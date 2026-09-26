@@ -532,6 +532,32 @@ describe('RickPanel service management through the application layer', () => {
     expect(await refunds()).toHaveLength(0);
   });
 
+  it('stops a verification whose recovery claim also died, instead of stranding it (WP15 G2)', async () => {
+    const { service } = await fundedRenewal('renew-crashed-recovery');
+    panel.unappliedPutFailures = 1;
+    await ctx.container.provisioner.runOnce(tenantA);
+    // The state a SECOND crash leaves: the recovery claim bumped the row to the sentinel
+    // (one past the last read) and died before stopping it; its lease has run out.
+    await ctx.container.database.db.execute(
+      sql`UPDATE provisioning_operations SET verification_attempts = 4,
+             next_attempt_at = now() - interval '1 minute'
+           WHERE service_id = ${service.id} AND type = 'RENEW'`,
+    );
+    const reads = userReads();
+    await ctx.container.provisionerLoop.tick();
+    const stopped = await operationOf(service.id, 'RENEW');
+    expect(stopped?.state).toBe('UNKNOWN');
+    expect(stopped?.nextAttemptAt, 'claimed again and stopped, not stranded').toBeNull();
+    expect(stopped?.verificationAttempts, 'the sentinel does not grow').toBe(4);
+    expect(userReads(), 'and not read again').toBe(reads);
+    const events = (await ctx.container.database.db.execute(
+      sql`SELECT context->>'reason' AS reason FROM operational_events
+           WHERE code = 'provisioning.stalled' AND resolved_at IS NULL` as never,
+    )) as unknown as { rows: { reason: string }[] };
+    expect(events.rows.map((row) => row.reason)).toContain('ALLOWANCE_UNVERIFIED');
+    expect(await refunds()).toHaveLength(0);
+  });
+
   it('verifies a renewal whose worker died mid-call, instead of replaying it (WP15 G2)', async () => {
     const { service } = await fundedRenewal('renew-stranded');
     const renew = await operationOf(service.id, 'RENEW');

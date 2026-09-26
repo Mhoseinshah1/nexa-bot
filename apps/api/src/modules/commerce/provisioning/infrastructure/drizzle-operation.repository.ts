@@ -1270,7 +1270,12 @@ export class DrizzleOperationRepository implements OperationRepository {
       .update(provisioningOperations)
       .set({
         nextAttemptAt: leaseUntil,
-        verificationAttempts: sql`${provisioningOperations.verificationAttempts} + 1`,
+        // Capped at `maxReads + 1`, the "claimed past its last read" sentinel the caller
+        // stops without reading. The cap, not a predicate, is what keeps that sentinel
+        // claimable: a recovery that claimed it and died before stopping it leaves the row
+        // at the sentinel with a date, and a predicate refusing the sentinel would strand
+        // it UNKNOWN for ever, blocking every later purchase on the service.
+        verificationAttempts: sql`LEAST(${provisioningOperations.verificationAttempts} + 1, ${maxReads + 1})`,
         updatedAt: now,
       })
       .where(
@@ -1278,7 +1283,6 @@ export class DrizzleOperationRepository implements OperationRepository {
           eq(provisioningOperations.tenantId, tenantId),
           eq(provisioningOperations.state, 'UNKNOWN'),
           lte(provisioningOperations.nextAttemptAt, now),
-          lt(provisioningOperations.verificationAttempts, maxReads + 1),
           sql`${provisioningOperations.id} IN ${due}`,
         ),
       )

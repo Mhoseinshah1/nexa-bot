@@ -149,6 +149,12 @@ missing usage figure is undecided, not zero; a RECONCILE takes the service lock 
 deciding; and a TLS error after the handshake on a write is ambiguous like any other. The
 remaining two are the two costs stated just above.
 
+A Codex review of the integrated stack (on #81) found one more: a recovery that claimed a
+row at its sentinel — one past the last read — and died before stopping it left the row
+`UNKNOWN` with a date that the claim then refused for ever, blocking every later purchase
+on the service. The claim now caps the counter at the sentinel instead of refusing it, so
+the row is claimed again and stopped, with no further read (WP15-23a/b).
+
 ## 4. What stays unproven, and how each is settled
 
 Every item needs a disposable panel. None is claimed anywhere in code or copy.
