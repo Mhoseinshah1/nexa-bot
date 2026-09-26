@@ -2329,3 +2329,37 @@ RESOLVED (pre-release hardening §2, `docs/prerelease-hardening-audit.md`).
 - **The customers section's key.** It is suffixed `:customer-status`, so it cannot collide with the same update's `resolveFromUpdate` record.
 - **What holds.** Same-surface retries replay, other-surface keys are their own commands, tenant isolation and `users.block` are unchanged.
 - **Tests.** `tests/integration/customer-block-surface.test.ts`.
+
+## OQ-WP17-FEE — what a payment fee is
+
+The WP17 roadmap names "Payment Fee" as a deferred feature. Nothing in this repository
+defines it:
+
+- **Schema, contracts and settings.** There is no fee column, no ledger reason, no setting
+  and no gateway field. `RESELLER_MEMBERSHIP_FEE` is the reseller membership, and
+  `topup_cashback_percent` is a gift.
+- **Payment File 02.** §4 and §22 exclude payment fees of any kind, and File 02 overrides
+  File 01 §20–21, which is the only place a fee was ever specified. That text is not in the
+  repository.
+- **Research.** FBR-010 found no gateway fee in any legacy schema. LGR-BR-012 found that the
+  legacy system's only deduction was commission.
+
+Building one needs these decisions, and each of them changes what a customer pays or what an
+operator receives:
+
+- **Who bears it.** Is it added to the customer's price, or absorbed by the seller?
+- **Its size.** Is it fixed or a percentage? Of what: principal or total? Does it vary by
+  gateway, by method, or both?
+- **Currency and rounding.** Which currency is it in, and how is it rounded for IRR and USD
+  minor units?
+- **Where it is recorded.** A column on the payment, its own ledger entry, or both?
+- **Disclosure.** Is it disclosed in the quote? Under "honoured, never re-priced" it would
+  have to be.
+- **Refunds.** Is it refundable in full, in part, or not at all?
+- **Interactions.** How does it interact with cashback, the top-up gift, referral commission
+  and reseller credit?
+
+It is related to the Phase-5 DECISION "Where do exchange rates and gateway fees come from?"
+and to OQ-WP10-01 (no external gateway is named).
+
+UNRESOLVED. Nothing is built (`docs/wp17-payment-phase3-audit.md` F1).

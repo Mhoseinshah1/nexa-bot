@@ -34,6 +34,7 @@ import { mayRequest, queryState } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
 import { setQueries, setQuery, useLinkHandler, type Route } from '../router';
 import { messageFor } from './settings';
+import { PaymentTimelineCard } from './payment-timeline';
 import {
   Badge,
   Banner,
@@ -1565,6 +1566,13 @@ export function PaymentDetailPage({
                 <p className="muted">{t('web.payment_review_in_telegram')}</p>
               </Card>
             )}
+
+            {/*
+              What has happened to this payment, in order (WP17). Read-only, and its own
+              request: the server decides which sections this viewer may see and names the
+              ones it withheld, so the card never guesses from the permissions it was given.
+            */}
+            <PaymentTimelineCard paymentId={id} />
 
             <Card>
               <p className="muted">{t('web.payment_not_settled_here')}</p>
