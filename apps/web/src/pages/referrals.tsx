@@ -525,6 +525,8 @@ type PickedFile =
       readonly contentBase64: string;
     };
 
+type ReadyFile = Extract<PickedFile, { readonly kind: 'READY' }>;
+
 function isMediaMimeType(value: string): value is TenantMediaMimeType {
   return (TENANT_MEDIA_MIME_TYPES as readonly string[]).includes(value);
 }
@@ -611,18 +613,22 @@ function BannerCard({ mayEdit }: { mayEdit: boolean }) {
   };
 
   const upload = useMutation({
-    mutationFn: () => {
-      if (picked.kind !== 'READY') throw new Error(t('web.referral_banner_file_unreadable'));
+    // The file travels as the mutation's VARIABLE, never read from `picked` here:
+    // useMutation hands the observer a new mutationFn only in an effect, so a click
+    // between the render that enabled the button and that effect would otherwise run the
+    // previous closure — the one that saw no file — and report a failure for a file the
+    // operator had picked.
+    mutationFn: (file: ReadyFile) => {
       const body = {
         purpose: 'REFERRAL_BANNER' as const,
-        mimeType: picked.mimeType,
-        contentBase64: picked.contentBase64,
+        mimeType: file.mimeType,
+        contentBase64: file.contentBase64,
       };
       // Keyed to the digest-sized fingerprint of the payload: picking a different file is
       // a new command, retrying the same one after an ambiguous failure is not.
       return uploadTenantMedia({
         ...body,
-        idempotencyKey: submission.current({ name: picked.name, size: picked.byteLength }),
+        idempotencyKey: submission.current({ name: file.name, size: file.byteLength }),
       });
     },
     onSuccess: () => {
@@ -677,7 +683,7 @@ function BannerCard({ mayEdit }: { mayEdit: boolean }) {
           className="form"
           onSubmit={(event) => {
             event.preventDefault();
-            if (picked.kind === 'READY' && !busy) upload.mutate();
+            if (picked.kind === 'READY' && !busy) upload.mutate(picked);
           }}
         >
           <Field
