@@ -1,4 +1,5 @@
 import { describe, expect, it, vi, afterEach } from 'vitest';
+import type { ReactElement } from 'react';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import {
   OWNER_ROLE_KEY,
@@ -384,7 +385,8 @@ describe('report exports and paging (WP12 review)', () => {
   it('draws the export links only for an owner who also holds reports.export, through the app wiring', async () => {
     const api = stubApi([...BUSINESS_ROUTES, ORDERS_ROUTE]);
     const viewer = renderPage(
-      resolve(reportsRoute('range=TODAY'), ['reports.view'], [OWNER_ROLE_KEY]).element,
+      resolve(reportsRoute('range=TODAY'), ['reports.view'], [OWNER_ROLE_KEY])
+        .element as ReactElement,
     );
     await waitFor(() =>
       expect(api.calls.some((c) => c.url.includes('/reports/orders'))).toBe(true),
@@ -395,7 +397,7 @@ describe('report exports and paging (WP12 review)', () => {
 
     renderPage(
       resolve(reportsRoute('range=TODAY'), ['reports.view', 'reports.export'], [OWNER_ROLE_KEY])
-        .element,
+        .element as ReactElement,
     );
     expect(await screen.findByRole('link', { name: 'خروجی CSV' })).toBeTruthy();
   });
