@@ -110,9 +110,5 @@ Owner rules for this package:
 
 ## 5. Evidence
 
-Mutations, each reverted after its run:
-
-| Mutation                                            | Failed                                                                                 |
-| --------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| `nextRelayDelayMs` back to `claimed > 0 ? 0 : poll` | 2 unit cases: the poison-message loop, and an all-skipped batch                        |
-| `displayableError` without the URL replacement      | 1 unit case, plus the integration case "shows a failing outbox message … URLs removed" |
+Ten rules, each reverted alone and killed by a named test: `docs/wp16-falsification.md`
+(O16-01..10), registered with the citation check so a renamed test fails the build.
