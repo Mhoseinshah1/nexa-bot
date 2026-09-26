@@ -93,6 +93,8 @@ import { TelegramAdminService } from './modules/platform/identity/application/te
 import { BootstrapOwnerService } from './modules/platform/identity/application/bootstrap-owner.service.js';
 import { BotBootstrapService } from './modules/platform/tenancy/application/bot-bootstrap.service.js';
 import { TelegramBotBootstrapGateway } from './modules/platform/tenancy/infrastructure/telegram-bot-bootstrap.gateway.js';
+import { DrizzleBotManagementRepository } from './modules/platform/tenancy/infrastructure/drizzle-bot-management.repository.js';
+import { BotManagementService } from './modules/platform/tenancy/application/bot-management.service.js';
 import { RetentionSweeper } from './modules/platform/identity/application/retention-sweeper.js';
 import { RecordPingService } from './modules/platform/system/application/record-ping.service.js';
 import { PingLogConsumer } from './modules/platform/opslog/application/ping-log.consumer.js';
@@ -256,6 +258,7 @@ import {
 import { DrizzleResellerRepository } from './modules/commerce/resellers/infrastructure/drizzle-reseller.repository.js';
 import { ResellerService } from './modules/commerce/resellers/application/reseller.service.js';
 import { ResellerAdminService } from './modules/commerce/resellers/application/reseller-admin.service.js';
+import { DrizzleAuditHistoryReader } from './modules/platform/audit/infrastructure/drizzle-audit-history.reader.js';
 import { DrizzleDiscountRepository } from './modules/commerce/pricing/infrastructure/drizzle-discount.repository.js';
 import {
   DrizzleCashbackRuleRepository,
@@ -528,6 +531,8 @@ export interface Container {
   readonly wallet: WalletService;
   readonly payments: PaymentService;
   readonly paymentAccounts: PaymentAccountService;
+  /** WP13 — the Web Admin's management of this tenant's Telegram bot instances. */
+  readonly botManagement: BotManagementService;
   /**
    * The payment ROUTES an operator offers (Phase 5C).
    *
@@ -895,6 +900,10 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     new DrizzleBootstrapRecordReader(database.db),
   );
 
+  const telegramBotGateway = new TelegramBotBootstrapGateway(
+    config.TELEGRAM_API_BASE_URL,
+    config.NOTIFICATION_SEND_TIMEOUT_MS,
+  );
   const bootstrapBot = new BotBootstrapService({
     uow,
     bots: botInstances,
@@ -902,10 +911,28 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     audit,
     clock,
     ids,
-    telegram: new TelegramBotBootstrapGateway(
-      config.TELEGRAM_API_BASE_URL,
-      config.NOTIFICATION_SEND_TIMEOUT_MS,
-    ),
+    telegram: telegramBotGateway,
+    webhookSecret: () => config.TELEGRAM_WEBHOOK_SECRET,
+    webhookEnabled: () => config.TELEGRAM_WEBHOOK_ENABLED,
+  });
+
+  /*
+   * WP13 — the Web Admin's management of the same bots. The SAME gateway instance, so a
+   * token is judged by one `identify` and the menu digested by one `commandsRevision`
+   * for both the installer and the Web Admin.
+   */
+  const botManagement = new BotManagementService({
+    repository: new DrizzleBotManagementRepository(database.db, cipher, botInstances),
+    telegram: telegramBotGateway,
+    guard,
+    uow,
+    audit,
+    opsLog: opsLogWriter,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    outbox,
+    clock,
     webhookSecret: () => config.TELEGRAM_WEBHOOK_SECRET,
     webhookEnabled: () => config.TELEGRAM_WEBHOOK_ENABLED,
   });
@@ -1335,6 +1362,9 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     idempotency,
     clock,
     ids,
+    wallet: walletRepository,
+    settings: settingsResolver,
+    auditHistory: new DrizzleAuditHistoryReader(database.db),
   });
   const discountRepository = new DrizzleDiscountRepository(database.db);
   const cashbackRuleRepository = new DrizzleCashbackRuleRepository(database.db);
@@ -3519,6 +3549,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     wallet: walletService,
     payments: paymentService,
     paymentAccounts: paymentAccountService,
+    botManagement,
     paymentGateways: paymentGatewayService,
     refunds: refundService,
     receiptDispositions: receiptDispositionService,

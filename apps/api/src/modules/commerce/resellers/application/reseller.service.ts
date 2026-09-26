@@ -20,6 +20,7 @@ import type {
   ResellerTierGrantRecord,
   ResellerTierRecord,
 } from './ports.js';
+import { creditAllowanceOf } from '../domain/reseller-credit.js';
 
 export interface ResellerServiceDeps {
   readonly resellers: ResellerRepository;
@@ -147,9 +148,15 @@ export class ResellerService {
   ): Promise<bigint> {
     const standing = await this.standing(scope, customerId, tx);
     if (standing === null) return 0n;
-    const limit = standing.reseller.creditLimit ?? standing.tier.creditLimit;
-    if (limit.currency !== currency || limit.amountMinor <= 0n) return 0n;
-    return limit.amountMinor;
+    // R8's one statement, shared with the operator's credit view (WP14 D1).
+    return creditAllowanceOf(
+      {
+        status: standing.reseller.status,
+        ownLimit: standing.reseller.creditLimit,
+        tierLimit: standing.tier.creditLimit,
+      },
+      currency,
+    );
   }
 
   /**

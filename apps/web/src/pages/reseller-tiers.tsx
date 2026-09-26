@@ -56,6 +56,7 @@ import {
   useToast,
   type Column,
 } from '../ui/kit';
+import { TierHistoryCard } from './reseller-standing';
 
 /**
  * Reseller tiers and what each one grants (WP9-B, `docs/wp9-reseller-audit.md` R2, R5).
@@ -330,6 +331,7 @@ export function ResellerTiersPage({
   mayEdit,
   mayViewCatalog,
   mayViewPanels,
+  mayViewAudit,
 }: {
   /** No `resellers.view`: no list, and no form (edit opens from a row). */
   denied: boolean;
@@ -339,6 +341,8 @@ export function ResellerTiersPage({
   mayViewCatalog: boolean;
   /** `panels.view` — whether the panel picker may ask for the fleet. */
   mayViewPanels: boolean;
+  /** `audit.view` — the tier's change history (WP14 D3). */
+  mayViewAudit: boolean;
 }) {
   const onLink = useLinkHandler();
   const tiers = useQuery({
@@ -351,6 +355,7 @@ export function ResellerTiersPage({
   /** Which tier's form, and which tier's grants, are open — by id, so a refetch shows. */
   const [editingId, setEditingId] = useState<string | null>(null);
   const [grantsId, setGrantsId] = useState<string | null>(null);
+  const [historyId, setHistoryId] = useState<string | null>(null);
   const editing = rows.find((row) => row.id === editingId);
   const granting = rows.find((row) => row.id === grantsId);
 
@@ -410,6 +415,9 @@ export function ResellerTiersPage({
           <button type="button" className="btn sm" onClick={() => setGrantsId(row.id)}>
             {t('web.reseller_grants_open')}
           </button>
+          <button type="button" className="btn sm" onClick={() => setHistoryId(row.id)}>
+            {t('web.history_open')}
+          </button>
         </div>
       ),
     },
@@ -458,6 +466,10 @@ export function ResellerTiersPage({
         ) : (
           <GrantsReadOnly tier={granting} names={names} onClose={() => setGrantsId(null)} />
         ))}
+
+      {denied || historyId === null ? null : (
+        <TierHistoryCard key={historyId} tierId={historyId} mayViewAudit={mayViewAudit} />
+      )}
 
       {denied ? null : !mayEdit ? (
         <Card title={t('web.reseller_tier_new_title')}>
@@ -590,6 +602,7 @@ function GrantsEditor({
       submission.settle();
       notify({ tone: 'ok', message: t('web.reseller_grants_saved') });
       void queries.invalidateQueries({ queryKey: ['reseller-tiers'] });
+      void queries.invalidateQueries({ queryKey: ['reseller-tier-history'] });
     },
     onError: (error) => submission.settleOn(error),
   });
@@ -831,6 +844,7 @@ function TierForm({ tier, onDone }: { tier?: ResellerTierSummaryResponse; onDone
       });
       if (mode === 'create') setState(BLANK_TIER);
       void queries.invalidateQueries({ queryKey: ['reseller-tiers'] });
+      void queries.invalidateQueries({ queryKey: ['reseller-tier-history'] });
       // A reseller's effective limit may follow its tier's.
       void queries.invalidateQueries({ queryKey: ['resellers'] });
       void queries.invalidateQueries({ queryKey: ['customer-reseller'] });

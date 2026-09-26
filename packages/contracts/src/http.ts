@@ -78,7 +78,8 @@ import {
   SERVICE_ADDON_TITLE_MAX_LENGTH,
   productCategoryEmojiSchema,
 } from './catalog.js';
-import { ORDER_STATES } from './commerce.js';
+import { ORDER_PURPOSES, ORDER_STATES } from './commerce.js';
+import { ACTOR_TYPES, SOURCE_SURFACES } from './actor.js';
 import {
   OPERATION_STATES,
   OPERATION_TYPES,
@@ -93,7 +94,7 @@ import {
   PAYMENT_STATES,
 } from './payment.js';
 import { CURRENCY_CODES, MAX_MONEY_AMOUNT_MINOR, salesCurrencyCodeSchema } from './money.js';
-import { OPERATIONAL_SEVERITIES } from './ports.js';
+import { AUDIT_RESULTS, OPERATIONAL_SEVERITIES } from './ports.js';
 import {
   SETTING_CLASSIFICATIONS,
   SETTING_CONSUMERS,
@@ -2991,12 +2992,136 @@ export type ResellerUpdateRequest = z.infer<typeof resellerUpdateSchema>;
 export const resellerResponseSchema = z.object({ reseller: resellerSummarySchema });
 export type ResellerResponse = z.infer<typeof resellerResponseSchema>;
 
+// --- Resellers, phase 2 (WP14) -------------------------------------------------------
+
+/**
+ * Read-only views of what WP9-B already defines (`docs/wp14-reseller-phase2-audit.md`).
+ * Nothing here moves money, settles a debt or introduces a financial rule: each field is a
+ * derivation of R8's allowance, `canCover`'s frontier or R9's snapshot.
+ */
+
+/**
+ * Why credit does or does not apply to a reseller right now (R8).
+ *
+ * `CURRENCY_MISMATCH`: the effective limit is in a currency the installation does not sell
+ * in, so no purchase can draw on it. A debt a reseller already owes stays owed in every
+ * state — suspension and a lower limit stop further credit, nothing more (`OQ-WP9-04`).
+ */
+export const RESELLER_CREDIT_STATES = [
+  'CREDIT_APPLIES',
+  'RESELLER_SUSPENDED',
+  'NO_LIMIT',
+  'CURRENCY_MISMATCH',
+] as const;
+export type ResellerCreditState = (typeof RESELLER_CREDIT_STATES)[number];
+
+/** Where the effective limit comes from: the reseller's own, else the tier's (R8). */
+export const RESELLER_LIMIT_SOURCES = ['RESELLER', 'TIER'] as const;
+export type ResellerLimitSource = (typeof RESELLER_LIMIT_SOURCES)[number];
+
+/** A signed amount in minor units, as a decimal string, with its currency. */
+const signedMoneySchema = z.object({
+  amount: z.string().regex(/^-?\d+$/u),
+  currency: z.enum(CURRENCY_CODES),
+});
+
+export const resellerCreditStandingSchema = z.object({
+  customerId: z.string(),
+  status: z.enum(RESELLER_STATUSES),
+  effectiveLimit: signedMoneySchema,
+  limitSource: z.enum(RESELLER_LIMIT_SOURCES),
+  sellingCurrency: z.enum(CURRENCY_CODES),
+  credit: z.enum(RESELLER_CREDIT_STATES),
+  /**
+   * The wallet balance in the SELLING currency, from the ledger — the balance a purchase
+   * debits and `canCover` compares with the allowance. Negative is debt. Every amount
+   * below is in this currency; only `effectiveLimit` keeps its own.
+   */
+  balance: signedMoneySchema,
+  /** What settlement would allow below zero now; zero unless credit applies. */
+  allowance: signedMoneySchema,
+  /** `max(0, −balance)`: the debt. */
+  creditInUse: signedMoneySchema,
+  /** `balance + allowance`: the largest purchase the credit check would pass. May be negative. */
+  availableToSpend: signedMoneySchema,
+  /** `max(0, creditInUse − allowance)`: owed beyond what the limit now allows. */
+  overLimitBy: signedMoneySchema,
+});
+export type ResellerCreditStanding = z.infer<typeof resellerCreditStandingSchema>;
+
+export const resellerCreditResponseSchema = z.object({ credit: resellerCreditStandingSchema });
+export type ResellerCreditResponse = z.infer<typeof resellerCreditResponseSchema>;
+
+export const RESELLER_PURCHASE_PAGE_DEFAULT = 25;
+export const RESELLER_PURCHASE_PAGE_MAX = 100;
+
+export const resellerPurchaseQuerySchema = z.object({
+  limit: z.coerce.number().int().positive().max(RESELLER_PURCHASE_PAGE_MAX).optional(),
+  cursor: z.string().max(512).optional(),
+});
+export type ResellerPurchaseQuery = z.infer<typeof resellerPurchaseQuerySchema>;
+
+/**
+ * One reseller purchase, as its confirmation recorded it (R9) — never re-derived from live
+ * tier settings. The margin the snapshot also holds is deliberately not here
+ * (`docs/wp14-reseller-phase2-audit.md` §3); it stays on the order's pricing card.
+ */
+export const resellerPurchaseSchema = z.object({
+  orderId: z.string(),
+  /** The order's CURRENT state: a refund after the sale shows here, beside the snapshot. */
+  orderState: z.enum(ORDER_STATES),
+  purpose: z.enum(ORDER_PURPOSES),
+  confirmedAt: z.iso.datetime(),
+  tierName: z.string(),
+  layer: z.enum(RESELLER_PRICE_LAYERS),
+  percent: z.number().int().nullable(),
+  listAmount: z.string(),
+  costAmount: z.string(),
+  promotionAmount: z.string(),
+  saleAmount: z.string(),
+  currency: z.enum(CURRENCY_CODES),
+});
+export type ResellerPurchase = z.infer<typeof resellerPurchaseSchema>;
+
+export const resellerPurchasePageSchema = z.object({
+  purchases: z.array(resellerPurchaseSchema),
+  nextCursor: z.string().nullable(),
+});
+export type ResellerPurchasePage = z.infer<typeof resellerPurchasePageSchema>;
+
+/** A history panel's bound, not a log browser's. */
+export const RESELLER_HISTORY_MAX = 50;
+
+/**
+ * One audited change to a reseller or a tier, from `audit_logs` — the rows of exactly that
+ * entity and those actions. The before and after were redacted when they were written; the
+ * actor's IP and user agent are not returned.
+ */
+export const resellerHistoryEntrySchema = z.object({
+  id: z.string(),
+  action: z.string(),
+  actorType: z.enum(ACTOR_TYPES),
+  actorLabel: z.string().nullable(),
+  surface: z.enum(SOURCE_SURFACES),
+  result: z.enum(AUDIT_RESULTS),
+  occurredAt: z.iso.datetime(),
+  before: z.record(z.string(), z.unknown()).nullable(),
+  after: z.record(z.string(), z.unknown()).nullable(),
+});
+export type ResellerHistoryEntry = z.infer<typeof resellerHistoryEntrySchema>;
+
+export const resellerHistoryResponseSchema = z.object({
+  entries: z.array(resellerHistoryEntrySchema),
+});
+export type ResellerHistoryResponse = z.infer<typeof resellerHistoryResponseSchema>;
+
 export const RESELLER_TIER_ROUTES = {
   list: '/reseller-tiers',
   create: '/reseller-tiers',
   detail: (id: string) => `/reseller-tiers/${encodeURIComponent(id)}`,
   update: (id: string) => `/reseller-tiers/${encodeURIComponent(id)}`,
   grants: (id: string) => `/reseller-tiers/${encodeURIComponent(id)}/grants`,
+  history: (id: string) => `/reseller-tiers/${encodeURIComponent(id)}/history`,
 } as const;
 
 export const RESELLER_ROUTES = {
@@ -3004,6 +3129,9 @@ export const RESELLER_ROUTES = {
   register: '/resellers',
   detail: (customerId: string) => `/resellers/${encodeURIComponent(customerId)}`,
   update: (customerId: string) => `/resellers/${encodeURIComponent(customerId)}`,
+  credit: (customerId: string) => `/resellers/${encodeURIComponent(customerId)}/credit`,
+  purchases: (customerId: string) => `/resellers/${encodeURIComponent(customerId)}/purchases`,
+  history: (customerId: string) => `/resellers/${encodeURIComponent(customerId)}/history`,
 } as const;
 
 // --- Orders ------------------------------------------------------------------

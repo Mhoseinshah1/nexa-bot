@@ -20,6 +20,7 @@ import { PlannedPage, PLANNED_SURFACES, type PlannedKey } from './pages/planned'
 import { PaymentsPage, PaymentDetailPage } from './pages/payments';
 import { CompensationsPage } from './pages/compensations';
 import { PaymentAccountsPage } from './pages/payment-accounts';
+import { BotsPage } from './pages/bots';
 import { PaymentGatewaysPage } from './pages/payment-gateways';
 import { SupportPage } from './pages/support';
 import { ProductDetailPage, ProductsPage } from './pages/products';
@@ -693,6 +694,25 @@ export function resolve(
     };
   }
 
+  /*
+   * WP13. `settings.view` reads, `settings.edit` stops, starts and runs the live check,
+   * and `settings.destructive` replaces the token — each passed separately, never
+   * derived from `denied`, for the reason `PaymentAccountsPage` records.
+   */
+  if (route.path === '/bots') {
+    return {
+      element: (
+        <BotsPage
+          denied={!may('settings.view')}
+          mayOperate={may('settings.edit')}
+          mayReplaceToken={may('settings.destructive')}
+        />
+      ),
+      crumbs: [{ label: t('web.nav_bots') }],
+      title: t('web.nav_bots'),
+    };
+  }
+
   if (route.path === '/payment-gateways') {
     return {
       element: (
@@ -752,6 +772,9 @@ export function resolve(
           route={route}
           denied={!may('resellers.view')}
           mayEdit={may('resellers.edit')}
+          mayViewWallet={may('users.view')}
+          mayViewOrders={may('orders.view')}
+          mayViewAudit={may('audit.view')}
         />
       ),
       crumbs: [{ label: t('web.resellers_title') }],
@@ -773,6 +796,7 @@ export function resolve(
            */
           mayViewCatalog={may('catalog.view')}
           mayViewPanels={may('panels.view')}
+          mayViewAudit={may('audit.view')}
         />
       ),
       crumbs: [nav('resellers'), { label: t('web.reseller_tiers_title') }],

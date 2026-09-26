@@ -32,11 +32,17 @@ import {
   COMMERCE_ERROR_CODES,
   RESELLER_ROUTES,
   RESELLER_TIER_ROUTES,
+  resellerCreditResponseSchema,
+  resellerHistoryResponseSchema,
   resellerListResponseSchema,
+  resellerPurchasePageSchema,
   resellerResponseSchema,
   resellerTierListResponseSchema,
   resellerTierResponseSchema,
+  type ResellerCreditResponse,
+  type ResellerHistoryResponse,
   type ResellerListResponse,
+  type ResellerPurchasePage,
   type ResellerRegisterRequest,
   type ResellerResponse,
   type ResellerStatus,
@@ -235,6 +241,14 @@ import {
   type CustomerResponse,
   type CustomerStatus,
   PAYMENT_ACCOUNT_ROUTES,
+  BOT_ROUTES,
+  botDiagnosticResponseSchema,
+  botListResponseSchema,
+  botMutationResponseSchema,
+  type BotDiagnosticResponse,
+  type BotListResponse,
+  type BotMutationResponse,
+  type BotOperatorStatus,
   paymentAccountListResponseSchema,
   paymentAccountResponseSchema,
   type PaymentAccountListResponse,
@@ -2087,6 +2101,35 @@ export function updateReseller(
   return post(RESELLER_ROUTES.update(customerId), body, resellerResponseSchema);
 }
 
+/**
+ * Reseller phase 2 reads (WP14, `docs/wp14-reseller-phase2-audit.md` D1–D3). Each is a
+ * GET; the server charges `resellers.view` plus the key the view names.
+ */
+export function fetchResellerCredit(customerId: string): Promise<ResellerCreditResponse> {
+  return authedGet(RESELLER_ROUTES.credit(customerId), resellerCreditResponseSchema);
+}
+
+export function fetchResellerPurchases(
+  customerId: string,
+  query: { cursor?: string } = {},
+): Promise<ResellerPurchasePage> {
+  const path = RESELLER_ROUTES.purchases(customerId);
+  return authedGet(
+    query.cursor === undefined || query.cursor === ''
+      ? path
+      : `${path}?cursor=${encodeURIComponent(query.cursor)}`,
+    resellerPurchasePageSchema,
+  );
+}
+
+export function fetchResellerHistory(customerId: string): Promise<ResellerHistoryResponse> {
+  return authedGet(RESELLER_ROUTES.history(customerId), resellerHistoryResponseSchema);
+}
+
+export function fetchResellerTierHistory(tierId: string): Promise<ResellerHistoryResponse> {
+  return authedGet(RESELLER_TIER_ROUTES.history(tierId), resellerHistoryResponseSchema);
+}
+
 // ---------------------------------------------------------------------------
 // Tenant media (customer UX §I): the referral banner's metadata, never its bytes
 // ---------------------------------------------------------------------------
@@ -2236,4 +2279,39 @@ export function reportExportUrl(
   format: ReportExportFormat,
 ): string {
   return `${API_PREFIX}${REPORT_ROUTES.export}?${reportParams(s, { report, format }).toString()}`;
+}
+
+// --- Bots (WP13) -------------------------------------------------------------
+
+/** This tenant's bot instances, with their recorded webhook state. No credential. */
+export function fetchBots(): Promise<BotListResponse> {
+  return authedGet(BOT_ROUTES.list, botListResponseSchema);
+}
+
+/** Stop or start a bot. `changed: false` answers a request for the state it was in. */
+export function setBotStatus(input: {
+  id: string;
+  idempotencyKey: string;
+  status: BotOperatorStatus;
+}): Promise<BotMutationResponse> {
+  const { id, ...body } = input;
+  return post(BOT_ROUTES.status(id), body, botMutationResponseSchema);
+}
+
+/**
+ * Replace the token of the SAME bot. The token goes in the body and nowhere else: not
+ * the URL, not a query key, not the submission key (the page keys this by bot id alone).
+ */
+export function replaceBotToken(input: {
+  id: string;
+  idempotencyKey: string;
+  token: string;
+}): Promise<BotMutationResponse> {
+  const { id, ...body } = input;
+  return post(BOT_ROUTES.token(id), body, botMutationResponseSchema);
+}
+
+/** Ask Telegram what it holds for this bot. A read; nothing is stored. */
+export function checkBot(id: string): Promise<BotDiagnosticResponse> {
+  return post(BOT_ROUTES.diagnostics(id), {}, botDiagnosticResponseSchema);
 }
