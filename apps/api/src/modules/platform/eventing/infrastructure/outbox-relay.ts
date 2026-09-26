@@ -39,6 +39,29 @@ export interface RelayBatchResult {
 }
 
 /**
+ * How long the relay waits before its next batch (WP16 R1,
+ * `docs/wp16-admin-ops-audit.md`).
+ *
+ * Drain at once while a batch PUBLISHED something; otherwise wait the poll interval.
+ *
+ * The earlier rule was "drain at once while a batch CLAIMED something", and a
+ * message whose consumer always throws is claimed by every batch. So one poison
+ * message kept the relay spinning in a zero-delay loop, one failed transaction and
+ * one error line per spin, for as long as the bug lasted — the "backs off" in the
+ * class comment below was not true. A batch that claimed work and published none
+ * made no progress, and the next one would make none either until something
+ * changed, so it waits like an idle one.
+ *
+ * What this does NOT fix: messages are still claimed oldest first with no per-message
+ * back-off, so `batchSize` poison messages at the head of the queue still hold back
+ * everything behind them. That needs a `next_attempt_at` column (a migration) and is
+ * recorded in the audit, not done here.
+ */
+export function nextRelayDelayMs(result: RelayBatchResult, pollIntervalMs: number): number {
+  return result.published > 0 ? 0 : pollIntervalMs;
+}
+
+/**
  * The outbox relay.
  *
  * Claims unpublished rows with FOR UPDATE SKIP LOCKED so several relay
@@ -67,9 +90,10 @@ export interface RelayBatchResult {
  * other messages in the batch still publish.
  *
  * The relay never gives up on a message and has no dead-letter queue: an event
- * that cannot be delivered is a bug to fix, not a message to discard. It backs
- * off, and lag beyond `maxLagMs` makes the process unhealthy so it is visible
- * rather than silent.
+ * that cannot be delivered is a bug to fix, not a message to discard. A batch
+ * that publishes nothing waits the poll interval before the next
+ * (`nextRelayDelayMs`), and lag beyond `maxLagMs` makes the process unhealthy so
+ * it is visible rather than silent. There is no per-message back-off.
  */
 export class OutboxRelay {
   private running = false;
@@ -155,8 +179,8 @@ export class OutboxRelay {
     } catch (error) {
       this.logger.error({ err: String(error) }, 'Outbox relay batch failed');
     }
-    // Drain quickly while there is work; idle politely when there is not.
-    this.scheduleNext(result.claimed > 0 ? 0 : this.options.pollIntervalMs);
+    // Drain quickly while batches make progress; idle politely when they do not.
+    this.scheduleNext(nextRelayDelayMs(result, this.options.pollIntervalMs));
   }
 
   /**

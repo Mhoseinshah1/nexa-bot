@@ -21,6 +21,7 @@ import {
   type TemplateWriteResponse,
   type SystemReadinessResponse,
   type MonitorProfileResponse,
+  type SystemDiagnosticsResponse,
   type TenantContext,
   uuidV7Schema,
   notificationListQuerySchema,
@@ -258,6 +259,46 @@ export class ControlController {
   async systemMonitor(@Req() request: FastifyRequest): Promise<MonitorProfileResponse> {
     const { scope, actor } = await this.authenticate(request);
     return { monitor: await this.container.monitorProfileService.read(scope, actor) };
+  }
+
+  /**
+   * What is stuck, and where (WP16 D2). Read-only; `opslog.view` is charged by the
+   * service. Every remedy it points at is an existing guarded single-entity action.
+   */
+  @Get('system/diagnostics')
+  async systemDiagnostics(@Req() request: FastifyRequest): Promise<SystemDiagnosticsResponse> {
+    const { scope, actor } = await this.authenticate(request);
+    const found = await this.container.diagnostics.read(scope, actor);
+    return {
+      generatedAt: found.generatedAt.toISOString(),
+      outbox: {
+        pending: found.outbox.pending,
+        oldestPendingAt: found.outbox.oldestPendingAt?.toISOString() ?? null,
+        failing: found.outbox.failing,
+        failingSample: found.outbox.failingSample.map((row) => ({
+          id: row.id,
+          eventType: row.eventType,
+          aggregateType: row.aggregateType,
+          attempts: row.attempts,
+          occurredAt: row.occurredAt.toISOString(),
+          lastError: row.lastError,
+        })),
+      },
+      provisioning: {
+        counts: { ...found.provisioning.counts },
+        sample: found.provisioning.sample.map((row) => ({
+          operationId: row.operationId,
+          serviceId: row.serviceId,
+          type: row.type,
+          state: row.state,
+          reason: row.reason,
+          attempts: row.attempts,
+          nextAttemptAt: row.nextAttemptAt?.toISOString() ?? null,
+          createdAt: row.createdAt.toISOString(),
+          updatedAt: row.updatedAt.toISOString(),
+        })),
+      },
+    };
   }
 
   // --- Operational events --------------------------------------------------
