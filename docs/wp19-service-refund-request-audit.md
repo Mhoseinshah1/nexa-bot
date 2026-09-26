@@ -26,7 +26,7 @@ Each choice was made conservatively, against the invariants in `CLAUDE.md`.
 | Admin DM card                  | WP10 receipt push (ADR-0031): consumer, then push rows, then worker lane                                                                      | Mirrored for the review card. Recipients are administrators with a Telegram binding who hold both decision permissions.                                                                                                                                                                      |
 | Admin typed input              | `admin_amount_captures` + `ADMIN_CAPTURE_PURPOSES`                                                                                            | Two new purposes: the amount, and the rejection reason.                                                                                                                                                                                                                                      |
 | Customer typed input           | `customer_text_captures` + `CUSTOMER_CAPTURE_PURPOSES`                                                                                        | One new purpose: the customer's reason (`subject_id` is the service).                                                                                                                                                                                                                        |
-| Customer lane                  | `CUSTOMER_NOTIFICATION_KINDS` (CHECK-pinned), with values read from the subject row at send time (the `PAYMENT_REJECTED` precedent)           | Two new kinds, APPROVED and REJECTED. Their values are read from the request row.                                                                                                                                                                                                            |
+| Customer lane                  | `CUSTOMER_NOTIFICATION_KINDS` (CHECK-pinned), with values read from the subject row at send time (the `PAYMENT_REJECTED` precedent)           | Three new kinds: REGISTERED, APPROVED and REJECTED. Their values are read from the request row.                                                                                                                                                                                              |
 | Feature flag                   | `features.ts` (the `customer_link_rotation` precedent: default off, `TENANT_WIDE`)                                                            | `customer_refund_requests`, default off. It appears in Web Admin's feature list with no new page.                                                                                                                                                                                            |
 
 **Found:** a `TERMINATED` service stays in the customer's list. Every customer query
@@ -114,5 +114,48 @@ refund. That is scoped to this workflow: see T5.
   request (`NOT EXISTS`). A service an operator terminated for another reason stays visible,
   as today.
 - **T6 — the customer's REGISTERED sentence is the interactive reply.** A
-  lane notification as well would tell the customer the same fact twice. APPROVED and
-  REJECTED arrive later, asynchronously, so they belong to the lane.
+  lane notification as well would tell the customer the same fact twice. The lane kind
+  `SERVICE_REFUND_REQUEST_REGISTERED` exists only as that reply's fallback: when Telegram
+  answers the interactive send with a rate limit, the reply is queued once (the 4J-2
+  mechanism) rather than lost. APPROVED and REJECTED arrive later, asynchronously, so they
+  always go through the lane.
+- **T7 — the generic refund notice is suppressed.** `settleServiceRefund` completes the
+  refund with `notifyCustomer: false`. The APPROVED notice already names the amount and the
+  removal, so `REFUND_COMPLETED` as well would be the same money told twice.
+- **T8 — an operator cannot settle the reservation by hand.** `RefundService.complete`
+  and `fail` refuse a refund whose reason is `SERVICE_REFUND_REQUEST`
+  (`REFUND_STATE_INVALID`). Only the request's sweep settles it. Otherwise an operator
+  could credit money before the deletion, or release a reservation whose deletion is still
+  in flight.
+- **T9 — rejection is immediate.** Once the administrator has typed the reason, the
+  rejection is written. There is no second confirmation (brief §2.9). The destructive
+  confirmation belongs to approval alone.
+
+## 5. Surfaces
+
+- **Telegram, customer.** Row four of the service detail offers `درخواست بازگشت وجه` when
+  `customerOffer` answers OFFERED, or states that a request is pending. `fa:` shows the
+  explanation. `fb:` opens the reason capture. The reason message files the request, and
+  a reason out of bounds reopens the capture.
+- **Telegram, administrator.** The review card is pushed to every bound administrator who
+  holds both decision keys. `qa:` opens the amount capture. The typed amount is validated
+  under the payment's lock and answered with one destructive confirmation, `qc:<capture>`.
+  `qb:` opens the reason capture, and the reason rejects. `qd:<capture>` cancels either
+  prompt. View user and view service reuse `9:v:` and `I:`. A stale, forged or replayed
+  tap decides nothing.
+- **Web Admin.** On the services list, a read-only card of requests that are OPEN,
+  EXECUTING or FAILED. On the service page, the service's requests, with approve (amount
+  plus a confirmation checkbox) and reject (reason) for the one that is OPEN. HTTP:
+  `GET /service-refund-requests`, `GET /services/:id/refund-requests`,
+  `POST /service-refund-requests/:id/approve` (the body must carry `confirm: true`) and
+  `POST /service-refund-requests/:id/reject`. Reading needs `refunds.view`; deciding needs
+  both keys.
+
+## 6. Evidence
+
+- `tests/integration/service-refund-requests.test.ts` covers every row of §2, the races
+  (concurrent filing, two approvers, approve against reject, a concurrent operator partial
+  refund), tenant isolation, and the deletion outcomes: success, ambiguity, definitive
+  failure, and SUCCEEDED without the service moving.
+- `tests/web/service-refund-requests.test.tsx` covers the Web Admin fallback.
+- `docs/wp19-falsification.md` records each rule reverted and the test that failed.
