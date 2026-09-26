@@ -1287,6 +1287,22 @@ export const COMMERCE_ERROR_CODES = {
   MEDIA_INVALID: 'commerce.media_invalid',
   /** The gift shares do not total 100 while the flag is (or is being turned) on. */
   REFERRAL_GIFT_TERMS_INVALID: 'commerce.referral_gift_terms_invalid',
+  /**
+   * WP19. No service refund request with this id in this tenant — or not one the asking
+   * customer owns. Another tenant's is answered the same way.
+   */
+  SERVICE_REFUND_REQUEST_NOT_FOUND: 'commerce.service_refund_request_not_found',
+  /**
+   * WP19. A refund request cannot be filed, or approved, for this service now. The `reason`
+   * detail is a `SERVICE_REFUND_INELIGIBILITY_REASONS` member. A customer is told one
+   * sentence for every reason.
+   */
+  SERVICE_REFUND_NOT_ELIGIBLE: 'commerce.service_refund_not_eligible',
+  /**
+   * WP19. The request is not OPEN any more: another administrator decided it, or it is
+   * executing or finished. Carries the current `state`. Nothing was changed.
+   */
+  SERVICE_REFUND_REQUEST_STATE_INVALID: 'commerce.service_refund_request_state_invalid',
 } as const;
 
 /*

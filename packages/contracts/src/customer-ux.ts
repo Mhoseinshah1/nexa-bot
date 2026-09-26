@@ -26,6 +26,11 @@ export const CUSTOMER_CAPTURE_PURPOSES = [
   'TOPUP_AMOUNT',
   'SERVICE_SEARCH',
   'SERVICE_NOTE',
+  /**
+   * WP19: the customer's reason for a refund request. `subject_id` names the SERVICE, like
+   * `SERVICE_NOTE`, and the request is filed only when this window reads a valid reason.
+   */
+  'SERVICE_REFUND_REASON',
 ] as const;
 export type CustomerCapturePurpose = (typeof CUSTOMER_CAPTURE_PURPOSES)[number];
 export const customerCapturePurposeSchema = z.enum(CUSTOMER_CAPTURE_PURPOSES);

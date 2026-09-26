@@ -15,6 +15,7 @@ import {
 } from './service-username.js';
 import { paymentAccountInputSchema } from './payment-accounts.js';
 import { refundChannelSchema, refundStateSchema } from './refunds.js';
+import { serviceRefundRequestStateSchema } from './service-refund-requests.js';
 import {
   PAYMENT_GATEWAY_SORT_MAX,
   PAYMENT_GATEWAY_SORT_MIN,
@@ -4754,6 +4755,98 @@ export const SERVICE_ROUTES = {
   terminate: (id: string) => `/services/${encodeURIComponent(id)}/terminate`,
   /** `ROTATE_LINK`: a new subscription link, minted by the panel. `services.edit`. */
   rotateLink: (id: string) => `/services/${encodeURIComponent(id)}/rotate-link`,
+} as const;
+
+// --- Service refund requests (WP19) --------------------------------------------
+
+/**
+ * One customer refund request, as the Web Admin renders it.
+ *
+ * The smallest durable fallback for a request whose Telegram card was never delivered
+ * (brief §2.10): the row is the record, and this is a render of it. Amounts are decimal
+ * STRINGS of minor units, like every money field on this seam. `remainingMinor` is the
+ * server's own figure for what the source payment still has to give back, read at the
+ * moment of the response; a browser never computes it.
+ *
+ * `operationState` is the deletion's, when one was planned: an EXECUTING request whose
+ * deletion is `UNKNOWN` is the one an operator has to look at, and it says so rather than
+ * implying progress.
+ */
+export const serviceRefundRequestSchema = z.object({
+  id: z.string(),
+  serviceId: z.string(),
+  serviceUsername: z.string().nullable(),
+  customerId: z.string(),
+  customerTelegramUserId: z.string().nullable(),
+  customerUsername: z.string().nullable(),
+  paymentId: z.string(),
+  orderId: z.string(),
+  state: serviceRefundRequestStateSchema,
+  reason: z.string(),
+  principalMinor: z.string(),
+  remainingMinor: z.string(),
+  currency: z.enum(CURRENCY_CODES),
+  approvedAmountMinor: z.string().nullable(),
+  refundId: z.string().nullable(),
+  operationId: z.string().nullable(),
+  operationState: z.string().nullable(),
+  decidedByAdminId: z.string().nullable(),
+  decidedAt: z.iso.datetime().nullable(),
+  rejectionReason: z.string().nullable(),
+  failureKind: z.string().nullable(),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
+  resolvedAt: z.iso.datetime().nullable(),
+});
+export type ServiceRefundRequestView = z.infer<typeof serviceRefundRequestSchema>;
+
+export const SERVICE_REFUND_REQUEST_PAGE_MAX = 100;
+
+export const serviceRefundRequestListQuerySchema = z.object({
+  state: serviceRefundRequestStateSchema.optional(),
+  limit: z.coerce.number().int().positive().max(SERVICE_REFUND_REQUEST_PAGE_MAX).optional(),
+});
+export type ServiceRefundRequestListQuery = z.infer<typeof serviceRefundRequestListQuerySchema>;
+
+export const serviceRefundRequestListResponseSchema = z.object({
+  requests: z.array(serviceRefundRequestSchema),
+});
+export type ServiceRefundRequestListResponse = z.infer<
+  typeof serviceRefundRequestListResponseSchema
+>;
+
+export const serviceRefundRequestResponseSchema = z.object({
+  request: serviceRefundRequestSchema,
+});
+export type ServiceRefundRequestResponse = z.infer<typeof serviceRefundRequestResponseSchema>;
+
+/**
+ * Approve: the amount, as a decimal string of minor units, and `confirm: true` — the one
+ * destructive confirmation the brief requires, stated in the body so a request that
+ * omits it is refused at the schema rather than executed.
+ */
+export const serviceRefundApproveRequestSchema = z.object({
+  idempotencyKey: z.string().min(8).max(255),
+  amountMinor: z.string().regex(/^[0-9]{1,19}$/u),
+  confirm: z.literal(true),
+});
+export type ServiceRefundApproveRequest = z.infer<typeof serviceRefundApproveRequestSchema>;
+
+export const serviceRefundRejectRequestSchema = z.object({
+  idempotencyKey: z.string().min(8).max(255),
+  reason: z.string().min(1).max(500),
+});
+export type ServiceRefundRejectRequest = z.infer<typeof serviceRefundRejectRequestSchema>;
+
+/**
+ * Reads need `refunds.view`; the two decisions need `refunds.issue` AND
+ * `services.terminate`, because an approval both moves money and deletes an account.
+ */
+export const SERVICE_REFUND_REQUEST_ROUTES = {
+  list: '/service-refund-requests',
+  forService: (serviceId: string) => `/services/${encodeURIComponent(serviceId)}/refund-requests`,
+  approve: (id: string) => `/service-refund-requests/${encodeURIComponent(id)}/approve`,
+  reject: (id: string) => `/service-refund-requests/${encodeURIComponent(id)}/reject`,
 } as const;
 
 // --- Backup and disaster recovery -------------------------------------------

@@ -7258,6 +7258,501 @@ export const TEMPLATES = [
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
+  {
+    key: 'bot.service.refund_request_button',
+    description:
+      "WP19: the button on a customer's service that starts a refund request. Drawn only while customer_refund_requests is on and the service is eligible.",
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.refund_request_ask',
+    description:
+      'WP19: the screen a refund-request tap opens. Names the service and says an administrator decides the amount, that the service is deleted if approved, that the money goes to the Nexa wallet, and that the payment gateway fee is not refundable. Nothing is recorded by this screen.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'service',
+        type: 'STRING',
+        description: 'The service username.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'product',
+        type: 'STRING',
+        description: 'The product the service was bought as.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.refund_request_confirm_button',
+    description: 'WP19: the button that confirms a refund request and asks for the reason.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.refund_request_reason_prompt',
+    description: 'WP19: asks the customer for the reason of their refund request (owner wording).',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.refund_request_reason_invalid',
+    description: 'WP19: the reason the customer typed is outside the bound. The window stays open.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'min',
+        type: 'NUMBER',
+        description: 'The shortest reason accepted, in characters.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'max',
+        type: 'NUMBER',
+        description: 'The longest reason accepted, in characters.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.refund_request_registered',
+    description:
+      'WP19: the request is on record. The interactive reply to the reason message, and the notification-lane fallback when that reply is lost. Says no money has moved and nothing was deleted yet.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.refund_request_approved',
+    description:
+      'WP19: the request completed — the service was deleted and the approved amount credited to the wallet. Sent only after both happened. Both values are read from the request row at send time.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'amount',
+        type: 'MONEY',
+        description: 'The amount credited to the wallet.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'service',
+        type: 'STRING',
+        description: 'The deleted service username.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.refund_request_rejected',
+    description:
+      "WP19: an administrator refused the request. Carries the administrator's mandatory reason, read from the request row at send time. Nothing was deleted and no money moved.",
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'reason',
+        type: 'STRING',
+        description: 'Why the request was refused, as the administrator typed it.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'service',
+        type: 'STRING',
+        description: 'The service username.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.refund_request_unavailable',
+    description:
+      'WP19: a refund request cannot be filed for this service now — one sentence for every reason.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.refund_request_pending',
+    description: 'WP19: a refund request for this service is already being reviewed.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.refund_request_card',
+    description:
+      "WP19: the review card an administrator receives for a customer's refund request. Facts only; the customer's reason is quoted as they typed it.",
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'requestId',
+        type: 'STRING',
+        description: 'The request id.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'requestedAt',
+        type: 'DATETIME',
+        description: 'When the customer filed it.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'telegramId',
+        type: 'STRING',
+        description: "The customer's numeric Telegram id.",
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'username',
+        type: 'STRING',
+        description: "The customer's Telegram username, or a dash.",
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'displayName',
+        type: 'STRING',
+        description: "The customer's Telegram display name, or a dash.",
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'serviceId',
+        type: 'STRING',
+        description: 'The service id.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'serviceUsername',
+        type: 'STRING',
+        description: 'The service username on the panel.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'product',
+        type: 'STRING',
+        description: 'The product title.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'state',
+        type: 'STRING',
+        description: 'The service state.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'expiresAt',
+        type: 'DATETIME',
+        description: 'When the service expires; the line is dropped for a service with no expiry.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'usedTraffic',
+        type: 'BYTES',
+        description: 'Traffic used so far.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'trafficLimit',
+        type: 'TRAFFIC_LIMIT',
+        description: 'The traffic allowance.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'principal',
+        type: 'MONEY',
+        description: 'The original purchase principal (the gateway fee excluded).',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'remaining',
+        type: 'MONEY',
+        description: 'What of that principal is still refundable.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'reason',
+        type: 'STRING',
+        description: "The customer's reason.",
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.refund_request_approve_button',
+    description: 'WP19: approve a refund request (opens the amount prompt; decides nothing).',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.refund_request_reject_button',
+    description: 'WP19: reject a refund request (opens the reason prompt; decides nothing).',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.refund_request_user_button',
+    description: 'WP19: open the customer from a refund-request card. Read-only navigation.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.refund_request_service_button',
+    description: 'WP19: open the service from a refund-request card. Read-only navigation.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.refund_request_amount_prompt',
+    description:
+      'WP19: asks the administrator for the amount to return (owner wording), with the remaining refundable principal.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'remaining',
+        type: 'MONEY',
+        description: 'What is still refundable from the source payment.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'minutes',
+        type: 'NUMBER',
+        description: 'How long the prompt waits.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.refund_request_amount_invalid',
+    description:
+      'WP19: the typed amount is not a positive whole number, or is more than is refundable.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'remaining',
+        type: 'MONEY',
+        description: 'What is still refundable.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.refund_request_confirm',
+    description:
+      'WP19: the one destructive confirmation before an approval executes. Names the amount, the customer, the service, that the service is deleted, that the money goes to the wallet, and that the gateway fee is not refunded.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'amount',
+        type: 'MONEY',
+        description: 'The amount to return.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'customer',
+        type: 'STRING',
+        description: 'The customer.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'service',
+        type: 'STRING',
+        description: 'The service username.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.refund_request_confirm_button',
+    description: 'WP19: executes an approved refund request.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.refund_request_cancel_button',
+    description: 'WP19: abandons an approval or a rejection in progress; nothing is decided.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.refund_request_cancelled',
+    description: 'WP19: the administrator abandoned the decision; the request is still open.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.refund_request_executing',
+    description:
+      'WP19: the approval committed. Says deletion has started and the credit follows a successful deletion — never that money was already returned.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'amount',
+        type: 'MONEY',
+        description: 'The approved amount.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.refund_request_reject_prompt',
+    description: 'WP19: asks for the mandatory rejection reason, which the customer is told.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'minutes',
+        type: 'NUMBER',
+        description: 'How long the prompt waits.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.refund_request_reject_invalid',
+    description: 'WP19: the rejection reason is empty or too long.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'max',
+        type: 'NUMBER',
+        description: 'The longest reason accepted.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.admin.refund_request_rejected',
+    description: 'WP19: the rejection committed and the customer is told.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.refund_request_closed',
+    description:
+      'WP19: the request is no longer open — another administrator decided it, or it already finished.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.refund_request_not_executable',
+    description:
+      'WP19: the approval could not execute — the service can no longer be deleted, or the source payment cannot be refunded. Nothing moved.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.refund_request_expired',
+    description:
+      'WP19: the prompt window closed before the administrator answered; nothing was decided.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'ops.financial.service_refund_request',
+    description:
+      "Financial log (WP19): a customer's service refund request reached a final outcome — COMPLETED (deleted and credited), REJECTED, or FAILED (deletion failed; nothing credited). Never the customer's or administrator's free text.",
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'outcome',
+        type: 'STRING',
+        description: 'COMPLETED, REJECTED or FAILED.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'requestId',
+        type: 'STRING',
+        description: 'The request id.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'serviceId',
+        type: 'STRING',
+        description: 'The service id.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'telegramId',
+        type: 'STRING',
+        description: "The customer's numeric Telegram id.",
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'username',
+        type: 'STRING',
+        description: "The customer's Telegram username, or a dash.",
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'displayName',
+        type: 'STRING',
+        description: "The customer's display name, or a dash.",
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'paymentId',
+        type: 'STRING',
+        description: 'The source payment id.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'amount',
+        type: 'MONEY',
+        description: 'The approved amount. Absent, and its line dropped, when none was approved.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'adminId',
+        type: 'STRING',
+        description: 'The deciding administrator id, or a dash.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'at',
+        type: 'DATETIME',
+        description: 'When the outcome was recorded.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
 ] as const satisfies readonly TemplateDefinition[];
 
 export type TemplateKey = (typeof TEMPLATES)[number]['key'];

@@ -132,6 +132,13 @@ export const ADMIN_CAPTURE_PURPOSES = [
   'RECEIPT_BLOCK_REASON',
   'RECEIPT_REJECT_REASON',
   'CUSTOMER_BLOCK_REASON',
+  /**
+   * WP19: the amount an administrator approves for a customer's service refund request,
+   * and then the reason one rejects it with. Both name the REQUEST
+   * (`service_refund_request_id`), never a payment or a customer directly.
+   */
+  'SERVICE_REFUND_AMOUNT',
+  'SERVICE_REFUND_REJECT_REASON',
 ] as const;
 export type AdminCapturePurpose = (typeof ADMIN_CAPTURE_PURPOSES)[number];
 
@@ -140,6 +147,7 @@ export const ADMIN_REASON_CAPTURE_PURPOSES = [
   'RECEIPT_BLOCK_REASON',
   'RECEIPT_REJECT_REASON',
   'CUSTOMER_BLOCK_REASON',
+  'SERVICE_REFUND_REJECT_REASON',
 ] as const satisfies readonly AdminCapturePurpose[];
 export type AdminReasonCapturePurpose = (typeof ADMIN_REASON_CAPTURE_PURPOSES)[number];
 

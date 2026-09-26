@@ -197,6 +197,23 @@ export const CUSTOMER_NOTIFICATION_KINDS = [
    * charged through this attempt and that they may pay again; an order stays open.
    */
   'GATEWAY_PAYMENT_FAILED',
+  /**
+   * WP19. The customer's refund request for a service was recorded
+   * (`service_refund_requests.id` is the subject). The interactive reply to their reason
+   * message, and its fallback when that reply is lost to a rate limit — the
+   * `PAYMENT_TRANSFER_RECORDED` shape: a customer who does not learn the request is on
+   * record files it again, or gives up on it.
+   */
+  'SERVICE_REFUND_REQUEST_REGISTERED',
+  /**
+   * WP19. The request completed: the provider account was deleted and the approved amount
+   * was credited to the wallet. Sent by the transaction that credits it, and by nothing
+   * else — never on approval, which is a promise, and never on an ambiguous deletion. The
+   * amount is read from the request's own completed refund.
+   */
+  'SERVICE_REFUND_REQUEST_APPROVED',
+  /** WP19. An administrator refused the request; the reason is read from the request row. */
+  'SERVICE_REFUND_REQUEST_REJECTED',
 ] as const;
 export type CustomerNotificationKind = (typeof CUSTOMER_NOTIFICATION_KINDS)[number];
 export const customerNotificationKindSchema = z.enum(CUSTOMER_NOTIFICATION_KINDS);
@@ -297,6 +314,14 @@ export const CUSTOMER_NOTIFICATION_PRECONDITIONS: Readonly<
    * never reopens the payment.
    */
   GATEWAY_PAYMENT_FAILED: false,
+  /*
+   * All three `false`: a recorded request stays recorded, a COMPLETED request cannot be
+   * uncompleted and a REJECTED one cannot be un-rejected. Each is terminal for the fact it
+   * states, and a late copy is still true.
+   */
+  SERVICE_REFUND_REQUEST_REGISTERED: false,
+  SERVICE_REFUND_REQUEST_APPROVED: false,
+  SERVICE_REFUND_REQUEST_REJECTED: false,
 };
 
 /**
@@ -351,6 +376,9 @@ export const CUSTOMER_NOTIFICATION_TEMPLATES: Readonly<
   WALLET_TOPUP_GIFT_CREDITED: 'bot.wallet.topup_gift_credited',
   REFUND_COMPLETED: 'bot.refund.completed',
   GATEWAY_PAYMENT_FAILED: 'bot.payment.gateway_failed',
+  SERVICE_REFUND_REQUEST_REGISTERED: 'bot.service.refund_request_registered',
+  SERVICE_REFUND_REQUEST_APPROVED: 'bot.service.refund_request_approved',
+  SERVICE_REFUND_REQUEST_REJECTED: 'bot.service.refund_request_rejected',
 };
 
 /**

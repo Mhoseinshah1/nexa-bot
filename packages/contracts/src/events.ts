@@ -116,6 +116,10 @@ export const EVENT_TYPES = [
   'PaymentLateCompletionObserved',
   'RefundCompleted',
   'RefundFailed',
+  // WP19. A customer filed a service refund request (what the administrators' review-card
+  // push fans out from), and one reached a final outcome (what the financial log hears).
+  'ServiceRefundRequested',
+  'ServiceRefundRequestResolved',
   'WalletEntryRecorded',
   'ServiceProvisioned',
   'ServiceStateChanged',
@@ -326,8 +330,27 @@ export const EVENT_PAYLOAD_SCHEMAS = {
     channel: z.string(),
     amountMinor: z.string(),
     currency: z.string(),
-    /** `OPERATOR_FAILED`, or `SUPERSEDED` by the automatic refund of the same payment. */
-    cause: z.enum(['OPERATOR_FAILED', 'SUPERSEDED']),
+    /**
+     * `OPERATOR_FAILED`, `SUPERSEDED` by the automatic refund of the same payment, or
+     * `DELETION_FAILED` — a service refund request whose provider deletion definitively
+     * failed, so the amount it reserved is released and nothing was credited (WP19).
+     */
+    cause: z.enum(['OPERATOR_FAILED', 'SUPERSEDED', 'DELETION_FAILED']),
+  }),
+  /*
+   * WP19. Aggregate is the SERVICE. Ids only — never the customer's reason or an
+   * administrator's words; a consumer re-reads the rows it renders.
+   */
+  ServiceRefundRequested: z.object({
+    requestId: z.string(),
+    customerId: z.string(),
+    paymentId: z.string(),
+  }),
+  ServiceRefundRequestResolved: z.object({
+    requestId: z.string(),
+    customerId: z.string(),
+    paymentId: z.string(),
+    outcome: z.enum(['COMPLETED', 'REJECTED', 'FAILED']),
   }),
   WalletEntryRecorded: z.object({
     customerId: z.string(),
