@@ -975,6 +975,17 @@ export const TEMPLATES = [
     placeholders: [],
   },
   {
+    key: 'bot.blocked_spam',
+    description:
+      'Shown to a customer anti-spam blocked (WP20, brief \u00a73.5): more than twenty ' +
+      'interactions in ten seconds. The owner\u2019s sentence, word for word. Chosen when the ' +
+      'stored reason is `ANTI_SPAM_BLOCK_REASON`, so an administrator\u2019s block keeps its own ' +
+      'reply. While the customer keeps flooding, only the interaction that crossed the limit ' +
+      'is answered, so a flood cannot be amplified into one reply per message.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
     key: 'bot.blocked_with_reason',
     description:
       'Shown to a blocked customer whose block carries a reason (File 01 \u00a79, the owner\u2019s ' +

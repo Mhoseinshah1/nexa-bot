@@ -58,6 +58,7 @@ export * from './payment-gateways.js';
 export * from './gateway-invoices.js';
 export * from './tonpays.js';
 export * from './refunds.js';
+export * from './messaging-reliability.js';
 export * from './service-refund-requests.js';
 export * from './payment-receipts.js';
 export * from './provisioning.js';

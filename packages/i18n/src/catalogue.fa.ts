@@ -128,6 +128,9 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     'خوش آمدید. حساب شما در این ربات ساخته شد. برای دیدن سرویس‌ها دستور /catalog را بفرستید.',
   'bot.start.welcome_back': 'خوش آمدید. برای دیدن سرویس‌های قابل خرید دستور /catalog را بفرستید.',
   'bot.blocked': 'دسترسی این حساب به ربات بسته شده است.',
+  // WP20, brief §3.5: the owner's sentence, word for word.
+  'bot.blocked_spam':
+    'کاربر گرامی، شما به دلیل ارسال پیام‌های سریع و مکرر (اسپم) از ربات مسدود شده‌اید. برای پیگیری با پشتیبانی در ارتباط باشید.',
   // File 01 §9, word for word: the account is blocked, why, and who to talk to.
   'bot.blocked_with_reason':
     'حساب شما مسدود شده است.\n\nدلیل:\n{reason}\n\nبرای بررسی یا رفع مسدودی با پشتیبانی در ارتباط باشید.',
