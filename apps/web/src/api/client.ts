@@ -80,6 +80,7 @@ import {
   WALLET_ROUTES,
   paymentListResponseSchema,
   paymentReceiptListResponseSchema,
+  paymentTimelineResponseSchema,
   paymentResponseSchema,
   walletEntryListResponseSchema,
   walletEntryResponseSchema,
@@ -88,6 +89,7 @@ import {
   type PaymentListResponse,
   type PaymentMethod,
   type PaymentReceiptListResponse,
+  type PaymentTimelineResponse,
   type PaymentResponse,
   type PaymentState,
   type ReceiptDisposition,
@@ -1210,6 +1212,14 @@ export function fetchCompensations(
 
 export function fetchPayment(id: string): Promise<PaymentResponse> {
   return authedGet(PAYMENT_ROUTES.detail(id), paymentResponseSchema);
+}
+
+/**
+ * One payment's history (WP17). Behind `payments.view` on the server, which also withholds —
+ * and names — the receipt, refund and wallet sections the viewer may not see.
+ */
+export function fetchPaymentTimeline(id: string): Promise<PaymentTimelineResponse> {
+  return authedGet(PAYMENT_ROUTES.timeline(id), paymentTimelineResponseSchema);
 }
 
 /** What the customer sent against one payment. Behind `receipts.view` on the server. */
