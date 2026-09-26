@@ -5216,6 +5216,30 @@ export const provisioningOperations = pgTable(
      * that a crash can separate.
      */
     announcedAt: timestamptz('announced_at'),
+    /**
+     * When the panel answered THIS PROVISION's create with a success whose follow-up
+     * then failed — a read-back lost, a record with no usable link (WP15 G7).
+     *
+     * The one durable provenance a later RECONCILE may adopt on. A lookup that finds
+     * the username proves only that the NAME exists; an account made by somebody else
+     * answers it the same way. Null on every other type, and on a create that timed
+     * out, 5xx'd or was refused, because none of those says the panel acted.
+     */
+    createAcceptedAt: timestamptz('create_accepted_at'),
+    /**
+     * When THIS RECONCILE first read the account as absent (WP15 G3).
+     *
+     * A panel that accepted a create may not show it on the next read. One absence is
+     * therefore UNDECIDED, and only a second one, a backoff later, re-plans the create.
+     */
+    absenceObservedAt: timestamptz('absence_observed_at'),
+    /**
+     * How many verification READS an ambiguous commercial write has had (WP15 G2).
+     *
+     * Bounded, and separate from `attempts`, which counts WRITES: a RENEW whose answer
+     * was lost is never sent again by this path, only looked at.
+     */
+    verificationAttempts: integer('verification_attempts').notNull().default(0),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
@@ -5299,10 +5323,15 @@ export const provisioningOperations = pgTable(
      * The two NON-TERMINAL states only, as above. A `FAILED` action has written nothing
      * to the service, so the next purchase reads an unchanged row and is safe.
      */
+    /*
+     * UNKNOWN is OPEN here (WP15 G2). A commercial write whose answer was lost is being
+     * verified, and a second purchase computed from the service's un-updated allowance
+     * would target the same absolute value — the customer charged twice for one extension.
+     */
     uniqueIndex('provisioning_operations_open_commercial_key')
       .on(table.tenantId, table.serviceId)
       .where(
-        sql`type IN ('RENEW', 'ADD_TRAFFIC', 'ADD_TIME') AND state IN ('PLANNED', 'IN_FLIGHT')`,
+        sql`type IN ('RENEW', 'ADD_TRAFFIC', 'ADD_TIME') AND state IN ('PLANNED', 'IN_FLIGHT', 'UNKNOWN')`,
       ),
     index('provisioning_operations_unknown_idx')
       .on(table.tenantId, table.createdAt)
@@ -5342,6 +5371,18 @@ export const provisioningOperations = pgTable(
       sql`target_traffic_limit_bytes IS NULL OR target_traffic_limit_bytes >= 0`,
     ),
     check('provisioning_operations_attempts_check', sql`attempts >= 0 AND attempts <= 100`),
+    check(
+      'provisioning_operations_verification_attempts_check',
+      sql`verification_attempts >= 0 AND verification_attempts <= 100`,
+    ),
+    check(
+      'provisioning_operations_create_accepted_check',
+      sql`create_accepted_at IS NULL OR type = 'PROVISION'`,
+    ),
+    check(
+      'provisioning_operations_absence_observed_check',
+      sql`absence_observed_at IS NULL OR type = 'RECONCILE'`,
+    ),
     /** A claim is a holder AND a deadline, together or not at all. */
     check('provisioning_operations_claim_check', sql`(claimed_by IS NULL) = (lease_until IS NULL)`),
     /** Terminal states have a completion time; live ones do not. */

@@ -22,6 +22,7 @@ import {
   type ProviderUserOutcome,
   type ProviderUserRef,
 } from '@nexa/contracts';
+import { planApplied, readRecordUsage } from './provider-numbers.js';
 
 /**
  * RickPanel.
@@ -150,7 +151,9 @@ function outcomeFromStatus(status: number): ProviderFailureResult {
 function outcomeFromTransport(
   result: Extract<ProviderHttpResult, { ok: false }>,
 ): ProviderFailureResult {
-  return { ok: false, failure: result.failure, status: result.status };
+  return result.detail === undefined
+    ? { ok: false, failure: result.failure, status: result.status }
+    : { ok: false, failure: result.failure, status: result.status, detail: result.detail };
 }
 
 /**
@@ -190,28 +193,12 @@ type RickpanelAuth = { readonly ok: true; readonly token: string } | ProviderFai
  * anywhere in the document, which is why a record without it yields `null` here
  * rather than a fabricated zero: zero bytes used is what a brand-new account
  * looks like, so inventing it would hide a divergence instead of reporting one.
+ * The reading itself — numbers or canonical numeric strings, nothing else — is
+ * `readRecordUsage`, shared with Marzban (WP15 G5).
  */
 function usageFromUser(record: Record<string, unknown>): ProviderUsage | null {
-  const used = record['used_traffic'];
-  if (typeof used !== 'number' || !Number.isFinite(used) || used < 0) return null;
-  const limit = record['data_limit'];
-  const expire = record['expire'];
-  return {
-    usedBytes: BigInt(Math.trunc(used)),
-    // Zero and null are both "no limit". Kept as null so "unlimited" and "an
-    // allowance of nothing" cannot be confused downstream.
-    totalBytes:
-      typeof limit === 'number' && Number.isFinite(limit) && limit > 0
-        ? BigInt(Math.trunc(limit))
-        : null,
-    // Seconds, not milliseconds: the document says so in `POST /api/user`, and
-    // the factor of a thousand is an expiry in 2026 against one in 1970.
-    expiresAt:
-      typeof expire === 'number' && Number.isFinite(expire) && expire > 0
-        ? new Date(Math.trunc(expire) * 1000)
-        : null,
-    lastSeen: { kind: 'UNSUPPORTED' },
-  };
+  const read = readRecordUsage(record);
+  return read.ok ? read.usage : null;
 }
 
 /**
@@ -330,6 +317,8 @@ export class RickpanelAdapter implements ProviderAdapter {
 
     const login = await http.send({
       method: 'POST',
+      // A token exchange creates a session and changes no account: a READ (G6).
+      effect: 'READ',
       path: TOKEN_PATH,
       body: {
         kind: 'form',
@@ -545,9 +534,13 @@ export class RickpanelAdapter implements ProviderAdapter {
        * A read-back failure that is already UNKNOWN (a timeout, a 5xx, an unreadable
        * body) keeps its own kind, which is the more useful thing to show an operator.
        */
+      //
+      // Every failure from here on carries `accepted`: the panel answered the create
+      // itself with a success, which is the one provenance a later READ may adopt on
+      // (WP15 G7). A 409 never reaches this point.
       return (SAFE_TO_REPLAY_FAILURE_KINDS as readonly string[]).includes(readBack.failure)
-        ? { ok: false, failure: 'MALFORMED_RESPONSE', status: created.status }
-        : readBack;
+        ? { ok: false, failure: 'MALFORMED_RESPONSE', status: created.status, accepted: true }
+        : { ...readBack, accepted: true };
     }
     if (!readBack.found) {
       /*
@@ -562,7 +555,7 @@ export class RickpanelAdapter implements ProviderAdapter {
        * "propagation is retryable" has to mean for a create: the READ repeats,
        * never the create.
        */
-      return { ok: false, failure: 'MALFORMED_RESPONSE', status: created.status };
+      return { ok: false, failure: 'MALFORMED_RESPONSE', status: created.status, accepted: true };
     }
     return this.delivered(target, readBack.record, created.status);
   }
@@ -581,8 +574,9 @@ export class RickpanelAdapter implements ProviderAdapter {
        * UNKNOWN for a mutating call, which is right: something is there, nothing
        * may be created again, and a READ is what resolves it. Reporting success
        * with no link would mark a service DELIVERED that no customer received.
+       * `delivered` is reached only after an accepted create, so this is provenance.
        */
-      return { ok: false, failure: 'MALFORMED_RESPONSE', status };
+      return { ok: false, failure: 'MALFORMED_RESPONSE', status, accepted: true };
     }
     return {
       ok: true,
@@ -668,8 +662,12 @@ export class RickpanelAdapter implements ProviderAdapter {
     if (!read.ok) return read;
     if (!read.found) return { ok: true, found: false };
 
-    const usage = usageFromUser(read.record);
-    if (usage === null) return { ok: false, failure: 'MALFORMED_RESPONSE', status: null };
+    // The record is THERE and its usage cannot be read: a different fact from "not
+    // found", and the detail is what lets an operator tell the two apart (G5).
+    const usage = readRecordUsage(read.record);
+    if (!usage.ok) {
+      return { ok: false, failure: 'MALFORMED_RESPONSE', status: null, detail: usage.detail };
+    }
     const url = subscriptionFrom(target.baseUrl, read.record);
     return {
       ok: true,
@@ -682,7 +680,7 @@ export class RickpanelAdapter implements ProviderAdapter {
        * can see the service, and re-delivery is its own retryable act.
        */
       delivery: url === null ? { kind: 'NONE' } : { kind: 'SUBSCRIPTION_LINK', url },
-      usage,
+      usage: usage.usage,
     };
   }
 
@@ -817,7 +815,19 @@ export class RickpanelAdapter implements ProviderAdapter {
     if (record === null) {
       return { ok: false, failure: 'MALFORMED_RESPONSE', status: changed.status };
     }
-    if (!appliedPlan(record, plan)) {
+    // Read from the RESPONSE rather than inferred from the request: a 200 whose record
+    // still holds the old expiry is a panel doing something this adapter does not model,
+    // and reporting success would tell a customer their service was renewed when it was not.
+    const applied = planApplied(record, plan);
+    if (applied === 'MALFORMED') {
+      return {
+        ok: false,
+        failure: 'MALFORMED_RESPONSE',
+        status: changed.status,
+        detail: 'VALUE_MALFORMED',
+      };
+    }
+    if (applied === 'DIFFERENT') {
       return { ok: false, failure: 'MALFORMED_RESPONSE', status: changed.status };
     }
     return { ok: true, found: true, usage: usageFromUser(record) };
@@ -1004,33 +1014,4 @@ export class RickpanelAdapter implements ProviderAdapter {
     if (found.usage === null) return { ok: false, failure: 'MALFORMED_RESPONSE', status: null };
     return { ok: true, usage: found.usage };
   }
-}
-
-/**
- * Did the panel's own record come back carrying what the plan asked for?
- *
- * Read from the RESPONSE rather than inferred from the request: a 200 whose
- * record still holds the old expiry is a panel doing something this adapter does
- * not model, and reporting success would tell a customer their service was
- * renewed when it was not.
- *
- * Both sentinels are folded the way the panel folds them — `expire: 0` and
- * `data_limit: 0` mean no limit and read back as null or zero — which is the same
- * mapping `usageFromUser` makes. A field the plan did not set is not checked,
- * because the adapter did not send it and the panel was right to leave it alone.
- */
-function appliedPlan(record: Record<string, unknown>, plan: ProviderAllowancePlan): boolean {
-  if (plan.expiresAt !== null) {
-    const wanted = Math.floor(plan.expiresAt.getTime() / 1000);
-    const got = record['expire'];
-    const normalised = got === null || got === 0 ? 0 : got;
-    if (normalised !== wanted) return false;
-  }
-  if (plan.trafficLimitBytes !== null) {
-    const wanted = Number(plan.trafficLimitBytes);
-    const got = record['data_limit'];
-    const normalised = got === null || got === 0 ? 0 : got;
-    if (normalised !== wanted) return false;
-  }
-  return true;
 }

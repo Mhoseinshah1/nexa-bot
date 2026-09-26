@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, isNull, lt, lte, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, lt, lte, notInArray, or, sql } from 'drizzle-orm';
 import {
   isIdempotentMutation,
   isMutatingOperation,
@@ -28,6 +28,7 @@ import {
 } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { provisioningOperations, services } from '../../../../infrastructure/persistence/schema.js';
 import type { OperationDraft, OperationRecord, OperationRepository } from '../application/ports.js';
+import { RECONCILE_ROUNDS } from '../application/provision-executor.js';
 
 /** Local alias so the predicate below reads as the rule rather than as a constant. */
 const MAX_ATTEMPTS = OPERATION_MAX_ATTEMPTS;
@@ -58,6 +59,9 @@ const REPLAYABLE_MUTATION_TYPES: readonly OperationType[] = OPERATION_TYPES.filt
 );
 
 type Row = typeof provisioningOperations.$inferSelect;
+
+/** The states `provisioning_operations_open_commercial_key` treats as open. */
+const OPEN_COMMERCIAL_STATES = ['PLANNED', 'IN_FLIGHT', 'UNKNOWN'] as const;
 
 function toRecord(row: Row): OperationRecord {
   return {
@@ -96,6 +100,9 @@ function toRecord(row: Row): OperationRecord {
     failureKind: row.failureKind as ProviderFailureKind | null,
     failureMessage: row.failureMessage,
     completedAt: row.completedAt,
+    createAcceptedAt: row.createAcceptedAt,
+    absenceObservedAt: row.absenceObservedAt,
+    verificationAttempts: row.verificationAttempts,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -170,7 +177,7 @@ export class DrizzleOperationRepository implements OperationRepository {
          * costs anything — but an ordering that is only correct because of what happens
          * to be in the column is the kind of claim that rots quietly.
          */
-        nextAttemptAt: now,
+        nextAttemptAt: draft.notBefore ?? now,
         createdAt: now,
         updatedAt: now,
       })
@@ -420,13 +427,17 @@ export class DrizzleOperationRepository implements OperationRepository {
           eq(provisioningOperations.tenantId, tenantId),
           eq(provisioningOperations.serviceId, serviceId),
           /*
-           * The SAME three types and the SAME two states as
+           * The SAME three types and the SAME three states as
            * `provisioning_operations_open_commercial_key`, which is the rule this read
            * reports rather than enforces. `TARGETED_OPERATION_TYPES` is the contract's
            * own list, so the query and the index cannot drift apart silently.
+           *
+           * `UNKNOWN` is open (WP15 G2): a write whose answer was lost is being verified,
+           * and a second purchase priced from the un-updated allowance would target the
+           * same absolute value — two payments for one extension.
            */
           inArray(provisioningOperations.type, [...TARGETED_OPERATION_TYPES]),
-          inArray(provisioningOperations.state, ['PLANNED', 'IN_FLIGHT']),
+          inArray(provisioningOperations.state, [...OPEN_COMMERCIAL_STATES]),
         ),
       )
       .limit(1);
@@ -697,6 +708,8 @@ export class DrizzleOperationRepository implements OperationRepository {
       readonly failureMessage?: string | null;
       readonly nextAttemptAt?: Date | null;
       readonly completedAt?: Date | null;
+      readonly createAcceptedAt?: Date;
+      readonly absenceObservedAt?: Date;
     },
     now: Date,
     tx: TransactionScope,
@@ -713,6 +726,12 @@ export class DrizzleOperationRepository implements OperationRepository {
         ...(result.failureKind === undefined ? {} : { failureKind: result.failureKind }),
         ...(result.failureMessage === undefined ? {} : { failureMessage: result.failureMessage }),
         ...(result.nextAttemptAt === undefined ? {} : { nextAttemptAt: result.nextAttemptAt }),
+        ...(result.createAcceptedAt === undefined
+          ? {}
+          : { createAcceptedAt: result.createAcceptedAt }),
+        ...(result.absenceObservedAt === undefined
+          ? {}
+          : { absenceObservedAt: result.absenceObservedAt }),
         /*
          * `provisioning_operations_completed_check` binds the terminal states to this
          * stamp, so it is written by the same statement rather than left to a caller.
@@ -1048,7 +1067,7 @@ export class DrizzleOperationRepository implements OperationRepository {
   async resolveUnknownForService(
     scope: TenantContext,
     serviceId: string,
-    to: Extract<OperationState, 'SUCCEEDED' | 'FAILED'>,
+    to: Extract<OperationState, 'SUCCEEDED' | 'FAILED' | 'ABANDONED'>,
     now: Date,
     tx: TransactionScope,
   ): Promise<number> {
@@ -1061,6 +1080,9 @@ export class DrizzleOperationRepository implements OperationRepository {
           eq(provisioningOperations.tenantId, tenantId),
           eq(provisioningOperations.serviceId, serviceId),
           eq(provisioningOperations.state, 'UNKNOWN'),
+          // A lost commercial write is answered by its OWN verification (WP15 G2), never
+          // by a reconcile of the account's existence.
+          notInArray(provisioningOperations.type, [...TARGETED_OPERATION_TYPES]),
         ),
       )
       .returning({ id: provisioningOperations.id });
@@ -1105,6 +1127,10 @@ export class DrizzleOperationRepository implements OperationRepository {
           eq(provisioningOperations.tenantId, tenantId),
           eq(provisioningOperations.state, 'UNKNOWN'),
           eq(services.state, 'UNRECONCILED'),
+          notInArray(provisioningOperations.type, [...TARGETED_OPERATION_TYPES]),
+          // WP15 G4: a lost create whose reconcile rounds are spent waits for an operator.
+          // Filtered HERE, not by the caller, so an exhausted row cannot fill the window.
+          sql`${provisioningOperations.verificationAttempts} < ${RECONCILE_ROUNDS}`,
           sql`NOT EXISTS (
             SELECT 1 FROM ${provisioningOperations} AS open_reconcile
              WHERE open_reconcile.tenant_id = ${provisioningOperations.tenantId}
@@ -1116,5 +1142,165 @@ export class DrizzleOperationRepository implements OperationRepository {
       .orderBy(asc(provisioningOperations.createdAt), asc(provisioningOperations.id))
       .limit(limit);
     return rows.map((row) => toRecord(row.operation));
+  }
+
+  async hasCreateProvenance(
+    scope: TenantContext,
+    serviceId: string,
+    tx?: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select({ id: provisioningOperations.id })
+      .from(provisioningOperations)
+      .where(
+        and(
+          eq(provisioningOperations.tenantId, tenantId),
+          eq(provisioningOperations.serviceId, serviceId),
+          eq(provisioningOperations.type, 'PROVISION'),
+          or(
+            sql`${provisioningOperations.createAcceptedAt} IS NOT NULL`,
+            eq(provisioningOperations.state, 'SUCCEEDED'),
+          ),
+        ),
+      )
+      .limit(1);
+    return rows.length > 0;
+  }
+
+  async countReconcileRound(
+    scope: TenantContext,
+    id: string,
+    seen: number,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .update(provisioningOperations)
+      .set({ verificationAttempts: seen + 1, updatedAt: now })
+      .where(
+        and(
+          eq(provisioningOperations.tenantId, tenantId),
+          eq(provisioningOperations.id, id),
+          eq(provisioningOperations.state, 'UNKNOWN'),
+          eq(provisioningOperations.verificationAttempts, seen),
+        ),
+      )
+      .returning({ id: provisioningOperations.id });
+    return rows.length > 0;
+  }
+
+  async exhaustReconcileRounds(
+    scope: TenantContext,
+    serviceId: string,
+    rounds: number,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<number> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .update(provisioningOperations)
+      .set({ verificationAttempts: rounds, updatedAt: now })
+      .where(
+        and(
+          eq(provisioningOperations.tenantId, tenantId),
+          eq(provisioningOperations.serviceId, serviceId),
+          eq(provisioningOperations.state, 'UNKNOWN'),
+          notInArray(provisioningOperations.type, [...TARGETED_OPERATION_TYPES]),
+          lt(provisioningOperations.verificationAttempts, rounds),
+        ),
+      )
+      .returning({ id: provisioningOperations.id });
+    return rows.length;
+  }
+
+  async claimDueVerification(
+    scope: TenantContext,
+    now: Date,
+    leaseUntil: Date,
+    maxReads: number,
+    tx: TransactionScope,
+  ): Promise<OperationRecord | null> {
+    const tenantId = requireTenantId(scope);
+    /*
+     * One row, locked and skipped by a concurrent claimer, then bumped: the bump of
+     * `next_attempt_at` to the lease is the claim, and the WHERE repeats every predicate
+     * so a row another replica claimed first is simply not returned.
+     */
+    const due = this.exec(tx)
+      .select({ id: provisioningOperations.id })
+      .from(provisioningOperations)
+      .where(
+        and(
+          eq(provisioningOperations.tenantId, tenantId),
+          eq(provisioningOperations.state, 'UNKNOWN'),
+          inArray(provisioningOperations.type, [...TARGETED_OPERATION_TYPES]),
+          sql`${provisioningOperations.nextAttemptAt} IS NOT NULL`,
+          lte(provisioningOperations.nextAttemptAt, now),
+          lt(provisioningOperations.verificationAttempts, maxReads),
+          sql`NOT EXISTS (
+            SELECT 1 FROM ${provisioningOperations} AS in_flight
+            WHERE in_flight.tenant_id = ${provisioningOperations.tenantId}
+              AND in_flight.service_id = ${provisioningOperations.serviceId}
+              AND in_flight.state = 'IN_FLIGHT'
+          )`,
+        ),
+      )
+      .orderBy(asc(provisioningOperations.nextAttemptAt), asc(provisioningOperations.createdAt))
+      .limit(1)
+      .for('update', { skipLocked: true });
+    const rows = await this.exec(tx)
+      .update(provisioningOperations)
+      .set({
+        nextAttemptAt: leaseUntil,
+        verificationAttempts: sql`${provisioningOperations.verificationAttempts} + 1`,
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(provisioningOperations.tenantId, tenantId),
+          eq(provisioningOperations.state, 'UNKNOWN'),
+          lte(provisioningOperations.nextAttemptAt, now),
+          lt(provisioningOperations.verificationAttempts, maxReads),
+          sql`${provisioningOperations.id} IN ${due}`,
+        ),
+      )
+      .returning();
+    const row = rows[0];
+    return row === undefined ? null : toRecord(row);
+  }
+
+  async rescheduleVerification(
+    scope: TenantContext,
+    id: string,
+    nextAttemptAt: Date | null,
+    note: string,
+    now: Date,
+    tx: TransactionScope,
+    releaseRead = false,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .update(provisioningOperations)
+      .set({
+        nextAttemptAt,
+        failureMessage: note,
+        ...(releaseRead
+          ? {
+              verificationAttempts: sql`GREATEST(${provisioningOperations.verificationAttempts} - 1, 0)`,
+            }
+          : {}),
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(provisioningOperations.tenantId, tenantId),
+          eq(provisioningOperations.id, id),
+          eq(provisioningOperations.state, 'UNKNOWN'),
+        ),
+      )
+      .returning({ id: provisioningOperations.id });
+    return rows.length > 0;
   }
 }

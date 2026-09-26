@@ -153,7 +153,12 @@ export type CustomerRotationOffer =
 /**
  * The operations a CUSTOMER may ask for on their own service.
  *
- * Three, and the list is here rather than in `@nexa/contracts` because it is a product
+ * Two. `TERMINATE` was the third and the owner removed it (WP15 G1): a customer ends a
+ * service by asking an operator, never by a tap that deletes a provider account. Nothing
+ * here decides whether it comes back as a refund request — that is deferred, and would be
+ * a request an operator acts on, not an operation a customer plans.
+ *
+ * The list is here rather than in `@nexa/contracts` because it is a product
  * policy rather than a vocabulary: `OPERATION_TYPES` says what an operation can be, and
  * this says which of them a person who is not an operator is allowed to initiate.
  *
@@ -170,7 +175,6 @@ export type CustomerRotationOffer =
 export const CUSTOMER_SERVICE_OPERATIONS = [
   'SUSPEND',
   'RESUME',
-  'TERMINATE',
 ] as const satisfies readonly OperationType[];
 
 export type CustomerServiceOperation = (typeof CUSTOMER_SERVICE_OPERATIONS)[number];
@@ -930,6 +934,18 @@ export class ProvisioningService {
     type: CustomerServiceOperation,
     input: { readonly idempotencyKey: string },
   ): Promise<OperationRecord> {
+    /*
+     * Re-checked at run time, not only by the type (WP15 G1). A caller that is not
+     * TypeScript, or a type widened by a later edit, must still not be able to plan a
+     * customer TERMINATE: the list above is the policy, and this is where it is enforced.
+     */
+    if (!(CUSTOMER_SERVICE_OPERATIONS as readonly string[]).includes(type)) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.ORDER_STATE_INVALID,
+        'This action is not available to a customer.',
+        { operation: type },
+      );
+    }
     const service = await this.getForCustomer(scope, customerId, serviceId);
     return this.planRequestedOperation(scope, actor, service, type, input, {
       requestedBy: customerId,

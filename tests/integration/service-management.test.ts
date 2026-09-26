@@ -3,6 +3,7 @@ import type { ProductCategoryId } from '@nexa/contracts';
 import { sql } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  COMMERCE_ERROR_CODES,
   EMPTY_PRODUCT_DISPLAY,
   money,
   type ActorContext,
@@ -293,7 +294,11 @@ describe('a customer manages the service they bought', () => {
   // What the customer is offered
   // =========================================================================
 
-  it('offers pause and end on an active service, and the end button only ASKS', async () => {
+  /** Every callback on the last message, whole — `nt:<id>` must not read as `t:<id>`. */
+  const drawnCallbacks = (): string[] =>
+    [...lastMessage().matchAll(/callback_data\\?":\\?"([^"\\]+)/gu)].map((match) => match[1] ?? '');
+
+  it('offers pause on an active service, and NO end button at all (WP15 G1)', async () => {
     const service = await activeService('offer-active');
 
     const result = await runtime().handle(
@@ -303,18 +308,17 @@ describe('a customer manages the service they bought', () => {
     );
 
     expect(result.replyKey).toBe('bot.service.card');
-    const body = lastMessage();
-    expect(body, 'pause is offered').toContain(`u:${service.id}`);
-    expect(body, 'resume is not, because the service is not suspended').not.toContain(
+    const drawn = drawnCallbacks();
+    expect(drawn, 'pause is offered').toContain(`u:${service.id}`);
+    expect(drawn, 'resume is not, because the service is not suspended').not.toContain(
       `e:${service.id}`,
     );
-    expect(body, 'end is offered as a QUESTION').toContain(`t:${service.id}`);
     /*
-     * The destructive prefix appears nowhere on this screen. It is produced in one
-     * place only — the confirmation — which is what makes "terminate takes two taps" a
-     * property of the code rather than a promise in a comment.
+     * The owner removed customer termination. Neither half of the old two-tap pair is
+     * drawn — a customer ends a service by asking an operator.
      */
-    expect(body, 'and never as the destructive callback').not.toContain(`k:${service.id}`);
+    expect(drawn, 'no end question').not.toContain(`t:${service.id}`);
+    expect(drawn, 'no end confirmation').not.toContain(`k:${service.id}`);
   });
 
   // =========================================================================
@@ -395,22 +399,22 @@ describe('a customer manages the service they bought', () => {
   // Terminate takes two taps
   // =========================================================================
 
-  it('asks before it ends anything, and the question alone plans nothing', async () => {
+  it('answers a stale end QUESTION with a refusal, and plans nothing (WP15 G1)', async () => {
     const service = await activeService('terminate-asks');
 
     const asked = await runtime().handle(tenantA, systemActor('bot'), tapUpdate(`t:${service.id}`));
 
+    // Still recognised — a message drawn before this release carries the button — and
+    // refused with the sentence a service that cannot do something already gets.
     expect(asked.intent).toBe('SERVICE_TERMINATE_ASK');
-    expect(asked.replyKey).toBe('bot.service.terminate_confirm');
-    // The one place the destructive callback is produced.
-    expect(lastMessage()).toContain(`k:${service.id}`);
+    expect(asked.replyKey).toBe('bot.service.capability_unsupported');
+    expect(drawnCallbacks(), 'no confirmation is offered').not.toContain(`k:${service.id}`);
     expect(await operationOf(service.id, 'TERMINATE'), 'nothing was planned').toBeUndefined();
     expect(panel.users.has(service.username), 'and nothing was deleted').toBe(true);
   });
 
-  it('ends the service on the second tap, and deletes the account on the panel', async () => {
+  it('refuses a stale or bookmarked CONFIRMATION tap: nothing planned, nothing deleted', async () => {
     const service = await activeService('terminate-ok');
-    await runtime().handle(tenantA, systemActor('bot'), tapUpdate(`t:${service.id}`));
 
     const confirmed = await runtime().handle(
       tenantA,
@@ -419,35 +423,53 @@ describe('a customer manages the service they bought', () => {
     );
 
     expect(confirmed.intent).toBe('SERVICE_TERMINATE');
-    expect(confirmed.replyKey).toBe('bot.service.action_requested');
+    expect(confirmed.replyKey).toBe('bot.service.capability_unsupported');
     await ctx.container.provisionerLoop.tick();
 
-    expect(panel.users.has(service.username), 'the account is gone').toBe(false);
-    expect((await services.findById(tenantA, service.id))?.state).toBe('TERMINATED');
-    expect((await operationOf(service.id, 'TERMINATE'))?.state).toBe('SUCCEEDED');
+    expect(await operationOf(service.id, 'TERMINATE'), 'nothing was planned').toBeUndefined();
+    expect(panel.users.has(service.username), 'the account is still there').toBe(true);
+    expect((await services.findById(tenantA, service.id))?.state).toBe('ACTIVE');
+    const audited = await ctx.container.database.db.execute(
+      sql`SELECT action FROM audit_logs WHERE entity_id = ${service.id}`,
+    );
+    expect(
+      audited.rows.map((row) => row['action']),
+      'no terminate was even requested',
+    ).not.toContain('service.request_terminate');
   });
 
-  it('offers nothing further once the service has ended', async () => {
+  it('cannot plan a customer TERMINATE through the application layer either', async () => {
+    const service = await activeService('terminate-app-layer');
+    await expect(
+      ctx.container.provisioning.requestFromCustomer(
+        tenantA,
+        systemActor('bot'),
+        customerA,
+        service.id,
+        // The type no longer admits it; a caller that is not TypeScript still must not.
+        'TERMINATE' as never,
+        { idempotencyKey: 'customer-terminate-direct' },
+      ),
+    ).rejects.toMatchObject({ code: COMMERCE_ERROR_CODES.ORDER_STATE_INVALID });
+    expect(await operationOf(service.id, 'TERMINATE'), 'nothing was planned').toBeUndefined();
+  });
+
+  it('offers nothing further once an OPERATOR has ended the service', async () => {
     const service = await activeService('terminate-then-detail');
-    await runtime().handle(tenantA, systemActor('bot'), tapUpdate(`k:${service.id}`));
+    await ctx.container.provisioning.requestFromOperator(tenantA, owner, service.id, 'TERMINATE', {
+      idempotencyKey: 'op-terminate-then-detail',
+    });
     await ctx.container.provisionerLoop.tick();
+    expect(panel.users.has(service.username), 'the operator path still deletes').toBe(false);
 
     await runtime().handle(tenantA, systemActor('bot'), tapUpdate(`s:${service.id}`));
-    // Whole callbacks, not substrings: the card's note button is `nt:<id>`.
-    const drawn = [...lastMessage().matchAll(/callback_data\\?":\\?"([^"\\]+)/gu)].map(
-      (match) => match[1],
-    );
+    const drawn = drawnCallbacks();
     expect(drawn.length).toBeGreaterThan(0);
     for (const prefix of ['u:', 'e:', 't:', 'k:']) {
       expect(drawn, `${prefix} must not be offered for a terminated service`).not.toContain(
         `${prefix}${service.id}`,
       );
     }
-    /*
-     * And a second terminate is refused rather than becoming a second DELETE against
-     * somebody's panel. `TERMINATED` is terminal in SERVICE_MACHINE and absent from
-     * `OPERATION_LEGAL_FROM.TERMINATE`.
-     */
     const again = await runtime().handle(tenantA, systemActor('bot'), tapUpdate(`k:${service.id}`));
     expect(again.replyKey).toBe('bot.service.capability_unsupported');
   });
@@ -465,16 +487,19 @@ describe('a customer manages the service they bought', () => {
       botInstanceId: BOT_A,
     });
 
+    // A pause, the destructive tap a customer still has, aimed at somebody else's row.
     const stolen = await runtime().handle(
       tenantA,
       systemActor('bot'),
-      tapUpdate(`k:${service.id}`, '920920'),
+      tapUpdate(`u:${service.id}`, '920920'),
     );
 
     expect(stolen.replyKey).toBe('bot.service.not_found');
-    expect(await operationOf(service.id, 'TERMINATE'), 'nothing was planned').toBeUndefined();
+    expect(await operationOf(service.id, 'SUSPEND'), 'nothing was planned').toBeUndefined();
     await ctx.container.provisionerLoop.tick();
-    expect(panel.users.has(service.username), 'and the account is untouched').toBe(true);
+    expect(panel.users.get(service.username)?.status, 'and the account is untouched').toBe(
+      'active',
+    );
   });
 
   it('cannot be reached from another tenant', async () => {
@@ -598,10 +623,12 @@ describe('a customer manages the service they bought', () => {
      * The other side of the same fact, and the reason `wasPresent` exists: the goal of
      * a terminate is that this account is not on this panel, and that holds whether or
      * not the DELETE found anything. Failing here would strand every terminate whose
-     * response went missing.
+     * response went missing. An OPERATOR's terminate since WP15 G1.
      */
     const service = await activeService('terminate-absent');
-    await runtime().handle(tenantA, systemActor('bot'), tapUpdate(`k:${service.id}`));
+    await ctx.container.provisioning.requestFromOperator(tenantA, owner, service.id, 'TERMINATE', {
+      idempotencyKey: 'op-terminate-absent',
+    });
     panel.forget(service.username);
 
     await ctx.container.provisionerLoop.tick();
@@ -786,18 +813,19 @@ describe('a customer manages the service they bought', () => {
      * else can. Inference is what the legacy `/admin/logs` offered.
      *
      * TWO rows, and they are different facts: the request is a decision and the
-     * execution is an effect. A terminate that was asked for and never carried out must
-     * not look like one that was.
+     * execution is an effect. Since WP15 G1 the one who can ask is an operator.
      */
     const service = await activeService('audit-terminate');
-    await runtime().handle(tenantA, systemActor('bot'), tapUpdate(`k:${service.id}`));
+    await ctx.container.provisioning.requestFromOperator(tenantA, owner, service.id, 'TERMINATE', {
+      idempotencyKey: 'op-audit-terminate',
+    });
 
     const requested = await ctx.container.database.db.execute(
       sql`SELECT action, after FROM audit_logs WHERE entity_id = ${service.id} ORDER BY occurred_at`,
     );
     expect(requested.rows.map((row) => row['action'])).toContain('service.request_terminate');
     const decision = requested.rows.find((row) => row['action'] === 'service.request_terminate');
-    expect((decision?.['after'] as Record<string, unknown>)['requestedBy']).toBe(customerA);
+    expect((decision?.['after'] as Record<string, unknown>)['requestedBy']).toBe('OPERATOR');
 
     await ctx.container.provisionerLoop.tick();
 
@@ -805,8 +833,6 @@ describe('a customer manages the service they bought', () => {
       sql`SELECT action FROM audit_logs WHERE entity_id = ${service.id} ORDER BY occurred_at`,
     );
     expect(after.rows.map((row) => row['action'])).toEqual([
-      // The whole life of this service, in order: settled, created on the panel, asked
-      // to be ended, ended.
       'service.plan',
       'service.provision',
       'service.request_terminate',
@@ -821,15 +847,18 @@ describe('a customer manages the service they bought', () => {
      * so an executor that called the panel from inside `uow.run` would fail this case
      * by never reaching the panel at all.
      *
-     * Asserted through the whole management lifecycle rather than one call, because the
-     * three new branches are three new places the mistake could be made and each of
-     * them writes to the database on either side of its provider call.
+     * Asserted through the whole management lifecycle rather than one call: the
+     * customer's two taps, then the operator's terminate.
      */
     const service = await activeService('outside-transactions');
-    for (const data of [`u:${service.id}`, `e:${service.id}`, `k:${service.id}`]) {
+    for (const data of [`u:${service.id}`, `e:${service.id}`]) {
       await runtime().handle(tenantA, systemActor('bot'), tapUpdate(data));
       await ctx.container.provisionerLoop.tick();
     }
+    await ctx.container.provisioning.requestFromOperator(tenantA, owner, service.id, 'TERMINATE', {
+      idempotencyKey: 'op-outside-transactions',
+    });
+    await ctx.container.provisionerLoop.tick();
     expect(panel.users.has(service.username), 'every call reached the panel').toBe(false);
     expect((await services.findById(tenantA, service.id))?.state).toBe('TERMINATED');
   });

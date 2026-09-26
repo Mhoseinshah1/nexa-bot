@@ -21,6 +21,7 @@ import {
   type ProviderUserOutcome,
   type ProviderUserRef,
 } from '@nexa/contracts';
+import { planApplied, readRecordUsage } from './provider-numbers.js';
 
 /**
  * Marzban.
@@ -112,7 +113,9 @@ function outcomeFromStatus(status: number): ProviderFailureResult {
 function outcomeFromTransport(
   result: Extract<ProviderHttpResult, { ok: false }>,
 ): ProviderFailureResult {
-  return { ok: false, failure: result.failure, status: result.status };
+  return result.detail === undefined
+    ? { ok: false, failure: result.failure, status: result.status }
+    : { ok: false, failure: result.failure, status: result.status, detail: result.detail };
 }
 
 /**
@@ -168,26 +171,10 @@ type MarzbanAuth = { readonly ok: true; readonly token: string } | ProviderFailu
  * stay forward compatible.
  */
 function usageFromUser(record: Record<string, unknown>): ProviderUsage | null {
-  const used = record['used_traffic'];
-  if (typeof used !== 'number' || !Number.isFinite(used) || used < 0) return null;
-  const limit = record['data_limit'];
-  const expire = record['expire'];
-  return {
-    usedBytes: BigInt(Math.trunc(used)),
-    // Zero and null are both Marzban's "no limit". Kept as null so that "unlimited"
-    // and "an allowance of nothing" cannot be confused downstream.
-    totalBytes:
-      typeof limit === 'number' && Number.isFinite(limit) && limit > 0
-        ? BigInt(Math.trunc(limit))
-        : null,
-    // Marzban's `expire` is epoch SECONDS, not milliseconds. The factor of a thousand
-    // is the difference between an expiry in 2026 and one in 1970.
-    expiresAt:
-      typeof expire === 'number' && Number.isFinite(expire) && expire > 0
-        ? new Date(Math.trunc(expire) * 1000)
-        : null,
-    lastSeen: { kind: 'UNSUPPORTED' },
-  };
+  // Numbers or canonical numeric strings, `used_traffic` required, `expire` in SECONDS:
+  // one reading shared with RickPanel (WP15 G5).
+  const read = readRecordUsage(record);
+  return read.ok ? read.usage : null;
 }
 
 /**
@@ -236,6 +223,8 @@ export class MarzbanAdapter implements ProviderAdapter {
 
     const login = await http.send({
       method: 'POST',
+      // A token exchange creates a session and changes no account: a READ (G6).
+      effect: 'READ',
       path: TOKEN_PATH,
       body: {
         kind: 'form',
@@ -352,20 +341,29 @@ export class MarzbanAdapter implements ProviderAdapter {
     });
     if (!created.ok) return outcomeFromTransport(created);
     if (created.status === 429) return { ok: false, failure: 'RATE_LIMITED', status: 429 };
+    /*
+     * A 409 is the panel saying the NAME is taken, and nothing more (WP15 G7).
+     *
+     * It used to land below as `PROVIDER_ERROR` — UNKNOWN for a create — and reconcile
+     * then found the name and adopted the account: somebody else's account, delivered to
+     * a paying customer, because a username collision was read as provenance. A 409 is
+     * this request REFUSED, which is what `PROVIDER_REFUSED` says and what RickPanel's
+     * adapter already answered. Whether the service has provenance from an EARLIER
+     * accepted create is the executor's question, from its own durable record.
+     */
+    if (created.status === 409) {
+      return { ok: false, failure: 'PROVIDER_REFUSED', status: 409 };
+    }
     if (created.status < 200 || created.status >= 300) {
-      /*
-       * Nothing after a good token exchange may report an authentication failure — it
-       * would send an operator to replace a password that just worked. A 409 for an
-       * existing username lands here as `PROVIDER_ERROR`, which classifies as UNKNOWN
-       * for a mutating operation and therefore routes to reconciliation. That is the
-       * wanted outcome: the existing account is ASKED for and adopted, rather than a
-       * status code being read as permission to assume anything about it.
-       */
+      // Nothing after a good token exchange may report an authentication failure — it
+      // would send an operator to replace a password that just worked.
       return { ok: false, failure: 'PROVIDER_ERROR', status: created.status };
     }
+    // From here the panel answered the create with a success: every failure below carries
+    // `accepted`, the one provenance a later READ may adopt on (G7).
     const record = parseJson(created.bodyText);
     if (record === null) {
-      return { ok: false, failure: 'MALFORMED_RESPONSE', status: created.status };
+      return { ok: false, failure: 'MALFORMED_RESPONSE', status: created.status, accepted: true };
     }
     const url = absoluteSubscription(target.baseUrl, record['subscription_url']);
     if (url === null) {
@@ -376,7 +374,7 @@ export class MarzbanAdapter implements ProviderAdapter {
        * right, because the account was very probably created and this installation
        * cannot deliver it. Reconciliation reads the user back and gets the URL.
        */
-      return { ok: false, failure: 'MALFORMED_RESPONSE', status: created.status };
+      return { ok: false, failure: 'MALFORMED_RESPONSE', status: created.status, accepted: true };
     }
     return {
       ok: true,
@@ -423,9 +421,16 @@ export class MarzbanAdapter implements ProviderAdapter {
     if (record === null) {
       return { ok: false, failure: 'MALFORMED_RESPONSE', status: read.status };
     }
-    const usage = usageFromUser(record);
-    if (usage === null) {
-      return { ok: false, failure: 'MALFORMED_RESPONSE', status: read.status };
+    // The record is THERE and its usage cannot be read: a different fact from "not
+    // found", and the detail is what lets an operator tell the two apart (G5).
+    const usage = readRecordUsage(record);
+    if (!usage.ok) {
+      return {
+        ok: false,
+        failure: 'MALFORMED_RESPONSE',
+        status: read.status,
+        detail: usage.detail,
+      };
     }
     const url = absoluteSubscription(target.baseUrl, record['subscription_url']);
     return {
@@ -437,7 +442,7 @@ export class MarzbanAdapter implements ProviderAdapter {
       // exists for must not be blocked by a delivery detail — an operator can see the
       // service, and re-delivery is its own retryable act.
       delivery: url === null ? { kind: 'NONE' } : { kind: 'SUBSCRIPTION_LINK', url },
-      usage,
+      usage: usage.usage,
     };
   }
 
@@ -596,7 +601,20 @@ export class MarzbanAdapter implements ProviderAdapter {
     if (record === null) {
       return { ok: false, failure: 'MALFORMED_RESPONSE', status: changed.status };
     }
-    if (!appliedPlan(record, plan)) {
+    // Read from the RESPONSE rather than inferred from the request, for the reason
+    // `setStatus` states: a 200 whose record still holds the old expiry is a panel doing
+    // something this adapter does not model, and success would tell a customer their
+    // service was renewed when it was not. `planApplied` folds 0 and null as the panel does.
+    const applied = planApplied(record, plan);
+    if (applied === 'MALFORMED') {
+      return {
+        ok: false,
+        failure: 'MALFORMED_RESPONSE',
+        status: changed.status,
+        detail: 'VALUE_MALFORMED',
+      };
+    }
+    if (applied === 'DIFFERENT') {
       return { ok: false, failure: 'MALFORMED_RESPONSE', status: changed.status };
     }
     return { ok: true, found: true, usage: usageFromUser(record) };
@@ -681,37 +699,4 @@ export class MarzbanAdapter implements ProviderAdapter {
     if (found.usage === null) return { ok: false, failure: 'MALFORMED_RESPONSE', status: null };
     return { ok: true, usage: found.usage };
   }
-}
-
-/**
- * Did the panel's own record come back carrying what the plan asked for?
- *
- * Read from the RESPONSE rather than inferred from the request, for the reason
- * `setStatus` states: Marzban returns the whole user record from a modify, so there is
- * no reason to assume. A 200 whose record still holds the old expiry is a panel doing
- * something this adapter does not model, and reporting success for it would tell a
- * customer their service was renewed when it was not.
- *
- * Both sentinels are folded the way the panel folds them: `expire: 0` and
- * `data_limit: 0` are stored as SQL NULL and read back as `null`, so a plan asking for
- * "no limit" is satisfied by an absent value. That is the same mapping `usageFromUser`
- * makes, and it is why zero and null are never distinguished here.
- *
- * A field the plan did not set is not checked, because the adapter did not send it and
- * the panel was right to leave it alone.
- */
-function appliedPlan(record: Record<string, unknown>, plan: ProviderAllowancePlan): boolean {
-  if (plan.expiresAt !== null) {
-    const wanted = Math.floor(plan.expiresAt.getTime() / 1000);
-    const got = record['expire'];
-    const normalised = got === null || got === 0 ? 0 : got;
-    if (normalised !== wanted) return false;
-  }
-  if (plan.trafficLimitBytes !== null) {
-    const wanted = Number(plan.trafficLimitBytes);
-    const got = record['data_limit'];
-    const normalised = got === null || got === 0 ? 0 : got;
-    if (normalised !== wanted) return false;
-  }
-  return true;
 }

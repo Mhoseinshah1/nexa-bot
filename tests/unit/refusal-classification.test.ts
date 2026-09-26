@@ -36,6 +36,7 @@ const ALL_REFUSALS: readonly ExecutionRefusal[] = [
   'TENANT_STOPPED',
   'SERVICE_ABSENT',
   'LEASE_LOST',
+  'PROVISION_IN_FLIGHT',
 ];
 
 describe('how a refusal is classified', () => {

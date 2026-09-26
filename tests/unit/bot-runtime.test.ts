@@ -727,9 +727,12 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.service.search_prompt',
       'bot.service.search_results',
       'bot.service.suspend_button',
-      'bot.service.terminate_button',
-      'bot.service.terminate_confirm',
-      'bot.service.terminate_confirm_button',
+      /*
+       * `bot.service.terminate_button`, `terminate_confirm` and `terminate_confirm_button`
+       * LEFT this set in WP15 G1: a customer can no longer terminate, and a stale tap is
+       * answered `bot.service.capability_unsupported`. The keys stay in the catalogue —
+       * removing one is a contract change of its own — and nothing here sends them.
+       */
       'bot.service.tutorial_button',
       'bot.start.welcome',
       'bot.start.welcome_back',

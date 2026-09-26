@@ -183,7 +183,9 @@ function safeVersion(value: unknown): string | null {
 
 /** A transport failure keeps the kind the client already normalized. */
 function fromTransport(result: Extract<ProviderHttpResult, { ok: false }>): ProviderFailureResult {
-  return { ok: false, failure: result.failure, status: result.status };
+  return result.detail === undefined
+    ? { ok: false, failure: result.failure, status: result.status }
+    : { ok: false, failure: result.failure, status: result.status, detail: result.detail };
 }
 
 /**
@@ -588,6 +590,8 @@ export class SanaeiAdapter implements ProviderAdapter {
     // by submitting one would spend a lockout attempt to learn it.
     const twoFactor = await http.send({
       method: 'POST',
+      // Asks a question and changes no client: a READ, retried like one (WP15 G6).
+      effect: 'READ',
       path: TWO_FACTOR_PATH,
       headers: authHeaders(),
       body: { kind: 'json', value: {} },
@@ -631,6 +635,8 @@ export class SanaeiAdapter implements ProviderAdapter {
 
     const login = await http.send({
       method: 'POST',
+      // Creates a session and changes no client: a READ (WP15 G6).
+      effect: 'READ',
       path: LOGIN_PATH,
       headers: authHeaders(),
       // JSON rather than form: v3.7.0's `LoginForm` binds both, and one
@@ -805,7 +811,12 @@ export class SanaeiAdapter implements ProviderAdapter {
         : fromApiStatus(added.status);
     }
     const body = parseEnvelope(added.bodyText);
-    if (body === null) return { ok: false, failure: 'MALFORMED_RESPONSE', status: added.status };
+    // A 2xx whose body cannot be read: the panel answered the create, so this is the
+    // provenance a later READ may adopt on (WP15 G7). `success: false` is the panel
+    // REFUSING — a duplicate email among others — and is no such evidence.
+    if (body === null) {
+      return { ok: false, failure: 'MALFORMED_RESPONSE', status: added.status, accepted: true };
+    }
     if (!body.success) return { ok: false, failure: 'PROVIDER_ERROR', status: added.status };
 
     return {
