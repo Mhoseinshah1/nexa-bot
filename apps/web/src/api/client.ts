@@ -145,7 +145,9 @@ import {
   type TemplateRevisionListResponse,
   type TemplateWriteResponse,
   systemReadinessResponseSchema,
+  systemDiagnosticsResponseSchema,
   type SystemReadinessResponse,
+  type SystemDiagnosticsResponse,
   PANEL_ROUTES,
   panelListResponseSchema,
   panelResponseSchema,
@@ -252,6 +254,11 @@ export function fetchMonitorProfile(): Promise<MonitorProfileResponse> {
 /** Readiness with dependency detail. Requires a session. */
 export function fetchReadiness(): Promise<SystemReadinessResponse> {
   return authedGet(CONTROL_ROUTES.systemReadiness, systemReadinessResponseSchema);
+}
+
+/** WP16: outbox backlog and stuck provisioning operations. `opslog.view`. */
+export function fetchSystemDiagnostics(): Promise<SystemDiagnosticsResponse> {
+  return authedGet(CONTROL_ROUTES.systemDiagnostics, systemDiagnosticsResponseSchema);
 }
 
 /**

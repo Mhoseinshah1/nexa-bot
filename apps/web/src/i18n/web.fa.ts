@@ -758,8 +758,46 @@ export const WEB_FA = {
   'web.system_logs_absent': 'صفحهٔ لاگ عمومی وجود ندارد',
   'web.system_logs_body':
     'در پنل وب نه صفحهٔ لاگ هست، نه مرورگر لاگ، نه بایگانی. این یک تصمیم است، نه چیزی که جا مانده باشد.',
+  // WP16: the Telegram operations group IS built (the operational-event projector and the
+  // notification dispatcher); the sentence that said it was not had gone stale.
   'web.system_logs_destination':
-    'جریان عملیاتی انسانی به گروه گزارش تلگرام می‌رود. ارسال به تلگرام بخشی از فاز بعدی است و در این نسخه ساخته نشده.',
+    'جریان عملیاتی انسانی به گروه گزارش تلگرام می‌رود؛ شناسهٔ گروه و حداقل سطح اهمیت در تنظیمات «اعلان‌های عملیاتی» تعیین می‌شود.',
+  'web.system_tab_diagnostics': 'عیب‌یابی',
+  'web.diagnostics_provisioning_title': 'عملیات گیرکرده',
+  'web.diagnostics_provisioning_hint':
+    'عملیاتی که سامانه هنوز به نتیجهٔ آن نرسیده یا منتظر تلاش دوباره است؛ قدیمی‌ترین‌ها اول.',
+  'web.diagnostics_provisioning_empty': 'عملیات گیرکرده‌ای نیست.',
+  'web.diagnostics_provisioning_rule':
+    'این صفحه چیزی را تغییر نمی‌دهد. برای هر مورد به صفحهٔ همان سرویس بروید؛ «بررسی دوباره» و «ساخت دوباره» همان‌جا و با قواعد خودشان در دسترس‌اند.',
+  'web.diagnostics_reason': 'وضعیت',
+  'web.diagnostics_reason_unknown': 'نتیجهٔ نامعلوم',
+  'web.diagnostics_reason_unknown_hint':
+    'پاسخ پنل گم شده است؛ سرویس تا وقتی خواندن از پنل روشنش نکند منتظر می‌ماند و هیچ مبلغی بازگردانده نمی‌شود.',
+  'web.diagnostics_reason_lease': 'کارگر متوقف‌شده',
+  'web.diagnostics_reason_lease_hint':
+    'کارگری این عملیات را برداشته و مهلتش تمام شده است؛ پاک‌سازی دوره‌ای آن را دوباره در صف می‌گذارد.',
+  'web.diagnostics_reason_retrying': 'در انتظار تلاش دوباره',
+  'web.diagnostics_reason_retrying_hint':
+    'دست‌کم یک بار ناموفق بوده و تلاش بعدی زمان‌بندی شده است.',
+  'web.diagnostics_reason_unannounced': 'اعلام‌نشده به مشتری',
+  'web.diagnostics_reason_unannounced_hint':
+    'عملیات بیش از ده دقیقه است که تمام شده ولی هنوز به مشتری اعلام نشده است.',
+  'web.diagnostics_operation': 'عملیات',
+  'web.diagnostics_attempts': 'تلاش‌ها',
+  'web.diagnostics_since': 'آخرین تغییر',
+  'web.diagnostics_service': 'سرویس',
+  'web.diagnostics_outbox_title': 'صف رویدادها',
+  'web.diagnostics_outbox_hint':
+    'رویدادهای این مجموعه که هنوز منتشر نشده‌اند. رویدادی که بارها ناموفق شده نشانهٔ خطا در کد است و حذف نمی‌شود.',
+  'web.diagnostics_outbox_pending': 'منتشرنشده',
+  'web.diagnostics_outbox_oldest': 'قدیمی‌ترین منتشرنشده',
+  'web.diagnostics_outbox_failing': 'ناموفق دست‌کم یک بار',
+  'web.diagnostics_outbox_failing_banner':
+    'برخی رویدادها دست‌کم یک بار ناموفق شده‌اند و دوباره تلاش می‌شوند. متن خطا کوتاه شده و نشانی‌ها از آن حذف شده‌اند.',
+  'web.diagnostics_event': 'رویداد',
+  'web.diagnostics_aggregate': 'موجودیت',
+  'web.diagnostics_occurred': 'زمان رخداد',
+  'web.diagnostics_error': 'آخرین خطا',
 
   // --- Monitor -------------------------------------------------------------
   'web.monitor_cadence': 'دوره‌های پایش',

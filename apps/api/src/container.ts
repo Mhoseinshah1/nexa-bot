@@ -95,6 +95,8 @@ import {
   DrizzleOperationalEventReader,
 } from './modules/platform/opslog/infrastructure/drizzle-operational-event.reader.js';
 import { MonitorProfileService } from './modules/platform/panels/application/monitor-profile.service.js';
+import { DiagnosticsService } from './modules/platform/system/application/diagnostics.service.js';
+import { DrizzleDiagnosticsReader } from './modules/platform/system/infrastructure/drizzle-diagnostics.reader.js';
 import { BackupService } from './modules/platform/backup/application/backup.service.js';
 import { BackupScheduler } from './modules/platform/backup/application/backup-scheduler.js';
 import { DrizzleBackupRunRepository } from './modules/platform/backup/infrastructure/drizzle-backup-run.repository.js';
@@ -600,6 +602,9 @@ export interface Container {
    * pure capacity functions; it touches no repository and not the monitor.
    */
   readonly monitorProfileService: MonitorProfileService;
+
+  /** WP16: outbox backlog and stuck provisioning operations, read-only (`opslog.view`). */
+  readonly diagnostics: DiagnosticsService;
 
   /**
    * The backup pipeline. ONE service, for the scheduler and the operator alike.
@@ -2916,6 +2921,11 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   );
 
   const opsLogService = new OpsLogService(guard, new DrizzleOperationalEventReader(database.db));
+  const diagnostics = new DiagnosticsService({
+    guard,
+    reader: new DrizzleDiagnosticsReader(database.db),
+    clock,
+  });
   const monitorProfileService = new MonitorProfileService(
     guard,
     {
@@ -3573,6 +3583,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     notificationTransport,
     opsLogService,
     monitorProfileService,
+    diagnostics,
     panelMonitor,
     backup,
     backupScheduler,
