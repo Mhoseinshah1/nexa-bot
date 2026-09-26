@@ -665,6 +665,13 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.payment.gateway_confirmed',
       'bot.payment.gateway_failed',
       'bot.payment.gateway_invoice',
+      /*
+       * WP18. The invoice screens when the route charges the customer a fee: the same
+       * facts as `gateway_invoice` plus the principal, the fee and the payable, each a
+       * figure the attempt snapshotted. Neither promises a flow the head does not have.
+       */
+      'bot.payment.gateway_invoice_order_fee',
+      'bot.payment.gateway_invoice_topup_fee',
       'bot.payment.gateway_pay_button',
       'bot.payment.gateway_preparing',
       'bot.payment.gateway_unavailable',

@@ -1470,7 +1470,61 @@ describe('TonPays, through the one settlement path', () => {
 
       const keys = (await logs()).map((log) => log.template_key).sort();
       expect(keys).toEqual(['ops.financial.late_completion', 'ops.financial.payment_failed']);
+      // The provider's verdict, never an operator's rejection: the log names who said no.
+      const failure = (await logs()).find(
+        (log) => log.template_key === 'ops.financial.payment_failed',
+      );
+      expect(failure!.payload).toMatchObject({
+        cause: 'GATEWAY_FAILED',
+        paymentId: failed.paymentId,
+      });
       expect((await paymentOf(late.paymentId)).state).not.toBe('CONFIRMED');
+    });
+
+    it('writes one log for an event replayed past a lost relay claim', async () => {
+      await configureLog(PAYMENTS_TOPIC);
+      await enableTonPays();
+      const orderId = await draftOrder();
+      const { paymentId } = await payWithGateway(orderId);
+      await pass();
+      const invoice = await invoiceOf(paymentId);
+      tonpays.set(invoice.provider_invoice_id!, 'completed', true);
+      await webhook(invoice, 'completed', 'replay-1');
+      await inquireNow();
+      await relayAll();
+      expect(await logs()).toHaveLength(1);
+
+      // A lost `processed_messages` claim is staged by calling the consumer again directly,
+      // past the claim (that table refuses DELETE by trigger): the dedupe key is what stands.
+      const consumer = (
+        ctx.container.relay as unknown as {
+          consumers: {
+            name: string;
+            handle: (event: never, tx: never) => Promise<void>;
+          }[];
+        }
+      ).consumers.find((one) => one.name === 'payments.financial-log');
+      if (consumer === undefined) throw new Error('the financial log is not registered');
+      const [message] = await rows<Record<string, unknown>>(
+        sql`SELECT * FROM outbox_messages
+             WHERE event_type = 'PaymentConfirmed' AND aggregate_id = ${paymentId}`,
+      );
+      const event = {
+        eventId: String(message?.['id']),
+        eventType: 'PaymentConfirmed',
+        eventVersion: 1,
+        tenantId: tenantA.tenantId as string,
+        aggregateType: 'Payment',
+        aggregateId: paymentId,
+        sequence: 1,
+        correlationId: 'replayed',
+        causationId: null,
+        actor: { type: 'SYSTEM_JOB', id: null },
+        occurredAt: new Date().toISOString(),
+        payload: message?.['payload'],
+      };
+      await ctx.container.uow.run(tenantA, (tx) => consumer.handle(event as never, tx as never));
+      expect(await logs()).toHaveLength(1);
     });
 
     it('logs a completed refund and a superseded one, and writes nothing when the log is not configured', async () => {
