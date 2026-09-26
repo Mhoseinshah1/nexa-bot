@@ -199,6 +199,9 @@ function BotCard({
     onSuccess: (result) => {
       submission.settle();
       setConfirmingStop(false);
+      // A live check describes the bot as it was when checked; after a change it would
+      // go on answering for a state that no longer exists.
+      if (result.changed) setDiagnostic(null);
       notify({
         tone: 'ok',
         message: t(
@@ -226,6 +229,8 @@ function BotCard({
       }),
     onSuccess: (result) => {
       submission.settle();
+      // Results obtained with the previous credential say nothing about the new one.
+      if (result.changed) setDiagnostic(null);
       notify({
         tone: 'ok',
         message: t(result.changed ? 'web.bot_token_done' : 'web.bot_token_same'),

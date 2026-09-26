@@ -5,6 +5,7 @@ import {
   errors,
   NexaError,
   PLATFORM_ERROR_CODES,
+  replaceBotTokenRequestSchema,
   type ActorContext,
   type AuditWriter,
   type BotDiagnostic,
@@ -73,10 +74,20 @@ export interface BotManagementServiceDeps {
   readonly webhookEnabled: () => boolean;
 }
 
-/** What a replay needs to answer as the first run did. */
+/**
+ * What a completed mutation stores against its key: the response it produced, whole.
+ *
+ * A replay returns the FIRST result (`docs/conventions.md`), so the bot is snapshotted as
+ * the command left it rather than re-read. A reply re-read on replay would pair the first
+ * command's `changed` with whatever somebody did since — a stop replayed after a start
+ * answering "changed" beside an ACTIVE bot. The view is JSON-native (ISO strings), so it
+ * survives `jsonb` unchanged (the reason `SettingReplayRecord` gives).
+ */
 interface MutationResult {
   readonly botId: string;
   readonly changed: boolean;
+  readonly bot: BotInstanceView;
+  readonly installation: BotInstallationView;
 }
 
 export interface BotMutationOutcome {
@@ -149,7 +160,7 @@ export class BotManagementService {
     if (replayed !== null) return replayed;
 
     const now = this.deps.clock.now();
-    const changed = await runAuthorizedMutation(
+    return runAuthorizedMutation(
       this.mutationDeps(),
       scope,
       actor,
@@ -166,8 +177,7 @@ export class BotManagementService {
           );
         }
         if (locked.status === input.status) {
-          await this.remember(scope, input.idempotencyKey, requestHash, botId, false, tx);
-          return false;
+          return this.remember(scope, input.idempotencyKey, requestHash, botId, false, tx);
         }
 
         const moved = await this.deps.repository.transitionStatus(
@@ -210,12 +220,9 @@ export class BotManagementService {
           aggregateId: botId,
           payload: { from: locked.status, to: input.status },
         });
-        await this.remember(scope, input.idempotencyKey, requestHash, botId, true, tx);
-        return true;
+        return this.remember(scope, input.idempotencyKey, requestHash, botId, true, tx);
       },
     );
-
-    return this.outcome(scope, botId, changed);
   }
 
   /**
@@ -241,7 +248,7 @@ export class BotManagementService {
   async replaceToken(
     scope: TenantContext,
     actor: ActorContext,
-    input: { readonly idempotencyKey: string; readonly botId: string; readonly token: string },
+    input: { readonly idempotencyKey: string; readonly botId: string; readonly token: unknown },
   ): Promise<BotMutationOutcome> {
     const botId = this.botId(input.botId);
     const denial = {
@@ -251,7 +258,11 @@ export class BotManagementService {
     };
     await this.authorize(scope, actor, BOTS_TOKEN_PERMISSION, denial);
 
-    const claimed = claimedBotId(input.token);
+    // The token is validated only NOW, after the permission: the surface hands it over
+    // unparsed, so a caller who may not replace a credential is refused (and the refusal
+    // recorded) before anything about the value is judged — even its length.
+    const token = replaceBotTokenRequestSchema.shape.token.parse(input.token);
+    const claimed = claimedBotId(token);
     if (claimed === null) {
       throw errors.validation(
         BOT_ERROR_CODES.BOT_TOKEN_MALFORMED,
@@ -270,7 +281,7 @@ export class BotManagementService {
        * reused key, and reporting it as "replaced" would tell the operator a token was
        * stored that never was.
        */
-      if (!(await this.sameAsStored(scope, botId, input.token))) {
+      if (!(await this.sameAsStored(scope, botId, token))) {
         throw errors.conflict(
           PLATFORM_ERROR_CODES.IDEMPOTENCY_PAYLOAD_MISMATCH,
           'This request key was already used to replace the token with a different value.',
@@ -290,10 +301,16 @@ export class BotManagementService {
     const identity = record.telegramBotId;
     if (claimed !== identity) throw this.differentBot();
 
-    if (await this.sameAsStored(scope, botId, input.token)) {
-      // Even the no-op is remembered under the same in-transaction session and permission
-      // check as every other write on this path.
-      await runAuthorizedMutation(
+    if (await this.sameAsStored(scope, botId, token)) {
+      /*
+       * Even the no-op is remembered under the same in-transaction session and permission
+       * check as every other write on this path — and decided AGAIN under the bot's row
+       * lock. The read above ran before any lock: a replacement that commits in between
+       * would otherwise be answered "your token is already the stored one" when it no
+       * longer is. Under the lock no replacement is in flight, so a fresh read is final;
+       * if the token moved, this request is not a no-op and continues as a replacement.
+       */
+      const noop = await runAuthorizedMutation(
         this.mutationDeps(),
         scope,
         actor,
@@ -301,13 +318,17 @@ export class BotManagementService {
         denial,
         async (tx) => {
           await this.assertScopeActive(scope, tx);
-          await this.remember(scope, input.idempotencyKey, requestHash, botId, false, tx);
+          if ((await this.deps.repository.lockManaged(scope, botId, tx)) === null) {
+            throw this.notFound();
+          }
+          if (!(await this.sameAsStored(scope, botId, token))) return null;
+          return this.remember(scope, input.idempotencyKey, requestHash, botId, false, tx);
         },
       );
-      return this.outcome(scope, botId, false);
+      if (noop !== null) return noop;
     }
 
-    const probe = await this.deps.telegram.identify(input.token);
+    const probe = await this.deps.telegram.identify(token);
     switch (probe.outcome) {
       case 'IDENTIFIED':
         if (probe.botId !== identity) throw this.differentBot();
@@ -332,7 +353,7 @@ export class BotManagementService {
     }
 
     const now = this.deps.clock.now();
-    await runAuthorizedMutation(
+    return runAuthorizedMutation(
       this.mutationDeps(),
       scope,
       actor,
@@ -346,7 +367,7 @@ export class BotManagementService {
         const replaced = await this.deps.repository.replaceToken(
           scope,
           botId,
-          { token: input.token, telegramBotId: identity, now },
+          { token, telegramBotId: identity, now },
           tx,
         );
         if (!replaced) throw this.differentBot();
@@ -365,11 +386,9 @@ export class BotManagementService {
           },
           tx,
         );
-        await this.remember(scope, input.idempotencyKey, requestHash, botId, true, tx);
+        return this.remember(scope, input.idempotencyKey, requestHash, botId, true, tx);
       },
     );
-
-    return this.outcome(scope, botId, true);
   }
 
   /**
@@ -500,22 +519,6 @@ export class BotManagementService {
     };
   }
 
-  /**
-   * The bot as it stands after a mutation, read WITHOUT charging `settings.view`.
-   *
-   * The caller was just authorized for something stronger, and a custom role holding
-   * `settings.edit` without the view key must not have its committed stop answered with
-   * a 403 — that would report a failure for a change that happened.
-   */
-  private async outcome(
-    scope: TenantContext,
-    botId: BotInstanceId,
-    changed: boolean,
-  ): Promise<BotMutationOutcome> {
-    const record = await this.require(scope, botId);
-    return { bot: this.view(record), installation: this.installation(), changed };
-  }
-
   private installation(): BotInstallationView {
     return {
       webhookRouteEnabled: this.deps.webhookEnabled(),
@@ -592,12 +595,8 @@ export class BotManagementService {
       requestHash,
     );
     if (found === null) return null;
-    const record = await this.require(scope, found.result.botId as BotInstanceId);
-    return {
-      bot: this.view(record),
-      installation: this.installation(),
-      changed: found.result.changed,
-    };
+    const { bot, installation, changed } = found.result;
+    return { bot, installation, changed };
   }
 
   private async remember(
@@ -607,16 +606,34 @@ export class BotManagementService {
     botId: BotInstanceId,
     changed: boolean,
     tx: TransactionScope,
-  ): Promise<void> {
+  ): Promise<BotMutationOutcome> {
+    // The bot as THIS transaction leaves it, read inside it: the response and the replay
+    // are one snapshot, and neither can show a state a later command produced. Read
+    // WITHOUT charging `settings.view`: the caller was just authorized for something
+    // stronger, and a custom role holding `settings.edit` without the view key must not
+    // have its committed stop answered with a 403.
+    const record = await this.deps.repository.findManaged(
+      scope,
+      botId,
+      this.currentFingerprint(),
+      tx,
+    );
+    if (record === null) throw this.notFound();
+    const outcome: BotMutationOutcome = {
+      bot: this.view(record),
+      installation: this.installation(),
+      changed,
+    };
     await rememberOnce(
       this.deps.idempotency,
       scope,
       'WEB',
       idempotencyKey,
       requestHash,
-      { botId, changed } satisfies MutationResult,
+      { botId, ...outcome } satisfies MutationResult,
       tx,
     );
+    return outcome;
   }
 
   private async assertScopeActive(scope: TenantContext, tx: TransactionScope): Promise<void> {

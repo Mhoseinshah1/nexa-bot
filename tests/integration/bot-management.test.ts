@@ -233,6 +233,51 @@ describe('WP13 bot management', () => {
       expect((await get(BOT_ROUTES.list, support)).statusCode).toBe(403);
     });
 
+    it('refuses a caller without settings.destructive before judging the token, and records it', async () => {
+      const operator = await operatorCookie();
+      const before = await auditCount('bot_instance.token_replace', BOT_A1);
+      for (const [key, payload] of [
+        ['operator-empty', { idempotencyKey: 'operator-empty', token: '' }],
+        ['operator-long', { idempotencyKey: 'operator-long', token: 'x'.repeat(10_000) }],
+        ['operator-none', { idempotencyKey: 'operator-none' }],
+      ] as const) {
+        const response = await post(BOT_ROUTES.token(BOT_A1), operator, payload);
+        expect(response.statusCode, key).toBe(403);
+      }
+      // Each refusal is recorded, as an early refusal on every other write path is.
+      expect(await auditCount('bot_instance.token_replace', BOT_A1)).toBe(before + 3);
+
+      // The owner is still told the value is malformed.
+      const owner = await ownerCookie();
+      const empty = await post(BOT_ROUTES.token(BOT_A1), owner, {
+        idempotencyKey: 'owner-empty',
+        token: '',
+      });
+      expect(empty.statusCode).toBe(400);
+    });
+
+    it('replays a status change as it first answered, not as the bot stands now', async () => {
+      const cookie = await ownerCookie();
+      const stop = { idempotencyKey: 'snapshot-stop', status: 'STOPPED' };
+      const first = botMutationResponseSchema.parse(
+        (await post(BOT_ROUTES.status(BOT_A1), cookie, stop)).json(),
+      );
+      expect(first).toMatchObject({ changed: true, bot: { status: 'STOPPED' } });
+      // Somebody starts it again before the stop's response is retried.
+      await post(BOT_ROUTES.status(BOT_A1), cookie, {
+        idempotencyKey: 'snapshot-start',
+        status: 'ACTIVE',
+      });
+
+      const replayed = botMutationResponseSchema.parse(
+        (await post(BOT_ROUTES.status(BOT_A1), cookie, stop)).json(),
+      );
+      expect(replayed).toEqual(first);
+      // And the replay changed nothing: the bot is still the later command's ACTIVE.
+      const current = await get(BOT_ROUTES.detail(BOT_A1), cookie);
+      expect((current.json() as { bot: { status: string } }).bot.status).toBe('ACTIVE');
+    });
+
     it('stops a bot so the webhook route and every outbound send refuse it, once, with an event', async () => {
       const cookie = await ownerCookie();
       const stop = await post(BOT_ROUTES.status(BOT_A1), cookie, {
@@ -474,6 +519,60 @@ describe('WP13 bot management', () => {
       expect(same.changed).toBe(false);
       expect(calls).toEqual(['identify']);
       expect(await auditCount('bot_instance.token_replace', BOT_A1)).toBe(1);
+    });
+
+    it('decides a same-token no-op again under the lock, and replaces when the token moved meanwhile', async () => {
+      const mine = tokenFor(TELEGRAM_ID, 'mine');
+      const theirs = tokenFor(TELEGRAM_ID, 'theirs');
+      // The stored token is somebody else's replacement...
+      await service.replaceToken(scope, owner, {
+        idempotencyKey: 'theirs',
+        botId: BOT_A1,
+        token: theirs,
+      });
+      calls.length = 0;
+      // ...but this request's unlocked read saw its own token still stored: the other
+      // replacement committed between that read and this request's transaction.
+      const c = api.container;
+      const real = new DrizzleBotManagementRepository(c.database.db, c.cipher, c.botInstances);
+      let reads = 0;
+      const racing = new BotManagementService({
+        repository: Object.assign(Object.create(real) as typeof real, {
+          resolveToken: async (s: never, id: never) => {
+            reads += 1;
+            return reads === 1 ? mine : real.resolveToken(s, id);
+          },
+        }),
+        telegram: {
+          identify: async () => {
+            calls.push('identify');
+            return identity;
+          },
+          readWebhook: async () => webhook,
+          commandsRevision: () => 'integration-revision',
+        },
+        guard: c.guard,
+        uow: c.uow,
+        audit: c.audit,
+        opsLog: c.opsLog,
+        sessions: c.sessions,
+        idempotency: c.idempotency,
+        scopeActivity: c.tenants,
+        outbox: c.outbox,
+        clock: c.clock,
+        webhookSecret: () => WEBHOOK_SECRET,
+        webhookEnabled: () => true,
+      });
+
+      const outcome = await racing.replaceToken(scope, owner, {
+        idempotencyKey: 'mine',
+        botId: BOT_A1,
+        token: mine,
+      });
+      // Not "your token is already the stored one": it no longer was, so it was replaced.
+      expect(outcome.changed).toBe(true);
+      expect(calls).toEqual(['identify']);
+      expect(await api.container.botInstances.resolveToken(scope as never, BOT_A1)).toBe(mine);
     });
 
     it('refuses a reused key sent with a different token, and never reports it replaced', async () => {

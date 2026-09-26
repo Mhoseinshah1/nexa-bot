@@ -75,11 +75,16 @@ export class BotsController {
     @Body() body: unknown,
   ): Promise<BotMutationResponse> {
     const { scope, actor } = await this.authenticate(request);
-    const input = replaceBotTokenRequestSchema.parse(body);
+    // Only the key is parsed here. The token goes to the service UNPARSED, which
+    // authorizes first and validates after, so a caller without `settings.destructive`
+    // is answered 403 — and the refusal recorded — whatever the value looks like.
+    const { idempotencyKey } = replaceBotTokenRequestSchema
+      .pick({ idempotencyKey: true })
+      .parse(body);
     return this.container.botManagement.replaceToken(scope, actor, {
-      idempotencyKey: input.idempotencyKey,
+      idempotencyKey,
       botId: id,
-      token: input.token,
+      token: (body as { readonly token?: unknown } | null)?.token,
     });
   }
 

@@ -193,6 +193,91 @@ describe('the Bots page', () => {
     expect(result.textContent).toContain('12');
   });
 
+  it('clears a live check once the token it was taken with is replaced', async () => {
+    const diagnosticRoute = {
+      url: `/bots/${BOT_ID}/diagnostics`,
+      body: {
+        diagnostic: {
+          botInstanceId: BOT_ID,
+          checkedAt: '2026-09-25T10:00:00.000Z',
+          identity: {
+            outcome: 'REJECTED',
+            telegramBotId: null,
+            username: null,
+            idMatches: null,
+            usernameMatches: null,
+          },
+          webhook: {
+            outcome: 'SKIPPED',
+            url: null,
+            urlMatchesRecorded: null,
+            pendingUpdateCount: null,
+            lastErrorAt: null,
+            lastErrorMessage: null,
+            maxConnections: null,
+          },
+        },
+      },
+    };
+    stubApi([
+      listRoute(),
+      diagnosticRoute,
+      { url: `/bots/${BOT_ID}/token`, body: { bot: bot(), installation, changed: true } },
+    ]);
+    const { container } = renderPage(page({ mayOperate: true, mayReplaceToken: true }));
+    fireEvent.click(await screen.findByRole('button', { name: 'بررسی زنده با تلگرام' }));
+    expect(await screen.findByTestId('bot-diagnostic')).toBeInTheDocument();
+
+    const input = container.querySelector('input[type="password"]') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: `7000000001:${'C'.repeat(35)}` } });
+    fireEvent.click(screen.getByRole('button', { name: 'جایگزینی توکن' }));
+    // The rejection was about the OLD credential; it must not stand beside the new one.
+    await waitFor(() => expect(screen.queryByTestId('bot-diagnostic')).toBeNull());
+  });
+
+  it('clears a live check once the bot is stopped', async () => {
+    stubApi([
+      listRoute(),
+      {
+        url: `/bots/${BOT_ID}/diagnostics`,
+        body: {
+          diagnostic: {
+            botInstanceId: BOT_ID,
+            checkedAt: '2026-09-25T10:00:00.000Z',
+            identity: {
+              outcome: 'REJECTED',
+              telegramBotId: null,
+              username: null,
+              idMatches: null,
+              usernameMatches: null,
+            },
+            webhook: {
+              outcome: 'SKIPPED',
+              url: null,
+              urlMatchesRecorded: null,
+              pendingUpdateCount: null,
+              lastErrorAt: null,
+              lastErrorMessage: null,
+              maxConnections: null,
+            },
+          },
+        },
+      },
+      {
+        url: `/bots/${BOT_ID}/status`,
+        body: { bot: bot({ status: 'STOPPED' }), installation, changed: true },
+      },
+    ]);
+    renderPage(page({ mayOperate: true }));
+    fireEvent.click(await screen.findByRole('button', { name: 'بررسی زنده با تلگرام' }));
+    expect(await screen.findByTestId('bot-diagnostic')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'توقف ربات' }));
+    const confirm = await screen.findAllByRole('button', { name: /توقف/u });
+    fireEvent.click(confirm[confirm.length - 1] as HTMLElement);
+    await waitFor(() => expect(screen.queryByTestId('bot-diagnostic')).toBeNull());
+  });
+
   it('draws start, not stop and not the live check, for a stopped bot', async () => {
     stubApi([
       listRoute([

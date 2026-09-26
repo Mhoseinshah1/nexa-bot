@@ -169,6 +169,10 @@ This is the Web Admin workflow ADR-0029 decision 3 anticipates.
   bot's counterpart of the separate CRITICAL `panels.credentials.rotate`, and it needs no
   backfill. The permission's docblock gains a sentence naming its second charger; that
   goes in the contracts commit.
+- **The permission before the value.** The surface hands the token over unparsed; the
+  service charges `settings.destructive` first and only then checks its length, so a
+  caller who may not replace it is answered 403 — and the refusal recorded — whatever it
+  sent.
 - **Before any network call:** the new token must parse as `<digits>:<secret>`. Its
   claimed id (the part before the colon, the same local claim ADR-0029 uses to refuse a
   different bot) must equal the stored `telegram_bot_id`.
@@ -191,7 +195,11 @@ This is the Web Admin workflow ADR-0029 decision 3 anticipates.
   that was stopped because it leaked is exactly the case.
 - **The same token as the one stored** is answered `changed: false` and nothing is
   written. The stored value is decrypted for that comparison and never leaves the
-  service.
+  service. The comparison is made again under the bot's row lock: a replacement that
+  committed after the first read makes this request a replacement, never a no-op.
+- **A replay answers with the first result.** The bot view, the installation and
+  `changed` are snapshotted with the key in the mutating transaction, as settings and
+  feature flags do, so a retried stop never comes back beside a bot started since.
 - **The token is not in the idempotency request hash.** This follows `PanelService`: a
   hash would put a value derived from the secret in a table nothing else protects.
 - **The webhook, secret and command menu are not touched.** Whether Telegram keeps a
