@@ -97,6 +97,7 @@ const RECORDS = [
   'docs/wp15-falsification.md',
   'docs/wp16-falsification.md',
   'docs/wp17-falsification.md',
+  'docs/wp18-falsification.md',
 ];
 /**
  * The fewest citations this record may contain.
@@ -123,7 +124,7 @@ const RECORDS = [
  * have to be a map, and a map is a place for a record to be added with no entry
  * and checked against nothing — which is this script's own failure mode.
  */
-const EXPECTED = 2004;
+const EXPECTED = 2024;
 /**
  * A table whose last column is one of these is making citations.
  *
