@@ -45,6 +45,7 @@ import {
 } from '../ui/kit';
 import { pollUnlessFinal } from '../polling';
 import { useSubmissionKey } from '../submission-key';
+import { DiagnosticsSection } from './system-diagnostics';
 
 /**
  * System and operations.
@@ -61,7 +62,7 @@ import { useSubmissionKey } from '../submission-key';
  * and what the background monitor is configured to do.
  */
 
-const SECTIONS = ['status', 'monitor', 'admins'] as const;
+const SECTIONS = ['status', 'diagnostics', 'monitor', 'admins'] as const;
 type Section = (typeof SECTIONS)[number];
 
 function isSection(value: string | null): value is Section {
@@ -93,6 +94,7 @@ export function SystemPage({
         }}
         items={[
           { id: 'status', label: t('web.system_tab_status') },
+          { id: 'diagnostics', label: t('web.system_tab_diagnostics') },
           { id: 'monitor', label: t('web.system_tab_monitor') },
           { id: 'admins', label: t('web.system_tab_admins') },
         ]}
@@ -100,6 +102,9 @@ export function SystemPage({
 
       <TabPanel id="system-panel" labelledBy={`system-panel-tab-${section}`}>
         {section === 'status' && <StatusSection />}
+        {section === 'diagnostics' && (
+          <DiagnosticsSection denied={!permissions.includes('opslog.view')} />
+        )}
         {section === 'monitor' && <MonitorSection denied={!permissions.includes('panels.view')} />}
         {section === 'admins' && (
           <AdminsSection
@@ -114,7 +119,7 @@ export function SystemPage({
           {t('web.system_logs_body')}
         </Banner>
         <p className="muted small">
-          <MaturityBadge value="planned" /> {t('web.system_logs_destination')}
+          <MaturityBadge value="now" /> {t('web.system_logs_destination')}
         </p>
       </Card>
     </>
