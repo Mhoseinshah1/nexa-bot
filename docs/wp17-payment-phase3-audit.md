@@ -222,12 +222,18 @@ Fifteen rules, each reverted alone and killed by a named test: `docs/wp17-falsif
 first pass cited one test by a title it does not have ("withholds refunds without
 refunds.view"); the record cites it as it is.
 
+A Codex review of the integrated head found two defects in the reader, both fixed with a
+named test and falsified (P17-16..18): the sections were read statement by statement, so
+a confirmation committed between two of them produced a history no moment ever had — they
+are now read at one repeatable-read, read-only snapshot — and `GATEWAY_PAYMENT_FAILED`,
+whose subject is the payment, was missing from the notification kinds.
+
 Tests added:
 
 - **Unit:** `tests/unit/payment-timeline.test.ts` (7 cases) and
   `tests/unit/payment-timeline-sections.test.ts` (4 cases, the section decision over the
   real permission guard).
-- **Integration:** `tests/integration/payment-timeline.test.ts` (7 cases), plus the new
+- **Integration:** `tests/integration/payment-timeline.test.ts` (9 cases), plus the new
   route in `tests/integration/route-registration.test.ts`.
 - **Web:** `tests/web/payment-timeline.test.tsx` (6 cases: the card alone, and inside its
   page through the real route).
