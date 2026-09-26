@@ -14,7 +14,7 @@ import type {
   RefundState,
   TenantContext,
 } from '@nexa/contracts';
-import type { Database } from '../../../../infrastructure/persistence/database.js';
+import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import { requireTenantId } from '../../../../infrastructure/persistence/unit-of-work.js';
 import {
   customerNotifications,
@@ -44,6 +44,7 @@ const PAYMENT_SUBJECT_KINDS: readonly CustomerNotificationKind[] = [
   'WALLET_TOPUP_CREDITED',
   'RECEIPT_CREDITED_TO_WALLET',
   'WALLET_TOPUP_GIFT_CREDITED',
+  'GATEWAY_PAYMENT_FAILED',
 ];
 
 /**
@@ -55,21 +56,41 @@ const PAYMENT_SUBJECT_KINDS: readonly CustomerNotificationKind[] = [
 export class DrizzlePaymentTimelineReader implements PaymentTimelineReader {
   constructor(private readonly db: Database) {}
 
+  /**
+   * Every section is read inside ONE repeatable-read, read-only transaction. The facts
+   * are several statements over several tables, and a payment confirmed between two of
+   * them would otherwise be read PENDING beside the debit and the notification committed
+   * with its confirmation: a history no moment ever had. One snapshot shows the payment
+   * as it stood, with exactly the rows that stood beside it.
+   */
   async facts(
     scope: TenantContext,
     paymentId: PaymentId,
     include: TimelineSectionsIncluded,
     limit: number,
   ): Promise<PaymentTimelineFacts | null> {
+    return this.db.transaction((q) => this.read(q, scope, paymentId, include, limit), {
+      isolationLevel: 'repeatable read',
+      accessMode: 'read only',
+    });
+  }
+
+  private async read(
+    q: Executor,
+    scope: TenantContext,
+    paymentId: PaymentId,
+    include: TimelineSectionsIncluded,
+    limit: number,
+  ): Promise<PaymentTimelineFacts | null> {
     const tenantId = requireTenantId(scope);
-    const [payment] = await this.db
+    const [payment] = await q
       .select()
       .from(payments)
       .where(and(eq(payments.tenantId, tenantId), eq(payments.id, paymentId)))
       .limit(1);
     if (payment === undefined) return null;
 
-    const [credit] = await this.db
+    const [credit] = await q
       .select()
       .from(receiptCredits)
       .where(and(eq(receiptCredits.tenantId, tenantId), eq(receiptCredits.paymentId, paymentId)))
@@ -82,7 +103,7 @@ export class DrizzlePaymentTimelineReader implements PaymentTimelineReader {
       createdAt: customerNotifications.createdAt,
       resolvedAt: customerNotifications.resolvedAt,
     };
-    const paymentNotifications = await this.db
+    const paymentNotifications = await q
       .select(notificationColumns)
       .from(customerNotifications)
       .where(
@@ -97,7 +118,7 @@ export class DrizzlePaymentTimelineReader implements PaymentTimelineReader {
       .limit(limit);
 
     const receiptRows = include.receipts
-      ? await this.db
+      ? await q
           .select({
             id: paymentReceipts.id,
             kind: paymentReceipts.kind,
@@ -120,7 +141,7 @@ export class DrizzlePaymentTimelineReader implements PaymentTimelineReader {
      * `refunds.view`; repeating it here would show a refund to a viewer without that key.
      */
     const walletRows = include.wallet
-      ? await this.db
+      ? await q
           .select({
             id: walletEntries.id,
             direction: walletEntries.direction,
@@ -143,7 +164,7 @@ export class DrizzlePaymentTimelineReader implements PaymentTimelineReader {
       : [];
 
     const refundRows = include.refunds
-      ? await this.db
+      ? await q
           .select()
           .from(refunds)
           .where(and(eq(refunds.tenantId, tenantId), eq(refunds.paymentId, paymentId)))
@@ -153,6 +174,7 @@ export class DrizzlePaymentTimelineReader implements PaymentTimelineReader {
 
     const refundNotifications = include.refunds
       ? await this.refundNotifications(
+          q,
           tenantId,
           payment.customerId,
           payment.orderId,
@@ -236,6 +258,7 @@ export class DrizzlePaymentTimelineReader implements PaymentTimelineReader {
    * never refunded.
    */
   private async refundNotifications(
+    q: Executor,
     tenantId: string,
     customerId: string,
     orderId: string | null,
@@ -253,7 +276,7 @@ export class DrizzlePaymentTimelineReader implements PaymentTimelineReader {
     const rows = [];
     if (refundIds.length > 0) {
       rows.push(
-        ...(await this.db
+        ...(await q
           .select(columns)
           .from(customerNotifications)
           .where(
@@ -270,7 +293,7 @@ export class DrizzlePaymentTimelineReader implements PaymentTimelineReader {
     }
     if (orderId !== null && carriesAutomaticRefund) {
       rows.push(
-        ...(await this.db
+        ...(await q
           .select(columns)
           .from(customerNotifications)
           .where(

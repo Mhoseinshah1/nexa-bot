@@ -14,6 +14,7 @@ import {
   type UserId,
 } from '@nexa/contracts';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
+import { DrizzlePaymentTimelineReader } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-payment-timeline.reader';
 import type { ProductDraft } from '../../apps/api/src/modules/commerce/catalog/application/ports';
 import type { OrderRecord } from '../../apps/api/src/modules/commerce/orders/application/ports';
 import {
@@ -246,6 +247,61 @@ describe('payment timeline', () => {
     expect(wire).not.toContain('file-m1');
   });
 
+  it('tells a gateway failure the customer was sent, like every other payment-subject notice', async () => {
+    const payment = await manualPayment('g1');
+    // The row `PaymentService.failGatewayPayment` writes when it notifies the customer.
+    await notifyAbout(payment.id, 'GATEWAY_PAYMENT_FAILED');
+
+    const view = await timeline(owner, payment.id);
+    expect(
+      view.entries
+        .filter((e) => e.kind === 'CUSTOMER_NOTIFIED')
+        .map((e) => ('notificationKind' in e ? e.notificationKind : null)),
+    ).toEqual(['GATEWAY_PAYMENT_FAILED']);
+  });
+
+  it('reads every section from one snapshot, blind to a commit made mid-read', async () => {
+    const payment = await manualPayment('s1');
+    const db = ctx.container.database.db;
+    const configs: unknown[] = [];
+    /*
+     * The reader's own transaction, with a commit from ANOTHER connection landed after
+     * its first statement: under one repeatable-read snapshot the later reads cannot see
+     * it; statement-by-statement reads would, and would pair it with whatever the payment
+     * row said a moment earlier.
+     */
+    const racing = new Proxy(db, {
+      get(target, property, receiver) {
+        if (property !== 'transaction') return Reflect.get(target, property, receiver) as unknown;
+        return (fn: (tx: unknown) => Promise<unknown>, config: unknown) => {
+          configs.push(config);
+          return target.transaction(async (tx) => {
+            await tx.execute(sql`SELECT 1`);
+            await notifyAbout(payment.id, 'PAYMENT_TRANSFER_RECORDED');
+            return fn(tx);
+          }, config as never);
+        };
+      },
+    });
+    const include = { receipts: true, refunds: true, wallet: true };
+    const during = await new DrizzlePaymentTimelineReader(racing).facts(
+      tenantA,
+      payment.id,
+      include,
+      200,
+    );
+    expect(during?.notifications.map((n) => n.kind)).toEqual([]);
+    expect(configs).toEqual([{ isolationLevel: 'repeatable read', accessMode: 'read only' }]);
+    // The row did commit: a read that starts afterwards sees it.
+    const after = await new DrizzlePaymentTimelineReader(db).facts(
+      tenantA,
+      payment.id,
+      include,
+      200,
+    );
+    expect(after?.notifications.map((n) => n.kind)).toEqual(['PAYMENT_TRANSFER_RECORDED']);
+  });
+
   it('times an abandoned manual refund by its close, and never calls it completed', async () => {
     const payment = await manualConfirmed('m2');
     const requested = await refund(owner, payment.id, 100_000n, 'm2-refund');
@@ -397,6 +453,13 @@ describe('payment timeline', () => {
       amountMinor,
       reason: 'مشتری منصرف شد',
     });
+
+  async function notifyAbout(paymentId: string, kind: string): Promise<void> {
+    await ctx.container.database.db.execute(sql`
+      INSERT INTO customer_notifications (id, tenant_id, customer_id, bot_instance_id, kind, subject_id)
+      VALUES (${ctx.container.ids.uuid()}, ${tenantA.tenantId}, ${customerA}, ${BOT_A}, ${kind},
+              ${paymentId})`);
+  }
 
   async function snapshot(): Promise<unknown> {
     const result = (await ctx.container.database.db.execute(sql`
