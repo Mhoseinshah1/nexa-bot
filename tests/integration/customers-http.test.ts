@@ -666,6 +666,25 @@ describe('customer HTTP surface', () => {
     expect(active.blockedReasonShown).toBe(false);
   });
 
+  it('an unblock WITH a note clears the stored reason and never stores the note as one', async () => {
+    const id = await customerIn(tenantA, '900400027');
+    await post(CUSTOMER_ROUTES.block(id), operatorCookie, {
+      idempotencyKey: idempotencyKey(),
+      reason: 'spam',
+    });
+    // The note is the audit's justification. Stored as `blocked_reason` on an ACTIVE
+    // customer it would read as a current block reason.
+    const response = await post(CUSTOMER_ROUTES.unblock(id), operatorCookie, {
+      idempotencyKey: idempotencyKey(),
+      reason: 'appealed and cleared',
+    });
+    expect(response.statusCode).toBe(201);
+    const active = customerResponseSchema.parse(response.json()).customer;
+    expect(active.status).toBe('ACTIVE');
+    expect(active.blockedReason).toBeNull();
+    expect(active.blockedReasonShown).toBe(false);
+  });
+
   it('a second block of a blocked customer leaves the stored reason untouched', async () => {
     const id = await customerIn(tenantA, '900400026');
     await post(CUSTOMER_ROUTES.block(id), operatorCookie, {
