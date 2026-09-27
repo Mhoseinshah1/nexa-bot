@@ -30,8 +30,8 @@ M=[
  # --- the service (B1, B5, B6) -----------------------------------------------------------
  ('B-04',[(SVC,".filter((channel) => channel.mandatory);",";")],T_U,'never asks about an optional one'),
  ('B-05',[(SVC,"answers[index]?.kind === 'NOT_MEMBER'","answers[index]?.kind !== 'MEMBER'")],T_U,'fails open'),
- ('B-06',[(SVC,"    const last = this.unavailableRecordedAt.get(key);\n    if (last !== undefined && nowMs - last < CHANNEL_MEMBERSHIP_RECORD_INTERVAL_MS) return;\n","    const last = this.unavailableRecordedAt.get(key);\n")],T_U,'records the condition once a minute'),
- ('B-07',[(SVC,"    if (this.unavailableRecordedAt.has(key)) {\n      this.unavailableRecordedAt.delete(key);\n      await this.recordRecovery(scope, botInstanceId, channel);\n      return;\n    }\n","")],T_U,'recovers the condition on the next answer'),
+ ('B-06',[(SVC,"    const last = this.unavailableWrittenAt.get(key);\n    if (last !== undefined && nowMs - last < CHANNEL_MEMBERSHIP_RECORD_INTERVAL_MS) return;\n","    const last = this.unavailableWrittenAt.get(key);\n")],T_U,'records the condition once a minute'),
+ ('B-07',[(SVC,"    if (this.outageRecordedHere.has(key)) {\n      this.outageRecordedHere.delete(key);\n      await this.recordRecovery(scope, botInstanceId);\n      return;\n    }\n","")],T_U,'recovers the condition on the next answer'),
  ('B-08',[(SVC,"    const last = this.outageLookedForAt.get(key);\n    if (last !== undefined && nowMs - last < CHANNEL_MEMBERSHIP_RECORD_INTERVAL_MS) return;\n","    const last = this.outageLookedForAt.get(key);\n")],T_U,'another process recorded'),
  ('B-09',[(SVC,"        ? CHANNEL_MEMBER_CACHE_MS\n","        ? CHANNEL_NOT_MEMBER_CACHE_MS\n")],T_U,'keeps a member about a minute'),
  ('B-10',[(SVC,"(!input.fresh || cached.answer.kind === 'MEMBER')","true")],T_U,'asks again for the check button'),
@@ -48,6 +48,10 @@ M=[
  ('B-19',[(BR,"      missing.length === 0 ||\n      (await this.deps.telegramAdmins?.resolve(scope, input.telegramUserId, actor.correlationId)) !=\n        null\n","      missing.length === 0\n")],T_I,'bound administrator'),
  ('B-20',[(BR,"      ? { intent: 'MAIN_MENU', targetId: null, callbackQueryId: command.callbackQueryId }\n      : command;","      ? command\n      : command;")],T_I,'answers the check button with the main menu'),
  ('B-21',[(BR,"      fresh: checking,\n","      fresh: false,\n")],T_I,'answers the check button with the main menu'),
+ # --- the Codex review of #86 -------------------------------------------------------------
+ ('B-22',[(SVC,"      this.outageRecordedHere.delete(key);\n","      this.outageRecordedHere.delete(key);\n      this.unavailableWrittenAt.delete(key);\n")],T_U,'flapping channel'),
+ ('B-23',[(SVC,"      dedupeKey: unavailableKey(botInstanceId),\n    });","      dedupeKey: `${unavailableKey(botInstanceId)}:${channels.join(',')}`,\n    });")],T_U,'corrects the channel'),
+ ('B-24',[(SVC,"    if (pending !== undefined) return pending;\n","")],T_U,'shares one Telegram read'),
 ]
 
 def build_contracts():
