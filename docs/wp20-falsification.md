@@ -20,6 +20,11 @@ answered before anti-spam counted it. W20-07, W20-11, W20-12 and W20-36 were re-
 the code those fixes changed, and killed again. The whole driver was re-run after the fixes:
 every row but W20-31 and W20-37, below, is killed.
 
+The branch was then restacked onto WP19's later review rounds, which moved the anti-spam
+counter's `update_id` read into the runtime's one shared reader. W20-28 was re-anchored on
+that line and run on its own; the rest of the driver was re-run on the restacked head
+(`e10c5a9`). Every row but W20-31 and W20-37 is killed.
+
 The first pass left four mutations alive.
 
 - **W20-30.** The Lua script counts an interaction only when its `update_id` is fresh

@@ -80,7 +80,7 @@ M=[
       (await this.deps.telegramAdmins?.resolve(""","""      counted.verdict !== 'ALLOWED' &&
       false &&
       (await this.deps.telegramAdmins?.resolve(""")],T_AS,'never blocks a bound administrator'),
- ('W20-28',[(BR,"    const updateId = updateIdOf(input.update);","    const updateId = (input.update as { message?: unknown }).message === undefined ? null : updateIdOf(input.update);")],T_AS,'counts button presses'),
+ ('W20-28',[(BR,"    const numericUpdateId = updateIdOf(input.update);","    const numericUpdateId = (input.update as { message?: unknown }).message === undefined ? undefined : updateIdOf(input.update);")],T_AS,'counts button presses'),
  ('W20-29',[(BR,"  if (reason === ANTI_SPAM_BLOCK_REASON) {","  if (false as boolean) {")],T_AS,'blocks on the 21st'),
  ('W20-30',[(RC,"if fresh then\n  redis.call('ZADD'","if true then\n  redis.call('ZADD'")],T_IC,'redelivered update'),
  ('W20-31',[(RC,"`${this.prefix}:${input.tenantId}:${input.botInstanceId}:${input.telegramUserId}`","`${this.prefix}:${input.botInstanceId}:${input.telegramUserId}`")],T_AS,'counts per tenant'),
