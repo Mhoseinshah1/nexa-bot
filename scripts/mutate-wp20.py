@@ -25,11 +25,13 @@ CT='packages/contracts/src/messaging-reliability.ts'
 AS='apps/api/src/modules/commerce/customers/application/anti-spam.service.ts'
 RC='apps/api/src/infrastructure/redis/redis-interaction-counter.ts'
 BR='apps/api/src/surfaces/telegram/bot-runtime.ts'
+WH='apps/api/src/surfaces/telegram/webhook.controller.ts'
 
 T_OR=('integration','tests/integration/wp20-outbox-retry.test.ts')
 T_AS=('integration','tests/integration/wp20-anti-spam.test.ts')
 T_IC=('integration','tests/integration/wp20-interaction-counter.test.ts')
 T_U=('unit','tests/unit/wp20-retry-schedule.test.ts')
+T_UA=('unit','tests/unit/wp20-anti-spam-conditions.test.ts')
 T_W=('web','tests/web/system-diagnostics.test.tsx')
 T_CN=('integration','tests/integration/customer-notifications.test.ts')
 T_RP=('integration','tests/integration/receipt-review-push.test.ts')
@@ -50,14 +52,14 @@ M=[
                 scopeOf(event),""")],T_OR,'stops after twelve'),
  ('W20-06',[(REL,"""              noEarlierLiveSibling(),
             ),""","""            ),""")],T_OR,'own aggregate, and nothing else'),
- ('W20-07',[(REL,"""      AND earlier.attempts < ${DELIVERY_MAX_FAILED_ATTEMPTS}
+ ('W20-07',[(REL,"""      AND earlier.exhausted_at IS NULL
   )`;""","""  )`;""")],T_OR,'stops after twelve'),
  ('W20-08',[(REL,"      AND earlier.attempts > 0\n","")],T_OR,'drains an aggregate'),
  ('W20-09',[(REL,"            held.add(aggregate);\n","")],T_OR,'own aggregate, and nothing else'),
  ('W20-10',[(REL,"""          // An exhausted message is in the diagnostics, not the lag (WP20).
           notExhausted(),""","""          // An exhausted message is in the diagnostics, not the lag (WP20).""")],T_OR,'stops after twelve'),
- ('W20-11',[(DIAG,"FILTER (WHERE attempts >= ${DELIVERY_MAX_FAILED_ATTEMPTS})","FILTER (WHERE false)")],T_OR,'stops after twelve'),
- ('W20-12',[(DIAG,"exhausted: Number(one.attempts) >= DELIVERY_MAX_FAILED_ATTEMPTS,","exhausted: false,")],T_OR,'stops after twelve'),
+ ('W20-11',[(DIAG,"FILTER (WHERE exhausted_at IS NOT NULL)","FILTER (WHERE false)")],T_OR,'stops after twelve'),
+ ('W20-12',[(DIAG,"exhausted: one.exhausted_at != null,","exhausted: false,")],T_OR,'stops after twelve'),
  ('W20-13',[(WEB,"{data.outbox.exhausted > 0 && (","{false && (")],T_W,'names the messages no longer retried'),
  ('W20-14',[(WEB,"        row.exhausted ? (","        false ? (")],T_W,'names the messages no longer retried'),
  # --- the later of retry_after and the lane's own back-off -----------------------------
@@ -86,10 +88,19 @@ M=[
  ('W20-33',[(RC,"tonumber(ARGV[1]) - tonumber(ARGV[2]))","tonumber(ARGV[1]) - 2 * tonumber(ARGV[2]))")],T_IC,'ROLLING window'),
  ('W20-34',[(RC,"    if (!(await this.ready())) return { state: 'UNAVAILABLE' };","    if (this.client.status !== 'ready') return { state: 'UNAVAILABLE' };")],T_IC,'counts within the window'),
  ('W20-35',[(AS,"      return { verdict: 'ALLOWED', count: null };","      return { verdict: 'FLOODING', count: null };")],T_AS,'blocks nobody'),
- ('W20-36',[(AS,"""      this.degradedRecordedAt !== null &&
-      nowMs""","""      false &&
-      nowMs""")],T_AS,'blocks nobody'),
+ ('W20-36',[(AS,"if (last !== undefined && nowMs - last","if (false && nowMs - last")],T_AS,'blocks nobody'),
  ('W20-37',[(BR,"if (spam !== null && spam.verdict !== 'ALLOWED' && arrival !== 'BLOCKED') {","if (spam !== null && spam.verdict !== 'ALLOWED') {")],T_AS,'keeps an administrator'),
+ # --- the pre-review fixes ---------------------------------------------------------------
+ ('W20-38',[(REL,"                { tx, scope: scopeOf(event) },","                tx as never,")],T_OR,'stops after twelve'),
+ ('W20-39',[(REL,"                ...(exhausted ? { exhaustedAt: this.clock.now() } : {}),\n","")],T_OR,'stops after twelve'),
+ ('W20-40',[(REL,"  return isNull(outboxMessages.exhaustedAt);","  return sql`${outboxMessages.attempts} < ${DELIVERY_MAX_FAILED_ATTEMPTS}`;")],T_OR,'count grew under the release before'),
+ ('W20-41',[(AS,"""  private async degraded(scope: TenantContext, botInstanceId: string, nowMs: number) {
+    const key = `${scope.tenantId}:${botInstanceId}`;""","""  private async degraded(scope: TenantContext, botInstanceId: string, nowMs: number) {
+    const key = `${scope.tenantId}`;""")],T_UA,'second bot'),
+ ('W20-42',[(AS,"    if (!this.degradedRecordedAt.has(key)) return;","    if (this.degradedRecordedAt.size === 0) return;")],T_UA,'another bot'),
+ ('W20-43',[(AS,"      dedupeKey: `${ANTI_SPAM_RECOVERED_CODE}:${botInstanceId}`,","      dedupeKey: unavailableKey(botInstanceId),")],T_UA,'its own key'),
+ ('W20-44',[(AS,"      recoversDedupeKey: unavailableKey(botInstanceId),","      recoversDedupeKey: botInstanceId,")],T_UA,'its own key'),
+ ('W20-45',[(WH,"        if (counted.verdict !== 'ALLOWED') return { ok: true };\n","")],T_AS,'counts /ping'),
 ]
 
 def build_contracts():
