@@ -236,6 +236,23 @@ M+=[
  ('W19-38',[(R,"          filter.before === undefined\n","          true\n")],'pages every request'),
  ('W19-39',[(C,"        items.length > limit && last !== undefined","        false && last !== undefined")],'pages every request'),
  ('W19-40',[(PG,"    if (page.nextCursor === null) return rows;","    return rows;")],'follows the server',('web','tests/web/service-refund-requests.test.tsx')),
+ # Third Codex review of #83.
+ ('W19-41',[(S,"""  ): Promise<(ServiceRefundRequestListItem & { readonly remaining: Money }) | null> {
+    await this.checkDecide(scope, actor);""","""  ): Promise<(ServiceRefundRequestListItem & { readonly remaining: Money }) | null> {
+    await this.deps.guard.check(scope, actor, SERVICE_REFUND_VIEW_PERMISSION);""")],'two decision keys alone'),
+ ('W19-42',[(DS,"""      await this.mutate(scope, actor, denial, async (tx) => {
+        await this.deps.captures.retireConfirmed(scope, captureId, tx);
+      });
+""","")],'retires a confirmation'),
+ ('W19-43',[(DS,"""      const refused = await this.refusalOf(scope, actor, requestId, error);
+      await this.closeIfOpen(scope, actor, waiting, 'SUPERSEDED');
+      return refused.outcome""","""      await this.closeIfOpen(scope, actor, waiting, 'SUPERSEDED');
+      const refused = await this.refusalOf(scope, actor, requestId, error);
+      return refused.outcome""")],'keeps the reason prompt'),
+ ('W19-44',[(S,"    const service = await this.deps.services.lockForUpdate(scope, parsed.data, tx);","    const service = await this.deps.services.findById(scope, parsed.data, tx);")],'ends while the filing waits'),
+ ('W19-45',[(S,"""        if (replayed !== null) {
+          if (replayed.serviceId""","""        if (replayed !== null && (false as boolean)) {
+          if (replayed.serviceId""")],'redelivered filing'),
 ]
 only=sys.argv[1:] 
 for entry in M:

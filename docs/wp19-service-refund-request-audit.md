@@ -248,3 +248,29 @@ Added, the row survived: the rejection is guarded three times — the early stat
 conditional UPDATE, and the `service_refund_requests_rejected_check` CHECK. W19-14c reverts
 all three (the driver lifts the CHECK for that one row and restores it), and the race test
 dies.
+
+## 10. The third Codex review of #83
+
+It found five issues. All were real, and each is fixed with a named test and a killed mutation
+(W19-41 to W19-45):
+
+- **A decision reported as denied after it committed (P1).** The HTTP response re-read the
+  decided request through the list, charged `refunds.view`. A decider holding only the two
+  decision keys was told "denied" for money already reserved and a deletion already planned.
+  The response is now read under the decision keys (`decidedView`).
+- **A confirmation that outlived its refusal (P1).** A capture stays CONFIRMED so that a crash
+  between the close and the approval is finished by the next tap. That also let a tap long
+  after a refusal the administrator had been shown carry out the approval, once the panel or
+  the payment's bound recovered. A definitive refusal now retires the capture
+  (`CONFIRMED -> SUPERSEDED`). An unclassified error leaves it CONFIRMED, so a retry of an
+  indeterminate failure is still the same approval.
+- **A prompt closed by a transient failure (P2).** The reason prompt was closed before the
+  error was classified. It is now closed only after `refusalOf` has proved the request decided
+  or not actionable. Anything else is rethrown with the prompt still open.
+- **A filing that read a service already ended (P2).** Filing now takes the service's row lock
+  before reading eligibility, as the approval does.
+- **A redelivered filing after its request was decided (P2).** The partial unique index
+  deduplicates only while a request is live. Filing now takes an idempotency key — the update
+  that carried the reason — which is stored on the request and unique for ever
+  (`service_refund_requests_filing_key`, folded into the unmerged migration 0125). This also
+  brings the filing in line with the rule that every state-changing command takes one.
