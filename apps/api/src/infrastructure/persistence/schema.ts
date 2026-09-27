@@ -454,6 +454,13 @@ export const outboxMessages = pgTable(
     publishedAt: timestamptz('published_at'),
     attempts: integer('attempts').notNull().default(0),
     lastError: text('last_error'),
+    /**
+     * When the relay may try this message again after a failure (WP20, brief §3.1). NULL
+     * means due now: a message that has never failed, and every row written before this
+     * column existed. A failure moves only its own row, so the messages behind it are not
+     * held up.
+     */
+    nextAttemptAt: timestamptz('next_attempt_at'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
   },
   (table) => [
