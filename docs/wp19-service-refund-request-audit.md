@@ -399,3 +399,37 @@ The full mutation re-runs also showed that W19-01, W19-22b and W19-02b now survi
 and 7 layered one more check behind each: the sweep's own decision under the service lock, and
 `terminationUndecided`, which also counts the request's own UNKNOWN deletion. The falsification
 record explains this, and adds W19-01b, W19-22c and W19-02c, which revert every layer.
+
+## 15. The eighth Codex review of #83
+
+It raised four issues. Three are real as stated. The fourth is real, but not for the reason
+it gave. Each fix has a named test and a killed mutation (W19-80 to W19-86).
+
+- **A pending credit that was not currency exposure (P1).** Approval reserves a `REQUESTED`
+  `WALLET_CREDIT` refund, and that reservation consumes the payment's remaining balance.
+  `refundableExposureIn` therefore saw nothing still owed, and `sales.currency` could change
+  while a deletion was pending. The credit would then land in a currency the wallet no longer
+  reads. A payment with a `REQUESTED` wallet credit now counts as exposure until the credit is
+  completed or released.
+- **The rejection-reason length (P2).** Codex said Zod's `.max(500)` counts UTF-16 units and
+  so refuses 300 emoji. That is false: Zod 4.5.4 counts code points, so 300 emoji pass
+  `max(300)` and fail `max(299)`. Two real defects sat beside the claim:
+  - the HTTP schema checked the untrimmed text, while the service and the database's
+    `length(btrim(...))` trim first. A padded 500-character reason was refused at the
+    boundary, and a reason of whitespace alone passed it;
+  - the Web input's `maxLength` does count UTF-16 units, and stopped a reason at 250 emoji.
+
+  `isServiceRefundRejectionReason` (contracts) is now the one rule: trim, then count code
+  points, 1 to 500. The HTTP schema refines on it, and the service and the Web form both call
+  it. The input's `maxLength` is gone.
+
+- **A reason lost to a transient failure (P2).** Reading the reason closes its window, and the
+  webhook answers 2xx whatever happens. A filing that failed for a reason nobody classified
+  left the customer with no window and no request. The window is now reopened, best effort,
+  before the failure is reported.
+- **A message typed before the confirmation (P2).** Two webhooks can run at once. A message
+  typed before the confirmation tap, but processed after it, was read as the reason and filed
+  a request. `customer_text_captures.opened_update_id` records the tap's `update_id`, and
+  `readText` answers `NO_WINDOW` to any message that is not newer. The column is folded into
+  the unmerged 0125. A capture opened without an update id (every other kind) keeps its
+  previous behaviour.
