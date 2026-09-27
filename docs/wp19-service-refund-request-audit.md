@@ -372,3 +372,30 @@ It found four issues. All were real, and each is fixed with a named test and a k
   one keyset stream over `SERVICE_REFUND_REQUEST_ATTENTION_STATES`, exclusive with `state`. No
   transition changes `(createdAt, id)`, so each request is on exactly one page, in the state it
   had there.
+
+## 14. The seventh Codex review of #83
+
+It found three issues. All were real, and each is fixed with a named test and a killed
+mutation (W19-74 to W19-79):
+
+- **Released past an ambiguous deletion (P1).** Round 6 made the sweep wait while another
+  TERMINATE of the service was open, but "open" meant PLANNED or IN_FLIGHT. An operator's
+  deletion whose answer was lost is UNKNOWN, which is not terminal: the account may already be
+  gone, or may yet be. The sweep could release past it, leaving the customer without the
+  service or the refund.
+  - Undecided now means anything but SUCCEEDED, FAILED or ABANDONED.
+  - One predicate serves both places: the query's `undecidedTermination`, and the sweep's own
+    `terminationUndecided` under the service lock, which replaces `findOpen` there.
+  - Every request that is not completing waits on it.
+- **A request stranded EXECUTING (P2).** A reservation the release before WP19 failed by hand,
+  whose own deletion then succeeded, matched no branch of the sweep's query and stayed
+  EXECUTING for ever. The query admits it, and the sweep decides it FAILED with failure kind
+  `RESERVATION_RELEASED`. The reservation holds no money, so nothing is credited.
+- **A replayed approval that claimed success (P2).** A retried Web approval key is answered
+  with the request as it stands now. The form said "deletion started" whatever that state was.
+  It now says so only for EXECUTING, and reports a completed or failed request as what it is.
+
+The full mutation re-runs also showed that W19-01, W19-22b and W19-02b now survive. Rounds 6
+and 7 layered one more check behind each: the sweep's own decision under the service lock, and
+`terminationUndecided`, which also counts the request's own UNKNOWN deletion. The falsification
+record explains this, and adds W19-01b, W19-22c and W19-02c, which revert every layer.
