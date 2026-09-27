@@ -30,7 +30,7 @@ M=[
  ('C-02',[(I18N,"  return `${groupTrafficFigure(formatTrafficGb(bytes))} ${GB_WORD[locale]}`;","  return `${formatTrafficGb(bytes)} ${GB_WORD[locale]}`;")],T_U,'grouped, instead of switching unit'),
  ('C-03',[(TI,"  const hundredths = (magnitude * 100n + BYTES_PER_GB / 2n) / BYTES_PER_GB;","  const hundredths = (magnitude * 100n) / BYTES_PER_GB;")],T_U,'nearest hundredth'),
  ('C-04',[(TI,".padStart(2, '0').replace(/0$/u, '')",".padStart(2, '0')")],T_U,'no noisy .00'),
- ('C-05',[(I18N,"  const grouped = whole.replace(/\\B(?=(\\d{3})+(?!\\d))/g, ',');","  const grouped = whole;")],T_U,'exact past 2^53'),
+ ('C-05',[(I18N,"  const grouped = whole.replace(/\\B(?=(\\d{3})+(?!\\d))/g, ',');","  const grouped = whole;")],T_U,'where Number would round'),
  ('C-06',[(FMT,"  return groupTrafficFigure(formatTrafficGb(bytes));","  return formatTrafficGb(bytes);")],T_U,'Web Admin’s rule too'),
  ('C-07',[(PROD,"<Ltr>{formatTrafficGbText(value)}</Ltr>","<Ltr>{value.toString()}</Ltr>")],T_PO,'10.25 GB allowance as 10.25'),
  ('C-08',[(ORD,"<Ltr>{formatTrafficGbText(value)}</Ltr>","<Ltr>{value.toString()}</Ltr>")],T_PO,'order line’s traffic in GB'),

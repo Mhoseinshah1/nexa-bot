@@ -102,6 +102,7 @@ const RECORDS = [
   'docs/wp20-falsification.md',
   'docs/wp21-falsification.md',
   'docs/package-a-falsification.md',
+  'docs/package-c-falsification.md',
 ];
 /**
  * The fewest citations this record may contain.
