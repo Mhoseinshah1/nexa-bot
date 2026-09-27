@@ -403,6 +403,40 @@ describe('WP19 — a customer asks for their money back', () => {
     ).toBe(true);
   });
 
+  it('keeps the reason prompt open when filing fails for a reason nobody classified (Codex review of #83, round 8)', async () => {
+    const service = await activeService('tg-file-transient');
+    await handle(tapUpdate(`fa:${service.id}`));
+    await handle(tapUpdate(`fb:${service.id}`));
+    const filing = vi
+      .spyOn(ctx.container.serviceRefundRequests, 'file')
+      .mockRejectedValueOnce(new Error('connection reset'));
+    try {
+      await handle(textUpdate('سرعت مناسب نبود')).catch(() => undefined);
+    } finally {
+      filing.mockRestore();
+    }
+    expect(await countRows(sql`SELECT count(*)::int AS n FROM service_refund_requests`)).toBe(0);
+    // The customer sends the reason again: the window is still there to read it.
+    const again = await handle(textUpdate('سرعت مناسب نبود'));
+    expect(again.replyKey).toBe('bot.service.refund_request_registered');
+    expect(await countRows(sql`SELECT count(*)::int AS n FROM service_refund_requests`)).toBe(1);
+  });
+
+  it('never reads a message sent before the confirmation as the reason (Codex review of #83, round 8)', async () => {
+    const service = await activeService('tg-file-order');
+    await handle(tapUpdate(`fa:${service.id}`));
+    // Typed BEFORE the confirmation tap, delivered after it by a concurrent webhook.
+    const early = textUpdate('یک پیام قدیمی');
+    await handle(tapUpdate(`fb:${service.id}`));
+    const late = await handle(early);
+    expect(late.replyKey).not.toBe('bot.service.refund_request_registered');
+    expect(await countRows(sql`SELECT count(*)::int AS n FROM service_refund_requests`)).toBe(0);
+    // A reason sent after the tap files, as it always did.
+    const filed = await handle(textUpdate('سرعت مناسب نبود'));
+    expect(filed.replyKey).toBe('bot.service.refund_request_registered');
+    expect(await countRows(sql`SELECT count(*)::int AS n FROM service_refund_requests`)).toBe(1);
+  });
+
   it('refuses a reason outside 3–500 code points and asks again, then files the next one', async () => {
     const service = await activeService('tg-reason');
     await handle(tapUpdate(`fb:${service.id}`));
@@ -743,6 +777,30 @@ describe('WP19 — a customer asks for their money back', () => {
       (credit.rows[0] as { actor_admin_id: string | null }).actor_admin_id,
       'the administrator who decided the amount, not an anonymous system credit',
     ).toBe(ownerId);
+  });
+
+  it('keeps a pending request credit as currency exposure until it is decided (Codex review of #83, round 8)', async () => {
+    const service = await activeService('currency-exposure');
+    const filed = await file(service.id);
+    // The whole remaining principal: the reservation consumes the payment's balance.
+    await ctx.container.serviceRefundRequests.approve(tenantA, owner, {
+      requestId: filed.request.id,
+      amountMinor: PRICE,
+    });
+    const change = () =>
+      ctx.container.settingsService.set(tenantA, owner, {
+        key: 'sales.currency',
+        value: 'IRR',
+        expectedVersion: null,
+        idempotencyKey: `currency-exposure-${ctx.container.ids.uuid()}`,
+      });
+    // The credit is still to be written, in the payment's currency: no change yet.
+    await expect(change()).rejects.toMatchObject({ code: 'control.invalid_value' });
+
+    // Deleted and credited: nothing is owed in the old currency any more.
+    await ctx.container.provisionerLoop.tick();
+    expect((await requestRow(filed.request.id))?.request.state).toBe('COMPLETED');
+    await expect(change()).resolves.toBeDefined();
   });
 
   it('credits nothing while the deletion’s answer is uncertain', async () => {
@@ -1807,6 +1865,24 @@ describe('WP19 — a customer asks for their money back', () => {
       reason: 'رد',
     });
     expect(rejection.request.state).toBe('REJECTED');
+  });
+
+  it('rejects through the Web with a reason of 300 emoji (Codex review of #83, round 8)', async () => {
+    const filed = await file((await activeService('emoji-reason')).id);
+    const reason = '😀'.repeat(300); // 300 code points, 600 UTF-16 units
+    const { controller, request } = await asWebOwner();
+    const decided = await controller.reject(request, filed.request.id, {
+      idempotencyKey: 'wp19-emoji-reject',
+      reason,
+    });
+    expect(decided.request.state).toBe('REJECTED');
+    expect(decided.request.rejectionReason).toBe(reason);
+    await expect(
+      controller.reject(request, filed.request.id, {
+        idempotencyKey: 'wp19-emoji-reject-long',
+        reason: '😀'.repeat(501),
+      }),
+    ).rejects.toThrow();
   });
 
   it('holds a Web decision to its idempotency key (Codex review of #83, round 4)', async () => {

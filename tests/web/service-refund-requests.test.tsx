@@ -244,6 +244,29 @@ describe('one service’s requests', () => {
     }
   });
 
+  it('accepts a reason of 300 emoji, counted in code points (Codex review of #83, round 8)', async () => {
+    const reason = '😀'.repeat(300); // 600 UTF-16 units
+    const api = stubApi([
+      forService([request()]),
+      {
+        url: `/service-refund-requests/${REQUEST_ID}/reject`,
+        body: { request: request({ state: 'REJECTED', rejectionReason: reason }) },
+      },
+    ]);
+    renderPage(<ServiceRefundRequestsCard serviceId={SERVICE_ID} mayDecide />);
+    await screen.findByRole('table');
+    fireEvent.change(screen.getByLabelText(t('web.service_refund_reject_reason')), {
+      target: { value: reason },
+    });
+    const reject = screen.getByRole('button', { name: t('web.service_refund_reject') });
+    expect(reject).toBeEnabled();
+    fireEvent.click(reject);
+    await waitFor(() => {
+      const call = api.calls.find((one) => one.url.endsWith('/reject'));
+      expect((call?.body as { reason: string } | undefined)?.reason).toBe(reason);
+    });
+  });
+
   it('rejects with the typed reason', async () => {
     const api = stubApi([
       forService([request()]),
