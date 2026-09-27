@@ -1864,7 +1864,6 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   const serviceRefundRequests = new ServiceRefundRequestService({
     repository: new DrizzleServiceRefundRequestRepository(database.db),
     services: serviceRepository,
-    operations: operationRepository,
     orders: orderRepository,
     payments: paymentRepository,
     refundLedger: refundRepository,

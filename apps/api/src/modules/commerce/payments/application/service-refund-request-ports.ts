@@ -169,4 +169,10 @@ export interface ServiceRefundRequestRepository {
     limit: number,
     tx?: unknown,
   ): Promise<readonly ExecutingServiceRefundRequest[]>;
+
+  /**
+   * Whether some TERMINATE of this service is undecided — PLANNED, IN_FLIGHT or UNKNOWN. The
+   * sweep's in-transaction check, and the same predicate `executingDecidable` filters on.
+   */
+  terminationUndecided(scope: TenantContext, serviceId: string, tx?: unknown): Promise<boolean>;
 }

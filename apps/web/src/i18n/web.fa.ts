@@ -1539,6 +1539,10 @@ export const WEB_FA = {
   'web.service_refund_reject_reason': 'دلیل رد (برای کاربر ارسال می‌شود)',
   'web.service_refund_reject': 'رد درخواست',
   'web.service_refund_approved_toast': 'درخواست تأیید شد و حذف سرویس آغاز شد.',
+  'web.service_refund_completed_toast':
+    'این درخواست پیش‌تر انجام شده است: سرویس حذف و مبلغ به کیف پول کاربر واریز شد.',
+  'web.service_refund_failed_toast':
+    'حذف سرویس ناموفق بود و مبلغی بازگردانده نشد. وضعیت درخواست را بررسی کنید.',
   'web.service_refund_rejected_toast': 'درخواست رد شد.',
   'web.service_refund_denied':
     'تصمیم دربارهٔ این درخواست به هر دو دسترسی «ثبت بازگشت وجه» و «حذف سرویس» نیاز دارد.',

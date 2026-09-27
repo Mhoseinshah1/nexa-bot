@@ -40,7 +40,6 @@ import type { CustomerRecord, CustomerRepository } from '../../customers/applica
 import type { OrderRepository } from '../../orders/application/ports.js';
 import type {
   OperationRecord,
-  OperationRepository,
   ServiceRecord,
   ServiceRepository,
 } from '../../provisioning/application/ports.js';
@@ -109,8 +108,6 @@ export interface ServiceRefundReview {
 export interface ServiceRefundRequestServiceDeps {
   readonly repository: ServiceRefundRequestRepository;
   readonly services: Pick<ServiceRepository, 'findById' | 'lockForUpdate'>;
-  /** Whether another deletion of the service is still in flight when the sweep decides (round 6). */
-  readonly operations: Pick<OperationRepository, 'findOpen'>;
   readonly orders: Pick<OrderRepository, 'findById'>;
   readonly payments: Pick<PaymentRepository, 'findConfirmedForOrder' | 'findById'>;
   readonly refundLedger: Pick<RefundRepository, 'consumptionFor' | 'lockPayment'>;
@@ -833,17 +830,26 @@ export class ServiceRefundRequestService {
        * the customer with neither the service nor the refund the administrator approved. A
        * service that is TERMINATED while the reservation is still held is completed and
        * credited, whichever deletion removed it; one still standing is released only when
-       * this request's own deletion definitively failed AND no other deletion is in flight.
-       * Every TERMINATE planner takes this same service lock before `findOpen` (round 4), so
-       * one planned before this read is seen here and the request waits for its answer; one
+       * this request's own deletion definitively failed AND no other deletion is undecided —
+       * PLANNED, IN_FLIGHT, or UNKNOWN, whose account may already be gone (round 7). Every
+       * TERMINATE planner takes this same service lock before `findOpen` (round 4), so one
+       * planned before this read is seen here and the request waits for its answer; one
        * planned after is an operator acting on a request already shown as FAILED.
+       *
+       * A reservation another release already closed (FAILED) holds no money, so its request
+       * is decided FAILED once its own deletion has ended — a success included, when the
+       * service is gone (round 7). Anything else that reads SUCCEEDED without being removed —
+       * a service that did not move, a reservation completed elsewhere — stays EXECUTING for
+       * an operator.
        */
       const service = await this.deps.services.lockForUpdate(scope, request.serviceId, tx);
-      const removed = service?.state === 'TERMINATED' && item.refundState === 'REQUESTED';
-      if (succeeded && !removed) return false;
+      const gone = service?.state === 'TERMINATED';
+      const removed = gone && item.refundState === 'REQUESTED';
+      const released = item.refundState === 'FAILED';
+      if (succeeded && !removed && !(gone && released)) return false;
       if (
         !removed &&
-        (await this.deps.operations.findOpen(scope, request.serviceId, 'TERMINATE', tx)) !== null
+        (await this.deps.repository.terminationUndecided(scope, request.serviceId, tx))
       ) {
         return false;
       }
@@ -891,7 +897,13 @@ export class ServiceRefundRequestService {
       const failed = await this.deps.repository.resolveExecution(
         scope,
         request.id,
-        { to: 'FAILED', failureKind: item.operationFailureKind ?? item.operationState },
+        {
+          to: 'FAILED',
+          // Its own deletion succeeded, but the reservation was already released elsewhere.
+          failureKind: succeeded
+            ? 'RESERVATION_RELEASED'
+            : (item.operationFailureKind ?? item.operationState),
+        },
         now,
         tx,
       );

@@ -254,9 +254,17 @@ function DecisionForm({
         idempotencyKey: approval.current({ request: request.id, amount: digitsOf(amount) }),
         amountMinor: digitsOf(amount),
       }),
-    onSuccess: () => {
+    // A retried key is answered with the request as it stands NOW (Codex review of #83,
+    // round 7): say "deletion started" only while it is, never over a deletion that ended.
+    onSuccess: ({ request: decided }) => {
       approval.settle();
-      notify({ tone: 'ok', message: t('web.service_refund_approved_toast') });
+      if (decided.state === 'COMPLETED') {
+        notify({ tone: 'ok', message: t('web.service_refund_completed_toast') });
+      } else if (decided.state === 'FAILED') {
+        notify({ tone: 'danger', message: t('web.service_refund_failed_toast') });
+      } else {
+        notify({ tone: 'ok', message: t('web.service_refund_approved_toast') });
+      }
       refresh();
     },
     // A 5xx may have committed: the retry keeps its key rather than approving twice.

@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, notInArray, or, sql } from 'drizzle-orm';
 import {
   OPERATION_TERMINAL_STATES,
   SERVICE_REFUND_REQUEST_ACTIVE_STATES,
@@ -348,6 +348,27 @@ export class DrizzleServiceRefundRequestRepository implements ServiceRefundReque
     return row === undefined ? null : toRecord(row);
   }
 
+  async terminationUndecided(
+    scope: TenantContext,
+    serviceId: string,
+    tx?: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select({ id: provisioningOperations.id })
+      .from(provisioningOperations)
+      .where(
+        and(
+          eq(provisioningOperations.tenantId, tenantId),
+          eq(provisioningOperations.serviceId, serviceId),
+          eq(provisioningOperations.type, 'TERMINATE'),
+          notInArray(provisioningOperations.state, [...OPERATION_TERMINAL_STATES]),
+        ),
+      )
+      .limit(1);
+    return rows.length > 0;
+  }
+
   async executingDecidable(
     scope: TenantContext,
     limit: number,
@@ -405,18 +426,34 @@ export class DrizzleServiceRefundRequestRepository implements ServiceRefundReque
               eq(refunds.state, 'REQUESTED'),
             ),
             and(
-              inArray(provisioningOperations.state, ['FAILED', 'ABANDONED']),
-              inArray(refunds.state, ['REQUESTED', 'FAILED']),
+              or(
+                and(
+                  inArray(provisioningOperations.state, ['FAILED', 'ABANDONED']),
+                  inArray(refunds.state, ['REQUESTED', 'FAILED']),
+                ),
+                /*
+                 * A reservation another release already closed (FAILED) holds no money, so
+                 * its request is decided FAILED once its own deletion has ended — a success
+                 * included, when the service is gone (Codex review of #83, round 7). Left
+                 * out, it stayed EXECUTING for ever.
+                 */
+                and(
+                  eq(provisioningOperations.state, 'SUCCEEDED'),
+                  eq(services.state, 'TERMINATED'),
+                  eq(refunds.state, 'FAILED'),
+                ),
+              ),
               /*
-               * Nor while another deletion of the service is still in flight (Codex review
-               * of #83, round 6): the sweep waits for its answer rather than releasing, and
-               * so must not return a row it would only refuse again.
+               * Nor, unless it is completing, while another deletion of the service is
+               * undecided — PLANNED, IN_FLIGHT or UNKNOWN (Codex review of #83, rounds 6 and
+               * 7): the sweep waits for that answer rather than releasing, so a row it would
+               * only refuse again is never returned. The sweep's own check is
+               * `terminationUndecided`, the same predicate.
                */
-              sql`not exists (select 1 from provisioning_operations open_op
-                where open_op.tenant_id = ${serviceRefundRequests.tenantId}
-                  and open_op.service_id = ${serviceRefundRequests.serviceId}
-                  and open_op.type = 'TERMINATE'
-                  and open_op.state in ('PLANNED', 'IN_FLIGHT'))`,
+              or(
+                and(eq(services.state, 'TERMINATED'), eq(refunds.state, 'REQUESTED')),
+                sql`not ${undecidedTermination()}`,
+              ),
             ),
           ),
         ),
@@ -431,4 +468,20 @@ export class DrizzleServiceRefundRequestRepository implements ServiceRefundReque
       refundState: row.refundState,
     }));
   }
+}
+
+/**
+ * Some TERMINATE of the request's service is undecided: anything but SUCCEEDED, FAILED or
+ * ABANDONED. UNKNOWN is undecided — the account may already be gone, or may yet be — and so
+ * is waited for, never released past (Codex review of #83, round 7).
+ */
+function undecidedTermination() {
+  return sql`exists (select 1 from ${provisioningOperations} other_op
+    where other_op.tenant_id = ${serviceRefundRequests.tenantId}
+      and other_op.service_id = ${serviceRefundRequests.serviceId}
+      and other_op.type = 'TERMINATE'
+      and other_op.state not in (${sql.join(
+        OPERATION_TERMINAL_STATES.map((state) => sql`${state}`),
+        sql`, `,
+      )}))`;
 }
