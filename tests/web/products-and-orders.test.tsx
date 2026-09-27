@@ -173,26 +173,19 @@ describe('the product list', () => {
     expect(screen.getByText('50')).toBeInTheDocument();
   });
 
-  it('reads the typed byte count back in a unit beneath the traffic input', async () => {
+  it('takes a new product’s traffic in GB, and starts it unlimited, said by its own box', async () => {
     stubApi(productList([product()]));
     renderPage(<ProductsPage route={PRODUCTS_ROUTE} mayEdit denied={false} />);
     await screen.findByText('پلن یک‌ماهه');
     const input = document.getElementById('product-traffic-create') as HTMLInputElement;
-
-    // The input stays in bytes — the stored unit — and the readout says what that is.
-    fireEvent.change(input, { target: { value: '53687091200' } });
-    const readout = screen.getByTestId('product-traffic-readout-create');
-    expect(readout.textContent).toContain('50');
-    expect(readout.textContent).toContain('گیگابایت');
-    expect(readout.textContent).not.toContain('53687091200');
-
-    // Zero is the unlimited sentinel, and the readout says so rather than "0 bytes".
-    fireEvent.change(input, { target: { value: '0' } });
-    expect(screen.getByTestId('product-traffic-readout-create').textContent).toBe('نامحدود');
-
-    // Something that is not a byte count gets no readout at all, never a guess.
-    fireEvent.change(input, { target: { value: '50GB' } });
-    expect(screen.queryByTestId('product-traffic-readout-create')).toBeNull();
+    // WP21: no byte field anywhere. Unlimited is a checkbox, not a zero in the box.
+    expect(screen.queryByText('حجم (بایت)')).toBeNull();
+    expect(input.disabled).toBe(true);
+    const unlimited = screen.getAllByLabelText('بدون محدودیت حجم')[0] as HTMLInputElement;
+    expect(unlimited.checked).toBe(true);
+    fireEvent.click(unlimited);
+    expect(input.disabled).toBe(false);
+    expect(input.inputMode).toBe('decimal');
   });
 
   it('says WHY a product is not in the catalogue, one reason per row', async () => {
@@ -299,6 +292,51 @@ describe('the product form', () => {
     );
     return api;
   };
+
+  const lastWriteOf = (api: ReturnType<typeof stubApi>) =>
+    (api.calls.filter((call) => call.method === 'POST').at(-1)?.body ?? {}) as Record<
+      string,
+      unknown
+    >;
+
+  it('reopens a saved 10.25 GB as 10.25, and sends it back as GB, never bytes (WP21)', async () => {
+    const api = formFor({ trafficBytes: '11005853696' });
+    await screen.findByLabelText('قیمت');
+    const input = document.getElementById('product-traffic-edit') as HTMLInputElement;
+    expect(input.value).toBe('10.25');
+    fireEvent.click(screen.getByText('ذخیرهٔ تغییرات'));
+    await waitFor(() => expect(lastWriteOf(api)['trafficGb']).toBe('10.25'));
+    expect(lastWriteOf(api)).not.toHaveProperty('trafficBytes');
+  });
+
+  it('says unlimited with its own box, sends null for it, and never reads 0 as unlimited', async () => {
+    const api = formFor({ trafficBytes: '0' });
+    await screen.findByLabelText('قیمت');
+    const unlimited = screen.getAllByLabelText('بدون محدودیت حجم')[0] as HTMLInputElement;
+    expect(unlimited.checked).toBe(true);
+    fireEvent.click(screen.getByText('ذخیرهٔ تغییرات'));
+    await waitFor(() => expect(lastWriteOf(api)['trafficGb']).toBeNull());
+
+    // A typed zero is a mistake the form names, not an unlimited plan.
+    const writes = api.calls.filter((call) => call.method === 'POST').length;
+    fireEvent.click(unlimited);
+    const input = document.getElementById('product-traffic-edit') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: '0' } });
+    fireEvent.click(screen.getByText('ذخیرهٔ تغییرات'));
+    expect(await screen.findByText(/بزرگ‌تر از صفر به گیگابایت/)).toBeInTheDocument();
+    expect(api.calls.filter((call) => call.method === 'POST')).toHaveLength(writes);
+  });
+
+  it('refuses a third decimal before anything is sent (WP21)', async () => {
+    const api = formFor({ trafficBytes: '1073741824' });
+    await screen.findByLabelText('قیمت');
+    const input = document.getElementById('product-traffic-edit') as HTMLInputElement;
+    expect(input.value).toBe('1');
+    fireEvent.change(input, { target: { value: '1.234' } });
+    fireEvent.click(screen.getByText('ذخیرهٔ تغییرات'));
+    expect(await screen.findByText(/بزرگ‌تر از صفر به گیگابایت/)).toBeInTheDocument();
+    expect(api.calls.filter((call) => call.method === 'POST')).toHaveLength(0);
+  });
 
   it('sends the price PAIR together, and both halves absent when the box is empty', async () => {
     const api = formFor();
