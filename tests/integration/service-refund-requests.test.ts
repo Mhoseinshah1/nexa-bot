@@ -716,6 +716,46 @@ describe('WP19 — a customer asks for their money back', () => {
     expect((await requestRow(filed.request.id))?.request.state).toBe('EXECUTING');
   });
 
+  it('refuses to announce a reservation closed elsewhere without its credit, and settles the next request anyway', async () => {
+    // A rollback past WP19 runs a release whose operator `complete` knows nothing of
+    // reservations: a hand-made call moves the reserved refund to COMPLETED with no
+    // ledger credit. Forced here as that release would write it.
+    const closed = await activeService('closed-elsewhere');
+    const closedFiled = await file(closed.id);
+    const next = await activeService('next-in-line');
+    const nextFiled = await file(next.id);
+    const before = await balance();
+    const closedApproved = await ctx.container.serviceRefundRequests.approve(tenantA, owner, {
+      requestId: closedFiled.request.id,
+      amountMinor: 100_000n,
+    });
+    await ctx.container.serviceRefundRequests.approve(tenantA, owner, {
+      requestId: nextFiled.request.id,
+      amountMinor: 120_000n,
+    });
+    const closedRefundId = closedApproved.refundId ?? '';
+    await ctx.container.database.db.execute(
+      sql`UPDATE refunds SET state = 'COMPLETED', completed_at = now(),
+                 completed_by_admin_id = requested_by_admin_id
+           WHERE id = ${closedRefundId}` as never,
+    );
+
+    // One tick deletes both accounts and runs the sweep, oldest request first.
+    await ctx.container.provisionerLoop.tick();
+    await ctx.container.serviceRefundRequests.settleDue(tenantA);
+
+    expect(
+      (await requestRow(closedFiled.request.id))?.request.state,
+      'not announced: its money never moved',
+    ).toBe('EXECUTING');
+    expect(await walletCredits(closedRefundId), 'and not credited on a guess').toBe(0);
+    const nextRow = await requestRow(nextFiled.request.id);
+    expect(nextRow?.request.state, 'the one behind it is not held').toBe('COMPLETED');
+    expect(await walletCredits(nextRow?.request.refundId ?? null)).toBe(1);
+    expect(await balance()).toBe(before + 120_000n);
+    expect(await notices('SERVICE_REFUND_REQUEST_APPROVED'), 'one approval told, not two').toBe(1);
+  });
+
   it('releases the reservation and credits nothing when the deletion definitively fails', async () => {
     const service = await activeService('definitive');
     const filed = await file(service.id);

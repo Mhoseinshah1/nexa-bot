@@ -1822,9 +1822,10 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
      */
     payments: paymentRepository,
     /*
-     * The ledger, `append` and `lockCustomer` only. No balance read: a customer who has
-     * already spent a refunded payment is still owed the refund, so nothing here may
-     * consult what the wallet currently holds.
+     * The ledger, `append`, `lockCustomer` and `findByReference` only. No balance read: a
+     * customer who has already spent a refunded payment is still owed the refund, so
+     * nothing here may consult what the wallet currently holds. `findByReference` asks
+     * whether one refund's own credit exists, never how much the wallet holds.
      */
     wallet: walletRepository,
     /*

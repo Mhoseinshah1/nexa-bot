@@ -909,6 +909,45 @@ notifications page. It lists these rows by their template key. Its dispatcher ha
 template for them, so a pending one is abandoned rather than delivered. The payment and
 refund rows remain the record.
 
+### What a rollback delays or drops: customer refund requests (WP19)
+
+WP19 lets a customer ask for a refund of a service. An administrator approves an
+amount; the provider account is deleted; a sweep then credits the wallet. The release
+before WP19 has none of this. Nothing in it crashes on WP19's rows, but four things
+happen differently while it runs:
+
+- **An executing request is not credited.** Its `TERMINATE` is an ordinary operation,
+  so the old provisioner still deletes the account, but it has no sweep to credit the
+  reservation. The customer has no service and no money until you roll forward. The
+  reservation still counts against the payment, so nothing can be refunded twice. The
+  first tick after the roll-forward credits it.
+- **A new request's review cards are not sent.** A `ServiceRefundRequested` event the
+  old relay meets has no consumer there and is marked published. The request itself
+  stays in the Web Admin (Services) and is decided from there.
+- **A reason being typed goes to the service note.** The old bot treats a text capture
+  it does not know as a service note. A customer who opened the refund form in the ten
+  minutes before the rollback, and sends the reason after it, has that text saved as
+  the service's note and no request filed.
+- **An operator can close a reservation by hand.** The old release's refund `complete`
+  and `fail` accept a reserved refund. Its Web Admin offers neither for one, but a
+  hand-made API call does. After the roll-forward the sweep refuses such a request
+  rather than announce a credit that was never written. It stays EXECUTING, in front of
+  an operator, and every other request is still decided.
+
+Financial facts that happen while the old release runs are not written to the
+financial log (WP18). Its relay has no consumer for them either.
+
+**Before rolling back past WP19**, switch the `customer_refund_requests` flag off
+in the Web Admin's feature flags, so no new request is filed. Wait until nothing is executing:
+
+```bash
+docker compose --env-file /etc/nexa/deploy.env -f /opt/nexa/deploy/compose.yml \
+  exec -T postgres psql -U nexa -d nexa -c \
+  "SELECT count(*) FROM service_refund_requests WHERE state = 'EXECUTING'"
+```
+
+An OPEN request can wait through a rollback; it is decided after the roll-forward.
+
 ### How far back you can roll
 
 **One release**, safely. Migrations are expand-only within a release

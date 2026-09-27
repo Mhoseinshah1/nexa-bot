@@ -102,7 +102,7 @@ export interface RefundServiceDeps {
    * earlier, by the idempotency store. Nothing here may read a balance to decide
    * anything: a refund is bounded by the PAYMENT, never by what the wallet holds.
    */
-  readonly wallet: Pick<WalletRepository, 'append' | 'lockCustomer'>;
+  readonly wallet: Pick<WalletRepository, 'append' | 'lockCustomer' | 'findByReference'>;
   /**
    * The cashback lane's one entry into a refund (WP8 P9): when a refund reaches
    * `COMPLETED`, the share of the order's earned cashback it made owed is taken back in
@@ -786,6 +786,13 @@ export class RefundService {
    * conditional transition below is what makes a replay a no-op, and the wallet's own
    * unique `<refundId>:refund` reference is the backstop under it.
    *
+   * Only when its credit is there. A COMPLETED reservation with no `<refundId>:refund`
+   * entry was closed by something other than this method — the release before WP19, whose
+   * operator `complete` knows nothing of reservations and accepts one with no credit. That
+   * is refused rather than answered: answering it would tell the customer their money was
+   * returned when it was not, and crediting it now would be a guess about what the
+   * operator who closed it did. The request stays EXECUTING, in front of an operator.
+   *
    * `completed_by_admin_id` is the administrator who APPROVED: their final confirmation
    * authorised exactly this credit, contingent on the deletion that has now happened. It
    * is not a fabricated actor — it is the only person who decided anything here.
@@ -804,7 +811,16 @@ export class RefundService {
       throw errors.notFound(COMMERCE_ERROR_CODES.PAYMENT_NOT_FOUND, 'Unknown payment.');
     }
     const before = await this.requireRefundForUpdate(scope, refundId, tx);
-    if (before.state === 'COMPLETED') return before;
+    if (before.state === 'COMPLETED') {
+      if ((await this.deps.wallet.findByReference(scope, `${refundId}:refund`, tx)) !== null) {
+        return before;
+      }
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.REFUND_STATE_INVALID,
+        'This reservation was closed without its credit.',
+        { reason: 'COMPLETED_WITHOUT_CREDIT' },
+      );
+    }
     if (before.state !== 'REQUESTED' || before.reason !== SERVICE_REFUND_REQUEST_REFUND_REASON) {
       throw errors.conflict(
         COMMERCE_ERROR_CODES.REFUND_STATE_INVALID,

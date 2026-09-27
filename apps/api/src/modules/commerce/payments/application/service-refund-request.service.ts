@@ -42,6 +42,7 @@ import type { PaymentRecord, PaymentRepository } from './ports.js';
 import type { RefundRepository } from './refund-ports.js';
 import type { RefundService } from './refund.service.js';
 import type {
+  ExecutingServiceRefundRequest,
   ServiceRefundRequestListItem,
   ServiceRefundRequestRecord,
   ServiceRefundRequestRepository,
@@ -594,6 +595,11 @@ export class ServiceRefundRequestService {
    * - Anything else is not returned by the query (an UNKNOWN or in-flight deletion) or is
    *   left as it stands (a SUCCEEDED deletion whose service did not move): no money on a
    *   guess.
+   *
+   * One request that cannot be decided never stops the others. Its transaction rolls back,
+   * it stays EXECUTING for an operator, and the sweep moves on: a reservation that another
+   * release closed by hand (`settleServiceRefund` refuses it) must not hold every other
+   * customer's refund behind it, on every tick.
    */
   async settleDue(scope: TenantContext, limit = SERVICE_REFUND_SWEEP_LIMIT): Promise<number> {
     const decidable = await this.deps.repository.executingDecidable(scope, limit);
@@ -608,81 +614,102 @@ export class ServiceRefundRequestService {
         continue;
       }
       const actor = this.deps.systemActor();
-      const moved = await this.deps.uow.run(scope, async (tx) => {
-        if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) return false;
-        const request = await this.deps.repository.findByIdForUpdate(scope, item.request.id, tx);
-        if (request === null || request.state !== 'EXECUTING' || request.refundId === null) {
-          return false;
-        }
-        const now = this.deps.clock.now();
-        if (succeeded) {
-          await this.deps.refunds.settleServiceRefund(scope, actor, request.refundId, tx);
-          const completed = await this.deps.repository.resolveExecution(
-            scope,
-            request.id,
-            { to: 'COMPLETED', failureKind: null },
-            now,
-            tx,
-          );
-          /* istanbul ignore next -- locked and EXECUTING above. */
-          if (completed === null) return false;
-          await this.deps.notifier.notify(
-            scope,
-            completed.customerId,
-            'SERVICE_REFUND_REQUEST_APPROVED',
-            completed.id,
-            now,
-            tx,
-          );
-          await this.resolved(actor, completed, 'COMPLETED', tx);
-          await this.deps.audit.record(
-            scope,
-            actor,
-            {
-              action: 'service_refund_request.complete',
-              entityType: 'ServiceRefundRequest',
-              entityId: completed.id,
-              before: { state: 'EXECUTING' },
-              after: {
-                state: 'COMPLETED',
-                refundId: completed.refundId,
-                amountMinor: completed.approvedAmount?.amountMinor.toString() ?? null,
-              },
-              result: 'SUCCESS',
-            },
-            tx,
-          );
-          return true;
-        }
-        await this.deps.refunds.releaseServiceRefund(scope, actor, request.refundId, tx);
-        const failed = await this.deps.repository.resolveExecution(
+      let moved: boolean;
+      try {
+        moved = await this.decideExecuting(scope, actor, item, succeeded);
+      } catch (error) {
+        this.deps.logger.warn(
+          {
+            requestId: item.request.id,
+            err: error instanceof Error ? error.message : String(error),
+          },
+          'A refund request could not be decided; it stays EXECUTING and the sweep moves on.',
+        );
+        continue;
+      }
+      if (moved) decided += 1;
+    }
+    return decided;
+  }
+
+  private async decideExecuting(
+    scope: TenantContext,
+    actor: ActorContext,
+    item: ExecutingServiceRefundRequest,
+    succeeded: boolean,
+  ): Promise<boolean> {
+    return this.deps.uow.run(scope, async (tx) => {
+      if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) return false;
+      const request = await this.deps.repository.findByIdForUpdate(scope, item.request.id, tx);
+      if (request === null || request.state !== 'EXECUTING' || request.refundId === null) {
+        return false;
+      }
+      const now = this.deps.clock.now();
+      if (succeeded) {
+        await this.deps.refunds.settleServiceRefund(scope, actor, request.refundId, tx);
+        const completed = await this.deps.repository.resolveExecution(
           scope,
           request.id,
-          { to: 'FAILED', failureKind: item.operationFailureKind ?? item.operationState },
+          { to: 'COMPLETED', failureKind: null },
           now,
           tx,
         );
         /* istanbul ignore next -- locked and EXECUTING above. */
-        if (failed === null) return false;
-        await this.resolved(actor, failed, 'FAILED', tx);
+        if (completed === null) return false;
+        await this.deps.notifier.notify(
+          scope,
+          completed.customerId,
+          'SERVICE_REFUND_REQUEST_APPROVED',
+          completed.id,
+          now,
+          tx,
+        );
+        await this.resolved(actor, completed, 'COMPLETED', tx);
         await this.deps.audit.record(
           scope,
           actor,
           {
-            action: 'service_refund_request.fail',
+            action: 'service_refund_request.complete',
             entityType: 'ServiceRefundRequest',
-            entityId: failed.id,
+            entityId: completed.id,
             before: { state: 'EXECUTING' },
-            after: { state: 'FAILED', failureKind: failed.failureKind },
+            after: {
+              state: 'COMPLETED',
+              refundId: completed.refundId,
+              amountMinor: completed.approvedAmount?.amountMinor.toString() ?? null,
+            },
             result: 'SUCCESS',
           },
           tx,
         );
         return true;
-      });
-      if (moved) decided += 1;
-    }
-    return decided;
+      }
+      await this.deps.refunds.releaseServiceRefund(scope, actor, request.refundId, tx);
+      const failed = await this.deps.repository.resolveExecution(
+        scope,
+        request.id,
+        { to: 'FAILED', failureKind: item.operationFailureKind ?? item.operationState },
+        now,
+        tx,
+      );
+      /* istanbul ignore next -- locked and EXECUTING above. */
+      if (failed === null) return false;
+      await this.resolved(actor, failed, 'FAILED', tx);
+      await this.deps.audit.record(
+        scope,
+        actor,
+        {
+          action: 'service_refund_request.fail',
+          entityType: 'ServiceRefundRequest',
+          entityId: failed.id,
+          before: { state: 'EXECUTING' },
+          after: { state: 'FAILED', failureKind: failed.failureKind },
+          result: 'SUCCESS',
+        },
+        tx,
+      );
+      return true;
+    });
   }
 
   // --- reads ------------------------------------------------------------------------------
