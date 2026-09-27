@@ -306,3 +306,32 @@ It found seven issues. All were real, and each is fixed with a named test and a 
   `request_idempotency` (namespace `WEB`). A retry is answered with the request it decided. A
   key reused for another request, amount or reason is refused as a payload mismatch and decides
   nothing.
+
+## 12. The fifth Codex review of #83
+
+It found four issues. All were real, and each is fixed with a named test and a killed mutation
+(W19-55 to W19-61):
+
+- **A redelivered message routed to a newer prompt (P1).** Telegram redelivers an update it did
+  not see answered, and every capture reads plain text. Round 4 remembered an entered amount,
+  but a replay whose prompt had since closed fell through to whatever prompt was open. A
+  rejection is decided on its reason at once, so an old amount could reject an unrelated
+  request.
+  - A known replay is now answered from the prompt it filled and goes nowhere else.
+  - The reason path records its message too.
+  - The general rule is enforced in the other direction as well: a refund-request prompt
+    reads only a message whose Telegram `update_id` is newer than the tap that opened it.
+    Update ids increase per bot, so no message typed before the tap can become this prompt's
+    amount or reason, whichever capture it was typed for.
+  - The tap's id is stored on the capture: `admin_amount_captures.opened_update_id`, nullable,
+    folded into the unmerged 0125.
+- **An order audit that contradicted the settlement (P2).** A service refund request settles
+  only after its deletion succeeded, but a settlement that exhausted the payment audited the
+  order as `serviceLeftUntouched: true`. It now records `serviceRemovedByRequest: true`.
+- **A stale registration notice (P2).** A `SERVICE_REFUND_REQUEST_REGISTERED` held back by a
+  rate limit could arrive after the decision. The notice renders only while the request is
+  OPEN; after the decision there is nothing to send.
+- **A queue hidden from its own permission (P2).** The Web Admin queue and a service's request
+  card were drawn only for `services.view`. They are now drawn for `refunds.view` alone, and the
+  Services entry in the navigation opens for either key. The services list itself is still
+  `services.view`'s, and is never fetched without it.
