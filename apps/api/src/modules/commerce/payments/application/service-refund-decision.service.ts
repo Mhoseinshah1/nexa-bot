@@ -41,7 +41,10 @@ import { parseTypedAmount } from './typed-amount.js';
 export interface ServiceRefundDecisionServiceDeps {
   readonly captures: AdminAmountCaptureRepository;
   /** The ONE decision path. The captures only ask it; every rule is decided there, again. */
-  readonly requests: Pick<ServiceRefundRequestService, 'review' | 'preview' | 'approve' | 'reject'>;
+  readonly requests: Pick<
+    ServiceRefundRequestService,
+    'reviewForDecision' | 'preview' | 'approve' | 'reject'
+  >;
   readonly guard: PermissionGuard;
   readonly uow: UnitOfWork<TransactionScope>;
   readonly audit: AuditWriter;
@@ -225,6 +228,9 @@ export class ServiceRefundDecisionService {
     const amountMinor = decided.capture.amountMinor as bigint;
     try {
       const request = await this.deps.requests.approve(scope, actor, { requestId, amountMinor });
+      // A replay of this same approval answers with the request as it stands, which may be
+      // past EXECUTING by now: a deletion that finished is not "started".
+      if (request.state !== 'EXECUTING') return { outcome: 'CLOSED' };
       return { outcome: 'EXECUTING', request };
     } catch (error) {
       return this.refusalOf(scope, actor, requestId, error);
@@ -280,7 +286,7 @@ export class ServiceRefundDecisionService {
     await this.authorize(scope, actor, denial);
     let review: ServiceRefundReview;
     try {
-      review = await this.deps.requests.review(scope, actor, input.requestId);
+      review = await this.deps.requests.reviewForDecision(scope, actor, input.requestId);
     } catch (error) {
       if (
         isNexaError(error) &&
@@ -334,7 +340,7 @@ export class ServiceRefundDecisionService {
     }
     let review: ServiceRefundReview;
     try {
-      review = await this.deps.requests.review(scope, actor, requestId);
+      review = await this.deps.requests.reviewForDecision(scope, actor, requestId);
     } catch {
       await this.closeIfOpen(scope, actor, waiting, 'SUPERSEDED');
       return { outcome: 'CLOSED' };
@@ -397,31 +403,24 @@ export class ServiceRefundDecisionService {
     if (reason.length === 0 || Array.from(reason).length > ADMIN_CAPTURE_REASON_MAX_LENGTH) {
       return { outcome: 'INVALID_REASON' };
     }
-    const adminId = adminIdOf(actor);
-    const denial = denialFor(waiting.id);
-    // Recorded FIRST, so a redelivered message finds nothing waiting and cannot reject twice
-    // with two different reasons.
-    const recorded = await this.mutate(scope, actor, denial, async (tx) => {
-      await this.deps.captures.lockForAdmin(scope, waiting.botInstanceId, adminId, tx);
-      const capture = await this.deps.captures.findById(scope, waiting.id, tx);
-      if (capture === null || capture.closedAt !== null || capture.reason !== null) {
-        return 'GONE' as const;
-      }
-      const now = this.deps.clock.now();
-      if (now.getTime() >= capture.expiresAt.getTime()) {
-        await this.deps.captures.close(scope, capture.id, 'EXPIRED', now, tx);
-        return 'EXPIRED' as const;
-      }
-      return (await this.deps.captures.recordReason(scope, capture.id, reason, tx))
-        ? ('RECORDED' as const)
-        : ('GONE' as const);
-    });
-    if (recorded === 'GONE') return { outcome: 'NO_CAPTURE' };
-    if (recorded === 'EXPIRED') return { outcome: 'EXPIRED' };
-
+    const now = this.deps.clock.now();
+    if (now.getTime() >= waiting.expiresAt.getTime()) {
+      await this.closeIfOpen(scope, actor, waiting, 'EXPIRED');
+      return { outcome: 'EXPIRED' };
+    }
+    // The rejection FIRST, and the prompt closed after it. The rejection is the request
+    // service's own write, under the request's lock, and a replay with the same reason is
+    // answered with the request as it stands. So a process that stops between the two leaves
+    // the prompt open with nothing recorded on it, and the redelivered message finishes the
+    // rejection it started; a second message with another reason finds the request decided
+    // and is refused. Nothing can reject twice, and nothing is left half-done.
     try {
       const request = await this.deps.requests.reject(scope, actor, { requestId, reason });
-      await this.closeIfOpen(scope, actor, waiting, 'CONFIRMED');
+      await this.mutate(scope, actor, denialFor(waiting.id), async (tx) => {
+        const closedAt = this.deps.clock.now();
+        await this.deps.captures.recordReason(scope, waiting.id, reason, tx);
+        await this.deps.captures.close(scope, waiting.id, 'CONFIRMED', closedAt, tx);
+      });
       return { outcome: 'REJECTED', request };
     } catch (error) {
       await this.closeIfOpen(scope, actor, waiting, 'SUPERSEDED');
@@ -454,7 +453,7 @@ export class ServiceRefundDecisionService {
       case COMMERCE_ERROR_CODES.PAYMENT_NOT_FOUND:
         return { outcome: 'NOT_EXECUTABLE' };
       case COMMERCE_ERROR_CODES.REFUND_EXCEEDS_REFUNDABLE: {
-        const review = await this.deps.requests.review(scope, actor, requestId);
+        const review = await this.deps.requests.reviewForDecision(scope, actor, requestId);
         return { outcome: 'INVALID_AMOUNT', remaining: review.remaining };
       }
       default:

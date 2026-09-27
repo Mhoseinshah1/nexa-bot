@@ -143,9 +143,11 @@ export interface ServiceRefundRequestRepository {
   ): Promise<ServiceRefundRequestRecord | null>;
 
   /**
-   * EXECUTING requests whose `TERMINATE` operation is terminal, oldest first — the sweep's
-   * work. A request whose operation is still PLANNED or IN_FLIGHT is not returned: nothing
-   * about it can be decided yet.
+   * EXECUTING requests the sweep can decide, oldest first. A request whose operation is
+   * still PLANNED or IN_FLIGHT (or UNKNOWN) is not returned: nothing about it can be decided
+   * yet. Nor is one the sweep would only leave standing — a SUCCEEDED deletion whose service
+   * did not move, or a reservation no longer REQUESTED (or released, after a failure) — so
+   * such rows can never fill a batch ahead of the ones that can move.
    */
   executingDecidable(
     scope: TenantContext,

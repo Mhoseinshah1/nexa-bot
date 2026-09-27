@@ -369,6 +369,22 @@ export class ServiceRefundRequestService {
   }
 
   /**
+   * The same review, for the administrator deciding it from a pushed card. Charged the two
+   * decision keys, not `refunds.view`: the card is pushed on exactly those two (the push
+   * consumer's filter), and a prompt that refused an administrator the card was sent to
+   * would be a button that can never work. It shows nothing the card itself did not.
+   */
+  async reviewForDecision(
+    scope: TenantContext,
+    actor: ActorContext,
+    requestId: string,
+  ): Promise<ServiceRefundReview> {
+    await this.checkDecide(scope, actor);
+    const request = await this.requireRequest(scope, requestId);
+    return this.reviewOf(scope, request);
+  }
+
+  /**
    * Validates an amount an administrator typed, under the payment's lock (brief §2.6),
    * WITHOUT deciding anything: the figure the final confirmation shows is one the server
    * has just checked, not one a browser or an old message rendered. The lock is released

@@ -505,7 +505,7 @@ export class RefundService {
           throw errors.notFound(COMMERCE_ERROR_CODES.PAYMENT_NOT_FOUND, 'Unknown payment.');
         }
         const before = await this.requireRefundForUpdate(scope, refundId, tx);
-        refuseWorkflowRefund(before);
+        await this.refuseWorkflowRefund(scope, before, tx);
 
         // Already there. Answered with the refund, and NO audit row — an audit entry for
         // a change that did not happen is the legacy activity feed.
@@ -614,7 +614,7 @@ export class RefundService {
       async (tx) => {
         await this.assertScopeActive(scope, tx);
         const before = await this.requireRefundForUpdate(scope, refundId, tx);
-        refuseWorkflowRefund(before);
+        await this.refuseWorkflowRefund(scope, before, tx);
 
         if (before.state === 'FAILED') {
           await this.remember(scope, input.idempotencyKey, requestHash, refundId, tx);
@@ -945,6 +945,27 @@ export class RefundService {
    * overdraw so it does not strictly need the serialisation, but taking the lock in one
    * order everywhere is what keeps two movements of one wallet from deadlocking.
    */
+  /**
+   * WP19: a service refund request's reservation belongs to its workflow. Completing it by
+   * hand would mark money returned with no ledger entry (the wallet channel credits only in
+   * `settleServiceRefund`), and failing it by hand would strand the request whose deletion
+   * is already under way — so an operator's complete and fail both refuse it. Known by its
+   * LINK from a request, never by its reason: the reason is free text an operator can type.
+   */
+  private async refuseWorkflowRefund(
+    scope: TenantContext,
+    refund: RefundRecord,
+    tx: TransactionScope,
+  ): Promise<void> {
+    if (await this.deps.repository.isServiceRefundReservation(scope, refund.id, tx)) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.REFUND_STATE_INVALID,
+        'This refund belongs to a customer refund request and is settled by it.',
+        { state: refund.state, reason: 'SERVICE_REFUND_REQUEST' },
+      );
+    }
+  }
+
   private async creditWallet(
     scope: TenantContext,
     refund: RefundRecord,
@@ -1474,22 +1495,6 @@ export class RefundService {
  * its own, and one that omitted it would leave a reader unable to tell a wallet reversal
  * from a bank transfer somebody had to make by hand.
  */
-/**
- * WP19: a service refund request's reservation belongs to its workflow. Completing it by
- * hand would mark money returned with no ledger entry (the wallet channel credits only in
- * `settleServiceRefund`), and failing it by hand would strand the request whose deletion
- * is already under way — so an operator's complete and fail both refuse it.
- */
-function refuseWorkflowRefund(refund: RefundRecord): void {
-  if (refund.reason === SERVICE_REFUND_REQUEST_REFUND_REASON) {
-    throw errors.conflict(
-      COMMERCE_ERROR_CODES.REFUND_STATE_INVALID,
-      'This refund belongs to a customer refund request and is settled by it.',
-      { state: refund.state, reason: 'SERVICE_REFUND_REQUEST' },
-    );
-  }
-}
-
 function auditView(refund: RefundRecord): Record<string, unknown> {
   return {
     paymentId: refund.paymentId,

@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, or, sql } from 'drizzle-orm';
 import {
   OPERATION_TERMINAL_STATES,
   SERVICE_REFUND_REQUEST_ACTIVE_STATES,
@@ -22,6 +22,7 @@ import {
 import {
   customers,
   provisioningOperations,
+  refunds,
   serviceRefundRequests,
   services,
 } from '../../../../infrastructure/persistence/schema.js';
@@ -344,11 +345,38 @@ export class DrizzleServiceRefundRequestRepository implements ServiceRefundReque
           eq(services.id, serviceRefundRequests.serviceId),
         ),
       )
+      .innerJoin(
+        refunds,
+        and(
+          eq(refunds.tenantId, serviceRefundRequests.tenantId),
+          eq(refunds.id, serviceRefundRequests.refundId),
+        ),
+      )
       .where(
         and(
           eq(serviceRefundRequests.tenantId, tenantId),
           eq(serviceRefundRequests.state, 'EXECUTING'),
           inArray(provisioningOperations.state, [...OPERATION_TERMINAL_STATES]),
+          /*
+           * Only a row the sweep can decide. A deletion that SUCCEEDED counts only once the
+           * service moved and while the reservation is still REQUESTED; one that failed,
+           * only while the reservation is REQUESTED or already released. Anything else — a
+           * service that did not move, a reservation another release closed by hand — is
+           * left EXECUTING for an operator, and so is never returned: returned, it would be
+           * refused again on every tick and, oldest first, fill every batch until the
+           * refunds behind it were never decided at all.
+           */
+          or(
+            and(
+              eq(provisioningOperations.state, 'SUCCEEDED'),
+              eq(services.state, 'TERMINATED'),
+              eq(refunds.state, 'REQUESTED'),
+            ),
+            and(
+              inArray(provisioningOperations.state, ['FAILED', 'ABANDONED']),
+              inArray(refunds.state, ['REQUESTED', 'FAILED']),
+            ),
+          ),
         ),
       )
       .orderBy(asc(serviceRefundRequests.createdAt), asc(serviceRefundRequests.id))

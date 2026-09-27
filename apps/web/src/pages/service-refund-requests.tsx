@@ -141,11 +141,23 @@ function columns(onLink: ReturnType<typeof useLinkHandler>, withService: boolean
  */
 export function OpenServiceRefundRequestsCard() {
   const onLink = useLinkHandler();
+  // One read per state that wants an operator, so the server filters BEFORE it limits: a
+  // page of the newest requests of every state would hide an old undecided one behind a
+  // hundred newer decided ones.
   const requests = useQuery({
     queryKey: ['service-refund-requests', 'attention'],
-    queryFn: () => fetchServiceRefundRequests(),
+    queryFn: async () => {
+      const pages = await Promise.all(
+        NEEDS_ATTENTION.map((state) => fetchServiceRefundRequests({ state })),
+      );
+      return {
+        requests: pages
+          .flatMap((page) => page.requests)
+          .sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0)),
+      };
+    },
   });
-  const rows = (requests.data?.requests ?? []).filter((row) => NEEDS_ATTENTION.includes(row.state));
+  const rows = requests.data?.requests ?? [];
   return (
     <Card title={t('web.service_refunds_open')} hint={t('web.service_refunds_hint')}>
       <StateSwitch query={requests} denied={false}>

@@ -17,7 +17,12 @@ import {
   requireTenantId,
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
-import { customers, payments, refunds } from '../../../../infrastructure/persistence/schema.js';
+import {
+  customers,
+  payments,
+  refunds,
+  serviceRefundRequests,
+} from '../../../../infrastructure/persistence/schema.js';
 import type {
   CompensationCursor,
   CompensationPage,
@@ -107,6 +112,25 @@ export class DrizzleRefundRepository implements RefundRepository {
   }
 
   /** Oldest first — a history reads forwards, and the sum below does not care. */
+  async isServiceRefundReservation(
+    scope: TenantContext,
+    refundId: string,
+    tx?: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await this.exec(tx)
+      .select({ id: serviceRefundRequests.id })
+      .from(serviceRefundRequests)
+      .where(
+        and(
+          eq(serviceRefundRequests.tenantId, tenantId),
+          eq(serviceRefundRequests.refundId, refundId),
+        ),
+      )
+      .limit(1);
+    return row !== undefined;
+  }
+
   async listCompensations(
     scope: TenantContext,
     limit: number,

@@ -97,6 +97,17 @@ export interface CompensationPage {
 
 export interface RefundRepository {
   /**
+   * Whether this refund is a customer refund request's reservation (WP19): whether a
+   * `service_refund_requests` row names it. Linkage, never the free-text reason — the
+   * generic refund API accepts any reason, so a reason can be typed to look like one.
+   */
+  isServiceRefundReservation(
+    scope: TenantContext,
+    refundId: string,
+    tx?: unknown,
+  ): Promise<boolean>;
+
+  /**
    * The compensation list (D7): refunds with reason `UNDELIVERABLE` and channel
    * `WALLET_CREDIT`, oldest first, keyset-paged on the refund's `(created_at, id)`.
    */
