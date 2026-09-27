@@ -159,3 +159,22 @@ refund. That is scoped to this workflow: see T5.
   failure, and SUCCEEDED without the service moving.
 - `tests/web/service-refund-requests.test.tsx` covers the Web Admin fallback.
 - `docs/wp19-falsification.md` records each rule reverted and the test that failed.
+
+## 7. A rollback to the release before WP19
+
+A read of what that release does with WP19's rows found nothing that crashes, retries for
+ever or refuses a whole page. Four things behave differently while it runs, and
+`docs/deployment.md` lists them with the query to run before rolling back:
+
+- an executing request is not credited until the roll-forward;
+- a new request's review cards are not sent;
+- a reason typed across the rollback lands in the service note;
+- an operator can close a reservation by hand through a hand-made API call.
+
+That last one needed code. After the roll-forward, a reservation closed COMPLETED with no
+credit would have been announced as credited, and one closed FAILED would have thrown on
+every tick and held every later request behind it. So `settleServiceRefund` answers a
+COMPLETED reservation only when its own `<refundId>:refund` entry exists, and refuses one
+without it. `settleDue` also decides each request in its own guarded transaction, so a
+refusal leaves that request EXECUTING for an operator and the sweep moves on (W19-22,
+W19-23).
