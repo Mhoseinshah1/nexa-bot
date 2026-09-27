@@ -276,12 +276,7 @@ M+=[
  ('W19-47',[(EV,"cause: z.enum(['OPERATOR_FAILED', 'SUPERSEDED']),","cause: z.enum(['OPERATOR_FAILED', 'SUPERSEDED', 'DELETION_FAILED']),")],'two values the release before WP19',('unit','tests/unit/contracts-invariants.test.ts')),
  ('W19-48',[(PV,"if (type === 'TERMINATE') {\n      const locked = await this.deps.services.lockForUpdate(scope, service.id, tx);","if (type === 'TERMINATE') {\n      const locked = service;")],'races an approval|ended while it waited'),
  ('W19-49',[(PV,"if (locked === null || !OPERATION_LEGAL_FROM.TERMINATE.includes(locked.state)) {","if (locked === null) {")],'ended while it waited'),
- ('W19-50',[(PV,"""      service.panelId,
-      'TERMINATE',
-      tx,
-    );""","""      service.panelId,
-      'TERMINATE',
-    );""")],'inside the approval'),
+ ('W19-50',[(PV,"this.deps.panels.operability(scope, service.panelId, 'TERMINATE', tx);","this.deps.panels.operability(scope, service.panelId, 'TERMINATE');")],'inside the approval'),
  ('W19-51',[(S,"""        const eligibility = await this.eligibilityOf(scope, service, { checkFlag: true }, tx);
         if (!eligibility.eligible) return refuse(eligibility.reason);""","""        const eligibility = found;
         if (!eligibility.eligible) return refuse(eligibility.reason);""")],'refunded in full while the filing'),

@@ -274,3 +274,35 @@ It found five issues. All were real, and each is fixed with a named test and a k
   that carried the reason — which is stored on the request and unique for ever
   (`service_refund_requests_filing_key`, folded into the unmerged migration 0125). This also
   brings the filing in line with the rule that every state-changing command takes one.
+
+## 11. The fourth Codex review of #83
+
+It found seven issues. All were real, and each is fixed with a named test and a killed mutation
+(W19-46 to W19-54):
+
+- **A cause the previous release cannot read (P1).** WP19 had added `DELETION_FAILED` to
+  `RefundFailed.cause`. The release before WP19 parses that payload with its two-value enum, so
+  an event written here and relayed after a rollback would fail its financial-log consumer on
+  every pass. A contract commit returns the enum to its two values (a unit test pins them), and
+  a released reservation writes no `RefundFailed`. Its financial-log line is
+  `ServiceRefundRequestResolved` FAILED, a type that release never routes.
+- **Two deletions planned for one service (P1).** The approval planned its `TERMINATE` under
+  the service's row lock, but an operator's terminate did not take it, and nothing else keys an
+  open `TERMINATE`. Both could pass `findOpen`, and the request would be bound to whichever
+  deletion ran second, which fails against a removed account. Now every `TERMINATE` planner
+  takes the service's row lock before `findOpen`, and judges the state from the locked row.
+- **A panel read on a second connection (P2).** The approval's operability read now uses its
+  own transaction.
+- **A filing that read a payment already refunded (P2).** Filing re-decides eligibility under
+  the source payment's lock. The order is service before payment, the executor's order. An
+  operator's full refund that commits mid-filing now files nothing.
+- **A redelivered amount answered with nothing (P2).** An entered amount is remembered against
+  its Telegram message (`request_idempotency`, namespace `TELEGRAM`). A redelivery restates the
+  same confirmation while the prompt is still open and its request still OPEN.
+- **An amount prompt closed by a transient failure (P2).** The prompt closes only for a request
+  that is gone or decided. Any other failure propagates with the prompt kept, as the reason
+  prompt already does.
+- **Web decision keys that were never recorded (P2).** Approve and reject record their keys in
+  `request_idempotency` (namespace `WEB`). A retry is answered with the request it decided. A
+  key reused for another request, amount or reason is refused as a payload mismatch and decides
+  nothing.
