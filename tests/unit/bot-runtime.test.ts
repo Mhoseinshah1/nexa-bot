@@ -640,6 +640,11 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.catalog.heading',
       'bot.catalog.next_page_button',
       'bot.catalog.previous_page_button',
+      // Package B: the join screen and its check button.
+      'bot.channels.check_button',
+      'bot.channels.join_private_button',
+      'bot.channels.join_required',
+      'bot.channels.still_missing',
       'bot.discount.ask',
       'bot.discount.enter_button',
       'bot.discount.no_longer_valid',
