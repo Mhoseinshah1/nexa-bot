@@ -51,6 +51,15 @@ own lock still waited on a held one — after it had decided eligibility, which 
 taking it first. W19-93 now cites a test that commits an undecided renewal under the held lock:
 an approval that decided first plans a deletion beside it, and the test dies.
 
+Round 12 removed the sweep query's top-level filter on the request's own operation being
+terminal: a removed service is credited whatever its own deletion says. That filter was the
+first layer W19-02, W19-02b and W19-02c reverted. W19-02 and W19-02b now revert the same
+single clause, admitting UNKNOWN to the failed branch, and both survive: the sweep's own
+`terminationUndecided` decides. W19-02c reverts it with both checks and is killed. W19-22b and
+W19-22c now drop the reservation check from the removed branch, and survive and die as
+before. W19-112 and W19-113 run in the unit project, against
+`receipt-review-push-loop-lanes.test.ts`.
+
 The first pass left six mutations alive.
 
 - **W19-02.** No test ever reached an UNKNOWN deletion: a 5xx on an idempotent DELETE is
@@ -202,4 +211,8 @@ The first pass left six mutations alive.
 | W19-109 | The filing takes the payment’s lock before the lifecycle lock (eleventh Codex review of #83)                                                                                                                                                                             | `service-refund-requests.test.ts` › holds no lifecycle lock while a filing or an approval waits for the source payment (Codex review of #83, round 11)                                  | KILLED     |
 | W19-110 | The service row is locked `FOR NO KEY UPDATE`, which an FK check’s `FOR KEY SHARE` does not wait on (eleventh Codex review of #83)                                                                                                                                       | `service-refund-requests.test.ts` › lets a settlement holding the lifecycle lock write against a service a filing or an operator has locked (Codex review of #83, round 11)             | KILLED     |
 | W19-111 | The attention stream is served by its own index, in its own order (eleventh Codex review of #83)                                                                                                                                                                         | `service-refund-requests.test.ts` › serves the attention stream from its own index, in its own order, without sorting (Codex review of #83, round 11)                                   | KILLED     |
+| W19-112 | The refund cards run past a failing receipt lane (twelfth Codex review of #83)                                                                                                                                                                                           | `receipt-review-push-loop-lanes.test.ts` › delivers the refund cards when the receipt lane keeps failing                                                                                | KILLED     |
+| W19-113 | A failed receipt or card lane costs the tick its progress (twelfth Codex review of #83)                                                                                                                                                                                  | `receipt-review-push-loop-lanes.test.ts` › delivers the refund cards when the receipt lane keeps failing                                                                                | KILLED     |
+| W19-114 | No request is filed while a deletion of the service is undecided (twelfth Codex review of #83)                                                                                                                                                                           | `service-refund-requests.test.ts` › files no request while an operator’s deletion of the service is undecided (Codex review of #83, round 12)                                           | KILLED     |
+| W19-115 | The sweep reads a removed service whatever its own deletion says (twelfth Codex review of #83)                                                                                                                                                                           | `service-refund-requests.test.ts` › credits a request whose own deletion is UNKNOWN once another deletion removes the service (Codex review of #83, round 12)                           | KILLED     |
 | W19-02c | An UNKNOWN deletion is not decidable — the terminal-state filter, the query clause AND the sweep's `terminationUndecided` (with its query twin) reverted together                                                                                                        | `service-refund-requests.test.ts` › leaves a request whose deletion is UNKNOWN executing, crediting and releasing nothing                                                               | KILLED     |
