@@ -12,6 +12,7 @@ import {
   sql,
   type SQL,
 } from 'drizzle-orm';
+import { SERVICE_REFUND_REQUEST_ACTIVE_STATES } from '@nexa/contracts';
 import type {
   OrderId,
   PanelId,
@@ -216,6 +217,22 @@ export class DrizzleServiceRepository implements ServiceRepository {
     await this.exec(tx).execute(
       sql`SELECT pg_advisory_xact_lock(${SERVICE_LIFECYCLE_LOCK_CLASS}, hashtext(${`${tenantId}:${id}`}))`,
     );
+  }
+
+  async hasActiveRefundRequest(scope: TenantContext, id: string, tx?: unknown): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select({ id: serviceRefundRequests.id })
+      .from(serviceRefundRequests)
+      .where(
+        and(
+          eq(serviceRefundRequests.tenantId, tenantId),
+          eq(serviceRefundRequests.serviceId, id),
+          inArray(serviceRefundRequests.state, [...SERVICE_REFUND_REQUEST_ACTIVE_STATES]),
+        ),
+      )
+      .limit(1);
+    return rows.length > 0;
   }
 
   async findByOrderId(

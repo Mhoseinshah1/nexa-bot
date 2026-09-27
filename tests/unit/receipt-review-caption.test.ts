@@ -14,6 +14,7 @@ import { normaliseCaptureReason } from '../../apps/api/src/modules/commerce/paym
 import {
   blockedReply,
   receiptReviewButtons,
+  refundRequestReviewButtons,
 } from '../../apps/api/src/surfaces/telegram/bot-runtime';
 
 /**
@@ -196,6 +197,33 @@ describe('the reviewer’s caption (File 01 §4)', () => {
         'trafficBytes',
         'username',
       ].sort(),
+    );
+  });
+});
+
+describe('the refund request card’s buttons each key draws (Codex review of #83, round 10)', () => {
+  const set = (...keys: string[]) => new Set(keys as PermissionKey[]);
+  const request = { id: 'r', customerId: 'c', serviceId: 's' };
+  const data = (permissions: ReadonlySet<PermissionKey>) =>
+    refundRequestReviewButtons(request, permissions).map((b) => ('data' in b ? b.data : null));
+
+  it('draws the two decisions alone for a reviewer holding only the decision keys', () => {
+    expect(data(set('refunds.issue', 'services.terminate'))).toEqual(['qa:r', 'qb:r']);
+  });
+
+  it('draws each view only for its own view key', () => {
+    expect(data(set('refunds.issue', 'services.terminate', 'users.view'))).toEqual([
+      'qa:r',
+      'qb:r',
+      '9:v:c',
+    ]);
+    expect(data(set('refunds.issue', 'services.terminate', 'services.view'))).toEqual([
+      'qa:r',
+      'qb:r',
+      'I:s',
+    ]);
+    expect(data(set('refunds.issue', 'services.terminate', 'users.view', 'services.view'))).toEqual(
+      ['qa:r', 'qb:r', '9:v:c', 'I:s'],
     );
   });
 });

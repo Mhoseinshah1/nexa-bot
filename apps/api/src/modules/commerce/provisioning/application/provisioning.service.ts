@@ -1472,6 +1472,20 @@ export class ProvisioningService {
       );
     }
 
+    /*
+     * A customer's refund request is open or being carried out (Codex review of #83, round
+     * 10). Its approval deletes the service and refunds only the service's own purchase, so a
+     * renewal or add-on sold now would be value the customer pays for and then loses, whether
+     * it is applied before the approval or after it. Sold again once the request is decided.
+     */
+    if (await this.deps.services.hasActiveRefundRequest(scope, service.id, tx)) {
+      return refuse(
+        COMMERCE_ERROR_CODES.SERVICE_ACTION_NOT_ALLOWED,
+        'This service has a refund request pending.',
+        'REFUND_REQUESTED',
+      );
+    }
+
     return { outcome: 'FULFILLABLE' };
   }
 
