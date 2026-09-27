@@ -3,6 +3,7 @@ import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   ANTI_SPAM_BLOCK_REASON,
+  ANTI_SPAM_MAX_INTERACTIONS,
   ANTI_SPAM_UNAVAILABLE_CODE,
   TELEGRAM_SECRET_TOKEN_HEADER,
   type AdminId,
@@ -217,6 +218,17 @@ describe('anti-spam', () => {
     // The spinner is still stopped: the callback query is answered.
     expect(sent.filter((one) => one.url.includes('/answerCallbackQuery'))).toHaveLength(1);
     expect((await customerRow())?.status).toBe('BLOCKED');
+  });
+
+  it('counts /ping, and writes nothing for one past the limit', async () => {
+    // The webhook answers `/ping` before the runtime runs; each one it records writes an
+    // audit row, an outbox event and an idempotency row.
+    await repeat(ANTI_SPAM_MAX_INTERACTIONS + 5, () => message('/ping'));
+    expect(
+      await count(
+        sql`SELECT count(*)::int AS n FROM outbox_messages WHERE event_type = 'SystemPinged'`,
+      ),
+    ).toBe(ANTI_SPAM_MAX_INTERACTIONS);
   });
 
   it('counts button presses', async () => {

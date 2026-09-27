@@ -10,6 +10,7 @@ import {
 import { OutboxRelay } from '../../apps/api/src/modules/platform/eventing/infrastructure/outbox-relay';
 import type { EventConsumer } from '../../apps/api/src/modules/platform/eventing/application/event-consumer';
 import {
+  notifications,
   operationalEvents,
   outboxMessages,
 } from '../../apps/api/src/infrastructure/persistence/schema';
@@ -157,6 +158,25 @@ describe('outbox retry scheduling', () => {
   });
 
   it('stops after twelve real failures, keeps the message, and says so once', async () => {
+    const owner = await createAdmin(ctx.container, tenantA, {
+      username: 'diag-owner',
+      roleKeys: ['owner'],
+    });
+    // The operations channel is configured, so "says so" means an operator is told.
+    await ctx.container.settingsService.set(tenantA, adminActorFor(owner), {
+      key: 'ops.notifications.telegram_chat_id',
+      value: '-100999',
+      expectedVersion: null,
+      idempotencyKey: 'wp20-chat',
+    });
+    await ctx.container.featureFlags.set(tenantA, adminActorFor(owner), {
+      key: 'ops_notifications',
+      enabled: true,
+      expectedVersion: null,
+      idempotencyKey: 'wp20-flag',
+      confirmKey: 'ops_notifications',
+      reason: 'Test setup.',
+    });
     await write('a');
     await write('a');
     const handler = consumer(new Set(['a#1']));
@@ -182,15 +202,39 @@ describe('outbox retry scheduling', () => {
       .where(and(eq(operationalEvents.code, OUTBOX_MESSAGE_EXHAUSTED_CODE)));
     expect(events).toHaveLength(1);
     expect(events[0]?.occurrenceCount).toBe(1);
+    // ...and an operator is told, once, through the lane: the event and its notification
+    // are written in the relay's own transaction.
+    const told = await ctx.container.database.db
+      .select()
+      .from(notifications)
+      .where(eq(notifications.kind, 'OPERATIONAL_EVENT'));
+    expect(told).toHaveLength(1);
 
     // Shown in the diagnostics, and not counted as lag.
-    const owner = await createAdmin(ctx.container, tenantA, {
-      username: 'diag-owner',
-      roleKeys: ['owner'],
-    });
     const found = await ctx.container.diagnostics.read(tenantA, adminActorFor(owner));
     expect(found.outbox.exhausted).toBe(1);
     expect(found.outbox.failingSample[0]).toMatchObject({ exhausted: true, nextAttemptAt: null });
     expect(await relay([handler]).lagMs()).toBe(0);
+  });
+
+  it('retries a message whose count grew under the release before, then exhausts and announces it', async () => {
+    await write('b');
+    // The release before WP20 retried a failing message on every poll: the count is past
+    // the limit, and nothing ever decided or said so.
+    await ctx.container.database.db
+      .update(outboxMessages)
+      .set({ attempts: DELIVERY_MAX_FAILED_ATTEMPTS + 3 })
+      .where(eq(outboxMessages.aggregateId, 'b'));
+    const handler = consumer(new Set(['b#1']));
+    expect((await relay([handler]).processBatch()).claimed, 'still claimed').toBe(1);
+    const exhausted = await row('b#1');
+    expect(exhausted?.exhaustedAt, 'exhausted by this relay').not.toBeNull();
+    const events = await ctx.container.database.db
+      .select()
+      .from(operationalEvents)
+      .where(and(eq(operationalEvents.code, OUTBOX_MESSAGE_EXHAUSTED_CODE)));
+    expect(events, 'and said so').toHaveLength(1);
+    // And never claimed again.
+    expect((await relay([handler]).processBatch()).claimed).toBe(0);
   });
 });
