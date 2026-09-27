@@ -99,7 +99,7 @@ M=[
         state: 'REQUESTED',
         channel: SERVICE_REFUND_REQUEST_CHANNEL,""")],'above what is left|operator’s own refund'),
  ('W19-08',[(RF,"  ): Promise<void> {\n    if (await this.deps.repository.isServiceRefundReservation(scope, refund.id, tx)) {","  ): Promise<void> {\n    if (refund !== null) return;\n    if (await this.deps.repository.isServiceRefundReservation(scope, refund.id, tx)) {")],'by hand'),
- ('W19-09',[(RF,"      { notifyCustomer: false },","      { notifyCustomer: true },")],'exactly once'),
+ ('W19-09',[(RF,"      { notifyCustomer: false, serviceRemoved: true },","      { notifyCustomer: true, serviceRemoved: true },")],'exactly once'),
  ('W19-10',[(SV,"""function notRefundedAway(): SQL {
   return sql`NOT EXISTS (""","""function notRefundedAway(): SQL {
   return sql`TRUE OR NOT EXISTS (""")],'exactly once'),
@@ -290,8 +290,8 @@ M+=[
         throw error;
       }""","""      void error;""")],'reading its request fails'),
  ('W19-53',[(DS,"""    if (replayed !== null) {
-      const entered = await this.enteredAgain(scope, actor, replayed.result.captureId);""","""    if (replayed !== null && (false as boolean)) {
-      const entered = await this.enteredAgain(scope, actor, replayed.result.captureId);""")],'redelivered amount'),
+      /*""","""    if (replayed !== null && (false as boolean)) {
+      /*""")],'redelivered amount'),
  ('W19-54',[(S,"return key === undefined ? null : { key, hash: hashRequest(body) };","void hashRequest;\n    return key === undefined ? null : null;")],'idempotency key \\(Codex'),
  ('W19-55',[(DS,"""      return (
         (await this.enteredAgain(scope, actor, replayed.result.captureId)) ?? { outcome: 'CLOSED' }
