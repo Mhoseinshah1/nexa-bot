@@ -18,6 +18,7 @@ import {
   type ProductStatus,
   type TenantContext,
   type UnitOfWork,
+  trafficBytesAfterEdit,
 } from '@nexa/contracts';
 import type { ResellerService } from '../../resellers/application/reseller.service.js';
 import { catalogueScope } from '../../resellers/domain/entitlement.js';
@@ -468,7 +469,24 @@ export class ProductService {
           throw errors.notFound(COMMERCE_ERROR_CODES.PRODUCT_NOT_FOUND, 'Unknown product.');
         }
 
-        const after = await this.deps.repository.update(scope, productId, input.edit, now, tx);
+        const after = await this.deps.repository.update(
+          scope,
+          productId,
+          {
+            ...input.edit,
+            specification: {
+              ...input.edit.specification,
+              // A figure the form showed and the operator left alone keeps its stored
+              // bytes, rounding and all (WP21: `trafficBytesAfterEdit`).
+              trafficBytes: trafficBytesAfterEdit(
+                before.specification.trafficBytes,
+                input.edit.specification.trafficBytes,
+              ),
+            },
+          },
+          now,
+          tx,
+        );
         if (after === null) {
           throw errors.notFound(COMMERCE_ERROR_CODES.PRODUCT_NOT_FOUND, 'Unknown product.');
         }

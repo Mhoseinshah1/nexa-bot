@@ -3,7 +3,9 @@ import type { FastifyRequest } from 'fastify';
 import {
   API_PREFIX,
   PRODUCT_ROUTES,
+  UNLIMITED_TRAFFIC_BYTES,
   money,
+  parseTrafficGb,
   productListQuerySchema,
   productStatusRequestSchema,
   productWriteSchema,
@@ -203,7 +205,9 @@ function draftFrom(command: ProductWriteRequest, write: 'CREATE' | 'UPDATE'): Pr
     categoryId: command.categoryId as ProductCategoryId | null,
     specification: {
       durationDays: command.durationDays,
-      trafficBytes: BigInt(command.trafficBytes),
+      // GB as typed, to bytes, once, here (WP21). Null is the explicit "unlimited".
+      trafficBytes:
+        command.trafficGb === null ? UNLIMITED_TRAFFIC_BYTES : bytesOf(command.trafficGb),
       deviceLimit: command.deviceLimit,
     },
     price:
@@ -212,6 +216,17 @@ function draftFrom(command: ProductWriteRequest, write: 'CREATE' | 'UPDATE'): Pr
         : money(BigInt(command.priceAmount), command.priceCurrency),
     display: displayFrom(command, write),
   };
+}
+
+/**
+ * A GB figure the schema has already admitted, as bytes. The schema's pattern and this
+ * parser are one rule (`TRAFFIC_GB_PATTERN`), so a null here is a broken invariant, not
+ * a user error — and it is refused rather than read as unlimited.
+ */
+function bytesOf(trafficGb: string): bigint {
+  const bytes = parseTrafficGb(trafficGb);
+  if (bytes === null) throw new Error('A traffic figure passed the schema and not the parser.');
+  return bytes;
 }
 
 /**

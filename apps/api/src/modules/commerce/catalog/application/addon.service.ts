@@ -16,6 +16,7 @@ import {
   type ServiceAddonStatus,
   type TenantContext,
   type UnitOfWork,
+  trafficBytesAfterEdit,
 } from '@nexa/contracts';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
 import {
@@ -244,7 +245,13 @@ export class ServiceAddonService {
          */
         this.assertAmountMatchesKind(before.kind, input.edit);
 
-        const after = await this.deps.repository.update(scope, addonId, input.edit, now, tx);
+        const after = await this.deps.repository.update(
+          scope,
+          addonId,
+          keepUntouchedTraffic(before.specification.trafficBytes, input.edit),
+          now,
+          tx,
+        );
         if (after === null) {
           throw errors.notFound(COMMERCE_ERROR_CODES.ADDON_NOT_FOUND, 'Unknown add-on.');
         }
@@ -488,6 +495,23 @@ export class ServiceAddonService {
 }
 
 /** `bigint` as text: `hashRequest` serialises to JSON, which throws on one. */
+/**
+ * The edit with a traffic figure the operator left alone kept at its stored bytes (WP21):
+ * the form shows a stored amount at its nearest hundredth of a GB, and saving it
+ * unchanged must not rewrite the row to that rounding. `trafficBytesAfterEdit` is the rule.
+ */
+function keepUntouchedTraffic(stored: bigint | null, edit: ServiceAddonEdit): ServiceAddonEdit {
+  const submitted = edit.specification.trafficBytes;
+  if (stored === null || submitted === null) return edit;
+  return {
+    ...edit,
+    specification: {
+      ...edit.specification,
+      trafficBytes: trafficBytesAfterEdit(stored, submitted),
+    },
+  };
+}
+
 function serialisableEdit(edit: ServiceAddonEdit): Record<string, unknown> {
   return {
     title: edit.title,

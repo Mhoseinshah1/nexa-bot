@@ -4,6 +4,7 @@ import {
   API_PREFIX,
   SERVICE_ADDON_ROUTES,
   money,
+  parseTrafficGb,
   productStatusRequestSchema,
   serviceAddonListQuerySchema,
   serviceAddonWriteSchema,
@@ -179,6 +180,16 @@ export class ServiceAddonsController {
 }
 
 /**
+ * A GB figure the schema has already admitted, as bytes. One rule with the schema's
+ * pattern, so a null here is a broken invariant and is refused.
+ */
+function bytesOf(trafficGb: string): bigint {
+  const bytes = parseTrafficGb(trafficGb);
+  if (bytes === null) throw new Error('A traffic figure passed the schema and not the parser.');
+  return bytes;
+}
+
+/**
  * The wire shape as the application's own draft.
  *
  * The price pair becomes ONE `Money` here, the layer below which nothing can construct
@@ -192,7 +203,8 @@ function draftFrom(command: ServiceAddonWriteRequest): ServiceAddonDraft {
     sortOrder: command.sortOrder,
     specification: {
       kind: command.kind,
-      trafficBytes: command.trafficBytes === null ? null : BigInt(command.trafficBytes),
+      // GB as typed, to bytes, once, here (WP21).
+      trafficBytes: command.trafficGb === null ? null : bytesOf(command.trafficGb),
       durationDays: command.durationDays,
     },
     price:

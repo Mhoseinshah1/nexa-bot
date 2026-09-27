@@ -5,6 +5,7 @@ import {
   SALES_CURRENCY_CODES,
   MAX_DEVICE_LIMIT,
   MAX_DURATION_DAYS,
+  MAX_TRAFFIC_BYTES,
   PRODUCT_DESCRIPTION_MAX_LENGTH,
   PRODUCT_DISPLAY_FEATURE_MAX_LENGTH,
   PRODUCT_DISPLAY_LIST_MAX_ITEMS,
@@ -15,6 +16,8 @@ import {
   PRODUCT_TITLE_MAX_LENGTH,
   UNLIMITED_DURATION_DAYS,
   UNLIMITED_TRAFFIC_BYTES,
+  formatTrafficGb,
+  parseTrafficGb,
   type CurrencyCode,
   type ProductAudience,
   type ProductCategoryListingResponse,
@@ -583,7 +586,13 @@ interface FormState {
   sortOrder: string;
   panelId: string;
   durationDays: string;
-  trafficBytes: string;
+  /**
+   * The allowance in GB as typed, at most two decimals (WP21). The one conversion to
+   * bytes is `parseTrafficGb`, the rule the server applies to the same text.
+   */
+  trafficGb: string;
+  /** "No traffic limit", said with its own control rather than with a zero. */
+  trafficUnlimited: boolean;
   deviceLimit: string;
   priceAmount: string;
   priceCurrency: CurrencyCode;
@@ -606,7 +615,8 @@ const BLANK: FormState = {
   sortOrder: '0',
   panelId: '',
   durationDays: '30',
-  trafficBytes: '0',
+  trafficGb: '',
+  trafficUnlimited: true,
   deviceLimit: '',
   priceAmount: '',
   priceCurrency: 'IRT',
@@ -624,7 +634,12 @@ function stateOf(row: ProductSummaryResponse): FormState {
     sortOrder: String(row.sortOrder),
     panelId: row.panelId ?? '',
     durationDays: String(row.durationDays),
-    trafficBytes: row.trafficBytes,
+    // A stored allowance reopens as the GB figure it was saved as: 10.25 is `10.25`.
+    trafficGb:
+      BigInt(row.trafficBytes) === UNLIMITED_TRAFFIC_BYTES
+        ? ''
+        : formatTrafficGb(BigInt(row.trafficBytes)),
+    trafficUnlimited: BigInt(row.trafficBytes) === UNLIMITED_TRAFFIC_BYTES,
     deviceLimit: row.deviceLimit === null ? '' : String(row.deviceLimit),
     priceAmount: row.priceAmount ?? '',
     priceCurrency: row.priceCurrency ?? 'IRT',
@@ -681,8 +696,18 @@ export function bodyFrom(
     return { problem: 'web.product_problem_duration' };
   }
 
-  const traffic = state.trafficBytes.trim();
-  if (!/^\d{1,19}$/u.test(traffic)) return { problem: 'web.product_problem_traffic' };
+  /*
+   * GB, at most two decimals, positive, within the contract's cap — or unlimited, which
+   * is its own checkbox. A typed `0` is refused rather than read as unlimited.
+   */
+  const traffic = state.trafficGb.trim();
+  const trafficBytes = state.trafficUnlimited ? null : parseTrafficGb(traffic);
+  if (
+    !state.trafficUnlimited &&
+    (trafficBytes === null || trafficBytes <= 0n || trafficBytes > MAX_TRAFFIC_BYTES)
+  ) {
+    return { problem: 'web.product_problem_traffic' };
+  }
 
   const deviceLimit = state.deviceLimit.trim() === '' ? null : Number(state.deviceLimit);
   if (
@@ -725,7 +750,7 @@ export function bodyFrom(
       sortOrder,
       panelId: state.panelId.trim() === '' ? null : state.panelId.trim(),
       durationDays,
-      trafficBytes: traffic,
+      trafficGb: state.trafficUnlimited ? null : traffic,
       deviceLimit,
       priceAmount: amount === '' ? null : amount,
       // The pair moves together. An amount with no currency is the shape the schema,
@@ -960,23 +985,26 @@ function ProductForm({
       </Field>
 
       <Field
-        label={t('web.product_traffic_bytes')}
+        label={t('web.product_traffic_gb')}
         hint={t('web.product_traffic_hint')}
         htmlFor={`product-traffic-${mode}`}
       >
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={state.trafficUnlimited}
+            onChange={(event) => set('trafficUnlimited', event.target.checked)}
+          />{' '}
+          {t('web.product_traffic_unlimited')}
+        </label>
         <input
           id={`product-traffic-${mode}`}
           dir="ltr"
-          inputMode="numeric"
-          value={state.trafficBytes}
-          onChange={(event) => set('trafficBytes', event.target.value.trim())}
+          inputMode="decimal"
+          disabled={state.trafficUnlimited}
+          value={state.trafficGb}
+          onChange={(event) => set('trafficGb', event.target.value.trim())}
         />
-        {/^\d{1,20}$/.test(state.trafficBytes) ? (
-          // What the typed byte count reads as — the input itself stays in bytes.
-          <small className="faint" data-testid={`product-traffic-readout-${mode}`}>
-            <Traffic bytes={state.trafficBytes} />
-          </small>
-        ) : null}
       </Field>
 
       <Field
