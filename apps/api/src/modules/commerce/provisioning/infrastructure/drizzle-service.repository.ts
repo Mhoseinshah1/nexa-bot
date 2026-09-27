@@ -43,6 +43,12 @@ import type {
   ServiceSearch,
 } from '../application/ports.js';
 
+/**
+ * The advisory-lock CLASS for `lockLifecycle` ("SL"): a refund request's deletion and a paid
+ * commercial action serialise on it, per service. Distinct from every other class in use.
+ */
+export const SERVICE_LIFECYCLE_LOCK_CLASS = 0x534c;
+
 type Row = typeof services.$inferSelect;
 
 /**
@@ -203,6 +209,13 @@ export class DrizzleServiceRepository implements ServiceRepository {
       .limit(1);
     const row = rows[0];
     return row === undefined ? null : toRecord(row);
+  }
+
+  async lockLifecycle(scope: TenantContext, id: string, tx: TransactionScope): Promise<void> {
+    const tenantId = requireTenantId(scope);
+    await this.exec(tx).execute(
+      sql`SELECT pg_advisory_xact_lock(${SERVICE_LIFECYCLE_LOCK_CLASS}, hashtext(${`${tenantId}:${id}`}))`,
+    );
   }
 
   async findByOrderId(

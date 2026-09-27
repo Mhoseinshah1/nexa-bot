@@ -108,7 +108,7 @@ export interface ServiceRefundReview {
 
 export interface ServiceRefundRequestServiceDeps {
   readonly repository: ServiceRefundRequestRepository;
-  readonly services: Pick<ServiceRepository, 'findById' | 'lockForUpdate'>;
+  readonly services: Pick<ServiceRepository, 'findById' | 'lockForUpdate' | 'lockLifecycle'>;
   readonly orders: Pick<OrderRepository, 'findById'>;
   readonly payments: Pick<PaymentRepository, 'findConfirmedForOrder' | 'findById'>;
   readonly refundLedger: Pick<RefundRepository, 'consumptionFor' | 'lockPayment'>;
@@ -206,6 +206,15 @@ export class ServiceRefundRequestService {
     if (remaining.amountMinor <= 0n) return { eligible: false, reason: 'NOTHING_REFUNDABLE' };
     const operable = await this.deps.panels.operability(scope, service.panelId, 'TERMINATE', tx);
     if (!operable.ok) return { eligible: false, reason: 'CANNOT_DELETE' };
+    /*
+     * A paid renewal or add-on still being applied (Codex review of #83, round 9). Deleting
+     * now would take away what that payment bought, and this request refunds only the
+     * service's own purchase — so no deletion is planned until it is decided. The approval
+     * asks this under the lifecycle lock a commercial settlement also takes.
+     */
+    if (await this.deps.repository.commercialUndecided(scope, service.id, tx)) {
+      return { eligible: false, reason: 'CANNOT_DELETE' };
+    }
     return { eligible: true, source: { payment, remaining } };
   }
 
@@ -534,12 +543,15 @@ export class ServiceRefundRequestService {
          * gone, which the sweep would then credit. Taken before the payment's lock, the
          * order the executor already takes them in.
          */
-        const service = await this.assertExecutable(
-          scope,
-          request,
-          await this.deps.services.lockForUpdate(scope, request.serviceId, tx),
-          tx,
-        );
+        const locked = await this.deps.services.lockForUpdate(scope, request.serviceId, tx);
+        /*
+         * Then the lifecycle lock, which a paid commercial action's settlement takes before it
+         * plans (Codex review of #83, round 9): each refuses while the other's work is
+         * undecided, and this lock makes the two decisions sequential rather than blind to
+         * each other's uncommitted rows. After the row lock and before the payment's.
+         */
+        if (locked !== null) await this.deps.services.lockLifecycle(scope, locked.id, tx);
+        const service = await this.assertExecutable(scope, request, locked, tx);
         if (input.amountMinor <= 0n) {
           throw errors.validation(
             COMMERCE_ERROR_CODES.REFUND_EXCEEDS_REFUNDABLE,

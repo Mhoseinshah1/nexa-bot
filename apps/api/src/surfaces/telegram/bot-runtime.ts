@@ -64,6 +64,7 @@ import type { InboundReceiptFile } from '../../modules/commerce/payments/applica
 import type { ReceiptService } from '../../modules/commerce/payments/application/receipt.service.js';
 import type { ReceiptCreditCaptureService } from '../../modules/commerce/payments/application/receipt-credit-capture.service.js';
 import type { ServiceRefundDecisionService } from '../../modules/commerce/payments/application/service-refund-decision.service.js';
+import { mayBePushedRefundRequests } from '../../modules/commerce/payments/application/service-refund-push.consumer.js';
 import {
   normaliseRefundReason,
   type ServiceRefundRequestService,
@@ -1039,6 +1040,19 @@ export const ADMIN_REFUND_REQUEST_APPROVE_CALLBACK_PREFIX = 'qa:';
 export const ADMIN_REFUND_REQUEST_REJECT_CALLBACK_PREFIX = 'qb:';
 export const ADMIN_REFUND_REQUEST_APPROVE_CONFIRM_CALLBACK_PREFIX = 'qc:';
 export const ADMIN_REFUND_REQUEST_APPROVE_CANCEL_CALLBACK_PREFIX = 'qd:';
+
+/**
+ * The four administrator callbacks' intents: the buttons of a review card that is PUSHED,
+ * to administrators chosen by `mayBePushedRefundRequests`, not reached through a panel
+ * section. So `adminTurn` admits them on that same predicate rather than on
+ * `hasAnyPanelSection` (Codex review of #83, round 9).
+ */
+const ADMIN_REFUND_REQUEST_INTENTS: ReadonlySet<BotIntent> = new Set<BotIntent>([
+  'ADMIN_REFUND_REQUEST_APPROVE',
+  'ADMIN_REFUND_REQUEST_REJECT',
+  'ADMIN_REFUND_REQUEST_CONFIRM',
+  'ADMIN_REFUND_REQUEST_CANCEL',
+]);
 
 /** The four administrator callbacks, prefix to intent. Each carries one UUIDv7. */
 const ADMIN_REFUND_REQUEST_CALLBACKS: readonly (readonly [string, BotIntent])[] = [
@@ -3952,6 +3966,11 @@ export function refusalValuesFor(key: TemplateKey): TemplateValues {
   return REFUSAL_VALUES[key] ?? {};
 }
 
+/** Whether `refusal` answers this error with a sentence, rather than rethrowing it. */
+function hasRefusalReply(error: unknown): boolean {
+  return isNexaError(error) && REFUSAL_REPLIES[error.code] !== undefined;
+}
+
 function refusal(error: unknown): PendingReply {
   const key = isNexaError(error) ? REFUSAL_REPLIES[error.code] : undefined;
   if (key === undefined) throw error;
@@ -4514,7 +4533,16 @@ export class BotRuntime {
     const maySeeCustomers = permissions.has(CUSTOMERS_VIEW_PERMISSION);
     const maySeeCategories =
       permissions.has(CATALOG_VIEW_PERMISSION) && this.deps.productCategories !== undefined;
-    if (!hasAnyPanelSection(permissions)) return null;
+    /*
+     * A refund request's card is pushed to whoever holds the two decision permissions,
+     * panel or no panel (Codex review of #83, round 9). Its taps are admitted on the SAME
+     * predicate the push chose them by: gated on a panel section, a reviewer holding only
+     * `refunds.issue` and `services.terminate` was sent a card whose every button answered
+     * as if they were a customer. The decision service checks both permissions again.
+     */
+    const mayDecideRefundRequest =
+      ADMIN_REFUND_REQUEST_INTENTS.has(command.intent) && mayBePushedRefundRequests(permissions);
+    if (!hasAnyPanelSection(permissions) && !mayDecideRefundRequest) return null;
 
     try {
       switch (command.intent) {
@@ -9648,13 +9676,16 @@ export class BotRuntime {
         return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };
       }
       /*
-       * A failure nobody classified — the database, a timeout — filed nothing, but reading
-       * the reason already closed its window, and the webhook answers 2xx, so Telegram will
-       * not redeliver (Codex review of #83, round 8). The window is reopened, so the
-       * customer's next message files the request. Best effort: if the reopen fails too,
-       * the original failure is the one reported.
+       * A failure nobody answers — the database, a timeout, or a typed error with no reply
+       * sentence such as the outbox's own — filed nothing, but reading the reason already
+       * closed its window, and the webhook answers 2xx, so Telegram will not redeliver
+       * (Codex review of #83, rounds 8 and 9). The window is reopened, so the customer's next
+       * message files the request. A refusal that HAS a sentence is an answer, and keeps
+       * the window shut: a window reopened under "not available" would swallow whatever the
+       * customer typed next. Best effort: if the reopen fails too, the original failure is
+       * the one reported.
        */
-      if (!isNexaError(error)) {
+      if (!hasRefusalReply(error)) {
         await reopen('refund-reason-retry').catch(() => undefined);
       }
       return refusal(error);

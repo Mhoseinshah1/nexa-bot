@@ -19,6 +19,7 @@ import {
   Badge,
   Banner,
   Card,
+  CursorPager,
   DataTable,
   Empty,
   Field,
@@ -136,53 +137,59 @@ function columns(onLink: ReturnType<typeof useLinkHandler>, withService: boolean
   return withService ? all : all.filter((column) => column.key !== 'service');
 }
 
-/**
- * Every request that still wants an operator, following the server's ONE cursor until it
- * says there is no more. One stream, not one per state (Codex review of #83, round 6): three
- * scans read at three moments could each miss a request that moved between them, OPEN read
- * after it became EXECUTING and EXECUTING read before. Under one keyset on `(createdAt, id)`,
- * which no transition changes, each request is on exactly one page, in the state it had there.
- */
-async function fetchEveryAttentionPage(): Promise<ServiceRefundRequestView[]> {
-  const rows: ServiceRefundRequestView[] = [];
-  let cursor: { at: string; id: string } | undefined;
-  for (;;) {
-    const page = await fetchServiceRefundRequests(
-      cursor === undefined ? { attention: true } : { attention: true, cursor },
-    );
-    rows.push(...page.requests);
-    if (page.nextCursor === null) return rows;
-    cursor = page.nextCursor;
-  }
-}
+/** The server's keyset position on `(createdAt, id)`: one page of the attention stream. */
+type AttentionCursor = { readonly at: string; readonly id: string };
 
 /**
  * The requests that still want an operator, on the services list: undecided, executing or
  * failed. Read-only — each row links to its service, where the decision is.
+ *
+ * ONE stream, not one per state (Codex review of #83, round 6): three scans read at three
+ * moments could each miss a request that moved between them. Under one keyset on
+ * `(createdAt, id)`, which no transition changes, each request is on exactly one page, in the
+ * state it had there. The server filters to the states that want an operator BEFORE it
+ * limits, so an old undecided request is never hidden behind a hundred newer decided ones.
+ *
+ * And a PAGE at a time, the operator moving through the trail (Codex review of #83, round 9).
+ * FAILED is terminal and stays in the stream, so following the cursor to its end on every
+ * visit loaded the installation's whole failure history — requests, rows and DOM growing
+ * without bound. Nothing is lost by paging: the stream is newest first, and every page is
+ * one "older" away.
  */
 export function OpenServiceRefundRequestsCard() {
   const onLink = useLinkHandler();
-  // The server filters to the states that want an operator BEFORE it limits: a page of the
-  // newest requests of every state would hide an old undecided one behind a hundred newer
-  // decided ones. And EVERY page, by the server's cursor: more than a page must not leave the
-  // oldest — the longest-waiting — on no page at all. Already newest first, as the server sent it.
+  const [trail, setTrail] = useState<readonly AttentionCursor[]>([]);
+  const cursor = trail[trail.length - 1];
   const requests = useQuery({
-    queryKey: ['service-refund-requests', 'attention'],
-    queryFn: async () => ({ requests: await fetchEveryAttentionPage() }),
+    queryKey: ['service-refund-requests', 'attention', cursor ?? null],
+    queryFn: () =>
+      fetchServiceRefundRequests(
+        cursor === undefined ? { attention: true } : { attention: true, cursor },
+      ),
   });
   const rows = requests.data?.requests ?? [];
+  const nextCursor = requests.data?.nextCursor ?? null;
   return (
     <Card title={t('web.service_refunds_open')} hint={t('web.service_refunds_hint')}>
       <StateSwitch query={requests} denied={false}>
-        {rows.length === 0 ? (
+        {rows.length === 0 && trail.length === 0 ? (
           <Empty title={t('web.service_refunds_empty')} />
         ) : (
-          <DataTable
-            caption={t('web.service_refunds_open')}
-            columns={columns(onLink, true)}
-            rows={rows}
-            rowKey={(row) => row.id}
-          />
+          <>
+            <DataTable
+              caption={t('web.service_refunds_open')}
+              columns={columns(onLink, true)}
+              rows={rows}
+              rowKey={(row) => row.id}
+            />
+            <CursorPager
+              shown={rows.length}
+              hasPrevious={trail.length > 0}
+              hasNext={nextCursor !== null}
+              onPrevious={() => setTrail(trail.slice(0, -1))}
+              onNext={() => nextCursor !== null && setTrail([...trail, nextCursor])}
+            />
+          </>
         )}
       </StateSwitch>
     </Card>

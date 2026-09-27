@@ -422,6 +422,27 @@ export class DrizzleOperationRepository implements OperationRepository {
     return rows[0]?.createdAt ?? null;
   }
 
+  async terminationUndecided(
+    scope: TenantContext,
+    serviceId: string,
+    tx?: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select({ id: provisioningOperations.id })
+      .from(provisioningOperations)
+      .where(
+        and(
+          eq(provisioningOperations.tenantId, tenantId),
+          eq(provisioningOperations.serviceId, serviceId),
+          eq(provisioningOperations.type, 'TERMINATE'),
+          notInArray(provisioningOperations.state, [...OPERATION_TERMINAL_STATES]),
+        ),
+      )
+      .limit(1);
+    return rows.length > 0;
+  }
+
   async findOpenCommercial(
     scope: TenantContext,
     serviceId: string,

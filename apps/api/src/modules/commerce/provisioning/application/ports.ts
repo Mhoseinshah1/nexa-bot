@@ -226,6 +226,20 @@ export interface ServiceRepository {
     tx: TransactionScope,
   ): Promise<ServiceRecord | null>;
 
+  /**
+   * Serialises the two plans that must not interleave on one service (WP19, Codex review of
+   * #83, round 9): a refund request's deletion, planned at approval, and a paid commercial
+   * action, planned at settlement. Each takes this lock and then refuses while the other's
+   * work is undecided, so neither can commit unseen beside the other.
+   *
+   * A transaction-scoped ADVISORY lock, not the row lock. A commercial settlement already
+   * holds the customer's wallet lock when it gets here, and the refund sweep takes the
+   * service row before that wallet, so taking the row here would close a cycle. Only these
+   * two planners take this lock, each after every lock it already holds, and neither then
+   * waits on the other's earlier locks.
+   */
+  lockLifecycle(scope: TenantContext, id: string, tx: TransactionScope): Promise<void>;
+
   findByOrderId(
     scope: TenantContext,
     orderId: OrderId,
@@ -763,6 +777,14 @@ export interface OperationRepository {
     serviceId: string,
     tx?: unknown,
   ): Promise<OperationRecord | null>;
+
+  /**
+   * Whether some `TERMINATE` of this service is undecided: `PLANNED`, `IN_FLIGHT` or
+   * `UNKNOWN`, every state `OPERATION_TERMINAL_STATES` leaves out. A commercial action is not
+   * planned beside one (Codex review of #83, round 9): whatever it applied, the deletion would
+   * take away, and nothing would give the customer that payment back.
+   */
+  terminationUndecided(scope: TenantContext, serviceId: string, tx?: unknown): Promise<boolean>;
 
   /**
    * Whether an operation of this type for this ORDER is still undecided: `PLANNED`,

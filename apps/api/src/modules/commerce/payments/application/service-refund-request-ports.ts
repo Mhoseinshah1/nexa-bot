@@ -175,4 +175,12 @@ export interface ServiceRefundRequestRepository {
    * sweep's in-transaction check, and the same predicate `executingDecidable` filters on.
    */
   terminationUndecided(scope: TenantContext, serviceId: string, tx?: unknown): Promise<boolean>;
+
+  /**
+   * Whether a paid `RENEW`, `ADD_TRAFFIC` or `ADD_TIME` of this service is undecided —
+   * PLANNED, IN_FLIGHT or UNKNOWN (Codex review of #83, round 9). A deletion is not planned
+   * beside one: the value it applies would be deleted with the service, and this request
+   * refunds only the service's own purchase.
+   */
+  commercialUndecided(scope: TenantContext, serviceId: string, tx?: unknown): Promise<boolean>;
 }

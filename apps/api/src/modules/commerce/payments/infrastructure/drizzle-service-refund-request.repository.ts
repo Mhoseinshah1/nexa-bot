@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, inArray, notInArray, or, sql } from 'drizzle-orm';
 import {
   OPERATION_TERMINAL_STATES,
+  TARGETED_OPERATION_TYPES,
   SERVICE_REFUND_REQUEST_ACTIVE_STATES,
   money,
   type CurrencyCode,
@@ -346,6 +347,27 @@ export class DrizzleServiceRefundRequestRepository implements ServiceRefundReque
       .returning();
     const row = rows[0];
     return row === undefined ? null : toRecord(row);
+  }
+
+  async commercialUndecided(
+    scope: TenantContext,
+    serviceId: string,
+    tx?: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select({ id: provisioningOperations.id })
+      .from(provisioningOperations)
+      .where(
+        and(
+          eq(provisioningOperations.tenantId, tenantId),
+          eq(provisioningOperations.serviceId, serviceId),
+          inArray(provisioningOperations.type, [...TARGETED_OPERATION_TYPES]),
+          notInArray(provisioningOperations.state, [...OPERATION_TERMINAL_STATES]),
+        ),
+      )
+      .limit(1);
+    return rows.length > 0;
   }
 
   async terminationUndecided(

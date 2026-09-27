@@ -1413,6 +1413,13 @@ export class ProvisioningService {
       throw errors.conflict(code, message, { reason });
     };
 
+    /*
+     * The lifecycle lock first, so a refund request's approval — which plans a deletion
+     * under the same lock — is either wholly before this or wholly after it (Codex review of
+     * #83, round 9). Taken after every lock settlement already holds.
+     */
+    await this.deps.services.lockLifecycle(scope, action.serviceId, tx);
+
     const service = await this.deps.services.findById(scope, action.serviceId, tx);
     if (service === null) {
       /*
@@ -1447,6 +1454,21 @@ export class ProvisioningService {
         COMMERCE_ERROR_CODES.SERVICE_ACTION_IN_PROGRESS,
         'This service already has an action waiting to be applied.',
         'ACTION_IN_PROGRESS',
+      );
+    }
+
+    /*
+     * A deletion is planned and not yet decided — an approved refund request's, or an
+     * operator's (Codex review of #83, round 9). Whatever this action applied, the deletion
+     * would take away, and the refund returns only the service's own purchase, so the
+     * payment for this action would buy nothing. Refused, so a wallet purchase is not taken
+     * and a transfer that already arrived is given back, like every other refusal here.
+     */
+    if (await this.deps.operations.terminationUndecided(scope, service.id, tx)) {
+      return refuse(
+        COMMERCE_ERROR_CODES.SERVICE_ACTION_NOT_ALLOWED,
+        'This service is being deleted.',
+        'TERMINATION_PENDING',
       );
     }
 
