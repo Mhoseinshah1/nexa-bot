@@ -295,10 +295,11 @@ export class OutboxRelay {
 
         // Aggregates whose message failed in THIS batch. Their later messages in the
         // same batch are left unclaimed: a message never overtakes an earlier one of its
-        // own aggregate. Across batches the claim's sibling rule does the same.
+        // own aggregate. Across batches the claim's sibling rule does the same. Keyed by
+        // tenant too, as that rule is: an aggregate id is not unique across tenants.
         const held = new Set<string>();
         for (const row of claimed) {
-          const aggregate = `${row.aggregateType}:${row.aggregateId}`;
+          const aggregate = `${row.tenantId ?? '-'}:${row.aggregateType}:${row.aggregateId}`;
           if (held.has(aggregate)) continue;
           // The eligibility above was evaluated when the row was SELECTed, and
           // `FOR UPDATE` locked the message, not its tenant — so a stop could
@@ -337,50 +338,73 @@ export class OutboxRelay {
             held.add(aggregate);
             const failures = row.attempts + 1;
             const exhausted = failures >= DELIVERY_MAX_FAILED_ATTEMPTS;
-            await tx
-              .update(outboxMessages)
-              .set({
-                attempts: sql`${outboxMessages.attempts} + 1`,
-                lastError: message.slice(0, 2000),
-                // Its own row only (WP20): the rest of the batch and the queue behind it
-                // are not held up. Null once exhausted, since nothing will retry it.
-                nextAttemptAt: exhausted
-                  ? null
-                  : new Date(this.clock.now().getTime() + deliveryRetryDelayMs(failures)),
-                // Exhaustion is a MARK, written where it is announced, never inferred from
-                // the count: the release before WP20 retried a failing message on every
-                // poll, so a row can reach the count without this relay ever deciding or
-                // saying so. Such a row is still claimed, fails once more here, and is
-                // exhausted and announced then — never exhausted in silence.
-                ...(exhausted ? { exhaustedAt: this.clock.now() } : {}),
-              })
-              .where(sql`${outboxMessages.id} = ${row.id}`);
+            const recordFailure = (executor: typeof tx, markExhausted: boolean) =>
+              executor
+                .update(outboxMessages)
+                .set({
+                  attempts: sql`${outboxMessages.attempts} + 1`,
+                  lastError: message.slice(0, 2000),
+                  // Its own row only (WP20): the rest of the batch and the queue behind
+                  // it are not held up. Null once exhausted, since nothing will retry it.
+                  nextAttemptAt: markExhausted
+                    ? null
+                    : new Date(this.clock.now().getTime() + deliveryRetryDelayMs(failures)),
+                  // Exhaustion is a MARK, written where it is announced, never inferred
+                  // from the count: the release before WP20 retried a failing message on
+                  // every poll, so a row can reach the count without this relay ever
+                  // deciding or saying so. Such a row is still claimed, fails once more
+                  // here, and is exhausted and announced then — never exhausted in silence.
+                  ...(markExhausted ? { exhaustedAt: this.clock.now() } : {}),
+                })
+                .where(sql`${outboxMessages.id} = ${row.id}`);
             if (exhausted) {
-              this.logger.error(
-                { eventId: event.eventId, eventType: event.eventType, attempts: failures },
-                'Outbox message exhausted its retries; kept as evidence, not retried',
-              );
-              await this.opsEvents?.record(
-                scopeOf(event),
-                {
-                  code: OUTBOX_MESSAGE_EXHAUSTED_CODE,
-                  severity: 'ERROR',
-                  message: `Outbox message ${event.eventType} failed ${String(failures)} times and is no longer retried automatically.`,
-                  context: {
+              try {
+                // The mark and its announcement in ONE savepoint. An announcement that
+                // throws takes the mark back with it, not the batch: the batch's other
+                // messages still publish, and this one is counted, rescheduled and left
+                // to be exhausted — and announced — by its next failure. Without the
+                // savepoint the throw rolled back the whole batch, and the same message,
+                // claimed first on every poll, stalled the relay for every tenant.
+                await tx.transaction(async (mark) => {
+                  await recordFailure(mark, true);
+                  await this.opsEvents?.record(
+                    scopeOf(event),
+                    {
+                      code: OUTBOX_MESSAGE_EXHAUSTED_CODE,
+                      severity: 'ERROR',
+                      message: `Outbox message ${event.eventType} failed ${String(failures)} times and is no longer retried automatically.`,
+                      context: {
+                        eventId: event.eventId,
+                        eventType: event.eventType,
+                        aggregateType: row.aggregateType,
+                        attempts: failures,
+                      },
+                      // One event per message: each exhausted message is its own fact.
+                      dedupeKey: event.eventId,
+                    },
+                    // A transaction SCOPE, as every consumer is handed: the recorder joins
+                    // this transaction only through one, and its projection — the
+                    // notification that tells an operator — refuses anything else.
+                    { tx: mark, scope: scopeOf(event) },
+                  );
+                });
+                this.logger.error(
+                  { eventId: event.eventId, eventType: event.eventType, attempts: failures },
+                  'Outbox message exhausted its retries; kept as evidence, not retried',
+                );
+              } catch (announceError) {
+                await recordFailure(tx, false);
+                this.logger.error(
+                  {
                     eventId: event.eventId,
                     eventType: event.eventType,
-                    aggregateType: row.aggregateType,
-                    attempts: failures,
+                    err: String(announceError),
                   },
-                  // One event per message: each exhausted message is its own fact.
-                  dedupeKey: event.eventId,
-                },
-                // A transaction SCOPE, as every consumer is handed: the recorder joins
-                // this transaction only through one, and its projection — the
-                // notification that tells an operator — refuses anything else.
-                { tx, scope: scopeOf(event) },
-              );
+                  'Outbox message exhaustion could not be announced; it will be retried and announced later',
+                );
+              }
             } else {
+              await recordFailure(tx, false);
               this.logger.error(
                 { eventId: event.eventId, eventType: event.eventType, err: message },
                 'Outbox consumer failed; message will be retried',
@@ -557,14 +581,22 @@ function notExhausted() {
  * it fails. So an aggregate with several queued events still drains in one batch.
  *
  * An exhausted message does not hold anything back either: it will never publish, and
- * holding its successors behind it would hold them for ever. Answered by the unique
- * (aggregate_type, aggregate_id, sequence) index.
+ * holding its successors behind it would hold them for ever.
+ *
+ * Within ONE TENANT. An aggregate id is not unique across tenants — every tenant's
+ * `SystemPinged` is `System:system` — and the claim never takes a stopped tenant's
+ * message, so a stopped tenant's failed ping would never be retried, never exhausted, and
+ * would hold every other tenant's pings behind it for ever (and count them as lag).
+ *
+ * Answered by `outbox_messages_live_failure_idx` (`online-indexes.ts`), which holds only
+ * the rows this asks about, so the check does not walk an aggregate's published history.
  */
 function noEarlierLiveSibling() {
   return sql`NOT EXISTS (
     SELECT 1 FROM ${outboxMessages} AS earlier
     WHERE earlier.aggregate_type = ${outboxMessages.aggregateType}
       AND earlier.aggregate_id = ${outboxMessages.aggregateId}
+      AND earlier.tenant_id IS NOT DISTINCT FROM ${outboxMessages.tenantId}
       AND earlier.sequence < ${outboxMessages.sequence}
       AND earlier.published_at IS NULL
       AND earlier.attempts > 0

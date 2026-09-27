@@ -213,6 +213,28 @@ export const ONLINE_INDEXES: readonly OnlineIndex[] = [
       'ON "wallet_entries" USING btree ("tenant_id","payment_id","created_at","id") ' +
       'WHERE (payment_id IS NOT NULL)',
   },
+  {
+    /*
+     * The outbox messages that failed and are still being retried (WP20): what the relay
+     * claim's sibling rule asks for, once per candidate, and nothing else.
+     *
+     * The rule — no EARLIER message of the same aggregate is still failing — could only
+     * use the unique `(aggregate_type, aggregate_id, sequence)` index, so it walked every
+     * earlier sequence of the aggregate, published history included, with a heap fetch
+     * each. Published rows are never deleted, and `System:system` takes one sequence per
+     * ping ever sent, so the claim's cost grew without bound. PARTIAL on the three
+     * conditions the rule tests, so it holds only the failures in flight and stays close
+     * to empty on a healthy installation.
+     *
+     * Concurrently, for the reason this file exists: every business transaction writes
+     * `outbox_messages`, and a blocking build would hold all of them during
+     * `botctl update`.
+     */
+    name: 'outbox_messages_live_failure_idx',
+    definition:
+      'ON "outbox_messages" USING btree ("aggregate_type","aggregate_id","sequence") ' +
+      'WHERE (published_at IS NULL) AND (attempts > 0) AND (exhausted_at IS NULL)',
+  },
 ];
 
 /** Index names are code constants; this refuses one that stopped being one. */

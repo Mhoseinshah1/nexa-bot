@@ -855,6 +855,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   const antiSpam = new AntiSpamService({
     counter: interactionCounter,
     opsEvents: opsLog,
+    conditions: new DrizzleOperationalConditionReader(database.db),
     clock,
     logger,
   });

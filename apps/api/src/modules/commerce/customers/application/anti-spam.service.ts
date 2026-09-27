@@ -60,9 +60,19 @@ export function spamVerdictOf(count: number): SpamVerdict {
 /** How often, at most, the "anti-spam is off" condition is written while it lasts. */
 export const ANTI_SPAM_DEGRADED_RECORD_INTERVAL_MS = 60_000;
 
+/** Which of these subjects' conditions are open, answered as codes (the opslog reader). */
+export interface OpenConditionReader {
+  openConditions(scope: TenantContext, dedupeKeys: readonly string[]): Promise<string[]>;
+}
+
 export interface AntiSpamDeps {
   readonly counter: InteractionCounter;
   readonly opsEvents: Pick<OperationalEventRecorder, 'record'>;
+  /**
+   * Asked, on a good count, whether an outage THIS process did not record is still open.
+   * Optional so a unit test of the counting rule need not model the log.
+   */
+  readonly conditions?: OpenConditionReader;
   readonly clock: Clock;
   readonly logger: Logger;
 }
@@ -76,6 +86,16 @@ export class AntiSpamService {
    * good turn must not resolve another's.
    */
   private readonly degradedRecordedAt = new Map<string, number>();
+
+  /**
+   * When each bot's open outage was last looked for, in this process, keyed `tenant:bot`.
+   * The outage may have been recorded by ANOTHER process — a replica replaced by a rolling
+   * update, or one no longer serving this bot — whose memory of it died with it; without
+   * this look nothing would ever resolve it, and operators would be told the protection is
+   * off while it works. Throttled like the outage itself, so a healthy bot costs one read a
+   * minute at most, and only while it has traffic.
+   */
+  private readonly outageLookedForAt = new Map<string, number>();
 
   constructor(private readonly deps: AntiSpamDeps) {}
 
@@ -112,7 +132,7 @@ export class AntiSpamService {
       await this.degraded(scope, input.botInstanceId, nowMs);
       return { verdict: 'ALLOWED', count: null };
     }
-    await this.recovered(scope, input.botInstanceId);
+    await this.recovered(scope, input.botInstanceId, nowMs);
     return { verdict: spamVerdictOf(tally.count), count: tally.count };
   }
 
@@ -133,10 +153,29 @@ export class AntiSpamService {
     });
   }
 
-  private async recovered(scope: TenantContext, botInstanceId: string) {
+  private async recovered(scope: TenantContext, botInstanceId: string, nowMs: number) {
     const key = `${scope.tenantId}:${botInstanceId}`;
-    if (!this.degradedRecordedAt.has(key)) return;
-    this.degradedRecordedAt.delete(key);
+    if (this.degradedRecordedAt.has(key)) {
+      this.degradedRecordedAt.delete(key);
+      await this.recordRecovery(scope, botInstanceId);
+      return;
+    }
+    const conditions = this.deps.conditions;
+    if (conditions === undefined) return;
+    const last = this.outageLookedForAt.get(key);
+    if (last !== undefined && nowMs - last < ANTI_SPAM_DEGRADED_RECORD_INTERVAL_MS) return;
+    this.outageLookedForAt.set(key, nowMs);
+    let open: string[];
+    try {
+      open = await conditions.openConditions(scope, [unavailableKey(botInstanceId)]);
+    } catch (error) {
+      this.deps.logger.warn({ err: String(error) }, 'anti-spam outage could not be looked up');
+      return;
+    }
+    if (open.includes(ANTI_SPAM_UNAVAILABLE_CODE)) await this.recordRecovery(scope, botInstanceId);
+  }
+
+  private async recordRecovery(scope: TenantContext, botInstanceId: string) {
     await this.recordQuietly(scope, {
       code: ANTI_SPAM_RECOVERED_CODE,
       severity: 'INFO',

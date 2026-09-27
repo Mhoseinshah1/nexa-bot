@@ -73,7 +73,10 @@ export class DrizzleDiagnosticsReader implements DiagnosticsReader {
              exhausted_at
         FROM outbox_messages
        WHERE tenant_id = ${tenantId} AND published_at IS NULL AND attempts > 0
-       ORDER BY occurred_at, sequence
+       -- The ones still being retried first (WP20). An exhausted message is kept for ever
+       -- and is always among the oldest, so ordering by age alone let a page of them push
+       -- every failure still in flight out of the sample. Their count is above.
+       ORDER BY (exhausted_at IS NOT NULL), occurred_at, sequence
        LIMIT ${sampleSize}`);
     const row = totals.rows[0];
     return {

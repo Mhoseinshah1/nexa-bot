@@ -4326,6 +4326,7 @@ export class BotRuntime {
      * triggering update then takes the BLOCKED branch below: it never reaches `act`, so it
      * cannot start any commercial work.
      */
+    let blockedThisTurn = false;
     if (spam !== null && spam.verdict !== 'ALLOWED' && arrival !== 'BLOCKED') {
       const outcome = await this.deps.customers.blockForSpam(scope, actor, {
         idempotencyKey: `${input.idempotencyKey}:anti-spam`,
@@ -4334,6 +4335,7 @@ export class BotRuntime {
       });
       customer = outcome.customer;
       arrival = 'BLOCKED';
+      blockedThisTurn = outcome.changed;
     }
 
     /*
@@ -4383,14 +4385,25 @@ export class BotRuntime {
           blocked)
         : await this.act(scope, actor, command, customer, arrival, input);
     /*
-     * A blocked customer who is STILL flooding is not answered (brief §3.5: protect the
-     * transport from outbound amplification). Only the interaction that crossed the limit
-     * is told why; the 22nd and later send nothing, so a flood cannot become one reply per
-     * message. A button press is still answered below — `stopSpinner` — so no spinner hangs.
-     * Once the customer slows down, each message is answered with the stored reason again.
+     * A blocked customer who is still over the limit is not answered (brief §3.5: protect
+     * the transport from outbound amplification). Only the interaction that TOOK the block
+     * is told why; every other one past the limit sends nothing, so a flood cannot become
+     * one reply per message. A button press is still answered below — `stopSpinner` — so
+     * no spinner hangs. Once the customer slows down, each message is answered with the
+     * stored reason again.
+     *
+     * The turn that took the block, whatever its verdict — not "the 21st". The 21st may be
+     * a `/ping`, which the webhook answers without blocking, or a turn that failed before
+     * its block committed, and the block then lands on a later one; silencing that one
+     * blocked the customer without a word. And under concurrency the 21st can lose the
+     * block to a later turn, so answering the 21st as well would tell them twice.
      */
     const reply: PendingReply =
-      spam?.verdict === 'FLOODING' && arrival === 'BLOCKED' && answered === blocked
+      spam !== null &&
+      spam.verdict !== 'ALLOWED' &&
+      arrival === 'BLOCKED' &&
+      answered === blocked &&
+      !blockedThisTurn
         ? { key: null, values: {}, buttons: [], orderId: null }
         : answered;
 
