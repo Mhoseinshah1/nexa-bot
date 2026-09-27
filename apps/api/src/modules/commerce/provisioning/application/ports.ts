@@ -227,16 +227,20 @@ export interface ServiceRepository {
   ): Promise<ServiceRecord | null>;
 
   /**
-   * Serialises the two plans that must not interleave on one service (WP19, Codex review of
-   * #83, round 9): a refund request's deletion, planned at approval, and a paid commercial
-   * action, planned at settlement. Each takes this lock and then refuses while the other's
-   * work is undecided, so neither can commit unseen beside the other.
+   * Serialises the plans that must not interleave on one service (WP19, Codex review of #83,
+   * rounds 9 to 11): a deletion — a refund request's, planned at approval, or an operator's —
+   * a refund request's filing, and a paid commercial action, planned at settlement. Each
+   * takes this lock and then refuses while another's work is undecided, so none can commit
+   * unseen beside another.
    *
    * A transaction-scoped ADVISORY lock, not the row lock. A commercial settlement already
    * holds the customer's wallet lock when it gets here, and the refund sweep takes the
-   * service row before that wallet, so taking the row here would close a cycle. Only these
-   * two planners take this lock, each after every lock it already holds, and neither then
-   * waits on the other's earlier locks.
+   * service row before that wallet, so taking the row here would close a cycle.
+   *
+   * Taken LAST, after every other lock its transaction takes (round 11): a holder waits for
+   * no other lock, so it cannot close a cycle. A filing or an approval that held it while
+   * waiting for the source payment closed `customer → lifecycle → payment → customer` with a
+   * settlement and an operator's refund of that payment.
    */
   lockLifecycle(scope: TenantContext, id: string, tx: TransactionScope): Promise<void>;
 
@@ -246,6 +250,15 @@ export interface ServiceRepository {
    * service's own purchase, so an approval would delete what the second payment bought.
    */
   hasActiveRefundRequest(scope: TenantContext, id: string, tx?: unknown): Promise<boolean>;
+
+  /**
+   * Whether a customer refund request for this service is OPEN — filed and not yet decided
+   * (Codex review of #83, round 11). An operator's deletion is refused beside one: it would
+   * remove the service with no credit behind it, and leave the request undecidable. An
+   * EXECUTING request is not this: its own deletion is already planned, and the sweep
+   * credits it whichever deletion removed the service.
+   */
+  hasOpenRefundRequest(scope: TenantContext, id: string, tx?: unknown): Promise<boolean>;
 
   findByOrderId(
     scope: TenantContext,

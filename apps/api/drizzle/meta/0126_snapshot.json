@@ -13155,6 +13155,34 @@
           "method": "btree",
           "with": {}
         },
+        "service_refund_requests_attention_idx": {
+          "name": "service_refund_requests_attention_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "state IN ('OPEN', 'EXECUTING', 'FAILED')",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
         "service_refund_requests_service_idx": {
           "name": "service_refund_requests_service_idx",
           "columns": [

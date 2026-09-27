@@ -504,3 +504,46 @@ It found three issues. All were real, and each is fixed with a named test and a 
   their rejection committed, though the decision and its audit belong to the first. A replay now
   requires the same deciding administrator, as the approval's replay already did. A genuine
   redelivery is still answered by the per-update idempotency record.
+
+## 18. The eleventh Codex review of #83
+
+It found five issues. All were real, and each is fixed with a named test and a killed mutation
+(W19-102 to W19-111). A sixth defect, which none of them named, was found while fixing them.
+
+- **A refund sweep held back by an unrelated lane (P1).** Cashback, referral commissions and
+  refund requests settled in sequence inside the drain's `try`. One cashback row that failed for
+  ever, or a failing drain, kept every later lane from running, so a request whose deletion had
+  succeeded stayed EXECUTING: the service gone, the reserved credit never paid. Each lane now
+  runs on its own. A failure is logged under the lane's name and still costs the tick its
+  progress, so readiness stays honest.
+- **An operator's deletion beside an OPEN request (P1).** The ordinary `TERMINATE` checked
+  only the service and its operations. An operator could delete the service under an OPEN
+  request, which then stayed OPEN for ever: the approval refuses a service that has ended, and
+  the sweep reads only EXECUTING requests. It is now refused (`SERVICE_ACTION_NOT_ALLOWED`,
+  `REFUND_REQUESTED`) until the request is decided.
+  - An EXECUTING request is not refused. Its own deletion is already planned, and the sweep
+    credits it whichever deletion removes the service (round 6).
+  - The approval's own deletion passes `forRefundRequest` and is exempt.
+- **An operator's deletion beside a paid renewal (P1).** A settlement decides "no deletion is
+  undecided" under the lifecycle lock alone. An operator's `TERMINATE` took only the service
+  row, so the two could each pass the other's check. The operator's deletion now takes the
+  lifecycle lock after the row.
+- **A lock cycle through the source payment (P2).** A filing and an approval took the
+  lifecycle lock before the source payment's lock. A settlement holds its customer's wallet
+  lock when it takes the lifecycle lock, and an operator's refund of the source payment holds
+  that payment and then waits for the same wallet: `customer → lifecycle → payment → customer`.
+  The lifecycle lock is now taken LAST in every transaction that takes it, so a holder never
+  waits for another lock.
+- **An attention page that sorted the whole history (P2).** The attention stream reads three
+  states as one stream by `(created_at, id)`, and the state index could not give that order. A
+  partial index over the three states now serves it, folded into the unmerged 0125. It is
+  ascending: a backwards scan is `DESC NULLS FIRST`, which is what `ORDER BY ... DESC` means.
+  Drizzle's `.desc()` writes `DESC NULLS LAST`, and the round's plan test caught PostgreSQL
+  sorting anyway with that index.
+- **The sixth: an FK check against a locked service.** Making the lifecycle lock last is not
+  enough while the service row is locked `FOR UPDATE`. A settlement holding the lifecycle lock
+  inserts an operation naming the service, and that insert's foreign-key check takes
+  `FOR KEY SHARE` on the row. That lock waits on `FOR UPDATE`, which a filing, an approval or an
+  operator's deletion held while waiting for the lifecycle lock. The row is now locked
+  `FOR NO KEY UPDATE`, for the reason `lockPayment` already documents. It still excludes every
+  other locker and every write of the row, and it no longer blocks a foreign-key check.

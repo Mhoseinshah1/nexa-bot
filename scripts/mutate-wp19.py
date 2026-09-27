@@ -31,6 +31,8 @@ CI='tests/unit/contracts-invariants.test.ts'
 RFR='apps/api/src/modules/commerce/payments/infrastructure/drizzle-refund.repository.ts'
 PS='apps/api/src/modules/commerce/payments/application/service-refund-push.service.ts'
 CCS='apps/api/src/modules/commerce/customers/application/customer-capture.service.ts'
+PL='apps/api/src/modules/commerce/provisioning/application/provisioner-loop.ts'
+LL='tests/unit/provisioner-loop-lanes.test.ts'
 M=[
  ('W19-01',[(S,"if (succeeded && item.serviceState !== 'TERMINATED') {","if (false && succeeded && item.serviceState !== 'TERMINATED') {"),(R,"           */\n          or(\n","           */\n          or(\n            sql`true`,\n")],'did not move'),
  ('W19-02',[(R,"inArray(provisioningOperations.state, [...OPERATION_TERMINAL_STATES]),","inArray(provisioningOperations.state, [...OPERATION_TERMINAL_STATES, 'UNKNOWN' as never]),")],'UNKNOWN'),
@@ -363,11 +365,22 @@ M+=[
  ('W19-95',[(PG,"  const cursor = trail[trail.length - 1];","  const cursor: AttentionCursor | undefined = undefined;")],'one page of the stream',('web','tests/web/service-refund-requests.test.tsx')),
  # Round 10 (Codex review of #83).
  ('W19-96',[(PV,"    if (await this.deps.services.hasActiveRefundRequest(scope, service.id, tx)) {","    if (false) {")],'open refund request'),
- ('W19-97',[(S,"        await this.deps.services.lockLifecycle(scope, service.id, tx);\n        // A replay of this very filing","        // A replay of this very filing")],'lifecycle lock'),
+ ('W19-97',[(S,"        await this.deps.services.lockLifecycle(scope, service.id, tx);\n        const eligibility = await this.eligibilityOf(","        const eligibility = await this.eligibilityOf(")],'lifecycle lock'),
  ('W19-98',[(S,"        request.rejectionReason === reason &&\n        request.decidedByAdminId === adminId","        request.rejectionReason === reason")],'second administrator'),
  ('W19-99',[(BR,"  if (permissions.has(CUSTOMERS_VIEW_PERMISSION)) {\n    buttons.push({\n      label: { kind: 'TEMPLATE', key: 'bot.admin.refund_request_user_button' },","  if (true) {\n    buttons.push({\n      label: { kind: 'TEMPLATE', key: 'bot.admin.refund_request_user_button' },")],'refund request card',('unit','tests/unit/receipt-review-caption.test.ts')),
  ('W19-100',[(BR,"  if (permissions.has(SERVICES_VIEW_PERMISSION)) {\n    buttons.push({\n      label: { kind: 'TEMPLATE', key: 'bot.admin.refund_request_service_button' },","  if (true) {\n    buttons.push({\n      label: { kind: 'TEMPLATE', key: 'bot.admin.refund_request_service_button' },")],'refund request card',('unit','tests/unit/receipt-review-caption.test.ts')),
  ('W19-101',[(PS,"      const buttons = this.deps.keyboard(request, reviewer.permissions);","      const buttons = this.deps.keyboard(request, new Set(['users.view', 'services.view']) as never);")],'card buttons their permissions'),
+ # Codex review of #83, round 11
+ ('W19-102',[(PL,"            this.options.logger.error({ error, lane }, 'provisioner settlement lane failed');\n","            this.options.logger.error({ error, lane }, 'provisioner settlement lane failed');\n            break;\n")],'settlement lanes',('unit',LL)),
+ ('W19-103',[(PL,"      if (scope !== null) {","      if (scope !== null && !failed) {")],'settlement lanes',('unit',LL)),
+ ('W19-104',[(PL,"      if (!failed) this.lastProgressAt = this.options.now();","      this.lastProgressAt = this.options.now();")],'settlement lanes',('unit',LL)),
+ ('W19-105',[(PV,"        origin.forRefundRequest !== true &&\n        (await this.deps.services.hasOpenRefundRequest(scope, locked.id, tx))","        false")],'while a refund request is open'),
+ ('W19-106',[(PV,"      { requestedBy: 'OPERATOR', forRefundRequest: true },","      { requestedBy: 'OPERATOR' },")],'holds no lifecycle lock'),
+ ('W19-107',[(PV,"      await this.deps.services.lockLifecycle(scope, locked.id, tx);\n","")],'serialises an operator'),
+ ('W19-108',[(S,"        if (!(await this.deps.refundLedger.lockPayment(scope, request.paymentId, tx))) {\n          throw this.notEligible('SOURCE_UNRESOLVED');\n        }\n","")],'holds no lifecycle lock'),
+ ('W19-109',[(S,"        if (!(await this.deps.refundLedger.lockPayment(scope, found.source.payment.id, tx))) {","        await this.deps.services.lockLifecycle(scope, service.id, tx);\n        if (!(await this.deps.refundLedger.lockPayment(scope, found.source.payment.id, tx))) {")],'holds no lifecycle lock'),
+ ('W19-110',[(SV,"      .for('no key update')","      .for('update')")],'lets a settlement holding'),
+ ('W19-111',[],'serves the attention stream',None,("DROP INDEX service_refund_requests_attention_idx","CREATE INDEX service_refund_requests_attention_idx ON service_refund_requests USING btree (tenant_id, created_at, id) WHERE state IN ('OPEN', 'EXECUTING', 'FAILED')")),
 ]
 only=sys.argv[1:] 
 for entry in M:
