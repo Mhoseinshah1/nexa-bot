@@ -4,6 +4,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import {
   COMMERCE_ERROR_CODES,
   EMPTY_PRODUCT_DISPLAY,
+  PLATFORM_ERROR_CODES,
   SESSION_COOKIE_NAME,
   isNexaError,
   money,
@@ -955,6 +956,21 @@ describe('WP19 — a customer asks for their money back', () => {
     expect(row?.remaining.amountMinor, 'the reservation released').toBe(PRICE);
     expect(await notices('SERVICE_REFUND_REQUEST_APPROVED')).toBe(0);
     expect((await services.findById(tenantA, service.id))?.state).toBe('ACTIVE');
+    // The financial log hears of it as the request's outcome, never as a RefundFailed
+    // whose cause the previous release cannot parse (Codex review of #83, round 4).
+    expect(
+      await countRows(
+        sql`SELECT count(*)::int AS n FROM outbox_messages WHERE event_type = 'RefundFailed'`,
+      ),
+    ).toBe(0);
+    expect(
+      await countRows(
+        sql`SELECT count(*)::int AS n FROM outbox_messages
+             WHERE event_type = 'ServiceRefundRequestResolved'
+               AND payload->>'requestId' = ${filed.request.id}
+               AND payload->>'outcome' = 'FAILED'`,
+      ),
+    ).toBe(1);
   });
 
   it('logs each outcome to the financial log, and the rejection with no amount', async () => {
@@ -1065,6 +1081,7 @@ describe('WP19 — a customer asks for their money back', () => {
     });
     expect(opened.outcome).toBe('OPENED');
     const stated = await ctx.container.serviceRefundDecisions.submitText(tenantA, actor, {
+      idempotencyKey: 'wp19-text-1',
       botInstanceId: BOT_A,
       text: '90000',
     });
@@ -1079,6 +1096,7 @@ describe('WP19 — a customer asks for their money back', () => {
       requestId: filed.request.id,
     });
     const stated = await ctx.container.serviceRefundDecisions.submitText(tenantA, owner, {
+      idempotencyKey: 'wp19-text-2',
       botInstanceId: BOT_A,
       text: '100000',
     });
@@ -1123,6 +1141,7 @@ describe('WP19 — a customer asks for their money back', () => {
     try {
       await expect(
         ctx.container.serviceRefundDecisions.submitText(tenantA, owner, {
+          idempotencyKey: 'wp19-text-3',
           botInstanceId: BOT_A,
           text: 'سرویس فعال است',
         }),
@@ -1149,6 +1168,7 @@ describe('WP19 — a customer asks for their money back', () => {
       reason: 'تکراری',
     });
     const redelivered = await ctx.container.serviceRefundDecisions.submitText(tenantA, owner, {
+      idempotencyKey: 'wp19-text-4',
       botInstanceId: BOT_A,
       text: 'تکراری',
     });
@@ -1185,6 +1205,7 @@ describe('WP19 — a customer asks for their money back', () => {
     };
     try {
       const answered = await decisions.submitText(tenantA, owner, {
+        idempotencyKey: 'wp19-text-5',
         botInstanceId: BOT_A,
         text: 'این دیگر نباید رد کند',
       });
@@ -1195,6 +1216,96 @@ describe('WP19 — a customer asks for their money back', () => {
     const row = await requestRow(filed.request.id);
     expect(row?.request.state).toBe('OPEN');
     expect(row?.request.rejectionReason).toBeNull();
+  });
+
+  it("plans one deletion when an operator's terminate races an approval (Codex review of #83, round 4)", async () => {
+    const service = await activeService('terminate-race');
+    const filed = await file(service.id);
+    // The approval holds the service's lock and pauses right after it found no open
+    // TERMINATE — the window an unlocked planner could plan a second one in.
+    const provisioning = ctx.container.provisioning as unknown as {
+      deps: {
+        operations: { findOpen: (...args: unknown[]) => Promise<{ id: string } | null> };
+      };
+    };
+    const operations = provisioning.deps.operations;
+    const original = operations.findOpen;
+    let paused!: () => void;
+    const pausedAt = new Promise<void>((resolve) => (paused = resolve));
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => (release = resolve));
+    let first = true;
+    operations.findOpen = async (...args: unknown[]) => {
+      const found = await original.apply(operations, args);
+      if (first && args[2] === 'TERMINATE') {
+        first = false;
+        paused();
+        await released;
+      }
+      return found;
+    };
+    try {
+      const approving = ctx.container.serviceRefundRequests.approve(tenantA, owner, {
+        requestId: filed.request.id,
+        amountMinor: 10_000n,
+      });
+      await pausedAt;
+      const terminating = ctx.container.provisioning.requestFromOperator(
+        tenantA,
+        owner,
+        service.id,
+        'TERMINATE',
+        { idempotencyKey: 'terminate-race-operator' },
+      );
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      release();
+      const [approved, terminated] = await Promise.all([approving, terminating]);
+      const planned = await terminateOf(service.id);
+      expect(planned, 'one deletion, answered to both').toHaveLength(1);
+      expect(terminated.id).toBe(planned[0]?.id);
+      expect(approved.operationId).toBe(planned[0]?.id);
+    } finally {
+      operations.findOpen = original;
+      release();
+    }
+  });
+
+  it('files nothing for a payment an operator refunded in full while the filing read it (Codex review of #83, round 4)', async () => {
+    const service = await activeService('filing-payment-race');
+    const paid = (await ctx.container.database.db.execute(
+      sql`SELECT id FROM payments WHERE order_id = ${service.orderId}` as never,
+    )) as unknown as { rows: { id: string }[] };
+    const paymentId = paid.rows[0]?.id ?? '';
+    const ledger = (
+      ctx.container.serviceRefundRequests as unknown as {
+        deps: { refundLedger: { lockPayment: (...args: unknown[]) => Promise<boolean> } };
+      }
+    ).deps.refundLedger;
+    const original = ledger.lockPayment;
+    // The operator's full refund commits after the filing read the payment's remainder and
+    // before the filing takes the payment's lock.
+    ledger.lockPayment = async (...args: unknown[]) => {
+      ledger.lockPayment = original;
+      await ctx.container.refunds.request(tenantA, owner, {
+        idempotencyKey: 'filing-payment-race-operator',
+        paymentId,
+        amountMinor: PRICE,
+        reason: 'operator refund',
+      });
+      return original.apply(ledger, args);
+    };
+    try {
+      expect(await refused(file(service.id))).toBe(
+        COMMERCE_ERROR_CODES.SERVICE_REFUND_NOT_ELIGIBLE,
+      );
+    } finally {
+      ledger.lockPayment = original;
+    }
+    expect(
+      await countRows(
+        sql`SELECT count(*)::int AS n FROM service_refund_requests WHERE service_id = ${service.id}`,
+      ),
+    ).toBe(0);
   });
 
   it('refuses to preview an approval the approval itself would refuse (Codex review of #83)', async () => {
@@ -1220,6 +1331,7 @@ describe('WP19 — a customer asks for their money back', () => {
     ).toBe(COMMERCE_ERROR_CODES.SERVICE_REFUND_NOT_ELIGIBLE);
     // So the typed amount is answered as not executable, and no confirmation is offered.
     const typed = await ctx.container.serviceRefundDecisions.submitText(tenantA, owner, {
+      idempotencyKey: 'wp19-text-6',
       botInstanceId: BOT_A,
       text: '1000',
     });
@@ -1365,6 +1477,106 @@ describe('WP19 — a customer asks for their money back', () => {
     expect(rejection.request.state).toBe('REJECTED');
   });
 
+  it('holds a Web decision to its idempotency key (Codex review of #83, round 4)', async () => {
+    const first = await file((await activeService('web-key-a')).id);
+    const second = await file((await activeService('web-key-b')).id);
+    const third = await file((await activeService('web-key-c')).id);
+    const fourth = await file((await activeService('web-key-d')).id);
+    const { controller, request } = await asWebOwner();
+    const approval = { idempotencyKey: 'wp19-web-approve', amountMinor: '1000', confirm: true };
+    expect((await controller.approve(request, first.request.id, approval)).request.state).toBe(
+      'EXECUTING',
+    );
+    // A retry of the same command is answered with the request it decided.
+    const retried = await controller.approve(request, first.request.id, approval);
+    expect(retried.request.id).toBe(first.request.id);
+    // The same key for another request, or another amount, is refused and decides nothing.
+    expect(await refused(controller.approve(request, second.request.id, approval))).toBe(
+      PLATFORM_ERROR_CODES.IDEMPOTENCY_PAYLOAD_MISMATCH,
+    );
+    expect(
+      await refused(
+        controller.approve(request, first.request.id, { ...approval, amountMinor: '2000' }),
+      ),
+    ).toBe(PLATFORM_ERROR_CODES.IDEMPOTENCY_PAYLOAD_MISMATCH);
+    expect((await requestRow(second.request.id))?.request.state).toBe('OPEN');
+
+    const rejection = { idempotencyKey: 'wp19-web-reject', reason: 'رد با کلید' };
+    expect((await controller.reject(request, third.request.id, rejection)).request.state).toBe(
+      'REJECTED',
+    );
+    expect(await refused(controller.reject(request, fourth.request.id, rejection))).toBe(
+      PLATFORM_ERROR_CODES.IDEMPOTENCY_PAYLOAD_MISMATCH,
+    );
+    expect((await requestRow(fourth.request.id))?.request.state).toBe('OPEN');
+  });
+
+  it('answers a redelivered amount with the same confirmation (Codex review of #83, round 4)', async () => {
+    const service = await activeService('amount-redelivered');
+    const filed = await file(service.id);
+    await ctx.container.serviceRefundDecisions.openApprove(tenantA, owner, {
+      botInstanceId: BOT_A,
+      requestId: filed.request.id,
+    });
+    const typed = { idempotencyKey: 'wp19-amount-redelivered', botInstanceId: BOT_A, text: '1500' };
+    const first = await ctx.container.serviceRefundDecisions.submitText(tenantA, owner, typed);
+    if (first.outcome !== 'AMOUNT_ENTERED') throw new Error(first.outcome);
+    // The first reply was lost; Telegram delivers the same message again.
+    const again = await ctx.container.serviceRefundDecisions.submitText(tenantA, owner, typed);
+    if (again.outcome !== 'AMOUNT_ENTERED') throw new Error(again.outcome);
+    expect(again.capture.id).toBe(first.capture.id);
+    expect(again.amount).toEqual(first.amount);
+    // A NEW message with the same figure is an ordinary one: no prompt is waiting.
+    const another = await ctx.container.serviceRefundDecisions.submitText(tenantA, owner, {
+      ...typed,
+      idempotencyKey: 'wp19-amount-another',
+    });
+    expect(another.outcome).toBe('NO_CAPTURE');
+    // Once the prompt is decided, the redelivery restates nothing.
+    await ctx.container.serviceRefundDecisions.confirmApprove(tenantA, owner, {
+      captureId: first.capture.id,
+    });
+    expect(
+      (await ctx.container.serviceRefundDecisions.submitText(tenantA, owner, typed)).outcome,
+    ).toBe('NO_CAPTURE');
+  });
+
+  it('keeps the amount prompt open when reading its request fails for a reason nobody classified (Codex review of #83, round 4)', async () => {
+    const service = await activeService('amount-read-fails');
+    const filed = await file(service.id);
+    await ctx.container.serviceRefundDecisions.openApprove(tenantA, owner, {
+      botInstanceId: BOT_A,
+      requestId: filed.request.id,
+    });
+    const requests = (
+      ctx.container.serviceRefundDecisions as unknown as {
+        deps: { requests: { reviewForDecision: (...args: unknown[]) => Promise<unknown> } };
+      }
+    ).deps.requests;
+    const original = requests.reviewForDecision;
+    requests.reviewForDecision = async () => {
+      throw new Error('connection lost');
+    };
+    try {
+      await expect(
+        ctx.container.serviceRefundDecisions.submitText(tenantA, owner, {
+          idempotencyKey: 'wp19-amount-read-fails-1',
+          botInstanceId: BOT_A,
+          text: '1000',
+        }),
+      ).rejects.toThrow('connection lost');
+    } finally {
+      requests.reviewForDecision = original;
+    }
+    // The prompt is still the administrator's; the next message is read as its amount.
+    const retried = await ctx.container.serviceRefundDecisions.submitText(tenantA, owner, {
+      idempotencyKey: 'wp19-amount-read-fails-2',
+      botInstanceId: BOT_A,
+      text: '1000',
+    });
+    expect(retried.outcome).toBe('AMOUNT_ENTERED');
+  });
+
   it('retires a confirmation whose approval was refused for good (Codex review of #83)', async () => {
     const service = await activeService('retire-confirmed');
     const filed = await file(service.id);
@@ -1373,6 +1585,7 @@ describe('WP19 — a customer asks for their money back', () => {
       requestId: filed.request.id,
     });
     const entered = await ctx.container.serviceRefundDecisions.submitText(tenantA, owner, {
+      idempotencyKey: 'wp19-text-7',
       botInstanceId: BOT_A,
       text: '1000',
     });
@@ -1421,6 +1634,7 @@ describe('WP19 — a customer asks for their money back', () => {
     try {
       await expect(
         ctx.container.serviceRefundDecisions.submitText(tenantA, owner, {
+          idempotencyKey: 'wp19-text-8',
           botInstanceId: BOT_A,
           text: 'رد به دلیل تکرار',
         }),
@@ -1433,6 +1647,7 @@ describe('WP19 — a customer asks for their money back', () => {
     }
     // The prompt is still there, and the same reason sent again finishes the rejection.
     const retried = await ctx.container.serviceRefundDecisions.submitText(tenantA, owner, {
+      idempotencyKey: 'wp19-text-9',
       botInstanceId: BOT_A,
       text: 'رد به دلیل تکرار',
     });

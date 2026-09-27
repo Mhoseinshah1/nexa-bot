@@ -42,6 +42,13 @@ describe('event catalog', () => {
     expect(isEventType('SystemPinged')).toBe(true);
     expect(isEventType('OrderPaid')).toBe(false);
   });
+
+  it('keeps RefundFailed.cause at the two values the release before WP19 reads (Codex review of #83)', () => {
+    // That release's financial log parses this payload strictly. A third cause written
+    // here and relayed after a rollback would fail its consumer on every pass.
+    const cause = EVENT_PAYLOAD_SCHEMAS.RefundFailed.shape.cause;
+    expect([...cause.options].sort()).toEqual(['OPERATOR_FAILED', 'SUPERSEDED']);
+  });
 });
 
 describe('ledger reason catalog', () => {
