@@ -27,7 +27,7 @@ where each decision landed, and what was chosen on technical grounds.
 | Decision                                                                                                                                                                                                                                                         | Implementation                                                                                                                                                                                                                                                                                                                                                                                                      |
 | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | §3.1 Per-message retry schedule: 5 s, 15 s, 60 s, 5 min, 15 min, then an hour. Claim only due messages. No 0 ms loop.                                                                                                                                            | `deliveryRetryDelayMs` in `@nexa/contracts`. Migration 0126 adds `outbox_messages.next_attempt_at` (NULL = due, so every existing row is claimable exactly as before). The relay claims only due rows and reschedules the failed row alone.                                                                                                                                                                         |
-| §3.1 A provider `retry_after` is a floor: use the later of it and the local back-off.                                                                                                                                                                            | `deliveryRetryDelayMs(n, retryAfter)`. The ops lane's `notificationBackoffMs` uses `max(local, retryAfter)`. The customer, receipt and refund-request lanes use `max(retryAfter, backoff)` on RATE_LIMITED.                                                                                                                                                                                                         |
+| §3.1 A provider `retry_after` is a floor: use the later of it and the local back-off.                                                                                                                                                                            | `deliveryRetryDelayMs(n, retryAfter)`. The ops lane's `notificationBackoffMs` uses `max(local, retryAfter)`. The customer, receipt, refund-request and service-delivery lanes use `max(retryAfter, backoff)` on RATE_LIMITED.                                                                                                                                                                                       |
 | §3.2 After 12 real failures: stop, keep the evidence, show it in diagnostics, announce it once, never delete, no force-success control.                                                                                                                          | `DELIVERY_MAX_FAILED_ATTEMPTS = 12`. At the 12th failure the row keeps `published_at` NULL and `next_attempt_at` NULL and is excluded from the claim. One `outbox.message_exhausted` operational event is recorded per message (dedupe key = the event id). Diagnostics gain `exhausted`, and a per-row `nextAttemptAt` and `exhausted`. The Web Admin shows a count, a banner and a badge per row. No new control. |
 | §3.3 Responsiveness. Per-chat ordering where required, no in-memory source of truth. Background traffic must not starve customers.                                                                                                                               | See T3–T5.                                                                                                                                                                                                                                                                                                                                                                                                          |
 | §3.4 More than 20 interactions in a rolling 10 s blocks. Deduplicate by `update_id`. Scope: tenant, bot, user. An atomic Redis counter, no row per message. Fail open.                                                                                           | `RedisInteractionCounter`: one Lua script over a sorted set, with a `SET NX` per `update_id`. `AntiSpamService` fails open and records `antispam.unavailable` at most once a minute per process, recovered by `antispam.recovered`.                                                                                                                                                                                 |
@@ -38,12 +38,30 @@ where each decision landed, and what was chosen on technical grounds.
 - **T1 — the schedule is for the outbox, the one lane that had none.** The four Telegram
   lanes already had per-row scheduling and caps of 3 (customer, receipt and refund-request
   lanes) or at most 10 (ops). The owner's 12 is a ceiling, so a stricter existing cap stays.
-  What they lacked was the `retry_after` floor, and that is added to all four.
-- **T2 — ordering is per aggregate, as `outbox_messages` promises.** A message is not
-  claimed while an earlier message of its own aggregate is unpublished and not exhausted.
-  Within one batch, a failed message holds back its aggregate's later messages. Other
-  aggregates are not held. An exhausted message stops holding its successors: waiting on
-  evidence would be waiting for ever.
+  What they lacked was the `retry_after` floor. It is added to all four, and to the
+  service-delivery lane, which had the same `retryAfterMs ?? BACKOFF` shape.
+
+  This changes one old behaviour on purpose: a `retry_after` of 0 used to mean "retry on
+  the next tick". Two tests in `notification-delivery.test.ts` relied on that; they now
+  bring the intent due explicitly, and the floor itself is pinned by the WP20 tests.
+
+- **T2 — ordering is per aggregate, as `outbox_messages` promises, without costing
+  throughput.** A message is not claimed while an earlier message of its own aggregate has
+  failed and is backing off. Within one batch, a failure holds back the rest of its
+  aggregate in that batch. An earlier message that has never failed holds nothing back at
+  the claim: it is in the same batch, ahead of its successors by the batch's order. An
+  aggregate with several queued events therefore drains in one batch, as it did before
+  WP20.
+
+  The first version held a message behind ANY unpublished predecessor. That took one batch
+  per queued event of an aggregate, and the full suite caught it: tests that relayed once
+  and expected everything published.
+
+  Other aggregates are not held. An exhausted message stops holding its successors: waiting
+  on evidence would be waiting for ever. Two relay replicas can still take one aggregate's
+  never-failed messages in parallel under `SKIP LOCKED`. That was true before WP20, and
+  closing it needs a per-aggregate lock this package does not add.
+
 - **T3 — the interactive turn already runs apart.** The webhook is served by the `api`
   process. The relay and every notification lane run in `worker` or `provisioner`. Nothing
   interactive awaits them, so a poison message cannot slow a reply. This package adds no
@@ -92,7 +110,7 @@ where each decision landed, and what was chosen on technical grounds.
   - the schedule;
   - a failure not claimed before it is due;
   - head-of-line freedom with a batch of one;
-  - per-aggregate holding;
+  - per-aggregate holding, and an aggregate's never-failed queue drained in one batch;
   - exhaustion at 12: kept, not claimed, announced once, shown in diagnostics, excluded
     from lag.
 - `tests/integration/wp20-anti-spam.test.ts`: every item in brief §3.6, plus:
@@ -102,6 +120,9 @@ where each decision landed, and what was chosen on technical grounds.
   - the flood's silence.
 - `tests/integration/wp20-interaction-counter.test.ts`: the rolling window against Redis,
   the dedupe, and the fail-fast on a dead Redis.
+- The later-of rule on every Telegram lane, each against a `retry_after` shorter than the
+  lane's own back-off: `customer-notifications.test.ts`, `receipt-review-push.test.ts`,
+  `service-refund-requests.test.ts` and `provisioning-delivery.test.ts`.
 - `tests/unit/wp20-retry-schedule.test.ts`: the schedule, the floor and the verdict.
 - `tests/web/system-diagnostics.test.tsx`: the exhausted count, banner and badge.
 - `docs/wp20-falsification.md`.

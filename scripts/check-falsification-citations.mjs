@@ -99,6 +99,7 @@ const RECORDS = [
   'docs/wp17-falsification.md',
   'docs/wp18-falsification.md',
   'docs/wp19-falsification.md',
+  'docs/wp20-falsification.md',
 ];
 /**
  * The fewest citations this record may contain.
