@@ -293,6 +293,11 @@ the brief refuses. So the card keeps polling only while its payment or a notice 
 moving, and now carries an explicit refresh (`web.refresh`) that reads the history again on
 request. The refresh is not drawn once the answer is final (a 403 or 404).
 
+A tenth round, on `962cdbe`, found one more (P17-45..46). A wallet purchase is confirmed
+by `settleFromWallet`, the customer's own act, with no administrator recorded. The card
+said it as the system's. A `WALLET_DEBIT` confirmation with no administrator is now said as
+the customer's. A gateway callback with none is still the system's.
+
 Tests added:
 
 - **Unit:** `tests/unit/payment-timeline.test.ts` (7 cases) and

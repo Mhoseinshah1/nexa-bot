@@ -391,6 +391,34 @@ describe('who resolved a payment', () => {
     expect(container.textContent).not.toContain(t('web.payment_timeline_by_system'));
   });
 
+  const confirmed = (evidenceKind: string) =>
+    timeline({
+      entries: [
+        timelineCreated,
+        { kind: 'PAYMENT_CONFIRMED', at: '2026-09-10T13:00:00.000Z', evidenceKind, adminId: null },
+      ],
+    });
+
+  it('says a wallet purchase was confirmed by the customer, never the system', async () => {
+    stubApi(confirmed('WALLET_DEBIT'));
+    const { container } = renderPage(
+      <PaymentTimelineCard paymentId={PAYMENT_ID} paymentState="CONFIRMED" />,
+    );
+    await waitFor(() => expect(screen.getByRole('table')).toBeInTheDocument());
+    expect(container.textContent).toContain(t('web.payment_timeline_by_customer'));
+    expect(container.textContent).not.toContain(t('web.payment_timeline_by_system'));
+  });
+
+  it('still says the system confirmed a gateway payment no administrator touched', async () => {
+    stubApi(confirmed('GATEWAY_CALLBACK'));
+    const { container } = renderPage(
+      <PaymentTimelineCard paymentId={PAYMENT_ID} paymentState="CONFIRMED" />,
+    );
+    await waitFor(() => expect(screen.getByRole('table')).toBeInTheDocument());
+    expect(container.textContent).toContain(t('web.payment_timeline_by_system'));
+    expect(container.textContent).not.toContain(t('web.payment_timeline_by_customer'));
+  });
+
   it('still says the system expired a payment nobody resolved', async () => {
     stubApi(resolved('EXPIRED'));
     const { container } = renderPage(

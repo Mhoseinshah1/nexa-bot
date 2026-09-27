@@ -126,7 +126,18 @@ function detail(entry: PaymentTimelineEntry): ReactNode {
     case 'PAYMENT_CONFIRMED':
       return (
         <>
-          <Ltr>{entry.evidenceKind}</Ltr> · {actor(entry.adminId)}
+          <Ltr>{entry.evidenceKind}</Ltr> ·{' '}
+          {/*
+            A WALLET_DEBIT confirmation is the customer paying from their own balance
+            (`settleFromWallet`), recorded with no administrator; it is said as the
+            customer's, never the system's (Codex review of #81). A gateway callback with
+            no administrator is still the system's.
+          */}
+          {entry.evidenceKind === 'WALLET_DEBIT' && entry.adminId === null ? (
+            <span className="muted small">{t('web.payment_timeline_by_customer')}</span>
+          ) : (
+            actor(entry.adminId)
+          )}
         </>
       );
     case 'PAYMENT_RESOLVED':
