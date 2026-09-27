@@ -17,8 +17,9 @@ SV='apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-service.re
 FL='apps/api/src/modules/commerce/payments/application/financial-log.consumer.ts'
 PC='apps/api/src/modules/commerce/payments/application/service-refund-push.consumer.ts'
 IT='tests/integration/service-refund-requests.test.ts'
+DS='apps/api/src/modules/commerce/payments/application/service-refund-decision.service.ts'
 M=[
- ('W19-01',[(S,"if (succeeded && item.serviceState !== 'TERMINATED') {","if (false && succeeded && item.serviceState !== 'TERMINATED') {")],'did not move'),
+ ('W19-01',[(S,"if (succeeded && item.serviceState !== 'TERMINATED') {","if (false && succeeded && item.serviceState !== 'TERMINATED') {"),(R,"          or(\n","          or(\n            sql`true`,\n")],'did not move'),
  ('W19-02',[(R,"inArray(provisioningOperations.state, [...OPERATION_TERMINAL_STATES]),","inArray(provisioningOperations.state, [...OPERATION_TERMINAL_STATES, 'UNKNOWN' as never]),")],'UNKNOWN'),
  ('W19-03',[(S,"const succeeded = item.operationState === 'SUCCEEDED';","const succeeded = item.operationState !== 'ABANDONED';")],'definitively fails'),
  ('W19-04',[(S,"""    for (const permission of SERVICE_REFUND_DECIDE_PERMISSIONS) {
@@ -146,6 +147,15 @@ M+=[
         where: sql`state IN ('OPEN', 'EXECUTING')`,
       })
       .returning();""","""      .returning();""")],'however concurrently'),
+ # Codex review of #83
+ ('W19-24',[(R,"          or(\n","          or(\n            sql`true`,\n")],'fill the batch'),
+ ('W19-25',[(RF,"    if (await this.deps.repository.isServiceRefundReservation(scope, refund.id, tx)) {","    if (refund.reason === 'SERVICE_REFUND_REQUEST') {")],'reads like a request'),
+ ('W19-26',[(S,"  ): Promise<ServiceRefundReview> {\n    await this.checkDecide(scope, actor);\n    const request = await this.requireRequest(scope, requestId);","  ): Promise<ServiceRefundReview> {\n    await this.deps.guard.check(scope, actor, SERVICE_REFUND_VIEW_PERMISSION);\n    const request = await this.requireRequest(scope, requestId);")],'exactly the two decision keys'),
+ ('W19-27',[(DS,"      if (request.state !== 'EXECUTING') return { outcome: 'CLOSED' };\n","")],'as decided, not as started'),
+ ('W19-28',[(DS,"      const request = await this.deps.requests.reject(scope, actor, { requestId, reason });","      await this.mutate(scope, actor, denialFor(waiting.id), async (tx) => {\n        await this.deps.captures.recordReason(scope, waiting.id, reason, tx);\n      });\n      const request = await this.deps.requests.reject(scope, actor, { requestId, reason });")],'rejects before it closes'),
+ ('W19-22b',[(RF,"      if ((await this.deps.wallet.findByReference(scope, `${refundId}:refund`, tx)) !== null) {\n        return before;\n      }","      return before;"),(R,"              eq(refunds.state, 'REQUESTED'),\n","")],'closed elsewhere'),
+ ('W19-23',[(S,"        continue;\n      }\n      if (moved) decided += 1;","        throw error;\n      }\n      if (moved) decided += 1;")],'fails inside its own settlement'),
+
 ]
 only=sys.argv[1:] 
 for mid,edits,filt in M:

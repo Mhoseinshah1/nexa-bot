@@ -791,6 +791,54 @@ describe('WP19 — a customer asks for their money back', () => {
     expect((await requestRow(stuckFiled.request.id))?.request.state).toBe('EXECUTING');
   });
 
+  it('decides every other request when one fails inside its own settlement', async () => {
+    const failing = await activeService('settle-throws');
+    const failingFiled = await file(failing.id);
+    const next = await activeService('settle-next');
+    const nextFiled = await file(next.id);
+    const failingApproved = await ctx.container.serviceRefundRequests.approve(tenantA, owner, {
+      requestId: failingFiled.request.id,
+      amountMinor: 100_000n,
+    });
+    await ctx.container.serviceRefundRequests.approve(tenantA, owner, {
+      requestId: nextFiled.request.id,
+      amountMinor: 120_000n,
+    });
+    for (const id of [failing.id, next.id]) {
+      await ctx.container.database.db.execute(
+        sql`UPDATE provisioning_operations SET state = 'SUCCEEDED', completed_at = now()
+             WHERE service_id = ${id} AND type = 'TERMINATE'` as never,
+      );
+      await ctx.container.database.db.execute(
+        sql`UPDATE services SET state = 'TERMINATED', terminated_at = now() WHERE id = ${id}` as never,
+      );
+    }
+    // The older one's credit cannot be written: its settlement throws.
+    const reference = `${failingApproved.refundId}:refund`;
+    await ctx.container.database.db.execute(
+      sql.raw(`CREATE OR REPLACE FUNCTION wp19_refuse_credit() RETURNS trigger AS $$
+               BEGIN
+                 IF NEW.reference = '${reference}' THEN RAISE EXCEPTION 'credit refused'; END IF;
+                 RETURN NEW;
+               END $$ LANGUAGE plpgsql`) as never,
+    );
+    await ctx.container.database.db.execute(
+      sql`CREATE TRIGGER wp19_refuse_credit BEFORE INSERT ON wallet_entries
+          FOR EACH ROW EXECUTE FUNCTION wp19_refuse_credit()` as never,
+    );
+    try {
+      await ctx.container.serviceRefundRequests.settleDue(tenantA);
+    } finally {
+      await ctx.container.database.db.execute(
+        sql`DROP TRIGGER wp19_refuse_credit ON wallet_entries` as never,
+      );
+      await ctx.container.database.db.execute(sql`DROP FUNCTION wp19_refuse_credit()` as never);
+    }
+    expect((await requestRow(failingFiled.request.id))?.request.state).toBe('EXECUTING');
+    expect(await walletCredits(failingApproved.refundId)).toBe(0);
+    expect((await requestRow(nextFiled.request.id))?.request.state).toBe('COMPLETED');
+  });
+
   it('lets an operator settle an ordinary refund whose typed reason reads like a request’s (Codex review of #83)', async () => {
     const service = await activeService('reason-lookalike');
     const filed = await file(service.id);
