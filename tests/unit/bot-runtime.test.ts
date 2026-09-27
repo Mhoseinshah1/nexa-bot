@@ -626,6 +626,12 @@ describe('profile metadata, normalised before it is ever stored', () => {
      */
     expect([...sent].filter((key) => !key.startsWith('bot.admin.')).sort()).toEqual([
       'bot.blocked',
+      /*
+       * WP20: the one answer to the interaction that crosses the anti-spam threshold,
+       * in the owner's words. It says the account is blocked, why, and to contact
+       * support; it promises no unblock the runtime would perform.
+       */
+      'bot.blocked_spam',
       'bot.blocked_with_reason',
       'bot.catalog.back_to_categories_button',
       'bot.catalog.categories_heading',

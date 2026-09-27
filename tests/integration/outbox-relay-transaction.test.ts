@@ -38,11 +38,21 @@ describe('the relay commits the claim and the effect together', () => {
     await ctx?.close();
   });
 
+  /**
+   * The relay's clock, moved forward by the tests that need a back-off to run out (WP20):
+   * a failed message is not due again until its own `next_attempt_at`.
+   */
+  let skewMs = 0;
+  const skewedClock = { now: () => new Date(Date.now() + skewMs) };
+  beforeEach(() => {
+    skewMs = 0;
+  });
+
   const relayWith = (consumers: EventConsumer[], context: TestContext = ctx) =>
     new OutboxRelay(
       context.container.database.db,
       consumers,
-      context.container.clock,
+      skewedClock,
       context.container.logger,
       {
         batchSize: 10,
@@ -51,12 +61,12 @@ describe('the relay commits the claim and the effect together', () => {
       },
     );
 
-  const writeEvent = (context: TestContext = ctx) =>
+  const writeEvent = (context: TestContext = ctx, aggregateId = 'system') =>
     context.container.uow.run(tenantA, async (tx) => {
       await context.container.outbox.write(tx, actor(), {
         eventType: 'SystemPinged',
         aggregateType: 'System',
-        aggregateId: 'system',
+        aggregateId,
         payload: { source: 'test' },
       });
     });
@@ -145,6 +155,8 @@ describe('the relay commits the claim and the effect together', () => {
     expect(first.failed).toBe(1);
     expect(await effects()).toHaveLength(0);
 
+    // Past the first back-off (WP20: 5 s after the first failure).
+    skewMs = 6_000;
     const second = await relay.processBatch();
     expect(second).toEqual({ claimed: 1, published: 1, failed: 0 });
 
@@ -210,9 +222,10 @@ describe('the relay commits the claim and the effect together', () => {
 
   // 6 ----------------------------------------------------------------------
   it('publishes the other messages in a batch when one of them fails', async () => {
-    await writeEvent();
-    await writeEvent();
-    await writeEvent();
+    // Three aggregates, so ordering holds none of them back: this is about the savepoint.
+    await writeEvent(ctx, 'system-a');
+    await writeEvent(ctx, 'system-b');
+    await writeEvent(ctx, 'system-c');
     const consumer = projecting('test.partial', {
       failAfter: () => consumer.handled === 2,
     });

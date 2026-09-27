@@ -8,6 +8,7 @@ import {
 } from '@nexa/contracts';
 import type { TransactionScope } from '../../apps/api/src/infrastructure/persistence/unit-of-work';
 import {
+  RECEIPT_PUSH_BACKOFF_MS,
   RECEIPT_PUSH_FAILED_CODE,
   receiptPushConditionKey,
 } from '../../apps/api/src/modules/commerce/payments/application/receipt-review-push.service';
@@ -584,8 +585,10 @@ describe('the administrators’ receipt push', () => {
       attempts: 0,
       last_error_code: 'push.rate_limited',
     });
+    // Telegram asked for 30 s; the lane's own minute is later, and the later one wins
+    // (WP20, brief §3.1).
     expect(new Date(String(limited?.next_attempt_at)).getTime()).toBeGreaterThanOrEqual(
-      before + 29_000,
+      before + RECEIPT_PUSH_BACKOFF_MS,
     );
     f.sent = [];
     await deliver();
@@ -654,6 +657,11 @@ describe('the administrators’ receipt push', () => {
     expect(await pushes(payment)).toEqual([]);
     spy.mockRestore();
 
+    // The failure is retried on its schedule (WP20), not on the next poll: once due.
+    await f.ctx.container.database.db.execute(
+      sql`UPDATE outbox_messages SET next_attempt_at = now() - interval '1 second'
+           WHERE published_at IS NULL AND next_attempt_at IS NOT NULL`,
+    );
     await relay();
     expect(await pushes(payment)).toHaveLength(2);
   });
