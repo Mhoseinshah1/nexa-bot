@@ -106,6 +106,8 @@ export interface ServiceRefundRequestRepository {
       readonly state?: ServiceRefundRequestState;
       readonly serviceId?: ServiceId;
       readonly limit: number;
+      /** The keyset cursor: rows strictly older than this `(createdAt, id)`. */
+      readonly before?: { readonly at: Date; readonly id: string };
     },
     tx?: unknown,
   ): Promise<readonly ServiceRefundRequestListItem[]>;

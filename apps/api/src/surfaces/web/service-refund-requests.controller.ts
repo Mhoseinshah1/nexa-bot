@@ -8,6 +8,7 @@ import {
   serviceRefundApproveRequestSchema,
   serviceRefundRejectRequestSchema,
   serviceRefundRequestListQuerySchema,
+  uuidV7Schema,
   type Money,
   type ServiceRefundRequestListResponse,
   type ServiceRefundRequestResponse,
@@ -43,11 +44,24 @@ export class ServiceRefundRequestsController {
   ): Promise<ServiceRefundRequestListResponse> {
     const { scope, actor } = await this.authenticate(request);
     const input = serviceRefundRequestListQuerySchema.parse(query ?? {});
+    const limit = input.limit ?? SERVICE_REFUND_REQUEST_PAGE_MAX;
+    // One row past the page, so "there is another page" is read, never guessed from a full one.
     const items = await this.container.serviceRefundRequests.list(scope, actor, {
       ...(input.state === undefined ? {} : { state: input.state }),
-      limit: input.limit ?? SERVICE_REFUND_REQUEST_PAGE_MAX,
+      ...(input.before === undefined || input.beforeId === undefined
+        ? {}
+        : { before: { at: new Date(input.before), id: input.beforeId } }),
+      limit: limit + 1,
     });
-    return { requests: items.map(toView) };
+    const page = items.slice(0, limit);
+    const last = page[page.length - 1];
+    return {
+      requests: page.map(toView),
+      nextCursor:
+        items.length > limit && last !== undefined
+          ? { at: last.request.createdAt.toISOString(), id: last.request.id }
+          : null,
+    };
   }
 
   @Get(routePattern(SERVICE_REFUND_REQUEST_ROUTES.forService, 'serviceId'))
@@ -57,10 +71,12 @@ export class ServiceRefundRequestsController {
   ): Promise<ServiceRefundRequestListResponse> {
     const { scope, actor } = await this.authenticate(request);
     const items = await this.container.serviceRefundRequests.list(scope, actor, {
-      serviceId,
+      serviceId: uuidV7Schema.parse(serviceId),
       limit: SERVICE_REFUND_REQUEST_PAGE_MAX,
     });
-    return { requests: items.map(toView) };
+    // Not paged. A service has at most one active request, and it is always the service's
+    // newest row — another cannot be filed while it stands — so the first page holds it.
+    return { requests: items.map(toView), nextCursor: null };
   }
 
   @Post(routePattern(SERVICE_REFUND_REQUEST_ROUTES.approve, 'requestId'))
@@ -72,7 +88,7 @@ export class ServiceRefundRequestsController {
     const { scope, actor } = await this.authenticate(request);
     const input = serviceRefundApproveRequestSchema.parse(body);
     const approved = await this.container.serviceRefundRequests.approve(scope, actor, {
-      requestId,
+      requestId: uuidV7Schema.parse(requestId),
       amountMinor: BigInt(input.amountMinor),
     });
     return { request: await this.viewOf(scope, actor, approved) };
@@ -87,7 +103,7 @@ export class ServiceRefundRequestsController {
     const { scope, actor } = await this.authenticate(request);
     const input = serviceRefundRejectRequestSchema.parse(body);
     const rejected = await this.container.serviceRefundRequests.reject(scope, actor, {
-      requestId,
+      requestId: uuidV7Schema.parse(requestId),
       reason: input.reason,
     });
     return { request: await this.viewOf(scope, actor, rejected) };

@@ -43,7 +43,7 @@ export interface ServiceRefundDecisionServiceDeps {
   /** The ONE decision path. The captures only ask it; every rule is decided there, again. */
   readonly requests: Pick<
     ServiceRefundRequestService,
-    'reviewForDecision' | 'preview' | 'approve' | 'reject'
+    'reviewForDecision' | 'preview' | 'approve' | 'rejectWithin'
   >;
   readonly guard: PermissionGuard;
   readonly uow: UnitOfWork<TransactionScope>;
@@ -408,19 +408,30 @@ export class ServiceRefundDecisionService {
       await this.closeIfOpen(scope, actor, waiting, 'EXPIRED');
       return { outcome: 'EXPIRED' };
     }
-    // The rejection FIRST, and the prompt closed after it. The rejection is the request
-    // service's own write, under the request's lock, and a replay with the same reason is
-    // answered with the request as it stands. So a process that stops between the two leaves
-    // the prompt open with nothing recorded on it, and the redelivered message finishes the
-    // rejection it started; a second message with another reason finds the request decided
-    // and is refused. Nothing can reject twice, and nothing is left half-done.
+    /*
+     * The prompt and the rejection in ONE transaction, under the administrator's capture
+     * lock — the lock `cancel` and `open` take. The prompt is read again under it and must
+     * still be open: a prompt cancelled, or replaced by another, a moment before this message
+     * was read decides nothing. And the rejection commits with the prompt's close, so
+     * neither is ever left without the other; a redelivered message finds no open prompt.
+     */
+    const adminId = adminIdOf(actor);
     try {
-      const request = await this.deps.requests.reject(scope, actor, { requestId, reason });
-      await this.mutate(scope, actor, denialFor(waiting.id), async (tx) => {
-        const closedAt = this.deps.clock.now();
-        await this.deps.captures.recordReason(scope, waiting.id, reason, tx);
-        await this.deps.captures.close(scope, waiting.id, 'CONFIRMED', closedAt, tx);
+      const request = await this.mutate(scope, actor, denialFor(waiting.id), async (tx) => {
+        await this.deps.captures.lockForAdmin(scope, waiting.botInstanceId, adminId, tx);
+        const capture = await this.deps.captures.findById(scope, waiting.id, tx);
+        if (capture === null || capture.closedAt !== null) return null;
+        const rejected = await this.deps.requests.rejectWithin(
+          scope,
+          actor,
+          { requestId, reason },
+          tx,
+        );
+        await this.deps.captures.recordReason(scope, capture.id, reason, tx);
+        await this.deps.captures.close(scope, capture.id, 'CONFIRMED', this.deps.clock.now(), tx);
+        return rejected;
       });
+      if (request === null) return { outcome: 'NO_CAPTURE' };
       return { outcome: 'REJECTED', request };
     } catch (error) {
       await this.closeIfOpen(scope, actor, waiting, 'SUPERSEDED');

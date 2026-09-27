@@ -1796,11 +1796,21 @@ export function failRefund(input: {
  * is not (brief §2.10). `remainingMinor` on each row is the server's own figure.
  */
 export function fetchServiceRefundRequests(
-  query: { readonly state?: ServiceRefundRequestState } = {},
+  query: {
+    readonly state?: ServiceRefundRequestState;
+    /** The `nextCursor` of the page before: returns the requests older than it. */
+    readonly cursor?: { readonly at: string; readonly id: string };
+  } = {},
 ): Promise<ServiceRefundRequestListResponse> {
-  const suffix = query.state === undefined ? '' : `?state=${encodeURIComponent(query.state)}`;
+  const params = new URLSearchParams();
+  if (query.state !== undefined) params.set('state', query.state);
+  if (query.cursor !== undefined) {
+    params.set('before', query.cursor.at);
+    params.set('beforeId', query.cursor.id);
+  }
+  const suffix = params.toString();
   return authedGet(
-    `${SERVICE_REFUND_REQUEST_ROUTES.list}${suffix}`,
+    suffix ? `${SERVICE_REFUND_REQUEST_ROUTES.list}?${suffix}` : SERVICE_REFUND_REQUEST_ROUTES.list,
     serviceRefundRequestListResponseSchema,
   );
 }

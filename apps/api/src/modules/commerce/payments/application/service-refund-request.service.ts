@@ -23,6 +23,7 @@ import {
   type UnitOfWork,
   type UserId,
   type TemplateValues,
+  uuidV7Schema,
 } from '@nexa/contracts';
 import type { OutboxWriter } from '../../../platform/eventing/infrastructure/outbox-writer.js';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
@@ -100,7 +101,7 @@ export interface ServiceRefundReview {
 
 export interface ServiceRefundRequestServiceDeps {
   readonly repository: ServiceRefundRequestRepository;
-  readonly services: Pick<ServiceRepository, 'findById'>;
+  readonly services: Pick<ServiceRepository, 'findById' | 'lockForUpdate'>;
   readonly orders: Pick<OrderRepository, 'findById'>;
   readonly payments: Pick<PaymentRepository, 'findConfirmedForOrder' | 'findById'>;
   readonly refundLedger: Pick<RefundRepository, 'consumptionFor' | 'lockPayment'>;
@@ -402,6 +403,15 @@ export class ServiceRefundRequestService {
       if (!(await this.deps.refundLedger.lockPayment(scope, request.paymentId, tx))) {
         throw errors.notFound(COMMERCE_ERROR_CODES.PAYMENT_NOT_FOUND, 'Unknown payment.');
       }
+      // The approval's own executability rule, so the confirmation is never shown for an
+      // approval that must refuse it: a service that has ended, a panel that can no longer
+      // delete, a paid source that no longer resolves.
+      await this.assertExecutable(
+        scope,
+        request,
+        await this.deps.services.findById(scope, request.serviceId, tx),
+        tx,
+      );
       const view = await this.reviewOf(scope, request, tx);
       this.assertAmount(input.amountMinor, view.remaining);
       return view;
@@ -440,7 +450,11 @@ export class ServiceRefundRequestService {
       async (tx) => {
         await this.assertScopeActive(scope, tx);
         await this.deps.guard.check(scope, actor, 'services.terminate', tx);
-        const request = await this.deps.repository.findByIdForUpdate(scope, input.requestId, tx);
+        const request = await this.deps.repository.findByIdForUpdate(
+          scope,
+          requestIdOf(input.requestId),
+          tx,
+        );
         if (request === null) throw this.notFound();
         if (request.state !== 'OPEN') {
           if (
@@ -452,13 +466,20 @@ export class ServiceRefundRequestService {
           }
           throw this.stateInvalid(request.state);
         }
-        const service = await this.deps.services.findById(scope, request.serviceId, tx);
-        if (service === null) throw this.notEligible('SERVICE_STATE');
-        const eligibility = await this.eligibilityOf(scope, service, { checkFlag: false }, tx);
-        if (!eligibility.eligible) throw this.notEligible(eligibility.reason);
-        if (eligibility.source.payment.id !== request.paymentId) {
-          throw this.notEligible('SOURCE_UNRESOLVED');
-        }
+        /*
+         * The service's row lock, before its eligibility is read and held until the
+         * deletion is planned. A termination commits `TERMINATED` under this same lock, so
+         * without it the read below could see the service ACTIVE a moment after it ended —
+         * and this would reserve money and plan a second deletion for a service that is
+         * gone, which the sweep would then credit. Taken before the payment's lock, the
+         * order the executor already takes them in.
+         */
+        const service = await this.assertExecutable(
+          scope,
+          request,
+          await this.deps.services.lockForUpdate(scope, request.serviceId, tx),
+          tx,
+        );
         if (input.amountMinor <= 0n) {
           throw errors.validation(
             COMMERCE_ERROR_CODES.REFUND_EXCEEDS_REFUNDABLE,
@@ -530,15 +551,7 @@ export class ServiceRefundRequestService {
     input: { readonly requestId: string; readonly reason: string },
   ): Promise<ServiceRefundRequestRecord> {
     await this.checkDecide(scope, actor);
-    const reason = input.reason.trim();
-    if (reason.length === 0 || Array.from(reason).length > 500) {
-      throw errors.validation(
-        COMMERCE_ERROR_CODES.CAPTURE_INPUT_INVALID,
-        'A rejection needs a reason of at most 500 characters.',
-        { max: 500 },
-      );
-    }
-    const adminId = this.adminIdOf(actor);
+    const reason = rejectionReasonOf(input.reason);
     const denial = {
       action: 'service_refund_request.reject',
       entityType: 'ServiceRefundRequest',
@@ -550,50 +563,72 @@ export class ServiceRefundRequestService {
       actor,
       'refunds.issue',
       denial,
-      async (tx) => {
-        await this.assertScopeActive(scope, tx);
-        await this.deps.guard.check(scope, actor, 'services.terminate', tx);
-        const request = await this.deps.repository.findByIdForUpdate(scope, input.requestId, tx);
-        if (request === null) throw this.notFound();
-        if (request.state !== 'OPEN') {
-          if (request.state === 'REJECTED' && request.rejectionReason === reason) return request;
-          throw this.stateInvalid(request.state);
-        }
-        const now = this.deps.clock.now();
-        const rejected = await this.deps.repository.reject(
-          scope,
-          request.id,
-          { reason, adminId },
-          now,
-          tx,
-        );
-        /* istanbul ignore next -- the row is locked and was OPEN above. */
-        if (rejected === null) throw this.stateInvalid(request.state);
-        await this.deps.notifier.notify(
-          scope,
-          rejected.customerId,
-          'SERVICE_REFUND_REQUEST_REJECTED',
-          rejected.id,
-          now,
-          tx,
-        );
-        await this.resolved(actor, rejected, 'REJECTED', tx);
-        await this.deps.audit.record(
-          scope,
-          actor,
-          {
-            action: 'service_refund_request.reject',
-            entityType: 'ServiceRefundRequest',
-            entityId: rejected.id,
-            before: { state: 'OPEN' },
-            after: { state: 'REJECTED' },
-            result: 'SUCCESS',
-          },
-          tx,
-        );
-        return rejected;
-      },
+      async (tx) => this.rejectWithin(scope, actor, { requestId: input.requestId, reason }, tx),
     );
+  }
+
+  /**
+   * The rejection, INSIDE a caller's transaction: the Telegram reason prompt's, which must
+   * re-read its prompt under the administrator's capture lock and reject in the same commit
+   * — a prompt cancelled or replaced a moment earlier must decide nothing, and a rejection
+   * with its prompt still open would be half of one fact. Charges both decision keys again
+   * inside the transaction, whatever its caller already checked.
+   */
+  async rejectWithin(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: { readonly requestId: string; readonly reason: string },
+    tx: TransactionScope,
+  ): Promise<ServiceRefundRequestRecord> {
+    const reason = rejectionReasonOf(input.reason);
+    const adminId = this.adminIdOf(actor);
+    await this.assertScopeActive(scope, tx);
+    for (const permission of SERVICE_REFUND_DECIDE_PERMISSIONS) {
+      await this.deps.guard.check(scope, actor, permission, tx);
+    }
+    const request = await this.deps.repository.findByIdForUpdate(
+      scope,
+      requestIdOf(input.requestId),
+      tx,
+    );
+    if (request === null) throw this.notFound();
+    if (request.state !== 'OPEN') {
+      if (request.state === 'REJECTED' && request.rejectionReason === reason) return request;
+      throw this.stateInvalid(request.state);
+    }
+    const now = this.deps.clock.now();
+    const rejected = await this.deps.repository.reject(
+      scope,
+      request.id,
+      { reason, adminId },
+      now,
+      tx,
+    );
+    /* istanbul ignore next -- the row is locked and was OPEN above. */
+    if (rejected === null) throw this.stateInvalid(request.state);
+    await this.deps.notifier.notify(
+      scope,
+      rejected.customerId,
+      'SERVICE_REFUND_REQUEST_REJECTED',
+      rejected.id,
+      now,
+      tx,
+    );
+    await this.resolved(actor, rejected, 'REJECTED', tx);
+    await this.deps.audit.record(
+      scope,
+      actor,
+      {
+        action: 'service_refund_request.reject',
+        entityType: 'ServiceRefundRequest',
+        entityId: rejected.id,
+        before: { state: 'OPEN' },
+        after: { state: 'REJECTED' },
+        result: 'SUCCESS',
+      },
+      tx,
+    );
+    return rejected;
   }
 
   // --- the sweep that decides an executing request ---------------------------------------
@@ -738,12 +773,14 @@ export class ServiceRefundRequestService {
       readonly state?: ServiceRefundRequestState;
       readonly serviceId?: string;
       readonly limit: number;
+      readonly before?: { readonly at: Date; readonly id: string };
     },
   ): Promise<readonly (ServiceRefundRequestListItem & { readonly remaining: Money })[]> {
     await this.deps.guard.check(scope, actor, SERVICE_REFUND_VIEW_PERMISSION);
     const items = await this.deps.repository.list(scope, {
       ...(filter.state === undefined ? {} : { state: filter.state }),
       ...(filter.serviceId === undefined ? {} : { serviceId: filter.serviceId as ServiceId }),
+      ...(filter.before === undefined ? {} : { before: filter.before }),
       limit: filter.limit,
     });
     const result = [];
@@ -902,12 +939,31 @@ export class ServiceRefundRequestService {
     return service;
   }
 
+  /**
+   * What the approval requires of the service, besides the request being OPEN: the shared
+   * eligibility evaluator's answer, and the paid source it resolves being the one this
+   * request reserved against. One rule for the approval and its preview.
+   */
+  private async assertExecutable(
+    scope: TenantContext,
+    request: ServiceRefundRequestRecord,
+    service: ServiceRecord | null,
+    tx: TransactionScope,
+  ): Promise<ServiceRecord> {
+    if (service === null) throw this.notEligible('SERVICE_STATE');
+    const eligibility = await this.eligibilityOf(scope, service, { checkFlag: false }, tx);
+    if (!eligibility.eligible) throw this.notEligible(eligibility.reason);
+    if (eligibility.source.payment.id !== request.paymentId) {
+      throw this.notEligible('SOURCE_UNRESOLVED');
+    }
+    return service;
+  }
+
   private async requireRequest(
     scope: TenantContext,
     requestId: string,
   ): Promise<ServiceRefundRequestRecord> {
-    if (!/^[0-9a-f-]{36}$/iu.test(requestId)) throw this.notFound();
-    const request = await this.deps.repository.findById(scope, requestId);
+    const request = await this.deps.repository.findById(scope, requestIdOf(requestId));
     if (request === null) throw this.notFound();
     return request;
   }
@@ -974,3 +1030,32 @@ export class ServiceRefundRequestService {
 
 /** The active states, re-exported for the surfaces that ask "is one open". */
 export const SERVICE_REFUND_ACTIVE = SERVICE_REFUND_REQUEST_ACTIVE_STATES;
+
+/**
+ * A request id, canonical, or the not-found refusal. Validated before any query: an id that
+ * is not a UUID compared with a `uuid` column is a driver error, and the caller sent a name
+ * that names nothing.
+ */
+function requestIdOf(candidate: string): string {
+  const parsed = uuidV7Schema.safeParse(candidate);
+  if (!parsed.success) {
+    throw errors.notFound(
+      COMMERCE_ERROR_CODES.SERVICE_REFUND_REQUEST_NOT_FOUND,
+      'Unknown refund request.',
+    );
+  }
+  return parsed.data;
+}
+
+/** A rejection's reason, trimmed, or the refusal: required, at most 500 characters. */
+function rejectionReasonOf(candidate: string): string {
+  const reason = candidate.trim();
+  if (reason.length === 0 || Array.from(reason).length > 500) {
+    throw errors.validation(
+      COMMERCE_ERROR_CODES.CAPTURE_INPUT_INVALID,
+      'A rejection needs a reason of at most 500 characters.',
+      { max: 500 },
+    );
+  }
+  return reason;
+}

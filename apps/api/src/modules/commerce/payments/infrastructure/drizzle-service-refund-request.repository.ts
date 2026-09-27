@@ -169,6 +169,7 @@ export class DrizzleServiceRefundRequestRepository implements ServiceRefundReque
       readonly state?: ServiceRefundRequestState;
       readonly serviceId?: ServiceId;
       readonly limit: number;
+      readonly before?: { readonly at: Date; readonly id: string };
     },
     tx?: unknown,
   ): Promise<readonly ServiceRefundRequestListItem[]> {
@@ -210,6 +211,11 @@ export class DrizzleServiceRefundRequestRepository implements ServiceRefundReque
           filter.serviceId === undefined
             ? undefined
             : eq(serviceRefundRequests.serviceId, filter.serviceId),
+          // The keyset, newest first: strictly older than the last row shown, the id
+          // breaking a tie between rows written in one transaction.
+          filter.before === undefined
+            ? undefined
+            : sql`(${serviceRefundRequests.createdAt}, ${serviceRefundRequests.id}) < (${filter.before.at.toISOString()}::timestamptz, ${filter.before.id}::uuid)`,
         ),
       )
       .orderBy(desc(serviceRefundRequests.createdAt), desc(serviceRefundRequests.id))

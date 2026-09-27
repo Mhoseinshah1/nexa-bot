@@ -135,6 +135,22 @@ function columns(onLink: ReturnType<typeof useLinkHandler>, withService: boolean
   return withService ? all : all.filter((column) => column.key !== 'service');
 }
 
+/** Every request in one state, following the server's cursor until it says there is no more. */
+async function fetchEveryPage(
+  state: ServiceRefundRequestState,
+): Promise<ServiceRefundRequestView[]> {
+  const rows: ServiceRefundRequestView[] = [];
+  let cursor: { at: string; id: string } | undefined;
+  for (;;) {
+    const page = await fetchServiceRefundRequests(
+      cursor === undefined ? { state } : { state, cursor },
+    );
+    rows.push(...page.requests);
+    if (page.nextCursor === null) return rows;
+    cursor = page.nextCursor;
+  }
+}
+
 /**
  * The requests that still want an operator, on the services list: undecided, executing or
  * failed. Read-only — each row links to its service, where the decision is.
@@ -143,16 +159,15 @@ export function OpenServiceRefundRequestsCard() {
   const onLink = useLinkHandler();
   // One read per state that wants an operator, so the server filters BEFORE it limits: a
   // page of the newest requests of every state would hide an old undecided one behind a
-  // hundred newer decided ones.
+  // hundred newer decided ones. And EVERY page of each, by the server's cursor: a state with
+  // more than a page must not leave its oldest — the longest-waiting — on no page at all.
   const requests = useQuery({
     queryKey: ['service-refund-requests', 'attention'],
     queryFn: async () => {
-      const pages = await Promise.all(
-        NEEDS_ATTENTION.map((state) => fetchServiceRefundRequests({ state })),
-      );
+      const lists = await Promise.all(NEEDS_ATTENTION.map((state) => fetchEveryPage(state)));
       return {
-        requests: pages
-          .flatMap((page) => page.requests)
+        requests: lists
+          .flat()
           .sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0)),
       };
     },
