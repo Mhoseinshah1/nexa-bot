@@ -254,7 +254,10 @@ export class ReceiptReviewPushService {
       return moved ? 'delivered' : 'lost';
     }
     if (result.outcome === 'RATE_LIMITED') {
-      const retryAt = new Date(at.getTime() + (result.retryAfterMs ?? RECEIPT_PUSH_BACKOFF_MS));
+      // The later of Telegram's retry_after and the lane's back-off (WP20, brief §3.1).
+      const retryAt = new Date(
+        at.getTime() + Math.max(result.retryAfterMs ?? 0, RECEIPT_PUSH_BACKOFF_MS),
+      );
       const moved = await this.write(
         scope,
         row,

@@ -1,4 +1,5 @@
 import { sql } from 'drizzle-orm';
+import { DELIVERY_MAX_FAILED_ATTEMPTS } from '@nexa/contracts';
 import type {
   OperationState,
   OperationType,
@@ -50,10 +51,12 @@ export class DrizzleDiagnosticsReader implements DiagnosticsReader {
     const totals = await q.execute<{
       pending: string;
       failing: string;
+      exhausted: string;
       oldest: Date | string | null;
     }>(sql`
       SELECT count(*)::text AS pending,
              count(*) FILTER (WHERE attempts > 0)::text AS failing,
+             count(*) FILTER (WHERE attempts >= ${DELIVERY_MAX_FAILED_ATTEMPTS})::text AS exhausted,
              min(occurred_at) AS oldest
         FROM outbox_messages
        WHERE tenant_id = ${tenantId} AND published_at IS NULL`);
@@ -64,8 +67,9 @@ export class DrizzleDiagnosticsReader implements DiagnosticsReader {
       attempts: number;
       occurred_at: Date | string;
       last_error: string | null;
+      next_attempt_at: Date | string | null;
     }>(sql`
-      SELECT id, event_type, aggregate_type, attempts, occurred_at, last_error
+      SELECT id, event_type, aggregate_type, attempts, occurred_at, last_error, next_attempt_at
         FROM outbox_messages
        WHERE tenant_id = ${tenantId} AND published_at IS NULL AND attempts > 0
        ORDER BY occurred_at, sequence
@@ -74,6 +78,7 @@ export class DrizzleDiagnosticsReader implements DiagnosticsReader {
     return {
       pending: Number(row?.pending ?? 0),
       failing: Number(row?.failing ?? 0),
+      exhausted: Number(row?.exhausted ?? 0),
       oldestPendingAt: row?.oldest == null ? null : new Date(row.oldest),
       failingSample: sample.rows.map((one) => ({
         id: one.id,
@@ -82,6 +87,8 @@ export class DrizzleDiagnosticsReader implements DiagnosticsReader {
         attempts: Number(one.attempts),
         occurredAt: new Date(one.occurred_at),
         lastError: one.last_error,
+        nextAttemptAt: one.next_attempt_at == null ? null : new Date(one.next_attempt_at),
+        exhausted: Number(one.attempts) >= DELIVERY_MAX_FAILED_ATTEMPTS,
       })),
     };
   }

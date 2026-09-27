@@ -50,6 +50,9 @@ importers:
       eslint:
         specifier: 10.9.1
         version: 10.9.1
+      ioredis:
+        specifier: 5.9.0
+        version: 5.9.0
       jsdom:
         specifier: ^27.4.0
         version: 27.4.0

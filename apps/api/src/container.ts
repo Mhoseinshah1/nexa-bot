@@ -62,6 +62,8 @@ import { blocksReadiness } from './modules/platform/system/application/readiness
 import { createLogger, newCorrelationId } from './infrastructure/logging/logger.js';
 import { createDatabase, type DatabaseHandle } from './infrastructure/persistence/database.js';
 import { createRedis, type RedisHandle } from './infrastructure/redis/redis.js';
+import { RedisInteractionCounter } from './infrastructure/redis/redis-interaction-counter.js';
+import { AntiSpamService } from './modules/commerce/customers/application/anti-spam.service.js';
 import {
   DrizzleUnitOfWork,
   type TransactionScope,
@@ -785,6 +787,12 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     },
   );
   const redis = createRedis(config.REDIS_URL);
+  /*
+   * Anti-spam's counter (WP20), on its own connection: the shared client waits for ever on
+   * a dead Redis, and a webhook turn must never wait on a counter. This one fails fast, and
+   * anti-spam fails open.
+   */
+  const interactionCounter = new RedisInteractionCounter(config.REDIS_URL);
 
   /*
    * The recovery repository is built HERE, above the unit of work, because the
@@ -1027,6 +1035,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     },
     database,
     writeGate,
+    // WP20: an exhausted message is announced once in the operations log.
+    opsLog,
   );
 
   // The readiness computation and the adapters that answer its questions. The
@@ -3710,6 +3720,13 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     delivery: deliveryService,
     orders: orderService,
     botRuntime: new BotRuntime({
+      // WP20: more than 20 interactions in 10 s blocks the customer; fails open.
+      antiSpam: new AntiSpamService({
+        counter: interactionCounter,
+        opsEvents: opsLog,
+        clock,
+        logger,
+      }),
       // WP11A: the external-gateway attempt's customer reads and the check tap.
       gateway: gatewayPayments,
       /*
@@ -3901,6 +3918,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       await serviceReminderLoop.stop();
       await customerNotificationLoop.stop();
       await receiptReviewPushLoop.stop();
+      await interactionCounter.close();
       await redis.close();
       await database.close();
     },

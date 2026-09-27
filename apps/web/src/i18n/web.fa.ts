@@ -878,6 +878,12 @@ export const WEB_FA = {
   'web.diagnostics_outbox_failing': 'ناموفق دست‌کم یک بار',
   'web.diagnostics_outbox_failing_banner':
     'برخی رویدادها دست‌کم یک بار ناموفق شده‌اند و دوباره تلاش می‌شوند. متن خطا کوتاه شده و نشانی‌ها از آن حذف شده‌اند.',
+  // WP20 (brief §3.2): after twelve real failures a message is kept but no longer retried.
+  'web.diagnostics_outbox_exhausted': 'متوقف‌شده پس از ۱۲ تلاش ناموفق',
+  'web.diagnostics_outbox_exhausted_banner':
+    'برخی رویدادها پس از ۱۲ تلاش ناموفق دیگر خودکار تلاش نمی‌شوند. نگه داشته شده‌اند و در گزارش عملیات ثبت شده‌اند؛ علت خطا باید رفع شود.',
+  'web.diagnostics_next_attempt': 'تلاش بعدی',
+  'web.diagnostics_no_more_attempts': 'تلاش خودکار متوقف شده',
   'web.diagnostics_event': 'رویداد',
   'web.diagnostics_aggregate': 'موجودیت',
   'web.diagnostics_occurred': 'زمان رخداد',

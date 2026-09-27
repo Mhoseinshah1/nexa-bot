@@ -1,6 +1,10 @@
-import { and, asc, eq, inArray, isNull, or, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull, lt, lte, or, sql } from 'drizzle-orm';
 import {
+  DELIVERY_MAX_FAILED_ATTEMPTS,
+  OUTBOX_MESSAGE_EXHAUSTED_CODE,
+  deliveryRetryDelayMs,
   systemContext,
+  type OperationalEventRecorder,
   type Clock,
   type DomainEvent,
   type EventType,
@@ -52,10 +56,9 @@ export interface RelayBatchResult {
  * made no progress, and the next one would make none either until something
  * changed, so it waits like an idle one.
  *
- * What this does NOT fix: messages are still claimed oldest first with no per-message
- * back-off, so `batchSize` poison messages at the head of the queue still hold back
- * everything behind them. That needs a `next_attempt_at` column (a migration) and is
- * recorded in the audit, not done here.
+ * WP20 (brief §3.1) added the other half: a failed message is rescheduled on its own
+ * `next_attempt_at`, so a poison message no longer takes a batch slot on every poll and
+ * the messages behind it are claimed meanwhile.
  */
 export function nextRelayDelayMs(result: RelayBatchResult, pollIntervalMs: number): number {
   return result.published > 0 ? 0 : pollIntervalMs;
@@ -89,11 +92,23 @@ export function nextRelayDelayMs(result: RelayBatchResult, pollIntervalMs: numbe
  * stays usable, so the attempt count and error can still be recorded and the
  * other messages in the batch still publish.
  *
- * The relay never gives up on a message and has no dead-letter queue: an event
- * that cannot be delivered is a bug to fix, not a message to discard. A batch
- * that publishes nothing waits the poll interval before the next
- * (`nextRelayDelayMs`), and lag beyond `maxLagMs` makes the process unhealthy so
- * it is visible rather than silent. There is no per-message back-off.
+ * A failed message is rescheduled on its own row (WP20, brief §3.1):
+ * `deliveryRetryDelayMs` after the Nth failure (5 s, 15 s, 60 s, 5 min, 15 min, then an
+ * hour), and only due rows are claimed. After `DELIVERY_MAX_FAILED_ATTEMPTS` real
+ * failures it is EXHAUSTED (brief §3.2): no longer claimed, never deleted and never
+ * marked published, counted in the system diagnostics, and announced once as an
+ * operational event. There is still no dead-letter queue and no control that makes a
+ * message succeed: an event that cannot be delivered is a bug to fix.
+ *
+ * Ordering is per aggregate, as the table promises. A message is not claimed while an
+ * earlier message of its aggregate is unpublished and not exhausted, so a failure holds
+ * back its own aggregate's later events and nothing else. An exhausted message stops
+ * holding them back: it is evidence now, and waiting on it would be waiting for ever.
+ *
+ * A batch that publishes nothing waits the poll interval before the next
+ * (`nextRelayDelayMs`), and lag beyond `maxLagMs` makes the process unhealthy so it is
+ * visible rather than silent. An exhausted message is excluded from the lag: it is shown
+ * in the diagnostics instead, and would otherwise keep the worker unhealthy for good.
  */
 export class OutboxRelay {
   private running = false;
@@ -137,6 +152,11 @@ export class OutboxRelay {
      * it does, so the default cannot quietly become production's.
      */
     private readonly gate: InstallationWriteGate = UNGATED,
+    /**
+     * Where an exhausted message is announced (WP20, brief §3.2). Optional for the same
+     * reason as the gate; the container passes the real recorder.
+     */
+    private readonly opsEvents?: Pick<OperationalEventRecorder, 'record'>,
   ) {
     this.progress = new LoopProgress(options.pollIntervalMs);
   }
@@ -251,11 +271,21 @@ export class OutboxRelay {
         // started again. A message with no tenant is platform work and always
         // eligible.
         const eligible = eligibleForDispatch(await this.activeTenantIds(tx));
+        const now = this.clock.now();
 
         const claimed = await tx
           .select()
           .from(outboxMessages)
-          .where(and(isNull(outboxMessages.publishedAt), eligible))
+          .where(
+            and(
+              isNull(outboxMessages.publishedAt),
+              eligible,
+              notExhausted(),
+              // Due: never failed, or its own back-off has run out (WP20).
+              or(isNull(outboxMessages.nextAttemptAt), lte(outboxMessages.nextAttemptAt, now)),
+              noEarlierLiveSibling(),
+            ),
+          )
           .orderBy(asc(outboxMessages.occurredAt), asc(outboxMessages.sequence))
           .limit(this.options.batchSize)
           .for('update', { skipLocked: true });
@@ -263,7 +293,13 @@ export class OutboxRelay {
         let published = 0;
         let failed = 0;
 
+        // Aggregates whose message failed in THIS batch. Their later messages in the
+        // same batch are left unclaimed: a message never overtakes an earlier one of its
+        // own aggregate. Across batches the claim's sibling rule does the same.
+        const held = new Set<string>();
         for (const row of claimed) {
+          const aggregate = `${row.aggregateType}:${row.aggregateId}`;
+          if (held.has(aggregate)) continue;
           // The eligibility above was evaluated when the row was SELECTed, and
           // `FOR UPDATE` locked the message, not its tenant — so a stop could
           // commit between the claim and the dispatch and the delivery would go
@@ -291,24 +327,56 @@ export class OutboxRelay {
               await this.dispatch(attempt, event);
               await attempt
                 .update(outboxMessages)
-                .set({ publishedAt: this.clock.now(), lastError: null })
+                .set({ publishedAt: this.clock.now(), lastError: null, nextAttemptAt: null })
                 .where(sql`${outboxMessages.id} = ${row.id}`);
             });
             published += 1;
           } catch (error) {
             failed += 1;
             const message = error instanceof Error ? error.message : String(error);
+            held.add(aggregate);
+            const failures = row.attempts + 1;
+            const exhausted = failures >= DELIVERY_MAX_FAILED_ATTEMPTS;
             await tx
               .update(outboxMessages)
               .set({
                 attempts: sql`${outboxMessages.attempts} + 1`,
                 lastError: message.slice(0, 2000),
+                // Its own row only (WP20): the rest of the batch and the queue behind it
+                // are not held up. Null once exhausted, since nothing will retry it.
+                nextAttemptAt: exhausted
+                  ? null
+                  : new Date(this.clock.now().getTime() + deliveryRetryDelayMs(failures)),
               })
               .where(sql`${outboxMessages.id} = ${row.id}`);
-            this.logger.error(
-              { eventId: event.eventId, eventType: event.eventType, err: message },
-              'Outbox consumer failed; message will be retried',
-            );
+            if (exhausted) {
+              this.logger.error(
+                { eventId: event.eventId, eventType: event.eventType, attempts: failures },
+                'Outbox message exhausted its retries; kept as evidence, not retried',
+              );
+              await this.opsEvents?.record(
+                scopeOf(event),
+                {
+                  code: OUTBOX_MESSAGE_EXHAUSTED_CODE,
+                  severity: 'ERROR',
+                  message: `Outbox message ${event.eventType} failed ${String(failures)} times and is no longer retried automatically.`,
+                  context: {
+                    eventId: event.eventId,
+                    eventType: event.eventType,
+                    aggregateType: row.aggregateType,
+                    attempts: failures,
+                  },
+                  // One event per message: each exhausted message is its own fact.
+                  dedupeKey: event.eventId,
+                },
+                tx,
+              );
+            } else {
+              this.logger.error(
+                { eventId: event.eventId, eventType: event.eventType, err: message },
+                'Outbox consumer failed; message will be retried',
+              );
+            }
           }
         }
 
@@ -402,6 +470,8 @@ export class OutboxRelay {
         and(
           isNull(outboxMessages.publishedAt),
           eligibleForDispatch(await this.activeTenantIds(executor)),
+          // An exhausted message is in the diagnostics, not the lag (WP20).
+          notExhausted(),
         ),
       )
       .orderBy(asc(outboxMessages.occurredAt))
@@ -457,6 +527,36 @@ function eligibleForDispatch(activeTenantIds: readonly string[]) {
   // worth looking at.
   if (activeTenantIds.length === 0) return isNull(outboxMessages.tenantId);
   return or(isNull(outboxMessages.tenantId), inArray(outboxMessages.tenantId, activeTenantIds));
+}
+
+/** Not yet at `DELIVERY_MAX_FAILED_ATTEMPTS` real failures (WP20, brief §3.2). */
+function notExhausted() {
+  return lt(outboxMessages.attempts, DELIVERY_MAX_FAILED_ATTEMPTS);
+}
+
+/**
+ * No EARLIER message of the same aggregate has failed and is still to be retried.
+ *
+ * Ordering is per aggregate (the table's promise), so a failed message holds back its own
+ * aggregate's later events while it backs off (WP20). An earlier message that has never
+ * failed does not hold anything back here: it is claimed in the same batch, ahead of its
+ * successors by the batch's order, and the batch's own `held` set stops the successors if
+ * it fails. So an aggregate with several queued events still drains in one batch.
+ *
+ * An exhausted message does not hold anything back either: it will never publish, and
+ * holding its successors behind it would hold them for ever. Answered by the unique
+ * (aggregate_type, aggregate_id, sequence) index.
+ */
+function noEarlierLiveSibling() {
+  return sql`NOT EXISTS (
+    SELECT 1 FROM ${outboxMessages} AS earlier
+    WHERE earlier.aggregate_type = ${outboxMessages.aggregateType}
+      AND earlier.aggregate_id = ${outboxMessages.aggregateId}
+      AND earlier.sequence < ${outboxMessages.sequence}
+      AND earlier.published_at IS NULL
+      AND earlier.attempts > 0
+      AND earlier.attempts < ${DELIVERY_MAX_FAILED_ATTEMPTS}
+  )`;
 }
 
 /** The scope a consumer acts in for this event: the tenant's, or the platform's. */

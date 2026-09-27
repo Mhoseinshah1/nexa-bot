@@ -336,11 +336,15 @@ export class DeliveryService {
      * its merits. `recordRateLimited` is a separate repository method precisely so that
      * no boolean can blur the two.
      *
-     * Telegram's own `retry_after` is preferred over any number we would invent, with
-     * `DELIVERY_BACKOFF_MS` as the floor for the case where it sends none.
+     * The retry waits the LATER of Telegram's own `retry_after` and
+     * `DELIVERY_BACKOFF_MS` (WP20, brief §3.1): never sooner than Telegram asked, and
+     * never sooner than our own floor either, so a short `retry_after` cannot turn a
+     * rate limit into a tight loop.
      */
     if (result.outcome === 'RATE_LIMITED') {
-      const retryAt = new Date(now.getTime() + (result.retryAfterMs ?? DELIVERY_BACKOFF_MS));
+      const retryAt = new Date(
+        now.getTime() + Math.max(result.retryAfterMs ?? 0, DELIVERY_BACKOFF_MS),
+      );
       const held = await this.deps.uow.run(scope, async (tx) =>
         this.deps.services.recordRateLimited(scope, service.id, from, retryAt, sentUrl, now, tx),
       );

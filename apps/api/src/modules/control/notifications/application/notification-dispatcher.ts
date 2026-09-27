@@ -815,19 +815,17 @@ export class NotificationDispatcher {
   /**
    * How long to wait before the next attempt.
    *
-   * A `retry_after` from the transport wins outright: Telegram knows what it
-   * wants and a number we invented would be either rude or slow. Otherwise
-   * exponential with jitter, so a batch of failures does not come back in
-   * lockstep.
+   * Exponential with jitter, so a batch of failures does not come back in
+   * lockstep — and never earlier than a `retry_after` from the transport. The
+   * LATER of the two wins (WP20, brief §3.1): Telegram's number is a floor, not a
+   * replacement, so a `retry_after` of 0 cannot turn a failure into an immediate
+   * retry and a small one cannot undercut the local back-off.
    */
   private backoffFor(
     attemptNumber: number,
     result: { outcome: string; retryAfterMs?: number },
   ): number {
-    if (result.retryAfterMs !== undefined) return result.retryAfterMs;
-    const exponential = this.options.baseBackoffMs * 2 ** Math.max(attemptNumber - 1, 0);
-    const capped = Math.min(exponential, this.options.maxBackoffMs);
-    return Math.floor(capped * (0.5 + Math.random() * 0.5));
+    return notificationBackoffMs(attemptNumber, result.retryAfterMs, this.options, Math.random);
   }
 
   /**
@@ -897,4 +895,22 @@ export function deserialiseValues(intent: {
     out[placeholder.token] = raw as TemplateValue;
   }
   return out;
+}
+
+/**
+ * The ops lane's wait before its next attempt: exponential from `baseBackoffMs`, capped at
+ * `maxBackoffMs`, jittered into the upper half — and never earlier than the transport's
+ * `retry_after`, whichever is LATER (WP20, brief §3.1). Pure, so the rule is testable
+ * without a dispatcher.
+ */
+export function notificationBackoffMs(
+  attemptNumber: number,
+  retryAfterMs: number | undefined,
+  options: { readonly baseBackoffMs: number; readonly maxBackoffMs: number },
+  random: () => number,
+): number {
+  const exponential = options.baseBackoffMs * 2 ** Math.max(attemptNumber - 1, 0);
+  const capped = Math.min(exponential, options.maxBackoffMs);
+  const local = Math.floor(capped * (0.5 + random() * 0.5));
+  return Math.max(local, retryAfterMs ?? 0);
 }

@@ -121,6 +121,19 @@ export function DiagnosticsSection({ denied }: { denied: boolean }) {
       render: (row) => <span className="nowrap">{formatTimestamp(row.occurredAt)}</span>,
     },
     {
+      // WP20: when the relay tries it next, or that it no longer will.
+      key: 'next',
+      header: t('web.diagnostics_next_attempt'),
+      render: (row) =>
+        row.exhausted ? (
+          <Badge tone="danger">{t('web.diagnostics_no_more_attempts')}</Badge>
+        ) : row.nextAttemptAt === null ? (
+          <span className="faint">—</span>
+        ) : (
+          <span className="nowrap">{formatTimestamp(row.nextAttemptAt)}</span>
+        ),
+    },
+    {
       key: 'error',
       header: t('web.diagnostics_error'),
       render: (row) =>
@@ -190,10 +203,17 @@ export function DiagnosticsSection({ denied }: { denied: boolean }) {
                     t('web.diagnostics_outbox_failing'),
                     <Num key="f" value={data.outbox.failing} />,
                   ],
+                  [
+                    t('web.diagnostics_outbox_exhausted'),
+                    <Num key="x" value={data.outbox.exhausted} />,
+                  ],
                 ]}
               />
               {data.outbox.failing > 0 && (
                 <Banner tone="warn">{t('web.diagnostics_outbox_failing_banner')}</Banner>
+              )}
+              {data.outbox.exhausted > 0 && (
+                <Banner tone="danger">{t('web.diagnostics_outbox_exhausted_banner')}</Banner>
               )}
               {data.outbox.failingSample.length > 0 && (
                 <DataTable

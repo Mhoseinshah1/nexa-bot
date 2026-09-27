@@ -558,8 +558,10 @@ export class CustomerNotificationService {
        * merits — in exactly the conditions that produce bursts.
        */
       if (result.outcome === 'RATE_LIMITED') {
+        // The LATER of Telegram's retry_after and the lane's own back-off (WP20, brief
+        // §3.1): never before Telegram asked, and never a zero-delay retry.
         const retryAt = new Date(
-          at.getTime() + (result.retryAfterMs ?? CUSTOMER_NOTIFICATION_BACKOFF_MS),
+          at.getTime() + Math.max(result.retryAfterMs ?? 0, CUSTOMER_NOTIFICATION_BACKOFF_MS),
         );
         await this.deps.uow.run(scope, async (tx) =>
           this.deps.notifications.deferUntil(scope, row.id, retryAt, at, tx),

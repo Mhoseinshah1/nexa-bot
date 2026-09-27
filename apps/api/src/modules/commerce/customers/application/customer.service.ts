@@ -1,4 +1,5 @@
 import {
+  ANTI_SPAM_BLOCK_REASON,
   COMMERCE_ERROR_CODES,
   CUSTOMER_BLOCK_REASON_MAX_LENGTH,
   CUSTOMER_PAGE_DEFAULT,
@@ -141,7 +142,21 @@ export interface CustomerServiceDeps {
  * section names the capture that read its reason. Ids only. The Web sends none: its surface,
  * recorded from the actor, is the context.
  */
+/**
+ * What authorises anti-spam's block (WP20). The webhook acts as `SYSTEM_JOB`, which holds
+ * `maintenance.run` and nothing else; see `CustomerService.blockForSpam`.
+ */
+export const ANTI_SPAM_BLOCK_PERMISSION: PermissionKey = 'maintenance.run';
+
 export type CustomerStatusContext =
+  | {
+      /**
+       * Anti-spam blocked the customer (WP20, brief §3.5): more than
+       * `ANTI_SPAM_MAX_INTERACTIONS` interactions in `ANTI_SPAM_WINDOW_MS`.
+       */
+      readonly source: 'ANTI_SPAM';
+      readonly interactions: number;
+    }
   | {
       readonly source: 'RECEIPT_REVIEW';
       readonly paymentId: string;
@@ -486,6 +501,39 @@ export class CustomerService {
     });
   }
 
+  /**
+   * Block a customer anti-spam caught flooding the bot (WP20, brief §3.5).
+   *
+   * The same `setStatus` as every other block, so the audit row, the `CustomerBlocked`
+   * event, the activity check and the idempotency record cannot drift apart. What
+   * differs is the reason (the owner's constant, `ANTI_SPAM_BLOCK_REASON`) and the
+   * permission: the webhook acts as `SYSTEM_JOB`, which holds `maintenance.run` and never
+   * `users.block`, and widening the job's grant would hand every background job the power
+   * to block anybody. So this entry point, and only this one, is authorised by
+   * `maintenance.run`, with a reason the caller cannot choose.
+   *
+   * The UPDATE is conditional on `ACTIVE`, so an administrator's block that won a race
+   * keeps its own reason, and concurrent anti-spam blocks change the row once.
+   */
+  async blockForSpam(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: {
+      readonly idempotencyKey: string;
+      readonly customerId: string;
+      readonly interactions: number;
+    },
+  ): Promise<{ readonly customer: CustomerRecord; readonly changed: boolean }> {
+    return this.setStatus(scope, actor, {
+      idempotencyKey: input.idempotencyKey,
+      customerId: input.customerId,
+      to: 'BLOCKED',
+      reason: ANTI_SPAM_BLOCK_REASON,
+      context: { source: 'ANTI_SPAM', interactions: input.interactions },
+      permission: ANTI_SPAM_BLOCK_PERMISSION,
+    });
+  }
+
   /** Unblock. The same machinery, so neither direction can forget a step. */
   async unblock(
     scope: TenantContext,
@@ -522,8 +570,11 @@ export class CustomerService {
       readonly to: CustomerStatus;
       readonly reason: string | null;
       readonly context?: CustomerStatusContext;
+      /** `users.block` unless the caller is anti-spam. See `blockForSpam`. */
+      readonly permission?: PermissionKey;
     },
   ): Promise<{ readonly customer: CustomerRecord; readonly changed: boolean }> {
+    const permission = input.permission ?? CUSTOMER_BLOCK_PERMISSION;
     // Before the hash, so a re-cased id cannot produce a second idempotency record for
     // the same command against the same row.
     const customerId = this.customerId(input.customerId);
@@ -545,7 +596,7 @@ export class CustomerService {
      * decision as the call it replays, or a retry after a timeout reports a
      * permission failure for a write that already happened.
      */
-    await this.deps.guard.check(scope, actor, CUSTOMER_BLOCK_PERMISSION);
+    await this.deps.guard.check(scope, actor, permission);
 
     /*
      * The key is remembered under the surface the ACTOR came from — the same `actor.surface`
@@ -618,7 +669,7 @@ export class CustomerService {
       },
       scope,
       actor,
-      CUSTOMER_BLOCK_PERMISSION,
+      permission,
       {
         action: input.to === 'BLOCKED' ? 'customer.block' : 'customer.unblock',
         entityType: 'Customer',
