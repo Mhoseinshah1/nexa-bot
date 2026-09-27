@@ -13012,6 +13012,12 @@
           "primaryKey": false,
           "notNull": true
         },
+        "filing_key": {
+          "name": "filing_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
         "principal_minor": {
           "name": "principal_minor",
           "type": "bigint",
@@ -13314,6 +13320,14 @@
           "columns": [
             "tenant_id",
             "refund_id"
+          ]
+        },
+        "service_refund_requests_filing_key": {
+          "name": "service_refund_requests_filing_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "filing_key"
           ]
         }
       },
