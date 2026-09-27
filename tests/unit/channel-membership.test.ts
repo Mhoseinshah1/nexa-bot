@@ -35,6 +35,7 @@ function harness(
   answer: (chatId: string) => ChannelMembershipAnswer,
 ) {
   let now = 1_000_000;
+  let configured = channels;
   const read = vi.fn(async (_scope: TenantContext, input: { chatId: string }) =>
     answer(input.chatId),
   );
@@ -42,7 +43,7 @@ function harness(
   const openConditions = vi.fn(async (_scope: unknown, _keys: readonly string[]) => [] as string[]);
   const service = new ChannelMembershipService({
     reader: { read },
-    channels: async () => channels,
+    channels: async () => configured,
     opsEvents: { record },
     conditions: { openConditions },
     clock: { now: () => new Date(now) },
@@ -56,7 +57,15 @@ function harness(
       telegramUserId: options.user ?? '910910',
       fresh: options.fresh ?? false,
     });
-  return { service, read, record, openConditions, ask, advance: (ms: number) => (now += ms) };
+  return {
+    service,
+    read,
+    record,
+    openConditions,
+    ask,
+    advance: (ms: number) => (now += ms),
+    configure: (next: readonly TelegramChannel[]) => (configured = next),
+  };
 }
 
 describe('membershipOf (brief B2)', () => {
@@ -163,8 +172,12 @@ describe('ChannelMembershipService (brief B1, B5, B6)', () => {
     expect(outages).toHaveLength(1);
     expect(outages[0]?.[1]).toMatchObject({
       severity: 'WARN',
-      dedupeKey: `${CHANNEL_MEMBERSHIP_UNAVAILABLE_CODE}:bot-1:@nexa_news`,
-      context: { botInstanceId: 'bot-1', channel: '@nexa_news', reason: 'telegram.rejected.403' },
+      dedupeKey: `${CHANNEL_MEMBERSHIP_UNAVAILABLE_CODE}:bot-1`,
+      context: {
+        botInstanceId: 'bot-1',
+        channels: ['@nexa_news'],
+        reasons: ['telegram.rejected.403'],
+      },
     });
     advance(60_000);
     await ask();
@@ -201,7 +214,7 @@ describe('ChannelMembershipService (brief B1, B5, B6)', () => {
     ]);
     expect(record.mock.calls[1]?.[1]).toMatchObject({
       recoversCode: CHANNEL_MEMBERSHIP_UNAVAILABLE_CODE,
-      recoversDedupeKey: `${CHANNEL_MEMBERSHIP_UNAVAILABLE_CODE}:bot-1:@nexa_news`,
+      recoversDedupeKey: `${CHANNEL_MEMBERSHIP_UNAVAILABLE_CODE}:bot-1`,
     });
   });
 
@@ -216,6 +229,64 @@ describe('ChannelMembershipService (brief B1, B5, B6)', () => {
     advance(61_000);
     await ask({ user: '3' });
     expect(openConditions).toHaveBeenCalledTimes(2);
+  });
+
+  it('writes a flapping channel’s outage at most once a minute (Codex review of #86)', async () => {
+    let failing = true;
+    const { ask, record, advance } = harness([PUBLIC], () =>
+      failing ? { kind: 'UNKNOWN', code: 'telegram.server_error.502' } : { kind: 'MEMBER' },
+    );
+    // Unknown, answered, unknown, answered … every eleven seconds, past each cache window.
+    for (let flap = 0; flap < 4; flap += 1) {
+      await ask({ user: String(flap), fresh: true });
+      failing = !failing;
+      advance(11_000);
+    }
+    const outages = record.mock.calls.filter(
+      ([, event]) => event.code === CHANNEL_MEMBERSHIP_UNAVAILABLE_CODE,
+    );
+    expect(outages).toHaveLength(1);
+  });
+
+  it('recovers the outage once the operator corrects the channel’s id (Codex review of #86)', async () => {
+    const WRONG: TelegramChannel = {
+      chatId: '-1000000000001',
+      joinUrl: 'https://t.me/+x',
+      mandatory: true,
+    };
+    const RIGHT: TelegramChannel = {
+      chatId: '-1000000000002',
+      joinUrl: 'https://t.me/+x',
+      mandatory: true,
+    };
+    const { ask, record, configure, advance } = harness([WRONG], (chatId) =>
+      chatId === WRONG.chatId
+        ? { kind: 'UNKNOWN', code: 'telegram.rejected.400' }
+        : { kind: 'MEMBER' },
+    );
+    await ask();
+    configure([RIGHT]);
+    advance(1_000);
+    await ask();
+    expect(record.mock.calls.map(([, event]) => event.code)).toEqual([
+      CHANNEL_MEMBERSHIP_UNAVAILABLE_CODE,
+      CHANNEL_MEMBERSHIP_RECOVERED_CODE,
+    ]);
+    // The recovery resolves the very row the outage opened, though no channel is shared.
+    const [outage, recovery] = record.mock.calls.map(([, event]) => event) as unknown as {
+      dedupeKey: string;
+      recoversDedupeKey?: string;
+    }[];
+    expect(recovery?.recoversDedupeKey).toBe(outage?.dedupeKey);
+  });
+
+  it('shares one Telegram read among concurrent turns for the same key (Codex review of #86)', async () => {
+    const { ask, read } = harness([PUBLIC, PRIVATE], () => ({ kind: 'MEMBER' }));
+    await Promise.all([ask(), ask(), ask({ fresh: true }), ask()]);
+    expect(read).toHaveBeenCalledTimes(2);
+    // Another customer is another key.
+    await ask({ user: 'someone-else' });
+    expect(read).toHaveBeenCalledTimes(4);
   });
 
   it('keeps a member about a minute, and a non-member only ten seconds', async () => {

@@ -385,7 +385,7 @@ describe('mandatory channel membership (Package B)', () => {
     expect(open[0]).toMatchObject({
       code: CHANNEL_MEMBERSHIP_UNAVAILABLE_CODE,
       resolved_at: null,
-      dedupe_key: `${CHANNEL_MEMBERSHIP_UNAVAILABLE_CODE}:${BOT_A}:@nexa_fail_open`,
+      dedupe_key: `${CHANNEL_MEMBERSHIP_UNAVAILABLE_CODE}:${BOT_A}`,
     });
 
     // Telegram answers again. The check button asks afresh, past the cached unknown.
