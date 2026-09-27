@@ -35,6 +35,9 @@ function harness() {
   let nowMs = Date.parse('2026-09-01T00:00:00Z');
   let updateId = 0;
   const recorded: Recorded[] = [];
+  // Outages the operations log holds open, by dedupe key — written by any process.
+  const openInLog = new Set<string>();
+  const lookups: string[][] = [];
   const counter: InteractionCounter = {
     tally: async ({ botInstanceId }) =>
       down.has(botInstanceId)
@@ -47,6 +50,12 @@ function harness() {
       record: async (_scope, event) => {
         recorded.push(event);
         return undefined as never;
+      },
+    },
+    conditions: {
+      openConditions: async (_scope, keys) => {
+        lookups.push([...keys]);
+        return keys.filter((key) => openInLog.has(key)).map(() => ANTI_SPAM_UNAVAILABLE_CODE);
       },
     },
     clock: { now: () => new Date(nowMs) as never },
@@ -65,6 +74,8 @@ function harness() {
   return {
     down,
     recorded,
+    openInLog,
+    lookups,
     observe,
     advance: (ms: number) => {
       nowMs += ms;
@@ -112,5 +123,38 @@ describe('the anti-spam degradation condition', () => {
       recoversCode: ANTI_SPAM_UNAVAILABLE_CODE,
       recoversDedupeKey: `${ANTI_SPAM_UNAVAILABLE_CODE}:bot-1`,
     });
+  });
+
+  /*
+   * The review of #84: the recovery used to be written only by the process whose memory
+   * held the outage. An outage recorded by a replica that a rolling update then replaced
+   * stayed open for ever, telling operators the protection was off while it worked.
+   */
+  it('resolves an outage another process recorded, on this process’s first good count (review of #84)', async () => {
+    const h = harness();
+    h.openInLog.add(`${ANTI_SPAM_UNAVAILABLE_CODE}:bot-1`);
+    await h.observe('bot-1');
+    expect(h.recorded).toEqual([
+      expect.objectContaining({
+        code: ANTI_SPAM_RECOVERED_CODE,
+        recoversCode: ANTI_SPAM_UNAVAILABLE_CODE,
+        recoversDedupeKey: `${ANTI_SPAM_UNAVAILABLE_CODE}:bot-1`,
+      }),
+    ]);
+  });
+
+  it('writes nothing when no outage is open, and looks at most once a minute per bot (review of #84)', async () => {
+    const h = harness();
+    await h.observe('bot-1');
+    await h.observe('bot-1');
+    await h.observe('bot-2');
+    expect(h.recorded, 'no recovery for an outage that is not open').toEqual([]);
+    expect(h.lookups).toEqual([
+      [`${ANTI_SPAM_UNAVAILABLE_CODE}:bot-1`],
+      [`${ANTI_SPAM_UNAVAILABLE_CODE}:bot-2`],
+    ]);
+    h.advance(ANTI_SPAM_DEGRADED_RECORD_INTERVAL_MS);
+    await h.observe('bot-1');
+    expect(h.lookups).toHaveLength(3);
   });
 });

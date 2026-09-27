@@ -1,8 +1,9 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   DELIVERY_MAX_FAILED_ATTEMPTS,
   OUTBOX_MESSAGE_EXHAUSTED_CODE,
+  SYSTEM_DIAGNOSTICS_SAMPLE_MAX,
   deliveryRetryDelayMs,
   systemJobActor,
   type CorrelationId,
@@ -13,12 +14,14 @@ import {
   notifications,
   operationalEvents,
   outboxMessages,
+  tenants,
 } from '../../apps/api/src/infrastructure/persistence/schema';
 import {
   adminActorFor,
   createAdmin,
   createTestContext,
   tenantA,
+  tenantB,
   type TestContext,
 } from './harness';
 
@@ -44,7 +47,11 @@ describe('outbox retry scheduling', () => {
     await ctx?.close();
   });
 
-  const relay = (consumers: EventConsumer[], batchSize = 10) =>
+  const relay = (
+    consumers: EventConsumer[],
+    batchSize = 10,
+    opsLog: ConstructorParameters<typeof OutboxRelay>[7] = ctx.container.opsLog,
+  ) =>
     new OutboxRelay(
       ctx.container.database.db,
       consumers,
@@ -53,12 +60,12 @@ describe('outbox retry scheduling', () => {
       { batchSize, pollIntervalMs: 50, maxLagMs: 300_000 },
       ctx.container.database,
       undefined,
-      ctx.container.opsLog,
+      opsLog,
     );
 
   /** A message is named `<aggregate>#<sequence>`: the first on aggregate `a` is `a#1`. */
-  const write = (aggregateId: string) =>
-    ctx.container.uow.run(tenantA, async (tx) => {
+  const write = (aggregateId: string, scope: typeof tenantA = tenantA) =>
+    ctx.container.uow.run(scope, async (tx) => {
       await ctx.container.outbox.write(tx, actor(), {
         eventType: 'SystemPinged',
         aggregateType: 'System',
@@ -236,5 +243,106 @@ describe('outbox retry scheduling', () => {
     expect(events, 'and said so').toHaveLength(1);
     // And never claimed again.
     expect((await relay([handler]).processBatch()).claimed).toBe(0);
+  });
+
+  /*
+   * The review of #84. An aggregate id is not unique across tenants: every tenant's
+   * `SystemPinged` is `System:system`, and the sequence is shared. The claim never takes a
+   * stopped tenant's message, so a stopped tenant's failed one would never be retried or
+   * exhausted — and the ordering rule, blind to the tenant, held every other tenant's
+   * messages on that aggregate behind it for ever, counted as lag.
+   */
+  it('never holds one tenant’s messages behind another tenant’s failure on a shared aggregate (review of #84)', async () => {
+    await write('shared', tenantA);
+    await write('shared', tenantB);
+    const handler = consumer(new Set(['shared#1']));
+    await relay([handler]).processBatch();
+    expect((await row('shared#1'))?.attempts, 'tenant A’s message failed').toBe(1);
+    expect(
+      (await row('shared#2'))?.publishedAt,
+      'tenant B’s is not held behind it in the same batch',
+    ).not.toBeNull();
+
+    // Tenant A stops with its failure still live. Tenant B's next message is not held
+    // behind a message nothing will ever retry, and is not lag.
+    await ctx.container.database.db
+      .update(tenants)
+      .set({ status: 'STOPPED' })
+      .where(eq(tenants.id, tenantA.tenantId));
+    await write('shared', tenantB);
+    await relay([handler]).processBatch();
+    expect((await row('shared#3'))?.publishedAt, 'across batches too').not.toBeNull();
+    expect(await relay([handler]).lagMs()).toBe(0);
+  });
+
+  it('keeps the batch when the exhaustion cannot be announced, and announces it on the next failure (review of #84)', async () => {
+    await write('x');
+    await write('y');
+    await ctx.container.database.db
+      .update(outboxMessages)
+      .set({ attempts: DELIVERY_MAX_FAILED_ATTEMPTS - 1 })
+      .where(eq(outboxMessages.aggregateId, 'x'));
+    const handler = consumer(new Set(['x#1']));
+    const down = {
+      record: () => Promise.reject(new Error('operations log unavailable')),
+    } as unknown as ConstructorParameters<typeof OutboxRelay>[7];
+
+    const result = await relay([handler], 10, down).processBatch();
+    expect(result, 'the batch commits').toMatchObject({ published: 1, failed: 1 });
+    expect((await row('y#1'))?.publishedAt, 'the rest of the batch still publishes').not.toBeNull();
+    const counted = await row('x#1');
+    expect(counted?.attempts, 'the failure is counted').toBe(DELIVERY_MAX_FAILED_ATTEMPTS);
+    expect(counted?.exhaustedAt, 'but not exhausted in silence').toBeNull();
+    expect(counted?.nextAttemptAt, 'and it is tried again').not.toBeNull();
+
+    // The log is back: the next failure exhausts it, and says so.
+    skewMs += 3_700_000;
+    await relay([handler]).processBatch();
+    expect((await row('x#1'))?.exhaustedAt).not.toBeNull();
+    const events = await ctx.container.database.db
+      .select()
+      .from(operationalEvents)
+      .where(eq(operationalEvents.code, OUTBOX_MESSAGE_EXHAUSTED_CODE));
+    expect(events).toHaveLength(1);
+  });
+
+  it('asks only for live failures when it checks for an earlier one (review of #84)', async () => {
+    // Published history is never deleted; the sibling rule must not walk it. A sequential
+    // scan is ruled out because the test table is tiny, not because the choice is close:
+    // what is left is the unique index, which walks every earlier sequence, or this one.
+    const plan = await ctx.container.database.db.transaction(async (tx) => {
+      await tx.execute(sql`SET LOCAL enable_seqscan = off`);
+      return tx.execute<{ 'QUERY PLAN': string }>(sql`
+        EXPLAIN SELECT 1 FROM outbox_messages AS earlier
+         WHERE earlier.aggregate_type = 'System' AND earlier.aggregate_id = 'system'
+           AND earlier.tenant_id IS NOT DISTINCT FROM ${tenantA.tenantId}::uuid
+           AND earlier.sequence < 100
+           AND earlier.published_at IS NULL AND earlier.attempts > 0
+           AND earlier.exhausted_at IS NULL`);
+    });
+    expect(plan.rows.map((one) => one['QUERY PLAN']).join('\n')).toContain(
+      'outbox_messages_live_failure_idx',
+    );
+  });
+
+  it('shows the failures still being retried ahead of the exhausted ones (review of #84)', async () => {
+    const owner = await createAdmin(ctx.container, tenantA, {
+      username: 'diag-sample',
+      roleKeys: ['owner'],
+    });
+    for (let one = 0; one <= SYSTEM_DIAGNOSTICS_SAMPLE_MAX; one += 1) await write(`old${one}`);
+    await ctx.container.database.db
+      .update(outboxMessages)
+      .set({ attempts: DELIVERY_MAX_FAILED_ATTEMPTS, exhaustedAt: new Date(), lastError: 'x' })
+      .where(sql`${outboxMessages.aggregateId} LIKE 'old%'`);
+    await write('live');
+    await ctx.container.database.db
+      .update(outboxMessages)
+      .set({ attempts: 1, nextAttemptAt: new Date(Date.now() + 60_000), lastError: 'y' })
+      .where(eq(outboxMessages.aggregateId, 'live'));
+
+    const found = await ctx.container.diagnostics.read(tenantA, adminActorFor(owner));
+    expect(found.outbox.exhausted).toBe(SYSTEM_DIAGNOSTICS_SAMPLE_MAX + 1);
+    expect(found.outbox.failingSample[0]).toMatchObject({ exhausted: false });
   });
 });

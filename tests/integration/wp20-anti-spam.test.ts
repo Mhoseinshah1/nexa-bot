@@ -231,6 +231,21 @@ describe('anti-spam', () => {
     ).toBe(ANTI_SPAM_MAX_INTERACTIONS);
   });
 
+  it('tells the customer why on the turn that takes the block, when the 21st did not (review of #84)', async () => {
+    // The 21st counted interaction is a `/ping`, which the webhook answers without
+    // blocking. The next message is the 22nd — FLOODING — and it is the one that blocks.
+    await message('/start');
+    await repeat(ANTI_SPAM_MAX_INTERACTIONS, () => message('/ping'));
+    expect((await customerRow())?.status, 'no block yet').toBe('ACTIVE');
+    sent = [];
+    await message('x');
+    expect((await customerRow())?.status).toBe('BLOCKED');
+    expect(spamReplies(), 'told why, by the turn that blocked').toHaveLength(1);
+    // ...and still once: the flood after it is not answered.
+    await repeat(3, () => message('y'));
+    expect(spamReplies()).toHaveLength(1);
+  });
+
   it('counts button presses', async () => {
     await message('/start');
     await repeat(20, () => tap('menu'));
@@ -328,6 +343,26 @@ describe('anti-spam', () => {
     const after = await customerRow();
     expect(after?.blocked_reason).toBe('بدهی پرداخت‌نشده');
     expect(spamReplies()).toHaveLength(0);
+  });
+
+  it('answers nothing past the limit on a turn that did not take the block (review of #84)', async () => {
+    // Blocked by an administrator first, so no turn of the flood takes the block. Counts
+    // 2..20 are answered with the stored reason; the 21st — which under concurrency can
+    // also be a turn that LOST the block to a later one — sends nothing, like the 22nd.
+    await message('/start');
+    const row = await customerRow();
+    const owner = await createAdmin(api.container, tenantA, {
+      username: 'silence-owner',
+      roleKeys: ['owner'],
+    });
+    await api.container.customers.block(tenantA, adminActorFor(owner), {
+      idempotencyKey: 'manual-block-silence',
+      customerId: row?.id ?? '',
+      reason: 'دلیل مدیر',
+    });
+    sent = [];
+    await repeat(ANTI_SPAM_MAX_INTERACTIONS + 1, () => message('x'));
+    expect(messagesSent()).toHaveLength(ANTI_SPAM_MAX_INTERACTIONS - 1);
   });
 
   it('refuses a blocked customer every commercial action', async () => {

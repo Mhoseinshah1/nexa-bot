@@ -25,6 +25,7 @@ CT='packages/contracts/src/messaging-reliability.ts'
 AS='apps/api/src/modules/commerce/customers/application/anti-spam.service.ts'
 RC='apps/api/src/infrastructure/redis/redis-interaction-counter.ts'
 BR='apps/api/src/surfaces/telegram/bot-runtime.ts'
+OI='apps/api/src/infrastructure/persistence/online-indexes.ts'
 WH='apps/api/src/surfaces/telegram/webhook.controller.ts'
 
 T_OR=('integration','tests/integration/wp20-outbox-retry.test.ts')
@@ -38,7 +39,7 @@ T_RP=('integration','tests/integration/receipt-review-push.test.ts')
 T_SR=('integration','tests/integration/service-refund-requests.test.ts')
 T_PD=('integration','tests/integration/provisioning-delivery.test.ts')
 
-# (id, [(file, before, after)], test, name filter)
+# (id, [(file, before, after)], test, name filter[, (setup SQL, teardown SQL)])
 M=[
  # --- the outbox: schedule, exhaustion, ordering ---------------------------------------
  ('W20-01',[(REL,"""              or(isNull(outboxMessages.nextAttemptAt), lte(outboxMessages.nextAttemptAt, now)),
@@ -47,9 +48,9 @@ M=[
  ('W20-03',[(REL,"""              notExhausted(),
               // Due:""","""              // Due:""")],T_OR,'stops after twelve'),
  ('W20-04',[(REL,"const exhausted = failures >= DELIVERY_MAX_FAILED_ATTEMPTS;","const exhausted = failures > DELIVERY_MAX_FAILED_ATTEMPTS;")],T_OR,'stops after twelve'),
- ('W20-05',[(REL,"""              await this.opsEvents?.record(
-                scopeOf(event),""","""              await (undefined as typeof this.opsEvents)?.record(
-                scopeOf(event),""")],T_OR,'stops after twelve'),
+ ('W20-05',[(REL,"""                  await this.opsEvents?.record(
+                    scopeOf(event),""","""                  await (undefined as typeof this.opsEvents)?.record(
+                    scopeOf(event),""")],T_OR,'stops after twelve'),
  ('W20-06',[(REL,"""              noEarlierLiveSibling(),
             ),""","""            ),""")],T_OR,'own aggregate, and nothing else'),
  ('W20-07',[(REL,"""      AND earlier.exhausted_at IS NULL
@@ -75,7 +76,7 @@ M=[
  ('W20-23',[(AS,"if (count <= ANTI_SPAM_MAX_INTERACTIONS) return 'ALLOWED';","if (count < ANTI_SPAM_MAX_INTERACTIONS) return 'ALLOWED';")],T_AS,'allows exactly twenty'),
  ('W20-24',[(AS,"if (count <= ANTI_SPAM_MAX_INTERACTIONS) return 'ALLOWED';","if (count <= ANTI_SPAM_MAX_INTERACTIONS + 1) return 'ALLOWED';")],T_AS,'blocks on the 21st'),
  ('W20-25',[(BR,"if (spam !== null && spam.verdict !== 'ALLOWED' && arrival !== 'BLOCKED') {","if (false as boolean) {")],T_AS,'blocks on the 21st'),
- ('W20-26',[(BR,"spam?.verdict === 'FLOODING' && arrival === 'BLOCKED' && answered === blocked","false")],T_AS,'answers nothing more'),
+ ('W20-26',[(BR,"      spam !== null &&\n      spam.verdict !== 'ALLOWED' &&\n      arrival === 'BLOCKED' &&\n      answered === blocked &&\n      !blockedThisTurn\n","      false\n")],T_AS,'answers nothing more'),
  ('W20-27',[(BR,"""      counted.verdict !== 'ALLOWED' &&
       (await this.deps.telegramAdmins?.resolve(""","""      counted.verdict !== 'ALLOWED' &&
       false &&
@@ -88,26 +89,51 @@ M=[
  ('W20-33',[(RC,"tonumber(ARGV[1]) - tonumber(ARGV[2]))","tonumber(ARGV[1]) - 2 * tonumber(ARGV[2]))")],T_IC,'ROLLING window'),
  ('W20-34',[(RC,"    if (!(await this.ready())) return { state: 'UNAVAILABLE' };","    if (this.client.status !== 'ready') return { state: 'UNAVAILABLE' };")],T_IC,'counts within the window'),
  ('W20-35',[(AS,"      return { verdict: 'ALLOWED', count: null };","      return { verdict: 'FLOODING', count: null };")],T_AS,'blocks nobody'),
- ('W20-36',[(AS,"if (last !== undefined && nowMs - last","if (false && nowMs - last")],T_AS,'blocks nobody'),
+ ('W20-36',[(AS,"if (last !== undefined && nowMs - last < ANTI_SPAM_DEGRADED_RECORD_INTERVAL_MS) {","if (false && nowMs - last < ANTI_SPAM_DEGRADED_RECORD_INTERVAL_MS) {")],T_AS,'blocks nobody'),
  ('W20-37',[(BR,"if (spam !== null && spam.verdict !== 'ALLOWED' && arrival !== 'BLOCKED') {","if (spam !== null && spam.verdict !== 'ALLOWED') {")],T_AS,'keeps an administrator'),
  # --- the pre-review fixes ---------------------------------------------------------------
- ('W20-38',[(REL,"                { tx, scope: scopeOf(event) },","                tx as never,")],T_OR,'stops after twelve'),
- ('W20-39',[(REL,"                ...(exhausted ? { exhaustedAt: this.clock.now() } : {}),\n","")],T_OR,'stops after twelve'),
+ ('W20-38',[(REL,"                    { tx: mark, scope: scopeOf(event) },","                    mark as never,")],T_OR,'stops after twelve'),
+ ('W20-39',[(REL,"                  ...(markExhausted ? { exhaustedAt: this.clock.now() } : {}),\n","")],T_OR,'stops after twelve'),
  ('W20-40',[(REL,"  return isNull(outboxMessages.exhaustedAt);","  return sql`${outboxMessages.attempts} < ${DELIVERY_MAX_FAILED_ATTEMPTS}`;")],T_OR,'count grew under the release before'),
  ('W20-41',[(AS,"""  private async degraded(scope: TenantContext, botInstanceId: string, nowMs: number) {
     const key = `${scope.tenantId}:${botInstanceId}`;""","""  private async degraded(scope: TenantContext, botInstanceId: string, nowMs: number) {
     const key = `${scope.tenantId}`;""")],T_UA,'second bot'),
- ('W20-42',[(AS,"    if (!this.degradedRecordedAt.has(key)) return;","    if (this.degradedRecordedAt.size === 0) return;")],T_UA,'another bot'),
+ ('W20-42',[(AS,"""    if (this.degradedRecordedAt.has(key)) {
+      this.degradedRecordedAt.delete(key);""","""    if (this.degradedRecordedAt.size > 0) {
+      this.degradedRecordedAt.clear();""")],T_UA,'another bot'),
  ('W20-43',[(AS,"      dedupeKey: `${ANTI_SPAM_RECOVERED_CODE}:${botInstanceId}`,","      dedupeKey: unavailableKey(botInstanceId),")],T_UA,'its own key'),
  ('W20-44',[(AS,"      recoversDedupeKey: unavailableKey(botInstanceId),","      recoversDedupeKey: botInstanceId,")],T_UA,'its own key'),
  ('W20-45',[(WH,"        if (counted.verdict !== 'ALLOWED') return { ok: true };\n","")],T_AS,'counts /ping'),
+ # --- the independent review of #84 ------------------------------------------------------
+ ('W20-46',[(REL,"      AND earlier.tenant_id IS NOT DISTINCT FROM ${outboxMessages.tenantId}\n","")],T_OR,'shared aggregate'),
+ ('W20-47',[(REL,"const aggregate = `${row.tenantId ?? '-'}:${row.aggregateType}:${row.aggregateId}`;","const aggregate = `${row.aggregateType}:${row.aggregateId}`;")],T_OR,'shared aggregate'),
+ ('W20-48',[(REL,"""              } catch (announceError) {
+                await recordFailure(tx, false);""","""              } catch (announceError) {
+                throw announceError;""")],T_OR,'cannot be announced'),
+ ('W20-49',[(REL,"""                await tx.transaction(async (mark) => {
+                  await recordFailure(mark, true);""","""                await (async (mark: typeof tx) => {
+                  await recordFailure(mark, true);"""),(REL,"""                  );
+                });
+                this.logger.error(
+                  { eventId: event.eventId, eventType: event.eventType, attempts: failures },""","""                  );
+                })(tx);
+                this.logger.error(
+                  { eventId: event.eventId, eventType: event.eventType, attempts: failures },""")],T_OR,'cannot be announced'),
+ ('W20-50',[(OI,"    name: 'outbox_messages_live_failure_idx',","    name: 'outbox_messages_mutant_idx',")],T_OR,'asks only for live failures',
+   ('DROP INDEX IF EXISTS outbox_messages_live_failure_idx','DROP INDEX IF EXISTS outbox_messages_mutant_idx')),
+ ('W20-51',[(DIAG,"ORDER BY (exhausted_at IS NOT NULL), occurred_at, sequence","ORDER BY occurred_at, sequence")],T_OR,'ahead of the exhausted'),
+ ('W20-52',[(BR,"      answered === blocked &&\n      !blockedThisTurn\n","      answered === blocked\n")],T_AS,'turn that takes the block'),
+ ('W20-53',[(BR,"      spam !== null &&\n      spam.verdict !== 'ALLOWED' &&\n      arrival === 'BLOCKED' &&","      spam?.verdict === 'FLOODING' &&\n      arrival === 'BLOCKED' &&")],T_AS,'did not take the block'),
+ ('W20-54',[(AS,"    if (open.includes(ANTI_SPAM_UNAVAILABLE_CODE)) await this.recordRecovery(scope, botInstanceId);","    void open;")],T_UA,'another process recorded'),
+ ('W20-55',[(AS,"    if (last !== undefined && nowMs - last < ANTI_SPAM_DEGRADED_RECORD_INTERVAL_MS) return;\n    this.outageLookedForAt","    this.outageLookedForAt")],T_UA,'at most once a minute'),
 ]
 
 def build_contracts():
   subprocess.run(['pnpm','--filter','@nexa/contracts','build'],capture_output=True,check=True)
 
 only=sys.argv[1:]
-for mid,edits,(project,test),filt in M:
+for mid,edits,(project,test),filt,*extra in M:
+  sqlpair=extra[0] if extra else None
   if only and mid not in only: continue
   files=set(); ok=True
   for f,a,b in edits:
@@ -118,6 +144,7 @@ for mid,edits,(project,test),filt in M:
   contracts=any(f.startswith('packages/contracts') for f in files)
   if ok:
     if contracts: build_contracts()
+    if sqlpair: subprocess.run(['psql',os.environ['TEST_DATABASE_URL'],'-qc',sqlpair[0]],check=True)
     r=subprocess.run(['pnpm','exec','vitest','run','--project',project,test,'-t',filt],capture_output=True,text=True)
     out=r.stdout+r.stderr
     failed=[l.strip() for l in out.splitlines() if '×' in l]
@@ -125,3 +152,6 @@ for mid,edits,(project,test),filt in M:
     print(mid,'KILLED' if r.returncode!=0 else 'SURVIVED',summ,failed[:3],flush=True)
   for f in files: subprocess.run(['git','checkout','--',f])
   if contracts: build_contracts()
+  # The teardown drops what the mutated code built; the restored code rebuilds what the
+  # setup dropped on the next migrate (`ensureOnlineIndexes`).
+  if ok and sqlpair: subprocess.run(['psql',os.environ['TEST_DATABASE_URL'],'-qc',sqlpair[1]],check=True)
