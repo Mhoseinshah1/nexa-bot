@@ -144,3 +144,47 @@ where each decision landed, and what was chosen on technical grounds.
 - `tests/unit/wp20-anti-spam-conditions.test.ts`: the degradation condition per bot.
 - `tests/web/system-diagnostics.test.tsx`: the exhausted count, banner and badge.
 - `docs/wp20-falsification.md`.
+
+## 6. The independent review of #84
+
+Codex's review of #84 hit its usage limit, so the branch was also reviewed independently,
+read-only, against CLAUDE.md. It found one tenant-isolation defect and four smaller ones.
+All five are fixed, each with a named test and a killed mutation (W20-46..55).
+
+- **The per-aggregate hold crossed tenants.** The claim's sibling rule and the batch's
+  `held` set matched on `(aggregate_type, aggregate_id)` alone. That pair is not unique
+  across tenants: every tenant's `SystemPinged` is `System:system`, and its sequence is
+  shared. The claim never takes a stopped tenant's message, so a stopped tenant's failed
+  ping was never retried or exhausted. It then held every other tenant's pings behind it
+  for ever, and counted them as lag, which is a blocking readiness check. Both now match
+  the tenant too (`IS NOT DISTINCT FROM`, so platform events still order among
+  themselves).
+- **An announcement that threw rolled back the batch.** The exhaustion mark and its
+  announcement now share one savepoint. If the announcement fails, the failure is still
+  counted and rescheduled but not marked, and its next failure exhausts and announces it.
+  Before, the throw rolled back the whole batch, and the same message was claimed first on
+  every poll, stalling the relay for every tenant.
+- **The sibling rule walked published history.** Published outbox rows are never deleted,
+  and the only index the rule could use was the unique `(aggregate_type, aggregate_id,
+sequence)` one. So each claim walked every earlier sequence of the aggregate, one per
+  ping ever sent for `System:system`. A partial index of live failures,
+  `outbox_messages_live_failure_idx`, now answers it. It is built concurrently in
+  `online-indexes.ts`, not in migration 0126, because every business transaction writes
+  `outbox_messages` and a blocking build would hold them all during `botctl update`.
+- **The spam block was not always explained.** The silence rule keyed on the FLOODING
+  verdict, so a block that landed on a FLOODING turn was never explained. That happens
+  when the 21st interaction is a `/ping`, which the webhook answers without blocking, or
+  when the 21st failed before its block committed. Past the limit, the turn that took the
+  block is now the one told why, whatever its verdict. Every other turn past the limit
+  sends nothing, including a 21st that lost the block to a later turn under concurrency,
+  so the customer is never told twice.
+- **An outage recorded by another process stayed open.** `antispam.unavailable` was
+  resolved only by the process whose memory held it. On a good count, a process now looks
+  the bot's outage up in the operations log, at most once a minute per bot and only while
+  the bot has traffic, and resolves it if it is open.
+- **The diagnostics sample was crowded out.** Exhausted rows are kept for ever and are
+  always the oldest, so twenty of them hid every failure still in flight. The sample now
+  lists the ones still being retried first.
+
+Two test gaps the review named stay as recorded: W20-31 is an equivalent mutant, and
+W20-37 is one of two guards.
