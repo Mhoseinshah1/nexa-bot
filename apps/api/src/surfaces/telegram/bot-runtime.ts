@@ -4141,13 +4141,6 @@ export function blockedReply(
   return { key: 'bot.blocked_with_reason', values: { reason }, buttons: [], orderId: null };
 }
 
-/** The update's `update_id`, as a string, or null when it carries none. */
-function updateIdOf(update: unknown): string | null {
-  if (typeof update !== 'object' || update === null) return null;
-  const id = (update as { readonly update_id?: unknown }).update_id;
-  return typeof id === 'number' && Number.isSafeInteger(id) ? String(id) : null;
-}
-
 /** The rejection capture's cancel button. */
 function rejectCancelButton(captureId: string): CustomerButton {
   return {
@@ -4263,7 +4256,9 @@ export class BotRuntime {
      *
      * Fails open: when the counter cannot be read the verdict is ALLOWED.
      */
-    const updateId = updateIdOf(input.update);
+    // One reader of `update_id` for the runtime (shared with WP19's prompt ordering).
+    const numericUpdateId = updateIdOf(input.update);
+    const updateId = numericUpdateId === undefined ? null : String(numericUpdateId);
     const counted =
       this.deps.antiSpam === undefined || updateId === null
         ? null
