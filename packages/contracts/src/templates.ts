@@ -121,6 +121,17 @@ export interface TemplateDefinition {
   readonly description: string;
   readonly format: TemplateFormat;
   readonly placeholders: readonly PlaceholderDefinition[];
+  /**
+   * A tighter ceiling than `TEMPLATE_BODY_MAX_LENGTH`, for a key Telegram itself bounds.
+   *
+   * Absent for every key a message carries. Set where the body lands in a field with its
+   * own limit — a Stars invoice's title (1–32) and description (1–255): an override past
+   * it would be accepted here and then refused by Telegram on every invoice for the
+   * tenant, which is the failure landing on a customer instead of on the administrator
+   * who typed it. Counted in UTF-16 code units, as the generic ceiling is. Only keys with
+   * no placeholders set it, so the stored body IS the sent text.
+   */
+  readonly maxLength?: number;
 }
 
 /**
@@ -6463,6 +6474,7 @@ export const TEMPLATES = [
       'The title of the Telegram Stars invoice message (Telegram allows 1–32 characters).',
     format: 'PLAIN_TEXT',
     placeholders: [],
+    maxLength: 32,
   },
   {
     key: 'bot.payment.stars_invoice_description',
@@ -6470,10 +6482,21 @@ export const TEMPLATES = [
       'The description of the Telegram Stars invoice message (Telegram allows 1–255 characters). It names no customer, order number or secret.',
     format: 'PLAIN_TEXT',
     placeholders: [],
+    maxLength: 255,
   },
   {
     key: 'bot.payment.stars_price_label',
     description: 'The label of the one price line on the Telegram Stars invoice.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.payment.checkout_in_progress',
+    description:
+      'Answers a customer who asked to cancel, withdraw or pay otherwise for an order whose ' +
+      'Telegram Stars payment was approved at checkout a moment ago. The charge is on its way; ' +
+      'it asks them to wait a minute and look again. It must not say the order was cancelled ' +
+      'or that anything was refunded.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
@@ -8219,10 +8242,14 @@ export function validateTemplateBody(
   if (body.trim().length === 0) {
     issues.push({ kind: 'EMPTY', detail: 'A template body may not be empty or only whitespace.' });
   }
-  if (body.length > TEMPLATE_BODY_MAX_LENGTH) {
+  const ceiling = Math.min(
+    TEMPLATE_BODY_MAX_LENGTH,
+    definition.maxLength ?? TEMPLATE_BODY_MAX_LENGTH,
+  );
+  if (body.length > ceiling) {
     issues.push({
       kind: 'TOO_LONG',
-      detail: `A template body may be at most ${TEMPLATE_BODY_MAX_LENGTH} characters; this one is ${body.length}.`,
+      detail: `A template body for ${key} may be at most ${ceiling} characters; this one is ${body.length}.`,
     });
   }
 

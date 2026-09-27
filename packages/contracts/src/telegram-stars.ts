@@ -28,6 +28,15 @@ export const TELEGRAM_STARS_ATTEMPT_LIFETIME_MINUTES = 70;
 export const TELEGRAM_STARS_PRE_CHECKOUT_MARGIN_MS = 2 * 60_000;
 
 /**
+ * How long an APPROVED pre-checkout holds its payment against cancellation (Codex review of
+ * #85). Telegram charges right after the approval, so for this long the payment may not be
+ * cancelled, withdrawn or replaced by a wallet payment: `successful_payment` is on its way.
+ * Equal to the margin above, so a hold taken at the last approvable moment ends exactly at
+ * the attempt's deadline and never keeps an expired attempt open.
+ */
+export const TELEGRAM_STARS_CHECKOUT_HOLD_MS = TELEGRAM_STARS_PRE_CHECKOUT_MARGIN_MS;
+
+/**
  * Nexa: the per-minute Telegram calls one tenant's Stars route allows itself for invoices.
  * There are no inquiries: approval is recorded, not asked for.
  */
