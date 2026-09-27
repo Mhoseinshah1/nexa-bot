@@ -403,10 +403,17 @@ describe('who resolved a payment', () => {
  * viewer had since lost the permission to see.
  */
 describe('the history does not keep an answer that has moved', () => {
+  /** A DECIDED payment carrying one notice, so only the notice can make it poll. */
   const notice = (deliveryState: string) =>
     timeline({
       entries: [
         timelineCreated,
+        {
+          kind: 'PAYMENT_RESOLVED',
+          at: '2026-09-10T12:58:00.000Z',
+          state: 'FAILED',
+          adminId: ADMIN_ID,
+        },
         {
           kind: 'CUSTOMER_NOTIFIED',
           at: '2026-09-10T12:59:00.000Z',
@@ -423,7 +430,7 @@ describe('the history does not keep an answer that has moved', () => {
     const api = stubApi(notice('PENDING'));
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
-      renderPage(<PaymentTimelineCard paymentId={PAYMENT_ID} paymentState="PENDING" />);
+      renderPage(<PaymentTimelineCard paymentId={PAYMENT_ID} paymentState="FAILED" />);
       await waitFor(() => expect(screen.getByRole('table')).toBeInTheDocument());
       expect(timelineReads(api.calls)).toBe(1);
       await vi.advanceTimersByTimeAsync(TIMELINE_UNSETTLED_POLL_MS + 1_000);
@@ -433,14 +440,32 @@ describe('the history does not keep an answer that has moved', () => {
     }
   });
 
-  it('does not poll a history whose notices are all resolved', async () => {
+  it('does not poll a decided payment whose notices are all resolved', async () => {
     const api = stubApi(notice('DELIVERED'));
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      renderPage(<PaymentTimelineCard paymentId={PAYMENT_ID} paymentState="FAILED" />);
+      await waitFor(() => expect(screen.getByRole('table')).toBeInTheDocument());
+      await vi.advanceTimersByTimeAsync(TIMELINE_UNSETTLED_POLL_MS * 3);
+      expect(timelineReads(api.calls)).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /*
+   * Codex review of #81: a pending payment with no notice yet gains its decision from a
+   * worker or another operator, and nothing on this page would ask for it.
+   */
+  it('reads the history of a payment still open again, to see its decision arrive', async () => {
+    const api = stubApi(timeline({ entries: [timelineCreated] }));
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       renderPage(<PaymentTimelineCard paymentId={PAYMENT_ID} paymentState="PENDING" />);
       await waitFor(() => expect(screen.getByRole('table')).toBeInTheDocument());
-      await vi.advanceTimersByTimeAsync(TIMELINE_UNSETTLED_POLL_MS * 3);
       expect(timelineReads(api.calls)).toBe(1);
+      await vi.advanceTimersByTimeAsync(TIMELINE_UNSETTLED_POLL_MS + 1_000);
+      await waitFor(() => expect(timelineReads(api.calls)).toBeGreaterThanOrEqual(2));
     } finally {
       vi.useRealTimers();
     }

@@ -276,6 +276,16 @@ abandoning a refund is as ambiguous behind an error as requesting one, including
 response that never arrived. All three commands now re-read the ledger and the history on
 any error.
 
+An eighth round, on `834af1b`, found two more (P17-41..43). The wallet section was bounded
+below by the payment's own `created_at`, but the wallet entry and the payment each take
+their timestamp from their own writer. A clock stepped back between the two, or a writer
+behind the payment's, could hide a movement that belongs to it. The floor is now a day
+before the payment (`WALLET_FLOOR_TOLERANCE_MS`). The window is still bounded, and a new
+index or a migration would have renumbered the three stacked packages behind this one.
+The card polled only while a notice was PENDING, so a payment still OPEN, with no notice
+yet, kept its history until something else moved it. It now also polls while the payment
+it shows is OPEN, at the same 15 s, and stops once the payment is decided.
+
 Tests added:
 
 - **Unit:** `tests/unit/payment-timeline.test.ts` (7 cases) and

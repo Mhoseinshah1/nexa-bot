@@ -302,23 +302,31 @@ describe('payment timeline', () => {
     expect(after?.notifications.map((n) => n.kind)).toEqual(['PAYMENT_TRANSFER_RECORDED']);
   });
 
-  it('reads the wallet movements from the payment’s own creation onward (Codex review of #81)', async () => {
+  it('reads the wallet movements from a day before the payment onward (Codex review of #81)', async () => {
     const payment = await walletPayment('floor');
+    const plant = (reference: string, before: string) =>
+      ctx.container.database.db.execute(sql`
+        INSERT INTO wallet_entries (id, tenant_id, customer_id, direction, reason, amount, currency,
+                                    reference, payment_id, created_at)
+        SELECT ${ctx.container.ids.uuid()}, tenant_id, customer_id, 'CREDIT', 'CASHBACK_GATEWAY', 7,
+               currency, ${reference}, id, created_at - ${before}::interval
+          FROM payments WHERE id = ${payment.id}`);
     /*
-     * An entry naming this payment but stamped a day BEFORE it — a row no writer can
-     * produce, placed here only to pin the floor. Without the floor the read would walk
-     * the customer's whole ledger from its first entry and find it.
+     * An hour before the payment: a wall clock corrected backwards between the payment's
+     * write and this one. It is still this payment's, and still read.
      */
-    await ctx.container.database.db.execute(sql`
-      INSERT INTO wallet_entries (id, tenant_id, customer_id, direction, reason, amount, currency,
-                                  reference, payment_id, created_at)
-      SELECT ${ctx.container.ids.uuid()}, tenant_id, customer_id, 'CREDIT', 'CASHBACK_GATEWAY', 7,
-             currency, ${`floor-probe-${String(payment.id)}`}, id, created_at - interval '1 day'
-        FROM payments WHERE id = ${payment.id}`);
+    await plant(`floor-hour-${String(payment.id)}`, '1 hour');
+    /*
+     * Two days before it: past the tolerance, so outside the bounded range. Without a floor
+     * the read would walk the customer's whole ledger from its first entry and find it.
+     */
+    await plant(`floor-days-${String(payment.id)}`, '2 days');
 
     const view = await timeline(owner, payment.id);
     const wallet = view.entries.filter((e) => e.kind === 'WALLET_ENTRY');
-    expect(wallet.map((e) => ('reason' in e ? e.reason : null))).toEqual(['PURCHASE']);
+    expect(wallet.map((e) => ('reason' in e ? e.reason : null)).sort()).toEqual(
+      ['CASHBACK_GATEWAY', 'PURCHASE'].sort(),
+    );
   });
 
   it('times an abandoned manual refund by its close, and never calls it completed', async () => {

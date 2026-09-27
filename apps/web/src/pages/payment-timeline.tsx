@@ -31,6 +31,17 @@ function hasUnsettledNotice(data: PaymentTimelineResponse): boolean {
 }
 
 /**
+ * Whether the history can still gain facts nobody on this page causes: a notice the lane
+ * is still deciding, or a payment still OPEN, which a worker or another operator may
+ * confirm, expire or reject at any moment (Codex review of #81). A decided payment with
+ * its notices resolved is not polled; what this page does to it re-reads the history
+ * itself.
+ */
+export function timelineStillMoving(data: PaymentTimelineResponse): boolean {
+  return hasUnsettledNotice(data) || timelineTerminalState(data) === 'OPEN';
+}
+
+/**
  * A payment's history (WP17, `docs/wp17-payment-phase3-audit.md` D2).
  *
  * READ-ONLY, and nothing on it is a control. Every row is a fact another flow recorded;
@@ -223,7 +234,7 @@ export function PaymentTimelineCard({
   const timeline = useQuery({
     queryKey: ['payment-timeline', paymentId, sections],
     queryFn: () => fetchPaymentTimeline(paymentId),
-    refetchInterval: pollUnlessFinalWhile(TIMELINE_UNSETTLED_POLL_MS, hasUnsettledNotice),
+    refetchInterval: pollUnlessFinalWhile(TIMELINE_UNSETTLED_POLL_MS, timelineStillMoving),
   });
   const data = timeline.data;
 
