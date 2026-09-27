@@ -249,6 +249,9 @@ describe('the feature flag registry', () => {
     expect([...FEATURE_FLAGS].map((f) => f.key).sort()).toEqual([
       // WP6-C. Off by default; the customer rotation path it switches on is reachable.
       'customer_link_rotation',
+      // WP19. Off by default; the customer's refund-request path it switches on is
+      // reachable, and requests already filed stay decidable when it is turned off.
+      'customer_refund_requests',
       'ops_notifications',
       // Customer UX completion §I. Off by default; the claim path it switches on is
       // reachable, and it refuses to turn on until the two shares total 100.

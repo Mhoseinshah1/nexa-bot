@@ -23,6 +23,10 @@ import {
   NexaError,
   PRICING_PRECEDENCE,
   providerDescriptor,
+  SERVICE_REFUND_REQUEST_ATTENTION_STATES,
+  serviceRefundRequestListQuerySchema,
+  isServiceRefundRejectionReason,
+  serviceRefundRejectRequestSchema,
   STATE_MACHINES,
   TELEGRAM_CALLBACK_DATA_MAX_BYTES,
   validateStateMachine,
@@ -41,6 +45,52 @@ describe('event catalog', () => {
     // Adding an event is a contract change, not a feature commit.
     expect(isEventType('SystemPinged')).toBe(true);
     expect(isEventType('OrderPaid')).toBe(false);
+  });
+
+  it('keeps RefundFailed.cause at the two values the release before WP19 reads (Codex review of #83)', () => {
+    // That release's financial log parses this payload strictly. A third cause written
+    // here and relayed after a rollback would fail its consumer on every pass.
+    const cause = EVENT_PAYLOAD_SCHEMAS.RefundFailed.shape.cause;
+    expect([...cause.options].sort()).toEqual(['OPERATOR_FAILED', 'SUPERSEDED']);
+  });
+});
+
+describe('the service refund request attention queue (Codex review of #83, round 6)', () => {
+  it('names exactly the three states that still want an operator', () => {
+    expect([...SERVICE_REFUND_REQUEST_ATTENTION_STATES]).toEqual(['OPEN', 'EXECUTING', 'FAILED']);
+  });
+
+  it('reads them as one filter, never beside a state', () => {
+    expect(serviceRefundRequestListQuerySchema.safeParse({ attention: 'true' }).success).toBe(true);
+    expect(
+      serviceRefundRequestListQuerySchema.safeParse({ attention: 'true', state: 'OPEN' }).success,
+    ).toBe(false);
+    expect(serviceRefundRequestListQuerySchema.safeParse({ attention: 'false' }).success).toBe(
+      false,
+    );
+  });
+});
+
+describe('a service refund rejection reason (Codex review of #83, round 8)', () => {
+  it('trims, then counts code points, at every boundary', () => {
+    const emoji = '😀'.repeat(300); // 300 code points, 600 UTF-16 units
+    expect(isServiceRefundRejectionReason(emoji)).toBe(true);
+    expect(
+      serviceRefundRejectRequestSchema.safeParse({ idempotencyKey: 'reject-key-1', reason: emoji })
+        .success,
+    ).toBe(true);
+    expect(isServiceRefundRejectionReason('😀'.repeat(501))).toBe(false);
+    expect(isServiceRefundRejectionReason('   ')).toBe(false);
+    // Trimmed first, as the service and the database count it.
+    const padded = ` ${'a'.repeat(500)} `;
+    expect(
+      serviceRefundRejectRequestSchema.safeParse({ idempotencyKey: 'reject-key-2', reason: padded })
+        .success,
+    ).toBe(true);
+    expect(
+      serviceRefundRejectRequestSchema.safeParse({ idempotencyKey: 'reject-key-3', reason: '   ' })
+        .success,
+    ).toBe(false);
   });
 });
 

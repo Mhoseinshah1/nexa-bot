@@ -44,6 +44,10 @@ import {
   type Column,
   type Tone,
 } from '../ui/kit';
+import {
+  OpenServiceRefundRequestsCard,
+  ServiceRefundRequestsCard,
+} from './service-refund-requests';
 
 /**
  * Services — what the customer bought, and what was done to produce it.
@@ -232,7 +236,16 @@ function usernameProblem(value: string): string | undefined {
 // List
 // ---------------------------------------------------------------------------
 
-export function ServicesPage({ route, denied }: { route: Route; denied: boolean }) {
+export function ServicesPage({
+  route,
+  denied,
+  mayViewRefundRequests = false,
+}: {
+  route: Route;
+  denied: boolean;
+  /** `refunds.view`: the customers' refund requests that still want an operator (WP19). */
+  mayViewRefundRequests?: boolean;
+}) {
   const onLink = useLinkHandler();
   const cursor = route.query.get('cursor');
   const state = route.query.get('state');
@@ -360,6 +373,8 @@ export function ServicesPage({ route, denied }: { route: Route; denied: boolean 
   return (
     <>
       <PageHead title={t('web.services_title')} subtitle={t('web.services_intro')} maturity="now" />
+      {/* Its own permission, not the list's: `refunds.view` alone reaches the queue (WP19). */}
+      {mayViewRefundRequests && <OpenServiceRefundRequestsCard />}
 
       <Card>
         <div hidden={!mayRequest(services, denied)}>
@@ -693,11 +708,17 @@ export function ServiceDetailPage({
   denied,
   mayEdit,
   mayTerminate,
+  mayViewRefundRequests = false,
+  mayDecideRefundRequests = false,
 }: {
   id: string;
   denied: boolean;
   mayEdit: boolean;
   mayTerminate: boolean;
+  /** `refunds.view`: this service's customer refund requests (WP19). */
+  mayViewRefundRequests?: boolean;
+  /** `refunds.issue` AND `services.terminate`: deciding one. A courtesy; the server decides. */
+  mayDecideRefundRequests?: boolean;
 }) {
   const onLink = useLinkHandler();
   const client = useQueryClient();
@@ -800,6 +821,9 @@ export function ServiceDetailPage({
   return (
     <>
       <PageHead title={t('web.service_detail')} subtitle={t('web.services_intro')} maturity="now" />
+      {mayViewRefundRequests && (
+        <ServiceRefundRequestsCard serviceId={id} mayDecide={mayDecideRefundRequests} />
+      )}
 
       <StateSwitch query={service} denied={denied}>
         {row === undefined ? null : (

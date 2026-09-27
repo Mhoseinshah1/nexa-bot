@@ -728,6 +728,14 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.service.refresh_button',
       'bot.service.refresh_requested',
       'bot.service.refresh_too_soon',
+      'bot.service.refund_request_ask',
+      'bot.service.refund_request_button',
+      'bot.service.refund_request_confirm_button',
+      'bot.service.refund_request_pending',
+      'bot.service.refund_request_reason_invalid',
+      'bot.service.refund_request_reason_prompt',
+      'bot.service.refund_request_registered',
+      'bot.service.refund_request_unavailable',
       'bot.service.renew_button',
       'bot.service.renew_choose',
       'bot.service.renew_option_button',
@@ -988,6 +996,30 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.admin.receipts_button',
       'bot.admin.receipts_list',
       'bot.admin.receipts_none',
+      /*
+       * WP19: the review card of a customer's service refund request and its two
+       * captures. Reviewed against this case's rule: approval names the amount and
+       * says the account is deleted before anything is credited (`confirm`,
+       * `executing`), never that money has moved; a stale or forged tap is told the
+       * request is closed, expired or cannot be executed, and decides nothing.
+       */
+      'bot.admin.refund_request_amount_invalid',
+      'bot.admin.refund_request_amount_prompt',
+      'bot.admin.refund_request_approve_button',
+      'bot.admin.refund_request_cancel_button',
+      'bot.admin.refund_request_cancelled',
+      'bot.admin.refund_request_closed',
+      'bot.admin.refund_request_confirm',
+      'bot.admin.refund_request_confirm_button',
+      'bot.admin.refund_request_executing',
+      'bot.admin.refund_request_expired',
+      'bot.admin.refund_request_not_executable',
+      'bot.admin.refund_request_reject_button',
+      'bot.admin.refund_request_reject_invalid',
+      'bot.admin.refund_request_reject_prompt',
+      'bot.admin.refund_request_rejected',
+      'bot.admin.refund_request_service_button',
+      'bot.admin.refund_request_user_button',
       'bot.admin.refused',
       'bot.admin.reject_button',
       /*

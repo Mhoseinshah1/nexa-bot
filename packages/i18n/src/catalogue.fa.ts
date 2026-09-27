@@ -48,6 +48,55 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     '↩️ بازگشت وجه انجام شد\n\n🆔 شناسه بازگشت وجه: {refundId}\n📤 مقصد: {channel}\n👤 کاربر: {displayName} | {username} | {telegramId}\n🔖 مرجع پرداخت: {reference}\n🆔 شناسه پرداخت: {paymentId}\n📦 سفارش: {orderId}\n💰 مبلغ بازگشتی: {amount}\n🕒 زمان: {at}',
   'ops.financial.refund_failed':
     '⛔️ بازگشت وجه ناموفق/لغو شد\n\n🆔 شناسه بازگشت وجه: {refundId}\n📤 مقصد: {channel}\n⚠️ علت: {cause}\n👤 کاربر: {displayName} | {username} | {telegramId}\n🔖 مرجع پرداخت: {reference}\n🆔 شناسه پرداخت: {paymentId}\n📦 سفارش: {orderId}\n💰 مبلغ: {amount}\n🕒 زمان: {at}',
+  'bot.service.refund_request_button': 'درخواست بازگشت وجه',
+  'bot.service.refund_request_ask':
+    'درخواست بازگشت وجه برای سرویس {service} ({product})\n\nپس از ثبت درخواست، مدیریت آن را بررسی می‌کند و مبلغ قابل بازگشت را تعیین می‌کند. در صورت تأیید، این سرویس حذف می‌شود و مبلغ تعیین‌شده به کیف پول شما در ربات واریز می‌شود. کارمزد درگاه پرداخت قابل بازگشت نیست.\n\nآیا درخواست بازگشت وجه را تأیید می‌کنید؟',
+  'bot.service.refund_request_confirm_button': '✅ تأیید درخواست بازگشت وجه',
+  'bot.service.refund_request_reason_prompt': 'دلیل درخواست بازگشت وجه خود را ارسال کنید.',
+  'bot.service.refund_request_reason_invalid':
+    'دلیل باید بین {min} تا {max} نویسه باشد. لطفاً دوباره ارسال کنید.',
+  'bot.service.refund_request_registered':
+    'درخواست بازگشت وجه شما ثبت شد و پس از بررسی مدیریت، نتیجه به شما اطلاع داده می‌شود. تا آن زمان سرویس شما تغییری نمی‌کند.',
+  'bot.service.refund_request_approved':
+    'درخواست بازگشت وجه شما تأیید شد.\nسرویس {service} حذف شد و مبلغ {amount} به کیف پول شما واریز شد.',
+  'bot.service.refund_request_rejected':
+    'درخواست بازگشت وجه شما برای سرویس {service} رد شد.\nدلیل: {reason}\nسرویس شما بدون تغییر باقی می‌ماند.',
+  'bot.service.refund_request_unavailable':
+    'در حال حاضر امکان ثبت درخواست بازگشت وجه برای این سرویس وجود ندارد.',
+  'bot.service.refund_request_pending':
+    'برای این سرویس یک درخواست بازگشت وجه در حال بررسی است. نتیجه به شما اطلاع داده می‌شود.',
+  'bot.admin.refund_request_card':
+    '📨 درخواست بازگشت وجه جدید\n\n🆔 شناسه درخواست: {requestId}\n🕒 زمان: {requestedAt}\n\n👤 کاربر: {displayName} | {username} | {telegramId}\n\n📦 سرویس: {serviceUsername} ({serviceId})\n🛍 محصول: {product}\n📍 وضعیت: {state}\n⏳ انقضا: {expiresAt}\n📊 مصرف: {usedTraffic} از {trafficLimit}\n\n💰 مبلغ اصلی خرید: {principal}\n💵 باقی‌مانده قابل بازگشت: {remaining}\n\n📝 دلیل کاربر: {reason}',
+  'bot.admin.refund_request_approve_button': '✅ تأیید درخواست',
+  'bot.admin.refund_request_reject_button': '❌ رد درخواست',
+  'bot.admin.refund_request_user_button': '👤 مشاهده کاربر',
+  'bot.admin.refund_request_service_button': '📦 مشاهده سرویس',
+  'bot.admin.refund_request_amount_prompt':
+    'مبلغی که باید به کاربر بازگردانده شود را وارد کنید.\nحداکثر قابل بازگشت: {remaining}\nفقط رقم، به همان واحد بفرستید. تا {minutes} دقیقه منتظر پیام شما هستم.',
+  'bot.admin.refund_request_amount_invalid':
+    'این مبلغ معتبر نیست. مبلغ باید بیشتر از صفر و حداکثر {remaining} باشد. دوباره بفرستید.',
+  'bot.admin.refund_request_confirm':
+    '⚠️ تأیید نهایی بازگشت وجه\n\nمبلغ: {amount}\nکاربر: {customer}\nسرویس: {service}\n\nبا تأیید، سرویس از پنل حذف می‌شود و پس از حذف موفق، این مبلغ به کیف پول کاربر در ربات واریز می‌شود. کارمزد درگاه پرداخت بازگردانده نمی‌شود. این کار برگشت‌پذیر نیست.',
+  'bot.admin.refund_request_confirm_button': '✅ تأیید نهایی و حذف سرویس',
+  'bot.admin.refund_request_cancel_button': '✖️ انصراف',
+  'bot.admin.refund_request_cancelled':
+    'انصراف ثبت شد و چیزی تغییر نکرد. درخواست همچنان در انتظار بررسی است.',
+  'bot.admin.refund_request_executing':
+    'درخواست تأیید شد و حذف سرویس آغاز شد. پس از حذف موفق، مبلغ {amount} به کیف پول کاربر واریز و به او اطلاع داده می‌شود.',
+  'bot.admin.refund_request_reject_prompt':
+    'دلیل رد درخواست را بفرستید. وارد کردن دلیل اجباری است و برای کاربر ارسال می‌شود. تا {minutes} دقیقه منتظر پیام شما هستم.',
+  'bot.admin.refund_request_reject_invalid':
+    'این پیام دلیل معتبری نیست. دلیل نباید خالی باشد و حداکثر {max} نویسه است. دوباره بفرستید.',
+  'bot.admin.refund_request_rejected':
+    'درخواست رد شد و دلیل آن برای کاربر ارسال می‌شود. سرویس و مبلغی تغییر نکرد.',
+  'bot.admin.refund_request_closed':
+    'این درخواست دیگر در انتظار بررسی نیست و تصمیم آن قبلاً ثبت شده است. چیزی تغییر نکرد.',
+  'bot.admin.refund_request_not_executable':
+    'این درخواست در وضعیت فعلی قابل اجرا نیست (سرویس قابل حذف نیست یا پرداخت مبدأ قابل بازگشت نیست). چیزی تغییر نکرد؛ می‌توانید درخواست را رد کنید.',
+  'bot.admin.refund_request_expired':
+    'مهلت پاسخ تمام شد و چیزی ثبت نشد. برای ادامه، دوباره از کارت درخواست اقدام کنید.',
+  'ops.financial.service_refund_request':
+    '🧾 درخواست بازگشت وجه سرویس — {outcome}\n\n🆔 شناسه درخواست: {requestId}\n📦 سرویس: {serviceId}\n👤 کاربر: {displayName} | {username} | {telegramId}\n🆔 پرداخت مبدأ: {paymentId}\n💰 مبلغ تأییدشده: {amount}\n👮 تصمیم‌گیرنده: {adminId}\n🕒 زمان: {at}',
   'ops.notification.test':
     'این یک پیام آزمایشی است. مقصد اعلان‌های عملیاتی به درستی پیکربندی شده است.\nدرخواست‌کننده: {requestedBy}\nزمان: {at}',
 

@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto';
 import {
   ADMIN_AMOUNT_CAPTURE_TTL_MS,
   COMMERCE_ERROR_CODES,
+  SERVICE_REFUND_REASON_MAX_LENGTH,
+  SERVICE_REFUND_REASON_MIN_LENGTH,
   PANEL_ERROR_CODES,
   PLATFORM_ERROR_CODES,
   providerDescriptor,
@@ -61,6 +63,12 @@ import type { PaymentDestinationRenderer } from '../../modules/commerce/payments
 import type { InboundReceiptFile } from '../../modules/commerce/payments/application/receipt-ports.js';
 import type { ReceiptService } from '../../modules/commerce/payments/application/receipt.service.js';
 import type { ReceiptCreditCaptureService } from '../../modules/commerce/payments/application/receipt-credit-capture.service.js';
+import type { ServiceRefundDecisionService } from '../../modules/commerce/payments/application/service-refund-decision.service.js';
+import { mayBePushedRefundRequests } from '../../modules/commerce/payments/application/service-refund-push.consumer.js';
+import {
+  normaliseRefundReason,
+  type ServiceRefundRequestService,
+} from '../../modules/commerce/payments/application/service-refund-request.service.js';
 import type {
   ReceiptBlockCaptureService,
   ReceiptRejectCaptureService,
@@ -199,6 +207,12 @@ export const BOT_INTENTS = [
   /* WP6-C: a customer's own link rotation, ask then confirm. */
   'SERVICE_ROTATE_ASK',
   'SERVICE_ROTATE',
+  /*
+   * WP19: a customer's refund request for a service. ASK shows what would happen and
+   * writes nothing; CONFIRM opens the reason capture. The request is filed by the reason.
+   */
+  'SERVICE_REFUND_ASK',
+  'SERVICE_REFUND_CONFIRM',
   'SERVICE_RENEW',
   'SERVICE_ADD_TRAFFIC',
   'SERVICE_ADD_TIME',
@@ -287,6 +301,15 @@ export const BOT_INTENTS = [
    */
   'ADMIN_REJECT_CONFIRM',
   'ADMIN_REJECT_CANCEL',
+  /*
+   * WP19: a decision on a customer's service refund request. APPROVE opens the amount
+   * capture and REJECT the reason capture — neither decides anything; CONFIRM names the
+   * amount CAPTURE and is the only callback that approves; CANCEL abandons either prompt.
+   */
+  'ADMIN_REFUND_REQUEST_APPROVE',
+  'ADMIN_REFUND_REQUEST_REJECT',
+  'ADMIN_REFUND_REQUEST_CONFIRM',
+  'ADMIN_REFUND_REQUEST_CANCEL',
   'ADMIN_SECTION',
   /*
    * WP1 — one administrator, and the one write this surface may make about them.
@@ -678,8 +701,8 @@ export const CANCEL_ORDER_CALLBACK_PREFIX = 'f:';
  * prefixes state: a callback is an intent and an identifier, never a quantity and never
  * a subscription. The link a resend produces is read from the row, so a modified client
  * has nothing to tamper with beyond the id — and an id that is not theirs fails at
- * `getForCustomer`, against the row, with the same answer an id that does not exist
- * gets.
+ * `getForCustomer`, by id and owner in one query, with the same answer an id that does
+ * not exist gets.
  */
 /**
  * Starting a wallet top-up, and choosing one of the offered amounts.
@@ -992,6 +1015,53 @@ const ADMIN_INTENTS: ReadonlySet<BotIntent> = new Set<BotIntent>(
 export const ADMIN_PANEL_CALLBACK_PREFIX = 'A:';
 export const ADMIN_RECEIPTS_CALLBACK_PREFIX = 'B:';
 export const ADMIN_RECEIPT_CALLBACK_PREFIX = 'C:';
+/**
+ * WP19 — a customer's refund request for one service, and an administrator's decision on it
+ * (`docs/wp19-service-refund-request-audit.md`). Two-letter prefixes, beside `f:` and `q:`
+ * rather than inside them: the router matches on the whole prefix, colon included.
+ *
+ * Customer:
+ * - `fa:<service uuid>` opens the request screen: what will happen, and one confirm button.
+ *   Reads only. 39 bytes.
+ * - `fb:<service uuid>` confirms, and opens the reason capture. The request is filed by the
+ *   reason itself, so a confirm that is never followed by a reason files nothing.
+ *
+ * Administrator (the review card, and the two captures behind it):
+ * - `qa:<request uuid>` approve: opens the amount capture.
+ * - `qb:<request uuid>` reject: opens the reason capture. The typed reason rejects at once
+ *   (brief §2.9): nothing is deleted or moved, so there is nothing to confirm twice.
+ * - `qc:<capture uuid>` / `qd:<capture uuid>` confirm or cancel an approval. The callback
+ *   names the CAPTURE, never the figure: the amount is on the capture row, so a stale or
+ *   forged button cannot carry a different number. `qd:` also cancels a reason prompt.
+ */
+export const SERVICE_REFUND_ASK_CALLBACK_PREFIX = 'fa:';
+export const SERVICE_REFUND_CONFIRM_CALLBACK_PREFIX = 'fb:';
+export const ADMIN_REFUND_REQUEST_APPROVE_CALLBACK_PREFIX = 'qa:';
+export const ADMIN_REFUND_REQUEST_REJECT_CALLBACK_PREFIX = 'qb:';
+export const ADMIN_REFUND_REQUEST_APPROVE_CONFIRM_CALLBACK_PREFIX = 'qc:';
+export const ADMIN_REFUND_REQUEST_APPROVE_CANCEL_CALLBACK_PREFIX = 'qd:';
+
+/**
+ * The four administrator callbacks' intents: the buttons of a review card that is PUSHED,
+ * to administrators chosen by `mayBePushedRefundRequests`, not reached through a panel
+ * section. So `adminTurn` admits them on that same predicate rather than on
+ * `hasAnyPanelSection` (Codex review of #83, round 9).
+ */
+const ADMIN_REFUND_REQUEST_INTENTS: ReadonlySet<BotIntent> = new Set<BotIntent>([
+  'ADMIN_REFUND_REQUEST_APPROVE',
+  'ADMIN_REFUND_REQUEST_REJECT',
+  'ADMIN_REFUND_REQUEST_CONFIRM',
+  'ADMIN_REFUND_REQUEST_CANCEL',
+]);
+
+/** The four administrator callbacks, prefix to intent. Each carries one UUIDv7. */
+const ADMIN_REFUND_REQUEST_CALLBACKS: readonly (readonly [string, BotIntent])[] = [
+  [ADMIN_REFUND_REQUEST_APPROVE_CALLBACK_PREFIX, 'ADMIN_REFUND_REQUEST_APPROVE'],
+  [ADMIN_REFUND_REQUEST_REJECT_CALLBACK_PREFIX, 'ADMIN_REFUND_REQUEST_REJECT'],
+  [ADMIN_REFUND_REQUEST_APPROVE_CONFIRM_CALLBACK_PREFIX, 'ADMIN_REFUND_REQUEST_CONFIRM'],
+  [ADMIN_REFUND_REQUEST_APPROVE_CANCEL_CALLBACK_PREFIX, 'ADMIN_REFUND_REQUEST_CANCEL'],
+];
+
 export const ADMIN_APPROVE_CALLBACK_PREFIX = 'D:';
 export const ADMIN_REJECT_CALLBACK_PREFIX = 'E:';
 export const ADMIN_SECTION_CALLBACK_PREFIX = 'F:';
@@ -2026,6 +2096,16 @@ export function startPayloadOf(update: unknown): string | null {
   return match?.[1] ?? null;
 }
 
+/**
+ * The update's Telegram `update_id`, which increases per bot (WP19). A refund-request prompt
+ * reads only messages newer than the tap that opened it, so a redelivered older message can
+ * never become its amount or reason. Undefined when absent or not a non-negative integer.
+ */
+export function updateIdOf(update: unknown): bigint | undefined {
+  const raw = (update as { update_id?: unknown } | null)?.update_id;
+  return typeof raw === 'number' && Number.isSafeInteger(raw) && raw >= 0 ? BigInt(raw) : undefined;
+}
+
 export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCommand {
   const callback = (update as { callback_query?: { id?: unknown; data?: unknown } } | null)
     ?.callback_query;
@@ -2255,6 +2335,20 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
       return callbackCommand(
         'SERVICE_TERMINATE',
         data.slice(SERVICE_TERMINATE_CALLBACK_PREFIX.length),
+        id,
+      );
+    }
+    if (data.startsWith(SERVICE_REFUND_ASK_CALLBACK_PREFIX)) {
+      return callbackCommand(
+        'SERVICE_REFUND_ASK',
+        data.slice(SERVICE_REFUND_ASK_CALLBACK_PREFIX.length),
+        id,
+      );
+    }
+    if (data.startsWith(SERVICE_REFUND_CONFIRM_CALLBACK_PREFIX)) {
+      return callbackCommand(
+        'SERVICE_REFUND_CONFIRM',
+        data.slice(SERVICE_REFUND_CONFIRM_CALLBACK_PREFIX.length),
         id,
       );
     }
@@ -2523,6 +2617,9 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
     }
     if (data.startsWith(ADMIN_CREDIT_CALLBACK_PREFIX)) {
       return callbackCommand('ADMIN_CREDIT', data.slice(ADMIN_CREDIT_CALLBACK_PREFIX.length), id);
+    }
+    for (const [prefix, intent] of ADMIN_REFUND_REQUEST_CALLBACKS) {
+      if (data.startsWith(prefix)) return callbackCommand(intent, data.slice(prefix.length), id);
     }
     if (data.startsWith(ADMIN_CREDIT_CONFIRM_CALLBACK_PREFIX)) {
       return callbackCommand(
@@ -3043,6 +3140,22 @@ export interface BotRuntimeDeps {
   readonly receiptCredits?: Pick<
     ReceiptCreditCaptureService,
     'open' | 'submitAmount' | 'confirm' | 'cancel'
+  >;
+  /**
+   * WP19: a customer's service refund request — whether it is offered, and the filing.
+   * Without it no service shows the button and a crafted `fa:`/`fb:` answers unavailable.
+   */
+  readonly serviceRefunds?: Pick<
+    ServiceRefundRequestService,
+    'customerOffer' | 'offeredFor' | 'file'
+  >;
+  /**
+   * WP19: an administrator's decision prompts behind the review card. Without it the card's
+   * approve and reject answer as any unknown admin tap.
+   */
+  readonly serviceRefundDecisions?: Pick<
+    ServiceRefundDecisionService,
+    'openApprove' | 'openReject' | 'submitText' | 'confirmApprove' | 'cancel'
   >;
   /**
    * Block User from the receipt message (WP10 follow-up §4). Optional for the reason
@@ -3853,6 +3966,11 @@ export function refusalValuesFor(key: TemplateKey): TemplateValues {
   return REFUSAL_VALUES[key] ?? {};
 }
 
+/** Whether `refusal` answers this error with a sentence, rather than rethrowing it. */
+function hasRefusalReply(error: unknown): boolean {
+  return isNexaError(error) && REFUSAL_REPLIES[error.code] !== undefined;
+}
+
 function refusal(error: unknown): PendingReply {
   const key = isNexaError(error) ? REFUSAL_REPLIES[error.code] : undefined;
   if (key === undefined) throw error;
@@ -3955,6 +4073,55 @@ export function receiptReviewButtons(
 }
 
 /**
+ * The four buttons of a refund request's review card (brief §2.5). Approve and reject are
+ * decisions; "view user" and "view service" reuse the administrators' own navigation, so the
+ * card adds no second way of showing either. Drawn only to an administrator the push lane
+ * already found holding both decision keys, and every tap is charged again behind it.
+ *
+ * The two view buttons open panel sections, which `adminTurn` admits only for their own view
+ * keys, so each is drawn only for a recipient holding it (Codex review of #83, round 10). A
+ * reviewer with the two decision keys alone is sent the two buttons that work for them, not
+ * two more that would answer as if they were a customer. `receiptReviewButtons` draws the
+ * same way.
+ */
+export function refundRequestReviewButtons(
+  request: {
+    readonly id: string;
+    readonly customerId: string;
+    readonly serviceId: string;
+  },
+  permissions: ReadonlySet<PermissionKey>,
+): CustomerButton[] {
+  const buttons: CustomerButton[] = [
+    {
+      label: { kind: 'TEMPLATE', key: 'bot.admin.refund_request_approve_button' },
+      data: `${ADMIN_REFUND_REQUEST_APPROVE_CALLBACK_PREFIX}${request.id}`,
+      row: 0,
+    },
+    {
+      label: { kind: 'TEMPLATE', key: 'bot.admin.refund_request_reject_button' },
+      data: `${ADMIN_REFUND_REQUEST_REJECT_CALLBACK_PREFIX}${request.id}`,
+      row: 0,
+    },
+  ];
+  if (permissions.has(CUSTOMERS_VIEW_PERMISSION)) {
+    buttons.push({
+      label: { kind: 'TEMPLATE', key: 'bot.admin.refund_request_user_button' },
+      data: `${ADMIN_CUSTOMER_CALLBACK_PREFIX}v:${request.customerId}`,
+      row: 1,
+    });
+  }
+  if (permissions.has(SERVICES_VIEW_PERMISSION)) {
+    buttons.push({
+      label: { kind: 'TEMPLATE', key: 'bot.admin.refund_request_service_button' },
+      data: `${ADMIN_SERVICE_CALLBACK_PREFIX}${request.serviceId}`,
+      row: 1,
+    });
+  }
+  return buttons;
+}
+
+/**
  * What a blocked customer is told (File 01 §9, the owner's correction to WP10): the account is
  * blocked, WHY — the reason stored on THIS customer's own row, and nothing else of the block's
  * record — and to contact support. A block with no reason keeps `bot.blocked`, a whole sentence
@@ -4002,6 +4169,14 @@ function blockCancelButton(captureId: string): CustomerButton {
 }
 
 /** The capture's cancel button. */
+/** Abandons a refund request's amount or reason prompt (WP19). */
+function refundRequestCancelButton(captureId: string): CustomerButton {
+  return {
+    label: { kind: 'TEMPLATE', key: 'bot.admin.refund_request_cancel_button' },
+    data: `${ADMIN_REFUND_REQUEST_APPROVE_CANCEL_CALLBACK_PREFIX}${captureId}`,
+  };
+}
+
 function creditCancelButton(captureId: string): CustomerButton {
   return {
     label: { kind: 'TEMPLATE', key: 'bot.admin.credit_cancel_button' },
@@ -4372,7 +4547,16 @@ export class BotRuntime {
     const maySeeCustomers = permissions.has(CUSTOMERS_VIEW_PERMISSION);
     const maySeeCategories =
       permissions.has(CATALOG_VIEW_PERMISSION) && this.deps.productCategories !== undefined;
-    if (!hasAnyPanelSection(permissions)) return null;
+    /*
+     * A refund request's card is pushed to whoever holds the two decision permissions,
+     * panel or no panel (Codex review of #83, round 9). Its taps are admitted on the SAME
+     * predicate the push chose them by: gated on a panel section, a reviewer holding only
+     * `refunds.issue` and `services.terminate` was sent a card whose every button answered
+     * as if they were a customer. The decision service checks both permissions again.
+     */
+    const mayDecideRefundRequest =
+      ADMIN_REFUND_REQUEST_INTENTS.has(command.intent) && mayBePushedRefundRequests(permissions);
+    if (!hasAnyPanelSection(permissions) && !mayDecideRefundRequest) return null;
 
     try {
       switch (command.intent) {
@@ -4493,6 +4677,20 @@ export class BotRuntime {
                 command.targetId,
                 input.botInstanceId,
                 input.idempotencyKey,
+              );
+        case 'ADMIN_REFUND_REQUEST_APPROVE':
+        case 'ADMIN_REFUND_REQUEST_REJECT':
+        case 'ADMIN_REFUND_REQUEST_CONFIRM':
+        case 'ADMIN_REFUND_REQUEST_CANCEL':
+          return command.targetId === null
+            ? null
+            : await this.adminRefundRequestTurn(
+                scope,
+                adminActor,
+                command.intent,
+                command.targetId,
+                input.botInstanceId,
+                updateIdOf(input.update),
               );
         case 'ADMIN_CREDIT_CONFIRM':
           return command.targetId === null
@@ -5267,15 +5465,197 @@ export class BotRuntime {
       readonly idempotencyKey: string;
       readonly botInstanceId: BotInstanceId;
       readonly telegramUserId: string;
+      readonly update?: unknown;
     },
   ): Promise<PendingReply | null> {
     const amount = await this.adminCreditAmount(scope, actor, text, input);
     if (amount !== null) return amount;
+    const refundDecision = await this.adminRefundRequestText(scope, actor, text, input);
+    if (refundDecision !== null) return refundDecision;
     const blockReason = await this.adminBlockReason(scope, actor, text, input);
     if (blockReason !== null) return blockReason;
     const customerBlockReason = await this.adminCustomerBlockReason(scope, actor, text, input);
     if (customerBlockReason !== null) return customerBlockReason;
     return this.adminRejectReason(scope, actor, text, input);
+  }
+
+  /**
+   * A tap on a refund request's review card, or on the prompt behind it (WP19). Approve and
+   * reject open a prompt and decide nothing; the confirmation names the amount CAPTURE and
+   * is the only tap that approves. Every refusal is a sentence from the closed list below.
+   */
+  private async adminRefundRequestTurn(
+    scope: TenantContext,
+    actor: ActorContext,
+    intent: BotIntent,
+    targetId: string,
+    botInstanceId: BotInstanceId,
+    updateId: bigint | undefined,
+  ): Promise<PendingReply | null> {
+    const decisions = this.deps.serviceRefundDecisions;
+    if (decisions === undefined) return null;
+    const minutes = Math.round(ADMIN_AMOUNT_CAPTURE_TTL_MS / 60_000);
+    const plain = (key: TemplateKey): PendingReply => ({
+      key,
+      values: {},
+      buttons: [],
+      orderId: null,
+    });
+    try {
+      if (intent === 'ADMIN_REFUND_REQUEST_APPROVE' || intent === 'ADMIN_REFUND_REQUEST_REJECT') {
+        const approve = intent === 'ADMIN_REFUND_REQUEST_APPROVE';
+        const opened = approve
+          ? await decisions.openApprove(scope, actor, {
+              botInstanceId,
+              requestId: targetId,
+              ...(updateId === undefined ? {} : { updateId }),
+            })
+          : await decisions.openReject(scope, actor, {
+              botInstanceId,
+              requestId: targetId,
+              ...(updateId === undefined ? {} : { updateId }),
+            });
+        if (opened.outcome === 'CLOSED') return plain('bot.admin.refund_request_closed');
+        if (opened.outcome === 'NOT_EXECUTABLE') {
+          return plain('bot.admin.refund_request_not_executable');
+        }
+        return {
+          key: approve
+            ? 'bot.admin.refund_request_amount_prompt'
+            : 'bot.admin.refund_request_reject_prompt',
+          values: approve ? { remaining: opened.review.remaining, minutes } : { minutes },
+          buttons: [refundRequestCancelButton(opened.capture.id)],
+          orderId: null,
+        };
+      }
+      if (intent === 'ADMIN_REFUND_REQUEST_CONFIRM') {
+        const result = await decisions.confirmApprove(scope, actor, { captureId: targetId });
+        switch (result.outcome) {
+          case 'EXECUTING':
+            return result.request.approvedAmount === null
+              ? plain('bot.admin.refund_request_closed')
+              : {
+                  key: 'bot.admin.refund_request_executing',
+                  values: { amount: result.request.approvedAmount },
+                  buttons: [],
+                  orderId: null,
+                };
+          case 'INVALID_AMOUNT':
+            return {
+              key: 'bot.admin.refund_request_amount_invalid',
+              values: { remaining: result.remaining },
+              buttons: [],
+              orderId: null,
+            };
+          case 'EXPIRED':
+            return plain('bot.admin.refund_request_expired');
+          case 'CANCELLED':
+            return plain('bot.admin.refund_request_cancelled');
+          case 'NOT_EXECUTABLE':
+            return plain('bot.admin.refund_request_not_executable');
+          case 'CLOSED':
+          case 'GONE':
+            return plain('bot.admin.refund_request_closed');
+        }
+      }
+      if (intent === 'ADMIN_REFUND_REQUEST_CANCEL') {
+        const result = await decisions.cancel(scope, actor, { captureId: targetId });
+        return plain(
+          result.outcome === 'CANCELLED'
+            ? 'bot.admin.refund_request_cancelled'
+            : 'bot.admin.refund_request_closed',
+        );
+      }
+      /* istanbul ignore next -- the four intents above are the only ones routed here. */
+      return null;
+    } catch {
+      return plain('bot.admin.refused');
+    }
+  }
+
+  /**
+   * An administrator's plain message, offered to their refund-request prompt (WP19): an
+   * amount restated with one destructive confirmation, or a reason that rejects at once.
+   * `null` when they have no such prompt waiting — the answer for almost every message.
+   */
+  private async adminRefundRequestText(
+    scope: TenantContext,
+    actor: ActorContext,
+    text: string,
+    input: {
+      readonly idempotencyKey: string;
+      readonly botInstanceId: BotInstanceId;
+      readonly telegramUserId: string;
+      readonly update?: unknown;
+    },
+  ): Promise<PendingReply | null> {
+    const decisions = this.deps.serviceRefundDecisions;
+    const admins = this.deps.telegramAdmins;
+    if (decisions === undefined || admins === undefined) return null;
+    const identity = await admins.resolve(scope, input.telegramUserId, actor.correlationId);
+    if (identity === null) return null;
+    const plain = (key: TemplateKey): PendingReply => ({
+      key,
+      values: {},
+      buttons: [],
+      orderId: null,
+    });
+    const updateId = updateIdOf(input.update);
+    try {
+      const result = await decisions.submitText(scope, identity.actor, {
+        idempotencyKey: `${input.idempotencyKey}:refund-text`,
+        botInstanceId: input.botInstanceId,
+        text,
+        ...(updateId === undefined ? {} : { updateId }),
+      });
+      switch (result.outcome) {
+        case 'NO_CAPTURE':
+          return null;
+        case 'EXPIRED':
+          return plain('bot.admin.refund_request_expired');
+        case 'CLOSED':
+          return plain('bot.admin.refund_request_closed');
+        case 'NOT_EXECUTABLE':
+          return plain('bot.admin.refund_request_not_executable');
+        case 'INVALID_AMOUNT':
+          // Answered, and the prompt stays open: a swallowed message is INCIDENT-FIN-001.
+          return {
+            key: 'bot.admin.refund_request_amount_invalid',
+            values: { remaining: result.remaining },
+            buttons: [],
+            orderId: null,
+          };
+        case 'INVALID_REASON':
+          return {
+            key: 'bot.admin.refund_request_reject_invalid',
+            values: { max: ADMIN_CAPTURE_REASON_MAX_LENGTH },
+            buttons: [],
+            orderId: null,
+          };
+        case 'REJECTED':
+          return plain('bot.admin.refund_request_rejected');
+        case 'AMOUNT_ENTERED':
+          return {
+            key: 'bot.admin.refund_request_confirm',
+            values: {
+              amount: result.amount,
+              customer: result.review.customer?.telegramUserId ?? '—',
+              service: result.review.service?.providerUsername ?? '—',
+            },
+            buttons: [
+              {
+                label: { kind: 'TEMPLATE', key: 'bot.admin.refund_request_confirm_button' },
+                data: `${ADMIN_REFUND_REQUEST_APPROVE_CONFIRM_CALLBACK_PREFIX}${result.capture.id}`,
+                row: 0,
+              },
+              { ...refundRequestCancelButton(result.capture.id), row: 0 },
+            ],
+            orderId: null,
+          };
+      }
+    } catch {
+      return plain('bot.admin.refused');
+    }
   }
 
   /**
@@ -8300,6 +8680,20 @@ export class BotRuntime {
     if (command.intent === 'SERVICE_ROTATE_ASK' && command.targetId !== null) {
       return this.serviceRotateAsk(scope, customer, command.targetId);
     }
+    if (command.intent === 'SERVICE_REFUND_ASK' && command.targetId !== null) {
+      return this.serviceRefundAsk(scope, customer, command.targetId);
+    }
+    if (command.intent === 'SERVICE_REFUND_CONFIRM' && command.targetId !== null) {
+      return this.serviceRefundConfirm(
+        scope,
+        actor,
+        customer,
+        command.targetId,
+        input.botInstanceId,
+        input.idempotencyKey,
+        updateIdOf(input.update),
+      );
+    }
     if (command.intent === 'SERVICE_ROTATE' && command.targetId !== null) {
       /*
        * Suffixed, as every other write that shares a turn with `resolveFromUpdate` is
@@ -8403,9 +8797,10 @@ export class BotRuntime {
   /**
    * One service, as its owner sees it.
    *
-   * `getForCustomer` compares ownership against the row rather than filtering the query,
-   * so an id that is not theirs and an id that does not exist both arrive here as
-   * `SERVICE_NOT_FOUND` — and both answer `bot.service.not_found`. Keeping them the same
+   * `getForCustomer` asks for the service by id AND owner in one query, so an id that is
+   * not theirs, an id that does not exist, and a service a completed refund request took
+   * out of their view (WP19) all arrive here as `SERVICE_NOT_FOUND` — and all answer
+   * `bot.service.not_found`. Keeping them the same
    * answer is what stops this being an oracle for guessing service ids.
    *
    * The usage figure is reported WITH the moment it was read. A figure with no `asOf` is
@@ -8489,6 +8884,15 @@ export class BotRuntime {
         label: { kind: 'TEMPLATE', key: 'bot.service.resume_button' },
         data: `${SERVICE_RESUME_CALLBACK_PREFIX}${service.id}`,
         row: 3,
+      });
+    }
+    // WP19: the refund request, alone on its row — it deletes the service, so it sits
+    // apart from the everyday actions above it.
+    if ((await this.deps.serviceRefunds?.offeredFor(scope, service)) === true) {
+      buttons.push({
+        label: { kind: 'TEMPLATE', key: 'bot.service.refund_request_button' },
+        data: `${SERVICE_REFUND_ASK_CALLBACK_PREFIX}${service.id}`,
+        row: 4,
       });
     }
     buttons.push({
@@ -8861,13 +9265,19 @@ export class BotRuntime {
     actor: ActorContext,
     customer: CustomerRecord,
     text: string,
-    input: { readonly idempotencyKey: string; readonly botInstanceId: BotInstanceId },
+    input: {
+      readonly idempotencyKey: string;
+      readonly botInstanceId: BotInstanceId;
+      readonly update?: unknown;
+    },
   ): Promise<PendingReply | null> {
+    const updateId = updateIdOf(input.update);
     const read = await this.deps.captures.readText(scope, actor, {
       idempotencyKey: `${input.idempotencyKey}:capture-text`,
       botInstanceId: input.botInstanceId,
       customerId: customer.id,
       text,
+      ...(updateId === undefined ? {} : { updateId }),
     });
     if (read.outcome !== 'READ') return null;
     const { capture } = read;
@@ -8914,6 +9324,9 @@ export class BotRuntime {
         ],
         orderId: null,
       };
+    }
+    if (capture.purpose === 'SERVICE_REFUND_REASON') {
+      return this.serviceRefundReason(scope, actor, customer, capture.subjectId, text, input);
     }
     // SERVICE_NOTE: the window names the service; the write re-checks ownership.
     if (capture.subjectId === null) return null;
@@ -9129,6 +9542,176 @@ export class BotRuntime {
       }
       return refusal(error);
     }
+  }
+
+  /**
+   * «درخواست بازگشت وجه» (WP19, brief §2.2): what would happen, and one confirm button.
+   * Writes nothing. The offer is re-read here rather than trusted from the drawn button, so
+   * a stale or forged tap on a service that is no longer eligible is told so.
+   */
+  private async serviceRefundAsk(
+    scope: TenantContext,
+    customer: CustomerRecord,
+    serviceId: string,
+  ): Promise<PendingReply> {
+    const service = await this.ownedService(scope, customer, serviceId);
+    if (service === null) {
+      return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };
+    }
+    const offer = await this.refundOffer(scope, service);
+    if (offer !== 'OFFERED') return refundOfferReply(offer, service.id);
+    const title = await this.deps.purchaseTitle(scope, service.orderId);
+    return {
+      key: 'bot.service.refund_request_ask',
+      values: { service: service.providerUsername, product: title ?? '—' },
+      buttons: [
+        {
+          label: { kind: 'TEMPLATE', key: 'bot.service.refund_request_confirm_button' },
+          data: `${SERVICE_REFUND_CONFIRM_CALLBACK_PREFIX}${service.id}`,
+          row: 0,
+        },
+        { ...backToServiceButton(service.id), row: 1 },
+      ],
+      orderId: null,
+    };
+  }
+
+  /**
+   * «✅ تأیید درخواست بازگشت وجه»: opens the reason window. Still files nothing — the reason
+   * files the request, so a confirmation never followed by a reason leaves no row.
+   */
+  private async serviceRefundConfirm(
+    scope: TenantContext,
+    actor: ActorContext,
+    customer: CustomerRecord,
+    serviceId: string,
+    botInstanceId: BotInstanceId,
+    idempotencyKey: string,
+    updateId: bigint | undefined,
+  ): Promise<PendingReply> {
+    const service = await this.ownedService(scope, customer, serviceId);
+    if (service === null) {
+      return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };
+    }
+    const offer = await this.refundOffer(scope, service);
+    if (offer !== 'OFFERED') return refundOfferReply(offer, service.id);
+    await this.deps.captures.open(scope, actor, {
+      idempotencyKey: `${idempotencyKey}:refund-reason-open`,
+      botInstanceId,
+      customerId: customer.id,
+      purpose: 'SERVICE_REFUND_REASON',
+      subjectId: service.id,
+      // The reason must be typed after this tap (Codex review of #83, round 8).
+      ...(updateId === undefined ? {} : { openedUpdateId: updateId }),
+    });
+    return {
+      key: 'bot.service.refund_request_reason_prompt',
+      values: {},
+      buttons: [backToServiceButton(service.id)],
+      orderId: null,
+    };
+  }
+
+  /**
+   * The customer's reason, which files the request exactly once (brief §2.2). An invalid
+   * reason is told so and the window is opened again; everything else is decided by
+   * `ServiceRefundRequestService.file`, inside its transaction.
+   */
+  private async serviceRefundReason(
+    scope: TenantContext,
+    actor: ActorContext,
+    customer: CustomerRecord,
+    serviceId: string | null,
+    text: string,
+    input: {
+      readonly idempotencyKey: string;
+      readonly botInstanceId: BotInstanceId;
+      readonly update?: unknown;
+    },
+  ): Promise<PendingReply | null> {
+    const refunds = this.deps.serviceRefunds;
+    if (serviceId === null) return null;
+    if (refunds === undefined) return refundOfferReply('UNAVAILABLE', serviceId);
+    const updateId = updateIdOf(input.update);
+    // A window this message reopens reads only messages sent after it (round 8).
+    const reopen = (suffix: string) =>
+      this.deps.captures.open(scope, actor, {
+        idempotencyKey: `${input.idempotencyKey}:${suffix}`,
+        botInstanceId: input.botInstanceId,
+        customerId: customer.id,
+        purpose: 'SERVICE_REFUND_REASON',
+        subjectId: serviceId,
+        ...(updateId === undefined ? {} : { openedUpdateId: updateId }),
+      });
+    if (normaliseRefundReason(text) === null) {
+      await reopen('refund-reason-reopen');
+      return {
+        key: 'bot.service.refund_request_reason_invalid',
+        values: { min: SERVICE_REFUND_REASON_MIN_LENGTH, max: SERVICE_REFUND_REASON_MAX_LENGTH },
+        buttons: [backToServiceButton(serviceId)],
+        orderId: null,
+      };
+    }
+    try {
+      const result = await refunds.file(scope, actor, {
+        customerId: customer.id,
+        serviceId,
+        botInstanceId: input.botInstanceId,
+        reason: text,
+        // The update that carried the reason: a redelivery files nothing new, whatever
+        // became of the request in between.
+        idempotencyKey: `${input.idempotencyKey}:refund-file`,
+      });
+      if (result.outcome === 'ALREADY_OPEN') return refundOfferReply('PENDING', serviceId);
+      /*
+       * A redelivered reason is answered with its own request, whatever became of it
+       * (round 3) — so "registered, awaiting review" is said only while that is still true
+       * (Codex review of #83, round 6). An approved request still deleting is pending; a
+       * decided one was told through the lane, and the customer is shown the service as it
+       * now stands (or `not_found`, once a completed request has hidden it).
+       */
+      if (result.request.state === 'EXECUTING') return refundOfferReply('PENDING', serviceId);
+      if (result.request.state !== 'OPEN') {
+        return this.serviceDetail(scope, actor, customer, serviceId);
+      }
+      return {
+        key: 'bot.service.refund_request_registered',
+        values: {},
+        buttons: [backToServiceButton(serviceId)],
+        orderId: null,
+        // A registration the customer never saw is repeated through the lane, once.
+        fallback: { kind: 'SERVICE_REFUND_REQUEST_REGISTERED', subjectId: result.request.id },
+      };
+    } catch (error) {
+      if (isNexaError(error) && error.code === COMMERCE_ERROR_CODES.SERVICE_REFUND_NOT_ELIGIBLE) {
+        return refundOfferReply('UNAVAILABLE', serviceId);
+      }
+      if (isNexaError(error) && error.code === COMMERCE_ERROR_CODES.SERVICE_NOT_FOUND) {
+        return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };
+      }
+      /*
+       * A failure nobody answers — the database, a timeout, or a typed error with no reply
+       * sentence such as the outbox's own — filed nothing, but reading the reason already
+       * closed its window, and the webhook answers 2xx, so Telegram will not redeliver
+       * (Codex review of #83, rounds 8 and 9). The window is reopened, so the customer's next
+       * message files the request. A refusal that HAS a sentence is an answer, and keeps
+       * the window shut: a window reopened under "not available" would swallow whatever the
+       * customer typed next. Best effort: if the reopen fails too, the original failure is
+       * the one reported.
+       */
+      if (!hasRefusalReply(error)) {
+        await reopen('refund-reason-retry').catch(() => undefined);
+      }
+      return refusal(error);
+    }
+  }
+
+  private async refundOffer(
+    scope: TenantContext,
+    service: ServiceRecord,
+  ): Promise<'OFFERED' | 'PENDING' | 'UNAVAILABLE'> {
+    const refunds = this.deps.serviceRefunds;
+    return refunds === undefined ? 'UNAVAILABLE' : refunds.customerOffer(scope, service);
   }
 
   private async serviceNoteBegin(
@@ -10995,6 +11578,19 @@ function backToListButton(): CustomerButton {
   return {
     label: { kind: 'TEMPLATE', key: 'bot.service.back_to_list_button' },
     data: `${SERVICES_LIST_PAGE_CALLBACK_PREFIX}1`,
+  };
+}
+
+/** The answer to a refund request the service cannot take right now (WP19). */
+function refundOfferReply(offer: 'PENDING' | 'UNAVAILABLE', serviceId: string): PendingReply {
+  return {
+    key:
+      offer === 'PENDING'
+        ? 'bot.service.refund_request_pending'
+        : 'bot.service.refund_request_unavailable',
+    values: {},
+    buttons: [backToServiceButton(serviceId)],
+    orderId: null,
   };
 }
 

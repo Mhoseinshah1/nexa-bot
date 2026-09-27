@@ -24,6 +24,17 @@ export class ReceiptReviewPushLoop {
   constructor(
     private readonly lane: ReceiptReviewPushService,
     private readonly options: {
+      /**
+       * WP19: the refund-request review cards, driven by the same pass. The same lane shape
+       * to the same administrators through the same bot, so it shares this timer and its
+       * readiness rather than adding a second loop to the worker.
+       */
+      readonly refundRequests?: {
+        deliverDue(
+          scope: TenantContext,
+          limit: number,
+        ): Promise<{ readonly claimed: number; readonly reaped: number }>;
+      };
       readonly scope: () => TenantContext | null;
       readonly intervalMs: number;
       readonly now: () => number;
@@ -65,11 +76,38 @@ export class ReceiptReviewPushLoop {
         this.progress.record(this.options.now());
         return;
       }
-      const report = await this.lane.deliverDue(scope, RECEIPT_PUSH_SWEEP_LIMIT);
-      if (report.claimed > 0 || report.reaped > 0) {
-        this.options.logger.info({ ...report }, 'receipt pushes dispatched');
+      /*
+       * The two lanes each run on their own (Codex review of #83, round 12). The refund
+       * cards used to run after the receipts inside one `try`, so a receipt pass that failed
+       * on every tick kept every refund card queued behind it, although the cards' own
+       * repository and sender were healthy. A failure is logged under its own lane and still
+       * costs the tick its progress, so readiness stays honest.
+       */
+      let failed = false;
+      try {
+        const report = await this.lane.deliverDue(scope, RECEIPT_PUSH_SWEEP_LIMIT);
+        if (report.claimed > 0 || report.reaped > 0) {
+          this.options.logger.info({ ...report }, 'receipt pushes dispatched');
+        }
+      } catch (error: unknown) {
+        failed = true;
+        this.options.logger.error({ err: error }, 'receipt push pass failed');
       }
-      this.progress.record(this.options.now());
+      if (this.options.refundRequests !== undefined) {
+        try {
+          const cards = await this.options.refundRequests.deliverDue(
+            scope,
+            RECEIPT_PUSH_SWEEP_LIMIT,
+          );
+          if (cards.claimed > 0 || cards.reaped > 0) {
+            this.options.logger.info({ ...cards }, 'refund request cards dispatched');
+          }
+        } catch (error: unknown) {
+          failed = true;
+          this.options.logger.error({ err: error }, 'refund request card pass failed');
+        }
+      }
+      if (!failed) this.progress.record(this.options.now());
     } catch (error: unknown) {
       this.options.logger.error({ err: error }, 'receipt push pass failed');
     } finally {

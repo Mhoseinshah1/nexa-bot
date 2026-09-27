@@ -226,6 +226,40 @@ export interface ServiceRepository {
     tx: TransactionScope,
   ): Promise<ServiceRecord | null>;
 
+  /**
+   * Serialises the plans that must not interleave on one service (WP19, Codex review of #83,
+   * rounds 9 to 11): a deletion — a refund request's, planned at approval, or an operator's —
+   * a refund request's filing, and a paid commercial action, planned at settlement. Each
+   * takes this lock and then refuses while another's work is undecided, so none can commit
+   * unseen beside another.
+   *
+   * A transaction-scoped ADVISORY lock, not the row lock. A commercial settlement already
+   * holds the customer's wallet lock when it gets here, and the refund sweep takes the
+   * service row before that wallet, so taking the row here would close a cycle.
+   *
+   * Taken LAST, after every other lock its transaction takes (round 11): a holder waits for
+   * no other lock, so it cannot close a cycle. A filing or an approval that held it while
+   * waiting for the source payment closed `customer → lifecycle → payment → customer` with a
+   * settlement and an operator's refund of that payment.
+   */
+  lockLifecycle(scope: TenantContext, id: string, tx: TransactionScope): Promise<void>;
+
+  /**
+   * Whether a customer refund request for this service is OPEN or EXECUTING (Codex review of
+   * #83, round 10). A commercial action is not sold beside one: the request refunds only the
+   * service's own purchase, so an approval would delete what the second payment bought.
+   */
+  hasActiveRefundRequest(scope: TenantContext, id: string, tx?: unknown): Promise<boolean>;
+
+  /**
+   * Whether a customer refund request for this service is OPEN — filed and not yet decided
+   * (Codex review of #83, round 11). An operator's deletion is refused beside one: it would
+   * remove the service with no credit behind it, and leave the request undecidable. An
+   * EXECUTING request is not this: its own deletion is already planned, and the sweep
+   * credits it whichever deletion removed the service.
+   */
+  hasOpenRefundRequest(scope: TenantContext, id: string, tx?: unknown): Promise<boolean>;
+
   findByOrderId(
     scope: TenantContext,
     orderId: OrderId,
@@ -466,6 +500,17 @@ export interface ServiceRepository {
   ): Promise<readonly ServiceRecord[]>;
 
   countForCustomer(scope: TenantContext, customerId: UserId, tx?: unknown): Promise<number>;
+
+  /**
+   * The customer's OWN service by id, or null — null too for one another customer owns,
+   * and for one a completed refund request removed from the customer's view (WP19 T5).
+   */
+  findForCustomer(
+    scope: TenantContext,
+    customerId: UserId,
+    id: string,
+    tx?: unknown,
+  ): Promise<ServiceRecord | null>;
 
   /** Sets or clears the customer's note on THEIR service; false when the row is not theirs. */
   setCustomerNote(
@@ -752,6 +797,14 @@ export interface OperationRepository {
     serviceId: string,
     tx?: unknown,
   ): Promise<OperationRecord | null>;
+
+  /**
+   * Whether some `TERMINATE` of this service is undecided: `PLANNED`, `IN_FLIGHT` or
+   * `UNKNOWN`, every state `OPERATION_TERMINAL_STATES` leaves out. A commercial action is not
+   * planned beside one (Codex review of #83, round 9): whatever it applied, the deletion would
+   * take away, and nothing would give the customer that payment back.
+   */
+  terminationUndecided(scope: TenantContext, serviceId: string, tx?: unknown): Promise<boolean>;
 
   /**
    * Whether an operation of this type for this ORDER is still undecided: `PLANNED`,

@@ -12,6 +12,7 @@ import {
   sql,
   type SQL,
 } from 'drizzle-orm';
+import { SERVICE_REFUND_REQUEST_ACTIVE_STATES } from '@nexa/contracts';
 import type {
   OrderId,
   PanelId,
@@ -28,7 +29,11 @@ import {
   requireTenantId,
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
-import { customers, services } from '../../../../infrastructure/persistence/schema.js';
+import {
+  customers,
+  serviceRefundRequests,
+  services,
+} from '../../../../infrastructure/persistence/schema.js';
 import type {
   ProvisionOutcome,
   ServiceCursor,
@@ -39,7 +44,31 @@ import type {
   ServiceSearch,
 } from '../application/ports.js';
 
+/**
+ * The advisory-lock CLASS for `lockLifecycle` ("SL"): a refund request's deletion and a paid
+ * commercial action serialise on it, per service. Distinct from every other class in use.
+ */
+export const SERVICE_LIFECYCLE_LOCK_CLASS = 0x534c;
+
 type Row = typeof services.$inferSelect;
+
+/**
+ * WP19 (T5): a service whose customer refund request COMPLETED was paid back and deleted
+ * at the customer's own request, and leaves the customer's view entirely — the list, the
+ * count, the search and the detail. Only the customer's: the operator's queries and every
+ * lane that works on services keep seeing it, because it is still a row with a history.
+ *
+ * `NOT EXISTS` over the request table's own `(tenant, service)` lookup, so a service with
+ * no request — nearly all of them — costs one index probe.
+ */
+function notRefundedAway(): SQL {
+  return sql`NOT EXISTS (
+    SELECT 1 FROM ${serviceRefundRequests}
+    WHERE ${serviceRefundRequests.tenantId} = ${services.tenantId}
+      AND ${serviceRefundRequests.serviceId} = ${services.id}
+      AND ${serviceRefundRequests.state} = 'COMPLETED'
+  )`;
+}
 
 function toRecord(row: Row): ServiceRecord {
   return {
@@ -177,10 +206,58 @@ export class DrizzleServiceRepository implements ServiceRepository {
       .select()
       .from(services)
       .where(and(eq(services.tenantId, tenantId), eq(services.id, id)))
-      .for('update')
+      /*
+       * `NO KEY UPDATE`, not `UPDATE` (Codex review of #83, round 11), for the reason
+       * `lockPayment` gives: it excludes every other locker and every write of this row
+       * exactly as before, and does NOT conflict with the `FOR KEY SHARE` a foreign-key check
+       * takes. That difference is a deadlock: a commercial settlement holds the service's
+       * lifecycle lock and then inserts an operation naming this service, whose FK check
+       * waited on a `FOR UPDATE` here while this transaction — a filing, an approval or an
+       * operator's deletion — waited on that lifecycle lock.
+       */
+      .for('no key update')
       .limit(1);
     const row = rows[0];
     return row === undefined ? null : toRecord(row);
+  }
+
+  async lockLifecycle(scope: TenantContext, id: string, tx: TransactionScope): Promise<void> {
+    const tenantId = requireTenantId(scope);
+    await this.exec(tx).execute(
+      sql`SELECT pg_advisory_xact_lock(${SERVICE_LIFECYCLE_LOCK_CLASS}, hashtext(${`${tenantId}:${id}`}))`,
+    );
+  }
+
+  async hasActiveRefundRequest(scope: TenantContext, id: string, tx?: unknown): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select({ id: serviceRefundRequests.id })
+      .from(serviceRefundRequests)
+      .where(
+        and(
+          eq(serviceRefundRequests.tenantId, tenantId),
+          eq(serviceRefundRequests.serviceId, id),
+          inArray(serviceRefundRequests.state, [...SERVICE_REFUND_REQUEST_ACTIVE_STATES]),
+        ),
+      )
+      .limit(1);
+    return rows.length > 0;
+  }
+
+  async hasOpenRefundRequest(scope: TenantContext, id: string, tx?: unknown): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select({ id: serviceRefundRequests.id })
+      .from(serviceRefundRequests)
+      .where(
+        and(
+          eq(serviceRefundRequests.tenantId, tenantId),
+          eq(serviceRefundRequests.serviceId, id),
+          eq(serviceRefundRequests.state, 'OPEN'),
+        ),
+      )
+      .limit(1);
+    return rows.length > 0;
   }
 
   async findByOrderId(
@@ -733,7 +810,11 @@ export class DrizzleServiceRepository implements ServiceRepository {
     tx?: unknown,
   ): Promise<{ readonly items: readonly ServiceRecord[]; readonly count: number }> {
     const tenantId = requireTenantId(scope);
-    const owned = and(eq(services.tenantId, tenantId), eq(services.customerId, customerId));
+    const owned = and(
+      eq(services.tenantId, tenantId),
+      eq(services.customerId, customerId),
+      notRefundedAway(),
+    );
     const [counted] = await this.exec(tx)
       .select({ total: sql<number>`count(*)::int` })
       .from(services)
@@ -770,6 +851,7 @@ export class DrizzleServiceRepository implements ServiceRepository {
         and(
           eq(services.tenantId, tenantId),
           eq(services.customerId, customerId),
+          notRefundedAway(),
           sql`${services.providerUsername} LIKE ${`${escaped}%`} ESCAPE '\\'`,
         ),
       )
@@ -783,8 +865,37 @@ export class DrizzleServiceRepository implements ServiceRepository {
     const [counted] = await this.exec(tx)
       .select({ total: sql<number>`count(*)::int` })
       .from(services)
-      .where(and(eq(services.tenantId, tenantId), eq(services.customerId, customerId)));
+      .where(
+        and(
+          eq(services.tenantId, tenantId),
+          eq(services.customerId, customerId),
+          notRefundedAway(),
+        ),
+      );
     return Number(counted?.total ?? 0);
+  }
+
+  async findForCustomer(
+    scope: TenantContext,
+    customerId: UserId,
+    id: string,
+    tx?: unknown,
+  ): Promise<ServiceRecord | null> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select()
+      .from(services)
+      .where(
+        and(
+          eq(services.tenantId, tenantId),
+          eq(services.id, id),
+          eq(services.customerId, customerId),
+          notRefundedAway(),
+        ),
+      )
+      .limit(1);
+    const row = rows[0];
+    return row === undefined ? null : toRecord(row);
   }
 
   async setCustomerNote(

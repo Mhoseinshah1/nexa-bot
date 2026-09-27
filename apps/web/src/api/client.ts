@@ -272,6 +272,12 @@ import {
   REFUND_ROUTES,
   refundListResponseSchema,
   refundResponseSchema,
+  SERVICE_REFUND_REQUEST_ROUTES,
+  serviceRefundRequestListResponseSchema,
+  serviceRefundRequestResponseSchema,
+  type ServiceRefundRequestListResponse,
+  type ServiceRefundRequestResponse,
+  type ServiceRefundRequestState,
   type RefundListResponse,
   type RefundResponse,
 } from '@nexa/contracts';
@@ -1781,6 +1787,75 @@ export function failRefund(input: {
 }): Promise<RefundResponse> {
   const { refundId, ...body } = input;
   return post(REFUND_ROUTES.fail(refundId), body, refundResponseSchema);
+}
+
+// --- Service refund requests (WP19) ------------------------------------------
+
+/**
+ * Customers' refund requests, newest first — the durable fallback the Telegram review card
+ * is not (brief §2.10). `remainingMinor` on each row is the server's own figure.
+ */
+export function fetchServiceRefundRequests(
+  query: {
+    readonly state?: ServiceRefundRequestState;
+    /** Every state that still wants an operator, as one stream under one cursor. */
+    readonly attention?: true;
+    /** The `nextCursor` of the page before: returns the requests older than it. */
+    readonly cursor?: { readonly at: string; readonly id: string };
+  } = {},
+): Promise<ServiceRefundRequestListResponse> {
+  const params = new URLSearchParams();
+  if (query.state !== undefined) params.set('state', query.state);
+  if (query.attention === true) params.set('attention', 'true');
+  if (query.cursor !== undefined) {
+    params.set('before', query.cursor.at);
+    params.set('beforeId', query.cursor.id);
+  }
+  const suffix = params.toString();
+  return authedGet(
+    suffix ? `${SERVICE_REFUND_REQUEST_ROUTES.list}?${suffix}` : SERVICE_REFUND_REQUEST_ROUTES.list,
+    serviceRefundRequestListResponseSchema,
+  );
+}
+
+/** One service's refund requests, every state. */
+export function fetchServiceRefundRequestsForService(
+  serviceId: string,
+): Promise<ServiceRefundRequestListResponse> {
+  return authedGet(
+    SERVICE_REFUND_REQUEST_ROUTES.forService(serviceId),
+    serviceRefundRequestListResponseSchema,
+  );
+}
+
+/**
+ * Approves an amount: the server re-decides eligibility and the bound under the payment's
+ * lock, reserves it, and plans the deletion. `confirm: true` is the destructive
+ * confirmation the schema itself requires. Nothing is credited until the account is gone.
+ */
+export function approveServiceRefundRequest(input: {
+  requestId: string;
+  idempotencyKey: string;
+  amountMinor: string;
+}): Promise<ServiceRefundRequestResponse> {
+  return post(
+    SERVICE_REFUND_REQUEST_ROUTES.approve(input.requestId),
+    { idempotencyKey: input.idempotencyKey, amountMinor: input.amountMinor, confirm: true },
+    serviceRefundRequestResponseSchema,
+  );
+}
+
+/** Rejects with the mandatory reason, which the customer is sent. Nothing is deleted or moved. */
+export function rejectServiceRefundRequest(input: {
+  requestId: string;
+  idempotencyKey: string;
+  reason: string;
+}): Promise<ServiceRefundRequestResponse> {
+  return post(
+    SERVICE_REFUND_REQUEST_ROUTES.reject(input.requestId),
+    { idempotencyKey: input.idempotencyKey, reason: input.reason },
+    serviceRefundRequestResponseSchema,
+  );
 }
 
 // --- Trials: the override, the reset and the operator's view (WP6-B) --------

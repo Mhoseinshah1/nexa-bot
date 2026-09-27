@@ -686,8 +686,14 @@ export class ProvisioningService {
      * ownership check, and an invalid-cast error is neither the tenancy answer nor a
      * refusal the surface has a sentence for.
      */
-    const service = await this.deps.services.findById(scope, serviceIdOrNotFound(id));
-    if (service === null || service.customerId !== customerId) {
+    // Owned, and not paid back and deleted at the customer's own request (WP19 T5): both
+    // in the query, so a hidden service answers exactly like one that never existed.
+    const service = await this.deps.services.findForCustomer(
+      scope,
+      customerId,
+      serviceIdOrNotFound(id),
+    );
+    if (service === null) {
       throw errors.notFound(COMMERCE_ERROR_CODES.SERVICE_NOT_FOUND, 'Unknown service.');
     }
     return service;
@@ -1184,92 +1190,213 @@ export class ProvisioningService {
     }
 
     const now = this.deps.clock.now();
-    return this.deps.uow.run(scope, async (tx) => {
-      if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) {
+    return this.deps.uow.run(scope, async (tx) =>
+      this.planWithin(scope, actor, service, type, input, origin, now, tx),
+    );
+  }
+
+  /**
+   * WP19: a `TERMINATE` planned INSIDE a caller's transaction.
+   *
+   * The one caller is an approved customer refund request, which must reserve the money
+   * and plan the deletion as one fact — a request that reserved an amount with no deletion
+   * behind it, or planned a deletion with nothing reserved, would each be a state no one
+   * decided. Everything else about the plan is `planRequestedOperation`'s, unchanged: the
+   * legal state, the panel's operability, an open TERMINATE answered rather than
+   * duplicated, and the audit row naming the administrator who approved it.
+   *
+   * No permission check here: the caller holds `services.terminate` AND `refunds.issue`
+   * and has charged both through the guard before it opened the transaction.
+   */
+  async planTerminateWithin(
+    scope: TenantContext,
+    actor: ActorContext,
+    service: ServiceRecord,
+    input: { readonly idempotencyKey: string },
+    tx: TransactionScope,
+  ): Promise<OperationRecord> {
+    if (!OPERATION_LEGAL_FROM.TERMINATE.includes(service.state)) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.SERVICE_ACTION_NOT_ALLOWED,
+        'That service is not in a state this action can be taken from.',
+        { state: service.state },
+      );
+    }
+    // In the caller's transaction, beside the locks it holds (Codex review of #83, round 4).
+    const operable = await this.deps.panels.operability(scope, service.panelId, 'TERMINATE', tx);
+    if (!operable.ok) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.PANEL_NOT_OPERABLE,
+        'The panel this service lives on cannot perform that action.',
+        { reason: operable.reason },
+      );
+    }
+    return this.planWithin(
+      scope,
+      actor,
+      service,
+      'TERMINATE',
+      input,
+      { requestedBy: 'OPERATOR', forRefundRequest: true },
+      this.deps.clock.now(),
+      tx,
+    );
+  }
+
+  /** The transactional half of planning, shared by both entry points above. */
+  private async planWithin(
+    scope: TenantContext,
+    actor: ActorContext,
+    service: ServiceRecord,
+    type: OperationType,
+    input: { readonly idempotencyKey: string },
+    origin: {
+      readonly requestedBy: 'OPERATOR' | UserId;
+      readonly admission?: {
+        readonly serialize: (tx: TransactionScope) => Promise<void>;
+        readonly admit: (tx: TransactionScope) => Promise<void>;
+      };
+      /**
+       * Set by `planTerminateWithin` alone: this deletion IS an approved refund request's, so
+       * the request standing active is the reason for it rather than a refusal of it.
+       */
+      readonly forRefundRequest?: true;
+    },
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<OperationRecord> {
+    if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+        'That tenant has stopped accepting work.',
+      );
+    }
+    /*
+     * The lock comes FIRST, before the open-operation read below, so that a second
+     * request waiting here sees the first one's committed row rather than the world
+     * both of them started from.
+     */
+    if (origin.admission !== undefined) await origin.admission.serialize(tx);
+    /*
+     * Every TERMINATE planner serialises on the service's row (WP19, Codex review of #83,
+     * round 4). An approved refund request plans its deletion under that lock; an
+     * operator's terminate, planned without it, could pass `findOpen` beside it and plan a
+     * SECOND deletion — which fails against the account the first one removed, and the
+     * request, bound to whichever ran second, is released with the service gone. Nothing
+     * else keys an open TERMINATE, so the lock is the rule. Re-taking it in the approval's
+     * own transaction is a no-op. The state is judged again from the locked row: the one
+     * read before the wait may predate a deletion that has since finished.
+     */
+    if (type === 'TERMINATE') {
+      const locked = await this.deps.services.lockForUpdate(scope, service.id, tx);
+      if (locked === null || !OPERATION_LEGAL_FROM.TERMINATE.includes(locked.state)) {
         throw errors.conflict(
-          COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
-          'That tenant has stopped accepting work.',
+          COMMERCE_ERROR_CODES.SERVICE_ACTION_NOT_ALLOWED,
+          'That service is not in a state this action can be taken from.',
+          { state: locked?.state ?? null },
         );
       }
       /*
-       * The lock comes FIRST, before the open-operation read below, so that a second
-       * request waiting here sees the first one's committed row rather than the world
-       * both of them started from.
+       * Then the lifecycle lock, after the row (Codex review of #83, round 11). A paid
+       * commercial action's settlement refuses while a deletion is undecided, and it decides
+       * that under this lock alone — it never takes the service row, because it already holds
+       * the customer's wallet there. A deletion planned under the row lock only could pass
+       * that settlement's check and its own `findOpen` beside it, and delete the renewal the
+       * customer had just paid for. Nothing waits on another lock while holding this one.
        */
-      if (origin.admission !== undefined) await origin.admission.serialize(tx);
-      const open = await this.deps.operations.findOpen(scope, service.id, type, tx);
-      if (open !== null) return open;
-      const operationId = this.deps.operationId(`${service.id}:${type}:${input.idempotencyKey}`);
-      if (origin.admission !== undefined) {
-        /*
-         * A replay of this key is answered with what it planned, BEFORE the admission
-         * rule: the request that started a cooldown must not be refused by its own
-         * success when its webhook is delivered again.
-         */
-        const replay = await this.deps.operations.findByOperationId(scope, operationId, tx);
-        if (replay !== null) return replay;
-        await origin.admission.admit(tx);
-      }
-      const operation = await this.deps.operations.plan(
-        scope,
-        {
-          id: this.deps.ids.uuid(),
-          operationId,
-          serviceId: service.id,
-          orderId: service.orderId,
-          /*
-           * The one place the two request paths differ in the ROW they write.
-           *
-           * `requestedBy` already distinguishes them in the audit payload; this puts
-           * the same distinction on the operation, where the announcer can read it in
-           * a later transaction. Without it the announcer decides from the TYPE, and an
-           * operator's suspend is the same type as a customer's — so the customer was
-           * told that the request they made had been applied, having made none.
-           */
-          requestedByCustomerId: origin.requestedBy === 'OPERATOR' ? null : origin.requestedBy,
-          panelId: service.panelId,
-          type,
-        },
-        now,
-        tx,
-      );
+      await this.deps.services.lockLifecycle(scope, locked.id, tx);
       /*
-       * WHO asked, and when.
-       *
-       * `plan` records no actor — an operation row says what is to be done and by which
-       * worker it was claimed, not who wanted it — so without this the only answer to
-       * "who asked for this service to be deleted" would be inferred. Inference is what
-       * `/admin/logs` offered, and the research records what that was worth.
-       *
-       * The actor is whatever the CALLER authenticated. For an operator it is their own
-       * `ActorContext`, which is the point of `requestFromOperator`. For a customer it
-       * is the `SYSTEM_JOB` the webhook runs as, because a customer is not an admin and
-       * has no actor of their own — their id goes in `requestedBy`, where it is a fact
-       * about the request rather than a fabricated identity. That distinction is the
-       * reason `docs/conventions.md` forbids inventing actors, and `requestedBy` is what
-       * keeps the two readable apart: a customer id, or the literal `OPERATOR` beside an
-       * admin actor that names the person.
-       *
-       * The executor writes a SECOND audit row when the panel actually applies the
-       * change, and the two are different facts: this one is a decision, that one is an
-       * effect, and a terminate that was asked for and never carried out must not look
-       * like one that was.
+       * A customer's refund request for this service is OPEN (Codex review of #83, round 11).
+       * Its approval deletes the service and credits the wallet; a deletion planned beside it
+       * would remove the service with no credit behind it, and leave the request OPEN for
+       * ever, since an approval refuses a service that has ended. The operator decides the
+       * request instead. An EXECUTING request is not refused here: its own deletion is
+       * already planned, and the sweep credits it whichever deletion removes the service.
+       * Its approval, which plans that deletion, passes `forRefundRequest`.
        */
-      await this.deps.audit.record(
-        scope,
-        actor,
-        {
-          action: `service.request_${type.toLowerCase()}`,
-          entityType: 'Service',
-          entityId: service.id,
-          before: { state: service.state },
-          after: { requestedBy: origin.requestedBy, operationId: operation.operationId },
-          result: 'SUCCESS',
-        },
-        tx,
-      );
-      return operation;
-    });
+      if (
+        origin.forRefundRequest !== true &&
+        (await this.deps.services.hasOpenRefundRequest(scope, locked.id, tx))
+      ) {
+        throw errors.conflict(
+          COMMERCE_ERROR_CODES.SERVICE_ACTION_NOT_ALLOWED,
+          'This service has a refund request pending; decide the request instead.',
+          { state: locked.state, reason: 'REFUND_REQUESTED' },
+        );
+      }
+    }
+    const open = await this.deps.operations.findOpen(scope, service.id, type, tx);
+    if (open !== null) return open;
+    const operationId = this.deps.operationId(`${service.id}:${type}:${input.idempotencyKey}`);
+    if (origin.admission !== undefined) {
+      /*
+       * A replay of this key is answered with what it planned, BEFORE the admission
+       * rule: the request that started a cooldown must not be refused by its own
+       * success when its webhook is delivered again.
+       */
+      const replay = await this.deps.operations.findByOperationId(scope, operationId, tx);
+      if (replay !== null) return replay;
+      await origin.admission.admit(tx);
+    }
+    const operation = await this.deps.operations.plan(
+      scope,
+      {
+        id: this.deps.ids.uuid(),
+        operationId,
+        serviceId: service.id,
+        orderId: service.orderId,
+        /*
+         * The one place the two request paths differ in the ROW they write.
+         *
+         * `requestedBy` already distinguishes them in the audit payload; this puts
+         * the same distinction on the operation, where the announcer can read it in
+         * a later transaction. Without it the announcer decides from the TYPE, and an
+         * operator's suspend is the same type as a customer's — so the customer was
+         * told that the request they made had been applied, having made none.
+         */
+        requestedByCustomerId: origin.requestedBy === 'OPERATOR' ? null : origin.requestedBy,
+        panelId: service.panelId,
+        type,
+      },
+      now,
+      tx,
+    );
+    /*
+     * WHO asked, and when.
+     *
+     * `plan` records no actor — an operation row says what is to be done and by which
+     * worker it was claimed, not who wanted it — so without this the only answer to
+     * "who asked for this service to be deleted" would be inferred. Inference is what
+     * `/admin/logs` offered, and the research records what that was worth.
+     *
+     * The actor is whatever the CALLER authenticated. For an operator it is their own
+     * `ActorContext`, which is the point of `requestFromOperator`. For a customer it
+     * is the `SYSTEM_JOB` the webhook runs as, because a customer is not an admin and
+     * has no actor of their own — their id goes in `requestedBy`, where it is a fact
+     * about the request rather than a fabricated identity. That distinction is the
+     * reason `docs/conventions.md` forbids inventing actors, and `requestedBy` is what
+     * keeps the two readable apart: a customer id, or the literal `OPERATOR` beside an
+     * admin actor that names the person.
+     *
+     * The executor writes a SECOND audit row when the panel actually applies the
+     * change, and the two are different facts: this one is a decision, that one is an
+     * effect, and a terminate that was asked for and never carried out must not look
+     * like one that was.
+     */
+    await this.deps.audit.record(
+      scope,
+      actor,
+      {
+        action: `service.request_${type.toLowerCase()}`,
+        entityType: 'Service',
+        entityId: service.id,
+        before: { state: service.state },
+        after: { requestedBy: origin.requestedBy, operationId: operation.operationId },
+        result: 'SUCCESS',
+      },
+      tx,
+    );
+    return operation;
   }
 
   /**
@@ -1319,6 +1446,13 @@ export class ProvisioningService {
       throw errors.conflict(code, message, { reason });
     };
 
+    /*
+     * The lifecycle lock first, so a refund request's approval — which plans a deletion
+     * under the same lock — is either wholly before this or wholly after it (Codex review of
+     * #83, round 9). Taken after every lock settlement already holds.
+     */
+    await this.deps.services.lockLifecycle(scope, action.serviceId, tx);
+
     const service = await this.deps.services.findById(scope, action.serviceId, tx);
     if (service === null) {
       /*
@@ -1353,6 +1487,35 @@ export class ProvisioningService {
         COMMERCE_ERROR_CODES.SERVICE_ACTION_IN_PROGRESS,
         'This service already has an action waiting to be applied.',
         'ACTION_IN_PROGRESS',
+      );
+    }
+
+    /*
+     * A deletion is planned and not yet decided — an approved refund request's, or an
+     * operator's (Codex review of #83, round 9). Whatever this action applied, the deletion
+     * would take away, and the refund returns only the service's own purchase, so the
+     * payment for this action would buy nothing. Refused, so a wallet purchase is not taken
+     * and a transfer that already arrived is given back, like every other refusal here.
+     */
+    if (await this.deps.operations.terminationUndecided(scope, service.id, tx)) {
+      return refuse(
+        COMMERCE_ERROR_CODES.SERVICE_ACTION_NOT_ALLOWED,
+        'This service is being deleted.',
+        'TERMINATION_PENDING',
+      );
+    }
+
+    /*
+     * A customer's refund request is open or being carried out (Codex review of #83, round
+     * 10). Its approval deletes the service and refunds only the service's own purchase, so a
+     * renewal or add-on sold now would be value the customer pays for and then loses, whether
+     * it is applied before the approval or after it. Sold again once the request is decided.
+     */
+    if (await this.deps.services.hasActiveRefundRequest(scope, service.id, tx)) {
+      return refuse(
+        COMMERCE_ERROR_CODES.SERVICE_ACTION_NOT_ALLOWED,
+        'This service has a refund request pending.',
+        'REFUND_REQUESTED',
       );
     }
 

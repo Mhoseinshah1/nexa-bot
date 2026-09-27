@@ -24,6 +24,7 @@ import { BotsController } from './surfaces/web/bots.controller.js';
 import { PaymentGatewaysController } from './surfaces/web/payment-gateways.controller.js';
 import { SupportFaqController } from './surfaces/web/support-faq.controller.js';
 import { RefundsController } from './surfaces/web/refunds.controller.js';
+import { ServiceRefundRequestsController } from './surfaces/web/service-refund-requests.controller.js';
 import { ServicesController } from './surfaces/web/services.controller.js';
 import { PanelsController } from './surfaces/web/panels.controller.js';
 import { RecoveryController } from './surfaces/web/recovery.controller.js';
@@ -85,6 +86,7 @@ export class AppModule implements NestModule {
         PaymentGatewaysController as never,
         SupportFaqController as never,
         RefundsController as never,
+        ServiceRefundRequestsController as never,
         ServicesController as never,
         PanelsController as never,
         RecoveryController as never,

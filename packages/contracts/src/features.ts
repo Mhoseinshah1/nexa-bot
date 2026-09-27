@@ -173,6 +173,21 @@ export const FEATURE_FLAGS = [
     configuredBy: ['services.link_rotation_cooldown_hours'],
   },
   {
+    key: 'customer_refund_requests',
+    description:
+      'Let a customer ask, from Telegram, for a refund of one of their paid services. An ' +
+      'administrator decides the amount (never more than what is left of the original ' +
+      'purchase, and never the payment gateway fee), the service is deleted from its panel, ' +
+      'and only after the deletion succeeds is the amount credited to the customer\u2019s Nexa ' +
+      'wallet \u2014 whatever the original payment method. Turning it off withdraws the ' +
+      'button and refuses the customer\u2019s taps; requests already filed can still be decided.',
+    defaultEnabled: false,
+    // TENANT_WIDE, like `customer_link_rotation`: it offers a new action to every customer at
+    // once, and that action ends in money leaving the tenant.
+    blastRadius: 'TENANT_WIDE',
+    configuredBy: [],
+  },
+  {
     key: 'referrals',
     description:
       'Run a referral program: a customer shares a link, and whoever joins through it is ' +

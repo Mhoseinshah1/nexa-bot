@@ -6,6 +6,8 @@ import {
   COMPENSATION_PAGE_MAX,
   ORDER_MACHINE,
   REFUND_METHOD_SUPPORT,
+  SERVICE_REFUND_REQUEST_CHANNEL,
+  SERVICE_REFUND_REQUEST_REFUND_REASON,
   errors,
   money,
   nextState,
@@ -100,7 +102,7 @@ export interface RefundServiceDeps {
    * earlier, by the idempotency store. Nothing here may read a balance to decide
    * anything: a refund is bounded by the PAYMENT, never by what the wallet holds.
    */
-  readonly wallet: Pick<WalletRepository, 'append' | 'lockCustomer'>;
+  readonly wallet: Pick<WalletRepository, 'append' | 'lockCustomer' | 'findByReference'>;
   /**
    * The cashback lane's one entry into a refund (WP8 P9): when a refund reaches
    * `COMPLETED`, the share of the order's earned cashback it made owed is taken back in
@@ -503,6 +505,7 @@ export class RefundService {
           throw errors.notFound(COMMERCE_ERROR_CODES.PAYMENT_NOT_FOUND, 'Unknown payment.');
         }
         const before = await this.requireRefundForUpdate(scope, refundId, tx);
+        await this.refuseWorkflowRefund(scope, before, tx);
 
         // Already there. Answered with the refund, and NO audit row — an audit entry for
         // a change that did not happen is the legacy activity feed.
@@ -611,6 +614,7 @@ export class RefundService {
       async (tx) => {
         await this.assertScopeActive(scope, tx);
         const before = await this.requireRefundForUpdate(scope, refundId, tx);
+        await this.refuseWorkflowRefund(scope, before, tx);
 
         if (before.state === 'FAILED') {
           await this.remember(scope, input.idempotencyKey, requestHash, refundId, tx);
@@ -659,6 +663,276 @@ export class RefundService {
     );
   }
 
+  // --- WP19: the customer service refund request ------------------------------
+
+  /**
+   * RESERVES an approved amount of a service's source payment, inside the approving
+   * transaction (`docs/wp19-service-refund-request-audit.md` T1, T3).
+   *
+   * A `REQUESTED` refund on the wallet channel: nothing is credited yet, but the row is in
+   * `REFUND_CONSUMING_STATES`, so the existing bound — the payment's lock, then the sum —
+   * decides this and any concurrent partial refund together. No second counter exists.
+   *
+   * The channel is the wallet whatever the payment arrived by: the owner's product rule
+   * (`SERVICE_REFUND_REQUEST_CHANNEL`), which is why `REFUND_METHOD_SUPPORT` is not asked
+   * here and still refuses an operator's own refund of a gateway payment. The bound is
+   * `payments.amount`, which since WP18 is the principal alone, so a customer fee can
+   * never be inside it.
+   *
+   * No permission is charged here: the caller holds `refunds.issue` and
+   * `services.terminate` and has charged both before its transaction opened.
+   */
+  async reserveForServiceRefund(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: {
+      readonly paymentId: PaymentId;
+      readonly amountMinor: bigint;
+    },
+    tx: TransactionScope,
+  ): Promise<RefundRecord> {
+    if (!(await this.deps.repository.lockPayment(scope, input.paymentId, tx))) {
+      throw errors.notFound(COMMERCE_ERROR_CODES.PAYMENT_NOT_FOUND, 'Unknown payment.');
+    }
+    const payment = await this.requirePayment(scope, input.paymentId, tx);
+    if (payment.state !== 'CONFIRMED' || payment.orderId === null) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.REFUND_NOT_PERMITTED,
+        'This payment cannot be refunded.',
+        {
+          reason: (payment.state !== 'CONFIRMED'
+            ? 'PAYMENT_NOT_SETTLED'
+            : 'TOPUP_CREDITED_TO_WALLET') satisfies RefundRefusalReason,
+        },
+      );
+    }
+    const order = await this.deps.orders.findById(scope, payment.orderId, tx);
+    if (order !== null && (await this.deps.deliveries.purchaseInProgress(scope, order, tx))) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.REFUND_NOT_PERMITTED,
+        'This payment cannot be refunded while its purchase is undecided.',
+        { reason: 'DELIVERY_IN_PROGRESS' satisfies RefundRefusalReason },
+      );
+    }
+    const consumption = await this.deps.repository.consumptionFor(scope, payment.id, tx);
+    if (consumption.currency !== null && consumption.currency !== payment.amount.currency) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.REFUND_NOT_PERMITTED,
+        'This payment has refunds in another currency.',
+        { reason: 'CURRENCY_MISMATCH' satisfies RefundRefusalReason },
+      );
+    }
+    if (
+      !refundFitsWithin({
+        paidMinor: payment.amount.amountMinor,
+        consumedMinor: consumption.consumedMinor,
+        requestedMinor: input.amountMinor,
+      })
+    ) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.REFUND_EXCEEDS_REFUNDABLE,
+        'That is more than this payment has left to refund.',
+        {
+          refundableMinor: refundableMinor(
+            payment.amount.amountMinor,
+            consumption.consumedMinor,
+          ).toString(),
+          currency: payment.amount.currency,
+        },
+      );
+    }
+
+    const now = this.deps.clock.now();
+    const created = await this.deps.repository.create(
+      scope,
+      {
+        id: this.deps.ids.uuid() as RefundId,
+        paymentId: payment.id,
+        customerId: payment.customerId,
+        orderId: payment.orderId,
+        state: 'REQUESTED',
+        channel: SERVICE_REFUND_REQUEST_CHANNEL,
+        amount: money(input.amountMinor, payment.amount.currency),
+        reason: SERVICE_REFUND_REQUEST_REFUND_REASON,
+        requestedByAdminId: this.adminIdOf(actor),
+        completedByAdminId: null,
+        completedAt: null,
+        now,
+      },
+      tx,
+    );
+    await this.deps.audit.record(
+      scope,
+      actor,
+      {
+        action: 'refund.request',
+        entityType: 'Refund',
+        entityId: created.id,
+        before: null,
+        after: auditView(created),
+        result: 'SUCCESS',
+      },
+      tx,
+    );
+    return created;
+  }
+
+  /**
+   * Credits a reservation, exactly once, after the provider account was deleted.
+   *
+   * Called by the request sweep in the transaction that completes the request. The
+   * payment's lock first, then the refund's, the order every refund writer takes them in.
+   * A refund that is already COMPLETED is answered with itself and nothing is written: the
+   * conditional transition below is what makes a replay a no-op, and the wallet's own
+   * unique `<refundId>:refund` reference is the backstop under it.
+   *
+   * Only when its credit is there. A COMPLETED reservation with no `<refundId>:refund`
+   * entry was closed by something other than this method — the release before WP19, whose
+   * operator `complete` knows nothing of reservations and accepts one with no credit. That
+   * is refused rather than answered: answering it would tell the customer their money was
+   * returned when it was not, and crediting it now would be a guess about what the
+   * operator who closed it did. The request stays EXECUTING, in front of an operator.
+   *
+   * `completed_by_admin_id` is the administrator who APPROVED: their final confirmation
+   * authorised exactly this credit, contingent on the deletion that has now happened. It
+   * is not a fabricated actor — it is the only person who decided anything here.
+   */
+  async settleServiceRefund(
+    scope: TenantContext,
+    actor: ActorContext,
+    refundId: RefundId,
+    tx: TransactionScope,
+  ): Promise<RefundRecord> {
+    const unlocked = await this.deps.repository.findById(scope, refundId, tx);
+    if (unlocked === null) {
+      throw errors.notFound(COMMERCE_ERROR_CODES.REFUND_NOT_FOUND, 'Unknown refund.');
+    }
+    if (!(await this.deps.repository.lockPayment(scope, unlocked.paymentId, tx))) {
+      throw errors.notFound(COMMERCE_ERROR_CODES.PAYMENT_NOT_FOUND, 'Unknown payment.');
+    }
+    const before = await this.requireRefundForUpdate(scope, refundId, tx);
+    if (before.state === 'COMPLETED') {
+      if ((await this.deps.wallet.findByReference(scope, `${refundId}:refund`, tx)) !== null) {
+        return before;
+      }
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.REFUND_STATE_INVALID,
+        'This reservation was closed without its credit.',
+        { reason: 'COMPLETED_WITHOUT_CREDIT' },
+      );
+    }
+    if (before.state !== 'REQUESTED' || before.reason !== SERVICE_REFUND_REQUEST_REFUND_REASON) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.REFUND_STATE_INVALID,
+        'This refund is not a reserved service refund.',
+        { state: before.state },
+      );
+    }
+    const now = this.deps.clock.now();
+    const after = await this.deps.repository.transition(
+      scope,
+      refundId,
+      {
+        from: 'REQUESTED',
+        to: 'COMPLETED',
+        completedByAdminId: before.requestedByAdminId,
+        completedAt: now,
+      },
+      now,
+      tx,
+    );
+    if (after === null) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.REFUND_STATE_INVALID,
+        'This refund changed while it was being settled.',
+        { reason: 'STATE_RACE' },
+      );
+    }
+    await this.creditWallet(scope, after, actor, now, tx, before.requestedByAdminId);
+    // After the credit, so the balance the reversal reads already holds it (P9).
+    await this.deps.cashback.reverseForRefund(scope, actor, after, now, tx);
+    await this.deps.referrals.reverseForRefund(scope, actor, after, now, tx);
+    await this.completed(
+      scope,
+      actor,
+      after,
+      await this.requirePayment(scope, after.paymentId, tx),
+      now,
+      tx,
+      { notifyCustomer: false, serviceRemoved: true },
+    );
+    await this.deps.audit.record(
+      scope,
+      actor,
+      {
+        action: 'refund.complete',
+        entityType: 'Refund',
+        entityId: refundId,
+        before: auditView(before),
+        after: auditView(after),
+        result: 'SUCCESS',
+      },
+      tx,
+    );
+    return after;
+  }
+
+  /**
+   * RELEASES a reservation whose deletion definitively failed: `REQUESTED -> FAILED`,
+   * nothing credited, the amount back in the payment's refundable balance. A refund
+   * already FAILED is answered with itself.
+   *
+   * It writes no `RefundFailed`. The caller's `ServiceRefundRequestResolved` FAILED, in
+   * this transaction, is what the financial log says; and `RefundFailed.cause` stays the
+   * two values the previous release reads strictly, so nothing written here can stall its
+   * consumer after a rollback (Codex review of #83, round 4).
+   */
+  async releaseServiceRefund(
+    scope: TenantContext,
+    actor: ActorContext,
+    refundId: RefundId,
+    tx: TransactionScope,
+  ): Promise<RefundRecord> {
+    const before = await this.requireRefundForUpdate(scope, refundId, tx);
+    if (before.state === 'FAILED') return before;
+    if (before.state !== 'REQUESTED' || before.reason !== SERVICE_REFUND_REQUEST_REFUND_REASON) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.REFUND_STATE_INVALID,
+        'This refund is not a reserved service refund.',
+        { state: before.state },
+      );
+    }
+    const now = this.deps.clock.now();
+    const after = await this.deps.repository.transition(
+      scope,
+      refundId,
+      { from: 'REQUESTED', to: 'FAILED', completionNote: 'DELETION_FAILED' },
+      now,
+      tx,
+    );
+    if (after === null) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.REFUND_STATE_INVALID,
+        'This refund changed while it was being released.',
+        { reason: 'STATE_RACE' },
+      );
+    }
+    await this.deps.audit.record(
+      scope,
+      actor,
+      {
+        action: 'refund.fail',
+        entityType: 'Refund',
+        entityId: refundId,
+        before: auditView(before),
+        after: auditView(after),
+        result: 'SUCCESS',
+      },
+      tx,
+    );
+    return after;
+  }
+
   // -------------------------------------------------------------------------
 
   /**
@@ -675,12 +949,39 @@ export class RefundService {
    * overdraw so it does not strictly need the serialisation, but taking the lock in one
    * order everywhere is what keeps two movements of one wallet from deadlocking.
    */
+  /**
+   * WP19: a service refund request's reservation belongs to its workflow. Completing it by
+   * hand would mark money returned with no ledger entry (the wallet channel credits only in
+   * `settleServiceRefund`), and failing it by hand would strand the request whose deletion
+   * is already under way — so an operator's complete and fail both refuse it. Known by its
+   * LINK from a request, never by its reason: the reason is free text an operator can type.
+   */
+  private async refuseWorkflowRefund(
+    scope: TenantContext,
+    refund: RefundRecord,
+    tx: TransactionScope,
+  ): Promise<void> {
+    if (await this.deps.repository.isServiceRefundReservation(scope, refund.id, tx)) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.REFUND_STATE_INVALID,
+        'This refund belongs to a customer refund request and is settled by it.',
+        { state: refund.state, reason: 'SERVICE_REFUND_REQUEST' },
+      );
+    }
+  }
+
   private async creditWallet(
     scope: TenantContext,
     refund: RefundRecord,
     actor: ActorContext,
     now: Date,
     tx: TransactionScope,
+    /*
+     * Whose decision the credit carries out. The acting admin by default; the sweep that
+     * settles a service refund request acts as the system but carries out the approving
+     * administrator's decision, and the ledger names them (Codex review of #83, round 6).
+     */
+    actorAdminId: string | null = this.adminIdOf(actor),
   ): Promise<void> {
     const present = await this.deps.wallet.lockCustomer(scope, refund.customerId, tx);
     if (!present) {
@@ -697,7 +998,7 @@ export class RefundService {
         reference: `${refund.id}:refund`,
         orderId: refund.orderId,
         paymentId: refund.paymentId,
-        actorAdminId: this.adminIdOf(actor),
+        actorAdminId,
         note: refund.reason,
         now,
       },
@@ -767,7 +1068,10 @@ export class RefundService {
     tx: TransactionScope,
     result:
       | { readonly outcome: 'COMPLETED' }
-      | { readonly outcome: 'FAILED'; readonly cause: 'OPERATOR_FAILED' | 'SUPERSEDED' },
+      | {
+          readonly outcome: 'FAILED';
+          readonly cause: 'OPERATOR_FAILED' | 'SUPERSEDED';
+        },
   ): Promise<void> {
     const common = {
       refundId: refund.id,
@@ -802,15 +1106,30 @@ export class RefundService {
     payment: PaymentRecord,
     now: Date,
     tx: TransactionScope,
+    /**
+     * WP19: a service refund request tells the customer `SERVICE_REFUND_REQUEST_APPROVED`
+     * — the amount AND that the service was removed — in the same transaction, so the
+     * generic `REFUND_COMPLETED` would be the same money told twice.
+     */
+    options: {
+      readonly notifyCustomer: boolean;
+      /**
+       * WP19: the refund settles a request whose deletion already SUCCEEDED, so the order's
+       * audit must not say the service was left alone (Codex review of #83, round 5).
+       */
+      readonly serviceRemoved?: boolean;
+    } = { notifyCustomer: true },
   ): Promise<void> {
-    await this.deps.notifier.notify(
-      scope,
-      refund.customerId,
-      'REFUND_COMPLETED',
-      refund.id,
-      now,
-      tx,
-    );
+    if (options.notifyCustomer) {
+      await this.deps.notifier.notify(
+        scope,
+        refund.customerId,
+        'REFUND_COMPLETED',
+        refund.id,
+        now,
+        tx,
+      );
+    }
     await this.announce(actor, refund, tx, { outcome: 'COMPLETED' });
 
     if (payment.orderId === null) return;
@@ -847,8 +1166,11 @@ export class RefundService {
           paymentId: payment.id,
           refundedMinor: refunded.toString(),
           currency: payment.amount.currency,
-          // Said because it is the surprising part: nothing was done to the service.
-          serviceLeftUntouched: true,
+          // Said because it is the surprising part: nothing was done to the service — except
+          // for a service refund request, which is settled only after its deletion succeeded.
+          ...(options.serviceRemoved === true
+            ? { serviceRemovedByRequest: true }
+            : { serviceLeftUntouched: true }),
         },
         result: 'SUCCESS',
       },

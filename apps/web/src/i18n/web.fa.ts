@@ -1509,6 +1509,43 @@ export const WEB_FA = {
   'web.refund_created_at': 'زمان ثبت',
   'web.refund_completed_at': 'زمان واریز',
   'web.refund_external_reference': 'شمارهٔ پیگیری واریز',
+  /*
+   * WP19 — customers' service refund requests. The Web Admin is the durable fallback for
+   * the Telegram review card (brief §2.10): the same two decisions, the same rules.
+   */
+  'web.service_refunds': 'درخواست‌های بازگشت وجه',
+  'web.service_refunds_hint':
+    'درخواست‌هایی که کاربران برای لغو سرویس و بازگشت وجه ثبت کرده‌اند. با تأیید، سرویس حذف و پس از حذف موفق مبلغ تأییدشده به کیف پول کاربر واریز می‌شود؛ کارمزد درگاه قابل بازگشت نیست.',
+  'web.service_refunds_open': 'درخواست‌های بازگشت وجهِ نیازمند رسیدگی',
+  'web.service_refunds_empty': 'درخواستی وجود ندارد.',
+  'web.service_refund_state_open': 'در انتظار بررسی',
+  'web.service_refund_state_executing': 'در حال حذف سرویس',
+  'web.service_refund_state_completed': 'انجام‌شده',
+  'web.service_refund_state_rejected': 'ردشده',
+  'web.service_refund_state_failed': 'ناموفق',
+  'web.service_refund_service': 'سرویس',
+  'web.service_refund_customer': 'کاربر',
+  'web.service_refund_reason': 'دلیل کاربر',
+  'web.service_refund_principal': 'مبلغ خرید',
+  'web.service_refund_remaining': 'باقی‌ماندهٔ قابل بازگشت',
+  'web.service_refund_approved': 'مبلغ تأییدشده',
+  'web.service_refund_operation': 'وضعیت حذف',
+  'web.service_refund_created': 'زمان ثبت',
+  'web.service_refund_outcome': 'نتیجه',
+  'web.service_refund_amount': 'مبلغ بازگشت (به کوچک‌ترین یکای پول)',
+  'web.service_refund_confirm':
+    'تأیید می‌کنم که سرویس حذف می‌شود و مبلغ فقط پس از حذف موفق به کیف پول کاربر واریز خواهد شد؛ کارمزد درگاه قابل بازگشت نیست.',
+  'web.service_refund_approve': 'تأیید و حذف سرویس',
+  'web.service_refund_reject_reason': 'دلیل رد (برای کاربر ارسال می‌شود)',
+  'web.service_refund_reject': 'رد درخواست',
+  'web.service_refund_approved_toast': 'درخواست تأیید شد و حذف سرویس آغاز شد.',
+  'web.service_refund_completed_toast':
+    'این درخواست پیش‌تر انجام شده است: سرویس حذف و مبلغ به کیف پول کاربر واریز شد.',
+  'web.service_refund_failed_toast':
+    'حذف سرویس ناموفق بود و مبلغی بازگردانده نشد. وضعیت درخواست را بررسی کنید.',
+  'web.service_refund_rejected_toast': 'درخواست رد شد.',
+  'web.service_refund_denied':
+    'تصمیم دربارهٔ این درخواست به هر دو دسترسی «ثبت بازگشت وجه» و «حذف سرویس» نیاز دارد.',
   'web.refund_request_title': 'ثبت بازگشت وجه',
   /*
    * Says the two facts an operator needs before pressing it: the bound is the
