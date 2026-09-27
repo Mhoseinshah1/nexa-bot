@@ -29,6 +29,7 @@ CL='apps/web/src/api/client.ts'
 H='packages/contracts/src/http.ts'
 CI='tests/unit/contracts-invariants.test.ts'
 RFR='apps/api/src/modules/commerce/payments/infrastructure/drizzle-refund.repository.ts'
+PS='apps/api/src/modules/commerce/payments/application/service-refund-push.service.ts'
 CCS='apps/api/src/modules/commerce/customers/application/customer-capture.service.ts'
 M=[
  ('W19-01',[(S,"if (succeeded && item.serviceState !== 'TERMINATED') {","if (false && succeeded && item.serviceState !== 'TERMINATED') {"),(R,"           */\n          or(\n","           */\n          or(\n            sql`true`,\n")],'did not move'),
@@ -362,10 +363,17 @@ M+=[
  ('W19-89',[(BR,"      if (!hasRefusalReply(error)) {\n        await reopen('refund-reason-retry')","      if (!isNexaError(error)) {\n        await reopen('refund-reason-retry')")],'typed error nobody answers'),
  ('W19-90',[(BR,"      if (!hasRefusalReply(error)) {\n        await reopen('refund-reason-retry')","      if (true) {\n        await reopen('refund-reason-retry')")],'sentence the customer is shown'),
  ('W19-91',[(S,"    if (await this.deps.repository.commercialUndecided(scope, service.id, tx)) {","    if (false) {")],'paid renewal of the service is undecided'),
- ('W19-92',[(PV,"    if (await this.deps.operations.terminationUndecided(scope, service.id, tx)) {","    if (false) {")],'refund deletion is undecided'),
+ ('W19-92',[(PV,"    if (await this.deps.operations.terminationUndecided(scope, service.id, tx)) {","    if (false) {")],'operator’s deletion of the service is undecided'),
  ('W19-93',[(S,"        if (locked !== null) await this.deps.services.lockLifecycle(scope, locked.id, tx);\n","")],'lifecycle lock'),
  ('W19-94',[(PV,"    await this.deps.services.lockLifecycle(scope, action.serviceId, tx);\n","")],'lifecycle lock'),
  ('W19-95',[(PG,"  const cursor = trail[trail.length - 1];","  const cursor: AttentionCursor | undefined = undefined;")],'one page of the stream',('web','tests/web/service-refund-requests.test.tsx')),
+ # Round 10 (Codex review of #83).
+ ('W19-96',[(PV,"    if (await this.deps.services.hasActiveRefundRequest(scope, service.id, tx)) {","    if (false) {")],'open refund request'),
+ ('W19-97',[(S,"        await this.deps.services.lockLifecycle(scope, service.id, tx);\n        // A replay of this very filing","        // A replay of this very filing")],'lifecycle lock'),
+ ('W19-98',[(S,"        request.rejectionReason === reason &&\n        request.decidedByAdminId === adminId","        request.rejectionReason === reason")],'second administrator'),
+ ('W19-99',[(BR,"  if (permissions.has(CUSTOMERS_VIEW_PERMISSION)) {\n    buttons.push({\n      label: { kind: 'TEMPLATE', key: 'bot.admin.refund_request_user_button' },","  if (true) {\n    buttons.push({\n      label: { kind: 'TEMPLATE', key: 'bot.admin.refund_request_user_button' },")],'refund request card',('unit','tests/unit/receipt-review-caption.test.ts')),
+ ('W19-100',[(BR,"  if (permissions.has(SERVICES_VIEW_PERMISSION)) {\n    buttons.push({\n      label: { kind: 'TEMPLATE', key: 'bot.admin.refund_request_service_button' },","  if (true) {\n    buttons.push({\n      label: { kind: 'TEMPLATE', key: 'bot.admin.refund_request_service_button' },")],'refund request card',('unit','tests/unit/receipt-review-caption.test.ts')),
+ ('W19-101',[(PS,"      const buttons = this.deps.keyboard(request, reviewer.permissions);","      const buttons = this.deps.keyboard(request, new Set(['users.view', 'services.view']) as never);")],'card buttons their permissions'),
 ]
 only=sys.argv[1:] 
 for entry in M:
