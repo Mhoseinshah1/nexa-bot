@@ -40,7 +40,7 @@ M=[
  ('B-13',[(SVC,"const key = `${scope.tenantId}:${input.botInstanceId}:${identity}:${input.telegramUserId}`;","const key = `${input.botInstanceId}:${identity}:${input.telegramUserId}`;")],T_U,'never serves one bot'),
  # --- the setting (audit §2.1) -----------------------------------------------------------
  ('B-14',[(CT,"      !channel.mandatory || channel.handle !== undefined || channel.joinUrl !== undefined,","      true,")],T_U,'required channel a customer could not open'),
- ('B-15',[(CT,"return channel.chatId ?? (channel.handle as string);","return channel.handle ?? (channel.chatId as string);")],T_I,'asks about it by id'),
+ ('B-15',[(CT,"return channel.chatId ?? (channel.handle as string);","return channel.handle ?? (channel.chatId as string);")],T_U,'even beside a handle'),
  ('B-16',[(CT,"/^https:\\/\\/t\\.me\\/[A-Za-z0-9_+\\-/]{1,200}$/","/^https:\\/\\/.+$/")],T_U,'not Telegram'),
  # --- the guard (B3, B4) -----------------------------------------------------------------
  ('B-17',[(BR,"        : await this.guardedAct(scope, actor, command, customer, arrival, input);","        : await this.act(scope, actor, command, customer, arrival, input);")],T_I,'missing one of two required channels'),

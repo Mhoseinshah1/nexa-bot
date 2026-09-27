@@ -3,6 +3,7 @@ import {
   CHANNEL_MEMBERSHIP_RECOVERED_CODE,
   CHANNEL_MEMBERSHIP_UNAVAILABLE_CODE,
   parseSettingValue,
+  telegramChannelIdentity,
   telegramChannelJoinUrl,
   type TelegramChannel,
   type TenantContext,
@@ -115,6 +116,15 @@ describe('the telegram.channels setting (audit §2.1)', () => {
   it('opens the join link when there is one, else the public handle', () => {
     expect(telegramChannelJoinUrl(PUBLIC)).toBe('https://t.me/nexa_news');
     expect(telegramChannelJoinUrl(PRIVATE)).toBe('https://t.me/+AbCdEf');
+  });
+
+  it('asks about a channel by its chat id whenever it has one, even beside a handle', () => {
+    // A handle can be renamed or given away; the numeric id is the channel (audit §2.1).
+    expect(telegramChannelIdentity({ ...PUBLIC, chatId: '-1009876543210' })).toBe(
+      '-1009876543210',
+    );
+    expect(telegramChannelIdentity(PUBLIC)).toBe('@nexa_news');
+    expect(telegramChannelIdentity(PRIVATE)).toBe('-1001234567890');
   });
 });
 
