@@ -331,11 +331,14 @@ export const EVENT_PAYLOAD_SCHEMAS = {
     amountMinor: z.string(),
     currency: z.string(),
     /**
-     * `OPERATOR_FAILED`, `SUPERSEDED` by the automatic refund of the same payment, or
-     * `DELETION_FAILED` — a service refund request whose provider deletion definitively
-     * failed, so the amount it reserved is released and nothing was credited (WP19).
+     * `OPERATOR_FAILED`, or `SUPERSEDED` by the automatic refund of the same payment.
+     *
+     * Closed at these two, and read strictly by the previous release's financial log: a
+     * third value written by a later release and relayed after a rollback would fail that
+     * consumer on every pass. A service refund request's released reservation (WP19) is
+     * told by `ServiceRefundRequestResolved` FAILED instead, which that release never routes.
      */
-    cause: z.enum(['OPERATOR_FAILED', 'SUPERSEDED', 'DELETION_FAILED']),
+    cause: z.enum(['OPERATOR_FAILED', 'SUPERSEDED']),
   }),
   /*
    * WP19. Aggregate is the SERVICE. Ids only — never the customer's reason or an
