@@ -1874,26 +1874,18 @@ describe('WP19 — a customer asks for their money back', () => {
     ).toBe(0);
   });
 
-  it('approves no deletion while a paid renewal of the service is undecided, and approves once it is applied (Codex review of #83, round 9)', async () => {
+  it('files no request while a paid renewal of the service is undecided, and files and approves once it is applied (Codex review of #83, rounds 9 and 10)', async () => {
     const service = await activeService('renew-first');
-    const filed = await file(service.id);
     await renew(service.id, 'renew-first');
     expect((await renewalsOf(service.id)).map((operation) => operation.state)).toEqual(['PLANNED']);
-    expect(
-      await refused(
-        ctx.container.serviceRefundRequests.approve(tenantA, owner, {
-          requestId: filed.request.id,
-          amountMinor: 1_000n,
-        }),
-      ),
-    ).toBe(COMMERCE_ERROR_CODES.SERVICE_REFUND_NOT_ELIGIBLE);
-    expect(await terminateOf(service.id)).toHaveLength(0);
-    expect((await requestRow(filed.request.id))?.request.state).toBe('OPEN');
+    expect(await refused(file(service.id))).toBe(COMMERCE_ERROR_CODES.SERVICE_REFUND_NOT_ELIGIBLE);
+    expect(await countRows(sql`SELECT count(*)::int AS n FROM service_refund_requests`)).toBe(0);
     // Applied, the renewal no longer stands in the way.
     await ctx.container.provisionerLoop.tick();
     expect((await renewalsOf(service.id)).map((operation) => operation.state)).toEqual([
       'SUCCEEDED',
     ]);
+    const filed = await file(service.id);
     await ctx.container.serviceRefundRequests.approve(tenantA, owner, {
       requestId: filed.request.id,
       amountMinor: 1_000n,
@@ -1901,12 +1893,33 @@ describe('WP19 — a customer asks for their money back', () => {
     expect(await terminateOf(service.id)).toHaveLength(1);
   });
 
-  it('takes no payment for a renewal while the service’s refund deletion is undecided (Codex review of #83, round 9)', async () => {
-    const service = await activeService('renew-after');
+  it('sells no renewal while the service has an open refund request, and sells one once it is decided (Codex review of #83, round 10)', async () => {
+    const service = await activeService('renew-open');
     const filed = await file(service.id);
-    await ctx.container.serviceRefundRequests.approve(tenantA, owner, {
+    const before = await balance();
+    const error = await renew(service.id, 'renew-open').then(
+      () => null,
+      (caught: unknown) => caught,
+    );
+    expect(isNexaError(error) ? error.code : error).toBe(
+      COMMERCE_ERROR_CODES.SERVICE_ACTION_NOT_ALLOWED,
+    );
+    expect(await renewalsOf(service.id)).toHaveLength(0);
+    // The fixture credited the price; the refused purchase debited nothing.
+    expect(await balance()).toBe(before + PRICE);
+    // Rejected, the request no longer stands in the way.
+    await ctx.container.serviceRefundRequests.reject(tenantA, owner, {
       requestId: filed.request.id,
-      amountMinor: 1_000n,
+      reason: 'این سرویس قابل بازگشت نیست',
+    });
+    await renew(service.id, 'renew-open-again');
+    expect(await renewalsOf(service.id)).toHaveLength(1);
+  });
+
+  it('takes no payment for a renewal while an operator’s deletion of the service is undecided (Codex review of #83, round 9)', async () => {
+    const service = await activeService('renew-after');
+    await ctx.container.provisioning.requestFromOperator(tenantA, owner, service.id, 'TERMINATE', {
+      idempotencyKey: 'renew-after-operator',
     });
     expect(await terminateOf(service.id)).toHaveLength(1);
     const before = await balance();
@@ -1918,14 +1931,18 @@ describe('WP19 — a customer asks for their money back', () => {
       COMMERCE_ERROR_CODES.SERVICE_ACTION_NOT_ALLOWED,
     );
     expect(await renewalsOf(service.id)).toHaveLength(0);
-    // The fixture credited the price; the refused purchase debited nothing.
     expect(await balance()).toBe(before + PRICE);
   });
 
-  it('serialises an approval and a renewal’s settlement on the service’s lifecycle lock (Codex review of #83, round 9)', async () => {
+  it('serialises a filing, an approval and a renewal’s settlement on the service’s lifecycle lock (Codex review of #83, rounds 9 and 10)', async () => {
     const service = await activeService('lifecycle-lock');
-    const filed = await file(service.id);
-    // The approval waits for the lock before it decides anything.
+    // A filing waits for the lock before it decides anything.
+    const heldForFiling = await holdLifecycle(service.id);
+    const filing = file(service.id);
+    await someoneWaitsOnAdvisory('the filing');
+    await heldForFiling.release();
+    const filed = await filing;
+    // And so does the approval.
     const held = await holdLifecycle(service.id);
     const approval = ctx.container.serviceRefundRequests.approve(tenantA, owner, {
       requestId: filed.request.id,
@@ -1944,6 +1961,36 @@ describe('WP19 — a customer asks for their money back', () => {
     await heldAgain.release();
     await renewal;
     expect(await renewalsOf(second.id)).toHaveLength(1);
+  });
+
+  it('tells a second administrator who typed the same reason that the request was decided, not that they rejected it (Codex review of #83, round 10)', async () => {
+    const service = await activeService('reject-twice');
+    const filed = await file(service.id);
+    const second = adminActorFor(
+      await createAdmin(ctx.container, tenantA, { username: 'owner-three', roleKeys: ['owner'] }),
+    );
+    const reason = 'این سرویس قابل بازگشت نیست';
+    await ctx.container.serviceRefundRequests.reject(tenantA, owner, {
+      requestId: filed.request.id,
+      reason,
+      idempotencyKey: 'reject-twice-first',
+    });
+    expect(
+      await refused(
+        ctx.container.serviceRefundRequests.reject(tenantA, second, {
+          requestId: filed.request.id,
+          reason,
+          idempotencyKey: 'reject-twice-second',
+        }),
+      ),
+    ).toBe(COMMERCE_ERROR_CODES.SERVICE_REFUND_REQUEST_STATE_INVALID);
+    // The same administrator's retry is still the same rejection.
+    const again = await ctx.container.serviceRefundRequests.reject(tenantA, owner, {
+      requestId: filed.request.id,
+      reason,
+    });
+    expect(again.state).toBe('REJECTED');
+    expect(again.decidedByAdminId).toBe(ownerId);
   });
 
   it('answers a malformed request id as one that does not exist, before any query (Codex review of #83)', async () => {
@@ -2458,6 +2505,31 @@ describe('WP19 — a customer asks for their money back', () => {
       'bot.admin.refund_request_closed',
     );
     expect((await requestRow(filed.request.id))?.request.state).toBe('REJECTED');
+  });
+
+  it('sends each reviewer only the card buttons their permissions open (Codex review of #83, round 10)', async () => {
+    const service = await activeService('card-buttons');
+    await deciderOnly(DECIDER_TG);
+    const filed = await file(service.id);
+    await ctx.container.relay.processBatch();
+    sent = [];
+    await ctx.container.receiptReviewPushLoop.tick();
+    const callbacksTo = (chat: string): string[] => {
+      const card = sent.find(
+        (one) => one.url.includes('/sendMessage') && String(one.body['chat_id']) === chat,
+      );
+      const markup = card?.body['reply_markup'] as
+        { inline_keyboard: { callback_data?: string }[][] } | undefined;
+      return (markup?.inline_keyboard ?? []).flat().map((button) => button.callback_data ?? '');
+    };
+    const decider = callbacksTo(DECIDER_TG);
+    expect(decider, 'the decision-only reviewer is sent the two decisions').toEqual([
+      `qa:${filed.request.id}`,
+      `qb:${filed.request.id}`,
+    ]);
+    const ownerCard = callbacksTo(ADMIN_TG);
+    expect(ownerCard, 'an owner is sent all four').toHaveLength(4);
+    expect(ownerCard).toContain(`I:${service.id}`);
   });
 
   it('enqueues one review card per administrator who may decide, and keeps the request if none is sent', async () => {
