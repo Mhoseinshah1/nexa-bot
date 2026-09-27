@@ -120,9 +120,7 @@ describe('the telegram.channels setting (audit §2.1)', () => {
 
   it('asks about a channel by its chat id whenever it has one, even beside a handle', () => {
     // A handle can be renamed or given away; the numeric id is the channel (audit §2.1).
-    expect(telegramChannelIdentity({ ...PUBLIC, chatId: '-1009876543210' })).toBe(
-      '-1009876543210',
-    );
+    expect(telegramChannelIdentity({ ...PUBLIC, chatId: '-1009876543210' })).toBe('-1009876543210');
     expect(telegramChannelIdentity(PUBLIC)).toBe('@nexa_news');
     expect(telegramChannelIdentity(PRIVATE)).toBe('-1001234567890');
   });
