@@ -251,7 +251,7 @@ export function splitByteCount(bytes: bigint): {
 }
 
 export const MAX_DURATION_DAYS = 3650;
-export const MAX_TRAFFIC_BYTES = 1_099_511_627_776_000n; // 1 PiB, far past any real plan
+export const MAX_TRAFFIC_BYTES = 1_099_511_627_776_000n; // 1000 TiB (1,024,000 GB), far past any real plan
 export const MAX_DEVICE_LIMIT = 1000;
 
 export const PRODUCT_TITLE_MAX_LENGTH = 120;

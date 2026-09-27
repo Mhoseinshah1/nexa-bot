@@ -65,6 +65,7 @@ import {
   TRIAL_LIMIT_MIN,
 } from './promotions.js';
 import { priceQuoteWireSchema } from './pricing.js';
+import { parseTrafficGb, TRAFFIC_GB_PATTERN } from './traffic-input.js';
 import {
   MAX_DEVICE_LIMIT,
   MAX_DURATION_DAYS,
@@ -2061,8 +2062,12 @@ export const productWriteSchema = z
      */
     panelId: uuidV7Schema.nullable(),
     durationDays: z.number().int().min(0).max(MAX_DURATION_DAYS),
-    /* A decimal STRING, parsed to `bigint` by the boundary rather than by the service. */
-    trafficBytes: z.string().regex(/^\d{1,19}$/u),
+    /*
+     * The traffic allowance as a person types it (WP21): GB with at most two decimals,
+     * converted to bytes by `parseTrafficGb` at the boundary. NULL is "no traffic limit",
+     * said explicitly; a typed `0` is refused below rather than read as unlimited.
+     */
+    trafficGb: z.string().trim().regex(TRAFFIC_GB_PATTERN).nullable(),
     deviceLimit: z.number().int().min(1).max(MAX_DEVICE_LIMIT).nullable(),
     /*
      * Positive when present. `products_price_positive_check` says the same thing in the
@@ -2109,9 +2114,13 @@ export const productWriteSchema = z
       'A price must be greater than zero. Leave it empty for a product that is not for sale.',
     path: ['priceAmount'],
   })
-  .refine((p) => BigInt(p.trafficBytes) <= MAX_TRAFFIC_BYTES, {
+  .refine((p) => p.trafficGb === null || (parseTrafficGb(p.trafficGb) ?? 0n) > 0n, {
+    message: 'A traffic allowance of zero is not a plan. Choose unlimited explicitly instead.',
+    path: ['trafficGb'],
+  })
+  .refine((p) => p.trafficGb === null || (parseTrafficGb(p.trafficGb) ?? 0n) <= MAX_TRAFFIC_BYTES, {
     message: 'That traffic allowance is past any real plan.',
-    path: ['trafficBytes'],
+    path: ['trafficGb'],
   })
   /*
    * And it FITS. `price_amount` is a PostgreSQL `bigint`, and the regex above admits
@@ -2119,8 +2128,8 @@ export const productWriteSchema = z
    * magnitude, so `9999999999999999999` passed validation and failed the INSERT as a
    * 500. Refused at the boundary under the field's own name instead.
    *
-   * `trafficBytes` needs no companion rule: `MAX_TRAFFIC_BYTES` already bounds it far
-   * below this.
+   * The traffic allowance needs no companion rule: `MAX_TRAFFIC_BYTES` already bounds
+   * it far below this.
    */
   .refine((p) => p.priceAmount === null || BigInt(p.priceAmount) <= MAX_MONEY_AMOUNT_MINOR, {
     message: 'That price is past the largest amount this system stores.',
@@ -2363,11 +2372,11 @@ export const serviceAddonWriteSchema = z
     kind: z.enum(SERVICE_ADDON_KINDS),
     title: z.string().trim().min(1).max(SERVICE_ADDON_TITLE_MAX_LENGTH),
     sortOrder: z.number().int().min(PRODUCT_SORT_MIN).max(PRODUCT_SORT_MAX),
-    /* Positive and present for `ADD_TRAFFIC`, absent otherwise. Zero is not unlimited here. */
-    trafficBytes: z
-      .string()
-      .regex(/^\d{1,19}$/u)
-      .nullable(),
+    /*
+     * GB with at most two decimals (WP21), converted by `parseTrafficGb`. Positive and
+     * present for `ADD_TRAFFIC`, absent otherwise. Zero is not unlimited here.
+     */
+    trafficGb: z.string().trim().regex(TRAFFIC_GB_PATTERN).nullable(),
     durationDays: z.number().int().min(1).max(MAX_DURATION_DAYS).nullable(),
     priceAmount: z
       .string()
@@ -2390,20 +2399,20 @@ export const serviceAddonWriteSchema = z
   .refine(
     (a) =>
       a.kind === 'ADD_TRAFFIC'
-        ? a.trafficBytes !== null && a.durationDays === null
-        : a.durationDays !== null && a.trafficBytes === null,
+        ? a.trafficGb !== null && a.durationDays === null
+        : a.durationDays !== null && a.trafficGb === null,
     {
       message: 'An add-on carries exactly the amount its kind can use.',
-      path: ['trafficBytes'],
+      path: ['trafficGb'],
     },
   )
-  .refine((a) => a.trafficBytes === null || BigInt(a.trafficBytes) > 0n, {
+  .refine((a) => a.trafficGb === null || (parseTrafficGb(a.trafficGb) ?? 0n) > 0n, {
     message: 'An add-on of no traffic is not something a customer can buy.',
-    path: ['trafficBytes'],
+    path: ['trafficGb'],
   })
-  .refine((a) => a.trafficBytes === null || BigInt(a.trafficBytes) <= MAX_TRAFFIC_BYTES, {
+  .refine((a) => a.trafficGb === null || (parseTrafficGb(a.trafficGb) ?? 0n) <= MAX_TRAFFIC_BYTES, {
     message: 'That traffic amount is past any real plan.',
-    path: ['trafficBytes'],
+    path: ['trafficGb'],
   });
 export type ServiceAddonWriteRequest = z.infer<typeof serviceAddonWriteSchema>;
 
