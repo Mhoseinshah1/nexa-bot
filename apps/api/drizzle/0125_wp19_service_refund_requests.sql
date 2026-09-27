@@ -89,6 +89,7 @@ ALTER TABLE "service_refund_requests" ADD CONSTRAINT "service_refund_requests_ad
 CREATE INDEX "service_refund_request_pushes_due_idx" ON "service_refund_request_pushes" USING btree ("tenant_id","next_attempt_at") WHERE state = 'PENDING';--> statement-breakpoint
 CREATE UNIQUE INDEX "service_refund_requests_active_key" ON "service_refund_requests" USING btree ("tenant_id","service_id") WHERE state IN ('OPEN', 'EXECUTING');--> statement-breakpoint
 CREATE INDEX "service_refund_requests_state_idx" ON "service_refund_requests" USING btree ("tenant_id","state","created_at");--> statement-breakpoint
+CREATE INDEX "service_refund_requests_attention_idx" ON "service_refund_requests" USING btree ("tenant_id","created_at","id") WHERE state IN ('OPEN', 'EXECUTING', 'FAILED');--> statement-breakpoint
 CREATE INDEX "service_refund_requests_service_idx" ON "service_refund_requests" USING btree ("tenant_id","service_id","created_at");--> statement-breakpoint
 ALTER TABLE "admin_amount_captures" ADD CONSTRAINT "admin_amount_captures_refund_request_fk" FOREIGN KEY ("tenant_id","service_refund_request_id") REFERENCES "public"."service_refund_requests"("tenant_id","id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "admin_amount_captures" ADD CONSTRAINT "admin_amount_captures_target_check" CHECK ((purpose IN ('RECEIPT_CREDIT_AMOUNT', 'RECEIPT_BLOCK_REASON', 'RECEIPT_REJECT_REASON')

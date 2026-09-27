@@ -7284,6 +7284,18 @@ export const serviceRefundRequests = pgTable(
       .where(sql`state IN ('OPEN', 'EXECUTING')`),
     /** The sweep's read: executing requests, oldest first. */
     index('service_refund_requests_state_idx').on(table.tenantId, table.state, table.createdAt),
+    /*
+     * The attention stream's read: every request still needing an administrator, newest
+     * first by `(created_at, id)` across all three states (Codex review of #83, round 11).
+     * The state index groups by state and has no tie-breaker, so a page there collects and
+     * sorts the whole matching history first — and FAILED is terminal and only grows.
+     * Ascending on purpose: scanned backwards it is `DESC NULLS FIRST`, which is what
+     * `ORDER BY ... DESC` means. Drizzle's `.desc()` writes `DESC NULLS LAST`, an order the
+     * query never asks for, and PostgreSQL then sorts after all.
+     */
+    index('service_refund_requests_attention_idx')
+      .on(table.tenantId, table.createdAt, table.id)
+      .where(sql`state IN ('OPEN', 'EXECUTING', 'FAILED')`),
     index('service_refund_requests_service_idx').on(
       table.tenantId,
       table.serviceId,
