@@ -287,12 +287,17 @@ describe('WP19 — a customer asks for their money back', () => {
     };
   }
 
-  /** Resolves once some transaction is waiting for an advisory lock. */
+  /**
+   * Resolves once some transaction on THIS database is waiting for an advisory lock. `pg_locks`
+   * is cluster-wide: counted across databases, a suite running beside this one satisfied the
+   * wait, and a lock this code no longer takes looked taken (the round-12 mutation run).
+   */
   async function someoneWaitsOnAdvisory(what: string): Promise<void> {
     const deadline = Date.now() + 5_000;
     for (;;) {
       const waiting = await countRows(
-        sql`SELECT count(*)::int AS n FROM pg_locks WHERE NOT granted AND locktype = 'advisory'`,
+        sql`SELECT count(*)::int AS n FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid
+              WHERE NOT l.granted AND l.locktype = 'advisory' AND a.datname = current_database()`,
       );
       if (waiting >= 1) return;
       if (Date.now() > deadline) throw new Error(`${what} never waited on the lifecycle lock`);
@@ -2586,7 +2591,9 @@ describe('WP19 — a customer asks for their money back', () => {
     const deadline = Date.now() + 5_000;
     for (;;) {
       const waiting = await countRows(
-        sql`SELECT count(*)::int AS n FROM pg_locks WHERE NOT granted AND locktype IN ('transactionid', 'tuple')`,
+        sql`SELECT count(*)::int AS n FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid
+              WHERE NOT l.granted AND l.locktype IN ('transactionid', 'tuple')
+                AND a.datname = current_database()`,
       );
       if (waiting >= 1) return;
       if (Date.now() > deadline) throw new Error(`${what} never waited on the payment`);
