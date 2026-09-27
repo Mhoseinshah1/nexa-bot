@@ -196,6 +196,13 @@ export const TEMPLATES = [
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
+  {
+    key: 'bot.command.paysupport',
+    description:
+      'The one-line description Telegram shows beside /paysupport: help with a payment (Telegram requires it of bots that sell for Stars).',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
   /*
    * The four labels on the persistent main-menu keyboard.
    *
@@ -6289,6 +6296,191 @@ export const TEMPLATES = [
     key: 'bot.payment.route_name_tonpays',
     description:
       'The product’s own name for the TonPays route, used when the operator set no display name.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  /*
+   * Package A — Telegram Stars (`docs/package-a-telegram-stars-audit.md`). A Star is never
+   * shown as the sales currency: the Toman figures are Nexa's snapshot, and the Star
+   * figure is the conversion the invoice asks for.
+   */
+  {
+    key: 'bot.payment.route_name_telegram_stars',
+    description:
+      'The product’s own name for the Telegram Stars route, used when the operator set no display name.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.payment.stars_invoice_order',
+    description:
+      'The Telegram Stars invoice summary for an ORDER with no gateway fee: the amount in the sales currency, the Stars asked for, and the deadline. The invoice itself arrives as its own Telegram message. It must say the payment counts only once Telegram confirms it.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'payable',
+        type: 'MONEY',
+        description: 'Principal plus fee, in the sales currency, from the snapshot.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'stars',
+        type: 'NUMBER',
+        description: 'The Stars the invoice asks for: ceil(payable / the snapshotted rate).',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'expiresAt',
+        type: 'DATETIME',
+        description: 'When this attempt stops being payable (Nexa’s deadline).',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.payment.stars_invoice_order_fee',
+    description:
+      'The Telegram Stars invoice summary for an ORDER whose route charges a customer fee: the order amount, the fee, the payable, the Stars and the deadline.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'principal',
+        type: 'MONEY',
+        description:
+          'The principal from Nexa’s snapshot: the order total, or the top-up the wallet receives.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'fee',
+        type: 'MONEY',
+        description: 'The customer’s gateway fee snapshotted on this attempt.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'payable',
+        type: 'MONEY',
+        description: 'Principal plus fee, in the sales currency, from the snapshot.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'stars',
+        type: 'NUMBER',
+        description: 'The Stars the invoice asks for: ceil(payable / the snapshotted rate).',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'expiresAt',
+        type: 'DATETIME',
+        description: 'When this attempt stops being payable (Nexa’s deadline).',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.payment.stars_invoice_topup',
+    description:
+      'The Telegram Stars invoice summary for a wallet TOP-UP with no gateway fee: the amount the wallet receives, the Stars asked for, and the deadline.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'payable',
+        type: 'MONEY',
+        description: 'Principal plus fee, in the sales currency, from the snapshot.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'stars',
+        type: 'NUMBER',
+        description: 'The Stars the invoice asks for: ceil(payable / the snapshotted rate).',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'expiresAt',
+        type: 'DATETIME',
+        description: 'When this attempt stops being payable (Nexa’s deadline).',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.payment.stars_invoice_topup_fee',
+    description:
+      'The Telegram Stars invoice summary for a wallet TOP-UP whose route charges a customer fee: the top-up amount, the fee, the payable, the Stars and the deadline. It must say the fee is not credited to the wallet.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'principal',
+        type: 'MONEY',
+        description:
+          'The principal from Nexa’s snapshot: the order total, or the top-up the wallet receives.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'fee',
+        type: 'MONEY',
+        description: 'The customer’s gateway fee snapshotted on this attempt.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'payable',
+        type: 'MONEY',
+        description: 'Principal plus fee, in the sales currency, from the snapshot.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'stars',
+        type: 'NUMBER',
+        description: 'The Stars the invoice asks for: ceil(payable / the snapshotted rate).',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'expiresAt',
+        type: 'DATETIME',
+        description: 'When this attempt stops being payable (Nexa’s deadline).',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.payment.stars_invoice_title',
+    description:
+      'The title of the Telegram Stars invoice message (Telegram allows 1–32 characters).',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.payment.stars_invoice_description',
+    description:
+      'The description of the Telegram Stars invoice message (Telegram allows 1–255 characters). It names no customer, order number or secret.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.payment.stars_price_label',
+    description: 'The label of the one price line on the Telegram Stars invoice.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.payment.stars_precheckout_refused',
+    description:
+      'The sentence Telegram shows when Nexa declines a Stars pre-checkout: the invoice can no longer be paid (expired, closed, or not this customer’s). One sentence for every reason, so it reveals nothing.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
