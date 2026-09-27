@@ -28,6 +28,8 @@ BR='apps/api/src/surfaces/telegram/bot-runtime.ts'
 CL='apps/web/src/api/client.ts'
 H='packages/contracts/src/http.ts'
 CI='tests/unit/contracts-invariants.test.ts'
+RFR='apps/api/src/modules/commerce/payments/infrastructure/drizzle-refund.repository.ts'
+CCS='apps/api/src/modules/commerce/customers/application/customer-capture.service.ts'
 M=[
  ('W19-01',[(S,"if (succeeded && item.serviceState !== 'TERMINATED') {","if (false && succeeded && item.serviceState !== 'TERMINATED') {"),(R,"           */\n          or(\n","           */\n          or(\n            sql`true`,\n")],'did not move'),
  ('W19-02',[(R,"inArray(provisioningOperations.state, [...OPERATION_TERMINAL_STATES]),","inArray(provisioningOperations.state, [...OPERATION_TERMINAL_STATES, 'UNKNOWN' as never]),")],'UNKNOWN'),
@@ -345,6 +347,14 @@ M+=[
             : (item.operationFailureKind ?? item.operationState),""","""          failureKind: item.operationFailureKind ?? item.operationState,""")],'released elsewhere before its deletion succeeded'),
  ('W19-78',[(PG,"      if (decided.state === 'COMPLETED') {","      if (false) {"),(PG,"      } else if (decided.state === 'FAILED') {","      } else if (false) {")],'replayed approval',('web','tests/web/service-refund-requests.test.tsx')),
  ('W19-79',[(PG,"      } else if (decided.state === 'FAILED') {","      } else if (false) {")],'replayed approval',('web','tests/web/service-refund-requests.test.tsx')),
+ # Round 8 (Codex review of #83).
+ ('W19-80',[(RFR,"                            AND w.state = 'REQUESTED'","                            AND false")],'currency exposure'),
+ ('W19-81',[(H,"  reason: z.string().refine(isServiceRefundRejectionReason, {","  reason: z.string().min(1).max(500).refine(() => true, {")],'rejection reason',('unit',CI)),
+ ('W19-82',[(S,"  if (!isServiceRefundRejectionReason(reason)) {","  if (reason.length === 0 || reason.length > 500) {")],'300 emoji'),
+ ('W19-83',[(PG,"          disabled={busy || !isServiceRefundRejectionReason(reason)}","          disabled={busy || reason.trim().length === 0 || reason.length > 500}")],'300 emoji',('web','tests/web/service-refund-requests.test.tsx')),
+ ('W19-84',[(BR,"        await reopen('refund-reason-retry').catch(() => undefined);\n","")],'filing fails for a reason nobody classified'),
+ ('W19-85',[(CCS,"        input.updateId <= capture.openedUpdateId","        input.updateId < 0n")],'sent before the confirmation'),
+ ('W19-86',[(BR,"      // The reason must be typed after this tap (Codex review of #83, round 8).\n      ...(updateId === undefined ? {} : { openedUpdateId: updateId }),\n","")],'sent before the confirmation'),
 ]
 only=sys.argv[1:] 
 for entry in M:
