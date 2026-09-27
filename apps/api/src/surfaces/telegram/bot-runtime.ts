@@ -25,6 +25,7 @@ import {
   SERVICE_SEARCH_MAX_LENGTH,
   connectionGuidePlatformSchema,
   paymentGatewayProviderSchema,
+  PAYMENT_GATEWAY_DESCRIPTORS,
 } from '@nexa/contracts';
 import type { AntiSpamService } from '../../modules/commerce/customers/application/anti-spam.service.js';
 import type {
@@ -63,6 +64,7 @@ import type { PanelUsernamePolicy } from '../../modules/platform/panels/applicat
 import type { CustomerService } from '../../modules/commerce/customers/application/customer.service.js';
 import type { PaymentDestinationRenderer } from '../../modules/commerce/payments/infrastructure/destination-renderer.js';
 import type { InboundReceiptFile } from '../../modules/commerce/payments/application/receipt-ports.js';
+import type { PaymentRecord } from '../../modules/commerce/payments/application/ports.js';
 import type { ReceiptService } from '../../modules/commerce/payments/application/receipt.service.js';
 import type { ReceiptCreditCaptureService } from '../../modules/commerce/payments/application/receipt-credit-capture.service.js';
 import type { ServiceRefundDecisionService } from '../../modules/commerce/payments/application/service-refund-decision.service.js';
@@ -645,6 +647,14 @@ export const GATEWAY_PAY_CALLBACK_PREFIX = 'g:';
  * `g` then a letter, so it cannot shadow `g:` nor be shadowed by it.
  */
 export const GATEWAY_CHECK_CALLBACK_PREFIX = 'gc:';
+
+/**
+ * Paying an order through ONE named external route (Package A): `gp:<order uuid>.<provider>`,
+ * an order the customer owns and a member of a closed enum — the `tp:` shape. The
+ * customer's choice of route travels; the amount never does. `g:` stays for messages
+ * already sent, and picks the first route as it always did.
+ */
+export const GATEWAY_ROUTE_PAY_CALLBACK_PREFIX = 'gp:';
 
 /**
  * Withdrawing a pending out-of-band payment. It names the PAYMENT, not the order.
@@ -2229,6 +2239,22 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
     if (data.startsWith(MANUAL_PAY_CALLBACK_PREFIX)) {
       return callbackCommand('PAY_MANUAL', data.slice(MANUAL_PAY_CALLBACK_PREFIX.length), id);
     }
+    if (data.startsWith(GATEWAY_ROUTE_PAY_CALLBACK_PREFIX)) {
+      const [rawId, rawProvider, ...rest] = data
+        .slice(GATEWAY_ROUTE_PAY_CALLBACK_PREFIX.length)
+        .split('.');
+      const order = uuidV7Schema.safeParse(rawId);
+      const provider = paymentGatewayProviderSchema.safeParse(rawProvider);
+      if (rest.length > 0 || !order.success || !provider.success) {
+        return { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
+      }
+      return {
+        intent: 'PAY_GATEWAY',
+        targetId: order.data,
+        secondaryId: provider.data,
+        callbackQueryId: id,
+      };
+    }
     if (data.startsWith(GATEWAY_PAY_CALLBACK_PREFIX)) {
       return callbackCommand('PAY_GATEWAY', data.slice(GATEWAY_PAY_CALLBACK_PREFIX.length), id);
     }
@@ -2740,6 +2766,13 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
    * `setMyCommands` render, so the menu and the help cannot disagree.
    */
   if (command === '/help') return { intent: 'HELP', targetId: null, callbackQueryId: null };
+  /*
+   * `/paysupport` (Package A): Telegram requires a bot that sells for Stars to answer it.
+   * It opens the same support screen the menu's support entry does — no new ticketing.
+   */
+  if (command === '/paysupport') {
+    return { intent: 'SUPPORT', targetId: null, callbackQueryId: null };
+  }
   /*
    * The management panel's three text entries (Phase 5T).
    *
@@ -3871,6 +3904,8 @@ export const REFUSAL_REPLIES: Readonly<Record<string, TemplateKey>> = {
    * situation they can see is false.
    */
   [COMMERCE_ERROR_CODES.ORDER_TRANSFER_UNDER_REVIEW]: 'bot.order.transfer_under_review',
+  // Package A, Codex review of #85: a Stars payment approved at checkout is on its way.
+  [COMMERCE_ERROR_CODES.PAYMENT_CHECKOUT_IN_PROGRESS]: 'bot.payment.checkout_in_progress',
   /*
    * The guard refused. ONE sentence for every reason it gives, exactly as the product
    * refusals collapse: the customer can act on none of "the amount does not match", "the
@@ -8647,7 +8682,14 @@ export class BotRuntime {
      * answer is produced. Nothing here pretends money moved.
      */
     if (command.intent === 'PAY_GATEWAY' && command.targetId !== null) {
-      return this.gatewayPayment(scope, actor, command.targetId, customer, input.idempotencyKey);
+      return this.gatewayPayment(
+        scope,
+        actor,
+        command.targetId,
+        customer,
+        input.idempotencyKey,
+        (command.secondaryId as PaymentGatewayProvider | undefined) ?? null,
+      );
     }
     if (command.intent === 'GATEWAY_CHECK' && command.targetId !== null) {
       return this.gatewayCheck(scope, command.targetId, customer);
@@ -10980,14 +11022,27 @@ export class BotRuntime {
    * question the pre-invoice and the awaiting-payment message both ask before drawing the
    * gateway button, and the question the service asks again when it is tapped.
    */
+  /**
+   * The external routes offered for this order, in the operator's order, each with the
+   * name a customer chooses it by (Package A: one button per route, so Stars and TonPays
+   * are two choices rather than whichever happens to be first).
+   */
   private async externalOffered(
     scope: TenantContext,
     customerId: UserId,
     amount: Money,
-  ): Promise<boolean> {
-    return (await this.deps.routes.routesFor(scope, customerId, 'SERVICE_PURCHASE', amount)).some(
-      (route) => route.descriptor.settlesVia === 'GATEWAY',
-    );
+  ): Promise<readonly ExternalRouteButton[]> {
+    const routes = (
+      await this.deps.routes.routesFor(scope, customerId, 'SERVICE_PURCHASE', amount)
+    ).filter((route) => route.descriptor.settlesVia === 'GATEWAY');
+    const named: ExternalRouteButton[] = [];
+    for (const route of routes) {
+      named.push({
+        provider: route.provider,
+        name: await this.deps.screens.routeName(scope, route),
+      });
+    }
+    return named;
   }
 
   /**
@@ -11008,6 +11063,8 @@ export class BotRuntime {
     orderId: string,
     customer: CustomerRecord,
     idempotencyKey: string,
+    /** The route the customer tapped (`gp:`), or null for the older `g:` button. */
+    provider: PaymentGatewayProvider | null,
   ): Promise<PendingReply> {
     try {
       const before = await this.deps.orders.orderForCustomer(scope, actor, {
@@ -11021,7 +11078,11 @@ export class BotRuntime {
           'SERVICE_PURCHASE',
           before.totals.total,
         )
-      ).find((candidate) => candidate.descriptor.settlesVia === 'GATEWAY');
+      ).find(
+        (candidate) =>
+          candidate.descriptor.settlesVia === 'GATEWAY' &&
+          (provider === null || candidate.provider === provider),
+      );
       if (route === undefined) return gatewayUnavailable();
       if (before.state === 'DRAFT') {
         await this.confirmDraft(scope, actor, before, customer, idempotencyKey);
@@ -11099,6 +11160,22 @@ export class BotRuntime {
       payment.expiresAt.getTime() <= now
     ) {
       return reply('bot.payment.gateway_closed', []);
+    }
+    /*
+     * Telegram Stars (Package A): the invoice is its own Telegram message, sent by this
+     * bot, so there is no link to draw. The summary shows the principal, the fee when
+     * there is one, the payable in the sales currency and the Stars asked for — all from
+     * THIS attempt's snapshot — while the invoice is being sent and once it has been.
+     */
+    if (
+      PAYMENT_GATEWAY_DESCRIPTORS[invoice.provider].invoiceCredential === 'BOT_TOKEN' &&
+      (invoice.creationState === 'CREATING' || invoice.creationState === 'CREATED')
+    ) {
+      return {
+        ...starsInvoiceBody(payment, invoice.sentAmount),
+        buttons: [check, mainMenuButton()],
+        orderId,
+      };
     }
     if (invoice.creationState === 'CREATING')
       return reply('bot.payment.gateway_preparing', [check]);
@@ -11609,23 +11686,68 @@ export type { CustomerRecord };
  * order still in DRAFT; back to the main menu. A cancel is not here: a DRAFT expires on
  * its own, and the cancel button lives on the awaiting-payment message.
  */
+/** One external route as an order's payment button: the provider and its customer-facing name. */
+interface ExternalRouteButton {
+  readonly provider: PaymentGatewayProvider;
+  readonly name: string;
+}
+
+/**
+ * One button per external route offered for the order (Package A), each naming the route
+ * and carrying `gp:<order>.<provider>` — identifiers, never an amount.
+ */
+function externalRouteButtons(
+  orderId: string,
+  routes: readonly ExternalRouteButton[],
+): CustomerButton[] {
+  return routes.map((route) => ({
+    label: {
+      kind: 'TEMPLATE' as const,
+      key: 'bot.wallet.topup_method_button' as const,
+      values: { name: route.name },
+    },
+    data: `${GATEWAY_ROUTE_PAY_CALLBACK_PREFIX}${orderId}.${route.provider}`,
+  }));
+}
+
+/**
+ * The Stars summary for one attempt, from its snapshot: principal, fee and payable in the
+ * sales currency, and the Stars the invoice asks for. With no fee the payable is all three.
+ */
+function starsInvoiceBody(
+  payment: PaymentRecord,
+  stars: bigint,
+): Pick<PendingReply, 'key' | 'values'> {
+  const fee = payment.customerFee;
+  const expiresAt = payment.expiresAt ?? new Date(0);
+  if (fee !== null && fee.fee.amountMinor > 0n) {
+    return {
+      key:
+        payment.orderId === null
+          ? 'bot.payment.stars_invoice_topup_fee'
+          : 'bot.payment.stars_invoice_order_fee',
+      values: { principal: payment.amount, fee: fee.fee, payable: fee.payable, stars, expiresAt },
+    };
+  }
+  return {
+    key:
+      payment.orderId === null
+        ? 'bot.payment.stars_invoice_topup'
+        : 'bot.payment.stars_invoice_order',
+    values: { payable: fee?.payable ?? payment.amount, stars, expiresAt },
+  };
+}
+
 function preinvoiceButtons(
   order: OrderRecord,
-  offered: { readonly manual: boolean; readonly external: boolean },
+  offered: { readonly manual: boolean; readonly external: readonly ExternalRouteButton[] },
 ): readonly CustomerButton[] {
   return [
     {
       label: { kind: 'TEMPLATE', key: 'bot.payment.wallet_button' },
       data: `${WALLET_PAY_CALLBACK_PREFIX}${order.id}`,
     },
-    ...(offered.external
-      ? [
-          {
-            label: { kind: 'TEMPLATE' as const, key: 'bot.payment.gateway_button' as const },
-            data: `${GATEWAY_PAY_CALLBACK_PREFIX}${order.id}`,
-          },
-        ]
-      : []),
+    ...externalRouteButtons(order.id, offered.external),
     ...(offered.manual
       ? [
           {
@@ -11801,7 +11923,7 @@ function tutorialFor(platform: ConnectionGuidePlatform): PendingReply {
 
 function paymentButtons(
   orderId: string,
-  offered: { readonly manual: boolean; readonly external: boolean },
+  offered: { readonly manual: boolean; readonly external: readonly ExternalRouteButton[] },
 ): readonly CustomerButton[] {
   const manualAvailable = offered.manual;
   return [
@@ -11809,15 +11931,8 @@ function paymentButtons(
       label: { kind: 'TEMPLATE', key: 'bot.payment.wallet_button' },
       data: `${WALLET_PAY_CALLBACK_PREFIX}${orderId}`,
     },
-    // The external gateway (WP11A), only when a real external route is offered for it.
-    ...(offered.external
-      ? [
-          {
-            label: { kind: 'TEMPLATE' as const, key: 'bot.payment.gateway_button' as const },
-            data: `${GATEWAY_PAY_CALLBACK_PREFIX}${orderId}`,
-          },
-        ]
-      : []),
+    // One per external route offered for it (WP11A; Package A named the route).
+    ...externalRouteButtons(orderId, offered.external),
     /*
      * Drawn only when there is somewhere for the money to go.
      *

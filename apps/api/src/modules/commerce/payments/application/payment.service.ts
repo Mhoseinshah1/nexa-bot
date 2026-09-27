@@ -2,6 +2,7 @@ import {
   ADMIN_CAPTURE_REASON_MAX_LENGTH,
   COMMERCE_ERROR_CODES,
   MAX_MONEY_AMOUNT_MINOR,
+  PAYMENT_GATEWAY_DESCRIPTORS,
   PAYMENT_RECEIPT_MAX_PER_PAYMENT,
   PAYMENT_WINDOW_MINUTES_MIN,
   orderPurposeCreatesNewService,
@@ -729,6 +730,17 @@ export class PaymentService {
           throw errors.conflict(
             COMMERCE_ERROR_CODES.ORDER_TRANSFER_UNDER_REVIEW,
             'A transfer for this order is waiting to be reviewed.',
+          );
+        }
+        /*
+         * A Stars payment approved at checkout is money in flight too (Codex review of
+         * #85): debiting the wallet as well would be two payments for one order. Refused,
+         * and the withdrawals above roll back with it.
+         */
+        if (await this.deps.repository.hasCheckoutHeldPendingForOrder(scope, orderId, now, tx)) {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.PAYMENT_CHECKOUT_IN_PROGRESS,
+            'A Telegram Stars payment for this order is being completed.',
           );
         }
 
@@ -2205,7 +2217,8 @@ export class PaymentService {
     tx: TransactionScope,
     payment: PaymentRecord,
     confirmation: {
-      readonly evidenceKind: 'WALLET_DEBIT' | 'OPERATOR_REVIEW' | 'GATEWAY_INQUIRY';
+      readonly evidenceKind:
+        'WALLET_DEBIT' | 'OPERATOR_REVIEW' | 'GATEWAY_INQUIRY' | 'GATEWAY_CALLBACK';
       readonly evidenceNote: string | null;
       readonly confirmedByAdminId: string | null;
       readonly confirmedAt: Date;
@@ -2807,6 +2820,22 @@ export class PaymentService {
         }
 
         /*
+         * A Stars payment approved at checkout moments ago is not theirs to withdraw
+         * either (Codex review of #85): Telegram charges right after the approval. Read
+         * from the row this transaction holds FOR UPDATE, which the approval also writes,
+         * so the two are serialised.
+         */
+        if (
+          payment.checkoutHeldUntil !== null &&
+          payment.checkoutHeldUntil.getTime() > now.getTime()
+        ) {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.PAYMENT_CHECKOUT_IN_PROGRESS,
+            'A Telegram Stars payment is being completed.',
+          );
+        }
+
+        /*
          * A transfer the customer sent a RECEIPT for is not theirs to withdraw (Payment
          * File 02 §9, D1). The receipt has no timer and leaves review only through a
          * reviewer's approve, reject or credit — a withdrawal would be a fourth way out
@@ -3214,6 +3243,7 @@ export class PaymentService {
           // An order payment promises no top-up gift (File 02 §17), exactly as the manual path.
           topupCashbackPercent: null,
           customerFeeBasisPoints: route.gateway.customerFeeBasisPoints,
+          providerUnitRateMinor: route.gateway.providerUnitRateMinor,
           paymentId,
           reference,
           now,
@@ -3290,6 +3320,7 @@ export class PaymentService {
           provider: route.provider,
           topupCashbackPercent: route.gateway.topupCashbackPercent,
           customerFeeBasisPoints: route.gateway.customerFeeBasisPoints,
+          providerUnitRateMinor: route.gateway.providerUnitRateMinor,
           paymentId,
           reference,
           now,
@@ -3363,8 +3394,21 @@ export class PaymentService {
         if (payment.expiresAt === null || now.getTime() >= payment.expiresAt.getTime()) {
           return { outcome: 'NOT_ELIGIBLE', reason: 'DEADLINE_PASSED', payment };
         }
+        /*
+         * The evidence is what APPROVED it, by the route's own descriptor (Codex review of
+         * #85): an inquiry route was asked server to server; a recorded-payment route (Stars)
+         * was told, on the bot's authenticated webhook, and asked nothing. The payment's
+         * route is its frozen snapshot, so this cannot drift from how it was offered.
+         */
+        const approval =
+          payment.gatewayProvider === null
+            ? 'INQUIRY'
+            : PAYMENT_GATEWAY_DESCRIPTORS[payment.gatewayProvider].approval;
         const confirmation = {
-          evidenceKind: 'GATEWAY_INQUIRY' as const,
+          evidenceKind:
+            approval === 'RECORDED_PAYMENT'
+              ? ('GATEWAY_CALLBACK' as const)
+              : ('GATEWAY_INQUIRY' as const),
           evidenceNote: input.evidenceNote,
           confirmedByAdminId: null,
           confirmedAt: now,
@@ -3525,11 +3569,35 @@ export class PaymentService {
         'That payment route is not offered for this payment.',
       );
     }
-    if ((await this.deps.gatewayCredentials.setAt(scope, provider, tx)) === null) {
+    const descriptor = PAYMENT_GATEWAY_DESCRIPTORS[provider];
+    /*
+     * What the invoice is sent WITH must exist: a stored key for a `GATEWAY_KEY` route, or
+     * the bot the customer is talking to for a `BOT_TOKEN` one (Stars). A request from no
+     * bot has no chat to send a Stars invoice to and no webhook it could be paid on.
+     */
+    if (
+      descriptor.invoiceCredential === 'GATEWAY_KEY' &&
+      (await this.deps.gatewayCredentials.setAt(scope, provider, tx)) === null
+    ) {
       throw errors.conflict(
         COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE,
         'This payment route is not configured.',
         { reason: 'CREDENTIAL_MISSING' },
+      );
+    }
+    if (descriptor.invoiceCredential === 'BOT_TOKEN' && scope.botInstanceId === null) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.PAYMENT_METHOD_UNAVAILABLE,
+        'That payment route is only offered inside the bot.',
+      );
+    }
+    // A priced-by-rate route with no rate converts nothing (enable refuses this; a
+    // route read FOR SHARE here cannot lose its rate before this attempt commits).
+    if (descriptor.conversion === 'FIXED_RATE' && chosen.gateway.providerUnitRateMinor === null) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE,
+        'This payment route is not configured.',
+        { reason: 'RATE_MISSING' },
       );
     }
     return { provider: chosen.provider, gateway: chosen.gateway };
@@ -3548,6 +3616,11 @@ export class PaymentService {
       readonly topupCashbackPercent: number | null;
       /** The route's customer fee rate (WP18), read in this transaction and snapshotted. */
       readonly customerFeeBasisPoints: number;
+      /**
+       * A `FIXED_RATE` route's conversion rate (Package A), read in this transaction and
+       * snapshotted onto the invoice. Null for a `SAME_UNIT` route.
+       */
+      readonly providerUnitRateMinor: bigint | null;
       readonly paymentId: PaymentId;
       readonly reference: string;
       readonly now: Date;
@@ -3562,6 +3635,11 @@ export class PaymentService {
         'This installation cannot take a payment that way.',
       );
     }
+    const descriptor = PAYMENT_GATEWAY_DESCRIPTORS[input.provider];
+    // The bot the invoice is sent through, for a route that sends it with the bot's token.
+    const botInstanceId = descriptor.invoiceCredential === 'BOT_TOKEN' ? scope.botInstanceId : null;
+    const conversionRateMinor =
+      descriptor.conversion === 'FIXED_RATE' ? input.providerUnitRateMinor : null;
     const open = await this.deps.gatewayInvoices.findOpenAttempt(
       scope,
       {
@@ -3569,6 +3647,7 @@ export class PaymentService {
         orderId: input.orderId,
         customerId: input.customerId,
         amount: input.amount,
+        botInstanceId,
         now: input.now,
       },
       tx,
@@ -3614,7 +3693,13 @@ export class PaymentService {
        * with no exact value there (an IRR figure that is not a whole Toman) is refused
        * rather than rounded: the invoice would be for a figure the customer never saw.
        */
-      const sentAmount = adapter.providerAmountOf(customerFee.payable);
+      /*
+       * For a `FIXED_RATE` route (Stars) this is `ceil(payable / rate)` at the rate read in
+       * this transaction, and the rate is snapshotted beside it. The rounding excess is no
+       * figure Nexa holds: every settlement, credit and refund reads the payment's Toman
+       * snapshot, never this.
+       */
+      const sentAmount = adapter.providerAmountOf(customerFee.payable, conversionRateMinor);
       if (sentAmount === null) {
         throw errors.conflict(
           COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE,
@@ -3650,6 +3735,8 @@ export class PaymentService {
           providerOrderId: adapter.newOrderId(),
           providerUnit: adapter.unit,
           sentAmount,
+          conversionRateMinor,
+          botInstanceId,
           now: input.now,
         },
         tx,
@@ -3677,6 +3764,9 @@ export class PaymentService {
           customerFeeBasisPoints: payment.customerFee?.basisPoints ?? null,
           customerFeeMinor: payment.customerFee?.fee.amountMinor.toString() ?? null,
           payableMinor: payment.customerFee?.payable.amountMinor.toString() ?? null,
+          providerUnit: invoice.providerUnit,
+          providerAmount: invoice.sentAmount.toString(),
+          conversionRateMinor: invoice.conversionRateMinor?.toString() ?? null,
           reissued: open !== null,
         },
         result: 'SUCCESS',
@@ -3733,7 +3823,8 @@ export class PaymentService {
     payment: PaymentRecord,
     order: OrderRecord,
     confirmation: {
-      readonly evidenceKind: 'WALLET_DEBIT' | 'OPERATOR_REVIEW' | 'GATEWAY_INQUIRY';
+      readonly evidenceKind:
+        'WALLET_DEBIT' | 'OPERATOR_REVIEW' | 'GATEWAY_INQUIRY' | 'GATEWAY_CALLBACK';
       readonly evidenceNote: string | null;
       readonly confirmedByAdminId: string | null;
       readonly confirmedAt: Date;

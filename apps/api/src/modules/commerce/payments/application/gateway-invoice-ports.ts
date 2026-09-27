@@ -1,8 +1,8 @@
 import type {
-  CurrencyCode,
   GatewayApprovalVerdict,
   GatewayInvoiceCreationState,
   GatewayInvoiceOutcome,
+  GatewayProviderUnit,
   Money,
   PaymentGatewayProvider,
   PaymentId,
@@ -27,6 +27,19 @@ export interface GatewayCreateRequest {
   readonly callbackUrl: string | null;
   /** Null when this customer's Telegram id is not known; the field is then omitted. */
   readonly buyerChatId: string | null;
+  /**
+   * The invoice's own customer-facing text, rendered from templates by the caller, for a
+   * provider whose invoice is a message this installation sends (Telegram Stars). Null
+   * for a provider that draws its own page.
+   */
+  readonly presentation: GatewayInvoicePresentation | null;
+}
+
+/** The title, description and price label of an invoice this installation sends itself. */
+export interface GatewayInvoicePresentation {
+  readonly title: string;
+  readonly description: string;
+  readonly priceLabel: string;
 }
 
 /**
@@ -90,8 +103,8 @@ export interface GatewayWebhookHint {
 
 export interface ExternalGatewayAdapter {
   readonly provider: PaymentGatewayProvider;
-  /** The unit the provider's amounts are in. */
-  readonly unit: CurrencyCode;
+  /** The unit the provider's amounts are in: a sales currency, or `XTR` for Stars. */
+  readonly unit: GatewayProviderUnit;
   /**
    * How long an attempt through this provider lives, from the creation of the internal
    * payment, with no grace. A NEXA rule per provider (TonPays: seventy minutes).
@@ -105,11 +118,20 @@ export interface ExternalGatewayAdapter {
    */
   readonly callBudgetPerMinute: number;
   readonly inquiryBudgetPerMinute: number;
-  /** The payment's amount in the provider's unit, or null when it has no exact value there. */
-  providerAmountOf(amount: Money): bigint | null;
+  /**
+   * The payment's amount in the provider's unit, or null when it has no exact value there.
+   *
+   * `rateMinor` is the route's snapshotted rate for a `FIXED_RATE` provider (sales-currency
+   * minor units per provider unit), and null for a `SAME_UNIT` one, which ignores it.
+   */
+  providerAmountOf(amount: Money, rateMinor: bigint | null): bigint | null;
   /** A fresh provider order id for one attempt. Never reused, never re-keyed. */
   newOrderId(): string;
-  createInvoice(apiKey: string, request: GatewayCreateRequest): Promise<GatewayCreateOutcome>;
+  /**
+   * `credential` is what the route's descriptor says an invoice is sent with: the stored
+   * gateway key (`GATEWAY_KEY`), or the token of the attempt's bot (`BOT_TOKEN`).
+   */
+  createInvoice(credential: string, request: GatewayCreateRequest): Promise<GatewayCreateOutcome>;
   inquire(apiKey: string, invoiceId: string): Promise<GatewayInquiryOutcome>;
   /** Shape-checks a webhook body. Null for anything that is not one. Reads no secret header. */
   parseWebhook(body: unknown, deliveryIdHeader: string | undefined): GatewayWebhookHint | null;
@@ -134,8 +156,20 @@ export interface GatewayInvoiceRecord {
   readonly callbackUrlSent: boolean;
   readonly invoiceUrl: string | null;
   readonly webInvoiceUrl: string | null;
-  readonly providerUnit: CurrencyCode;
+  readonly providerUnit: GatewayProviderUnit;
   readonly sentAmount: bigint;
+  /**
+   * The rate `sentAmount` was computed at, for a `FIXED_RATE` provider (Package A): sales-
+   * currency minor units per provider unit. Frozen with the row. Null for `SAME_UNIT`.
+   */
+  readonly conversionRateMinor: bigint | null;
+  /** The bot whose token sends the invoice and whose webhook may pay it. Stars only. */
+  readonly botInstanceId: string | null;
+  /**
+   * The provider's own id for the charge that paid this attempt (Stars:
+   * `telegram_payment_charge_id`). Written once, unique per tenant and provider.
+   */
+  readonly providerChargeId: string | null;
   readonly requestAmount: bigint | null;
   readonly finalAmount: bigint | null;
   readonly creditAmount: bigint | null;
@@ -173,8 +207,10 @@ export interface GatewayInvoiceRepository {
       readonly paymentId: PaymentId;
       readonly provider: PaymentGatewayProvider;
       readonly providerOrderId: string;
-      readonly providerUnit: CurrencyCode;
+      readonly providerUnit: GatewayProviderUnit;
       readonly sentAmount: bigint;
+      readonly conversionRateMinor: bigint | null;
+      readonly botInstanceId: string | null;
       readonly now: Date;
     },
     tx: unknown,
@@ -193,6 +229,38 @@ export interface GatewayInvoiceRepository {
     providerOrderId: string,
     tx?: unknown,
   ): Promise<GatewayInvoiceRecord | null>;
+
+  /**
+   * The attempt a provider's payload names, row-locked (`FOR UPDATE`), within the tenant
+   * the caller established. For recording a pushed payment (Stars) under the row's lock.
+   */
+  lockByProviderOrderId(
+    scope: TenantContext,
+    provider: PaymentGatewayProvider,
+    providerOrderId: string,
+    tx: unknown,
+  ): Promise<GatewayInvoiceRecord | null>;
+
+  /** The attempt a provider charge id is already attached to, if any. */
+  findByChargeId(
+    scope: TenantContext,
+    provider: PaymentGatewayProvider,
+    chargeId: string,
+    tx?: unknown,
+  ): Promise<GatewayInvoiceRecord | null>;
+
+  /**
+   * Records a payment the provider PUSHED (Stars' `successful_payment`): the charge id,
+   * `provider_paid = true`, and the row made due for settlement at `dueAt`. Conditional
+   * on no charge id yet; false when one is already recorded.
+   */
+  recordCharge(
+    scope: TenantContext,
+    paymentId: PaymentId,
+    charge: { readonly chargeId: string; readonly status: string; readonly dueAt: Date },
+    now: Date,
+    tx: unknown,
+  ): Promise<boolean>;
 
   /**
    * Claims up to `limit` CREATING rows whose payment is still PENDING, taking a lease.
@@ -226,7 +294,11 @@ export interface GatewayInvoiceRepository {
       readonly finalAmount: bigint | null;
       readonly buyerChatIdSent: boolean;
       readonly callbackUrlSent: boolean;
-      readonly firstInquiryAt: Date;
+      /**
+       * Null for a `RECORDED_PAYMENT` provider, which is never asked: the row keeps
+       * whatever schedule it has, so a charge recorded before this commits stays due.
+       */
+      readonly firstInquiryAt: Date | null;
     },
     now: Date,
     tx: unknown,
@@ -353,6 +425,12 @@ export interface GatewayInvoiceRepository {
       readonly orderId: string | null;
       readonly customerId: string;
       readonly amount: Money;
+      /**
+       * The bot the attempt's invoice was sent through, for a `BOT_TOKEN` provider: an
+       * attempt opened in another bot's chat cannot be paid from this one. Null matches
+       * an attempt with no bot.
+       */
+      readonly botInstanceId: string | null;
       readonly now: Date;
     },
     tx: unknown,

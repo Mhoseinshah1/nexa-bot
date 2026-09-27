@@ -139,12 +139,13 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   // One list in `BOT_COMMANDS` feeds both, so a command cannot be registered and
   // undocumented, or documented and unregistered.
   'bot.help':
-    'دستورهای این ربات:\n/catalog — دیدن و خرید سرویس‌ها\n/services — سرویس‌های من و مدیریت آن‌ها\n/wallet — موجودی کیف پول\n/help — همین راهنما',
+    'دستورهای این ربات:\n/catalog — دیدن و خرید سرویس‌ها\n/services — سرویس‌های من و مدیریت آن‌ها\n/wallet — موجودی کیف پول\n/paysupport — پشتیبانی پرداخت\n/help — همین راهنما',
   'bot.command.start': 'شروع',
   'bot.command.catalog': 'خرید سرویس',
   'bot.command.services': 'سرویس‌های من',
   'bot.command.wallet': 'کیف پول',
   'bot.command.help': 'پشتیبانی و سوالات متداول',
+  'bot.command.paysupport': 'پشتیبانی پرداخت',
 
   // The persistent main menu, as the owner specified it after v0.2.0 staging
   // acceptance. These four are ROUTES as well as labels: `intentOf` matches the
@@ -906,6 +907,23 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.payment.gateway_choose': '💳 درگاه پرداخت خود را انتخاب کنید:',
   'bot.payment.route_name_manual_transfer': 'کارت به کارت',
   'bot.payment.route_name_tonpays': 'تون‌پیز (TonPays)',
+  'bot.payment.route_name_telegram_stars': '⭐ تلگرام استارز',
+  'bot.payment.stars_invoice_order':
+    '🧾 فاکتور پرداخت با تلگرام استارز\n\n💰 مبلغ سفارش: {payable}\n⭐ مبلغ به استارز: {stars} استارز\n⏳ مهلت پرداخت: {expiresAt}\n\nفاکتور استارز در پیام بعدی برای شما ارسال می‌شود. پرداخت شما فقط پس از تأیید تلگرام ثبت می‌شود.',
+  'bot.payment.stars_invoice_order_fee':
+    '🧾 فاکتور پرداخت با تلگرام استارز\n\n💰 مبلغ سفارش: {principal}\n💳 کارمزد درگاه: {fee}\n💵 مبلغ قابل پرداخت: {payable}\n⭐ مبلغ به استارز: {stars} استارز\n⏳ مهلت پرداخت: {expiresAt}\n\nفاکتور استارز در پیام بعدی برای شما ارسال می‌شود. پرداخت شما فقط پس از تأیید تلگرام ثبت می‌شود.',
+  'bot.payment.stars_invoice_topup':
+    '🧾 فاکتور شارژ کیف پول با تلگرام استارز\n\n💰 مبلغ شارژ: {payable}\n⭐ مبلغ به استارز: {stars} استارز\n⏳ مهلت پرداخت: {expiresAt}\n\nفاکتور استارز در پیام بعدی برای شما ارسال می‌شود. پرداخت شما فقط پس از تأیید تلگرام ثبت می‌شود.',
+  'bot.payment.stars_invoice_topup_fee':
+    '🧾 فاکتور شارژ کیف پول با تلگرام استارز\n\n💰 مبلغ شارژ: {principal}\n💳 کارمزد درگاه: {fee}\n💵 مبلغ قابل پرداخت: {payable}\n⭐ مبلغ به استارز: {stars} استارز\n⏳ مهلت پرداخت: {expiresAt}\n\nکارمزد درگاه به کیف پول شما اضافه نمی‌شود و فقط مبلغ شارژ واریز خواهد شد. فاکتور استارز در پیام بعدی برای شما ارسال می‌شود.',
+  'bot.payment.checkout_in_progress':
+    'پرداخت شما با تلگرام استارز در حال انجام است. لطفاً یک دقیقه صبر کنید و دوباره بررسی کنید.',
+  'bot.payment.stars_invoice_title': 'پرداخت با تلگرام استارز',
+  'bot.payment.stars_invoice_description':
+    'پرداخت در ربات با تلگرام استارز. پرداخت شما پس از تأیید تلگرام ثبت می‌شود.',
+  'bot.payment.stars_price_label': 'مبلغ قابل پرداخت',
+  'bot.payment.stars_precheckout_refused':
+    'این فاکتور دیگر قابل پرداخت نیست. لطفاً از داخل ربات دوباره پرداخت را آغاز کنید.',
   'bot.payment.gateway_preparing':
     '⏳ فاکتور پرداخت آنلاین شما در حال ساخت است.\n\nچند ثانیه دیگر دکمهٔ «بررسی وضعیت پرداخت» را بزنید تا لینک پرداخت نمایش داده شود.',
   'bot.payment.gateway_invoice':

@@ -57,6 +57,7 @@ export * from './payment-accounts.js';
 export * from './payment-gateways.js';
 export * from './gateway-invoices.js';
 export * from './tonpays.js';
+export * from './telegram-stars.js';
 export * from './refunds.js';
 export * from './messaging-reliability.js';
 export * from './service-refund-requests.js';

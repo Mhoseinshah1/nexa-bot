@@ -83,6 +83,12 @@ const EMPTY_FORM = {
    * that settles through `GATEWAY` shows the field.
    */
   customerFeePercent: '0',
+  /**
+   * A `FIXED_RATE` route's conversion rate (Package A): the sales currency's minor units
+   * per ONE provider unit — for Telegram Stars, what one Star costs. Empty means "not
+   * set": such a route cannot be switched on, and the server says so.
+   */
+  providerUnitRate: '',
   /*
    * The two purpose switches (customer UX completion §D/§F). ON by default, which is
    * the state every route starts in; the form shows both so an operator who switches
@@ -107,6 +113,7 @@ function formOf(gateway: PaymentGatewayView): FormState {
     topupCashbackPercent: String(gateway.topupCashbackPercent),
     // Reopens as it was typed: 525 basis points is `5.25`, never `5.250000001`.
     customerFeePercent: formatBasisPointsPercent(gateway.customerFeeBasisPoints),
+    providerUnitRate: gateway.conversion.rateMinor ?? '',
     allowServicePurchase: gateway.allowServicePurchase,
     allowWalletTopup: gateway.allowWalletTopup,
   };
@@ -126,6 +133,8 @@ function nameOf(gateway: PaymentGatewayView): string {
       return t('web.payment_gateway_provider_manual_transfer');
     case 'TONPAYS':
       return t('web.payment_gateway_provider_tonpays');
+    case 'TELEGRAM_STARS':
+      return t('web.payment_gateway_provider_telegram_stars');
   }
 }
 
@@ -199,6 +208,24 @@ export function percentOf(value: string): number | null {
  * Whether a route may carry a customer fee: it settles through `GATEWAY` (WP18). Asked of
  * the descriptor, never of the provider's name, so a new external route inherits it.
  */
+/** Whether a route is priced by an operator-set rate (Package A: Telegram Stars). */
+export function takesConversionRate(provider: string): boolean {
+  return (
+    provider in PAYMENT_GATEWAY_DESCRIPTORS &&
+    PAYMENT_GATEWAY_DESCRIPTORS[provider as PaymentGatewayProvider].conversion === 'FIXED_RATE'
+  );
+}
+
+/**
+ * The rate as the operator typed it: '' clears it (null), a positive whole number sets
+ * it, anything else is `undefined` — refused in the form rather than corrected.
+ */
+export function conversionRateOf(value: string): string | null | undefined {
+  if (value.trim() === '') return null;
+  const minor = minorOf(value);
+  return minor === null || /^0+$/u.test(minor) ? undefined : minor;
+}
+
 export function takesCustomerFee(provider: string): boolean {
   return (
     provider in PAYMENT_GATEWAY_DESCRIPTORS &&
@@ -282,6 +309,9 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
       if (chargesFee && fee === null) {
         throw new Error(t('web.payment_gateway_customer_fee_invalid'));
       }
+      const pricedByRate = takesConversionRate(editing);
+      const rate = pricedByRate ? conversionRateOf(form.providerUnitRate) : null;
+      if (rate === undefined) throw new Error(t('web.payment_gateway_rate_invalid'));
       const body = {
         provider: editing,
         displayName: form.displayName.trim() === '' ? null : form.displayName.trim(),
@@ -305,6 +335,11 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
          * manual route has no field and sends nothing, and the server keeps its zero.
          */
         ...(fee === null ? {} : { customerFeeBasisPoints: fee }),
+        /*
+         * The conversion rate (Package A), for a fixed-rate route only: sent always there,
+         * so clearing the field clears the rate; never sent for any other route.
+         */
+        ...(pricedByRate ? { providerUnitRateMinor: rate } : {}),
         /*
          * Both switches, always, as the form shows them. The server defaults an ABSENT
          * switch to on for the previous release's client; a form that has the switch
@@ -445,6 +480,22 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
           '—'
         ) : (
           <Ltr>{`${formatBasisPointsPercent(row.customerFeeBasisPoints)}%`}</Ltr>
+        ),
+    },
+    {
+      key: 'rate',
+      header: t('web.payment_gateway_rate_column'),
+      /*
+       * A fixed-rate route's rate, or amber when it has none (it cannot be switched on
+       * until it does). A dash for a route that is not priced by a rate at all.
+       */
+      render: (row) =>
+        !row.conversion.rateRequired ? (
+          '—'
+        ) : row.conversion.rateMinor === null ? (
+          <Badge tone="warn">{t('web.payment_gateway_rate_missing')}</Badge>
+        ) : (
+          <Ltr>{`${boundOf(row.conversion.rateMinor, row.currency)} = ⭐ 1`}</Ltr>
         ),
     },
     {
@@ -777,6 +828,25 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
             </Field>
           )}
 
+          {takesConversionRate(editing) && (
+            <Field
+              label={t('web.payment_gateway_rate')}
+              htmlFor="pg-rate"
+              hint={t('web.payment_gateway_rate_hint')}
+              {...(conversionRateOf(form.providerUnitRate) === undefined
+                ? { error: t('web.payment_gateway_rate_invalid') }
+                : {})}
+            >
+              <input
+                id="pg-rate"
+                value={form.providerUnitRate}
+                inputMode="numeric"
+                maxLength={19}
+                onChange={(event) => setForm({ ...form, providerUnitRate: event.target.value })}
+              />
+            </Field>
+          )}
+
           <Field label={t('web.gateway_allow_column')} hint={t('web.gateway_allow_hint')}>
             <div className="toolbar">
               <Switch
@@ -813,7 +883,9 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
                 busy ||
                 percentOf(form.topupCashbackPercent) === null ||
                 (takesCustomerFee(editing) &&
-                  parsePercentBasisPoints(form.customerFeePercent) === null)
+                  parsePercentBasisPoints(form.customerFeePercent) === null) ||
+                (takesConversionRate(editing) &&
+                  conversionRateOf(form.providerUnitRate) === undefined)
               }
               onClick={() => save.mutate()}
             >

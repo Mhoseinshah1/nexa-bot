@@ -467,6 +467,64 @@ describe('the payments route', () => {
  * never receive the sixteen digits, so the assertion is on what is absent rather than on
  * what is drawn.
  */
+describe('a Telegram Stars payment on the detail (Codex review of #85, C6)', () => {
+  const INVOICE = {
+    provider: 'TELEGRAM_STARS',
+    providerOrderId: 'a'.repeat(32),
+    providerInvoiceId: 'message:910910:42',
+    creationState: 'CREATED',
+    creationErrorCode: null,
+    providerStatus: 'successful_payment',
+    providerPaid: true,
+    lastInquiryAt: null,
+    lastInquiryErrorCode: null,
+    webhookStatusHint: null,
+    lastWebhookAt: null,
+    webhookCount: 0,
+    providerUnit: 'XTR',
+    sentAmount: '200',
+    conversionRateMinor: '1300',
+    providerChargeId: 'stars-charge-0001',
+    requestAmount: '200',
+    finalAmount: null,
+    creditAmount: null,
+    outcome: 'SETTLED',
+    lateCompletionObservedAt: null,
+    createdAt: '2026-09-10T12:30:00.000Z',
+  };
+  const render = (invoice: Record<string, unknown>) => {
+    stubApi(
+      detail({
+        state: 'CONFIRMED',
+        method: 'GATEWAY',
+        evidenceKind: 'GATEWAY_CALLBACK',
+        gatewayInvoice: invoice,
+      }),
+    );
+    return renderPage(
+      <PaymentDetailPage
+        id={ROW_ID}
+        mayViewReceipts={false}
+        mayViewRefunds={false}
+        mayIssueRefunds={false}
+        denied={false}
+      />,
+    );
+  };
+
+  it('shows the charge id an operator reconciles and refunds by', async () => {
+    render(INVOICE);
+    expect(await screen.findByText('stars-charge-0001')).toBeInTheDocument();
+    expect(screen.getByText('شناسهٔ پرداخت درگاه')).toBeInTheDocument();
+  });
+
+  it('draws no charge row for an attempt nothing has paid', async () => {
+    render({ ...INVOICE, providerChargeId: null, providerPaid: null, outcome: null });
+    await screen.findByText('message:910910:42');
+    expect(screen.queryByText('شناسهٔ پرداخت درگاه')).not.toBeInTheDocument();
+  });
+});
+
 describe('the frozen destination on a payment detail', () => {
   it('names the account the instructions pointed at', async () => {
     stubApi(detail({ destination: DESTINATION }));

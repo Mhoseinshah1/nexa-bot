@@ -300,6 +300,9 @@ describe('TonPays, through the one settlement path', () => {
       credentials: new DrizzleGatewayCredentialStore(db, ctx.container.cipher, () =>
         ctx.container.ids.uuid(),
       ),
+      // TonPays sends its invoices with its own key; neither of these is reached for it.
+      botTokens: { tokenForBotInstance: () => Promise.resolve(null) },
+      presentation: () => Promise.reject(new Error('TonPays renders no invoice text')),
       budget: overrides.budget ?? new DrizzleGatewayCallBudget(db),
       callbackUrlFor: async (scope: TenantContext, provider) =>
         gatewayCallbackUrl(await origins.originFor(scope), provider, String(scope.tenantId)),

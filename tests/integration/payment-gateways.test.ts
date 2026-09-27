@@ -137,11 +137,20 @@ describe('payment routes', () => {
 
   it('seeds each tenant exactly the routes this release can operate', async () => {
     const { gateways, currency } = await ctx.container.paymentGateways.list(tenantA, ownerA);
-    expect(gateways.map((gateway) => gateway.provider)).toEqual(['MANUAL_TRANSFER', 'TONPAYS']);
+    // In render order `(sort_order, provider)`: every seeded route has sort order 0.
+    expect(gateways.map((gateway) => gateway.provider)).toEqual([
+      'MANUAL_TRANSFER',
+      'TELEGRAM_STARS',
+      'TONPAYS',
+    ]);
     const route = gateways.find((gateway) => gateway.provider === 'MANUAL_TRANSFER');
     expect(route?.status).toBe('ACTIVE');
     // WP11A: a route that needs a credential is seeded DISABLED, with no key.
     expect(gateways.find((gateway) => gateway.provider === 'TONPAYS')?.status).toBe('DISABLED');
+    // Package A: a route priced by an operator's rate is seeded DISABLED, with no rate.
+    const stars = gateways.find((gateway) => gateway.provider === 'TELEGRAM_STARS');
+    expect(stars?.status).toBe('DISABLED');
+    expect(stars?.providerUnitRateMinor).toBeNull();
     // NULL, not a name: provisioning does not invent customer-facing copy.
     expect(route?.displayName).toBeNull();
     expect(route?.minAmountMinor).toBe(0n);
@@ -163,8 +172,8 @@ describe('payment routes', () => {
 
   it('lets a view-only role read and refuses its writes at the guard', async () => {
     const { gateways } = await ctx.container.paymentGateways.list(tenantA, viewerA);
-    // The whole roster, TonPays included (WP11A).
-    expect(gateways).toHaveLength(2);
+    // The whole roster, TonPays (WP11A) and Telegram Stars (Package A) included.
+    expect(gateways).toHaveLength(3);
 
     const refused = await ctx.container.paymentGateways
       .setStatus(tenantA, viewerA, {

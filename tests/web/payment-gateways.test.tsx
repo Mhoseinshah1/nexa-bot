@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { NAV, navPermitted } from '../../apps/web/src/app';
-import { minorOf, PaymentGatewaysPage, percentOf } from '../../apps/web/src/pages/payment-gateways';
+import {
+  conversionRateOf,
+  minorOf,
+  PaymentGatewaysPage,
+  percentOf,
+  takesConversionRate,
+} from '../../apps/web/src/pages/payment-gateways';
 import { renderPage, stubApi } from './harness';
 
 /**
@@ -397,5 +403,24 @@ describe('the customer gateway fee', () => {
     });
     const saved = api.calls.find((call) => call.method === 'POST');
     expect(saved?.body as Record<string, unknown>).not.toHaveProperty('customerFeeBasisPoints');
+  });
+});
+
+/** Package A: the Telegram Stars rate — sales-currency minor units per Star. */
+describe('the Web Admin rate field', () => {
+  it('is shown for a fixed-rate route only', () => {
+    expect(takesConversionRate('TELEGRAM_STARS')).toBe(true);
+    expect(takesConversionRate('TONPAYS')).toBe(false);
+    expect(takesConversionRate('MANUAL_TRANSFER')).toBe(false);
+  });
+
+  it('clears on empty, sets a positive whole number, and refuses anything else', () => {
+    expect(conversionRateOf('')).toBeNull();
+    expect(conversionRateOf('  ')).toBeNull();
+    expect(conversionRateOf('1300')).toBe('1300');
+    expect(conversionRateOf('۱۳۰۰')).toBe('1300');
+    expect(conversionRateOf('0')).toBeUndefined();
+    expect(conversionRateOf('1.5')).toBeUndefined();
+    expect(conversionRateOf('-3')).toBeUndefined();
   });
 });

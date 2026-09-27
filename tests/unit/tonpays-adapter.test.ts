@@ -81,6 +81,7 @@ const request = (overrides: Partial<Parameters<TonPaysAdapter['createInvoice']>[
   amount: 50000n,
   callbackUrl: 'https://bot.example.com/payments/webhook/tonpays/t',
   buyerChatId: '123456789',
+  presentation: null,
   ...overrides,
 });
 

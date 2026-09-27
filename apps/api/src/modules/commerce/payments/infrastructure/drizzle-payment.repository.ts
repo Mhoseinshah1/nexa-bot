@@ -4,10 +4,12 @@ import {
   desc,
   eq,
   getTableColumns,
+  gt,
   inArray,
   isNotNull,
   isNull,
   lte,
+  or,
   sql,
   type SQL,
 } from 'drizzle-orm';
@@ -302,9 +304,60 @@ export class DrizzlePaymentRepository implements PaymentRepository {
         updatedAt: now,
       })
       .where(
-        and(eq(payments.tenantId, tenantId), eq(payments.id, id), eq(payments.state, 'PENDING')),
+        and(
+          eq(payments.tenantId, tenantId),
+          eq(payments.id, id),
+          eq(payments.state, 'PENDING'),
+          // Never over an approved Stars checkout: the charge is on its way (#85, C2).
+          notHeldAt(now),
+        ),
       )
       .returning({ id: payments.id });
+    return rows.length > 0;
+  }
+
+  async holdForCheckout(
+    scope: TenantContext,
+    id: PaymentId,
+    until: Date,
+    now: Date,
+    tx: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .update(payments)
+      .set({ checkoutHeldUntil: until, updatedAt: now })
+      .where(
+        and(
+          eq(payments.tenantId, tenantId),
+          eq(payments.id, id),
+          eq(payments.state, 'PENDING'),
+          eq(payments.method, 'GATEWAY'),
+        ),
+      )
+      .returning({ id: payments.id });
+    return rows.length > 0;
+  }
+
+  async hasCheckoutHeldPendingForOrder(
+    scope: TenantContext,
+    orderId: OrderId,
+    now: Date,
+    tx: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select({ id: payments.id })
+      .from(payments)
+      .where(
+        and(
+          eq(payments.tenantId, tenantId),
+          eq(payments.orderId, orderId),
+          eq(payments.state, 'PENDING'),
+          gt(payments.checkoutHeldUntil, now),
+        ),
+      )
+      .limit(1);
     return rows.length > 0;
   }
 
@@ -420,6 +473,12 @@ export class DrizzlePaymentRepository implements PaymentRepository {
            * `PaymentService.withdrawPending` over a payment id, not this one.
            */
           isNull(payments.customerSignalledAt),
+          /*
+           * Nor a payment an approved Stars pre-checkout holds (Codex review of #85):
+           * Telegram charges right after the approval. Row-local, so a cancellation that
+           * waited on the approval's row lock re-checks it against the committed row.
+           */
+          notHeldAt(now),
         ),
       )
       .returning({ id: payments.id });
@@ -708,6 +767,7 @@ type Row = {
   resolvedByAdminId: string | null;
   resolutionNote: string | null;
   customerSignalledAt: Date | null;
+  checkoutHeldUntil: Date | null;
   expiresAt: Date | null;
   gatewayProvider: string | null;
   topupCashbackPercent: number | null;
@@ -737,6 +797,7 @@ function toRecord(row: Row): PaymentRecord {
     resolvedByAdminId: row.resolvedByAdminId,
     resolutionNote: row.resolutionNote,
     customerSignalledAt: row.customerSignalledAt,
+    checkoutHeldUntil: row.checkoutHeldUntil,
     expiresAt: row.expiresAt,
     // `payments_gateway_provider_check` is built from the contract enum.
     gatewayProvider: row.gatewayProvider as PaymentGatewayProvider | null,
@@ -754,4 +815,9 @@ function toRecord(row: Row): PaymentRecord {
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
+}
+
+/** No approved Stars checkout holds the row at `now` (Codex review of #85, C2). */
+function notHeldAt(now: Date) {
+  return or(isNull(payments.checkoutHeldUntil), lte(payments.checkoutHeldUntil, now));
 }

@@ -47,12 +47,12 @@ describe('externalRoutes', () => {
     expect(externalRoutes([])).toEqual([]);
   });
 
-  it('answers TonPays, and only TonPays, among the providers this release actually has', () => {
+  it('answers TonPays and Telegram Stars, and only those, among the providers this release has', () => {
     const real = PAYMENT_GATEWAY_PROVIDERS.map((provider) =>
       route(provider, PAYMENT_GATEWAY_DESCRIPTORS[provider]),
     );
-    // WP11A: the reason the pre-invoice draws the gateway button when TonPays is offered.
-    expect(externalRoutes(real).map((one) => one.provider)).toEqual(['TONPAYS']);
+    // WP11A, Package A: the reason the pre-invoice draws a button per external route.
+    expect(externalRoutes(real).map((one) => one.provider)).toEqual(['TONPAYS', 'TELEGRAM_STARS']);
   });
 
   it('keeps the external routes, in order, and drops the manual one between them', () => {

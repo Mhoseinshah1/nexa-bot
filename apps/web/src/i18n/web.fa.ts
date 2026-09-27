@@ -1248,11 +1248,20 @@ export const WEB_FA = {
   'web.payment_gateway_provider': 'روش',
   'web.payment_gateway_provider_manual_transfer': 'کارت به کارت',
   'web.payment_gateway_provider_tonpays': 'تون‌پیز (TonPays)',
+  'web.payment_gateway_provider_telegram_stars': 'تلگرام استارز (⭐)',
+  // Package A: the Stars route's operator-set rate. No FX feed exists or is implied.
+  'web.payment_gateway_rate': 'نرخ هر ستاره (به کوچک‌ترین واحد ارز فروش)',
+  'web.payment_gateway_rate_hint':
+    'مبلغ یک ستارهٔ تلگرام به کوچک‌ترین واحد ارز فروش؛ عدد صحیح مثبت. تعداد ستارهٔ هر پرداخت = سقفِ (مبلغ قابل پرداخت ÷ این نرخ). نرخ روی هر پرداخت ثبت می‌شود و تغییر آن پرداخت‌های قبلی را تغییر نمی‌دهد. بدون نرخ، این روش فعال نمی‌شود. خالی گذاشتن نرخ را پاک می‌کند (فقط وقتی روش غیرفعال است).',
+  'web.payment_gateway_rate_invalid': 'نرخ باید یک عدد صحیح مثبت باشد.',
+  'web.payment_gateway_rate_column': 'نرخ ستاره',
+  'web.payment_gateway_rate_missing': 'نرخ تعیین نشده',
   'web.payment_gateway_invoice': 'فاکتور درگاه',
   'web.payment_gateway_invoice_hint':
     'اطلاعات سمت درگاه برای پشتیبانی و بررسی. مبالغ درگاه فقط اطلاعات تکمیلی‌اند؛ تأیید پرداخت فقط با استعلام مستقیم (completed و paid=true) و پیش از پایان مهلت ۷۰ دقیقه‌ای انجام می‌شود.',
   'web.payment_gateway_invoice_order_id': 'شناسهٔ سفارش در درگاه',
   'web.payment_gateway_invoice_id': 'شناسهٔ فاکتور درگاه',
+  'web.payment_gateway_charge_id': 'شناسهٔ پرداخت درگاه',
   'web.payment_gateway_invoice_creation': 'ساخت فاکتور',
   'web.payment_gateway_invoice_status': 'آخرین وضعیت استعلام',
   'web.payment_gateway_invoice_last_inquiry': 'آخرین استعلام',

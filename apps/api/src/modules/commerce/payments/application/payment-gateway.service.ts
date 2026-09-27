@@ -44,6 +44,7 @@ import type {
   GatewayAudienceReader,
   PaymentGatewayRecord,
   PaymentGatewayRepository,
+  StoredGatewayConfig,
 } from './gateway-ports.js';
 import type { ExternalGatewayAdapter, GatewayCredentialStore } from './gateway-invoice-ports.js';
 
@@ -328,6 +329,16 @@ export class PaymentGatewayService {
       ...(input.config.customerFeeBasisPoints === undefined
         ? {}
         : { customerFeeBasisPoints: input.config.customerFeeBasisPoints }),
+      // And the rate (Package A), on the same terms: only when sent, and null (clear) is
+      // a different command from a value.
+      ...(input.config.providerUnitRateMinor === undefined
+        ? {}
+        : {
+            providerUnitRateMinor:
+              input.config.providerUnitRateMinor === null
+                ? null
+                : input.config.providerUnitRateMinor.toString(),
+          }),
       // And the two purpose switches, for the same reason: switching top-up off is an
       // edit, and a key reused for it must not replay the edit that left it on.
       allowServicePurchase: input.config.allowServicePurchase,
@@ -359,14 +370,49 @@ export class PaymentGatewayService {
          * nothing to say about it — defaulting an absent one to ON would re-enable a
          * payment path an operator had switched off, from an edit to the display name.
          */
-        const config: PaymentGatewayConfig & { readonly customerFeeBasisPoints: number } = {
+        const config: StoredGatewayConfig = {
           ...input.config,
           allowServicePurchase: input.config.allowServicePurchase ?? before.allowServicePurchase,
           allowWalletTopup: input.config.allowWalletTopup ?? before.allowWalletTopup,
           // Absent keeps the stored rate, for the reason the two switches above do.
           customerFeeBasisPoints:
             input.config.customerFeeBasisPoints ?? before.customerFeeBasisPoints,
+          // Absent keeps the stored conversion rate; null clears it.
+          providerUnitRateMinor:
+            input.config.providerUnitRateMinor === undefined
+              ? before.providerUnitRateMinor
+              : input.config.providerUnitRateMinor,
         };
+        /*
+         * A conversion rate exists only on a `FIXED_RATE` route (Package A). Anywhere else
+         * it is a number nothing reads, refused rather than stored for an operator to
+         * believe — the rule the customer fee below states for itself.
+         */
+        const conversion = PAYMENT_GATEWAY_DESCRIPTORS[provider].conversion;
+        if (config.providerUnitRateMinor !== null && conversion !== 'FIXED_RATE') {
+          throw errors.validation(
+            COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+            'A conversion rate applies only to a route priced in another unit.',
+            { field: 'providerUnitRateMinor' },
+          );
+        }
+        /*
+         * And an ENABLED fixed-rate route keeps one: clearing it would leave a route every
+         * customer who chooses it is refused by. Disable first, then clear. Decided on the
+         * row read above, inside the transaction, so a concurrent enable is serialised by
+         * the UPDATE below rather than slipping between the check and the write.
+         */
+        if (
+          conversion === 'FIXED_RATE' &&
+          config.providerUnitRateMinor === null &&
+          before.status === 'ACTIVE'
+        ) {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE,
+            'An enabled route needs its conversion rate. Switch it off before clearing it.',
+            { reason: 'RATE_MISSING' },
+          );
+        }
         /*
          * A customer fee exists only on a route that settles through `GATEWAY` (WP18,
          * owner decision). A card-to-card transfer, a wallet settlement and an operator's
@@ -464,6 +510,22 @@ export class PaymentGatewayService {
             COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE,
             'This payment route needs its API key before it can be switched on.',
             { reason: 'CREDENTIAL_MISSING' },
+          );
+        }
+
+        /*
+         * And a route priced by an operator's rate cannot be switched ON without one
+         * (Package A): an attempt could not say how many Stars to ask for.
+         */
+        if (
+          input.status === 'ACTIVE' &&
+          PAYMENT_GATEWAY_DESCRIPTORS[provider].conversion === 'FIXED_RATE' &&
+          before.providerUnitRateMinor === null
+        ) {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE,
+            'This payment route needs its conversion rate before it can be switched on.',
+            { reason: 'RATE_MISSING' },
           );
         }
 
@@ -779,7 +841,7 @@ export class PaymentGatewayService {
            * takes whole Toman) cannot invoice it, so it is not offered for it — rather
            * than drawn and then refused at the tap.
            */
-          (amount === null || this.adapterAdmits(gateway.provider, amount)),
+          (amount === null || this.adapterAdmits(gateway, amount)),
       )
       .map((gateway) => ({
         provider: gateway.provider,
@@ -791,10 +853,13 @@ export class PaymentGatewayService {
     return { gateways, audience, routes };
   }
 
-  private adapterAdmits(provider: PaymentGatewayProvider, amount: Money): boolean {
-    if (PAYMENT_GATEWAY_DESCRIPTORS[provider].settlesVia !== 'GATEWAY') return true;
-    const adapter = this.deps.adapters(provider);
-    return adapter !== null && adapter.providerAmountOf(amount) !== null;
+  private adapterAdmits(gateway: PaymentGatewayRecord, amount: Money): boolean {
+    if (PAYMENT_GATEWAY_DESCRIPTORS[gateway.provider].settlesVia !== 'GATEWAY') return true;
+    const adapter = this.deps.adapters(gateway.provider);
+    // A `FIXED_RATE` route with no rate converts nothing, so it is offered for nothing.
+    return (
+      adapter !== null && adapter.providerAmountOf(amount, gateway.providerUnitRateMinor) !== null
+    );
   }
 
   private async audienceFor(scope: TenantContext, customerId: UserId, tx?: unknown) {
@@ -969,6 +1034,7 @@ function auditView(gateway: PaymentGatewayRecord): Record<string, unknown> {
     sortOrder: gateway.sortOrder,
     topupCashbackPercent: gateway.topupCashbackPercent,
     customerFeeBasisPoints: gateway.customerFeeBasisPoints,
+    providerUnitRateMinor: gateway.providerUnitRateMinor?.toString() ?? null,
     allowServicePurchase: gateway.allowServicePurchase,
     allowWalletTopup: gateway.allowWalletTopup,
   };

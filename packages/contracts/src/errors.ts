@@ -1042,6 +1042,15 @@ export const COMMERCE_ERROR_CODES = {
    */
   ORDER_TRANSFER_UNDER_REVIEW: 'commerce.order_transfer_under_review',
 
+  /**
+   * A Telegram Stars pre-checkout was approved for this payment moments ago (Package A,
+   * Codex review of #85). Telegram charges the customer right after it, so the payment
+   * is money in flight: it may not be cancelled, withdrawn or replaced by a wallet
+   * payment until the hold lapses or the charge settles it. The customer is asked to wait
+   * a moment — never told the order is gone.
+   */
+  PAYMENT_CHECKOUT_IN_PROGRESS: 'commerce.payment_checkout_in_progress',
+
   /** No manual-transfer account with that id for this tenant. */
   PAYMENT_ACCOUNT_NOT_FOUND: 'commerce.payment_account_not_found',
   /**
