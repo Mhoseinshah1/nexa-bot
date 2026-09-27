@@ -60,6 +60,14 @@ Five things did not fit Stars, and the design below answers each one.
   - Web Admin edits it on the existing payment-gateways page.
 - **The boot reconcile** (`ensureDefaults`) creates the row DISABLED, as it does for every
   provider.
+- **Scope (brief A1, "tenant/bot scoped").** The route's configuration — status, rate, fee,
+  limits — is the tenant's, as every gateway row is (`payment_gateways` is unique per
+  tenant and provider). What is bound to a bot is the ATTEMPT: the invoice snapshots the
+  bot it was sent through (`gateway_invoices.bot_instance_id`), is sent with that bot's
+  token, and pre-checkout and `successful_payment` are accepted only on that bot's webhook.
+  A per-bot rate would be a second configuration table for one row's worth of settings,
+  while two bots of one tenant sell the same catalogue in the same currency. The decision
+  is recorded here rather than left for a later reader to guess.
 
 ### 2.2 The conversion (brief A1)
 
