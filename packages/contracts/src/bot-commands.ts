@@ -24,6 +24,11 @@ export const BOT_COMMANDS = [
   { command: 'services', description: 'bot.command.services' },
   { command: 'wallet', description: 'bot.command.wallet' },
   { command: 'help', description: 'bot.command.help' },
+  /*
+   * Telegram requires a bot that sells digital goods for Stars to answer `/paysupport`
+   * (Package A). It is the existing support screen, not a second channel.
+   */
+  { command: 'paysupport', description: 'bot.command.paysupport' },
 ] as const;
 
 export type BotCommandName = (typeof BOT_COMMANDS)[number]['command'];

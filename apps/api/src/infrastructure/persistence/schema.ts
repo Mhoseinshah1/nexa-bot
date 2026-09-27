@@ -28,6 +28,7 @@ import {
   BOT_INSTANCE_STATUSES,
   CALENDARS,
   CURRENCY_CODES,
+  GATEWAY_PROVIDER_UNITS,
   DELIVERY_OUTCOMES,
   NOTIFICATION_KINDS,
   NOTIFICATION_STATUSES,
@@ -3327,6 +3328,15 @@ export const payments = pgTable(
      * customer tapping twice does not move the moment they first claimed to have paid.
      */
     customerSignalledAt: timestamptz('customer_signalled_at'),
+    /**
+     * Until when an APPROVED Telegram Stars pre-checkout holds this payment (Package A,
+     * Codex review of #85). Telegram charges right after the approval, so until then the
+     * payment is money in flight: every cancel, withdraw and wallet-replacement predicate
+     * excludes a row whose hold has not lapsed, in the same statement that moves it — a
+     * row-local predicate, so a cancellation that waited on the approval's row lock
+     * re-reads it rather than acting on what it saw before.
+     */
+    checkoutHeldUntil: timestamptz('checkout_held_until'),
     expiresAt: timestamptz('expires_at'),
     /**
      * The route the payment was offered through, snapshotted when it was created
@@ -3507,6 +3517,7 @@ export const payments = pgTable(
       'payments_customer_signal_check',
       sql`customer_signalled_at IS NULL OR method = 'MANUAL_TRANSFER'`,
     ),
+    check('payments_checkout_hold_check', sql`checkout_held_until IS NULL OR method = 'GATEWAY'`),
     check(
       'payments_gateway_provider_check',
       nullableEnumCheck('gateway_provider', PAYMENT_GATEWAY_PROVIDERS),
@@ -3613,6 +3624,24 @@ export const gatewayInvoices = pgTable(
     outcomeAt: timestamptz('outcome_at'),
     /** The first time an approval was observed that could no longer be acted on. */
     lateCompletionObservedAt: timestamptz('late_completion_observed_at'),
+    /**
+     * A `FIXED_RATE` route's rate, snapshotted when the attempt opened (Package A): sales-
+     * currency minor units per provider unit. `sent_amount` was computed from it and
+     * `nexa_gateway_invoices_snapshot_guard` freezes both. Null for a same-unit route.
+     */
+    conversionRateMinor: bigint('conversion_rate_minor', { mode: 'bigint' }),
+    /**
+     * The bot the attempt was opened through, for a route whose invoice is sent with the
+     * bot's own token (Stars). Pre-checkout and the recorded payment must arrive on this
+     * bot's webhook. Frozen once written.
+     */
+    botInstanceId: uuid('bot_instance_id').references(() => botInstances.id),
+    /**
+     * The provider's charge id, recorded from a payment the provider PUSHED (Stars:
+     * `telegram_payment_charge_id`), before settlement. Unique per provider within the
+     * tenant, and written once: one charge can settle one attempt, never two.
+     */
+    providerChargeId: text('provider_charge_id'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
@@ -3622,6 +3651,9 @@ export const gatewayInvoices = pgTable(
       foreignColumns: [payments.tenantId, payments.id],
       name: 'gateway_invoices_payment_fk',
     }),
+    uniqueIndex('gateway_invoices_charge_id_key')
+      .on(table.tenantId, table.provider, table.providerChargeId)
+      .where(sql`provider_charge_id IS NOT NULL`),
     uniqueIndex('gateway_invoices_order_id_key').on(
       table.tenantId,
       table.provider,
@@ -3643,7 +3675,23 @@ export const gatewayInvoices = pgTable(
       enumCheck('creation_state', GATEWAY_INVOICE_CREATION_STATES),
     ),
     check('gateway_invoices_outcome_check', nullableEnumCheck('outcome', GATEWAY_INVOICE_OUTCOMES)),
-    check('gateway_invoices_provider_unit_check', enumCheck('provider_unit', CURRENCY_CODES)),
+    check(
+      'gateway_invoices_provider_unit_check',
+      enumCheck('provider_unit', GATEWAY_PROVIDER_UNITS),
+    ),
+    check(
+      'gateway_invoices_conversion_rate_check',
+      sql`conversion_rate_minor IS NULL OR conversion_rate_minor > 0`,
+    ),
+    check(
+      'gateway_invoices_charge_id_length_check',
+      sql`provider_charge_id IS NULL OR length(provider_charge_id) BETWEEN 1 AND 255`,
+    ),
+    /** A Stars attempt names its bot and its rate; the invoice cannot be sent or checked without both. */
+    check(
+      'gateway_invoices_stars_snapshot_check',
+      sql`provider <> 'TELEGRAM_STARS' OR (bot_instance_id IS NOT NULL AND conversion_rate_minor IS NOT NULL AND provider_unit = 'XTR')`,
+    ),
     check('gateway_invoices_sent_amount_check', sql`sent_amount > 0`),
     check(
       'gateway_invoices_order_id_length_check',
@@ -3886,6 +3934,14 @@ export const paymentGateways = pgTable(
      */
     allowServicePurchase: boolean('allow_service_purchase').notNull().default(true),
     allowWalletTopup: boolean('allow_wallet_topup').notNull().default(true),
+    /**
+     * A `FIXED_RATE` route's conversion (Package A): sales-currency minor units per ONE
+     * provider unit — for Telegram Stars in a Toman installation, the owner's
+     * `toman_per_star`. Null until an operator sets it, and a fixed-rate route cannot be
+     * enabled while it is. Each attempt snapshots it onto its `gateway_invoices` row, so
+     * changing it never alters an invoice already open. There is no FX feed.
+     */
+    providerUnitRateMinor: bigint('provider_unit_rate_minor', { mode: 'bigint' }),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
@@ -3953,6 +4009,10 @@ export const paymentGateways = pgTable(
     check(
       'payment_gateways_customer_fee_check',
       sql`customer_fee_basis_points BETWEEN ${sql.raw(String(CUSTOMER_FEE_BASIS_POINTS_MIN))} AND ${sql.raw(String(CUSTOMER_FEE_BASIS_POINTS_MAX))}`,
+    ),
+    check(
+      'payment_gateways_provider_unit_rate_check',
+      sql`provider_unit_rate_minor IS NULL OR provider_unit_rate_minor > 0`,
     ),
   ],
 );

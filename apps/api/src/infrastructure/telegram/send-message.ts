@@ -123,9 +123,10 @@ export async function telegramSend(request: TelegramRequest): Promise<TelegramSe
  * `result.username` and `result.id` from `getMe`, which is why the success case carries
  * the whole thing rather than a shape chosen for one method.
  *
- * NOT exported for general use: the callers are `telegramSend`, `telegramGetMe` and
- * `telegramSetWebhook`, and a fourth should be a named function here rather than an
- * arbitrary method string passed in from a surface.
+ * NOT exported for general use: every caller is a named function in this file
+ * (`telegramSend`, `telegramGetMe`, `telegramSetWebhook`, the Stars pair below, ...), and
+ * the next should be one too rather than an arbitrary method string passed in from a
+ * surface.
  */
 type TelegramCallOutcome =
   | { readonly outcome: 'SUCCEEDED'; readonly result: unknown }
@@ -711,4 +712,92 @@ export async function telegramGetChatMember(
     outcome: 'SUCCEEDED',
     member: { status, isMember: typeof isMember === 'boolean' ? isMember : null },
   };
+}
+
+// ---------------------------------------------------------------------------
+// Telegram Stars (Package A, `docs/package-a-telegram-stars-audit.md`)
+// ---------------------------------------------------------------------------
+
+/**
+ * Send a Telegram Stars invoice (`sendInvoice`) to one chat.
+ *
+ * The body is fixed here, not by a caller, because every field is a rule of the brief
+ * (A2) rather than a choice: `currency` is `XTR`, `provider_token` is the EMPTY string
+ * (Stars take none), there is exactly ONE price, and there are no tips, no shipping, no
+ * flexible price and no subscription period — Telegram charges what the one price says,
+ * and nothing a customer can adjust.
+ *
+ * `payload` is the attempt's opaque provider order id: it names no customer, order,
+ * secret or token, and it is what `pre_checkout_query` and `successful_payment` hand back.
+ *
+ * The outcome is the shared taxonomy, and the CALLER decides what it means for an
+ * invoice. A readable refusal is a refusal; a timeout, a network error, a 5xx and an
+ * unreadable 2xx all leave it unknown whether the invoice reached the chat.
+ */
+export async function telegramSendInvoice(
+  request: Omit<TelegramSendRequest, 'body' | 'method'> & {
+    readonly chatId: string;
+    readonly title: string;
+    readonly description: string;
+    readonly payload: string;
+    readonly priceLabel: string;
+    readonly stars: bigint;
+  },
+): Promise<TelegramSendOutcome> {
+  assertOutsideTransaction('A Telegram sendInvoice');
+
+  const { chatId, title, description, payload, priceLabel, stars, ...rest } = request;
+  const amount = Number(stars);
+  if (!Number.isSafeInteger(amount) || amount < 1) {
+    return {
+      outcome: 'FAILED_PERMANENT',
+      errorCode: 'telegram.rejected.stars_amount',
+      errorMessage: 'A Stars invoice needs a positive whole number of Stars.',
+    };
+  }
+  return telegramSend({
+    ...rest,
+    method: 'sendInvoice',
+    body: {
+      chat_id: chatId,
+      title,
+      description,
+      payload,
+      provider_token: '',
+      currency: 'XTR',
+      prices: [{ label: priceLabel, amount }],
+    },
+  });
+}
+
+/**
+ * Answer a `pre_checkout_query` (`answerPreCheckoutQuery`).
+ *
+ * Telegram waits ten seconds for this and then cancels the payment, so the caller
+ * answers inside the webhook request. `errorMessage` is shown to the customer, and is
+ * required by Telegram when `ok` is false: it is the rendered template sentence, never a
+ * reason (the reason would tell a stranger which payloads exist).
+ */
+export async function telegramAnswerPreCheckoutQuery(
+  request: Omit<TelegramSendRequest, 'body' | 'method'> & {
+    readonly preCheckoutQueryId: string;
+    readonly ok: boolean;
+    readonly errorMessage: string | null;
+  },
+): Promise<TelegramSendOutcome> {
+  assertOutsideTransaction('A Telegram answerPreCheckoutQuery');
+
+  const { preCheckoutQueryId, ok, errorMessage, ...rest } = request;
+  const call = await telegramCall({
+    ...rest,
+    method: 'answerPreCheckoutQuery',
+    body: {
+      pre_checkout_query_id: preCheckoutQueryId,
+      ok,
+      ...(ok || errorMessage === null ? {} : { error_message: errorMessage }),
+    },
+  });
+  if (call.outcome !== 'SUCCEEDED') return call;
+  // Answers `result: true`. No id to carry.
+  return { outcome: 'SUCCEEDED', messageId: null };
 }

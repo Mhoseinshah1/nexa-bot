@@ -1,4 +1,15 @@
 import { z } from 'zod';
+import { CURRENCY_CODES } from './money.js';
+import { TELEGRAM_STARS_CURRENCY } from './telegram-stars.js';
+
+/**
+ * The units a provider's invoice may be denominated in: every sales currency, and the ones
+ * only a provider bills in. `XTR` (Telegram Stars) is here and deliberately NOT in
+ * `CURRENCY_CODES`: a Star is never `Money` in Nexa. The payment, its fee, the ledger and
+ * every report stay in the sales currency; the Star figure lives on the invoice row only.
+ */
+export const GATEWAY_PROVIDER_UNITS = [...CURRENCY_CODES, TELEGRAM_STARS_CURRENCY] as const;
+export type GatewayProviderUnit = (typeof GATEWAY_PROVIDER_UNITS)[number];
 
 /**
  * The invoice an EXTERNAL gateway holds for one payment attempt (WP11A,
@@ -94,6 +105,13 @@ export const gatewayInvoiceViewSchema = z.object({
   webhookCount: z.number().int(),
   providerUnit: z.string(),
   sentAmount: z.string(),
+  /**
+   * A `FIXED_RATE` route's rate, snapshotted on this attempt: sales-currency minor units
+   * per provider unit. Null for a route that bills in the sales currency.
+   */
+  conversionRateMinor: z.string().nullable(),
+  /** The provider's charge id, recorded from a pushed payment (Stars). Null until then. */
+  providerChargeId: z.string().nullable(),
   requestAmount: z.string().nullable(),
   finalAmount: z.string().nullable(),
   creditAmount: z.string().nullable(),

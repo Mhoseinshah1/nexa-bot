@@ -62,8 +62,13 @@ import type { PaymentMethod } from './payment.js';
  *   customer pays on TonPays' own invoice page; the provider's INQUIRY endpoint, asked
  *   server to server, is the only thing that can say the money was approved. It needs
  *   an API key, so a tenant's row starts DISABLED and cannot be enabled without one.
+ * - `TELEGRAM_STARS` — Telegram Stars, `XTR` (post-WP20 brief, Package A,
+ *   `docs/package-a-telegram-stars-audit.md`). The bot sends the invoice with its own
+ *   token, and only Telegram's `successful_payment`, received on the bot's authenticated
+ *   webhook and recorded, approves it. Priced by an operator-set rate; a row starts
+ *   DISABLED and cannot be enabled without one.
  */
-export const PAYMENT_GATEWAY_PROVIDERS = ['MANUAL_TRANSFER', 'TONPAYS'] as const;
+export const PAYMENT_GATEWAY_PROVIDERS = ['MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS'] as const;
 export type PaymentGatewayProvider = (typeof PAYMENT_GATEWAY_PROVIDERS)[number];
 export const paymentGatewayProviderSchema = z.enum(PAYMENT_GATEWAY_PROVIDERS);
 
@@ -87,6 +92,24 @@ export interface PaymentGatewayDescriptor {
   readonly provider: PaymentGatewayProvider;
   readonly settlesVia: PaymentMethod;
   readonly requiresCredentials: boolean;
+  /**
+   * What an external route's invoice is sent with: the operator's stored gateway key, or
+   * the token of the bot the customer is talking to. `NONE` for a route with no invoice.
+   */
+  readonly invoiceCredential: 'NONE' | 'GATEWAY_KEY' | 'BOT_TOKEN';
+  /**
+   * What approves an external payment. `INQUIRY`: only the provider's own check
+   * endpoint, asked server to server. `RECORDED_PAYMENT`: a payment the provider pushed
+   * to an authenticated channel and Nexa recorded before settling. `NONE` for a route
+   * with no external approval.
+   */
+  readonly approval: 'NONE' | 'INQUIRY' | 'RECORDED_PAYMENT';
+  /**
+   * How the payable becomes the provider's amount. `SAME_UNIT`: the provider bills in the
+   * sales currency (or an exact multiple of it). `FIXED_RATE`: an operator-set rate,
+   * `providerUnitRateMinor`, snapshotted on every attempt; there is no FX feed.
+   */
+  readonly conversion: 'SAME_UNIT' | 'FIXED_RATE';
 }
 
 export const PAYMENT_GATEWAY_DESCRIPTORS: {
@@ -96,13 +119,36 @@ export const PAYMENT_GATEWAY_DESCRIPTORS: {
     provider: 'MANUAL_TRANSFER',
     settlesVia: 'MANUAL_TRANSFER',
     requiresCredentials: false,
+    invoiceCredential: 'NONE',
+    approval: 'NONE',
+    conversion: 'SAME_UNIT',
   },
   TONPAYS: {
     provider: 'TONPAYS',
     settlesVia: 'GATEWAY',
     requiresCredentials: true,
+    invoiceCredential: 'GATEWAY_KEY',
+    approval: 'INQUIRY',
+    conversion: 'SAME_UNIT',
+  },
+  TELEGRAM_STARS: {
+    provider: 'TELEGRAM_STARS',
+    settlesVia: 'GATEWAY',
+    // The bot's own token is the credential; there is no key for an operator to set.
+    requiresCredentials: false,
+    invoiceCredential: 'BOT_TOKEN',
+    approval: 'RECORDED_PAYMENT',
+    conversion: 'FIXED_RATE',
   },
 };
+
+/**
+ * The bound on a `FIXED_RATE` route's rate: sales-currency minor units per ONE provider
+ * unit (for Stars, the owner's `toman_per_star` in a Toman installation). A positive
+ * integer; the ceiling is the money column's, so a rate that parses is one the database
+ * can hold.
+ */
+export const providerUnitRateMinorSchema = z.bigint().min(1n).max(MAX_MONEY_AMOUNT_MINOR);
 
 /**
  * The bound on a gateway API key an operator may submit, in characters.
@@ -414,6 +460,13 @@ export const paymentGatewayConfigSchema = z
      */
     allowServicePurchase: z.boolean().optional().default(true),
     allowWalletTopup: z.boolean().optional().default(true),
+    /**
+     * A `FIXED_RATE` route's conversion rate (Package A). OPTIONAL, and absent means
+     * "leave the stored rate as it is", for the same reason as the fee: a client that
+     * never sends it must not clear it by saving the form. `null` clears it, which an
+     * ACTIVE fixed-rate route refuses.
+     */
+    providerUnitRateMinor: z.union([providerUnitRateMinorSchema, z.null()]).optional(),
   })
   .superRefine((value, ctx) => {
     /*

@@ -3,6 +3,7 @@ import type { FastifyRequest } from 'fastify';
 import {
   API_PREFIX,
   PAYMENT_GATEWAY_DESCRIPTORS,
+  providerUnitRateMinorSchema,
   PAYMENT_GATEWAY_ROUTES,
   paymentGatewayConfigSchema,
   routePattern,
@@ -103,6 +104,18 @@ export class PaymentGatewaysController {
         ...config,
         allowServicePurchase: input.allowServicePurchase,
         allowWalletTopup: input.allowWalletTopup,
+        /*
+         * The conversion rate (Package A) as the WIRE carried it: absent keeps the row's,
+         * null clears it, a decimal string sets it. Bounded by the contract's schema.
+         */
+        ...(input.providerUnitRateMinor === undefined
+          ? {}
+          : {
+              providerUnitRateMinor:
+                input.providerUnitRateMinor === null
+                  ? null
+                  : providerUnitRateMinorSchema.parse(BigInt(input.providerUnitRateMinor)),
+            }),
       },
     });
     return this.respond(scope, gateway);
@@ -219,6 +232,10 @@ function toView(
       setAt: facts.credentialSetAt?.toISOString() ?? null,
     },
     callbackUrl: facts.callbackUrl,
+    conversion: {
+      rateRequired: PAYMENT_GATEWAY_DESCRIPTORS[gateway.provider].conversion === 'FIXED_RATE',
+      rateMinor: gateway.providerUnitRateMinor?.toString() ?? null,
+    },
     createdAt: gateway.createdAt.toISOString(),
     updatedAt: gateway.updatedAt.toISOString(),
   };

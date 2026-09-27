@@ -4233,6 +4233,17 @@ export const paymentGatewaySchema = z.object({
    * reconciliation alone decides. Shown for diagnostics only.
    */
   callbackUrl: z.string().nullable().default(null),
+  /**
+   * A `FIXED_RATE` route's conversion (Package A): `rateRequired` says the form shows the
+   * field and enabling needs it; `rateMinor` is the stored rate — sales-currency minor
+   * units per provider unit (Stars: Toman per Star) — as a decimal string, or null.
+   */
+  conversion: z
+    .object({
+      rateRequired: z.boolean(),
+      rateMinor: z.string().nullable(),
+    })
+    .default({ rateRequired: false, rateMinor: null }),
   /*
    * The descriptor's `settlesVia` is NOT here, and `requiresCredentials` is only as
    * `credential.required` above (WP11A), which the key form needs.
@@ -4312,6 +4323,12 @@ export const updatePaymentGatewayRequestSchema = z.object({
   /** Optional on the wire for the previous release's client; `paymentGatewayConfigSchema` defaults both to true. */
   allowServicePurchase: z.boolean().optional(),
   allowWalletTopup: z.boolean().optional(),
+  /**
+   * A `FIXED_RATE` route's rate (Package A): sales-currency minor units per provider unit,
+   * a positive whole number as a decimal string, or null to clear. Absent keeps the
+   * stored rate.
+   */
+  providerUnitRateMinor: z.union([z.string().regex(/^[1-9][0-9]{0,18}$/u), z.null()]).optional(),
 });
 export type UpdatePaymentGatewayRequest = z.infer<typeof updatePaymentGatewayRequestSchema>;
 

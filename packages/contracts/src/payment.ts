@@ -202,7 +202,14 @@ export const PAYMENT_EVIDENCE_KINDS = [
   'OPERATOR_REVIEW',
   /** A debit committed against the customer's own ledger in the same transaction. */
   'WALLET_DEBIT',
-  /** A signed, verified callback from a configured gateway. No adapter ships yet. */
+  /**
+   * A verified callback from a configured gateway, delivered to this installation.
+   *
+   * Telegram Stars (Package A) is the one route that settles on it: `successful_payment`
+   * arrives on the bot's own webhook, authenticated by the webhook secret, and is recorded
+   * under the invoice's lock before it settles. Not `GATEWAY_INQUIRY` — nothing was asked
+   * of the provider.
+   */
   'GATEWAY_CALLBACK',
   /** An operator resolved an UNKNOWN outcome against the gateway's own records. */
   'RECONCILIATION',

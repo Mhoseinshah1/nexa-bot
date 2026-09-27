@@ -663,9 +663,14 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.payment.cancel_confirm',
       'bot.payment.cancel_confirm_button',
       'bot.payment.cancelled',
+      'bot.payment.checkout_in_progress',
       'bot.payment.copy_amount_button',
       'bot.payment.copy_card_button',
-      'bot.payment.gateway_button',
+      /*
+       * Package A: `bot.payment.gateway_button` is gone from the runtime — every external
+       * route now draws its own named button (`bot.wallet.topup_method_button`), so Stars
+       * and TonPays are two choices rather than whichever came first.
+       */
       'bot.payment.gateway_check_button',
       'bot.payment.gateway_closed',
       'bot.payment.gateway_confirmed',
@@ -692,6 +697,15 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.payment.receipt_received',
       'bot.payment.received_for_review',
       'bot.payment.sent_button',
+      /*
+       * Package A: the Telegram Stars summaries — principal, fee, payable and the Stars the
+       * invoice asks for, each from the attempt's snapshot. The invoice itself is a
+       * Telegram message; none of them links anywhere.
+       */
+      'bot.payment.stars_invoice_order',
+      'bot.payment.stars_invoice_order_fee',
+      'bot.payment.stars_invoice_topup',
+      'bot.payment.stars_invoice_topup_fee',
       'bot.payment.transfer_instructions',
       'bot.payment.transfer_under_review',
       'bot.payment.unconfigured',

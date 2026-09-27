@@ -13,6 +13,12 @@ import {
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
 import { currentCorrelationId, newCorrelationId } from '../../infrastructure/logging/logger.js';
+import { STARS_CHARGE_UNMATCHED_CODE } from '../../modules/commerce/payments/application/telegram-stars-payment.service.js';
+import {
+  hasSuccessfulPayment,
+  starsPreCheckoutOf,
+  starsSuccessfulPaymentOf,
+} from './stars-updates.js';
 
 /**
  * The Telegram webhook receiver.
@@ -157,6 +163,40 @@ export class TelegramWebhookController {
     };
 
     const idempotencyKey = telegramUpdateKey(botInstance.id, updateId);
+
+    /*
+     * Telegram Stars (Package A). Both payment updates are answered HERE, before the
+     * customer turn and before anything that could refuse or delay them.
+     *
+     * A pre-checkout has ten seconds and moves no money; whatever happens it is answered
+     * 2xx. A `successful_payment` is money that has already moved: it is RECORDED before
+     * this returns, and a record that throws propagates as a non-2xx so Telegram delivers
+     * the update again — an unrecorded charge is the one failure nothing repairs later.
+     * A malformed one is never handed to the runtime as a message either: it is reported
+     * to the operator as a charge nobody could attach.
+     */
+    const preCheckout = starsPreCheckoutOf(update);
+    if (preCheckout !== null) {
+      await this.container.starsPayments.preCheckout(scope, botInstance.id, preCheckout);
+      return { ok: true };
+    }
+    if (hasSuccessfulPayment(update)) {
+      const payment = starsSuccessfulPaymentOf(update);
+      if (payment === null) {
+        await this.container.opsLog.record(scope, {
+          code: STARS_CHARGE_UNMATCHED_CODE,
+          severity: 'ERROR',
+          message:
+            'Telegram reported a payment this installation could not read. Nothing was settled; ' +
+            'find it in the bot’s Star transactions.',
+          dedupeKey: `${STARS_CHARGE_UNMATCHED_CODE}:malformed:${botInstance.id}:${updateId}`,
+          context: { botInstanceId: botInstance.id, updateId, reason: 'MALFORMED' },
+        });
+        return { ok: true };
+      }
+      await this.container.starsPayments.recordSuccessfulPayment(scope, botInstance.id, payment);
+      return { ok: true };
+    }
 
     if (isPingCommand(update)) {
       /*

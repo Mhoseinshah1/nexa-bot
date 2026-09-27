@@ -2,7 +2,6 @@ import { and, asc, count, eq, inArray } from 'drizzle-orm';
 import {
   PAYMENT_GATEWAY_DESCRIPTORS,
   PAYMENT_GATEWAY_PROVIDERS,
-  type PaymentGatewayConfig,
   type PaymentGatewayProvider,
   type PaymentGatewayStatus,
   type SalesCurrencyCode,
@@ -23,6 +22,7 @@ import type {
   GatewayAudienceReader,
   PaymentGatewayRecord,
   PaymentGatewayRepository,
+  StoredGatewayConfig,
 } from '../application/gateway-ports.js';
 
 /** The columns the record is built from. Selected explicitly, in one place. */
@@ -40,6 +40,7 @@ const COLUMNS = {
   sortOrder: paymentGateways.sortOrder,
   topupCashbackPercent: paymentGateways.topupCashbackPercent,
   customerFeeBasisPoints: paymentGateways.customerFeeBasisPoints,
+  providerUnitRateMinor: paymentGateways.providerUnitRateMinor,
   allowServicePurchase: paymentGateways.allowServicePurchase,
   allowWalletTopup: paymentGateways.allowWalletTopup,
   createdAt: paymentGateways.createdAt,
@@ -61,6 +62,7 @@ interface Row {
   readonly sortOrder: number;
   readonly topupCashbackPercent: number;
   readonly customerFeeBasisPoints: number;
+  readonly providerUnitRateMinor: bigint | null;
   readonly allowServicePurchase: boolean;
   readonly allowWalletTopup: boolean;
   readonly createdAt: Date;
@@ -89,6 +91,7 @@ function toRecord(row: Row): PaymentGatewayRecord {
     sortOrder: row.sortOrder,
     topupCashbackPercent: row.topupCashbackPercent,
     customerFeeBasisPoints: row.customerFeeBasisPoints,
+    providerUnitRateMinor: row.providerUnitRateMinor,
     allowServicePurchase: row.allowServicePurchase,
     allowWalletTopup: row.allowWalletTopup,
     createdAt: row.createdAt,
@@ -174,11 +177,14 @@ export class DrizzlePaymentGatewayRepository implements PaymentGatewayRepository
           provider,
           /*
            * A route that needs a credential starts DISABLED (WP11A): it cannot be operated
-           * until an operator stores its key, and enabling it refuses until then.
+           * until an operator stores its key, and enabling it refuses until then. So does a
+           * route priced by an operator's rate (Package A), which has none yet.
            */
-          status: PAYMENT_GATEWAY_DESCRIPTORS[provider].requiresCredentials
-            ? ('DISABLED' as const)
-            : ('ACTIVE' as const),
+          status:
+            PAYMENT_GATEWAY_DESCRIPTORS[provider].requiresCredentials ||
+            PAYMENT_GATEWAY_DESCRIPTORS[provider].conversion === 'FIXED_RATE'
+              ? ('DISABLED' as const)
+              : ('ACTIVE' as const),
           /*
            * No display name, which is the point. NULL means "the product's own name for
            * this route" — provisioning does not invent customer-facing copy, and the
@@ -207,7 +213,7 @@ export class DrizzlePaymentGatewayRepository implements PaymentGatewayRepository
   async update(
     scope: TenantContext,
     provider: PaymentGatewayProvider,
-    config: PaymentGatewayConfig & { readonly customerFeeBasisPoints: number },
+    config: StoredGatewayConfig,
     currency: SalesCurrencyCode,
     now: Date,
     tx: unknown,
@@ -228,6 +234,7 @@ export class DrizzlePaymentGatewayRepository implements PaymentGatewayRepository
         sortOrder: config.sortOrder,
         topupCashbackPercent: config.topupCashbackPercent,
         customerFeeBasisPoints: config.customerFeeBasisPoints,
+        providerUnitRateMinor: config.providerUnitRateMinor,
         allowServicePurchase: config.allowServicePurchase,
         allowWalletTopup: config.allowWalletTopup,
         updatedAt: now,

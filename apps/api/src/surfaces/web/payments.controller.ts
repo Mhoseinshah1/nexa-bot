@@ -363,6 +363,10 @@ function toGatewayInvoiceView(invoice: GatewayInvoiceRecord): GatewayInvoiceView
     webhookCount: invoice.webhookCount,
     providerUnit: invoice.providerUnit,
     sentAmount: invoice.sentAmount.toString(),
+    // Stars (Package A): the rate the Star figure was computed at, and the charge id
+    // that paid it — an identifier an operator reconciles by, never a way to pay.
+    conversionRateMinor: amount(invoice.conversionRateMinor),
+    providerChargeId: invoice.providerChargeId,
     requestAmount: amount(invoice.requestAmount),
     finalAmount: amount(invoice.finalAmount),
     creditAmount: amount(invoice.creditAmount),

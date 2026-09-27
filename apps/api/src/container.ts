@@ -25,6 +25,7 @@ import type {
 import { CATALOGUE_FA, createTranslator } from '@nexa/i18n';
 import type {
   OperationType,
+  BotInstanceId,
   PaymentGatewayProvider,
   TenantContext,
   Translator,
@@ -241,6 +242,9 @@ import {
   TonPaysAdapter,
 } from './modules/commerce/payments/infrastructure/tonpays-adapter.js';
 import { DrizzleGatewayInvoiceRepository } from './modules/commerce/payments/infrastructure/drizzle-gateway-invoice.repository.js';
+import { TelegramStarsAdapter } from './modules/commerce/payments/infrastructure/telegram-stars-adapter.js';
+import { TelegramStarsCheckoutAnswerer } from './modules/commerce/payments/infrastructure/telegram-stars-checkout-answerer.js';
+import { StarsPaymentService } from './modules/commerce/payments/application/telegram-stars-payment.service.js';
 import {
   DrizzleGatewayCallBudget,
   DrizzleGatewayCredentialStore,
@@ -448,6 +452,11 @@ export interface Container {
    */
   readonly gatewayPayments: GatewayPaymentService;
   readonly gatewayPaymentLoop: GatewayPaymentLoop;
+  /**
+   * Telegram Stars' two payment updates (Package A), answered by the webhook before the
+   * customer turn: pre-checkout, and the recording and settling of `successful_payment`.
+   */
+  readonly starsPayments: StarsPaymentService;
   /**
    * The lane that warns a customer before their service runs out of days or traffic.
    *
@@ -1552,6 +1561,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     payments: {
       claimedPendingFor: (scope, orderId, tx) =>
         paymentRepository.hasClaimedPendingForOrder(scope, orderId, tx),
+      checkoutHeldFor: (scope, orderId, now, tx) =>
+        paymentRepository.hasCheckoutHeldPendingForOrder(scope, orderId, now, tx),
       withdrawPendingFor: (scope, orderId, now, tx) =>
         paymentRepository.cancelPendingForOrder(scope, orderId, now, tx),
     },
@@ -1731,8 +1742,17 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    * port. The callback URL is generated from the tenant's registered public origin.
    */
   const tonpaysAdapter = new TonPaysAdapter();
+  /*
+   * Package A — Telegram Stars. The invoice is sent with the ATTEMPT's bot token through
+   * the one Telegram call module, bounded by the same send timeout every customer message
+   * uses.
+   */
+  const starsAdapter = new TelegramStarsAdapter({
+    apiBaseUrl: config.TELEGRAM_API_BASE_URL,
+    timeoutMs: config.NOTIFICATION_SEND_TIMEOUT_MS,
+  });
   const gatewayAdapters = (provider: PaymentGatewayProvider) =>
-    provider === 'TONPAYS' ? tonpaysAdapter : null;
+    provider === 'TONPAYS' ? tonpaysAdapter : provider === 'TELEGRAM_STARS' ? starsAdapter : null;
   const gatewayInvoiceRepository = new DrizzleGatewayInvoiceRepository(database.db);
   const gatewayCredentialStore = new DrizzleGatewayCredentialStore(database.db, cipher, () =>
     ids.uuid(),
@@ -2059,6 +2079,21 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     paymentRecords: paymentRepository,
     adapters: gatewayAdapters,
     credentials: gatewayCredentialStore,
+    // The bot the customer is talking to sends a Stars invoice (`BOT_TOKEN` routes).
+    botTokens: {
+      tokenForBotInstance: (scope, botInstanceId) =>
+        botInstances.tokenForBotInstance(scope, botInstanceId as BotInstanceId),
+    },
+    // The Stars invoice's own text, from the tenant's templates — never a literal.
+    presentation: async (scope) => ({
+      title: await templateResolver.render(scope, 'bot.payment.stars_invoice_title', {}),
+      description: await templateResolver.render(
+        scope,
+        'bot.payment.stars_invoice_description',
+        {},
+      ),
+      priceLabel: await templateResolver.render(scope, 'bot.payment.stars_price_label', {}),
+    }),
     budget: new DrizzleGatewayCallBudget(database.db),
     callbackUrlFor: gatewayCallbackUrlFor,
     customers: customerRepository,
@@ -2068,6 +2103,29 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     audit,
     opsLog,
     outbox,
+    clock,
+    ids,
+    logger,
+  });
+  const starsPayments = new StarsPaymentService({
+    invoices: gatewayInvoiceRepository,
+    payments: paymentRepository,
+    customers: customerRepository,
+    orders: orderRepository,
+    settlement: gatewayPayments,
+    answerer: new TelegramStarsCheckoutAnswerer(
+      { render: (scope, key, values) => templateResolver.render(scope, key, values) },
+      {
+        tokenForBotInstance: (scope, botInstanceId) =>
+          botInstances.tokenForBotInstance(scope, botInstanceId as BotInstanceId),
+      },
+      config.TELEGRAM_API_BASE_URL,
+      config.NOTIFICATION_SEND_TIMEOUT_MS,
+    ),
+    scopeActivity: tenants,
+    uow,
+    audit,
+    opsLog,
     clock,
     ids,
     logger,
@@ -3673,6 +3731,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     paymentExpiryLoop,
     gatewayPayments,
     gatewayPaymentLoop,
+    starsPayments,
     /** The sweep itself, so a test runs one pass instead of starting a timer. */
     paymentExpirySweep,
     usernameLane,
