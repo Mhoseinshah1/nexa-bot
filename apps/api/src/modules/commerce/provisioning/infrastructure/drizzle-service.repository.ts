@@ -206,7 +206,16 @@ export class DrizzleServiceRepository implements ServiceRepository {
       .select()
       .from(services)
       .where(and(eq(services.tenantId, tenantId), eq(services.id, id)))
-      .for('update')
+      /*
+       * `NO KEY UPDATE`, not `UPDATE` (Codex review of #83, round 11), for the reason
+       * `lockPayment` gives: it excludes every other locker and every write of this row
+       * exactly as before, and does NOT conflict with the `FOR KEY SHARE` a foreign-key check
+       * takes. That difference is a deadlock: a commercial settlement holds the service's
+       * lifecycle lock and then inserts an operation naming this service, whose FK check
+       * waited on a `FOR UPDATE` here while this transaction — a filing, an approval or an
+       * operator's deletion — waited on that lifecycle lock.
+       */
+      .for('no key update')
       .limit(1);
     const row = rows[0];
     return row === undefined ? null : toRecord(row);
@@ -229,6 +238,22 @@ export class DrizzleServiceRepository implements ServiceRepository {
           eq(serviceRefundRequests.tenantId, tenantId),
           eq(serviceRefundRequests.serviceId, id),
           inArray(serviceRefundRequests.state, [...SERVICE_REFUND_REQUEST_ACTIVE_STATES]),
+        ),
+      )
+      .limit(1);
+    return rows.length > 0;
+  }
+
+  async hasOpenRefundRequest(scope: TenantContext, id: string, tx?: unknown): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select({ id: serviceRefundRequests.id })
+      .from(serviceRefundRequests)
+      .where(
+        and(
+          eq(serviceRefundRequests.tenantId, tenantId),
+          eq(serviceRefundRequests.serviceId, id),
+          eq(serviceRefundRequests.state, 'OPEN'),
         ),
       )
       .limit(1);

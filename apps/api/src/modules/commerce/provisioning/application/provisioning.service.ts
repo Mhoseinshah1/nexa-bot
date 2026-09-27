@@ -1237,7 +1237,7 @@ export class ProvisioningService {
       service,
       'TERMINATE',
       input,
-      { requestedBy: 'OPERATOR' },
+      { requestedBy: 'OPERATOR', forRefundRequest: true },
       this.deps.clock.now(),
       tx,
     );
@@ -1256,6 +1256,11 @@ export class ProvisioningService {
         readonly serialize: (tx: TransactionScope) => Promise<void>;
         readonly admit: (tx: TransactionScope) => Promise<void>;
       };
+      /**
+       * Set by `planTerminateWithin` alone: this deletion IS an approved refund request's, so
+       * the request standing active is the reason for it rather than a refusal of it.
+       */
+      readonly forRefundRequest?: true;
     },
     now: Date,
     tx: TransactionScope,
@@ -1289,6 +1294,34 @@ export class ProvisioningService {
           COMMERCE_ERROR_CODES.SERVICE_ACTION_NOT_ALLOWED,
           'That service is not in a state this action can be taken from.',
           { state: locked?.state ?? null },
+        );
+      }
+      /*
+       * Then the lifecycle lock, after the row (Codex review of #83, round 11). A paid
+       * commercial action's settlement refuses while a deletion is undecided, and it decides
+       * that under this lock alone — it never takes the service row, because it already holds
+       * the customer's wallet there. A deletion planned under the row lock only could pass
+       * that settlement's check and its own `findOpen` beside it, and delete the renewal the
+       * customer had just paid for. Nothing waits on another lock while holding this one.
+       */
+      await this.deps.services.lockLifecycle(scope, locked.id, tx);
+      /*
+       * A customer's refund request for this service is OPEN (Codex review of #83, round 11).
+       * Its approval deletes the service and credits the wallet; a deletion planned beside it
+       * would remove the service with no credit behind it, and leave the request OPEN for
+       * ever, since an approval refuses a service that has ended. The operator decides the
+       * request instead. An EXECUTING request is not refused here: its own deletion is
+       * already planned, and the sweep credits it whichever deletion removes the service.
+       * Its approval, which plans that deletion, passes `forRefundRequest`.
+       */
+      if (
+        origin.forRefundRequest !== true &&
+        (await this.deps.services.hasOpenRefundRequest(scope, locked.id, tx))
+      ) {
+        throw errors.conflict(
+          COMMERCE_ERROR_CODES.SERVICE_ACTION_NOT_ALLOWED,
+          'This service has a refund request pending; decide the request instead.',
+          { state: locked.state, reason: 'REFUND_REQUESTED' },
         );
       }
     }

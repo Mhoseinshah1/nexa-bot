@@ -126,8 +126,10 @@ export class ProvisionerLoop {
   async tick(): Promise<void> {
     if (this.running) return;
     this.running = true;
+    let scope: TenantContext | null = null;
+    let failed = false;
     try {
-      const scope = this.options.scope();
+      scope = this.options.scope();
       for (let drained = 0; drained < DRAIN_LIMIT; drained += 1) {
         const result = await this.executor.runOnce(scope);
         if (result.kind === 'IDLE') break;
@@ -202,18 +204,6 @@ export class ProvisionerLoop {
        * limits are somebody else's.
        */
       await this.outcomes.announceDue(scope, DRAIN_LIMIT);
-      /*
-       * And the cashback the drain above just earned, or the orders that ended without
-       * delivery just voided. ONE batch per tick, like the two above it: each decision is
-       * its own short transaction, and a backlog takes more ticks rather than one long one.
-       */
-      await this.options.cashback.settleDue(scope, DRAIN_LIMIT);
-      // And the referral commissions those same deliveries earned, or those same ended
-      // orders voided — the same answer, decided for the referrer's wallet (WP9 F7).
-      await this.options.referrals.settleDue(scope, DRAIN_LIMIT);
-      // And the refund requests whose deletion the drain above just finished (WP19).
-      await this.options.serviceRefunds.settleDue(scope, DRAIN_LIMIT);
-      this.lastProgressAt = this.options.now();
     } catch (error: unknown) {
       /*
        * A failed tick makes NO progress, deliberately.
@@ -222,7 +212,37 @@ export class ProvisionerLoop {
        * progress so readiness goes stale if every tick keeps failing. Those two
        * together are what make the heartbeat honest.
        */
+      failed = true;
       this.options.logger.error({ error }, 'provisioner tick failed');
+    }
+    try {
+      if (scope !== null) {
+        /*
+         * Then the settlement lanes, EACH on its own (Codex review of #83, round 11).
+         *
+         * The cashback the drain earned or voided, the referral commissions beside it (WP9
+         * F7), and the refund requests whose deletion finished (WP19). ONE batch per tick
+         * each: every decision is its own short transaction, and a backlog takes more ticks
+         * rather than one long one. They used to run in sequence inside the drain's `try`,
+         * so one row that failed for ever in an earlier lane — or a failing drain — kept
+         * every later lane from running at all: a service already deleted, and its refund
+         * never credited. Now a lane's failure is logged under its own name, costs the
+         * tick its progress as before, and holds no other lane back.
+         */
+        for (const [lane, settle] of [
+          ['cashback', this.options.cashback],
+          ['referrals', this.options.referrals],
+          ['serviceRefunds', this.options.serviceRefunds],
+        ] as const) {
+          try {
+            await settle.settleDue(scope, DRAIN_LIMIT);
+          } catch (error: unknown) {
+            failed = true;
+            this.options.logger.error({ error, lane }, 'provisioner settlement lane failed');
+          }
+        }
+      }
+      if (!failed) this.lastProgressAt = this.options.now();
     } finally {
       this.running = false;
     }

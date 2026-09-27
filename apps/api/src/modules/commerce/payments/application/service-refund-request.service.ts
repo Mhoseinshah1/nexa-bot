@@ -299,13 +299,6 @@ export class ServiceRefundRequestService {
           input.serviceId,
           tx,
         );
-        /*
-         * The lifecycle lock, after the service row and before the payment's, as the approval
-         * takes it (Codex review of #83, round 10). A paid commercial action's settlement
-         * refuses while a request is active and this filing refuses while one is undecided;
-         * under the one lock neither can miss the other's uncommitted row.
-         */
-        await this.deps.services.lockLifecycle(scope, service.id, tx);
         // A replay of this very filing, whatever became of the request since: answered with
         // that request, never filed again.
         const replayed = await this.deps.repository.findByFilingKey(
@@ -346,6 +339,14 @@ export class ServiceRefundRequestService {
         if (!(await this.deps.refundLedger.lockPayment(scope, found.source.payment.id, tx))) {
           return refuse('SOURCE_UNRESOLVED');
         }
+        /*
+         * The lifecycle lock, LAST, as the approval takes it (Codex review of #83, rounds 10
+         * and 11). A paid commercial action's settlement refuses while a request is active and
+         * this filing refuses while one is undecided; under the one lock neither can miss the
+         * other's uncommitted row. Taken after the payment's lock rather than before it, so a
+         * filing never holds it while waiting: see the approval for the cycle that closed.
+         */
+        await this.deps.services.lockLifecycle(scope, service.id, tx);
         const eligibility = await this.eligibilityOf(scope, service, { checkFlag: true }, tx);
         if (!eligibility.eligible) return refuse(eligibility.reason);
         if (eligibility.source.payment.id !== found.source.payment.id) {
@@ -552,11 +553,18 @@ export class ServiceRefundRequestService {
          */
         const locked = await this.deps.services.lockForUpdate(scope, request.serviceId, tx);
         /*
-         * Then the lifecycle lock, which a paid commercial action's settlement takes before it
-         * plans (Codex review of #83, round 9): each refuses while the other's work is
-         * undecided, and this lock makes the two decisions sequential rather than blind to
-         * each other's uncommitted rows. After the row lock and before the payment's.
+         * Then the payment's lock, which the reservation below takes anyway, and only then the
+         * lifecycle lock — LAST, after every other lock this transaction takes (Codex review of
+         * #83, rounds 9 and 11). A paid commercial action's settlement takes the lifecycle lock
+         * after its customer's wallet lock, and an operator's refund of this payment takes the
+         * payment's lock and then that wallet's; a lifecycle lock held while waiting for the
+         * payment closed the cycle `customer → lifecycle → payment → customer`. Held last, it
+         * waits for nothing, so it closes no cycle. Each side still refuses while the other's
+         * work is undecided, and this lock still makes the two decisions sequential.
          */
+        if (!(await this.deps.refundLedger.lockPayment(scope, request.paymentId, tx))) {
+          throw this.notEligible('SOURCE_UNRESOLVED');
+        }
         if (locked !== null) await this.deps.services.lockLifecycle(scope, locked.id, tx);
         const service = await this.assertExecutable(scope, request, locked, tx);
         if (input.amountMinor <= 0n) {
