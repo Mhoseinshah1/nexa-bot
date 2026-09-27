@@ -2793,4 +2793,56 @@ describe('WP19 — a customer asks for their money back', () => {
     expect(await terminateOf(service.id), 'no deletion planned beside it').toHaveLength(0);
     expect((await requestRow(filed.request.id))?.request.state).toBe('OPEN');
   });
+
+  it('files no request while an operator’s deletion of the service is undecided (Codex review of #83, round 12)', async () => {
+    const service = await activeService('file-beside-delete');
+    await ctx.container.provisioning.requestFromOperator(tenantA, owner, service.id, 'TERMINATE', {
+      idempotencyKey: 'file-beside-delete',
+    });
+    expect((await terminateOf(service.id)).map((operation) => operation.state)).toEqual([
+      'PLANNED',
+    ]);
+    expect(await refused(file(service.id))).toBe(COMMERCE_ERROR_CODES.SERVICE_REFUND_NOT_ELIGIBLE);
+    expect(await countRows(sql`SELECT count(*)::int AS n FROM service_refund_requests`)).toBe(0);
+    // Undecided includes UNKNOWN: the account may already be gone.
+    await ctx.container.database.db.execute(
+      sql`UPDATE provisioning_operations SET state = 'UNKNOWN'
+           WHERE service_id = ${service.id} AND type = 'TERMINATE'` as never,
+    );
+    expect(await refused(file(service.id))).toBe(COMMERCE_ERROR_CODES.SERVICE_REFUND_NOT_ELIGIBLE);
+    // Definitively failed, the deletion no longer stands in the way.
+    await ctx.container.database.db.execute(
+      sql`UPDATE provisioning_operations SET state = 'FAILED', completed_at = now()
+           WHERE service_id = ${service.id} AND type = 'TERMINATE'` as never,
+    );
+    expect((await file(service.id)).outcome).toBe('FILED');
+  });
+
+  it('credits a request whose own deletion is UNKNOWN once another deletion removes the service (Codex review of #83, round 12)', async () => {
+    const service = await activeService('unknown-then-removed');
+    const filed = await file(service.id);
+    const before = await balance();
+    await ctx.container.serviceRefundRequests.approve(tenantA, owner, {
+      requestId: filed.request.id,
+      amountMinor: 100_000n,
+    });
+    await ctx.container.database.db.execute(
+      sql`UPDATE provisioning_operations SET state = 'UNKNOWN'
+           WHERE service_id = ${service.id} AND type = 'TERMINATE'` as never,
+    );
+    // An operator retries the deletion beside the ambiguous one; the next tick executes it
+    // and then sweeps.
+    await ctx.container.provisioning.requestFromOperator(tenantA, owner, service.id, 'TERMINATE', {
+      idempotencyKey: 'unknown-then-removed-operator',
+    });
+    await ctx.container.provisionerLoop.tick();
+    expect((await services.findById(tenantA, service.id))?.state).toBe('TERMINATED');
+    expect(
+      (await terminateOf(service.id)).map((operation) => operation.state).sort(),
+      'the request’s own deletion is still UNKNOWN',
+    ).toEqual(['SUCCEEDED', 'UNKNOWN']);
+    const row = await requestRow(filed.request.id);
+    expect(row?.request.state, 'the approved refund is paid').toBe('COMPLETED');
+    expect(await balance(), 'credited the approved amount').toBe(before + 100_000n);
+  });
 });
