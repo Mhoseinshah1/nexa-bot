@@ -663,6 +663,7 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.payment.cancel_confirm',
       'bot.payment.cancel_confirm_button',
       'bot.payment.cancelled',
+      'bot.payment.checkout_in_progress',
       'bot.payment.copy_amount_button',
       'bot.payment.copy_card_button',
       /*
