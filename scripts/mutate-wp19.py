@@ -33,10 +33,12 @@ PS='apps/api/src/modules/commerce/payments/application/service-refund-push.servi
 CCS='apps/api/src/modules/commerce/customers/application/customer-capture.service.ts'
 PL='apps/api/src/modules/commerce/provisioning/application/provisioner-loop.ts'
 LL='tests/unit/provisioner-loop-lanes.test.ts'
+RPL='apps/api/src/modules/commerce/payments/application/receipt-review-push-loop.ts'
+RL='tests/unit/receipt-review-push-loop-lanes.test.ts'
 M=[
  ('W19-01',[(S,"if (succeeded && item.serviceState !== 'TERMINATED') {","if (false && succeeded && item.serviceState !== 'TERMINATED') {"),(R,"           */\n          or(\n","           */\n          or(\n            sql`true`,\n")],'did not move'),
- ('W19-02',[(R,"inArray(provisioningOperations.state, [...OPERATION_TERMINAL_STATES]),","inArray(provisioningOperations.state, [...OPERATION_TERMINAL_STATES, 'UNKNOWN' as never]),")],'UNKNOWN'),
- ('W19-02b',[(R,"inArray(provisioningOperations.state, [...OPERATION_TERMINAL_STATES]),","inArray(provisioningOperations.state, [...OPERATION_TERMINAL_STATES, 'UNKNOWN' as never]),"),(R,"inArray(provisioningOperations.state, ['FAILED', 'ABANDONED']),","inArray(provisioningOperations.state, ['FAILED', 'ABANDONED', 'UNKNOWN']),")],'UNKNOWN'),
+ ('W19-02',[(R,"inArray(provisioningOperations.state, ['FAILED', 'ABANDONED']),","inArray(provisioningOperations.state, ['FAILED', 'ABANDONED', 'UNKNOWN']),")],'UNKNOWN'),
+ ('W19-02b',[(R,"inArray(provisioningOperations.state, ['FAILED', 'ABANDONED']),","inArray(provisioningOperations.state, ['FAILED', 'ABANDONED', 'UNKNOWN']),"),(R,"inArray(provisioningOperations.state, ['FAILED', 'ABANDONED']),","inArray(provisioningOperations.state, ['FAILED', 'ABANDONED', 'UNKNOWN']),")],'UNKNOWN'),
  ('W19-03',[(S,"const succeeded = item.operationState === 'SUCCEEDED';","const succeeded = item.operationState !== 'ABANDONED';")],'definitively fails'),
  ('W19-04',[(S,"""    for (const permission of SERVICE_REFUND_DECIDE_PERMISSIONS) {
       await this.deps.guard.check(scope, actor, permission);
@@ -210,7 +212,7 @@ M+=[
  ('W19-25',[(RF,"    if (await this.deps.repository.isServiceRefundReservation(scope, refund.id, tx)) {","    if (refund.reason === 'SERVICE_REFUND_REQUEST') {")],'reads like a request'),
  ('W19-26',[(S,"  ): Promise<ServiceRefundReview> {\n    await this.checkDecide(scope, actor);\n    const request = await this.requireRequest(scope, requestId);","  ): Promise<ServiceRefundReview> {\n    await this.deps.guard.check(scope, actor, SERVICE_REFUND_VIEW_PERMISSION);\n    const request = await this.requireRequest(scope, requestId);")],'exactly the two decision keys'),
  ('W19-27',[(DS,"      if (request.state !== 'EXECUTING') return { outcome: 'CLOSED' };\n","")],'as decided, not as started'),
- ('W19-22b',[(RF,"      if ((await this.deps.wallet.findByReference(scope, `${refundId}:refund`, tx)) !== null) {\n        return before;\n      }","      return before;"),(R,"              eq(refunds.state, 'REQUESTED'),\n","")],'closed elsewhere'),
+ ('W19-22b',[(RF,"      if ((await this.deps.wallet.findByReference(scope, `${refundId}:refund`, tx)) !== null) {\n        return before;\n      }","      return before;"),(R,"            and(eq(services.state, 'TERMINATED'), eq(refunds.state, 'REQUESTED')),\n            and(\n              or(","            and(eq(services.state, 'TERMINATED')),\n            and(\n              or(")],'closed elsewhere'),
  ('W19-23',[(S,"        continue;\n      }\n      if (moved) decided += 1;","        throw error;\n      }\n      if (moved) decided += 1;")],'fails inside its own settlement'),
 
  # Second Codex review of #83. W19-28 (reject before the prompt closed) is superseded by
@@ -315,8 +317,8 @@ M+=[
  ('W19-60',[(SVP,"      {mayViewRefundRequests && <OpenServiceRefundRequestsCard />}","      {!denied && mayViewRefundRequests && <OpenServiceRefundRequestsCard />}")],'refunds.view alone',('web','tests/web/service-refund-requests.test.tsx')),
  ('W19-61',[(APP,"    permission: ['services.view', 'refunds.view'],","    permission: 'services.view',")],'refunds.view alone',('web','tests/web/service-refund-requests.test.tsx')),
  # Round 6 (Codex review of #83).
- ('W19-22c',[(RF,"      if ((await this.deps.wallet.findByReference(scope, `${refundId}:refund`, tx)) !== null) {\n        return before;\n      }","      return before;"),(R,"              eq(refunds.state, 'REQUESTED'),\n",""),(S,"const removed = gone && item.refundState === 'REQUESTED';","const removed = gone;")],'closed elsewhere'),
- ('W19-02c',[(R,"inArray(provisioningOperations.state, [...OPERATION_TERMINAL_STATES]),","inArray(provisioningOperations.state, [...OPERATION_TERMINAL_STATES, 'UNKNOWN' as never]),"),(R,"inArray(provisioningOperations.state, ['FAILED', 'ABANDONED']),","inArray(provisioningOperations.state, ['FAILED', 'ABANDONED', 'UNKNOWN']),"),(R,"sql`not ${undecidedTermination()}`","sql`true`"),(S,"(await this.deps.repository.terminationUndecided(scope, request.serviceId, tx))","false")],'UNKNOWN'),
+ ('W19-22c',[(RF,"      if ((await this.deps.wallet.findByReference(scope, `${refundId}:refund`, tx)) !== null) {\n        return before;\n      }","      return before;"),(R,"            and(eq(services.state, 'TERMINATED'), eq(refunds.state, 'REQUESTED')),\n            and(\n              or(","            and(eq(services.state, 'TERMINATED')),\n            and(\n              or("),(S,"const removed = gone && item.refundState === 'REQUESTED';","const removed = gone;")],'closed elsewhere'),
+ ('W19-02c',[(R,"inArray(provisioningOperations.state, ['FAILED', 'ABANDONED']),","inArray(provisioningOperations.state, ['FAILED', 'ABANDONED', 'UNKNOWN']),"),(R,"inArray(provisioningOperations.state, ['FAILED', 'ABANDONED']),","inArray(provisioningOperations.state, ['FAILED', 'ABANDONED', 'UNKNOWN']),"),(R,"sql`not ${undecidedTermination()}`","sql`true`"),(S,"(await this.deps.repository.terminationUndecided(scope, request.serviceId, tx))","false")],'UNKNOWN'),
  ('W19-01b',[(S,"if (succeeded && item.serviceState !== 'TERMINATED') {","if (false && succeeded && item.serviceState !== 'TERMINATED') {"),(R,"           */\n          or(\n","           */\n          or(\n            sql`true`,\n"),(S,"      if (succeeded && !removed && !(gone && released)) return false;\n","")],'did not move'),
  ('W19-62',[(S,"const removed = gone && item.refundState === 'REQUESTED';","const removed = succeeded;")],'another deletion removed'),
  ('W19-63',[(S,"const removed = gone && item.refundState === 'REQUESTED';","const removed = gone;")],'released elsewhere'),
@@ -381,6 +383,11 @@ M+=[
  ('W19-109',[(S,"        if (!(await this.deps.refundLedger.lockPayment(scope, found.source.payment.id, tx))) {","        await this.deps.services.lockLifecycle(scope, service.id, tx);\n        if (!(await this.deps.refundLedger.lockPayment(scope, found.source.payment.id, tx))) {")],'holds no lifecycle lock'),
  ('W19-110',[(SV,"      .for('no key update')","      .for('update')")],'lets a settlement holding'),
  ('W19-111',[],'serves the attention stream',None,("DROP INDEX service_refund_requests_attention_idx","CREATE INDEX service_refund_requests_attention_idx ON service_refund_requests USING btree (tenant_id, created_at, id) WHERE state IN ('OPEN', 'EXECUTING', 'FAILED')")),
+ # Codex review of #83, round 12
+ ('W19-112',[(RPL,"        this.options.logger.error({ err: error }, 'receipt push pass failed');\n      }\n","        this.options.logger.error({ err: error }, 'receipt push pass failed');\n        return;\n      }\n")],'two lanes',('unit',RL)),
+ ('W19-113',[(RPL,"      if (!failed) this.progress.record(this.options.now());","      this.progress.record(this.options.now());")],'two lanes',('unit',RL)),
+ ('W19-114',[(S,"    if (await this.deps.repository.terminationUndecided(scope, service.id, tx)) {\n      return { eligible: false, reason: 'CANNOT_DELETE' };\n    }\n","")],'files no request while an operator'),
+ ('W19-115',[(R,"            and(eq(services.state, 'TERMINATED'), eq(refunds.state, 'REQUESTED')),\n            and(\n              or(","            and(\n              eq(provisioningOperations.state, 'SUCCEEDED'),\n              eq(services.state, 'TERMINATED'),\n              eq(refunds.state, 'REQUESTED'),\n            ),\n            and(\n              or(")],'own deletion is UNKNOWN'),
 ]
 only=sys.argv[1:] 
 for entry in M:
