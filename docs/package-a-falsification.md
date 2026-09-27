@@ -19,6 +19,13 @@ The first pass left one mutation alive.
 
 Every row is killed.
 
+**The Codex review of #85.** A-31 to A-43 falsify the fixes for its six findings (C1–C6),
+run in a separate worktree so the implementation checkout was never mutated. The one
+guard not falsified is `preCheckoutRefusal` returning `NOT_PENDING` when the hold's
+conditional UPDATE moves nothing: it is reached only when the payment leaves PENDING
+between the row lock and the UPDATE of the same transaction, which the lock itself
+prevents, so no deterministic test can reach it and no row claims one.
+
 Not falsified here, because no code path exists to mutate: nothing in the codebase calls
 `refundStarPayment`. That absence is asserted by the static scan
 `integration/telegram-stars.test.ts` › has no code path that asks Telegram to refund Stars,
@@ -56,3 +63,16 @@ and, over every case of that file, by its `afterAll`.
 | A-28 | The financial log carries the Stars and the rate for a converted payment                                                  | `integration/telegram-stars.test.ts` › logs the Stars payment with principal, fee, payable, the Stars and the charge id — never the token or payload   | KILLED |
 | A-29 | `/paysupport` answers the support screen                                                                                  | `unit/telegram-stars.test.ts` › answers /paysupport as the support screen, and lists it in the menu and in help                                        | KILLED |
 | A-30 | The attempt opens on the route the customer tapped                                                                        | `integration/telegram-stars.test.ts` › opens the attempt on the route the customer tapped, not the first one offered                                   | KILLED |
+| A-31 | `cancelPendingForOrder` leaves a payment held by an approved checkout                                                     | `integration/telegram-stars.test.ts` › holds an approved checkout against cancel, withdraw and wallet payment until the charge settles it (C2, C5)     | KILLED |
+| A-32 | The customer's order cancellation refuses while a checkout holds the payment                                              | `integration/telegram-stars.test.ts` › holds an approved checkout against cancel, withdraw and wallet payment until the charge settles it (C2, C5)     | KILLED |
+| A-33 | `withdrawPending` refuses a held payment with `PAYMENT_CHECKOUT_IN_PROGRESS`                                              | `integration/telegram-stars.test.ts` › holds an approved checkout against cancel, withdraw and wallet payment until the charge settles it (C2, C5)     | KILLED |
+| A-34 | `resolve` never moves a held payment (the operator's reject)                                                              | `integration/telegram-stars.test.ts` › holds an approved checkout against cancel, withdraw and wallet payment until the charge settles it (C2, C5)     | KILLED |
+| A-35 | A wallet payment refuses while a checkout holds the order's payment                                                       | `integration/telegram-stars.test.ts` › holds an approved checkout against cancel, withdraw and wallet payment until the charge settles it (C2, C5)     | KILLED |
+| A-36 | An approved pre-checkout writes the hold                                                                                  | `integration/telegram-stars.test.ts` › holds an approved checkout against cancel, withdraw and wallet payment until the charge settles it (C2, C5)     | KILLED |
+| A-37 | A recorded charge stays due until its outcome commits                                                                     | `integration/telegram-stars.test.ts` › keeps a recorded late charge due until its late outcome commits (C3)                                            | KILLED |
+| A-38 | A recorded settlement that throws does not fail the webhook                                                               | `integration/telegram-stars.test.ts` › keeps a recorded late charge due until its late outcome commits (C3)                                            | KILLED |
+| A-39 | The Stars invoice id names the chat                                                                                       | `unit/telegram-stars.test.ts` › names two customers' invoices apart when Telegram gives both the same message id (C4)                                  | KILLED |
+| A-40 | A recorded-payment route confirms as `GATEWAY_CALLBACK`                                                                   | `integration/telegram-stars.test.ts` › holds an approved checkout against cancel, withdraw and wallet payment until the charge settles it (C2, C5)     | KILLED |
+| A-41 | A template's own `maxLength` caps its override                                                                            | `unit/telegram-stars.test.ts` › refuses an invoice title or description override Telegram would refuse (C1)                                            | KILLED |
+| A-42 | The payment detail shows the provider charge id                                                                           | `web/payments.test.tsx` › shows the charge id an operator reconciles and refunds by                                                                    | KILLED |
+| A-43 | A hold that has lapsed no longer holds                                                                                    | `integration/telegram-stars.test.ts` › lets the customer cancel once the checkout hold has lapsed (C2)                                                 | KILLED |

@@ -29,10 +29,15 @@ WH='apps/api/src/surfaces/telegram/webhook.controller.ts'
 FL='apps/api/src/modules/commerce/payments/application/financial-log.consumer.ts'
 BR='apps/api/src/surfaces/telegram/bot-runtime.ts'
 ANS='apps/api/src/modules/commerce/payments/infrastructure/telegram-stars-checkout-answerer.ts'
+PR='apps/api/src/modules/commerce/payments/infrastructure/drizzle-payment.repository.ts'
+OS='apps/api/src/modules/commerce/orders/application/order.service.ts'
+TPL='packages/contracts/src/templates.ts'
+WEB='apps/web/src/pages/payments.tsx'
 
 T_I=('integration','tests/integration/telegram-stars.test.ts')
 T_U=('unit','tests/unit/telegram-stars.test.ts')
 T_W=('unit','tests/unit/telegram-stars-webhook.test.ts')
+T_WEB=('web','tests/web/payments.test.tsx')
 
 TRIGGER_SQL=('DROP TRIGGER IF EXISTS nexa_gateway_invoices_snapshot_guard ON gateway_invoices',
   'CREATE TRIGGER nexa_gateway_invoices_snapshot_guard BEFORE UPDATE ON gateway_invoices '
@@ -75,6 +80,20 @@ M=[
  ('A-28',[(FL,"  if (invoice.conversionRateMinor !== null) {","  if (false as boolean) {")],T_I,'financial log'),
  ('A-29',[(BR,"  if (command === '/paysupport') {","  if (false as boolean) {")],T_U,'/paysupport'),
  ('A-30',[(BR,"          (provider === null || candidate.provider === provider),","          true,")],T_I,'route the customer tapped'),
+ # --- the Codex review of #85 -------------------------------------------------------------
+ ('A-31',[(PR,"          isNull(payments.customerSignalledAt),\n          /*\n           * Nor a payment an approved Stars pre-checkout holds (Codex review of #85):\n           * Telegram charges right after the approval. Row-local, so a cancellation that\n           * waited on the approval's row lock re-checks it against the committed row.\n           */\n          notHeldAt(now),\n","          isNull(payments.customerSignalledAt),\n")],T_I,'holds an approved checkout'),
+ ('A-32',[(OS,"        if (await this.deps.payments.checkoutHeldFor(scope, orderId, now, tx)) {","        if (false as boolean) {")],T_I,'holds an approved checkout'),
+ ('A-33',[(PS,"        if (\n          payment.checkoutHeldUntil !== null &&\n          payment.checkoutHeldUntil.getTime() > now.getTime()\n        ) {","        if (false as boolean) {")],T_I,'holds an approved checkout'),
+ ('A-34',[(PR,"          // Never over an approved Stars checkout: the charge is on its way (#85, C2).\n          notHeldAt(now),\n","")],T_I,'holds an approved checkout'),
+ ('A-35',[(PS,"        if (await this.deps.repository.hasCheckoutHeldPendingForOrder(scope, orderId, now, tx)) {","        if (false as boolean) {")],T_I,'holds an approved checkout'),
+ ('A-36',[(SPS,"        const held = await this.deps.payments.holdForCheckout(","        const held = true || await this.deps.payments.holdForCheckout(")],T_I,'holds an approved checkout'),
+ ('A-37',[(GPS,"        new Date(now.getTime() + RECORDED_OUTCOME_RETRY_MS))","        null)")],T_I,'keeps a recorded late charge due'),
+ ('A-38',[(SPS,"        } catch (error) {\n          this.deps.logger.warn(\n            {\n              paymentId: step.invoice.paymentId,","        } catch (error) {\n          throw error;\n          this.deps.logger.warn(\n            {\n              paymentId: step.invoice.paymentId,")],T_I,'keeps a recorded late charge due'),
+ ('A-39',[(AD,"      invoiceId: `message:${chatId}:${sent.messageId}`,","      invoiceId: `message:${sent.messageId}`,")],T_U,'same message id'),
+ ('A-40',[(PS,"            approval === 'RECORDED_PAYMENT'\n              ? ('GATEWAY_CALLBACK' as const)","            approval === 'RECORDED_PAYMENT'\n              ? ('GATEWAY_INQUIRY' as const)")],T_I,'holds an approved checkout'),
+ ('A-41',[(TPL,"    definition.maxLength ?? TEMPLATE_BODY_MAX_LENGTH,\n","    TEMPLATE_BODY_MAX_LENGTH,\n")],T_U,'override Telegram would refuse'),
+ ('A-42',[(WEB,"                    ...(row.gatewayInvoice.providerChargeId === null\n                      ? []","                    ...(true\n                      ? []")],T_WEB,'shows the charge id'),
+ ('A-43',[(PR,"  return or(isNull(payments.checkoutHeldUntil), lte(payments.checkoutHeldUntil, now));","  return or(isNull(payments.checkoutHeldUntil));")],T_I,'once the checkout hold has lapsed'),
 ]
 
 def build_contracts():
