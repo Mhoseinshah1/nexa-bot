@@ -686,6 +686,44 @@ describe('WP19 — a customer asks for their money back', () => {
     expect((await services.findById(tenantA, service.id))?.id).toBe(service.id);
   });
 
+  it('records a full request refund as removing the service, never as leaving it untouched (Codex review of #83, round 5)', async () => {
+    const service = await activeService('full-principal');
+    const filed = await file(service.id);
+    await ctx.container.serviceRefundRequests.approve(tenantA, owner, {
+      requestId: filed.request.id,
+      amountMinor: PRICE,
+    });
+    await ctx.container.provisionerLoop.tick();
+    await ctx.container.serviceRefundRequests.settleDue(tenantA);
+    expect((await requestRow(filed.request.id))?.request.state).toBe('COMPLETED');
+    const audits = (await ctx.container.database.db.execute(
+      sql`SELECT after FROM audit_logs
+           WHERE action = 'order.refund' AND entity_id = ${service.orderId}` as never,
+    )) as unknown as { rows: { after: Record<string, unknown> }[] };
+    expect(audits.rows).toHaveLength(1);
+    expect(audits.rows[0]?.after.state).toBe('REFUNDED');
+    expect(audits.rows[0]?.after.serviceRemovedByRequest).toBe(true);
+    expect(audits.rows[0]?.after).not.toHaveProperty('serviceLeftUntouched');
+  });
+
+  it('sends a queued registration notice only while its request is still open (Codex review of #83, round 5)', async () => {
+    const service = await activeService('registered-stale');
+    const filed = await file(service.id);
+    const values = () =>
+      ctx.container.serviceRefundRequests.notificationValues(
+        tenantA,
+        'SERVICE_REFUND_REQUEST_REGISTERED',
+        filed.request.id,
+      );
+    expect(await values()).toEqual({});
+    await ctx.container.serviceRefundRequests.reject(tenantA, owner, {
+      requestId: filed.request.id,
+      reason: 'پس از ثبت رد شد',
+    });
+    // A fallback still queued behind a rate limit would now say "awaiting review".
+    expect(await values()).toBeNull();
+  });
+
   it('credits nothing while the deletion’s answer is uncertain', async () => {
     const service = await activeService('ambiguous');
     const filed = await file(service.id);
@@ -1598,13 +1636,14 @@ describe('WP19 — a customer asks for their money back', () => {
       idempotencyKey: 'wp19-amount-another',
     });
     expect(another.outcome).toBe('NO_CAPTURE');
-    // Once the prompt is decided, the redelivery restates nothing.
+    // Once the prompt is decided, the redelivery restates nothing — and is answered as
+    // decided rather than offered to any other prompt (Codex review of #83, round 5).
     await ctx.container.serviceRefundDecisions.confirmApprove(tenantA, owner, {
       captureId: first.capture.id,
     });
     expect(
       (await ctx.container.serviceRefundDecisions.submitText(tenantA, owner, typed)).outcome,
-    ).toBe('NO_CAPTURE');
+    ).toBe('CLOSED');
   });
 
   it('keeps the amount prompt open when reading its request fails for a reason nobody classified (Codex review of #83, round 4)', async () => {
@@ -1641,6 +1680,61 @@ describe('WP19 — a customer asks for their money back', () => {
       text: '1000',
     });
     expect(retried.outcome).toBe('AMOUNT_ENTERED');
+  });
+
+  it('answers a redelivered message from its own prompt, never from a newer one (Codex review of #83, round 5)', async () => {
+    const first = await file((await activeService('replay-own-a')).id);
+    const second = await file((await activeService('replay-own-b')).id);
+    const third = await file((await activeService('replay-own-c')).id);
+    const decisions = ctx.container.serviceRefundDecisions;
+    // An amount typed for the first request's approval, its prompt then cancelled.
+    const approve = await decisions.openApprove(tenantA, owner, {
+      botInstanceId: BOT_A,
+      requestId: first.request.id,
+    });
+    if (approve.outcome !== 'OPENED') throw new Error(approve.outcome);
+    const amount = { idempotencyKey: 'wp19-replay-amount', botInstanceId: BOT_A, text: '1000' };
+    expect((await decisions.submitText(tenantA, owner, amount)).outcome).toBe('AMOUNT_ENTERED');
+    await decisions.cancel(tenantA, owner, { captureId: approve.capture.id });
+    // A rejection of the second request, decided on its reason.
+    await decisions.openReject(tenantA, owner, {
+      botInstanceId: BOT_A,
+      requestId: second.request.id,
+    });
+    const reason = {
+      idempotencyKey: 'wp19-replay-reason',
+      botInstanceId: BOT_A,
+      text: 'دلیل رد دوم',
+    };
+    expect((await decisions.submitText(tenantA, owner, reason)).outcome).toBe('REJECTED');
+    // A rejection prompt for the third request is open when both messages arrive again.
+    await decisions.openReject(tenantA, owner, {
+      botInstanceId: BOT_A,
+      requestId: third.request.id,
+    });
+    expect((await decisions.submitText(tenantA, owner, amount)).outcome).toBe('CLOSED');
+    expect((await decisions.submitText(tenantA, owner, reason)).outcome).toBe('CLOSED');
+    expect((await requestRow(third.request.id))?.request.state).toBe('OPEN');
+    expect((await requestRow(first.request.id))?.request.state).toBe('OPEN');
+  });
+
+  it('reads only a message sent after the tap that opened the prompt (Codex review of #83, round 5)', async () => {
+    const filed = await file((await activeService('replay-older')).id);
+    await handle(tapUpdate(`qb:${filed.request.id}`, ADMIN_TG));
+    const tappedAt = updateSeq;
+    // A message typed BEFORE that tap — for another prompt, delivered again — is not a reason.
+    const older = textUpdate('برای درخواست دیگری نوشته شده بود', ADMIN_TG);
+    const stale = {
+      ...older,
+      update: { ...older.update, update_id: tappedAt - 1 },
+    };
+    await handle(stale);
+    expect((await requestRow(filed.request.id))?.request.state).toBe('OPEN');
+    // The next message the administrator types is.
+    await handle(textUpdate('دلیل واقعی رد', ADMIN_TG));
+    const decided = await requestRow(filed.request.id);
+    expect(decided?.request.state).toBe('REJECTED');
+    expect(decided?.request.rejectionReason).toBe('دلیل واقعی رد');
   });
 
   it('retires a confirmation whose approval was refused for good (Codex review of #83)', async () => {

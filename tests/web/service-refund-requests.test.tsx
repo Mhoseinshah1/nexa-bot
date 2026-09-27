@@ -5,6 +5,8 @@ import {
   ServiceRefundRequestsCard,
 } from '../../apps/web/src/pages/service-refund-requests';
 import { t } from '../../apps/web/src/i18n/web.fa';
+import { NAV, navPermitted, resolve } from '../../apps/web/src/app';
+import type { ReactElement } from 'react';
 import { renderPage, stubApi } from './harness';
 
 /**
@@ -125,6 +127,30 @@ describe('the requests that still want an operator', () => {
     expect(within(table).getAllByRole('link')[0]?.getAttribute('href')).toBe(
       `/services/${SERVICE_ID}`,
     );
+  });
+});
+
+describe('a finance reviewer holding refunds.view alone (Codex review of #83, round 5)', () => {
+  it('reaches the queue from the navigation, and never asks for the services list', async () => {
+    const services = NAV.find((entry) => entry.id === 'services');
+    expect(navPermitted(services!, ['refunds.view'])).toBe(true);
+    const api = stubApi(
+      ['OPEN', 'EXECUTING', 'FAILED'].map((state) => ({
+        url: `/service-refund-requests?state=${state}`,
+        body: {
+          nextCursor: null,
+          requests:
+            state === 'OPEN'
+              ? [request({ id: '019250ab-cdef-7012-8345-6789abcdef09', reason: 'فقط مالی' })]
+              : [],
+        },
+      })),
+    );
+    const resolved = resolve({ path: '/services', query: new URLSearchParams() }, ['refunds.view']);
+    renderPage(resolved.element as ReactElement);
+    expect(await screen.findByText('فقط مالی')).toBeInTheDocument();
+    // The list is still the services list's: denied, and never fetched.
+    expect(api.calls.some((call) => /\/services(\?|$)/.test(call.url))).toBe(false);
   });
 });
 
