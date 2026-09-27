@@ -6992,6 +6992,13 @@ export const customerTextCaptures = pgTable(
     expiresAt: timestamptz('expires_at').notNull(),
     closedAt: timestamptz('closed_at'),
     closeReason: text('close_reason'),
+    /*
+     * The Telegram `update_id` of the tap that opened a refund-reason window (WP19, Codex
+     * review of #83, round 8). The window reads only a message whose update is newer, so a
+     * message typed before the tap — processed late, by a concurrent webhook — never files
+     * a refund request. Null for every other window, which keeps its old reading.
+     */
+    openedUpdateId: bigint('opened_update_id', { mode: 'bigint' }),
   },
   (table) => [
     foreignKey({

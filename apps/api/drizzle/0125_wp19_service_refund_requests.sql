@@ -72,6 +72,7 @@ ALTER TABLE "customer_text_captures" DROP CONSTRAINT "customer_text_captures_pur
 ALTER TABLE "customer_text_captures" DROP CONSTRAINT "customer_text_captures_subject_check";--> statement-breakpoint
 ALTER TABLE "admin_amount_captures" ADD COLUMN "service_refund_request_id" uuid;--> statement-breakpoint
 ALTER TABLE "admin_amount_captures" ADD COLUMN "opened_update_id" bigint;--> statement-breakpoint
+ALTER TABLE "customer_text_captures" ADD COLUMN "opened_update_id" bigint;--> statement-breakpoint
 ALTER TABLE "service_refund_request_pushes" ADD CONSTRAINT "service_refund_request_pushes_tenant_id_tenants_id_fk" FOREIGN KEY ("tenant_id") REFERENCES "public"."tenants"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "service_refund_request_pushes" ADD CONSTRAINT "service_refund_request_pushes_bot_instance_id_bot_instances_id_fk" FOREIGN KEY ("bot_instance_id") REFERENCES "public"."bot_instances"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "service_refund_request_pushes" ADD CONSTRAINT "service_refund_request_pushes_request_fk" FOREIGN KEY ("tenant_id","request_id") REFERENCES "public"."service_refund_requests"("tenant_id","id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
