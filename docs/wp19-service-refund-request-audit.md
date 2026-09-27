@@ -178,3 +178,33 @@ COMPLETED reservation only when its own `<refundId>:refund` entry exists, and re
 without it. `settleDue` also decides each request in its own guarded transaction, so a
 refusal leaves that request EXECUTING for an operator and the sweep moves on (W19-22,
 W19-23).
+
+## 8. The first Codex review of #83
+
+It found six issues. All were real, and each is fixed with a named test and a killed mutation
+(W19-24 to W19-29):
+
+- **Stuck rows could fill every batch (P1).** The sweep query returned the oldest
+  EXECUTING rows whose deletion was terminal, including rows it would only refuse. Fifty of
+  those ahead of a valid refund held it back for ever. The query now returns only what the
+  sweep can decide: a SUCCEEDED deletion whose service moved, with the reservation still
+  REQUESTED, or a failed one whose reservation is REQUESTED or released.
+- **A pushed card whose buttons could not work (P1).** The card is pushed to administrators
+  holding `refunds.issue` and `services.terminate`, but the prompts read the request under
+  `refunds.view`. They now read it under the same two keys. They show nothing the card did
+  not.
+- **A reservation recognised by free text (P2).** An operator's refund whose typed reason
+  happened to be `SERVICE_REFUND_REQUEST` was refused completion and failure. A reservation
+  is now known by its link from a `service_refund_requests` row.
+- **A rejection that a crash could strand (P2).** The reason was recorded on the prompt
+  first, then the request rejected. A crash in between left a prompt no message could reach
+  and a request still OPEN. The rejection is now written first. It replays on the same
+  reason, so the redelivered message finishes it, and a database trigger in the test holds
+  the order.
+- **A replayed confirmation said "started" after the end (P2).** It now answers CLOSED when
+  the request is past EXECUTING.
+- **The attention card filtered a truncated page (P2).** It now asks the server once per
+  state that wants an operator, so the server filters before it limits.
+
+Because the query now excludes what the in-code guards refuse, W19-01 and W19-22 are paired
+rows (see the falsification record).
