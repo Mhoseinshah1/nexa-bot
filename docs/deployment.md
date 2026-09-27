@@ -902,9 +902,12 @@ that knows the fee shows the three figures again. An approval is still decided o
 the provider's own inquiry, and the wallet or the order receives the principal, so no
 money is credited wrongly in either release. Only the figure shown is wrong.
 
-The financial log's own rows (`FINANCIAL_EVENT`, templates `ops.financial.*`) are
-unknown to that release too. It cannot render a pending one, so that one is not
-delivered. The payment and refund rows remain the record.
+The financial log's own rows are `OPERATIONAL_EVENT` notifications with templates
+under `ops.financial.*`. They have no kind of their own on purpose: that release's Web
+Admin reads the kind as a strict list, and one unknown value would refuse its whole
+notifications page. It lists these rows by their template key. Its dispatcher has no
+template for them, so a pending one is abandoned rather than delivered. The payment and
+refund rows remain the record.
 
 ### How far back you can roll
 

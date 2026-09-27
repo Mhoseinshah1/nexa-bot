@@ -1,9 +1,7 @@
-ALTER TABLE "notifications" DROP CONSTRAINT "notifications_kind_check";--> statement-breakpoint
 ALTER TABLE "payment_gateways" ADD COLUMN "customer_fee_basis_points" integer DEFAULT 0 NOT NULL;--> statement-breakpoint
 ALTER TABLE "payments" ADD COLUMN "customer_fee_basis_points" integer;--> statement-breakpoint
 ALTER TABLE "payments" ADD COLUMN "customer_fee_amount" bigint;--> statement-breakpoint
 ALTER TABLE "payments" ADD COLUMN "payable_amount" bigint;--> statement-breakpoint
-ALTER TABLE "notifications" ADD CONSTRAINT "notifications_kind_check" CHECK (kind IN ('OPERATIONAL_EVENT', 'OPERATIONS_TEST', 'RECEIPT_AWAITING_REVIEW', 'FINANCIAL_EVENT'));--> statement-breakpoint
 ALTER TABLE "payment_gateways" ADD CONSTRAINT "payment_gateways_customer_fee_check" CHECK (customer_fee_basis_points BETWEEN 0 AND 10000);--> statement-breakpoint
 ALTER TABLE "payments" ADD CONSTRAINT "payments_customer_fee_check" CHECK ((customer_fee_basis_points IS NULL AND customer_fee_amount IS NULL AND payable_amount IS NULL) OR (method = 'GATEWAY' AND customer_fee_basis_points BETWEEN 0 AND 10000 AND customer_fee_amount >= 0 AND payable_amount = amount + customer_fee_amount));--> statement-breakpoint
 

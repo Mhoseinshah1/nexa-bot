@@ -4388,7 +4388,7 @@
       "checkConstraints": {
         "notifications_kind_check": {
           "name": "notifications_kind_check",
-          "value": "kind IN ('OPERATIONAL_EVENT', 'OPERATIONS_TEST', 'RECEIPT_AWAITING_REVIEW', 'FINANCIAL_EVENT')"
+          "value": "kind IN ('OPERATIONAL_EVENT', 'OPERATIONS_TEST', 'RECEIPT_AWAITING_REVIEW')"
         },
         "notifications_status_check": {
           "name": "notifications_status_check",

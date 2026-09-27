@@ -1432,13 +1432,15 @@ describe('TonPays, through the one settlement path', () => {
 
     const logs = () =>
       rows<{
+        kind: string;
         template_key: string;
         destination: { chatId: string; topicId: number | null };
         payload: Record<string, unknown>;
         dedupe_key: string;
       }>(
-        sql`SELECT template_key, destination, payload, dedupe_key FROM notifications
-            WHERE tenant_id = ${tenantA.tenantId} AND kind = 'FINANCIAL_EVENT' ORDER BY created_at`,
+        sql`SELECT kind, template_key, destination, payload, dedupe_key FROM notifications
+            WHERE tenant_id = ${tenantA.tenantId} AND template_key LIKE 'ops.financial.%'
+            ORDER BY created_at`,
       );
 
     it('logs a gateway order payment to the payments topic with principal, fee, payable and the provider’s figure as diagnostic', async () => {
@@ -1458,6 +1460,9 @@ describe('TonPays, through the one settlement path', () => {
       expect(written).toHaveLength(1);
       const [log] = written;
       expect(log!.template_key).toBe('ops.financial.order_paid');
+      // A kind the release before WP18 knows: its Web Admin reads `kind` as a strict enum,
+      // so a new kind would break its whole notifications page after a rollback.
+      expect(log!.kind).toBe('OPERATIONAL_EVENT');
       expect(log!.destination).toMatchObject({ chatId: LOG_CHAT, topicId: PAYMENTS_TOPIC });
       expect(log!.payload).toMatchObject({
         method: 'GATEWAY',
@@ -1534,6 +1539,9 @@ describe('TonPays, through the one settlement path', () => {
 
       const keys = (await logs()).map((log) => log.template_key).sort();
       expect(keys).toEqual(['ops.financial.late_completion', 'ops.financial.payment_failed']);
+      expect(new Set((await logs()).map((log) => log.kind))).toEqual(
+        new Set(['OPERATIONAL_EVENT']),
+      );
       // The provider's verdict, never an operator's rejection: the log names who said no.
       const failure = (await logs()).find(
         (log) => log.template_key === 'ops.financial.payment_failed',
@@ -1725,9 +1733,9 @@ describe('TonPays, through the one settlement path', () => {
       const orderId = await draftOrder();
       const { paymentId } = await payWithGateway(orderId);
       await pass();
-      // The lane is broken: every FINANCIAL_EVENT insert fails.
+      // The lane is broken: every financial log insert fails.
       await ctx.container.database.db.execute(
-        sql`ALTER TABLE notifications ADD CONSTRAINT wp18_break CHECK (kind <> 'FINANCIAL_EVENT') NOT VALID`,
+        sql`ALTER TABLE notifications ADD CONSTRAINT wp18_break CHECK (template_key NOT LIKE 'ops.financial.%') NOT VALID`,
       );
       try {
         const invoice = await invoiceOf(paymentId);

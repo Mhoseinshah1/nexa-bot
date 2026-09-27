@@ -86,7 +86,8 @@ So the brief's "keep the existing internal payment amount as principal" is also 
 business tx ──► outbox (PaymentConfirmed | PaymentFailed | PaymentLateCompletionObserved
                         | RefundCompleted | RefundFailed)
 relay tx    ──► FinancialLogConsumer  (DB reads only)
-                  └─► NotificationService.queue(kind FINANCIAL_EVENT, dedupe fin:<eventId>,
+                  └─► NotificationService.queue(kind OPERATIONAL_EVENT, template ops.financial.*,
+                                                dedupe fin:<eventId>,
                                                 destination = financial destination)
 dispatcher  ──► Telegram sendMessage(chat, message_thread_id = payments topic)
 ```
@@ -113,7 +114,7 @@ A rejection by an operator and an unsuccessful gateway verdict are logged, becau
 ### 3.3 Consumer rules
 
 - **Database reads only**, in the relay transaction. It reads the payment, the customer (Telegram id, username, display name) and, for a `GATEWAY` payment, its invoice (provider invoice id, provider final amount).
-- **One kind**, `FINANCIAL_EVENT` (a new `NOTIFICATION_KINDS` member; the CHECK widens in the migration). Templates are under `ops.financial.*`, PLAIN_TEXT. Money goes through the MONEY placeholder, so the one formatter owns the unit.
+- **No new kind.** The rows are `OPERATIONAL_EVENT`, and the templates under `ops.financial.*` (PLAIN_TEXT) are what make a row financial. A `FINANCIAL_EVENT` kind was the first design; the second Codex round showed why it was wrong (§4a). `notificationSchema.kind` is a strict enum, so the previous release's Web Admin would refuse its whole notifications page after a rollback. Money goes through the MONEY placeholder, so the one formatter owns the unit.
 - **Dedupe key `fin:<outbox event id>`.** A redelivered event whose `processed_messages` claim was lost still writes nothing new.
 - **Destination** comes from `NotificationService.financialDestination`: null when the flag is off or the chat is empty, and the event is then simply not logged. The DB stays the source of truth, and the consumer never throws for "not configured".
 - **A consumer error** rolls back only the consumer's SAVEPOINT (relay rule). The financial row committed long before.
@@ -164,6 +165,19 @@ It found four gaps (W18-21..27):
   refused as a different payload. The fee now joins the hash only when it is sent. The
   test send's `target` follows the same rule, so an operations test hashes as it always
   did.
+
+The second round found one more (W18-28..29):
+
+- **A notification kind the previous release cannot read.** The first design wrote the
+  log's rows under a new kind, `FINANCIAL_EVENT`. `notificationSchema.kind` is a strict
+  enum, so after a rollback the previous Web Admin would refuse the whole notifications
+  page as soon as one such row existed. That is the conventions rule "a widened enum is
+  write-compatible, not reader-compatible".
+
+  The log now writes `OPERATIONAL_EVENT`, a kind every release knows. The `ops.financial.*`
+  template key tells a financial row apart, and the previous reader takes that key as a
+  plain string. Migration 0124 no longer touches `notifications_kind_check`, and a unit
+  test pins `NOTIFICATION_KINDS` to the list that release reads.
 
 ## 5. Open questions added
 

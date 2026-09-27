@@ -49,8 +49,13 @@ const NONE = '—';
  * committed, and never inside it — a log that fails, is not configured, or is never
  * delivered cannot roll back, delay or veto money. It does database work only
  * (`EventConsumer` forbids the network here): it reads the rows it renders and writes one
- * `FINANCIAL_EVENT` intent into the operator notification lane, which sends it later,
- * outside every transaction, with that lane's bounded retries.
+ * intent into the operator notification lane, which sends it later, outside every
+ * transaction, with that lane's bounded retries.
+ *
+ * The intent's kind is `OPERATIONAL_EVENT`, and the `ops.financial.*` template key is
+ * what makes it a financial row. A kind of its own would be one the previous release's
+ * Web Admin refuses (`notificationSchema.kind` is a strict enum), so a rollback would take
+ * its whole notifications page down; an unfamiliar template key is only a string there.
  *
  * What it renders is named field by field — ids, amounts, a Telegram id, username and
  * display name, a provider invoice id and the provider's final amount labelled diagnostic.
@@ -96,7 +101,7 @@ export class FinancialLogConsumer implements EventConsumer {
     await this.deps.lane.queue(
       scope,
       {
-        kind: 'FINANCIAL_EVENT',
+        kind: 'OPERATIONAL_EVENT',
         dedupeKey: `fin:${event.eventId}`,
         templateKey: rendered.templateKey,
         values: rendered.values,

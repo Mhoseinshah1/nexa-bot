@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   CUSTOMER_FEE_BASIS_POINTS_MAX,
+  NOTIFICATION_KINDS,
   formatBasisPointsPercent,
   gatewayCustomerFeeMinor,
   parsePercentBasisPoints,
@@ -112,5 +113,26 @@ describe('the route config', () => {
         paymentGatewayConfigSchema.safeParse({ ...base, customerFeeBasisPoints: bad }).success,
       ).toBe(false);
     }
+  });
+});
+
+/**
+ * The financial log adds no notification kind (Codex review of #82).
+ *
+ * `notificationSchema.kind` is a strict enum. A row whose kind the previous release does
+ * not know makes that release's Web Admin refuse the whole notifications page after a
+ * rollback, so the financial log writes `OPERATIONAL_EVENT` under an `ops.financial.*`
+ * template key. These are the kinds the release before WP18 knows. Widening the list is
+ * a staged change (the reader first, the writer in a later release), never part of a
+ * feature — `docs/conventions.md`, "A widened enum is write-compatible, not
+ * reader-compatible".
+ */
+describe('notification kinds', () => {
+  it('are exactly the kinds the release before WP18 can read', () => {
+    expect([...NOTIFICATION_KINDS]).toEqual([
+      'OPERATIONAL_EVENT',
+      'OPERATIONS_TEST',
+      'RECEIPT_AWAITING_REVIEW',
+    ]);
   });
 });
