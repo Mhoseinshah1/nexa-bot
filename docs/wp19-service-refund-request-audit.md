@@ -475,3 +475,32 @@ It found four issues. All were real, and each is fixed with a named test and a k
   rows and DOM nodes grew without bound over an installation's life. The card now reads one
   page and moves by the server's cursor on demand, with the shared `CursorPager`. Round 6's
   single stream is kept: one keyset, so a moving request is still on exactly one page.
+
+## 17. The tenth Codex review of #83
+
+It found three issues. All were real, and each is fixed with a named test and a killed mutation
+(W19-96 to W19-101).
+
+- **A purchase applied while the request stood open (P1).** Round 9 stopped a deletion beside
+  an undecided commercial action. A renewal or add-on settled and applied while the request was
+  OPEN was still deleted by the approval, and the request refunds only the service's own
+  purchase. The fix has three parts:
+  - `prepareCommercialAction` now refuses while a request is OPEN or EXECUTING
+    (`SERVICE_ACTION_NOT_ALLOWED`, `REFUND_REQUESTED`). A wallet purchase is not taken, and an
+    arrived transfer is given back. The action is sold again once the request is decided.
+  - Filing takes the lifecycle lock, after the service row and before the payment, as the
+    approval does. A filing and a settlement cannot then miss each other's uncommitted rows.
+    Filing already refused while a commercial action was undecided (round 9, one evaluator).
+  - A commercial action applied before the filing stays the customer's informed choice. The
+    administrator decides the amount against the service's own purchase, as before.
+- **Card buttons the reviewer could not use (P2).** The pushed card drew "view user" and "view
+  service" for every reviewer. Those buttons open panel sections that `adminTurn` admits only on
+  their own view keys, so a reviewer with the two decision keys alone was sent two buttons that
+  answered as if they were a customer. The push lane now builds the card for the reviewer's
+  permissions: "view user" needs `users.view` and "view service" needs `services.view`, as
+  `receiptReviewButtons` already draws.
+- **A second administrator's rejection called a replay (P2).** A rejection whose reason matched
+  one already recorded was answered as a replay whoever sent it. A second administrator was told
+  their rejection committed, though the decision and its audit belong to the first. A replay now
+  requires the same deciding administrator, as the approval's replay already did. A genuine
+  redelivery is still answered by the per-update idempotency record.

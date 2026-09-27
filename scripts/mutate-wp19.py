@@ -114,12 +114,10 @@ M=[
  ('W19-12',[(S,"const eligibility = await this.eligibilityOf(scope, service, { checkFlag: true }, tx);","const eligibility = await this.eligibilityOf(scope, service, { checkFlag: false }, tx);"),(S,"    if (!(await this.deps.features.isEnabled(scope, FLAG))) return 'UNAVAILABLE';\n","")],'switch is off'),
  ('W19-13',[(S,"if (length < SERVICE_REFUND_REASON_MIN_LENGTH || length > SERVICE_REFUND_REASON_MAX_LENGTH) {","if (length < 1 || length > SERVICE_REFUND_REASON_MAX_LENGTH) {")],'outside 3'),
  ('W19-14',[(S,"""    if (request.state !== 'OPEN') {
-      if (request.state === 'REJECTED' && request.rejectionReason === reason) return request;
-      throw this.stateInvalid(request.state);
-    }""","""    if (request.state !== 'OPEN' && request.state === 'REJECTED') {
-      if (request.state === 'REJECTED' && request.rejectionReason === reason) return request;
-      throw this.stateInvalid(request.state);
-    }""")],'approval and a rejection'),
+      /*
+       * A replay of THIS administrator's rejection""","""    if (request.state !== 'OPEN' && request.state === 'REJECTED') {
+      /*
+       * A replay of THIS administrator's rejection""")],'approval and a rejection'),
  ('W19-15',[(FL,"...(request.approvedAmount === null ? {} : { amount: request.approvedAmount }),","...(request.approvedAmount === null ? { amount: request.principal } : { amount: request.approvedAmount }),")],'financial log'),
  ('W19-16',[(PC,"return permissions.has('refunds.issue') && permissions.has('services.terminate');","return permissions.has('refunds.issue');")],'review card per administrator'),
  ('W19-17',[(S,"if (service === null || service.customerId !== customerId) {","if (service === null) {")],'another customer'),
@@ -171,12 +169,10 @@ M+=[
       .returning();""","""      .returning();""")],'however concurrently'),
  # Codex review of #83
  ('W19-14b',[(S,"""    if (request.state !== 'OPEN') {
-      if (request.state === 'REJECTED' && request.rejectionReason === reason) return request;
-      throw this.stateInvalid(request.state);
-    }""","""    if (request.state !== 'OPEN' && request.state === 'REJECTED') {
-      if (request.state === 'REJECTED' && request.rejectionReason === reason) return request;
-      throw this.stateInvalid(request.state);
-    }"""),(R,"""        resolvedAt: now,
+      /*
+       * A replay of THIS administrator's rejection""","""    if (request.state !== 'OPEN' && request.state === 'REJECTED') {
+      /*
+       * A replay of THIS administrator's rejection"""),(R,"""        resolvedAt: now,
         updatedAt: now,
       })
       .where(
@@ -191,12 +187,10 @@ M+=[
           eq(serviceRefundRequests.tenantId, tenantId),
           eq(serviceRefundRequests.id, id),""")],'approval and a rejection'),
  ('W19-14c',[(S,"""    if (request.state !== 'OPEN') {
-      if (request.state === 'REJECTED' && request.rejectionReason === reason) return request;
-      throw this.stateInvalid(request.state);
-    }""","""    if (request.state !== 'OPEN' && request.state === 'REJECTED') {
-      if (request.state === 'REJECTED' && request.rejectionReason === reason) return request;
-      throw this.stateInvalid(request.state);
-    }"""),(R,"""        resolvedAt: now,
+      /*
+       * A replay of THIS administrator's rejection""","""    if (request.state !== 'OPEN' && request.state === 'REJECTED') {
+      /*
+       * A replay of THIS administrator's rejection"""),(R,"""        resolvedAt: now,
         updatedAt: now,
       })
       .where(
