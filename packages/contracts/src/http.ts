@@ -1188,6 +1188,14 @@ export type NotificationDetailResponse = z.infer<typeof notificationDetailRespon
  */
 export const sendTestNotificationRequestSchema = z.object({
   idempotencyKey: z.string().min(8).max(255),
+  /**
+   * Which destination to test (WP18, Codex review of #82). `OPERATIONS`, the default, is
+   * the operations topic. `PAYMENTS` is where the financial log goes: the payments topic
+   * when one is set, the operations topic otherwise. A payments topic that cannot be
+   * tested is one discovered to be wrong on the first financial event, after its bounded
+   * attempts are spent.
+   */
+  target: z.enum(['OPERATIONS', 'PAYMENTS']).optional(),
 });
 export type SendTestNotificationRequest = z.infer<typeof sendTestNotificationRequestSchema>;
 
