@@ -156,6 +156,22 @@ export class DrizzleAdminAmountCaptureRepository implements AdminAmountCaptureRe
     return row === undefined ? null : toRecord(row);
   }
 
+  async retireConfirmed(scope: TenantContext, id: string, tx: unknown): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .update(adminAmountCaptures)
+      .set({ closeReason: 'SUPERSEDED' })
+      .where(
+        and(
+          eq(adminAmountCaptures.tenantId, tenantId),
+          eq(adminAmountCaptures.id, id),
+          eq(adminAmountCaptures.closeReason, 'CONFIRMED'),
+        ),
+      )
+      .returning({ id: adminAmountCaptures.id });
+    return rows.length > 0;
+  }
+
   async recordReason(
     scope: TenantContext,
     id: string,

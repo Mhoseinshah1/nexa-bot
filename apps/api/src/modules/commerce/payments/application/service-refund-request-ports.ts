@@ -44,6 +44,8 @@ export interface ServiceRefundRequestDraft {
   readonly paymentId: PaymentId;
   readonly botInstanceId: string;
   readonly reason: string;
+  /** The filing's idempotency key: unique for ever, so a replay files nothing new. */
+  readonly filingKey: string;
   readonly principalMinor: bigint;
   readonly currency: CurrencyCode;
   readonly now: Date;
@@ -97,6 +99,13 @@ export interface ServiceRefundRequestRepository {
   findActiveForService(
     scope: TenantContext,
     serviceId: ServiceId,
+    tx?: unknown,
+  ): Promise<ServiceRefundRequestRecord | null>;
+
+  /** The request a filing key filed, in any state. */
+  findByFilingKey(
+    scope: TenantContext,
+    filingKey: string,
     tx?: unknown,
   ): Promise<ServiceRefundRequestRecord | null>;
 

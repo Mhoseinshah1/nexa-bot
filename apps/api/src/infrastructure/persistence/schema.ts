@@ -7229,6 +7229,12 @@ export const serviceRefundRequests = pgTable(
     state: text('state').notNull().default('OPEN'),
     /** The customer's reason, trimmed, as they typed it. */
     reason: text('reason').notNull(),
+    /**
+     * The filing's idempotency key: the Telegram update that carried the reason. Unique for
+     * ever, not just while the request is live — a redelivered update after the request was
+     * rejected or failed is answered with that request, never filed a second time.
+     */
+    filingKey: text('filing_key').notNull(),
     /** The source payment's principal (never the gateway fee), in its currency. A snapshot. */
     principalMinor: bigint('principal_minor', { mode: 'bigint' }).notNull(),
     currency: text('currency').notNull(),
@@ -7251,6 +7257,8 @@ export const serviceRefundRequests = pgTable(
     unique('service_refund_requests_tenant_id_key').on(table.tenantId, table.id),
     /** A refund row reserves money for at most one request. */
     unique('service_refund_requests_refund_key').on(table.tenantId, table.refundId),
+    /** One request per filing, whatever became of it. */
+    unique('service_refund_requests_filing_key').on(table.tenantId, table.filingKey),
     /**
      * ONE open request per service, decided by the database: a double tap, a replayed
      * update and two concurrent filings all meet this index, whatever the code forgot.

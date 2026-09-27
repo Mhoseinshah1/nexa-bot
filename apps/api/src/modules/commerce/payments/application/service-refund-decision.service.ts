@@ -233,7 +233,16 @@ export class ServiceRefundDecisionService {
       if (request.state !== 'EXECUTING') return { outcome: 'CLOSED' };
       return { outcome: 'EXECUTING', request };
     } catch (error) {
-      return this.refusalOf(scope, actor, requestId, error);
+      // Classified first: an error this workflow does not know is rethrown with the capture
+      // still CONFIRMED, so a retry of an indeterminate failure is still the same approval.
+      const refused = await this.refusalOf(scope, actor, requestId, error);
+      // A definitive refusal retires the confirmation. The administrator is told the approval
+      // failed; the same old button, tapped later when the panel or the payment's bound has
+      // recovered, must not then carry it out without a new confirmation.
+      await this.mutate(scope, actor, denial, async (tx) => {
+        await this.deps.captures.retireConfirmed(scope, captureId, tx);
+      });
+      return refused;
     }
   }
 
@@ -434,8 +443,12 @@ export class ServiceRefundDecisionService {
       if (request === null) return { outcome: 'NO_CAPTURE' };
       return { outcome: 'REJECTED', request };
     } catch (error) {
-      await this.closeIfOpen(scope, actor, waiting, 'SUPERSEDED');
+      // Classified before the prompt is touched: a transient failure rolled the rejection and
+      // the close back together, and is rethrown with the prompt — and the typed reason's
+      // chance to be sent again — intact. Only a refusal that proves the request is decided or
+      // not actionable closes it.
       const refused = await this.refusalOf(scope, actor, requestId, error);
+      await this.closeIfOpen(scope, actor, waiting, 'SUPERSEDED');
       return refused.outcome === 'NOT_EXECUTABLE' ? refused : { outcome: 'CLOSED' };
     }
   }

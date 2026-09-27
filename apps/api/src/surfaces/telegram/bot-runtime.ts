@@ -9572,6 +9572,9 @@ export class BotRuntime {
         serviceId,
         botInstanceId: input.botInstanceId,
         reason: text,
+        // The update that carried the reason: a redelivery files nothing new, whatever
+        // became of the request in between.
+        idempotencyKey: `${input.idempotencyKey}:refund-file`,
       });
       if (result.outcome === 'ALREADY_OPEN') return refundOfferReply('PENDING', serviceId);
       return {

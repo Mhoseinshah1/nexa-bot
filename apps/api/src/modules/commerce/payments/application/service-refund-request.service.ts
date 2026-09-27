@@ -4,6 +4,7 @@ import {
   SERVICE_REFUND_REASON_MAX_LENGTH,
   SERVICE_REFUND_REASON_MIN_LENGTH,
   SERVICE_REFUND_REQUEST_ACTIVE_STATES,
+  SERVICE_REFUND_REQUEST_PAGE_MAX,
   errors,
   money,
   refundableMinor,
@@ -239,6 +240,12 @@ export class ServiceRefundRequestService {
       readonly serviceId: string;
       readonly botInstanceId: string;
       readonly reason: string;
+      /**
+       * The filing's idempotency key — the update that carried the reason. Stored on the row
+       * and unique for ever: the partial index stops a second LIVE request, and this stops a
+       * redelivered update from filing again after the first request was decided.
+       */
+      readonly idempotencyKey: string;
     },
   ): Promise<ServiceRefundFileResult> {
     const reason = normaliseRefundReason(input.reason);
@@ -275,6 +282,22 @@ export class ServiceRefundRequestService {
           input.serviceId,
           tx,
         );
+        // A replay of this very filing, whatever became of the request since: answered with
+        // that request, never filed again.
+        const replayed = await this.deps.repository.findByFilingKey(
+          scope,
+          input.idempotencyKey,
+          tx,
+        );
+        if (replayed !== null) {
+          if (replayed.serviceId !== service.id || replayed.customerId !== input.customerId) {
+            throw errors.conflict(
+              COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+              'That idempotency key already filed a different request.',
+            );
+          }
+          return { outcome: 'FILED', request: replayed };
+        }
         const existing = await this.deps.repository.findActiveForService(
           scope,
           service.id as ServiceId,
@@ -301,6 +324,7 @@ export class ServiceRefundRequestService {
             paymentId: payment.id,
             botInstanceId: input.botInstanceId,
             reason,
+            filingKey: input.idempotencyKey,
             principalMinor: payment.amount.amountMinor,
             currency: payment.amount.currency,
             now,
@@ -777,6 +801,37 @@ export class ServiceRefundRequestService {
     },
   ): Promise<readonly (ServiceRefundRequestListItem & { readonly remaining: Money })[]> {
     await this.deps.guard.check(scope, actor, SERVICE_REFUND_VIEW_PERMISSION);
+    return this.itemsOf(scope, filter);
+  }
+
+  /**
+   * The request an administrator has just decided, as the list renders it — charged the two
+   * decision keys, not `refunds.view`. The decision has committed by now: a response that
+   * then refused the decider a read would report a failure for money already reserved and a
+   * deletion already planned, and invite the same decision again.
+   */
+  async decidedView(
+    scope: TenantContext,
+    actor: ActorContext,
+    record: ServiceRefundRequestRecord,
+  ): Promise<(ServiceRefundRequestListItem & { readonly remaining: Money }) | null> {
+    await this.checkDecide(scope, actor);
+    const items = await this.itemsOf(scope, {
+      serviceId: record.serviceId,
+      limit: SERVICE_REFUND_REQUEST_PAGE_MAX,
+    });
+    return items.find((item) => item.request.id === record.id) ?? null;
+  }
+
+  private async itemsOf(
+    scope: TenantContext,
+    filter: {
+      readonly state?: ServiceRefundRequestState;
+      readonly serviceId?: string;
+      readonly limit: number;
+      readonly before?: { readonly at: Date; readonly id: string };
+    },
+  ): Promise<readonly (ServiceRefundRequestListItem & { readonly remaining: Money })[]> {
     const items = await this.deps.repository.list(scope, {
       ...(filter.state === undefined ? {} : { state: filter.state }),
       ...(filter.serviceId === undefined ? {} : { serviceId: filter.serviceId as ServiceId }),
@@ -923,16 +978,22 @@ export class ServiceRefundRequestService {
     });
   }
 
+  /**
+   * The customer's own service, under its row lock until the filing commits. Its eligibility
+   * is read next, and a termination commits `TERMINATED` under this same lock: without it,
+   * a service that ended a moment ago would be read ACTIVE and a request filed for it.
+   */
   private async requireOwnedService(
     scope: TenantContext,
     customerId: UserId,
     serviceId: string,
     tx: TransactionScope,
   ): Promise<ServiceRecord> {
-    if (!/^[0-9a-f-]{36}$/iu.test(serviceId)) {
+    const parsed = uuidV7Schema.safeParse(serviceId);
+    if (!parsed.success) {
       throw errors.notFound(COMMERCE_ERROR_CODES.SERVICE_NOT_FOUND, 'Unknown service.');
     }
-    const service = await this.deps.services.findById(scope, serviceId, tx);
+    const service = await this.deps.services.lockForUpdate(scope, parsed.data, tx);
     if (service === null || service.customerId !== customerId) {
       throw errors.notFound(COMMERCE_ERROR_CODES.SERVICE_NOT_FOUND, 'Unknown service.');
     }

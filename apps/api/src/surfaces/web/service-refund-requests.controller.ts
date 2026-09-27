@@ -109,19 +109,18 @@ export class ServiceRefundRequestsController {
     return { request: await this.viewOf(scope, actor, rejected) };
   }
 
-  /** The decided row, as the list renders it: read back through the same guarded read. */
+  /**
+   * The decided row, as the list renders it — read under the decision keys the decider
+   * already holds, never `refunds.view`: the decision has committed by now.
+   */
   private async viewOf(
     scope: TenantContext,
     actor: ReturnType<typeof adminActor>,
     record: ServiceRefundRequestRecord,
   ): Promise<ServiceRefundRequestView> {
-    const items = await this.container.serviceRefundRequests.list(scope, actor, {
-      serviceId: record.serviceId,
-      limit: SERVICE_REFUND_REQUEST_PAGE_MAX,
-    });
-    const found = items.find((item) => item.request.id === record.id);
+    const found = await this.container.serviceRefundRequests.decidedView(scope, actor, record);
     /* istanbul ignore next -- the row was just written in this tenant. */
-    if (found === undefined) {
+    if (found === null) {
       return toView({
         request: record,
         serviceUsername: null,

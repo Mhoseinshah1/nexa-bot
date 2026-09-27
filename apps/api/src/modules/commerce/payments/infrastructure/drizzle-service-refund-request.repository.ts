@@ -92,6 +92,7 @@ export class DrizzleServiceRefundRequestRepository implements ServiceRefundReque
         botInstanceId: draft.botInstanceId,
         state: 'OPEN',
         reason: draft.reason,
+        filingKey: draft.filingKey,
         principalMinor: draft.principalMinor,
         currency: draft.currency,
         createdAt: draft.now,
@@ -107,6 +108,26 @@ export class DrizzleServiceRefundRequestRepository implements ServiceRefundReque
         where: sql`state IN ('OPEN', 'EXECUTING')`,
       })
       .returning();
+    const row = rows[0];
+    return row === undefined ? null : toRecord(row);
+  }
+
+  async findByFilingKey(
+    scope: TenantContext,
+    filingKey: string,
+    tx?: unknown,
+  ): Promise<ServiceRefundRequestRecord | null> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select()
+      .from(serviceRefundRequests)
+      .where(
+        and(
+          eq(serviceRefundRequests.tenantId, tenantId),
+          eq(serviceRefundRequests.filingKey, filingKey),
+        ),
+      )
+      .limit(1);
     const row = rows[0];
     return row === undefined ? null : toRecord(row);
   }

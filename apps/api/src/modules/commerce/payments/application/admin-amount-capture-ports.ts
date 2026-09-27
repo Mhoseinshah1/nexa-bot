@@ -93,6 +93,13 @@ export interface AdminAmountCaptureRepository {
   recordReason(scope: TenantContext, id: string, reason: string, tx: unknown): Promise<boolean>;
 
   /**
+   * `CONFIRMED -> SUPERSEDED` on a capture its confirmation could not carry out: the decision
+   * it confirmed was refused for good. A later tap of the same button then finds it retired,
+   * not ready to act — nobody confirms an approval they were told had failed.
+   */
+  retireConfirmed(scope: TenantContext, id: string, tx: unknown): Promise<boolean>;
+
+  /**
    * The open capture still WAITING for an amount, for this administrator on this bot.
    *
    * A capture that already holds an amount is not returned: it reads one message, and a
