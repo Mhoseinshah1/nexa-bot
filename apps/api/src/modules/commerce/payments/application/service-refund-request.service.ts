@@ -40,6 +40,7 @@ import type { CustomerRecord, CustomerRepository } from '../../customers/applica
 import type { OrderRepository } from '../../orders/application/ports.js';
 import type {
   OperationRecord,
+  OperationRepository,
   ServiceRecord,
   ServiceRepository,
 } from '../../provisioning/application/ports.js';
@@ -108,6 +109,8 @@ export interface ServiceRefundReview {
 export interface ServiceRefundRequestServiceDeps {
   readonly repository: ServiceRefundRequestRepository;
   readonly services: Pick<ServiceRepository, 'findById' | 'lockForUpdate'>;
+  /** Whether another deletion of the service is still in flight when the sweep decides (round 6). */
+  readonly operations: Pick<OperationRepository, 'findOpen'>;
   readonly orders: Pick<OrderRepository, 'findById'>;
   readonly payments: Pick<PaymentRepository, 'findConfirmedForOrder' | 'findById'>;
   readonly refundLedger: Pick<RefundRepository, 'consumptionFor' | 'lockPayment'>;
@@ -822,8 +825,30 @@ export class ServiceRefundRequestService {
       if (request === null || request.state !== 'EXECUTING' || request.refundId === null) {
         return false;
       }
+      /*
+       * The SERVICE decides, read under its own lock (request before service, the approval's
+       * order) — not the request's operation alone (Codex review of #83, round 6). If the
+       * request's deletion failed but another TERMINATE — an operator's retry, planned after
+       * this one ended — has since removed the account, releasing the reservation would leave
+       * the customer with neither the service nor the refund the administrator approved. A
+       * service that is TERMINATED while the reservation is still held is completed and
+       * credited, whichever deletion removed it; one still standing is released only when
+       * this request's own deletion definitively failed AND no other deletion is in flight.
+       * Every TERMINATE planner takes this same service lock before `findOpen` (round 4), so
+       * one planned before this read is seen here and the request waits for its answer; one
+       * planned after is an operator acting on a request already shown as FAILED.
+       */
+      const service = await this.deps.services.lockForUpdate(scope, request.serviceId, tx);
+      const removed = service?.state === 'TERMINATED' && item.refundState === 'REQUESTED';
+      if (succeeded && !removed) return false;
+      if (
+        !removed &&
+        (await this.deps.operations.findOpen(scope, request.serviceId, 'TERMINATE', tx)) !== null
+      ) {
+        return false;
+      }
       const now = this.deps.clock.now();
-      if (succeeded) {
+      if (removed) {
         await this.deps.refunds.settleServiceRefund(scope, actor, request.refundId, tx);
         const completed = await this.deps.repository.resolveExecution(
           scope,
@@ -898,6 +923,7 @@ export class ServiceRefundRequestService {
     actor: ActorContext,
     filter: {
       readonly state?: ServiceRefundRequestState;
+      readonly states?: readonly ServiceRefundRequestState[];
       readonly serviceId?: string;
       readonly limit: number;
       readonly before?: { readonly at: Date; readonly id: string };
@@ -930,6 +956,7 @@ export class ServiceRefundRequestService {
     scope: TenantContext,
     filter: {
       readonly state?: ServiceRefundRequestState;
+      readonly states?: readonly ServiceRefundRequestState[];
       readonly serviceId?: string;
       readonly limit: number;
       readonly before?: { readonly at: Date; readonly id: string };
@@ -937,6 +964,7 @@ export class ServiceRefundRequestService {
   ): Promise<readonly (ServiceRefundRequestListItem & { readonly remaining: Money })[]> {
     const items = await this.deps.repository.list(scope, {
       ...(filter.state === undefined ? {} : { state: filter.state }),
+      ...(filter.states === undefined ? {} : { states: filter.states }),
       ...(filter.serviceId === undefined ? {} : { serviceId: filter.serviceId as ServiceId }),
       ...(filter.before === undefined ? {} : { before: filter.before }),
       limit: filter.limit,

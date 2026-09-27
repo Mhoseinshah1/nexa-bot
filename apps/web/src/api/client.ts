@@ -1798,12 +1798,15 @@ export function failRefund(input: {
 export function fetchServiceRefundRequests(
   query: {
     readonly state?: ServiceRefundRequestState;
+    /** Every state that still wants an operator, as one stream under one cursor. */
+    readonly attention?: true;
     /** The `nextCursor` of the page before: returns the requests older than it. */
     readonly cursor?: { readonly at: string; readonly id: string };
   } = {},
 ): Promise<ServiceRefundRequestListResponse> {
   const params = new URLSearchParams();
   if (query.state !== undefined) params.set('state', query.state);
+  if (query.attention === true) params.set('attention', 'true');
   if (query.cursor !== undefined) {
     params.set('before', query.cursor.at);
     params.set('beforeId', query.cursor.id);

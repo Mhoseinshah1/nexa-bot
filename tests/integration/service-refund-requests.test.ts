@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { sql } from 'drizzle-orm';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   COMMERCE_ERROR_CODES,
   EMPTY_PRODUCT_DISPLAY,
@@ -724,6 +724,27 @@ describe('WP19 — a customer asks for their money back', () => {
     expect(await values()).toBeNull();
   });
 
+  it('names the approving administrator on the wallet credit the sweep writes (Codex review of #83, round 6)', async () => {
+    const service = await activeService('credit-actor');
+    const filed = await file(service.id);
+    await ctx.container.serviceRefundRequests.approve(tenantA, owner, {
+      requestId: filed.request.id,
+      amountMinor: 120_000n,
+    });
+    await ctx.container.provisionerLoop.tick();
+    const row = await requestRow(filed.request.id);
+    expect(row?.request.state).toBe('COMPLETED');
+    const credit = await ctx.container.database.db.execute(
+      sql`SELECT actor_admin_id FROM wallet_entries
+           WHERE reference = ${`${row?.request.refundId ?? ''}:refund`}`,
+    );
+    expect(credit.rows, 'one credit').toHaveLength(1);
+    expect(
+      (credit.rows[0] as { actor_admin_id: string | null }).actor_admin_id,
+      'the administrator who decided the amount, not an anonymous system credit',
+    ).toBe(ownerId);
+  });
+
   it('credits nothing while the deletion’s answer is uncertain', async () => {
     const service = await activeService('ambiguous');
     const filed = await file(service.id);
@@ -1009,6 +1030,66 @@ describe('WP19 — a customer asks for their money back', () => {
                AND payload->>'outcome' = 'FAILED'`,
       ),
     ).toBe(1);
+  });
+
+  /** The request's own deletion failed, and its sweep has not yet run: a crash, a stopped scope. */
+  async function failedUnswept(label: string) {
+    const service = await activeService(label);
+    const filed = await file(service.id);
+    await ctx.container.serviceRefundRequests.approve(tenantA, owner, {
+      requestId: filed.request.id,
+      amountMinor: 100_000n,
+    });
+    panel.behaviour = 'bad-credentials';
+    const sweep = vi
+      .spyOn(ctx.container.serviceRefundRequests, 'settleDue')
+      .mockResolvedValueOnce(0);
+    try {
+      await ctx.container.provisionerLoop.tick();
+    } finally {
+      sweep.mockRestore();
+    }
+    panel.behaviour = 'healthy';
+    expect((await terminateOf(service.id))[0]?.state).toBe('FAILED');
+    expect((await requestRow(filed.request.id))?.request.state).toBe('EXECUTING');
+    return { service, filed };
+  }
+
+  it('completes, never releases, a request whose service another deletion removed (Codex review of #83, round 6)', async () => {
+    const { service, filed } = await failedUnswept('removed-elsewhere');
+    const before = await balance();
+    // An operator retries the deletion; the next tick executes it and then sweeps.
+    await ctx.container.provisioning.requestFromOperator(tenantA, owner, service.id, 'TERMINATE', {
+      idempotencyKey: 'removed-elsewhere-operator',
+    });
+    await ctx.container.provisionerLoop.tick();
+
+    expect((await services.findById(tenantA, service.id))?.state).toBe('TERMINATED');
+    const row = await requestRow(filed.request.id);
+    expect(row?.request.state, 'the approved refund is paid').toBe('COMPLETED');
+    expect(await balance(), 'credited the approved amount').toBe(before + 100_000n);
+    expect(row?.remaining.amountMinor, 'the reservation settled, not released').toBe(
+      PRICE - 100_000n,
+    );
+    expect(await notices('SERVICE_REFUND_REQUEST_APPROVED')).toBe(1);
+  });
+
+  it('waits, releasing nothing, while another deletion of the service is in flight (Codex review of #83, round 6)', async () => {
+    const { service, filed } = await failedUnswept('removal-in-flight');
+    const before = await balance();
+    await ctx.container.provisioning.requestFromOperator(tenantA, owner, service.id, 'TERMINATE', {
+      idempotencyKey: 'removal-in-flight-operator',
+    });
+    // The operator's deletion is planned, not executed: the sweep must wait for its answer.
+    expect(await ctx.container.serviceRefundRequests.settleDue(tenantA)).toBe(0);
+    let row = await requestRow(filed.request.id);
+    expect(row?.request.state).toBe('EXECUTING');
+    expect(row?.remaining.amountMinor, 'still reserved').toBe(PRICE - 100_000n);
+
+    await ctx.container.provisionerLoop.tick();
+    row = await requestRow(filed.request.id);
+    expect(row?.request.state).toBe('COMPLETED');
+    expect(await balance()).toBe(before + 100_000n);
   });
 
   it('logs each outcome to the financial log, and the rejection with no amount', async () => {
@@ -1562,6 +1643,43 @@ describe('WP19 — a customer asks for their money back', () => {
     expect([...seen].sort()).toEqual([...filed].sort());
   });
 
+  it('reads every request that wants an operator as one stream, once each, while they move (Codex review of #83, round 6)', async () => {
+    const ids: string[] = [];
+    for (const key of ['attn-a', 'attn-b', 'attn-c', 'attn-d']) {
+      ids.push((await file((await activeService(key)).id)).request.id);
+    }
+    const [oldest, rejected, moving, newest] = ids as [string, string, string, string];
+    await ctx.container.serviceRefundRequests.reject(tenantA, owner, {
+      requestId: rejected,
+      reason: 'رد',
+    });
+    const { controller, request } = await asWebOwner();
+    const first = await controller.list(request, { attention: 'true', limit: '1' });
+    expect(first.requests.map((row) => row.id)).toEqual([newest]);
+    // Between two pages, a request moves from OPEN to EXECUTING. Three scans, one per state,
+    // could read OPEN after it moved and EXECUTING before; one keyset cannot lose it.
+    await ctx.container.serviceRefundRequests.approve(tenantA, owner, {
+      requestId: moving,
+      amountMinor: 1_000n,
+    });
+    const seen = [...first.requests];
+    let cursor = first.nextCursor;
+    while (cursor !== null) {
+      const page = await controller.list(request, {
+        attention: 'true',
+        limit: '1',
+        before: cursor.at,
+        beforeId: cursor.id,
+      });
+      seen.push(...page.requests);
+      cursor = page.nextCursor;
+    }
+    expect(seen.map((row) => row.id)).toEqual([newest, moving, oldest]);
+    expect(seen.find((row) => row.id === moving)?.state).toBe('EXECUTING');
+    // Never beside a state: two filters naming states would be two answers.
+    await expect(controller.list(request, { attention: 'true', state: 'OPEN' })).rejects.toThrow();
+  });
+
   it('answers a decision made on the two decision keys alone with the decided request (Codex review of #83)', async () => {
     const approved = await file((await activeService('decided-view-a')).id);
     const rejected = await file((await activeService('decided-view-r')).id);
@@ -1871,6 +1989,50 @@ describe('WP19 — a customer asks for their money back', () => {
     // A new update is a new filing.
     const again = await file(service.id, 'دوباره درخواست دارم', 'wp19-file-new');
     expect(again.request.id).not.toBe(first.request.id);
+  });
+
+  it('never tells a redelivered reason "registered" once its request has moved on (Codex review of #83, round 6)', async () => {
+    const service = await activeService('tg-file-replay');
+    await handle(tapUpdate(`fa:${service.id}`));
+    await handle(tapUpdate(`fb:${service.id}`));
+    const reason = textUpdate('دیگر به این سرویس نیازی ندارم');
+    expect((await handle(reason)).replyKey).toBe('bot.service.refund_request_registered');
+    const filed = (
+      await ctx.container.serviceRefundRequests.list(tenantA, owner, { limit: 10 })
+    )[0];
+    if (filed === undefined) throw new Error('nothing filed');
+
+    // Approved and still deleting: pending, as far as the customer has been told.
+    await ctx.container.serviceRefundRequests.approve(tenantA, owner, {
+      requestId: filed.request.id,
+      amountMinor: 100_000n,
+    });
+    expect((await handle(reason)).replyKey).toBe('bot.service.refund_request_pending');
+
+    // Completed: the service is gone and the customer was told through the lane.
+    await ctx.container.provisionerLoop.tick();
+    expect((await requestRow(filed.request.id))?.request.state).toBe('COMPLETED');
+    const replayed = await handle(reason);
+    expect(replayed.replyKey).not.toBe('bot.service.refund_request_registered');
+    expect(replayed.replyKey).toBe('bot.service.not_found');
+    expect(await notices('SERVICE_REFUND_REQUEST_REGISTERED'), 'no registration queued').toBe(0);
+  });
+
+  it('shows a rejected request’s redelivered reason the service as it stands (Codex review of #83, round 6)', async () => {
+    const service = await activeService('tg-file-replay-rejected');
+    await handle(tapUpdate(`fa:${service.id}`));
+    await handle(tapUpdate(`fb:${service.id}`));
+    const reason = textUpdate('دیگر به این سرویس نیازی ندارم');
+    await handle(reason);
+    const filed = (
+      await ctx.container.serviceRefundRequests.list(tenantA, owner, { limit: 10 })
+    )[0];
+    if (filed === undefined) throw new Error('nothing filed');
+    await ctx.container.serviceRefundRequests.reject(tenantA, owner, {
+      requestId: filed.request.id,
+      reason: 'رد',
+    });
+    expect((await handle(reason)).replyKey).toBe('bot.service.card');
   });
 
   it('rejects from Telegram with the typed reason', async () => {

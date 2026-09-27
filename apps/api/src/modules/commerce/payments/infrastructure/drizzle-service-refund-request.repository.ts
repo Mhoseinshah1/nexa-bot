@@ -188,6 +188,7 @@ export class DrizzleServiceRefundRequestRepository implements ServiceRefundReque
     scope: TenantContext,
     filter: {
       readonly state?: ServiceRefundRequestState;
+      readonly states?: readonly ServiceRefundRequestState[];
       readonly serviceId?: ServiceId;
       readonly limit: number;
       readonly before?: { readonly at: Date; readonly id: string };
@@ -229,6 +230,9 @@ export class DrizzleServiceRefundRequestRepository implements ServiceRefundReque
         and(
           eq(serviceRefundRequests.tenantId, tenantId),
           filter.state === undefined ? undefined : eq(serviceRefundRequests.state, filter.state),
+          filter.states === undefined
+            ? undefined
+            : inArray(serviceRefundRequests.state, [...filter.states]),
           filter.serviceId === undefined
             ? undefined
             : eq(serviceRefundRequests.serviceId, filter.serviceId),
@@ -356,6 +360,7 @@ export class DrizzleServiceRefundRequestRepository implements ServiceRefundReque
         operationState: provisioningOperations.state,
         operationFailureKind: provisioningOperations.failureKind,
         serviceState: services.state,
+        refundState: refunds.state,
       })
       .from(serviceRefundRequests)
       .innerJoin(
@@ -402,6 +407,16 @@ export class DrizzleServiceRefundRequestRepository implements ServiceRefundReque
             and(
               inArray(provisioningOperations.state, ['FAILED', 'ABANDONED']),
               inArray(refunds.state, ['REQUESTED', 'FAILED']),
+              /*
+               * Nor while another deletion of the service is still in flight (Codex review
+               * of #83, round 6): the sweep waits for its answer rather than releasing, and
+               * so must not return a row it would only refuse again.
+               */
+              sql`not exists (select 1 from provisioning_operations open_op
+                where open_op.tenant_id = ${serviceRefundRequests.tenantId}
+                  and open_op.service_id = ${serviceRefundRequests.serviceId}
+                  and open_op.type = 'TERMINATE'
+                  and open_op.state in ('PLANNED', 'IN_FLIGHT'))`,
             ),
           ),
         ),
@@ -413,6 +428,7 @@ export class DrizzleServiceRefundRequestRepository implements ServiceRefundReque
       operationState: row.operationState as OperationState,
       operationFailureKind: row.operationFailureKind,
       serviceState: row.serviceState as ServiceState,
+      refundState: row.refundState,
     }));
   }
 }

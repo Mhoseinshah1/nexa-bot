@@ -60,6 +60,8 @@ export interface ExecutingServiceRefundRequest {
   readonly operationState: OperationState;
   readonly operationFailureKind: string | null;
   readonly serviceState: ServiceState;
+  /** The reservation's state when the sweep read it: `REQUESTED` until something decides it. */
+  readonly refundState: string;
 }
 
 /** A request as the Web Admin lists it: the row plus the few facts beside it. */
@@ -113,6 +115,8 @@ export interface ServiceRefundRequestRepository {
     scope: TenantContext,
     filter: {
       readonly state?: ServiceRefundRequestState;
+      /** Any of these states, as one keyset stream (the attention queue, round 6). */
+      readonly states?: readonly ServiceRefundRequestState[];
       readonly serviceId?: ServiceId;
       readonly limit: number;
       /** The keyset cursor: rows strictly older than this `(createdAt, id)`. */

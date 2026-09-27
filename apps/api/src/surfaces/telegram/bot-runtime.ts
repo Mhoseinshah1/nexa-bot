@@ -9602,6 +9602,17 @@ export class BotRuntime {
         idempotencyKey: `${input.idempotencyKey}:refund-file`,
       });
       if (result.outcome === 'ALREADY_OPEN') return refundOfferReply('PENDING', serviceId);
+      /*
+       * A redelivered reason is answered with its own request, whatever became of it
+       * (round 3) — so "registered, awaiting review" is said only while that is still true
+       * (Codex review of #83, round 6). An approved request still deleting is pending; a
+       * decided one was told through the lane, and the customer is shown the service as it
+       * now stands (or `not_found`, once a completed request has hidden it).
+       */
+      if (result.request.state === 'EXECUTING') return refundOfferReply('PENDING', serviceId);
+      if (result.request.state !== 'OPEN') {
+        return this.serviceDetail(scope, actor, customer, serviceId);
+      }
       return {
         key: 'bot.service.refund_request_registered',
         values: {},

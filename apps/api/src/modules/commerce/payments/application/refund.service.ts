@@ -848,7 +848,7 @@ export class RefundService {
         { reason: 'STATE_RACE' },
       );
     }
-    await this.creditWallet(scope, after, actor, now, tx);
+    await this.creditWallet(scope, after, actor, now, tx, before.requestedByAdminId);
     // After the credit, so the balance the reversal reads already holds it (P9).
     await this.deps.cashback.reverseForRefund(scope, actor, after, now, tx);
     await this.deps.referrals.reverseForRefund(scope, actor, after, now, tx);
@@ -976,6 +976,12 @@ export class RefundService {
     actor: ActorContext,
     now: Date,
     tx: TransactionScope,
+    /*
+     * Whose decision the credit carries out. The acting admin by default; the sweep that
+     * settles a service refund request acts as the system but carries out the approving
+     * administrator's decision, and the ledger names them (Codex review of #83, round 6).
+     */
+    actorAdminId: string | null = this.adminIdOf(actor),
   ): Promise<void> {
     const present = await this.deps.wallet.lockCustomer(scope, refund.customerId, tx);
     if (!present) {
@@ -992,7 +998,7 @@ export class RefundService {
         reference: `${refund.id}:refund`,
         orderId: refund.orderId,
         paymentId: refund.paymentId,
-        actorAdminId: this.adminIdOf(actor),
+        actorAdminId,
         note: refund.reason,
         now,
       },

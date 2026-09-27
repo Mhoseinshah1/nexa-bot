@@ -54,9 +54,6 @@ const STATE_TONES: Readonly<Record<ServiceRefundRequestState, Tone>> = {
   FAILED: 'danger',
 };
 
-/** The states that still want an operator: undecided, in flight, or failed. */
-const NEEDS_ATTENTION: readonly ServiceRefundRequestState[] = ['OPEN', 'EXECUTING', 'FAILED'];
-
 /** Digits only, as a decimal STRING of minor units — never a float. */
 function digitsOf(value: string): string {
   const trimmed = value.trim();
@@ -135,15 +132,19 @@ function columns(onLink: ReturnType<typeof useLinkHandler>, withService: boolean
   return withService ? all : all.filter((column) => column.key !== 'service');
 }
 
-/** Every request in one state, following the server's cursor until it says there is no more. */
-async function fetchEveryPage(
-  state: ServiceRefundRequestState,
-): Promise<ServiceRefundRequestView[]> {
+/**
+ * Every request that still wants an operator, following the server's ONE cursor until it
+ * says there is no more. One stream, not one per state (Codex review of #83, round 6): three
+ * scans read at three moments could each miss a request that moved between them, OPEN read
+ * after it became EXECUTING and EXECUTING read before. Under one keyset on `(createdAt, id)`,
+ * which no transition changes, each request is on exactly one page, in the state it had there.
+ */
+async function fetchEveryAttentionPage(): Promise<ServiceRefundRequestView[]> {
   const rows: ServiceRefundRequestView[] = [];
   let cursor: { at: string; id: string } | undefined;
   for (;;) {
     const page = await fetchServiceRefundRequests(
-      cursor === undefined ? { state } : { state, cursor },
+      cursor === undefined ? { attention: true } : { attention: true, cursor },
     );
     rows.push(...page.requests);
     if (page.nextCursor === null) return rows;
@@ -157,20 +158,13 @@ async function fetchEveryPage(
  */
 export function OpenServiceRefundRequestsCard() {
   const onLink = useLinkHandler();
-  // One read per state that wants an operator, so the server filters BEFORE it limits: a
-  // page of the newest requests of every state would hide an old undecided one behind a
-  // hundred newer decided ones. And EVERY page of each, by the server's cursor: a state with
-  // more than a page must not leave its oldest — the longest-waiting — on no page at all.
+  // The server filters to the states that want an operator BEFORE it limits: a page of the
+  // newest requests of every state would hide an old undecided one behind a hundred newer
+  // decided ones. And EVERY page, by the server's cursor: more than a page must not leave the
+  // oldest — the longest-waiting — on no page at all. Already newest first, as the server sent it.
   const requests = useQuery({
     queryKey: ['service-refund-requests', 'attention'],
-    queryFn: async () => {
-      const lists = await Promise.all(NEEDS_ATTENTION.map((state) => fetchEveryPage(state)));
-      return {
-        requests: lists
-          .flat()
-          .sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0)),
-      };
-    },
+    queryFn: async () => ({ requests: await fetchEveryAttentionPage() }),
   });
   const rows = requests.data?.requests ?? [];
   return (

@@ -73,32 +73,19 @@ describe('the requests that still want an operator', () => {
           ],
         },
       },
+      // The server's one stream over the three states that want an operator.
       {
-        url: '/service-refund-requests?state=OPEN',
-        body: {
-          nextCursor: null,
-          requests: [request({ id: '019250ab-cdef-7012-8345-6789abcdef02', reason: 'دلیل اول' })],
-        },
-      },
-      {
-        url: '/service-refund-requests?state=EXECUTING',
+        url: '/service-refund-requests?attention=true',
         body: {
           nextCursor: null,
           requests: [
+            request({ id: '019250ab-cdef-7012-8345-6789abcdef02', reason: 'دلیل اول' }),
             request({
               id: '019250ab-cdef-7012-8345-6789abcdef03',
               state: 'EXECUTING',
               reason: 'دلیل دوم',
               operationState: 'UNKNOWN',
             }),
-          ],
-        },
-      },
-      {
-        url: '/service-refund-requests?state=FAILED',
-        body: {
-          nextCursor: null,
-          requests: [
             request({
               id: '019250ab-cdef-7012-8345-6789abcdef04',
               state: 'FAILED',
@@ -117,12 +104,15 @@ describe('the requests that still want an operator', () => {
     expect(within(table).queryByText('دلیل پنجم')).toBeNull();
     // An ambiguous deletion is shown as what it is, never as progress.
     expect(within(table).getByText('UNKNOWN')).toBeInTheDocument();
-    // The server filters before it limits: one read per state, never the newest page of all.
+    // The server filters before it limits, never the newest page of all; and as ONE stream,
+    // never a scan per state that could miss a request moving between two of them (Codex
+    // review of #83, round 6).
     const reads = api.calls
       .map((call) => call.url)
       .filter((url) => url.includes('/service-refund-requests'));
-    expect(reads.every((url) => url.includes('?state='))).toBe(true);
-    expect(reads.some((url) => url.includes('state=OPEN'))).toBe(true);
+    expect(reads).toHaveLength(1);
+    expect(reads[0]).toContain('?attention=true');
+    expect(reads.some((url) => url.includes('state='))).toBe(false);
     // Each row leads to its service, where the decision is.
     expect(within(table).getAllByRole('link')[0]?.getAttribute('href')).toBe(
       `/services/${SERVICE_ID}`,
@@ -134,18 +124,15 @@ describe('a finance reviewer holding refunds.view alone (Codex review of #83, ro
   it('reaches the queue from the navigation, and never asks for the services list', async () => {
     const services = NAV.find((entry) => entry.id === 'services');
     expect(navPermitted(services!, ['refunds.view'])).toBe(true);
-    const api = stubApi(
-      ['OPEN', 'EXECUTING', 'FAILED'].map((state) => ({
-        url: `/service-refund-requests?state=${state}`,
+    const api = stubApi([
+      {
+        url: '/service-refund-requests?attention=true',
         body: {
           nextCursor: null,
-          requests:
-            state === 'OPEN'
-              ? [request({ id: '019250ab-cdef-7012-8345-6789abcdef09', reason: 'فقط مالی' })]
-              : [],
+          requests: [request({ id: '019250ab-cdef-7012-8345-6789abcdef09', reason: 'فقط مالی' })],
         },
-      })),
-    );
+      },
+    ]);
     const resolved = resolve({ path: '/services', query: new URLSearchParams() }, ['refunds.view']);
     renderPage(resolved.element as ReactElement);
     expect(await screen.findByText('فقط مالی')).toBeInTheDocument();
@@ -155,11 +142,11 @@ describe('a finance reviewer holding refunds.view alone (Codex review of #83, ro
 });
 
 describe('the attention card’s paging', () => {
-  it('follows the server’s cursor to the oldest request in a state (Codex review of #83)', async () => {
+  it('follows the server’s cursor to the oldest request that wants an operator (Codex review of #83)', async () => {
     const oldest = '019250ab-cdef-7012-8345-6789abcdef09';
     const api = stubApi([
       {
-        url: '/service-refund-requests?state=OPEN',
+        url: '/service-refund-requests?attention=true',
         body: {
           requests: [request({ id: '019250ab-cdef-7012-8345-6789abcdef08', reason: 'تازه' })],
           nextCursor: {
@@ -169,23 +156,27 @@ describe('the attention card’s paging', () => {
         },
       },
       {
-        url: '/service-refund-requests?state=OPEN&before=',
+        url: '/service-refund-requests?attention=true&before=',
         body: {
           requests: [
-            request({ id: oldest, reason: 'قدیمی‌ترین', createdAt: '2026-09-01T10:00:00.000Z' }),
+            request({
+              id: oldest,
+              state: 'FAILED',
+              reason: 'قدیمی‌ترین',
+              createdAt: '2026-09-01T10:00:00.000Z',
+            }),
           ],
           nextCursor: null,
         },
       },
-      { url: '/service-refund-requests?state=EXECUTING', body: { requests: [], nextCursor: null } },
-      { url: '/service-refund-requests?state=FAILED', body: { requests: [], nextCursor: null } },
     ]);
     renderPage(<OpenServiceRefundRequestsCard />);
     const table = await screen.findByRole('table');
     expect(within(table).getByText('تازه')).toBeInTheDocument();
     expect(within(table).getByText('قدیمی‌ترین')).toBeInTheDocument();
-    // The second read names the first page's cursor, both halves.
+    // The second read names the first page's cursor, both halves, in the same stream.
     const second = api.calls.find((call) => call.url.includes('before='));
+    expect(second?.url).toContain('attention=true');
     expect(second?.url).toContain('beforeId=019250ab-cdef-7012-8345-6789abcdef08');
   });
 });

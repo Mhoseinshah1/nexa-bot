@@ -7,6 +7,7 @@ import {
   routePattern,
   serviceRefundApproveRequestSchema,
   serviceRefundRejectRequestSchema,
+  SERVICE_REFUND_REQUEST_ATTENTION_STATES,
   serviceRefundRequestListQuerySchema,
   uuidV7Schema,
   type Money,
@@ -48,6 +49,7 @@ export class ServiceRefundRequestsController {
     // One row past the page, so "there is another page" is read, never guessed from a full one.
     const items = await this.container.serviceRefundRequests.list(scope, actor, {
       ...(input.state === undefined ? {} : { state: input.state }),
+      ...(input.attention === 'true' ? { states: SERVICE_REFUND_REQUEST_ATTENTION_STATES } : {}),
       ...(input.before === undefined || input.beforeId === undefined
         ? {}
         : { before: { at: new Date(input.before), id: input.beforeId } }),
