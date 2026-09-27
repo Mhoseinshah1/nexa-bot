@@ -4802,14 +4802,30 @@ export type ServiceRefundRequestView = z.infer<typeof serviceRefundRequestSchema
 
 export const SERVICE_REFUND_REQUEST_PAGE_MAX = 100;
 
-export const serviceRefundRequestListQuerySchema = z.object({
-  state: serviceRefundRequestStateSchema.optional(),
-  limit: z.coerce.number().int().positive().max(SERVICE_REFUND_REQUEST_PAGE_MAX).optional(),
-});
+export const serviceRefundRequestListQuerySchema = z
+  .object({
+    state: serviceRefundRequestStateSchema.optional(),
+    limit: z.coerce.number().int().positive().max(SERVICE_REFUND_REQUEST_PAGE_MAX).optional(),
+    /**
+     * The keyset cursor, newest first: the `createdAt` of the oldest request already shown,
+     * and its id to break ties. Without it a state with more than one page of requests had
+     * its oldest ones on no page at all — and the oldest undecided request is the one an
+     * operator most needs to see.
+     */
+    before: z.iso.datetime().optional(),
+    beforeId: uuidV7Schema.optional(),
+  })
+  .refine((query) => (query.before === undefined) === (query.beforeId === undefined), {
+    // Both halves or neither: a timestamp without its tie-break skips rows sharing it.
+    message: 'before and beforeId must be supplied together.',
+    path: ['beforeId'],
+  });
 export type ServiceRefundRequestListQuery = z.infer<typeof serviceRefundRequestListQuerySchema>;
 
 export const serviceRefundRequestListResponseSchema = z.object({
   requests: z.array(serviceRefundRequestSchema),
+  /** The cursor for the next (older) page, or `null` on the last one. Returned, never guessed. */
+  nextCursor: z.object({ at: z.iso.datetime(), id: z.string() }).nullable(),
 });
 export type ServiceRefundRequestListResponse = z.infer<
   typeof serviceRefundRequestListResponseSchema
