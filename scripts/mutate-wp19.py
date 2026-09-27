@@ -22,6 +22,8 @@ C='apps/api/src/surfaces/web/service-refund-requests.controller.ts'
 PG='apps/web/src/pages/service-refund-requests.tsx'
 EV='packages/contracts/src/events.ts'
 PV='apps/api/src/modules/commerce/provisioning/application/provisioning.service.ts'
+SVP='apps/web/src/pages/services.tsx'
+APP='apps/web/src/app.tsx'
 M=[
  ('W19-01',[(S,"if (succeeded && item.serviceState !== 'TERMINATED') {","if (false && succeeded && item.serviceState !== 'TERMINATED') {"),(R,"          or(\n","          or(\n            sql`true`,\n")],'did not move'),
  ('W19-02',[(R,"inArray(provisioningOperations.state, [...OPERATION_TERMINAL_STATES]),","inArray(provisioningOperations.state, [...OPERATION_TERMINAL_STATES, 'UNKNOWN' as never]),")],'UNKNOWN'),
@@ -291,6 +293,23 @@ M+=[
       const entered = await this.enteredAgain(scope, actor, replayed.result.captureId);""","""    if (replayed !== null && (false as boolean)) {
       const entered = await this.enteredAgain(scope, actor, replayed.result.captureId);""")],'redelivered amount'),
  ('W19-54',[(S,"return key === undefined ? null : { key, hash: hashRequest(body) };","void hashRequest;\n    return key === undefined ? null : null;")],'idempotency key \\(Codex'),
+ ('W19-55',[(DS,"""      return (
+        (await this.enteredAgain(scope, actor, replayed.result.captureId)) ?? { outcome: 'CLOSED' }
+      );
+    }""","""      const entered = await this.enteredAgain(scope, actor, replayed.result.captureId);
+      if (entered !== null) return entered;
+    }""")],'from its own prompt, never from a newer one'),
+ ('W19-56',[(DS,"""        // Its redelivery is then a known replay, answered and never offered to a newer prompt.
+        await rememberOnce(""","""        // Its redelivery is then a known replay, answered and never offered to a newer prompt.
+        if (false as boolean) await rememberOnce(""")],'from its own prompt, never from a newer one'),
+ ('W19-57',[(DS,"""  if (updateId === undefined || capture.openedUpdateId === null) return true;
+  return updateId > capture.openedUpdateId;""","""  void updateId;
+  void capture;
+  return true;""")],'sent after the tap that opened the prompt'),
+ ('W19-58',[(RF,"{ notifyCustomer: false, serviceRemoved: true },","{ notifyCustomer: false },")],'never as leaving it untouched'),
+ ('W19-59',[(S,"return request.state === 'OPEN' ? {} : null;","return {};")],'only while its request is still open'),
+ ('W19-60',[(SVP,"      {mayViewRefundRequests && <OpenServiceRefundRequestsCard />}","      {!denied && mayViewRefundRequests && <OpenServiceRefundRequestsCard />}")],'refunds.view alone',('web','tests/web/service-refund-requests.test.tsx')),
+ ('W19-61',[(APP,"    permission: ['services.view', 'refunds.view'],","    permission: 'services.view',")],'refunds.view alone',('web','tests/web/service-refund-requests.test.tsx')),
 ]
 only=sys.argv[1:] 
 for entry in M:
