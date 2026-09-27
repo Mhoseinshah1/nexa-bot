@@ -347,6 +347,23 @@ describe('Telegram Stars (Package A)', () => {
       expect(enabled).toEqual({ status: 'ACTIVE', provider_unit_rate_minor: '1300' });
     });
 
+    it('is created DISABLED by the boot reconcile for a tenant that has no row', async () => {
+      await api.container.database.db.execute(
+        sql`DELETE FROM payment_gateways WHERE tenant_id = ${tenantA.tenantId} AND provider = 'TELEGRAM_STARS'`,
+      );
+      const written = await api.container.paymentGatewayProvisioning.ensureDefaults(
+        tenantA,
+        'IRT',
+        new Date(),
+      );
+      expect(written).toBe(1);
+      const [route] = await rows<{ status: string; provider_unit_rate_minor: string | null }>(
+        sql`SELECT status, provider_unit_rate_minor::text AS provider_unit_rate_minor
+            FROM payment_gateways WHERE tenant_id = ${tenantA.tenantId} AND provider = 'TELEGRAM_STARS'`,
+      );
+      expect(route).toEqual({ status: 'DISABLED', provider_unit_rate_minor: null });
+    });
+
     it('refuses clearing the rate of an enabled route, and a rate on a route that has no conversion', async () => {
       await enableStars();
       const cleared = await configureStars({ providerUnitRateMinor: null }).catch(
