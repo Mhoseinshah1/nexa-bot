@@ -384,6 +384,24 @@ M+=[
  ('W19-110',[(SV,"      .for('no key update')","      .for('update')")],'lets a settlement holding'),
  ('W19-111',[],'serves the attention stream',None,("DROP INDEX service_refund_requests_attention_idx","CREATE INDEX service_refund_requests_attention_idx ON service_refund_requests USING btree (tenant_id, created_at, id) WHERE state IN ('OPEN', 'EXECUTING', 'FAILED')")),
  # Codex review of #83, round 12
+ ('W19-05c',[(S,"""        if (request.state !== 'OPEN') {
+          if (
+            request.decidedByAdminId === adminId &&""","""        if (false as boolean) {
+          if (
+            request.decidedByAdminId === adminId &&"""),(R,"""        decidedAt: now,
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(serviceRefundRequests.tenantId, tenantId),
+          eq(serviceRefundRequests.id, id),
+          eq(serviceRefundRequests.state, 'OPEN'),""","""        decidedAt: now,
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(serviceRefundRequests.tenantId, tenantId),
+          eq(serviceRefundRequests.id, id),"""),(S,"    if (await this.deps.repository.terminationUndecided(scope, service.id, tx)) {\n      return { eligible: false, reason: 'CANNOT_DELETE' };\n    }\n","")],'administrators approve together'),
  ('W19-112',[(RPL,"        this.options.logger.error({ err: error }, 'receipt push pass failed');\n      }\n","        this.options.logger.error({ err: error }, 'receipt push pass failed');\n        return;\n      }\n")],'two lanes',('unit',RL)),
  ('W19-113',[(RPL,"      if (!failed) this.progress.record(this.options.now());","      this.progress.record(this.options.now());")],'two lanes',('unit',RL)),
  ('W19-114',[(S,"    if (await this.deps.repository.terminationUndecided(scope, service.id, tx)) {\n      return { eligible: false, reason: 'CANNOT_DELETE' };\n    }\n","")],'files no request while an operator'),
