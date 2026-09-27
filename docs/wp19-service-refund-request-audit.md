@@ -433,3 +433,45 @@ it gave. Each fix has a named test and a killed mutation (W19-80 to W19-86).
   `readText` answers `NO_WINDOW` to any message that is not newer. The column is folded into
   the unmerged 0125. A capture opened without an update id (every other kind) keeps its
   previous behaviour.
+
+## 16. The ninth Codex review of #83
+
+It found four issues. All were real, and each is fixed with a named test and a killed mutation
+(W19-87 to W19-95).
+
+- **A refund deletion beside a paid commercial action (P1).** The approval checked the
+  service, the panel and the source payment, but not a paid `RENEW`, `ADD_TRAFFIC` or
+  `ADD_TIME` still undecided on the same service. The commercial planner checked other
+  commercial actions, but not a deletion. Whichever ran first, the deletion took away value
+  a second payment had bought, and the refund returns only the service's own purchase. The
+  fix has three parts:
+  - The eligibility evaluator refuses while a commercial action is undecided. It uses the
+    existing reason `CANNOT_DELETE` ("a `TERMINATE` may not be planned now"), so there is no
+    contract change, and the approval succeeds once the action is applied.
+  - `prepareCommercialAction` refuses while any `TERMINATE` of the service is undecided
+    (`SERVICE_ACTION_NOT_ALLOWED`, `TERMINATION_PENDING`). Like its other refusals, a wallet
+    purchase is not taken and an arrived transfer is given back.
+  - Both planners take a per-service advisory lock, `lockLifecycle`, so neither decides blind
+    to the other's uncommitted rows. It is not the service row lock. Settlement already holds
+    the customer's wallet lock at that point, and the refund sweep takes the service row
+    before that wallet, so the row lock would close a cycle. Only these two planners take the
+    advisory lock, each after every lock it already holds, and neither then waits on the
+    other's earlier locks. The approval holds the request, the service row, then this lock,
+    then the source payment. Settlement holds the commercial order's payment, its order and
+    the customer, then this lock.
+- **A pushed card that could not be answered (P1).** The review card is pushed to every bound
+  administrator holding `refunds.issue` and `services.terminate`. `adminTurn` dropped any tap
+  from an administrator with no panel section, so a reviewer holding only those two keys was
+  answered as a customer. The card's four intents are now admitted on the push's own
+  predicate, `mayBePushedRefundRequests`, and nothing else is. The decision service still
+  checks both permissions.
+- **A reason window left shut by a typed error (P2).** Round 8 reopened the window only for
+  errors that are not `NexaError`s. A typed error with no reply sentence, such as the outbox's
+  own `platform.outbox_sequence_failed`, is rethrown by `refusal()` and left the same hole. The
+  window is now reopened for every failure without a customer sentence. A refusal that has a
+  sentence keeps the window shut, so it cannot swallow the customer's next message.
+- **An attention queue drained on every visit (P2).** `FAILED` is terminal and stays in the
+  attention stream. The Web card followed the cursor to its end on every load, so requests,
+  rows and DOM nodes grew without bound over an installation's life. The card now reads one
+  page and moves by the server's cursor on demand, with the shared `CursorPager`. Round 6's
+  single stream is kept: one keyset, so a moving request is still on exactly one page.

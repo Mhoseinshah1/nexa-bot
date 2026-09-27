@@ -218,7 +218,7 @@ M+=[
 
  # Second Codex review of #83. W19-28 (reject before the prompt closed) is superseded by
  # W19-32..33: that order was what let a cancelled prompt still reject.
- ('W19-30',[(S,"          await this.deps.services.lockForUpdate(scope, request.serviceId, tx),","          await this.deps.services.findById(scope, request.serviceId, tx),")],'ends while the approval waits'),
+ ('W19-30',[(S,"        const locked = await this.deps.services.lockForUpdate(scope, request.serviceId, tx);","        const locked = await this.deps.services.findById(scope, request.serviceId, tx);")],'ends while the approval waits'),
  ('W19-31',[(S,"""      await this.assertExecutable(
         scope,
         request,
@@ -245,7 +245,8 @@ M+=[
  ('W19-37',[(C,"      serviceId: uuidV7Schema.parse(serviceId),","      serviceId,")],'malformed request id'),
  ('W19-38',[(R,"          filter.before === undefined\n","          true\n")],'pages every request'),
  ('W19-39',[(C,"        items.length > limit && last !== undefined","        false && last !== undefined")],'pages every request'),
- ('W19-40',[(PG,"    if (page.nextCursor === null) return rows;","    return rows;")],'follows the server',('web','tests/web/service-refund-requests.test.tsx')),
+ # Round 9 replaced draining the stream with paging it: the cursor is still followed, on demand.
+ ('W19-40',[(PG,"              onNext={() => nextCursor !== null && setTrail([...trail, nextCursor])}","              onNext={() => undefined}")],'one page of the stream',('web','tests/web/service-refund-requests.test.tsx')),
  # Third Codex review of #83.
  ('W19-41',[(S,"""  ): Promise<(ServiceRefundRequestListItem & { readonly remaining: Money }) | null> {
     await this.checkDecide(scope, actor);""","""  ): Promise<(ServiceRefundRequestListItem & { readonly remaining: Money }) | null> {
@@ -330,11 +331,11 @@ M+=[
  ('W19-68',[(RF,"await this.creditWallet(scope, after, actor, now, tx, before.requestedByAdminId);","await this.creditWallet(scope, after, actor, now, tx);")],'approving administrator'),
  ('W19-69',[(R,"            : inArray(serviceRefundRequests.state, [...filter.states]),","            : undefined,")],'one stream'),
  ('W19-70',[(C,"      ...(input.attention === 'true' ? { states: SERVICE_REFUND_REQUEST_ATTENTION_STATES } : {}),\n","")],'one stream'),
- ('W19-71',[(CL,"  if (query.attention === true) params.set('attention', 'true');\n","")],'wants an operator',('web','tests/web/service-refund-requests.test.tsx')),
+ ('W19-71',[(CL,"  if (query.attention === true) params.set('attention', 'true');\n","")],'one page of the stream',('web','tests/web/service-refund-requests.test.tsx')),
  ('W19-72',[(H,"  .refine((query) => query.state === undefined || query.attention === undefined, {","  .refine((query) => query.state === undefined || query.attention === undefined || true, {")],'attention queue',('unit',CI)),
  ('W19-73',[(H,"    attention: z.enum(['true']).optional(),","    attention: z.string().optional(),")],'attention queue',('unit',CI)),
  # Round 7 (Codex review of #83).
- ('W19-74',[(R,"notInArray(provisioningOperations.state, [...OPERATION_TERMINAL_STATES]),","inArray(provisioningOperations.state, ['PLANNED', 'IN_FLIGHT']),"),(R,"      and other_op.state not in (${sql.join(","      and other_op.state in ('PLANNED', 'IN_FLIGHT') and other_op.state not in (${sql.join(")],'is UNKNOWN'),
+ ('W19-74',[(R,"eq(provisioningOperations.type, 'TERMINATE'),\n          notInArray(provisioningOperations.state, [...OPERATION_TERMINAL_STATES]),","eq(provisioningOperations.type, 'TERMINATE'),\n          inArray(provisioningOperations.state, ['PLANNED', 'IN_FLIGHT']),"),(R,"      and other_op.state not in (${sql.join(","      and other_op.state in ('PLANNED', 'IN_FLIGHT') and other_op.state not in (${sql.join(")],'is UNKNOWN'),
  ('W19-75',[(R,"""                and(
                   eq(provisioningOperations.state, 'SUCCEEDED'),
                   eq(services.state, 'TERMINATED'),
