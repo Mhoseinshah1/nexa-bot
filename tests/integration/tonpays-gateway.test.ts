@@ -5,6 +5,7 @@ import {
   COMMERCE_ERROR_CODES,
   EMPTY_PRODUCT_DISPLAY,
   isNexaError,
+  MAX_MONEY_AMOUNT_MINOR,
   money,
   type ActorContext,
   type BotInstanceId,
@@ -37,6 +38,7 @@ import {
 } from '../../apps/api/src/modules/commerce/payments/application/gateway-payment.service';
 import type { GatewayCallBudget } from '../../apps/api/src/modules/commerce/payments/application/gateway-invoice-ports';
 import { DrizzleOperationalConditionReader } from '../../apps/api/src/modules/platform/opslog/infrastructure/drizzle-operational-event.reader';
+import { hashRequest } from '../../apps/api/src/modules/platform/idempotency/infrastructure/drizzle-idempotency-store';
 import { startFakeMarzban, type FakeMarzban } from '../support/fake-marzban';
 import {
   adminActorFor,
@@ -1297,6 +1299,68 @@ describe('TonPays, through the one settlement path', () => {
       expect(kept.customerFeeBasisPoints).toBe(FIVE_PERCENT);
     });
 
+    it('refuses a payable past the largest money amount, before anything is written (Codex review of #82)', async () => {
+      await enableTonPays({ customerFeeBasisPoints: 100 });
+      const scope = { ...tenantA, botInstanceId: BOT_A };
+      await expect(
+        ctx.container.payments.requestGatewayTopup(scope, systemActor('fee-overflow'), maryam, {
+          idempotencyKey: 'fee-overflow',
+          amount: money(MAX_MONEY_AMOUNT_MINOR, 'IRT'),
+          provider: 'TONPAYS',
+        }),
+      ).rejects.toSatisfy(
+        (error: unknown) =>
+          isNexaError(error) &&
+          error.code === COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE &&
+          (error.details as { reason?: string }).reason === 'AMOUNT_NOT_REPRESENTABLE',
+      );
+      const written = await rows<{ n: number }>(
+        sql`SELECT count(*)::int AS n FROM payments WHERE customer_id = ${maryam}`,
+      );
+      expect(written[0]!.n).toBe(0);
+      await pass();
+      expect(tonpays.creates).toEqual([]);
+    });
+
+    it('replays a route edit an earlier release committed, whose retry omits the fee (Codex review of #82)', async () => {
+      await enableTonPays();
+      const { customerFeeBasisPoints: _fee, ...withoutFee } = { ...OPEN_ROUTE, sortOrder: 3 };
+      // The earlier release hashed the edit without a fee field, and remembered it.
+      await ctx.container.idempotency.remember(
+        tenantA,
+        'WEB',
+        'legacy-route-edit',
+        hashRequest({
+          provider: 'TONPAYS',
+          displayName: withoutFee.displayName,
+          instructions: withoutFee.instructions,
+          minAmountMinor: withoutFee.minAmountMinor.toString(),
+          maxAmountMinor: withoutFee.maxAmountMinor.toString(),
+          eligibility: withoutFee.eligibility,
+          sortOrder: withoutFee.sortOrder,
+          topupCashbackPercent: withoutFee.topupCashbackPercent,
+          allowServicePurchase: withoutFee.allowServicePurchase,
+          allowWalletTopup: withoutFee.allowWalletTopup,
+        }),
+        { provider: 'TONPAYS' },
+      );
+      // Its retry after the upgrade replays that edit rather than being refused.
+      const replayed = await ctx.container.paymentGateways.configure(tenantA, owner, {
+        idempotencyKey: 'legacy-route-edit',
+        provider: 'TONPAYS',
+        config: withoutFee,
+      });
+      expect(replayed.provider).toBe('TONPAYS');
+      // And an edit that SENDS a fee is still its own command.
+      await expect(
+        ctx.container.paymentGateways.configure(tenantA, owner, {
+          idempotencyKey: 'legacy-route-edit',
+          provider: 'TONPAYS',
+          config: { ...withoutFee, customerFeeBasisPoints: 250 },
+        }),
+      ).rejects.toMatchObject({ code: 'platform.idempotency_payload_mismatch' });
+    });
+
     it('never refunds the fee: the automatic refund returns the principal and nothing more', async () => {
       await enableTonPays({ customerFeeBasisPoints: FIVE_PERCENT });
       const orderId = await draftOrder(200_000n);
@@ -1575,6 +1639,57 @@ describe('TonPays, through the one settlement path', () => {
         (log) => log.template_key === 'ops.financial.refund_completed',
       );
       expect(completed!.payload).toMatchObject({ amount: { amountMinor: '200000' } });
+    });
+
+    /*
+     * Codex review of #82: the payments topic could not be tested. The only test send went
+     * to the operations topic, so a wrong payments topic was found on the first financial
+     * event, after its bounded attempts were spent.
+     */
+    const testedTopic = async (id: string) =>
+      (
+        await rows<{ destination: { topicId: number | null } }>(
+          sql`SELECT destination FROM notifications WHERE id = ${id}`,
+        )
+      )[0]!.destination.topicId;
+
+    it('tests the payments topic on request, and the operations topic by default (Codex review of #82)', async () => {
+      await configureLog(PAYMENTS_TOPIC);
+      const payments = await ctx.container.notifications.sendTest(tenantA, owner, {
+        idempotencyKey: 'wp18-test-payments',
+        target: 'PAYMENTS',
+      });
+      expect(await testedTopic(payments.intent.id)).toBe(PAYMENTS_TOPIC);
+      const operations = await ctx.container.notifications.sendTest(tenantA, owner, {
+        idempotencyKey: 'wp18-test-operations',
+      });
+      expect(await testedTopic(operations.intent.id)).toBe(5);
+    });
+
+    it('tests where the financial log goes: the operations topic when no payments topic is set (Codex review of #82)', async () => {
+      await configureLog(null);
+      const payments = await ctx.container.notifications.sendTest(tenantA, owner, {
+        idempotencyKey: 'wp18-test-payments-fallback',
+        target: 'PAYMENTS',
+      });
+      expect(await testedTopic(payments.intent.id)).toBe(5);
+    });
+
+    it('replays a test an earlier release accepted, whose retry sends no target (Codex review of #82)', async () => {
+      await configureLog(PAYMENTS_TOPIC);
+      const first = await ctx.container.notifications.sendTest(tenantA, owner, {
+        idempotencyKey: 'wp18-test-legacy',
+      });
+      const [stored] = await rows<{ request_hash: string }>(
+        sql`SELECT request_hash FROM request_idempotency WHERE key = 'wp18-test-legacy'`,
+      );
+      // The hash an earlier release wrote for the same request: the command, and nothing else.
+      expect(stored!.request_hash).toBe(hashRequest({ command: 'notifications.test' }));
+      const again = await ctx.container.notifications.sendTest(tenantA, owner, {
+        idempotencyKey: 'wp18-test-legacy',
+      });
+      expect(again.intent.id).toBe(first.intent.id);
+      expect(again.replayed).toBe(true);
     });
 
     it('logs nothing while ops_notifications is off, even with a chat configured', async () => {

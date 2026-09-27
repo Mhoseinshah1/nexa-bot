@@ -138,6 +138,33 @@ A rejection by an operator and an unsuccessful gateway verdict are logged, becau
 - **T5 — The fee templates appear only when fee > 0.** With the fee at 0 the three lines would read "fee 0" under a payable equal to the principal, which the existing template already says truthfully.
 - **T6 — Payment detail (HTTP/Web) carries `customerFee` `{basisPoints, fee, payable}` or null.** It is shown as its own lines on the payment page and never added to any total. The brief allows reports to show the fee separately, but no report sums it in this package, to keep revenue untouched.
 
+## 4a. The Codex review of #82
+
+It found four gaps (W18-21..27):
+
+- **A payable past the money bound.** The principal and the rate each passed their own
+  check, but their sum could exceed what a money column holds. The database then answered
+  with a numeric overflow. The attempt now refuses such a payable as
+  `AMOUNT_NOT_REPRESENTABLE` before anything is built or written.
+- **Rolling back past WP18.** The release before WP18 reads only `payments.amount`. It
+  would show an open fee-bearing attempt's principal as the amount to pay, while the
+  provider's invoice asks for the payable. That release is already published, so no code
+  in this package can change what it shows.
+
+  `docs/deployment.md` now states the procedure: set every fee to 0, wait until no open
+  attempt carries one (at most 70 minutes, with a query to check), then roll back. If you
+  already rolled back, roll forward. Money is never credited wrongly in either release.
+
+- **The payments topic could not be tested.** The only test send went to the operations
+  topic. `sendTestNotificationRequestSchema` gains an optional `target`, and `PAYMENTS`
+  tests where the financial log goes. The Web Admin notifications page has a second
+  button for it.
+- **An idempotency hash that moved.** The route-edit hash always carried the fee, as
+  `null` when it was omitted. So a retry of an edit committed by the earlier release was
+  refused as a different payload. The fee now joins the hash only when it is sent. The
+  test send's `target` follows the same rule, so an operations test hashes as it always
+  did.
+
 ## 5. Open questions added
 
 - **`OQ-WP18-01`** — an IRR installation whose fee makes the payable a non-whole Toman gets `AMOUNT_NOT_REPRESENTABLE` for that attempt. The choices would be to round the fee to the Toman or to refuse the rate at configuration time. Both are product decisions this package does not take.

@@ -1,6 +1,7 @@
 import {
   ADMIN_CAPTURE_REASON_MAX_LENGTH,
   COMMERCE_ERROR_CODES,
+  MAX_MONEY_AMOUNT_MINOR,
   PAYMENT_RECEIPT_MAX_PER_PAYMENT,
   PAYMENT_WINDOW_MINUTES_MIN,
   orderPurposeCreatesNewService,
@@ -3590,6 +3591,19 @@ export class PaymentService {
        * invoice asks for the PAYABLE, principal plus fee; nothing else ever does.
        */
       const fee = gatewayCustomerFeeMinor(input.amount.amountMinor, input.customerFeeBasisPoints);
+      /*
+       * A payable past the largest amount a money column holds is refused here, as a
+       * domain answer, before anything is built or written (Codex review of #82). The
+       * principal and the rate each passed their own bound; their sum need not, and the
+       * database's numeric overflow is not an answer a customer or an operator can read.
+       */
+      if (input.amount.amountMinor > MAX_MONEY_AMOUNT_MINOR - fee) {
+        throw errors.conflict(
+          COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE,
+          'This amount cannot be paid through this route.',
+          { reason: 'AMOUNT_NOT_REPRESENTABLE' },
+        );
+      }
       const customerFee: PaymentCustomerFee = {
         basisPoints: input.customerFeeBasisPoints,
         fee: money(fee, input.amount.currency),

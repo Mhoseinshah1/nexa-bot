@@ -314,7 +314,14 @@ export class NotificationService {
     // caller was told their key had been reused with different input when they
     // had sent the same input twice. The request carries only a key, so that is
     // all there is to identify it by.
-    const requestHash = hashRequest({ command: 'notifications.test' });
+    //
+    // The target joins the hash only when it is PAYMENTS (Codex review of #82): a request
+    // that omits it is the request an earlier release hashed, and a retry of one that
+    // release accepted must replay rather than be refused as a different payload.
+    const requestHash = hashRequest({
+      command: 'notifications.test',
+      ...(command.target === 'PAYMENTS' ? { target: 'PAYMENTS' } : {}),
+    });
 
     // The replay lookup comes BEFORE the destination is resolved, for the same
     // reason. An accepted test does not become un-accepted when the destination
@@ -368,8 +375,13 @@ export class NotificationService {
       });
     }
 
-    // Only a NEW test needs a destination to send to.
-    const destination = await this.destination(scope);
+    // Only a NEW test needs a destination to send to. The payments target is where the
+    // financial log goes (`financialDestination`), without the flag that gates the log:
+    // a destination is tested BEFORE the log is switched on, which is the point of it.
+    const destination =
+      command.target === 'PAYMENTS'
+        ? await this.paymentsDestination(scope)
+        : await this.destination(scope);
     if (destination === null) {
       throw errors.validation(
         CONTROL_ERROR_CODES.DESTINATION_NOT_CONFIGURED,
@@ -473,6 +485,18 @@ export class NotificationService {
     tx?: unknown,
   ): Promise<NotificationDestination | null> {
     if (!(await this.features.isEnabled(scope, 'ops_notifications', tx))) return null;
+    return this.paymentsDestination(scope, tx);
+  }
+
+  /**
+   * The operations chat in the payments topic when one is set, and in the operations
+   * topic otherwise, whatever the flag says. `financialDestination` is this behind the
+   * `ops_notifications` gate; a test send is this without it.
+   */
+  private async paymentsDestination(
+    scope: ScopeContext,
+    tx?: unknown,
+  ): Promise<NotificationDestination | null> {
     const base = await this.destination(scope, tx);
     if (base === null || base.transport !== 'TELEGRAM') return base;
     const paymentsTopic = await this.settings.valueOf<number | null>(

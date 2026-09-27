@@ -321,8 +321,13 @@ export class PaymentGatewayService {
       sortOrder: input.config.sortOrder,
       // In the hash, so two edits differing only in the gift are two commands (D5).
       topupCashbackPercent: input.config.topupCashbackPercent,
-      // And the fee (WP18): two edits differing only in the rate are two commands.
-      customerFeeBasisPoints: input.config.customerFeeBasisPoints ?? null,
+      // And the fee (WP18): two edits differing only in the rate are two commands. Only
+      // when it is SENT (Codex review of #82): a request that omits it is the request an
+      // earlier release hashed, and a retry of an edit that release committed must replay
+      // rather than be refused as a different payload.
+      ...(input.config.customerFeeBasisPoints === undefined
+        ? {}
+        : { customerFeeBasisPoints: input.config.customerFeeBasisPoints }),
       // And the two purpose switches, for the same reason: switching top-up off is an
       // edit, and a key reused for it must not replay the edit that left it on.
       allowServicePurchase: input.config.allowServicePurchase,

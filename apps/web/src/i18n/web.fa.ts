@@ -144,6 +144,7 @@ export const WEB_FA = {
   'web.returned_reason': 'علت بازگرداندن',
   'web.returned_at': 'زمان بازگرداندن',
   'web.send_test': 'ارسال پیام آزمایشی',
+  'web.send_test_payments': 'ارسال پیام آزمایشی به تاپیک پرداخت‌ها',
   'web.test_sent': 'پیام آزمایشی در صف قرار گرفت.',
   'web.destination_missing': 'مقصد اعلان‌ها هنوز تنظیم نشده است.',
 

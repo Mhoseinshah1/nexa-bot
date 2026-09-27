@@ -872,6 +872,40 @@ already published — see `docs/conventions.md`, "A widened enum is
 write-compatible, not reader-compatible", for the staging rule that avoids
 repeating this.
 
+### What a rollback can misquote: a gateway attempt that carries a customer fee
+
+WP18 lets a gateway route charge the customer a fee. The fee is snapshotted on the
+attempt: `payments.amount` stays the principal, and `customer_fee_amount` and
+`payable_amount` sit beside it. The provider is asked for the payable. The release
+before WP18 knows nothing of those two columns. If an attempt that carries a fee is
+still open when you roll back, that release shows the customer the principal as the
+amount to pay, while the provider's invoice asks for the payable. The customer is told
+one figure and asked for another.
+
+It cannot happen unless an operator set a non-zero fee on a route, and an attempt lives
+at most 70 minutes. So it is avoided, not repaired.
+
+**Before rolling back past WP18**, set every route's fee to 0 in the Web Admin (Payment
+Gateways). New attempts then carry no fee. Wait until no open attempt carries one:
+
+```bash
+docker compose --env-file /etc/nexa/deploy.env -f /opt/nexa/deploy/compose.yml \
+  exec -T postgres psql -U nexa -d nexa -c \
+  "SELECT count(*) FROM payments
+    WHERE method = 'GATEWAY' AND state = 'PENDING' AND customer_fee_amount > 0"
+```
+
+Roll back when that count is 0. It reaches 0 within the attempt deadline, 70 minutes.
+
+**If you already rolled back** with such an attempt open, roll forward. The release
+that knows the fee shows the three figures again. An approval is still decided only by
+the provider's own inquiry, and the wallet or the order receives the principal, so no
+money is credited wrongly in either release. Only the figure shown is wrong.
+
+The financial log's own rows (`FINANCIAL_EVENT`, templates `ops.financial.*`) are
+unknown to that release too. It cannot render a pending one, so that one is not
+delivered. The payment and refund rows remain the record.
+
 ### How far back you can roll
 
 **One release**, safely. Migrations are expand-only within a release
