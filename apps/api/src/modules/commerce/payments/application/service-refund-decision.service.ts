@@ -64,6 +64,18 @@ export interface ServiceRefundDecisionServiceDeps {
 /** The namespace every Telegram capture remembers its message under. */
 const TEXT_NAMESPACE = 'TELEGRAM' as const;
 
+/**
+ * Whether a message may be read by this prompt: only one sent AFTER the tap that opened it
+ * (Codex review of #83, round 5). Telegram's `update_id` increases per bot, so a
+ * redelivered message typed earlier — for the prompt this one replaced, or for any other
+ * kind of prompt — is never this prompt's amount or reason. Unknown on either side (a
+ * prompt opened by no update, a caller that passes none) decides nothing here.
+ */
+function isNewerThan(updateId: bigint | undefined, capture: AdminAmountCaptureRecord): boolean {
+  if (updateId === undefined || capture.openedUpdateId === null) return true;
+  return updateId > capture.openedUpdateId;
+}
+
 export type DecisionOpenResult =
   | {
       readonly outcome: 'OPENED';
@@ -138,7 +150,12 @@ export class ServiceRefundDecisionService {
   openApprove(
     scope: TenantContext,
     actor: ActorContext,
-    input: { readonly botInstanceId: BotInstanceId; readonly requestId: string },
+    input: {
+      readonly botInstanceId: BotInstanceId;
+      readonly requestId: string;
+      /** The tap's Telegram `update_id`: the prompt then reads only newer messages. */
+      readonly updateId?: bigint;
+    },
   ): Promise<DecisionOpenResult> {
     return this.open(scope, actor, input, 'SERVICE_REFUND_AMOUNT');
   }
@@ -147,7 +164,12 @@ export class ServiceRefundDecisionService {
   openReject(
     scope: TenantContext,
     actor: ActorContext,
-    input: { readonly botInstanceId: BotInstanceId; readonly requestId: string },
+    input: {
+      readonly botInstanceId: BotInstanceId;
+      readonly requestId: string;
+      /** The tap's Telegram `update_id`: the prompt then reads only newer messages. */
+      readonly updateId?: bigint;
+    },
   ): Promise<DecisionOpenResult> {
     return this.open(scope, actor, input, 'SERVICE_REFUND_REJECT_REASON');
   }
@@ -164,6 +186,8 @@ export class ServiceRefundDecisionService {
       readonly idempotencyKey: string;
       readonly botInstanceId: BotInstanceId;
       readonly text: string;
+      /** The message's Telegram `update_id`; a prompt reads only messages newer than its tap. */
+      readonly updateId?: bigint;
     },
   ): Promise<DecisionTextResult> {
     const adminId = adminIdOrNull(actor);
@@ -178,7 +202,7 @@ export class ServiceRefundDecisionService {
     const requestHash = hashRequest({
       bot: input.botInstanceId,
       text: input.text,
-      serviceRefundAmount: true,
+      serviceRefundText: true,
     });
     const replayed = await this.deps.idempotency.find<{ captureId: string }>(
       scope,
@@ -187,9 +211,17 @@ export class ServiceRefundDecisionService {
       requestHash,
     );
     if (replayed !== null) {
-      const entered = await this.enteredAgain(scope, actor, replayed.result.captureId);
-      if (entered !== null) return entered;
+      /*
+       * A known replay is answered from the prompt it filled and goes NOWHERE else (Codex
+       * review of #83, round 5). Offered to the prompt open now, a redelivered amount could
+       * become the reason of a later rejection prompt — and a rejection is decided on its
+       * reason at once.
+       */
+      return (
+        (await this.enteredAgain(scope, actor, replayed.result.captureId)) ?? { outcome: 'CLOSED' }
+      );
     }
+    const remember = { key: input.idempotencyKey, hash: requestHash };
     const amountCapture = await this.deps.captures.findAwaitingAmount(
       scope,
       input.botInstanceId,
@@ -197,11 +229,8 @@ export class ServiceRefundDecisionService {
       undefined,
       'SERVICE_REFUND_AMOUNT',
     );
-    if (amountCapture !== null) {
-      return this.submitAmount(scope, actor, amountCapture, input.text, {
-        key: input.idempotencyKey,
-        hash: requestHash,
-      });
+    if (amountCapture !== null && isNewerThan(input.updateId, amountCapture)) {
+      return this.submitAmount(scope, actor, amountCapture, input.text, remember);
     }
     const reasonCapture = await this.deps.captures.findAwaitingReason(
       scope,
@@ -209,7 +238,9 @@ export class ServiceRefundDecisionService {
       adminId,
       'SERVICE_REFUND_REJECT_REASON',
     );
-    if (reasonCapture !== null) return this.submitReason(scope, actor, reasonCapture, input.text);
+    if (reasonCapture !== null && isNewerThan(input.updateId, reasonCapture)) {
+      return this.submitReason(scope, actor, reasonCapture, input.text, remember);
+    }
     return { outcome: 'NO_CAPTURE' };
   }
 
@@ -323,7 +354,11 @@ export class ServiceRefundDecisionService {
   private async open(
     scope: TenantContext,
     actor: ActorContext,
-    input: { readonly botInstanceId: BotInstanceId; readonly requestId: string },
+    input: {
+      readonly botInstanceId: BotInstanceId;
+      readonly requestId: string;
+      readonly updateId?: bigint;
+    },
     purpose: 'SERVICE_REFUND_AMOUNT' | 'SERVICE_REFUND_REJECT_REASON',
   ): Promise<DecisionOpenResult> {
     const adminId = adminIdOf(actor);
@@ -366,6 +401,7 @@ export class ServiceRefundDecisionService {
           purpose,
           openedAt: now,
           expiresAt: new Date(now.getTime() + ADMIN_AMOUNT_CAPTURE_TTL_MS),
+          ...(input.updateId === undefined ? {} : { openedUpdateId: input.updateId }),
         },
         tx,
       );
@@ -497,6 +533,7 @@ export class ServiceRefundDecisionService {
     actor: ActorContext,
     waiting: AdminAmountCaptureRecord,
     text: string,
+    remember: { readonly key: string; readonly hash: string },
   ): Promise<DecisionTextResult> {
     const requestId = waiting.serviceRefundRequestId;
     /* istanbul ignore next -- the table's target CHECK: this purpose names a request. */
@@ -531,6 +568,16 @@ export class ServiceRefundDecisionService {
         );
         await this.deps.captures.recordReason(scope, capture.id, reason, tx);
         await this.deps.captures.close(scope, capture.id, 'CONFIRMED', this.deps.clock.now(), tx);
+        // Its redelivery is then a known replay, answered and never offered to a newer prompt.
+        await rememberOnce(
+          this.deps.idempotency,
+          scope,
+          TEXT_NAMESPACE,
+          remember.key,
+          remember.hash,
+          { captureId: capture.id },
+          tx,
+        );
         return rejected;
       });
       if (request === null) return { outcome: 'NO_CAPTURE' };

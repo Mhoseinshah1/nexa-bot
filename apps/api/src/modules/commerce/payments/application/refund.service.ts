@@ -859,7 +859,7 @@ export class RefundService {
       await this.requirePayment(scope, after.paymentId, tx),
       now,
       tx,
-      { notifyCustomer: false },
+      { notifyCustomer: false, serviceRemoved: true },
     );
     await this.deps.audit.record(
       scope,
@@ -1105,7 +1105,14 @@ export class RefundService {
      * — the amount AND that the service was removed — in the same transaction, so the
      * generic `REFUND_COMPLETED` would be the same money told twice.
      */
-    options: { readonly notifyCustomer: boolean } = { notifyCustomer: true },
+    options: {
+      readonly notifyCustomer: boolean;
+      /**
+       * WP19: the refund settles a request whose deletion already SUCCEEDED, so the order's
+       * audit must not say the service was left alone (Codex review of #83, round 5).
+       */
+      readonly serviceRemoved?: boolean;
+    } = { notifyCustomer: true },
   ): Promise<void> {
     if (options.notifyCustomer) {
       await this.deps.notifier.notify(
@@ -1153,8 +1160,11 @@ export class RefundService {
           paymentId: payment.id,
           refundedMinor: refunded.toString(),
           currency: payment.amount.currency,
-          // Said because it is the surprising part: nothing was done to the service.
-          serviceLeftUntouched: true,
+          // Said because it is the surprising part: nothing was done to the service — except
+          // for a service refund request, which is settled only after its deletion succeeded.
+          ...(options.serviceRemoved === true
+            ? { serviceRemovedByRequest: true }
+            : { serviceLeftUntouched: true }),
         },
         result: 'SUCCESS',
       },

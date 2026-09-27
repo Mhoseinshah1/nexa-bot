@@ -40,6 +40,8 @@ export interface AdminAmountCaptureRecord {
   readonly expiresAt: Date;
   readonly closedAt: Date | null;
   readonly closeReason: AdminAmountCaptureCloseReason | null;
+  /** WP19: the `update_id` of the tap that opened the prompt; it reads only newer messages. */
+  readonly openedUpdateId: bigint | null;
 }
 
 export interface AdminAmountCaptureRepository {
@@ -72,6 +74,7 @@ export interface AdminAmountCaptureRepository {
       readonly purpose?: AdminCapturePurpose;
       readonly openedAt: Date;
       readonly expiresAt: Date;
+      readonly openedUpdateId?: bigint;
     },
     tx: unknown,
   ): Promise<AdminAmountCaptureRecord>;

@@ -208,7 +208,9 @@ export const NAV: readonly NavEntry[] = [
     path: '/services',
     label: 'web.nav_services',
     icon: 'services',
-    permission: 'services.view',
+    // ANY of the two: the page is the services list AND the customers' refund-request queue
+    // (WP19), and a finance reviewer may hold `refunds.view` alone (Codex review of #83).
+    permission: ['services.view', 'refunds.view'],
     group: 'web.navgroup_sales',
   },
   {

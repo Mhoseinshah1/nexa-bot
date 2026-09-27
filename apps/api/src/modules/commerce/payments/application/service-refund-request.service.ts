@@ -977,7 +977,12 @@ export class ServiceRefundRequestService {
       if (request.state !== 'REJECTED' || request.rejectionReason === null) return null;
       return { reason: request.rejectionReason, service: label };
     }
-    return {};
+    /*
+     * REGISTERED says the request awaits review. A fallback queued behind a rate limit can
+     * outlive that, and after the decision it would tell the customer the opposite of the
+     * notice they already have (Codex review of #83, round 5): only an OPEN request is.
+     */
+    return request.state === 'OPEN' ? {} : null;
   }
 
   /**

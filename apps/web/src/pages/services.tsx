@@ -373,7 +373,8 @@ export function ServicesPage({
   return (
     <>
       <PageHead title={t('web.services_title')} subtitle={t('web.services_intro')} maturity="now" />
-      {!denied && mayViewRefundRequests && <OpenServiceRefundRequestsCard />}
+      {/* Its own permission, not the list's: `refunds.view` alone reaches the queue (WP19). */}
+      {mayViewRefundRequests && <OpenServiceRefundRequestsCard />}
 
       <Card>
         <div hidden={!mayRequest(services, denied)}>
@@ -820,7 +821,7 @@ export function ServiceDetailPage({
   return (
     <>
       <PageHead title={t('web.service_detail')} subtitle={t('web.services_intro')} maturity="now" />
-      {!denied && mayViewRefundRequests && (
+      {mayViewRefundRequests && (
         <ServiceRefundRequestsCard serviceId={id} mayDecide={mayDecideRefundRequests} />
       )}
 

@@ -64,6 +64,7 @@ export class DrizzleAdminAmountCaptureRepository implements AdminAmountCaptureRe
       readonly purpose?: AdminCapturePurpose;
       readonly openedAt: Date;
       readonly expiresAt: Date;
+      readonly openedUpdateId?: bigint;
     },
     tx: unknown,
   ): Promise<AdminAmountCaptureRecord> {
@@ -98,6 +99,7 @@ export class DrizzleAdminAmountCaptureRepository implements AdminAmountCaptureRe
         purpose: input.purpose ?? 'RECEIPT_CREDIT_AMOUNT',
         openedAt: input.openedAt,
         expiresAt: input.expiresAt,
+        openedUpdateId: input.openedUpdateId ?? null,
       })
       .returning();
     if (row === undefined) throw new Error('admin_amount_captures insert returned no row.');
@@ -272,5 +274,6 @@ function toRecord(row: typeof adminAmountCaptures.$inferSelect): AdminAmountCapt
     closedAt: row.closedAt,
     // The CHECK constraint is what makes this cast safe; the column is a closed set.
     closeReason: row.closeReason as AdminAmountCaptureCloseReason | null,
+    openedUpdateId: row.openedUpdateId,
   };
 }

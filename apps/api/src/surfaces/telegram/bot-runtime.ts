@@ -2082,6 +2082,16 @@ export function startPayloadOf(update: unknown): string | null {
   return match?.[1] ?? null;
 }
 
+/**
+ * The update's Telegram `update_id`, which increases per bot (WP19). A refund-request prompt
+ * reads only messages newer than the tap that opened it, so a redelivered older message can
+ * never become its amount or reason. Undefined when absent or not a non-negative integer.
+ */
+export function updateIdOf(update: unknown): bigint | undefined {
+  const raw = (update as { update_id?: unknown } | null)?.update_id;
+  return typeof raw === 'number' && Number.isSafeInteger(raw) && raw >= 0 ? BigInt(raw) : undefined;
+}
+
 export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCommand {
   const callback = (update as { callback_query?: { id?: unknown; data?: unknown } } | null)
     ?.callback_query;
@@ -4638,6 +4648,7 @@ export class BotRuntime {
                 command.intent,
                 command.targetId,
                 input.botInstanceId,
+                updateIdOf(input.update),
               );
         case 'ADMIN_CREDIT_CONFIRM':
           return command.targetId === null
@@ -5412,6 +5423,7 @@ export class BotRuntime {
       readonly idempotencyKey: string;
       readonly botInstanceId: BotInstanceId;
       readonly telegramUserId: string;
+      readonly update?: unknown;
     },
   ): Promise<PendingReply | null> {
     const amount = await this.adminCreditAmount(scope, actor, text, input);
@@ -5436,6 +5448,7 @@ export class BotRuntime {
     intent: BotIntent,
     targetId: string,
     botInstanceId: BotInstanceId,
+    updateId: bigint | undefined,
   ): Promise<PendingReply | null> {
     const decisions = this.deps.serviceRefundDecisions;
     if (decisions === undefined) return null;
@@ -5450,8 +5463,16 @@ export class BotRuntime {
       if (intent === 'ADMIN_REFUND_REQUEST_APPROVE' || intent === 'ADMIN_REFUND_REQUEST_REJECT') {
         const approve = intent === 'ADMIN_REFUND_REQUEST_APPROVE';
         const opened = approve
-          ? await decisions.openApprove(scope, actor, { botInstanceId, requestId: targetId })
-          : await decisions.openReject(scope, actor, { botInstanceId, requestId: targetId });
+          ? await decisions.openApprove(scope, actor, {
+              botInstanceId,
+              requestId: targetId,
+              ...(updateId === undefined ? {} : { updateId }),
+            })
+          : await decisions.openReject(scope, actor, {
+              botInstanceId,
+              requestId: targetId,
+              ...(updateId === undefined ? {} : { updateId }),
+            });
         if (opened.outcome === 'CLOSED') return plain('bot.admin.refund_request_closed');
         if (opened.outcome === 'NOT_EXECUTABLE') {
           return plain('bot.admin.refund_request_not_executable');
@@ -5523,6 +5544,7 @@ export class BotRuntime {
       readonly idempotencyKey: string;
       readonly botInstanceId: BotInstanceId;
       readonly telegramUserId: string;
+      readonly update?: unknown;
     },
   ): Promise<PendingReply | null> {
     const decisions = this.deps.serviceRefundDecisions;
@@ -5536,11 +5558,13 @@ export class BotRuntime {
       buttons: [],
       orderId: null,
     });
+    const updateId = updateIdOf(input.update);
     try {
       const result = await decisions.submitText(scope, identity.actor, {
         idempotencyKey: `${input.idempotencyKey}:refund-text`,
         botInstanceId: input.botInstanceId,
         text,
+        ...(updateId === undefined ? {} : { updateId }),
       });
       switch (result.outcome) {
         case 'NO_CAPTURE':
