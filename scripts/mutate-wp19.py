@@ -355,6 +355,16 @@ M+=[
  ('W19-84',[(BR,"        await reopen('refund-reason-retry').catch(() => undefined);\n","")],'filing fails for a reason nobody classified'),
  ('W19-85',[(CCS,"        input.updateId <= capture.openedUpdateId","        input.updateId < 0n")],'sent before the confirmation'),
  ('W19-86',[(BR,"      // The reason must be typed after this tap (Codex review of #83, round 8).\n      ...(updateId === undefined ? {} : { openedUpdateId: updateId }),\n","")],'sent before the confirmation'),
+ # Round 9 (Codex review of #83).
+ ('W19-87',[(BR,"    if (!hasAnyPanelSection(permissions) && !mayDecideRefundRequest) return null;","    if (!hasAnyPanelSection(permissions)) return null;")],'no panel section'),
+ ('W19-88',[(BR,"      ADMIN_REFUND_REQUEST_INTENTS.has(command.intent) && mayBePushedRefundRequests(permissions);","      mayBePushedRefundRequests(permissions);")],'no panel section'),
+ ('W19-89',[(BR,"      if (!hasRefusalReply(error)) {\n        await reopen('refund-reason-retry')","      if (!isNexaError(error)) {\n        await reopen('refund-reason-retry')")],'typed error nobody answers'),
+ ('W19-90',[(BR,"      if (!hasRefusalReply(error)) {\n        await reopen('refund-reason-retry')","      if (true) {\n        await reopen('refund-reason-retry')")],'sentence the customer is shown'),
+ ('W19-91',[(S,"    if (await this.deps.repository.commercialUndecided(scope, service.id, tx)) {","    if (false) {")],'paid renewal of the service is undecided'),
+ ('W19-92',[(PV,"    if (await this.deps.operations.terminationUndecided(scope, service.id, tx)) {","    if (false) {")],'refund deletion is undecided'),
+ ('W19-93',[(S,"        if (locked !== null) await this.deps.services.lockLifecycle(scope, locked.id, tx);\n","")],'lifecycle lock'),
+ ('W19-94',[(PV,"    await this.deps.services.lockLifecycle(scope, action.serviceId, tx);\n","")],'lifecycle lock'),
+ ('W19-95',[(PG,"  const cursor = trail[trail.length - 1];","  const cursor: AttentionCursor | undefined = undefined;")],'one page of the stream',('web','tests/web/service-refund-requests.test.tsx')),
 ]
 only=sys.argv[1:] 
 for entry in M:
