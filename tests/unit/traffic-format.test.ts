@@ -1,21 +1,23 @@
 import { describe, expect, it } from 'vitest';
 import {
   UNLIMITED_TRAFFIC_BYTES,
+  formatTrafficGb,
   money,
-  splitByteCount,
+  parseTrafficGb,
   templateDefinition,
   type TemplateKey,
   type TemplateValues,
 } from '@nexa/contracts';
 import { CATALOGUE_FA, formatBytes, formatTrafficLimit, renderTemplateBody } from '@nexa/i18n';
-import { splitBytes } from '../../apps/web/src/format';
+import { formatTrafficGbText, splitBytes } from '../../apps/web/src/format';
 
 /**
- * Traffic is shown in a unit, never as the stored byte integer (pre-release hardening §3).
+ * Traffic is shown in a unit, never as the stored byte integer (pre-release hardening §3),
+ * and since Package C that unit is always GB, with at most two decimals.
  *
  * Presentation only: the stored bytes, the pricing and the provider semantics are untouched.
- * One rule — binary units, the largest reached, one truncated decimal — is used by the bot's
- * renderer and the Web Admin alike. An ALLOWANCE (`TRAFFIC_LIMIT`) of zero is "unlimited"; a
+ * One rule — `formatTrafficGb`, grouped — is used by the bot's renderer and the Web Admin
+ * alike. An ALLOWANCE (`TRAFFIC_LIMIT`) of zero is "unlimited"; a
  * QUANTITY (`BYTES`) of zero is zero; an unknown figure is never passed and stays a dash.
  */
 
@@ -25,29 +27,57 @@ function render(key: TemplateKey, values: TemplateValues): string {
   return renderTemplateBody(templateDefinition(key), CATALOGUE_FA[key], values);
 }
 
-describe('the shared byte rule', () => {
-  it('shows a known allowance in its largest binary unit', () => {
+describe('the shared traffic rule: GB, at most two decimals (Package C)', () => {
+  it('shows every allowance in GB, with no noisy .00', () => {
+    expect(formatBytes(10n * GIB)).toBe('10 گیگابایت');
     expect(formatBytes(53_687_091_200n)).toBe('50 گیگابایت');
     expect(formatBytes(GIB)).toBe('1 گیگابایت');
-    expect(formatBytes(2n * 1_099_511_627_776n)).toBe('2 ترابایت');
-    expect(formatBytes(500n * 1_048_576n)).toBe('500 مگابایت');
-  });
-
-  it('keeps one decimal, truncated, never rounded up past what is there', () => {
     expect(formatBytes(GIB + GIB / 2n)).toBe('1.5 گیگابایت');
-    // 1.99… GiB is 1.9, not 2: a figure is never shown as more than it is.
-    expect(formatBytes(2n * GIB - 1n)).toBe('1.9 گیگابایت');
+    // What an operator typed as 10.25 is shown as 10.25, and 10.5 as 10.5 — never 10.50.
+    expect(formatBytes(parseTrafficGb('10.25') as bigint)).toBe('10.25 گیگابایت');
+    expect(formatBytes(parseTrafficGb('10.50') as bigint)).toBe('10.5 گیگابایت');
   });
 
-  it('shows a small figure in bytes, and zero as zero bytes', () => {
-    expect(formatBytes(5n)).toBe('5 بایت');
-    expect(formatBytes(0n)).toBe('0 بایت');
+  it('keeps a large allowance in GB, grouped, instead of switching unit', () => {
+    expect(formatBytes(2n * 1_099_511_627_776n)).toBe('2,048 گیگابایت');
+    expect(formatBytes(1_099_511_627_776n + GIB / 4n)).toBe('1,024.25 گیگابایت');
+  });
+
+  it('rounds to the nearest hundredth, never truncating to a figure that is not the nearest', () => {
+    // 500 MiB is 0.48828… GB: 0.49.
+    expect(formatBytes(500n * 1_048_576n)).toBe('0.49 گیگابایت');
+    // One byte short of 2 GiB is 2 at two decimals.
+    expect(formatBytes(2n * GIB - 1n)).toBe('2 گیگابایت');
+  });
+
+  it('shows zero, and a figure under half a hundredth, as 0 GB — never in bytes', () => {
+    expect(formatBytes(0n)).toBe('0 گیگابایت');
+    expect(formatBytes(5n)).toBe('0 گیگابایت');
+    expect(formatBytes(5n)).not.toContain('بایت 5');
   });
 
   it('stays exact past 2^53, where Number would round', () => {
     const eightPib = 8n * 1_125_899_906_842_624n;
-    expect(splitByteCount(eightPib + 1n)).toEqual({ whole: 8n, tenths: 0n, unit: 'PIB' });
-    expect(formatBytes(eightPib + 1n)).toBe('8 پتابایت');
+    expect(formatBytes(eightPib + 1n)).toBe('8,388,608 گیگابایت');
+  });
+
+  it('round-trips every figure an operator can type, at the boundaries', () => {
+    for (const typed of [
+      '0.01',
+      '0.1',
+      '0.99',
+      '1',
+      '9.99',
+      '10',
+      '10.5',
+      '10.25',
+      '999999999.99',
+    ]) {
+      const bytes = parseTrafficGb(typed) as bigint;
+      const shown = formatTrafficGb(bytes);
+      expect(shown).toBe(typed.replace(/(\.\d)0$/u, '$1'));
+      expect(parseTrafficGb(shown)).toBe(bytes);
+    }
   });
 
   it('shows an unlimited allowance as the word for unlimited, never as 0', () => {
@@ -56,8 +86,17 @@ describe('the shared byte rule', () => {
   });
 
   it('is the Web Admin’s rule too, so one figure reads the same on both surfaces', () => {
-    expect(splitBytes(53_687_091_200n)).toEqual({ value: '50', unit: 'web.unit_gib' });
-    expect(splitBytes(GIB + GIB / 2n)).toEqual({ value: '1.5', unit: 'web.unit_gib' });
+    for (const bytes of [
+      0n,
+      5n,
+      GIB,
+      11_005_853_696n,
+      2n * 1_099_511_627_776n,
+      500n * 1_048_576n,
+    ]) {
+      expect(`${formatTrafficGbText(bytes)} گیگابایت`).toBe(formatBytes(bytes));
+    }
+    // `splitBytes` is left to file sizes, which keep their unit.
     expect(splitBytes(5n)).toEqual({ value: '5', unit: 'web.unit_bytes' });
   });
 });
@@ -97,7 +136,7 @@ describe('the renderer owns the unit', () => {
       usedTrafficBytes: 0n,
       totalTrafficBytes: UNLIMITED_TRAFFIC_BYTES,
     });
-    expect(text).toContain('مصرف: 0 بایت از نامحدود');
+    expect(text).toContain('مصرف: 0 گیگابایت از نامحدود');
 
     const limited = render('bot.service.detail', {
       productTitle: 'پلن ویژه',
@@ -123,7 +162,7 @@ describe('the renderer owns the unit', () => {
       durationDays: 30,
       total: money(50_000n, 'IRT'),
     });
-    expect(time).toContain('حجم افزوده: 0 بایت');
+    expect(time).toContain('حجم افزوده: 0 گیگابایت');
     expect(time).not.toContain('نامحدود');
   });
 

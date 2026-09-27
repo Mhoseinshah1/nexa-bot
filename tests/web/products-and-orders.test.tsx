@@ -173,6 +173,25 @@ describe('the product list', () => {
     expect(screen.getByText('50')).toBeInTheDocument();
   });
 
+  it('shows a 10.25 GB allowance as 10.25 and a 1 TiB one as 1,024 — GB, never a switched unit (Package C)', async () => {
+    stubApi(
+      productList([
+        product({ trafficBytes: '11005853696' }),
+        product({
+          id: '01900000-0000-7000-8000-00000000c1a0',
+          title: 'پلن بزرگ',
+          trafficBytes: '1099511627776',
+        }),
+      ]),
+    );
+    renderPage(<ProductsPage route={PRODUCTS_ROUTE} mayEdit denied={false} />);
+
+    expect(await screen.findByText('10.25')).toBeInTheDocument();
+    expect(screen.getByText('1,024')).toBeInTheDocument();
+    expect(screen.queryByText('ترابایت')).toBeNull();
+    expect(screen.getAllByText('گیگابایت')).toHaveLength(2);
+  });
+
   it('takes a new product’s traffic in GB, and starts it unlimited, said by its own box', async () => {
     stubApi(productList([product()]));
     renderPage(<ProductsPage route={PRODUCTS_ROUTE} mayEdit denied={false} />);

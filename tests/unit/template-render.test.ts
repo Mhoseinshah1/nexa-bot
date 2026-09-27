@@ -155,7 +155,7 @@ describe('the catalogue under the rule', () => {
       usedTrafficBytes: 0n,
       totalTrafficBytes: 0n,
     });
-    expect(rendered).toBe('سرویس: پلن\nوضعیت: فعال\nمصرف: 0 بایت از نامحدود');
+    expect(rendered).toBe('سرویس: پلن\nوضعیت: فعال\nمصرف: 0 گیگابایت از نامحدود');
   });
 
   it('drops the never-synced line of the admin view and keeps the expiry', () => {

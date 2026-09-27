@@ -77,7 +77,7 @@ describe('the service card', () => {
     const text = render(screen.key, screen.values);
     expect(text).toContain('📥 حجم مصرفی: هنوز از سرور خوانده نشده');
     expect(text).toContain('💢 حجم باقی مانده: هنوز از سرور خوانده نشده');
-    expect(text).not.toContain('0 بایت');
+    expect(text).not.toContain(': 0 گیگابایت');
     expect(text).toContain('📶 آخرین زمان اتصال شما: در دسترس نیست');
     expect(text).not.toContain('متصل نشده');
   });
@@ -103,7 +103,7 @@ describe('the service card', () => {
     });
     const text = render(unlimited.key, unlimited.values);
     expect(text).toContain('🟩 ترافیک: نامحدود');
-    expect(text).toContain('📥 حجم مصرفی: 0 بایت');
+    expect(text).toContain('📥 حجم مصرفی: 0 گیگابایت');
     expect(text).toContain('💢 حجم باقی مانده: نامحدود');
     expect(text).toContain('📅 تاریخ اتمام: بدون محدودیت زمانی');
     expect(text).not.toContain('موقعیت سرویس');
@@ -118,7 +118,7 @@ describe('the service card', () => {
       expiresAt: new Date('2026-09-20T00:00:00Z'),
     });
     const text = render(overrun.key, overrun.values);
-    expect(text).toContain('💢 حجم باقی مانده: 0 بایت (0%)');
+    expect(text).toContain('💢 حجم باقی مانده: 0 گیگابایت (0%)');
     expect(text).toContain('(0 روز)');
     expect(text).not.toContain('نامحدود');
   });
