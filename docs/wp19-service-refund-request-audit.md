@@ -208,3 +208,43 @@ It found six issues. All were real, and each is fixed with a named test and a ki
 
 Because the query now excludes what the in-code guards refuse, W19-01 and W19-22 are paired
 rows (see the falsification record).
+
+## 9. The second Codex review of #83
+
+It found five issues. All were real, and each is fixed with a named test and a killed mutation
+(W19-30 to W19-40):
+
+- **A rejection whose prompt had been cancelled (P1).** The reason prompt was read, and the
+  request rejected, in different transactions. A cancel or a new prompt committed between the
+  two still let the old prompt reject. The rejection now runs inside the prompt's transaction
+  (`rejectWithin`), under the administrator's capture lock that `cancel` and `open` take, and
+  only while the prompt is still open. Its close commits with it, so neither half can be left
+  without the other. This supersedes the round-1 ordering (W19-28), which was the gap: it
+  made the rejection commit first.
+- **An approval that read a service already ended (P2).** Eligibility was read without a lock,
+  under `READ COMMITTED`, so a termination committing `TERMINATED` in between was seen as
+  ACTIVE. The approval then reserved money and planned a second deletion, which the sweep
+  would credit. The approval now takes the service's row lock before it reads eligibility, and
+  holds it until the deletion is planned. The lock is taken service first, then payment — the
+  order the executor already uses — so it adds no cycle.
+- **A confirmation shown for an approval that would refuse (P2).** The amount preview checked
+  only the payment's bound. It now applies the approval's own executability rule: the shared
+  eligibility evaluator and the request's source payment.
+- **Malformed ids reached PostgreSQL (P2).** A request id is validated as a UUID before any
+  query. The service answers with not-found, and the HTTP boundary parses the approve, reject
+  and per-service path ids (400).
+- **One page per state (P2).** The list takes a keyset cursor (`before`/`beforeId`, both or
+  neither) and returns `nextCursor`. The attention card follows the cursor to the end of each
+  state, so the oldest undecided request is always shown. The per-service list is not paged. A
+  service has at most one active request, and it is always the service's newest row, so the
+  first page holds it.
+
+The re-run of the whole driver also found W19-02 alive. Since round 1, the sweep query admits
+only a SUCCEEDED or FAILED/ABANDONED deletion, so adding UNKNOWN to the terminal states alone
+changes nothing. W19-02b reverts that and the query's failure clause together.
+
+It also found that the falsification record claimed a W19-14b row that the driver never had.
+Added, the row survived: the rejection is guarded three times — the early state check, the
+conditional UPDATE, and the `service_refund_requests_rejected_check` CHECK. W19-14c reverts
+all three (the driver lifts the CHECK for that one row and restores it), and the race test
+dies.
