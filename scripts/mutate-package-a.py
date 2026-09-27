@@ -74,7 +74,7 @@ M=[
  # --- the customer, the log --------------------------------------------------------------
  ('A-28',[(FL,"  if (invoice.conversionRateMinor !== null) {","  if (false as boolean) {")],T_I,'financial log'),
  ('A-29',[(BR,"  if (command === '/paysupport') {","  if (false as boolean) {")],T_U,'/paysupport'),
- ('A-30',[(BR,"          (provider === null || candidate.provider === provider),","          true,")],T_I,'settles an order once'),
+ ('A-30',[(BR,"          (provider === null || candidate.provider === provider),","          true,")],T_I,'route the customer tapped'),
 ]
 
 def build_contracts():

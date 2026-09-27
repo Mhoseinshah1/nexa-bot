@@ -802,6 +802,33 @@ describe('Telegram Stars (Package A)', () => {
       expect(markup).not.toContain(`"g:${orderId}"`);
     });
 
+    it('opens the attempt on the route the customer tapped, not the first one offered', async () => {
+      await enableStars();
+      await api.container.paymentGateways.configure(tenantA, owner, {
+        idempotencyKey: 'tonpays-cfg',
+        provider: 'TONPAYS',
+        config: OPEN_ROUTE,
+      });
+      await api.container.paymentGateways.setCredential(tenantA, owner, {
+        idempotencyKey: 'tonpays-key',
+        provider: 'TONPAYS',
+        apiKey: 'tp_test_key_for_route_choice',
+      });
+      await api.container.paymentGateways.setStatus(tenantA, owner, {
+        idempotencyKey: 'tonpays-on',
+        provider: 'TONPAYS',
+        status: 'ACTIVE',
+      });
+      const orderId = await draftOrder(260_000n);
+      // Both routes share a sort order, so Telegram Stars is offered first; the customer
+      // chose TonPays. The tap only records the attempt — no worker runs, so nothing is sent.
+      await tapAs(MARYAM, `gp:${orderId}.TONPAYS`);
+      const [payment] = await rows<{ gateway_provider: string }>(
+        sql`SELECT gateway_provider FROM payments WHERE order_id = ${orderId} AND method = 'GATEWAY'`,
+      );
+      expect(payment?.gateway_provider).toBe('TONPAYS');
+    });
+
     it('answers /paysupport with the support screen /help shows', async () => {
       const text = async (command: string) => {
         calls = [];
