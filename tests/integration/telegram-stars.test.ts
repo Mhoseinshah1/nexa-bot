@@ -903,6 +903,15 @@ describe('Telegram Stars (Package A)', () => {
           }),
         ),
       ).toBe(inProgress);
+      // An operator's reject passes only the repository's own predicate, which holds too.
+      expect(
+        await codeOf(
+          api.container.payments.rejectManualTransfer(tenantA, owner, paymentId as PaymentId, {
+            idempotencyKey: 'c2-reject',
+            note: 'held',
+          }),
+        ),
+      ).toBe(COMMERCE_ERROR_CODES.PAYMENT_STATE_INVALID);
       expect(await paymentState(paymentId)).toBe('PENDING');
 
       // The charge Telegram took after the approval settles the order it was for.
