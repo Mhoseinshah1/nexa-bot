@@ -329,6 +329,145 @@ describe('payment timeline card on the payment detail', () => {
     expect(timelineCalls(api.calls)).toHaveLength(2);
   });
 
+  /*
+   * Codex review of #81: the one re-read a disagreement earns can itself fail — a 5xx that
+   * outlasts its retries — and a failed read is no answer. The detail is not polled and a
+   * decided history stops polling, so without asking again the page would keep a PENDING
+   * detail beside a history that records the decision until it was reloaded.
+   */
+  it('reads the payment again when the re-read failed, until it is answered (Codex review of #81)', async () => {
+    let detailServed = 0;
+    const decided = {
+      payment: {
+        ...detailRoute.body.payment,
+        state: 'FAILED',
+        resolvedAt: '2026-09-10T13:00:00.000Z',
+        resolvedByAdminId: ADMIN_ID,
+      },
+    };
+    const boom = {
+      error: { kind: 'internal', code: 'test.boom', message: 'boom', correlationId: 'test' },
+    };
+    const api = stubApi([
+      {
+        url: `/payments/${PAYMENT_ID}`,
+        get body() {
+          detailServed += 1;
+          if (detailServed === 1) return detailRoute.body;
+          return detailServed === 2 ? boom : decided;
+        },
+        get status() {
+          return detailServed === 2 ? 500 : 200;
+        },
+      },
+      ...timeline(),
+    ]);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      open(['payments.view']);
+      await waitFor(() => expect(detailCalls(api.calls)).toHaveLength(2));
+      await vi.advanceTimersByTimeAsync(TIMELINE_UNSETTLED_POLL_MS + 1_000);
+      await waitFor(() => expect(detailCalls(api.calls)).toHaveLength(3));
+      // Answered now, and the two agree: nothing more is asked.
+      await vi.advanceTimersByTimeAsync(TIMELINE_UNSETTLED_POLL_MS * 3);
+      expect(detailCalls(api.calls)).toHaveLength(3);
+      expect(timelineCalls(api.calls)).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /*
+   * Codex review of #81: the receipts card is read once and never polled, so a receipt the
+   * customer sends after it was read reached the (polled) history and not the card — the
+   * history saying «receipt submitted» above a card saying there are none.
+   */
+  const RECEIPT_ID = '019260ab-cdef-7012-8345-6789abcdef01';
+  const receiptView = {
+    id: RECEIPT_ID,
+    kind: 'PHOTO',
+    fileUniqueId: 'AQADreceipt',
+    mimeType: 'image/jpeg',
+    fileSize: 1024,
+    fileName: null,
+    createdAt: '2026-09-10T12:45:00.000Z',
+  };
+  const timelineReceipt = {
+    kind: 'RECEIPT_SUBMITTED',
+    at: '2026-09-10T12:45:00.000Z',
+    receiptId: RECEIPT_ID,
+    receiptKind: 'PHOTO',
+  };
+  const receiptCalls = (calls: readonly { url: string }[]) =>
+    calls.filter((call) => call.url.endsWith(`/payments/${PAYMENT_ID}/receipts`));
+
+  it('reads the receipts again when the history names one the card has not seen (Codex review of #81)', async () => {
+    let receiptsServed = 0;
+    const api = stubApi([
+      detailRoute,
+      ...timeline({ entries: [timelineCreated, timelineReceipt] }),
+      {
+        url: `/payments/${PAYMENT_ID}/receipts`,
+        get body() {
+          receiptsServed += 1;
+          return { receipts: receiptsServed === 1 ? [] : [receiptView] };
+        },
+      },
+    ]);
+    open(['payments.view', 'receipts.view']);
+
+    await waitFor(() => expect(receiptCalls(api.calls)).toHaveLength(2));
+    await waitFor(() =>
+      expect(screen.queryByText(t('web.payment_receipts_empty'))).not.toBeInTheDocument(),
+    );
+    await settle();
+    expect(receiptCalls(api.calls)).toHaveLength(2);
+  });
+
+  it('reads the receipts again when the card’s older answer lands after the history (Codex review of #81)', async () => {
+    let receiptsServed = 0;
+    const api = stubApi([
+      detailRoute,
+      ...timeline({ entries: [timelineCreated, timelineReceipt] }),
+      {
+        url: `/payments/${PAYMENT_ID}/receipts`,
+        get body() {
+          receiptsServed += 1;
+          return { receipts: receiptsServed === 1 ? [] : [receiptView] };
+        },
+      },
+    ]);
+    // The card asked first and is answered last: its answer is older than the history
+    // already on screen, and it is that ARRIVAL the comparison must see.
+    const stubbed = globalThis.fetch;
+    vi.stubGlobal('fetch', (input: unknown, init?: RequestInit) =>
+      String(input).endsWith('/receipts') && receiptsServed === 0
+        ? new Promise((resolve) => setTimeout(resolve, 40)).then(() =>
+            stubbed(input as string, init),
+          )
+        : stubbed(input as string, init),
+    );
+    open(['payments.view', 'receipts.view']);
+
+    await waitFor(() => expect(receiptCalls(api.calls)).toHaveLength(2));
+    await settle();
+    expect(receiptCalls(api.calls)).toHaveLength(2);
+  });
+
+  it('reads the receipts once when the card already holds every receipt the history names', async () => {
+    const api = stubApi([
+      detailRoute,
+      ...timeline({ entries: [timelineCreated, timelineReceipt] }),
+      { url: `/payments/${PAYMENT_ID}/receipts`, body: { receipts: [receiptView] } },
+    ]);
+    open(['payments.view', 'receipts.view']);
+
+    await waitFor(() => expect(timelineCalls(api.calls)).toHaveLength(1));
+    await waitFor(() => expect(receiptCalls(api.calls)).toHaveLength(1));
+    await settle();
+    expect(receiptCalls(api.calls)).toHaveLength(1);
+  });
+
   it('reads nothing again when a truncated history cannot say', async () => {
     const api = stubApi([detailRoute, ...timeline({ truncated: true })]);
     open(['payments.view']);

@@ -310,6 +310,24 @@ An eleventh round, on `4033836`, found two more (P17-47..49).
 - **The payment id.** The timeline echoed the path's spelling of the payment id. It now
   answers with the canonical, lower-case one the schema produced.
 
+A twelfth round, on `59cd147`, found two more in the Web Admin (P17-50..53).
+
+- **A failed re-read.** The one re-read a disagreement earns could itself fail, for
+  example with a 5xx that outlasts its retries. It still counted as the one re-read. The
+  detail is not polled, a decided history stops polling, and focus refetching is off, so
+  the page kept a PENDING detail beside a history recording the decision until it was
+  reloaded. A failed re-read now clears its marker, and the comparison runs again one
+  poll interval later. A successful re-read that still disagrees is still read only once.
+- **The receipts card.** It is read once and never polled, so a receipt sent after it was
+  read reached the polled history and not the card. The history then said «receipt
+  submitted» above a card that said there were none.
+
+  The card compares the receipt ids the history names with the ids the receipts card
+  holds, and reads the card again when one is missing. It watches the card's answer
+  through an `enabled: false` observer. That observer asks nothing, so a viewer without
+  `receipts.view` costs no request, and an older answer that lands after the history
+  still triggers the comparison.
+
 Tests added:
 
 - **Unit:** `tests/unit/payment-timeline.test.ts` (7 cases) and

@@ -1,5 +1,5 @@
-import { useEffect, useRef, type ReactNode } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useQuery, useQueryClient, type QueryKey } from '@tanstack/react-query';
 import type {
   CustomerNotificationState,
   PaymentMethod,
@@ -11,7 +11,7 @@ import type {
   PaymentTimelineSection,
   RefundChannel,
 } from '@nexa/contracts';
-import { fetchPaymentTimeline } from '../api/client';
+import { fetchPaymentReceipts, fetchPaymentTimeline } from '../api/client';
 import { formatTimestamp } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
 import { Banner, Card, Copyable, DataTable, Empty, Ltr, Money, StateSwitch } from '../ui/kit';
@@ -256,15 +256,76 @@ export function PaymentTimelineCard({
    * (Codex review of #81). A payment only ever leaves an open state, so the side that
    * still reads it open is the older read, and that one is read again. Once per pair of
    * disagreeing answers, so two answers that cannot converge cost one extra request each,
-   * never a loop.
+   * never a loop — unless that one request FAILED, in which case it was no answer at all
+   * and is asked again a poll interval later (`readAgain`, below).
    *
    * The customer's transfer signal is the same kind of fact: set once, frozen afterwards
    * (migration 0058), and it leaves the payment PENDING (Codex review of #81). So the side
    * that has not seen it is the older one too.
    */
-  const reconciled = useRef<string | null>(null);
+  /*
+   * The receipts card's own answer, watched rather than fetched: `enabled: false` asks
+   * nothing, so a viewer without `receipts.view` (whose page draws no such card) costs
+   * no request, and an answer that lands after this card's history still re-runs the
+   * comparison below.
+   */
+  const receiptsKey = ['payment-receipts', paymentId];
+  const heldReceipts = useQuery({
+    queryKey: receiptsKey,
+    queryFn: () => fetchPaymentReceipts(paymentId),
+    enabled: false,
+  }).data;
+  const reconciled = useRef(new Map<string, string>());
+  const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [retryTick, setRetryTick] = useState(0);
+  useEffect(
+    () => () => {
+      if (retryTimer.current !== null) clearTimeout(retryTimer.current);
+    },
+    [],
+  );
+  /*
+   * Reads `key` again, once per disagreement `pair`. A read that fails — a 5xx that
+   * outlasts its retries — does not count as the one read (Codex review of #81): the
+   * marker is cleared and the comparison runs again a poll interval later, because the
+   * disagreement may be one neither side will ever poll its way out of. A decided
+   * payment's timeline stops polling, and focus refetching is off.
+   */
+  const readAgain = useCallback(
+    (view: string, key: QueryKey, pair: string) => {
+      if (reconciled.current.get(view) === pair) return;
+      reconciled.current.set(view, pair);
+      void queries.invalidateQueries({ queryKey: key }).then(() => {
+        const failed = queries
+          .getQueryCache()
+          .findAll({ queryKey: key })
+          .some((query) => query.state.status === 'error');
+        if (!failed || reconciled.current.get(view) !== pair) return;
+        reconciled.current.delete(view);
+        if (retryTimer.current !== null) clearTimeout(retryTimer.current);
+        retryTimer.current = setTimeout(() => {
+          retryTimer.current = null;
+          setRetryTick((tick) => tick + 1);
+        }, TIMELINE_UNSETTLED_POLL_MS);
+      });
+    },
+    [queries],
+  );
   useEffect(() => {
     if (data === undefined) return;
+    /*
+     * A receipt the history names and the receipts card has not seen (Codex review of
+     * #81): the card was read first and is not polled, so it is the older of the two.
+     * Compared by id against what the card holds, so a page whose card already has
+     * every receipt costs nothing.
+     */
+    if (heldReceipts !== undefined) {
+      const held = new Set(heldReceipts.receipts.map((receipt) => receipt.id));
+      const unseen = data.entries.flatMap((entry) =>
+        entry.kind === 'RECEIPT_SUBMITTED' && !held.has(entry.receiptId) ? [entry.receiptId] : [],
+      );
+      if (unseen.length > 0) readAgain('receipts', receiptsKey, unseen.join(','));
+    }
     const recorded = timelineTerminalState(data);
     if (recorded === null) return;
     const recordedSignal = timelineRecordsSignal(data);
@@ -272,15 +333,10 @@ export function PaymentTimelineCard({
     const detailOlder = (detailOpen && recorded !== 'OPEN') || (!signalled && recordedSignal);
     const timelineOlder =
       (!detailOpen && recorded !== paymentState) || (signalled && !recordedSignal);
-    if (!detailOlder && !timelineOlder) return;
     const pair = `${paymentState}:${String(signalled)}:${recorded}:${String(recordedSignal)}`;
-    if (reconciled.current === pair) return;
-    reconciled.current = pair;
-    if (detailOlder) void queries.invalidateQueries({ queryKey: ['payment', paymentId] });
-    if (timelineOlder) {
-      void queries.invalidateQueries({ queryKey: ['payment-timeline', paymentId] });
-    }
-  }, [data, paymentState, signalled, paymentId, queries]);
+    if (detailOlder) readAgain('detail', ['payment', paymentId], pair);
+    if (timelineOlder) readAgain('timeline', ['payment-timeline', paymentId], pair);
+  }, [data, heldReceipts, paymentState, signalled, paymentId, readAgain, retryTick]);
 
   /*
    * An explicit refresh (Codex review of #81). A decided payment can still gain facts no
