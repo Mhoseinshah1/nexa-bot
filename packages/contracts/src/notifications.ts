@@ -27,7 +27,17 @@ import { z } from 'zod';
  * the code that sends, never harvested from the research.
  */
 export const NOTIFICATION_KINDS = [
-  /** An operational event at or above the configured severity. */
+  /**
+   * An operational event at or above the configured severity — and, since WP18, a final
+   * financial fact for the log group's payments topic (templates `ops.financial.*`).
+   *
+   * The financial log deliberately has no kind of its own. This list is a strict enum in
+   * `notificationSchema`, so a kind the previous release does not know makes that
+   * release's Web Admin refuse the WHOLE notifications page after a rollback, while a
+   * template key it does not know is only an unfamiliar string. The template key is what
+   * tells a financial row apart; the destination (the payments topic) is snapshotted on
+   * the row.
+   */
   'OPERATIONAL_EVENT',
   /** An explicit test of the operations destination. */
   'OPERATIONS_TEST',
@@ -46,14 +56,6 @@ export const NOTIFICATION_KINDS = [
    * button on a notification would make the message the only way in.
    */
   'RECEIPT_AWAITING_REVIEW',
-  /**
-   * A final financial fact for the log group's payments topic (WP18): a confirmed order
-   * payment or top-up, a rejection or gateway failure, a late gateway approval, a
-   * completed or failed refund. Queued by the financial-log CONSUMER, after the money
-   * committed, so a message that is never delivered costs nobody anything — the payment
-   * and refund rows are the record, and this is a report of them.
-   */
-  'FINANCIAL_EVENT',
 ] as const;
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 
