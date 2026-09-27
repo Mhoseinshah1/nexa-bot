@@ -74,12 +74,18 @@ export interface ServiceRefundPushDeps {
   };
   /** The card's values, read from the rows as they stand now. */
   readonly card: (scope: TenantContext, requestId: string) => Promise<TemplateValues | null>;
-  /** The four buttons (brief §2.5), built by the surface that owns their callback data. */
-  readonly keyboard: (request: {
-    readonly id: string;
-    readonly customerId: string;
-    readonly serviceId: string;
-  }) => CustomerButton[];
+  /**
+   * The card's buttons (brief §2.5), built by the surface that owns their callback data, for
+   * the recipient's own permissions: a view button whose section they cannot open is not sent.
+   */
+  readonly keyboard: (
+    request: {
+      readonly id: string;
+      readonly customerId: string;
+      readonly serviceId: string;
+    },
+    permissions: ReadonlySet<PermissionKey>,
+  ) => CustomerButton[];
   readonly messenger: Pick<CustomerMessenger, 'send'>;
   readonly opsLog: OperationalEventRecorder;
   readonly conditions: {
@@ -171,7 +177,7 @@ export class ServiceRefundPushService {
       }
       const values = await this.deps.card(scope, request.id);
       if (values === null) return this.resolve(scope, row, 'FAILED', 'push.request_missing');
-      const buttons = this.deps.keyboard(request);
+      const buttons = this.deps.keyboard(request, reviewer.permissions);
 
       const started = await this.deps.uow.run(scope, async (tx) =>
         this.deps.pushes.markSendStarted(scope, row.id, reviewer.chatId, this.deps.clock.now(), tx),

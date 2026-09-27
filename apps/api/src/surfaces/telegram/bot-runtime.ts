@@ -4077,13 +4077,22 @@ export function receiptReviewButtons(
  * decisions; "view user" and "view service" reuse the administrators' own navigation, so the
  * card adds no second way of showing either. Drawn only to an administrator the push lane
  * already found holding both decision keys, and every tap is charged again behind it.
+ *
+ * The two view buttons open panel sections, which `adminTurn` admits only for their own view
+ * keys, so each is drawn only for a recipient holding it (Codex review of #83, round 10). A
+ * reviewer with the two decision keys alone is sent the two buttons that work for them, not
+ * two more that would answer as if they were a customer. `receiptReviewButtons` draws the
+ * same way.
  */
-export function refundRequestReviewButtons(request: {
-  readonly id: string;
-  readonly customerId: string;
-  readonly serviceId: string;
-}): CustomerButton[] {
-  return [
+export function refundRequestReviewButtons(
+  request: {
+    readonly id: string;
+    readonly customerId: string;
+    readonly serviceId: string;
+  },
+  permissions: ReadonlySet<PermissionKey>,
+): CustomerButton[] {
+  const buttons: CustomerButton[] = [
     {
       label: { kind: 'TEMPLATE', key: 'bot.admin.refund_request_approve_button' },
       data: `${ADMIN_REFUND_REQUEST_APPROVE_CALLBACK_PREFIX}${request.id}`,
@@ -4094,17 +4103,22 @@ export function refundRequestReviewButtons(request: {
       data: `${ADMIN_REFUND_REQUEST_REJECT_CALLBACK_PREFIX}${request.id}`,
       row: 0,
     },
-    {
+  ];
+  if (permissions.has(CUSTOMERS_VIEW_PERMISSION)) {
+    buttons.push({
       label: { kind: 'TEMPLATE', key: 'bot.admin.refund_request_user_button' },
       data: `${ADMIN_CUSTOMER_CALLBACK_PREFIX}v:${request.customerId}`,
       row: 1,
-    },
-    {
+    });
+  }
+  if (permissions.has(SERVICES_VIEW_PERMISSION)) {
+    buttons.push({
       label: { kind: 'TEMPLATE', key: 'bot.admin.refund_request_service_button' },
       data: `${ADMIN_SERVICE_CALLBACK_PREFIX}${request.serviceId}`,
       row: 1,
-    },
-  ];
+    });
+  }
+  return buttons;
 }
 
 /**

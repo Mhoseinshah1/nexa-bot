@@ -299,6 +299,13 @@ export class ServiceRefundRequestService {
           input.serviceId,
           tx,
         );
+        /*
+         * The lifecycle lock, after the service row and before the payment's, as the approval
+         * takes it (Codex review of #83, round 10). A paid commercial action's settlement
+         * refuses while a request is active and this filing refuses while one is undecided;
+         * under the one lock neither can miss the other's uncommitted row.
+         */
+        await this.deps.services.lockLifecycle(scope, service.id, tx);
         // A replay of this very filing, whatever became of the request since: answered with
         // that request, never filed again.
         const replayed = await this.deps.repository.findByFilingKey(
@@ -733,7 +740,19 @@ export class ServiceRefundRequestService {
     );
     if (request === null) throw this.notFound();
     if (request.state !== 'OPEN') {
-      if (request.state === 'REJECTED' && request.rejectionReason === reason) return request;
+      /*
+       * A replay of THIS administrator's rejection, as the approval's replay rule already
+       * requires (Codex review of #83, round 10). Another administrator who typed the same
+       * reason is told the request was decided, not that their rejection committed: the
+       * decision and its audit belong to whoever made it.
+       */
+      if (
+        request.state === 'REJECTED' &&
+        request.rejectionReason === reason &&
+        request.decidedByAdminId === adminId
+      ) {
+        return request;
+      }
       throw this.stateInvalid(request.state);
     }
     const now = this.deps.clock.now();

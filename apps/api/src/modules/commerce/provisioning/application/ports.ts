@@ -240,6 +240,13 @@ export interface ServiceRepository {
    */
   lockLifecycle(scope: TenantContext, id: string, tx: TransactionScope): Promise<void>;
 
+  /**
+   * Whether a customer refund request for this service is OPEN or EXECUTING (Codex review of
+   * #83, round 10). A commercial action is not sold beside one: the request refunds only the
+   * service's own purchase, so an approval would delete what the second payment bought.
+   */
+  hasActiveRefundRequest(scope: TenantContext, id: string, tx?: unknown): Promise<boolean>;
+
   findByOrderId(
     scope: TenantContext,
     orderId: OrderId,
