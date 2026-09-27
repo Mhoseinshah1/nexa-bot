@@ -912,6 +912,40 @@ describe('WP19 — a customer asks for their money back', () => {
     expect((await requestRow(stuckFiled.request.id))?.request.state).toBe('EXECUTING');
   });
 
+  it('never lets a request waiting on another deletion fill the batch (Codex review of #83, round 6)', async () => {
+    // The waiting one is OLDER: its deletion failed, and an operator's is still planned.
+    // Provisioned first (`activeService` ticks the provisioner, and a tick sweeps), filed after.
+    const ready = await activeService('batch-ready-after-wait');
+    const waiting = await failedUnswept('batch-waiting');
+    const readyFiled = await file(ready.id);
+    const before = await balance();
+    await ctx.container.serviceRefundRequests.approve(tenantA, owner, {
+      requestId: readyFiled.request.id,
+      amountMinor: 110_000n,
+    });
+    // Planned only now, after every tick: a tick would execute it.
+    await ctx.container.provisioning.requestFromOperator(
+      tenantA,
+      owner,
+      waiting.service.id,
+      'TERMINATE',
+      { idempotencyKey: 'batch-waiting-operator' },
+    );
+    await ctx.container.database.db.execute(
+      sql`UPDATE provisioning_operations SET state = 'SUCCEEDED', completed_at = now()
+           WHERE service_id = ${ready.id} AND type = 'TERMINATE'` as never,
+    );
+    await ctx.container.database.db.execute(
+      sql`UPDATE services SET state = 'TERMINATED', terminated_at = now() WHERE id = ${ready.id}` as never,
+    );
+
+    // A batch of ONE: the waiting row must not be the one it holds.
+    await ctx.container.serviceRefundRequests.settleDue(tenantA, 1);
+    expect((await requestRow(readyFiled.request.id))?.request.state).toBe('COMPLETED');
+    expect(await balance()).toBe(before + 110_000n);
+    expect((await requestRow(waiting.filed.request.id))?.request.state).toBe('EXECUTING');
+  });
+
   it('decides every other request when one fails inside its own settlement', async () => {
     const failing = await activeService('settle-throws');
     const failingFiled = await file(failing.id);
@@ -1072,6 +1106,25 @@ describe('WP19 — a customer asks for their money back', () => {
       PRICE - 100_000n,
     );
     expect(await notices('SERVICE_REFUND_REQUEST_APPROVED')).toBe(1);
+  });
+
+  it('releases, never credits, a reservation already released elsewhere when another deletion removed the service (Codex review of #83, round 6)', async () => {
+    const { service, filed } = await failedUnswept('released-elsewhere');
+    const before = await balance();
+    // The release before WP19 fails the reserved refund by hand, as its operator `fail` would.
+    const refundId = (await requestRow(filed.request.id))?.request.refundId ?? '';
+    await ctx.container.database.db.execute(
+      sql`UPDATE refunds SET state = 'FAILED' WHERE id = ${refundId}` as never,
+    );
+    await ctx.container.provisioning.requestFromOperator(tenantA, owner, service.id, 'TERMINATE', {
+      idempotencyKey: 'released-elsewhere-operator',
+    });
+    await ctx.container.provisionerLoop.tick();
+
+    expect((await services.findById(tenantA, service.id))?.state).toBe('TERMINATED');
+    // Decided, not stranded: a settlement the ledger would refuse is never attempted.
+    expect((await requestRow(filed.request.id))?.request.state).toBe('FAILED');
+    expect(await balance(), 'nothing credited for a released reservation').toBe(before);
   });
 
   it('waits, releasing nothing, while another deletion of the service is in flight (Codex review of #83, round 6)', async () => {

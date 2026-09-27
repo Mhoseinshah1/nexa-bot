@@ -24,6 +24,10 @@ EV='packages/contracts/src/events.ts'
 PV='apps/api/src/modules/commerce/provisioning/application/provisioning.service.ts'
 SVP='apps/web/src/pages/services.tsx'
 APP='apps/web/src/app.tsx'
+BR='apps/api/src/surfaces/telegram/bot-runtime.ts'
+CL='apps/web/src/api/client.ts'
+H='packages/contracts/src/http.ts'
+CI='tests/unit/contracts-invariants.test.ts'
 M=[
  ('W19-01',[(S,"if (succeeded && item.serviceState !== 'TERMINATED') {","if (false && succeeded && item.serviceState !== 'TERMINATED') {"),(R,"          or(\n","          or(\n            sql`true`,\n")],'did not move'),
  ('W19-02',[(R,"inArray(provisioningOperations.state, [...OPERATION_TERMINAL_STATES]),","inArray(provisioningOperations.state, [...OPERATION_TERMINAL_STATES, 'UNKNOWN' as never]),")],'UNKNOWN'),
@@ -310,6 +314,20 @@ M+=[
  ('W19-59',[(S,"return request.state === 'OPEN' ? {} : null;","return {};")],'only while its request is still open'),
  ('W19-60',[(SVP,"      {mayViewRefundRequests && <OpenServiceRefundRequestsCard />}","      {!denied && mayViewRefundRequests && <OpenServiceRefundRequestsCard />}")],'refunds.view alone',('web','tests/web/service-refund-requests.test.tsx')),
  ('W19-61',[(APP,"    permission: ['services.view', 'refunds.view'],","    permission: 'services.view',")],'refunds.view alone',('web','tests/web/service-refund-requests.test.tsx')),
+ # Round 6 (Codex review of #83).
+ ('W19-62',[(S,"const removed = service?.state === 'TERMINATED' && item.refundState === 'REQUESTED';","const removed = succeeded;")],'another deletion removed'),
+ ('W19-63',[(S,"const removed = service?.state === 'TERMINATED' && item.refundState === 'REQUESTED';","const removed = service?.state === 'TERMINATED';")],'released elsewhere'),
+ ('W19-64',[(S,"(await this.deps.operations.findOpen(scope, request.serviceId, 'TERMINATE', tx)) !== null","false")],'in flight'),
+ ('W19-64b',[(S,"(await this.deps.operations.findOpen(scope, request.serviceId, 'TERMINATE', tx)) !== null","false"),(R,"                  and open_op.state in ('PLANNED', 'IN_FLIGHT'))`,","                  and false)`,")],'in flight'),
+ ('W19-65',[(R,"                  and open_op.state in ('PLANNED', 'IN_FLIGHT'))`,","                  and false)`,")],'waiting on another deletion'),
+ ('W19-66',[(BR,"      if (result.request.state === 'EXECUTING') return refundOfferReply('PENDING', serviceId);\n","")],'redelivered reason'),
+ ('W19-67',[(BR,"      if (result.request.state !== 'OPEN') {\n        return this.serviceDetail(scope, actor, customer, serviceId);\n      }\n","")],'redelivered reason'),
+ ('W19-68',[(RF,"await this.creditWallet(scope, after, actor, now, tx, before.requestedByAdminId);","await this.creditWallet(scope, after, actor, now, tx);")],'approving administrator'),
+ ('W19-69',[(R,"            : inArray(serviceRefundRequests.state, [...filter.states]),","            : undefined,")],'one stream'),
+ ('W19-70',[(C,"      ...(input.attention === 'true' ? { states: SERVICE_REFUND_REQUEST_ATTENTION_STATES } : {}),\n","")],'one stream'),
+ ('W19-71',[(CL,"  if (query.attention === true) params.set('attention', 'true');\n","")],'wants an operator',('web','tests/web/service-refund-requests.test.tsx')),
+ ('W19-72',[(H,"  .refine((query) => query.state === undefined || query.attention === undefined, {","  .refine((query) => query.state === undefined || query.attention === undefined || true, {")],'attention queue',('unit',CI)),
+ ('W19-73',[(H,"    attention: z.enum(['true']).optional(),","    attention: z.string().optional(),")],'attention queue',('unit',CI)),
 ]
 only=sys.argv[1:] 
 for entry in M:
