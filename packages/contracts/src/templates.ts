@@ -966,6 +966,45 @@ export const TEMPLATES = [
     placeholders: [],
   },
   {
+    key: 'bot.channels.join_required',
+    description:
+      'Package B: shown INSTEAD of what the customer asked for when Telegram says they are not ' +
+      'in a channel the operator made required. The join buttons and the check button follow ' +
+      'it. It must not say the action was performed, queued or will be performed.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.channels.still_missing',
+    description:
+      'Package B: the answer to the membership check button when at least one required channel ' +
+      'is still not joined. The join buttons and the check button follow it again.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.channels.check_button',
+    description: 'Package B: the membership check button (the owner’s label, ✅ بررسی عضویت).',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.channels.join_private_button',
+    description:
+      'Package B: the join button of a required channel that has no public @handle — a private ' +
+      'channel opened by its invite link. Numbered by its position in the list of channels shown.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'number',
+        type: 'NUMBER',
+        description: 'The channel’s position among the join buttons, from 1.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
     key: 'bot.blocked',
     description:
       'Shown to a customer an operator has blocked. Says that the account cannot be ' +
