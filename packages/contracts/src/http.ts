@@ -15,7 +15,10 @@ import {
 } from './service-username.js';
 import { paymentAccountInputSchema } from './payment-accounts.js';
 import { refundChannelSchema, refundStateSchema } from './refunds.js';
-import { serviceRefundRequestStateSchema } from './service-refund-requests.js';
+import {
+  serviceRefundRequestStateSchema,
+  isServiceRefundRejectionReason,
+} from './service-refund-requests.js';
 import {
   PAYMENT_GATEWAY_SORT_MAX,
   PAYMENT_GATEWAY_SORT_MIN,
@@ -4860,7 +4863,10 @@ export type ServiceRefundApproveRequest = z.infer<typeof serviceRefundApproveReq
 
 export const serviceRefundRejectRequestSchema = z.object({
   idempotencyKey: z.string().min(8).max(255),
-  reason: z.string().min(1).max(500),
+  // Trimmed, in code points, as the service and the database count it (Codex review of #83, round 8).
+  reason: z.string().refine(isServiceRefundRejectionReason, {
+    message: 'A rejection needs a reason of 1 to 500 characters.',
+  }),
 });
 export type ServiceRefundRejectRequest = z.infer<typeof serviceRefundRejectRequestSchema>;
 

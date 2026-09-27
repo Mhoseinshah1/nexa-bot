@@ -25,6 +25,8 @@ import {
   providerDescriptor,
   SERVICE_REFUND_REQUEST_ATTENTION_STATES,
   serviceRefundRequestListQuerySchema,
+  isServiceRefundRejectionReason,
+  serviceRefundRejectRequestSchema,
   STATE_MACHINES,
   TELEGRAM_CALLBACK_DATA_MAX_BYTES,
   validateStateMachine,
@@ -66,6 +68,29 @@ describe('the service refund request attention queue (Codex review of #83, round
     expect(serviceRefundRequestListQuerySchema.safeParse({ attention: 'false' }).success).toBe(
       false,
     );
+  });
+});
+
+describe('a service refund rejection reason (Codex review of #83, round 8)', () => {
+  it('trims, then counts code points, at every boundary', () => {
+    const emoji = '😀'.repeat(300); // 300 code points, 600 UTF-16 units
+    expect(isServiceRefundRejectionReason(emoji)).toBe(true);
+    expect(
+      serviceRefundRejectRequestSchema.safeParse({ idempotencyKey: 'reject-key-1', reason: emoji })
+        .success,
+    ).toBe(true);
+    expect(isServiceRefundRejectionReason('😀'.repeat(501))).toBe(false);
+    expect(isServiceRefundRejectionReason('   ')).toBe(false);
+    // Trimmed first, as the service and the database count it.
+    const padded = ` ${'a'.repeat(500)} `;
+    expect(
+      serviceRefundRejectRequestSchema.safeParse({ idempotencyKey: 'reject-key-2', reason: padded })
+        .success,
+    ).toBe(true);
+    expect(
+      serviceRefundRejectRequestSchema.safeParse({ idempotencyKey: 'reject-key-3', reason: '   ' })
+        .success,
+    ).toBe(false);
   });
 });
 

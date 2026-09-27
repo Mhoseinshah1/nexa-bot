@@ -84,6 +84,25 @@ export const SERVICE_REFUND_REASON_MIN_LENGTH = 3;
 export const SERVICE_REFUND_REASON_MAX_LENGTH = 500;
 
 /**
+ * An administrator's rejection reason, in code points after trimming: required, at most 500.
+ * The database CHECK counts the same way (`length(btrim(...))`).
+ */
+export const SERVICE_REFUND_REJECTION_REASON_MAX_LENGTH = 500;
+
+/**
+ * The ONE rejection-reason rule, for the HTTP schema, the service and the Web form alike
+ * (Codex review of #83, round 8): trimmed, then counted in code points, exactly as the
+ * database CHECK counts it. The schema's old `.min(1).max(500)` checked the UNtrimmed text,
+ * so a 500-character reason with surrounding spaces was refused at the boundary although the
+ * domain accepts it; and a browser input's `maxLength` counts UTF-16 units, so the Web form
+ * stopped a reason at 250 emoji.
+ */
+export function isServiceRefundRejectionReason(text: string): boolean {
+  const length = Array.from(text.trim()).length;
+  return length >= 1 && length <= SERVICE_REFUND_REJECTION_REASON_MAX_LENGTH;
+}
+
+/**
  * The `refunds.reason` every refund this workflow creates carries.
  *
  * A constant, like `AUTOMATIC_REFUND_REASON`, so a reconciliation can tell these refunds
