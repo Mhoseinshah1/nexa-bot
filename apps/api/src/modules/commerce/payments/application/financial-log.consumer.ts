@@ -327,14 +327,18 @@ function amounts(payment: PaymentRecord): {
 function provider(invoice: GatewayInvoiceRecord | null): TemplateValues {
   if (invoice === null) return { providerInvoiceId: NONE, providerFinalAmount: NONE };
   /*
-   * A payment the provider PUSHED and Nexa recorded (Telegram Stars, Package A): the
-   * provider's own id for it is the CHARGE id — what an operator reconciles by, and what
-   * a manual Star refund would need — and the amount is the Stars that charge carried,
-   * which the record step proved equal to the snapshot. Never the payload or a token.
+   * A rate-converted attempt (Telegram Stars, Package A): once paid, its provider id is
+   * the CHARGE id — what an operator reconciles by, and what a manual Star refund would
+   * need — and its amount is the Stars it asked for, which the record step proved equal to
+   * what was charged. Never the payload or a token.
    */
-  if (invoice.providerChargeId !== null) {
+  if (invoice.conversionRateMinor !== null) {
+    // A rate-converted attempt's only provider amount is the one it asked for (XTR).
     return {
-      providerInvoiceId: `charge:${invoice.providerChargeId}`,
+      providerInvoiceId:
+        invoice.providerChargeId !== null
+          ? `charge:${invoice.providerChargeId}`
+          : (invoice.providerInvoiceId ?? NONE),
       providerFinalAmount: `${invoice.sentAmount.toString()} ${invoice.providerUnit}`,
     };
   }

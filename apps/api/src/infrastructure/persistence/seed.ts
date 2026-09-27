@@ -233,10 +233,14 @@ export async function seed(db: Database, cipher: SecretCipher): Promise<void> {
            * A route that needs a credential is seeded DISABLED (WP11A): the seed stores no
            * key, and an active route with no key is one every customer would be refused
            * by. A case that wants it on stores a key and enables it, as an operator must.
+           * So is a route priced by an operator's rate (Package A, Telegram Stars): the seed
+           * sets no rate, and the product refuses to switch one on without it.
            */
-          status: PAYMENT_GATEWAY_DESCRIPTORS[provider].requiresCredentials
-            ? ('DISABLED' as const)
-            : ('ACTIVE' as const),
+          status:
+            PAYMENT_GATEWAY_DESCRIPTORS[provider].requiresCredentials ||
+            PAYMENT_GATEWAY_DESCRIPTORS[provider].conversion === 'FIXED_RATE'
+              ? ('DISABLED' as const)
+              : ('ACTIVE' as const),
           // The seed writes no `sales.currency`, so the registry default is what these
           // bounds mean — the same answer 0078 gives an upgraded tenant with no row.
           boundsCurrency: 'IRT' as const,

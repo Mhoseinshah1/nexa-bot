@@ -119,7 +119,7 @@ type RecordStep =
  *   A record that throws is the webhook's 500, so Telegram redelivers: a charge nobody
  *   recorded is the one failure this route cannot repair afterwards.
  *
- * Nothing here ever refunds Stars: `refundStarPayment` is not called (brief A6).
+ * Nothing here ever refunds Stars: Telegram's Star-refund method is never called (brief A6).
  */
 export class StarsPaymentService {
   constructor(private readonly deps: StarsPaymentServiceDeps) {}
