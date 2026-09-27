@@ -61,6 +61,12 @@ export interface PaymentRecord {
    * was claimed from what was checked.
    */
   readonly customerSignalledAt: Date | null;
+  /**
+   * Until when an approved Telegram Stars pre-checkout holds this payment against
+   * cancellation (Codex review of #85). Null for every other route, and for a Stars
+   * attempt nobody has approved at checkout.
+   */
+  readonly checkoutHeldUntil: Date | null;
   readonly expiresAt: Date | null;
   /**
    * The route the payment was offered through, snapshotted at creation (D5, D7). Null
@@ -377,6 +383,31 @@ export interface PaymentRepository {
    * the read a different snapshot from the write.
    */
   hasClaimedPendingForOrder(scope: TenantContext, orderId: OrderId, tx: unknown): Promise<boolean>;
+
+  /**
+   * Whether a PENDING payment against this order is held by an approved Stars
+   * pre-checkout at `now` (Codex review of #85). Asked AFTER `cancelPendingForOrder`, which
+   * leaves such a row behind, for the reason `hasClaimedPendingForOrder` is asked after it.
+   */
+  hasCheckoutHeldPendingForOrder(
+    scope: TenantContext,
+    orderId: OrderId,
+    now: Date,
+    tx: unknown,
+  ): Promise<boolean>;
+
+  /**
+   * Holds one PENDING gateway payment until `until`: an approved Stars pre-checkout
+   * (Codex review of #85). One conditional UPDATE; false when the payment is no longer
+   * PENDING, which the caller turns into a refused checkout.
+   */
+  holdForCheckout(
+    scope: TenantContext,
+    id: PaymentId,
+    until: Date,
+    now: Date,
+    tx: unknown,
+  ): Promise<boolean>;
 
   /**
    * Withdraws every PENDING payment against one order. The `CANCEL` edge, as a set.

@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   COMMERCE_ERROR_CODES,
@@ -1390,6 +1390,20 @@ export function PaymentDetailPage({
                         <Copyable key="pi" value={row.gatewayInvoice.providerInvoiceId} />
                       ),
                     ],
+                    /*
+                     * The provider's own id for the CHARGE (Telegram Stars'
+                     * `telegram_payment_charge_id`): what an operator reconciles or refunds by,
+                     * so it is shown and copyable (Codex review of #85). Absent for a route
+                     * that has none, rather than a dash that suggests one is missing.
+                     */
+                    ...(row.gatewayInvoice.providerChargeId === null
+                      ? []
+                      : [
+                          [
+                            t('web.payment_gateway_charge_id'),
+                            <Copyable key="pc" value={row.gatewayInvoice.providerChargeId} />,
+                          ] as [ReactNode, ReactNode],
+                        ]),
                     [
                       t('web.payment_gateway_invoice_creation'),
                       <Ltr key="cs">

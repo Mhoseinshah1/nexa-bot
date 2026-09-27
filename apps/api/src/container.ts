@@ -1540,6 +1540,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     payments: {
       claimedPendingFor: (scope, orderId, tx) =>
         paymentRepository.hasClaimedPendingForOrder(scope, orderId, tx),
+      checkoutHeldFor: (scope, orderId, now, tx) =>
+        paymentRepository.hasCheckoutHeldPendingForOrder(scope, orderId, now, tx),
       withdrawPendingFor: (scope, orderId, now, tx) =>
         paymentRepository.cancelPendingForOrder(scope, orderId, now, tx),
     },

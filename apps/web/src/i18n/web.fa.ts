@@ -1261,6 +1261,7 @@ export const WEB_FA = {
     'اطلاعات سمت درگاه برای پشتیبانی و بررسی. مبالغ درگاه فقط اطلاعات تکمیلی‌اند؛ تأیید پرداخت فقط با استعلام مستقیم (completed و paid=true) و پیش از پایان مهلت ۷۰ دقیقه‌ای انجام می‌شود.',
   'web.payment_gateway_invoice_order_id': 'شناسهٔ سفارش در درگاه',
   'web.payment_gateway_invoice_id': 'شناسهٔ فاکتور درگاه',
+  'web.payment_gateway_charge_id': 'شناسهٔ پرداخت درگاه',
   'web.payment_gateway_invoice_creation': 'ساخت فاکتور',
   'web.payment_gateway_invoice_status': 'آخرین وضعیت استعلام',
   'web.payment_gateway_invoice_last_inquiry': 'آخرین استعلام',

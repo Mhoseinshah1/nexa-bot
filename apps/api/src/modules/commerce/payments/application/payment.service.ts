@@ -732,6 +732,17 @@ export class PaymentService {
             'A transfer for this order is waiting to be reviewed.',
           );
         }
+        /*
+         * A Stars payment approved at checkout is money in flight too (Codex review of
+         * #85): debiting the wallet as well would be two payments for one order. Refused,
+         * and the withdrawals above roll back with it.
+         */
+        if (await this.deps.repository.hasCheckoutHeldPendingForOrder(scope, orderId, now, tx)) {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.PAYMENT_CHECKOUT_IN_PROGRESS,
+            'A Telegram Stars payment for this order is being completed.',
+          );
+        }
 
         /*
          * The customer row next, and everything authoritative is read AFTER it.
@@ -2206,7 +2217,8 @@ export class PaymentService {
     tx: TransactionScope,
     payment: PaymentRecord,
     confirmation: {
-      readonly evidenceKind: 'WALLET_DEBIT' | 'OPERATOR_REVIEW' | 'GATEWAY_INQUIRY';
+      readonly evidenceKind:
+        'WALLET_DEBIT' | 'OPERATOR_REVIEW' | 'GATEWAY_INQUIRY' | 'GATEWAY_CALLBACK';
       readonly evidenceNote: string | null;
       readonly confirmedByAdminId: string | null;
       readonly confirmedAt: Date;
@@ -2808,6 +2820,22 @@ export class PaymentService {
         }
 
         /*
+         * A Stars payment approved at checkout moments ago is not theirs to withdraw
+         * either (Codex review of #85): Telegram charges right after the approval. Read
+         * from the row this transaction holds FOR UPDATE, which the approval also writes,
+         * so the two are serialised.
+         */
+        if (
+          payment.checkoutHeldUntil !== null &&
+          payment.checkoutHeldUntil.getTime() > now.getTime()
+        ) {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.PAYMENT_CHECKOUT_IN_PROGRESS,
+            'A Telegram Stars payment is being completed.',
+          );
+        }
+
+        /*
          * A transfer the customer sent a RECEIPT for is not theirs to withdraw (Payment
          * File 02 §9, D1). The receipt has no timer and leaves review only through a
          * reviewer's approve, reject or credit — a withdrawal would be a fourth way out
@@ -3366,8 +3394,21 @@ export class PaymentService {
         if (payment.expiresAt === null || now.getTime() >= payment.expiresAt.getTime()) {
           return { outcome: 'NOT_ELIGIBLE', reason: 'DEADLINE_PASSED', payment };
         }
+        /*
+         * The evidence is what APPROVED it, by the route's own descriptor (Codex review of
+         * #85): an inquiry route was asked server to server; a recorded-payment route (Stars)
+         * was told, on the bot's authenticated webhook, and asked nothing. The payment's
+         * route is its frozen snapshot, so this cannot drift from how it was offered.
+         */
+        const approval =
+          payment.gatewayProvider === null
+            ? 'INQUIRY'
+            : PAYMENT_GATEWAY_DESCRIPTORS[payment.gatewayProvider].approval;
         const confirmation = {
-          evidenceKind: 'GATEWAY_INQUIRY' as const,
+          evidenceKind:
+            approval === 'RECORDED_PAYMENT'
+              ? ('GATEWAY_CALLBACK' as const)
+              : ('GATEWAY_INQUIRY' as const),
           evidenceNote: input.evidenceNote,
           confirmedByAdminId: null,
           confirmedAt: now,
@@ -3782,7 +3823,8 @@ export class PaymentService {
     payment: PaymentRecord,
     order: OrderRecord,
     confirmation: {
-      readonly evidenceKind: 'WALLET_DEBIT' | 'OPERATOR_REVIEW' | 'GATEWAY_INQUIRY';
+      readonly evidenceKind:
+        'WALLET_DEBIT' | 'OPERATOR_REVIEW' | 'GATEWAY_INQUIRY' | 'GATEWAY_CALLBACK';
       readonly evidenceNote: string | null;
       readonly confirmedByAdminId: string | null;
       readonly confirmedAt: Date;

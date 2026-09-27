@@ -63,6 +63,11 @@ export const GATEWAY_CLAIM_LEASE_MS = 60_000;
 /** Rows per pass, per queue. Small: every one of them is a call to a third party. */
 export const GATEWAY_CREATE_BATCH = 5;
 export const GATEWAY_INQUIRY_BATCH = 10;
+/**
+ * How soon a recorded charge whose outcome did not commit is tried again, when no inquiry
+ * backoff applies (it is past its deadline, or on the last retry before it).
+ */
+export const RECORDED_OUTCOME_RETRY_MS = 60_000;
 
 /** The path a provider's webhook is served on. The route and this must agree. */
 export const GATEWAY_WEBHOOK_PATH_PREFIX = '/payments/webhook';
@@ -719,14 +724,20 @@ export class GatewayPaymentService {
     const recorded = invoice.providerChargeId !== null && invoice.providerPaid === true;
     /*
      * Nothing recorded is nothing approved: the row is unscheduled and the deadline
-     * decides, as it does for every attempt nobody paid. A retry is scheduled only for a
-     * recorded charge whose settlement did not finish, and only while it could still
-     * settle; past the deadline the settlement path records it as late, once.
+     * decides, as it does for every attempt nobody paid.
+     *
+     * A RECORDED charge stays scheduled until its outcome commits, whatever its
+     * eligibility (Codex review of #85). `recordOutcome` is what clears the schedule — for a
+     * settlement and for a late completion alike — so a transaction that fails between
+     * here and there (the late completion's own write, its audit, its operator notice) is
+     * retried rather than stranding money that has already moved with no outcome and no
+     * notice. The retry is harmless for the reason the inquiry path's is: the settlement is
+     * exactly-once and a late completion is recorded once.
      */
-    const retry =
-      recorded && eligible && expiresAt !== null
-        ? this.nextInquiryAt(invoice, now, expiresAt)
-        : null;
+    const retry = recorded
+      ? ((eligible && expiresAt !== null ? this.nextInquiryAt(invoice, now, expiresAt) : null) ??
+        new Date(now.getTime() + RECORDED_OUTCOME_RETRY_MS))
+      : null;
     await this.deps.uow.run(scope, (tx) =>
       this.deps.invoices.recordInquiry(
         scope,

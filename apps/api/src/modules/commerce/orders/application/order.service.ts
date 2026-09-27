@@ -115,6 +115,18 @@ export interface OrderPaymentLane {
   claimedPendingFor(scope: TenantContext, orderId: OrderId, tx: TransactionScope): Promise<boolean>;
 
   /**
+   * Whether a PENDING payment against this order is held by an approved Telegram Stars
+   * pre-checkout at `now` (Codex review of #85). Telegram charges right after the approval,
+   * so that payment is money in flight exactly as a claimed transfer is.
+   */
+  checkoutHeldFor(
+    scope: TenantContext,
+    orderId: OrderId,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<boolean>;
+
+  /**
    * Withdraws every PENDING payment against this order. Returns the ids it moved.
    *
    * A set rather than one row, because `requestManualTransfer` allows at most one
@@ -1729,6 +1741,18 @@ export class OrderService {
           throw errors.conflict(
             COMMERCE_ERROR_CODES.ORDER_TRANSFER_UNDER_REVIEW,
             'A transfer for this order is waiting to be reviewed.',
+          );
+        }
+        /*
+         * And a Stars payment approved at checkout moments ago (Codex review of #85). The
+         * withdrawal left it behind for the same reason it leaves a claimed transfer: the
+         * charge is on its way. Throwing rolls the withdrawal back; the customer is asked
+         * to wait, and the charge then settles the order it was for.
+         */
+        if (await this.deps.payments.checkoutHeldFor(scope, orderId, now, tx)) {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.PAYMENT_CHECKOUT_IN_PROGRESS,
+            'A Telegram Stars payment for this order is being completed.',
           );
         }
 

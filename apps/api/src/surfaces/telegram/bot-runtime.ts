@@ -3904,6 +3904,8 @@ export const REFUSAL_REPLIES: Readonly<Record<string, TemplateKey>> = {
    * situation they can see is false.
    */
   [COMMERCE_ERROR_CODES.ORDER_TRANSFER_UNDER_REVIEW]: 'bot.order.transfer_under_review',
+  // Package A, Codex review of #85: a Stars payment approved at checkout is on its way.
+  [COMMERCE_ERROR_CODES.PAYMENT_CHECKOUT_IN_PROGRESS]: 'bot.payment.checkout_in_progress',
   /*
    * The guard refused. ONE sentence for every reason it gives, exactly as the product
    * refusals collapse: the customer can act on none of "the amount does not match", "the

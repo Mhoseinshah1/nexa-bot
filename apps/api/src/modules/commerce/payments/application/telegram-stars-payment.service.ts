@@ -1,5 +1,6 @@
 import {
   systemJobActor,
+  TELEGRAM_STARS_CHECKOUT_HOLD_MS,
   type AuditWriter,
   type Clock,
   type CorrelationId,
@@ -73,7 +74,7 @@ export interface StarsPaymentServiceDeps {
     GatewayInvoiceRepository,
     'findByProviderOrderId' | 'lockByProviderOrderId' | 'findByChargeId' | 'recordCharge'
   >;
-  readonly payments: Pick<PaymentRepository, 'findById'>;
+  readonly payments: Pick<PaymentRepository, 'findById' | 'findByIdForUpdate' | 'holdForCheckout'>;
   readonly customers: Pick<CustomerRepository, 'findById'>;
   readonly orders: Pick<OrderRepository, 'findById'>;
   readonly settlement: Pick<GatewayPaymentService, 'settleRecorded'>;
@@ -142,18 +143,60 @@ export class StarsPaymentService {
     return refusal === null;
   }
 
+  /**
+   * Decide, and on approval HOLD the payment, in one transaction (Codex review of #85).
+   *
+   * Telegram charges right after an approval, so an approved attempt is money in flight: a
+   * cancellation, a withdrawal or a wallet payment landing between the approval and
+   * `successful_payment` would leave a charge nothing can settle. The payment row is taken
+   * FOR UPDATE, decided from what that lock sees, and stamped `checkout_held_until` before
+   * the answer goes out; every path that ends a PENDING payment excludes a held row in the
+   * statement that moves it. The answer itself is sent after the commit — no network call
+   * inside a transaction — and a transaction that fails is a refusal.
+   */
   private async preCheckoutRefusal(
     scope: TenantContext,
     botInstanceId: string,
     update: StarsPreCheckoutUpdate,
   ): Promise<string | null> {
-    if (!(await this.deps.scopeActivity.scopeIsActive(scope))) return 'SCOPE_INACTIVE';
-    const invoice = await this.deps.invoices.findByProviderOrderId(scope, PROVIDER, update.payload);
-    if (invoice === null) return 'UNKNOWN_PAYLOAD';
-    // A charge is already on it: this attempt has been paid, and a second one must not be.
-    if (invoice.providerChargeId !== null) return 'ALREADY_PAID';
-    const facts = await this.factsFor(scope, invoice, botInstanceId, update);
-    return facts === null ? 'UNKNOWN_PAYMENT' : starsPreCheckoutRefusal(facts);
+    try {
+      return await this.deps.uow.run(scope, async (tx) => {
+        if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) return 'SCOPE_INACTIVE';
+        const invoice = await this.deps.invoices.lockByProviderOrderId(
+          scope,
+          PROVIDER,
+          update.payload,
+          tx,
+        );
+        if (invoice === null) return 'UNKNOWN_PAYLOAD';
+        // A charge is already on it: this attempt has been paid, and a second one must not be.
+        if (invoice.providerChargeId !== null) return 'ALREADY_PAID';
+        const locked = await this.deps.payments.findByIdForUpdate(
+          scope,
+          invoice.paymentId as PaymentId,
+          tx,
+        );
+        if (locked === null) return 'UNKNOWN_PAYMENT';
+        const facts = await this.factsFor(scope, invoice, botInstanceId, update, tx);
+        const refusal = facts === null ? 'UNKNOWN_PAYMENT' : starsPreCheckoutRefusal(facts);
+        if (refusal !== null) return refusal;
+        const now = this.deps.clock.now();
+        const held = await this.deps.payments.holdForCheckout(
+          scope,
+          invoice.paymentId as PaymentId,
+          new Date(now.getTime() + TELEGRAM_STARS_CHECKOUT_HOLD_MS),
+          now,
+          tx,
+        );
+        return held ? null : 'NOT_PENDING';
+      });
+    } catch (error) {
+      this.deps.logger.warn(
+        { provider: PROVIDER, error: error instanceof Error ? error.name : 'unknown' },
+        'stars pre-checkout could not be decided',
+      );
+      return 'UNDECIDED';
+    }
   }
 
   /**
@@ -234,7 +277,25 @@ export class StarsPaymentService {
     switch (step.kind) {
       case 'RECORDED':
       case 'DUPLICATE': {
-        const settled = await this.deps.settlement.settleRecorded(scope, step.invoice.paymentId);
+        /*
+         * The charge is recorded and due; settling it now is only its earlier arrival. A
+         * settlement that throws (the late completion's own write failing, say) is left to
+         * the worker, which the row is due for — never turned into the webhook's error,
+         * which would only make Telegram redeliver a charge that is already safe.
+         */
+        let settled: Awaited<ReturnType<GatewayPaymentService['settleRecorded']>> | 'DEFERRED';
+        try {
+          settled = await this.deps.settlement.settleRecorded(scope, step.invoice.paymentId);
+        } catch (error) {
+          this.deps.logger.warn(
+            {
+              paymentId: step.invoice.paymentId,
+              error: error instanceof Error ? error.name : 'unknown',
+            },
+            'stars payment recorded; settlement left to the worker',
+          );
+          settled = 'DEFERRED';
+        }
         this.deps.logger.info(
           { paymentId: step.invoice.paymentId, provider: PROVIDER, recorded: step.kind, settled },
           'stars payment recorded',

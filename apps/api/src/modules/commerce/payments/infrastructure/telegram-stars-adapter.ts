@@ -23,8 +23,8 @@ import type {
 /**
  * What a `sendInvoice` answer means for the attempt (Package A, audit §2.4).
  *
- * - A message id is `CREATED`, and the invoice's id is `message:<id>` — there is no other
- *   provider invoice id, and the message id is what an operator can find in the chat.
+ * - A message id is `CREATED`, and the invoice's id is `message:<chat>:<id>` — there is no
+ *   other provider invoice id, and the chat and message are what an operator can find.
  * - 429 is `RATE_LIMITED`: Telegram said in so many words it did not process the call.
  * - A readable 400 or 403 is `REFUSED` on the CUSTOMER's side (a chat that no longer
  *   exists, a bot the customer blocked); a readable 401 or 404 is `REFUSED` on the
@@ -40,12 +40,16 @@ export function starsCreateOutcome(
   sent: TelegramSendOutcome,
   orderId: string,
   stars: bigint,
+  chatId: string,
 ): GatewayCreateOutcome {
   if (sent.outcome === 'SUCCEEDED') {
     if (sent.messageId === null) return { kind: 'UNKNOWN', code: 'telegram.no_message_id' };
     return {
       kind: 'CREATED',
-      invoiceId: `message:${sent.messageId}`,
+      // A message id is unique only WITHIN a chat, and the invoice id is unique per tenant
+      // and provider: two customers' invoices are both `42` in their own chats. So the id
+      // names the chat too (Codex review of #85).
+      invoiceId: `message:${chatId}:${sent.messageId}`,
       orderId,
       invoiceUrl: null,
       webInvoiceUrl: null,
@@ -133,7 +137,7 @@ export class TelegramStarsAdapter implements ExternalGatewayAdapter {
       payload: request.orderId,
       stars: request.amount,
     });
-    return starsCreateOutcome(sent, request.orderId, request.amount);
+    return starsCreateOutcome(sent, request.orderId, request.amount, request.buyerChatId);
   }
 
   inquire(): Promise<GatewayInquiryOutcome> {
