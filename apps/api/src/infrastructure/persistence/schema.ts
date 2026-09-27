@@ -3328,6 +3328,15 @@ export const payments = pgTable(
      * customer tapping twice does not move the moment they first claimed to have paid.
      */
     customerSignalledAt: timestamptz('customer_signalled_at'),
+    /**
+     * Until when an APPROVED Telegram Stars pre-checkout holds this payment (Package A,
+     * Codex review of #85). Telegram charges right after the approval, so until then the
+     * payment is money in flight: every cancel, withdraw and wallet-replacement predicate
+     * excludes a row whose hold has not lapsed, in the same statement that moves it — a
+     * row-local predicate, so a cancellation that waited on the approval's row lock
+     * re-reads it rather than acting on what it saw before.
+     */
+    checkoutHeldUntil: timestamptz('checkout_held_until'),
     expiresAt: timestamptz('expires_at'),
     /**
      * The route the payment was offered through, snapshotted when it was created
@@ -3508,6 +3517,7 @@ export const payments = pgTable(
       'payments_customer_signal_check',
       sql`customer_signalled_at IS NULL OR method = 'MANUAL_TRANSFER'`,
     ),
+    check('payments_checkout_hold_check', sql`checkout_held_until IS NULL OR method = 'GATEWAY'`),
     check(
       'payments_gateway_provider_check',
       nullableEnumCheck('gateway_provider', PAYMENT_GATEWAY_PROVIDERS),
