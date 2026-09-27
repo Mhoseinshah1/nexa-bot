@@ -4,6 +4,7 @@ import type { ReactElement } from 'react';
 import { PaymentDetailPage, PaymentsPage } from '../../apps/web/src/pages/payments';
 import { resolve } from '../../apps/web/src/app';
 import { formatTimestamp } from '../../apps/web/src/format';
+import { t } from '../../apps/web/src/i18n/web.fa';
 import { renderPage, stubApi } from './harness';
 import { PAYMENT_ROUTES } from '@nexa/contracts';
 import * as client from '../../apps/web/src/api/client';
@@ -400,7 +401,8 @@ describe('the payment detail', () => {
     await screen.findAllByText('a1b2c3d4e5f60718:manual');
     const labels = [...view.container.querySelectorAll('button')]
       .map((b) => b.textContent?.trim())
-      .filter((label) => label !== '');
+      // The history's refresh only reads again; it is not a control over the payment.
+      .filter((label) => label !== '' && label !== t('web.refresh'));
     expect(labels, 'the payment page draws a control').toEqual([]);
   });
 });
@@ -435,7 +437,8 @@ describe('the payments route', () => {
     expect(view.queryByText('رد رسید')).toBeNull();
     const labels = [...view.container.querySelectorAll('button')]
       .map((b) => b.textContent?.trim())
-      .filter((label) => label !== '');
+      // The history's refresh only reads again; it is not a control over the payment.
+      .filter((label) => label !== '' && label !== t('web.refresh'));
     expect(labels, 'the payment page draws a control').toEqual([]);
   });
 
@@ -1289,7 +1292,8 @@ describe('the payment diagnostics (§21)', () => {
     // Read-only: the only buttons on the page are copy controls with no label.
     const labels = [...view.container.querySelectorAll('button')]
       .map((b) => b.textContent?.trim())
-      .filter((label) => label !== '');
+      // The history's refresh only reads again; it is not a control over the payment.
+      .filter((label) => label !== '' && label !== t('web.refresh'));
     expect(labels, 'the disposition card draws a control').toEqual([]);
   });
 

@@ -286,6 +286,13 @@ The card polled only while a notice was PENDING, so a payment still OPEN, with n
 yet, kept its history until something else moved it. It now also polls while the payment
 it shows is OPEN, at the same 15 s, and stops once the payment is decided.
 
+A ninth round, on `5e3ed4e`, found one more (P17-44). A payment already decided can still
+gain facts that no action on its page produces: an automatic refund of an undeliverable
+order, and its notice. Polling every decided payment for them would be the heavy polling
+the brief refuses. So the card keeps polling only while its payment or a notice is still
+moving, and now carries an explicit refresh (`web.refresh`) that reads the history again on
+request. The refresh is not drawn once the answer is final (a 403 or 404).
+
 Tests added:
 
 - **Unit:** `tests/unit/payment-timeline.test.ts` (7 cases) and

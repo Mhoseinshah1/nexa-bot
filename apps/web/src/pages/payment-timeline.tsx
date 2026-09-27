@@ -16,6 +16,7 @@ import { formatTimestamp } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
 import { Banner, Card, Copyable, DataTable, Empty, Ltr, Money, StateSwitch } from '../ui/kit';
 import { pollUnlessFinalWhile } from '../polling';
+import { retryOf } from '../view-state';
 
 /**
  * How often the history is read again while a notice it shows is still PENDING — the one
@@ -270,8 +271,26 @@ export function PaymentTimelineCard({
     }
   }, [data, paymentState, signalled, paymentId, queries]);
 
+  /*
+   * An explicit refresh (Codex review of #81). A decided payment can still gain facts no
+   * action on this page produces — an automatic refund of an undeliverable order, its
+   * notice — and polling every decided payment for them would be the heavy polling the
+   * brief refuses. So the card polls only while its payment or a notice is still moving,
+   * and says how to ask again otherwise. Not drawn once the answer is final (a 403/404).
+   */
+  const refresh = retryOf(timeline);
   return (
-    <Card title={t('web.payment_timeline')} hint={t('web.payment_timeline_hint')}>
+    <Card
+      title={t('web.payment_timeline')}
+      hint={t('web.payment_timeline_hint')}
+      actions={
+        refresh === undefined ? undefined : (
+          <button type="button" className="btn sm" onClick={refresh}>
+            {t('web.refresh')}
+          </button>
+        )
+      }
+    >
       <StateSwitch query={timeline} denied={false}>
         {data === undefined ? null : (
           <>

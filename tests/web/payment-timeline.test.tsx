@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ReactElement } from 'react';
-import { screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { resolve } from '../../apps/web/src/app';
 import {
   PaymentTimelineCard,
@@ -87,10 +87,15 @@ describe('payment timeline card', () => {
     expect(
       screen.getByText(t('web.payment_timeline_delivery_delivered'), { exact: false }),
     ).toBeInTheDocument();
-    // The only buttons are the copy buttons beside an administrator id; nothing acts.
+    // The only buttons are the copy buttons beside an administrator id and the refresh,
+    // which only reads again; nothing acts.
     const buttons = [...container.querySelectorAll('button')];
     expect(buttons.length).toBeGreaterThan(0);
-    expect(buttons.every((b) => b.getAttribute('aria-label') === t('web.copy'))).toBe(true);
+    expect(
+      buttons.every(
+        (b) => b.getAttribute('aria-label') === t('web.copy') || b.textContent === t('web.refresh'),
+      ),
+    ).toBe(true);
     expect(screen.queryByText(t('web.payment_timeline_withheld'), { exact: false })).toBeNull();
     expect(screen.queryByText(t('web.payment_timeline_truncated'))).toBeNull();
   });
@@ -457,6 +462,26 @@ describe('the history does not keep an answer that has moved', () => {
    * Codex review of #81: a pending payment with no notice yet gains its decision from a
    * worker or another operator, and nothing on this page would ask for it.
    */
+  /*
+   * Codex review of #81: a decided payment can still gain facts nothing on this page
+   * produces — an automatic refund of an undeliverable order and its notice. Polling every
+   * decided payment would be heavy polling, so the card offers an explicit refresh instead.
+   */
+  it('reads a decided payment’s history again when asked, without polling it', async () => {
+    const api = stubApi(timeline());
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      renderPage(<PaymentTimelineCard paymentId={PAYMENT_ID} paymentState="FAILED" />);
+      await waitFor(() => expect(screen.getByRole('table')).toBeInTheDocument());
+      await vi.advanceTimersByTimeAsync(TIMELINE_UNSETTLED_POLL_MS * 3);
+      expect(timelineReads(api.calls), 'a decided history is not polled').toBe(1);
+      fireEvent.click(screen.getByRole('button', { name: t('web.refresh') }));
+      await waitFor(() => expect(timelineReads(api.calls)).toBe(2));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('reads the history of a payment still open again, to see its decision arrive', async () => {
     const api = stubApi(timeline({ entries: [timelineCreated] }));
     vi.useFakeTimers({ shouldAdvanceTime: true });
