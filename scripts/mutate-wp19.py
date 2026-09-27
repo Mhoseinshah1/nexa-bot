@@ -29,7 +29,7 @@ CL='apps/web/src/api/client.ts'
 H='packages/contracts/src/http.ts'
 CI='tests/unit/contracts-invariants.test.ts'
 M=[
- ('W19-01',[(S,"if (succeeded && item.serviceState !== 'TERMINATED') {","if (false && succeeded && item.serviceState !== 'TERMINATED') {"),(R,"          or(\n","          or(\n            sql`true`,\n")],'did not move'),
+ ('W19-01',[(S,"if (succeeded && item.serviceState !== 'TERMINATED') {","if (false && succeeded && item.serviceState !== 'TERMINATED') {"),(R,"           */\n          or(\n","           */\n          or(\n            sql`true`,\n")],'did not move'),
  ('W19-02',[(R,"inArray(provisioningOperations.state, [...OPERATION_TERMINAL_STATES]),","inArray(provisioningOperations.state, [...OPERATION_TERMINAL_STATES, 'UNKNOWN' as never]),")],'UNKNOWN'),
  ('W19-02b',[(R,"inArray(provisioningOperations.state, [...OPERATION_TERMINAL_STATES]),","inArray(provisioningOperations.state, [...OPERATION_TERMINAL_STATES, 'UNKNOWN' as never]),"),(R,"inArray(provisioningOperations.state, ['FAILED', 'ABANDONED']),","inArray(provisioningOperations.state, ['FAILED', 'ABANDONED', 'UNKNOWN']),")],'UNKNOWN'),
  ('W19-03',[(S,"const succeeded = item.operationState === 'SUCCEEDED';","const succeeded = item.operationState !== 'ABANDONED';")],'definitively fails'),
@@ -207,7 +207,7 @@ M+=[
         and(
           eq(serviceRefundRequests.tenantId, tenantId),
           eq(serviceRefundRequests.id, id),""")],'approval and a rejection',None,("ALTER TABLE service_refund_requests DROP CONSTRAINT service_refund_requests_rejected_check","TRUNCATE service_refund_requests CASCADE; ALTER TABLE service_refund_requests ADD CONSTRAINT service_refund_requests_rejected_check CHECK (state <> 'REJECTED' OR (rejection_reason IS NOT NULL AND length(btrim(rejection_reason)) BETWEEN 1 AND 500 AND decided_by_admin_id IS NOT NULL AND decided_at IS NOT NULL AND approved_amount_minor IS NULL AND refund_id IS NULL AND operation_id IS NULL))")),
- ('W19-24',[(R,"          or(\n","          or(\n            sql`true`,\n")],'fill the batch'),
+ ('W19-24',[(R,"           */\n          or(\n","           */\n          or(\n            sql`true`,\n")],'fill the batch'),
  ('W19-25',[(RF,"    if (await this.deps.repository.isServiceRefundReservation(scope, refund.id, tx)) {","    if (refund.reason === 'SERVICE_REFUND_REQUEST') {")],'reads like a request'),
  ('W19-26',[(S,"  ): Promise<ServiceRefundReview> {\n    await this.checkDecide(scope, actor);\n    const request = await this.requireRequest(scope, requestId);","  ): Promise<ServiceRefundReview> {\n    await this.deps.guard.check(scope, actor, SERVICE_REFUND_VIEW_PERMISSION);\n    const request = await this.requireRequest(scope, requestId);")],'exactly the two decision keys'),
  ('W19-27',[(DS,"      if (request.state !== 'EXECUTING') return { outcome: 'CLOSED' };\n","")],'as decided, not as started'),
@@ -316,7 +316,8 @@ M+=[
  ('W19-61',[(APP,"    permission: ['services.view', 'refunds.view'],","    permission: 'services.view',")],'refunds.view alone',('web','tests/web/service-refund-requests.test.tsx')),
  # Round 6 (Codex review of #83).
  ('W19-22c',[(RF,"      if ((await this.deps.wallet.findByReference(scope, `${refundId}:refund`, tx)) !== null) {\n        return before;\n      }","      return before;"),(R,"              eq(refunds.state, 'REQUESTED'),\n",""),(S,"const removed = gone && item.refundState === 'REQUESTED';","const removed = gone;")],'closed elsewhere'),
- ('W19-01b',[(S,"if (succeeded && item.serviceState !== 'TERMINATED') {","if (false && succeeded && item.serviceState !== 'TERMINATED') {"),(R,"          or(\n","          or(\n            sql`true`,\n"),(S,"      if (succeeded && !removed && !(gone && released)) return false;\n","")],'did not move'),
+ ('W19-02c',[(R,"inArray(provisioningOperations.state, [...OPERATION_TERMINAL_STATES]),","inArray(provisioningOperations.state, [...OPERATION_TERMINAL_STATES, 'UNKNOWN' as never]),"),(R,"inArray(provisioningOperations.state, ['FAILED', 'ABANDONED']),","inArray(provisioningOperations.state, ['FAILED', 'ABANDONED', 'UNKNOWN']),"),(R,"sql`not ${undecidedTermination()}`","sql`true`"),(S,"(await this.deps.repository.terminationUndecided(scope, request.serviceId, tx))","false")],'UNKNOWN'),
+ ('W19-01b',[(S,"if (succeeded && item.serviceState !== 'TERMINATED') {","if (false && succeeded && item.serviceState !== 'TERMINATED') {"),(R,"           */\n          or(\n","           */\n          or(\n            sql`true`,\n"),(S,"      if (succeeded && !removed && !(gone && released)) return false;\n","")],'did not move'),
  ('W19-62',[(S,"const removed = gone && item.refundState === 'REQUESTED';","const removed = succeeded;")],'another deletion removed'),
  ('W19-63',[(S,"const removed = gone && item.refundState === 'REQUESTED';","const removed = gone;")],'released elsewhere'),
  ('W19-64',[(S,"(await this.deps.repository.terminationUndecided(scope, request.serviceId, tx))","false")],'in flight'),
