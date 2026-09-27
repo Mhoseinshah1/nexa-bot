@@ -1284,12 +1284,22 @@ describe('WP19 — a customer asks for their money back', () => {
         await refused(ctx.container.serviceRefundRequests.review(tenantA, owner, requestId)),
       ).toBe(COMMERCE_ERROR_CODES.SERVICE_REFUND_REQUEST_NOT_FOUND);
     }
-    // And the HTTP boundary parses its path ids before the service is reached.
+    // And the HTTP boundary parses its path ids before the service is reached. The bodies are
+    // valid, so the only ZodError left to raise is the path id's.
     const { controller, request } = await asWebOwner();
     await expect(
-      controller.approve(request, 'not-a-uuid', { amountMinor: '1000', confirm: true }),
+      controller.approve(request, 'not-a-uuid', {
+        idempotencyKey: 'wp19-bad-id-approve',
+        amountMinor: '1000',
+        confirm: true,
+      }),
     ).rejects.toMatchObject({ name: 'ZodError' });
-    await expect(controller.reject(request, 'not-a-uuid', { reason: 'رد' })).rejects.toMatchObject({
+    await expect(
+      controller.reject(request, 'not-a-uuid', {
+        idempotencyKey: 'wp19-bad-id-reject',
+        reason: 'رد',
+      }),
+    ).rejects.toMatchObject({
       name: 'ZodError',
     });
     await expect(controller.forService(request, 'not-a-uuid')).rejects.toMatchObject({
