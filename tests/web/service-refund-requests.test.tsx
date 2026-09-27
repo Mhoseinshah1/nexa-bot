@@ -142,7 +142,7 @@ describe('a finance reviewer holding refunds.view alone (Codex review of #83, ro
 });
 
 describe('the attention card’s paging', () => {
-  it('follows the server’s cursor to the oldest request that wants an operator (Codex review of #83)', async () => {
+  it('reads one page of the stream, and the next only when asked, by the server’s cursor (Codex review of #83, rounds 6 and 9)', async () => {
     const oldest = '019250ab-cdef-7012-8345-6789abcdef09';
     const api = stubApi([
       {
@@ -171,13 +171,22 @@ describe('the attention card’s paging', () => {
       },
     ]);
     renderPage(<OpenServiceRefundRequestsCard />);
-    const table = await screen.findByRole('table');
-    expect(within(table).getByText('تازه')).toBeInTheDocument();
-    expect(within(table).getByText('قدیمی‌ترین')).toBeInTheDocument();
+    const first = await screen.findByRole('table');
+    expect(within(first).getByText('تازه')).toBeInTheDocument();
+    // One page on arrival: a failure history is not drained on every visit (round 9).
+    expect(within(first).queryByText('قدیمی‌ترین')).not.toBeInTheDocument();
+    expect(api.calls.filter((call) => call.url.includes('before='))).toHaveLength(0);
+    expect(screen.getByRole('button', { name: t('web.newer') })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: t('web.older') }));
+    await waitFor(() =>
+      expect(within(screen.getByRole('table')).getByText('قدیمی‌ترین')).toBeInTheDocument(),
+    );
     // The second read names the first page's cursor, both halves, in the same stream.
     const second = api.calls.find((call) => call.url.includes('before='));
     expect(second?.url).toContain('attention=true');
     expect(second?.url).toContain('beforeId=019250ab-cdef-7012-8345-6789abcdef08');
+    expect(screen.getByRole('button', { name: t('web.older') })).toBeDisabled();
   });
 });
 

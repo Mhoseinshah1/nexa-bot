@@ -6,6 +6,7 @@ import {
   EMPTY_PRODUCT_DISPLAY,
   PLATFORM_ERROR_CODES,
   SESSION_COOKIE_NAME,
+  errors,
   isNexaError,
   money,
   type ActorContext,
@@ -19,7 +20,10 @@ import {
   type UserId,
 } from '@nexa/contracts';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
-import { DrizzleServiceRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-service.repository';
+import {
+  DrizzleServiceRepository,
+  SERVICE_LIFECYCLE_LOCK_CLASS,
+} from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-service.repository';
 import { DrizzleOperationRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-operation.repository';
 import { startFakeMarzban, type FakeMarzban } from '../support/fake-marzban';
 import { ServiceRefundRequestsController } from '../../apps/api/src/surfaces/web/service-refund-requests.controller';
@@ -51,6 +55,7 @@ type WebRequest = Parameters<ServiceRefundRequestsController['list']>[0];
 const BOT_A = SEED_IDS.botA1 as BotInstanceId;
 const CUSTOMER_TG = '910911';
 const ADMIN_TG = '920922';
+const DECIDER_TG = '920923';
 const PRICE = 250_000n;
 
 const systemActor = (correlationId: string): ActorContext => ({
@@ -229,6 +234,72 @@ describe('WP19 — a customer asks for their money back', () => {
       idempotencyKey,
     });
 
+  /** A paid renewal of the service, from a wallet funded for it: settles, and plans a RENEW. */
+  async function renew(serviceId: string, key: string): Promise<void> {
+    await ctx.container.wallet.adjust(tenantA, owner, customerA, {
+      idempotencyKey: `${key}-renew-credit`,
+      direction: 'CREDIT',
+      amountMinor: PRICE,
+      currency: 'IRT',
+      note: 'fixture',
+    });
+    const { order } = await ctx.container.commercialActions.draft(
+      tenantA,
+      systemActor(key),
+      customerA,
+      { serviceId, kind: 'RENEW', idempotencyKey: `act-${key}-quote` },
+    );
+    await ctx.container.commercialActions.confirm(tenantA, systemActor(key), customerA, {
+      orderId: order.id,
+      idempotencyKey: `act-${key}-confirm`,
+    });
+    await ctx.container.payments.settleFromWallet(tenantA, systemActor(key), customerA, {
+      idempotencyKey: `act-${key}-pay`,
+      orderId: order.id,
+    });
+  }
+
+  const renewalsOf = async (serviceId: string) =>
+    (await operations.listForService(tenantA, serviceId, 50)).filter(
+      (operation) => operation.type === 'RENEW',
+    );
+
+  /** Holds the service's lifecycle lock in a transaction of its own until released. */
+  async function holdLifecycle(serviceId: string): Promise<{ release: () => Promise<void> }> {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    let held!: () => void;
+    const holding = new Promise<void>((resolve) => (held = resolve));
+    const holder = ctx.container.database.db.transaction(async (tx) => {
+      await tx.execute(
+        sql`SELECT pg_advisory_xact_lock(${SERVICE_LIFECYCLE_LOCK_CLASS},
+              hashtext(${`${tenantA.tenantId}:${serviceId}`}))`,
+      );
+      held();
+      await gate;
+    });
+    await holding;
+    return {
+      release: async () => {
+        release();
+        await holder;
+      },
+    };
+  }
+
+  /** Resolves once some transaction is waiting for an advisory lock. */
+  async function someoneWaitsOnAdvisory(what: string): Promise<void> {
+    const deadline = Date.now() + 5_000;
+    for (;;) {
+      const waiting = await countRows(
+        sql`SELECT count(*)::int AS n FROM pg_locks WHERE NOT granted AND locktype = 'advisory'`,
+      );
+      if (waiting >= 1) return;
+      if (Date.now() > deadline) throw new Error(`${what} never waited on the lifecycle lock`);
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
+
   const balance = async (): Promise<bigint> =>
     (await ctx.container.wallet.balance(tenantA, owner, customerA)).amountMinor;
 
@@ -321,7 +392,7 @@ describe('WP19 — a customer asks for their money back', () => {
 
   /** The Web Admin controller, and a request carrying a real session of the owner's. */
   /** An administrator holding exactly `refunds.issue` and `services.terminate`, and no view. */
-  async function deciderOnly(): Promise<ActorContext> {
+  async function deciderOnly(telegramUserId?: string): Promise<ActorContext> {
     const roleId = ctx.container.ids.uuid();
     await ctx.container.database.db.execute(
       sql`INSERT INTO roles (id, tenant_id, key, name, is_system)
@@ -333,7 +404,10 @@ describe('WP19 — a customer asks for their money back', () => {
             VALUES (${tenantA.tenantId}, ${roleId}, ${permission})` as never,
       );
     }
-    const decider = await createAdmin(ctx.container, tenantA, { username: 'decider-only' });
+    const decider = await createAdmin(ctx.container, tenantA, {
+      username: 'decider-only',
+      ...(telegramUserId === undefined ? {} : { telegramUserId }),
+    });
     await ctx.container.database.db.execute(
       sql`INSERT INTO admin_roles (tenant_id, admin_id, role_id)
           VALUES (${tenantA.tenantId}, ${decider.id}, ${roleId})` as never,
@@ -420,6 +494,48 @@ describe('WP19 — a customer asks for their money back', () => {
     const again = await handle(textUpdate('سرعت مناسب نبود'));
     expect(again.replyKey).toBe('bot.service.refund_request_registered');
     expect(await countRows(sql`SELECT count(*)::int AS n FROM service_refund_requests`)).toBe(1);
+  });
+
+  it('keeps the reason prompt open when filing fails with a typed error nobody answers (Codex review of #83, round 9)', async () => {
+    const service = await activeService('tg-file-typed');
+    await handle(tapUpdate(`fa:${service.id}`));
+    await handle(tapUpdate(`fb:${service.id}`));
+    const filing = vi
+      .spyOn(ctx.container.serviceRefundRequests, 'file')
+      .mockRejectedValueOnce(
+        errors.internal('platform.outbox_sequence_failed', 'The outbox sequence failed.'),
+      );
+    try {
+      await handle(textUpdate('سرعت مناسب نبود')).catch(() => undefined);
+    } finally {
+      filing.mockRestore();
+    }
+    expect(await countRows(sql`SELECT count(*)::int AS n FROM service_refund_requests`)).toBe(0);
+    const again = await handle(textUpdate('سرعت مناسب نبود'));
+    expect(again.replyKey).toBe('bot.service.refund_request_registered');
+    expect(await countRows(sql`SELECT count(*)::int AS n FROM service_refund_requests`)).toBe(1);
+  });
+
+  it('keeps the reason prompt shut when filing is refused with a sentence the customer is shown (Codex review of #83, round 9)', async () => {
+    const service = await activeService('tg-file-answered');
+    await handle(tapUpdate(`fa:${service.id}`));
+    await handle(tapUpdate(`fb:${service.id}`));
+    const filing = vi
+      .spyOn(ctx.container.serviceRefundRequests, 'file')
+      .mockRejectedValueOnce(
+        errors.conflict(COMMERCE_ERROR_CODES.SERVICE_ACTION_UNAVAILABLE, 'Not offered.'),
+      );
+    let answered: Awaited<ReturnType<typeof handle>>;
+    try {
+      answered = await handle(textUpdate('سرعت مناسب نبود'));
+    } finally {
+      filing.mockRestore();
+    }
+    expect(answered.replyKey).toBe('bot.service.action_unavailable');
+    // An answered refusal is an answer: the next message is not swallowed as a reason.
+    const next = await handle(textUpdate('سرعت مناسب نبود'));
+    expect(next.replyKey).not.toBe('bot.service.refund_request_registered');
+    expect(await countRows(sql`SELECT count(*)::int AS n FROM service_refund_requests`)).toBe(0);
   });
 
   it('never reads a message sent before the confirmation as the reason (Codex review of #83, round 8)', async () => {
@@ -1375,6 +1491,19 @@ describe('WP19 — a customer asks for their money back', () => {
     expect(stated.outcome).toBe('AMOUNT_ENTERED');
   });
 
+  it('answers a pushed card’s taps from an administrator with no panel section, and nothing else (Codex review of #83, round 9)', async () => {
+    const service = await activeService('decide-only-tg');
+    const filed = await file(service.id);
+    await deciderOnly(DECIDER_TG);
+    const opened = await handle(tapUpdate(`qa:${filed.request.id}`, DECIDER_TG));
+    expect(opened.replyKey).toBe('bot.admin.refund_request_amount_prompt');
+    const stated = await handle(textUpdate('90000', DECIDER_TG));
+    expect(stated.replyKey).toBe('bot.admin.refund_request_confirm');
+    // The panel is still theirs to not have: only the card's own intents are admitted.
+    const panel = await handle(tapUpdate('A:', DECIDER_TG));
+    expect(panel.replyKey).not.toBe('bot.admin.panel');
+  });
+
   it('answers a replayed confirmation after the deletion finished as decided, not as started (Codex review of #83)', async () => {
     const service = await activeService('replay-finished');
     const filed = await file(service.id);
@@ -1743,6 +1872,80 @@ describe('WP19 — a customer asks for their money back', () => {
         sql`SELECT count(*)::int AS n FROM refunds WHERE payment_id = ${filed.request.paymentId}`,
       ),
     ).toBe(0);
+  });
+
+  it('approves no deletion while a paid renewal of the service is undecided, and approves once it is applied (Codex review of #83, round 9)', async () => {
+    const service = await activeService('renew-first');
+    const filed = await file(service.id);
+    await renew(service.id, 'renew-first');
+    expect((await renewalsOf(service.id)).map((operation) => operation.state)).toEqual([
+      'PLANNED',
+    ]);
+    expect(
+      await refused(
+        ctx.container.serviceRefundRequests.approve(tenantA, owner, {
+          requestId: filed.request.id,
+          amountMinor: 1_000n,
+        }),
+      ),
+    ).toBe(COMMERCE_ERROR_CODES.SERVICE_REFUND_NOT_ELIGIBLE);
+    expect(await terminateOf(service.id)).toHaveLength(0);
+    expect((await requestRow(filed.request.id))?.request.state).toBe('OPEN');
+    // Applied, the renewal no longer stands in the way.
+    await ctx.container.provisionerLoop.tick();
+    expect((await renewalsOf(service.id)).map((operation) => operation.state)).toEqual([
+      'SUCCEEDED',
+    ]);
+    await ctx.container.serviceRefundRequests.approve(tenantA, owner, {
+      requestId: filed.request.id,
+      amountMinor: 1_000n,
+    });
+    expect(await terminateOf(service.id)).toHaveLength(1);
+  });
+
+  it('takes no payment for a renewal while the service’s refund deletion is undecided (Codex review of #83, round 9)', async () => {
+    const service = await activeService('renew-after');
+    const filed = await file(service.id);
+    await ctx.container.serviceRefundRequests.approve(tenantA, owner, {
+      requestId: filed.request.id,
+      amountMinor: 1_000n,
+    });
+    expect(await terminateOf(service.id)).toHaveLength(1);
+    const before = await balance();
+    const error = await renew(service.id, 'renew-after').then(
+      () => null,
+      (caught: unknown) => caught,
+    );
+    expect(isNexaError(error) ? error.code : error).toBe(
+      COMMERCE_ERROR_CODES.SERVICE_ACTION_NOT_ALLOWED,
+    );
+    expect(await renewalsOf(service.id)).toHaveLength(0);
+    // The fixture credited the price; the refused purchase debited nothing.
+    expect(await balance()).toBe(before + PRICE);
+  });
+
+  it('serialises an approval and a renewal’s settlement on the service’s lifecycle lock (Codex review of #83, round 9)', async () => {
+    const service = await activeService('lifecycle-lock');
+    const filed = await file(service.id);
+    // The approval waits for the lock before it decides anything.
+    const held = await holdLifecycle(service.id);
+    const approval = ctx.container.serviceRefundRequests.approve(tenantA, owner, {
+      requestId: filed.request.id,
+      amountMinor: 1_000n,
+    });
+    await someoneWaitsOnAdvisory('the approval');
+    await held.release();
+    await approval;
+    expect(await terminateOf(service.id)).toHaveLength(1);
+
+    // And a renewal's settlement waits for the same lock.
+    const second = await activeService('lifecycle-lock-2');
+    const heldAgain = await holdLifecycle(second.id);
+    const renewal = renew(second.id, 'lifecycle-lock-2');
+    await someoneWaitsOnAdvisory('the renewal');
+    await heldAgain.release();
+    await renewal;
+    expect(await renewalsOf(second.id)).toHaveLength(1);
   });
 
   it('answers a malformed request id as one that does not exist, before any query (Codex review of #83)', async () => {
