@@ -2738,4 +2738,59 @@ describe('WP19 — a customer asks for their money back', () => {
       await expect(waiting, `${label} completes after the settlement`).resolves.toBeDefined();
     }
   });
+
+  it('decides an approval’s eligibility under the lifecycle lock, not before it (Codex review of #83, round 11)', async () => {
+    /*
+     * A settlement plans a renewal under the lifecycle lock and commits. An approval that
+     * read eligibility before waiting for the lock would decide on the world before that
+     * renewal, and plan a deletion beside it — which the deletion's own lifecycle lock in
+     * `planWithin`, taken afterwards, cannot undo.
+     */
+    const service = await activeService('approval-under-lock');
+    const filed = await file(service.id);
+    const record = await services.findById(tenantA, service.id);
+    if (record === null) throw new Error('the service is gone');
+    let proceed!: () => void;
+    const go = new Promise<void>((resolve) => (proceed = resolve));
+    let held!: () => void;
+    const holding = new Promise<void>((resolve) => (held = resolve));
+    const settlement = ctx.container.database.db.transaction(async (tx) => {
+      await tx.execute(
+        sql`SELECT pg_advisory_xact_lock(${SERVICE_LIFECYCLE_LOCK_CLASS},
+              hashtext(${`${tenantA.tenantId}:${service.id}`}))`,
+      );
+      held();
+      await go;
+      // The renewal a settlement plans under the lock, as `planCommercialAction` does.
+      await operations.plan(
+        tenantA,
+        {
+          id: ctx.container.ids.uuid(),
+          // The id format the planners derive: sixteen hex digits.
+          operationId: ctx.container.ids.uuid().replace(/-/g, '').slice(-16) as never,
+          serviceId: service.id,
+          orderId: record.orderId,
+          requestedByCustomerId: null,
+          panelId: record.panelId,
+          type: 'RENEW',
+          target: { expiresAt: new Date(Date.now() + 30 * 86_400_000), trafficLimitBytes: null },
+        },
+        new Date(),
+        tx as never,
+      );
+    });
+    await holding;
+    const approval = ctx.container.serviceRefundRequests.approve(tenantA, owner, {
+      requestId: filed.request.id,
+      amountMinor: 1_000n,
+    });
+    await someoneWaitsOnAdvisory('the approval');
+    proceed();
+    await settlement;
+    expect(await refused(approval), 'approved beside an undecided renewal').toBe(
+      COMMERCE_ERROR_CODES.SERVICE_REFUND_NOT_ELIGIBLE,
+    );
+    expect(await terminateOf(service.id), 'no deletion planned beside it').toHaveLength(0);
+    expect((await requestRow(filed.request.id))?.request.state).toBe('OPEN');
+  });
 });
