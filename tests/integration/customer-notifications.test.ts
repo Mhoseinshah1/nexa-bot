@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  CUSTOMER_NOTIFICATION_BACKOFF_MS,
   CUSTOMER_NOTIFICATION_KINDS,
   CUSTOMER_NOTIFICATION_MAX_ATTEMPTS,
   CUSTOMER_NOTIFICATION_PRECONDITIONS,
@@ -261,6 +262,25 @@ describe('the customer notification lane', () => {
     // than lost, so this row does not have to wait for `reapStranded`.
     expect(row?.send_started_at).toBeNull();
     expect(row?.next_attempt_at).not.toBeNull();
+  });
+
+  it('a short retry_after never brings a retry earlier than the lane’s own back-off (WP20)', async () => {
+    /*
+     * Brief §3.1: the LATER of Telegram's retry_after and the local back-off. One second
+     * from Telegram used to become a one-second retry; the lane's own minute now holds.
+     */
+    const id = await customer(tenantA, '5014');
+    await enqueue(tenantA, id, 'PAYMENT_EXPIRED', ctx.container.ids.uuid());
+    const before = ctx.container.clock.now().getTime();
+
+    outcomes = [{ outcome: 'RATE_LIMITED', retryAfterMs: 1_000 }];
+    await sweep(lane());
+
+    const [row] = await rows(tenantA);
+    expect(row?.state).toBe('PENDING');
+    expect(new Date(String(row?.next_attempt_at)).getTime()).toBeGreaterThanOrEqual(
+      before + CUSTOMER_NOTIFICATION_BACKOFF_MS,
+    );
   });
 
   it('a refusal spends an attempt and stops at the ceiling', async () => {

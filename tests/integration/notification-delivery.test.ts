@@ -225,6 +225,14 @@ describe('notification delivery', () => {
       expect(transport.messages[0]?.html).toBe(true);
     });
 
+    /** Brings every pending intent due now, past the back-off its failure scheduled. */
+    async function makeDue(): Promise<void> {
+      await ctx.container.database.db.execute(
+        `UPDATE notifications SET next_attempt_at = now() - interval '1 second'
+          WHERE status = 'PENDING'` as never,
+      );
+    }
+
     it('retries a retryable failure without creating a second notification', async () => {
       await raiseError();
       transport.failNextWith({
@@ -242,6 +250,10 @@ describe('notification delivery', () => {
       expect(detail.intent.status).toBe('PENDING');
       expect(detail.attempts).toHaveLength(1);
       expect(detail.attempts[0]?.retryAfterMs).toBe(0);
+
+      // A retry_after of 0 is a floor, not an instruction to retry now (WP20): the
+      // dispatcher's own back-off still applies, so the test brings the intent due.
+      await makeDue();
 
       // The retry succeeds. One intent throughout, two attempts.
       const second = await ctx.container.notificationDispatcher.tick();
@@ -292,6 +304,8 @@ describe('notification delivery', () => {
 
       fail();
       await ctx.container.notificationDispatcher.tick();
+      // The dispatcher's own back-off applies whatever the retry_after (WP20).
+      await makeDue();
       fail();
       await ctx.container.notificationDispatcher.tick();
 

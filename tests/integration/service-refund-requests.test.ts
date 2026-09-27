@@ -27,6 +27,7 @@ import {
 import { DrizzleOperationRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-operation.repository';
 import { startFakeMarzban, type FakeMarzban } from '../support/fake-marzban';
 import { ServiceRefundRequestsController } from '../../apps/api/src/surfaces/web/service-refund-requests.controller';
+import { REFUND_PUSH_BACKOFF_MS } from '../../apps/api/src/modules/commerce/payments/application/service-refund-push.service';
 import {
   adminActorFor,
   createAdmin,
@@ -75,6 +76,8 @@ describe('WP19 — a customer asks for their money back', () => {
   let ctx: TestContext;
   let telegram: Server;
   let sent: Sent[];
+  /** Chats the stand-in answers with a 429 of one second. */
+  const rateLimitedChats = new Set<string>();
   let panel: FakeMarzban;
   let products: DrizzleProductRepository;
   let services: DrizzleServiceRepository;
@@ -100,6 +103,18 @@ describe('WP19 — a customer asks for their money back', () => {
           body = { unparseable: raw };
         }
         sent.push({ url: request.url ?? '', body });
+        if (rateLimitedChats.has(String(body.chat_id))) {
+          response.writeHead(429, { 'content-type': 'application/json' });
+          response.end(
+            JSON.stringify({
+              ok: false,
+              error_code: 429,
+              description: 'Too Many Requests',
+              parameters: { retry_after: 1 },
+            }),
+          );
+          return;
+        }
         response.writeHead(200, { 'content-type': 'application/json' });
         response.end(JSON.stringify({ ok: true, result: { message_id: 11 } }));
       });
@@ -129,6 +144,7 @@ describe('WP19 — a customer asks for their money back', () => {
     services = new DrizzleServiceRepository(ctx.container.database.db);
     operations = new DrizzleOperationRepository(ctx.container.database.db);
     sent = [];
+    rateLimitedChats.clear();
     panel = await startFakeMarzban({ host: '127.0.0.2' });
 
     const seeded = await createAdmin(ctx.container, tenantA, {
@@ -2554,6 +2570,29 @@ describe('WP19 — a customer asks for their money back', () => {
       'only the one holding both keys',
     ).toEqual([ownerId]);
     expect((await requestRow(filed.request.id))?.request.state).toBe('OPEN');
+  });
+
+  it('waits its own back-off when Telegram asks for less (WP20)', async () => {
+    const service = await activeService('limited-card');
+    const filed = await file(service.id);
+    await ctx.container.relay.processBatch();
+    rateLimitedChats.add(ADMIN_TG);
+    const before = ctx.container.clock.now().getTime();
+
+    await ctx.container.receiptReviewPushLoop.tick();
+
+    const pushes = (await ctx.container.database.db.execute(
+      sql`SELECT state, attempts, next_attempt_at FROM service_refund_request_pushes
+           WHERE request_id = ${filed.request.id}` as never,
+    )) as unknown as {
+      rows: { state: string; attempts: number; next_attempt_at: string | Date }[];
+    };
+    expect(pushes.rows).toHaveLength(1);
+    expect(pushes.rows[0]).toMatchObject({ state: 'PENDING', attempts: 0 });
+    // Telegram asked for one second; the lane's own minute is later, and wins.
+    expect(new Date(pushes.rows[0]?.next_attempt_at ?? 0).getTime()).toBeGreaterThanOrEqual(
+      before + REFUND_PUSH_BACKOFF_MS,
+    );
   });
 
   /** The paid source a service's refund request reserves against: its order's payment. */

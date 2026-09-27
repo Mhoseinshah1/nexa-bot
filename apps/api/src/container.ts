@@ -62,6 +62,8 @@ import { blocksReadiness } from './modules/platform/system/application/readiness
 import { createLogger, newCorrelationId } from './infrastructure/logging/logger.js';
 import { createDatabase, type DatabaseHandle } from './infrastructure/persistence/database.js';
 import { createRedis, type RedisHandle } from './infrastructure/redis/redis.js';
+import { RedisInteractionCounter } from './infrastructure/redis/redis-interaction-counter.js';
+import { AntiSpamService } from './modules/commerce/customers/application/anti-spam.service.js';
 import {
   DrizzleUnitOfWork,
   type TransactionScope,
@@ -607,6 +609,8 @@ export interface Container {
   readonly receiptFiles: TelegramReceiptFiles;
   readonly orders: OrderService;
   readonly botRuntime: BotRuntime;
+  /** WP20: counts every Telegram interaction, including the `/ping` the runtime never sees. */
+  readonly antiSpam: Pick<AntiSpamService, 'observe'>;
 
   // Control plane — Phase 2
   readonly panels: PanelService;
@@ -785,6 +789,12 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     },
   );
   const redis = createRedis(config.REDIS_URL);
+  /*
+   * Anti-spam's counter (WP20), on its own connection: the shared client waits for ever on
+   * a dead Redis, and a webhook turn must never wait on a counter. This one fails fast, and
+   * anti-spam fails open.
+   */
+  const interactionCounter = new RedisInteractionCounter(config.REDIS_URL);
 
   /*
    * The recovery repository is built HERE, above the unit of work, because the
@@ -837,6 +847,18 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     // transaction survived that transaction rolling back.
     record: (scope, event, tx) => opsLogRef.current.record(scope, event, tx),
   };
+  /*
+   * WP20: the one anti-spam counter. Shared by the bot runtime and by the webhook's
+   * `/ping` branch, which answers before the runtime runs: an interaction the runtime
+   * never sees is still an interaction.
+   */
+  const antiSpam = new AntiSpamService({
+    counter: interactionCounter,
+    opsEvents: opsLog,
+    conditions: new DrizzleOperationalConditionReader(database.db),
+    clock,
+    logger,
+  });
 
   const hasher = new ScryptPasswordHasher(scryptParamsFor(config.PASSWORD_HASH_PROFILE));
   const admins = new DrizzleAdminRepository(database.db);
@@ -1027,6 +1049,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     },
     database,
     writeGate,
+    // WP20: an exhausted message is announced once in the operations log.
+    opsLog,
   );
 
   // The readiness computation and the adapters that answer its questions. The
@@ -3709,7 +3733,10 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     provisionerLoop,
     delivery: deliveryService,
     orders: orderService,
+    antiSpam,
     botRuntime: new BotRuntime({
+      // WP20: more than 20 interactions in 10 s blocks the customer; fails open.
+      antiSpam,
       // WP11A: the external-gateway attempt's customer reads and the check tap.
       gateway: gatewayPayments,
       /*
@@ -3901,6 +3928,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       await serviceReminderLoop.stop();
       await customerNotificationLoop.stop();
       await receiptReviewPushLoop.stop();
+      await interactionCounter.close();
       await redis.close();
       await database.close();
     },

@@ -57,6 +57,7 @@
     "@types/react-dom": "19.2.5",
     "drizzle-orm": "0.45.2",
     "eslint": "10.9.1",
+    "ioredis": "5.9.0",
     "jsdom": "^27.4.0",
     "jsqr": "^1.4.0",
     "pg": "8.23.0",

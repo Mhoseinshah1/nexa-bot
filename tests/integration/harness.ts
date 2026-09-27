@@ -13,6 +13,7 @@ import type {
 import { connectionIdentityOf } from '../../apps/api/src/modules/platform/panels/application/panel-eligibility';
 import { DrizzlePanelRepository } from '../../apps/api/src/modules/platform/panels/infrastructure/drizzle-panel.repository';
 import { providerAdapter } from '../../apps/api/src/modules/platform/providers/infrastructure/adapter-registry';
+import { Redis } from 'ioredis';
 import { createContainer, type Container } from '../../apps/api/src/container';
 import { loadConfig } from '../../apps/api/src/infrastructure/config/load-config';
 import type { AppConfig } from '../../apps/api/src/infrastructure/config/config.schema';
@@ -77,6 +78,29 @@ export async function migrateOnce(databaseUrl: string): Promise<void> {
  * of them — TRUNCATE bypasses row triggers, so the guard stays in force for
  * application code while tests can still reset.
  */
+/**
+ * Anti-spam's windows live in Redis (WP20), not in a table, so truncating the database does not
+ * clear them — and the cases reuse the same tenants, bots and Telegram users, so one case's
+ * interactions would count against the next case's customer. Cleared by `resetDatabase`, which
+ * every suite calls, rather than by each suite: a fixture a case must remember to clean is one
+ * some case will not.
+ */
+let antiSpamRedis: Redis | null = null;
+export async function resetAntiSpamWindows(): Promise<void> {
+  antiSpamRedis ??= new Redis(process.env.REDIS_URL ?? 'redis://127.0.0.1:6379', {
+    lazyConnect: true,
+    maxRetriesPerRequest: 1,
+  });
+  antiSpamRedis.on('error', () => undefined);
+  if (antiSpamRedis.status === 'wait') await antiSpamRedis.connect();
+  let cursor = '0';
+  do {
+    const [next, keys] = await antiSpamRedis.scan(cursor, 'MATCH', 'nexa:antispam:*', 'COUNT', 500);
+    if (keys.length > 0) await antiSpamRedis.del(...keys);
+    cursor = next;
+  } while (cursor !== '0');
+}
+
 export async function resetDatabase(db: Database): Promise<void> {
   await db.execute(
     `TRUNCATE TABLE
@@ -121,6 +145,7 @@ export async function resetDatabase(db: Database): Promise<void> {
        customers
      RESTART IDENTITY CASCADE` as never,
   );
+  await resetAntiSpamWindows();
 }
 
 /**

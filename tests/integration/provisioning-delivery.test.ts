@@ -21,6 +21,7 @@ import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/ca
 import { DrizzleServiceRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-service.repository';
 import { DrizzleOperationRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-operation.repository';
 import { SUPERSEDED_BY_AUTOMATIC_REFUND } from '../../apps/api/src/modules/commerce/payments/application/refund.service';
+import { DELIVERY_BACKOFF_MS } from '../../apps/api/src/modules/commerce/provisioning/application/delivery.service';
 import { CANARY, startFake3xUi, type Fake3xUi } from '../support/fake-3xui';
 import {
   adminActorFor,
@@ -492,6 +493,31 @@ describe('a provisioned service announces itself', () => {
     /* Telegram said fifteen minutes. Anything sooner is us inventing a number. */
     const retryAt = service?.deliveryNextAttemptAt?.getTime() ?? 0;
     expect(retryAt).toBeGreaterThanOrEqual(before + 900_000);
+  });
+
+  it('waits its own back-off when Telegram asks for less (WP20)', async () => {
+    reply = (_request, response) => {
+      response.writeHead(429, { 'content-type': 'application/json' });
+      response.end(
+        JSON.stringify({
+          ok: false,
+          error_code: 429,
+          description: 'Too Many Requests: retry after 1',
+          parameters: { retry_after: 1 },
+        }),
+      );
+    };
+    const before = ctx.container.clock.now().getTime();
+    const orderId = await paidOrder('deliver-rate-limited-short');
+
+    await ctx.container.provisionerLoop.tick();
+
+    const service = await services.findByOrderId(tenantA, orderId);
+    expect(service?.deliveryState).toBe('PENDING');
+    // One second from Telegram; five minutes of our own. The later one holds.
+    expect(service?.deliveryNextAttemptAt?.getTime() ?? 0).toBeGreaterThanOrEqual(
+      before + DELIVERY_BACKOFF_MS,
+    );
   });
 
   it('retries the announcement without calling the provider again', async () => {

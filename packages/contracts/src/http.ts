@@ -395,6 +395,12 @@ export const systemDiagnosticsResponseSchema = z.object({
     oldestPendingAt: z.iso.datetime().nullable(),
     /** Unpublished messages that have failed at least once. */
     failing: z.number().int().nonnegative(),
+    /**
+     * Unpublished messages that reached `DELIVERY_MAX_FAILED_ATTEMPTS` (WP20). They are no
+     * longer retried automatically and are kept as evidence; they are counted in `failing`
+     * too.
+     */
+    exhausted: z.number().int().nonnegative(),
     /** The oldest failing messages, at most `SYSTEM_DIAGNOSTICS_SAMPLE_MAX`. */
     failingSample: z.array(
       z.object({
@@ -404,6 +410,9 @@ export const systemDiagnosticsResponseSchema = z.object({
         attempts: z.number().int(),
         occurredAt: z.iso.datetime(),
         lastError: z.string().nullable(),
+        /** When the relay tries it next; null once it is exhausted (WP20). */
+        nextAttemptAt: z.iso.datetime().nullable(),
+        exhausted: z.boolean(),
       }),
     ),
   }),

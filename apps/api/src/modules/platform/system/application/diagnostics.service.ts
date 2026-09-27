@@ -25,6 +25,8 @@ export interface OutboxDiagnostics {
   readonly pending: number;
   readonly oldestPendingAt: Date | null;
   readonly failing: number;
+  /** Failing messages at `DELIVERY_MAX_FAILED_ATTEMPTS`: no longer retried (WP20). */
+  readonly exhausted: number;
   readonly failingSample: readonly {
     readonly id: string;
     readonly eventType: string;
@@ -32,6 +34,8 @@ export interface OutboxDiagnostics {
     readonly attempts: number;
     readonly occurredAt: Date;
     readonly lastError: string | null;
+    readonly nextAttemptAt: Date | null;
+    readonly exhausted: boolean;
   }[];
 }
 

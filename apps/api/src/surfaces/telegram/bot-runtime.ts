@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import {
+  ANTI_SPAM_BLOCK_REASON,
   ADMIN_AMOUNT_CAPTURE_TTL_MS,
   COMMERCE_ERROR_CODES,
   SERVICE_REFUND_REASON_MAX_LENGTH,
@@ -25,6 +26,7 @@ import {
   connectionGuidePlatformSchema,
   paymentGatewayProviderSchema,
 } from '@nexa/contracts';
+import type { AntiSpamService } from '../../modules/commerce/customers/application/anti-spam.service.js';
 import type {
   ConnectionGuidePlatform,
   PaymentGatewayProvider,
@@ -3158,6 +3160,11 @@ export interface BotRuntimeDeps {
     'openApprove' | 'openReject' | 'submitText' | 'confirmApprove' | 'cancel'
   >;
   /**
+   * Anti-spam (WP20, brief §3.4–§3.5). Optional so the unit fixtures that build a runtime
+   * need not bring a counter; absent, nobody is counted and nobody is blocked for it.
+   */
+  readonly antiSpam?: Pick<AntiSpamService, 'observe'>;
+  /**
    * Block User from the receipt message (WP10 follow-up §4). Optional for the reason
    * `receiptCredits` is; without it the block button is not drawn. It blocks only through
    * `CustomerService` and holds nothing that decides a payment.
@@ -4138,6 +4145,10 @@ export function blockedReply(
   customer: Pick<CustomerRecord, 'blockedReason' | 'blockedReasonShown'>,
 ): PendingReply {
   const reason = customer.blockedReason?.trim() ?? '';
+  // Anti-spam's own block is answered in the owner's own sentence (WP20, brief §3.5).
+  if (reason === ANTI_SPAM_BLOCK_REASON) {
+    return { key: 'bot.blocked_spam', values: {}, buttons: [], orderId: null };
+  }
   if (!customer.blockedReasonShown || reason === '') {
     return { key: 'bot.blocked', values: {}, buttons: [], orderId: null };
   }
@@ -4248,6 +4259,30 @@ export class BotRuntime {
     const { intent } = command;
 
     /*
+     * 0. Anti-spam (WP20, brief §3.4), before any work.
+     *
+     * Every interaction is counted — text, commands (`/start` included), button presses,
+     * media — once per `update_id`, so Telegram redelivering an update does not count it
+     * twice. Counted whatever it claims to be: an intent is only what the update SAYS, and
+     * exempting admin-shaped callbacks would let any customer flood with `C:<uuid>` taps
+     * uncounted. Who is an administrator is decided below, by the binding, and only once
+     * the limit is crossed — so the ordinary turn pays for no extra lookup.
+     *
+     * Fails open: when the counter cannot be read the verdict is ALLOWED.
+     */
+    // One reader of `update_id` for the runtime (shared with WP19's prompt ordering).
+    const numericUpdateId = updateIdOf(input.update);
+    const updateId = numericUpdateId === undefined ? null : String(numericUpdateId);
+    const counted =
+      this.deps.antiSpam === undefined || updateId === null
+        ? null
+        : await this.deps.antiSpam.observe(scope, {
+            botInstanceId: input.botInstanceId,
+            telegramUserId: input.telegramUserId,
+            updateId,
+          });
+
+    /*
      * 1. The state change, committed.
      *
      * Runs for every intent this runtime SEES, not only `/start`. The customer's
@@ -4260,7 +4295,7 @@ export class BotRuntime {
      * `webhook.controller.ts` states it where the `return` is — named here too, because
      * "every intent" is the sentence a reader would otherwise take as complete.
      */
-    const { customer, arrival } = await this.deps.customers.resolveFromUpdate(scope, actor, {
+    const resolved = await this.deps.customers.resolveFromUpdate(scope, actor, {
       idempotencyKey: input.idempotencyKey,
       telegramUserId: input.telegramUserId,
       from: input.from,
@@ -4268,6 +4303,40 @@ export class BotRuntime {
       // A referral link's code, on the `/start` it opened (WP9 F2). Null on anything else.
       startPayload: intent === 'START' ? startPayloadOf(input.update) : null,
     });
+    let { customer, arrival } = resolved;
+
+    /*
+     * A bound administrator is staff, not a customer, and anti-spam is a rule about
+     * customers (brief §3.4). Asked of the binding — the one authority on who is an
+     * administrator — and only when the count has crossed the limit.
+     */
+    const spam =
+      counted !== null &&
+      counted.verdict !== 'ALLOWED' &&
+      (await this.deps.telegramAdmins?.resolve(scope, input.telegramUserId, actor.correlationId)) !=
+        null
+        ? null
+        : counted;
+
+    /*
+     * The 21st interaction, or a later one whose block has not landed yet, blocks the
+     * customer (brief §3.5) through the one block path there is, with the owner's reason,
+     * as `SYSTEM_JOB`. Conditional on ACTIVE, so concurrent triggers change the row once
+     * and an administrator's block that got there first keeps its own reason. The
+     * triggering update then takes the BLOCKED branch below: it never reaches `act`, so it
+     * cannot start any commercial work.
+     */
+    let blockedThisTurn = false;
+    if (spam !== null && spam.verdict !== 'ALLOWED' && arrival !== 'BLOCKED') {
+      const outcome = await this.deps.customers.blockForSpam(scope, actor, {
+        idempotencyKey: `${input.idempotencyKey}:anti-spam`,
+        customerId: customer.id,
+        interactions: spam.count ?? 0,
+      });
+      customer = outcome.customer;
+      arrival = 'BLOCKED';
+      blockedThisTurn = outcome.changed;
+    }
 
     /*
      * 2. The commercial work, still before any send.
@@ -4307,7 +4376,7 @@ export class BotRuntime {
       arrival === 'BLOCKED' && command.intent === 'USERNAME_TEXT' && command.args?.[0] !== undefined
         ? await this.adminCaptureText(scope, actor, command.args[0], input)
         : null;
-    const reply =
+    const answered =
       arrival === 'BLOCKED'
         ? (blockedAdminText ??
           (ADMIN_INTENTS.has(command.intent)
@@ -4315,6 +4384,28 @@ export class BotRuntime {
             : null) ??
           blocked)
         : await this.act(scope, actor, command, customer, arrival, input);
+    /*
+     * A blocked customer who is still over the limit is not answered (brief §3.5: protect
+     * the transport from outbound amplification). Only the interaction that TOOK the block
+     * is told why; every other one past the limit sends nothing, so a flood cannot become
+     * one reply per message. A button press is still answered below — `stopSpinner` — so
+     * no spinner hangs. Once the customer slows down, each message is answered with the
+     * stored reason again.
+     *
+     * The turn that took the block, whatever its verdict — not "the 21st". The 21st may be
+     * a `/ping`, which the webhook answers without blocking, or a turn that failed before
+     * its block committed, and the block then lands on a later one; silencing that one
+     * blocked the customer without a word. And under concurrency the 21st can lose the
+     * block to a later turn, so answering the 21st as well would tell them twice.
+     */
+    const reply: PendingReply =
+      spam !== null &&
+      spam.verdict !== 'ALLOWED' &&
+      arrival === 'BLOCKED' &&
+      answered === blocked &&
+      !blockedThisTurn
+        ? { key: null, values: {}, buttons: [], orderId: null }
+        : answered;
 
     const chatId = privateChatIdOf(input.update);
 

@@ -275,6 +275,7 @@ export class ControlController {
         pending: found.outbox.pending,
         oldestPendingAt: found.outbox.oldestPendingAt?.toISOString() ?? null,
         failing: found.outbox.failing,
+        exhausted: found.outbox.exhausted,
         failingSample: found.outbox.failingSample.map((row) => ({
           id: row.id,
           eventType: row.eventType,
@@ -282,6 +283,8 @@ export class ControlController {
           attempts: row.attempts,
           occurredAt: row.occurredAt.toISOString(),
           lastError: row.lastError,
+          nextAttemptAt: row.nextAttemptAt?.toISOString() ?? null,
+          exhausted: row.exhausted,
         })),
       },
       provisioning: {

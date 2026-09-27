@@ -159,6 +159,22 @@ export class TelegramWebhookController {
     const idempotencyKey = telegramUpdateKey(botInstance.id, updateId);
 
     if (isPingCommand(update)) {
+      /*
+       * Counted like every other interaction (WP20, brief §3.4). The runtime that counts
+       * the rest never sees a `/ping`, and a `/ping` writes an audit row, an outbox event
+       * and an idempotency row — so an uncounted one is the cheapest flood there is. Past
+       * the limit the ping is answered and nothing is written; blocking is the runtime's,
+       * and the flooder's next ordinary message crosses it there.
+       */
+      const pinger = telegramUserIdOf(update);
+      if (pinger !== null) {
+        const counted = await this.container.antiSpam.observe(scope, {
+          botInstanceId: botInstance.id,
+          telegramUserId: pinger,
+          updateId,
+        });
+        if (counted.verdict !== 'ALLOWED') return { ok: true };
+      }
       await this.container.recordPing.execute(scope, actor, {
         // Telegram redelivers an update after a timeout; keying on the bot AND
         // the update id makes that redelivery a replay, while keeping two bots'
