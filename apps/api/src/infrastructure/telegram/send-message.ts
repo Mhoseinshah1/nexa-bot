@@ -654,3 +654,61 @@ export async function telegramGetWebhookInfo(
     },
   };
 }
+
+// ---------------------------------------------------------------------------
+// Channel membership (Package B, `docs/package-b-channel-membership-audit.md`)
+// ---------------------------------------------------------------------------
+
+/** What `getChatMember` said about one user in one chat, as Telegram put it. */
+export interface TelegramChatMember {
+  readonly status: string;
+  /** Present only for `restricted`: whether the user is still in the chat. */
+  readonly isMember: boolean | null;
+}
+
+export type TelegramChatMemberOutcome =
+  | { readonly outcome: 'SUCCEEDED'; readonly member: TelegramChatMember }
+  | Exclude<TelegramSendOutcome, { outcome: 'SUCCEEDED' }>;
+
+/**
+ * Ask Telegram whether one user is in one chat (`getChatMember`). A READ: it changes
+ * nothing, so a customer's turn may call it.
+ *
+ * `chatId` is the numeric id or the public `@handle`. The outcome is the shared taxonomy;
+ * the CALLER decides what a failure means — for membership, never "not a member" (audit
+ * §2.2). A 2xx whose `result` carries no string `status` is refused like `getMe`'s.
+ */
+export async function telegramGetChatMember(
+  request: Omit<TelegramSendRequest, 'body' | 'method'> & {
+    readonly chatId: string;
+    readonly userId: string;
+  },
+): Promise<TelegramChatMemberOutcome> {
+  assertOutsideTransaction('A Telegram getChatMember');
+
+  const { chatId, userId, ...rest } = request;
+  const call = await telegramCall({
+    ...rest,
+    method: 'getChatMember',
+    body: { chat_id: chatId, user_id: Number(userId) },
+  });
+  if (call.outcome !== 'SUCCEEDED') return call;
+
+  const result = call.result;
+  const status =
+    result !== null && typeof result === 'object' && !Array.isArray(result)
+      ? (result as Record<string, unknown>).status
+      : undefined;
+  if (typeof status !== 'string') {
+    return {
+      outcome: 'FAILED_PERMANENT',
+      errorCode: 'telegram.rejected.chat_member_shape',
+      errorMessage: 'getChatMember answered without a ChatMember status.',
+    };
+  }
+  const isMember = (result as Record<string, unknown>).is_member;
+  return {
+    outcome: 'SUCCEEDED',
+    member: { status, isMember: typeof isMember === 'boolean' ? isMember : null },
+  };
+}

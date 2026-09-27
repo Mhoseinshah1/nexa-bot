@@ -25,8 +25,10 @@ import {
   SERVICE_SEARCH_MAX_LENGTH,
   connectionGuidePlatformSchema,
   paymentGatewayProviderSchema,
+  telegramChannelJoinUrl,
 } from '@nexa/contracts';
 import type { AntiSpamService } from '../../modules/commerce/customers/application/anti-spam.service.js';
+import type { ChannelMembershipService } from '../../modules/commerce/customers/application/channel-membership.service.js';
 import type {
   ConnectionGuidePlatform,
   PaymentGatewayProvider,
@@ -49,6 +51,7 @@ import type {
   ServiceReminderThresholds,
   SettingKey,
   TemplateKey,
+  TelegramChannel,
   TemplateValues,
   TenantContext,
   UserId,
@@ -260,6 +263,11 @@ export const BOT_INTENTS = [
   'REFERRAL_GIFT',
   'HELP',
   'RECEIPT_UPLOAD',
+  /*
+   * Package B — the `✅ بررسی عضویت` button. Exempt from the membership guard, and it
+   * never replays what the customer first asked for: a pass answers the main menu.
+   */
+  'MEMBERSHIP_CHECK',
   /*
    * Phase 5T — the management panel.
    *
@@ -817,6 +825,8 @@ export const DISCOUNT_CODE_REMOVE_CALLBACK_PREFIX = 'dx:';
  * declared beside the composer that draws them and imported here.
  */
 export const MAIN_MENU_CALLBACK_DATA = 'mm:';
+/** Package B: the membership check button's callback data. */
+export const MEMBERSHIP_CHECK_CALLBACK_DATA = 'mc:';
 export const TUTORIAL_PLATFORM_CALLBACK_PREFIX = 'to:';
 /** `tp:<capture uuid>.<provider>` — a capture the customer owns and a member of a closed enum. */
 export const TOPUP_ROUTE_CALLBACK_PREFIX = 'tp:';
@@ -1013,6 +1023,45 @@ function hasAnyPanelSection(permissions: ReadonlySet<PermissionKey>): boolean {
 const ADMIN_INTENTS: ReadonlySet<BotIntent> = new Set<BotIntent>(
   BOT_INTENTS.filter((intent) => intent.startsWith('ADMIN_')),
 );
+
+/**
+ * The intents the membership guard lets through (Package B, brief B3): support and help —
+ * the minimal support path, which `/paysupport` opens too. The check button and the
+ * management panel are let through by `guardedAct` itself.
+ */
+const MEMBERSHIP_EXEMPT_INTENTS: ReadonlySet<BotIntent> = new Set<BotIntent>(['SUPPORT', 'HELP']);
+
+/**
+ * The join screen (brief B4): one message, a URL button per missing REQUIRED channel, and
+ * the check button. A public channel's button is its `@handle`; a private one is numbered.
+ * A channel with no join link cannot be configured as required, so every one has a button.
+ */
+function membershipRequired(
+  key: 'bot.channels.join_required' | 'bot.channels.still_missing',
+  missing: readonly TelegramChannel[],
+): PendingReply {
+  const buttons: CustomerButton[] = [];
+  missing.forEach((channel, index) => {
+    const url = telegramChannelJoinUrl(channel);
+    if (url === null) return;
+    buttons.push({
+      label:
+        channel.handle !== undefined
+          ? { kind: 'TEXT', text: channel.handle }
+          : {
+              kind: 'TEMPLATE',
+              key: 'bot.channels.join_private_button',
+              values: { number: index + 1 },
+            },
+      url,
+    });
+  });
+  buttons.push({
+    label: { kind: 'TEMPLATE', key: 'bot.channels.check_button' },
+    data: MEMBERSHIP_CHECK_CALLBACK_DATA,
+  });
+  return { key, values: {}, buttons, orderId: null };
+}
 
 export const ADMIN_PANEL_CALLBACK_PREFIX = 'A:';
 export const ADMIN_RECEIPTS_CALLBACK_PREFIX = 'B:';
@@ -2154,6 +2203,9 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
     if (data === MAIN_MENU_CALLBACK_DATA) {
       return { intent: 'MAIN_MENU', targetId: null, callbackQueryId: id };
     }
+    if (data === MEMBERSHIP_CHECK_CALLBACK_DATA) {
+      return { intent: 'MEMBERSHIP_CHECK', targetId: null, callbackQueryId: id };
+    }
     if (data === TUTORIAL_CALLBACK_DATA) {
       return { intent: 'TUTORIAL', targetId: null, callbackQueryId: id };
     }
@@ -3164,6 +3216,12 @@ export interface BotRuntimeDeps {
    * need not bring a counter; absent, nobody is counted and nobody is blocked for it.
    */
   readonly antiSpam?: Pick<AntiSpamService, 'observe'>;
+  /**
+   * Mandatory channel membership (Package B). Optional so the unit fixtures that build a
+   * runtime need not model Telegram; absent, no channel is enforced — which is also what a
+   * tenant with no REQUIRED channel sees.
+   */
+  readonly membership?: Pick<ChannelMembershipService, 'missingRequired'>;
   /**
    * Block User from the receipt message (WP10 follow-up §4). Optional for the reason
    * `receiptCredits` is; without it the block button is not drawn. It blocks only through
@@ -4383,7 +4441,7 @@ export class BotRuntime {
             ? await this.adminTurn(scope, actor, command, input)
             : null) ??
           blocked)
-        : await this.act(scope, actor, command, customer, arrival, input);
+        : await this.guardedAct(scope, actor, command, customer, arrival, input);
     /*
      * A blocked customer who is still over the limit is not answered (brief §3.5: protect
      * the transport from outbound amplification). Only the interaction that TOOK the block
@@ -8420,6 +8478,63 @@ export class BotRuntime {
       buttons: [],
       orderId: null,
     };
+  }
+
+  /**
+   * The mandatory channel membership guard (Package B, audit §2.6), in front of `act` and
+   * nowhere else — one guard, not a check copied into each handler.
+   *
+   * Runs after the customer is resolved and counted, so a `/start ref-…` still attributes
+   * and anti-spam still sees the interaction; only the business action is withheld. Exempt:
+   * the management panel, support and help (`/paysupport` opens support), and the check
+   * itself. A bound administrator is never locked out, and the binding is asked only when
+   * something is missing, so an ordinary turn pays for no extra lookup.
+   *
+   * The check button answers the MAIN MENU on a pass. It never replays what the customer
+   * first asked for: a purchase, a payment or a termination is not something a membership
+   * check may run.
+   */
+  private async guardedAct(
+    scope: TenantContext,
+    actor: ActorContext,
+    command: BotCommand,
+    customer: CustomerRecord,
+    arrival: CustomerArrival,
+    input: {
+      readonly idempotencyKey: string;
+      readonly botInstanceId: BotInstanceId;
+      readonly update: unknown;
+      readonly telegramUserId: string;
+    },
+  ): Promise<PendingReply> {
+    const checking = command.intent === 'MEMBERSHIP_CHECK';
+    const safe: BotCommand = checking
+      ? { intent: 'MAIN_MENU', targetId: null, callbackQueryId: command.callbackQueryId }
+      : command;
+    const membership = this.deps.membership;
+    if (
+      membership === undefined ||
+      (!checking &&
+        (MEMBERSHIP_EXEMPT_INTENTS.has(command.intent) || ADMIN_INTENTS.has(command.intent)))
+    ) {
+      return this.act(scope, actor, safe, customer, arrival, input);
+    }
+    const missing = await membership.missingRequired(scope, {
+      botInstanceId: input.botInstanceId,
+      telegramUserId: input.telegramUserId,
+      fresh: checking,
+    });
+    if (
+      missing.length === 0 ||
+      (await this.deps.telegramAdmins?.resolve(scope, input.telegramUserId, actor.correlationId)) !=
+        null
+    ) {
+      return this.act(scope, actor, safe, customer, arrival, input);
+    }
+    return membershipRequired(
+      checking ? 'bot.channels.still_missing' : 'bot.channels.join_required',
+      missing,
+    );
   }
 
   /**
