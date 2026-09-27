@@ -215,6 +215,16 @@ export class ServiceRefundRequestService {
     if (await this.deps.repository.commercialUndecided(scope, service.id, tx)) {
       return { eligible: false, reason: 'CANNOT_DELETE' };
     }
+    /*
+     * A deletion already planned and not yet decided — an operator's, UNKNOWN included (Codex
+     * review of #83, round 12). The request would stand OPEN beside it, and once the deletion
+     * succeeded it could never be approved, since an approval refuses a service that has
+     * ended: the customer would lose the service with no decision on the request. Filed
+     * again once the deletion has failed, or not at all once it has succeeded.
+     */
+    if (await this.deps.repository.terminationUndecided(scope, service.id, tx)) {
+      return { eligible: false, reason: 'CANNOT_DELETE' };
+    }
     return { eligible: true, source: { payment, remaining } };
   }
 

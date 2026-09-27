@@ -547,3 +547,31 @@ It found five issues. All were real, and each is fixed with a named test and a k
   operator's deletion held while waiting for the lifecycle lock. The row is now locked
   `FOR NO KEY UPDATE`, for the reason `lockPayment` already documents. It still excludes every
   other locker and every write of the row, and it no longer blocks a foreign-key check.
+
+## 19. The twelfth Codex review of #83
+
+It raised four issues. Three were real, and each is fixed with a named test and a killed
+mutation (W19-112 to W19-115). The fourth asks for a rule the owner decided against.
+
+- **Refund cards held behind the receipt lane (P2).** The receipt push loop ran the refund
+  cards after the receipts inside one `try`. A receipt pass that failed on every tick kept
+  every card queued. Each lane now runs on its own, and a failure still costs the tick its
+  progress.
+- **A request filed beside an undecided deletion (P2).** An operator's `TERMINATE` planned
+  before the filing was not seen by eligibility, which checked only commercial actions. The
+  request then stood OPEN beside the deletion and, once that succeeded, could never be
+  approved. Eligibility now refuses (`CANNOT_DELETE`) while any `TERMINATE` of the service is
+  undecided, UNKNOWN included.
+- **A removed service whose own deletion was UNKNOWN (P1).** The sweep's query required the
+  request's own operation to be terminal. An UNKNOWN deletion never is, and an operator's retry
+  beside it can remove the service. The row was then never returned, and the approved credit
+  stayed reserved for ever. The query now reads a request whose service is TERMINATED while its
+  reservation is held, whatever its own deletion says. That was already the sweep's own
+  decision: the service ending proves the account was removed.
+- **Commercial purchases applied before the filing (P1), not changed.** Codex asks that a
+  service whose renewal or add-on has already been applied be refused, or its later payments
+  compensated. The owner's brief decides otherwise (§2.4): the source is the service's original
+  `NEW_SERVICE` payment; renewal, add-traffic and add-time payments are not swept into the
+  request; and the administrator chooses the amount, with no computed unused value. A purchase
+  still undecided is refused (round 9), and none is sold while a request is active (round 10).
+  A purchase the customer completed before asking is a known fact the administrator weighs.

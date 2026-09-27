@@ -303,12 +303,17 @@ describe('WP19 — a customer asks for their money back', () => {
     };
   }
 
-  /** Resolves once some transaction is waiting for an advisory lock. */
+  /**
+   * Resolves once some transaction on THIS database is waiting for an advisory lock. `pg_locks`
+   * is cluster-wide: counted across databases, a suite running beside this one satisfied the
+   * wait, and a lock this code no longer takes looked taken (the round-12 mutation run).
+   */
   async function someoneWaitsOnAdvisory(what: string): Promise<void> {
     const deadline = Date.now() + 5_000;
     for (;;) {
       const waiting = await countRows(
-        sql`SELECT count(*)::int AS n FROM pg_locks WHERE NOT granted AND locktype = 'advisory'`,
+        sql`SELECT count(*)::int AS n FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid
+              WHERE NOT l.granted AND l.locktype = 'advisory' AND a.datname = current_database()`,
       );
       if (waiting >= 1) return;
       if (Date.now() > deadline) throw new Error(`${what} never waited on the lifecycle lock`);
@@ -2625,7 +2630,9 @@ describe('WP19 — a customer asks for their money back', () => {
     const deadline = Date.now() + 5_000;
     for (;;) {
       const waiting = await countRows(
-        sql`SELECT count(*)::int AS n FROM pg_locks WHERE NOT granted AND locktype IN ('transactionid', 'tuple')`,
+        sql`SELECT count(*)::int AS n FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid
+              WHERE NOT l.granted AND l.locktype IN ('transactionid', 'tuple')
+                AND a.datname = current_database()`,
       );
       if (waiting >= 1) return;
       if (Date.now() > deadline) throw new Error(`${what} never waited on the payment`);
@@ -2831,5 +2838,57 @@ describe('WP19 — a customer asks for their money back', () => {
     );
     expect(await terminateOf(service.id), 'no deletion planned beside it').toHaveLength(0);
     expect((await requestRow(filed.request.id))?.request.state).toBe('OPEN');
+  });
+
+  it('files no request while an operator’s deletion of the service is undecided (Codex review of #83, round 12)', async () => {
+    const service = await activeService('file-beside-delete');
+    await ctx.container.provisioning.requestFromOperator(tenantA, owner, service.id, 'TERMINATE', {
+      idempotencyKey: 'file-beside-delete',
+    });
+    expect((await terminateOf(service.id)).map((operation) => operation.state)).toEqual([
+      'PLANNED',
+    ]);
+    expect(await refused(file(service.id))).toBe(COMMERCE_ERROR_CODES.SERVICE_REFUND_NOT_ELIGIBLE);
+    expect(await countRows(sql`SELECT count(*)::int AS n FROM service_refund_requests`)).toBe(0);
+    // Undecided includes UNKNOWN: the account may already be gone.
+    await ctx.container.database.db.execute(
+      sql`UPDATE provisioning_operations SET state = 'UNKNOWN'
+           WHERE service_id = ${service.id} AND type = 'TERMINATE'` as never,
+    );
+    expect(await refused(file(service.id))).toBe(COMMERCE_ERROR_CODES.SERVICE_REFUND_NOT_ELIGIBLE);
+    // Definitively failed, the deletion no longer stands in the way.
+    await ctx.container.database.db.execute(
+      sql`UPDATE provisioning_operations SET state = 'FAILED', completed_at = now()
+           WHERE service_id = ${service.id} AND type = 'TERMINATE'` as never,
+    );
+    expect((await file(service.id)).outcome).toBe('FILED');
+  });
+
+  it('credits a request whose own deletion is UNKNOWN once another deletion removes the service (Codex review of #83, round 12)', async () => {
+    const service = await activeService('unknown-then-removed');
+    const filed = await file(service.id);
+    const before = await balance();
+    await ctx.container.serviceRefundRequests.approve(tenantA, owner, {
+      requestId: filed.request.id,
+      amountMinor: 100_000n,
+    });
+    await ctx.container.database.db.execute(
+      sql`UPDATE provisioning_operations SET state = 'UNKNOWN'
+           WHERE service_id = ${service.id} AND type = 'TERMINATE'` as never,
+    );
+    // An operator retries the deletion beside the ambiguous one; the next tick executes it
+    // and then sweeps.
+    await ctx.container.provisioning.requestFromOperator(tenantA, owner, service.id, 'TERMINATE', {
+      idempotencyKey: 'unknown-then-removed-operator',
+    });
+    await ctx.container.provisionerLoop.tick();
+    expect((await services.findById(tenantA, service.id))?.state).toBe('TERMINATED');
+    expect(
+      (await terminateOf(service.id)).map((operation) => operation.state).sort(),
+      'the request’s own deletion is still UNKNOWN',
+    ).toEqual(['SUCCEEDED', 'UNKNOWN']);
+    const row = await requestRow(filed.request.id);
+    expect(row?.request.state, 'the approved refund is paid').toBe('COMPLETED');
+    expect(await balance(), 'credited the approved amount').toBe(before + 100_000n);
   });
 });

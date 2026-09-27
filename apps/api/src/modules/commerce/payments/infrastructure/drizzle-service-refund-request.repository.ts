@@ -431,7 +431,6 @@ export class DrizzleServiceRefundRequestRepository implements ServiceRefundReque
         and(
           eq(serviceRefundRequests.tenantId, tenantId),
           eq(serviceRefundRequests.state, 'EXECUTING'),
-          inArray(provisioningOperations.state, [...OPERATION_TERMINAL_STATES]),
           /*
            * Only a row the sweep can decide. A deletion that SUCCEEDED counts only once the
            * service moved and while the reservation is still REQUESTED; one that failed,
@@ -442,11 +441,16 @@ export class DrizzleServiceRefundRequestRepository implements ServiceRefundReque
            * refunds behind it were never decided at all.
            */
           or(
-            and(
-              eq(provisioningOperations.state, 'SUCCEEDED'),
-              eq(services.state, 'TERMINATED'),
-              eq(refunds.state, 'REQUESTED'),
-            ),
+            /*
+             * Removed: the service is gone and the reservation still held. Credited whatever
+             * this request's own deletion says (Codex review of #83, round 12): an UNKNOWN
+             * deletion is never terminal, and an operator's retry beside it can succeed. The
+             * service ending proves the account was removed, and the sweep's own decision
+             * credits a removed service without asking the request's operation. Required to
+             * be SUCCEEDED here, the row was never returned: the customer lost the service
+             * and the approved credit stayed reserved for ever.
+             */
+            and(eq(services.state, 'TERMINATED'), eq(refunds.state, 'REQUESTED')),
             and(
               or(
                 and(
