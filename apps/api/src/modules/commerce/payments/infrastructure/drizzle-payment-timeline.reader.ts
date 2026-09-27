@@ -1,4 +1,4 @@
-import { and, asc, eq, gte, inArray, ne } from 'drizzle-orm';
+import { and, asc, eq, inArray, ne } from 'drizzle-orm';
 import type {
   CurrencyCode,
   CustomerNotificationKind,
@@ -53,12 +53,6 @@ const PAYMENT_SUBJECT_KINDS: readonly CustomerNotificationKind[] = [
  * Every query is tenant-scoped, and every section below the payment row is keyed on the
  * payment id and, where a customer is involved, on the payment's OWN customer.
  */
-
-/**
- * How far before a payment's creation its wallet entries are still looked for. Causally
- * they follow it; this is room for a wall clock corrected backwards between the two writes.
- */
-export const WALLET_FLOOR_TOLERANCE_MS = 24 * 60 * 60 * 1000;
 
 export class DrizzlePaymentTimelineReader implements PaymentTimelineReader {
   constructor(private readonly db: Database) {}
@@ -147,15 +141,12 @@ export class DrizzlePaymentTimelineReader implements PaymentTimelineReader {
      * `REFUND` entries are left to the refund section, which shows the same money under
      * `refunds.view`; repeating it here would show a refund to a viewer without that key.
      *
-     * Bounded BELOW, a day before the payment's own creation (Codex review of #81). No
-     * index leads with `payment_id`, so without a floor this read walked the customer's
-     * whole ledger from its first entry to find a recent payment's few rows. An entry
-     * naming a payment is CAUSED after it — the foreign key means its transaction already
-     * saw the payment row — but both are stamped from a wall clock, which a correction can
-     * move backwards between the two writes. So the floor is the payment's creation less
-     * `WALLET_FLOOR_TOLERANCE_MS`: a clock stepped back by more than a day would be needed
-     * to hide an entry, and the read stays a range on `wallet_entries_customer_created_idx`
-     * rather than the customer's whole ledger.
+     * By the payment, through `wallet_entries_payment_idx` (`online-indexes.ts`), bounded on
+     * both sides by the payment itself (Codex review of #81). An earlier version bounded the
+     * read below by the payment's creation, less a day for a clock stepped back, because no
+     * index led with `payment_id`: the range still ran to the end of the customer's ledger,
+     * and the floor could hide a movement stamped by a clock stepped back further. With the
+     * index there is no floor to tolerate.
      */
     const walletRows = include.wallet
       ? await q
@@ -173,10 +164,6 @@ export class DrizzlePaymentTimelineReader implements PaymentTimelineReader {
               eq(walletEntries.tenantId, tenantId),
               eq(walletEntries.paymentId, paymentId),
               eq(walletEntries.customerId, payment.customerId),
-              gte(
-                walletEntries.createdAt,
-                new Date(payment.createdAt.getTime() - WALLET_FLOOR_TOLERANCE_MS),
-              ),
               ne(walletEntries.reason, 'REFUND'),
             ),
           )

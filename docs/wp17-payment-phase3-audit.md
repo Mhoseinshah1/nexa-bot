@@ -298,6 +298,18 @@ by `settleFromWallet`, the customer's own act, with no administrator recorded. T
 said it as the system's. A `WALLET_DEBIT` confirmation with no administrator is now said as
 the customer's. A gateway callback with none is still the system's.
 
+An eleventh round, on `4033836`, found two more (P17-47..49).
+
+- **The wallet read.** The eighth round's day-before floor bounded it on one side only. An
+  old payment's few movements were still found by walking the customer's whole later
+  ledger. The read now goes through a payment-scoped index, `wallet_entries_payment_idx`,
+  built CONCURRENTLY by `online-indexes.ts` like every index on a populated table. So it
+  needs no migration, and the stacked packages keep their numbers. The floor is gone
+  with its reason, so a movement stamped by a clock stepped back by any amount is read.
+  A planner test pins the index: without it, the fixture's read touches 82 buffers.
+- **The payment id.** The timeline echoed the path's spelling of the payment id. It now
+  answers with the canonical, lower-case one the schema produced.
+
 Tests added:
 
 - **Unit:** `tests/unit/payment-timeline.test.ts` (7 cases) and

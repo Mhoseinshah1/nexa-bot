@@ -161,7 +161,8 @@ export class PaymentsController {
     const { scope, actor } = await this.authenticate(request);
     const view = await this.container.paymentTimeline.timeline(scope, actor, id);
     return {
-      paymentId: id,
+      // The canonical id, not the path's spelling of it (Codex review of #81).
+      paymentId: view.paymentId,
       entries: [...view.entries],
       withheld: [...view.withheld],
       truncated: view.truncated,

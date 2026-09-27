@@ -31,6 +31,11 @@ export interface PaymentTimelineServiceDeps {
 }
 
 export interface PaymentTimelineView extends AssembledTimeline {
+  /**
+   * The payment's id as the schema canonicalised it — lower case — never the caller's
+   * spelling, so a client keying on it matches the detail and the list (Codex review of #81).
+   */
+  readonly paymentId: string;
   readonly withheld: readonly PaymentTimelineSection[];
 }
 
@@ -79,6 +84,6 @@ export class PaymentTimelineService {
     if (!include.receipts) withheld.push('RECEIPTS');
     if (!include.refunds) withheld.push('REFUNDS');
     if (!include.wallet) withheld.push('WALLET');
-    return { ...assembled, withheld };
+    return { ...assembled, paymentId: parsed.data, withheld };
   }
 }

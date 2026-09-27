@@ -302,7 +302,7 @@ describe('payment timeline', () => {
     expect(after?.notifications.map((n) => n.kind)).toEqual(['PAYMENT_TRANSFER_RECORDED']);
   });
 
-  it('reads the wallet movements from a day before the payment onward (Codex review of #81)', async () => {
+  it('reads every wallet movement naming the payment, however its clock stamped it (Codex review of #81)', async () => {
     const payment = await walletPayment('floor');
     const plant = (reference: string, before: string) =>
       ctx.container.database.db.execute(sql`
@@ -312,21 +312,62 @@ describe('payment timeline', () => {
                currency, ${reference}, id, created_at - ${before}::interval
           FROM payments WHERE id = ${payment.id}`);
     /*
-     * An hour before the payment: a wall clock corrected backwards between the payment's
-     * write and this one. It is still this payment's, and still read.
+     * Before the payment by an hour, and by two days: wall clocks corrected backwards
+     * between the payment's write and these. Both still name the payment, so both are
+     * its movements. An earlier version floored the read a day before the payment, and
+     * the second one vanished from the history.
      */
     await plant(`floor-hour-${String(payment.id)}`, '1 hour');
-    /*
-     * Two days before it: past the tolerance, so outside the bounded range. Without a floor
-     * the read would walk the customer's whole ledger from its first entry and find it.
-     */
     await plant(`floor-days-${String(payment.id)}`, '2 days');
 
     const view = await timeline(owner, payment.id);
     const wallet = view.entries.filter((e) => e.kind === 'WALLET_ENTRY');
     expect(wallet.map((e) => ('reason' in e ? e.reason : null)).sort()).toEqual(
-      ['CASHBACK_GATEWAY', 'PURCHASE'].sort(),
+      ['CASHBACK_GATEWAY', 'CASHBACK_GATEWAY', 'PURCHASE'].sort(),
     );
+  });
+
+  it("finds an old payment's movements through its own index, not the customer's later ledger (Codex review of #81)", async () => {
+    const payment = await walletPayment('indexed');
+    /*
+     * Years of later ledger for the same customer: 4,000 movements naming no payment,
+     * copied from the fixture's own top-up so every constraint is the real one's.
+     */
+    await ctx.container.database.withClient(async (client) => {
+      await client.query(
+        `INSERT INTO wallet_entries (id, tenant_id, customer_id, direction, reason, amount,
+                                     currency, reference, actor_admin_id, note, created_at)
+         SELECT gen_random_uuid(), e.tenant_id, e.customer_id, e.direction, e.reason, e.amount,
+                e.currency, 'later-' || g, e.actor_admin_id, e.note,
+                now() + (g || ' seconds')::interval
+           FROM (SELECT * FROM wallet_entries
+                  WHERE customer_id = $1 AND payment_id IS NULL LIMIT 1) e,
+                generate_series(1, 4000) AS g`,
+        [customerA],
+      );
+      await client.query('ANALYZE wallet_entries');
+    });
+    // The reader's own statement, as it reaches PostgreSQL.
+    const plan = await ctx.container.database.withClient(async (client) => {
+      const { rows } = await client.query<{ 'QUERY PLAN': string }>(
+        `EXPLAIN (ANALYZE, BUFFERS, COSTS OFF, TIMING OFF, SUMMARY OFF)
+         SELECT id, direction, reason, amount, currency, created_at FROM wallet_entries
+          WHERE tenant_id = $1 AND payment_id = $2 AND customer_id = $3 AND reason <> 'REFUND'
+          ORDER BY created_at, id LIMIT 201`,
+        [tenantA.tenantId, payment.id, customerA],
+      );
+      return rows.map((row) => row['QUERY PLAN']).join('\n');
+    });
+    expect(plan, plan).toContain('wallet_entries_payment_idx');
+    const match = /Buffers: shared( hit=(\d+))?( read=(\d+))?/.exec(plan);
+    const buffers = Number(match?.[2] ?? 0) + Number(match?.[4] ?? 0);
+    expect(buffers, `walked more than the payment's own rows:\n${plan}`).toBeLessThan(20);
+  });
+
+  it('answers with the canonical payment id, whatever the spelling asked for (Codex review of #81)', async () => {
+    const payment = await walletPayment('canonical');
+    const view = await timeline(owner, String(payment.id).toUpperCase());
+    expect(view.paymentId).toBe(String(payment.id));
   });
 
   it('times an abandoned manual refund by its close, and never calls it completed', async () => {
