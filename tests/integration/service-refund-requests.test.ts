@@ -2550,4 +2550,192 @@ describe('WP19 — a customer asks for their money back', () => {
     ).toEqual([ownerId]);
     expect((await requestRow(filed.request.id))?.request.state).toBe('OPEN');
   });
+
+  /** The paid source a service's refund request reserves against: its order's payment. */
+  async function sourcePaymentOf(orderId: string): Promise<string> {
+    const result = (await ctx.container.database.db.execute(
+      sql`SELECT id FROM payments WHERE tenant_id = ${tenantA.tenantId} AND order_id = ${orderId}` as never,
+    )) as unknown as { rows: { id: string }[] };
+    const id = result.rows[0]?.id;
+    if (id === undefined) throw new Error(`order ${orderId} has no payment`);
+    return id;
+  }
+
+  /** Holds a payment's refund lock (the row, as `lockPayment` takes it) until released. */
+  async function holdPayment(paymentId: string): Promise<{ release: () => Promise<void> }> {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    let held!: () => void;
+    const holding = new Promise<void>((resolve) => (held = resolve));
+    const holder = ctx.container.database.db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT id FROM payments WHERE id = ${paymentId} FOR NO KEY UPDATE`);
+      held();
+      await gate;
+    });
+    await holding;
+    return {
+      release: async () => {
+        release();
+        await holder;
+      },
+    };
+  }
+
+  /** Resolves once some transaction is waiting for a row another holds. */
+  async function someoneWaitsOnRow(what: string): Promise<void> {
+    const deadline = Date.now() + 5_000;
+    for (;;) {
+      const waiting = await countRows(
+        sql`SELECT count(*)::int AS n FROM pg_locks WHERE NOT granted AND locktype IN ('transactionid', 'tuple')`,
+      );
+      if (waiting >= 1) return;
+      if (Date.now() > deadline) throw new Error(`${what} never waited on the payment`);
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
+
+  /** Whether another transaction could take the service's lifecycle lock right now. */
+  async function lifecycleIsFree(serviceId: string): Promise<boolean> {
+    return ctx.container.database.db.transaction(async (tx) => {
+      const result = (await tx.execute(
+        sql`SELECT pg_try_advisory_xact_lock(${SERVICE_LIFECYCLE_LOCK_CLASS},
+              hashtext(${`${tenantA.tenantId}:${serviceId}`})) AS ok`,
+      )) as unknown as { rows: { ok: boolean }[] };
+      return result.rows[0]?.ok === true;
+    });
+  }
+
+  it('holds no lifecycle lock while a filing or an approval waits for the source payment (Codex review of #83, round 11)', async () => {
+    const service = await activeService('lock-order');
+    const payment = await sourcePaymentOf(service.orderId);
+
+    // A filing waits for the payment, and holds nothing a commercial settlement waits for.
+    const heldForFiling = await holdPayment(payment);
+    const filing = file(service.id);
+    await someoneWaitsOnRow('the filing');
+    expect(await lifecycleIsFree(service.id), 'the filing holds the lifecycle lock').toBe(true);
+    await heldForFiling.release();
+    const filed = await filing;
+    expect(filed.outcome).toBe('FILED');
+
+    // And so does the approval.
+    const held = await holdPayment(payment);
+    const approval = ctx.container.serviceRefundRequests.approve(tenantA, owner, {
+      requestId: filed.request.id,
+      amountMinor: 1_000n,
+    });
+    await someoneWaitsOnRow('the approval');
+    expect(await lifecycleIsFree(service.id), 'the approval holds the lifecycle lock').toBe(true);
+    await held.release();
+    expect((await approval).state).toBe('EXECUTING');
+    expect(await terminateOf(service.id)).toHaveLength(1);
+  });
+
+  it('refuses an operator’s deletion while a refund request is open, and plans it once the request is decided (Codex review of #83, round 11)', async () => {
+    const service = await activeService('operator-beside-open');
+    const filed = await file(service.id);
+    const operatorDelete = (key: string) =>
+      ctx.container.provisioning.requestFromOperator(tenantA, owner, service.id, 'TERMINATE', {
+        idempotencyKey: key,
+      });
+    expect(await refused(operatorDelete('operator-beside-open-1'))).toBe(
+      COMMERCE_ERROR_CODES.SERVICE_ACTION_NOT_ALLOWED,
+    );
+    expect(await terminateOf(service.id), 'no deletion planned').toHaveLength(0);
+    expect((await requestRow(filed.request.id))?.request.state).toBe('OPEN');
+
+    await ctx.container.serviceRefundRequests.reject(tenantA, owner, {
+      requestId: filed.request.id,
+      reason: 'سرویس توسط مدیر حذف می‌شود',
+      idempotencyKey: 'operator-beside-open-reject',
+    });
+    await operatorDelete('operator-beside-open-2');
+    expect(await terminateOf(service.id)).toHaveLength(1);
+  });
+
+  it('serialises an operator’s deletion with a renewal’s settlement on the lifecycle lock (Codex review of #83, round 11)', async () => {
+    const service = await activeService('operator-lifecycle');
+    const held = await holdLifecycle(service.id);
+    const deletion = ctx.container.provisioning.requestFromOperator(
+      tenantA,
+      owner,
+      service.id,
+      'TERMINATE',
+      { idempotencyKey: 'operator-lifecycle' },
+    );
+    await someoneWaitsOnAdvisory('the operator’s deletion');
+    expect(await terminateOf(service.id), 'planned while the lock was held').toHaveLength(0);
+    await held.release();
+    await deletion;
+    expect(await terminateOf(service.id)).toHaveLength(1);
+    // The renewal that waited on the other side is now refused, never applied beside it.
+    expect(await refused(renew(service.id, 'operator-lifecycle'))).toBe(
+      COMMERCE_ERROR_CODES.SERVICE_ACTION_NOT_ALLOWED,
+    );
+    expect(await renewalsOf(service.id)).toHaveLength(0);
+  });
+
+  it('serves the attention stream from its own index, in its own order, without sorting (Codex review of #83, round 11)', async () => {
+    const plan = await ctx.container.database.db.transaction(async (tx) => {
+      // Every alternative priced out, so a Sort node appears only if no index gives the order.
+      await tx.execute(sql`SET LOCAL enable_seqscan = off`);
+      await tx.execute(sql`SET LOCAL enable_bitmapscan = off`);
+      await tx.execute(sql`SET LOCAL enable_sort = off`);
+      const result = (await tx.execute(
+        sql`EXPLAIN SELECT id FROM service_refund_requests
+              WHERE tenant_id = ${tenantA.tenantId}
+                AND state IN ('OPEN', 'EXECUTING', 'FAILED')
+              ORDER BY created_at DESC, id DESC
+              LIMIT 100`,
+      )) as unknown as { rows: { 'QUERY PLAN': string }[] };
+      return result.rows.map((row) => row['QUERY PLAN']).join('\n');
+    });
+    expect(plan).toContain('service_refund_requests_attention_idx');
+    expect(plan, 'the page is read in index order').not.toMatch(/\bSort\b/);
+  });
+
+  it('lets a settlement holding the lifecycle lock write against a service a filing or an operator has locked (Codex review of #83, round 11)', async () => {
+    /*
+     * A commercial settlement holds the lifecycle lock and then inserts an operation naming
+     * the service, whose FK check takes `FOR KEY SHARE` on the service row. A filing and an
+     * operator's deletion hold that row while they wait for the lifecycle lock. Under a
+     * `FOR UPDATE` row lock the two waited on each other: PostgreSQL aborted one of them.
+     */
+    for (const [label, waiter] of [
+      ['a filing', (serviceId: string) => file(serviceId)],
+      [
+        'an operator’s deletion',
+        (serviceId: string) =>
+          ctx.container.provisioning.requestFromOperator(tenantA, owner, serviceId, 'TERMINATE', {
+            idempotencyKey: `fk-share-${serviceId}`,
+          }),
+      ],
+    ] as const) {
+      const service = await activeService(`fk-share-${label}`);
+      let proceed!: () => void;
+      const go = new Promise<void>((resolve) => (proceed = resolve));
+      let held!: () => void;
+      const holding = new Promise<void>((resolve) => (held = resolve));
+      const settlement = ctx.container.database.db.transaction(async (tx) => {
+        await tx.execute(
+          sql`SELECT pg_advisory_xact_lock(${SERVICE_LIFECYCLE_LOCK_CLASS},
+                hashtext(${`${tenantA.tenantId}:${service.id}`}))`,
+        );
+        held();
+        await go;
+        await tx.execute(sql`SET LOCAL lock_timeout = '3s'`);
+        // What the operation insert's FK check takes on the service row.
+        await tx.execute(sql`SELECT id FROM services WHERE id = ${service.id} FOR KEY SHARE`);
+      });
+      await holding;
+      const waiting = waiter(service.id);
+      await someoneWaitsOnAdvisory(label);
+      proceed();
+      await expect(
+        settlement,
+        `${label} blocked the settlement's FK check`,
+      ).resolves.toBeUndefined();
+      await expect(waiting, `${label} completes after the settlement`).resolves.toBeDefined();
+    }
+  });
 });
