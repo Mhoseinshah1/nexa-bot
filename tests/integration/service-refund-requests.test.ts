@@ -4,6 +4,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import {
   COMMERCE_ERROR_CODES,
   EMPTY_PRODUCT_DISPLAY,
+  SESSION_COOKIE_NAME,
   isNexaError,
   money,
   type ActorContext,
@@ -20,6 +21,7 @@ import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/ca
 import { DrizzleServiceRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-service.repository';
 import { DrizzleOperationRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-operation.repository';
 import { startFakeMarzban, type FakeMarzban } from '../support/fake-marzban';
+import { ServiceRefundRequestsController } from '../../apps/api/src/surfaces/web/service-refund-requests.controller';
 import {
   adminActorFor,
   createAdmin,
@@ -42,6 +44,8 @@ import {
  * shared with every other refund of the same payment; and the service leaving the customer's
  * view only once the refund COMPLETED.
  */
+
+type WebRequest = Parameters<ServiceRefundRequestsController['list']>[0];
 
 const BOT_A = SEED_IDS.botA1 as BotInstanceId;
 const CUSTOMER_TG = '910911';
@@ -305,6 +309,32 @@ describe('WP19 — a customer asks for their money back', () => {
       throw error;
     }
     throw new Error('expected a refusal');
+  }
+
+  /** The Web Admin controller, and a request carrying a real session of the owner's. */
+  async function asWebOwner(): Promise<{
+    controller: ServiceRefundRequestsController;
+    request: WebRequest;
+  }> {
+    const { token } = await ctx.container.auth.login(
+      tenantA,
+      {
+        type: 'API',
+        id: null,
+        label: null,
+        surface: 'WEB',
+        correlationId: 'wp19-web' as CorrelationId,
+      },
+      { username: 'owner-refunds', password: 'a-perfectly-fine-password' },
+      { ip: '203.0.113.10', userAgent: 'vitest' },
+    );
+    return {
+      controller: new ServiceRefundRequestsController(ctx.container),
+      request: {
+        headers: { cookie: `${SESSION_COOKIE_NAME}=${token}` },
+        ip: '203.0.113.10',
+      } as unknown as WebRequest,
+    };
   }
 
   // ===========================================================================
@@ -1052,50 +1082,48 @@ describe('WP19 — a customer asks for their money back', () => {
     expect(again.outcome).toBe('CLOSED');
   });
 
-  it('rejects before it closes the prompt, so a crash between the two leaves nothing half-done (Codex review of #83)', async () => {
-    const service = await activeService('reject-order');
+  it('rejects and closes its prompt in one transaction, so neither is left without the other (Codex review of #83)', async () => {
+    const service = await activeService('reject-atomic');
     const filed = await file(service.id);
     const opened = await ctx.container.serviceRefundDecisions.openReject(tenantA, owner, {
       botInstanceId: BOT_A,
       requestId: filed.request.id,
     });
     expect(opened.outcome).toBe('OPENED');
-    // The ordering, held by the database: the request may become REJECTED only while its
-    // open prompt still holds no reason. Record-then-reject would leave, on a crash, a
-    // prompt no message can reach and a request still OPEN.
+    // The prompt's close fails. A rejection committed on its own would survive that; one
+    // committed with its prompt rolls back with it, and the request is still OPEN.
     await ctx.container.database.db.execute(
-      sql`CREATE OR REPLACE FUNCTION wp19_reject_order() RETURNS trigger AS $$
+      sql`CREATE OR REPLACE FUNCTION wp19_refuse_close() RETURNS trigger AS $$
           BEGIN
-            IF NEW.state = 'REJECTED' AND EXISTS (
-              SELECT 1 FROM admin_amount_captures
-               WHERE service_refund_request_id = NEW.id AND closed_at IS NULL AND reason IS NOT NULL
-            ) THEN
-              RAISE EXCEPTION 'reason recorded before the rejection';
+            IF NEW.close_reason = 'CONFIRMED' THEN
+              RAISE EXCEPTION 'the prompt could not be closed';
             END IF;
             RETURN NEW;
           END $$ LANGUAGE plpgsql` as never,
     );
     await ctx.container.database.db.execute(
-      sql`CREATE TRIGGER wp19_reject_order BEFORE UPDATE ON service_refund_requests
-          FOR EACH ROW EXECUTE FUNCTION wp19_reject_order()` as never,
+      sql`CREATE TRIGGER wp19_refuse_close BEFORE UPDATE ON admin_amount_captures
+          FOR EACH ROW EXECUTE FUNCTION wp19_refuse_close()` as never,
     );
     try {
-      const rejected = await ctx.container.serviceRefundDecisions.submitText(tenantA, owner, {
-        botInstanceId: BOT_A,
-        text: 'سرویس فعال است',
-      });
-      expect(rejected.outcome).toBe('REJECTED');
+      await expect(
+        ctx.container.serviceRefundDecisions.submitText(tenantA, owner, {
+          botInstanceId: BOT_A,
+          text: 'سرویس فعال است',
+        }),
+      ).rejects.toThrow();
     } finally {
       await ctx.container.database.db.execute(
-        sql`DROP TRIGGER wp19_reject_order ON service_refund_requests` as never,
+        sql`DROP TRIGGER wp19_refuse_close ON admin_amount_captures` as never,
       );
-      await ctx.container.database.db.execute(sql`DROP FUNCTION wp19_reject_order()` as never);
+      await ctx.container.database.db.execute(sql`DROP FUNCTION wp19_refuse_close()` as never);
     }
-    expect((await requestRow(filed.request.id))?.request.state).toBe('REJECTED');
+    expect((await requestRow(filed.request.id))?.request.state).toBe('OPEN');
+    expect(await notices('SERVICE_REFUND_REQUEST_REJECTED')).toBe(0);
 
-    // And the crash itself: the rejection committed, the prompt still open with nothing on
-    // it. The redelivered message finishes what it started.
-    const other = await activeService('reject-crash');
+    // A rejection made elsewhere while the prompt stood — the Web Admin, say — is answered
+    // as itself when the same reason arrives, and the prompt is closed with it.
+    const other = await activeService('reject-elsewhere');
     const otherFiled = await file(other.id);
     await ctx.container.serviceRefundDecisions.openReject(tenantA, owner, {
       botInstanceId: BOT_A,
@@ -1115,6 +1143,182 @@ describe('WP19 — a customer asks for their money back', () => {
            WHERE service_refund_request_id = ${otherFiled.request.id} AND closed_at IS NULL`,
     );
     expect(open).toBe(0);
+  });
+
+  it('decides nothing with a reason whose prompt was cancelled after the message was read (Codex review of #83)', async () => {
+    const service = await activeService('reject-cancelled');
+    const filed = await file(service.id);
+    await ctx.container.serviceRefundDecisions.openReject(tenantA, owner, {
+      botInstanceId: BOT_A,
+      requestId: filed.request.id,
+    });
+    // The race, made deterministic: the message finds its prompt open, and the cancel
+    // commits between that read and the decision.
+    const decisions = ctx.container.serviceRefundDecisions;
+    const captures = (
+      decisions as unknown as {
+        deps: {
+          captures: { findAwaitingReason: (...args: unknown[]) => Promise<{ id: string } | null> };
+        };
+      }
+    ).deps.captures;
+    const original = captures.findAwaitingReason;
+    captures.findAwaitingReason = async (...args: unknown[]) => {
+      const found = await original.apply(captures, args);
+      if (found !== null) await decisions.cancel(tenantA, owner, { captureId: found.id });
+      return found;
+    };
+    try {
+      const answered = await decisions.submitText(tenantA, owner, {
+        botInstanceId: BOT_A,
+        text: 'این دیگر نباید رد کند',
+      });
+      expect(answered.outcome).toBe('NO_CAPTURE');
+    } finally {
+      captures.findAwaitingReason = original;
+    }
+    const row = await requestRow(filed.request.id);
+    expect(row?.request.state).toBe('OPEN');
+    expect(row?.request.rejectionReason).toBeNull();
+  });
+
+  it('refuses to preview an approval the approval itself would refuse (Codex review of #83)', async () => {
+    const service = await activeService('preview-ended');
+    const filed = await file(service.id);
+    const opened = await ctx.container.serviceRefundDecisions.openApprove(tenantA, owner, {
+      botInstanceId: BOT_A,
+      requestId: filed.request.id,
+    });
+    expect(opened.outcome).toBe('OPENED');
+    // The service ends after the request was filed and the prompt opened.
+    await ctx.container.database.db.execute(
+      sql`UPDATE services SET state = 'TERMINATED', terminated_at = now()
+           WHERE id = ${service.id}` as never,
+    );
+    expect(
+      await refused(
+        ctx.container.serviceRefundRequests.preview(tenantA, owner, {
+          requestId: filed.request.id,
+          amountMinor: 1_000n,
+        }),
+      ),
+    ).toBe(COMMERCE_ERROR_CODES.SERVICE_REFUND_NOT_ELIGIBLE);
+    // So the typed amount is answered as not executable, and no confirmation is offered.
+    const typed = await ctx.container.serviceRefundDecisions.submitText(tenantA, owner, {
+      botInstanceId: BOT_A,
+      text: '1000',
+    });
+    expect(typed.outcome).toBe('NOT_EXECUTABLE');
+    const recorded = await countRows(
+      sql`SELECT count(*)::int AS n FROM admin_amount_captures
+           WHERE service_refund_request_id = ${filed.request.id} AND amount_minor IS NOT NULL`,
+    );
+    expect(recorded).toBe(0);
+  });
+
+  it('approves nothing for a service that ends while the approval waits for it (Codex review of #83)', async () => {
+    const service = await activeService('approve-race');
+    const filed = await file(service.id);
+    // An outside termination holds the service row and ends it; the approval must wait for
+    // it and then see the service it would be deleting is already gone.
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    let locked!: () => void;
+    const holding = new Promise<void>((resolve) => (locked = resolve));
+    const holder = ctx.container.database.db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT id FROM services WHERE id = ${service.id} FOR UPDATE`);
+      await tx.execute(
+        sql`UPDATE services SET state = 'TERMINATED', terminated_at = now()
+             WHERE id = ${service.id}`,
+      );
+      locked();
+      await gate;
+    });
+    await holding;
+    const approval = refused(
+      ctx.container.serviceRefundRequests.approve(tenantA, owner, {
+        requestId: filed.request.id,
+        amountMinor: 1_000n,
+      }),
+    );
+    const deadline = Date.now() + 5_000;
+    for (;;) {
+      const waiting = await countRows(
+        sql`SELECT count(*)::int AS n FROM pg_locks
+             WHERE NOT granted AND locktype IN ('tuple', 'transactionid')`,
+      );
+      if (waiting >= 1) break;
+      if (Date.now() > deadline) throw new Error('the approval never waited on the service');
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    release();
+    await holder;
+    expect(await approval).toBe(COMMERCE_ERROR_CODES.SERVICE_REFUND_NOT_ELIGIBLE);
+    const row = await requestRow(filed.request.id);
+    expect(row?.request.state).toBe('OPEN');
+    expect(row?.request.refundId).toBeNull();
+    expect(await terminateOf(service.id)).toHaveLength(0);
+    expect(
+      await countRows(
+        sql`SELECT count(*)::int AS n FROM refunds WHERE payment_id = ${filed.request.paymentId}`,
+      ),
+    ).toBe(0);
+  });
+
+  it('answers a malformed request id as one that does not exist, before any query (Codex review of #83)', async () => {
+    for (const requestId of ['not-a-uuid', '-'.repeat(36)]) {
+      expect(
+        await refused(
+          ctx.container.serviceRefundRequests.approve(tenantA, owner, {
+            requestId,
+            amountMinor: 1_000n,
+          }),
+        ),
+      ).toBe(COMMERCE_ERROR_CODES.SERVICE_REFUND_REQUEST_NOT_FOUND);
+      expect(
+        await refused(
+          ctx.container.serviceRefundRequests.reject(tenantA, owner, { requestId, reason: 'رد' }),
+        ),
+      ).toBe(COMMERCE_ERROR_CODES.SERVICE_REFUND_REQUEST_NOT_FOUND);
+      expect(
+        await refused(ctx.container.serviceRefundRequests.review(tenantA, owner, requestId)),
+      ).toBe(COMMERCE_ERROR_CODES.SERVICE_REFUND_REQUEST_NOT_FOUND);
+    }
+    // And the HTTP boundary parses its path ids before the service is reached.
+    const { controller, request } = await asWebOwner();
+    await expect(
+      controller.approve(request, 'not-a-uuid', { amountMinor: '1000', confirm: true }),
+    ).rejects.toMatchObject({ name: 'ZodError' });
+    await expect(controller.reject(request, 'not-a-uuid', { reason: 'رد' })).rejects.toMatchObject({
+      name: 'ZodError',
+    });
+    await expect(controller.forService(request, 'not-a-uuid')).rejects.toMatchObject({
+      name: 'ZodError',
+    });
+  });
+
+  it('pages every request in a state by the server’s cursor (Codex review of #83)', async () => {
+    const filed: string[] = [];
+    for (const key of ['page-a', 'page-b', 'page-c']) {
+      const service = await activeService(key);
+      filed.push((await file(service.id)).request.id);
+    }
+    const { controller, request } = await asWebOwner();
+    const first = await controller.list(request, { state: 'OPEN', limit: '2' });
+    expect(first.requests).toHaveLength(2);
+    expect(first.nextCursor).not.toBeNull();
+    const cursor = first.nextCursor as { at: string; id: string };
+    const second = await controller.list(request, {
+      state: 'OPEN',
+      limit: '2',
+      before: cursor.at,
+      beforeId: cursor.id,
+    });
+    expect(second.requests).toHaveLength(1);
+    expect(second.nextCursor).toBeNull();
+    const seen = [...first.requests, ...second.requests].map((row) => row.id);
+    expect(new Set(seen).size).toBe(3);
+    expect([...seen].sort()).toEqual([...filed].sort());
   });
 
   it('rejects from Telegram with the typed reason', async () => {

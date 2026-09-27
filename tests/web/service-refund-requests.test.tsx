@@ -56,6 +56,7 @@ describe('the requests that still want an operator', () => {
       {
         url: '/service-refund-requests',
         body: {
+          nextCursor: null,
           requests: [
             request({
               id: '019250ab-cdef-7012-8345-6789abcdef05',
@@ -73,12 +74,14 @@ describe('the requests that still want an operator', () => {
       {
         url: '/service-refund-requests?state=OPEN',
         body: {
+          nextCursor: null,
           requests: [request({ id: '019250ab-cdef-7012-8345-6789abcdef02', reason: 'دلیل اول' })],
         },
       },
       {
         url: '/service-refund-requests?state=EXECUTING',
         body: {
+          nextCursor: null,
           requests: [
             request({
               id: '019250ab-cdef-7012-8345-6789abcdef03',
@@ -92,6 +95,7 @@ describe('the requests that still want an operator', () => {
       {
         url: '/service-refund-requests?state=FAILED',
         body: {
+          nextCursor: null,
           requests: [
             request({
               id: '019250ab-cdef-7012-8345-6789abcdef04',
@@ -124,10 +128,46 @@ describe('the requests that still want an operator', () => {
   });
 });
 
+describe('the attention card’s paging', () => {
+  it('follows the server’s cursor to the oldest request in a state (Codex review of #83)', async () => {
+    const oldest = '019250ab-cdef-7012-8345-6789abcdef09';
+    const api = stubApi([
+      {
+        url: '/service-refund-requests?state=OPEN',
+        body: {
+          requests: [request({ id: '019250ab-cdef-7012-8345-6789abcdef08', reason: 'تازه' })],
+          nextCursor: {
+            at: '2026-09-20T10:00:00.000Z',
+            id: '019250ab-cdef-7012-8345-6789abcdef08',
+          },
+        },
+      },
+      {
+        url: '/service-refund-requests?state=OPEN&before=',
+        body: {
+          requests: [
+            request({ id: oldest, reason: 'قدیمی‌ترین', createdAt: '2026-09-01T10:00:00.000Z' }),
+          ],
+          nextCursor: null,
+        },
+      },
+      { url: '/service-refund-requests?state=EXECUTING', body: { requests: [], nextCursor: null } },
+      { url: '/service-refund-requests?state=FAILED', body: { requests: [], nextCursor: null } },
+    ]);
+    renderPage(<OpenServiceRefundRequestsCard />);
+    const table = await screen.findByRole('table');
+    expect(within(table).getByText('تازه')).toBeInTheDocument();
+    expect(within(table).getByText('قدیمی‌ترین')).toBeInTheDocument();
+    // The second read names the first page's cursor, both halves.
+    const second = api.calls.find((call) => call.url.includes('before='));
+    expect(second?.url).toContain('beforeId=019250ab-cdef-7012-8345-6789abcdef08');
+  });
+});
+
 describe('one service’s requests', () => {
   const forService = (rows: readonly Record<string, unknown>[]) => ({
     url: `/services/${SERVICE_ID}/refund-requests`,
-    body: { requests: rows },
+    body: { requests: rows, nextCursor: null },
   });
 
   it('approves only after the destructive confirmation is ticked, with the amount as minor units', async () => {
