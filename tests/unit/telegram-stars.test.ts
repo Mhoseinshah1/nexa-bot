@@ -5,6 +5,8 @@ import {
   PAYMENT_GATEWAY_DESCRIPTORS,
   TELEGRAM_STARS_PRE_CHECKOUT_MARGIN_MS,
   telegramStarsFor,
+  templateDefinition,
+  validateTemplateBody,
 } from '@nexa/contracts';
 import { CATALOGUE_FA } from '@nexa/i18n';
 import {
@@ -171,12 +173,14 @@ describe('the sendInvoice and answerPreCheckoutQuery bodies (A2, A3)', () => {
 
 describe('what a sendInvoice answer means for the attempt (A2)', () => {
   const failed = (outcome: 'FAILED_RETRYABLE' | 'FAILED_PERMANENT', errorCode: string) =>
-    starsCreateOutcome({ outcome, errorCode, errorMessage: 'x' }, 'order', 81n);
+    starsCreateOutcome({ outcome, errorCode, errorMessage: 'x' }, 'order', 81n, '910910');
 
-  it('is CREATED with the message id', () => {
-    expect(starsCreateOutcome({ outcome: 'SUCCEEDED', messageId: 42 }, 'order', 81n)).toEqual({
+  it('is CREATED with the chat and the message id', () => {
+    expect(
+      starsCreateOutcome({ outcome: 'SUCCEEDED', messageId: 42 }, 'order', 81n, '910910'),
+    ).toEqual({
       kind: 'CREATED',
-      invoiceId: 'message:42',
+      invoiceId: 'message:910910:42',
       orderId: 'order',
       invoiceUrl: null,
       webInvoiceUrl: null,
@@ -196,7 +200,7 @@ describe('what a sendInvoice answer means for the attempt (A2)', () => {
     ]) {
       expect(failed('FAILED_RETRYABLE', code).kind).toBe('UNKNOWN');
     }
-    expect(starsCreateOutcome({ outcome: 'SUCCEEDED', messageId: null }, 'o', 1n).kind).toBe(
+    expect(starsCreateOutcome({ outcome: 'SUCCEEDED', messageId: null }, 'o', 1n, '1').kind).toBe(
       'UNKNOWN',
     );
     expect(failed('FAILED_PERMANENT', 'telegram.rejected.400')).toMatchObject({
@@ -424,5 +428,36 @@ describe('the customer’s routes and /paysupport (A5, A7)', () => {
     expect(intentOf({ message: { text: '/paysupport@acme_bot' } }).intent).toBe('SUPPORT');
     expect(BOT_COMMANDS.map((entry) => entry.command)).toContain('paysupport');
     expect(CATALOGUE_FA['bot.help']).toContain('/paysupport');
+  });
+});
+
+describe('the Codex review of #85', () => {
+  it("names two customers' invoices apart when Telegram gives both the same message id (C4)", () => {
+    const one = starsCreateOutcome({ outcome: 'SUCCEEDED', messageId: 42 }, 'a', 1n, '910910');
+    const two = starsCreateOutcome({ outcome: 'SUCCEEDED', messageId: 42 }, 'b', 1n, '920920');
+    expect(one.kind === 'CREATED' && two.kind === 'CREATED').toBe(true);
+    if (one.kind === 'CREATED' && two.kind === 'CREATED') {
+      expect(one.invoiceId).not.toBe(two.invoiceId);
+    }
+  });
+
+  it('refuses an invoice title or description override Telegram would refuse (C1)', () => {
+    const title = templateDefinition('bot.payment.stars_invoice_title');
+    const description = templateDefinition('bot.payment.stars_invoice_description');
+    expect(validateTemplateBody(title, 'x'.repeat(32))).toEqual([]);
+    expect(validateTemplateBody(title, 'x'.repeat(33)).map((issue) => issue.kind)).toEqual([
+      'TOO_LONG',
+    ]);
+    expect(validateTemplateBody(description, 'x'.repeat(255))).toEqual([]);
+    expect(validateTemplateBody(description, 'x'.repeat(256)).map((issue) => issue.kind)).toEqual([
+      'TOO_LONG',
+    ]);
+    // The shipped defaults fit what they are for.
+    expect(validateTemplateBody(title, CATALOGUE_FA['bot.payment.stars_invoice_title'])).toEqual(
+      [],
+    );
+    expect(
+      validateTemplateBody(description, CATALOGUE_FA['bot.payment.stars_invoice_description']),
+    ).toEqual([]);
   });
 });

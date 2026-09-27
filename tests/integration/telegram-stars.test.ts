@@ -444,7 +444,7 @@ describe('Telegram Stars (Package A)', () => {
         sql`SELECT id FROM bot_instances WHERE id = ${BOT_A}`,
       );
       expect(botRow).toBeDefined();
-      expect(invoice.provider_invoice_id).toMatch(/^message:\d+$/u);
+      expect(invoice.provider_invoice_id).toMatch(/^message:\d+:\d+$/u);
     });
 
     it('keeps an open invoice at the rate it was issued at when the rate changes, and the row refuses a rewrite', async () => {
@@ -846,6 +846,133 @@ describe('Telegram Stars (Package A)', () => {
       const paysupport = await text('/paysupport');
       expect(paysupport).toHaveLength(1);
       expect(paysupport).toEqual(await text('/help'));
+    });
+  });
+
+  describe('the Codex review of #85', () => {
+    const codeOf = (promise: Promise<unknown>) =>
+      promise.then(
+        () => null,
+        (error: unknown) => (isNexaError(error) ? error.code : String(error)),
+      );
+
+    async function approvedOrder() {
+      await enableStars();
+      const orderId = await draftOrder(260_000n);
+      await tapAs(MARYAM, `gp:${orderId}.TELEGRAM_STARS`);
+      const [payment] = await rows<{ id: string }>(
+        sql`SELECT id FROM payments WHERE order_id = ${orderId} AND method = 'GATEWAY'`,
+      );
+      await worker();
+      const invoice = await invoiceOf(payment!.id);
+      await preCheckout(invoice.provider_order_id, Number(invoice.sent_amount));
+      expect(lastAnswer()).toMatchObject({ ok: true });
+      return { orderId, paymentId: payment!.id, invoice };
+    }
+
+    it('holds an approved checkout against cancel, withdraw and wallet payment until the charge settles it (C2, C5)', async () => {
+      const { orderId, paymentId, invoice } = await approvedOrder();
+      const [held] = await rows<{ checkout_held_until: Date | null }>(
+        sql`SELECT checkout_held_until FROM payments WHERE id = ${paymentId}`,
+      );
+      expect(held?.checkout_held_until).not.toBeNull();
+
+      const inProgress = COMMERCE_ERROR_CODES.PAYMENT_CHECKOUT_IN_PROGRESS;
+      expect(
+        await codeOf(
+          api.container.orders.cancelByCustomer(inBot(), systemActor('c2-cancel'), {
+            idempotencyKey: 'c2-cancel',
+            customerId: maryam,
+            orderId,
+          }),
+        ),
+      ).toBe(inProgress);
+      expect(
+        await codeOf(
+          api.container.payments.withdrawPending(inBot(), systemActor('c2-withdraw'), maryam, {
+            idempotencyKey: 'c2-withdraw',
+            paymentId,
+          }),
+        ),
+      ).toBe(inProgress);
+      expect(
+        await codeOf(
+          api.container.payments.settleFromWallet(inBot(), systemActor('c2-wallet'), maryam, {
+            idempotencyKey: 'c2-wallet',
+            orderId,
+          }),
+        ),
+      ).toBe(inProgress);
+      expect(await paymentState(paymentId)).toBe('PENDING');
+
+      // The charge Telegram took after the approval settles the order it was for.
+      await successfulPayment(invoice.provider_order_id, Number(invoice.sent_amount), 'c2-charge');
+      const [order] = await rows<{ state: string }>(
+        sql`SELECT state FROM orders WHERE id = ${orderId}`,
+      );
+      expect(order?.state).toBe('PAID');
+      // C5: approved by a callback on the bot's webhook, not by an inquiry nobody made.
+      const [confirmed] = await rows<{ evidence_kind: string }>(
+        sql`SELECT evidence_kind FROM payments WHERE id = ${paymentId}`,
+      );
+      expect(confirmed?.evidence_kind).toBe('GATEWAY_CALLBACK');
+    });
+
+    it('lets the customer cancel once the checkout hold has lapsed (C2)', async () => {
+      const { orderId, paymentId } = await approvedOrder();
+      await api.container.database.db.execute(
+        sql`UPDATE payments SET checkout_held_until = now() - interval '1 second' WHERE id = ${paymentId}`,
+      );
+      await api.container.orders.cancelByCustomer(inBot(), systemActor('c2-later'), {
+        idempotencyKey: 'c2-later',
+        customerId: maryam,
+        orderId,
+      });
+      expect(await paymentState(paymentId)).toBe('CANCELLED');
+    });
+
+    it('keeps a recorded late charge due until its late outcome commits (C3)', async () => {
+      await enableStars();
+      const { attempt, invoice, stars } = await invoicedTopup();
+      await api.container.database.db.execute(
+        sql`UPDATE payments SET expires_at = now() - interval '1 minute' WHERE id = ${attempt.payment.id}`,
+      );
+      // The late completion's transaction fails, as a transient failure of its write would.
+      await api.container.database.db.execute(sql`
+        CREATE OR REPLACE FUNCTION test_c3_block_late() RETURNS trigger AS $$
+        BEGIN
+          IF NEW.outcome = 'LATE_COMPLETION' THEN RAISE EXCEPTION 'c3: late outcome refused'; END IF;
+          RETURN NEW;
+        END $$ LANGUAGE plpgsql`);
+      await api.container.database.db.execute(
+        sql`CREATE TRIGGER test_c3_block_late BEFORE UPDATE ON gateway_invoices FOR EACH ROW EXECUTE FUNCTION test_c3_block_late()`,
+      );
+      try {
+        const answer = await successfulPayment(invoice.provider_order_id, stars, 'c3-charge');
+        // Recorded, so Telegram is not asked to deliver it again.
+        expect(answer.statusCode).toBeLessThan(300);
+        // The pass fails, as the loop's `tick` expects one to; the row must survive it.
+        await expect(worker()).rejects.toThrow();
+        const stranded = await rows<{ next_inquiry_at: Date | null; outcome: string | null }>(
+          sql`SELECT next_inquiry_at, outcome FROM gateway_invoices WHERE payment_id = ${attempt.payment.id}`,
+        );
+        expect(stranded[0]?.outcome).toBeNull();
+        expect(stranded[0]?.next_inquiry_at).not.toBeNull();
+      } finally {
+        await api.container.database.db.execute(
+          sql`DROP TRIGGER IF EXISTS test_c3_block_late ON gateway_invoices`,
+        );
+        await api.container.database.db.execute(sql`DROP FUNCTION IF EXISTS test_c3_block_late()`);
+      }
+      // The failure clears; the next pass records the late completion, once.
+      await api.container.database.db.execute(
+        sql`UPDATE gateway_invoices SET next_inquiry_at = now() - interval '1 second' WHERE payment_id = ${attempt.payment.id}`,
+      );
+      await worker();
+      const late = await invoiceOf(attempt.payment.id);
+      expect(late.outcome).toBe('LATE_COMPLETION');
+      expect(await opsCodes()).toContain('payments.gateway_late_completion');
+      expect(await ledger()).toEqual([]);
     });
   });
 
