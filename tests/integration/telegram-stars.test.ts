@@ -462,6 +462,62 @@ describe('Telegram Stars (Package A)', () => {
     });
   });
 
+  describe('the open attempt', () => {
+    it('hands back an open attempt only in the bot it was sent through', async () => {
+      await enableStars();
+      await api.container.database.db.execute(
+        sql`UPDATE bot_instances SET status = 'ACTIVE' WHERE id = ${BOT_A2}`,
+      );
+      const first = await topup(100_000n);
+      const again = await topup(100_000n);
+      expect(again.reissued).toBe(true);
+      expect(again.payment.id).toBe(first.payment.id);
+      // The same amount from the tenant's other bot: that invoice is not in this chat.
+      const key = `stars-topup-a2-${String((updateId += 1))}`;
+      const otherBot = await api.container.payments.requestGatewayTopup(
+        inBot(BOT_A2),
+        systemActor(key),
+        maryam,
+        { idempotencyKey: key, amount: money(100_000n, 'IRT'), provider: 'TELEGRAM_STARS' },
+      );
+      expect(otherBot.reissued).toBe(false);
+      expect(otherBot.payment.id).not.toBe(first.payment.id);
+      expect((await invoiceOf(otherBot.payment.id)).bot_instance_id).toBe(BOT_A2);
+    });
+
+    it('settles a charge on an invoice whose create answer was lost', async () => {
+      await enableStars();
+      // Telegram fails the send with a 502: the invoice may or may not be in the chat.
+      reply = (method, response) => {
+        if (method !== 'sendInvoice') return defaultReply(method, response);
+        response.writeHead(502, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ ok: false, error_code: 502, description: 'Bad Gateway' }));
+      };
+      const attempt = await topup(100_000n);
+      await worker();
+      const invoice = await invoiceOf(attempt.payment.id);
+      expect(invoice.creation_state).toBe('CREATE_UNKNOWN');
+      expect(invoice.provider_invoice_id).toBeNull();
+      // It was delivered after all, and the customer paid it.
+      reply = defaultReply;
+      await preCheckout(invoice.provider_order_id, Number(invoice.sent_amount));
+      expect(lastAnswer()).toMatchObject({ ok: true });
+      // The webhook records the charge and dies before settling; the worker settles it.
+      await api.container.uow.run(tenantA, (tx) =>
+        new DrizzleGatewayInvoiceRepository(api.container.database.db).recordCharge(
+          tenantA,
+          attempt.payment.id as PaymentId,
+          { chargeId: 'charge-lost-create', status: 'successful_payment', dueAt: new Date() },
+          new Date(),
+          tx,
+        ),
+      );
+      await worker();
+      expect(await paymentState(attempt.payment.id)).toBe('CONFIRMED');
+      expect(calls.filter((call) => call.method === 'sendInvoice')).toHaveLength(1);
+    });
+  });
+
   describe('pre-checkout (A3)', () => {
     it('approves the attempt’s own payer, bot, currency and Stars, and moves nothing', async () => {
       await enableStars();
