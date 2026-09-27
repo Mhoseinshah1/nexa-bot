@@ -441,7 +441,17 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
     // pressing the button again to ask whether it worked, and minting a fresh
     // key there would answer by queueing a second message. It is retired only
     // once a response has actually been seen.
-    mutationFn: (idempotencyKey: string) => sendTestNotification(idempotencyKey),
+    //
+    // Two destinations can be tested (Codex review of #82): the operations topic, and
+    // the topic the financial log goes to. The target is part of the key's payload, so
+    // each is its own question.
+    mutationFn: ({
+      idempotencyKey,
+      target,
+    }: {
+      idempotencyKey: string;
+      target: 'OPERATIONS' | 'PAYMENTS';
+    }) => sendTestNotification(idempotencyKey, target),
     onSuccess: async () => {
       submission.settle();
       await client.invalidateQueries({ queryKey: ['notifications'] });
@@ -504,14 +514,37 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
         maturity="now"
         actions={
           mayTest ? (
-            <button
-              type="button"
-              className="btn primary sm"
-              onClick={() => test.mutate(submission.current({ command: 'notifications.test' }))}
-              disabled={test.isPending}
-            >
-              {test.isPending ? t('web.saving') : t('web.send_test')}
-            </button>
+            <>
+              <button
+                type="button"
+                className="btn primary sm"
+                onClick={() =>
+                  test.mutate({
+                    idempotencyKey: submission.current({ command: 'notifications.test' }),
+                    target: 'OPERATIONS',
+                  })
+                }
+                disabled={test.isPending}
+              >
+                {test.isPending ? t('web.saving') : t('web.send_test')}
+              </button>
+              <button
+                type="button"
+                className="btn sm"
+                onClick={() =>
+                  test.mutate({
+                    idempotencyKey: submission.current({
+                      command: 'notifications.test',
+                      target: 'PAYMENTS',
+                    }),
+                    target: 'PAYMENTS',
+                  })
+                }
+                disabled={test.isPending}
+              >
+                {t('web.send_test_payments')}
+              </button>
+            </>
           ) : undefined
         }
       />

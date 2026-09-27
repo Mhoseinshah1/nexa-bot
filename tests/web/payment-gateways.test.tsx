@@ -319,3 +319,83 @@ describe('the TonPays API key', () => {
     expect(screen.queryByRole('button', { name: 'تنظیم کلید API' })).toBeNull();
   });
 });
+
+/**
+ * WP18 — the customer gateway fee field. Only a route that settles through `GATEWAY` draws
+ * it; a typed `5.25` travels as 525 basis points, and 525 reopens as `5.25`.
+ */
+describe('the customer gateway fee', () => {
+  const route = (provider: 'TONPAYS' | 'MANUAL_TRANSFER', customerFeeBasisPoints: number) => ({
+    provider,
+    status: 'ACTIVE',
+    displayName: null,
+    instructions: null,
+    minAmountMinor: '0',
+    maxAmountMinor: '0',
+    currency: 'IRT',
+    eligibility: {
+      activateAfterPayments: 0,
+      deactivateAfterPayments: 0,
+      activateAfterAccountDays: 0,
+    },
+    sortOrder: 0,
+    topupCashbackPercent: 0,
+    customerFeeBasisPoints,
+    allowServicePurchase: true,
+    allowWalletTopup: true,
+    credential: { required: provider === 'TONPAYS', setAt: null },
+    callbackUrl: null,
+    createdAt: '2026-09-10T12:30:00.000Z',
+    updatedAt: '2026-09-10T12:30:00.000Z',
+  });
+
+  const openRoute = async (gateway: ReturnType<typeof route>) => {
+    const api = stubApi([
+      { url: '/payment-gateways', body: { gateways: [gateway] } },
+      { url: `/payment-gateways/${gateway.provider}`, body: { gateway } },
+    ]);
+    renderPage(<PaymentGatewaysPage denied={false} mayEdit />);
+    fireEvent.click(await screen.findByRole('button', { name: 'ویرایش' }));
+    return api;
+  };
+
+  it('reopens 525 basis points as 5.25 and saves a typed 7.5 as 750 basis points', async () => {
+    const api = await openRoute(route('TONPAYS', 525));
+    expect(screen.getByText('5.25%')).toBeInTheDocument();
+    const input = (await screen.findByLabelText('کارمزد مشتری (%)')) as HTMLInputElement;
+    expect(input.value).toBe('5.25');
+
+    fireEvent.change(input, { target: { value: '۷٫۵' } });
+    fireEvent.click(screen.getByRole('button', { name: 'ذخیره' }));
+    await waitFor(() => {
+      expect(api.calls.some((call) => call.method === 'POST')).toBe(true);
+    });
+    const saved = api.calls.find((call) => call.method === 'POST');
+    expect((saved?.body as { customerFeeBasisPoints?: unknown }).customerFeeBasisPoints).toBe(750);
+  });
+
+  it('refuses a third decimal or a figure above 100 at the field, and will not save it', async () => {
+    const api = await openRoute(route('TONPAYS', 0));
+    const input = (await screen.findByLabelText('کارمزد مشتری (%)')) as HTMLInputElement;
+    for (const bad of ['5.123', '100.01', '-1', '1e2']) {
+      fireEvent.change(input, { target: { value: bad } });
+      expect(
+        await screen.findByText('کارمزد مشتری باید عددی از ۰ تا ۱۰۰ با حداکثر دو رقم اعشار باشد.'),
+      ).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'ذخیره' })).toBeDisabled();
+    }
+    expect(api.calls.some((call) => call.method === 'POST')).toBe(false);
+  });
+
+  it('draws no fee field for card-to-card, and sends no fee from that form', async () => {
+    const api = await openRoute(route('MANUAL_TRANSFER', 0));
+    await screen.findByLabelText('هدیهٔ شارژ (درصد)');
+    expect(screen.queryByLabelText('کارمزد مشتری (%)')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'ذخیره' }));
+    await waitFor(() => {
+      expect(api.calls.some((call) => call.method === 'POST')).toBe(true);
+    });
+    const saved = api.calls.find((call) => call.method === 'POST');
+    expect(saved?.body as Record<string, unknown>).not.toHaveProperty('customerFeeBasisPoints');
+  });
+});

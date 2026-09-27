@@ -1,8 +1,12 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  PAYMENT_GATEWAY_DESCRIPTORS,
   PAYMENT_GATEWAY_TOPUP_CASHBACK_PERCENT_MAX,
   PAYMENT_GATEWAY_TOPUP_CASHBACK_PERCENT_MIN,
+  formatBasisPointsPercent,
+  parsePercentBasisPoints,
+  type PaymentGatewayProvider,
   type PaymentGatewayView,
   type SalesCurrencyCode,
 } from '@nexa/contracts';
@@ -73,6 +77,12 @@ const EMPTY_FORM = {
   activateAfterAccountDays: '0',
   sortOrder: '0',
   topupCashbackPercent: '0',
+  /**
+   * The customer's gateway fee as the operator types it — up to two decimals, `5.25` —
+   * turned into basis points by the one contracts parser at save (WP18). Only a route
+   * that settles through `GATEWAY` shows the field.
+   */
+  customerFeePercent: '0',
   /*
    * The two purpose switches (customer UX completion §D/§F). ON by default, which is
    * the state every route starts in; the form shows both so an operator who switches
@@ -95,6 +105,8 @@ function formOf(gateway: PaymentGatewayView): FormState {
     activateAfterAccountDays: String(gateway.eligibility.activateAfterAccountDays),
     sortOrder: String(gateway.sortOrder),
     topupCashbackPercent: String(gateway.topupCashbackPercent),
+    // Reopens as it was typed: 525 basis points is `5.25`, never `5.250000001`.
+    customerFeePercent: formatBasisPointsPercent(gateway.customerFeeBasisPoints),
     allowServicePurchase: gateway.allowServicePurchase,
     allowWalletTopup: gateway.allowWalletTopup,
   };
@@ -183,6 +195,17 @@ export function percentOf(value: string): number | null {
     : null;
 }
 
+/**
+ * Whether a route may carry a customer fee: it settles through `GATEWAY` (WP18). Asked of
+ * the descriptor, never of the provider's name, so a new external route inherits it.
+ */
+export function takesCustomerFee(provider: string): boolean {
+  return (
+    provider in PAYMENT_GATEWAY_DESCRIPTORS &&
+    PAYMENT_GATEWAY_DESCRIPTORS[provider as PaymentGatewayProvider].settlesVia === 'GATEWAY'
+  );
+}
+
 export function minorOf(value: string): string | null {
   const latin = value
     .trim()
@@ -254,6 +277,11 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
       }
       const gift = percentOf(form.topupCashbackPercent);
       if (gift === null) throw new Error(t('web.payment_gateway_topup_invalid'));
+      const chargesFee = takesCustomerFee(editing);
+      const fee = chargesFee ? parsePercentBasisPoints(form.customerFeePercent) : null;
+      if (chargesFee && fee === null) {
+        throw new Error(t('web.payment_gateway_customer_fee_invalid'));
+      }
       const body = {
         provider: editing,
         displayName: form.displayName.trim() === '' ? null : form.displayName.trim(),
@@ -272,6 +300,11 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
          * only top-ups created after the save.
          */
         topupCashbackPercent: gift,
+        /*
+         * The customer's gateway fee in basis points (WP18), for a gateway route only. A
+         * manual route has no field and sends nothing, and the server keeps its zero.
+         */
+        ...(fee === null ? {} : { customerFeeBasisPoints: fee }),
         /*
          * Both switches, always, as the form shows them. The server defaults an ABSENT
          * switch to on for the previous release's client; a form that has the switch
@@ -403,6 +436,16 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
       header: t('web.payment_gateway_topup_gift'),
       render: (row) =>
         row.topupCashbackPercent === 0 ? '—' : <Ltr>{`${String(row.topupCashbackPercent)}%`}</Ltr>,
+    },
+    {
+      key: 'fee',
+      header: t('web.payment_gateway_customer_fee'),
+      render: (row) =>
+        row.customerFeeBasisPoints === 0 ? (
+          '—'
+        ) : (
+          <Ltr>{`${formatBasisPointsPercent(row.customerFeeBasisPoints)}%`}</Ltr>
+        ),
     },
     {
       key: 'purposes',
@@ -715,6 +758,25 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
             />
           </Field>
 
+          {takesCustomerFee(editing) && (
+            <Field
+              label={t('web.payment_gateway_customer_fee')}
+              htmlFor="pg-customer-fee"
+              hint={t('web.payment_gateway_customer_fee_hint')}
+              {...(parsePercentBasisPoints(form.customerFeePercent) === null
+                ? { error: t('web.payment_gateway_customer_fee_invalid') }
+                : {})}
+            >
+              <input
+                id="pg-customer-fee"
+                value={form.customerFeePercent}
+                inputMode="decimal"
+                maxLength={7}
+                onChange={(event) => setForm({ ...form, customerFeePercent: event.target.value })}
+              />
+            </Field>
+          )}
+
           <Field label={t('web.gateway_allow_column')} hint={t('web.gateway_allow_hint')}>
             <div className="toolbar">
               <Switch
@@ -747,7 +809,12 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
             <button
               type="button"
               className="btn primary sm"
-              disabled={busy || percentOf(form.topupCashbackPercent) === null}
+              disabled={
+                busy ||
+                percentOf(form.topupCashbackPercent) === null ||
+                (takesCustomerFee(editing) &&
+                  parsePercentBasisPoints(form.customerFeePercent) === null)
+              }
               onClick={() => save.mutate()}
             >
               {t('web.payment_gateway_save')}

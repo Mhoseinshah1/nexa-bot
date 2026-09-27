@@ -5,6 +5,7 @@ import {
   COMMERCE_ERROR_CODES,
   EMPTY_PRODUCT_DISPLAY,
   isNexaError,
+  MAX_MONEY_AMOUNT_MINOR,
   money,
   type ActorContext,
   type BotInstanceId,
@@ -37,6 +38,7 @@ import {
 } from '../../apps/api/src/modules/commerce/payments/application/gateway-payment.service';
 import type { GatewayCallBudget } from '../../apps/api/src/modules/commerce/payments/application/gateway-invoice-ports';
 import { DrizzleOperationalConditionReader } from '../../apps/api/src/modules/platform/opslog/infrastructure/drizzle-operational-event.reader';
+import { hashRequest } from '../../apps/api/src/modules/platform/idempotency/infrastructure/drizzle-idempotency-store';
 import { startFakeMarzban, type FakeMarzban } from '../support/fake-marzban';
 import {
   adminActorFor,
@@ -307,6 +309,7 @@ describe('TonPays, through the one settlement path', () => {
       uow: ctx.container.uow,
       audit: ctx.container.audit,
       opsLog: ctx.container.opsLog,
+      outbox: ctx.container.outbox,
       clock: { now: () => new Date(Date.now() + offsetMs) },
       ids: ctx.container.ids,
       logger: { info: () => undefined, warn: () => undefined, error: () => undefined },
@@ -1101,6 +1104,653 @@ describe('TonPays, through the one settlement path', () => {
       await inquireNow();
       expect((await paymentOf(failed.payment.id)).state).toBe('FAILED');
       expect(await ledger()).toHaveLength(2);
+    });
+  });
+
+  // =====================================================================================
+  // WP18 — the customer gateway fee, and the financial log.
+  // `docs/wp18-gateway-fee-financial-log-audit.md`.
+  // =====================================================================================
+
+  describe('WP18 — the customer gateway fee', () => {
+    const FIVE_PERCENT = 500;
+
+    const feeOf = async (paymentId: string) =>
+      (
+        await rows<{
+          amount: string;
+          customer_fee_basis_points: number | null;
+          customer_fee_amount: string | null;
+          payable_amount: string | null;
+        }>(
+          sql`SELECT amount::text AS amount, customer_fee_basis_points,
+                     customer_fee_amount::text AS customer_fee_amount,
+                     payable_amount::text AS payable_amount
+              FROM payments WHERE id = ${paymentId}`,
+        )
+      )[0]!;
+
+    /** The database's own message, under the query wrapper drizzle puts around it. */
+    const dbMessage = (error: unknown): string =>
+      String((error as { cause?: { message?: unknown } }).cause?.message ?? error);
+
+    const sentAmount = async (paymentId: string) =>
+      (
+        await rows<{ sent_amount: string }>(
+          sql`SELECT sent_amount::text AS sent_amount FROM gateway_invoices WHERE payment_id = ${paymentId}`,
+        )
+      )[0]!.sent_amount;
+
+    async function approve(paymentId: string, key: string) {
+      const invoice = await invoiceOf(paymentId);
+      tonpays.set(invoice.provider_invoice_id!, 'completed', true);
+      await webhook(invoice, 'completed', key);
+      await inquireNow();
+      await inquireNow();
+    }
+
+    it('invoices principal + fee, keeps the payment amount the principal, and settles the order at its own total', async () => {
+      await enableTonPays({ customerFeeBasisPoints: FIVE_PERCENT });
+      const orderId = await draftOrder(200_000n);
+      const { paymentId } = await payWithGateway(orderId);
+
+      expect(await feeOf(paymentId)).toEqual({
+        amount: '200000',
+        customer_fee_basis_points: 500,
+        customer_fee_amount: '10000',
+        payable_amount: '210000',
+      });
+      expect(await sentAmount(paymentId)).toBe('210000');
+      await pass();
+      // The invoice TonPays is asked for is the payable, and nothing else.
+      expect(tonpays.creates.map((create) => create.body.amount)).toEqual([210_000]);
+      // The customer is shown the three figures apart, once the invoice exists.
+      await tap(`gc:${paymentId}`);
+      expect(lastText()).toContain('مبلغ سفارش');
+      expect(lastText()).toContain('کارمزد درگاه');
+      expect(lastText()).toContain('مبلغ قابل پرداخت');
+
+      await approve(paymentId, 'fee-order');
+      expect((await paymentOf(paymentId)).state).toBe('CONFIRMED');
+      // The settlement guard compares the PRINCIPAL with the order total: it settled.
+      expect(await orderState(orderId)).toBe('PAID');
+      const [order] = await rows<{ total_amount: string }>(
+        sql`SELECT total_amount::text AS total_amount FROM orders WHERE id = ${orderId}`,
+      );
+      expect(order!.total_amount).toBe('200000');
+      // No money moved through the wallet for a gateway order, fee included.
+      expect(await ledger()).toEqual([]);
+    });
+
+    it('credits a top-up’s principal only, bases the gift on the principal, and never credits the fee', async () => {
+      await enableTonPays({ customerFeeBasisPoints: FIVE_PERCENT, topupCashbackPercent: 10 });
+      const scope = { ...tenantA, botInstanceId: BOT_A };
+      const attempt = await ctx.container.payments.requestGatewayTopup(
+        scope,
+        systemActor('fee-topup'),
+        maryam,
+        { idempotencyKey: 'fee-topup', amount: money(200_000n, 'IRT'), provider: 'TONPAYS' },
+      );
+      expect(attempt.payment.amount.amountMinor).toBe(200_000n);
+      expect(attempt.payment.customerFee?.payable.amountMinor).toBe(210_000n);
+      await pass();
+      expect(tonpays.creates.map((create) => create.body.amount)).toEqual([210_000]);
+
+      await approve(attempt.payment.id, 'fee-topup');
+      expect(await ledger()).toEqual([
+        { reason: 'CASHBACK_TOPUP', amount: '20000', payment_id: attempt.payment.id },
+        { reason: 'TOPUP_GATEWAY', amount: '200000', payment_id: attempt.payment.id },
+      ]);
+    });
+
+    it('rounds the fee half-up to the minor unit, on integers', async () => {
+      // 12.5 % of 3 Toman is 0.375 → 0; 16.67 % of 3 is 0.5001 → 1; 50 % of 1 is 0.5 → 1.
+      await enableTonPays({ customerFeeBasisPoints: 5_000 });
+      const scope = { ...tenantA, botInstanceId: BOT_A };
+      const attempt = await ctx.container.payments.requestGatewayTopup(
+        scope,
+        systemActor('fee-round'),
+        maryam,
+        { idempotencyKey: 'fee-round', amount: money(100_001n, 'IRT'), provider: 'TONPAYS' },
+      );
+      // 100001 × 0.5 = 50000.5 → 50001, half-up.
+      expect(await feeOf(attempt.payment.id)).toMatchObject({
+        customer_fee_amount: '50001',
+        payable_amount: '150002',
+      });
+    });
+
+    it('snapshots the rate: a later change neither alters the open attempt nor the invoice it hands back', async () => {
+      await enableTonPays({ customerFeeBasisPoints: FIVE_PERCENT });
+      const orderId = await draftOrder(200_000n);
+      const { paymentId } = await payWithGateway(orderId);
+      await ctx.container.paymentGateways.configure(tenantA, owner, {
+        idempotencyKey: 'fee-raised',
+        provider: 'TONPAYS',
+        config: { ...OPEN_ROUTE, customerFeeBasisPoints: 1_000 },
+      });
+      // The same order, tapped again: the OPEN attempt comes back with its own figures.
+      const again = await payWithGateway(orderId);
+      expect(again.paymentId).toBe(paymentId);
+      expect(await feeOf(paymentId)).toMatchObject({
+        customer_fee_basis_points: 500,
+        payable_amount: '210000',
+      });
+      // And the database refuses to rewrite a snapshot, in every state.
+      await expect(
+        ctx.container.database.db.execute(
+          sql`UPDATE payments SET customer_fee_amount = 0, payable_amount = amount WHERE id = ${paymentId}`,
+        ),
+      ).rejects.toSatisfy((error: unknown) =>
+        /customer gateway fee and payable are fixed/u.test(dbMessage(error)),
+      );
+    });
+
+    it('holds the payable to principal + fee, and a fee only on a gateway payment, in the database too', async () => {
+      await enableTonPays({ customerFeeBasisPoints: FIVE_PERCENT });
+      const orderId = await draftOrder(200_000n);
+      const { paymentId } = await payWithGateway(orderId);
+      await expect(
+        ctx.container.database.db.execute(
+          sql`INSERT INTO payments (id, tenant_id, customer_id, method, amount, currency, reference,
+                                    customer_fee_basis_points, customer_fee_amount, payable_amount)
+              SELECT gen_random_uuid(), tenant_id, customer_id, 'GATEWAY', 1000, currency, 'bad-payable',
+                     500, 50, 1049
+              FROM payments WHERE id = ${paymentId}`,
+        ),
+      ).rejects.toSatisfy((error: unknown) =>
+        /payments_customer_fee_check/u.test(dbMessage(error)),
+      );
+      await expect(
+        ctx.container.database.db.execute(
+          sql`INSERT INTO payments (id, tenant_id, customer_id, method, amount, currency, reference,
+                                    customer_fee_basis_points, customer_fee_amount, payable_amount)
+              SELECT gen_random_uuid(), tenant_id, customer_id, 'MANUAL_TRANSFER', 1000, currency, 'bad-method',
+                     500, 50, 1050
+              FROM payments WHERE id = ${paymentId}`,
+        ),
+      ).rejects.toSatisfy((error: unknown) =>
+        /payments_customer_fee_check/u.test(dbMessage(error)),
+      );
+    });
+
+    it('refuses a non-zero fee on a route that does not settle through a gateway', async () => {
+      await expect(
+        ctx.container.paymentGateways.configure(tenantA, owner, {
+          idempotencyKey: 'manual-fee',
+          provider: 'MANUAL_TRANSFER',
+          config: { ...OPEN_ROUTE, customerFeeBasisPoints: 100 },
+        }),
+      ).rejects.toSatisfy(
+        (error: unknown) =>
+          isNexaError(error) && error.code === COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+      );
+      // A save that does not mention the fee keeps the stored rate.
+      await enableTonPays({ customerFeeBasisPoints: FIVE_PERCENT });
+      const { customerFeeBasisPoints: _omitted, ...withoutFee } = {
+        ...OPEN_ROUTE,
+        customerFeeBasisPoints: undefined,
+      };
+      const kept = await ctx.container.paymentGateways.configure(tenantA, owner, {
+        idempotencyKey: 'tp-no-fee-field',
+        provider: 'TONPAYS',
+        config: { ...withoutFee, sortOrder: 7 },
+      });
+      expect(kept.customerFeeBasisPoints).toBe(FIVE_PERCENT);
+    });
+
+    it('refuses a payable past the largest money amount, before anything is written (Codex review of #82)', async () => {
+      await enableTonPays({ customerFeeBasisPoints: 100 });
+      const scope = { ...tenantA, botInstanceId: BOT_A };
+      await expect(
+        ctx.container.payments.requestGatewayTopup(scope, systemActor('fee-overflow'), maryam, {
+          idempotencyKey: 'fee-overflow',
+          amount: money(MAX_MONEY_AMOUNT_MINOR, 'IRT'),
+          provider: 'TONPAYS',
+        }),
+      ).rejects.toSatisfy(
+        (error: unknown) =>
+          isNexaError(error) &&
+          error.code === COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE &&
+          (error.details as { reason?: string }).reason === 'AMOUNT_NOT_REPRESENTABLE',
+      );
+      const written = await rows<{ n: number }>(
+        sql`SELECT count(*)::int AS n FROM payments WHERE customer_id = ${maryam}`,
+      );
+      expect(written[0]!.n).toBe(0);
+      await pass();
+      expect(tonpays.creates).toEqual([]);
+    });
+
+    it('replays a route edit an earlier release committed, whose retry omits the fee (Codex review of #82)', async () => {
+      await enableTonPays();
+      const { customerFeeBasisPoints: _fee, ...withoutFee } = { ...OPEN_ROUTE, sortOrder: 3 };
+      // The earlier release hashed the edit without a fee field, and remembered it.
+      await ctx.container.idempotency.remember(
+        tenantA,
+        'WEB',
+        'legacy-route-edit',
+        hashRequest({
+          provider: 'TONPAYS',
+          displayName: withoutFee.displayName,
+          instructions: withoutFee.instructions,
+          minAmountMinor: withoutFee.minAmountMinor.toString(),
+          maxAmountMinor: withoutFee.maxAmountMinor.toString(),
+          eligibility: withoutFee.eligibility,
+          sortOrder: withoutFee.sortOrder,
+          topupCashbackPercent: withoutFee.topupCashbackPercent,
+          allowServicePurchase: withoutFee.allowServicePurchase,
+          allowWalletTopup: withoutFee.allowWalletTopup,
+        }),
+        { provider: 'TONPAYS' },
+      );
+      // Its retry after the upgrade replays that edit rather than being refused.
+      const replayed = await ctx.container.paymentGateways.configure(tenantA, owner, {
+        idempotencyKey: 'legacy-route-edit',
+        provider: 'TONPAYS',
+        config: withoutFee,
+      });
+      expect(replayed.provider).toBe('TONPAYS');
+      // And an edit that SENDS a fee is still its own command.
+      await expect(
+        ctx.container.paymentGateways.configure(tenantA, owner, {
+          idempotencyKey: 'legacy-route-edit',
+          provider: 'TONPAYS',
+          config: { ...withoutFee, customerFeeBasisPoints: 250 },
+        }),
+      ).rejects.toMatchObject({ code: 'platform.idempotency_payload_mismatch' });
+    });
+
+    it('never refunds the fee: the automatic refund returns the principal and nothing more', async () => {
+      await enableTonPays({ customerFeeBasisPoints: FIVE_PERCENT });
+      const orderId = await draftOrder(200_000n);
+      const { paymentId } = await payWithGateway(orderId);
+      await pass();
+      await approve(paymentId, 'fee-refund');
+      const payment = await new DrizzlePaymentRepository(ctx.container.database.db).findById(
+        tenantA,
+        paymentId,
+      );
+      const refund = await ctx.container.uow.run(tenantA, (tx) =>
+        ctx.container.refunds.refundUndeliverable(
+          tenantA,
+          systemActor('fee-refund-auto'),
+          { payment: payment!, now: ctx.container.clock.now() },
+          tx,
+        ),
+      );
+      expect(refund?.amount.amountMinor).toBe(200_000n);
+      expect(await ledger()).toEqual([
+        { reason: 'REFUND', amount: '200000', payment_id: paymentId },
+      ]);
+    });
+  });
+
+  describe('WP18 — the financial log', () => {
+    const LOG_CHAT = '-1001234567890';
+    const PAYMENTS_TOPIC = 77;
+    let flagKey = 0;
+
+    async function configureLog(paymentsTopic: number | null) {
+      const key = () => `wp18-log-${String((flagKey += 1))}`;
+      await ctx.container.featureFlags.set(tenantA, owner, {
+        key: 'ops_notifications',
+        enabled: true,
+        expectedVersion: null,
+        idempotencyKey: key(),
+        confirmKey: 'ops_notifications',
+        reason: 'WP18 financial log.',
+      });
+      await ctx.container.settingsService.set(tenantA, owner, {
+        key: 'ops.notifications.telegram_chat_id',
+        value: LOG_CHAT,
+        expectedVersion: null,
+        idempotencyKey: key(),
+      });
+      await ctx.container.settingsService.set(tenantA, owner, {
+        key: 'ops.notifications.telegram_topic_id',
+        value: 5,
+        expectedVersion: null,
+        idempotencyKey: key(),
+      });
+      if (paymentsTopic !== null) {
+        await ctx.container.settingsService.set(tenantA, owner, {
+          key: 'ops.notifications.payments_topic_id',
+          value: paymentsTopic,
+          expectedVersion: null,
+          idempotencyKey: key(),
+        });
+      }
+    }
+
+    async function relayAll() {
+      for (let round = 0; round < 20; round += 1) {
+        const result = await ctx.container.relay.processBatch();
+        if (result.claimed === 0) return;
+      }
+    }
+
+    const logs = () =>
+      rows<{
+        kind: string;
+        template_key: string;
+        destination: { chatId: string; topicId: number | null };
+        payload: Record<string, unknown>;
+        dedupe_key: string;
+      }>(
+        sql`SELECT kind, template_key, destination, payload, dedupe_key FROM notifications
+            WHERE tenant_id = ${tenantA.tenantId} AND template_key LIKE 'ops.financial.%'
+            ORDER BY created_at`,
+      );
+
+    it('logs a gateway order payment to the payments topic with principal, fee, payable and the provider’s figure as diagnostic', async () => {
+      await configureLog(PAYMENTS_TOPIC);
+      await enableTonPays({ customerFeeBasisPoints: 500 });
+      const orderId = await draftOrder(200_000n);
+      const { paymentId } = await payWithGateway(orderId);
+      await pass();
+      const invoice = await invoiceOf(paymentId);
+      tonpays.set(invoice.provider_invoice_id!, 'completed', true);
+      await webhook(invoice, 'completed', 'log-1');
+      await inquireNow();
+      await relayAll();
+      await relayAll(); // a second pass writes nothing new
+
+      const written = await logs();
+      expect(written).toHaveLength(1);
+      const [log] = written;
+      expect(log!.template_key).toBe('ops.financial.order_paid');
+      // A kind the release before WP18 knows: its Web Admin reads `kind` as a strict enum,
+      // so a new kind would break its whole notifications page after a rollback.
+      expect(log!.kind).toBe('OPERATIONAL_EVENT');
+      expect(log!.destination).toMatchObject({ chatId: LOG_CHAT, topicId: PAYMENTS_TOPIC });
+      expect(log!.payload).toMatchObject({
+        method: 'GATEWAY',
+        route: 'TONPAYS',
+        telegramId: MARYAM,
+        displayName: 'مریم',
+        paymentId,
+        orderId,
+        principal: { amountMinor: '200000', currency: 'IRT' },
+        fee: { amountMinor: '10000', currency: 'IRT' },
+        payable: { amountMinor: '210000', currency: 'IRT' },
+        providerInvoiceId: invoice.provider_invoice_id,
+        // The fake reports its documented final amount, 37 above the request: diagnostic.
+        providerFinalAmount: '210037 IRT',
+        evidence: 'GATEWAY_INQUIRY',
+      });
+      // Nothing that is a key, a link or a raw payload.
+      const serialised = JSON.stringify(written);
+      expect(serialised).not.toContain(API_KEY);
+      expect(serialised).not.toContain('https://');
+      expect(serialised).not.toContain('t.me');
+    });
+
+    it('logs a top-up with the principal credit, fee, total paid and gift apart', async () => {
+      await configureLog(null);
+      await enableTonPays({ customerFeeBasisPoints: 500, topupCashbackPercent: 10 });
+      const attempt = await ctx.container.payments.requestGatewayTopup(
+        { ...tenantA, botInstanceId: BOT_A },
+        systemActor('log-topup'),
+        maryam,
+        { idempotencyKey: 'log-topup', amount: money(200_000n, 'IRT'), provider: 'TONPAYS' },
+      );
+      await pass();
+      const invoice = await invoiceOf(attempt.payment.id);
+      tonpays.set(invoice.provider_invoice_id!, 'completed', true);
+      await webhook(invoice, 'completed', 'log-topup');
+      await inquireNow();
+      await relayAll();
+
+      const [log] = await logs();
+      expect(log!.template_key).toBe('ops.financial.topup_credited');
+      // No payments topic configured: the operations topic.
+      expect(log!.destination).toMatchObject({ chatId: LOG_CHAT, topicId: 5 });
+      expect(log!.payload).toMatchObject({
+        principal: { amountMinor: '200000' },
+        fee: { amountMinor: '10000' },
+        payable: { amountMinor: '210000' },
+        gift: { amountMinor: '20000' },
+      });
+    });
+
+    it('logs a gateway failure and a late approval, once each', async () => {
+      await configureLog(PAYMENTS_TOPIC);
+      await enableTonPays();
+      const failedOrder = await draftOrder();
+      const failed = await payWithGateway(failedOrder);
+      await pass();
+      tonpays.set((await invoiceOf(failed.paymentId)).provider_invoice_id!, 'rejected', false);
+      await inquireNow();
+      await inquireNow();
+
+      const lateOrder = await draftOrder();
+      const late = await payWithGateway(lateOrder);
+      await pass();
+      const lateInvoice = await invoiceOf(late.paymentId);
+      await ctx.container.database.db.execute(
+        sql`UPDATE payments SET expires_at = now() - interval '1 second' WHERE id = ${late.paymentId}`,
+      );
+      tonpays.set(lateInvoice.provider_invoice_id!, 'completed', true);
+      await webhook(lateInvoice, 'completed', 'late-1');
+      await inquireNow();
+      await inquireNow();
+      await relayAll();
+
+      const keys = (await logs()).map((log) => log.template_key).sort();
+      expect(keys).toEqual(['ops.financial.late_completion', 'ops.financial.payment_failed']);
+      expect(new Set((await logs()).map((log) => log.kind))).toEqual(
+        new Set(['OPERATIONAL_EVENT']),
+      );
+      // The provider's verdict, never an operator's rejection: the log names who said no.
+      const failure = (await logs()).find(
+        (log) => log.template_key === 'ops.financial.payment_failed',
+      );
+      expect(failure!.payload).toMatchObject({
+        cause: 'GATEWAY_FAILED',
+        paymentId: failed.paymentId,
+      });
+      expect((await paymentOf(late.paymentId)).state).not.toBe('CONFIRMED');
+    });
+
+    it('writes one log for an event replayed past a lost relay claim', async () => {
+      await configureLog(PAYMENTS_TOPIC);
+      await enableTonPays();
+      const orderId = await draftOrder();
+      const { paymentId } = await payWithGateway(orderId);
+      await pass();
+      const invoice = await invoiceOf(paymentId);
+      tonpays.set(invoice.provider_invoice_id!, 'completed', true);
+      await webhook(invoice, 'completed', 'replay-1');
+      await inquireNow();
+      await relayAll();
+      expect(await logs()).toHaveLength(1);
+
+      // A lost `processed_messages` claim is staged by calling the consumer again directly,
+      // past the claim (that table refuses DELETE by trigger): the dedupe key is what stands.
+      const consumer = (
+        ctx.container.relay as unknown as {
+          consumers: {
+            name: string;
+            handle: (event: never, tx: never) => Promise<void>;
+          }[];
+        }
+      ).consumers.find((one) => one.name === 'payments.financial-log');
+      if (consumer === undefined) throw new Error('the financial log is not registered');
+      const [message] = await rows<Record<string, unknown>>(
+        sql`SELECT * FROM outbox_messages
+             WHERE event_type = 'PaymentConfirmed' AND aggregate_id = ${paymentId}`,
+      );
+      const event = {
+        eventId: String(message?.['id']),
+        eventType: 'PaymentConfirmed',
+        eventVersion: 1,
+        tenantId: tenantA.tenantId as string,
+        aggregateType: 'Payment',
+        aggregateId: paymentId,
+        sequence: 1,
+        correlationId: 'replayed',
+        causationId: null,
+        actor: { type: 'SYSTEM_JOB', id: null },
+        occurredAt: new Date().toISOString(),
+        payload: message?.['payload'],
+      };
+      await ctx.container.uow.run(tenantA, (tx) => consumer.handle(event as never, tx as never));
+      expect(await logs()).toHaveLength(1);
+    });
+
+    it('logs a completed refund and a superseded one, and writes nothing when the log is not configured', async () => {
+      await enableTonPays();
+      const orderId = await draftOrder(200_000n);
+      const { paymentId } = await payWithGateway(orderId);
+      await pass();
+      const invoice = await invoiceOf(paymentId);
+      tonpays.set(invoice.provider_invoice_id!, 'completed', true);
+      await webhook(invoice, 'completed', 'rf-1');
+      await inquireNow();
+      // Not configured yet: the confirmation's event is consumed and logs nothing.
+      await relayAll();
+      expect(await logs()).toEqual([]);
+
+      await configureLog(PAYMENTS_TOPIC);
+      await ctx.container.database.db.execute(
+        sql`INSERT INTO refunds (id, tenant_id, payment_id, customer_id, order_id, state, channel,
+                                 amount, currency, reason)
+            SELECT gen_random_uuid(), tenant_id, id, customer_id, order_id, 'REQUESTED', 'EXTERNAL_MANUAL',
+                   1000, currency, 'operator'
+            FROM payments WHERE id = ${paymentId}`,
+      );
+      const payment = await new DrizzlePaymentRepository(ctx.container.database.db).findById(
+        tenantA,
+        paymentId,
+      );
+      await ctx.container.uow.run(tenantA, (tx) =>
+        ctx.container.refunds.refundUndeliverable(
+          tenantA,
+          systemActor('rf-auto'),
+          { payment: payment!, now: ctx.container.clock.now() },
+          tx,
+        ),
+      );
+      await relayAll();
+      const written = await logs();
+      expect(written.map((log) => log.template_key).sort()).toEqual([
+        'ops.financial.refund_completed',
+        'ops.financial.refund_failed',
+      ]);
+      const failed = written.find((log) => log.template_key === 'ops.financial.refund_failed');
+      expect(failed!.payload).toMatchObject({
+        cause: 'SUPERSEDED',
+        amount: { amountMinor: '1000' },
+      });
+      const completed = written.find(
+        (log) => log.template_key === 'ops.financial.refund_completed',
+      );
+      expect(completed!.payload).toMatchObject({ amount: { amountMinor: '200000' } });
+    });
+
+    /*
+     * Codex review of #82: the payments topic could not be tested. The only test send went
+     * to the operations topic, so a wrong payments topic was found on the first financial
+     * event, after its bounded attempts were spent.
+     */
+    const testedTopic = async (id: string) =>
+      (
+        await rows<{ destination: { topicId: number | null } }>(
+          sql`SELECT destination FROM notifications WHERE id = ${id}`,
+        )
+      )[0]!.destination.topicId;
+
+    it('tests the payments topic on request, and the operations topic by default (Codex review of #82)', async () => {
+      await configureLog(PAYMENTS_TOPIC);
+      const payments = await ctx.container.notifications.sendTest(tenantA, owner, {
+        idempotencyKey: 'wp18-test-payments',
+        target: 'PAYMENTS',
+      });
+      expect(await testedTopic(payments.intent.id)).toBe(PAYMENTS_TOPIC);
+      const operations = await ctx.container.notifications.sendTest(tenantA, owner, {
+        idempotencyKey: 'wp18-test-operations',
+      });
+      expect(await testedTopic(operations.intent.id)).toBe(5);
+    });
+
+    it('tests where the financial log goes: the operations topic when no payments topic is set (Codex review of #82)', async () => {
+      await configureLog(null);
+      const payments = await ctx.container.notifications.sendTest(tenantA, owner, {
+        idempotencyKey: 'wp18-test-payments-fallback',
+        target: 'PAYMENTS',
+      });
+      expect(await testedTopic(payments.intent.id)).toBe(5);
+    });
+
+    it('replays a test an earlier release accepted, whose retry sends no target (Codex review of #82)', async () => {
+      await configureLog(PAYMENTS_TOPIC);
+      const first = await ctx.container.notifications.sendTest(tenantA, owner, {
+        idempotencyKey: 'wp18-test-legacy',
+      });
+      const [stored] = await rows<{ request_hash: string }>(
+        sql`SELECT request_hash FROM request_idempotency WHERE key = 'wp18-test-legacy'`,
+      );
+      // The hash an earlier release wrote for the same request: the command, and nothing else.
+      expect(stored!.request_hash).toBe(hashRequest({ command: 'notifications.test' }));
+      const again = await ctx.container.notifications.sendTest(tenantA, owner, {
+        idempotencyKey: 'wp18-test-legacy',
+      });
+      expect(again.intent.id).toBe(first.intent.id);
+      expect(again.replayed).toBe(true);
+    });
+
+    it('logs nothing while ops_notifications is off, even with a chat configured', async () => {
+      await configureLog(PAYMENTS_TOPIC);
+      const flag = (await ctx.container.featureFlags.list(tenantA, owner)).find(
+        (row) => row.key === 'ops_notifications',
+      );
+      if (flag === undefined) throw new Error('no ops_notifications flag');
+      await ctx.container.featureFlags.set(tenantA, owner, {
+        key: 'ops_notifications',
+        enabled: false,
+        expectedVersion: flag.version,
+        idempotencyKey: `wp18-log-off-${String((flagKey += 1))}`,
+        confirmKey: 'ops_notifications',
+        reason: 'WP18: the switch is the switch.',
+      });
+      await enableTonPays();
+      const orderId = await draftOrder();
+      const { paymentId } = await payWithGateway(orderId);
+      await pass();
+      const invoice = await invoiceOf(paymentId);
+      tonpays.set(invoice.provider_invoice_id!, 'completed', true);
+      await webhook(invoice, 'completed', 'off-1');
+      await inquireNow();
+      await relayAll();
+      expect((await paymentOf(paymentId)).state).toBe('CONFIRMED');
+      expect(await logs()).toEqual([]);
+    });
+
+    it('cannot touch the money: a log that fails to queue leaves the confirmation committed', async () => {
+      await configureLog(PAYMENTS_TOPIC);
+      await enableTonPays();
+      const orderId = await draftOrder();
+      const { paymentId } = await payWithGateway(orderId);
+      await pass();
+      // The lane is broken: every financial log insert fails.
+      await ctx.container.database.db.execute(
+        sql`ALTER TABLE notifications ADD CONSTRAINT wp18_break CHECK (template_key NOT LIKE 'ops.financial.%') NOT VALID`,
+      );
+      try {
+        const invoice = await invoiceOf(paymentId);
+        tonpays.set(invoice.provider_invoice_id!, 'completed', true);
+        await webhook(invoice, 'completed', 'broken-1');
+        await inquireNow();
+        await relayAll();
+        expect((await paymentOf(paymentId)).state).toBe('CONFIRMED');
+        expect(await orderState(orderId)).toBe('PAID');
+        expect(await logs()).toEqual([]);
+      } finally {
+        await ctx.container.database.db.execute(
+          sql`ALTER TABLE notifications DROP CONSTRAINT wp18_break`,
+        );
+      }
     });
   });
 

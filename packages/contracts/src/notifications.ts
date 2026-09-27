@@ -27,7 +27,17 @@ import { z } from 'zod';
  * the code that sends, never harvested from the research.
  */
 export const NOTIFICATION_KINDS = [
-  /** An operational event at or above the configured severity. */
+  /**
+   * An operational event at or above the configured severity — and, since WP18, a final
+   * financial fact for the log group's payments topic (templates `ops.financial.*`).
+   *
+   * The financial log deliberately has no kind of its own. This list is a strict enum in
+   * `notificationSchema`, so a kind the previous release does not know makes that
+   * release's Web Admin refuse the WHOLE notifications page after a rollback, while a
+   * template key it does not know is only an unfamiliar string. The template key is what
+   * tells a financial row apart; the destination (the payments topic) is snapshotted on
+   * the row.
+   */
   'OPERATIONAL_EVENT',
   /** An explicit test of the operations destination. */
   'OPERATIONS_TEST',

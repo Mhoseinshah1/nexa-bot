@@ -10432,9 +10432,33 @@ export class BotRuntime {
     if (invoice.creationState !== 'CREATED' || link === null) {
       return reply('bot.payment.gateway_unknown', []);
     }
+    /*
+     * A route that charges a customer fee shows the three figures apart (WP18): the
+     * principal — the order amount, or the top-up the wallet receives — the gateway fee,
+     * and the payable the invoice asks for. From THIS attempt's snapshot, never the
+     * route's current rate. With no fee the single amount is already all three.
+     */
+    const fee = payment.customerFee;
+    const invoiceBody: Pick<PendingReply, 'key' | 'values'> =
+      fee !== null && fee.fee.amountMinor > 0n
+        ? {
+            key:
+              payment.orderId === null
+                ? 'bot.payment.gateway_invoice_topup_fee'
+                : 'bot.payment.gateway_invoice_order_fee',
+            values: {
+              principal: payment.amount,
+              fee: fee.fee,
+              payable: fee.payable,
+              expiresAt: payment.expiresAt,
+            },
+          }
+        : {
+            key: 'bot.payment.gateway_invoice',
+            values: { total: payment.amount, expiresAt: payment.expiresAt },
+          };
     return {
-      key: 'bot.payment.gateway_invoice',
-      values: { total: payment.amount, expiresAt: payment.expiresAt },
+      ...invoiceBody,
       buttons: [
         { label: { kind: 'TEMPLATE', key: 'bot.payment.gateway_pay_button' }, url: link },
         check,

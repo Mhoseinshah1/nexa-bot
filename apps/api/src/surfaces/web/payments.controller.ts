@@ -406,6 +406,15 @@ function toDetail(
     receiptCredit: credit === null ? null : toReceiptCreditView(credit),
     topupCashbackPercent: record.topupCashbackPercent,
     gatewayInvoice: invoice === null ? null : toGatewayInvoiceView(invoice),
+    // Beside the principal, never added to it (WP18).
+    customerFee:
+      record.customerFee === null
+        ? null
+        : {
+            basisPoints: record.customerFee.basisPoints,
+            fee: record.customerFee.fee.amountMinor.toString(),
+            payable: record.customerFee.payable.amountMinor.toString(),
+          },
   };
 }
 

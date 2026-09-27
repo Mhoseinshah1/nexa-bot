@@ -43,6 +43,12 @@ export interface PaymentGatewayRecord {
    */
   readonly topupCashbackPercent: number;
   /**
+   * The customer's gateway fee in basis points (WP18). Non-zero only on a route that
+   * settles through `GATEWAY`. A gateway attempt SNAPSHOTS it onto the payment when
+   * created; it is read here, never at confirmation.
+   */
+  readonly customerFeeBasisPoints: number;
+  /**
    * What the route may be offered FOR (customer UX completion §D/§F). `status` decides
    * whether it is offered at all; these decide for which purpose. An operator may take
    * card-to-card for a top-up and not for a purchase, or the reverse, and one switch
@@ -89,7 +95,7 @@ export interface PaymentGatewayRepository {
   update(
     scope: TenantContext,
     provider: PaymentGatewayProvider,
-    config: PaymentGatewayConfig,
+    config: PaymentGatewayConfig & { readonly customerFeeBasisPoints: number },
     currency: SalesCurrencyCode,
     now: Date,
     tx: unknown,

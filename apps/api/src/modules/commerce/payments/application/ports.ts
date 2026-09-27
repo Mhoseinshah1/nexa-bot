@@ -72,8 +72,25 @@ export interface PaymentRecord {
    * Null for anything that is not a top-up; frozen after insert by 0114.
    */
   readonly topupCashbackPercent: number | null;
+  /**
+   * The customer's gateway fee this attempt was created with (WP18), or null: every
+   * non-gateway payment, and a gateway attempt from before WP18 (read as no fee).
+   * `amount` above stays the PRINCIPAL; this is beside it, never inside it.
+   */
+  readonly customerFee: PaymentCustomerFee | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
+}
+
+/**
+ * A gateway attempt's fee snapshot (WP18): the rate, the fee it produced on the
+ * principal, and the payable the invoice asked for — `payable = principal + fee`, which
+ * `payments_customer_fee_check` holds the database to as well.
+ */
+export interface PaymentCustomerFee {
+  readonly basisPoints: number;
+  readonly fee: Money;
+  readonly payable: Money;
 }
 
 /**
@@ -100,6 +117,11 @@ export interface PaymentDraft {
    * other payment. Written once, here, and frozen by 0114 afterwards.
    */
   readonly topupCashbackPercent: number | null;
+  /**
+   * The customer's gateway fee snapshot (WP18). Only a `GATEWAY` attempt carries one;
+   * absent is null. Written once, here, and frozen by 0124 afterwards.
+   */
+  readonly customerFee?: PaymentCustomerFee | null;
   readonly now: Date;
 }
 

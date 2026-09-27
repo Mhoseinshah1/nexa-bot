@@ -107,6 +107,15 @@ export const EVENT_TYPES = [
   // consumer of this event, so it is durable with the receipt and never part of the
   // transaction that filed it. `docs/wp10-followup-audit.md` §3.
   'PaymentReceiptSubmitted',
+  // WP18. A payment that ended without money, by an operator's rejection or a gateway's
+  // unsuccessful verdict; a gateway approval that arrived after Nexa had closed the
+  // attempt; a refund reaching COMPLETED or FAILED. Each is a final financial fact an
+  // operator's log is told about (`docs/wp18-gateway-fee-financial-log-audit.md` §3), and
+  // before WP18 none of the five left anything a consumer could hear.
+  'PaymentFailed',
+  'PaymentLateCompletionObserved',
+  'RefundCompleted',
+  'RefundFailed',
   'WalletEntryRecorded',
   'ServiceProvisioned',
   'ServiceStateChanged',
@@ -281,6 +290,44 @@ export const EVENT_PAYLOAD_SCHEMAS = {
   PaymentReceiptSubmitted: z.object({
     paymentId: z.string(),
     receiptId: z.string(),
+  }),
+  /*
+   * WP18. Ids and closed vocabularies only — no operator note, no provider text. The
+   * financial-log consumer re-reads the rows it renders, under its own transaction.
+   */
+  PaymentFailed: z.object({
+    customerId: z.string(),
+    orderId: z.string().nullable(),
+    method: z.string(),
+    /** `REJECTED` (an operator) or `GATEWAY_FAILED` (the provider's inquiry said so). */
+    cause: z.enum(['REJECTED', 'GATEWAY_FAILED']),
+  }),
+  PaymentLateCompletionObserved: z.object({
+    customerId: z.string(),
+    orderId: z.string().nullable(),
+    provider: z.string(),
+  }),
+  RefundCompleted: z.object({
+    /** Aggregate is the PAYMENT the refund returns money from; this names the refund. */
+    refundId: z.string(),
+    customerId: z.string(),
+    paymentId: z.string(),
+    orderId: z.string().nullable(),
+    channel: z.string(),
+    amountMinor: z.string(),
+    currency: z.string(),
+  }),
+  RefundFailed: z.object({
+    /** Aggregate is the PAYMENT the refund returns money from; this names the refund. */
+    refundId: z.string(),
+    customerId: z.string(),
+    paymentId: z.string(),
+    orderId: z.string().nullable(),
+    channel: z.string(),
+    amountMinor: z.string(),
+    currency: z.string(),
+    /** `OPERATOR_FAILED`, or `SUPERSEDED` by the automatic refund of the same payment. */
+    cause: z.enum(['OPERATOR_FAILED', 'SUPERSEDED']),
   }),
   WalletEntryRecorded: z.object({
     customerId: z.string(),

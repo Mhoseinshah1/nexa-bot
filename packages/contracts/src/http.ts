@@ -23,6 +23,7 @@ import {
   paymentGatewayProviderSchema,
   paymentGatewayStatusSchema,
   topupCashbackPercentSchema,
+  customerFeeBasisPointsSchema,
 } from './payment-gateways.js';
 import { PAYMENT_RECEIPT_KINDS, RECEIPT_DISPOSITIONS } from './payment-receipts.js';
 import { gatewayInvoiceViewSchema } from './gateway-invoices.js';
@@ -1187,6 +1188,14 @@ export type NotificationDetailResponse = z.infer<typeof notificationDetailRespon
  */
 export const sendTestNotificationRequestSchema = z.object({
   idempotencyKey: z.string().min(8).max(255),
+  /**
+   * Which destination to test (WP18, Codex review of #82). `OPERATIONS`, the default, is
+   * the operations topic. `PAYMENTS` is where the financial log goes: the payments topic
+   * when one is set, the operations topic otherwise. A payments topic that cannot be
+   * tested is one discovered to be wrong on the first financial event, after its bounded
+   * attempts are spent.
+   */
+  target: z.enum(['OPERATIONS', 'PAYMENTS']).optional(),
 });
 export type SendTestNotificationRequest = z.infer<typeof sendTestNotificationRequestSchema>;
 
@@ -3648,6 +3657,22 @@ export const paymentDetailSchema = paymentSummarySchema.extend({
    * and an operator diagnosing a payment needs the ids and the states.
    */
   gatewayInvoice: gatewayInvoiceViewSchema.nullable().default(null),
+  /**
+   * The customer's gateway fee this attempt was created with (WP18), or null: every
+   * payment that is not a `GATEWAY` payment, and one created before the snapshot existed.
+   * `amount` above stays the PRINCIPAL — what the order cost or the wallet receives, and
+   * the refund ceiling. `payable` is what the gateway was asked for; `fee` is the
+   * difference, which is not revenue and is not refundable. Minor units as strings, in
+   * the payment's own currency.
+   */
+  customerFee: z
+    .object({
+      basisPoints: z.number().int(),
+      fee: z.string(),
+      payable: z.string(),
+    })
+    .nullable()
+    .default(null),
 });
 export type PaymentDetailResponse = z.infer<typeof paymentDetailSchema>;
 
@@ -4164,6 +4189,12 @@ export const paymentGatewaySchema = z.object({
    * changing it here changes only top-ups created afterwards.
    */
   topupCashbackPercent: z.number().int(),
+  /**
+   * The customer's gateway fee in basis points (WP18): `525` is 5.25 %, `0` is none. Only
+   * a route that settles through `GATEWAY` can carry one. Each attempt SNAPSHOTS it when
+   * created. Defaulted on parse for a response from the previous release.
+   */
+  customerFeeBasisPoints: z.number().int().default(0),
   /** Per purpose (customer UX completion §D/§F): what the route may be offered FOR. */
   allowServicePurchase: z.boolean(),
   allowWalletTopup: z.boolean(),
@@ -4259,6 +4290,12 @@ export const updatePaymentGatewayRequestSchema = z.object({
   sortOrder: z.number().int().min(PAYMENT_GATEWAY_SORT_MIN).max(PAYMENT_GATEWAY_SORT_MAX),
   /** The top-up gift, 0–100 (D5). Required, like every other field this form renders. */
   topupCashbackPercent: topupCashbackPercentSchema,
+  /**
+   * The customer's gateway fee in basis points, 0–10000 (WP18). An INTEGER on the wire —
+   * the Web Admin turns a typed `5.25` into `525` with `parsePercentBasisPoints`, so no
+   * decimal rate ever crosses the boundary as a float. Absent keeps the stored rate.
+   */
+  customerFeeBasisPoints: customerFeeBasisPointsSchema.optional(),
   /** Optional on the wire for the previous release's client; `paymentGatewayConfigSchema` defaults both to true. */
   allowServicePurchase: z.boolean().optional(),
   allowWalletTopup: z.boolean().optional(),

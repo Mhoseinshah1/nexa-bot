@@ -727,10 +727,13 @@ export function fetchNotification(id: string): Promise<NotificationDetailRespons
 
 export function sendTestNotification(
   idempotencyKey: string,
+  target: 'OPERATIONS' | 'PAYMENTS' = 'OPERATIONS',
 ): Promise<SendTestNotificationResponse> {
   return post(
     CONTROL_ROUTES.notificationTest,
-    { idempotencyKey },
+    // The operations test is sent exactly as before, with no target, so its key and
+    // hash are the ones an earlier release knew.
+    target === 'PAYMENTS' ? { idempotencyKey, target } : { idempotencyKey },
     sendTestNotificationResponseSchema,
   );
 }
