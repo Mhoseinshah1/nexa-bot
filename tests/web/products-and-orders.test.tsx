@@ -661,6 +661,11 @@ describe('the order detail', () => {
     );
   };
 
+  it('shows the order line’s traffic in GB with its two decimals (Package C)', async () => {
+    detail({ lineTrafficBytes: '11005853696' });
+    expect(await screen.findByText('10.25')).toBeInTheDocument();
+  });
+
   /*
    * The retry-and-reassign card is gone with the state it served, and so is every
    * route it called. What replaced it is a REFUNDED order, which this page renders
