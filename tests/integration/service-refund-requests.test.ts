@@ -79,6 +79,7 @@ describe('WP19 — a customer asks for their money back', () => {
   let ownerId: AdminId;
   let updateSeq = 0;
   let flagSeq = 0;
+  let fileSeq = 0;
 
   beforeAll(async () => {
     telegram = createServer((request: IncomingMessage, response: ServerResponse) => {
@@ -213,12 +214,18 @@ describe('WP19 — a customer asks for their money back', () => {
     return { id: service.id, orderId: confirmed.id };
   }
 
-  const file = (serviceId: string, reason = 'دیگر نیازی به این سرویس ندارم') =>
+  /** A filing; each call is its own update unless it names one. */
+  const file = (
+    serviceId: string,
+    reason = 'دیگر نیازی به این سرویس ندارم',
+    idempotencyKey = `wp19-file-${String(++fileSeq)}`,
+  ) =>
     ctx.container.serviceRefundRequests.file(tenantA, systemActor('file'), {
       customerId: customerA,
       serviceId,
       botInstanceId: BOT_A,
       reason,
+      idempotencyKey,
     });
 
   const balance = async (): Promise<bigint> =>
@@ -312,7 +319,30 @@ describe('WP19 — a customer asks for their money back', () => {
   }
 
   /** The Web Admin controller, and a request carrying a real session of the owner's. */
-  async function asWebOwner(): Promise<{
+  /** An administrator holding exactly `refunds.issue` and `services.terminate`, and no view. */
+  async function deciderOnly(): Promise<ActorContext> {
+    const roleId = ctx.container.ids.uuid();
+    await ctx.container.database.db.execute(
+      sql`INSERT INTO roles (id, tenant_id, key, name, is_system)
+          VALUES (${roleId}, ${tenantA.tenantId}, 'refund_deciders', 'refund_deciders', false)` as never,
+    );
+    for (const permission of ['refunds.issue', 'services.terminate']) {
+      await ctx.container.database.db.execute(
+        sql`INSERT INTO role_permissions (tenant_id, role_id, permission_key)
+            VALUES (${tenantA.tenantId}, ${roleId}, ${permission})` as never,
+      );
+    }
+    const decider = await createAdmin(ctx.container, tenantA, { username: 'decider-only' });
+    await ctx.container.database.db.execute(
+      sql`INSERT INTO admin_roles (tenant_id, admin_id, role_id)
+          VALUES (${tenantA.tenantId}, ${decider.id}, ${roleId})` as never,
+    );
+    return adminActorFor(decider);
+  }
+
+  const asWebOwner = () => asWeb('owner-refunds');
+
+  async function asWeb(username: string): Promise<{
     controller: ServiceRefundRequestsController;
     request: WebRequest;
   }> {
@@ -325,7 +355,7 @@ describe('WP19 — a customer asks for their money back', () => {
         surface: 'WEB',
         correlationId: 'wp19-web' as CorrelationId,
       },
-      { username: 'owner-refunds', password: 'a-perfectly-fine-password' },
+      { username, password: 'a-perfectly-fine-password' },
       { ip: '203.0.113.10', userAgent: 'vitest' },
     );
     return {
@@ -434,6 +464,7 @@ describe('WP19 — a customer asks for their money back', () => {
         serviceId: service.id,
         botInstanceId: BOT_A,
         reason: 'این سرویس من نیست',
+        idempotencyKey: 'wp19-file-other',
       }),
     );
     expect(code).toBe(COMMERCE_ERROR_CODES.SERVICE_NOT_FOUND);
@@ -1026,23 +1057,7 @@ describe('WP19 — a customer asks for their money back', () => {
   it('opens a decision prompt for an administrator holding exactly the two decision keys (Codex review of #83)', async () => {
     const service = await activeService('decide-only');
     const filed = await file(service.id);
-    const roleId = ctx.container.ids.uuid();
-    await ctx.container.database.db.execute(
-      sql`INSERT INTO roles (id, tenant_id, key, name, is_system)
-          VALUES (${roleId}, ${tenantA.tenantId}, 'refund_deciders', 'refund_deciders', false)` as never,
-    );
-    for (const permission of ['refunds.issue', 'services.terminate']) {
-      await ctx.container.database.db.execute(
-        sql`INSERT INTO role_permissions (tenant_id, role_id, permission_key)
-            VALUES (${tenantA.tenantId}, ${roleId}, ${permission})` as never,
-      );
-    }
-    const decider = await createAdmin(ctx.container, tenantA, { username: 'decider-only' });
-    await ctx.container.database.db.execute(
-      sql`INSERT INTO admin_roles (tenant_id, admin_id, role_id)
-          VALUES (${tenantA.tenantId}, ${decider.id}, ${roleId})` as never,
-    );
-    const actor = adminActorFor(decider);
+    const actor = await deciderOnly();
     // The card is pushed on these two keys; its buttons must work on them too.
     const opened = await ctx.container.serviceRefundDecisions.openApprove(tenantA, actor, {
       botInstanceId: BOT_A,
@@ -1329,6 +1344,158 @@ describe('WP19 — a customer asks for their money back', () => {
     const seen = [...first.requests, ...second.requests].map((row) => row.id);
     expect(new Set(seen).size).toBe(3);
     expect([...seen].sort()).toEqual([...filed].sort());
+  });
+
+  it('answers a decision made on the two decision keys alone with the decided request (Codex review of #83)', async () => {
+    const approved = await file((await activeService('decided-view-a')).id);
+    const rejected = await file((await activeService('decided-view-r')).id);
+    await deciderOnly();
+    const { controller, request } = await asWeb('decider-only');
+    // The decision commits; the response that reports it must not then need `refunds.view`.
+    const approval = await controller.approve(request, approved.request.id, {
+      idempotencyKey: 'wp19-decided-view-a',
+      amountMinor: '1000',
+      confirm: true,
+    });
+    expect(approval.request.state).toBe('EXECUTING');
+    const rejection = await controller.reject(request, rejected.request.id, {
+      idempotencyKey: 'wp19-decided-view-r',
+      reason: 'رد',
+    });
+    expect(rejection.request.state).toBe('REJECTED');
+  });
+
+  it('retires a confirmation whose approval was refused for good (Codex review of #83)', async () => {
+    const service = await activeService('retire-confirmed');
+    const filed = await file(service.id);
+    await ctx.container.serviceRefundDecisions.openApprove(tenantA, owner, {
+      botInstanceId: BOT_A,
+      requestId: filed.request.id,
+    });
+    const entered = await ctx.container.serviceRefundDecisions.submitText(tenantA, owner, {
+      botInstanceId: BOT_A,
+      text: '1000',
+    });
+    if (entered.outcome !== 'AMOUNT_ENTERED') throw new Error(entered.outcome);
+    // Between the amount and the confirmation, the service stops being deletable.
+    await ctx.container.database.db.execute(
+      sql`UPDATE services SET state = 'TERMINATED', terminated_at = now()
+           WHERE id = ${service.id}` as never,
+    );
+    const refusedOnce = await ctx.container.serviceRefundDecisions.confirmApprove(tenantA, owner, {
+      captureId: entered.capture.id,
+    });
+    expect(refusedOnce.outcome).toBe('NOT_EXECUTABLE');
+    // It recovers. The administrator was told the approval failed; the same old button must
+    // not now carry it out.
+    await ctx.container.database.db.execute(
+      sql`UPDATE services SET state = 'ACTIVE', terminated_at = NULL WHERE id = ${service.id}` as never,
+    );
+    const tappedAgain = await ctx.container.serviceRefundDecisions.confirmApprove(tenantA, owner, {
+      captureId: entered.capture.id,
+    });
+    expect(tappedAgain.outcome).not.toBe('EXECUTING');
+    const row = await requestRow(filed.request.id);
+    expect(row?.request.state).toBe('OPEN');
+    expect(await terminateOf(service.id)).toHaveLength(0);
+  });
+
+  it('keeps the reason prompt when its rejection fails for a reason nobody classified (Codex review of #83)', async () => {
+    const service = await activeService('reject-transient');
+    const filed = await file(service.id);
+    await ctx.container.serviceRefundDecisions.openReject(tenantA, owner, {
+      botInstanceId: BOT_A,
+      requestId: filed.request.id,
+    });
+    await ctx.container.database.db.execute(
+      sql`CREATE OR REPLACE FUNCTION wp19_transient() RETURNS trigger AS $$
+          BEGIN
+            IF NEW.state = 'REJECTED' THEN RAISE EXCEPTION 'a transient failure'; END IF;
+            RETURN NEW;
+          END $$ LANGUAGE plpgsql` as never,
+    );
+    await ctx.container.database.db.execute(
+      sql`CREATE TRIGGER wp19_transient BEFORE UPDATE ON service_refund_requests
+          FOR EACH ROW EXECUTE FUNCTION wp19_transient()` as never,
+    );
+    try {
+      await expect(
+        ctx.container.serviceRefundDecisions.submitText(tenantA, owner, {
+          botInstanceId: BOT_A,
+          text: 'رد به دلیل تکرار',
+        }),
+      ).rejects.toThrow();
+    } finally {
+      await ctx.container.database.db.execute(
+        sql`DROP TRIGGER wp19_transient ON service_refund_requests` as never,
+      );
+      await ctx.container.database.db.execute(sql`DROP FUNCTION wp19_transient()` as never);
+    }
+    // The prompt is still there, and the same reason sent again finishes the rejection.
+    const retried = await ctx.container.serviceRefundDecisions.submitText(tenantA, owner, {
+      botInstanceId: BOT_A,
+      text: 'رد به دلیل تکرار',
+    });
+    expect(retried.outcome).toBe('REJECTED');
+    expect((await requestRow(filed.request.id))?.request.state).toBe('REJECTED');
+  });
+
+  it('files nothing for a service that ends while the filing waits for it (Codex review of #83)', async () => {
+    const service = await activeService('file-race');
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    let locked!: () => void;
+    const holding = new Promise<void>((resolve) => (locked = resolve));
+    const holder = ctx.container.database.db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT id FROM services WHERE id = ${service.id} FOR UPDATE`);
+      await tx.execute(
+        sql`UPDATE services SET state = 'TERMINATED', terminated_at = now()
+             WHERE id = ${service.id}`,
+      );
+      locked();
+      await gate;
+    });
+    await holding;
+    const filing = refused(file(service.id));
+    const deadline = Date.now() + 5_000;
+    for (;;) {
+      const waiting = await countRows(
+        sql`SELECT count(*)::int AS n FROM pg_locks
+             WHERE NOT granted AND locktype IN ('tuple', 'transactionid')`,
+      );
+      if (waiting >= 1) break;
+      if (Date.now() > deadline) throw new Error('the filing never waited on the service');
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    release();
+    await holder;
+    expect(await filing).toBe(COMMERCE_ERROR_CODES.SERVICE_REFUND_NOT_ELIGIBLE);
+    expect(
+      await countRows(
+        sql`SELECT count(*)::int AS n FROM service_refund_requests WHERE service_id = ${service.id}`,
+      ),
+    ).toBe(0);
+  });
+
+  it('answers a redelivered filing with its request even after that request was decided (Codex review of #83)', async () => {
+    const service = await activeService('file-replay');
+    const first = await file(service.id, 'دیگر نیازی ندارم', 'wp19-file-replay');
+    expect(first.outcome).toBe('FILED');
+    await ctx.container.serviceRefundRequests.reject(tenantA, owner, {
+      requestId: first.request.id,
+      reason: 'رد',
+    });
+    // Telegram redelivers the update that carried the reason.
+    const replayed = await file(service.id, 'دیگر نیازی ندارم', 'wp19-file-replay');
+    expect(replayed.request.id).toBe(first.request.id);
+    expect(
+      await countRows(
+        sql`SELECT count(*)::int AS n FROM service_refund_requests WHERE service_id = ${service.id}`,
+      ),
+    ).toBe(1);
+    // A new update is a new filing.
+    const again = await file(service.id, 'دوباره درخواست دارم', 'wp19-file-new');
+    expect(again.request.id).not.toBe(first.request.id);
   });
 
   it('rejects from Telegram with the typed reason', async () => {
