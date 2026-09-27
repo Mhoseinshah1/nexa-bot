@@ -335,3 +335,40 @@ It found four issues. All were real, and each is fixed with a named test and a k
   card were drawn only for `services.view`. They are now drawn for `refunds.view` alone, and the
   Services entry in the navigation opens for either key. The services list itself is still
   `services.view`'s, and is never fetched without it.
+
+## 13. The sixth Codex review of #83
+
+It found four issues. All were real, and each is fixed with a named test and a killed mutation
+(W19-62 to W19-73):
+
+- **A release after another deletion removed the service (P1).** The sweep decided from the
+  request's own operation alone. If that deletion failed and an operator's retry then removed
+  the account before the sweep ran, the reservation was released: the customer lost the
+  service and the refund the administrator approved.
+  - The sweep now locks the service (request before service, the approval's order).
+  - A service that is TERMINATED while the reservation is still `REQUESTED` is completed and
+    credited, whichever TERMINATE removed it.
+  - While another TERMINATE of the service is `PLANNED` or `IN_FLIGHT`, the sweep waits for its
+    answer, and its query skips the row so it cannot fill a batch.
+  - It releases only when this request's own deletion definitively failed and nothing else is
+    deleting.
+  - A reservation already released by hand (the release before WP19) is released again,
+    never credited.
+  - Every TERMINATE planner takes the same service lock before `findOpen` (round 4). A
+    deletion planned after the sweep decided is an operator acting on a request already shown
+    as FAILED.
+- **A redelivered reason told "registered" after its request moved on (P2).** Filing answers a
+  redelivery with its own request in any state (round 3), but the runtime rendered every
+  answer as a registration. An approved request still deleting is now answered as pending. A
+  decided one shows the service as it now stands, or `not_found` once a completed request has
+  hidden it. The decision itself reached the customer through the lane.
+- **An anonymous wallet credit (P2).** The sweep acts as the system, so the ledger entry it
+  wrote had no `actor_admin_id`. The credit now names the approving administrator, the
+  refund's `requested_by_admin_id`. The audit row and the event keep the system actor that
+  performed the sweep.
+- **Three scans that could miss a moving request (P2).** The Web Admin attention card read
+  OPEN, EXECUTING and FAILED as three keyset scans at three moments. A request moving between
+  two of them could be on no page. A contracts commit adds `attention=true` to the list query:
+  one keyset stream over `SERVICE_REFUND_REQUEST_ATTENTION_STATES`, exclusive with `state`. No
+  transition changes `(createdAt, id)`, so each request is on exactly one page, in the state it
+  had there.
