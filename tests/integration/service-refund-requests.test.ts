@@ -1878,9 +1878,7 @@ describe('WP19 — a customer asks for their money back', () => {
     const service = await activeService('renew-first');
     const filed = await file(service.id);
     await renew(service.id, 'renew-first');
-    expect((await renewalsOf(service.id)).map((operation) => operation.state)).toEqual([
-      'PLANNED',
-    ]);
+    expect((await renewalsOf(service.id)).map((operation) => operation.state)).toEqual(['PLANNED']);
     expect(
       await refused(
         ctx.container.serviceRefundRequests.approve(tenantA, owner, {
