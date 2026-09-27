@@ -1,5 +1,4 @@
 import { sql } from 'drizzle-orm';
-import { DELIVERY_MAX_FAILED_ATTEMPTS } from '@nexa/contracts';
 import type {
   OperationState,
   OperationType,
@@ -56,7 +55,7 @@ export class DrizzleDiagnosticsReader implements DiagnosticsReader {
     }>(sql`
       SELECT count(*)::text AS pending,
              count(*) FILTER (WHERE attempts > 0)::text AS failing,
-             count(*) FILTER (WHERE attempts >= ${DELIVERY_MAX_FAILED_ATTEMPTS})::text AS exhausted,
+             count(*) FILTER (WHERE exhausted_at IS NOT NULL)::text AS exhausted,
              min(occurred_at) AS oldest
         FROM outbox_messages
        WHERE tenant_id = ${tenantId} AND published_at IS NULL`);
@@ -68,8 +67,10 @@ export class DrizzleDiagnosticsReader implements DiagnosticsReader {
       occurred_at: Date | string;
       last_error: string | null;
       next_attempt_at: Date | string | null;
+      exhausted_at: Date | string | null;
     }>(sql`
-      SELECT id, event_type, aggregate_type, attempts, occurred_at, last_error, next_attempt_at
+      SELECT id, event_type, aggregate_type, attempts, occurred_at, last_error, next_attempt_at,
+             exhausted_at
         FROM outbox_messages
        WHERE tenant_id = ${tenantId} AND published_at IS NULL AND attempts > 0
        ORDER BY occurred_at, sequence
@@ -88,7 +89,7 @@ export class DrizzleDiagnosticsReader implements DiagnosticsReader {
         occurredAt: new Date(one.occurred_at),
         lastError: one.last_error,
         nextAttemptAt: one.next_attempt_at == null ? null : new Date(one.next_attempt_at),
-        exhausted: Number(one.attempts) >= DELIVERY_MAX_FAILED_ATTEMPTS,
+        exhausted: one.exhausted_at != null,
       })),
     };
   }

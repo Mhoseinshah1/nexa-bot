@@ -6,6 +6,11 @@
 -- a table that holds every event the installation ever wrote.
 ALTER TABLE "outbox_messages" ADD COLUMN "next_attempt_at" timestamp with time zone;--> statement-breakpoint
 
+-- When the relay gave up on a message and announced it (WP20, brief §3.2). A MARK, not a
+-- count: the release before WP20 retried a failing message on every poll, so `attempts`
+-- can pass the limit without anything ever deciding or saying so. NULL means still retried.
+ALTER TABLE "outbox_messages" ADD COLUMN "exhausted_at" timestamp with time zone;--> statement-breakpoint
+
 -- The guard's list of immutable columns is unchanged: `next_attempt_at` is delivery
 -- bookkeeping, like `attempts`, and was never in it. Only the refusal's sentence is
 -- restated so it names every column that may change.
@@ -24,7 +29,7 @@ BEGIN
      OR NEW.occurred_at IS DISTINCT FROM OLD.occurred_at
   THEN
     RAISE EXCEPTION
-      'outbox_messages content is immutable; only published_at, attempts, last_error and next_attempt_at may change.'
+      'outbox_messages content is immutable; only published_at, attempts, last_error, next_attempt_at and exhausted_at may change.'
       USING ERRCODE = 'restrict_violation';
   END IF;
   RETURN NEW;

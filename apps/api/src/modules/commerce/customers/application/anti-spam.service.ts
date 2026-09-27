@@ -69,11 +69,13 @@ export interface AntiSpamDeps {
 
 export class AntiSpamService {
   /**
-   * When the degradation was last written, in this process. In memory on purpose: it only
-   * throttles WRITES of a condition the database already dedupes, so a restart costs one
-   * extra occurrence, never a missed one.
+   * When each bot's degradation was last written, in this process, keyed `tenant:bot`. In
+   * memory on purpose: it only throttles WRITES of a condition the database already
+   * dedupes, so a restart costs one extra occurrence, never a missed one. Per bot, because
+   * the condition is per bot: one bot's outage must not hide another's, and one bot's next
+   * good turn must not resolve another's.
    */
-  private degradedRecordedAt: number | null = null;
+  private readonly degradedRecordedAt = new Map<string, number>();
 
   constructor(private readonly deps: AntiSpamDeps) {}
 
@@ -115,34 +117,36 @@ export class AntiSpamService {
   }
 
   private async degraded(scope: TenantContext, botInstanceId: string, nowMs: number) {
-    if (
-      this.degradedRecordedAt !== null &&
-      nowMs - this.degradedRecordedAt < ANTI_SPAM_DEGRADED_RECORD_INTERVAL_MS
-    ) {
+    const key = `${scope.tenantId}:${botInstanceId}`;
+    const last = this.degradedRecordedAt.get(key);
+    if (last !== undefined && nowMs - last < ANTI_SPAM_DEGRADED_RECORD_INTERVAL_MS) {
       return;
     }
-    this.degradedRecordedAt = nowMs;
+    this.degradedRecordedAt.set(key, nowMs);
     this.deps.logger.warn({ botInstanceId }, 'anti-spam store unavailable; failing open');
     await this.recordQuietly(scope, {
       code: ANTI_SPAM_UNAVAILABLE_CODE,
       severity: 'WARN',
       message: 'Anti-spam could not count interactions; nobody is being blocked for flooding.',
       context: { botInstanceId },
-      dedupeKey: botInstanceId,
+      dedupeKey: unavailableKey(botInstanceId),
     });
   }
 
   private async recovered(scope: TenantContext, botInstanceId: string) {
-    if (this.degradedRecordedAt === null) return;
-    this.degradedRecordedAt = null;
+    const key = `${scope.tenantId}:${botInstanceId}`;
+    if (!this.degradedRecordedAt.has(key)) return;
+    this.degradedRecordedAt.delete(key);
     await this.recordQuietly(scope, {
       code: ANTI_SPAM_RECOVERED_CODE,
       severity: 'INFO',
       message: 'Anti-spam is counting interactions again.',
       context: { botInstanceId },
-      dedupeKey: botInstanceId,
+      // Its own key: the recorder dedupes on the key alone, so a recovery written under
+      // the outage's key would land ON the outage row rather than resolve it.
+      dedupeKey: `${ANTI_SPAM_RECOVERED_CODE}:${botInstanceId}`,
       recoversCode: ANTI_SPAM_UNAVAILABLE_CODE,
-      recoversDedupeKey: botInstanceId,
+      recoversDedupeKey: unavailableKey(botInstanceId),
     });
   }
 
@@ -157,4 +161,9 @@ export class AntiSpamService {
       this.deps.logger.warn({ err: String(error) }, 'anti-spam condition not recorded');
     }
   }
+}
+
+/** The outage's dedupe key for one bot, named by its code as every other condition's is. */
+function unavailableKey(botInstanceId: string): string {
+  return `${ANTI_SPAM_UNAVAILABLE_CODE}:${botInstanceId}`;
 }

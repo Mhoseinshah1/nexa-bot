@@ -461,6 +461,13 @@ export const outboxMessages = pgTable(
      * held up.
      */
     nextAttemptAt: timestamptz('next_attempt_at'),
+    /**
+     * When the relay gave up on this message and said so (WP20, brief §3.2): set by the
+     * failure that reached `DELIVERY_MAX_FAILED_ATTEMPTS`, in the transaction that records
+     * the announcement. NULL means still retried. A mark rather than a count, because a
+     * count can grow under a release that never decides or announces anything.
+     */
+    exhaustedAt: timestamptz('exhausted_at'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
   },
   (table) => [

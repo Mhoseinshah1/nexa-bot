@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNull, lt, lte, or, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import {
   DELIVERY_MAX_FAILED_ATTEMPTS,
   OUTBOX_MESSAGE_EXHAUSTED_CODE,
@@ -347,6 +347,12 @@ export class OutboxRelay {
                 nextAttemptAt: exhausted
                   ? null
                   : new Date(this.clock.now().getTime() + deliveryRetryDelayMs(failures)),
+                // Exhaustion is a MARK, written where it is announced, never inferred from
+                // the count: the release before WP20 retried a failing message on every
+                // poll, so a row can reach the count without this relay ever deciding or
+                // saying so. Such a row is still claimed, fails once more here, and is
+                // exhausted and announced then — never exhausted in silence.
+                ...(exhausted ? { exhaustedAt: this.clock.now() } : {}),
               })
               .where(sql`${outboxMessages.id} = ${row.id}`);
             if (exhausted) {
@@ -369,7 +375,10 @@ export class OutboxRelay {
                   // One event per message: each exhausted message is its own fact.
                   dedupeKey: event.eventId,
                 },
-                tx,
+                // A transaction SCOPE, as every consumer is handed: the recorder joins
+                // this transaction only through one, and its projection — the
+                // notification that tells an operator — refuses anything else.
+                { tx, scope: scopeOf(event) },
               );
             } else {
               this.logger.error(
@@ -529,9 +538,13 @@ function eligibleForDispatch(activeTenantIds: readonly string[]) {
   return or(isNull(outboxMessages.tenantId), inArray(outboxMessages.tenantId, activeTenantIds));
 }
 
-/** Not yet at `DELIVERY_MAX_FAILED_ATTEMPTS` real failures (WP20, brief §3.2). */
+/**
+ * Not exhausted (WP20, brief §3.2): not marked by the failure that reached
+ * `DELIVERY_MAX_FAILED_ATTEMPTS` and announced it. The mark, not the count, so a row whose
+ * count grew under an earlier release is retried and announced rather than dropped.
+ */
 function notExhausted() {
-  return lt(outboxMessages.attempts, DELIVERY_MAX_FAILED_ATTEMPTS);
+  return isNull(outboxMessages.exhaustedAt);
 }
 
 /**
@@ -555,7 +568,7 @@ function noEarlierLiveSibling() {
       AND earlier.sequence < ${outboxMessages.sequence}
       AND earlier.published_at IS NULL
       AND earlier.attempts > 0
-      AND earlier.attempts < ${DELIVERY_MAX_FAILED_ATTEMPTS}
+      AND earlier.exhausted_at IS NULL
   )`;
 }
 

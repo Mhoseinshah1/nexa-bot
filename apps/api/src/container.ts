@@ -609,6 +609,8 @@ export interface Container {
   readonly receiptFiles: TelegramReceiptFiles;
   readonly orders: OrderService;
   readonly botRuntime: BotRuntime;
+  /** WP20: counts every Telegram interaction, including the `/ping` the runtime never sees. */
+  readonly antiSpam: Pick<AntiSpamService, 'observe'>;
 
   // Control plane — Phase 2
   readonly panels: PanelService;
@@ -845,6 +847,17 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     // transaction survived that transaction rolling back.
     record: (scope, event, tx) => opsLogRef.current.record(scope, event, tx),
   };
+  /*
+   * WP20: the one anti-spam counter. Shared by the bot runtime and by the webhook's
+   * `/ping` branch, which answers before the runtime runs: an interaction the runtime
+   * never sees is still an interaction.
+   */
+  const antiSpam = new AntiSpamService({
+    counter: interactionCounter,
+    opsEvents: opsLog,
+    clock,
+    logger,
+  });
 
   const hasher = new ScryptPasswordHasher(scryptParamsFor(config.PASSWORD_HASH_PROFILE));
   const admins = new DrizzleAdminRepository(database.db);
@@ -3719,14 +3732,10 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     provisionerLoop,
     delivery: deliveryService,
     orders: orderService,
+    antiSpam,
     botRuntime: new BotRuntime({
       // WP20: more than 20 interactions in 10 s blocks the customer; fails open.
-      antiSpam: new AntiSpamService({
-        counter: interactionCounter,
-        opsEvents: opsLog,
-        clock,
-        logger,
-      }),
+      antiSpam,
       // WP11A: the external-gateway attempt's customer reads and the check tap.
       gateway: gatewayPayments,
       /*
