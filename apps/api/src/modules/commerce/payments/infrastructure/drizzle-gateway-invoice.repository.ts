@@ -1,6 +1,6 @@
 import { and, asc, eq, gt, inArray, isNotNull, isNull, lte, or, sql } from 'drizzle-orm';
 import type {
-  CurrencyCode,
+  GatewayProviderUnit,
   Money,
   GatewayInvoiceCreationState,
   GatewayInvoiceOutcome,
@@ -40,8 +40,11 @@ function toRecord(row: Row): GatewayInvoiceRecord {
     callbackUrlSent: row.callbackUrlSent,
     invoiceUrl: row.invoiceUrl,
     webInvoiceUrl: row.webInvoiceUrl,
-    providerUnit: row.providerUnit as CurrencyCode,
+    providerUnit: row.providerUnit as GatewayProviderUnit,
     sentAmount: row.sentAmount,
+    conversionRateMinor: row.conversionRateMinor,
+    botInstanceId: row.botInstanceId,
+    providerChargeId: row.providerChargeId,
     requestAmount: row.requestAmount,
     finalAmount: row.finalAmount,
     creditAmount: row.creditAmount,
@@ -81,8 +84,10 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
       readonly paymentId: PaymentId;
       readonly provider: PaymentGatewayProvider;
       readonly providerOrderId: string;
-      readonly providerUnit: CurrencyCode;
+      readonly providerUnit: GatewayProviderUnit;
       readonly sentAmount: bigint;
+      readonly conversionRateMinor: bigint | null;
+      readonly botInstanceId: string | null;
       readonly now: Date;
     },
     tx: unknown,
@@ -98,6 +103,8 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
         creationState: 'CREATING',
         providerUnit: input.providerUnit,
         sentAmount: input.sentAmount,
+        conversionRateMinor: input.conversionRateMinor,
+        botInstanceId: input.botInstanceId,
         createdAt: input.now,
         updatedAt: input.now,
       })
@@ -139,6 +146,79 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
       )
       .limit(1);
     return row === undefined ? null : toRecord(row);
+  }
+
+  async lockByProviderOrderId(
+    scope: TenantContext,
+    provider: PaymentGatewayProvider,
+    providerOrderId: string,
+    tx: unknown,
+  ): Promise<GatewayInvoiceRecord | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await this.exec(tx)
+      .select()
+      .from(gatewayInvoices)
+      .where(
+        and(
+          eq(gatewayInvoices.tenantId, tenantId),
+          eq(gatewayInvoices.provider, provider),
+          eq(gatewayInvoices.providerOrderId, providerOrderId),
+        ),
+      )
+      .limit(1)
+      .for('update');
+    return row === undefined ? null : toRecord(row);
+  }
+
+  async findByChargeId(
+    scope: TenantContext,
+    provider: PaymentGatewayProvider,
+    chargeId: string,
+    tx?: unknown,
+  ): Promise<GatewayInvoiceRecord | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await this.exec(tx)
+      .select()
+      .from(gatewayInvoices)
+      .where(
+        and(
+          eq(gatewayInvoices.tenantId, tenantId),
+          eq(gatewayInvoices.provider, provider),
+          eq(gatewayInvoices.providerChargeId, chargeId),
+        ),
+      )
+      .limit(1);
+    return row === undefined ? null : toRecord(row);
+  }
+
+  async recordCharge(
+    scope: TenantContext,
+    paymentId: PaymentId,
+    charge: { readonly chargeId: string; readonly status: string; readonly dueAt: Date },
+    now: Date,
+    tx: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .update(gatewayInvoices)
+      .set({
+        providerChargeId: charge.chargeId,
+        providerPaid: true,
+        providerStatus: charge.status,
+        // Due now: the settlement is attempted at once by the caller, and this row is what
+        // the worker settles from if that attempt does not finish.
+        nextInquiryAt: charge.dueAt,
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(gatewayInvoices.tenantId, tenantId),
+          eq(gatewayInvoices.paymentId, paymentId),
+          isNull(gatewayInvoices.providerChargeId),
+        ),
+      )
+      .returning({ paymentId: gatewayInvoices.paymentId });
+    return rows.length > 0;
   }
 
   async claimCreating(
@@ -212,7 +292,7 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
       readonly finalAmount: bigint | null;
       readonly buyerChatIdSent: boolean;
       readonly callbackUrlSent: boolean;
-      readonly firstInquiryAt: Date;
+      readonly firstInquiryAt: Date | null;
     },
     now: Date,
     tx: unknown,
@@ -233,7 +313,8 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
         callbackUrlSent: created.callbackUrlSent,
         creationClaimedUntil: null,
         creationErrorCode: null,
-        nextInquiryAt: created.firstInquiryAt,
+        // Null keeps the row's schedule: a Stars charge recorded before this commits is due.
+        nextInquiryAt: created.firstInquiryAt ?? sql`${gatewayInvoices.nextInquiryAt}`,
         updatedAt: now,
       })
       .where(
@@ -262,7 +343,12 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
         creationState: to,
         creationErrorCode: errorCode,
         creationClaimedUntil: null,
-        nextInquiryAt: null,
+        /*
+         * Nothing more to ask about an invoice whose create ended — unless the provider
+         * already PUSHED a payment for it (Stars: the invoice reached the customer although
+         * its create's answer was lost). That row stays due, so the recorded charge settles.
+         */
+        nextInquiryAt: sql`CASE WHEN ${gatewayInvoices.providerChargeId} IS NULL THEN NULL ELSE ${gatewayInvoices.nextInquiryAt} END`,
         updatedAt: now,
       })
       .where(
@@ -324,8 +410,13 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
         isNull(gatewayInvoices.inquiryClaimedUntil),
         lte(gatewayInvoices.inquiryClaimedUntil, now),
       ),
-      // Something to ask about: a created invoice, or one a webhook named for a lost create.
-      or(isNotNull(gatewayInvoices.providerInvoiceId), isNotNull(gatewayInvoices.hintedInvoiceId)),
+      // Something to ask about: a created invoice, or one a webhook named for a lost create
+      // — or a payment the provider pushed and Nexa recorded (Stars), settled from the row.
+      or(
+        isNotNull(gatewayInvoices.providerInvoiceId),
+        isNotNull(gatewayInvoices.hintedInvoiceId),
+        isNotNull(gatewayInvoices.providerChargeId),
+      ),
     );
     const due = this.exec(tx)
       .select({ paymentId: gatewayInvoices.paymentId })
@@ -545,6 +636,7 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
       readonly orderId: string | null;
       readonly customerId: string;
       readonly amount: Money;
+      readonly botInstanceId: string | null;
       readonly now: Date;
     },
     tx: unknown,
@@ -565,6 +657,9 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
           eq(gatewayInvoices.tenantId, tenantId),
           eq(gatewayInvoices.provider, input.provider),
           inArray(gatewayInvoices.creationState, ['CREATING', 'CREATED']),
+          input.botInstanceId === null
+            ? isNull(gatewayInvoices.botInstanceId)
+            : eq(gatewayInvoices.botInstanceId, input.botInstanceId),
           eq(payments.state, 'PENDING'),
           eq(payments.customerId, input.customerId),
           input.orderId === null ? isNull(payments.orderId) : eq(payments.orderId, input.orderId),

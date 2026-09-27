@@ -326,6 +326,18 @@ function amounts(payment: PaymentRecord): {
  */
 function provider(invoice: GatewayInvoiceRecord | null): TemplateValues {
   if (invoice === null) return { providerInvoiceId: NONE, providerFinalAmount: NONE };
+  /*
+   * A payment the provider PUSHED and Nexa recorded (Telegram Stars, Package A): the
+   * provider's own id for it is the CHARGE id — what an operator reconciles by, and what
+   * a manual Star refund would need — and the amount is the Stars that charge carried,
+   * which the record step proved equal to the snapshot. Never the payload or a token.
+   */
+  if (invoice.providerChargeId !== null) {
+    return {
+      providerInvoiceId: `charge:${invoice.providerChargeId}`,
+      providerFinalAmount: `${invoice.sentAmount.toString()} ${invoice.providerUnit}`,
+    };
+  }
   return {
     providerInvoiceId: invoice.providerInvoiceId ?? invoice.hintedInvoiceId ?? NONE,
     providerFinalAmount:

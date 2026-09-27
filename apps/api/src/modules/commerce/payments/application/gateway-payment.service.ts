@@ -1,4 +1,5 @@
 import {
+  PAYMENT_GATEWAY_DESCRIPTORS,
   systemJobActor,
   type ActorContext,
   type AuditWriter,
@@ -29,6 +30,7 @@ import type {
   ExternalGatewayAdapter,
   GatewayCallBudget,
   GatewayCredentialStore,
+  GatewayInvoicePresentation,
   GatewayInvoiceRecord,
   GatewayInvoiceRepository,
   GatewayWebhookHint,
@@ -89,6 +91,18 @@ export interface GatewayPaymentServiceDeps {
   readonly paymentRecords: Pick<PaymentRepository, 'findById' | 'setExternalReference'>;
   readonly adapters: (provider: PaymentGatewayProvider) => ExternalGatewayAdapter | null;
   readonly credentials: GatewayCredentialStore;
+  /**
+   * The token of ONE bot instance, for a `BOT_TOKEN` route (Telegram Stars): the invoice is
+   * sent by the bot the customer is talking to. Null when that bot is gone or disabled.
+   */
+  readonly botTokens: {
+    tokenForBotInstance(scope: TenantContext, botInstanceId: string): Promise<string | null>;
+  };
+  /**
+   * The invoice's own text, rendered from the tenant's templates, for a provider whose
+   * invoice is a message this installation sends. Never a literal.
+   */
+  readonly presentation: (scope: TenantContext) => Promise<GatewayInvoicePresentation>;
   readonly budget: GatewayCallBudget;
   /** `gatewayCallbackUrl` over the tenant's registered origin, or null. */
   readonly callbackUrlFor: (
@@ -296,8 +310,7 @@ export class GatewayPaymentService {
     }
 
     const adapter = this.deps.adapters(invoice.provider);
-    const apiKey =
-      adapter === null ? null : await this.deps.credentials.read(scope, invoice.provider);
+    const apiKey = adapter === null ? null : await this.invoiceCredential(scope, invoice);
     if (adapter === null || apiKey === null) {
       await this.endCreation(scope, actor, invoice, 'CREATE_FAILED', 'nexa.credential_missing');
       await this.deps.payments.failGatewayPayment(scope, actor, invoice.paymentId, {
@@ -326,7 +339,15 @@ export class GatewayPaymentService {
     const customer = await this.deps.customers.findById(scope, claimed.customerId as UserId);
     // brief §10: sent when known, omitted otherwise, and never a reason to fail.
     const buyerChatId = customer?.telegramUserId ?? null;
-    const callbackUrl = await this.deps.callbackUrlFor(scope, invoice.provider);
+    const descriptor = PAYMENT_GATEWAY_DESCRIPTORS[invoice.provider];
+    // A Stars invoice is a message this bot sends and is paid on the bot's own webhook:
+    // no callback URL, and its text from the tenant's templates.
+    const callbackUrl =
+      descriptor.approval === 'INQUIRY'
+        ? await this.deps.callbackUrlFor(scope, invoice.provider)
+        : null;
+    const presentation =
+      descriptor.invoiceCredential === 'BOT_TOKEN' ? await this.deps.presentation(scope) : null;
 
     const stamped = await this.deps.uow.run(scope, (tx) =>
       this.deps.invoices.markCreationSent(scope, invoice.paymentId, now, tx),
@@ -338,6 +359,7 @@ export class GatewayPaymentService {
       amount: invoice.sentAmount,
       callbackUrl,
       buyerChatId,
+      presentation,
     });
     const at = this.deps.clock.now();
 
@@ -356,7 +378,11 @@ export class GatewayPaymentService {
               finalAmount: outcome.finalAmount,
               buyerChatIdSent: buyerChatId !== null,
               callbackUrlSent: callbackUrl !== null,
-              firstInquiryAt: new Date(at.getTime() + FIRST_INQUIRY_DELAY_MS),
+              // A provider that pushes its payments is never asked (Stars).
+              firstInquiryAt:
+                descriptor.approval === 'INQUIRY'
+                  ? new Date(at.getTime() + FIRST_INQUIRY_DELAY_MS)
+                  : null,
             },
             at,
             tx,
@@ -460,6 +486,16 @@ export class GatewayPaymentService {
       expiresAt !== null &&
       now.getTime() < expiresAt.getTime();
     const postDeadline = !eligible;
+
+    /*
+     * A provider that PUSHES its payments (Stars) is never asked. Its row is due only
+     * because a payment was recorded on it, and the recorded charge IS the approval —
+     * written under the row's lock after every identity check (`StarsPaymentService`).
+     * No call, no budget: this is the settlement the webhook's own attempt did not finish.
+     */
+    if (PAYMENT_GATEWAY_DESCRIPTORS[invoice.provider].approval === 'RECORDED_PAYMENT') {
+      return this.settleRecordedClaim(scope, actor, invoice, eligible, expiresAt);
+    }
 
     const adapter = this.deps.adapters(invoice.provider);
     const apiKey =
@@ -611,6 +647,29 @@ export class GatewayPaymentService {
     }
 
     // APPROVED, by the inquiry. The settlement path decides whether it counts.
+    return this.settleApproved(
+      scope,
+      actor,
+      invoice,
+      eligible,
+      `${invoice.provider.toLowerCase()}:${outcome.status}:paid`,
+      at,
+    );
+  }
+
+  /**
+   * An approval, handed to the one settlement path. Shared by the inquiry (TonPays) and a
+   * recorded payment (Stars), so both are decided by the same lock, the same deadline and
+   * the same exactly-once transition — and a late one is recorded the same way.
+   */
+  private async settleApproved(
+    scope: TenantContext,
+    actor: ActorContext,
+    invoice: GatewayInvoiceRecord,
+    eligible: boolean,
+    evidenceNote: string,
+    at: Date,
+  ): Promise<'SETTLED' | 'LATE' | 'ERROR'> {
     if (!eligible) {
       await this.lateCompletion(scope, actor, invoice, 'DEADLINE_PASSED');
       return 'LATE';
@@ -621,7 +680,7 @@ export class GatewayPaymentService {
         scope,
         actor,
         invoice.paymentId,
-        { evidenceNote: `${invoice.provider.toLowerCase()}:${outcome.status}:paid` },
+        { evidenceNote },
       );
     } catch (error) {
       /*
@@ -645,6 +704,110 @@ export class GatewayPaymentService {
       case 'NOT_ELIGIBLE':
         await this.lateCompletion(scope, actor, invoice, confirmation.reason);
         return 'LATE';
+    }
+  }
+
+  /** The worker's settlement of a recorded payment (Stars). No provider call is made. */
+  private async settleRecordedClaim(
+    scope: TenantContext,
+    actor: ActorContext,
+    invoice: GatewayInvoiceRecord,
+    eligible: boolean,
+    expiresAt: Date | null,
+  ): Promise<'OPEN' | 'SETTLED' | 'LATE' | 'ERROR'> {
+    const now = this.deps.clock.now();
+    const recorded = invoice.providerChargeId !== null && invoice.providerPaid === true;
+    /*
+     * Nothing recorded is nothing approved: the row is unscheduled and the deadline
+     * decides, as it does for every attempt nobody paid. A retry is scheduled only for a
+     * recorded charge whose settlement did not finish, and only while it could still
+     * settle; past the deadline the settlement path records it as late, once.
+     */
+    const retry =
+      recorded && eligible && expiresAt !== null
+        ? this.nextInquiryAt(invoice, now, expiresAt)
+        : null;
+    await this.deps.uow.run(scope, (tx) =>
+      this.deps.invoices.recordInquiry(
+        scope,
+        invoice.paymentId,
+        {
+          status: null,
+          paid: null,
+          requestAmount: null,
+          finalAmount: null,
+          errorCode: recorded ? null : 'nexa.nothing_recorded',
+          adoptInvoiceId: null,
+          nextInquiryAt: retry,
+          postDeadline: false,
+        },
+        now,
+        tx,
+      ),
+    );
+    if (!recorded) return 'OPEN';
+    return this.settleApproved(
+      scope,
+      actor,
+      invoice,
+      eligible,
+      `${invoice.provider.toLowerCase()}:successful_payment`,
+      now,
+    );
+  }
+
+  /**
+   * Settle ONE recorded payment now (Stars' `successful_payment`, straight after it was
+   * recorded). The same decision the worker takes from the row: this is only its earlier
+   * arrival, and if it does not finish the row is still due and the worker finishes it.
+   */
+  async settleRecorded(
+    scope: TenantContext,
+    paymentId: PaymentId,
+  ): Promise<'SETTLED' | 'LATE' | 'ERROR' | 'NOT_RECORDED'> {
+    const invoice = await this.deps.invoices.findByPayment(scope, paymentId);
+    const payment = await this.deps.paymentRecords.findById(scope, paymentId);
+    if (
+      invoice === null ||
+      payment === null ||
+      PAYMENT_GATEWAY_DESCRIPTORS[invoice.provider].approval !== 'RECORDED_PAYMENT' ||
+      invoice.providerChargeId === null ||
+      invoice.providerPaid !== true
+    ) {
+      return 'NOT_RECORDED';
+    }
+    // Already decided (settled, or recorded late): the transition is exactly-once anyway,
+    // and a redelivered update must not write a second late-completion notice.
+    if (invoice.outcome !== null) return invoice.outcome === 'LATE_COMPLETION' ? 'LATE' : 'SETTLED';
+    const now = this.deps.clock.now();
+    const eligible =
+      payment.state === 'PENDING' &&
+      payment.expiresAt !== null &&
+      now.getTime() < payment.expiresAt.getTime();
+    return this.settleApproved(
+      scope,
+      this.actor(),
+      invoice,
+      eligible,
+      `${invoice.provider.toLowerCase()}:successful_payment`,
+      now,
+    );
+  }
+
+  /** What an invoice is sent with, by the route's descriptor. Never logged. */
+  private async invoiceCredential(
+    scope: TenantContext,
+    invoice: GatewayInvoiceRecord,
+  ): Promise<string | null> {
+    switch (PAYMENT_GATEWAY_DESCRIPTORS[invoice.provider].invoiceCredential) {
+      case 'GATEWAY_KEY':
+        return this.deps.credentials.read(scope, invoice.provider);
+      case 'BOT_TOKEN':
+        return invoice.botInstanceId === null
+          ? null
+          : this.deps.botTokens.tokenForBotInstance(scope, invoice.botInstanceId);
+      case 'NONE':
+        return null;
     }
   }
 
@@ -800,6 +963,9 @@ export class GatewayPaymentService {
   async requestCheck(scope: TenantContext, view: GatewayAttemptView): Promise<void> {
     const now = this.deps.clock.now();
     if (
+      // A provider that pushes its payments (Stars) has nothing to ask: the tap only
+      // re-reads the attempt's state, which the caller renders.
+      PAYMENT_GATEWAY_DESCRIPTORS[view.invoice.provider].approval !== 'INQUIRY' ||
       view.payment.state !== 'PENDING' ||
       view.payment.expiresAt === null ||
       now.getTime() >= view.payment.expiresAt.getTime() ||

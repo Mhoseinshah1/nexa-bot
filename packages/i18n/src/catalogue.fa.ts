@@ -139,7 +139,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   // One list in `BOT_COMMANDS` feeds both, so a command cannot be registered and
   // undocumented, or documented and unregistered.
   'bot.help':
-    'دستورهای این ربات:\n/catalog — دیدن و خرید سرویس‌ها\n/services — سرویس‌های من و مدیریت آن‌ها\n/wallet — موجودی کیف پول\n/help — همین راهنما',
+    'دستورهای این ربات:\n/catalog — دیدن و خرید سرویس‌ها\n/services — سرویس‌های من و مدیریت آن‌ها\n/wallet — موجودی کیف پول\n/paysupport — پشتیبانی پرداخت\n/help — همین راهنما',
   'bot.command.start': 'شروع',
   'bot.command.catalog': 'خرید سرویس',
   'bot.command.services': 'سرویس‌های من',

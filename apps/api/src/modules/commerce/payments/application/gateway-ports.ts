@@ -49,6 +49,12 @@ export interface PaymentGatewayRecord {
    */
   readonly customerFeeBasisPoints: number;
   /**
+   * A `FIXED_RATE` route's rate (Package A): sales-currency minor units per ONE provider
+   * unit — for Stars, the owner's `toman_per_star`. Null until an operator sets it; such a
+   * route cannot be enabled. Read here and SNAPSHOTTED onto each attempt's invoice.
+   */
+  readonly providerUnitRateMinor: bigint | null;
+  /**
    * What the route may be offered FOR (customer UX completion §D/§F). `status` decides
    * whether it is offered at all; these decide for which purpose. An operator may take
    * card-to-card for a top-up and not for a purchase, or the reverse, and one switch
@@ -59,6 +65,12 @@ export interface PaymentGatewayRecord {
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }
+
+/** Everything `update` writes: the config, with every optional field already decided. */
+export type StoredGatewayConfig = PaymentGatewayConfig & {
+  readonly customerFeeBasisPoints: number;
+  readonly providerUnitRateMinor: bigint | null;
+};
 
 export interface PaymentGatewayRepository {
   /**
@@ -95,7 +107,7 @@ export interface PaymentGatewayRepository {
   update(
     scope: TenantContext,
     provider: PaymentGatewayProvider,
-    config: PaymentGatewayConfig & { readonly customerFeeBasisPoints: number },
+    config: StoredGatewayConfig,
     currency: SalesCurrencyCode,
     now: Date,
     tx: unknown,

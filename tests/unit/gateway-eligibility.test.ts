@@ -171,8 +171,13 @@ describe('the provider catalogue', () => {
      * adapter for. A member added here without one is an operator switching on a route
      * that silently cannot take money.
      */
-    // WP11A added TonPays WITH its adapter (`TonPaysAdapter`), which is what this pins.
-    expect([...PAYMENT_GATEWAY_PROVIDERS]).toEqual(['MANUAL_TRANSFER', 'TONPAYS']);
+    // WP11A added TonPays WITH its adapter (`TonPaysAdapter`), and Package A added Telegram
+    // Stars with its own (`TelegramStarsAdapter`); that is what this pins.
+    expect([...PAYMENT_GATEWAY_PROVIDERS]).toEqual([
+      'MANUAL_TRANSFER',
+      'TONPAYS',
+      'TELEGRAM_STARS',
+    ]);
   });
 
   it('declares how each route settles and whether it holds credentials', () => {
