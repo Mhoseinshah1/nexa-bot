@@ -104,16 +104,24 @@ it only means a second call.
 
 ### 2.5 Failure policy (brief B5)
 
-An UNKNOWN answer raises the operational condition `channels.membership_unavailable`, per bot
-and channel (dedupe key `channels.membership_unavailable:<bot>:<channel>`), WARN, with the
-bot id, the channel identity and the Telegram error code — never the token, and never the
-customer. It is written at most once a minute per bot and channel per process, so a busy bot
-cannot flood the log (the same throttle as anti-spam).
+An UNKNOWN answer raises the operational condition `channels.membership_unavailable`, per BOT
+(dedupe key `channels.membership_unavailable:<bot>`), WARN. Its context names the bot, the
+channels that could not be checked, and Telegram's error codes — never the token, and never
+the customer. It is written at most once a minute per bot per process. The time of the last
+write is kept apart from the fact that an outage is open here, so a channel that flaps between
+an answer and none cannot defeat the throttle (Codex review of #86).
 
-The next deterministic answer for that bot and channel records
-`channels.membership_recovered`, which resolves it. When the outage was raised by another
-process (a replica replaced by a rolling update), a good answer looks for the open condition
-at most once a minute and resolves it too.
+The first turn in which every REQUIRED channel of that bot answered records
+`channels.membership_recovered`, which resolves it. The key is per bot rather than per channel
+for the same review: an operator fixes a channel the bot cannot query by correcting its id or
+handle, or by removing it, and a condition keyed by the old identity would never be asked
+about again and would stay open for ever. When the outage was raised by another process (a
+replica replaced by a rolling update), a good turn looks for the open condition at most once a
+minute and resolves it too.
+
+Concurrent turns for the same customer, bot and channel share one `getChatMember` in flight,
+so a burst of taps costs one Telegram call per channel rather than one per tap — which would
+spend the bot's API quota and turn later checks UNKNOWN.
 
 ### 2.6 The central guard (brief B3)
 
@@ -168,6 +176,14 @@ channel, until a check works again.
 - The setting's new fields are optional, so the release before this one still parses every
   stored value. It stops enforcing, which is the state it shipped with.
 - Open `channels.membership_unavailable` conditions stay in the log until resolved.
+- **One caveat (Codex review of #86).** A private channel saved with only a `chatId` and a
+  `joinUrl` — no `handle` — is not a value the release before this one can parse: its schema
+  requires a handle. After a rollback that release reads the whole setting as invalid and
+  shows the default, an empty list, while the stored row is kept as it was. Nothing is lost
+  unless an operator saves the channel list on the old release, which would overwrite it. So
+  before rolling back, remove handle-less channels (or give each a handle), or do not save the
+  channel list until rolling forward again. There is no truthful stand-in value that would
+  keep the old schema happy: an invented handle would name a channel that is not this one.
 
 ## 4. Not done, deliberately
 
