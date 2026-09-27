@@ -8,8 +8,8 @@ import subprocess, sys, os
 os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if 'TEST_DATABASE_URL' not in os.environ:
   sys.exit('TEST_DATABASE_URL is required')
-if subprocess.run(['git','diff','--quiet','--','apps']).returncode != 0:
-  sys.exit('apps/ has uncommitted changes; a mutation restore would discard them')
+if subprocess.run(['git','diff','--quiet','--','apps','packages']).returncode != 0:
+  sys.exit('apps/ or packages/ has uncommitted changes; a mutation restore would discard them')
 S='apps/api/src/modules/commerce/payments/application/service-refund-request.service.ts'
 R='apps/api/src/modules/commerce/payments/infrastructure/drizzle-service-refund-request.repository.ts'
 RF='apps/api/src/modules/commerce/payments/application/refund.service.ts'
@@ -20,6 +20,8 @@ IT='tests/integration/service-refund-requests.test.ts'
 DS='apps/api/src/modules/commerce/payments/application/service-refund-decision.service.ts'
 C='apps/api/src/surfaces/web/service-refund-requests.controller.ts'
 PG='apps/web/src/pages/service-refund-requests.tsx'
+EV='packages/contracts/src/events.ts'
+PV='apps/api/src/modules/commerce/provisioning/application/provisioning.service.ts'
 M=[
  ('W19-01',[(S,"if (succeeded && item.serviceState !== 'TERMINATED') {","if (false && succeeded && item.serviceState !== 'TERMINATED') {"),(R,"          or(\n","          or(\n            sql`true`,\n")],'did not move'),
  ('W19-02',[(R,"inArray(provisioningOperations.state, [...OPERATION_TERMINAL_STATES]),","inArray(provisioningOperations.state, [...OPERATION_TERMINAL_STATES, 'UNKNOWN' as never]),")],'UNKNOWN'),
@@ -253,6 +255,47 @@ M+=[
  ('W19-45',[(S,"""        if (replayed !== null) {
           if (replayed.serviceId""","""        if (replayed !== null && (false as boolean)) {
           if (replayed.serviceId""")],'redelivered filing'),
+ ('W19-46',[(RF,"""      tx,
+    );
+    return after;
+  }
+
+  // -------------------------------------------------------------------------
+
+  /**
+   * One append-only ledger entry""","""      tx,
+    );
+    await this.announce(actor, after, tx, { outcome: 'FAILED', cause: 'OPERATOR_FAILED' });
+    return after;
+  }
+
+  // -------------------------------------------------------------------------
+
+  /**
+   * One append-only ledger entry""")],'definitively fails'),
+ ('W19-47',[(EV,"cause: z.enum(['OPERATOR_FAILED', 'SUPERSEDED']),","cause: z.enum(['OPERATOR_FAILED', 'SUPERSEDED', 'DELETION_FAILED']),")],'two values the release before WP19',('unit','tests/unit/contracts-invariants.test.ts')),
+ ('W19-48',[(PV,"if (type === 'TERMINATE') {\n      const locked = await this.deps.services.lockForUpdate(scope, service.id, tx);","if (type === 'TERMINATE') {\n      const locked = service;")],'races an approval|ended while it waited'),
+ ('W19-49',[(PV,"if (locked === null || !OPERATION_LEGAL_FROM.TERMINATE.includes(locked.state)) {","if (locked === null) {")],'ended while it waited'),
+ ('W19-50',[(PV,"""      service.panelId,
+      'TERMINATE',
+      tx,
+    );""","""      service.panelId,
+      'TERMINATE',
+    );""")],'inside the approval'),
+ ('W19-51',[(S,"""        const eligibility = await this.eligibilityOf(scope, service, { checkFlag: true }, tx);
+        if (!eligibility.eligible) return refuse(eligibility.reason);""","""        const eligibility = found;
+        if (!eligibility.eligible) return refuse(eligibility.reason);""")],'refunded in full while the filing'),
+ ('W19-52',[(DS,"""      if (
+        !isNexaError(error) ||
+        (error.code !== COMMERCE_ERROR_CODES.SERVICE_REFUND_REQUEST_NOT_FOUND &&
+          error.code !== COMMERCE_ERROR_CODES.SERVICE_REFUND_REQUEST_STATE_INVALID)
+      ) {
+        throw error;
+      }""","""      void error;""")],'reading its request fails'),
+ ('W19-53',[(DS,"""    if (replayed !== null) {
+      const entered = await this.enteredAgain(scope, actor, replayed.result.captureId);""","""    if (replayed !== null && (false as boolean)) {
+      const entered = await this.enteredAgain(scope, actor, replayed.result.captureId);""")],'redelivered amount'),
+ ('W19-54',[(S,"return key === undefined ? null : { key, hash: hashRequest(body) };","void hashRequest;\n    return key === undefined ? null : null;")],'idempotency key \\(Codex'),
 ]
 only=sys.argv[1:] 
 for entry in M:
@@ -270,6 +313,10 @@ for entry in M:
     open(f,'w').write(s.replace(a,b)); files.add(f)
   if ok and db is not None:
     subprocess.run(['psql',os.environ['TEST_DATABASE_URL'],'-qc',db[0]],check=True)
+  # Tests read @nexa/contracts from its build, so a contract mutation is built in and out.
+  contracts=any(f.startswith('packages/contracts/') for f in files)
+  if ok and contracts:
+    subprocess.run(['pnpm','--filter','@nexa/contracts','build'],capture_output=True,check=True)
   if ok:
     r=subprocess.run(['pnpm','exec','vitest','run','--project',project,test,'-t',filt],capture_output=True,text=True)
     out=r.stdout+r.stderr
@@ -279,3 +326,5 @@ for entry in M:
   if ok and db is not None:
     subprocess.run(['psql',os.environ['TEST_DATABASE_URL'],'-qc',db[1]],check=True)
   for f in files: subprocess.run(['git','checkout','--',f])
+  if contracts:
+    subprocess.run(['pnpm','--filter','@nexa/contracts','build'],capture_output=True,check=True)

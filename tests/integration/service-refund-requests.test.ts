@@ -1308,6 +1308,72 @@ describe('WP19 — a customer asks for their money back', () => {
     ).toBe(0);
   });
 
+  it("plans no deletion for an operator's terminate of a service that ended while it waited (Codex review of #83, round 4)", async () => {
+    const service = await activeService('terminate-waits');
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    let locked!: () => void;
+    const holding = new Promise<void>((resolve) => (locked = resolve));
+    const holder = ctx.container.database.db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT id FROM services WHERE id = ${service.id} FOR UPDATE`);
+      await tx.execute(
+        sql`UPDATE services SET state = 'TERMINATED', terminated_at = now()
+             WHERE id = ${service.id}`,
+      );
+      locked();
+      await gate;
+    });
+    await holding;
+    // Read ACTIVE before the wait; the terminate must judge the row it locked.
+    const terminating = refused(
+      ctx.container.provisioning.requestFromOperator(tenantA, owner, service.id, 'TERMINATE', {
+        idempotencyKey: 'terminate-waits-operator',
+      }),
+    );
+    const deadline = Date.now() + 5_000;
+    for (;;) {
+      const waiting = await countRows(
+        sql`SELECT count(*)::int AS n FROM pg_locks
+             WHERE NOT granted AND locktype IN ('tuple', 'transactionid')`,
+      );
+      if (waiting >= 1) break;
+      if (Date.now() > deadline) throw new Error('the terminate never waited on the service');
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    release();
+    await holder;
+    expect(await terminating).toBe(COMMERCE_ERROR_CODES.SERVICE_ACTION_NOT_ALLOWED);
+    expect(await terminateOf(service.id)).toHaveLength(0);
+  });
+
+  it("reads the panel for an approval's deletion inside the approval's transaction (Codex review of #83, round 4)", async () => {
+    const service = await activeService('operability-tx');
+    const filed = await file(service.id);
+    const panels = (
+      ctx.container.provisioning as unknown as {
+        deps: { panels: { operability: (...args: unknown[]) => Promise<unknown> } };
+      }
+    ).deps.panels;
+    const original = panels.operability;
+    const calls: unknown[][] = [];
+    panels.operability = async (...args: unknown[]) => {
+      calls.push(args);
+      return original.apply(panels, args);
+    };
+    try {
+      await ctx.container.serviceRefundRequests.approve(tenantA, owner, {
+        requestId: filed.request.id,
+        amountMinor: 1_000n,
+      });
+    } finally {
+      panels.operability = original;
+    }
+    const terminate = calls.filter((args) => args[2] === 'TERMINATE');
+    expect(terminate.length).toBeGreaterThan(0);
+    // A read outside it would take a second pool connection while this one holds locks.
+    for (const args of terminate) expect(args[3]).toBeDefined();
+  });
+
   it('refuses to preview an approval the approval itself would refuse (Codex review of #83)', async () => {
     const service = await activeService('preview-ended');
     const filed = await file(service.id);
