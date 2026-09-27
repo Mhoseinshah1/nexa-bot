@@ -34,6 +34,7 @@ import { mayRequest, queryState } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
 import { setQueries, setQuery, useLinkHandler, type Route } from '../router';
 import { messageFor } from './settings';
+import { PaymentTimelineCard } from './payment-timeline';
 import {
   Badge,
   Banner,
@@ -800,6 +801,23 @@ function RefundsCard({
      */
     void queries.invalidateQueries({ queryKey: ['order'] });
     void queries.invalidateQueries({ queryKey: ['orders'] });
+    /*
+     * And the payment's HISTORY, drawn on this same page: the refund just recorded is a
+     * row in it, and a cached timeline would omit what the operator just did.
+     */
+    void queries.invalidateQueries({ queryKey: ['payment-timeline', paymentId] });
+  };
+
+  /*
+   * After ANY error from the three refund commands. A refusal means the figures here were
+   * stale, and a 5xx or a lost response may have committed, so the ledger is read again,
+   * and so is the history beside it: a refund that committed behind a 5xx is a row there
+   * too, and the refund card would otherwise show one the history omits (Codex review of
+   * #81).
+   */
+  const rereadAfterError = () => {
+    void queries.invalidateQueries({ queryKey: ['refunds', paymentId] });
+    void queries.invalidateQueries({ queryKey: ['payment-timeline', paymentId] });
   };
 
   const issue = useMutation({
@@ -830,9 +848,7 @@ function RefundsCard({
        * another operator refunded — so they are re-read, and `refundable` becomes the
        * server's answer again rather than the one the form was drawn from.
        */
-      if (error instanceof ApiError) {
-        void queries.invalidateQueries({ queryKey: ['refunds', paymentId] });
-      }
+      rereadAfterError();
     },
   });
 
@@ -854,7 +870,11 @@ function RefundsCard({
       setExternalReference('');
       refresh(response);
     },
-    onError: (error) => completion.settleOn(error),
+    // A 5xx or a lost response may have committed, as on `issue` above.
+    onError: (error) => {
+      completion.settleOn(error);
+      rereadAfterError();
+    },
   });
 
   const abandon = useMutation({
@@ -874,7 +894,10 @@ function RefundsCard({
       setExternalReference('');
       refresh(response);
     },
-    onError: (error) => abandonment.settleOn(error),
+    onError: (error) => {
+      abandonment.settleOn(error);
+      rereadAfterError();
+    },
   });
 
   const currency = data?.currency ?? 'IRT';
@@ -1151,6 +1174,7 @@ export function PaymentDetailPage({
   mayViewRefunds,
   mayIssueRefunds,
   mayViewOrders = false,
+  mayViewWallet = false,
   denied,
 }: {
   id: string;
@@ -1166,9 +1190,20 @@ export function PaymentDetailPage({
    * an order it may not read.
    */
   mayViewOrders?: boolean;
+  /**
+   * `users.view`, the key the history's wallet section sits behind. Never used to draw or
+   * hide anything here — the server decides what is withheld — only to make a change in it
+   * a new question for the history card.
+   */
+  mayViewWallet?: boolean;
   denied: boolean;
 }) {
   const onLink = useLinkHandler();
+  const timelineSections = [
+    mayViewReceipts ? 'receipts' : '',
+    mayViewRefunds ? 'refunds' : '',
+    mayViewWallet ? 'wallet' : '',
+  ].join(',');
   const payment = useQuery({
     queryKey: ['payment', id],
     queryFn: () => fetchPayment(id),
@@ -1565,6 +1600,20 @@ export function PaymentDetailPage({
                 <p className="muted">{t('web.payment_review_in_telegram')}</p>
               </Card>
             )}
+
+            {/*
+              What has happened to this payment, in order (WP17). Read-only, and its own
+              request: the server decides which sections this viewer may see and names the
+              ones it withheld, so the card never guesses from the permissions it was given.
+              It is handed the state this page read, and reads whichever side is older again
+              when the two disagree.
+            */}
+            <PaymentTimelineCard
+              paymentId={id}
+              paymentState={row.state}
+              signalled={row.customerSignalledAt !== null}
+              sections={timelineSections}
+            />
 
             <Card>
               <p className="muted">{t('web.payment_not_settled_here')}</p>

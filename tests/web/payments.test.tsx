@@ -4,6 +4,7 @@ import type { ReactElement } from 'react';
 import { PaymentDetailPage, PaymentsPage } from '../../apps/web/src/pages/payments';
 import { resolve } from '../../apps/web/src/app';
 import { formatTimestamp } from '../../apps/web/src/format';
+import { t } from '../../apps/web/src/i18n/web.fa';
 import { renderPage, stubApi } from './harness';
 import { PAYMENT_ROUTES } from '@nexa/contracts';
 import * as client from '../../apps/web/src/api/client';
@@ -400,7 +401,8 @@ describe('the payment detail', () => {
     await screen.findAllByText('a1b2c3d4e5f60718:manual');
     const labels = [...view.container.querySelectorAll('button')]
       .map((b) => b.textContent?.trim())
-      .filter((label) => label !== '');
+      // The history's refresh only reads again; it is not a control over the payment.
+      .filter((label) => label !== '' && label !== t('web.refresh'));
     expect(labels, 'the payment page draws a control').toEqual([]);
   });
 });
@@ -435,7 +437,8 @@ describe('the payments route', () => {
     expect(view.queryByText('رد رسید')).toBeNull();
     const labels = [...view.container.querySelectorAll('button')]
       .map((b) => b.textContent?.trim())
-      .filter((label) => label !== '');
+      // The history's refresh only reads again; it is not a control over the payment.
+      .filter((label) => label !== '' && label !== t('web.refresh'));
     expect(labels, 'the payment page draws a control').toEqual([]);
   });
 
@@ -945,6 +948,254 @@ describe('the refund card', () => {
     // Nothing left to answer, so the form that records an external transfer is absent.
     expect(view.container.textContent).not.toContain('پاسخ به بازگشت‌های در انتظار واریز');
   });
+
+  /*
+   * Codex review of #81: the payment's history card sits on this same page, and a refund
+   * answered here is a row in it. Without re-reading it the card kept the history from
+   * before the answer until the page was reloaded — a timeline that omits what the
+   * operator just did, on the page where they did it.
+   */
+  it('re-reads the payment history after a refund is answered', async () => {
+    const api = stubApi([
+      ...withRefunds([refundRow()], { consumedMinor: '100000', refundableMinor: '150000' }),
+      {
+        url: `/payments/${ROW_ID}/timeline`,
+        // Agrees with the CONFIRMED detail, so the only second read is the refund's.
+        body: {
+          paymentId: ROW_ID,
+          entries: [
+            {
+              kind: 'PAYMENT_CONFIRMED',
+              at: '2026-09-10T12:45:00.000Z',
+              evidenceKind: 'OPERATOR_REVIEW',
+              adminId: ADMIN_ID,
+            },
+          ],
+          withheld: [],
+          truncated: false,
+        },
+      },
+      {
+        url: `/refunds/${REFUND_ID}/completion`,
+        body: { refund: refundRow({ state: 'COMPLETED', completedByAdminId: ADMIN_ID }) },
+      },
+    ] as never);
+    renderPage(
+      <PaymentDetailPage
+        id={ROW_ID}
+        mayViewReceipts={false}
+        mayViewRefunds
+        mayIssueRefunds
+        denied={false}
+      />,
+    );
+    await screen.findByText('باقی‌ماندهٔ قابل بازگشت');
+    const timelineReads = () =>
+      api.calls.filter((call) => call.method === 'GET' && call.url.includes('/timeline')).length;
+    await waitFor(() => expect(timelineReads()).toBe(1));
+
+    fireEvent.change(screen.getByLabelText('کدام بازگشت'), { target: { value: REFUND_ID } });
+    fireEvent.change(screen.getByLabelText('توضیح'), { target: { value: 'واریز شد' } });
+    fireEvent.click(screen.getByRole('button', { name: 'واریز انجام شد' }));
+
+    await waitFor(() => {
+      expect(api.calls.some((call) => call.url.includes('/completion'))).toBe(true);
+    });
+    await waitFor(() => expect(timelineReads()).toBe(2));
+  });
+
+  /*
+   * Codex review of #81: completing or abandoning a refund is as ambiguous behind a 5xx as
+   * requesting one, so both re-read the ledger and the history on an error answer too.
+   */
+  it.each([
+    ['completion', `/refunds/${REFUND_ID}/completion`, 'واریز انجام شد'],
+    ['abandonment', `/refunds/${REFUND_ID}/failure`, 'منصرف شدم'],
+  ])(
+    're-reads the ledger and the history after a %s answered with a 5xx',
+    async (_, url, button) => {
+      const api = stubApi([
+        ...withRefunds([refundRow()], { consumedMinor: '100000', refundableMinor: '150000' }),
+        {
+          url: `/payments/${ROW_ID}/timeline`,
+          body: {
+            paymentId: ROW_ID,
+            entries: [
+              {
+                kind: 'PAYMENT_CONFIRMED',
+                at: '2026-09-10T12:45:00.000Z',
+                evidenceKind: 'OPERATOR_REVIEW',
+                adminId: ADMIN_ID,
+              },
+            ],
+            withheld: [],
+            truncated: false,
+          },
+        },
+        {
+          url,
+          status: 500,
+          body: {
+            error: { kind: 'internal', code: 'internal', message: 'lost', correlationId: 't' },
+          },
+        },
+      ] as never);
+      renderPage(
+        <PaymentDetailPage
+          id={ROW_ID}
+          mayViewReceipts={false}
+          mayViewRefunds
+          mayIssueRefunds
+          denied={false}
+        />,
+      );
+      await screen.findByText('باقی‌ماندهٔ قابل بازگشت');
+      const reads = (part: string) =>
+        api.calls.filter((call) => call.method === 'GET' && call.url.endsWith(part)).length;
+      await waitFor(() => expect(reads('/timeline')).toBe(1));
+      const ledgerBefore = reads('/refunds');
+
+      fireEvent.change(screen.getByLabelText('کدام بازگشت'), { target: { value: REFUND_ID } });
+      fireEvent.change(screen.getByLabelText('توضیح'), { target: { value: 'پاسخ گم شد' } });
+      fireEvent.click(screen.getByRole('button', { name: button }));
+
+      await waitFor(() => expect(api.calls.some((call) => call.url.endsWith(url))).toBe(true));
+      await waitFor(() => expect(reads('/timeline')).toBe(2));
+      await waitFor(() => expect(reads('/refunds')).toBeGreaterThan(ledgerBefore));
+    },
+  );
+
+  it('re-reads the ledger and the history after a completion whose response was lost', async () => {
+    const api = stubApi([
+      ...withRefunds([refundRow()], { consumedMinor: '100000', refundableMinor: '150000' }),
+      {
+        url: `/payments/${ROW_ID}/timeline`,
+        // Agrees with the CONFIRMED detail, so the only second read is the error's.
+        body: {
+          paymentId: ROW_ID,
+          entries: [
+            {
+              kind: 'PAYMENT_CONFIRMED',
+              at: '2026-09-10T12:45:00.000Z',
+              evidenceKind: 'OPERATOR_REVIEW',
+              adminId: ADMIN_ID,
+            },
+          ],
+          withheld: [],
+          truncated: false,
+        },
+      },
+    ] as never);
+    // No HTTP answer at all: the network failed after the request may have landed.
+    const routed = globalThis.fetch;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: unknown, init?: RequestInit) => {
+        if (String(input).endsWith('/completion')) {
+          api.calls.push({ url: String(input), method: 'POST', body: null });
+          return Promise.reject(new TypeError('network error'));
+        }
+        return routed(input as RequestInfo, init);
+      }),
+    );
+    renderPage(
+      <PaymentDetailPage
+        id={ROW_ID}
+        mayViewReceipts={false}
+        mayViewRefunds
+        mayIssueRefunds
+        denied={false}
+      />,
+    );
+    await screen.findByText('باقی‌ماندهٔ قابل بازگشت');
+    const reads = (part: string) =>
+      api.calls.filter((call) => call.method === 'GET' && call.url.endsWith(part)).length;
+    await waitFor(() => expect(reads('/timeline')).toBe(1));
+
+    fireEvent.change(screen.getByLabelText('کدام بازگشت'), { target: { value: REFUND_ID } });
+    fireEvent.change(screen.getByLabelText('توضیح'), { target: { value: 'پاسخ گم شد' } });
+    fireEvent.click(screen.getByRole('button', { name: 'واریز انجام شد' }));
+
+    await waitFor(() =>
+      expect(api.calls.some((call) => call.url.endsWith('/completion'))).toBe(true),
+    );
+    await waitFor(() => expect(reads('/timeline')).toBe(2));
+  });
+
+  /*
+   * Codex review of #81: a refund request answered with a 5xx may have COMMITTED — that is
+   * why the retry keeps its key. The ledger beside it is re-read, and so must the history
+   * be, or the refund card shows a refund the history on the same page omits.
+   */
+  it('re-reads the payment history after a refund request is answered with a 5xx', async () => {
+    const api = stubApi([
+      ...withRefunds([], {}),
+      {
+        url: `/payments/${ROW_ID}/timeline`,
+        body: {
+          paymentId: ROW_ID,
+          entries: [
+            {
+              kind: 'PAYMENT_CONFIRMED',
+              at: '2026-09-10T12:45:00.000Z',
+              evidenceKind: 'OPERATOR_REVIEW',
+              adminId: ADMIN_ID,
+            },
+          ],
+          withheld: [],
+          truncated: false,
+        },
+      },
+    ] as never);
+    // The request and the ledger share one URL; only the POST is answered 500.
+    const routed = globalThis.fetch;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: unknown, init?: RequestInit) => {
+        if (init?.method === 'POST' && String(input).endsWith(`/payments/${ROW_ID}/refunds`)) {
+          api.calls.push({ url: String(input), method: 'POST', body: null });
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                error: {
+                  kind: 'internal',
+                  code: 'internal',
+                  message: 'lost',
+                  correlationId: 'test',
+                },
+              }),
+              { status: 500, headers: { 'content-type': 'application/json' } },
+            ),
+          );
+        }
+        return routed(input as RequestInfo, init);
+      }),
+    );
+    renderPage(
+      <PaymentDetailPage
+        id={ROW_ID}
+        mayViewReceipts={false}
+        mayViewRefunds
+        mayIssueRefunds
+        denied={false}
+      />,
+    );
+    await screen.findByText('باقی‌ماندهٔ قابل بازگشت');
+    const timelineReads = () =>
+      api.calls.filter((call) => call.method === 'GET' && call.url.includes('/timeline')).length;
+    await waitFor(() => expect(timelineReads()).toBe(1));
+
+    fireEvent.change(screen.getByLabelText('مبلغ (به کوچک‌ترین یکای پول)'), {
+      target: { value: '1000' },
+    });
+    fireEvent.change(screen.getByLabelText('دلیل'), { target: { value: 'مشتری منصرف شد' } });
+    fireEvent.click(screen.getByRole('button', { name: 'ثبت درخواست' }));
+
+    await waitFor(() => {
+      expect(api.calls.some((call) => call.method === 'POST')).toBe(true);
+    });
+    await waitFor(() => expect(timelineReads()).toBe(2));
+  });
 });
 
 /**
@@ -1041,7 +1292,8 @@ describe('the payment diagnostics (§21)', () => {
     // Read-only: the only buttons on the page are copy controls with no label.
     const labels = [...view.container.querySelectorAll('button')]
       .map((b) => b.textContent?.trim())
-      .filter((label) => label !== '');
+      // The history's refresh only reads again; it is not a control over the payment.
+      .filter((label) => label !== '' && label !== t('web.refresh'));
     expect(labels, 'the disposition card draws a control').toEqual([]);
   });
 

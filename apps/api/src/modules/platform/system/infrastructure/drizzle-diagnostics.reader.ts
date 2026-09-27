@@ -5,7 +5,7 @@ import type {
   StuckOperationReason,
   TenantContext,
 } from '@nexa/contracts';
-import type { Database } from '../../../../infrastructure/persistence/database.js';
+import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import { requireTenantId } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type {
   DiagnosticsReader,
@@ -25,13 +25,29 @@ import type {
  *
  * The outbox reads use the tenant's partial unpublished index. No payload and no actor
  * column is selected.
+ *
+ * Each pair — a count and the sample drawn from the same predicate — is read inside ONE
+ * `REPEATABLE READ, READ ONLY` transaction, so the two are one observation. Read statement by
+ * statement, a message the relay published or failed between them could produce `failing > 0`
+ * beside an empty sample, or a sample under a zero count: a diagnostic that contradicts itself.
+ * (Codex review of #81.)
  */
+const SNAPSHOT = { isolationLevel: 'repeatable read', accessMode: 'read only' } as const;
+
 export class DrizzleDiagnosticsReader implements DiagnosticsReader {
   constructor(private readonly db: Database) {}
 
   async outbox(scope: TenantContext, sampleSize: number): Promise<OutboxDiagnostics> {
+    return this.db.transaction((q) => this.readOutbox(q, scope, sampleSize), SNAPSHOT);
+  }
+
+  private async readOutbox(
+    q: Executor,
+    scope: TenantContext,
+    sampleSize: number,
+  ): Promise<OutboxDiagnostics> {
     const tenantId = requireTenantId(scope);
-    const totals = await this.db.execute<{
+    const totals = await q.execute<{
       pending: string;
       failing: string;
       oldest: Date | string | null;
@@ -41,7 +57,7 @@ export class DrizzleDiagnosticsReader implements DiagnosticsReader {
              min(occurred_at) AS oldest
         FROM outbox_messages
        WHERE tenant_id = ${tenantId} AND published_at IS NULL`);
-    const sample = await this.db.execute<{
+    const sample = await q.execute<{
       id: string;
       event_type: string;
       aggregate_type: string;
@@ -76,6 +92,19 @@ export class DrizzleDiagnosticsReader implements DiagnosticsReader {
     unannouncedBefore: Date,
     sampleSize: number,
   ): Promise<ProvisioningDiagnostics> {
+    return this.db.transaction(
+      (q) => this.readProvisioning(q, scope, now, unannouncedBefore, sampleSize),
+      SNAPSHOT,
+    );
+  }
+
+  private async readProvisioning(
+    q: Executor,
+    scope: TenantContext,
+    now: Date,
+    unannouncedBefore: Date,
+    sampleSize: number,
+  ): Promise<ProvisioningDiagnostics> {
     const tenantId = requireTenantId(scope);
     const nowIso = now.toISOString();
     const beforeIso = unannouncedBefore.toISOString();
@@ -104,9 +133,9 @@ export class DrizzleDiagnosticsReader implements DiagnosticsReader {
                   AND completed_at < ${beforeIso}::timestamptz
                   AND (state IN ('SUCCEEDED', 'ABANDONED')
                        OR (state = 'FAILED' AND next_attempt_at IS NULL))))`;
-    const counts = await this.db.execute<{ reason: StuckOperationReason; n: string }>(sql`
+    const counts = await q.execute<{ reason: StuckOperationReason; n: string }>(sql`
       SELECT reason, count(*)::text AS n FROM (${reasoned}) stuck GROUP BY reason`);
-    const sample = await this.db.execute<{
+    const sample = await q.execute<{
       id: string;
       service_id: string;
       type: OperationType;

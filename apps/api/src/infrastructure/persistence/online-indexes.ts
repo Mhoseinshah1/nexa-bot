@@ -196,6 +196,23 @@ export const ONLINE_INDEXES: readonly OnlineIndex[] = [
     name: 'services_tenant_provider_username_idx',
     definition: 'ON "services" USING btree ("tenant_id","provider_username")',
   },
+  {
+    /*
+     * One payment's wallet movements, in time order: the payment timeline's read (WP17,
+     * Codex review of #81). Every other index on `wallet_entries` leads with the customer
+     * or the tenant's time, so an old payment's few rows were found by walking the
+     * customer's whole LATER ledger, bounded on neither side that mattered.
+     *
+     * Partial: most ledger entries name no payment, and they have no place here.
+     * Concurrently, for the reason `services` gives above: `wallet_entries` is populated
+     * on every installation that has sold anything, and a blocking build would hold every
+     * wallet write behind it during `botctl update`.
+     */
+    name: 'wallet_entries_payment_idx',
+    definition:
+      'ON "wallet_entries" USING btree ("tenant_id","payment_id","created_at","id") ' +
+      'WHERE (payment_id IS NOT NULL)',
+  },
 ];
 
 /** Index names are code constants; this refuses one that stopped being one. */

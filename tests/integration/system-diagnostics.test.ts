@@ -13,6 +13,8 @@ import {
   type UserId,
 } from '@nexa/contracts';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
+import { DrizzleDiagnosticsReader } from '../../apps/api/src/modules/platform/system/infrastructure/drizzle-diagnostics.reader';
+import type { Database } from '../../apps/api/src/infrastructure/persistence/database';
 import { startFakeRickpanel, type FakeRickpanel } from '../support/fake-rickpanel';
 import {
   adminActorFor,
@@ -266,6 +268,94 @@ describe('system diagnostics', () => {
     expect(other.provisioning.sample).toEqual([]);
     expect(other.outbox.failing).toBe(0);
     expect(other.outbox.failingSample).toEqual([]);
+  });
+
+  /**
+   * The database, with a commit from ANOTHER connection landed right after the reader's
+   * first statement — whether that statement ran inside a transaction or straight on the
+   * pool. Under one repeatable-read snapshot the reader's second statement cannot see it;
+   * read statement by statement, the count and the sample would describe two moments.
+   * (Codex review of #81.)
+   */
+  function racing(db: Database, inject: () => Promise<unknown>) {
+    let fired = false;
+    const configs: unknown[] = [];
+    const afterFirst = <T extends { execute: (...args: never[]) => Promise<unknown> }>(
+      target: T,
+    ): T =>
+      new Proxy(target, {
+        get(inner, property, receiver) {
+          if (property !== 'execute') return Reflect.get(inner, property, receiver) as unknown;
+          return async (...args: never[]) => {
+            const out = await inner.execute(...args);
+            if (!fired) {
+              fired = true;
+              await inject();
+            }
+            return out;
+          };
+        },
+      });
+    const proxied = new Proxy(db, {
+      get(target, property, receiver) {
+        if (property === 'transaction') {
+          return (fn: (tx: never) => Promise<unknown>, config: unknown) => {
+            configs.push(config);
+            return target.transaction((tx) => fn(afterFirst(tx) as never), config as never);
+          };
+        }
+        if (property === 'execute') return afterFirst(target).execute;
+        return Reflect.get(target, property, receiver) as unknown;
+      },
+    });
+    return { db: proxied, configs };
+  }
+
+  it('reads the outbox count and its sample as one observation', async () => {
+    await paidOrder('snap-outbox');
+    const [first] = (
+      await exec(sql`SELECT id FROM outbox_messages WHERE tenant_id = ${tenantA.tenantId}
+                      ORDER BY occurred_at, sequence LIMIT 1`)
+    ).rows as { id: string }[];
+    const { db, configs } = racing(ctx.container.database.db, () =>
+      exec(sql`UPDATE outbox_messages SET attempts = 3, last_error = 'boom'
+                WHERE id = ${first?.id ?? ''}`),
+    );
+
+    const during = await new DrizzleDiagnosticsReader(db).outbox(tenantA, 10);
+    expect(during.failingSample).toHaveLength(during.failing);
+    expect(during.failing).toBe(0);
+    expect(configs).toEqual([{ isolationLevel: 'repeatable read', accessMode: 'read only' }]);
+
+    // The commit did land: a read that starts afterwards sees it, count and sample alike.
+    const after = await new DrizzleDiagnosticsReader(ctx.container.database.db).outbox(tenantA, 10);
+    expect(after.failing).toBe(1);
+    expect(after.failingSample).toHaveLength(1);
+  });
+
+  it('reads the stuck-operation counts and their sample as one observation', async () => {
+    const operation = await provisionFor(await paidOrder('snap-ops'));
+    const { db, configs } = racing(ctx.container.database.db, () =>
+      exec(sql`UPDATE provisioning_operations SET state = 'UNKNOWN', attempts = 1
+                WHERE id = ${operation}`),
+    );
+    const now = ctx.container.clock.now();
+    const before = new Date(now.getTime() - 10 * 60_000);
+
+    const during = await new DrizzleDiagnosticsReader(db).provisioning(tenantA, now, before, 10);
+    const counted = Object.values(during.counts).reduce((sum, n) => sum + n, 0);
+    expect(during.sample).toHaveLength(counted);
+    expect(counted).toBe(0);
+    expect(configs).toEqual([{ isolationLevel: 'repeatable read', accessMode: 'read only' }]);
+
+    const after = await new DrizzleDiagnosticsReader(ctx.container.database.db).provisioning(
+      tenantA,
+      now,
+      before,
+      10,
+    );
+    expect(after.counts.UNKNOWN_OUTCOME).toBe(1);
+    expect(after.sample.map((row) => row.operationId)).toEqual([operation]);
   });
 
   it('changes nothing it reads', async () => {
