@@ -93,6 +93,12 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
+        },
+        "opened_update_id": {
+          "name": "opened_update_id",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
