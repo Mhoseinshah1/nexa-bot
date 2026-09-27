@@ -23,6 +23,8 @@ import {
   NexaError,
   PRICING_PRECEDENCE,
   providerDescriptor,
+  SERVICE_REFUND_REQUEST_ATTENTION_STATES,
+  serviceRefundRequestListQuerySchema,
   STATE_MACHINES,
   TELEGRAM_CALLBACK_DATA_MAX_BYTES,
   validateStateMachine,
@@ -48,6 +50,22 @@ describe('event catalog', () => {
     // here and relayed after a rollback would fail its consumer on every pass.
     const cause = EVENT_PAYLOAD_SCHEMAS.RefundFailed.shape.cause;
     expect([...cause.options].sort()).toEqual(['OPERATOR_FAILED', 'SUPERSEDED']);
+  });
+});
+
+describe('the service refund request attention queue (Codex review of #83, round 6)', () => {
+  it('names exactly the three states that still want an operator', () => {
+    expect([...SERVICE_REFUND_REQUEST_ATTENTION_STATES]).toEqual(['OPEN', 'EXECUTING', 'FAILED']);
+  });
+
+  it('reads them as one filter, never beside a state', () => {
+    expect(serviceRefundRequestListQuerySchema.safeParse({ attention: 'true' }).success).toBe(true);
+    expect(
+      serviceRefundRequestListQuerySchema.safeParse({ attention: 'true', state: 'OPEN' }).success,
+    ).toBe(false);
+    expect(serviceRefundRequestListQuerySchema.safeParse({ attention: 'false' }).success).toBe(
+      false,
+    );
   });
 });
 

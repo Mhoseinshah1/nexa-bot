@@ -4805,6 +4805,11 @@ export const SERVICE_REFUND_REQUEST_PAGE_MAX = 100;
 export const serviceRefundRequestListQuerySchema = z
   .object({
     state: serviceRefundRequestStateSchema.optional(),
+    /**
+     * `true`: every request in `SERVICE_REFUND_REQUEST_ATTENTION_STATES`, as ONE stream
+     * under one cursor. Never beside `state`.
+     */
+    attention: z.enum(['true']).optional(),
     limit: z.coerce.number().int().positive().max(SERVICE_REFUND_REQUEST_PAGE_MAX).optional(),
     /**
      * The keyset cursor, newest first: the `createdAt` of the oldest request already shown,
@@ -4819,6 +4824,11 @@ export const serviceRefundRequestListQuerySchema = z
     // Both halves or neither: a timestamp without its tie-break skips rows sharing it.
     message: 'before and beforeId must be supplied together.',
     path: ['beforeId'],
+  })
+  .refine((query) => query.state === undefined || query.attention === undefined, {
+    // Two filters naming states would be two answers to "which states".
+    message: 'state and attention are exclusive.',
+    path: ['attention'],
   });
 export type ServiceRefundRequestListQuery = z.infer<typeof serviceRefundRequestListQuerySchema>;
 

@@ -48,6 +48,19 @@ export const SERVICE_REFUND_REQUEST_ACTIVE_STATES = [
   'EXECUTING',
 ] as const satisfies readonly ServiceRefundRequestState[];
 
+/**
+ * The states that still want an operator: undecided, deleting, or failed with its
+ * reservation released. The Web Admin's attention queue reads exactly these, as ONE keyset
+ * stream (`serviceRefundRequestListQuerySchema.attention`): three per-state scans read at
+ * three moments can each miss a request that moved between them (Codex review of #83,
+ * round 6).
+ */
+export const SERVICE_REFUND_REQUEST_ATTENTION_STATES = [
+  'OPEN',
+  'EXECUTING',
+  'FAILED',
+] as const satisfies readonly ServiceRefundRequestState[];
+
 /** Each state's permitted successors. Every write is a conditional UPDATE naming its `from`. */
 export const SERVICE_REFUND_REQUEST_TRANSITIONS: {
   readonly [K in ServiceRefundRequestState]: readonly ServiceRefundRequestState[];
