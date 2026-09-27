@@ -19,7 +19,7 @@ import {
   type ServiceSummaryResponse,
 } from '@nexa/contracts';
 import { actOnService, fetchService, fetchServiceOperations, fetchServices } from '../api/client';
-import { formatNumber, formatTimestamp, splitBytes } from '../format';
+import { formatNumber, formatTimestamp, formatTrafficGbText } from '../format';
 import { messageFor } from './settings';
 import { useSubmissionKey } from '../submission-key';
 import { mayRequest, queryState } from '../view-state';
@@ -188,8 +188,8 @@ function Dash() {
 /**
  * A byte figure, or the word for "no limit".
  *
- * `splitBytes` deliberately does not handle zero: `UNLIMITED_TRAFFIC_BYTES` is zero and
- * a formatter that rendered it as "0 MiB" would state the opposite of what it means.
+ * `formatTrafficGbText` does not handle zero: `UNLIMITED_TRAFFIC_BYTES` is zero and
+ * a formatter that rendered it as "0 GB" would state the opposite of what it means.
  * The USED counter goes through the plain formatter, because zero used is zero used.
  */
 function TrafficLimit({ bytes }: { bytes: string }) {
@@ -199,10 +199,9 @@ function TrafficLimit({ bytes }: { bytes: string }) {
 }
 
 function Bytes({ bytes }: { bytes: bigint }) {
-  const { value, unit } = splitBytes(bytes);
   return (
     <span className="nowrap">
-      <Ltr>{value}</Ltr> {t(unit)}
+      <Ltr>{formatTrafficGbText(bytes)}</Ltr> {t('web.unit_gib')}
     </span>
   );
 }

@@ -36,7 +36,7 @@ import {
   updateProduct,
   type ProductWriteInput,
 } from '../api/client';
-import { formatNumber, formatTimestamp, splitBytes } from '../format';
+import { formatNumber, formatTimestamp, formatTrafficGbText } from '../format';
 import { useSubmissionKey } from '../submission-key';
 import { mayRequest, queryState } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
@@ -229,10 +229,9 @@ function DisplayList({ lines }: { lines: readonly string[] }) {
 function Traffic({ bytes }: { bytes: string }) {
   const value = BigInt(bytes);
   if (value === UNLIMITED_TRAFFIC_BYTES) return <span>{t('web.product_unlimited')}</span>;
-  const { value: amount, unit } = splitBytes(value);
   return (
     <span className="nowrap">
-      <Ltr>{amount}</Ltr> {t(unit)}
+      <Ltr>{formatTrafficGbText(value)}</Ltr> {t('web.unit_gib')}
     </span>
   );
 }
