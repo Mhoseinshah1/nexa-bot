@@ -100,6 +100,7 @@ const RECORDS = [
   'docs/wp18-falsification.md',
   'docs/wp19-falsification.md',
   'docs/wp20-falsification.md',
+  'docs/wp21-falsification.md',
   'docs/package-a-falsification.md',
 ];
 /**

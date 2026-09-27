@@ -108,7 +108,7 @@ and both are `parseTrafficGb`. Both surfaces display a byte count through the sa
   - the edit rule and its zero guard;
   - both write schemas.
 - **Web:**
-  - `tests/web/wp21-traffic-rule.test.ts`: the form accepts exactly what the schema
+  - `tests/web/wp21-traffic-rule.test.tsx`: the form accepts exactly what the schema
     accepts, and sends null for unlimited;
   - `tests/web/products-and-orders.test.tsx`: GB input with an unlimited box, a saved
     10.25 reopening as 10.25 and sent back as GB, a typed zero named rather than sent, and
