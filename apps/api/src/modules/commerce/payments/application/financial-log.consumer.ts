@@ -211,9 +211,10 @@ export class FinancialLogConsumer implements EventConsumer {
       }
       case 'ServiceRefundRequestResolved': {
         /*
-         * A customer's refund request reached an outcome (WP19). The money itself is logged
-         * by `RefundCompleted` or `RefundFailed` when there was any; this line says what
-         * was decided about the REQUEST — including a rejection, which moves nothing.
+         * A customer's refund request reached an outcome (WP19). A credit is logged by
+         * `RefundCompleted` as well; this line says what was decided about the REQUEST —
+         * a rejection, which moves nothing, and a failure, whose released reservation
+         * writes no `RefundFailed` (that payload's cause is closed for rollback).
          */
         const payload = EVENT_PAYLOAD_SCHEMAS.ServiceRefundRequestResolved.parse(event.payload);
         const request = await this.deps.refundRequests.findById(scope, payload.requestId, tx);

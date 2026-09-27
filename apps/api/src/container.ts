@@ -1884,6 +1884,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     ids,
     systemActor: () => systemJobActor('service-refunds', newCorrelationId(ids.uuid())),
     logger,
+    idempotency,
   });
   /** The Telegram prompts behind a refund request's review card (WP19). */
   const serviceRefundDecisions = new ServiceRefundDecisionService({
@@ -1897,6 +1898,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     scopeActivity: tenants,
     clock,
     ids,
+    idempotency,
   });
 
   /**

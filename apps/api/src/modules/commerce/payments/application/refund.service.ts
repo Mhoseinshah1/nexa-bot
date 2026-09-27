@@ -879,8 +879,13 @@ export class RefundService {
 
   /**
    * RELEASES a reservation whose deletion definitively failed: `REQUESTED -> FAILED`,
-   * nothing credited, the amount back in the payment's refundable balance, and the
-   * financial log told why. A refund already FAILED is answered with itself.
+   * nothing credited, the amount back in the payment's refundable balance. A refund
+   * already FAILED is answered with itself.
+   *
+   * It writes no `RefundFailed`. The caller's `ServiceRefundRequestResolved` FAILED, in
+   * this transaction, is what the financial log says; and `RefundFailed.cause` stays the
+   * two values the previous release reads strictly, so nothing written here can stall its
+   * consumer after a rollback (Codex review of #83, round 4).
    */
   async releaseServiceRefund(
     scope: TenantContext,
@@ -925,7 +930,6 @@ export class RefundService {
       },
       tx,
     );
-    await this.announce(actor, after, tx, { outcome: 'FAILED', cause: 'DELETION_FAILED' });
     return after;
   }
 
@@ -1060,7 +1064,7 @@ export class RefundService {
       | { readonly outcome: 'COMPLETED' }
       | {
           readonly outcome: 'FAILED';
-          readonly cause: 'OPERATOR_FAILED' | 'SUPERSEDED' | 'DELETION_FAILED';
+          readonly cause: 'OPERATOR_FAILED' | 'SUPERSEDED';
         },
   ): Promise<void> {
     const common = {

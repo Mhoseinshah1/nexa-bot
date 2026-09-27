@@ -12,6 +12,7 @@ import {
   type AuditWriter,
   type Clock,
   type IdGenerator,
+  type IdempotencyStore,
   type Money,
   type OperationalEventRecorder,
   type OperationType,
@@ -29,6 +30,8 @@ import {
 import type { OutboxWriter } from '../../../platform/eventing/infrastructure/outbox-writer.js';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
 import { runAuthorizedMutation } from '../../../platform/access/application/authorized-mutation.js';
+import { rememberOnce } from '../../../platform/idempotency/application/remember-once.js';
+import { hashRequest } from '../../../platform/idempotency/infrastructure/drizzle-idempotency-store.js';
 import type { SessionRepository } from '../../../platform/identity/application/ports.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
@@ -67,6 +70,8 @@ export const SERVICE_REFUND_SWEEP_LIMIT = 50;
 
 /** The one feature switch this workflow answers to (brief §2.1). */
 const FLAG = 'customer_refund_requests';
+/** Where a Web decision's key is remembered: the surface that supplies it. */
+const DECISION_NAMESPACE = 'WEB' as const;
 
 /** A request's reason, trimmed and in bounds, or `null`. Code points, not UTF-16 units. */
 export function normaliseRefundReason(text: string): string | null {
@@ -133,6 +138,8 @@ export interface ServiceRefundRequestServiceDeps {
   readonly customers: Pick<CustomerRepository, 'findById'>;
   readonly notifier: CustomerNotifier;
   readonly outbox: OutboxWriter;
+  /** A Web decision's own key, so a retry is answered and a reused key refused (round 4). */
+  readonly idempotency: IdempotencyStore;
   readonly audit: AuditWriter;
   readonly opsLog: OperationalEventRecorder;
   readonly guard: PermissionGuard;
@@ -304,13 +311,28 @@ export class ServiceRefundRequestService {
           tx,
         );
         if (existing !== null) return { outcome: 'ALREADY_OPEN', request: existing };
-        const eligibility = await this.eligibilityOf(scope, service, { checkFlag: true }, tx);
-        if (!eligibility.eligible) {
+        const refuse = (reason: string): never => {
           throw errors.conflict(
             COMMERCE_ERROR_CODES.SERVICE_REFUND_NOT_ELIGIBLE,
             'This service cannot carry a refund request now.',
-            { reason: eligibility.reason },
+            { reason },
           );
+        };
+        const found = await this.eligibilityOf(scope, service, { checkFlag: true }, tx);
+        if (!found.eligible) return refuse(found.reason);
+        /*
+         * Decided again under the source payment's lock (Codex review of #83, round 4), the
+         * lock every refund of it takes: an operator's refund that consumed the rest of it
+         * while this filing read would otherwise leave a request, and a review card, for a
+         * payment with nothing left. Service before payment, the executor's order.
+         */
+        if (!(await this.deps.refundLedger.lockPayment(scope, found.source.payment.id, tx))) {
+          return refuse('SOURCE_UNRESOLVED');
+        }
+        const eligibility = await this.eligibilityOf(scope, service, { checkFlag: true }, tx);
+        if (!eligibility.eligible) return refuse(eligibility.reason);
+        if (eligibility.source.payment.id !== found.source.payment.id) {
+          return refuse('SOURCE_UNRESOLVED');
         }
         const payment = eligibility.source.payment;
         const now = this.deps.clock.now();
@@ -456,10 +478,22 @@ export class ServiceRefundRequestService {
   async approve(
     scope: TenantContext,
     actor: ActorContext,
-    input: { readonly requestId: string; readonly amountMinor: bigint },
+    input: {
+      readonly requestId: string;
+      readonly amountMinor: bigint;
+      /** The Web command's key. The Telegram prompt's confirmation names its capture instead. */
+      readonly idempotencyKey?: string;
+    },
   ): Promise<ServiceRefundRequestRecord> {
     await this.checkDecide(scope, actor);
     const adminId = this.adminIdOf(actor);
+    const decision = this.decisionKey(input.idempotencyKey, {
+      decision: 'APPROVE',
+      requestId: input.requestId.toLowerCase(),
+      amountMinor: input.amountMinor.toString(),
+    });
+    const replayed = await this.decisionReplay(scope, decision);
+    if (replayed !== null) return replayed;
     const denial = {
       action: 'service_refund_request.approve',
       entityType: 'ServiceRefundRequest',
@@ -486,6 +520,7 @@ export class ServiceRefundRequestService {
             request.approvedAmount !== null &&
             request.approvedAmount.amountMinor === input.amountMinor
           ) {
+            await this.rememberDecision(scope, decision, request.id, tx);
             return request;
           }
           throw this.stateInvalid(request.state);
@@ -559,6 +594,7 @@ export class ServiceRefundRequestService {
           },
           tx,
         );
+        await this.rememberDecision(scope, decision, approved.id, tx);
         return approved;
       },
     );
@@ -572,10 +608,22 @@ export class ServiceRefundRequestService {
   async reject(
     scope: TenantContext,
     actor: ActorContext,
-    input: { readonly requestId: string; readonly reason: string },
+    input: {
+      readonly requestId: string;
+      readonly reason: string;
+      /** The Web command's key. The Telegram prompt rejects through `rejectWithin`. */
+      readonly idempotencyKey?: string;
+    },
   ): Promise<ServiceRefundRequestRecord> {
     await this.checkDecide(scope, actor);
     const reason = rejectionReasonOf(input.reason);
+    const decision = this.decisionKey(input.idempotencyKey, {
+      decision: 'REJECT',
+      requestId: input.requestId.toLowerCase(),
+      reason,
+    });
+    const replayed = await this.decisionReplay(scope, decision);
+    if (replayed !== null) return replayed;
     const denial = {
       action: 'service_refund_request.reject',
       entityType: 'ServiceRefundRequest',
@@ -587,7 +635,62 @@ export class ServiceRefundRequestService {
       actor,
       'refunds.issue',
       denial,
-      async (tx) => this.rejectWithin(scope, actor, { requestId: input.requestId, reason }, tx),
+      async (tx) => {
+        const rejected = await this.rejectWithin(
+          scope,
+          actor,
+          { requestId: input.requestId, reason },
+          tx,
+        );
+        await this.rememberDecision(scope, decision, rejected.id, tx);
+        return rejected;
+      },
+    );
+  }
+
+  /*
+   * A Web decision's idempotency key (Codex review of #83, round 4). The request's own
+   * state already answers a repeat of the same decision; the key adds what state cannot:
+   * a key reused for another request, or for another amount or reason, is refused as a
+   * mismatch rather than carried out, and a retry is answered with the request it decided.
+   */
+  private decisionKey(
+    key: string | undefined,
+    body: Record<string, string>,
+  ): { readonly key: string; readonly hash: string } | null {
+    return key === undefined ? null : { key, hash: hashRequest(body) };
+  }
+
+  private async decisionReplay(
+    scope: TenantContext,
+    decision: { readonly key: string; readonly hash: string } | null,
+  ): Promise<ServiceRefundRequestRecord | null> {
+    if (decision === null) return null;
+    const replayed = await this.deps.idempotency.find<{ requestId: string }>(
+      scope,
+      DECISION_NAMESPACE,
+      decision.key,
+      decision.hash,
+    );
+    if (replayed === null) return null;
+    return this.deps.repository.findById(scope, replayed.result.requestId);
+  }
+
+  private async rememberDecision(
+    scope: TenantContext,
+    decision: { readonly key: string; readonly hash: string } | null,
+    requestId: string,
+    tx: TransactionScope,
+  ): Promise<void> {
+    if (decision === null) return;
+    await rememberOnce(
+      this.deps.idempotency,
+      scope,
+      DECISION_NAMESPACE,
+      decision.key,
+      decision.hash,
+      { requestId },
+      tx,
     );
   }
 

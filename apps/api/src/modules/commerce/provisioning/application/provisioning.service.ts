@@ -1222,7 +1222,8 @@ export class ProvisioningService {
         { state: service.state },
       );
     }
-    const operable = await this.deps.panels.operability(scope, service.panelId, 'TERMINATE');
+    // In the caller's transaction, beside the locks it holds (Codex review of #83, round 4).
+    const operable = await this.deps.panels.operability(scope, service.panelId, 'TERMINATE', tx);
     if (!operable.ok) {
       throw errors.conflict(
         COMMERCE_ERROR_CODES.PANEL_NOT_OPERABLE,
@@ -1271,6 +1272,26 @@ export class ProvisioningService {
      * both of them started from.
      */
     if (origin.admission !== undefined) await origin.admission.serialize(tx);
+    /*
+     * Every TERMINATE planner serialises on the service's row (WP19, Codex review of #83,
+     * round 4). An approved refund request plans its deletion under that lock; an
+     * operator's terminate, planned without it, could pass `findOpen` beside it and plan a
+     * SECOND deletion — which fails against the account the first one removed, and the
+     * request, bound to whichever ran second, is released with the service gone. Nothing
+     * else keys an open TERMINATE, so the lock is the rule. Re-taking it in the approval's
+     * own transaction is a no-op. The state is judged again from the locked row: the one
+     * read before the wait may predate a deletion that has since finished.
+     */
+    if (type === 'TERMINATE') {
+      const locked = await this.deps.services.lockForUpdate(scope, service.id, tx);
+      if (locked === null || !OPERATION_LEGAL_FROM.TERMINATE.includes(locked.state)) {
+        throw errors.conflict(
+          COMMERCE_ERROR_CODES.SERVICE_ACTION_NOT_ALLOWED,
+          'That service is not in a state this action can be taken from.',
+          { state: locked?.state ?? null },
+        );
+      }
+    }
     const open = await this.deps.operations.findOpen(scope, service.id, type, tx);
     if (open !== null) return open;
     const operationId = this.deps.operationId(`${service.id}:${type}:${input.idempotencyKey}`);

@@ -90,6 +90,7 @@ export class ServiceRefundRequestsController {
     const approved = await this.container.serviceRefundRequests.approve(scope, actor, {
       requestId: uuidV7Schema.parse(requestId),
       amountMinor: BigInt(input.amountMinor),
+      idempotencyKey: input.idempotencyKey,
     });
     return { request: await this.viewOf(scope, actor, approved) };
   }
@@ -105,6 +106,7 @@ export class ServiceRefundRequestsController {
     const rejected = await this.container.serviceRefundRequests.reject(scope, actor, {
       requestId: uuidV7Schema.parse(requestId),
       reason: input.reason,
+      idempotencyKey: input.idempotencyKey,
     });
     return { request: await this.viewOf(scope, actor, rejected) };
   }

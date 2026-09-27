@@ -5538,6 +5538,7 @@ export class BotRuntime {
     });
     try {
       const result = await decisions.submitText(scope, identity.actor, {
+        idempotencyKey: `${input.idempotencyKey}:refund-text`,
         botInstanceId: input.botInstanceId,
         text,
       });

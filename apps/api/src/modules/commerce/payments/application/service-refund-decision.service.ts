@@ -5,12 +5,14 @@ import {
   PLATFORM_ERROR_CODES,
   errors,
   isNexaError,
+  money,
   uuidV7Schema,
   type ActorContext,
   type AdminAmountCaptureCloseReason,
   type AuditWriter,
   type BotInstanceId,
   type Clock,
+  type IdempotencyStore,
   type IdGenerator,
   type Money,
   type OperationalEventRecorder,
@@ -19,6 +21,8 @@ import {
   type UnitOfWork,
 } from '@nexa/contracts';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
+import { rememberOnce } from '../../../platform/idempotency/application/remember-once.js';
+import { hashRequest } from '../../../platform/idempotency/infrastructure/drizzle-idempotency-store.js';
 import {
   recordMutationDenial,
   runAuthorizedMutation,
@@ -53,7 +57,12 @@ export interface ServiceRefundDecisionServiceDeps {
   readonly scopeActivity: ScopeActivityReader;
   readonly clock: Clock;
   readonly ids: IdGenerator;
+  /** An entered amount, remembered against the message's key so a redelivery is answered. */
+  readonly idempotency: IdempotencyStore;
 }
+
+/** The namespace every Telegram capture remembers its message under. */
+const TEXT_NAMESPACE = 'TELEGRAM' as const;
 
 export type DecisionOpenResult =
   | {
@@ -151,10 +160,36 @@ export class ServiceRefundDecisionService {
   async submitText(
     scope: TenantContext,
     actor: ActorContext,
-    input: { readonly botInstanceId: BotInstanceId; readonly text: string },
+    input: {
+      readonly idempotencyKey: string;
+      readonly botInstanceId: BotInstanceId;
+      readonly text: string;
+    },
   ): Promise<DecisionTextResult> {
     const adminId = adminIdOrNull(actor);
     if (adminId === null) return { outcome: 'NO_CAPTURE' };
+    /*
+     * A redelivered amount message (Codex review of #83, round 4). The first delivery
+     * recorded the amount, so no prompt is waiting for one any more, and the redelivery
+     * would be answered with nothing — the confirmation button lost with the first reply.
+     * The first delivery remembered which prompt it filled; while that prompt is still
+     * open it is restated, and the approval behind its button decides everything again.
+     */
+    const requestHash = hashRequest({
+      bot: input.botInstanceId,
+      text: input.text,
+      serviceRefundAmount: true,
+    });
+    const replayed = await this.deps.idempotency.find<{ captureId: string }>(
+      scope,
+      TEXT_NAMESPACE,
+      input.idempotencyKey,
+      requestHash,
+    );
+    if (replayed !== null) {
+      const entered = await this.enteredAgain(scope, actor, replayed.result.captureId);
+      if (entered !== null) return entered;
+    }
     const amountCapture = await this.deps.captures.findAwaitingAmount(
       scope,
       input.botInstanceId,
@@ -162,7 +197,12 @@ export class ServiceRefundDecisionService {
       undefined,
       'SERVICE_REFUND_AMOUNT',
     );
-    if (amountCapture !== null) return this.submitAmount(scope, actor, amountCapture, input.text);
+    if (amountCapture !== null) {
+      return this.submitAmount(scope, actor, amountCapture, input.text, {
+        key: input.idempotencyKey,
+        hash: requestHash,
+      });
+    }
     const reasonCapture = await this.deps.captures.findAwaitingReason(
       scope,
       input.botInstanceId,
@@ -338,6 +378,7 @@ export class ServiceRefundDecisionService {
     actor: ActorContext,
     waiting: AdminAmountCaptureRecord,
     text: string,
+    remember: { readonly key: string; readonly hash: string },
   ): Promise<DecisionTextResult> {
     const requestId = waiting.serviceRefundRequestId;
     /* istanbul ignore next -- the table's target CHECK: this purpose names a request. */
@@ -350,7 +391,20 @@ export class ServiceRefundDecisionService {
     let review: ServiceRefundReview;
     try {
       review = await this.deps.requests.reviewForDecision(scope, actor, requestId);
-    } catch {
+    } catch (error) {
+      /*
+       * Only a request that is gone or decided closes the prompt (Codex review of #83,
+       * round 4). A failed read — a dropped connection, a revoked permission — says nothing
+       * about the request, and closing on it would leave an OPEN request whose approver
+       * must open the prompt again for no reason they were told.
+       */
+      if (
+        !isNexaError(error) ||
+        (error.code !== COMMERCE_ERROR_CODES.SERVICE_REFUND_REQUEST_NOT_FOUND &&
+          error.code !== COMMERCE_ERROR_CODES.SERVICE_REFUND_REQUEST_STATE_INVALID)
+      ) {
+        throw error;
+      }
       await this.closeIfOpen(scope, actor, waiting, 'SUPERSEDED');
       return { outcome: 'CLOSED' };
     }
@@ -393,10 +447,49 @@ export class ServiceRefundDecisionService {
       if (!(await this.deps.captures.recordAmount(scope, capture.id, amount.amountMinor, tx))) {
         return null;
       }
+      await rememberOnce(
+        this.deps.idempotency,
+        scope,
+        TEXT_NAMESPACE,
+        remember.key,
+        remember.hash,
+        { captureId: capture.id },
+        tx,
+      );
       return { ...capture, amountMinor: amount.amountMinor };
     });
     if (recorded === null) return { outcome: 'NO_CAPTURE' };
     return { outcome: 'AMOUNT_ENTERED', capture: recorded, amount, review };
+  }
+
+  /**
+   * The confirmation a redelivered amount message is owed: its prompt restated with the
+   * amount it recorded, while that prompt is still open and its request still OPEN.
+   * `null` otherwise — the message is then an ordinary one, and finds no prompt.
+   */
+  private async enteredAgain(
+    scope: TenantContext,
+    actor: ActorContext,
+    captureId: string,
+  ): Promise<DecisionTextResult | null> {
+    const capture = await this.deps.captures.findById(scope, captureId);
+    if (
+      capture === null ||
+      capture.closedAt !== null ||
+      capture.amountMinor === null ||
+      capture.serviceRefundRequestId === null ||
+      capture.adminId !== adminIdOrNull(actor)
+    ) {
+      return null;
+    }
+    const review = await this.deps.requests.reviewForDecision(
+      scope,
+      actor,
+      capture.serviceRefundRequestId,
+    );
+    if (review.request.state !== 'OPEN') return null;
+    const amount = money(capture.amountMinor, review.request.principal.currency);
+    return { outcome: 'AMOUNT_ENTERED', capture, amount, review };
   }
 
   private async submitReason(
