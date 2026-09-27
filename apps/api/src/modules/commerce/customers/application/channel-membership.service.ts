@@ -91,9 +91,23 @@ export class ChannelMembershipService {
    * wrong answer.
    */
   private readonly cache = new Map<string, CachedAnswer>();
-  /** When each bot+channel outage was last written here, keyed `tenant:bot:channel`. */
-  private readonly unavailableRecordedAt = new Map<string, number>();
-  /** When each bot+channel's open outage was last looked for, keyed the same way. */
+  /**
+   * The read in flight for each cache key (Codex review of #86). A burst of updates from
+   * one customer — or a check button pressed twice — shares one `getChatMember` per
+   * channel instead of starting one each, which would spend the bot's API quota and turn
+   * later checks UNKNOWN. Removed when the read settles, whatever it answered.
+   */
+  private readonly inFlight = new Map<string, Promise<ChannelMembershipAnswer>>();
+  /**
+   * When this process last WROTE the outage for each bot, keyed `tenant:bot`. Kept apart
+   * from `outageRecordedHere` (Codex review of #86): a recovery clears the latter and never
+   * this, so a channel that flaps between an answer and none is written at most once a
+   * minute, not once per flap.
+   */
+  private readonly unavailableWrittenAt = new Map<string, number>();
+  /** Bots whose outage this process wrote and has not yet recovered, keyed `tenant:bot`. */
+  private readonly outageRecordedHere = new Set<string>();
+  /** When each bot's open outage was last looked for, keyed the same way. */
   private readonly outageLookedForAt = new Map<string, number>();
 
   constructor(private readonly deps: ChannelMembershipDeps) {}
@@ -104,6 +118,12 @@ export class ChannelMembershipService {
    * Optional channels are never asked about (B1). UNKNOWN counts as satisfied (B5). With
    * `fresh`, a cached NOT_MEMBER or UNKNOWN is asked again — the check button — while a
    * cached MEMBER still stands.
+   *
+   * The operations condition is per BOT, not per channel (Codex review of #86): it names
+   * the channels that could not be checked in its context, and it is recovered by the
+   * first turn in which every REQUIRED channel of that bot answered. So an operator who
+   * fixes the problem by correcting a channel's id or handle, or by removing it, recovers
+   * the condition — a key naming the old identity would never be asked about again.
    */
   async missingRequired(
     scope: TenantContext,
@@ -118,6 +138,18 @@ export class ChannelMembershipService {
     const answers = await Promise.all(
       required.map((channel) => this.answerFor(scope, input, channel)),
     );
+    const nowMs = this.deps.clock.now().getTime();
+    const unknown = required.flatMap((channel, index) => {
+      const answer = answers[index];
+      return answer?.kind === 'UNKNOWN'
+        ? [{ channel: telegramChannelIdentity(channel), reason: answer.code }]
+        : [];
+    });
+    if (unknown.length > 0) {
+      await this.unavailable(scope, input.botInstanceId, unknown, nowMs);
+    } else {
+      await this.available(scope, input.botInstanceId, nowMs);
+    }
     return required.filter((_, index) => answers[index]?.kind === 'NOT_MEMBER');
   }
 
@@ -132,34 +164,45 @@ export class ChannelMembershipService {
   ): Promise<ChannelMembershipAnswer> {
     const identity = telegramChannelIdentity(channel);
     const key = `${scope.tenantId}:${input.botInstanceId}:${identity}:${input.telegramUserId}`;
-    const nowMs = this.deps.clock.now().getTime();
     const cached = this.cache.get(key);
     if (
       cached !== undefined &&
-      cached.until > nowMs &&
+      cached.until > this.deps.clock.now().getTime() &&
       (!input.fresh || cached.answer.kind === 'MEMBER')
     ) {
       return cached.answer;
     }
+    // A read already under way began after the cache went stale, so it is as fresh as a
+    // new one would be — the check button shares it too.
+    const pending = this.inFlight.get(key);
+    if (pending !== undefined) return pending;
 
-    let answer: ChannelMembershipAnswer;
+    const read = this.read(scope, input, identity).then((answer) => {
+      this.remember(key, answer, this.deps.clock.now().getTime());
+      return answer;
+    });
+    this.inFlight.set(key, read);
     try {
-      answer = await this.deps.reader.read(scope, {
+      return await read;
+    } finally {
+      this.inFlight.delete(key);
+    }
+  }
+
+  private async read(
+    scope: TenantContext,
+    input: { readonly botInstanceId: string; readonly telegramUserId: string },
+    identity: string,
+  ): Promise<ChannelMembershipAnswer> {
+    try {
+      return await this.deps.reader.read(scope, {
         botInstanceId: input.botInstanceId,
         chatId: identity,
         telegramUserId: input.telegramUserId,
       });
     } catch {
-      answer = { kind: 'UNKNOWN', code: 'nexa.reader_threw' };
+      return { kind: 'UNKNOWN', code: 'nexa.reader_threw' };
     }
-    this.remember(key, answer, nowMs);
-
-    if (answer.kind === 'UNKNOWN') {
-      await this.unavailable(scope, input.botInstanceId, identity, answer.code, nowMs);
-    } else {
-      await this.available(scope, input.botInstanceId, identity, nowMs);
-    }
-    return answer;
   }
 
   private remember(key: string, answer: ChannelMembershipAnswer, nowMs: number) {
@@ -178,20 +221,22 @@ export class ChannelMembershipService {
     }
   }
 
-  /** B5: an operator is told the channel is not being enforced — at most once a minute. */
+  /** B5: an operator is told a channel is not being enforced — at most once a minute. */
   private async unavailable(
     scope: TenantContext,
     botInstanceId: string,
-    channel: string,
-    code: string,
+    unknown: readonly { readonly channel: string; readonly reason: string }[],
     nowMs: number,
   ) {
-    const key = `${scope.tenantId}:${botInstanceId}:${channel}`;
-    const last = this.unavailableRecordedAt.get(key);
+    const key = `${scope.tenantId}:${botInstanceId}`;
+    const last = this.unavailableWrittenAt.get(key);
     if (last !== undefined && nowMs - last < CHANNEL_MEMBERSHIP_RECORD_INTERVAL_MS) return;
-    this.unavailableRecordedAt.set(key, nowMs);
+    this.unavailableWrittenAt.set(key, nowMs);
+    this.outageRecordedHere.add(key);
+    const channels = unknown.map((item) => item.channel);
+    const reasons = unknown.map((item) => item.reason);
     this.deps.logger.warn(
-      { botInstanceId, channel, code },
+      { botInstanceId, channels, reasons },
       'channel membership could not be checked; failing open',
     );
     await this.recordQuietly(scope, {
@@ -200,22 +245,17 @@ export class ChannelMembershipService {
       message:
         'The bot could not check membership of a required channel; the channel is not being ' +
         'enforced. Make the bot an administrator of the channel, and check its id or handle.',
-      context: { botInstanceId, channel, reason: code },
-      dedupeKey: unavailableKey(botInstanceId, channel),
+      context: { botInstanceId, channels, reasons },
+      dedupeKey: unavailableKey(botInstanceId),
     });
   }
 
-  /** B5: recovered by the next answer Telegram gives — here, or from another process. */
-  private async available(
-    scope: TenantContext,
-    botInstanceId: string,
-    channel: string,
-    nowMs: number,
-  ) {
-    const key = `${scope.tenantId}:${botInstanceId}:${channel}`;
-    if (this.unavailableRecordedAt.has(key)) {
-      this.unavailableRecordedAt.delete(key);
-      await this.recordRecovery(scope, botInstanceId, channel);
+  /** B5: recovered when every required channel answers — here, or after another process. */
+  private async available(scope: TenantContext, botInstanceId: string, nowMs: number) {
+    const key = `${scope.tenantId}:${botInstanceId}`;
+    if (this.outageRecordedHere.has(key)) {
+      this.outageRecordedHere.delete(key);
+      await this.recordRecovery(scope, botInstanceId);
       return;
     }
     const conditions = this.deps.conditions;
@@ -225,27 +265,27 @@ export class ChannelMembershipService {
     this.outageLookedForAt.set(key, nowMs);
     let open: string[];
     try {
-      open = await conditions.openConditions(scope, [unavailableKey(botInstanceId, channel)]);
+      open = await conditions.openConditions(scope, [unavailableKey(botInstanceId)]);
     } catch (error) {
       this.deps.logger.warn({ err: String(error) }, 'channel outage could not be looked up');
       return;
     }
     if (open.includes(CHANNEL_MEMBERSHIP_UNAVAILABLE_CODE)) {
-      await this.recordRecovery(scope, botInstanceId, channel);
+      await this.recordRecovery(scope, botInstanceId);
     }
   }
 
-  private async recordRecovery(scope: TenantContext, botInstanceId: string, channel: string) {
+  private async recordRecovery(scope: TenantContext, botInstanceId: string) {
     await this.recordQuietly(scope, {
       code: CHANNEL_MEMBERSHIP_RECOVERED_CODE,
       severity: 'INFO',
-      message: 'The bot can check membership of the required channel again.',
-      context: { botInstanceId, channel },
+      message: 'The bot can check membership of every required channel again.',
+      context: { botInstanceId },
       // Its own key: the recorder dedupes on the key alone, so a recovery written under
       // the outage's key would land ON the outage row rather than resolve it.
-      dedupeKey: `${CHANNEL_MEMBERSHIP_RECOVERED_CODE}:${botInstanceId}:${channel}`,
+      dedupeKey: `${CHANNEL_MEMBERSHIP_RECOVERED_CODE}:${botInstanceId}`,
       recoversCode: CHANNEL_MEMBERSHIP_UNAVAILABLE_CODE,
-      recoversDedupeKey: unavailableKey(botInstanceId, channel),
+      recoversDedupeKey: unavailableKey(botInstanceId),
     });
   }
 
@@ -262,7 +302,7 @@ export class ChannelMembershipService {
   }
 }
 
-/** The outage's dedupe key for one bot and channel, named by its code. */
-function unavailableKey(botInstanceId: string, channel: string): string {
-  return `${CHANNEL_MEMBERSHIP_UNAVAILABLE_CODE}:${botInstanceId}:${channel}`;
+/** The outage's dedupe key for one bot, named by its code. */
+function unavailableKey(botInstanceId: string): string {
+  return `${CHANNEL_MEMBERSHIP_UNAVAILABLE_CODE}:${botInstanceId}`;
 }
