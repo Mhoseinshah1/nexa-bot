@@ -4324,6 +4324,15 @@ export const adminAmountCaptures = pgTable(
     expiresAt: timestamptz('expires_at').notNull(),
     closedAt: timestamptz('closed_at'),
     closeReason: text('close_reason'),
+    /**
+     * WP19: the Telegram `update_id` of the tap that opened the prompt, for the two
+     * `SERVICE_REFUND_*` purposes. A prompt reads only messages NEWER than it: update ids
+     * increase per bot, so a redelivered message typed before the tap — for this prompt's
+     * predecessor or for any other kind of prompt — cannot become this one's reason, and a
+     * rejection is decided on its reason at once (Codex review of #83, round 5). Null for
+     * every other purpose, and for a prompt opened with no update behind it.
+     */
+    openedUpdateId: bigint('opened_update_id', { mode: 'bigint' }),
   },
   (table) => [
     foreignKey({
