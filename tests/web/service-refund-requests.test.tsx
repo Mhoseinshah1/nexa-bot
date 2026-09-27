@@ -213,6 +213,37 @@ describe('one service’s requests', () => {
     });
   });
 
+  it('never says "deletion started" for a replayed approval whose deletion already ended (Codex review of #83, round 7)', async () => {
+    for (const [state, key] of [
+      ['FAILED', 'web.service_refund_failed_toast'],
+      ['COMPLETED', 'web.service_refund_completed_toast'],
+      ['EXECUTING', 'web.service_refund_approved_toast'],
+    ] as const) {
+      const view = stubApi([
+        forService([request()]),
+        {
+          url: `/service-refund-requests/${REQUEST_ID}/approve`,
+          body: { request: request({ state, approvedAmountMinor: '120000' }) },
+        },
+      ]);
+      const { unmount } = renderPage(
+        <ServiceRefundRequestsCard serviceId={SERVICE_ID} mayDecide />,
+      );
+      await screen.findByRole('table');
+      fireEvent.change(screen.getByLabelText(t('web.service_refund_amount')), {
+        target: { value: '120000' },
+      });
+      fireEvent.click(screen.getByRole('checkbox'));
+      fireEvent.click(screen.getByRole('button', { name: t('web.service_refund_approve') }));
+      expect(await screen.findByText(t(key)), state).toBeInTheDocument();
+      if (state !== 'EXECUTING') {
+        expect(screen.queryByText(t('web.service_refund_approved_toast')), state).toBeNull();
+      }
+      expect(view.calls.some((call) => call.url.endsWith('/approve'))).toBe(true);
+      unmount();
+    }
+  });
+
   it('rejects with the typed reason', async () => {
     const api = stubApi([
       forService([request()]),

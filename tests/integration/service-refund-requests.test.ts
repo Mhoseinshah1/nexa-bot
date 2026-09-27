@@ -912,6 +912,63 @@ describe('WP19 — a customer asks for their money back', () => {
     expect((await requestRow(stuckFiled.request.id))?.request.state).toBe('EXECUTING');
   });
 
+  it('waits, releasing nothing, while another deletion of the service is UNKNOWN (Codex review of #83, round 7)', async () => {
+    const { service, filed } = await failedUnswept('removal-unknown');
+    const before = await balance();
+    const operator = await ctx.container.provisioning.requestFromOperator(
+      tenantA,
+      owner,
+      service.id,
+      'TERMINATE',
+      { idempotencyKey: 'removal-unknown-operator' },
+    );
+    // The operator's deletion lost its answer: it may already have removed the account.
+    await ctx.container.database.db.execute(
+      sql`UPDATE provisioning_operations SET state = 'UNKNOWN'
+           WHERE id = ${operator.id}` as never,
+    );
+    expect(await ctx.container.serviceRefundRequests.settleDue(tenantA)).toBe(0);
+    let row = await requestRow(filed.request.id);
+    expect(row?.request.state, 'not released past an ambiguous deletion').toBe('EXECUTING');
+    expect(row?.remaining.amountMinor, 'still reserved').toBe(PRICE - 100_000n);
+
+    // A read settles it: the account was gone, and the approved refund is paid.
+    await ctx.container.database.db.execute(
+      sql`UPDATE provisioning_operations SET state = 'SUCCEEDED', completed_at = now()
+           WHERE id = ${operator.id}` as never,
+    );
+    await ctx.container.database.db.execute(
+      sql`UPDATE services SET state = 'TERMINATED', terminated_at = now() WHERE id = ${service.id}` as never,
+    );
+    await ctx.container.serviceRefundRequests.settleDue(tenantA);
+    row = await requestRow(filed.request.id);
+    expect(row?.request.state).toBe('COMPLETED');
+    expect(await balance()).toBe(before + 100_000n);
+  });
+
+  it('decides FAILED, crediting nothing, a request whose reservation was released elsewhere before its deletion succeeded (Codex review of #83, round 7)', async () => {
+    const service = await activeService('released-then-deleted');
+    const filed = await file(service.id);
+    const before = await balance();
+    const approved = await ctx.container.serviceRefundRequests.approve(tenantA, owner, {
+      requestId: filed.request.id,
+      amountMinor: 100_000n,
+    });
+    // The release before WP19 fails the reserved refund by hand; its deletion then succeeds.
+    await ctx.container.database.db.execute(
+      sql`UPDATE refunds SET state = 'FAILED' WHERE id = ${approved.refundId ?? ''}` as never,
+    );
+    await ctx.container.provisionerLoop.tick();
+
+    expect((await terminateOf(service.id))[0]?.state).toBe('SUCCEEDED');
+    expect((await services.findById(tenantA, service.id))?.state).toBe('TERMINATED');
+    const row = await requestRow(filed.request.id);
+    expect(row?.request.state, 'decided, never left executing for ever').toBe('FAILED');
+    expect(row?.request.failureKind).toBe('RESERVATION_RELEASED');
+    expect(await balance(), 'no credit for a released reservation').toBe(before);
+    expect(await notices('SERVICE_REFUND_REQUEST_APPROVED')).toBe(0);
+  });
+
   it('never lets a request waiting on another deletion fill the batch (Codex review of #83, round 6)', async () => {
     // The waiting one is OLDER: its deletion failed, and an operator's is still planned.
     // Provisioned first (`activeService` ticks the provisioner, and a tick sweeps), filed after.
