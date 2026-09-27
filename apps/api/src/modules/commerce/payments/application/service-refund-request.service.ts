@@ -26,6 +26,7 @@ import {
   type UserId,
   type TemplateValues,
   uuidV7Schema,
+  isServiceRefundRejectionReason,
 } from '@nexa/contracts';
 import type { OutboxWriter } from '../../../platform/eventing/infrastructure/outbox-writer.js';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
@@ -1259,7 +1260,7 @@ function requestIdOf(candidate: string): string {
 /** A rejection's reason, trimmed, or the refusal: required, at most 500 characters. */
 function rejectionReasonOf(candidate: string): string {
   const reason = candidate.trim();
-  if (reason.length === 0 || Array.from(reason).length > 500) {
+  if (!isServiceRefundRejectionReason(reason)) {
     throw errors.validation(
       COMMERCE_ERROR_CODES.CAPTURE_INPUT_INVALID,
       'A rejection needs a reason of at most 500 characters.',

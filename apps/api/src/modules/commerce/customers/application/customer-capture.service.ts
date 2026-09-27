@@ -92,6 +92,8 @@ export class CustomerCaptureService {
       readonly customerId: UserId;
       readonly purpose: CustomerCapturePurpose;
       readonly subjectId: string | null;
+      /** The update that opened it: a refund-reason window reads only newer ones (round 8). */
+      readonly openedUpdateId?: bigint;
     },
   ): Promise<CustomerCaptureRecord> {
     const denial = {
@@ -135,6 +137,7 @@ export class CustomerCaptureService {
           subjectId: input.subjectId,
           openedAt: now,
           expiresAt: new Date(now.getTime() + CUSTOMER_TEXT_CAPTURE_TTL_MS),
+          openedUpdateId: input.openedUpdateId ?? null,
         },
         tx,
       );
@@ -165,6 +168,8 @@ export class CustomerCaptureService {
       readonly botInstanceId: BotInstanceId;
       readonly customerId: UserId;
       readonly text: string;
+      /** The message's own Telegram `update_id`, when known. */
+      readonly updateId?: bigint;
     },
   ): Promise<CaptureReadResult> {
     const requestHash = hashRequest({
@@ -208,6 +213,19 @@ export class CustomerCaptureService {
       if (now.getTime() >= capture.expiresAt.getTime()) {
         await this.deps.captures.close(scope, capture.id, 'EXPIRED', now, tx);
         return { outcome: 'EXPIRED' } as const;
+      }
+      /*
+       * A window that names the update which opened it reads only NEWER messages (Codex
+       * review of #83, round 8). Telegram's update ids increase per bot, so a message typed
+       * before the tap — delivered late by a concurrent webhook — is not this window's
+       * answer, and is left for whatever it was sent to.
+       */
+      if (
+        capture.openedUpdateId !== null &&
+        input.updateId !== undefined &&
+        input.updateId <= capture.openedUpdateId
+      ) {
+        return { outcome: 'NO_WINDOW' } as const;
       }
       // An amount window that already holds its figure is waiting for a ROUTE, not for
       // text; a second figure typed under the buttons is not an answer to anything.

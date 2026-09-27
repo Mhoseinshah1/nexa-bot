@@ -31,6 +31,8 @@ export interface CustomerCaptureRecord {
   readonly expiresAt: Date;
   readonly closedAt: Date | null;
   readonly closeReason: CustomerCaptureCloseReason | null;
+  /** The update that opened it; set for a refund-reason window only (round 8). */
+  readonly openedUpdateId: bigint | null;
 }
 
 export interface CustomerCaptureRepository {
@@ -56,6 +58,7 @@ export interface CustomerCaptureRepository {
       readonly subjectId: string | null;
       readonly openedAt: Date;
       readonly expiresAt: Date;
+      readonly openedUpdateId?: bigint | null;
     },
     tx: unknown,
   ): Promise<CustomerCaptureRecord>;

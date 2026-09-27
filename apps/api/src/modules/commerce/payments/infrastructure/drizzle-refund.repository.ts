@@ -306,7 +306,12 @@ export class DrizzleRefundRepository implements RefundRepository {
    * safe, and the operator is told how many stand in the way, not which.
    *
    * `REFUND_CONSUMING_STATES` is the same set the refundable balance uses, so a
-   * payment fully covered by an in-flight refund does not count as exposure.
+   * payment fully covered by an in-flight refund does not count as exposure — unless
+   * that in-flight refund is itself a wallet credit still to be written (Codex review of
+   * #83, round 8). A service refund request's reservation is a `REQUESTED`
+   * `WALLET_CREDIT`: it consumes the whole remaining balance at approval and credits
+   * the wallet, in the payment's currency, only once the deletion succeeds. The credit
+   * it still owes is exposure until it is completed or released.
    */
   async refundableExposureIn(
     scope: TenantContext,
@@ -319,12 +324,17 @@ export class DrizzleRefundRepository implements RefundRepository {
       SELECT count(*)::int AS n
         FROM ${payments} p
        WHERE p.tenant_id = ${tenantId}
-         AND p.state = 'CONFIRMED'
          AND p.currency = ${currency}
-         AND p.amount > coalesce((SELECT sum(r.amount) FROM ${refunds} r
-                                   WHERE r.payment_id = p.id
-                                     AND r.tenant_id = p.tenant_id
-                                     AND r.state = ANY(${sql.param(consuming)}::text[])), 0)
+         AND ((p.state = 'CONFIRMED'
+               AND p.amount > coalesce((SELECT sum(r.amount) FROM ${refunds} r
+                                         WHERE r.payment_id = p.id
+                                           AND r.tenant_id = p.tenant_id
+                                           AND r.state = ANY(${sql.param(consuming)}::text[])), 0))
+              OR EXISTS (SELECT 1 FROM ${refunds} w
+                          WHERE w.payment_id = p.id
+                            AND w.tenant_id = p.tenant_id
+                            AND w.state = 'REQUESTED'
+                            AND w.channel = 'WALLET_CREDIT'))
     `)) as unknown as { rows: { n: number }[] };
     return Number(rows.rows[0]?.n ?? 0);
   }

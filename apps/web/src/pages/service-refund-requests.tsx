@@ -1,6 +1,10 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { type ServiceRefundRequestState, type ServiceRefundRequestView } from '@nexa/contracts';
+import {
+  isServiceRefundRejectionReason,
+  type ServiceRefundRequestState,
+  type ServiceRefundRequestView,
+} from '@nexa/contracts';
 import {
   approveServiceRefundRequest,
   fetchServiceRefundRequests,
@@ -326,7 +330,6 @@ function DecisionForm({
         <input
           id="service-refund-reject"
           value={reason}
-          maxLength={500}
           onChange={(event) => setReason(event.target.value)}
         />
       </Field>
@@ -334,7 +337,8 @@ function DecisionForm({
         <button
           type="button"
           className="btn sm"
-          disabled={busy || reason.trim().length === 0}
+          // The contract's rule, in code points: `maxLength` counts UTF-16 units (round 8).
+          disabled={busy || !isServiceRefundRejectionReason(reason)}
           onClick={() => reject.mutate()}
         >
           {t('web.service_refund_reject')}

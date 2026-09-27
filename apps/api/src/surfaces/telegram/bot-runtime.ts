@@ -8649,6 +8649,7 @@ export class BotRuntime {
         command.targetId,
         input.botInstanceId,
         input.idempotencyKey,
+        updateIdOf(input.update),
       );
     }
     if (command.intent === 'SERVICE_ROTATE' && command.targetId !== null) {
@@ -9222,13 +9223,19 @@ export class BotRuntime {
     actor: ActorContext,
     customer: CustomerRecord,
     text: string,
-    input: { readonly idempotencyKey: string; readonly botInstanceId: BotInstanceId },
+    input: {
+      readonly idempotencyKey: string;
+      readonly botInstanceId: BotInstanceId;
+      readonly update?: unknown;
+    },
   ): Promise<PendingReply | null> {
+    const updateId = updateIdOf(input.update);
     const read = await this.deps.captures.readText(scope, actor, {
       idempotencyKey: `${input.idempotencyKey}:capture-text`,
       botInstanceId: input.botInstanceId,
       customerId: customer.id,
       text,
+      ...(updateId === undefined ? {} : { updateId }),
     });
     if (read.outcome !== 'READ') return null;
     const { capture } = read;
@@ -9538,6 +9545,7 @@ export class BotRuntime {
     serviceId: string,
     botInstanceId: BotInstanceId,
     idempotencyKey: string,
+    updateId: bigint | undefined,
   ): Promise<PendingReply> {
     const service = await this.ownedService(scope, customer, serviceId);
     if (service === null) {
@@ -9551,6 +9559,8 @@ export class BotRuntime {
       customerId: customer.id,
       purpose: 'SERVICE_REFUND_REASON',
       subjectId: service.id,
+      // The reason must be typed after this tap (Codex review of #83, round 8).
+      ...(updateId === undefined ? {} : { openedUpdateId: updateId }),
     });
     return {
       key: 'bot.service.refund_request_reason_prompt',
@@ -9571,19 +9581,28 @@ export class BotRuntime {
     customer: CustomerRecord,
     serviceId: string | null,
     text: string,
-    input: { readonly idempotencyKey: string; readonly botInstanceId: BotInstanceId },
+    input: {
+      readonly idempotencyKey: string;
+      readonly botInstanceId: BotInstanceId;
+      readonly update?: unknown;
+    },
   ): Promise<PendingReply | null> {
     const refunds = this.deps.serviceRefunds;
     if (serviceId === null) return null;
     if (refunds === undefined) return refundOfferReply('UNAVAILABLE', serviceId);
-    if (normaliseRefundReason(text) === null) {
-      await this.deps.captures.open(scope, actor, {
-        idempotencyKey: `${input.idempotencyKey}:refund-reason-reopen`,
+    const updateId = updateIdOf(input.update);
+    // A window this message reopens reads only messages sent after it (round 8).
+    const reopen = (suffix: string) =>
+      this.deps.captures.open(scope, actor, {
+        idempotencyKey: `${input.idempotencyKey}:${suffix}`,
         botInstanceId: input.botInstanceId,
         customerId: customer.id,
         purpose: 'SERVICE_REFUND_REASON',
         subjectId: serviceId,
+        ...(updateId === undefined ? {} : { openedUpdateId: updateId }),
       });
+    if (normaliseRefundReason(text) === null) {
+      await reopen('refund-reason-reopen');
       return {
         key: 'bot.service.refund_request_reason_invalid',
         values: { min: SERVICE_REFUND_REASON_MIN_LENGTH, max: SERVICE_REFUND_REASON_MAX_LENGTH },
@@ -9627,6 +9646,16 @@ export class BotRuntime {
       }
       if (isNexaError(error) && error.code === COMMERCE_ERROR_CODES.SERVICE_NOT_FOUND) {
         return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };
+      }
+      /*
+       * A failure nobody classified — the database, a timeout — filed nothing, but reading
+       * the reason already closed its window, and the webhook answers 2xx, so Telegram will
+       * not redeliver (Codex review of #83, round 8). The window is reopened, so the
+       * customer's next message files the request. Best effort: if the reopen fails too,
+       * the original failure is the one reported.
+       */
+      if (!isNexaError(error)) {
+        await reopen('refund-reason-retry').catch(() => undefined);
       }
       return refusal(error);
     }
