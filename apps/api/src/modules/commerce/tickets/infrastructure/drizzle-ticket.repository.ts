@@ -118,6 +118,7 @@ export class DrizzleTicketRepository implements TicketRepository {
   async countActiveForCustomer(
     scope: TenantContext,
     customerId: UserId,
+    botInstanceId: BotInstanceId,
     tx: unknown,
   ): Promise<number> {
     const tenantId = requireTenantId(scope);
@@ -128,6 +129,7 @@ export class DrizzleTicketRepository implements TicketRepository {
         and(
           eq(tickets.tenantId, tenantId),
           eq(tickets.customerId, customerId),
+          eq(tickets.botInstanceId, botInstanceId),
           inArray(tickets.status, [...TICKET_ACTIVE_STATUSES]),
         ),
       );
@@ -311,13 +313,20 @@ export class DrizzleTicketRepository implements TicketRepository {
   async listForCustomer(
     scope: TenantContext,
     customerId: UserId,
+    botInstanceId: BotInstanceId,
     limit: number,
   ): Promise<readonly TicketRecord[]> {
     const tenantId = requireTenantId(scope);
     const rows = await this.db
       .select()
       .from(tickets)
-      .where(and(eq(tickets.tenantId, tenantId), eq(tickets.customerId, customerId)))
+      .where(
+        and(
+          eq(tickets.tenantId, tenantId),
+          eq(tickets.customerId, customerId),
+          eq(tickets.botInstanceId, botInstanceId),
+        ),
+      )
       // Active tickets first — the ones a customer can still write in — then the newest.
       .orderBy(
         sql`CASE WHEN ${tickets.status} = 'CLOSED' THEN 1 ELSE 0 END`,

@@ -1021,6 +1021,7 @@ describe('WP-A7 — support tickets', () => {
         await refusalOf(
           ctx.container.tickets.closeByCustomer(tenantA, systemActor('x'), {
             customerId: other,
+            botInstanceId: BOT_A,
             ticketId,
           }),
         )
@@ -1309,6 +1310,7 @@ describe('WP-A7 — support tickets', () => {
       (
         await ctx.container.tickets.closeByCustomer(tenantA, systemActor('cap-close'), {
           customerId: customer,
+          botInstanceId: BOT_A,
           ticketId,
         })
       ).ticket.status,
@@ -1366,5 +1368,115 @@ describe('WP-A7 — support tickets', () => {
     const again = await web.controller.reply(web.request, ticketId, request);
     expect(again.message).toMatchObject({ id: first.message.id, delivery: 'DELIVERED' });
     expect(again.message.authorAdminUsername).toBe('owner-tickets');
+  });
+  // ===========================================================================
+  // Codex review of #96, round 2
+  // ===========================================================================
+
+  it('refuses a close from a customer blocked after the surface resolved them', async () => {
+    const ticketId = await openThroughBot('مسدود');
+    await ctx.container.database.db.execute(
+      sql`UPDATE customers SET status = 'BLOCKED', blocked_at = now() WHERE id = ${customer}`,
+    );
+    expect(
+      await refusalOf(
+        ctx.container.tickets.closeByCustomer(tenantA, systemActor('blocked-close'), {
+          customerId: customer,
+          botInstanceId: BOT_A,
+          ticketId,
+        }),
+      ),
+    ).toMatchObject({ code: 'commerce.customer_blocked' });
+    expect(
+      (await rows<{ status: string }>(sql`SELECT status FROM tickets WHERE id = ${ticketId}`))[0],
+    ).toEqual({ status: 'OPEN' });
+    expect(
+      await count(
+        sql`SELECT count(*)::int AS n FROM ticket_messages WHERE ticket_id = ${ticketId} AND sender_type = 'SYSTEM'`,
+      ),
+    ).toBe(0);
+  });
+
+  it('keeps a ticket to the bot it was opened through: another bot of the tenant sees none of it', async () => {
+    await ctx.container.database.db.execute(
+      sql`UPDATE bot_instances SET status = 'ACTIVE' WHERE id = ${BOT_A2}`,
+    );
+    const viaA2 = (update: Envelope): Envelope => ({ ...update, botInstanceId: BOT_A2 });
+    await handle(viaA2(tap('tkn:')));
+    const category = callbacksOf(lastSent()).find((data) => data.startsWith('tkc:'))!;
+    await handle(viaA2(tap(category)));
+    await handle(viaA2(text('فقط در ربات دوم')));
+    const [ticket] = await rows<{ id: string }>(sql`SELECT id FROM tickets`);
+    const ticketId = ticket!.id;
+    const state = async () =>
+      (
+        await rows<{ status: string; messages: number }>(
+          sql`SELECT t.status, (SELECT count(*)::int FROM ticket_messages m WHERE m.ticket_id = t.id) AS messages
+                FROM tickets t WHERE t.id = ${ticketId}`,
+        )
+      )[0];
+    const before = await state();
+
+    // Bot A: the list does not show it, and every way in answers as for no ticket at all.
+    const list = await handle(tap('tkl:'));
+    expect(list.replyKey).toBe('bot.ticket.list_empty');
+    expect(callbacksOf(lastSent())).not.toContain(`tkv:${ticketId}`);
+    for (const data of [
+      `tkv:${ticketId}`,
+      `tkr:${ticketId}`,
+      `tkq:${ticketId}`,
+      `tkx:${ticketId}`,
+    ]) {
+      expect((await handle(tap(data))).replyKey).toBe('bot.ticket.not_found');
+    }
+    expect(await openTicketWindows()).toBe(0);
+    expect(
+      await refusalOf(
+        ctx.container.tickets.replyByCustomer(tenantA, systemActor('a1-reply'), {
+          customerId: customer,
+          botInstanceId: BOT_A,
+          ticketId,
+          text: 'از ربات اول',
+          file: null,
+          idempotencyKey: 'a1-reply',
+        }),
+      ),
+    ).toMatchObject({ code: 'ticket.not_found' });
+    expect(
+      await refusalOf(
+        ctx.container.tickets.closeByCustomer(tenantA, systemActor('a1-close'), {
+          customerId: customer,
+          botInstanceId: BOT_A,
+          ticketId,
+        }),
+      ),
+    ).toMatchObject({ code: 'ticket.not_found' });
+    expect(await state()).toEqual(before);
+
+    // Bot A2, where it was opened, still has all of it.
+    await handle(viaA2(tap('tkl:')));
+    expect(callbacksOf(lastSent())).toContain(`tkv:${ticketId}`);
+    expect((await handle(viaA2(tap(`tkv:${ticketId}`)))).replyKey).toBe('bot.ticket.view');
+    expect((await handle(viaA2(tap(`tkr:${ticketId}`)))).replyKey).toBe('bot.ticket.reply_prompt');
+    expect((await handle(viaA2(text('پاسخ از ربات دوم')))).replyKey).toBe('bot.ticket.reply_sent');
+    expect((await handle(viaA2(tap(`tkx:${ticketId}`)))).replyKey).toBe('bot.ticket.closed');
+    // The opening message, the reply and the close's fact.
+    expect(await state()).toEqual({ status: 'CLOSED', messages: 3 });
+  });
+
+  it('answers a malformed category id with not-found, never a database error', async () => {
+    const web = await webAs(owner);
+    for (const id of ['not-a-uuid', '1', "' OR 1=1 --"]) {
+      // A uuid cast failure in PostgreSQL was a 500; the parsed id is the category's 404.
+      const refused = await web.controller.updateCategory(web.request, id, { sortOrder: 3 }).then(
+        () => null,
+        (error: unknown) => error,
+      );
+      expect(isNexaError(refused)).toBe(true);
+      expect(isNexaError(refused) && [refused.code, refused.httpStatus]).toEqual([
+        'ticket.category_not_found',
+        404,
+      ]);
+    }
   });
 });

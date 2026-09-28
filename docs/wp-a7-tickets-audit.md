@@ -119,7 +119,13 @@ A message read by a ticket window is checked against the ticket's status before 
 a ticket support closed while the customer's reply window was open answers «closed» and
 reopens no window, whatever the message was.
 
-A customer holds at most five open tickets and a ticket at most 500 messages — rails against a
+Every customer-facing read and write names the bot the update arrived on and matches the
+ticket's own `bot_instance_id`: the list, the view, the reply prompt, the reply and the close.
+A ticket opened through another of the tenant's bots answers `bot.ticket.not_found`, exactly
+as a ticket that does not exist, so one bot's desk is no oracle for another's. Support in the
+Web Admin sees every ticket.
+
+A customer holds at most five open tickets in each bot and a ticket at most 500 messages — rails against a
 loop, not policies.
 
 ## 6. Idempotency

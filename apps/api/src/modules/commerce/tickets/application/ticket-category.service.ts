@@ -4,6 +4,7 @@ import {
   COMMERCE_ERROR_CODES,
   errors,
   normalizeTicketCategoryTitle,
+  uuidV7Schema,
   type ActorContext,
   type AuditWriter,
   type Clock,
@@ -215,8 +216,21 @@ export class TicketCategoryService {
     id: string,
     patch: { readonly title?: string; readonly sortOrder?: number; readonly isActive?: boolean },
   ): Promise<{ readonly category: TicketCategoryRecord; readonly changed: boolean }> {
+    /*
+     * The route's raw parameter, parsed before it reaches a uuid column: a malformed id is
+     * the category that does not exist, never a database error (Codex review of #96).
+     */
+    const parsed = uuidV7Schema.safeParse(id);
+    if (!parsed.success) {
+      throw errors.notFound(TICKET_ERROR_CODES.TICKET_CATEGORY_NOT_FOUND, 'Unknown category.');
+    }
+    const categoryId = parsed.data;
     const title = patch.title === undefined ? undefined : this.titleOf(patch.title);
-    const denial = { action: 'ticket_category.update', entityType: 'TicketCategory', entityId: id };
+    const denial = {
+      action: 'ticket_category.update',
+      entityType: 'TicketCategory',
+      entityId: categoryId,
+    };
     return runAuthorizedMutation(
       this.mutationDeps(),
       scope,
@@ -226,7 +240,7 @@ export class TicketCategoryService {
       async (tx) => {
         await this.assertScopeActive(scope, tx);
         await this.deps.categories.lockTenant(scope, tx);
-        const current = await this.deps.categories.findById(scope, id, tx);
+        const current = await this.deps.categories.findById(scope, categoryId, tx);
         if (current === null) {
           throw errors.notFound(TICKET_ERROR_CODES.TICKET_CATEGORY_NOT_FOUND, 'Unknown category.');
         }

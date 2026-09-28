@@ -10705,19 +10705,23 @@ export class BotRuntime {
     const id = command.targetId;
     switch (command.intent) {
       case 'TICKETS':
-        return this.ticketList(scope, desk, customer);
+        return this.ticketList(scope, desk, customer, input.botInstanceId);
       case 'TICKET_NEW':
-        return this.ticketNew(scope, desk, customer);
+        return this.ticketNew(scope, desk, customer, input.botInstanceId);
       case 'TICKET_CATEGORY':
         return id === null ? null : this.ticketCategory(scope, actor, desk, customer, id, input);
       case 'TICKET_VIEW':
-        return id === null ? null : this.ticketView(scope, desk, customer, id);
+        return id === null ? null : this.ticketView(scope, desk, customer, input.botInstanceId, id);
       case 'TICKET_REPLY':
         return id === null ? null : this.ticketReplyOpen(scope, actor, desk, customer, id, input);
       case 'TICKET_CLOSE_ASK':
-        return id === null ? null : this.ticketCloseAsk(scope, desk, customer, id);
+        return id === null
+          ? null
+          : this.ticketCloseAsk(scope, desk, customer, input.botInstanceId, id);
       case 'TICKET_CLOSE':
-        return id === null ? null : this.ticketClose(scope, actor, desk, customer, id);
+        return id === null
+          ? null
+          : this.ticketClose(scope, actor, desk, customer, input.botInstanceId, id);
       default:
         return null;
     }
@@ -10728,8 +10732,9 @@ export class BotRuntime {
     scope: TenantContext,
     desk: TicketDeskPort,
     customer: CustomerRecord,
+    botInstanceId: BotInstanceId,
   ): Promise<PendingReply> {
-    const tickets = await desk.service.customerTickets(scope, customer.id);
+    const tickets = await desk.service.customerTickets(scope, customer.id, botInstanceId);
     const buttons: CustomerButton[] = [];
     for (const ticket of tickets) {
       buttons.push({
@@ -10759,8 +10764,9 @@ export class BotRuntime {
     scope: TenantContext,
     desk: TicketDeskPort,
     customer: CustomerRecord,
+    botInstanceId: BotInstanceId,
   ): Promise<PendingReply> {
-    const open = (await desk.service.customerTickets(scope, customer.id)).filter(
+    const open = (await desk.service.customerTickets(scope, customer.id, botInstanceId)).filter(
       (ticket) => ticket.status !== 'CLOSED',
     ).length;
     if (open >= TICKET_OPEN_MAX_PER_CUSTOMER) {
@@ -10815,7 +10821,7 @@ export class BotRuntime {
       (candidate) => candidate.id === categoryId,
     );
     // A stale button for a category since hidden: the chooser again, as it now stands.
-    if (category === undefined) return this.ticketNew(scope, desk, customer);
+    if (category === undefined) return this.ticketNew(scope, desk, customer, input.botInstanceId);
     const updateId = updateIdOf(input.update);
     try {
       await this.deps.captures.open(scope, actor, {
@@ -10843,11 +10849,13 @@ export class BotRuntime {
     scope: TenantContext,
     desk: TicketDeskPort,
     customer: CustomerRecord,
+    botInstanceId: BotInstanceId,
     ticketId: string,
   ): Promise<PendingReply> {
     const found = await desk.service.customerTicket(
       scope,
       customer.id,
+      botInstanceId,
       ticketId,
       TICKET_VIEW_MESSAGE_COUNT,
     );
@@ -10896,7 +10904,13 @@ export class BotRuntime {
       readonly update?: unknown;
     },
   ): Promise<PendingReply> {
-    const found = await desk.service.customerTicket(scope, customer.id, ticketId, 1);
+    const found = await desk.service.customerTicket(
+      scope,
+      customer.id,
+      input.botInstanceId,
+      ticketId,
+      1,
+    );
     if (found === null) return ticketNotFound();
     if (found.ticket.status === 'CLOSED') return ticketAlreadyClosed();
     const updateId = updateIdOf(input.update);
@@ -10925,9 +10939,10 @@ export class BotRuntime {
     scope: TenantContext,
     desk: TicketDeskPort,
     customer: CustomerRecord,
+    botInstanceId: BotInstanceId,
     ticketId: string,
   ): Promise<PendingReply> {
-    const found = await desk.service.customerTicket(scope, customer.id, ticketId, 1);
+    const found = await desk.service.customerTicket(scope, customer.id, botInstanceId, ticketId, 1);
     if (found === null) return ticketNotFound();
     if (found.ticket.status === 'CLOSED') return ticketAlreadyClosed();
     return {
@@ -10950,11 +10965,13 @@ export class BotRuntime {
     actor: ActorContext,
     desk: TicketDeskPort,
     customer: CustomerRecord,
+    botInstanceId: BotInstanceId,
     ticketId: string,
   ): Promise<PendingReply> {
     try {
       const closed = await desk.service.closeByCustomer(scope, actor, {
         customerId: customer.id,
+        botInstanceId,
         ticketId,
       });
       return {
@@ -11127,7 +11144,7 @@ export class BotRuntime {
         };
       }
       if (code === TICKET_ERROR_CODES.TICKET_CATEGORY_NOT_FOUND) {
-        return this.ticketNew(scope, desk, customer);
+        return this.ticketNew(scope, desk, customer, input.botInstanceId);
       }
       if (code === TICKET_ERROR_CODES.TICKET_CLOSED) return ticketAlreadyClosed();
       if (code === TICKET_ERROR_CODES.TICKET_NOT_FOUND) return ticketNotFound();

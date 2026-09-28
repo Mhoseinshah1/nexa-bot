@@ -133,7 +133,13 @@ export interface TicketRepository {
    * row to lock before the first ticket exists.
    */
   lockCustomer(scope: TenantContext, customerId: UserId, tx: unknown): Promise<void>;
-  countActiveForCustomer(scope: TenantContext, customerId: UserId, tx: unknown): Promise<number>;
+  /** The customer's active tickets IN ONE BOT — the desk a customer sees is that bot's. */
+  countActiveForCustomer(
+    scope: TenantContext,
+    customerId: UserId,
+    botInstanceId: BotInstanceId,
+    tx: unknown,
+  ): Promise<number>;
   findByOpeningKey(scope: TenantContext, key: string, tx?: unknown): Promise<TicketRecord | null>;
   create(
     scope: TenantContext,
@@ -195,10 +201,14 @@ export interface TicketRepository {
     at: Date,
     tx: unknown,
   ): Promise<TicketRecord>;
-  /** A customer's own tickets for the bot: the active ones first, then the newest. */
+  /**
+   * A customer's own tickets opened through ONE bot: the active ones first, then the newest.
+   * The desk in one bot never lists another bot's tickets (Codex review of #96).
+   */
   listForCustomer(
     scope: TenantContext,
     customerId: UserId,
+    botInstanceId: BotInstanceId,
     limit: number,
   ): Promise<readonly TicketRecord[]>;
   list(scope: TenantContext, filter: TicketListFilter): Promise<readonly TicketListItem[]>;

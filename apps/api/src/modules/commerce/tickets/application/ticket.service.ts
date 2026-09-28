@@ -204,7 +204,11 @@ export class TicketService {
         });
         if (replayed !== null) {
           const first = await this.deps.tickets.findMessageByKey(scope, input.idempotencyKey, tx);
-          if (first === null || replayed.customerId !== input.customerId) {
+          if (
+            first === null ||
+            replayed.customerId !== input.customerId ||
+            replayed.botInstanceId !== input.botInstanceId
+          ) {
             throw this.keyReused();
           }
           this.assertSameRequest(first, requestHash);
@@ -212,7 +216,12 @@ export class TicketService {
         }
         /* istanbul ignore next -- refused above whenever there is no replay. */
         if (category === null) throw this.notFound();
-        const open = await this.deps.tickets.countActiveForCustomer(scope, input.customerId, tx);
+        const open = await this.deps.tickets.countActiveForCustomer(
+          scope,
+          input.customerId,
+          input.botInstanceId,
+          tx,
+        );
         if (open >= TICKET_OPEN_MAX_PER_CUSTOMER) {
           throw errors.conflict(
             TICKET_ERROR_CODES.TICKET_OPEN_LIMIT,
@@ -309,7 +318,13 @@ export class TicketService {
       async (tx) => {
         await this.assertScopeActive(scope, tx);
         await this.assertCustomerActive(scope, input.customerId, tx);
-        const ticket = await this.ownedForUpdate(scope, input.customerId, input.ticketId, tx);
+        const ticket = await this.ownedForUpdate(
+          scope,
+          input.customerId,
+          input.botInstanceId,
+          input.ticketId,
+          tx,
+        );
         /*
          * A CLOSED ticket is decided BEFORE the content (Codex review of #96). Support may
          * close the ticket after the customer opened the reply prompt; judging the words
@@ -345,7 +360,11 @@ export class TicketService {
   async closeByCustomer(
     scope: TenantContext,
     actor: ActorContext,
-    input: { readonly customerId: UserId; readonly ticketId: string },
+    input: {
+      readonly customerId: UserId;
+      readonly botInstanceId: BotInstanceId;
+      readonly ticketId: string;
+    },
   ): Promise<TicketChanged> {
     const denial = { action: 'ticket.close', entityType: 'Ticket', entityId: null };
     return runAuthorizedMutation(
@@ -356,7 +375,15 @@ export class TicketService {
       denial,
       async (tx) => {
         await this.assertScopeActive(scope, tx);
-        const ticket = await this.ownedForUpdate(scope, input.customerId, input.ticketId, tx);
+        // Blocked after the surface resolved them: refused here, as opening and replying are.
+        await this.assertCustomerActive(scope, input.customerId, tx);
+        const ticket = await this.ownedForUpdate(
+          scope,
+          input.customerId,
+          input.botInstanceId,
+          input.ticketId,
+          tx,
+        );
         if (ticket.status === 'CLOSED') return { ticket, changed: false };
         const moved = await this.move(scope, actor, tx, ticket, 'CLOSED', 'CLOSED_BY_CUSTOMER');
         return { ticket: moved, changed: true };
@@ -364,18 +391,32 @@ export class TicketService {
     );
   }
 
-  /** The customer's own tickets for the bot's list: active first, then the newest. */
+  /**
+   * The customer's own tickets opened through THIS bot, for its list: active first, then the
+   * newest. Every customer-facing read and write names the bot and matches the ticket's —
+   * a ticket from another of the tenant's bots is, to this one, a ticket that does not exist.
+   */
   async customerTickets(
     scope: TenantContext,
     customerId: UserId,
+    botInstanceId: BotInstanceId,
   ): Promise<readonly TicketRecord[]> {
-    return this.deps.tickets.listForCustomer(scope, customerId, TICKET_CUSTOMER_LIST_LIMIT);
+    return this.deps.tickets.listForCustomer(
+      scope,
+      customerId,
+      botInstanceId,
+      TICKET_CUSTOMER_LIST_LIMIT,
+    );
   }
 
-  /** One of the customer's own tickets and its latest messages, or null. Never another's. */
+  /**
+   * One of the customer's own tickets, opened through this bot, and its latest messages; or
+   * null — the same null for another customer's ticket and another bot's.
+   */
   async customerTicket(
     scope: TenantContext,
     customerId: UserId,
+    botInstanceId: BotInstanceId,
     ticketId: string,
     messageCount: number,
   ): Promise<{
@@ -386,7 +427,13 @@ export class TicketService {
     const id = uuidV7Schema.safeParse(ticketId);
     if (!id.success) return null;
     const ticket = await this.deps.tickets.findById(scope, id.data);
-    if (ticket === null || ticket.customerId !== customerId) return null;
+    if (
+      ticket === null ||
+      ticket.customerId !== customerId ||
+      ticket.botInstanceId !== botInstanceId
+    ) {
+      return null;
+    }
     const latest = await this.deps.tickets.latestMessages(scope, ticket.id, messageCount);
     return { ticket, messages: latest.messages, messageCount: latest.messageCount };
   }
@@ -1058,9 +1105,11 @@ export class TicketService {
     };
   }
 
+  /** The customer's own ticket, opened through this bot, locked; otherwise not-found. */
   private async ownedForUpdate(
     scope: TenantContext,
     customerId: UserId,
+    botInstanceId: BotInstanceId,
     ticketId: string,
     tx: TransactionScope,
   ): Promise<TicketRecord> {
@@ -1068,7 +1117,13 @@ export class TicketService {
     const ticket = id.success
       ? await this.deps.tickets.findByIdForUpdate(scope, id.data, tx)
       : null;
-    if (ticket === null || ticket.customerId !== customerId) throw this.notFound();
+    if (
+      ticket === null ||
+      ticket.customerId !== customerId ||
+      ticket.botInstanceId !== botInstanceId
+    ) {
+      throw this.notFound();
+    }
     return ticket;
   }
 
