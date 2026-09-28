@@ -399,6 +399,23 @@ export function isMutatingOperation(type: OperationType): boolean {
  * — so the ambiguity is settled inside the attempt instead. Measured on a real panel for
  * RickPanel only: `docs/rickpanel-rotate-audit.md`.
  */
+/*
+ * ## `ADD_DEVICES` (WP-A5): idempotent by its target, and the adapter contract says so
+ *
+ * The same design decision as the three commercial types above, and the same evidence
+ * obligation moved to where it can be kept. The operation carries an ABSOLUTE limit,
+ * computed once at settlement; `ProviderAdapter.applyDeviceLimit` is specified as "make
+ * the limit read as this", never "add one". No adapter implements it in this release, and
+ * `DEVICE_LIMIT_ADJUSTMENT` is declared by none — so the property is a requirement on the
+ * first adapter to declare the capability, to be measured on a real panel (the same
+ * value sent twice changes nothing) in the commit that declares it, exactly as
+ * `scripts/marzban-allowance-check.sh` measured it for Marzban's allowance fields.
+ *
+ * Membership here means what it means for the three: a stranded write is not re-planned
+ * blind but verified by a READ (`drizzle-operation.repository.ts` keeps every targeted
+ * type out of the replayable set), and the verification compares the panel's limit with
+ * the stored target through `readDeviceLimit`.
+ */
 export const IDEMPOTENT_MUTATIONS = [
   'SUSPEND',
   'RESUME',
@@ -407,6 +424,7 @@ export const IDEMPOTENT_MUTATIONS = [
   'ADD_TRAFFIC',
   'ADD_TIME',
   'ROTATE_SUBSCRIPTION',
+  'ADD_DEVICES',
 ] as const satisfies readonly OperationType[];
 
 export function isIdempotentMutation(type: OperationType): boolean {
