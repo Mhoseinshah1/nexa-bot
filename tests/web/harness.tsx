@@ -205,6 +205,11 @@ export function order(overrides: Record<string, unknown> = {}): Record<string, u
     id: '019230ab-cdef-7012-8345-6789abcdef01',
     customerId: '019210ab-cdef-7012-8345-6789abcdef01',
     state: 'DRAFT',
+    /*
+     * A purchase from the catalogue. `CUSTOM_SERVICE` (Package D) is the one purpose whose
+     * `productId` is null, and a case about it overrides both together.
+     */
+    purpose: 'NEW_SERVICE',
     productId: '019220ab-cdef-7012-8345-6789abcdef01',
     panelId: '01a05e35-c9ad-7e93-bef3-1ed9b55292c8',
     lineTitle: 'پلن یک‌ماهه',

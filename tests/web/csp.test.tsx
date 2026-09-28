@@ -77,6 +77,8 @@ const GENEROUS_ROUTES = [
   { url: '/referral-commissions', body: { commissions: [], nextCursor: null } },
   { url: '/resellers', body: { resellers: [], nextCursor: null } },
   { url: '/reseller-tiers', body: { tiers: [] } },
+  { url: '/custom-service/rules', body: { rules: [] } },
+  { url: '/custom-service/locations', body: { locations: [] } },
 ];
 
 /**

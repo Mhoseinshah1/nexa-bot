@@ -30,6 +30,7 @@ import { ServiceDetailPage, ServicesPage } from './pages/services';
 import { UsersPage, UserDetailPage } from './pages/users';
 import { TrialsPage } from './pages/trials';
 import { DiscountsPage } from './pages/discounts';
+import { CustomServicePage } from './pages/custom-service';
 import { ReferralsPage } from './pages/referrals';
 import { ReportsPage } from './pages/business';
 import { isSuperAdmin, mayExportReports } from './report-view';
@@ -322,6 +323,20 @@ export const NAV: readonly NavEntry[] = [
      * `catalog.discounts.edit` or `catalog.pricing.edit` could reach nothing but a
      * blank create form, so a link offered on either would be a promise the page could
      * not keep.
+     */
+    permission: 'catalog.view',
+    group: 'web.navgroup_sales',
+  },
+  {
+    id: 'custom-service',
+    path: '/custom-service',
+    label: 'web.nav_custom_service',
+    icon: 'zap',
+    /*
+     * `catalog.view`, and only that — the rule the discounts entry above states. Both
+     * lists need it (`CustomServiceAdminService` charges it to read), and every write
+     * opens from a row or a form beside them; an actor holding only
+     * `catalog.pricing.edit` would reach forms with nothing to edit.
      */
     permission: 'catalog.view',
     group: 'web.navgroup_sales',
@@ -754,6 +769,28 @@ export function resolve(
       ),
       crumbs: [{ label: t('web.discounts_title') }],
       title: t('web.discounts_title'),
+    };
+  }
+
+  if (route.path === '/custom-service') {
+    return {
+      element: (
+        <CustomServicePage
+          denied={!may('catalog.view')}
+          // The server charges `catalog.pricing.edit` for every rule and location write.
+          mayEdit={may('catalog.pricing.edit')}
+          /*
+           * The pickers' own keys, passed separately because the server charges them
+           * separately: the fleet on `panels.view`, the tiers on `resellers.view`.
+           * Without one, that picker takes a typed id instead of asking for a list it
+           * would be refused.
+           */
+          mayViewPanels={may('panels.view')}
+          mayViewTiers={may('resellers.view')}
+        />
+      ),
+      crumbs: [{ label: t('web.custom_service_title') }],
+      title: t('web.custom_service_title'),
     };
   }
 

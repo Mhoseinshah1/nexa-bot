@@ -3022,6 +3022,134 @@ export const WEB_FA = {
   'web.report_wallet_refund': 'بازپرداخت به کیف پول',
   'web.report_wallet_spending': 'خرید از کیف پول',
   'web.report_wallet_topup': 'شارژ توسط مشتری',
+
+  // Package D: the custom service (سرویس دلخواه) — its page, its rules and locations, and a
+  // custom order's frozen terms.
+  'web.nav_custom_service': 'سرویس دلخواه',
+  'web.purpose_custom_service': 'سرویس دلخواه',
+  'web.flag_custom_service': 'سرویس دلخواه',
+  'web.order_purpose': 'نوع سفارش',
+  'web.custom_service_title': 'سرویس دلخواه',
+  'web.custom_service_intro':
+    'مشتری موقعیت را انتخاب می‌کند، حجم را به گیگابایت و مدت را به روز وارد می‌کند و قیمت از قاعده‌های زیر محاسبه می‌شود.',
+  'web.custom_service_flag_title': 'قابلیت سرویس دلخواه',
+  'web.custom_service_flag_note':
+    'این بخش تنها وقتی به مشتری نشان داده می‌شود که قابلیت «سرویس دلخواه» (custom_service) در بخش قابلیت‌ها روشن باشد؛ به‌طور پیش‌فرض خاموش است.',
+  'web.custom_service_specificity_title': 'ترتیب انتخاب قاعده',
+  'web.custom_service_specificity_intro':
+    'برای حجم و برای زمان، هرکدام جداگانه، نخستین سطحی انتخاب می‌شود که قاعده‌ای فعال با بازهٔ شامل مقدار درخواستی داشته باشد؛ از خاص‌ترین به عام‌ترین:',
+  'web.custom_service_note_tier':
+    'سطح مشتری یعنی سطح نمایندگی او، اگر نمایندهٔ فعال باشد؛ در غیر این صورت قاعده‌های «مشتریان عادی».',
+  'web.custom_service_note_both':
+    'یک موقعیت تنها وقتی به مشتری عرضه می‌شود که هم قاعدهٔ حجم و هم قاعدهٔ زمان او را روی آن پنل قیمت‌گذاری کند.',
+  'web.custom_service_note_overlap':
+    'دو قاعدهٔ فعال از یک نوع، برای یک مخاطب و یک پنل، نمی‌توانند بازهٔ هم‌پوشان داشته باشند.',
+  'web.custom_service_note_snapshot':
+    'ویرایش یا حذف یک قاعده سفارش‌های ثبت‌شده را تغییر نمی‌دهد؛ هر سفارش شرایط قیمت خود را نگه می‌دارد.',
+  'web.custom_service_dimension': 'نوع قاعده',
+  'web.custom_service_dimension_volume': 'حجم',
+  'web.custom_service_dimension_time': 'زمان',
+  'web.custom_service_level_customer_panel': 'مشتری مشخص، روی همین پنل',
+  'web.custom_service_level_customer_all_panels': 'مشتری مشخص، روی همهٔ پنل‌ها',
+  'web.custom_service_level_tier_panel': 'سطح مشتری، روی همین پنل',
+  'web.custom_service_level_tier_all_panels': 'سطح مشتری، روی همهٔ پنل‌ها',
+  'web.custom_service_error_overlap':
+    'بازهٔ این قاعده با یک قاعدهٔ فعال دیگر از همین نوع، برای همین مخاطب و همین پنل، هم‌پوشانی دارد. بازه را تغییر دهید یا قاعدهٔ دیگر را غیرفعال کنید.',
+  'web.custom_service_error_rule_not_found': 'این قاعده دیگر وجود ندارد.',
+  'web.custom_service_error_location_not_found': 'این موقعیت دیگر وجود ندارد.',
+  'web.custom_service_error_invalid': 'قاعده پذیرفته نشد؛ مقادیر فرم را بررسی کنید.',
+  'web.custom_service_error_invalid_panel': 'این پنل در این مجموعه وجود ندارد.',
+  'web.custom_service_error_invalid_customer': 'این مشتری در این مجموعه وجود ندارد.',
+  'web.custom_service_error_invalid_tier': 'این سطح نمایندگی وجود ندارد.',
+  'web.custom_service_error_invalid_count': 'تعداد قاعده‌های سرویس دلخواه به سقف مجاز رسیده است.',
+  'web.custom_service_locations_title': 'موقعیت‌ها',
+  'web.custom_service_locations_hint':
+    'پنلی به مشتری عرضه می‌شود که موقعیت فعال داشته باشد. نام پنل فقط برای مدیر است؛ مشتری عنوان موقعیت را می‌بیند.',
+  'web.custom_service_locations_empty': 'پنلی برای نمایش نیست.',
+  'web.custom_service_locations_empty_hint':
+    'نخست پنلی اضافه کنید، سپس آن را با یک عنوان برای مشتری عرضه کنید.',
+  'web.custom_service_panel': 'پنل',
+  'web.custom_service_location': 'موقعیت',
+  'web.custom_service_location_label': 'عنوان برای مشتری',
+  'web.custom_service_location_label_hint': 'نامی که مشتری می‌بیند، مثلاً «🇩🇪 آلمان».',
+  'web.custom_service_location_offered': 'عرضه می‌شود',
+  'web.custom_service_location_disabled': 'غیرفعال',
+  'web.custom_service_location_not_offered': 'عرضه نمی‌شود',
+  'web.custom_service_location_offer': 'عرضه',
+  'web.custom_service_location_form_title': 'ذخیرهٔ موقعیت',
+  'web.custom_service_location_form_hint':
+    'ذخیره برای پنلی که موقعیت ندارد آن را اضافه می‌کند و برای پنلی که دارد آن را به‌روز می‌کند.',
+  'web.custom_service_location_saved': 'موقعیت ذخیره شد.',
+  'web.custom_service_location_deleted': 'موقعیت حذف شد.',
+  'web.custom_service_location_delete_confirm':
+    'این پنل دیگر برای سرویس دلخواه عرضه نشود؟ سفارش‌های ثبت‌شده تغییری نمی‌کنند.',
+  'web.custom_service_panel_typed_hint': 'فهرست پنل‌ها در دسترس نیست؛ شناسهٔ پنل را وارد کنید.',
+  'web.custom_service_enabled': 'فعال',
+  'web.custom_service_delete': 'حذف',
+  'web.custom_service_edit_denied': 'برای ویرایش، دسترسی «catalog.pricing.edit» لازم است.',
+  'web.custom_service_rules_title': 'قاعده‌های قیمت',
+  'web.custom_service_rules_hint':
+    'قیمت هر گیگابایت برای بازه‌ای از حجم، و قیمت هر روز برای بازه‌ای از مدت، به کوچک‌ترین واحد پول فروش.',
+  'web.custom_service_rules_empty': 'هنوز قاعده‌ای ثبت نشده است.',
+  'web.custom_service_range': 'بازه',
+  'web.custom_service_range_to': 'تا',
+  'web.custom_service_unit_price': 'قیمت واحد',
+  'web.custom_service_per_gb': 'برای هر گیگابایت',
+  'web.custom_service_per_day': 'برای هر روز',
+  'web.custom_service_audience': 'مخاطب',
+  'web.custom_service_audience_hint':
+    'یک مشتری مشخص، یک سطح نمایندگی، یا مشتریان عادی (کسانی که نمایندهٔ فعال نیستند).',
+  'web.custom_service_audience_ordinary': 'مشتریان عادی',
+  'web.custom_service_audience_tier': 'سطح نمایندگی',
+  'web.custom_service_audience_customer': 'مشتری مشخص',
+  'web.custom_service_customer_id': 'شناسهٔ مشتری',
+  'web.custom_service_customer_id_hint': 'شناسهٔ داخلی مشتری، نه شناسهٔ تلگرام.',
+  'web.custom_service_tier_typed_hint':
+    'فهرست سطح‌های نمایندگی در دسترس نیست؛ شناسهٔ سطح را وارد کنید.',
+  'web.custom_service_all_panels': 'همهٔ پنل‌ها',
+  'web.custom_service_rule_panel_hint': 'قاعدهٔ یک پنل مشخص بر قاعدهٔ «همهٔ پنل‌ها» مقدم است.',
+  'web.custom_service_rule_panel_typed_hint':
+    'فهرست پنل‌ها در دسترس نیست؛ شناسهٔ پنل را وارد کنید یا برای همهٔ پنل‌ها خالی بگذارید.',
+  'web.custom_service_rule_new_title': 'قاعدهٔ تازه',
+  'web.custom_service_rule_edit_title': 'ویرایش قاعده',
+  'web.custom_service_rule_create': 'ثبت قاعده',
+  'web.custom_service_rule_created': 'قاعده ثبت شد.',
+  'web.custom_service_rule_saved': 'قاعده ذخیره شد.',
+  'web.custom_service_rule_deleted': 'قاعده حذف شد.',
+  'web.custom_service_rule_delete_confirm': 'این قاعده حذف شود؟ سفارش‌های ثبت‌شده تغییری نمی‌کنند.',
+  'web.custom_service_rule_label_hint': 'اختیاری؛ نامی که فقط مدیر می‌بیند.',
+  'web.custom_service_minimum_gb': 'کمینهٔ حجم (گیگابایت)',
+  'web.custom_service_maximum_gb': 'بیشینهٔ حجم (گیگابایت)',
+  'web.custom_service_minimum_days': 'کمینهٔ مدت (روز)',
+  'web.custom_service_maximum_days': 'بیشینهٔ مدت (روز)',
+  'web.custom_service_bound_gb_hint':
+    'حداکثر با دو رقم اعشار، بزرگ‌تر از صفر، مثلاً 10.25. هر دو مرز جزو بازه‌اند.',
+  'web.custom_service_bound_days_hint': 'عدد صحیح از ۱ تا ۳۶۵۰. هر دو مرز جزو بازه‌اند.',
+  'web.custom_service_price_per_gb': 'قیمت هر گیگابایت',
+  'web.custom_service_price_per_day': 'قیمت هر روز',
+  'web.custom_service_price_hint':
+    'به کوچک‌ترین واحد پول فروش، عدد صحیح مثبت؛ قیمت صفر پذیرفته نمی‌شود.',
+  'web.custom_service_problem_label': 'عنوان بیش از حد بلند است.',
+  'web.custom_service_problem_volume_bound':
+    'مرزهای حجم باید عددی بزرگ‌تر از صفر با حداکثر دو رقم اعشار باشند (مثلاً 10.25).',
+  'web.custom_service_problem_days_bound': 'مرزهای مدت باید عدد صحیح از ۱ تا ۳۶۵۰ روز باشند.',
+  'web.custom_service_problem_range': 'بیشینه نباید از کمینه کمتر باشد.',
+  'web.custom_service_problem_price': 'قیمت باید عدد صحیح مثبت باشد.',
+  'web.custom_service_problem_tier': 'یک سطح نمایندگی انتخاب کنید.',
+  'web.custom_service_problem_customer': 'شناسهٔ مشتری معتبر نیست.',
+  'web.custom_service_problem_panel': 'پنل معتبری انتخاب کنید.',
+  'web.custom_service_problem_location_label': 'عنوان موقعیت را وارد کنید (حداکثر ۶۴ نویسه).',
+  'web.custom_service_volume': 'حجم',
+  'web.custom_service_days': 'مدت',
+  'web.custom_service_volume_price': 'قیمت حجم',
+  'web.custom_service_time_price': 'قیمت زمان',
+  'web.custom_service_base_price': 'قیمت پایه',
+  'web.custom_service_volume_rule': 'قاعدهٔ حجم',
+  'web.custom_service_time_rule': 'قاعدهٔ زمان',
+  'web.order_custom_service_title': 'شرایط سرویس دلخواه',
+  'web.order_custom_service_hint':
+    'همان‌طور که هنگام ثبت سفارش ثبت شد؛ ویرایش یا حذف قاعده‌ها این ارقام را تغییر نمی‌دهد.',
+  'web.order_custom_service_none': 'برای این سفارش شرایط سرویس دلخواهی ثبت نشده است.',
 } as const;
 
 export type WebKey = keyof typeof WEB_FA;

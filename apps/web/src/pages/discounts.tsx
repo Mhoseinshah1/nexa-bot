@@ -13,6 +13,7 @@ import {
   DISCOUNTABLE_PURPOSES,
   MAX_MONEY_AMOUNT_MINOR,
   PRODUCT_PAGE_MAX,
+  RESELLER_GRANTABLE_OPERATIONS,
   SALES_CURRENCY_CODES,
   uuidV7Schema,
   type CashbackRuleSummaryResponse,
@@ -23,6 +24,7 @@ import {
   type DiscountSummaryResponse,
   type DiscountType,
   type DiscountablePurpose,
+  type PricePreviewQuery,
   type PricePreviewResponse,
   type PricePreviewRuleOutcome,
   type ProductCategoryListingResponse,
@@ -137,6 +139,7 @@ export const PURPOSE_LABELS: Readonly<Record<DiscountablePurpose, WebKey>> = {
   RENEW: 'web.purpose_renew',
   ADD_TRAFFIC: 'web.purpose_add_traffic',
   ADD_TIME: 'web.purpose_add_time',
+  CUSTOM_SERVICE: 'web.purpose_custom_service',
 };
 
 const KIND_LABELS: Readonly<Record<DiscountKind, WebKey>> = {
@@ -1673,8 +1676,15 @@ function CashbackForm({
 // The price preview
 // ---------------------------------------------------------------------------
 
+/**
+ * The four CATALOGUE purposes, which are what the preview route accepts. A custom service
+ * (Package D) is discountable but is priced from a location, a volume and days, none of
+ * which the preview carries, so it is not offered here.
+ */
+type PreviewPurpose = PricePreviewQuery['purpose'];
+
 interface PreviewQuery {
-  purpose: DiscountablePurpose;
+  purpose: PreviewPurpose;
   productId?: string;
   addonId?: string;
   customerId?: string;
@@ -1682,12 +1692,12 @@ interface PreviewQuery {
 }
 
 /** A purchase or a renewal is priced from a product; the other two from an add-on. */
-function pricedFromProduct(purpose: DiscountablePurpose): boolean {
+function pricedFromProduct(purpose: PreviewPurpose): boolean {
   return purpose === 'NEW_SERVICE' || purpose === 'RENEW';
 }
 
 function PricePreview({ denied, options }: { denied: boolean; options: ScopeOptions }) {
-  const [purpose, setPurpose] = useState<DiscountablePurpose>('NEW_SERVICE');
+  const [purpose, setPurpose] = useState<PreviewPurpose>('NEW_SERVICE');
   const [productId, setProductId] = useState('');
   const [addonId, setAddonId] = useState('');
   const [customerId, setCustomerId] = useState('');
@@ -1736,9 +1746,9 @@ function PricePreview({ denied, options }: { denied: boolean; options: ScopeOpti
         <select
           id="preview-purpose"
           value={purpose}
-          onChange={(event) => setPurpose(event.target.value as DiscountablePurpose)}
+          onChange={(event) => setPurpose(event.target.value as PreviewPurpose)}
         >
-          {DISCOUNTABLE_PURPOSES.map((one) => (
+          {RESELLER_GRANTABLE_OPERATIONS.map((one) => (
             <option key={one} value={one}>
               {t(PURPOSE_LABELS[one])}
             </option>

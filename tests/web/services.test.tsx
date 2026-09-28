@@ -321,6 +321,16 @@ describe('the service detail', () => {
     expect(screen.queryByText('مگابایت')).toBeNull();
   });
 
+  it('says a custom service has no product rather than linking to one (Package D)', async () => {
+    stubApi(detail({ productId: null }));
+    const { container } = renderPage(
+      <ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit mayTerminate />,
+    );
+    await screen.findByText('nx-7f3a91');
+    expect(container.querySelector('a[href^="/products/"]')).toBeNull();
+    expect(screen.getByText('سرویس دلخواه')).toBeInTheDocument();
+  });
+
   /** The same prohibition as on the list, on the screen that shows one service. */
   it('renders no subscription url on the detail either', async () => {
     stubApi(detail({ subscriptionUrl: 'https://panel.example/sub/DEADBEEFDEADBEEF' }));
