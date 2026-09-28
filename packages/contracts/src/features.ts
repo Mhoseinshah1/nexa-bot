@@ -31,8 +31,8 @@
  * How much a toggle changes.
  *
  * The legacy capability screen renders the whole-bot kill switch identically to
- * the dice toggle (CBR-009). Blast radius is therefore declared, and a surface
- * shows it.
+ * the dice toggle (CBR-009). Blast radius is therefore declared, and travels to
+ * every surface on the flag's response.
  *
  * It no longer gates the write. Until WP-A2 a `TENANT_WIDE` toggle was refused
  * unless the operator typed the flag's key and a reason; the owner removed both
