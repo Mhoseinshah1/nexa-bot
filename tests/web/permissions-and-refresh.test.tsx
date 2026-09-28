@@ -4,7 +4,7 @@ import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { NAV, navPermitted, resolve } from '../../apps/web/src/app';
 import { DashboardPage } from '../../apps/web/src/pages/dashboard';
 import { NotificationsPage } from '../../apps/web/src/pages/alerts';
-import { event, panel, renderPage, stubApi } from './harness';
+import { capabilityRegistry, event, panel, renderPage, stubApi } from './harness';
 import { formatNumber } from '../../apps/web/src/format';
 
 /**
@@ -376,6 +376,7 @@ describe('creating a panel without permission to view one', () => {
               credentialShape: 'USERNAME_PASSWORD',
               capabilities: ['HEALTH_CHECK'],
               requiredActivationFields: [],
+              capabilityRegistry: capabilityRegistry(),
             },
           ],
         },
@@ -881,6 +882,7 @@ describe('the providers catalogue', () => {
           credentialShape: 'USERNAME_PASSWORD',
           capabilities: ['HEALTH_CHECK'],
           requiredActivationFields: [],
+          capabilityRegistry: capabilityRegistry(),
           maturity: 'now',
         },
       ],

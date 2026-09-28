@@ -795,7 +795,7 @@ export const WEB_FA = {
     'برای دسترسی بدون دخالت انسان، توکن بر گذرواژه ترجیح دارد: پنلی که کد دومرحله‌ای می‌خواهد با گذرواژه قابل استفاده نیست.',
   'web.capability': 'قابلیت',
   'web.capabilities_hint':
-    'از توصیف‌گر ارائه‌دهنده خوانده می‌شود، نه از یک ردیف ذخیره‌شده. در این نسخه تنها «بررسی سلامت» اجرا می‌شود.',
+    'از خودِ آداپتور ارائه‌دهنده خوانده می‌شود — هم پیاده‌سازی و هم اعلام آن — نه از یک ردیف ذخیره‌شده. هیچ کلیدی در این صفحه قابلیتی را که پنل ندارد روشن نمی‌کند.',
   'web.credentials_one_way_title': 'اعتبارنامه یک‌طرفه است',
   'web.credentials_one_way_body':
     'هیچ اعتبارنامه‌ای خوانده نمی‌شود — نه مقدارش، نه شکل ستاره‌دارش. تنها «تنظیم شده» یا «تنظیم نشده» و زمان آخرین جایگزینی دیده می‌شود. کادرهای جایگزینی خالی شروع می‌شوند؛ کادر خالی یعنی «دست نزن»، نه «پاک کن».',
@@ -3207,6 +3207,167 @@ export const WEB_FA = {
   'web.order_custom_service_hint':
     'همان‌طور که هنگام ثبت سفارش ثبت شد؛ ویرایش یا حذف قاعده‌ها این ارقام را تغییر نمی‌دهد.',
   'web.order_custom_service_none': 'برای این سفارش شرایط سرویس دلخواهی ثبت نشده است.',
+  // --- Advanced provider settings (WP-A8) ----------------------------------
+  // The capability registry: one row per thing a person does with a service.
+  'web.cap_registry_title': 'قابلیت‌های این پنل',
+  'web.cap_support': 'پشتیبانی',
+  'web.cap_supported': 'پشتیبانی می‌شود',
+  'web.cap_unsupported': 'پشتیبانی نمی‌شود',
+  'web.cap_row_create_service': 'ساخت سرویس',
+  'web.cap_row_create_service_hint': 'ساخت حساب تازه روی پنل پس از پرداخت سفارش.',
+  'web.cap_row_renew': 'تمدید',
+  'web.cap_row_renew_hint': 'تمدید سرویس با همان پلن و قیمت امروز آن.',
+  'web.cap_row_add_traffic': 'افزایش حجم',
+  'web.cap_row_add_traffic_hint': 'افزودن حجم به سهم فعلی سرویس با خرید بسته.',
+  'web.cap_row_add_time': 'افزایش زمان',
+  'web.cap_row_add_time_hint': 'افزودن روز به مدت سرویس با خرید بسته.',
+  'web.cap_row_reset_traffic': 'بازنشانی مصرف',
+  'web.cap_row_reset_traffic_hint': 'صفر کردن حجم مصرف‌شدهٔ یک سرویس روی پنل.',
+  'web.cap_row_disable_enable': 'غیرفعال / فعال کردن',
+  'web.cap_row_disable_enable_hint': 'متوقف کردن موقت سرویس و فعال کردن دوبارهٔ آن.',
+  'web.cap_row_rotate_subscription': 'ابطال و تعویض لینک اشتراک',
+  'web.cap_row_rotate_subscription_hint': 'گرفتن لینک اشتراک تازه از پنل برای یک سرویس.',
+  'web.cap_row_subscription_files': 'فایل‌های اشتراک',
+  'web.cap_row_subscription_files_hint': 'فرستادن فایل‌های اتصال آماده‌ای که خود پنل می‌سازد.',
+  'web.cap_row_extra_devices': 'افزایش کاربر / دستگاه',
+  'web.cap_row_extra_devices_hint': 'بالا بردن محدودیت کاربر یا دستگاه یک سرویس موجود.',
+  'web.cap_row_location_change': 'تغییر لوکیشن',
+  'web.cap_row_location_change_hint': 'بردن یک سرویس موجود به لوکیشن دیگر.',
+  'web.cap_row_usage_read': 'خواندن مصرف',
+  'web.cap_row_usage_read_hint': 'خواندن حجم مصرف‌شدهٔ سرویس از پنل.',
+  'web.cap_row_terminate': 'حذف سرویس',
+  'web.cap_row_terminate_hint': 'پاک کردن حساب سرویس از پنل.',
+  'web.cap_gap_not_declared':
+    'پیاده‌سازی شده، اما هنوز روی پنل واقعی تأیید و اعلام نشده است؛ برای همین پیشنهاد نمی‌شود.',
+  'web.cap_gap_not_implemented': 'اعلام شده اما کدی پشت آن نیست؛ برای ایمنی رد می‌شود.',
+  'web.cap_gap_not_supported': 'این ارائه‌دهنده در این نسخه این کار را انجام نمی‌دهد.',
+  'web.cap_gap_not_in_release': 'این نسخه هنوز چنین قابلیتی ندارد.',
+  'web.cap_customer': 'برای مشتری',
+  'web.cap_customer_available': 'در دسترس مشتری',
+  'web.cap_customer_operator_only': 'کار مدیر یا سامانه',
+  'web.cap_blocker_unsupported': 'پنل پشتیبانی نمی‌کند',
+  'web.cap_blocker_policy_disabled': 'در سیاست این پنل خاموش است',
+  'web.cap_blocker_policy_unreadable': 'سیاست ذخیره‌شده خوانا نیست',
+  'web.cap_blocker_tenant_feature_off': 'قابلیت سراسری آن خاموش است',
+  'web.cap_customer_hint':
+    'آماده بودن بستهٔ فروش در کاتالوگ و آماده بودن خود پنل جداگانه، در بخش‌های خودشان نشان داده می‌شود.',
+
+  // The operator's policy for this panel: it can only restrict.
+  'web.policy_title': 'سیاست‌های عملیاتی این پنل',
+  'web.policy_hint':
+    'سیاست فقط می‌تواند محدود کند: کاری را برای مشتریانِ این پنل خاموش کند، فاصلهٔ انتظار را بیشتر کند یا اندازهٔ یک خرید را محدود کند. فقط کارهایی که پنل پشتیبانی می‌کند اینجا دیده می‌شوند، و کارهای مدیر و سامانه تغییر نمی‌کنند.',
+  'web.policy_customer_enabled': 'در دسترس مشتری',
+  'web.policy_cooldown_minutes': 'کمترین فاصلهٔ دو درخواست مشتری (دقیقه)',
+  'web.policy_cooldown_hint':
+    'خالی یعنی همان فاصلهٔ عمومی. فاصلهٔ واقعی بیشترینِ این عدد و فاصلهٔ عمومی است؛ هیچ‌وقت کمتر نمی‌شود.',
+  'web.policy_max_traffic_gb': 'بیشترین حجم یک خرید (گیگابایت)',
+  'web.policy_max_days': 'بیشترین مدت یک خرید (روز)',
+  'web.policy_max_device_limit': 'بیشترین تعداد کاربر یک سرویس',
+  'web.policy_limit_hint':
+    'خالی یعنی بدون سقف اضافه. بسته‌های بزرگ‌تر روی این پنل پیشنهاد نمی‌شوند.',
+  'web.policy_delivery': 'شیوهٔ تحویل سرویس',
+  'web.policy_delivery_hint':
+    'در هر دو حالت همان متن تأییدشده، لینک اشتراک و دکمه‌ها فرستاده می‌شود؛ تفاوت فقط تصویر QR است.',
+  'web.policy_delivery_card_with_qr': 'کارت تحویل همراه با تصویر QR',
+  'web.policy_delivery_card_text': 'کارت تحویل به‌صورت متن، بدون تصویر QR',
+  'web.policy_no_actions': 'این پنل هیچ کار مشتری‌ای را پشتیبانی نمی‌کند که قابل تنظیم باشد.',
+  'web.policy_invalid': 'این مقدارها معتبر نیستند:',
+  'web.policy_stale':
+    'سیاست این پنل از زمان بارگذاری تغییر کرده است. مقدار تازه بارگذاری شد؛ تغییرتان را دوباره اعمال کنید.',
+  'web.policy_unreadable': 'سیاست ذخیره‌شده خوانا نیست',
+  'web.policy_unreadable_body':
+    'تا ذخیرهٔ دوباره، همهٔ کارهای مشتری روی این پنل رد می‌شود. فرم زیر پیش‌فرض را نشان می‌دهد.',
+  'web.policy_revision': 'نسخهٔ سیاست',
+  'web.policy_read_only': 'برای تغییر سیاست به دسترسی ویرایش پنل نیاز است.',
+
+  // The fixed rules the provider's adapter applies.
+  'web.prule_title': 'تنظیمات اختصاصی ارائه‌دهنده',
+  'web.prule_hint':
+    'رفتار ثابتی که هنگام ساخت سرویس روی این پنل اعمال می‌شود. پیکربندی قابل‌ویرایش — پروتکل‌ها، تگ‌های ورودی، دامنهٔ اشتراک و شناسهٔ ورودی — در زبانهٔ «نمای کلی»، بخش پیکربندی ارائه‌دهنده است و با همان قاعدهٔ سرور بررسی می‌شود.',
+  'web.prule_traffic_reset': 'بازنشانی دوره‌ای حجم',
+  'web.prule_traffic_reset_never':
+    'هرگز. حجم خریداری‌شده کل سهم سرویس است؛ بازنشانی دوره‌ای به مشتری بیش از آنچه خریده می‌دهد، پس تنظیم‌پذیر نیست.',
+  'web.prule_protocols': 'انتخاب پروتکل',
+  'web.prule_protocols_operator_chosen': 'مدیر در پیکربندی پنل انتخاب می‌کند.',
+  'web.prule_protocols_panel_assigned': 'خود پنل همهٔ پروتکل‌ها را به هر حساب می‌دهد.',
+  'web.prule_protocols_inbound_defined': 'پروتکلِ ورودیِ انتخاب‌شده به کار می‌رود.',
+  'web.prule_inbounds': 'انتخاب ورودی',
+  'web.prule_inbounds_operator_tags': 'تگ‌های ورودی که مدیر برای هر پروتکل می‌نویسد.',
+  'web.prule_inbounds_operator_inbound_id': 'یک ورودی، با شناسه‌ای که مدیر وارد می‌کند.',
+  'web.prule_inbounds_panel_assigned': 'خود پنل همهٔ ورودی‌ها را به هر حساب می‌دهد.',
+  'web.prule_subscription_link': 'لینک اشتراک',
+  'web.prule_subscription_link_panel_issued': 'پنل لینک را می‌سازد و برمی‌گرداند.',
+  'web.prule_subscription_link_subscription_domain': 'از دامنهٔ اشتراکِ پیکربندی‌شده ساخته می‌شود.',
+  'web.prule_device_limit': 'محدودیت کاربر هنگام ساخت',
+  'web.prule_device_limit_from_product': 'محدودیت کاربرِ محصول روی حساب تازه نوشته می‌شود.',
+  'web.prule_device_limit_not_sent': 'فرستاده نمی‌شود؛ این پنل محدودیت کاربر یا دستگاه ندارد.',
+  'web.prule_current': 'پیکربندی فعلی',
+  'web.prule_nothing_to_configure': 'این پنل پیش از ساخت سرویس به پیکربندی نیاز ندارد.',
+  'web.prule_not_configured': 'هنوز تنظیم نشده است.',
+  'web.prule_location_note':
+    'لوکیشنی که مشتری می‌بیند از محصول یا سرویس دلخواه می‌آید، نه از پیکربندی پنل.',
+
+  // Diagnostics, from what the probe lane already stored.
+  'web.diag_title': 'عیب‌یابی',
+  'web.diag_hint':
+    'از آخرین نتیجهٔ ذخیره‌شده خوانده می‌شود؛ دیدن این بخش هیچ درخواستی به پنل نمی‌فرستد. برای بررسی تازه «آزمایش اتصال» را بزنید.',
+  'web.diag_check': 'بررسی',
+  'web.diag_overall_ok': 'همه چیز درست است',
+  'web.diag_overall_degraded': 'کار می‌کند، با هشدار',
+  'web.diag_overall_error': 'مشکل دارد',
+  'web.diag_overall_not_checked': 'هنوز بررسی نشده',
+  'web.diag_overall_disabled': 'پنل غیرفعال است',
+  'web.diag_check_connectivity': 'دسترسی به پنل',
+  'web.diag_check_credentials': 'اعتبارنامهٔ تنظیم‌شده',
+  'web.diag_check_authentication': 'احراز هویت',
+  'web.diag_check_provider_status': 'وضعیت خود پنل',
+  'web.diag_check_configuration': 'پیکربندی ارائه‌دهنده',
+  'web.diag_check_connection_test': 'آزمایش اتصال با پیکربندی فعلی',
+  'web.diag_check_freshness': 'تازگی نتیجه',
+  'web.diag_check_required_capabilities': 'قابلیت‌های لازم',
+  'web.diag_verdict_pass': 'درست',
+  'web.diag_verdict_warn': 'هشدار',
+  'web.diag_verdict_fail': 'نادرست',
+  'web.diag_verdict_unknown': 'نامشخص',
+  'web.diag_failure': 'آخرین خطا',
+  'web.diag_last_success': 'آخرین بررسی موفق',
+  'web.diag_missing_fields': 'فیلدهای تنظیم‌نشده',
+  'web.diag_required_title': 'قابلیت‌های لازم برای فروش و نگهداری',
+  'web.diag_capability_health_check': 'بررسی سلامت',
+  'web.diag_capability_create_user': 'ساخت حساب',
+  'web.diag_capability_deliver_subscription_link': 'تحویل لینک اشتراک',
+  'web.diag_capability_read_usage': 'خواندن مصرف',
+  'web.diag_available': 'موجود',
+  'web.diag_missing': 'موجود نیست',
+  'web.diag_failure_authentication_failed':
+    'اعتبارنامه رد شد — نام کاربری و گذرواژه یا توکن را جایگزین کنید.',
+  'web.diag_failure_authentication_requires_interaction':
+    'پنل کد دومرحله‌ای می‌خواهد — برای دسترسی خودکار توکن API تنظیم کنید.',
+  'web.diag_failure_unreachable': 'پنل در دسترس نبود — نشانی و روشن بودن سرور را بررسی کنید.',
+  'web.diag_failure_timeout': 'پنل دیر پاسخ داد یا در زمان مقرر پاسخی نداد.',
+  'web.diag_failure_tls_failed': 'گواهی یا دست‌دهی TLS ناموفق بود — گواهی پنل را بررسی کنید.',
+  'web.diag_failure_blocked_target': 'نشانی به مقصدی می‌رسد که این نصب اجازهٔ تماس با آن را ندارد.',
+  'web.diag_failure_rate_limited':
+    'پنل گفت درخواست‌ها زیاد است — خود پنل سالم است؛ کمتر با آن تماس گرفته شود.',
+  'web.diag_failure_malformed_response':
+    'پنل پاسخ داد، اما پاسخ شکل پاسخ این ارائه‌دهنده را نداشت.',
+  'web.diag_failure_provider_error': 'پنل با خطای خودش پاسخ داد.',
+  'web.diag_failure_provider_refused': 'پنل درخواست را طبق قاعدهٔ خودش رد کرد.',
+  'web.diag_failure_unsupported_capability': 'این ارائه‌دهنده کار خواسته‌شده را انجام نمی‌دهد.',
+
+  // The Super Admin's read-only technical view.
+  'web.tech_title': 'نمای فنی (فقط مدیر ارشد)',
+  'web.tech_hint':
+    'شناسه‌های خام برای عیب‌یابی یکپارچگی. فقط‌خواندنی است و هیچ اعتبارنامه‌ای در آن نیست — فقط زمان تنظیم آنها.',
+  'web.tech_show': 'نمایش نمای فنی',
+  'web.tech_hide': 'پنهان کردن نمای فنی',
+
+  // Credential shapes and the provider catalogue, in Persian.
+  'web.credential_shape_username_password': 'نام کاربری و گذرواژه',
+  'web.credential_shape_opaque_token': 'توکن API',
+  'web.credential_shape_token_or_username_password': 'توکن API یا نام کاربری و گذرواژه',
+  'web.credential_shape_none': 'بدون اعتبارنامه',
+  'web.providers_capabilities': 'کارهای پشتیبانی‌شده',
 } as const;
 
 export type WebKey = keyof typeof WEB_FA;

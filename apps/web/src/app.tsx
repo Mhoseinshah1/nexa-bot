@@ -1008,6 +1008,8 @@ export function resolve(
           id={panel['id'] ?? ''}
           mayEdit={may('panels.edit')}
           mayRotate={may('panels.credentials.rotate')}
+          // WP-A8: the Super Admin's read-only technical view.
+          mayViewTechnical={may('panels.technical.view')}
           denied={!may('panels.view')}
         />
       ),

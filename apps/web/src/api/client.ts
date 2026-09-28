@@ -199,6 +199,15 @@ import {
   type SystemReadinessResponse,
   type SystemDiagnosticsResponse,
   PANEL_ROUTES,
+  // WP-A8: advanced provider settings.
+  PANEL_ADVANCED_ROUTES,
+  panelAdvancedResponseSchema,
+  panelTechnicalResponseSchema,
+  updatePanelPolicyResponseSchema,
+  type PanelAdvancedResponse,
+  type PanelPolicy,
+  type PanelTechnicalResponse,
+  type UpdatePanelPolicyResponse,
   panelListResponseSchema,
   panelResponseSchema,
   providerListResponseSchema,
@@ -1646,6 +1655,33 @@ export function updatePanel(input: {
 }): Promise<PanelResponse> {
   const { id, ...body } = input;
   return post(PANEL_ROUTES.update(id), body, panelResponseSchema);
+}
+
+/**
+ * WP-A8: a panel's capability registry, operator policy, provider rules and
+ * diagnostics — all server-derived, so this client renders and never decides.
+ */
+export function fetchPanelAdvanced(id: string): Promise<PanelAdvancedResponse> {
+  return authedGet(PANEL_ADVANCED_ROUTES.advanced(id), panelAdvancedResponseSchema);
+}
+
+/**
+ * Replaces the panel's operator policy, whole, from the revision the form was shown.
+ * The server refuses a stale revision rather than overwriting a colleague's decision.
+ */
+export function updatePanelPolicy(input: {
+  id: string;
+  policy: PanelPolicy;
+  expectedRevision: number;
+  idempotencyKey: string;
+}): Promise<UpdatePanelPolicyResponse> {
+  const { id, ...body } = input;
+  return post(PANEL_ADVANCED_ROUTES.policy(id), body, updatePanelPolicyResponseSchema);
+}
+
+/** WP-A8: the Super Admin's read-only technical view (`panels.technical.view`). */
+export function fetchPanelTechnical(id: string): Promise<PanelTechnicalResponse> {
+  return authedGet(PANEL_ADVANCED_ROUTES.technical(id), panelTechnicalResponseSchema);
 }
 
 /**
