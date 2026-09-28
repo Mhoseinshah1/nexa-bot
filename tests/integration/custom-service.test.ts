@@ -746,6 +746,22 @@ describe('Package D — the custom service', () => {
       );
     });
 
+    it('is confirmed only by the purchase path, never as a service action', async () => {
+      await offer();
+      const order = await h.draft(customer, panelA, '10', 30);
+      const refusal = await refusalOf(
+        f.ctx.container.commercialActions.confirm(tenantA, customerActor(f.key()), customer, {
+          orderId: order.id,
+          idempotencyKey: f.key(),
+        }),
+      );
+      expect(refusal.code).toBe('commerce.order_state_invalid');
+      const [row] = await h.rows<{ state: string }>(
+        sql`SELECT state FROM orders WHERE id = ${order.id}`,
+      );
+      expect(row?.state).toBe('DRAFT');
+    });
+
     it('refuses a confirmation while the feature is off', async () => {
       await offer();
       const order = await h.draft(customer, panelA, '10', 30);

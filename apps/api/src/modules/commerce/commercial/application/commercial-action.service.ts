@@ -537,13 +537,13 @@ export class CommercialActionService {
         if (before === null || before.customerId !== customerId) {
           throw errors.notFound(COMMERCE_ERROR_CODES.ORDER_NOT_FOUND, 'Unknown order.');
         }
-        if (before.purpose === 'NEW_SERVICE') {
+        if (before.purpose === 'NEW_SERVICE' || before.purpose === 'CUSTOM_SERVICE') {
           /*
-           * A product purchase reaching this command.
+           * A purchase reaching this command.
            *
-           * Refused rather than handled: `OrderService.confirm` re-checks the PRODUCT
-           * and this one does not, so confirming one here would skip the check that
-           * stops a withdrawn product being sold.
+           * Refused rather than handled: `OrderService.confirm` re-checks the PRODUCT,
+           * or a custom order's terms (Package D), and this one does not, so confirming
+           * one here would skip the check that stops a withdrawn sale being made.
            */
           throw errors.conflict(
             COMMERCE_ERROR_CODES.ORDER_STATE_INVALID,
