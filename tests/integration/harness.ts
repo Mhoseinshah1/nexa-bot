@@ -111,7 +111,7 @@ export async function resetDatabase(db: Database): Promise<void> {
        admin_login_throttle, admin_sessions, admin_permission_overrides,
        admin_roles, role_permissions, roles, admins,
        panel_health, panel_probe_claims, panel_probe_budgets, panel_credentials,
-       panel_capacity_reservations, panels,
+       panel_capacity_reservations, panel_policies, panels,
        bot_instances, tenants,
        backup_runs, recovery_requests,
        -- The Phase 4 tables, listed EXPLICITLY rather than left to CASCADE.
