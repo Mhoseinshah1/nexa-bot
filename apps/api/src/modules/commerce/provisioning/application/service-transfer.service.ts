@@ -109,6 +109,11 @@ export type ServiceTransferPreviewResult =
       readonly outcome: 'READY';
       readonly serviceId: string;
       readonly recipientTelegramUserId: string;
+      /**
+       * The service's ownership version when this screen was drawn. The confirmation
+       * carries it back, and a transfer made since refuses it (`CONFIRMATION_STALE`).
+       */
+      readonly ownershipVersion: number;
       /** The values `bot.service.transfer_confirm` renders. */
       readonly values: TemplateValues;
     }
@@ -240,6 +245,7 @@ export class ServiceTransferService {
       outcome: 'READY',
       serviceId: service.id,
       recipientTelegramUserId: recipient.telegramUserId,
+      ownershipVersion: await this.deps.repository.countForService(scope, service.id),
       values: {
         ...(await this.summaryOf(scope, service)),
         recipientId: recipient.telegramUserId,
@@ -258,7 +264,9 @@ export class ServiceTransferService {
    *    sender who no longer owns the service because THIS transfer already happened — the
    *    newest transfer row is sender → this recipient — is answered with that transfer: a
    *    double tap is two updates with two keys, and the second must not say the first
-   *    failed.
+   *    failed. A sender who DOES own it is held to the ownership version the confirmation
+   *    was drawn at: a screen from before the service changed hands and came back is
+   *    refused (`CONFIRMATION_STALE`), because Telegram leaves it tappable.
    * 4. The transfer row FIRST, because the database admits the change of owner only when
    *    the newest row names it; then the service (owner, note cleared), the audit row, the
    *    event and the recipient's notification.
@@ -273,6 +281,8 @@ export class ServiceTransferService {
       readonly customerId: UserId;
       readonly serviceId: string;
       readonly recipientTelegramUserId: string;
+      /** The version `preview` returned for the screen being confirmed. */
+      readonly ownershipVersion: number;
       readonly botInstanceId: BotInstanceId;
       readonly idempotencyKey: string;
     },
@@ -342,6 +352,16 @@ export class ServiceTransferService {
         // customer-facing predicate, read under the lock.
         const service = await this.deps.services.findForCustomer(scope, sender.id, locked.id, tx);
         if (service === null) throw notFound();
+        // Read under the row lock every transfer of this service takes, so no change of
+        // owner can land between this count and the write below.
+        const version = await this.deps.repository.countForService(scope, service.id, tx);
+        if (version !== input.ownershipVersion) {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.SERVICE_NOT_TRANSFERABLE,
+            'This confirmation was made before the service last changed hands.',
+            { reason: 'CONFIRMATION_STALE' satisfies ServiceTransferIneligibilityReason },
+          );
+        }
 
         const refusal = recipientRefusal(recipient, sender.id);
         if (refusal !== null || recipient === null) {

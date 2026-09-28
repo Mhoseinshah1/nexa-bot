@@ -548,6 +548,12 @@ export interface BotCommand {
    */
   readonly secondaryId?: string | null;
   /**
+   * The service's ownership version a transfer confirmation (`tc:`) was drawn at (Package
+   * F). Carried back so a confirmation older than the last change of owner is refused
+   * rather than obeyed; absent on every other command.
+   */
+  readonly ownershipVersion?: number;
+  /**
    * The words after a slash command, for the two the management panel accepts.
    *
    * `/link <telegram id> <username>` and `/role <username> <role key>` carry their
@@ -2504,6 +2510,7 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
         intent: 'SERVICE_TRANSFER_CONFIRM',
         targetId: pair.serviceId,
         secondaryId: pair.recipientTelegramUserId,
+        ownershipVersion: pair.ownershipVersion,
         callbackQueryId: id,
       };
     }
@@ -9118,14 +9125,18 @@ export class BotRuntime {
     if (
       command.intent === 'SERVICE_TRANSFER_CONFIRM' &&
       command.targetId !== null &&
-      typeof command.secondaryId === 'string'
+      typeof command.secondaryId === 'string' &&
+      command.ownershipVersion !== undefined
     ) {
       return this.serviceTransferConfirm(
         scope,
         actor,
         customer,
         command.targetId,
-        command.secondaryId,
+        {
+          recipientTelegramUserId: command.secondaryId,
+          ownershipVersion: command.ownershipVersion,
+        },
         input,
       );
     }
@@ -10304,13 +10315,21 @@ export class BotRuntime {
         orderId: null,
       };
     }
+    const confirm = transferConfirmData(
+      preview.serviceId,
+      preview.recipientTelegramUserId,
+      preview.ownershipVersion,
+    );
+    // Past the version a callback can carry, no confirmation is drawn rather than one
+    // Telegram would refuse (`TRANSFER_CONFIRM_VERSION_MAX`).
+    if (confirm === null) return transferUnavailableReply(serviceId);
     return {
       key: 'bot.service.transfer_confirm',
       values: preview.values,
       buttons: [
         {
           label: { kind: 'TEMPLATE', key: 'bot.service.transfer_confirm_button' },
-          data: transferConfirmData(preview.serviceId, preview.recipientTelegramUserId),
+          data: confirm,
           row: 0,
         },
         { ...backToServiceButton(serviceId), row: 1 },
@@ -10329,7 +10348,7 @@ export class BotRuntime {
     actor: ActorContext,
     customer: CustomerRecord,
     serviceId: string,
-    recipientTelegramUserId: string,
+    confirmed: { readonly recipientTelegramUserId: string; readonly ownershipVersion: number },
     input: { readonly idempotencyKey: string; readonly botInstanceId: BotInstanceId },
   ): Promise<PendingReply> {
     const transfers = this.deps.serviceTransfers;
@@ -10338,7 +10357,8 @@ export class BotRuntime {
       await transfers.transfer(scope, actor, {
         customerId: customer.id,
         serviceId,
-        recipientTelegramUserId,
+        recipientTelegramUserId: confirmed.recipientTelegramUserId,
+        ownershipVersion: confirmed.ownershipVersion,
         botInstanceId: input.botInstanceId,
         // Suffixed: the bare update key is already spent by `resolveFromUpdate` this turn.
         idempotencyKey: `${input.idempotencyKey}:transfer`,
@@ -12514,26 +12534,59 @@ function transferUnavailableReply(serviceId: string): PendingReply {
   };
 }
 
-/** `tc:<service uuid>.<recipient telegram id>` — at most 59 bytes. */
-export function transferConfirmData(serviceId: string, recipientTelegramUserId: string): string {
-  return `${SERVICE_TRANSFER_CONFIRM_CALLBACK_PREFIX}${serviceId}.${recipientTelegramUserId}`;
+/**
+ * The largest ownership version a `tc:` payload can carry: four base-36 digits. With the
+ * 36-byte service id and a 19-digit recipient the payload is then at most 64 bytes,
+ * Telegram's limit. A service that has changed hands more often than this is not offered
+ * a confirmation at all (`transferConfirmData` returns null) rather than one Telegram
+ * would refuse to draw.
+ */
+export const TRANSFER_CONFIRM_VERSION_MAX = 36 ** 4 - 1;
+
+/**
+ * `tc:<service uuid>.<recipient telegram id>.<ownership version, base 36>` — at most 64
+ * bytes. Null past `TRANSFER_CONFIRM_VERSION_MAX`.
+ */
+export function transferConfirmData(
+  serviceId: string,
+  recipientTelegramUserId: string,
+  ownershipVersion: number,
+): string | null {
+  if (
+    !Number.isSafeInteger(ownershipVersion) ||
+    ownershipVersion < 0 ||
+    ownershipVersion > TRANSFER_CONFIRM_VERSION_MAX
+  ) {
+    return null;
+  }
+  return `${SERVICE_TRANSFER_CONFIRM_CALLBACK_PREFIX}${serviceId}.${recipientTelegramUserId}.${ownershipVersion.toString(36)}`;
 }
 
 /**
- * A `tc:` payload's two halves, each validated here — the service as a UUIDv7, the
- * recipient by `telegramUserIdSchema` — or null. Anything else is UNSUPPORTED rather than a
- * half-read that could transfer a service nobody named.
+ * A `tc:` payload's three parts, each validated here — the service as a UUIDv7, the
+ * recipient by `telegramUserIdSchema`, the version as one to four lower-case base-36 digits
+ * with no leading zero — or null. Anything else is UNSUPPORTED rather than a half-read that
+ * could transfer a service nobody named, or at a version nobody saw.
  */
-export function decodeTransferConfirm(
-  data: string,
-): { readonly serviceId: string; readonly recipientTelegramUserId: string } | null {
+export function decodeTransferConfirm(data: string): {
+  readonly serviceId: string;
+  readonly recipientTelegramUserId: string;
+  readonly ownershipVersion: number;
+} | null {
   if (!data.startsWith(SERVICE_TRANSFER_CONFIRM_CALLBACK_PREFIX)) return null;
   const parts = data.slice(SERVICE_TRANSFER_CONFIRM_CALLBACK_PREFIX.length).split('.');
-  if (parts.length !== 2) return null;
+  if (parts.length !== 3) return null;
   const service = uuidV7Schema.safeParse(parts[0]);
   const recipient = telegramUserIdSchema.safeParse(parts[1]);
-  if (!service.success || !recipient.success) return null;
-  return { serviceId: service.data, recipientTelegramUserId: recipient.data };
+  const version = parts[2] ?? '';
+  if (!service.success || !recipient.success || !/^(0|[1-9a-z][0-9a-z]{0,3})$/.test(version)) {
+    return null;
+  }
+  return {
+    serviceId: service.data,
+    recipientTelegramUserId: recipient.data,
+    ownershipVersion: Number.parseInt(version, 36),
+  };
 }
 
 /**

@@ -6,6 +6,7 @@ import {
   EMPTY_PRODUCT_DISPLAY,
   isNexaError,
   money,
+  uuidV7Schema,
   type ActorContext,
   type BotInstanceId,
   type CorrelationId,
@@ -56,6 +57,8 @@ const PRICE = 250_000n;
 
 const PROMPT = 'سرویس را به چه کاربری می‌خواهید انتقال دهید؟ شناسه کاربری عددی مقصد را ارسال کنید.';
 const DONE = '✅ سرویس با موفقیت به کاربر مقصد منتقل شد.';
+const UNAVAILABLE =
+  'انتقال این سرویس در حال حاضر ممکن نیست. سرویس باید فعال یا خاموش باشد، سرویس تست نباشد و پرداخت، درخواست یا عملیات در جریانی نداشته باشد.';
 const HEADING = '🎁 یک سرویس برای شما انتقال داده شد';
 
 const systemActor = (correlationId: string): ActorContext => ({
@@ -238,16 +241,32 @@ describe('Package F — a customer transfers a service to another customer', () 
     return service;
   }
 
-  const transfer = (
+  /** How many times the service has changed hands: the version a fresh screen carries. */
+  const versionOf = (serviceId: string) =>
+    count(
+      sql`SELECT count(*)::int AS n FROM service_ownership_transfers WHERE service_id = ${serviceId}`,
+    );
+
+  /**
+   * A confirmation, as the bot would send it. Its ownership version is read when the call
+   * is made — a screen drawn just now — unless a test names the version of an older one.
+   * An id that is no UUID has no version; the service refuses it as not found before any
+   * version is compared.
+   */
+  const transfer = async (
     serviceId: string,
     recipientTelegramUserId: string,
     idempotencyKey = key('transfer'),
     from: UserId = sender,
+    ownershipVersion?: number,
   ) =>
     ctx.container.serviceTransfers.transfer(tenantA, systemActor('transfer'), {
       customerId: from,
       serviceId,
       recipientTelegramUserId,
+      ownershipVersion:
+        ownershipVersion ??
+        (uuidV7Schema.safeParse(serviceId).success ? await versionOf(serviceId) : 0),
       botInstanceId: BOT_A,
       idempotencyKey,
     });
@@ -374,7 +393,7 @@ describe('Package F — a customer transfers a service to another customer', () 
       lastSent().reply_markup as { inline_keyboard: { text: string; callback_data: string }[][] }
     ).inline_keyboard.flat()[0]!;
     expect(confirmButton.text).toBe('✅ تأیید انتقال سرویس');
-    expect(confirmButton.callback_data).toBe(`tc:${service.id}.${RECIPIENT_TG}`);
+    expect(confirmButton.callback_data).toBe(`tc:${service.id}.${RECIPIENT_TG}.0`);
     // Nothing moved on the way to the confirmation.
     expect(await ownerOf(service.id)).toBe(sender);
     expect(await transfersOf(service.id)).toBe(0);
@@ -531,7 +550,7 @@ describe('Package F — a customer transfers a service to another customer', () 
     await handle(textUpdate(SENDER_TG));
     expect(lastText()).toContain('نمی‌توانید سرویس را به خودتان انتقال دهید');
     await handle(textUpdate(RECIPIENT_TG));
-    expect(callbacksOf(lastSent())).toContain(`tc:${service.id}.${RECIPIENT_TG}`);
+    expect(callbacksOf(lastSent())).toContain(`tc:${service.id}.${RECIPIENT_TG}.0`);
   });
 
   it('refuses an unknown recipient and text that is no numeric id, keeping the window open', async () => {
@@ -550,7 +569,7 @@ describe('Package F — a customer transfers a service to another customer', () 
     expect(lastText()).toContain('کاربری با این شناسه در ربات پیدا نشد');
     // Persian digits are read as the id they spell.
     await handle(textUpdate('۹۳۱۰۰۲'));
-    expect(callbacksOf(lastSent())).toContain(`tc:${service.id}.${RECIPIENT_TG}`);
+    expect(callbacksOf(lastSent())).toContain(`tc:${service.id}.${RECIPIENT_TG}.0`);
     expect(await transfersOf(service.id)).toBe(0);
   });
 
@@ -1015,12 +1034,46 @@ describe('Package F — a customer transfers a service to another customer', () 
     expect(back.replayed).toBe(false);
     expect(await ownerOf(service.id)).toBe(sender);
     expect(await transfersOf(service.id)).toBe(2);
-    // The recipient taps their confirmation again under a new key: the newest row is theirs,
-    // so the answer is that transfer — not "not found" because the first row was not.
-    expect(await transfer(service.id, SENDER_TG, key('back-again'), recipient)).toEqual({
+    // The recipient taps their confirmation (drawn at version 1) again under a new key: the
+    // newest row is theirs, so the answer is that transfer — not "not found" because the
+    // first row was not.
+    expect(await transfer(service.id, SENDER_TG, key('back-again'), recipient, 1)).toEqual({
       ...back,
       replayed: true,
     });
+  });
+
+  it('refuses a confirmation drawn before the service changed hands and came back', async () => {
+    const service = await deliveredService('stale-confirm');
+    // The sender's confirmation, drawn at version 0 and tapped: A → B.
+    const confirm = await askAndType(service.id, RECIPIENT_TG);
+    expect(confirm.endsWith('.0')).toBe(true);
+    await handle(tapUpdate(confirm));
+    expect(lastText()).toBe(DONE);
+    // B gives it back: the service is A's again, at version 2.
+    await transfer(service.id, SENDER_TG, key('stale-back'), recipient);
+    expect(await ownerOf(service.id)).toBe(sender);
+
+    // A taps the SAME old keyboard. The service is A's, so no replay applies: the version
+    // the screen carries is all that tells it apart from a fresh confirmation.
+    await handle(tapUpdate(confirm));
+    expect(lastText()).toBe(UNAVAILABLE);
+    expect(await ownerOf(service.id)).toBe(sender);
+    expect(await transfersOf(service.id)).toBe(2);
+    expect(
+      await refusalOf(transfer(service.id, RECIPIENT_TG, key('stale-direct'), sender, 0)),
+    ).toMatchObject({
+      code: 'commerce.service_not_transferable',
+      details: { reason: 'CONFIRMATION_STALE' },
+    });
+
+    // A screen drawn now carries the new version, and it moves the service.
+    const fresh = await askAndType(service.id, RECIPIENT_TG);
+    expect(fresh.endsWith('.2')).toBe(true);
+    await handle(tapUpdate(fresh));
+    expect(lastText()).toBe(DONE);
+    expect(await ownerOf(service.id)).toBe(recipient);
+    expect(await transfersOf(service.id)).toBe(3);
   });
 
   it('refuses a sender who has been blocked, and moves nothing', async () => {

@@ -52,6 +52,14 @@ export interface ServiceTransferRepository {
   ): Promise<ServiceTransferRecord | null>;
 
   /**
+   * How many times this service has changed hands: its ownership VERSION. The rows are
+   * append-only, so the count only grows, and every change of owner adds exactly one. A
+   * confirmation carries the version it was made at; one made before a later change of
+   * owner no longer matches (`CONFIRMATION_STALE`).
+   */
+  countForService(scope: TenantContext, serviceId: string, tx?: unknown): Promise<number>;
+
+  /**
    * Writes the row. `null` when the key already wrote one: the caller answers with THAT
    * row rather than transferring twice.
    */

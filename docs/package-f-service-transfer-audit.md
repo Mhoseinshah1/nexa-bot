@@ -69,9 +69,17 @@ it stands.
    - the remaining traffic and time;
    - the recipient's numeric id and, when Telegram gave one, their display name or @username.
 4. The button carries `ta:<serviceId>` (39 bytes) and opens the window; it moves nothing.
-   `✅ تأیید انتقال سرویس` carries `tc:<serviceId>.<recipientTelegramId>`: at most 59 bytes,
-   under Telegram's 64. The confirmation reads the recipient again. Nothing on the button is
-   trusted.
+   `✅ تأیید انتقال سرویس` carries `tc:<serviceId>.<recipientTelegramId>.<version>`: at most
+   64 bytes, Telegram's limit. The confirmation reads the recipient again. Nothing on the
+   button is trusted.
+   - The version is the service's ownership version when the screen was drawn: how many
+     transfer rows it has, in base 36, at most four digits. Telegram leaves an old keyboard
+     tappable, so without it a sender who gave a service away and was given it back could
+     re-send it from a screen that predates both (Codex on #90).
+   - The transfer compares it under the service's row lock and refuses a mismatch as
+     `CONFIRMATION_STALE`, answered with the ordinary "cannot be transferred now" sentence.
+   - A service that has changed hands more than 1,679,615 times is offered no confirmation
+     rather than one Telegram would refuse to draw.
 5. The transfer commits in one transaction (§5). The sender is told
    `✅ سرویس با موفقیت به کاربر مقصد منتقل شد.`
 
@@ -170,6 +178,10 @@ key)`. A replayed update returns the row it already wrote.
      newest transfer row is `sender → this recipient`), the answer is the completed result,
      not an error. A double tap is two updates with two keys, and the second one must not
      say the first failed.
+   - If the sender DOES own it, the ownership version the confirmation carries must equal
+     the service's transfer-row count, read under the row lock that serialises every
+     transfer of it. A mismatch is `CONFIRMATION_STALE`: the screen predates a change of
+     owner (§2).
 4. **Write:**
    - the `service_ownership_transfers` row (append-only), FIRST: the database admits the
      change of owner only when the newest row for the service names it. "Newest" is an

@@ -74,6 +74,7 @@ import {
   SERVICE_TRANSFER_CONFIRM_CALLBACK_PREFIX,
   decodeTransferConfirm,
   notificationButtons,
+  TRANSFER_CONFIRM_VERSION_MAX,
   transferConfirmData,
   MAIN_MENU_CALLBACK_DATA,
   TUTORIAL_PLATFORM_CALLBACK_PREFIX,
@@ -1629,32 +1630,50 @@ describe('a callback prefix decides what happens, so no prefix may shadow anothe
     const service = '0191f4a0-2d3c-7c2b-9a41-6f2b0c7e51aa';
     const tap = (data: string) => intentOf({ callback_query: { id: 'cbq', data } });
 
-    it('carries the service and the recipient id through, inside 64 bytes', () => {
-      // The longest id `telegramUserIdSchema` admits: nineteen digits.
+    it('carries the service, the recipient id and the ownership version, inside 64 bytes', () => {
+      // The longest id `telegramUserIdSchema` admits: nineteen digits; the largest version.
       const longest = '9'.repeat(19);
-      const data = transferConfirmData(service, longest);
-      expect(data).toBe(`tc:${service}.${longest}`);
-      expect(Buffer.byteLength(data, 'utf8')).toBe(59);
-      expect(tap(data)).toMatchObject({
+      const data = transferConfirmData(service, longest, TRANSFER_CONFIRM_VERSION_MAX);
+      expect(data).toBe(`tc:${service}.${longest}.zzzz`);
+      expect(Buffer.byteLength(data ?? '', 'utf8')).toBe(64);
+      expect(tap(data ?? '')).toMatchObject({
         intent: 'SERVICE_TRANSFER_CONFIRM',
         targetId: service,
         secondaryId: longest,
+        ownershipVersion: TRANSFER_CONFIRM_VERSION_MAX,
       });
-      expect(decodeTransferConfirm(data)).toEqual({
+      expect(decodeTransferConfirm(data ?? '')).toEqual({
         serviceId: service,
         recipientTelegramUserId: longest,
+        ownershipVersion: TRANSFER_CONFIRM_VERSION_MAX,
       });
+    });
+
+    it('round-trips every version shape, and draws nothing past the largest one', () => {
+      for (const version of [0, 1, 35, 36, 1295, 1296, TRANSFER_CONFIRM_VERSION_MAX]) {
+        const data = transferConfirmData(service, '42', version);
+        expect(decodeTransferConfirm(data ?? '')?.ownershipVersion, String(version)).toBe(version);
+      }
+      expect(transferConfirmData(service, '42', TRANSFER_CONFIRM_VERSION_MAX + 1)).toBeNull();
+      expect(transferConfirmData(service, '42', -1)).toBeNull();
+      expect(transferConfirmData(service, '42', 1.5)).toBeNull();
     });
 
     it.each([
       ['no recipient', `tc:${service}`],
       ['an empty recipient', `tc:${service}.`],
-      ['a third part', `tc:${service}.123.4`],
-      ['a leading zero', `tc:${service}.0123`],
-      ['a negative id', `tc:${service}.-5`],
-      ['twenty digits', `tc:${service}.${'1'.repeat(20)}`],
-      ['a service that is no uuid', 'tc:not-a-uuid.123'],
-      ['Persian digits, which only the typed id accepts', `tc:${service}.۱۲۳`],
+      ['no version, as a confirmation drawn before versions were carried', `tc:${service}.123`],
+      ['an empty version', `tc:${service}.123.`],
+      ['a fourth part', `tc:${service}.123.4.5`],
+      ['a version with a leading zero', `tc:${service}.123.01`],
+      ['an upper-case version', `tc:${service}.123.A`],
+      ['a five-digit version', `tc:${service}.123.10000`],
+      ['a negative version', `tc:${service}.123.-1`],
+      ['a leading zero', `tc:${service}.0123.0`],
+      ['a negative id', `tc:${service}.-5.0`],
+      ['twenty digits', `tc:${service}.${'1'.repeat(20)}.0`],
+      ['a service that is no uuid', 'tc:not-a-uuid.123.0'],
+      ['Persian digits, which only the typed id accepts', `tc:${service}.۱۲۳.0`],
     ])('answers %s as UNSUPPORTED, never a half-read', (_label, data) => {
       expect(tap(data).intent).toBe('UNSUPPORTED');
       expect(decodeTransferConfirm(data)).toBeNull();

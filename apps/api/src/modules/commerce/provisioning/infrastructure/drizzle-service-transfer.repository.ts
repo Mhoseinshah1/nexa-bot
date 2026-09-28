@@ -1,4 +1,4 @@
-import { and, desc, eq, isNotNull, ne, notInArray, or } from 'drizzle-orm';
+import { and, count, desc, eq, isNotNull, ne, notInArray, or } from 'drizzle-orm';
 import {
   OPERATION_TERMINAL_STATES,
   type ActorType,
@@ -110,6 +110,20 @@ export class DrizzleServiceTransferRepository implements ServiceTransferReposito
       .limit(1);
     const row = rows[0];
     return row === undefined ? null : toRecord(row);
+  }
+
+  async countForService(scope: TenantContext, serviceId: string, tx?: unknown): Promise<number> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select({ value: count() })
+      .from(serviceOwnershipTransfers)
+      .where(
+        and(
+          eq(serviceOwnershipTransfers.tenantId, tenantId),
+          eq(serviceOwnershipTransfers.serviceId, serviceId),
+        ),
+      );
+    return rows[0]?.value ?? 0;
   }
 
   async create(
