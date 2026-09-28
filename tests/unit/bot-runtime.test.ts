@@ -181,7 +181,8 @@ describe('a Telegram turn, decided before any I/O', () => {
     expect(intentOf({ message: { text: '  Ali_2026  ' } }, menu).args).toEqual(['  Ali_2026  ']);
   });
 
-  it('offers exactly the five top-level actions this release can perform', () => {
+  // Titled as `docs/phase4j-falsification.md` F4J-15 cites it; since WP-A7 the exact set is five.
+  it('offers exactly the four top-level actions this release can perform', () => {
     /*
      * A keyboard is a PROMISE. The legacy system's menu described a product that did
      * not exist, and `docs/research/` records what that cost; a button answering "not

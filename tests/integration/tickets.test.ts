@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { sql } from 'drizzle-orm';
-import type { FastifyReply, FastifyRequest } from 'fastify';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   SESSION_COOKIE_NAME,
@@ -38,6 +37,9 @@ import {
  * message and is retried by the lane — the acceptance: a customer has a complete support
  * conversation without losing history when Telegram delivery temporarily fails.
  */
+
+type FastifyRequest = Parameters<TicketsController['list']>[0];
+type FastifyReply = Parameters<TicketsController['attachment']>[1];
 
 const BOT_A = SEED_IDS.botA1 as BotInstanceId;
 const BOT_B = SEED_IDS.botB1 as BotInstanceId;
