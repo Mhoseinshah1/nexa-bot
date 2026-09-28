@@ -141,6 +141,7 @@ import {
   PROVIDER_TYPES,
 } from './provider.js';
 import { isStorableInstant } from './time.js';
+import { capabilityRegistryEntrySchema } from './panel-advanced.js';
 import {
   SUPPORT_FAQ_STATUSES,
   TENANT_MEDIA_MAX_BYTES,
@@ -1831,6 +1832,12 @@ export const providerDescriptorSchema = z.object({
   credentialShape: z.enum(CREDENTIAL_SHAPES),
   capabilities: z.array(z.enum(PROVIDER_CAPABILITIES)),
   requiredActivationFields: z.array(z.string()),
+  /**
+   * WP-A8: what the provider's adapter can do, row by row, derived from its methods AND
+   * its declarations (`deriveCapabilityRegistry`). What the Web Admin shows an operator;
+   * `capabilities` above stays the raw declaration list.
+   */
+  capabilityRegistry: z.array(capabilityRegistryEntrySchema),
 });
 
 export const providerListResponseSchema = z.object({
