@@ -92,6 +92,32 @@ export const EXPIRY_REMINDER_DAYS_MAX = 30;
  */
 export const EXPIRY_EARLY_REMINDER_DAYS_MIN = 0;
 
+/**
+ * How long before the deadline the day-of rung begins AT THE LATEST, in milliseconds.
+ *
+ * The rung normally begins at local midnight of the expiry's date. A service expiring a
+ * few minutes after that midnight would then have a rung shorter than the fifteen-minute
+ * sweep: one pass returns `EXPIRY_SECOND`, the next finds the deadline passed and returns
+ * `EXPIRED`, and the enabled day-of reminder is recorded as passed without ever being sent
+ * (Codex review #1 of PR #100, C2). So the rung begins at the EARLIER of local midnight and
+ * `expiresAt - EXPIRY_DAY_MIN_NOTICE_MS` — twenty minutes: one sweep interval, one delivery
+ * poll and slack, so a sweep running on time always lands in the rung with at least five
+ * minutes left, and the send-time re-check (deadline still ahead) passes.
+ * `tests/unit/wp-a9-reminders.test.ts` pins the relation to both loop intervals.
+ *
+ * What is still deliberate: a worker that is DOWN for the whole rung reaches the deadline
+ * first, and then "expires today" is never sent — it would be false. The prefix records
+ * the rung as passed and the expired notice is what the customer receives.
+ */
+export const EXPIRY_DAY_MIN_NOTICE_MS = 20 * 60_000;
+
+/** Where the day-of rung begins: see `EXPIRY_DAY_MIN_NOTICE_MS`. */
+export function expiryDayRungStart(localDayStart: Date, expiresAt: Date): Date {
+  return new Date(
+    Math.min(localDayStart.getTime(), expiresAt.getTime() - EXPIRY_DAY_MIN_NOTICE_MS),
+  );
+}
+
 /** The bounds a configured usage threshold is checked against, in percent. */
 export const USAGE_REMINDER_PERCENT_MIN = 1;
 export const USAGE_REMINDER_PERCENT_MAX = 100;
@@ -314,8 +340,9 @@ export function expiryReminderDue(
     'expiryEarlyDays' | 'expiryFirstDays' | 'expirySecondDays'
   >,
   /**
-   * WP-A9: the instant the deadline's own calendar day began, in the tenant's display
-   * timezone — local midnight of the expiry date. `null` for a service with no deadline.
+   * WP-A9: the instant the day-of rung begins — local midnight of the expiry date in the
+   * tenant's display timezone, or `EXPIRY_DAY_MIN_NOTICE_MS` before the deadline when that
+   * is earlier (`expiryDayRungStart`). `null` for a service with no deadline.
    *
    * A PARAMETER rather than computed here, because the candidate query computes it too
    * (`date_trunc('day', … AT TIME ZONE tz)`), and two computations of one boundary are

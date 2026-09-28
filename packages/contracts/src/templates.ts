@@ -5506,8 +5506,10 @@ export const TEMPLATES = [
     key: 'bot.service.expiry_day',
     description:
       'Sent on the day a service expires, once that calendar day has begun in the ' +
-      'tenant\u2019s display timezone and before the deadline itself. Says the service ' +
-      'expires TODAY and when, and invites a renewal.',
+      'tenant\u2019s display timezone and before the deadline itself \u2014 or, for a ' +
+      'deadline just after local midnight, up to twenty minutes before it. Says the ' +
+      'service expires SOON and exactly when, and invites a renewal; it does not say ' +
+      '\u201ctoday\u201d, which that second case would make false.',
     format: 'PLAIN_TEXT',
     placeholders: [
       {

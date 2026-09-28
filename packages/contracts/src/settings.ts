@@ -742,7 +742,10 @@ export const SETTINGS = [
       'How many minutes before its deadline a customer is reminded, once, about a ' +
       'card-to-card payment they have not paid or an order they have not started paying. ' +
       'Never sent for an attempt that is settled, cancelled, expired or already has a ' +
-      'receipt, nor for one opened less than five minutes earlier. Ten by default.',
+      'receipt, nor for one opened less than five minutes earlier, nor with fewer than ' +
+      'three minutes left — a reminder that could not be delivered before the deadline. ' +
+      'Five to thirty; ten by default. A value below five stored before the floor was ' +
+      'raised no longer parses, and the default is in force until it is saved again.',
     schema: z
       .number()
       .int()

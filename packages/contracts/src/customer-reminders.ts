@@ -13,13 +13,34 @@
  */
 
 /**
+ * The least time a pending reminder may be ENQUEUED before its deadline, in minutes.
+ *
+ * A reminder is delivered by a second lane on its own one-minute poll, and the send-time
+ * precondition supersedes it once the deadline has passed. So a reminder enqueued with
+ * under a minute left, and picked up by a poll that ran just before it committed, would be
+ * superseded unsent — a valid configuration delivering nothing, in silence (Codex review
+ * #1 of PR #100, C1). Three minutes covers the producer's own cadence, the delivery
+ * lane's, and a minute of slack; `tests/unit/wp-a9-reminders.test.ts` pins the relation to
+ * both loop intervals, so shortening either cannot quietly break it.
+ */
+export const PENDING_PAYMENT_REMINDER_MIN_NOTICE_MINUTES = 3;
+
+/**
  * How many minutes before its deadline a pending payment or order is reminded about.
  *
- * The floor is one minute and the ceiling thirty, because `PAYMENT_WINDOW_MINUTES_MAX` is
- * sixty: a reminder further out than half the longest window an operator may configure
- * would arrive while the customer is still reading the instructions it reminds them of.
+ * The ceiling is thirty, because `PAYMENT_WINDOW_MINUTES_MAX` is sixty: a reminder further
+ * out than half the longest window an operator may configure would arrive while the
+ * customer is still reading the instructions it reminds them of.
+ *
+ * The floor is FIVE, not one, and the reason is the notice above: a reminder is due only
+ * between the lead and `PENDING_PAYMENT_REMINDER_MIN_NOTICE_MINUTES`, and that window must
+ * be wider than the producer's one-minute cadence or a pass may never land in it. With a
+ * floor of five the narrowest window is two minutes. The floor was one when WP-A9 first
+ * shipped; a stored value below five no longer parses, so the registry's own tightened-
+ * bound rule applies — the default is in force, a WARN operational event says so, and the
+ * Web Admin shows the row as a stored value that needs saving again.
  */
-export const PENDING_PAYMENT_REMINDER_MINUTES_MIN = 1;
+export const PENDING_PAYMENT_REMINDER_MINUTES_MIN = 5;
 export const PENDING_PAYMENT_REMINDER_MINUTES_MAX = 30;
 
 /**
@@ -40,11 +61,13 @@ export const PENDING_PAYMENT_REMINDER_SWEEP_LIMIT = 200;
 export const WALLET_LOW_BALANCE_SWEEP_LIMIT = 200;
 
 /**
- * Whether a pending attempt is inside its reminder window.
+ * Whether a pending attempt is inside its reminder window: at most `leadMinutes` and at
+ * least `PENDING_PAYMENT_REMINDER_MIN_NOTICE_MINUTES` before its deadline.
  *
- * Half-open at the deadline: an attempt whose deadline has passed is expired, whatever
- * its row still says, and is never reminded — the expiry sweep will tell the customer
- * that instead.
+ * An attempt closer to its deadline than the notice is NOT reminded: the message could not
+ * be delivered before the send-time re-check supersedes it, and the expiry sweep will tell
+ * the customer the attempt closed instead. That is a deliberate outcome, and with the
+ * setting's floor above the notice every attempt passes through the window first.
  */
 export function pendingReminderDue(
   createdAt: Date,
@@ -53,7 +76,7 @@ export function pendingReminderDue(
   leadMinutes: number,
 ): boolean {
   const left = expiresAt.getTime() - now.getTime();
-  if (left <= 0) return false;
+  if (left < PENDING_PAYMENT_REMINDER_MIN_NOTICE_MINUTES * 60_000) return false;
   if (left > leadMinutes * 60_000) return false;
   return now.getTime() - createdAt.getTime() >= PENDING_PAYMENT_REMINDER_MIN_AGE_MINUTES * 60_000;
 }

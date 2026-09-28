@@ -829,8 +829,9 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.service.expiry_early':
     'سرویس «{service}» تا {days} روز دیگر به پایان اعتبار می‌رسد (تاریخ: {expiresAt}).\n' +
     'می‌توانید از بخش «سرویس‌های من» آن را تمدید کنید.',
+  // Not «امروز»: for a deadline just after local midnight this is sent before midnight.
   'bot.service.expiry_day':
-    'اعتبار سرویس «{service}» امروز به پایان می‌رسد (زمان: {expiresAt}).\n' +
+    'اعتبار سرویس «{service}» به‌زودی، در {expiresAt}، به پایان می‌رسد.\n' +
     'برای جلوگیری از قطع شدن، همین حالا از بخش «سرویس‌های من» تمدید کنید.',
   'bot.service.provision_delayed':
     'ساخت سرویس کامل نشد و موضوع به پشتیبانی اطلاع داده شد. لطفاً منتظر پیگیری بمانید.',
