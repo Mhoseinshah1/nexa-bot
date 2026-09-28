@@ -948,6 +948,63 @@ docker compose --env-file /etc/nexa/deploy.env -f /opt/nexa/deploy/compose.yml \
 
 An OPEN request can wait through a rollback; it is decided after the roll-forward.
 
+### What a rollback strands: extra-users rates (WP-A5)
+
+WP-A5 adds a third service add-on kind, `ADD_DEVICES`: the per-user rate an operator
+sets on the Web Admin's «افزایش کاربر / دستگاه» page. The release before WP-A5 maps every
+add-on row it reads as either `ADD_TRAFFIC` or `ADD_TIME`
+(`DrizzleServiceAddonRepository.specificationOf`), and an `ADD_DEVICES` row has neither a
+traffic amount nor a duration, so it throws. That release has no add-on screen in its Web
+Admin; what fails is its add-on API:
+
+- `GET /service-addons` answers **500** whenever the page it reads holds an
+  `ADD_DEVICES` row — with no `kind` filter, or with `status` alone. Filtered to
+  `kind=ADD_TRAFFIC` or `kind=ADD_TIME` it is unaffected. Filtered to
+  `kind=ADD_DEVICES` it answers **400**: its contract does not know the kind.
+- `GET` and `POST /service-addons/:id`, `/activate` and `/deactivate` answer **500** for
+  an `ADD_DEVICES` id.
+- The price preview (Web Admin, Discounts) answers **500** for an `ADD_DEVICES` add-on id.
+
+Nothing a customer sees is affected. The old bot lists add-ons filtered to its own two
+kinds, so extra traffic and extra time are offered as before. A `dv:` or `dq:` button tap
+reaches no handler there and gets the ordinary "unsupported" answer. Orders, operations
+and commercial actions of kind `ADD_DEVICES` cannot exist yet: no provider declares
+`DEVICE_LIMIT_ADJUSTMENT`, so nothing of that kind can be drafted, let alone paid for. The
+release that first declares the capability must add its own note here. The old
+provisioner abandons an operation type it does not know, and it does not refund it.
+
+**During the update itself** the same failures can meet the new Web Admin page, if one
+of its requests reaches an old API replica. They last only as long as old and new
+replicas both run, and a reload after the update answers them.
+
+**Before rolling back past WP-A5**, delete the extra-users rates. Withdrawing a rate is
+not enough, because the old release reads inactive rows too. Nothing references a rate
+yet, so the delete removes nothing else. If the database refuses it with a
+foreign-key error, something does reference a rate; stop and do not roll back. First
+save the rates so you can re-enter them after the roll-forward:
+
+```bash
+docker compose --env-file /etc/nexa/deploy.env -f /opt/nexa/deploy/compose.yml \
+  exec -T postgres psql -U nexa -d nexa -c \
+  "SELECT id, title, status, price_amount, price_currency, max_quantity, panel_id, product_id
+     FROM service_addons WHERE kind = 'ADD_DEVICES'"
+docker compose --env-file /etc/nexa/deploy.env -f /opt/nexa/deploy/compose.yml \
+  exec -T postgres psql -U nexa -d nexa -c \
+  "DELETE FROM service_addons WHERE kind = 'ADD_DEVICES'"
+```
+
+Roll back when this count is 0:
+
+```bash
+docker compose --env-file /etc/nexa/deploy.env -f /opt/nexa/deploy/compose.yml \
+  exec -T postgres psql -U nexa -d nexa -c \
+  "SELECT count(*) FROM service_addons WHERE kind = 'ADD_DEVICES'"
+```
+
+**If you already rolled back** with such a row present, roll forward. The release that
+knows the kind reads it again, and nothing was written wrongly in between: every failure
+above is a refused read.
+
 ### How far back you can roll
 
 **One release**, safely. Migrations are expand-only within a release
