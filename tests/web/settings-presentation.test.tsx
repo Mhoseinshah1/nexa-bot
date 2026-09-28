@@ -302,6 +302,141 @@ describe('the settings page', () => {
     expect(screen.queryByDisplayValue(/amountMinor/)).toBeNull();
   });
 
+  /** F5: a money amount typed in Persian digits reaches the schema as Latin digits. */
+  it('sends a money amount typed in Persian digits as Latin digits', async () => {
+    const api = stubApi([
+      {
+        url: '/settings',
+        body: {
+          settings: [
+            setting({ key: 'sales.currency', value: 'IRT', configures: null }),
+            setting({
+              key: 'wallet.topup.maximum',
+              value: { amountMinor: '0', currency: 'IRT' },
+              configures: null,
+            }),
+          ],
+        },
+      },
+      {
+        url: '/settings/wallet.topup.maximum',
+        body: { setting: setting({ key: 'wallet.topup.maximum' }), changed: true },
+      },
+    ]);
+    renderPage(<SettingsPage mayEdit denied={false} />);
+    const amount = await screen.findByLabelText(
+      `${t('web.amount_minor')} — ${t('web.setting_topup_maximum')}`,
+    );
+    fireEvent.change(amount, { target: { value: '۲۰٬۰۰۰' } });
+    const heading = screen.getByRole('heading', { name: t('web.setting_topup_maximum') });
+    const card = heading.closest('section.card') as HTMLElement;
+    fireEvent.click(within(card).getByRole('button', { name: t('web.save') }));
+    await waitFor(() => {
+      const write = api.calls.find((call) => call.method === 'POST');
+      expect(write?.body).toMatchObject({ value: { amountMinor: '20000', currency: 'IRT' } });
+    });
+  });
+
+  /** F2: any safe integer is a number; a digit cap sent a valid 16-digit id as a string. */
+  it('sends a 16-digit topic id as a number', async () => {
+    const api = stubApi([
+      {
+        url: '/settings',
+        body: {
+          settings: [setting({ key: 'ops.notifications.telegram_topic_id', value: null })],
+        },
+      },
+      {
+        url: '/settings/ops.notifications.telegram_topic_id',
+        body: { setting: setting({ key: 'ops.notifications.telegram_topic_id' }), changed: true },
+      },
+    ]);
+    renderPage(<SettingsPage mayEdit denied={false} />);
+    const field = await screen.findByLabelText(t('web.setting_ops_topic_id'));
+    fireEvent.change(field, { target: { value: '1234567890123456' } });
+    fireEvent.click(screen.getByRole('button', { name: t('web.save') }));
+    await waitFor(() => {
+      const write = api.calls.find((call) => call.method === 'POST');
+      expect(write?.body).toMatchObject({ value: 1234567890123456 });
+    });
+  });
+
+  /** F1: two channels that behave differently must not read the same. */
+  it('summarises each channel with whether it is required and its join link', async () => {
+    stubApi([
+      {
+        url: '/settings',
+        body: {
+          settings: [
+            setting({
+              key: 'telegram.channels',
+              value: [
+                { handle: '@required_one', mandatory: true },
+                { chatId: '-1001234567890', joinUrl: 'https://t.me/+invite', mandatory: false },
+              ],
+              configures: null,
+            }),
+          ],
+        },
+      },
+    ]);
+    renderPage(<SettingsPage mayEdit denied={false} />);
+    const heading = await screen.findByRole('heading', {
+      name: t('web.setting_telegram_channels'),
+    });
+    const card = heading.closest('section.card') as HTMLElement;
+    const current = within(card).getByText(`${t('web.settings_current_value')}:`, {
+      exact: false,
+    }).parentElement as HTMLElement;
+    const text = current.textContent ?? '';
+    expect(text).toContain(`@required_one — ${t('web.channel_mandatory')}`);
+    expect(text).toContain(`-1001234567890 — ${t('web.channel_optional')}`);
+    expect(text).toContain(`${t('web.channel_join_url')}: https://t.me/+invite`);
+  });
+
+  /** F4: "not in the active list" only from a successful read of the list. */
+  it('does not call the trial product unlisted when the product list cannot be read', async () => {
+    const id = '01a05e35-c9ad-7e93-bef3-1ed9b55292c9';
+    stubApi([
+      {
+        url: '/settings',
+        body: { settings: [setting({ key: 'trial.product_id', value: id, configures: 'trials' })] },
+      },
+      {
+        url: '/products',
+        status: 403,
+        body: {
+          error: {
+            kind: 'forbidden',
+            code: 'access.permission_denied',
+            message: 'no',
+            correlationId: 'test',
+          },
+        },
+      },
+    ]);
+    renderPage(<SettingsPage mayEdit denied={false} />);
+    await screen.findByRole('heading', { name: t('web.setting_trial_product_id') });
+    await waitFor(() => expect(screen.getAllByText(id).length).toBeGreaterThan(0));
+    expect(screen.queryByText(t('web.trial_product_unlisted'))).toBeNull();
+  });
+
+  it('calls the trial product unlisted only when the list was read and lacks it', async () => {
+    const id = '01a05e35-c9ad-7e93-bef3-1ed9b55292c9';
+    stubApi([
+      {
+        url: '/settings',
+        body: { settings: [setting({ key: 'trial.product_id', value: id, configures: 'trials' })] },
+      },
+      { url: '/products', body: { products: [], nextCursor: null } },
+    ]);
+    renderPage(<SettingsPage mayEdit denied={false} />);
+    // Once in the value line and once as the picker's option for the stored id.
+    await waitFor(() =>
+      expect(screen.getAllByText(t('web.trial_product_unlisted')).length).toBe(2),
+    );
+  });
+
   it('says a refused value in Persian and keeps the English detail out of sight', async () => {
     stubApi([
       { url: '/settings', body: { settings: [setting()] } },

@@ -4,7 +4,7 @@ import { SettingsPage } from '../../apps/web/src/pages/settings';
 import { AlertsPage } from '../../apps/web/src/pages/alerts';
 import { SystemPage } from '../../apps/web/src/pages/system';
 import { event, renderPage, setting, stubApi } from './harness';
-import { CURRENCY_CODES, MANAGEMENT_EVENT_CODES } from '@nexa/contracts';
+import { MANAGEMENT_EVENT_CODES } from '@nexa/contracts';
 import { t } from '../../apps/web/src/i18n/web.fa';
 
 const settings = (rows: unknown[]) => [{ url: '/settings', body: { settings: rows } }];
@@ -151,17 +151,20 @@ describe('the settings screen', () => {
   });
 
   /**
-   * Codex, review five: `wallet.topup.minimum` is `moneySchema`, which accepts
-   * five currencies, and this select offered two. A minimum written through
-   * the API in dollars was a valid stored value the screen could neither show
-   * nor keep — a controlled select with no matching option shows its first,
-   * and saving rewrote the currency to Toman. The screen offers what the
-   * server accepts; narrowing the server is a product decision, not an
-   * omission in a dropdown.
+   * Codex, review five: `wallet.topup.minimum` is `moneySchema`, which accepts five
+   * currencies, and a controlled select with no matching option shows its first — so a
+   * minimum stored in dollars was rewritten to Toman on save. The stored currency stays
+   * an option.
+   *
+   * WP-A1 review F3: but the minimum is compared with the SELLING currency and converted
+   * nowhere, so a non-zero minimum in dollars makes top-up unavailable. The choice
+   * offered is therefore the selling currency, plus the stored one, labelled as not the
+   * store's, with a warning over the row.
    */
-  it('offers every currency the top-up minimum accepts, and keeps a stored dollar minimum', async () => {
+  it('keeps a stored dollar minimum selectable, offers the store currency, and warns', async () => {
     stubApi(
       settings([
+        setting({ key: 'sales.currency', value: 'IRT', configures: null }),
         setting({
           key: 'wallet.topup.minimum',
           value: { amountMinor: '500', currency: 'USD' },
@@ -176,7 +179,28 @@ describe('the settings screen', () => {
 
     const select = screen.getByLabelText('واحد پول — کمینهٔ شارژ کیف پول') as HTMLSelectElement;
     expect(select.value).toBe('USD');
-    expect([...select.options].map((option) => option.value)).toEqual([...CURRENCY_CODES]);
+    expect([...select.options].map((option) => option.value)).toEqual(['IRT', 'USD']);
+    expect(screen.getByText(t('web.settings_money_currency_mismatch'))).toBeInTheDocument();
+  });
+
+  it('offers only the store currency for a money setting already in it', async () => {
+    stubApi(
+      settings([
+        setting({ key: 'sales.currency', value: 'IRR', configures: null }),
+        setting({
+          key: 'referral.minimum_order_amount',
+          value: { amountMinor: '0', currency: 'IRR' },
+          configures: 'referrals',
+        }),
+      ]),
+    );
+    renderPage(<SettingsPage mayEdit denied={false} />);
+    await screen.findByRole('heading', { name: t('web.setting_referral_minimum_order_amount') });
+    const select = screen.getByLabelText(
+      `${t('web.currency')} — ${t('web.setting_referral_minimum_order_amount')}`,
+    ) as HTMLSelectElement;
+    expect([...select.options].map((option) => option.value)).toEqual(['IRR']);
+    expect(screen.queryByText(t('web.settings_money_currency_mismatch'))).toBeNull();
   });
 
   /** Owner revision 1 — the currency every amount inherits. */

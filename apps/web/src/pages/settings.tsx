@@ -58,6 +58,7 @@ import {
 export function SettingsPage({ mayEdit, denied }: { mayEdit: boolean; denied: boolean }) {
   const settings = useQuery({ queryKey: ['settings'], queryFn: fetchSettings, enabled: !denied });
   const rows = settings.data?.settings ?? [];
+  const salesCurrency = sellingCurrencyOf(rows);
 
   return (
     <>
@@ -70,13 +71,60 @@ export function SettingsPage({ mayEdit, denied }: { mayEdit: boolean; denied: bo
               {t(title)}
             </h2>
             {members.map((setting) => (
-              <SettingRow key={setting.key} setting={setting} mayEdit={mayEdit} />
+              <SettingRow
+                key={setting.key}
+                setting={setting}
+                mayEdit={mayEdit}
+                salesCurrency={salesCurrency}
+              />
             ))}
           </section>
         ))}
       </StateSwitch>
     </>
   );
+}
+
+/**
+ * The currency this installation sells in, as the page's own `sales.currency` row says.
+ *
+ * Every money setting is compared against it by its consumer, with no conversion: a
+ * top-up bound in another currency makes top-up unavailable, a referral minimum in
+ * another currency earns no order a commission, and a signup gift in another currency
+ * cannot be switched on. So the money editors offer this currency as the choice (F3).
+ * `null` when the row is absent — then nothing is narrowed rather than a currency
+ * guessed.
+ */
+function sellingCurrencyOf(rows: readonly ResolvedSettingResponse[]): CurrencyCode | null {
+  const value = rows.find((row) => row.key === 'sales.currency')?.value;
+  return typeof value === 'string' && (SALES_CURRENCY_CODES as readonly string[]).includes(value)
+    ? (value as CurrencyCode)
+    : null;
+}
+
+/**
+ * The currencies a money control offers: the selling currency, plus any currency a stored
+ * value already carries, so opening the page never silently rewrites it. Every code the
+ * schema accepts when the selling currency is not known.
+ */
+function currencyChoices(
+  sales: CurrencyCode | null,
+  stored: readonly string[],
+): readonly CurrencyCode[] {
+  if (sales === null) return CURRENCY_CODES;
+  return [sales, ...CURRENCY_CODES.filter((code) => code !== sales && stored.includes(code))];
+}
+
+/** An option's label; a currency other than the selling one says so. */
+function currencyOptionLabel(code: CurrencyCode, sales: CurrencyCode | null): string {
+  return sales === null || code === sales
+    ? currencyLabel(code)
+    : `${currencyLabel(code)} — ${t('web.settings_currency_not_sales')}`;
+}
+
+/** Whether a stored money value is a non-zero amount outside the selling currency. */
+function offCurrency(money: MoneyWire, sales: CurrencyCode | null): boolean {
+  return sales !== null && money.currency !== sales && /[1-9]/u.test(money.amountMinor);
 }
 
 /**
@@ -137,7 +185,15 @@ export function registryLabel(key: string): string | undefined {
   return flag === undefined ? undefined : t(flag);
 }
 
-function SettingRow({ setting, mayEdit }: { setting: ResolvedSettingResponse; mayEdit: boolean }) {
+function SettingRow({
+  setting,
+  mayEdit,
+  salesCurrency,
+}: {
+  setting: ResolvedSettingResponse;
+  mayEdit: boolean;
+  salesCurrency: CurrencyCode | null;
+}) {
   const client = useQueryClient();
   const presentation = settingPresentation(setting.key);
   const title = presentation === null ? t('web.settings_unknown_title') : t(presentation.title);
@@ -269,6 +325,17 @@ function SettingRow({ setting, mayEdit }: { setting: ResolvedSettingResponse; ma
           <CurrentValue control={presentation?.control ?? null} value={setting.value} />
         </p>
 
+        {/* A stored amount outside the selling currency is one its consumer cannot
+            compare with anything (F3): said here, not left for the operator to infer. */}
+        {presentation?.control.kind === 'money' &&
+          offCurrency(asMoney(setting.value), salesCurrency) && (
+            <Banner tone="warn">{t('web.settings_money_currency_mismatch')}</Banner>
+          )}
+        {presentation?.control.kind === 'money_list' &&
+          asMoneyList(setting.value).some((money) => offCurrency(money, salesCurrency)) && (
+            <Banner tone="warn">{t('web.settings_presets_currency_mismatch')}</Banner>
+          )}
+
         <SettingEditor
           // Remounting on a new basis is what makes "reload value" reset the
           // editor's own internal draft as well as the value above it.
@@ -276,6 +343,7 @@ function SettingRow({ setting, mayEdit }: { setting: ResolvedSettingResponse; ma
           setting={basis}
           control={presentation?.control ?? null}
           title={title}
+          salesCurrency={salesCurrency}
           value={draft}
           onChange={setDraft}
           disabled={!mayEdit}
@@ -430,15 +498,38 @@ function CurrentValue({ control, value }: { control: SettingControl | null; valu
     }
     case 'channel_list': {
       const channels = asChannelList(value);
-      return channels.length === 0 ? (
-        unset
-      ) : (
-        <>{joined(channels.map((channel) => isolated(channel.handle ?? channel.chatId ?? '')))}</>
-      );
+      return channels.length === 0 ? unset : <>{joined(channels.map(channelSummary))}</>;
     }
     case 'product':
       return typeof value === 'string' ? <TrialProductName id={value} /> : unset;
   }
+}
+
+/**
+ * One channel as it behaves (F1): who it is, whether membership is required, and the
+ * link a customer is sent to. Two channels differing only in `mandatory` or `joinUrl`
+ * behave differently, so they must not read the same.
+ */
+function channelSummary(channel: Channel): ReactNode {
+  return (
+    <>
+      <Ltr>{channel.handle ?? channel.chatId ?? ''}</Ltr>
+      {channel.handle !== undefined && channel.chatId !== undefined && (
+        <>
+          {' '}
+          <Ltr>{`(${channel.chatId})`}</Ltr>
+        </>
+      )}
+      {' — '}
+      {channel.mandatory ? t('web.channel_mandatory') : t('web.channel_optional')}
+      {channel.joinUrl !== undefined && (
+        <>
+          {' — '}
+          {t('web.channel_join_url')}: <Ltr>{channel.joinUrl}</Ltr>
+        </>
+      )}
+    </>
+  );
 }
 
 function isolated(text: string): ReactNode {
@@ -458,7 +549,12 @@ function joined(items: readonly ReactNode[]): ReactNode {
 /** The trial product's title, from the same query the picker below makes. */
 function TrialProductName({ id }: { id: string }) {
   const products = useTrialProducts();
-  const found = products.data?.products.find((product) => product.id === id);
+  // "Not in the active list" is a fact only a SUCCESSFUL read can establish (F4). While
+  // the list is loading, or when it cannot be read (no catalogue permission), the stored
+  // id is what is known, and that is what is shown.
+  if (products.isPending) return <span className="muted">{t('web.loading')}</span>;
+  if (products.isError) return <Ltr>{id}</Ltr>;
+  const found = products.data.products.find((product) => product.id === id);
   return <>{found === undefined ? t('web.trial_product_unlisted') : found.title}</>;
 }
 
@@ -486,6 +582,7 @@ function SettingEditor({
   setting,
   control,
   title,
+  salesCurrency,
   value,
   onChange,
   disabled,
@@ -493,6 +590,7 @@ function SettingEditor({
   setting: ResolvedSettingResponse;
   control: SettingControl | null;
   title: string;
+  salesCurrency: CurrencyCode | null;
   value: unknown;
   onChange: (next: unknown) => void;
   disabled: boolean;
@@ -547,6 +645,7 @@ function SettingEditor({
         <MoneyEditor
           id={id}
           title={title}
+          salesCurrency={salesCurrency}
           value={asMoney(value)}
           onChange={onChange}
           disabled={disabled}
@@ -556,6 +655,7 @@ function SettingEditor({
       return (
         <TopupPresetEditor
           title={title}
+          salesCurrency={salesCurrency}
           value={asMoneyList(value)}
           onChange={onChange}
           disabled={disabled}
@@ -596,21 +696,30 @@ function HiddenLabel({ htmlFor, children }: { htmlFor: string; children: string 
 }
 
 /**
- * Persian and Arabic-Indic digits and grouping marks, as the Latin digits they mean.
+ * Persian and Arabic-Indic digits as the Latin digits they mean, grouping marks dropped.
  *
- * `minorOf`'s rule from the gateways page: those are ways of WRITING the same whole
- * number, so an operator typing `۶۰` means 60. Anything else — a sign, a decimal point,
- * a letter — is not a spelling of a whole number and is sent as typed, for the server's
- * schema to refuse rather than for this field to reinterpret.
+ * `minorOf`'s rule from the gateways page: those are ways of WRITING the same number, so
+ * an operator typing Persian sixty means 60. Anything else — a sign, a decimal point, a
+ * letter — is left as typed, for the server's schema to refuse rather than for a field
+ * to reinterpret. Shared by the whole-number field and every money amount (F5).
  */
-function wholeNumberOf(text: string): number | null {
-  const latin = text
+function latinDigits(text: string): string {
+  return text
     .trim()
     .replace(/[\s,\u066C\u2009\u202F']/gu, '')
     .replace(/[\u06F0-\u06F9]/gu, (d) => String(d.charCodeAt(0) - 0x06f0))
     .replace(/[\u0660-\u0669]/gu, (d) => String(d.charCodeAt(0) - 0x0660));
-  if (!/^[0-9]{1,15}$/u.test(latin)) return null;
-  return Number(latin);
+}
+
+/**
+ * A whole number, or `null` when the text does not spell one. Any SAFE integer (F2): a
+ * digit cap would refuse a schema-valid topic id and send it as a string.
+ */
+function wholeNumberOf(text: string): number | null {
+  const latin = latinDigits(text);
+  if (!/^[0-9]+$/u.test(latin)) return null;
+  const parsed = Number(latin);
+  return Number.isSafeInteger(parsed) ? parsed : null;
 }
 
 /**
@@ -943,12 +1052,14 @@ function ChannelListEditor({
 function MoneyEditor({
   id,
   title,
+  salesCurrency,
   value,
   onChange,
   disabled,
 }: {
   id: string;
   title: string;
+  salesCurrency: CurrencyCode | null;
   value: MoneyWire;
   onChange: (next: unknown) => void;
   disabled: boolean;
@@ -963,7 +1074,7 @@ function MoneyEditor({
           inputMode="numeric"
           value={value.amountMinor}
           disabled={disabled}
-          onChange={(event) => onChange({ ...value, amountMinor: event.target.value })}
+          onChange={(event) => onChange({ ...value, amountMinor: latinDigits(event.target.value) })}
         />
       </Field>
       <Field label={t('web.currency')} htmlFor={`${id}-currency`}>
@@ -976,19 +1087,16 @@ function MoneyEditor({
           onChange={(event) => onChange({ ...value, currency: event.target.value })}
         >
           {/*
-            EVERY code `moneySchema` accepts, because that is what the server
-            stores for these keys. `sales.currency` is narrowed to Toman and
-            Rial by its own schema and its editor below says so; these keys are
-            not, so a minimum written through the API in dollars was a valid
-            stored value this select had no option for — a controlled select
-            with no matching option shows its first one, and saving then
-            rewrote the currency to Toman without anyone choosing it.
-            Narrowing the server schema instead is a product decision this
-            screen does not get to make by omission.
+            The SELLING currency, plus the stored one when it differs (F3). Every
+            consumer of these keys compares them with the selling currency and
+            converts nothing, so any other choice silently switches the rule off,
+            or the feature with it. The stored currency stays an option because
+            a controlled select with no matching option shows its first one, and
+            saving would then rewrite a value nobody chose to change.
           */}
-          {CURRENCY_CODES.map((code) => (
+          {currencyChoices(salesCurrency, [value.currency]).map((code) => (
             <option key={code} value={code}>
-              {currencyLabel(code)}
+              {currencyOptionLabel(code, salesCurrency)}
             </option>
           ))}
         </select>
@@ -1108,20 +1216,20 @@ const TRIAL_PICKER_LIMIT = PRODUCT_PAGE_MAX;
  * The top-up amounts a customer may choose. 5B.
  *
  * A list, in the order offered, each with its own currency — the same shape the setting
- * stores, so what is saved is what a customer sees. The currency select lists every code
- * `moneySchema` accepts for `MoneyEditor`'s reason: the server stores them all, and a
- * controlled select with no matching option silently rewrites the value on save.
- *
- * That only presets in the SELLING currency are offered to a customer is said once, in
- * the setting's description, rather than in a banner of its own over the list.
+ * stores, so what is saved is what a customer sees. Only presets in the SELLING currency
+ * are offered to a customer, so that is the currency each row offers and a new row
+ * starts in; a row already stored in another currency keeps it as an option, for
+ * `MoneyEditor`'s reason (F3).
  */
 function TopupPresetEditor({
   title,
+  salesCurrency,
   value,
   onChange,
   disabled,
 }: {
   title: string;
+  salesCurrency: CurrencyCode | null;
   value: readonly MoneyWire[];
   onChange: (next: unknown) => void;
   disabled: boolean;
@@ -1136,7 +1244,7 @@ function TopupPresetEditor({
       // An empty amount rather than a number: the field is text, the schema refuses a
       // non-positive value, and pre-filling a figure would be this screen inventing a
       // price.
-      onAdd={() => ({ amountMinor: '', currency: 'IRT' })}
+      onAdd={() => ({ amountMinor: '', currency: salesCurrency ?? 'IRT' })}
       renderRow={(item, index, update) => (
         <div className="input-group">
           {/*
@@ -1154,7 +1262,7 @@ function TopupPresetEditor({
             inputMode="numeric"
             value={item.amountMinor}
             disabled={disabled}
-            onChange={(event) => update({ ...item, amountMinor: event.target.value })}
+            onChange={(event) => update({ ...item, amountMinor: latinDigits(event.target.value) })}
           />
           <label className="visually-hidden" htmlFor={`preset-currency-${index}`}>
             {`${t('web.currency')} ${formatNumber(index + 1)}`}
@@ -1164,11 +1272,11 @@ function TopupPresetEditor({
             className="input"
             value={item.currency}
             disabled={disabled}
-            onChange={(event) => update({ ...item, currency: event.target.value })}
+            onChange={(event) => update({ ...item, currency: event.target.value as CurrencyCode })}
           >
-            {CURRENCY_CODES.map((code) => (
+            {currencyChoices(salesCurrency, [item.currency]).map((code) => (
               <option key={code} value={code}>
-                {currencyLabel(code)}
+                {currencyOptionLabel(code, salesCurrency)}
               </option>
             ))}
           </select>
