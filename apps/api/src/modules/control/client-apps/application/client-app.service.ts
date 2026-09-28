@@ -325,12 +325,23 @@ export class ClientAppService {
 
   // -------------------------------------------------------------------------
 
-  /** Another tenant's id is answered exactly as an unknown one: the predicate carries the tenant. */
+  /**
+   * Another tenant's id is answered exactly as an unknown one: the predicate carries the tenant.
+   *
+   * So is an id that is not a UUID at all (Codex review #1 of PR #95, C2). It arrives from
+   * the URL path, and compared against the `uuid` column PostgreSQL refuses it with a cast
+   * error that aborts the transaction and surfaced as a 500. It is checked HERE, before the
+   * query, and answered as the unknown id it is — not as a validation error, which would
+   * tell a caller something about the shape of ids that exist.
+   */
   private async require(
     scope: TenantContext,
     id: string,
     tx: TransactionScope,
   ): Promise<ClientAppRecord> {
+    if (!UUID_SHAPE.test(id)) {
+      throw errors.notFound(CONTROL_ERROR_CODES.CLIENT_APP_NOT_FOUND, 'No such client app entry.');
+    }
     const found = await this.deps.repository.find(scope, id, tx);
     if (found === null) {
       throw errors.notFound(CONTROL_ERROR_CODES.CLIENT_APP_NOT_FOUND, 'No such client app entry.');
@@ -453,6 +464,12 @@ export class ClientAppService {
     }
   }
 }
+
+/**
+ * The canonical text form of a UUID, any version — every id `IdGenerator.uuid()` mints
+ * has it. Anything else cannot name a row, so it never reaches the `uuid` column.
+ */
+const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
 /** The entry's fields as the contract accepts them, or a validation refusal naming each issue. */
 function parseInput(command: ClientAppInput): ClientAppInput {

@@ -1466,7 +1466,8 @@ export const WEB_FA = {
   'web.client_apps_problem_markup': 'HTML پذیرفته نمی‌شود؛ متن ساده بنویسید.',
   'web.client_apps_problem_scheme':
     'لینک‌های javascript:، data:، vbscript: و file: پذیرفته نمی‌شوند.',
-  'web.client_apps_problem_link': 'هر پیوند [متن](لینک) باید با https:// و نام دامنه باشد.',
+  'web.client_apps_problem_link':
+    'هر لینک، چه به‌صورت [متن](لینک) و چه خود نشانی، باید با https:// و نام دامنه باشد؛ لینک http:// یا www. بدون https:// پذیرفته نمی‌شود.',
   'web.client_apps_conflict':
     'این برنامه از زمانی که باز کردید تغییر کرده است. نسخهٔ تازه را بارگذاری کنید و تغییر را دوباره اعمال کنید.',
   'web.client_apps_limit': 'سقف تعداد برنامه‌ها پر شده است. یکی را حذف کنید.',

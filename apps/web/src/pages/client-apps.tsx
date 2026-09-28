@@ -260,21 +260,21 @@ export function ClientAppsPage({ denied, mayEdit }: { denied: boolean; mayEdit: 
   const refresh = () => {
     void queries.invalidateQueries({ queryKey: ['client-apps'] });
   };
-  const close = () => {
-    setEditor({ kind: 'closed' });
-    setForm(EMPTY_FORM);
+  /*
+   * Every change of editor clears the last save's outcome (Codex review #1 of PR #95,
+   * C3). `save.error` belongs to the entry it was raised for; carried over, a version
+   * conflict on one app drew the conflict notice and its reload control over another.
+   */
+  const switchEditor = (next: Editor, draft: FormState) => {
+    save.reset();
+    setEditor(next);
+    setForm(draft);
     setTouched(false);
   };
-  const openCreate = () => {
-    setEditor({ kind: 'create' });
-    setForm(EMPTY_FORM);
-    setTouched(false);
-  };
-  const openEdit = (row: ClientAppResponse) => {
-    setEditor({ kind: 'edit', basis: row });
-    setForm(formOf(row));
-    setTouched(false);
-  };
+  const close = () => switchEditor({ kind: 'closed' }, EMPTY_FORM);
+  const openCreate = () => switchEditor({ kind: 'create' }, EMPTY_FORM);
+  const openEdit = (row: ClientAppResponse) =>
+    switchEditor({ kind: 'edit', basis: row }, formOf(row));
 
   /** The WHOLE command is the variable, so a retry resends exactly what was clicked. */
   const save = useMutation({
