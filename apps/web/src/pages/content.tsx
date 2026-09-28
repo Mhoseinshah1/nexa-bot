@@ -70,7 +70,14 @@ export function ContentPage({ mayEdit, denied }: { mayEdit: boolean; denied: boo
   );
 }
 
-function TemplateCard({ template, mayEdit }: { template: TemplateViewResponse; mayEdit: boolean }) {
+/** Exported for the reminders screen (WP-A9), which edits its own templates in place. */
+export function TemplateCard({
+  template,
+  mayEdit,
+}: {
+  template: TemplateViewResponse;
+  mayEdit: boolean;
+}) {
   const client = useQueryClient();
 
   /**

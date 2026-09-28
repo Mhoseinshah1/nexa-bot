@@ -2150,6 +2150,71 @@ export const WEB_FA = {
   'web.flag_service_expiry_reminders': 'یادآور پیش از انقضای سرویس',
   'web.flag_service_expired_notice': 'اعلام پایان اعتبار سرویس',
   'web.flag_service_usage_reminders': 'یادآور مصرف حجم سرویس',
+  // WP-A9: the names of the reminder keys and switches this package added.
+  'web.setting_reminders_expiry_early_days': 'یادآور هفتگی پیش از انقضا (روز)',
+  'web.setting_reminders_payment_pending_minutes':
+    'یادآور پرداخت در انتظار (دقیقه پیش از پایان مهلت)',
+  'web.setting_wallet_low_balance_threshold': 'آستانهٔ هشدار کمبود موجودی کیف پول',
+  'web.flag_service_expiry_day_reminder': 'یادآور روز انقضای سرویس',
+  'web.flag_wallet_low_balance_reminders': 'هشدار کمبود موجودی کیف پول',
+  'web.flag_payment_pending_reminders': 'یادآور پرداخت در انتظار',
+  // WP-A9: the reminders screen.
+  'web.nav_reminders': 'یادآورها',
+  'web.reminders_title': 'یادآورهای خودکار',
+  'web.reminders_intro':
+    'پیام‌هایی را که ربات خودکار برای مشتریان می‌فرستد روشن یا خاموش کنید و زمان آن‌ها را تنظیم کنید. هر یادآور برای هر سرویس، پرداخت یا کاهش موجودی فقط یک بار فرستاده می‌شود.',
+  'web.reminders_expiry_title': 'انقضای سرویس',
+  'web.reminders_expiry_hint':
+    'پیش از پایان اعتبار سرویس، در روز انقضا و پس از آن به مشتری خبر می‌دهد. اگر مشتری تمدید کند، یادآورهای دورهٔ قبلی دیگر فرستاده نمی‌شوند.',
+  'web.reminders_flag_expiry': 'یادآور پیش از انقضا',
+  'web.reminders_flag_expiry_day': 'یادآور روز انقضا',
+  'web.reminders_day_hint':
+    'از ابتدای روزِ انقضا به وقت فروشگاه و پیش از پایان اعتبار فرستاده می‌شود.',
+  'web.reminders_flag_expired': 'اعلام پایان اعتبار',
+  'web.reminders_early_days': 'یادآور هفتگی',
+  'web.reminders_early_days_hint':
+    'چند روز پیش از انقضا، زودتر از یادآور اول. صفر یعنی این یادآور فرستاده نشود.',
+  'web.reminders_early_inert':
+    'یادآور هفتگی زودتر از یادآور اول نیست و در حال حاضر فرستاده نمی‌شود. عدد آن را بیشتر از یادآور اول کنید یا صفر بگذارید.',
+  'web.reminders_first_days': 'یادآور اول',
+  'web.reminders_second_days': 'یادآور دوم',
+  'web.reminders_days_hint':
+    'چند روز پیش از انقضا، از ۱ تا ۳۰. یادآور اول باید زودتر از یادآور دوم باشد.',
+  'web.reminders_unit_days': 'روز پیش از انقضا',
+  'web.reminders_usage_title': 'کاهش حجم',
+  'web.reminders_usage_hint':
+    'وقتی بخش مشخصی از حجم سرویس باقی مانده باشد به مشتری خبر می‌دهد. پس از خرید حجم اضافه یا تمدید، از نو شمرده می‌شود. سرویس با حجم نامحدود هشدار نمی‌گیرد.',
+  'web.reminders_flag_usage': 'یادآور کاهش حجم',
+  'web.reminders_usage_first': 'هشدار اول',
+  'web.reminders_usage_second': 'هشدار دوم',
+  'web.reminders_usage_final': 'هشدار پایانی',
+  'web.reminders_usage_values_hint':
+    'درصد حجم باقی‌مانده، از ۰ تا ۹۹. هر هشدار باید با حجم باقی‌ماندهٔ کمتری از هشدار قبلی باشد.',
+  'web.reminders_unit_percent': 'درصد باقی‌مانده',
+  'web.reminders_wallet_title': 'کمبود موجودی کیف پول',
+  'web.reminders_wallet_hint':
+    'وقتی موجودی کیف پول مشتری از مبلغ تعیین‌شده کمتر شود، یک بار به او خبر می‌دهد و تا موجودی دوباره به این مبلغ نرسیده باشد پیام دیگری نمی‌فرستد. به مشتری‌ای که هیچ‌وقت این مبلغ را در کیف پول نداشته پیامی فرستاده نمی‌شود.',
+  'web.reminders_flag_wallet': 'هشدار کمبود موجودی',
+  'web.reminders_wallet_threshold': 'مبلغ آستانه',
+  'web.reminders_wallet_threshold_hint':
+    'به کوچک‌ترین واحد پول فروش. صفر یعنی هشداری فرستاده نشود.',
+  'web.reminders_wallet_currency_mismatch':
+    'این مبلغ به واحد پولی غیر از واحد فروش فعلی ذخیره شده و هشداری فرستاده نمی‌شود. مبلغ را دوباره ذخیره کنید.',
+  'web.reminders_pending_title': 'پرداخت در انتظار',
+  'web.reminders_pending_hint':
+    'کمی پیش از پایان مهلت، یک بار به مشتری‌ای که هنوز کارت‌به‌کارت نکرده یا سفارشش را پرداخت نکرده یادآوری می‌کند. برای پرداخت تأییدشده، لغوشده یا منقضی‌شده، پرداختی که رسیدش ارسال شده و پرداخت درگاهی فرستاده نمی‌شود.',
+  'web.reminders_flag_pending': 'یادآور پرداخت در انتظار',
+  'web.reminders_pending_minutes': 'زمان یادآوری',
+  'web.reminders_pending_minutes_hint':
+    'چند دقیقه پیش از پایان مهلت، از ۱ تا ۳۰. پرداختی که کمتر از ۵ دقیقه از ایجادش گذشته یادآوری نمی‌شود.',
+  'web.reminders_templates': 'متن پیام‌ها',
+  'web.reminders_templates_hint':
+    'متن هر پیام را می‌توانید همین‌جا ویرایش کنید؛ همان متنی است که در بخش «متن‌ها» هم دیده می‌شود.',
+  'web.reminders_templates_denied': 'برای دیدن و ویرایش متن پیام‌ها به دسترسی «متن‌ها» نیاز است.',
+  'web.reminders_turn_off_confirm': 'آیا از خاموش کردن این یادآور مطمئن هستید؟',
+  'web.reminders_turn_off_yes': 'بله، خاموش شود',
+  'web.reminders_cancel': 'انصراف',
+  'web.reminders_toggle_reason': 'تغییر از صفحهٔ یادآورها',
   // WP6-A: the trial's flag, its two settings, and the product picker's two options.
   'web.flag_trials': 'سرویس آزمایشی',
   'web.setting_trial_product_id': 'محصول سرویس آزمایشی',

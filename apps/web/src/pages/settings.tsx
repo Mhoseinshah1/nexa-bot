@@ -79,6 +79,13 @@ const REGISTRY_LABELS: Readonly<Record<string, WebKey>> = {
   service_expiry_reminders: 'web.flag_service_expiry_reminders',
   service_expired_notice: 'web.flag_service_expired_notice',
   service_usage_reminders: 'web.flag_service_usage_reminders',
+  // WP-A9.
+  'reminders.expiry_early_days': 'web.setting_reminders_expiry_early_days',
+  'reminders.payment_pending_minutes': 'web.setting_reminders_payment_pending_minutes',
+  'wallet.low_balance.threshold': 'web.setting_wallet_low_balance_threshold',
+  service_expiry_day_reminder: 'web.flag_service_expiry_day_reminder',
+  wallet_low_balance_reminders: 'web.flag_wallet_low_balance_reminders',
+  payment_pending_reminders: 'web.flag_payment_pending_reminders',
   trials: 'web.flag_trials',
   'trial.product_id': 'web.setting_trial_product_id',
   'trial.limit_per_customer': 'web.setting_trial_limit_per_customer',

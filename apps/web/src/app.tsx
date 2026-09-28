@@ -13,6 +13,7 @@ import { PanelsPage, PanelDetailPage, NewPanelPage, ProvidersPage } from './page
 import { SettingsPage } from './pages/settings';
 import { FeaturesPage } from './pages/features';
 import { ContentPage } from './pages/content';
+import { RemindersPage } from './pages/reminders';
 import { AlertsPage, NotificationsPage } from './pages/alerts';
 import { SystemPage } from './pages/system';
 import { RecoveryPage } from './pages/recovery';
@@ -457,6 +458,15 @@ export const NAV: readonly NavEntry[] = [
     path: '/features',
     label: 'web.nav_features',
     icon: 'zap',
+    permission: 'settings.view',
+    group: 'web.navgroup_config',
+  },
+  {
+    // WP-A9: every automated customer reminder, its schedule and its message.
+    id: 'reminders',
+    path: '/reminders',
+    label: 'web.nav_reminders',
+    icon: 'bell',
     permission: 'settings.view',
     group: 'web.navgroup_config',
   },
@@ -1026,6 +1036,21 @@ export function resolve(
       element: <FeaturesPage mayEdit={may('settings.edit')} denied={!may('settings.view')} />,
       crumbs: [{ label: t('web.nav_features') }],
       title: t('web.nav_features'),
+    };
+  }
+
+  if (route.path === '/reminders') {
+    return {
+      element: (
+        <RemindersPage
+          mayEdit={may('settings.edit')}
+          denied={!may('settings.view')}
+          mayViewTemplates={may('templates.view')}
+          mayEditTemplates={may('templates.edit')}
+        />
+      ),
+      crumbs: [{ label: t('web.nav_reminders') }],
+      title: t('web.nav_reminders'),
     };
   }
 
