@@ -110,7 +110,8 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
 /**
  * The presentation for a key the server sent, or `undefined` for one this build does not
  * know. That happens when a newer server has registered a flag that this page has not
- * been given yet, and the page then falls back to the server's own description.
+ * been given yet. The page then falls back to the server's own description, and asks
+ * before switching such a flag off, because nothing here can say it is harmless.
  */
 export function featurePresentation(key: string): FeaturePresentation | undefined {
   return Object.prototype.hasOwnProperty.call(FEATURE_PRESENTATION, key)

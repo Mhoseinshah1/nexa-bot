@@ -225,6 +225,87 @@ describe('the feature flags page', () => {
     expect(screen.queryByRole('alertdialog')).toBeNull();
   });
 
+  /**
+   * A flag from a newer server that this bundle has no entry for. Nothing here can say
+   * its switch-off is harmless, and the server no longer asks for a confirmation, so the
+   * page asks, with the generic sentence.
+   */
+  it('asks before switching off a flag this build does not know', async () => {
+    const api = stubApi([
+      {
+        url: '/features',
+        body: { flags: [flag({ key: 'future_flag', enabled: true, version: 1 })] },
+      },
+      {
+        url: '/features/future_flag',
+        status: 201,
+        body: { flag: flag({ key: 'future_flag', enabled: false, version: 2 }), changed: true },
+      },
+    ]);
+    renderPage(<FeaturesPage mayEdit denied={false} />);
+    const posts = () => api.calls.filter((call) => call.method === 'POST');
+
+    fireEvent.click(await screen.findByRole('switch', { name: 'future_flag' }));
+    const dialog = screen.getByRole('alertdialog');
+    expect(dialog).toHaveTextContent(t('web.feature_confirm_disable'));
+    expect(dialog).toHaveTextContent(t('web.feature_unknown_off_effect'));
+    expect(posts()).toHaveLength(0);
+
+    fireEvent.click(screen.getByRole('button', { name: t('web.feature_confirm_disable_yes') }));
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    expect(posts()[0]?.url).toContain('/features/future_flag');
+    expect(posts()[0]?.body).toMatchObject({ enabled: false, expectedVersion: 1 });
+  });
+
+  /**
+   * The dialog holds focus: Tab from its last button goes to its first and Shift+Tab
+   * back, never to the switches behind it. A second switch pressed behind it opens
+   * nothing and sends nothing. Cancelling hands focus back to the switch that opened it.
+   */
+  it('keeps focus inside the dialog and hands it back to the switch on cancel', async () => {
+    const api = stubApi([
+      {
+        url: '/features',
+        body: {
+          flags: [
+            flag({ enabled: true, version: 2 }),
+            flag({ key: 'template_overrides', enabled: true, version: 1 }),
+          ],
+        },
+      },
+    ]);
+    renderPage(<FeaturesPage mayEdit denied={false} />);
+
+    // Not focused first: a click does not focus a button in every browser (Safari),
+    // so focus must come back to the switch by name, not by "what had focus".
+    const opener = await screen.findByRole('switch', { name: OPS_TITLE });
+    fireEvent.click(opener);
+
+    const yes = screen.getByRole('button', { name: t('web.feature_confirm_disable_yes') });
+    const cancel = screen.getByRole('button', { name: t('web.feature_confirm_cancel') });
+    expect(cancel).toHaveFocus();
+
+    fireEvent.keyDown(cancel, { key: 'Tab' });
+    expect(yes).toHaveFocus();
+    fireEvent.keyDown(yes, { key: 'Tab', shiftKey: true });
+    expect(cancel).toHaveFocus();
+
+    // Focus moved out by any other route is pulled back in.
+    screen.getByRole('switch', { name: t('web.feature_template_overrides_title') }).focus();
+    expect(cancel).toHaveFocus();
+
+    // A second sensitive switch behind the open dialog: no second dialog, no request.
+    fireEvent.click(
+      screen.getByRole('switch', { name: t('web.feature_template_overrides_title') }),
+    );
+    expect(screen.getAllByRole('alertdialog')).toHaveLength(1);
+    expect(api.calls.filter((call) => call.method === 'POST')).toHaveLength(0);
+
+    fireEvent.click(cancel);
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    await waitFor(() => expect(opener).toHaveFocus());
+  });
+
   it('shows related settings by their Persian names and current values, not as a key table', async () => {
     stubApi([
       {

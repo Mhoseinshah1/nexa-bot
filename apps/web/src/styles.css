@@ -1874,6 +1874,11 @@ textarea.input {
   overflow-wrap: anywhere;
 }
 
+/* Holds a feature's switch so focus can be handed back to it; adds no box. */
+.switch-slot {
+  display: contents;
+}
+
 /* A plain yes/cancel confirmation over the page (`ui/confirm-dialog.tsx`). */
 .dialog-backdrop {
   position: fixed;

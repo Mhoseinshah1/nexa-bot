@@ -150,6 +150,9 @@ export const WEB_FA = {
   'web.feature_referral_signup_gift_title': 'هدیهٔ عضویت با معرفی',
   'web.feature_referral_signup_gift_summary':
     'برای هر معرفی معتبر، مبلغ هدیه میان معرف و کاربر جدید تقسیم می‌شود و هر کدام یک بار سهم خود را دریافت می‌کنند.',
+  // A flag from a newer server that this panel build has no entry for.
+  'web.feature_unknown_off_effect':
+    'این قابلیت برای این نسخه از پنل ناشناخته است و خاموش کردن آن ممکن است بخشی از کار ربات را متوقف کند.',
   'web.feature_custom_service_title': 'سرویس دلخواه',
   'web.feature_custom_service_summary':
     'مشتری موقعیت، حجم و مدت دلخواه خود را انتخاب می‌کند و قیمت بر اساس قیمت هر گیگابایت و هر روز محاسبه می‌شود.',

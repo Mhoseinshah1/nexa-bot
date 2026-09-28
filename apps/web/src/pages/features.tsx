@@ -1,11 +1,11 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { FeatureFlagResponse } from '@nexa/contracts';
 import { fetchFeatureFlags, saveFeatureFlag } from '../api/client';
 import { formatTimestamp } from '../format';
 import { useSubmissionKey } from '../submission-key';
 import { t } from '../i18n/web.fa';
-import { ConfirmDialog } from '../ui/confirm-dialog';
+import { ConfirmDialog, confirmDialogOpen } from '../ui/confirm-dialog';
 import { Badge, Card, Ltr, PageHead, StateSwitch, Switch } from '../ui/kit';
 import { featurePresentation } from './features-catalogue';
 import { ErrorReport, registryLabel } from './settings';
@@ -15,8 +15,9 @@ import { ErrorReport, registryLabel } from './settings';
  *
  * Each feature shows its Persian name, one practical sentence, its state and a switch.
  * Turning a feature on is one click. Turning one off is one click too, except for the
- * few whose switch-off silently stops something people rely on. Those ask a plain
- * yes/cancel question first (`FEATURE_PRESENTATION[key].disableEffect`). Nothing is
+ * few whose switch-off silently stops something people rely on, and any flag this
+ * build does not know. Those ask a plain yes/cancel question first
+ * (`FEATURE_PRESENTATION[key].disableEffect`). Nothing is
  * typed: no internal key, no phrase, no reason. The audit row records who, when and
  * what on its own.
  *
@@ -48,8 +49,13 @@ function FlagCard({ flag, mayEdit }: { flag: FeatureFlagResponse; mayEdit: boole
   // own description is then the best there is, and the key is its only name.
   const title = presentation === undefined ? flag.key : t(presentation.title);
   const summary = presentation === undefined ? flag.description : t(presentation.summary);
-  const disableEffect = presentation?.disableEffect ?? null;
+  // A flag this build does not know takes the CONSERVATIVE path: nothing here can say its
+  // switch-off is harmless, and the server no longer asks for any confirmation, so the
+  // page asks, with a generic sentence, rather than switching it off on one click.
+  const disableEffect =
+    presentation === undefined ? 'web.feature_unknown_off_effect' : presentation.disableEffect;
   const [asking, setAsking] = useState(false);
+  const switchSlot = useRef<HTMLSpanElement>(null);
 
   const refresh = async () => {
     await client.invalidateQueries({ queryKey: ['features'] });
@@ -85,6 +91,8 @@ function FlagCard({ flag, mayEdit }: { flag: FeatureFlagResponse; mayEdit: boole
   };
 
   const onSwitch = (next: boolean) => {
+    // One question at a time, and nothing is sent behind an open one.
+    if (confirmDialogOpen()) return;
     if (!next && disableEffect !== null) {
       setAsking(true);
       return;
@@ -93,6 +101,10 @@ function FlagCard({ flag, mayEdit }: { flag: FeatureFlagResponse; mayEdit: boole
   };
 
   const cancel = useCallback(() => setAsking(false), []);
+  const returnFocus = useCallback(
+    () => switchSlot.current?.querySelector<HTMLElement>('[role="switch"]') ?? null,
+    [],
+  );
 
   return (
     <Card
@@ -103,12 +115,16 @@ function FlagCard({ flag, mayEdit }: { flag: FeatureFlagResponse; mayEdit: boole
             {flag.enabled ? t('web.enabled') : t('web.disabled')}
           </Badge>
           {mayEdit && (
-            <Switch
-              checked={flag.enabled}
-              onChange={onSwitch}
-              label={title}
-              disabled={toggle.isPending || asking}
-            />
+            // The slot exists so the dialog can hand focus back to this switch on close;
+            // the kit's Switch takes no ref.
+            <span ref={switchSlot} className="switch-slot">
+              <Switch
+                checked={flag.enabled}
+                onChange={onSwitch}
+                label={title}
+                disabled={toggle.isPending || asking}
+              />
+            </span>
           )}
         </>
       }
@@ -137,6 +153,7 @@ function FlagCard({ flag, mayEdit }: { flag: FeatureFlagResponse; mayEdit: boole
             send(false);
           }}
           onCancel={cancel}
+          returnFocusTo={returnFocus}
         />
       )}
     </Card>
