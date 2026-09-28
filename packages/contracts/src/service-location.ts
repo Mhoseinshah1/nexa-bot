@@ -218,3 +218,7 @@ export const serviceLocationDeleteSchema = z.object({
   idempotencyKey: z.string().min(8).max(255),
 });
 export type ServiceLocationDeleteRequest = z.infer<typeof serviceLocationDeleteSchema>;
+
+/** The answer to a delete: `false` is a replay after the row had already gone. */
+export const serviceLocationDeleteResponseSchema = z.object({ deleted: z.boolean() });
+export type ServiceLocationDeleteResponse = z.infer<typeof serviceLocationDeleteResponseSchema>;
