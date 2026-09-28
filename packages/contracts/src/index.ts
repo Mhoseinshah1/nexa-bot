@@ -67,6 +67,7 @@ export * from './service-transfer.js';
 export * from './payment-receipts.js';
 export * from './provisioning.js';
 export * from './service-reminders.js';
+export * from './customer-reminders.js';
 export * from './service-username.js';
 export * from './promotions.js';
 export * from './customer-ux.js';

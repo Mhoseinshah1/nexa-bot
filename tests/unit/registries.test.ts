@@ -256,6 +256,9 @@ describe('the feature flag registry', () => {
       // reachable, and requests already filed stay decidable when it is turned off.
       'customer_refund_requests',
       'ops_notifications',
+      // WP-A9. On by default; the pending payment/order reminder lane it switches on is
+      // reachable, and every reminder is re-checked against the attempt at send time.
+      'payment_pending_reminders',
       // Customer UX completion §I. Off by default; the claim path it switches on is
       // reachable, and it refuses to turn on until the two shares total 100.
       'referral_signup_gift',
@@ -266,11 +269,16 @@ describe('the feature flag registry', () => {
       // sixth threshold because it is not a number: it fires at zero days and what an
       // operator decides about it is whether it is sent at all.
       'service_expired_notice',
+      // WP-A9. "Expires today", on by default; a flag for the same reason as the one above.
+      'service_expiry_day_reminder',
       'service_expiry_reminders',
       'service_usage_reminders',
       'template_overrides',
       // WP6-A. Off by default; the trial path it switches on is reachable.
       'trials',
+      // WP-A9. Off by default; the low-balance lane it switches on is reachable, and it
+      // does nothing until wallet.low_balance.threshold is a positive amount.
+      'wallet_low_balance_reminders',
     ]);
   });
 });

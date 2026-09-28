@@ -8,11 +8,16 @@ import {
   USAGE_SYNC_MINUTES_MIN,
 } from './provisioning.js';
 import {
+  EXPIRY_EARLY_REMINDER_DAYS_MIN,
   EXPIRY_REMINDER_DAYS_MAX,
   EXPIRY_REMINDER_DAYS_MIN,
   USAGE_REMINDER_PERCENT_MAX,
   USAGE_REMINDER_PERCENT_MIN,
 } from './service-reminders.js';
+import {
+  PENDING_PAYMENT_REMINDER_MINUTES_MAX,
+  PENDING_PAYMENT_REMINDER_MINUTES_MIN,
+} from './customer-reminders.js';
 import { moneySchema, salesCurrencyCodeSchema } from './money.js';
 import { uuidV7Schema } from './ids.js';
 import {
@@ -664,10 +669,11 @@ export const SETTINGS = [
   {
     key: 'reminders.usage_first_percent',
     description:
-      'The first traffic-usage threshold, in percent of the allowance. The three usage ' +
-      'thresholds must be strictly increasing and distinct; the trio is checked as a ' +
-      'combination when any one of them is written. A service with an unlimited allowance ' +
-      'is never warned, whatever these say.',
+      'The first traffic-usage threshold, as the percent of the allowance USED; the Web ' +
+      'Admin shows and takes it as the percent REMAINING, a hundred minus this. 80 by ' +
+      'default, which is 20% remaining. The three usage thresholds must be strictly ' +
+      'increasing and distinct; the trio is checked as a combination when any one of them ' +
+      'is written. A service with an unlimited allowance is never warned, whatever these say.',
     schema: z.number().int().min(USAGE_REMINDER_PERCENT_MIN).max(USAGE_REMINDER_PERCENT_MAX),
     defaultValue: 80,
     configures: 'service_usage_reminders',
@@ -679,10 +685,12 @@ export const SETTINGS = [
   {
     key: 'reminders.usage_second_percent',
     description:
-      'The second traffic-usage threshold, in percent. Must be greater than ' +
-      'reminders.usage_first_percent and less than reminders.usage_final_percent.',
+      'The second traffic-usage threshold, as the percent USED (the Web Admin shows the ' +
+      'percent remaining). Must be greater than reminders.usage_first_percent and less than ' +
+      'reminders.usage_final_percent. 90 by default since WP-A9 (10% remaining); a stored ' +
+      'value keeps its meaning.',
     schema: z.number().int().min(USAGE_REMINDER_PERCENT_MIN).max(USAGE_REMINDER_PERCENT_MAX),
-    defaultValue: 95,
+    defaultValue: 90,
     configures: 'service_usage_reminders',
     zeroMeaning: 'NOT_APPLICABLE',
     mutability: 'RUNTIME',
@@ -692,14 +700,82 @@ export const SETTINGS = [
   {
     key: 'reminders.usage_final_percent',
     description:
-      'The last traffic-usage threshold, in percent. A hundred by default — the moment ' +
-      'the allowance is gone. The message says the traffic ran out and offers more; it does ' +
-      'not claim the service stopped, because whether a panel cuts a customer off at the ' +
-      'limit is the provider’s behaviour and not a fact this installation observed.',
+      'The last traffic-usage threshold, as the percent USED (the Web Admin shows the ' +
+      'percent remaining). 95 by default since WP-A9 — 5% remaining; it was a hundred, the ' +
+      'moment the allowance is gone, and a tenant that stored 100 keeps that. The message ' +
+      'says how little is left and offers more; it does not claim the service stopped, ' +
+      'because whether a panel cuts a customer off at the limit is the provider’s behaviour ' +
+      'and not a fact this installation observed.',
     schema: z.number().int().min(USAGE_REMINDER_PERCENT_MIN).max(USAGE_REMINDER_PERCENT_MAX),
-    defaultValue: 100,
+    defaultValue: 95,
     configures: 'service_usage_reminders',
     zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  /*
+   * WP-A9: the week-out expiry slot, the pending-payment lead and the wallet threshold.
+   *
+   * Each is a PARAMETER of a flag, never a switch of its own, for the split `features.ts`
+   * states — except where zero is declared to disable, and then it says so.
+   */
+  {
+    key: 'reminders.expiry_early_days',
+    description:
+      'How many days before a service expires the week-out warning is sent, ahead of ' +
+      'reminders.expiry_first_days. Seven by default; zero turns this one warning off. Must ' +
+      'be greater than reminders.expiry_first_days when it is written; a value that is not ' +
+      '(a tenant that configured a first warning of seven days or more before this key ' +
+      'existed) is never sent on its own, and the Web Admin says so.',
+    schema: z.number().int().min(EXPIRY_EARLY_REMINDER_DAYS_MIN).max(EXPIRY_REMINDER_DAYS_MAX),
+    defaultValue: 7,
+    configures: 'service_expiry_reminders',
+    zeroMeaning: 'DISABLES',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  {
+    key: 'reminders.payment_pending_minutes',
+    description:
+      'How many minutes before its deadline a customer is reminded, once, about a ' +
+      'card-to-card payment they have not paid or an order they have not started paying. ' +
+      'Never sent for an attempt that is settled, cancelled, expired or already has a ' +
+      'receipt, nor for one opened less than five minutes earlier. Ten by default.',
+    schema: z
+      .number()
+      .int()
+      .min(PENDING_PAYMENT_REMINDER_MINUTES_MIN)
+      .max(PENDING_PAYMENT_REMINDER_MINUTES_MAX),
+    defaultValue: 10,
+    configures: 'payment_pending_reminders',
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  {
+    key: 'wallet.low_balance.threshold',
+    description:
+      'The wallet balance below which a customer is told, once, that their balance is low; ' +
+      'told again only after the balance has been back at or above it. An amount in the ' +
+      'currency this installation sells in — a threshold in any other currency is compared ' +
+      'with nothing and sends nothing. Zero sends nothing. Inert while the ' +
+      'wallet_low_balance_reminders flag is off, which is the default.',
+    schema: moneySchema
+      .refine(
+        (money) => BigInt(money.amountMinor) >= 0n,
+        'A low-balance threshold cannot be negative; zero turns the alert off.',
+      )
+      // The same sanity rail a payment has: the value is bound into a bigint comparison.
+      .refine(
+        (money) => BigInt(money.amountMinor) <= PAYMENT_AMOUNT_MAX_MINOR,
+        `A low-balance threshold must be at most ${PAYMENT_AMOUNT_MAX_MINOR.toString()} minor units.`,
+      ),
+    defaultValue: { amountMinor: '0', currency: 'IRT' },
+    configures: 'wallet_low_balance_reminders',
+    zeroMeaning: 'DISABLES',
     mutability: 'RUNTIME',
     classification: 'PUBLIC',
     consumer: 'ACTIVE',
