@@ -193,6 +193,12 @@ export const BOT_INTENTS = [
   'PAY_WALLET',
   'PAY_MANUAL',
   'PAY_GATEWAY',
+  /*
+   * «🧾 ثبت پرداخت» opens the route selector for an order, and «❌ بستن لیست» closes it.
+   * Both name the order and write nothing; the route buttons inside are the taps that pay.
+   */
+  'PAY_METHODS',
+  'PAY_METHODS_CLOSE',
   /* WP11A: the customer asks what became of an external-gateway attempt. Names the payment. */
   'GATEWAY_CHECK',
   'PAY_CANCEL_ASK',
@@ -690,6 +696,16 @@ export const GATEWAY_CHECK_CALLBACK_PREFIX = 'gc:';
  * already sent, and picks the first route as it always did.
  */
 export const GATEWAY_ROUTE_PAY_CALLBACK_PREFIX = 'gp:';
+
+/**
+ * «🧾 ثبت پرداخت»: opens the payment-method selector for an order, `pm:<order uuid>`. It
+ * pays nothing and starts nothing — the selector lists every route offered for the order,
+ * and each of THOSE buttons carries the route's own tap (`m:` card-to-card, `gp:` an
+ * external route). `px:<order uuid>` is the selector's «❌ بستن لیست», which writes nothing
+ * and answers the screen the customer came from.
+ */
+export const PAY_METHODS_CALLBACK_PREFIX = 'pm:';
+export const PAY_METHODS_CLOSE_CALLBACK_PREFIX = 'px:';
 
 /**
  * Withdrawing a pending out-of-band payment. It names the PAYMENT, not the order.
@@ -2350,6 +2366,16 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
     }
     if (data.startsWith(MANUAL_PAY_CALLBACK_PREFIX)) {
       return callbackCommand('PAY_MANUAL', data.slice(MANUAL_PAY_CALLBACK_PREFIX.length), id);
+    }
+    if (data.startsWith(PAY_METHODS_CALLBACK_PREFIX)) {
+      return callbackCommand('PAY_METHODS', data.slice(PAY_METHODS_CALLBACK_PREFIX.length), id);
+    }
+    if (data.startsWith(PAY_METHODS_CLOSE_CALLBACK_PREFIX)) {
+      return callbackCommand(
+        'PAY_METHODS_CLOSE',
+        data.slice(PAY_METHODS_CLOSE_CALLBACK_PREFIX.length),
+        id,
+      );
     }
     if (data.startsWith(GATEWAY_ROUTE_PAY_CALLBACK_PREFIX)) {
       const [rawId, rawProvider, ...rest] = data
@@ -8963,6 +8989,20 @@ export class BotRuntime {
     if (command.intent === 'PAY_MANUAL' && command.targetId !== null) {
       return this.manualPayment(scope, actor, command.targetId, customer, input.idempotencyKey);
     }
+    if (command.intent === 'PAY_METHODS' && command.targetId !== null) {
+      return this.paymentMethods(scope, actor, command.targetId, customer);
+    }
+    if (command.intent === 'PAY_METHODS_CLOSE' && command.targetId !== null) {
+      const back = await this.paymentMethodsBack(scope, actor, command.targetId, customer);
+      if (back !== null) return back;
+      return {
+        key: 'bot.start.welcome_back',
+        values: {},
+        buttons: [],
+        orderId: null,
+        keyboard: (await this.isAdmin(scope, actor, input)) ? 'MAIN_MENU_ADMIN' : 'MAIN_MENU',
+      };
+    }
     /*
      * A rail with no adapter, answered rather than simulated.
      *
@@ -9519,18 +9559,7 @@ export class BotRuntime {
         orderId,
         idempotencyKey: `${input.idempotencyKey}:action_confirm`,
       });
-      return {
-        key: 'bot.order.awaiting_payment',
-        values: {
-          total: order.totals.total,
-          ...(order.expiresAt === null ? {} : { expiresAt: order.expiresAt }),
-        },
-        buttons: paymentButtons(order.id, {
-          manual: await this.deps.payments.manualTransferOffered(scope),
-          external: await this.externalOffered(scope, customer.id, order.totals.total),
-        }),
-        orderId: order.id,
-      };
+      return this.awaitingPaymentReply(scope, customer, order);
     } catch (error) {
       return refusal(error);
     }
@@ -10974,14 +11003,11 @@ export class BotRuntime {
       features: display?.displayFeatures ?? [],
       walletBalance: money(balance.amountMinor, balance.currency),
     });
-    const external = await this.externalOffered(scope, customer.id, order.totals.total);
+    const routes = await this.orderRouteButtons(scope, customer.id, order.id, order.totals.total);
     return {
       key: screen.key,
       values: screen.values,
-      buttons: preinvoiceButtons(order, {
-        manual: await this.deps.payments.manualTransferOffered(scope),
-        external,
-      }),
+      buttons: preinvoiceButtons(order, routes.length > 0),
       orderId: order.id,
     };
   }
@@ -11294,35 +11320,48 @@ export class BotRuntime {
         customerId: customer.id,
         orderId,
       });
-      return {
-        key: 'bot.order.awaiting_payment',
-        /*
-         * What is owed, until when, and — since 4C — the buttons that pay it.
-         *
-         * The sentence here used to say there was no way to pay, which was true when
-         * this message was written and false the moment `paymentButtons` was attached
-         * below. The deadline it renders is now enforced where the money moves:
-         * `orderAwaitingPayment` refuses a tap after `expiresAt`, so «اعتبار تا» is a
-         * fact rather than decoration on a button that worked for ever.
-         *
-         * `expiresAt` is required by the key's declaration, and an order that reached
-         * AWAITING_PAYMENT always has one — the draft carried it. The fallback is the
-         * renderer's rule rather than a guess: a missing required value throws in the
-         * resolver, which is better than a customer reading a literal `{expiresAt}`.
-         */
-        values: {
-          total: order.totals.total,
-          ...(order.expiresAt === null ? {} : { expiresAt: order.expiresAt }),
-        },
-        buttons: paymentButtons(order.id, {
-          manual: await this.deps.payments.manualTransferOffered(scope),
-          external: await this.externalOffered(scope, customer.id, order.totals.total),
-        }),
-        orderId: order.id,
-      };
+      return this.awaitingPaymentReply(scope, customer, order);
     } catch (error) {
       return refusal(error);
     }
+  }
+
+  /**
+   * The awaiting-payment message: what is owed, until when, and the buttons that pay it.
+   * One builder for a confirmed purchase, a confirmed commercial action and the selector's
+   * «❌ بستن لیست», so the three can never draw different buttons for the same order.
+   */
+  private async awaitingPaymentReply(
+    scope: TenantContext,
+    customer: CustomerRecord,
+    order: OrderRecord,
+  ): Promise<PendingReply> {
+    return {
+      key: 'bot.order.awaiting_payment',
+      /*
+       * What is owed, until when, and — since 4C — the buttons that pay it.
+       *
+       * The sentence here used to say there was no way to pay, which was true when
+       * this message was written and false the moment `paymentButtons` was attached
+       * below. The deadline it renders is now enforced where the money moves:
+       * `orderAwaitingPayment` refuses a tap after `expiresAt`, so «اعتبار تا» is a
+       * fact rather than decoration on a button that worked for ever.
+       *
+       * `expiresAt` is required by the key's declaration, and an order that reached
+       * AWAITING_PAYMENT always has one — the draft carried it. The fallback is the
+       * renderer's rule rather than a guess: a missing required value throws in the
+       * resolver, which is better than a customer reading a literal `{expiresAt}`.
+       */
+      values: {
+        total: order.totals.total,
+        ...(order.expiresAt === null ? {} : { expiresAt: order.expiresAt }),
+      },
+      buttons: paymentButtons(
+        order.id,
+        (await this.orderRouteButtons(scope, customer.id, order.id, order.totals.total)).length > 0,
+      ),
+      orderId: order.id,
+    };
   }
 
   /**
@@ -11721,31 +11760,140 @@ export class BotRuntime {
   }
 
   /**
-   * Whether an external gateway route is offered for paying this amount (WP11A) — the one
-   * question the pre-invoice and the awaiting-payment message both ask before drawing the
-   * gateway button, and the question the service asks again when it is tapped.
+   * One button per payment route offered for paying this order, in the operator's order —
+   * what «🧾 ثبت پرداخت» opens, and whether it is drawn at all.
+   *
+   * Built from the routes rather than from a list of providers, so a route added later
+   * appears here without a change: each is dispatched by what its DESCRIPTOR says it
+   * settles through. `GATEWAY` taps `gp:<order>.<provider>` (TonPays, Stars, any external
+   * route); `MANUAL_TRANSFER` taps `m:<order>`, the card-to-card instruction and then the
+   * receipt flow. A route that settles any other way has no order tap and is not drawn.
+   *
+   * Card-to-card keeps the offer rule it always had: `manualTransferOffered` (the route
+   * switched on for purchases AND an enabled account to pay into), not the per-customer
+   * thresholds — whether those apply to an order payment is `OQ-5C-01`. So it is drawn
+   * where the operator ordered it when `routesFor` lists it, and last otherwise.
+   *
+   * Every button carries identifiers only. Each tap re-decides its route on the server.
    */
-  /**
-   * The external routes offered for this order, in the operator's order, each with the
-   * name a customer chooses it by (Package A: one button per route, so Stars and TonPays
-   * are two choices rather than whichever happens to be first).
-   */
-  private async externalOffered(
+  private async orderRouteButtons(
     scope: TenantContext,
     customerId: UserId,
+    orderId: string,
     amount: Money,
-  ): Promise<readonly ExternalRouteButton[]> {
-    const routes = (
-      await this.deps.routes.routesFor(scope, customerId, 'SERVICE_PURCHASE', amount)
-    ).filter((route) => route.descriptor.settlesVia === 'GATEWAY');
-    const named: ExternalRouteButton[] = [];
+  ): Promise<readonly CustomerButton[]> {
+    const routes = await this.deps.routes.routesFor(scope, customerId, 'SERVICE_PURCHASE', amount);
+    const manualOffered = await this.deps.payments.manualTransferOffered(scope);
+    const buttons: CustomerButton[] = [];
+    let manualDrawn = false;
     for (const route of routes) {
-      named.push({
-        provider: route.provider,
-        name: await this.deps.screens.routeName(scope, route),
-      });
+      let data: string | null = null;
+      if (route.descriptor.settlesVia === 'GATEWAY') {
+        data = `${GATEWAY_ROUTE_PAY_CALLBACK_PREFIX}${orderId}.${route.provider}`;
+      } else if (
+        route.descriptor.settlesVia === 'MANUAL_TRANSFER' &&
+        manualOffered &&
+        !manualDrawn
+      ) {
+        data = `${MANUAL_PAY_CALLBACK_PREFIX}${orderId}`;
+        manualDrawn = true;
+      }
+      if (data === null) continue;
+      buttons.push(routeButton(await this.deps.screens.routeName(scope, route), data));
     }
-    return named;
+    if (manualOffered && !manualDrawn) {
+      const name = await this.deps.screens.routeName(scope, {
+        provider: 'MANUAL_TRANSFER',
+        displayName: null,
+      });
+      buttons.push(routeButton(name, `${MANUAL_PAY_CALLBACK_PREFIX}${orderId}`));
+    }
+    return buttons;
+  }
+
+  /**
+   * «💰 روش پرداخت خود را انتخاب نمایید» for one order: the routes `orderRouteButtons`
+   * offers, then «❌ بستن لیست».
+   *
+   * Writes nothing. The order is read as THIS customer's, so another customer's id
+   * answers the refusal, and an order no longer payable (paid, cancelled, expired) answers
+   * `bot.order.not_awaiting_payment`. No payment attempt exists until a route is tapped.
+   */
+  private async paymentMethods(
+    scope: TenantContext,
+    actor: ActorContext,
+    orderId: string,
+    customer: CustomerRecord,
+  ): Promise<PendingReply> {
+    try {
+      const order = await this.deps.orders.orderForCustomer(scope, actor, {
+        customerId: customer.id,
+        orderId,
+      });
+      const close: CustomerButton = {
+        label: { kind: 'TEMPLATE', key: 'bot.wallet.topup_close_button' },
+        data: `${PAY_METHODS_CLOSE_CALLBACK_PREFIX}${order.id}`,
+      };
+      if (order.state !== 'DRAFT' && order.state !== 'AWAITING_PAYMENT') {
+        return {
+          key: 'bot.order.not_awaiting_payment',
+          values: {},
+          buttons: [mainMenuButton()],
+          orderId: order.id,
+        };
+      }
+      const routes = await this.orderRouteButtons(scope, customer.id, order.id, order.totals.total);
+      if (routes.length === 0) {
+        return {
+          key: 'bot.wallet.topup_none_available',
+          values: {},
+          buttons: [close],
+          orderId: order.id,
+        };
+      }
+      return {
+        key: 'bot.wallet.topup_method_prompt',
+        values: {},
+        buttons: [...routes, close],
+        orderId: order.id,
+      };
+    } catch (error) {
+      return refusal(error);
+    }
+  }
+
+  /**
+   * «❌ بستن لیست» on an order's selector: the screen the customer opened it from, or null
+   * for the main menu. Writes nothing and creates no payment.
+   *
+   * An order awaiting payment answers its awaiting-payment message again; a new purchase
+   * still in DRAFT answers its pre-invoice again. Anything else — a commercial draft, an
+   * order that was paid, cancelled or expired meanwhile — answers the main menu.
+   */
+  private async paymentMethodsBack(
+    scope: TenantContext,
+    actor: ActorContext,
+    orderId: string,
+    customer: CustomerRecord,
+  ): Promise<PendingReply | null> {
+    try {
+      const order = await this.deps.orders.orderForCustomer(scope, actor, {
+        customerId: customer.id,
+        orderId,
+      });
+      if (order.state === 'AWAITING_PAYMENT') {
+        return this.awaitingPaymentReply(scope, customer, order);
+      }
+      if (
+        order.state === 'DRAFT' &&
+        (order.purpose === 'NEW_SERVICE' || order.purpose === 'CUSTOM_SERVICE')
+      ) {
+        return this.repricedSummary(scope, actor, order, customer);
+      }
+      return null;
+    } catch (error) {
+      return refusal(error);
+    }
   }
 
   /**
@@ -12385,34 +12533,30 @@ export type { CustomerRecord };
  * and no place to put one.
  */
 /**
- * The pre-invoice's buttons (§D), in the approved order: wallet; the external gateway
- * ONLY when a real external route allows the purchase (none exists in this release, so
- * it is never drawn); manual when card-to-card is offered; the discount code on a new
- * order still in DRAFT; back to the main menu. A cancel is not here: a DRAFT expires on
- * its own, and the cancel button lives on the awaiting-payment message.
+ * The pre-invoice's buttons (§D), in the approved order: wallet; «🧾 ثبت پرداخت», which
+ * opens the selector of every route offered for the order (card-to-card and each external
+ * route live THERE, not here); the discount code on a new order still in DRAFT; back to
+ * the main menu. A cancel is not here: a DRAFT expires on its own, and the cancel button
+ * lives on the awaiting-payment message.
  */
-/** One external route as an order's payment button: the provider and its customer-facing name. */
-interface ExternalRouteButton {
-  readonly provider: PaymentGatewayProvider;
-  readonly name: string;
+/** One route in a payment-method selector: the route's customer-facing name, and its tap. */
+function routeButton(name: string, data: string): CustomerButton {
+  return {
+    label: { kind: 'TEMPLATE', key: 'bot.wallet.topup_method_button', values: { name } },
+    data,
+  };
 }
 
 /**
- * One button per external route offered for the order (Package A), each naming the route
- * and carrying `gp:<order>.<provider>` — identifiers, never an amount.
+ * «🧾 ثبت پرداخت»: opens the order's payment-method selector (`pm:`). It is the generic
+ * entry to every route, never card-to-card itself; drawn only when at least one route is
+ * offered for the order, because a selector with nothing in it is a button with no outcome.
  */
-function externalRouteButtons(
-  orderId: string,
-  routes: readonly ExternalRouteButton[],
-): CustomerButton[] {
-  return routes.map((route) => ({
-    label: {
-      kind: 'TEMPLATE' as const,
-      key: 'bot.wallet.topup_method_button' as const,
-      values: { name: route.name },
-    },
-    data: `${GATEWAY_ROUTE_PAY_CALLBACK_PREFIX}${orderId}.${route.provider}`,
-  }));
+function payMethodsButton(orderId: string): CustomerButton {
+  return {
+    label: { kind: 'TEMPLATE', key: 'bot.payment.manual_button' },
+    data: `${PAY_METHODS_CALLBACK_PREFIX}${orderId}`,
+  };
 }
 
 /**
@@ -12443,24 +12587,13 @@ function starsInvoiceBody(
   };
 }
 
-function preinvoiceButtons(
-  order: OrderRecord,
-  offered: { readonly manual: boolean; readonly external: readonly ExternalRouteButton[] },
-): readonly CustomerButton[] {
+function preinvoiceButtons(order: OrderRecord, routesOffered: boolean): readonly CustomerButton[] {
   return [
     {
       label: { kind: 'TEMPLATE', key: 'bot.payment.wallet_button' },
       data: `${WALLET_PAY_CALLBACK_PREFIX}${order.id}`,
     },
-    ...externalRouteButtons(order.id, offered.external),
-    ...(offered.manual
-      ? [
-          {
-            label: { kind: 'TEMPLATE' as const, key: 'bot.payment.manual_button' as const },
-            data: `${MANUAL_PAY_CALLBACK_PREFIX}${order.id}`,
-          },
-        ]
-      : []),
+    ...(routesOffered ? [payMethodsButton(order.id)] : []),
     ...(order.state === 'DRAFT' &&
     (order.purpose === 'NEW_SERVICE' || order.purpose === 'CUSTOM_SERVICE')
       ? [
@@ -12724,38 +12857,21 @@ function tutorialFor(platform: ConnectionGuidePlatform): PendingReply {
   };
 }
 
-function paymentButtons(
-  orderId: string,
-  offered: { readonly manual: boolean; readonly external: readonly ExternalRouteButton[] },
-): readonly CustomerButton[] {
-  const manualAvailable = offered.manual;
+function paymentButtons(orderId: string, routesOffered: boolean): readonly CustomerButton[] {
   return [
     {
       label: { kind: 'TEMPLATE', key: 'bot.payment.wallet_button' },
       data: `${WALLET_PAY_CALLBACK_PREFIX}${orderId}`,
     },
-    // One per external route offered for it (WP11A; Package A named the route).
-    ...externalRouteButtons(orderId, offered.external),
     /*
-     * Drawn only when there is somewhere for the money to go.
+     * «🧾 ثبت پرداخت», opening the selector of every route offered for the order —
+     * card-to-card, each external route. Drawn only when there is at least one: a
+     * card-to-card route with no enabled account to pay into is not offered
+     * (`manualTransferOffered`), so a selector drawn regardless could hold nothing.
      *
-     * Since 5A a manual transfer is refused outright when the tenant has no enabled
-     * account — `PAYMENT_DESTINATION_UNCONFIGURED` — so a button drawn regardless would
-     * be a button whose only outcome is an error. That is the rule stated two lines
-     * below for a gateway, applied to the rail that CAN be unconfigured.
-     *
-     * The read can be a moment stale: the last enabled account may be disabled between
-     * this render and the tap. The service refuses that case, which is why the check
-     * exists in both places rather than only here.
+     * The read can be a moment stale; each route's own tap re-decides it on the server.
      */
-    ...(manualAvailable
-      ? [
-          {
-            label: { kind: 'TEMPLATE' as const, key: 'bot.payment.manual_button' as const },
-            data: `${MANUAL_PAY_CALLBACK_PREFIX}${orderId}`,
-          },
-        ]
-      : []),
+    ...(routesOffered ? [payMethodsButton(orderId)] : []),
     /*
      * The way out, beside the two ways in.
      *

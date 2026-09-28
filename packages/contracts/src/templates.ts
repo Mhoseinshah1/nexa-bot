@@ -4655,8 +4655,11 @@ export const TEMPLATES = [
   {
     key: 'bot.payment.manual_button',
     description:
-      'The label on the button a customer presses to pay for an order out of band. ' +
-      'A key rather than a literal, for the reason `bot.payment.wallet_button` gives.',
+      'The label on «🧾 ثبت پرداخت», the button that opens the payment-method selector for ' +
+      'an order. It lists every route offered for the order (card-to-card, each external ' +
+      'route) and pays nothing itself; it is NOT card-to-card. The key keeps its name ' +
+      'because renaming a template key strands tenant overrides. A key rather than a ' +
+      'literal, for the reason `bot.payment.wallet_button` gives.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
@@ -7097,7 +7100,7 @@ export const TEMPLATES = [
   {
     key: 'bot.wallet.topup_method_prompt',
     description:
-      'Choose the payment route for the recorded amount. One button per route that is ACTIVE, allows wallet top-up, and admits this customer and this amount.',
+      'Choose the payment route. The one prompt of both payment-method selectors: a wallet top-up (one button per route that is ACTIVE, allows wallet top-up, and admits this customer and this amount) and an order, opened by `bot.payment.manual_button` (one button per route offered for the purchase).',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
@@ -7138,7 +7141,8 @@ export const TEMPLATES = [
   },
   {
     key: 'bot.wallet.topup_close_button',
-    description: 'Closes the route list and the capture.',
+    description:
+      'Closes a route list: the top-up list and its capture, or an order’s selector, which returns to the screen it was opened from. Creates no payment.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },

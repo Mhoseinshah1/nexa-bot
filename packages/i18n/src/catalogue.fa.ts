@@ -1010,7 +1010,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     'مبلغ واردشده معتبر نیست. لطفاً فقط یک عدد صحیح و مثبت بفرستید.',
   'bot.wallet.topup_below_minimum': 'مبلغ واردشده کمتر از حداقل مجاز است. حداقل: {minimum}',
   'bot.wallet.topup_above_maximum': 'مبلغ واردشده بیشتر از حداکثر مجاز است. حداکثر: {maximum}',
-  'bot.wallet.topup_method_prompt': '💳 روش پرداخت خود را انتخاب نمایید',
+  'bot.wallet.topup_method_prompt': '💰 روش پرداخت خود را انتخاب نمایید',
   'bot.wallet.topup_method_button': 'پرداخت با {name}',
   'bot.wallet.topup_method_gift_button': 'پرداخت با {name} ({percent} درصد شارژ هدیه)',
   'bot.wallet.topup_close_button': '❌ بستن لیست',
