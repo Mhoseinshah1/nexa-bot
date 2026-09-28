@@ -378,6 +378,32 @@ describe('WP-A9 reminders', () => {
     expect(told.get(tonight)).toBe('SERVICE_EXPIRY_DAY');
   });
 
+  it('sends "today" after "tomorrow" once the local day of expiry begins', async () => {
+    /*
+     * The ordinary sequence, and the one a query that forgot the calendar rung would
+     * break: the one-day warning is raised yesterday, so a candidate query whose ladder
+     * stopped at EXPIRY_SECOND would find it raised and never return the service again —
+     * and "your service expires today" would never be sent.
+     */
+    await pinLocalHour(20);
+    const id = await service({ expiresInDays: 23 / 24 });
+    expect(await servicePass()).toEqual({ expiry: 1, usage: 0 });
+    expect((await toldAbout()).get(id)).toBe('SERVICE_EXPIRY_SECOND');
+
+    // The tenant's clock reaches the deadline's own date (a zone where it is now ~00:30).
+    await pinLocalHour(0);
+    expect(await servicePass()).toEqual({ expiry: 1, usage: 0 });
+    const result = await ctx.container.database.db.execute(sql`
+      SELECT n.kind FROM customer_notifications n
+      JOIN service_reminders r ON r.id = n.subject_id
+      WHERE r.service_id = ${id} ORDER BY n.created_at`);
+    expect((result.rows as { kind: string }[]).map((row) => row.kind)).toEqual([
+      'SERVICE_EXPIRY_SECOND',
+      'SERVICE_EXPIRY_DAY',
+    ]);
+    expect(await servicePass()).toEqual({ expiry: 0, usage: 0 });
+  });
+
   it('warns at 20%, 10% and 5% remaining, and says so in the message', async () => {
     const below = await service({ expiresInDays: 30, usedBytes: (ALLOWANCE * 79n) / 100n });
     const twenty = await service({ expiresInDays: 30, usedBytes: (ALLOWANCE * 80n) / 100n });
