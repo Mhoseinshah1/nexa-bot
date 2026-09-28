@@ -4,6 +4,8 @@ import type {
   NotificationKind,
   NotificationStatus,
   NotificationTransportKind,
+  OpsLogGroupProblem,
+  OpsLogTopicCategory,
   ScopeContext,
   TemplateKey,
 } from '@nexa/contracts';
@@ -256,6 +258,39 @@ export interface NotificationRepository {
     readonly nextStatus: NotificationStatus;
     readonly nextAttemptAt: Date;
   }): Promise<{ readonly moved: boolean }>;
+
+  /**
+   * WP-A4: puts this tenant's PRESERVED operations-log notifications back in the queue.
+   *
+   * Preserved means FAILED — every attempt spent, or refused outright — and still kept:
+   * nothing in this lane deletes a notification or files one as sent. Only the
+   * operations lane (`OPERATIONAL_EVENT` to Telegram) is requeued; a test and a message to
+   * a person are not. Each intent gets `allowance` more attempts ON TOP of what it has
+   * spent, so its attempt rows keep their numbers and its history stays whole; a row
+   * without a topic route is given one (`routeOf`) so it reaches the connected group.
+   *
+   * A conditional UPDATE naming `FAILED`, so a replay or a second operator requeues
+   * nothing twice. Returns how many moved.
+   */
+  requeuePreserved(
+    scope: ScopeContext,
+    input: {
+      readonly now: Date;
+      readonly allowance: number;
+      readonly limit: number;
+      readonly routeOf: (row: {
+        readonly templateKey: string;
+        readonly payload: Record<string, unknown>;
+      }) => OpsLogTopicCategory;
+    },
+    tx?: unknown,
+  ): Promise<number>;
+
+  /** How many operations-log notifications are pending, and how many are preserved unsent. */
+  opsQueueCounts(
+    scope: ScopeContext,
+    tx?: unknown,
+  ): Promise<{ readonly pending: number; readonly preserved: number }>;
 }
 
 /** A message, rendered and addressed, ready to leave the process. */
@@ -265,22 +300,101 @@ export interface OutboundMessage {
   /** Decides the parse mode. Declared per template key (UNK-TXT-002). */
   readonly html: boolean;
   readonly tenantId: string;
+  /**
+   * WP-A4: the bot to send FROM, when the destination names one — the bot that was added
+   * to the operations log group. Absent means any of the tenant's active bots.
+   */
+  readonly botInstanceId?: string;
+}
+
+// ---------------------------------------------------------------------------
+// WP-A4: the operations log group, as the notification lane sees it
+// ---------------------------------------------------------------------------
+
+/** Where the connected group is right now, for snapshotting a new intent's destination. */
+export interface OpsGroupDestinationReader {
+  /** Null when no group is connected: the lane then falls back to the manual setting. */
+  current(
+    scope: ScopeContext,
+    category: OpsLogTopicCategory,
+    tx?: unknown,
+  ): Promise<{ readonly chatId: string; readonly topicId: number | null } | null>;
+}
+
+export type OpsTopicRoute =
+  | {
+      readonly kind: 'ROUTED';
+      readonly chatId: string;
+      readonly topicId: number;
+      readonly botInstanceId: string;
+    }
+  | {
+      readonly kind: 'UNAVAILABLE';
+      /** A machine code for the attempt row: `ops_group.not_connected`, … */
+      readonly errorCode: string;
+      readonly errorMessage: string;
+    };
+
+/**
+ * The dispatcher's view of the group, at SEND time.
+ *
+ * An intent routed to the group snapshots where the group stood when it was queued, and
+ * is SENT to where the group stands now: a topic an operator deleted has been recreated,
+ * or a preserved message is being retried after a reconnect. Every method is installation
+ * housekeeping in the dispatcher's own sense — no actor, one tenant named per call — and
+ * does its own work through the ops group service, which audits what it changes.
+ */
+export interface OpsTopicRouter {
+  /** The group's current chat and the category's thread, creating the topic if owed. */
+  resolve(tenantId: string, category: OpsLogTopicCategory): Promise<OpsTopicRoute>;
+  /**
+   * Telegram said `staleTopicId` is gone. Recreates the topic ONCE for that thread id —
+   * a second sender that met the same missing thread finds it already recreated — and
+   * returns where to send now.
+   */
+  recover(
+    tenantId: string,
+    category: OpsLogTopicCategory,
+    staleTopicId: number,
+  ): Promise<OpsTopicRoute>;
+  /** A message reached the topic. Best-effort bookkeeping for the status panel. */
+  delivered(
+    tenantId: string,
+    category: OpsLogTopicCategory,
+    chatId: string,
+    at: Date,
+  ): Promise<void>;
+  /** Telegram refused the CHAT, not the message: the panel should say why. */
+  problem(tenantId: string, chatId: string, problem: OpsLogGroupProblem): Promise<void>;
 }
 
 export type TransportResult =
   | { readonly outcome: 'SUCCEEDED' }
-  | {
+  | ({
       readonly outcome: 'FAILED_RETRYABLE';
       readonly errorCode: string;
       readonly errorMessage: string;
       /** What the transport asked us to wait, when it said anything. */
       readonly retryAfterMs?: number;
-    }
-  | {
+    } & TransportFailureSignals)
+  | ({
       readonly outcome: 'FAILED_PERMANENT';
       readonly errorCode: string;
       readonly errorMessage: string;
-    };
+    } & TransportFailureSignals);
+
+/**
+ * What a transport can say about WHY, beyond retryable or permanent (WP-A4).
+ *
+ * Decided by the transport, which is the only layer that reads the provider's error
+ * text; the dispatcher acts on the flags without parsing a sentence.
+ */
+export interface TransportFailureSignals {
+  /** The forum topic addressed no longer exists (an operator deleted it). */
+  readonly topicMissing?: boolean;
+  /** Telegram refused the CHAT, not the message: removed, unknown, or without rights. */
+  readonly chatProblem?: OpsLogGroupProblem;
+}
 
 /**
  * The seam between deciding to say something and saying it.

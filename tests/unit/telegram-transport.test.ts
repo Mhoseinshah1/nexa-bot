@@ -15,7 +15,14 @@ import type { OutboundMessage } from '../../apps/api/src/modules/control/notific
  * honest fixture.
  */
 describe('the Telegram notification transport', () => {
-  const bots = { activeTokenForTenant: async () => 'test-token' };
+  const tokensAskedFor: string[] = [];
+  const bots = {
+    activeTokenForTenant: async () => 'test-token',
+    tokenForBotInstance: async (_scope: unknown, id: string) => {
+      tokensAskedFor.push(id);
+      return 'group-bot-token';
+    },
+  };
   const transport = new TelegramNotificationTransport(bots, 'https://telegram.invalid', 1000);
 
   const message: OutboundMessage = {
@@ -142,13 +149,64 @@ describe('the Telegram notification transport', () => {
 
   it('fails permanently when the tenant has no bot to send from', async () => {
     const withoutBot = new TelegramNotificationTransport(
-      { activeTokenForTenant: async () => null },
+      { activeTokenForTenant: async () => null, tokenForBotInstance: async () => null },
       'https://telegram.invalid',
       1000,
     );
     expect(await withoutBot.send(message)).toMatchObject({
       outcome: 'FAILED_PERMANENT',
       errorCode: 'telegram.no_bot_configured',
+    });
+  });
+
+  // WP-A4: the operations log group.
+  it('sends from the bot the message names, into the topic it names', async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: true }),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    await transport.send({
+      ...message,
+      destination: { transport: 'TELEGRAM', chatId: '-100999', topicId: 42, opsTopic: 'SYSTEM' },
+      botInstanceId: '01900000-0000-7000-8000-00000000a001',
+    });
+    expect(tokensAskedFor).toContain('01900000-0000-7000-8000-00000000a001');
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, { body: string }];
+    expect(url).toContain('/botgroup-bot-token/sendMessage');
+    expect(JSON.parse(init.body)).toMatchObject({ chat_id: '-100999', message_thread_id: 42 });
+  });
+
+  it('flags a deleted topic, and only when a topic was addressed', async () => {
+    respond(400, {
+      ok: false,
+      error_code: 400,
+      description: 'Bad Request: message thread not found',
+    });
+    expect(
+      await transport.send({
+        ...message,
+        destination: { transport: 'TELEGRAM', chatId: '-100999', topicId: 42 },
+      }),
+    ).toMatchObject({ outcome: 'FAILED_PERMANENT', topicMissing: true });
+    respond(400, {
+      ok: false,
+      error_code: 400,
+      description: 'Bad Request: message thread not found',
+    });
+    expect(await transport.send(message)).not.toHaveProperty('topicMissing');
+  });
+
+  it('flags a refusal of the chat itself', async () => {
+    respond(403, {
+      ok: false,
+      error_code: 403,
+      description: 'Forbidden: bot was kicked from the supergroup chat',
+    });
+    expect(await transport.send(message)).toMatchObject({
+      outcome: 'FAILED_PERMANENT',
+      chatProblem: 'BOT_REMOVED',
     });
   });
 

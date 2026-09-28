@@ -6,6 +6,7 @@ import type {
   NotificationKind,
   NotificationStatus,
   NotificationTransportKind,
+  OpsLogTopicCategory,
   ScopeContext,
   TemplateKey,
 } from '@nexa/contracts';
@@ -984,5 +985,115 @@ export class DrizzleNotificationRepository implements NotificationRepository {
 
       return { moved: moved.length > 0 };
     });
+  }
+
+  /**
+   * WP-A4: preserved operations-log notifications, back in the queue.
+   *
+   * Row-locked with SKIP LOCKED and moved by a conditional UPDATE naming `FAILED`, so two
+   * operators, a replay and the worker's automatic requeue after a reconnect cannot move
+   * one intent twice. The attempt counter is not touched — it is monotonic and names the
+   * attempt rows already written — so the allowance is RAISED instead: spend plus
+   * `allowance`, which gives exactly that many further attempts whatever was spent.
+   */
+  async requeuePreserved(
+    scope: ScopeContext,
+    input: {
+      readonly now: Date;
+      readonly allowance: number;
+      readonly limit: number;
+      readonly routeOf: (row: {
+        readonly templateKey: string;
+        readonly payload: Record<string, unknown>;
+      }) => OpsLogTopicCategory;
+    },
+    tx?: unknown,
+  ): Promise<number> {
+    const tenantId = requireTenantId(scope);
+    const work = async (executor: Executor): Promise<number> => {
+      const rows = await executor
+        .select({
+          id: notifications.id,
+          templateKey: notifications.templateKey,
+          payload: notifications.payload,
+          destination: notifications.destination,
+        })
+        .from(notifications)
+        .where(
+          and(
+            eq(notifications.tenantId, tenantId),
+            eq(notifications.status, 'FAILED'),
+            eq(notifications.kind, 'OPERATIONAL_EVENT'),
+            sql`${notifications.destination}->>'transport' = 'TELEGRAM'`,
+          ),
+        )
+        .orderBy(asc(notifications.createdAt), asc(notifications.id))
+        .limit(input.limit)
+        .for('update', { skipLocked: true });
+      if (rows.length === 0) return 0;
+
+      const byCategory = new Map<string, string[]>();
+      for (const row of rows) {
+        const destination = row.destination as { opsTopic?: unknown };
+        const category =
+          typeof destination.opsTopic === 'string'
+            ? destination.opsTopic
+            : input.routeOf({
+                templateKey: row.templateKey,
+                payload: (row.payload ?? {}) as Record<string, unknown>,
+              });
+        const ids = byCategory.get(category) ?? [];
+        ids.push(row.id);
+        byCategory.set(category, ids);
+      }
+
+      let moved = 0;
+      for (const [category, ids] of byCategory) {
+        const updated = await executor
+          .update(notifications)
+          .set({
+            status: 'PENDING',
+            completedAt: null,
+            nextAttemptAt: input.now,
+            maxAttempts: sql`${spentAttempts} + ${input.allowance}`,
+            // Keeps the snapshot and adds the route, so a row queued before the group
+            // existed reaches the connected group's topic.
+            destination: sql`${notifications.destination} || jsonb_build_object('opsTopic', ${category}::text)`,
+          })
+          .where(
+            and(
+              eq(notifications.tenantId, tenantId),
+              eq(notifications.status, 'FAILED'),
+              inArray(notifications.id, ids),
+            ),
+          )
+          .returning({ id: notifications.id });
+        moved += updated.length;
+      }
+      return moved;
+    };
+    const scoped = (tx as TransactionScope | undefined)?.tx;
+    return scoped ? work(scoped) : this.db.transaction((opened) => work(opened));
+  }
+
+  async opsQueueCounts(
+    scope: ScopeContext,
+    tx?: unknown,
+  ): Promise<{ readonly pending: number; readonly preserved: number }> {
+    const tenantId = requireTenantId(scope);
+    const rows = await executorOf(this.db, tx)
+      .select({ status: notifications.status, count: sql<number>`count(*)::int` })
+      .from(notifications)
+      .where(
+        and(
+          eq(notifications.tenantId, tenantId),
+          eq(notifications.kind, 'OPERATIONAL_EVENT'),
+          ne(notifications.status, 'SENT'),
+        ),
+      )
+      .groupBy(notifications.status);
+    const of = (status: NotificationStatus) =>
+      rows.find((row) => row.status === status)?.count ?? 0;
+    return { pending: of('PENDING'), preserved: of('FAILED') };
   }
 }

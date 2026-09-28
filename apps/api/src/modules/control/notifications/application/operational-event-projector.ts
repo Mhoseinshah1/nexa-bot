@@ -1,22 +1,17 @@
 import {
-  OPERATIONAL_SEVERITIES,
   isSystemContext,
+  opsLogTopicForCode,
   type Logger,
   type UnitOfWork,
   type OperationalEventInput,
   type OperationalEventRecorder,
-  type OperationalSeverity,
   type RecordedOperationalEvent,
   type ScopeContext,
-  type SettingKey,
+  type TenantContext,
 } from '@nexa/contracts';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
-import type { SettingsResolver } from '../../settings/application/settings-resolver.js';
 import type { NotificationService } from './notification.service.js';
-
-const SEVERITY_RANK = new Map<OperationalSeverity, number>(
-  OPERATIONAL_SEVERITIES.map((severity, index) => [severity, index]),
-);
+import { contextBotInstanceId, operationalEventDetails } from './event-details.js';
 
 /**
  * Projects operational events into notifications.
@@ -32,10 +27,12 @@ const SEVERITY_RANK = new Map<OperationalSeverity, number>(
  *     log group posted the same expired-TLS error 36 + 15 + 8 + 1 times in one
  *     day (BUG-LGR-028); dedupe made that one row here, and this makes it one
  *     message.
- *   - **Severity routes.** At or above the configured threshold, per the
- *     corpus's own recommendation that severity be carried on the event "so
- *     routing is a rule, not a topic choice". The legacy log routes by forum
- *     topic and has no severity at all (LGR-BR-081).
+ *   - **Explicit routing, not a severity cutoff (WP-A4).** Every meaningful
+ *     event is eligible; `opsLogTopicForCode` decides which of the group's
+ *     topics it goes to. The operator-set minimum severity this replaced
+ *     silently suppressed events nobody had decided to hide, and
+ *     `ops.notifications.min_severity` is no longer read. Severity stays on the
+ *     event and in the message.
  *   - **A recovery is worth saying.** An event that reopens a resolved
  *     condition is news even though its row is not new — the legacy log never
  *     follows an error with a resolution at all (BUG-LGR-029).
@@ -53,15 +50,14 @@ export class NotifyingOperationalEventRecorder implements OperationalEventRecord
   /**
    * @param inner the real recorder
    * @param notifications the queue this projects into
-   * @param settings a resolver wired to the RAW recorder, not to this one
    * @param logger where a failed projection goes
    *
-   * That third parameter is load-bearing. `SettingsResolver` records an
-   * operational event when a stored value no longer parses, and this projection
-   * reads settings — so a resolver wired to this decorator would recurse on the
-   * first bad value. The composition root gives the projection path a resolver
-   * that writes straight to the underlying recorder, which removes the cycle
-   * rather than detecting it.
+   * The queue reads settings and the feature flag, and `SettingsResolver`
+   * records an operational event when a stored value no longer parses — so the
+   * composition root gives `NotificationService` a resolver wired to the RAW
+   * recorder, never to this decorator, which removes the cycle rather than
+   * detecting it. (This class read the severity threshold itself until WP-A4,
+   * and carried that resolver for it.)
    *
    * The first version of this class used a re-entrancy flag instead. It was
    * wrong under concurrency: two events arriving together would find the flag
@@ -71,7 +67,6 @@ export class NotifyingOperationalEventRecorder implements OperationalEventRecord
   constructor(
     private readonly inner: OperationalEventRecorder,
     private readonly notifications: NotificationService,
-    private readonly settings: SettingsResolver,
     private readonly uow: UnitOfWork<TransactionScope>,
     private readonly logger: Logger,
   ) {}
@@ -128,7 +123,7 @@ export class NotifyingOperationalEventRecorder implements OperationalEventRecord
   }
 
   private async recordAndProject(
-    scope: ScopeContext,
+    scope: TenantContext,
     event: OperationalEventInput,
     tx: TransactionScope,
   ): Promise<RecordedOperationalEvent> {
@@ -146,13 +141,9 @@ export class NotifyingOperationalEventRecorder implements OperationalEventRecord
       // kept it. That is the failure mode this whole subsystem exists to make
       // hard, written into its own error handling.
       await this.uow.runNested(scope, tx, async (nested) => {
-        const threshold = await this.settings.valueOf<OperationalSeverity>(
-          scope,
-          'ops.notifications.min_severity' as SettingKey,
-          nested,
-        );
-        if (rank(recorded.severity) < rank(threshold)) return;
-
+        // No severity threshold (WP-A4): routing decides WHERE, never whether.
+        const details = operationalEventDetails(event.context);
+        const botInstanceId = scope.botInstanceId ?? contextBotInstanceId(event.context);
         await this.notifications.queue(
           scope,
           {
@@ -168,8 +159,14 @@ export class NotifyingOperationalEventRecorder implements OperationalEventRecord
               message: recorded.message,
               occurrences: recorded.occurrenceCount,
               firstSeenAt: recorded.firstSeenAt,
+              lastSeenAt: recorded.lastSeenAt,
+              tenantId: String(scope.tenantId),
+              ...(botInstanceId ? { botInstanceId: String(botInstanceId) } : {}),
+              ...(details ? { details } : {}),
+              ...(event.correlationId ? { correlationId: String(event.correlationId) } : {}),
             },
             ...(event.correlationId ? { correlationId: event.correlationId } : {}),
+            opsTopic: opsLogTopicForCode(recorded.code),
           },
           nested,
         );
@@ -193,8 +190,4 @@ export class NotifyingOperationalEventRecorder implements OperationalEventRecord
 
     return recorded;
   }
-}
-
-function rank(severity: OperationalSeverity): number {
-  return SEVERITY_RANK.get(severity) ?? 0;
 }

@@ -1,0 +1,848 @@
+import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import {
+  isNexaError,
+  normaliseOpsConnectCode,
+  systemJobActor,
+  type ActorContext,
+  type Clock,
+  type CorrelationId,
+  type OpsLogGroupProblem,
+  type ScopeContext,
+} from '@nexa/contracts';
+import { NotificationDispatcher } from '../../apps/api/src/modules/control/notifications/application/notification-dispatcher';
+import type {
+  NotificationTransport,
+  OutboundMessage,
+  TransportResult,
+} from '../../apps/api/src/modules/control/notifications/application/ports';
+import {
+  OpsGroupRouter,
+  OpsGroupService,
+} from '../../apps/api/src/modules/control/ops-group/application/ops-group.service';
+import { OpsTopicProvisioner } from '../../apps/api/src/modules/control/ops-group/application/topic-provisioner';
+import type { OpsGroupTelegram } from '../../apps/api/src/modules/control/ops-group/application/ports';
+import { DrizzleOpsGroupRepository } from '../../apps/api/src/modules/control/ops-group/infrastructure/drizzle-ops-group.repository';
+import { OpsGroupBotSource } from '../../apps/api/src/modules/control/ops-group/infrastructure/telegram-ops-group';
+import {
+  SEED_IDS,
+  adminActorFor,
+  createAdmin,
+  createTestContext,
+  tenantA,
+  tenantB,
+  type TestContext,
+} from './harness';
+
+/**
+ * WP-A4 — the Nexa-managed operations log group, against a real database.
+ *
+ * Telegram is a scripted fake of the `OpsGroupTelegram` port and of the notification
+ * transport: what cannot be faked — the one-time code's single use, the topic registry's
+ * unique key and claim, the queue's preservation and requeue — is what runs here.
+ */
+
+const GROUP_CHAT = '-1001234567890';
+const OTHER_CHAT = '-1009999999999';
+
+/** A controllable clock for the service, so code expiry is decided by the test. */
+class TestClock implements Clock {
+  current = new Date();
+  now(): Date {
+    return new Date(this.current.getTime());
+  }
+  advance(ms: number): void {
+    this.current = new Date(this.current.getTime() + ms);
+  }
+}
+
+/** The ops group's Telegram, scripted. */
+class FakeOpsTelegram implements OpsGroupTelegram {
+  chat = { type: 'supergroup', title: 'Nexa Ops', isForum: true };
+  member: { status: string; canManageTopics: boolean | null; canSendMessages: boolean | null } = {
+    status: 'administrator',
+    canManageTopics: true,
+    canSendMessages: null,
+  };
+  nextThread = 100;
+  created: { chatId: string; name: string; threadId: number }[] = [];
+  sent: { chatId: string; threadId: number | null; text: string }[] = [];
+  /** Delays `createTopic`, so concurrent callers overlap for real. */
+  createDelayMs = 0;
+  /** Threads Telegram no longer has: a send to one answers "message thread not found". */
+  deletedThreads = new Set<number>();
+
+  async botIdentity() {
+    return { outcome: 'OK' as const, botId: '777000' };
+  }
+  async describeChat() {
+    return { outcome: 'OK' as const, ...this.chat };
+  }
+  async botMembership() {
+    return { outcome: 'OK' as const, ...this.member };
+  }
+  async createTopic(_token: string, chatId: string, name: string) {
+    if (this.createDelayMs > 0)
+      await new Promise((resolve) => setTimeout(resolve, this.createDelayMs));
+    this.nextThread += 1;
+    this.created.push({ chatId, name, threadId: this.nextThread });
+    return { outcome: 'OK' as const, threadId: this.nextThread };
+  }
+  async send(_token: string, chatId: string, threadId: number | null, text: string) {
+    if (threadId !== null && this.deletedThreads.has(threadId)) {
+      return {
+        outcome: 'FAILED' as const,
+        retryable: false,
+        errorCode: 'telegram.rejected.400',
+        errorMessage: 'Bad Request: message thread not found',
+        topicMissing: true,
+        chatProblem: null,
+      };
+    }
+    this.sent.push({ chatId, threadId, text });
+    return { outcome: 'OK' as const };
+  }
+}
+
+/** The notification transport, scripted per call, recording every message it is handed. */
+class ScriptedTransport implements NotificationTransport {
+  readonly kind = 'TELEGRAM' as const;
+  readonly messages: OutboundMessage[] = [];
+  /** Answers for the next calls, in order; empty means "delivered". */
+  script: TransportResult[] = [];
+  /** A fixed answer for every call, when set. */
+  always: TransportResult | null = null;
+  /** Threads that answer "message thread not found", like the fake Telegram's. */
+  deletedThreads = new Set<number>();
+
+  async send(message: OutboundMessage): Promise<TransportResult> {
+    this.messages.push(message);
+    if (this.always) return this.always;
+    const next = this.script.shift();
+    if (next) return next;
+    const topic = message.destination.transport === 'TELEGRAM' ? message.destination.topicId : null;
+    if (topic !== null && this.deletedThreads.has(topic)) {
+      return {
+        outcome: 'FAILED_PERMANENT',
+        errorCode: 'telegram.rejected.400',
+        errorMessage: 'Bad Request: message thread not found',
+        topicMissing: true,
+      };
+    }
+    return { outcome: 'SUCCEEDED' };
+  }
+}
+
+describe('the operations log group (WP-A4)', () => {
+  let ctx: TestContext;
+  let owner: ActorContext;
+  let telegram: FakeOpsTelegram;
+  let clock: TestClock;
+  let service: OpsGroupService;
+  let provisioner: OpsTopicProvisioner;
+  let repository: DrizzleOpsGroupRepository;
+  let transport: ScriptedTransport;
+  let dispatcher: NotificationDispatcher;
+  let keySeq = 0;
+  const key = (label: string) => `${label}-${Date.now()}-${(keySeq += 1)}`;
+  const system = () => systemJobActor('ops-group-test', 'test-correlation' as CorrelationId);
+
+  beforeEach(async () => {
+    ctx ??= await createTestContext({ NOTIFICATION_TRANSPORT: 'recording' });
+    await ctx.reset();
+    owner = adminActorFor(
+      await createAdmin(ctx.container, tenantA, { username: 'owner', roleKeys: ['owner'] }),
+    );
+    await ctx.container.featureFlags.set(tenantA, owner, {
+      key: 'ops_notifications',
+      enabled: true,
+      expectedVersion: null,
+      idempotencyKey: key('flag'),
+      confirmKey: 'ops_notifications',
+      reason: 'Test setup.',
+    });
+
+    telegram = new FakeOpsTelegram();
+    clock = new TestClock();
+    repository = new DrizzleOpsGroupRepository(ctx.container.database.db);
+    const c = ctx.container;
+    provisioner = new OpsTopicProvisioner({
+      repository,
+      telegram,
+      templates: c.templateResolver,
+      audit: c.audit,
+      opsLog: c.opsLogWriter,
+      clock,
+      ids: c.ids,
+      logger: c.logger,
+    });
+    service = new OpsGroupService({
+      repository,
+      telegram,
+      bots: new OpsGroupBotSource(c.botInstances),
+      provisioner,
+      notifications: c.notificationRepository,
+      templates: c.templateResolver,
+      features: c.featureFlagResolver,
+      settings: c.settingsResolver,
+      guard: c.guard,
+      uow: c.uow,
+      audit: c.audit,
+      opsLog: c.opsLogWriter,
+      sessions: c.sessions,
+      idempotency: c.idempotency,
+      scopeActivity: c.tenants,
+      outbox: c.outbox,
+      clock,
+      ids: c.ids,
+      logger: c.logger,
+    });
+    transport = new ScriptedTransport();
+    dispatcher = new NotificationDispatcher(
+      c.notificationRepository,
+      transport,
+      c.templateResolver,
+      c.settingsResolver,
+      c.clock,
+      c.ids,
+      c.logger,
+      c.opsLogWriter,
+      {
+        pollIntervalMs: 1_000,
+        batchSize: 10,
+        leaseMs: 60_000,
+        baseBackoffMs: 1_000,
+        maxBackoffMs: 5_000,
+      },
+      new OpsGroupRouter(service, system),
+    );
+    dispatcher.setRateLimitScope(tenantA);
+  });
+
+  afterAll(async () => {
+    await ctx?.close();
+  });
+
+  // -------------------------------------------------------------------------
+  // Helpers
+  // -------------------------------------------------------------------------
+
+  async function issueCode(botInstanceId: string = SEED_IDS.botA1): Promise<string> {
+    const issued = await service.issueConnectCode(tenantA, owner, {
+      idempotencyKey: key('code'),
+      botInstanceId,
+    });
+    return issued.code;
+  }
+
+  function botScope(tenant: { readonly tenantId: unknown }, botInstanceId: string): ScopeContext {
+    return { tenantId: tenant.tenantId as never, botInstanceId: botInstanceId as never };
+  }
+
+  async function bind(
+    code: string,
+    options: {
+      tenant?: { readonly tenantId: unknown };
+      botInstanceId?: string;
+      chatId?: string;
+      isForum?: boolean;
+      type?: string;
+      updateKey?: string;
+    } = {},
+  ) {
+    const botInstanceId = options.botInstanceId ?? SEED_IDS.botA1;
+    return service.bindFromTelegram(
+      botScope(options.tenant ?? tenantA, botInstanceId),
+      systemJobActor(`telegram-update:${botInstanceId}`, 'test-correlation' as CorrelationId),
+      {
+        idempotencyKey: options.updateKey ?? key('update'),
+        botInstanceId,
+        chat: {
+          id: options.chatId ?? GROUP_CHAT,
+          type: options.type ?? 'supergroup',
+          title: 'Nexa Ops',
+          isForum: options.isForum ?? true,
+        },
+        rawCode: `ops-${code}`,
+      },
+    );
+  }
+
+  async function connectHealthy(): Promise<void> {
+    expect(await bind(await issueCode())).toBe('CONNECTED');
+    expect(await service.maintain(tenantA, system())).toBe('CHECKED');
+    const view = await service.view(tenantA, owner);
+    expect(view.health).toBe('HEALTHY');
+  }
+
+  async function makeDue(): Promise<void> {
+    await ctx.container.database.db.execute(
+      `UPDATE notifications SET next_attempt_at = now() - interval '1 second'
+        WHERE status = 'PENDING'` as never,
+    );
+  }
+
+  const raise = (dedupeKey: string, extra: Record<string, unknown> = {}) =>
+    ctx.container.opsLog.record(tenantA, {
+      code: 'panel.health.unreachable',
+      severity: 'ERROR',
+      message: 'The panel did not answer.',
+      dedupeKey,
+      context: extra,
+    });
+
+  // -------------------------------------------------------------------------
+  // Binding
+  // -------------------------------------------------------------------------
+
+  describe('binding with a one-time code', () => {
+    it('binds the group the code was sent from, discovering its chat id, and answers there', async () => {
+      const code = await issueCode();
+      expect(await bind(code)).toBe('CONNECTED');
+
+      const view = await service.view(tenantA, owner);
+      expect(view.connection).toBe('CONNECTED');
+      expect(view.health).toBe('UNVERIFIED');
+      expect(view.group?.bot).toEqual({ id: SEED_IDS.botA1, username: 'acme_store_bot' });
+      const group = await repository.findGroup(tenantA);
+      expect(group?.chatId).toBe(GROUP_CHAT);
+      expect(group?.connectedByAdminId).toBe(owner.id);
+      // The reply went to the group itself, not a topic.
+      expect(telegram.sent.at(-1)).toMatchObject({ chatId: GROUP_CHAT, threadId: null });
+
+      const audit = await ctx.container.database.db.execute(
+        `SELECT action FROM audit_logs WHERE action = 'ops_group.bind'` as never,
+      );
+      expect((audit as unknown as { rows: unknown[] }).rows).toHaveLength(1);
+    });
+
+    it('stores the code only as a hash', async () => {
+      const code = await issueCode();
+      const stored = (await ctx.container.database.db.execute(
+        `SELECT code_hash FROM ops_log_connect_codes` as never,
+      )) as unknown as { rows: { code_hash: string }[] };
+      expect(stored.rows).toHaveLength(1);
+      expect(stored.rows[0]?.code_hash).not.toContain(code);
+      expect(normaliseOpsConnectCode(`ops-${code.toLowerCase()}`)).toBe(code);
+    });
+
+    it('accepts a code once: a second group sending it is refused and binds nothing', async () => {
+      const code = await issueCode();
+      expect(await bind(code)).toBe('CONNECTED');
+      expect(await bind(code, { chatId: OTHER_CHAT })).toBe('REFUSED');
+      expect((await repository.findGroup(tenantA))?.chatId).toBe(GROUP_CHAT);
+    });
+
+    it('replays a redelivered update instead of refusing it, and answers the group once', async () => {
+      const code = await issueCode();
+      const updateKey = key('update');
+      expect(await bind(code, { updateKey })).toBe('CONNECTED');
+      const replies = telegram.sent.length;
+      expect(await bind(code, { updateKey })).toBe('CONNECTED');
+      expect(telegram.sent.length).toBe(replies);
+    });
+
+    it('refuses an expired code', async () => {
+      const code = await issueCode();
+      clock.advance(10 * 60_000 + 1);
+      expect(await bind(code)).toBe('REFUSED');
+      expect(await repository.findGroup(tenantA)).toBeNull();
+    });
+
+    it('refuses a code sent through another bot of the same tenant', async () => {
+      // The seed's second bot is STOPPED, and a stopped bot's webhook is refused before
+      // any of this runs; start it so the refusal tested here is the code's own.
+      await ctx.container.database.db.execute(
+        `UPDATE bot_instances SET status = 'ACTIVE' WHERE id = '${SEED_IDS.botA2}'` as never,
+      );
+      const code = await issueCode(SEED_IDS.botA1);
+      expect(await bind(code, { botInstanceId: SEED_IDS.botA2 })).toBe('REFUSED');
+      expect(await repository.findGroup(tenantA)).toBeNull();
+      // Still usable through the bot it was issued for.
+      expect(await bind(code)).toBe('CONNECTED');
+    });
+
+    it('refuses a code sent to another tenant’s bot, and binds nothing in either tenant', async () => {
+      const code = await issueCode(SEED_IDS.botA1);
+      expect(await bind(code, { tenant: tenantB, botInstanceId: SEED_IDS.botB1 })).toBe('REFUSED');
+      expect(await repository.findGroup(tenantA)).toBeNull();
+      expect(await repository.findGroup(tenantB)).toBeNull();
+    });
+
+    it('leaves the code unused for a group without topics, so it works once they are on', async () => {
+      const code = await issueCode();
+      expect(await bind(code, { isForum: false })).toBe('NOT_FORUM');
+      expect(await bind(code, { type: 'group', isForum: false })).toBe('NOT_FORUM');
+      expect(await repository.findGroup(tenantA)).toBeNull();
+      expect(await bind(code)).toBe('CONNECTED');
+    });
+
+    it('refuses to issue a code without settings.edit, and records the denial', async () => {
+      const observer = adminActorFor(
+        await createAdmin(ctx.container, tenantA, { username: 'watcher', roleKeys: ['observer'] }),
+      );
+      await expect(
+        service.issueConnectCode(tenantA, observer, {
+          idempotencyKey: key('code'),
+          botInstanceId: SEED_IDS.botA1,
+        }),
+      ).rejects.toSatisfy(
+        (error: unknown) => isNexaError(error) && error.kind === 'PERMISSION_DENIED',
+      );
+      const denied = (await ctx.container.database.db.execute(
+        `SELECT result FROM audit_logs WHERE action = 'ops_group.connect_code'` as never,
+      )) as unknown as { rows: { result: string }[] };
+      expect(denied.rows.map((row) => row.result)).toEqual(['DENIED']);
+    });
+
+    it('refuses a code for a bot that is not active', async () => {
+      await expect(
+        service.issueConnectCode(tenantA, owner, {
+          idempotencyKey: key('code'),
+          botInstanceId: SEED_IDS.botA2,
+        }),
+      ).rejects.toSatisfy(
+        (error: unknown) => isNexaError(error) && error.code === 'ops_group.bot_not_available',
+      );
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Permission verification
+  // -------------------------------------------------------------------------
+
+  describe('permission verification', () => {
+    async function checkWith(
+      configure: () => void,
+    ): Promise<{ health: string; problems: readonly OpsLogGroupProblem[] }> {
+      expect(await bind(await issueCode())).toBe('CONNECTED');
+      configure();
+      await service.maintain(tenantA, system());
+      const view = await service.view(tenantA, owner);
+      return { health: view.health, problems: view.problems };
+    }
+
+    it('declares a group healthy only after getChat and getChatMember agree, and then creates the topics', async () => {
+      await connectHealthy();
+      expect(telegram.created.map((topic) => topic.name).sort()).toEqual(
+        ['⚙️ سیستم و خطاها', '💳 پرداخت‌ها'].sort(),
+      );
+      const view = await service.view(tenantA, owner);
+      expect(view.topics.map((topic) => [topic.category, topic.state])).toEqual([
+        ['SYSTEM', 'READY'],
+        ['PAYMENTS', 'READY'],
+      ]);
+    });
+
+    it('names a bot that is only a member', async () => {
+      const found = await checkWith(() => {
+        telegram.member = { status: 'member', canManageTopics: null, canSendMessages: null };
+      });
+      expect(found).toEqual({ health: 'PROBLEM', problems: ['BOT_NOT_ADMIN'] });
+      expect(telegram.created).toHaveLength(0);
+    });
+
+    it('names an administrator without the manage-topics right', async () => {
+      const found = await checkWith(() => {
+        telegram.member = {
+          status: 'administrator',
+          canManageTopics: false,
+          canSendMessages: null,
+        };
+      });
+      expect(found).toEqual({ health: 'PROBLEM', problems: ['CANNOT_MANAGE_TOPICS'] });
+      expect(telegram.created).toHaveLength(0);
+    });
+
+    it('names a restricted bot that may not send', async () => {
+      const found = await checkWith(() => {
+        telegram.member = { status: 'restricted', canManageTopics: null, canSendMessages: false };
+      });
+      expect(found.health).toBe('PROBLEM');
+      expect(found.problems).toEqual(['BOT_NOT_ADMIN', 'CANNOT_SEND']);
+    });
+
+    it('names a group whose topics were switched off', async () => {
+      const found = await checkWith(() => {
+        telegram.chat = { ...telegram.chat, isForum: false };
+      });
+      expect(found).toEqual({ health: 'PROBLEM', problems: ['NOT_FORUM'] });
+    });
+
+    it('marks the group at once when Telegram says the bot was removed', async () => {
+      await connectHealthy();
+      const changed = await service.membershipChanged(botScope(tenantA, SEED_IDS.botA1), system(), {
+        idempotencyKey: key('member'),
+        botInstanceId: SEED_IDS.botA1,
+        chatId: GROUP_CHAT,
+        status: 'kicked',
+      });
+      expect(changed).toBe(true);
+      const view = await service.view(tenantA, owner);
+      expect(view).toMatchObject({ health: 'PROBLEM', problems: ['BOT_REMOVED'] });
+    });
+
+    it('ignores a membership change in a chat that is not the bound group', async () => {
+      await connectHealthy();
+      const changed = await service.membershipChanged(botScope(tenantA, SEED_IDS.botA1), system(), {
+        idempotencyKey: key('member'),
+        botInstanceId: SEED_IDS.botA1,
+        chatId: OTHER_CHAT,
+        status: 'left',
+      });
+      expect(changed).toBe(false);
+      expect((await service.view(tenantA, owner)).health).toBe('HEALTHY');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Topics
+  // -------------------------------------------------------------------------
+
+  describe('topic creation is idempotent', () => {
+    it('creates each topic once however often setup runs', async () => {
+      await connectHealthy();
+      expect(telegram.created).toHaveLength(2);
+      await service.verify(tenantA, owner, { idempotencyKey: key('verify') });
+      await service.reconnect(tenantA, owner, { idempotencyKey: key('reconnect') });
+      expect(telegram.created).toHaveLength(2);
+      const rows = (await ctx.container.database.db.execute(
+        `SELECT category FROM ops_log_topics` as never,
+      )) as unknown as { rows: unknown[] };
+      expect(rows.rows).toHaveLength(2);
+    });
+
+    it('creates ONE topic when five callers race for it', async () => {
+      expect(await bind(await issueCode())).toBe('CONNECTED');
+      const group = await repository.findGroup(tenantA);
+      telegram.createDelayMs = 50;
+      const results = await Promise.all(
+        Array.from({ length: 5 }, () =>
+          provisioner.ensure(tenantA, system(), group!, 'SYSTEM', 'token'),
+        ),
+      );
+      expect(telegram.created).toHaveLength(1);
+      const ready = results.filter((result) => result.kind === 'READY');
+      expect(ready.length).toBeGreaterThanOrEqual(1);
+      expect(results.every((result) => result.kind === 'READY' || result.kind === 'BUSY')).toBe(
+        true,
+      );
+      const topics = await repository.listTopics(tenantA, GROUP_CHAT);
+      expect(topics).toHaveLength(1);
+      expect(topics[0]).toMatchObject({
+        state: 'READY',
+        messageThreadId: telegram.created[0]?.threadId,
+      });
+    });
+  });
+
+  describe('a deleted topic', () => {
+    it('is recreated once and the event is resent there, not lost', async () => {
+      await connectHealthy();
+      const system_ = (await repository.listTopics(tenantA, GROUP_CHAT)).find(
+        (topic) => topic.category === 'SYSTEM',
+      );
+      transport.deletedThreads.add(system_!.messageThreadId!);
+
+      await raise('deleted-topic');
+      const tick = await dispatcher.tick();
+      expect(tick).toMatchObject({ claimed: 1, sent: 1 });
+
+      // Two sends: the refused one and the resend into the recreated topic.
+      expect(transport.messages).toHaveLength(2);
+      const resentTo =
+        transport.messages[1]!.destination.transport === 'TELEGRAM'
+          ? transport.messages[1]!.destination.topicId
+          : null;
+      expect(resentTo).not.toBe(system_!.messageThreadId);
+      const after = (await repository.listTopics(tenantA, GROUP_CHAT)).find(
+        (topic) => topic.category === 'SYSTEM',
+      );
+      expect(after).toMatchObject({ state: 'READY', messageThreadId: resentTo, recreatedCount: 1 });
+      // Only the SYSTEM topic was recreated.
+      expect(telegram.created).toHaveLength(3);
+
+      const [intent] = await ctx.container.notifications.list(tenantA, owner);
+      const detail = await ctx.container.notifications.get(tenantA, owner, intent!.id);
+      expect(detail.intent.status).toBe('SENT');
+      expect(detail.attempts.map((attempt) => attempt.outcome)).toEqual(['SUCCEEDED']);
+    });
+
+    it('never loops: a topic that keeps vanishing costs one recreation per attempt and a retryable failure', async () => {
+      await connectHealthy();
+      transport.always = {
+        outcome: 'FAILED_PERMANENT',
+        errorCode: 'telegram.rejected.400',
+        errorMessage: 'Bad Request: message thread not found',
+        topicMissing: true,
+      };
+      await raise('vanishing');
+      const before = telegram.created.length;
+      await dispatcher.tick();
+      expect(telegram.created.length - before).toBe(1);
+      expect(transport.messages).toHaveLength(2);
+
+      const [intent] = await ctx.container.notifications.list(tenantA, owner);
+      const detail = await ctx.container.notifications.get(tenantA, owner, intent!.id);
+      expect(detail.intent.status).toBe('PENDING');
+      expect(detail.attempts[0]).toMatchObject({
+        outcome: 'FAILED_RETRYABLE',
+        errorCode: 'ops_group.topic_missing',
+      });
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Retry, exhaustion and requeue
+  // -------------------------------------------------------------------------
+
+  describe('ten attempts, then preserved', () => {
+    it('keeps an event unsent after ten failures, and delivers it after a requeue', async () => {
+      await connectHealthy();
+      transport.always = {
+        outcome: 'FAILED_RETRYABLE',
+        errorCode: 'telegram.server_error.502',
+        errorMessage: 'Bad Gateway',
+      };
+      await raise('exhaust');
+      const [queued] = await ctx.container.notifications.list(tenantA, owner);
+      expect(queued?.maxAttempts).toBe(10);
+
+      for (let attempt = 1; attempt <= 10; attempt += 1) {
+        await dispatcher.tick();
+        await makeDue();
+      }
+      const [failed] = await ctx.container.notifications.list(tenantA, owner);
+      const detail = await ctx.container.notifications.get(tenantA, owner, failed!.id);
+      // Preserved: still there, FAILED, never filed as sent.
+      expect(detail.intent.status).toBe('FAILED');
+      expect(detail.attempts).toHaveLength(10);
+      expect(detail.attempts.some((attempt) => attempt.outcome === 'SUCCEEDED')).toBe(false);
+      expect((await service.view(tenantA, owner)).queue).toEqual({ pending: 0, preserved: 1 });
+
+      // An eleventh tick claims nothing: bounded, not retried for ever.
+      expect((await dispatcher.tick()).claimed).toBe(0);
+
+      // The problem is fixed; the operator retries what was preserved.
+      transport.always = null;
+      const requeued = await service.requeue(tenantA, owner, { idempotencyKey: key('requeue') });
+      expect(requeued.requeued).toBe(1);
+      expect(requeued.opsGroup.queue).toEqual({ pending: 1, preserved: 0 });
+
+      const sent = await dispatcher.tick();
+      expect(sent).toMatchObject({ claimed: 1, sent: 1 });
+      const final = await ctx.container.notifications.get(tenantA, owner, failed!.id);
+      expect(final.intent.status).toBe('SENT');
+      expect(final.intent.maxAttempts).toBe(20);
+      expect(final.attempts.at(-1)).toMatchObject({ attemptNumber: 11, outcome: 'SUCCEEDED' });
+    });
+
+    it('replays a requeue under its key instead of requeueing twice', async () => {
+      await connectHealthy();
+      transport.always = { outcome: 'FAILED_PERMANENT', errorCode: 'x', errorMessage: 'no' };
+      await raise('replay');
+      await dispatcher.tick();
+      const idempotencyKey = key('requeue');
+      expect((await service.requeue(tenantA, owner, { idempotencyKey })).requeued).toBe(1);
+      expect((await service.requeue(tenantA, owner, { idempotencyKey })).requeued).toBe(1);
+      const [intent] = await ctx.container.notifications.list(tenantA, owner);
+      expect(intent?.maxAttempts).toBe(11);
+    });
+
+    it('requeues preserved events automatically once the group is healthy again', async () => {
+      await connectHealthy();
+      transport.always = { outcome: 'FAILED_PERMANENT', errorCode: 'x', errorMessage: 'no' };
+      await raise('auto');
+      await dispatcher.tick();
+      expect((await service.view(tenantA, owner)).queue.preserved).toBe(1);
+
+      // Telegram reports a membership change; the worker checks and finds it healthy.
+      await service.membershipChanged(botScope(tenantA, SEED_IDS.botA1), system(), {
+        idempotencyKey: key('member'),
+        botInstanceId: SEED_IDS.botA1,
+        chatId: GROUP_CHAT,
+        status: 'administrator',
+      });
+      expect(await service.maintain(tenantA, system())).toBe('CHECKED');
+      expect((await service.view(tenantA, owner)).queue).toEqual({ pending: 1, preserved: 0 });
+    });
+
+    it('queues nothing to a disconnected group, and delivers again after a reconnect', async () => {
+      await connectHealthy();
+      await service.disconnect(tenantA, owner, { idempotencyKey: key('disconnect') });
+      await raise('while-disconnected');
+      // Disconnected on purpose: nothing is queued to it (the operational event row is
+      // still the record), exactly as with the feature switched off.
+      const queuedWhileDown = await ctx.container.notifications.list(tenantA, owner);
+      expect(queuedWhileDown).toHaveLength(0);
+
+      await service.reconnect(tenantA, owner, { idempotencyKey: key('reconnect') });
+      expect((await service.view(tenantA, owner)).connection).toBe('CONNECTED');
+      await raise('after-reconnect');
+      expect((await dispatcher.tick()).sent).toBe(1);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Rate limit
+  // -------------------------------------------------------------------------
+
+  describe('the per-minute ceiling is throughput, not a drop', () => {
+    it('leaves events over the quota queued and sends them later', async () => {
+      await connectHealthy();
+      await ctx.container.settingsService.set(tenantA, owner, {
+        key: 'ops.notifications.max_per_minute',
+        value: 1,
+        expectedVersion: null,
+        idempotencyKey: key('rate'),
+      });
+      await raise('rate-1');
+      await raise('rate-2');
+      await raise('rate-3');
+
+      expect((await dispatcher.tick()).sent).toBe(1);
+      expect((await dispatcher.tick()).claimed).toBe(0);
+      const statuses = (await ctx.container.notifications.list(tenantA, owner)).map(
+        (n) => n.status,
+      );
+      expect(statuses.filter((status) => status === 'PENDING')).toHaveLength(2);
+      expect(statuses).not.toContain('FAILED');
+
+      // The next minute.
+      dispatcher.resetRateWindow();
+      expect((await dispatcher.tick()).sent).toBe(1);
+      dispatcher.resetRateWindow();
+      expect((await dispatcher.tick()).sent).toBe(1);
+      const all = await ctx.container.notifications.list(tenantA, owner);
+      expect(all.every((n) => n.status === 'SENT')).toBe(true);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Routing and detail
+  // -------------------------------------------------------------------------
+
+  describe('routing and detail', () => {
+    it('routes a payments event to the payments topic and everything else to the system topic', async () => {
+      await connectHealthy();
+      const topics = await repository.listTopics(tenantA, GROUP_CHAT);
+      const thread = (category: string) =>
+        topics.find((topic) => topic.category === category)?.messageThreadId;
+
+      await ctx.container.opsLog.record(tenantA, {
+        code: 'payments.gateway_misconfigured',
+        severity: 'ERROR',
+        message: 'The gateway refused its key.',
+        dedupeKey: 'route-pay',
+      });
+      await raise('route-sys');
+      await dispatcher.tick();
+      const threads = transport.messages.map((message) =>
+        message.destination.transport === 'TELEGRAM' ? message.destination.topicId : null,
+      );
+      expect(threads.sort()).toEqual([thread('PAYMENTS'), thread('SYSTEM')].sort());
+      // Sent from the bot that was added to the group.
+      expect(transport.messages.every((message) => message.botInstanceId === SEED_IDS.botA1)).toBe(
+        true,
+      );
+    });
+
+    it('addresses the financial log to the group’s payments topic, over the manual setting', async () => {
+      await ctx.container.settingsService.set(tenantA, owner, {
+        key: 'ops.notifications.telegram_chat_id',
+        value: '-100555',
+        expectedVersion: null,
+        idempotencyKey: key('manual'),
+      });
+      // Before a group: the manual fallback.
+      expect(await ctx.container.notifications.financialDestination(tenantA)).toMatchObject({
+        chatId: '-100555',
+      });
+      await connectHealthy();
+      const payments = (await repository.listTopics(tenantA, GROUP_CHAT)).find(
+        (topic) => topic.category === 'PAYMENTS',
+      );
+      expect(await ctx.container.notifications.financialDestination(tenantA)).toEqual({
+        transport: 'TELEGRAM',
+        chatId: GROUP_CHAT,
+        topicId: payments?.messageThreadId,
+        opsTopic: 'PAYMENTS',
+      });
+    });
+
+    it('prints the safe detail and never a secret', async () => {
+      await connectHealthy();
+      await ctx.container.opsLog.record(tenantA, {
+        code: 'payments.gateway_create_unknown',
+        severity: 'ERROR',
+        message: 'The create answer was lost.',
+        dedupeKey: 'secrets',
+        correlationId: 'corr-1234' as CorrelationId,
+        context: {
+          paymentId: '01900000-0000-7000-8000-00000000fa11',
+          orderId: '01900000-0000-7000-8000-00000000fa12',
+          from: 'AWAITING_PAYMENT',
+          to: 'PAID',
+          reason: 'provider said 1234567890:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw was wrong',
+          token: '1234567890:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw',
+          apiKey: 'sk_live_supersecretvalue',
+          subscriptionUrl: 'https://panel.example/sub/abcdefsecret',
+          providerPayload: { card: '6037991234567890', cvv2: '123' },
+        },
+      });
+      await dispatcher.tick();
+      const text = transport.messages[0]?.text ?? '';
+      expect(text).toContain('payments.gateway_create_unknown');
+      expect(text).toContain('paymentId: 01900000-0000-7000-8000-00000000fa11');
+      expect(text).toContain('orderId: 01900000-0000-7000-8000-00000000fa12');
+      expect(text).toContain('from: AWAITING_PAYMENT');
+      expect(text).toContain('to: PAID');
+      expect(text).toContain(String(SEED_IDS.tenantA));
+      expect(text).toContain('corr-1234');
+      for (const secret of [
+        'AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw',
+        'sk_live_supersecretvalue',
+        'abcdefsecret',
+        '6037991234567890',
+        'cvv2',
+      ]) {
+        expect(text).not.toContain(secret);
+      }
+    });
+  });
+
+  describe('the status panel', () => {
+    it('is per tenant', async () => {
+      await connectHealthy();
+      const otherOwner = adminActorFor(
+        await createAdmin(ctx.container, tenantB, { username: 'b-owner', roleKeys: ['owner'] }),
+      );
+      const other = await service.view(tenantB, otherOwner);
+      expect(other.connection).toBe('NOT_CONFIGURED');
+      expect(other.group).toBeNull();
+    });
+
+    it('sends a test into every topic and records the last delivery', async () => {
+      await connectHealthy();
+      const tested = await service.sendTest(tenantA, owner, { idempotencyKey: key('test') });
+      expect(tested.results.map((result) => [result.category, result.outcome])).toEqual([
+        ['SYSTEM', 'SENT'],
+        ['PAYMENTS', 'SENT'],
+      ]);
+      expect(tested.opsGroup.lastDeliveredAt).not.toBeNull();
+      expect(tested.opsGroup.topics.every((topic) => topic.lastDeliveredAt !== null)).toBe(true);
+    });
+
+    it('recreates a deleted topic during a test send', async () => {
+      await connectHealthy();
+      const payments = (await repository.listTopics(tenantA, GROUP_CHAT)).find(
+        (topic) => topic.category === 'PAYMENTS',
+      );
+      telegram.deletedThreads.add(payments!.messageThreadId!);
+      const tested = await service.sendTest(tenantA, owner, { idempotencyKey: key('test') });
+      expect(tested.results.every((result) => result.outcome === 'SENT')).toBe(true);
+      expect(
+        tested.opsGroup.topics.find((topic) => topic.category === 'PAYMENTS')?.recreatedCount,
+      ).toBe(1);
+    });
+  });
+});

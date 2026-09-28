@@ -1,6 +1,7 @@
 import {
   money,
   notificationDestinationSchema,
+  opsLogTopicCategoryOf,
   templateDefinition,
   type Clock,
   type CorrelationId,
@@ -20,7 +21,14 @@ import { asId } from '@nexa/contracts';
 import type { SettingsResolver } from '../../settings/application/settings-resolver.js';
 import type { TemplateResolver } from '../../templates/application/template-resolver.js';
 import { DEFAULT_TEMPLATE_LOCALE } from '../../templates/application/template-resolver.js';
-import type { NotificationIntent, NotificationRepository, NotificationTransport } from './ports.js';
+import type {
+  NotificationIntent,
+  NotificationRepository,
+  NotificationTransport,
+  OpsTopicRoute,
+  OpsTopicRouter,
+  TransportResult,
+} from './ports.js';
 import { LoopProgress } from '../../../../infrastructure/lifecycle/loop-progress.js';
 
 export interface DispatcherOptions {
@@ -210,6 +218,12 @@ export class NotificationDispatcher {
      */
     private readonly opsLog: OperationalEventRecorder,
     private readonly options: DispatcherOptions,
+    /**
+     * WP-A4: resolves an intent routed to the operations log group to where the group is
+     * NOW, and recreates a topic an operator deleted. Null sends every intent to its
+     * snapshot, which is what a dispatcher built before the group existed did.
+     */
+    private readonly opsRouter: OpsTopicRouter | null = null,
   ) {
     this.progress = new LoopProgress(options.pollIntervalMs);
   }
@@ -701,28 +715,93 @@ export class NotificationDispatcher {
       return { result: 'RELEASED', reachedTransport: false };
     }
 
-    // A transport that THROWS is a transport failure, not an unknown one.
-    //
-    // Left to propagate, it reached the batch's catch, which could only guess
-    // at what had happened and guessed permanently-failed — ending an intent on
-    // one refused connection, `maxAttempts` notwithstanding. Handled here, it is
-    // an ordinary retryable outcome with a reason in its attempt row, and the
-    // attempt ceiling decides when to stop, exactly as it does for a transport
-    // that returns a failure instead of raising one.
-    let result: Awaited<ReturnType<NotificationTransport['send']>>;
-    try {
-      result = await this.transport.send({
-        destination,
-        text,
-        html: definition.format === 'TELEGRAM_HTML',
-        tenantId: intent.tenantId,
-      });
-    } catch (error) {
-      result = {
-        outcome: 'FAILED_RETRYABLE',
-        errorCode: 'notification.transport_threw',
-        errorMessage: error instanceof Error ? error.message : String(error),
-      };
+    // WP-A4: an intent routed to the operations log group goes to where the group is
+    // NOW — its current chat and the category's current thread — not to the snapshot it
+    // was queued with. The snapshot stays on the row as history.
+    const category =
+      this.opsRouter !== null &&
+      destination.transport === 'TELEGRAM' &&
+      destination.opsTopic !== undefined
+        ? opsLogTopicCategoryOf(destination.opsTopic)
+        : null;
+    let botInstanceId: string | undefined;
+    if (category !== null && this.opsRouter !== null && destination.transport === 'TELEGRAM') {
+      const route = await this.routeOrUnavailable(() =>
+        (this.opsRouter as OpsTopicRouter).resolve(intent.tenantId, category),
+      );
+      if (route.kind === 'UNAVAILABLE') {
+        // RETRYABLE, never permanent: a group that is disconnected or mid-setup is a
+        // problem somebody fixes, and the message is preserved when the allowance runs
+        // out rather than lost. Nothing left the process.
+        const recorded = await this.record(
+          intent,
+          {
+            outcome: 'FAILED_RETRYABLE',
+            errorCode: route.errorCode,
+            errorMessage: route.errorMessage,
+          },
+          startedAt,
+        );
+        return { result: recorded, reachedTransport: false };
+      }
+      destination = { ...destination, chatId: route.chatId, topicId: route.topicId };
+      botInstanceId = route.botInstanceId;
+    }
+
+    const html = definition.format === 'TELEGRAM_HTML';
+    let result = await this.sendOnce(intent, destination, text, html, botInstanceId);
+
+    if (category !== null && this.opsRouter !== null && result.outcome !== 'SUCCEEDED') {
+      const router = this.opsRouter;
+      if (
+        result.topicMissing === true &&
+        destination.transport === 'TELEGRAM' &&
+        destination.topicId !== null
+      ) {
+        // The topic was deleted. Recreate it ONCE for this stale thread id — a second
+        // sender that met the same missing thread finds it already recreated — and
+        // resend ONCE. If that does not deliver, this attempt is a retryable failure and
+        // the allowance decides when to stop: never a loop, never a lost event.
+        const staleTopicId = destination.topicId;
+        const recovered = await this.routeOrUnavailable(() =>
+          router.recover(intent.tenantId, category, staleTopicId),
+        );
+        if (recovered.kind === 'ROUTED') {
+          destination = { ...destination, chatId: recovered.chatId, topicId: recovered.topicId };
+          // The first send reached Telegram as well; the ceiling is a courtesy to it.
+          this.sentInWindow += 1;
+          result = await this.sendOnce(intent, destination, text, html, recovered.botInstanceId);
+        } else {
+          result = {
+            outcome: 'FAILED_RETRYABLE',
+            errorCode: recovered.errorCode,
+            errorMessage: recovered.errorMessage,
+          };
+        }
+        if (result.outcome !== 'SUCCEEDED' && result.topicMissing === true) {
+          result = {
+            outcome: 'FAILED_RETRYABLE',
+            errorCode: 'ops_group.topic_missing',
+            errorMessage: 'The recreated topic was missing again; retrying on the next attempt.',
+          };
+        }
+      }
+      // Telegram refused the CHAT — the bot was removed, lost its rights, or the group
+      // is gone. The status panel says so, and the worker checks the group again.
+      const problem = result.outcome !== 'SUCCEEDED' ? result.chatProblem : undefined;
+      if (problem !== undefined && destination.transport === 'TELEGRAM') {
+        const chatId = destination.chatId;
+        await this.bestEffort('record an ops group problem', () =>
+          router.problem(intent.tenantId, chatId, problem),
+        );
+      }
+    }
+    if (category !== null && this.opsRouter !== null && result.outcome === 'SUCCEEDED') {
+      const router = this.opsRouter;
+      const chatId = destination.transport === 'TELEGRAM' ? destination.chatId : '';
+      await this.bestEffort('record an ops group delivery', () =>
+        router.delivered(intent.tenantId, category, chatId, this.clock.now()),
+      );
     }
 
     const recorded = await this.record(intent, result, startedAt);
@@ -731,6 +810,66 @@ export class NotificationDispatcher {
       reachedTransport: true,
       alreadyTrue: recorded === 'SUPERSEDED' && result.outcome === 'SUCCEEDED',
     };
+  }
+
+  /**
+   * One transport call. A transport that THROWS is a transport failure, not an unknown
+   * one.
+   *
+   * Left to propagate, it reached the batch's catch, which could only guess at what had
+   * happened and guessed permanently-failed — ending an intent on one refused
+   * connection, `maxAttempts` notwithstanding. Handled here, it is an ordinary retryable
+   * outcome with a reason in its attempt row, and the attempt ceiling decides when to
+   * stop, exactly as it does for a transport that returns a failure instead of raising
+   * one.
+   */
+  private async sendOnce(
+    intent: NotificationIntent,
+    destination: NotificationDestination,
+    text: string,
+    html: boolean,
+    botInstanceId: string | undefined,
+  ): Promise<TransportResult> {
+    try {
+      return await this.transport.send({
+        destination,
+        text,
+        html,
+        tenantId: intent.tenantId,
+        ...(botInstanceId !== undefined ? { botInstanceId } : {}),
+      });
+    } catch (error) {
+      return {
+        outcome: 'FAILED_RETRYABLE',
+        errorCode: 'notification.transport_threw',
+        errorMessage: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
+  /** A router answer, with a throw turned into a retryable unavailability. */
+  private async routeOrUnavailable(ask: () => Promise<OpsTopicRoute>): Promise<OpsTopicRoute> {
+    try {
+      return await ask();
+    } catch (error) {
+      return {
+        kind: 'UNAVAILABLE',
+        errorCode: 'ops_group.route_failed',
+        errorMessage: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
+  /** Bookkeeping that must never cost a delivery its outcome. Logged, never rethrown. */
+  private async bestEffort(what: string, work: () => Promise<void>): Promise<void> {
+    try {
+      await work();
+    } catch (error) {
+      this.logger.warn(
+        { err: error instanceof Error ? error.message : String(error) },
+        `Could not ${what}`,
+      );
+    }
   }
 
   private async record(

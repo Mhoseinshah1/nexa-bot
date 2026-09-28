@@ -356,6 +356,21 @@ import { NotificationService } from './modules/control/notifications/application
 import { UndeliverableOrderRefunder } from './modules/commerce/orders/application/undeliverable-order-refunder.js';
 import { NotificationDispatcher } from './modules/control/notifications/application/notification-dispatcher.js';
 import { NotifyingOperationalEventRecorder } from './modules/control/notifications/application/operational-event-projector.js';
+// WP-A4: the Telegram operations log group.
+import {
+  OpsGroupRouter,
+  OpsGroupService,
+} from './modules/control/ops-group/application/ops-group.service.js';
+import {
+  OPS_GROUP_MAINTAIN_INTERVAL_MS,
+  OpsGroupMaintainer,
+} from './modules/control/ops-group/application/ops-group-maintainer.js';
+import { OpsTopicProvisioner } from './modules/control/ops-group/application/topic-provisioner.js';
+import { DrizzleOpsGroupRepository } from './modules/control/ops-group/infrastructure/drizzle-ops-group.repository.js';
+import {
+  OpsGroupBotSource,
+  TelegramOpsGroup,
+} from './modules/control/ops-group/infrastructure/telegram-ops-group.js';
 import { TelegramNotificationTransport } from './modules/control/notifications/infrastructure/telegram-transport.js';
 import { RecordingTransport } from './modules/control/notifications/infrastructure/recording-transport.js';
 import type { NotificationTransport } from './modules/control/notifications/application/ports.js';
@@ -705,6 +720,9 @@ export interface Container {
   readonly notificationRepository: DrizzleNotificationRepository;
   readonly notificationDispatcher: NotificationDispatcher;
   readonly notificationTransport: NotificationTransport;
+  /** WP-A4: the Nexa-managed operations log group, and the worker pass that keeps it. */
+  readonly opsGroups: OpsGroupService;
+  readonly opsGroupMaintainer: OpsGroupMaintainer;
   readonly opsLogService: OpsLogService;
   /**
    * What the background monitor is configured to do, and what that
@@ -3360,6 +3378,58 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
 
   const notificationRepository = new DrizzleNotificationRepository(database.db, ids);
 
+  // WP-A4: the operations log group. Built before the notification lane, which prefers
+  // the connected group over the manual chat id setting, and before the dispatcher, which
+  // resolves an intent routed to the group to where the group is at send time.
+  const opsGroupRepository = new DrizzleOpsGroupRepository(database.db);
+  const opsGroupTelegram = new TelegramOpsGroup(
+    config.TELEGRAM_API_BASE_URL,
+    config.NOTIFICATION_SEND_TIMEOUT_MS,
+  );
+  const opsGroups = new OpsGroupService({
+    repository: opsGroupRepository,
+    telegram: opsGroupTelegram,
+    bots: new OpsGroupBotSource(botInstances),
+    provisioner: new OpsTopicProvisioner({
+      repository: opsGroupRepository,
+      telegram: opsGroupTelegram,
+      templates: templateResolver,
+      audit,
+      // The RAW recorder: a topic event is not projected back into the group it is about.
+      opsLog: opsLogWriter,
+      clock,
+      ids,
+      logger,
+    }),
+    notifications: notificationRepository,
+    templates: templateResolver,
+    features: featureFlagResolver,
+    settings: settingsResolver,
+    guard,
+    uow,
+    audit,
+    opsLog: opsLogWriter,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    outbox,
+    clock,
+    ids,
+    logger,
+  });
+  const opsGroupSystemActor = () => systemJobActor('ops-group', newCorrelationId(ids.uuid()));
+  const opsGroupRouter = new OpsGroupRouter(opsGroups, opsGroupSystemActor);
+  const opsGroupMaintainer = new OpsGroupMaintainer(opsGroups, {
+    scope: () =>
+      installationTenantId === null
+        ? null
+        : { tenantId: installationTenantId, botInstanceId: null },
+    actor: opsGroupSystemActor,
+    intervalMs: OPS_GROUP_MAINTAIN_INTERVAL_MS,
+    now: () => clock.now().getTime(),
+    logger,
+  });
+
   // A second resolver, wired to the RAW recorder rather than to the façade.
   //
   // `SettingsResolver` records an operational event when a stored value no
@@ -3384,6 +3454,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     opsLogWriter,
     // For the mutation-time session-revocation check.
     sessions,
+    // WP-A4: the connected group first, the manual chat id only without one.
+    opsGroupRouter,
   );
 
   // And the stranded-order reporter's lane, for the same reason and in the same
@@ -3396,7 +3468,6 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   opsLogRef.current = new NotifyingOperationalEventRecorder(
     opsLogWriter,
     notifications,
-    projectionSettings,
     uow,
     logger,
   );
@@ -3430,6 +3501,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       baseBackoffMs: config.NOTIFICATION_BACKOFF_BASE_MS,
       maxBackoffMs: config.NOTIFICATION_BACKOFF_MAX_MS,
     },
+    // WP-A4: an intent routed to the group goes where the group is NOW.
+    opsGroupRouter,
   );
 
   const opsLogService = new OpsLogService(guard, new DrizzleOperationalEventReader(database.db));
@@ -4121,6 +4194,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     notificationRepository,
     notificationDispatcher,
     notificationTransport,
+    opsGroups,
+    opsGroupMaintainer,
     opsLogService,
     monitorProfileService,
     diagnostics,
@@ -4150,6 +4225,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       await serviceReminderLoop.stop();
       await customerNotificationLoop.stop();
       await receiptReviewPushLoop.stop();
+      await opsGroupMaintainer.stop();
       await interactionCounter.close();
       await redis.close();
       await database.close();
