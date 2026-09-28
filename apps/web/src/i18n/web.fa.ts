@@ -2073,13 +2073,14 @@ export const WEB_FA = {
    * What is STILL not here, in the product's own words rather than left for an
    * operator to infer from a missing button.
    *
-   * Phase 6A built the seven actions this sentence used to say were absent.
-   * `services.transfer` is the one that remains a declared permission with no
-   * endpoint, and for a real reason: there is no stated rule for what becomes of the
-   * order, the payment and the link the previous owner is holding.
+   * Phase 6A built the seven actions this sentence used to say were absent. Package F
+   * built the CUSTOMER's transfer, from the bot: the owner settled that only ownership
+   * moves. `services.transfer` — the operator's transfer — is still a declared permission
+   * with no endpoint, because none was asked for; and each customer transfer is in the
+   * audit log as `service.transfer`.
    */
   'web.services_transfer_absent':
-    'انتقال سرویس به مشتری دیگر در این نسخه ساخته نشده است، چون قاعده‌اش تعیین نشده: تکلیف سفارش، پرداخت و لینکی که مالک قبلی دارد روشن نیست. دکمهٔ غیرفعال هم نگذاشته‌ایم، چون یعنی «هست ولی دسترسی ندارید».',
+    'انتقال سرویس از پنل مدیریت ساخته نشده است. مشتری خودش سرویسش را از داخل ربات به کاربر دیگری منتقل می‌کند؛ فقط مالکیت جابه‌جا می‌شود و سفارش، پرداخت و لینک اشتراک دست نمی‌خورند. هر انتقال با عنوان service.transfer در گزارش ممیزی ثبت می‌شود. دکمهٔ غیرفعال نگذاشته‌ایم، چون یعنی «هست ولی دسترسی ندارید».',
 
   // --- Service actions -----------------------------------------------------
   'web.service_actions_title': 'عملیات روی این سرویس',

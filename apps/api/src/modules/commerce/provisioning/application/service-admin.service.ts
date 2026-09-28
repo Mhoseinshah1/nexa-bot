@@ -105,10 +105,11 @@ export interface ServiceAdminServiceDeps {
  * from planning a provider operation. The two readers it did gain — panel operability
  * and customer contact — can answer a question and do nothing else.
  *
- * A transfer is still absent, and still for a real reason: there is no stated rule for
- * what becomes of the order, the payment and the subscription the previous owner holds.
- * `docs/open-questions.md` carries it, and inventing the answer inside a controller is
- * the guess this repository refuses.
+ * An OPERATOR's transfer is still absent. The owner settled the rule in Package F — only
+ * ownership moves; the order, the payment and the link stay as they are — and what was
+ * built is the CUSTOMER's transfer, from the bot (`ServiceTransferService`). No operator
+ * transfer was asked for, so `services.transfer` has no endpoint; each customer transfer
+ * is in the audit log as `service.transfer`.
  */
 export class ServiceAdminService {
   constructor(private readonly deps: ServiceAdminServiceDeps) {}

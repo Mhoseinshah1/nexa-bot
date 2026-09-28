@@ -48,11 +48,12 @@ import type { OperatorServiceOperation } from '../../modules/commerce/provisioni
  * rest charge `services.edit` — and a single typed route would make that a runtime
  * switch inside a handler instead of a property of the URL.
  *
- * `services.transfer` remains declared and unserved, and that is not an oversight: it
- * has no stated rule for what becomes of the order, the payment and the subscription
- * the previous owner still holds. `docs/open-questions.md` carries the question, a
- * controller is the worst place to invent an answer, and a route that half-worked would
- * be the legacy silent-success pattern with a customer's paid-for account attached.
+ * `services.transfer` remains declared and unserved, and that is not an oversight. The
+ * owner settled the rule in Package F (`docs/package-f-service-transfer-audit.md`): only
+ * ownership moves, and the order, the payment and the link stay as they are. What was
+ * built is the CUSTOMER's transfer, from the bot. No operator transfer was asked for, so
+ * there is no route here; each customer transfer is in the audit log as
+ * `service.transfer`.
  *
  * ## What the responses do not carry
  *

@@ -732,10 +732,10 @@ describe('service HTTP surface', () => {
      *
      * Phase 6A built the terminate this case used to forbid, along with six more
      * operator actions — `service-operations-http.test.ts` is where they are proved.
-     * Transfer is untouched because its product rule is genuinely undecided:
-     * `docs/open-questions.md` still carries what becomes of the order, the payment and
-     * the subscription the previous owner holds. A route that half-worked would be the
-     * legacy silent-success pattern with a customer's paid-for account attached.
+     * Package F settled the transfer rule and built the CUSTOMER's transfer, from the bot
+     * (`service-transfer.test.ts`). An OPERATOR transfer was not asked for, so there is
+     * still no route, and a route that appeared unasked would be a write path with none
+     * of the customer path's refusals.
      *
      * The three verbs against the detail path stay here too. Nothing in this release
      * edits a service row through it, and a `PATCH` that quietly appeared would be a
