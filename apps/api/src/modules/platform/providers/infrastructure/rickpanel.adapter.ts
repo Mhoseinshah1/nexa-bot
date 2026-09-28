@@ -16,6 +16,7 @@ import {
   type ProviderRotationOutcome,
   type ProviderServiceTarget,
   type ProviderStateChangeOutcome,
+  type ProviderSubscriptionFilesOutcome,
   type ProviderTarget,
   type ProviderUsage,
   type ProviderUsageOutcome,
@@ -23,6 +24,7 @@ import {
   type ProviderUserRef,
 } from '@nexa/contracts';
 import { planApplied, readRecordUsage } from './provider-numbers.js';
+import { parseSubscriptionFiles, retryAfterMs } from './subscription-files.js';
 
 /**
  * RickPanel.
@@ -71,6 +73,8 @@ export const SYSTEM_PATH = 'api/system';
 export const USER_PATH = 'api/user';
 /** `POST /api/user/{username}/revoke_sub`: the panel mints a new subscription token. */
 export const REVOKE_SUBSCRIPTION_SUFFIX = 'revoke_sub';
+/** `GET /api/user/{username}/files` — every downloadable format (Package E). */
+export const SUBSCRIPTION_FILES_SUFFIX = 'files';
 
 /**
  * The `proxies` value every create carries: one protocol key with an empty object.
@@ -995,6 +999,53 @@ export class RickpanelAdapter implements ProviderAdapter {
         status: rotated.ok ? rotated.status : null,
       }
     );
+  }
+
+  /**
+   * The panel's ready-made connection files for one user (Package E,
+   * `docs/package-e-rickpanel-files-audit.md`).
+   *
+   * One authenticated `GET`, never repeated here: the document limits the bytes to once a
+   * minute per user, so a second call inside that window is a 429 this adapter would
+   * have caused. The answer is decoded and bounded by `parseSubscriptionFiles`; the
+   * whole body is already bounded by the client's response cap, which an adapter cannot
+   * widen. `meta_only` is never asked for — whether files exist is the descriptor's
+   * answer, and a tap that wants them wants the bytes.
+   *
+   *   - 404 is `found: false`: "a user you do not own answers 404, the same as one that
+   *     does not exist".
+   *   - 429 carries `retryAfterMs` from `Retry-After`, or the documented minute.
+   *   - a 2xx that is not a list of files is `MALFORMED_RESPONSE`, never an empty list.
+   */
+  async fetchSubscriptionFiles(
+    target: ProviderServiceTarget,
+    http: ProviderHttpClient,
+    ref: ProviderUserRef,
+  ): Promise<ProviderSubscriptionFilesOutcome> {
+    const auth = await this.authenticate(target, http);
+    if (!auth.ok) return auth;
+
+    const read = await http.send({
+      method: 'GET',
+      path: `${USER_PATH}/${encodeURIComponent(ref.username)}/${SUBSCRIPTION_FILES_SUFFIX}`,
+      headers: { authorization: `Bearer ${auth.token}` },
+    });
+    if (!read.ok) return outcomeFromTransport(read);
+    if (read.status === 429) {
+      return {
+        ok: false,
+        failure: 'RATE_LIMITED',
+        status: 429,
+        retryAfterMs: retryAfterMs(read.headers['retry-after']),
+      };
+    }
+    if (read.status === 404) return { ok: true, found: false };
+    if (read.status < 200 || read.status >= 300) return outcomeFromStatus(read.status);
+    const parsed = parseSubscriptionFiles(read.bodyText);
+    if (parsed === null) {
+      return { ok: false, failure: 'MALFORMED_RESPONSE', status: read.status };
+    }
+    return { ok: true, found: true, files: parsed.files, failed: parsed.failed };
   }
 
   /** One user's traffic. A read, so a failure is never `UNKNOWN`. */

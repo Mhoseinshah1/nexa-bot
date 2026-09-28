@@ -124,6 +124,7 @@ import {
 } from '../../modules/commerce/provisioning/application/delivery.service.js';
 import type { CustomerCaptureService } from '../../modules/commerce/customers/application/customer-capture.service.js';
 import type { CustomerCaptureRecord } from '../../modules/commerce/customers/application/customer-capture-ports.js';
+import type { SubscriptionFileService } from '../../modules/commerce/provisioning/application/subscription-file.service.js';
 import type { CustomerCountersReader } from '../../modules/commerce/customers/application/customer-counters-ports.js';
 import type {
   TopupRoute,
@@ -212,6 +213,8 @@ export const BOT_INTENTS = [
   'SERVICES_PAGE',
   'SERVICE',
   'SERVICE_RESEND',
+  /** Package E: the panel's ready-made connection files, sent as documents. */
+  'SERVICE_FILES',
   'SERVICE_SUSPEND',
   'SERVICE_RESUME',
   'SERVICE_TERMINATE_ASK',
@@ -843,6 +846,8 @@ export const TOPUP_CLOSE_CALLBACK_PREFIX = 'tx:';
 export const SERVICES_LIST_PAGE_CALLBACK_PREFIX = 'sl:';
 export const SERVICES_SEARCH_CALLBACK_DATA = 'ss:';
 export const SERVICE_REFRESH_CALLBACK_PREFIX = 'rs:';
+/** `sf:<service id>` — the panel's connection files for that service (Package E). */
+export const SERVICE_FILES_CALLBACK_PREFIX = 'sf:';
 export const SERVICE_NOTE_CALLBACK_PREFIX = 'nt:';
 export const SERVICE_RENEW_QUOTE_CALLBACK_PREFIX = 'nr:';
 export const REFERRAL_GIFT_CALLBACK_DATA = 'rg:';
@@ -2351,6 +2356,9 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
      * prefix of another routes every tap to whichever branch comes first, and the
      * customer gets the wrong screen with nothing anywhere saying so.
      */
+    if (data.startsWith(SERVICE_FILES_CALLBACK_PREFIX)) {
+      return callbackCommand('SERVICE_FILES', data.slice(SERVICE_FILES_CALLBACK_PREFIX.length), id);
+    }
     if (data.startsWith(SERVICE_RESEND_CALLBACK_PREFIX)) {
       return callbackCommand(
         'SERVICE_RESEND',
@@ -3225,6 +3233,12 @@ export interface BotRuntimeDeps {
    * without it: then no button is drawn and a stale tap answers the unavailable sentence.
    */
   readonly customService?: CustomServiceSurface;
+  /**
+   * Package E — a panel's ready-made connection files. Optional for the fixtures that
+   * build a runtime without it: then no button is drawn and a stale tap is answered
+   * as an unknown service.
+   */
+  readonly subscriptionFiles?: Pick<SubscriptionFileService, 'offered' | 'send'>;
   /** The referral program (WP9): its terms, for the wallet button, and the invite. */
   readonly referrals?: Pick<ReferralProgram, 'terms' | 'invite'>;
   readonly orders: OrderService;
@@ -8883,6 +8897,9 @@ export class BotRuntime {
     if (command.intent === 'SERVICE_RESEND' && command.targetId !== null) {
       return this.serviceResend(scope, customer, command.targetId, input);
     }
+    if (command.intent === 'SERVICE_FILES' && command.targetId !== null) {
+      return this.serviceFiles(scope, actor, customer, command.targetId, input);
+    }
     if (command.intent === 'SERVICE_SUSPEND' && command.targetId !== null) {
       return this.serviceAction(
         scope,
@@ -9069,6 +9086,17 @@ export class BotRuntime {
       buttons.push({
         label: { kind: 'TEMPLATE', key: 'bot.service.refresh_button' },
         data: `${SERVICE_REFRESH_CALLBACK_PREFIX}${service.id}`,
+        row: 0,
+      });
+    }
+    // Package E: only where the panel's adapter can fetch its files.
+    if (
+      this.deps.subscriptionFiles !== undefined &&
+      (await this.deps.subscriptionFiles.offered(scope, service))
+    ) {
+      buttons.push({
+        label: { kind: 'TEMPLATE', key: 'bot.service.files_button' },
+        data: `${SERVICE_FILES_CALLBACK_PREFIX}${service.id}`,
         row: 0,
       });
     }
@@ -9345,6 +9373,59 @@ export class BotRuntime {
        * no link yet and it is NOT used, because it would be wrong for the other two.
        */
       return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };
+    }
+  }
+
+  /**
+   * A customer asking for their service's connection files (Package E).
+   *
+   * Sent only to the private chat the tap came from, for the reason `serviceResend`
+   * gives: these are credentials. Ownership, state and the panel are decided again by
+   * `SubscriptionFileService.send`, which sends the files itself — this handler sees a
+   * count, never a file — and the one answer after them is a template key.
+   */
+  private async serviceFiles(
+    scope: TenantContext,
+    actor: ActorContext,
+    customer: CustomerRecord,
+    serviceId: string,
+    input: { readonly botInstanceId: BotInstanceId; readonly update: unknown },
+  ): Promise<PendingReply> {
+    const files = this.deps.subscriptionFiles;
+    const chatId = privateChatIdOf(input.update);
+    if (files === undefined || chatId === null) {
+      return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };
+    }
+    const result = await files.send(scope, actor, {
+      customerId: customer.id,
+      serviceId,
+      chatId,
+      botInstanceId: input.botInstanceId,
+    });
+    switch (result.outcome) {
+      case 'NOT_FOUND':
+        return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };
+      case 'RATE_LIMITED':
+        return {
+          key: 'bot.service.files_rate_limited',
+          values: { seconds: result.retryAfterSeconds },
+          buttons: [],
+          orderId: null,
+        };
+      case 'UNAVAILABLE':
+        return { key: 'bot.service.files_unavailable', values: {}, buttons: [], orderId: null };
+      case 'SENT':
+        return result.failed === 0
+          ? { key: null, values: {}, buttons: [], orderId: null }
+          : {
+              key: 'bot.service.files_partial',
+              values: { failed: result.failed },
+              buttons: [],
+              orderId: null,
+            };
+      case 'STOPPED':
+        // Telegram declined a send part-way; a further message would meet the same answer.
+        return { key: null, values: {}, buttons: [], orderId: null };
     }
   }
 

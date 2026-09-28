@@ -312,6 +312,7 @@ import type { PanelNamespaceRebinder } from './modules/platform/panels/applicati
 import { DrizzleUsernameCaptureRepository } from './modules/commerce/provisioning/infrastructure/drizzle-username-capture.repository.js';
 import { DrizzleOperationRepository } from './modules/commerce/provisioning/infrastructure/drizzle-operation.repository.js';
 import { ProvisioningService } from './modules/commerce/provisioning/application/provisioning.service.js';
+import { SubscriptionFileService } from './modules/commerce/provisioning/application/subscription-file.service.js';
 import { ServiceAdminService } from './modules/commerce/provisioning/application/service-admin.service.js';
 import { decideOperability } from './modules/commerce/provisioning/application/panel-operability.js';
 import {
@@ -545,6 +546,8 @@ export interface Container {
   readonly customServiceFlow: CustomServiceFlowService;
   /** The customer's generic text window (customer UX completion §N). */
   readonly customerCaptures: CustomerCaptureService;
+  /** Package E: a panel's connection files, fetched and sent to their owner. */
+  readonly subscriptionFiles: SubscriptionFileService;
   /** The operator's price preview and an order's pricing detail (WP8). */
   readonly pricingRead: PricingReadService;
   /** Cashback from promise to credit to reversal (WP8 P9); driven by the provisioner loop. */
@@ -3185,6 +3188,26 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     leaseMs: OPERATION_LEASE_SECONDS_MIN * 1000,
   });
 
+  /*
+   * Package E: a panel's ready-made connection files, fetched on a customer's tap and
+   * sent straight to them. The same panel client, URL policy and tenant probe budget as
+   * every other panel read, and the same messenger as every other customer send.
+   */
+  const subscriptionFileService = new SubscriptionFileService({
+    services: provisioningService,
+    panels: panelRepository,
+    credentials: panelCredentials,
+    adapters: providerServiceAdapter,
+    implementedProviderTypes: SERVICE_PROVIDER_TYPES,
+    http: panelHttp,
+    urlPolicy,
+    probeBudget: probeCore.probeBudget,
+    messenger: customerMessenger,
+    guard,
+    uow,
+    clock,
+  });
+
   /**
    * How a customer learns that the thing they asked for happened.
    *
@@ -3817,6 +3840,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     customServiceAdmin: customServiceAdminService,
     customServiceFlow: customServiceFlowService,
     customerCaptures: customerCaptureService,
+    subscriptionFiles: subscriptionFileService,
     pricingRead: pricingReadService,
     cashback: cashbackService,
     referrals: referralProgram,
@@ -3953,6 +3977,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       commercial: commercialActionService,
       trials: trialService,
       customService: customServiceFlowService,
+      subscriptionFiles: subscriptionFileService,
       orders: orderService,
       // The SAME messenger the delivery sweep uses, for the reason above it.
       messenger: customerMessenger,
