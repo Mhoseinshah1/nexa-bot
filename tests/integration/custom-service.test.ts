@@ -234,7 +234,9 @@ describe('Package D — the custom service', () => {
       request.resume();
       request.on('end', () => {
         response.writeHead(200, { 'content-type': 'application/json' });
-        response.end(JSON.stringify({ ok: true, result: { id: 7001, username: 'acme_store_bot' } }));
+        response.end(
+          JSON.stringify({ ok: true, result: { id: 7001, username: 'acme_store_bot' } }),
+        );
       });
     });
     await new Promise<void>((resolve) => getMe.listen(0, '127.0.0.1', resolve));
@@ -249,7 +251,9 @@ describe('Package D — the custom service', () => {
   afterAll(async () => {
     await f.ctx?.close();
     getMe?.closeAllConnections();
-    await new Promise<void>((resolve) => (getMe === undefined ? resolve() : getMe.close(() => resolve())));
+    await new Promise<void>((resolve) =>
+      getMe === undefined ? resolve() : getMe.close(() => resolve()),
+    );
   });
 
   beforeEach(async () => {
@@ -718,8 +722,20 @@ describe('Package D — the custom service', () => {
     it('refuses a confirmation when a more specific rule now applies, or the location was withdrawn', async () => {
       await offer();
       const first = await h.draft(customer, panelA, '10', 30);
-      await h.rule({ customerId: customer, unitPriceMinor: 20_000n }); // same price, other rule
+      const mine = await h.rule({ customerId: customer, unitPriceMinor: 20_000n }); // same price, other rule
       expect((await refusalOf(h.confirm(first))).code).toBe(
+        'commerce.custom_service_terms_changed',
+      );
+
+      // The rule the quote named was replaced by an identical one — same level, same
+      // price, another id. The quote names a rule that no longer prices anything.
+      const replaced = await h.draft(customer, panelA, '10', 30);
+      await f.ctx.container.customServiceAdmin.deleteRule(tenantA, f.owner, {
+        idempotencyKey: f.key(),
+        ruleId: mine.id,
+      });
+      await h.rule({ customerId: customer, unitPriceMinor: 20_000n });
+      expect((await refusalOf(h.confirm(replaced))).code).toBe(
         'commerce.custom_service_terms_changed',
       );
 
@@ -1001,9 +1017,10 @@ describe('Package D — the custom service', () => {
       const [held] = await h.rows<{ username: string }>(
         sql`SELECT username FROM service_username_reservations WHERE order_id = ${order.id}`,
       );
-      const facts = await new DrizzleReceiptReviewFactsReader(
-        f.ctx.container.database.db,
-      ).factsFor(tenantA, order.id);
+      const facts = await new DrizzleReceiptReviewFactsReader(f.ctx.container.database.db).factsFor(
+        tenantA,
+        order.id,
+      );
       expect(facts.purpose).toBe('CUSTOM_SERVICE');
       expect(facts.serviceUsername).toBe(held!.username);
       expect(facts.productTitle).toBe('🇩🇪 آلمان');
