@@ -110,7 +110,7 @@ describe('the feature flags page', () => {
    * control a flag offers is its on/off switch; a value input beside it would
    * be the first step back, and WP-A2 removed the typed key and the reason.
    */
-  it('offers only an on/off switch, never a field to type into', async () => {
+  it('offers only enable and disable, never a value to type', async () => {
     stubApi([{ url: '/features', body: { flags: [flag({ enabled: true })] } }]);
     const { container } = renderPage(<FeaturesPage mayEdit denied={false} />);
     await screen.findByText(OPS_TITLE);
@@ -125,7 +125,7 @@ describe('the feature flags page', () => {
     expect(screen.queryAllByRole('combobox')).toHaveLength(0);
   });
 
-  it('draws no switch at all for an actor who may only view', async () => {
+  it('draws no toggle at all for an actor who may only view', async () => {
     stubApi([{ url: '/features', body: { flags: [flag({ enabled: true })] } }]);
     renderPage(<FeaturesPage mayEdit={false} denied={false} />);
     await screen.findByText(OPS_TITLE);
