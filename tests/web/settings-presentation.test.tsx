@@ -421,6 +421,27 @@ describe('the settings page', () => {
     expect(screen.queryByText(t('web.trial_product_unlisted'))).toBeNull();
   });
 
+  /** Codex #2: a partial page cannot establish that the product is absent. */
+  it('does not call the trial product unlisted when it may be on a later page', async () => {
+    const id = '01a05e35-c9ad-7e93-bef3-1ed9b55292c9';
+    stubApi([
+      {
+        url: '/settings',
+        body: { settings: [setting({ key: 'trial.product_id', value: id, configures: 'trials' })] },
+      },
+      { url: '/products', body: { products: [], nextCursor: 'more' } },
+    ]);
+    renderPage(<SettingsPage mayEdit denied={false} />);
+    const select = (await screen.findByLabelText(
+      t('web.setting_trial_product_id'),
+    )) as HTMLSelectElement;
+    await waitFor(() => expect(select.disabled).toBe(false));
+    expect(screen.getByText(id)).toBeInTheDocument();
+    expect(select.value).toBe(id);
+    expect(select.selectedOptions[0]?.text).toBe(`${t('web.trial_product_current')} (${id})`);
+    expect(screen.queryByText(t('web.trial_product_unlisted'))).toBeNull();
+  });
+
   it('calls the trial product unlisted only when the list was read and lacks it', async () => {
     const id = '01a05e35-c9ad-7e93-bef3-1ed9b55292c9';
     stubApi([

@@ -2264,6 +2264,7 @@ export const WEB_FA = {
   'web.setting_referral_signup_gift_referred_percent': 'سهم کاربر معرفی‌شده از هدیهٔ عضویت',
   'web.trial_product_none': 'هیچ‌کدام (سرویس آزمایشی ارائه نمی‌شود)',
   'web.trial_product_unlisted': 'محصول فعلی (در فهرست محصولات فعال نیست)',
+  'web.trial_product_current': 'محصول فعلی',
 
   // WP6-B: a customer's trial allowance, the override, the global reset and its history.
   'web.nav_trials': 'سرویس آزمایشی',

@@ -549,13 +549,19 @@ function joined(items: readonly ReactNode[]): ReactNode {
 /** The trial product's title, from the same query the picker below makes. */
 function TrialProductName({ id }: { id: string }) {
   const products = useTrialProducts();
-  // "Not in the active list" is a fact only a SUCCESSFUL read can establish (F4). While
-  // the list is loading, or when it cannot be read (no catalogue permission), the stored
-  // id is what is known, and that is what is shown.
+  // "Not in the active list" is a fact only a SUCCESSFUL and COMPLETE read can establish
+  // (F4, Codex #2). While the list is loading, when it cannot be read (no catalogue
+  // permission), or when the product may be on a later page, the stored id is what is
+  // known, and that is what is shown.
   if (products.isPending) return <span className="muted">{t('web.loading')}</span>;
   if (products.isError) return <Ltr>{id}</Ltr>;
   const found = products.data.products.find((product) => product.id === id);
-  return <>{found === undefined ? t('web.trial_product_unlisted') : found.title}</>;
+  if (found !== undefined) return <>{found.title}</>;
+  return products.data.nextCursor === null ? (
+    <>{t('web.trial_product_unlisted')}</>
+  ) : (
+    <Ltr>{id}</Ltr>
+  );
 }
 
 function useTrialProducts() {
@@ -1198,7 +1204,16 @@ function TrialProductEditor({
         onChange={(event) => onChange(event.target.value === '' ? null : event.target.value)}
       >
         <option value="">{t('web.trial_product_none')}</option>
-        {listed ? null : <option value={value}>{t('web.trial_product_unlisted')}</option>}
+        {/* The stored id is always an option, so the select shows what is stored. It is
+            called "not in the active list" only when the list read is complete; on a
+            partial page it may simply be further on, and is named by its id. */}
+        {listed ? null : (
+          <option value={value}>
+            {products.data?.nextCursor === null
+              ? t('web.trial_product_unlisted')
+              : `${t('web.trial_product_current')} (${value})`}
+          </option>
+        )}
         {items.map((product) => (
           <option key={product.id} value={product.id}>
             {product.title}
