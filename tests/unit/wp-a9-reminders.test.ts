@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  EXPIRY_DAY_MIN_NOTICE_MS,
   EXPIRY_REMINDER_KINDS,
+  PENDING_PAYMENT_REMINDER_MINUTES_MIN,
+  PENDING_PAYMENT_REMINDER_MIN_NOTICE_MINUTES,
+  expiryDayRungStart,
   PENDING_PAYMENT_REMINDER_MIN_AGE_MINUTES,
   SERVICE_REMINDER_DEFAULTS,
   expiryReminderDue,
@@ -12,7 +16,12 @@ import {
   usageRemainingPercent,
   usageRemindersReached,
 } from '@nexa/contracts';
-import { CustomerReminderLoop } from '../../apps/api/src/modules/commerce/messaging/application/customer-reminder-loop';
+import {
+  CUSTOMER_REMINDER_INTERVAL_MS,
+  CustomerReminderLoop,
+} from '../../apps/api/src/modules/commerce/messaging/application/customer-reminder-loop';
+import { CUSTOMER_NOTIFICATION_INTERVAL_MS } from '../../apps/api/src/modules/commerce/messaging/application/customer-notification-loop';
+import { SERVICE_REMINDER_INTERVAL_MS } from '../../apps/api/src/modules/commerce/provisioning/application/service-reminder-loop';
 
 /**
  * WP-A9, the pure halves: the owner's defaults, the ladder's decision including the day of
@@ -200,5 +209,76 @@ describe('CustomerReminderLoop', () => {
     clock = 1_000 + 10 * 60_000;
     expect(loop.isFresh(clock), 'a failing sweep turns readiness stale').toBe(false);
     await loop.stop();
+  });
+});
+
+/*
+ * Codex review #1 of PR #100. Both findings were a reminder that a VALID configuration could
+ * not deliver: enqueued too close to a deadline for the delivery lane to send it before the
+ * send-time re-check superseded it (C1), or never enqueued because no sweep landed in a rung
+ * shorter than the sweep interval (C2). The margins are pinned to the loop intervals here,
+ * so shortening a margin or lengthening an interval fails this file rather than a customer.
+ */
+describe('a reminder is enqueued early enough to be delivered', () => {
+  const MIN = 60_000;
+
+  it('keeps the pending-payment notice wider than producer plus delivery', () => {
+    expect(PENDING_PAYMENT_REMINDER_MIN_NOTICE_MINUTES * MIN).toBeGreaterThanOrEqual(
+      CUSTOMER_REMINDER_INTERVAL_MS + CUSTOMER_NOTIFICATION_INTERVAL_MS,
+    );
+    // And the narrowest window a setting can produce still holds a producer pass.
+    expect(
+      (PENDING_PAYMENT_REMINDER_MINUTES_MIN - PENDING_PAYMENT_REMINDER_MIN_NOTICE_MINUTES) * MIN,
+    ).toBeGreaterThanOrEqual(CUSTOMER_REMINDER_INTERVAL_MS);
+  });
+
+  it('refuses a lead below the raised floor, and still parses every one above it', () => {
+    const schema = settingDefinition('reminders.payment_pending_minutes').schema;
+    for (const refused of [1, 2, 4]) expect(schema.safeParse(refused).success).toBe(false);
+    for (const accepted of [5, 10, 30]) expect(schema.safeParse(accepted).success).toBe(true);
+  });
+
+  it('never reminds an attempt with less than the notice left', () => {
+    const opened = after(-20 * MIN);
+    const notice = PENDING_PAYMENT_REMINDER_MIN_NOTICE_MINUTES * MIN;
+    expect(pendingReminderDue(opened, after(notice), at, 10)).toBe(true);
+    expect(pendingReminderDue(opened, after(notice - 1), at, 10)).toBe(false);
+    expect(pendingReminderDue(opened, after(30_000), at, 10)).toBe(false);
+  });
+
+  it('keeps the day-of rung at least one sweep plus one delivery long', () => {
+    expect(EXPIRY_DAY_MIN_NOTICE_MS).toBeGreaterThanOrEqual(
+      SERVICE_REMINDER_INTERVAL_MS + CUSTOMER_NOTIFICATION_INTERVAL_MS,
+    );
+  });
+
+  it('sends the day-of reminder for a deadline five minutes after local midnight, whatever the sweep phase', () => {
+    // Local midnight in Tehran (UTC+03:30) and a deadline five minutes after it.
+    const midnight = new Date('2026-09-29T20:30:00.000Z');
+    const expiresAt = new Date(midnight.getTime() + 5 * MIN);
+    const rung = expiryDayRungStart(midnight, expiresAt);
+    expect(rung.getTime()).toBe(expiresAt.getTime() - EXPIRY_DAY_MIN_NOTICE_MS);
+
+    for (let phase = 0; phase < SERVICE_REMINDER_INTERVAL_MS; phase += 10_000) {
+      const due: { kind: string; left: number }[] = [];
+      for (
+        let t = expiresAt.getTime() - 3_600_000 + phase;
+        t <= expiresAt.getTime() + SERVICE_REMINDER_INTERVAL_MS;
+        t += SERVICE_REMINDER_INTERVAL_MS
+      ) {
+        const kind = expiryReminderDue(expiresAt, new Date(t), SERVICE_REMINDER_DEFAULTS, rung);
+        if (kind !== null) due.push({ kind, left: expiresAt.getTime() - t });
+      }
+      const day = due.find((one) => one.kind === 'EXPIRY_DAY');
+      expect(day, `phase ${String(phase)}`).toBeDefined();
+      // With at least one delivery poll to spare, so the send-time re-check still holds.
+      expect(day!.left).toBeGreaterThan(CUSTOMER_NOTIFICATION_INTERVAL_MS);
+    }
+  });
+
+  it('leaves an ordinary day-of rung at local midnight', () => {
+    const midnight = new Date('2026-09-29T20:30:00.000Z');
+    const expiresAt = new Date(midnight.getTime() + 14 * 3_600_000);
+    expect(expiryDayRungStart(midnight, expiresAt)).toEqual(midnight);
   });
 });

@@ -1,6 +1,8 @@
 import { useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  PENDING_PAYMENT_REMINDER_MINUTES_MAX,
+  PENDING_PAYMENT_REMINDER_MINUTES_MIN,
   USAGE_REMINDER_PERCENT_MAX,
   usageRemainingPercent,
   type FeatureFlagResponse,
@@ -201,8 +203,8 @@ export function RemindersPage({
                 label={t('web.reminders_pending_minutes')}
                 hint={t('web.reminders_pending_minutes_hint')}
                 unit={t('web.unit_minutes')}
-                min={1}
-                max={30}
+                min={PENDING_PAYMENT_REMINDER_MINUTES_MIN}
+                max={PENDING_PAYMENT_REMINDER_MINUTES_MAX}
                 mayEdit={mayEdit}
               />
               {templateBlock(['bot.payment.pending_reminder', 'bot.order.pending_reminder'])}
@@ -392,6 +394,9 @@ function NumberRow({
           )}
         </div>
       </Field>
+      {/* A stored value the registry no longer accepts (a bound was tightened): the
+          default is in force, and saving a value repairs it. */}
+      {setting.storedValueInvalid && <Banner tone="danger">{t('web.stored_value_invalid')}</Banner>}
       {save.isError && <ErrorReport error={save.error} />}
       {save.isSuccess && (
         <Banner tone={save.data.changed ? 'ok' : 'info'}>

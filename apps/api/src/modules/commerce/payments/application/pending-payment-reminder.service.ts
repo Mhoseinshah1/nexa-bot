@@ -1,5 +1,6 @@
 import {
   PENDING_PAYMENT_REMINDER_MIN_AGE_MINUTES,
+  PENDING_PAYMENT_REMINDER_MIN_NOTICE_MINUTES,
   PENDING_PAYMENT_REMINDER_SWEEP_LIMIT,
   pendingReminderDue,
   type Clock,
@@ -38,7 +39,13 @@ export interface PendingPaymentReminderRepository {
    */
   listPaymentCandidates(
     scope: TenantContext,
-    bounds: { readonly now: Date; readonly leadAt: Date; readonly openedBefore: Date },
+    bounds: {
+      readonly now: Date;
+      /** The latest deadline still worth a reminder: `PENDING_PAYMENT_REMINDER_MIN_NOTICE_MINUTES` out. */
+      readonly noticeAt: Date;
+      readonly leadAt: Date;
+      readonly openedBefore: Date;
+    },
     limit: number,
     tx: TransactionScope,
   ): Promise<readonly PendingReminderCandidate[]>;
@@ -48,7 +55,13 @@ export interface PendingPaymentReminderRepository {
    */
   listOrderCandidates(
     scope: TenantContext,
-    bounds: { readonly now: Date; readonly leadAt: Date; readonly openedBefore: Date },
+    bounds: {
+      readonly now: Date;
+      /** The latest deadline still worth a reminder: `PENDING_PAYMENT_REMINDER_MIN_NOTICE_MINUTES` out. */
+      readonly noticeAt: Date;
+      readonly leadAt: Date;
+      readonly openedBefore: Date;
+    },
     limit: number,
     tx: TransactionScope,
   ): Promise<readonly PendingReminderCandidate[]>;
@@ -96,8 +109,10 @@ export interface PendingPaymentReminderReport {
  * twice. An order is reminded only while no payment for it is PENDING, CONFIRMED or UNKNOWN.
  *
  * Never an attempt the customer has already acted on (a receipt, or the "I have paid"
- * signal), never one that is settled, cancelled or expired, and never one opened less than
- * `PENDING_PAYMENT_REMINDER_MIN_AGE_MINUTES` ago. All of it is re-checked at SEND time by
+ * signal), never one that is settled, cancelled or expired, never one opened less than
+ * `PENDING_PAYMENT_REMINDER_MIN_AGE_MINUTES` ago, and never one with less than
+ * `PENDING_PAYMENT_REMINDER_MIN_NOTICE_MINUTES` left — a reminder the delivery lane could
+ * not send before the deadline supersedes it. All of it is re-checked at SEND time by
  * the notification lane's subject reader, which supersedes a reminder that stopped holding.
  *
  * ## What is NOT here
@@ -125,6 +140,7 @@ export class PendingPaymentReminderService {
       );
       const bounds = {
         now,
+        noticeAt: new Date(now.getTime() + PENDING_PAYMENT_REMINDER_MIN_NOTICE_MINUTES * 60_000),
         leadAt: new Date(now.getTime() + lead * 60_000),
         openedBefore: new Date(now.getTime() - PENDING_PAYMENT_REMINDER_MIN_AGE_MINUTES * 60_000),
       };

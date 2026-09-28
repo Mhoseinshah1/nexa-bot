@@ -1,7 +1,12 @@
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  featureFlagDefinition,
+  settingDefinition,
   type ActorContext,
+  type Clock,
+  type FeatureFlagKey,
+  type SettingKey,
   type BotInstanceId,
   type CorrelationId,
   type UserId,
@@ -18,6 +23,9 @@ import { DrizzleWalletRepository } from '../../apps/api/src/modules/commerce/wal
 import { DrizzleNotificationSubjectReader } from '../../apps/api/src/modules/commerce/messaging/infrastructure/drizzle-notification-subject.reader';
 import { DrizzleCustomerReminderFactsReader } from '../../apps/api/src/modules/commerce/messaging/infrastructure/drizzle-customer-reminder-facts.reader';
 import { DrizzleServiceReminderSnapshotReader } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-service-reminder.repository';
+import { DrizzleServiceReminderRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-service-reminder.repository';
+import { ServiceReminderService } from '../../apps/api/src/modules/commerce/provisioning/application/service-reminder.service';
+import { CustomerNotifier } from '../../apps/api/src/modules/commerce/messaging/application/customer-notifier';
 import { DrizzleWalletThresholdAlertRepository } from '../../apps/api/src/modules/commerce/wallet/infrastructure/drizzle-wallet-threshold-alert.repository';
 import {
   adminActorFor,
@@ -155,6 +163,8 @@ describe('WP-A9 reminders', () => {
   /** A live service, written directly, for the reason `service-reminders.test.ts` gives. */
   async function service(options: {
     readonly expiresInDays: number | null;
+    /** An exact deadline, overriding `expiresInDays`. */
+    readonly expiresAt?: Date;
     readonly usedBytes?: bigint;
     readonly limitBytes?: bigint;
     readonly state?: string;
@@ -173,7 +183,13 @@ describe('WP-A9 reminders', () => {
               ${ctx.container.ids.uuid()},
               ${options.limitBytes ?? ALLOWANCE}, ${options.usedBytes ?? 0n}, now(),
               ${options.state ?? 'ACTIVE'}, now(), NULL,
-              ${days === null ? sql`NULL` : sql`now() + make_interval(secs => ${days * DAY})`})`);
+              ${
+                options.expiresAt !== undefined
+                  ? sql`${options.expiresAt}::timestamptz`
+                  : days === null
+                    ? sql`NULL`
+                    : sql`now() + make_interval(secs => ${days * DAY})`
+              })`);
     return id;
   }
 
@@ -265,7 +281,7 @@ describe('WP-A9 reminders', () => {
    * a messenger that records what it was asked to send. The readers are the point: every
    * supersession below is decided by the production query over the production tables.
    */
-  function dispatcher(): CustomerNotificationService {
+  function dispatcher(clock: Clock = ctx.container.clock): CustomerNotificationService {
     const db = ctx.container.database.db;
     const people = new DrizzleCustomerRepository(db);
     return new CustomerNotificationService({
@@ -293,12 +309,13 @@ describe('WP-A9 reminders', () => {
         sendFile: async () => ({ outcome: 'REFUSED' }),
       },
       uow: ctx.container.uow,
-      clock: ctx.container.clock,
+      clock,
       scopeIsActive: async () => true,
       logger: { info: () => {}, error: () => {} },
     });
   }
-  const deliver = () => dispatcher().deliverDue(tenantA, 200);
+  const deliver = (clock?: Clock) => dispatcher(clock).deliverDue(tenantA, 200);
+  const at = (ms: number): Clock => ({ now: () => new Date(ms) });
 
   interface Row {
     readonly kind: string;
@@ -781,5 +798,143 @@ describe('WP-A9 reminders', () => {
     expect(await setSetting('reminders.expiry_early_days', 9)).toMatch(/یادآور هفتگی/);
     expect(await setSetting('reminders.expiry_early_days', 14)).toBeNull();
     expect(await setSetting('reminders.expiry_early_days', 0)).toBeNull();
+  });
+  // =========================================================================
+  // 7. Codex review #1 of PR #100: a valid configuration always delivers
+  // =========================================================================
+
+  /**
+   * The service sweep with a clock of the test's choosing, so a case can walk the real
+   * fifteen-minute cadence across a local midnight. Everything else is production code —
+   * the repository, the notifier, the tenant's own row — and the settings and flags are
+   * the registry's defaults.
+   */
+  function sweepAt(ms: number) {
+    const db = ctx.container.database.db;
+    return new ServiceReminderService({
+      reminders: new DrizzleServiceReminderRepository(db),
+      settings: {
+        valueOf: async <T>(_scope: unknown, key: SettingKey) =>
+          settingDefinition(key).defaultValue as T,
+      },
+      features: {
+        isEnabled: async (_scope: unknown, key: FeatureFlagKey) =>
+          featureFlagDefinition(key).defaultEnabled,
+      },
+      notifier: new CustomerNotifier({
+        notifications: new DrizzleCustomerNotificationRepository(db),
+        bots: { botFor: async () => BOT_A },
+        ids: ctx.container.ids,
+      }),
+      scopeActivity: ctx.container.tenants,
+      uow: ctx.container.uow,
+      clock: at(ms),
+      ids: ctx.container.ids,
+    }).runOnce(tenantA);
+  }
+
+  /** Five minutes after the Tehran midnight two days from now. */
+  async function justAfterTehranMidnight(): Promise<Date> {
+    await ctx.container.database.db.execute(
+      sql`UPDATE tenants SET display_timezone = 'Asia/Tehran' WHERE id = ${tenantA.tenantId}`,
+    );
+    const result = await ctx.container.database.db.execute(sql`
+      SELECT (((date_trunc('day', now() AT TIME ZONE 'Asia/Tehran') + interval '2 days')
+                 AT TIME ZONE 'Asia/Tehran') + interval '5 minutes')::text AS at`);
+    return new Date((result.rows[0] as { at: string }).at);
+  }
+
+  async function kindsToldAbout(serviceId: string): Promise<readonly string[]> {
+    const result = await ctx.container.database.db.execute(sql`
+      SELECT n.kind FROM customer_notifications n
+      JOIN service_reminders r ON r.id = n.subject_id
+      WHERE r.service_id = ${serviceId} ORDER BY r.raised_at, n.kind`);
+    return (result.rows as { kind: string }[]).map((row) => row.kind);
+  }
+
+  it('sends the day-of reminder for a deadline 5 minutes after Tehran midnight, at any sweep phase', async () => {
+    const expiresAt = await justAfterTehranMidnight();
+    const QUARTER = 15 * 60_000;
+    // 9m50s is the phase that used to lose it: sweeps at 23:59:50 and 00:14:50.
+    for (const phase of [0, 10_000, 5 * 60_000, 9 * 60_000 + 50_000, 14 * 60_000 + 50_000]) {
+      const id = await service({ expiresInDays: null, expiresAt });
+      let dayAt: number | null = null;
+      for (
+        let t = expiresAt.getTime() - 3_600_000 + phase;
+        t <= expiresAt.getTime() + QUARTER;
+        t += QUARTER
+      ) {
+        const before = await kindsToldAbout(id);
+        await sweepAt(t);
+        const after = await kindsToldAbout(id);
+        if (!before.includes('SERVICE_EXPIRY_DAY') && after.includes('SERVICE_EXPIRY_DAY'))
+          dayAt = t;
+      }
+      expect(await kindsToldAbout(id), `phase ${String(phase)}`).toEqual([
+        'SERVICE_EXPIRY_SECOND',
+        'SERVICE_EXPIRY_DAY',
+        'SERVICE_EXPIRED',
+      ]);
+      // Raised early enough that the delivery lane's next poll sends it rather than
+      // superseding it: delivered a minute later, before the deadline.
+      expect(dayAt).not.toBeNull();
+      sends = [];
+      await deliver(at(dayAt! + 60_000));
+      expect(sends.map((one) => one.templateKey)).toContain('bot.service.expiry_day');
+      // Out of the way of the next phase: a terminated service is nobody's reminder.
+      await ctx.container.database.db.execute(
+        sql`UPDATE services SET state = 'TERMINATED', terminated_at = now() WHERE id = ${id}`,
+      );
+    }
+  });
+
+  it('never says "expires soon" after the deadline: a worker down for the whole rung sends the expired notice', async () => {
+    const expiresAt = await justAfterTehranMidnight();
+    const id = await service({ expiresInDays: null, expiresAt });
+    await sweepAt(expiresAt.getTime() - 3_600_000);
+    // The worker is down from then until a minute after the deadline.
+    await sweepAt(expiresAt.getTime() + 60_000);
+    expect(await kindsToldAbout(id)).toEqual(['SERVICE_EXPIRY_SECOND', 'SERVICE_EXPIRED']);
+    // Deliberately recorded as passed, so it can never be sent late.
+    const rows = await ctx.container.database.db.execute(
+      sql`SELECT kind FROM service_reminders WHERE service_id = ${id} AND kind = 'EXPIRY_DAY'`,
+    );
+    expect(rows.rows).toHaveLength(1);
+  });
+
+  it('never enqueues a pending reminder too close to its deadline to be delivered', async () => {
+    await payment({ state: 'PENDING', expiresInMinutes: 2 });
+    await order({ state: 'AWAITING_PAYMENT', expiresInMinutes: 2 });
+    expect(await pendingPass()).toEqual({ payments: 0, orders: 0 });
+    expect(await count('customer_notifications')).toBe(0);
+  });
+
+  it('delivers at the smallest lead an operator can choose', async () => {
+    expect(await setSetting('reminders.payment_pending_minutes', 5)).toBeNull();
+    expect(await setSetting('reminders.payment_pending_minutes', 4)).not.toBeNull();
+    // The latest moment a reminder may be enqueued: three minutes left.
+    await payment({ state: 'PENDING', expiresInMinutes: 3.1 });
+    expect(await pendingPass()).toEqual({ payments: 1, orders: 0 });
+
+    // The delivery lane's next poll, a minute later, still finds it payable and sends it.
+    const report = await deliver(at(ctx.container.clock.now().getTime() + 60_000));
+    expect(report).toMatchObject({ delivered: 1, superseded: 0 });
+  });
+
+  it('treats a lead stored below the raised floor as the default, and says so', async () => {
+    await ctx.container.database.db.execute(sql`
+      INSERT INTO setting_values (id, tenant_id, setting_key, value)
+      VALUES (${ctx.container.ids.uuid()}, ${tenantA.tenantId},
+              'reminders.payment_pending_minutes', '1'::jsonb)`);
+    const read = await ctx.container.settingsService.get(
+      tenantA,
+      owner,
+      'reminders.payment_pending_minutes',
+    );
+    expect(read).toMatchObject({ value: 10, source: 'DEFAULT', storedValueInvalid: true });
+
+    // Ten minutes is in force, so an attempt eight minutes out is reminded.
+    await payment({ state: 'PENDING', expiresInMinutes: 8 });
+    expect(await pendingPass()).toEqual({ payments: 1, orders: 0 });
   });
 });

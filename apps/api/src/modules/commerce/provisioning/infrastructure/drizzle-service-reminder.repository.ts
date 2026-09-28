@@ -1,5 +1,6 @@
 import { and, eq, sql } from 'drizzle-orm';
 import {
+  EXPIRY_DAY_MIN_NOTICE_MS,
   EXPIRY_REMINDER_STATES,
   USAGE_REMINDER_STATES,
   type TenantContext,
@@ -122,6 +123,10 @@ export class DrizzleServiceReminderRepository implements ServiceReminderReposito
      * the filter and the decision cannot disagree across a daylight-saving change. The
      * zone is the tenant ROW's own, which is the one every message renders dates in; no
      * zone is written in code.
+     *
+     * The rung begins at the EARLIER of that midnight and `EXPIRY_DAY_MIN_NOTICE_MS` before
+     * the deadline (`expiryDayRungStart`), so a deadline minutes after midnight still has a
+     * rung at least one sweep long and the day-of reminder is not skipped.
      */
     const result = await this.exec(tx).execute(sql`
       SELECT c.id, c.customer_id, c.provider_username, c.expires_at,
@@ -130,8 +135,11 @@ export class DrizzleServiceReminderRepository implements ServiceReminderReposito
       FROM (
         SELECT s.id, s.tenant_id, s.customer_id, s.provider_username, s.expires_at,
                s.traffic_limit_bytes, s.traffic_used_bytes,
-               (date_trunc('day', s.expires_at AT TIME ZONE t.display_timezone)
-                  AT TIME ZONE t.display_timezone) AS day_start
+               LEAST(
+                 date_trunc('day', s.expires_at AT TIME ZONE t.display_timezone)
+                   AT TIME ZONE t.display_timezone,
+                 s.expires_at - make_interval(secs => ${EXPIRY_DAY_MIN_NOTICE_MS / 1000})
+               ) AS day_start
         FROM services s
         JOIN tenants t ON t.id = s.tenant_id
         WHERE s.tenant_id = ${tenantId}

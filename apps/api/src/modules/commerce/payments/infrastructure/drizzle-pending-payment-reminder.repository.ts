@@ -49,7 +49,12 @@ export class DrizzlePendingPaymentReminderRepository implements PendingPaymentRe
 
   async listPaymentCandidates(
     scope: TenantContext,
-    bounds: { readonly now: Date; readonly leadAt: Date; readonly openedBefore: Date },
+    bounds: {
+      readonly now: Date;
+      readonly noticeAt: Date;
+      readonly leadAt: Date;
+      readonly openedBefore: Date;
+    },
     limit: number,
     tx: TransactionScope,
   ): Promise<readonly PendingReminderCandidate[]> {
@@ -62,7 +67,7 @@ export class DrizzlePendingPaymentReminderRepository implements PendingPaymentRe
         AND p.state = 'PENDING'
         AND p.method = 'MANUAL_TRANSFER'
         AND p.expires_at IS NOT NULL
-        AND p.expires_at > ${bounds.now}
+        AND p.expires_at >= ${bounds.noticeAt}
         AND p.expires_at <= ${bounds.leadAt}
         AND p.created_at <= ${bounds.openedBefore}
         AND p.customer_signalled_at IS NULL
@@ -85,7 +90,12 @@ export class DrizzlePendingPaymentReminderRepository implements PendingPaymentRe
 
   async listOrderCandidates(
     scope: TenantContext,
-    bounds: { readonly now: Date; readonly leadAt: Date; readonly openedBefore: Date },
+    bounds: {
+      readonly now: Date;
+      readonly noticeAt: Date;
+      readonly leadAt: Date;
+      readonly openedBefore: Date;
+    },
     limit: number,
     tx: TransactionScope,
   ): Promise<readonly PendingReminderCandidate[]> {
@@ -104,7 +114,7 @@ export class DrizzlePendingPaymentReminderRepository implements PendingPaymentRe
         AND o.state = 'AWAITING_PAYMENT'
         AND o.total_amount > 0
         AND o.expires_at IS NOT NULL
-        AND o.expires_at > ${bounds.now}
+        AND o.expires_at >= ${bounds.noticeAt}
         AND o.expires_at <= ${bounds.leadAt}
         AND COALESCE(o.confirmed_at, o.created_at) <= ${bounds.openedBefore}
         AND c.first_bot_instance_id IS NOT NULL
