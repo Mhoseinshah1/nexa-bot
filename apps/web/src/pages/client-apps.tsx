@@ -11,6 +11,7 @@ import {
   CLIENT_APP_URL_MAX_LENGTH,
   PROVIDER_DESCRIPTORS,
   clientAppTextProblem,
+  neutralizeClientAppBareLinks,
   normalizeClientAppUrl,
   renderClientAppGuide,
   templateDefinition,
@@ -441,9 +442,13 @@ export function ClientAppsPage({ denied, mayEdit }: { denied: boolean; mayEdit: 
     CATALOGUE_FA[
       form.deliveryKinds.includes('CONNECTION_FILES') ? 'bot.apps.detail_files' : 'bot.apps.detail'
     ],
+    // Neutralised exactly as the bot's read neutralises them (C6), so an entry loaded from a
+    // row written around the service previews as the customer would receive it.
     {
-      app: form.icon.trim() === '' ? form.name.trim() : `${form.icon.trim()} ${form.name.trim()}`,
-      description: form.description.trim(),
+      app: neutralizeClientAppBareLinks(
+        form.icon.trim() === '' ? form.name.trim() : `${form.icon.trim()} ${form.name.trim()}`,
+      ),
+      description: neutralizeClientAppBareLinks(form.description.trim()),
       guide: renderClientAppGuide(form.guide),
     },
   );

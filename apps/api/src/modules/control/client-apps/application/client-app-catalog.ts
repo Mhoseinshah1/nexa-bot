@@ -1,5 +1,6 @@
 import {
   CLIENT_APP_PLATFORMS,
+  neutralizeClientAppBareLinks,
   normalizeClientAppUrl,
   renderClientAppGuide,
   uuidV7Schema,
@@ -128,7 +129,7 @@ export class ClientAppCatalog {
       id: row.id,
       platform: row.platform,
       title: titleOf(row),
-      description: row.description,
+      description: neutralizeClientAppBareLinks(row.description),
       guide: renderClientAppGuide(row.guide),
       officialUrl: safeLink(row.officialUrl),
       alternativeUrl: safeLink(row.alternativeUrl),
@@ -151,6 +152,14 @@ function safeLink(url: string | null): string | null {
   return url === null ? null : normalizeClientAppUrl(url);
 }
 
+/**
+ * The icon, when set, and the name — on the list's button and atop the detail.
+ *
+ * Every operator string this read returns goes through the contract's neutralisation, not
+ * only the guide (Codex review #2 of PR #95, C6): validation refuses a bare unsafe link in
+ * any field, and a row written around it must still not hand Telegram an `http://` or a
+ * `www.` host to auto-link in the plain-text message.
+ */
 function titleOf(row: ClientAppRecord): string {
-  return row.icon === null ? row.name : `${row.icon} ${row.name}`;
+  return neutralizeClientAppBareLinks(row.icon === null ? row.name : `${row.icon} ${row.name}`);
 }
