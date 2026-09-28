@@ -448,6 +448,14 @@ export const CONTROL_ERROR_CODES = {
    * one that cannot succeed.
    */
   NOTIFICATION_RECORD_ORPHANED: 'control.notification_record_orphaned',
+
+  // --- WP-A10: client apps and connection guides ------------------------------------
+  /** No client app entry with this id in this tenant. Another tenant's is answered the same way. */
+  CLIENT_APP_NOT_FOUND: 'control.client_app_not_found',
+  /** The entry moved since the client read it. Carries the current version. */
+  CLIENT_APP_VERSION_CONFLICT: 'control.client_app_version_conflict',
+  /** The tenant already holds `CLIENT_APP_MAX_ENTRIES`. */
+  CLIENT_APP_LIMIT: 'control.client_app_limit',
 } as const;
 
 /**
