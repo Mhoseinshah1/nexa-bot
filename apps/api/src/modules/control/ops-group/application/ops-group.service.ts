@@ -370,8 +370,14 @@ export class OpsGroupService {
         );
         // A test that reached every topic proves the problem is fixed: what was preserved
         // unsent goes out again, which is the brief's "retry after a successful test".
+        // And only onto the binding the test was sent to (Codex review #2 of PR #99): a
+        // disconnect or a rebind that committed while the sends were in flight wins, and
+        // nothing is requeued behind it.
         if (allSent) {
-          await this.requeueInside(scope, actor, group, tx, 'test', this.deps.clock.now());
+          const locked = await this.deps.repository.lockGroup(scope, tx);
+          if (locked !== null && sameBinding(locked, group)) {
+            await this.requeueInside(scope, actor, locked, tx, 'test', this.deps.clock.now());
+          }
         }
         const response: OpsGroupTestResponse = {
           opsGroup: await this.snapshot(scope, tx),
@@ -613,117 +619,137 @@ export class OpsGroupService {
     await this.authorize(scope, actor, OPS_GROUP_SYSTEM_PERMISSION, denial);
 
     const code = normaliseOpsConnectCode(input.rawCode);
+    // EVERY outcome is remembered under the update's key before the group is answered,
+    // the refusals included (Codex review #2 of PR #99): a redelivered update replays its
+    // answer and posts nothing, instead of a second refusal per redelivery.
+    const requestHash = hashRequest({
+      command: 'ops_group.bind',
+      chatId: input.chat.id,
+      code: hashOpsConnectCode(code ?? input.rawCode.trim()),
+    });
+    const replay = await this.deps.idempotency.find<{ outcome: OpsBindOutcome }>(
+      scope,
+      actor.surface,
+      input.idempotencyKey,
+      requestHash,
+    );
     let outcome: OpsBindOutcome;
     let replayed = false;
-    if (code === null) {
-      outcome = 'REFUSED';
-    } else if (input.chat.type !== 'supergroup' || !input.chat.isForum) {
-      // The code is left UNUSED: the operator switches topics on and sends it again.
-      outcome = 'NOT_FORUM';
-    } else {
-      const requestHash = hashRequest({
-        command: 'ops_group.bind',
-        chatId: input.chat.id,
-        code: hashOpsConnectCode(code),
-      });
-      const replay = await this.deps.idempotency.find<{ outcome: OpsBindOutcome }>(
+    if (replay) {
+      outcome = replay.result.outcome;
+      replayed = true;
+    } else if (code === null || input.chat.type !== 'supergroup' || !input.chat.isForum) {
+      // A code that cannot be one, or a group without topics. The code is left UNUSED in
+      // the second case: the operator switches topics on and sends it again.
+      const refusal: OpsBindOutcome = code === null ? 'REFUSED' : 'NOT_FORUM';
+      outcome = await runAuthorizedMutation(
+        this.mutationDeps(),
         scope,
-        actor.surface,
-        input.idempotencyKey,
-        requestHash,
+        actor,
+        OPS_GROUP_SYSTEM_PERMISSION,
+        denial,
+        async (tx) => {
+          await this.assertScopeActive(scope, tx);
+          await rememberOnce(
+            this.deps.idempotency,
+            scope,
+            actor.surface,
+            input.idempotencyKey,
+            requestHash,
+            { outcome: refusal },
+            tx,
+          );
+          return refusal;
+        },
       );
-      if (replay) {
-        outcome = replay.result.outcome;
-        replayed = true;
-      } else {
-        outcome = await runAuthorizedMutation(
-          this.mutationDeps(),
-          scope,
-          actor,
-          OPS_GROUP_SYSTEM_PERMISSION,
-          denial,
-          async (tx) => {
-            await this.assertScopeActive(scope, tx);
-            const now = this.deps.clock.now();
-            const consumed = await this.deps.repository.consumeCode(
-              scope,
-              {
-                botInstanceId: input.botInstanceId,
-                codeHash: hashOpsConnectCode(code),
-                chatId: input.chat.id,
-                now,
-              },
-              tx,
-            );
-            if (consumed === null) {
-              await rememberOnce(
-                this.deps.idempotency,
-                scope,
-                actor.surface,
-                input.idempotencyKey,
-                requestHash,
-                { outcome: 'REFUSED' as const },
-                tx,
-              );
-              return 'REFUSED' as const;
-            }
-            const before = await this.deps.repository.lockGroup(scope, tx);
-            const bound = await this.deps.repository.bindGroup(
-              scope,
-              {
-                id: before?.id ?? this.deps.ids.uuid(),
-                botInstanceId: input.botInstanceId,
-                chatId: input.chat.id,
-                title: input.chat.title ?? '',
-                connectedByAdminId: consumed.issuedByAdminId,
-                now,
-              },
-              tx,
-            );
-            await this.deps.audit.record(
-              scope,
-              actor,
-              {
-                action: 'ops_group.bind',
-                entityType: 'OpsLogGroup',
-                entityId: bound.id,
-                before:
-                  before === null
-                    ? null
-                    : {
-                        chatId: before.chatId,
-                        botInstanceId: before.botInstanceId,
-                        status: before.status,
-                      },
-                after: {
-                  chatId: bound.chatId,
-                  botInstanceId: bound.botInstanceId,
-                  status: bound.status,
-                  connectedByAdminId: consumed.issuedByAdminId,
-                },
-                result: 'SUCCESS',
-              },
-              tx,
-            );
-            await this.deps.outbox.write(tx, actor, {
-              eventType: 'OpsLogGroupChanged',
-              aggregateType: 'OpsLogGroup',
-              aggregateId: bound.id,
-              payload: { change: 'CONNECTED', botInstanceId: bound.botInstanceId },
-            });
+    } else {
+      outcome = await runAuthorizedMutation(
+        this.mutationDeps(),
+        scope,
+        actor,
+        OPS_GROUP_SYSTEM_PERMISSION,
+        denial,
+        async (tx) => {
+          await this.assertScopeActive(scope, tx);
+          const now = this.deps.clock.now();
+          const consumed = await this.deps.repository.consumeCode(
+            scope,
+            {
+              botInstanceId: input.botInstanceId,
+              codeHash: hashOpsConnectCode(code),
+              chatId: input.chat.id,
+              now,
+            },
+            tx,
+          );
+          if (consumed === null) {
             await rememberOnce(
               this.deps.idempotency,
               scope,
               actor.surface,
               input.idempotencyKey,
               requestHash,
-              { outcome: 'CONNECTED' as const },
+              { outcome: 'REFUSED' as const },
               tx,
             );
-            return 'CONNECTED' as const;
-          },
-        );
-      }
+            return 'REFUSED' as const;
+          }
+          const before = await this.deps.repository.lockGroup(scope, tx);
+          const bound = await this.deps.repository.bindGroup(
+            scope,
+            {
+              id: before?.id ?? this.deps.ids.uuid(),
+              botInstanceId: input.botInstanceId,
+              chatId: input.chat.id,
+              title: input.chat.title ?? '',
+              connectedByAdminId: consumed.issuedByAdminId,
+              now,
+            },
+            tx,
+          );
+          await this.deps.audit.record(
+            scope,
+            actor,
+            {
+              action: 'ops_group.bind',
+              entityType: 'OpsLogGroup',
+              entityId: bound.id,
+              before:
+                before === null
+                  ? null
+                  : {
+                      chatId: before.chatId,
+                      botInstanceId: before.botInstanceId,
+                      status: before.status,
+                    },
+              after: {
+                chatId: bound.chatId,
+                botInstanceId: bound.botInstanceId,
+                status: bound.status,
+                connectedByAdminId: consumed.issuedByAdminId,
+              },
+              result: 'SUCCESS',
+            },
+            tx,
+          );
+          await this.deps.outbox.write(tx, actor, {
+            eventType: 'OpsLogGroupChanged',
+            aggregateType: 'OpsLogGroup',
+            aggregateId: bound.id,
+            payload: { change: 'CONNECTED', botInstanceId: bound.botInstanceId },
+          });
+          await rememberOnce(
+            this.deps.idempotency,
+            scope,
+            actor.surface,
+            input.idempotencyKey,
+            requestHash,
+            { outcome: 'CONNECTED' as const },
+            tx,
+          );
+          return 'CONNECTED' as const;
+        },
+      );
     }
 
     // A redelivered update already had its answer posted.
@@ -1058,7 +1084,12 @@ export class OpsGroupService {
 
     const problems: OpsLogGroupProblem[] = [];
     if (chat.type !== 'supergroup' || !chat.isForum) problems.push('NOT_FORUM');
-    if (GONE_STATUSES.has(member.status)) {
+    // A `restricted` member with `is_member: false` is not in the chat at all (Bot API,
+    // ChatMemberRestricted): removed, not merely short of a right (Codex review #2).
+    if (
+      GONE_STATUSES.has(member.status) ||
+      (member.status === 'restricted' && member.isMember === false)
+    ) {
       problems.push('BOT_REMOVED');
     } else if (member.status === 'creator') {
       // The creator holds every right.

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { ReactElement } from 'react';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { OPS_GROUP_MANAGED_SETTING_KEYS } from '@nexa/contracts';
-import { OpsGroupPage } from '../../apps/web/src/pages/ops-group';
+import { OpsGroupPage, opsGroupPollsFast } from '../../apps/web/src/pages/ops-group';
 import { SettingsPage } from '../../apps/web/src/pages/settings';
 import { resolve } from '../../apps/web/src/app';
 import { renderPage, setting, stubApi } from './harness';
@@ -150,6 +150,54 @@ describe('the operations log group page', () => {
       'settings.view',
     ]);
     expect(resolved.title).toBe('گروه گزارش‌های مدیریتی');
+  });
+});
+
+describe('Codex review #2 of PR #99', () => {
+  it('keeps the key when a test press finds the first still running, and asks for its answer', async () => {
+    const api = stubApi([
+      statusRoute(),
+      {
+        url: '/ops-group/test',
+        status: 409,
+        body: {
+          error: {
+            kind: 'CONFLICT',
+            code: 'platform.idempotency_in_flight',
+            message: 'still running',
+            correlationId: 'test',
+          },
+        },
+      },
+    ]);
+    renderPage(page({ mayManage: true }));
+    const button = await screen.findByRole('button', { name: 'ارسال پیام آزمایشی' });
+    fireEvent.click(button);
+    await waitFor(() =>
+      expect(api.calls.filter((call) => call.url.endsWith('/ops-group/test'))).toHaveLength(1),
+    );
+    await waitFor(() => expect(button).not.toBeDisabled());
+    fireEvent.click(button);
+    await waitFor(() =>
+      expect(api.calls.filter((call) => call.url.endsWith('/ops-group/test'))).toHaveLength(2),
+    );
+    const keys = api.calls
+      .filter((call) => call.url.endsWith('/ops-group/test'))
+      .map((call) => (call.body as { idempotencyKey: string }).idempotencyKey);
+    expect(keys[0]).toBe(keys[1]);
+  });
+
+  it('polls fast only for a pending code or a connected group not yet checked', () => {
+    const none = view({ connection: 'NOT_CONFIGURED', group: null, health: 'UNVERIFIED' });
+    expect(opsGroupPollsFast(none as never)).toBe(false);
+    expect(
+      opsGroupPollsFast({ ...none, pendingCodeExpiresAt: '2026-09-01T10:10:00.000Z' } as never),
+    ).toBe(true);
+    expect(opsGroupPollsFast(view({ health: 'UNVERIFIED' }) as never)).toBe(true);
+    expect(
+      opsGroupPollsFast(view({ connection: 'DISCONNECTED', health: 'UNVERIFIED' }) as never),
+    ).toBe(false);
+    expect(opsGroupPollsFast(view() as never)).toBe(false);
   });
 });
 

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { PLATFORM_ERROR_CODES } from '@nexa/contracts';
 import type {
   OpsConnectCodeResponse,
   OpsGroupTestResponse,
@@ -115,6 +116,34 @@ function opsMessageFor(error: unknown): string {
   return messageFor(error);
 }
 
+/**
+ * Whether the panel is about to change on its own, and so polls every 3 s: a connection
+ * code is out, or a CONNECTED group has not been checked yet. A tenant with no group at
+ * all reports `UNVERIFIED` by default and must not keep the fast lane for ever (Codex
+ * review #2 of PR #99); everything else polls at 15 s.
+ */
+export function opsGroupPollsFast(view: OpsLogGroupView): boolean {
+  return (
+    view.pendingCodeExpiresAt !== null ||
+    (view.connection === 'CONNECTED' && view.health === 'UNVERIFIED')
+  );
+}
+
+/**
+ * `settleOn`, except for `platform.idempotency_in_flight` (Codex review #2 of PR #99).
+ * That 409 means the FIRST press is still running under this key, so the key is kept: the
+ * next press asks for that press's answer instead of minting a new key and repeating the
+ * whole action — for a test, a second set of messages in every topic.
+ */
+function settleUnlessInFlight(
+  submission: { settleOn: (error: unknown) => void },
+  error: unknown,
+): void {
+  if (error instanceof ApiError && error.code === PLATFORM_ERROR_CODES.IDEMPOTENCY_IN_FLIGHT)
+    return;
+  submission.settleOn(error);
+}
+
 export function OpsGroupPage({ denied, mayManage }: { denied: boolean; mayManage: boolean }) {
   const queries = useQueryClient();
   const notify = useToast();
@@ -132,8 +161,7 @@ export function OpsGroupPage({ denied, mayManage }: { denied: boolean; mayManage
     // about to change without anybody pressing anything.
     refetchInterval: pollUnlessFinalWhile<OpsLogGroupResponse>(
       3_000,
-      (data) =>
-        data.opsGroup.pendingCodeExpiresAt !== null || data.opsGroup.health === 'UNVERIFIED',
+      (data) => opsGroupPollsFast(data.opsGroup),
       15_000,
     ),
   });
@@ -154,7 +182,7 @@ export function OpsGroupPage({ denied, mayManage }: { denied: boolean; mayManage
       setCode(issued);
       await settle();
     },
-    onError: (error) => submission.settleOn(error),
+    onError: (error) => settleUnlessInFlight(submission, error),
   });
 
   const act = useMutation({
@@ -174,7 +202,7 @@ export function OpsGroupPage({ denied, mayManage }: { denied: boolean; mayManage
       });
       await settle();
     },
-    onError: (error) => submission.settleOn(error),
+    onError: (error) => settleUnlessInFlight(submission, error),
   });
 
   const test = useMutation({
@@ -183,7 +211,7 @@ export function OpsGroupPage({ denied, mayManage }: { denied: boolean; mayManage
       setTestResult(result.results);
       await settle();
     },
-    onError: (error) => submission.settleOn(error),
+    onError: (error) => settleUnlessInFlight(submission, error),
   });
 
   const requeue = useMutation({
@@ -195,7 +223,7 @@ export function OpsGroupPage({ denied, mayManage }: { denied: boolean; mayManage
       });
       await settle();
     },
-    onError: (error) => submission.settleOn(error),
+    onError: (error) => settleUnlessInFlight(submission, error),
   });
 
   const busy = connect.isPending || act.isPending || test.isPending || requeue.isPending;

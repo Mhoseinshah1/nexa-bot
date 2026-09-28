@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { TelegramNotificationTransport } from '../../apps/api/src/modules/control/notifications/infrastructure/telegram-transport';
+import { TelegramOpsGroup } from '../../apps/api/src/modules/control/ops-group/infrastructure/telegram-ops-group';
 import type { OutboundMessage } from '../../apps/api/src/modules/control/notifications/application/ports';
 
 /**
@@ -244,5 +245,34 @@ describe('the Telegram notification transport', () => {
       destination: { transport: 'TELEGRAM', chatId: '-100999', topicId: 7 },
     });
     expect(calls[1]?.body).toMatchObject({ parse_mode: 'HTML', message_thread_id: 7 });
+  });
+});
+
+// WP-A4, Codex review #2 of PR #99: the ops group adapter carries `is_member`.
+describe('the operations group adapter', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('reports whether a restricted bot is still in the chat', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          ok: true,
+          result: { status: 'restricted', is_member: false, can_send_messages: true },
+        }),
+      })),
+    );
+    const adapter = new TelegramOpsGroup('https://telegram.invalid', 1000);
+    expect(await adapter.botMembership('t', '-100999', '777')).toEqual({
+      outcome: 'OK',
+      status: 'restricted',
+      isMember: false,
+      canManageTopics: null,
+      canSendMessages: true,
+    });
   });
 });

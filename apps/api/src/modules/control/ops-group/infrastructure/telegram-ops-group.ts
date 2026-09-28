@@ -60,6 +60,7 @@ export class TelegramOpsGroup implements OpsGroupTelegram {
       ? {
           outcome: 'OK' as const,
           status: result.member.status,
+          isMember: result.member.isMember,
           canManageTopics: result.member.canManageTopics,
           canSendMessages: result.member.canSendMessages,
         }

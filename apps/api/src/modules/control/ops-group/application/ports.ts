@@ -229,6 +229,11 @@ export interface OpsGroupTelegram {
     | {
         readonly outcome: 'OK';
         readonly status: string;
+        /**
+         * `restricted` only: whether the bot is IN the chat right now (Bot API
+         * ChatMemberRestricted.is_member). False is a bot that left while restricted.
+         */
+        readonly isMember: boolean | null;
         readonly canManageTopics: boolean | null;
         readonly canSendMessages: boolean | null;
       }

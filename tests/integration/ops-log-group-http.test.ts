@@ -251,6 +251,55 @@ describe('the operations log group over HTTP and the webhook (WP-A4)', () => {
     expect(status.opsGroup).toMatchObject({ health: 'PROBLEM', problems: ['BOT_NOT_ADMIN'] });
   });
 
+  it('does not acknowledge a membership change it failed to record (Codex review #2)', async () => {
+    const owner = await cookieFor('owner', 'the-owners-real-password');
+    const issued = opsConnectCodeResponseSchema.parse(
+      (
+        await post(OPS_GROUP_ROUTES.connectCode, owner, {
+          idempotencyKey: 'connect-code-3',
+          botInstanceId: SEED_IDS.botA1,
+        })
+      ).json(),
+    );
+    await deliver(groupMessage(`/connect_ops@acme_store_bot ${issued.code}`));
+    await api.container.opsGroups.maintain(tenantA, systemJobActor('test', 'c' as CorrelationId));
+
+    const demotion = {
+      update_id: (updateId += 1),
+      my_chat_member: {
+        chat: { id: GROUP_CHAT, type: 'supergroup', title: 'Nexa Ops' },
+        from: { id: 42, is_bot: false, first_name: 'Operator' },
+        date: 3,
+        old_chat_member: { status: 'administrator', user: { id: 777000, is_bot: true } },
+        new_chat_member: { status: 'member', user: { id: 777000, is_bot: true } },
+      },
+    };
+    const send = () =>
+      inject({
+        method: 'POST',
+        url: `/telegram/webhook/${SEED_IDS.botA1}`,
+        headers: { [TELEGRAM_SECRET_TOKEN_HEADER]: WEBHOOK_SECRET },
+        payload: demotion,
+      });
+
+    const real = api.container.opsGroups.membershipChanged.bind(api.container.opsGroups);
+    api.container.opsGroups.membershipChanged = () => Promise.reject(new Error('database blip'));
+    try {
+      // Not 2xx: Telegram delivers it again.
+      expect((await send()).statusCode).toBeGreaterThanOrEqual(500);
+    } finally {
+      api.container.opsGroups.membershipChanged = real;
+    }
+    // The redelivery is handled, and the group is marked for a new check.
+    expect((await send()).statusCode).toBeLessThan(300);
+    const group = (await api.container.database.db.execute(
+      `SELECT health FROM ops_log_groups` as never,
+    )) as unknown as { rows: { health: string }[] };
+    expect(group.rows[0]?.health).toBe('UNVERIFIED');
+    // A second redelivery of the same update is a replay, and still 2xx.
+    expect((await send()).statusCode).toBeLessThan(300);
+  });
+
   it('refuses every write to an administrator without settings.edit', async () => {
     const support = await cookieFor('support', 'the-support-password');
     for (const [path, body] of [

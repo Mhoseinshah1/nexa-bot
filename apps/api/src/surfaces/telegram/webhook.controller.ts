@@ -203,40 +203,60 @@ export class TelegramWebhookController {
      * WP-A4: the operations log group. Both are answered HERE, before the customer turn:
      * a connection code posted in a group is an operator binding the group, not a
      * customer's contact, and running the turn for it would create a customer row for
-     * the operator. A failure is recorded and answered 2xx, like the turn below, so a
-     * transient error does not become Telegram redelivering the same update for ever.
+     * the operator.
+     *
+     * The two fail differently, on the controller's own two precedents (Codex review #2
+     * of PR #99):
+     *
+     *   - a CONNECTION attempt is recorded and answered 2xx, like the customer turn below.
+     *     The operator is looking at the group, gets no reply, and sends the code again —
+     *     the code is still unused, because nothing committed.
+     *   - a MEMBERSHIP change propagates, like a Stars `successful_payment` above. It is a
+     *     fact Telegram tells nobody twice: a lost demotion of a HEALTHY group is never
+     *     re-checked, because nothing else would mark it. A non-2xx makes Telegram
+     *     deliver it again, and the update key makes the redelivery a replay.
      */
     const connectAttempt = opsConnectAttemptOf(update);
     const membership = connectAttempt === null ? opsMembershipChangeOf(update) : null;
-    if (connectAttempt !== null || membership !== null) {
+    const recordOpsGroupFailure = async (error: unknown): Promise<void> => {
+      await this.container.opsLog.record(scope, {
+        code: 'telegram.ops_group_update_failed',
+        severity: 'ERROR',
+        message: 'A Telegram update for the operations log group could not be handled.',
+        dedupeKey: `telegram.ops_group_update_failed:${botInstance.id}`,
+        context: {
+          botInstanceId: botInstance.id,
+          updateId,
+          error: error instanceof Error ? error.name : 'unknown',
+        },
+      });
+    };
+    if (connectAttempt !== null) {
       try {
-        if (connectAttempt !== null) {
-          await this.container.opsGroups.bindFromTelegram(scope, actor, {
-            idempotencyKey,
-            botInstanceId: botInstance.id,
-            chat: connectAttempt.chat,
-            rawCode: connectAttempt.rawCode,
-          });
-        } else if (membership !== null) {
-          await this.container.opsGroups.membershipChanged(scope, actor, {
-            idempotencyKey,
-            botInstanceId: botInstance.id,
-            chatId: membership.chatId,
-            status: membership.status,
-          });
-        }
-      } catch (error) {
-        await this.container.opsLog.record(scope, {
-          code: 'telegram.ops_group_update_failed',
-          severity: 'ERROR',
-          message: 'A Telegram update for the operations log group could not be handled.',
-          dedupeKey: `telegram.ops_group_update_failed:${botInstance.id}`,
-          context: {
-            botInstanceId: botInstance.id,
-            updateId,
-            error: error instanceof Error ? error.name : 'unknown',
-          },
+        await this.container.opsGroups.bindFromTelegram(scope, actor, {
+          idempotencyKey,
+          botInstanceId: botInstance.id,
+          chat: connectAttempt.chat,
+          rawCode: connectAttempt.rawCode,
         });
+      } catch (error) {
+        await recordOpsGroupFailure(error);
+      }
+      return { ok: true };
+    }
+    if (membership !== null) {
+      try {
+        await this.container.opsGroups.membershipChanged(scope, actor, {
+          idempotencyKey,
+          botInstanceId: botInstance.id,
+          chatId: membership.chatId,
+          status: membership.status,
+        });
+      } catch (error) {
+        // Recorded when it can be; rethrown whether or not it could, because the
+        // redelivery is what keeps the fact.
+        await recordOpsGroupFailure(error).catch(() => undefined);
+        throw error;
       }
       return { ok: true };
     }

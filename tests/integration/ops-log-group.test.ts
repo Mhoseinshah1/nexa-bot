@@ -59,8 +59,14 @@ class TestClock implements Clock {
 /** The ops group's Telegram, scripted. */
 class FakeOpsTelegram implements OpsGroupTelegram {
   chat = { type: 'supergroup', title: 'Nexa Ops', isForum: true };
-  member: { status: string; canManageTopics: boolean | null; canSendMessages: boolean | null } = {
+  member: {
+    status: string;
+    isMember: boolean | null;
+    canManageTopics: boolean | null;
+    canSendMessages: boolean | null;
+  } = {
     status: 'administrator',
+    isMember: null,
     canManageTopics: true,
     canSendMessages: null,
   };
@@ -80,6 +86,9 @@ class FakeOpsTelegram implements OpsGroupTelegram {
   describing: (() => void) | null = null;
   /** Delays `send`, so concurrent test sends overlap for real. */
   sendDelayMs = 0;
+  /** Holds `send` until released, so a write can land while the sends are in flight. */
+  sendGate: Promise<void> | null = null;
+  sending: (() => void) | null = null;
   async describeChat() {
     this.describing?.();
     if (this.chatGate !== null) await this.chatGate;
@@ -97,6 +106,8 @@ class FakeOpsTelegram implements OpsGroupTelegram {
   }
   async send(_token: string, chatId: string, threadId: number | null, text: string) {
     if (this.sendDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, this.sendDelayMs));
+    this.sending?.();
+    if (this.sendGate !== null) await this.sendGate;
     if (threadId !== null && this.deletedThreads.has(threadId)) {
       return {
         outcome: 'FAILED' as const,
@@ -446,7 +457,12 @@ describe('the operations log group (WP-A4)', () => {
 
     it('names a bot that is only a member', async () => {
       const found = await checkWith(() => {
-        telegram.member = { status: 'member', canManageTopics: null, canSendMessages: null };
+        telegram.member = {
+          status: 'member',
+          isMember: null,
+          canManageTopics: null,
+          canSendMessages: null,
+        };
       });
       expect(found).toEqual({ health: 'PROBLEM', problems: ['BOT_NOT_ADMIN'] });
       expect(telegram.created).toHaveLength(0);
@@ -456,6 +472,7 @@ describe('the operations log group (WP-A4)', () => {
       const found = await checkWith(() => {
         telegram.member = {
           status: 'administrator',
+          isMember: null,
           canManageTopics: false,
           canSendMessages: null,
         };
@@ -466,10 +483,27 @@ describe('the operations log group (WP-A4)', () => {
 
     it('names a restricted bot that may not send', async () => {
       const found = await checkWith(() => {
-        telegram.member = { status: 'restricted', canManageTopics: null, canSendMessages: false };
+        telegram.member = {
+          status: 'restricted',
+          isMember: true,
+          canManageTopics: null,
+          canSendMessages: false,
+        };
       });
       expect(found.health).toBe('PROBLEM');
       expect(found.problems).toEqual(['BOT_NOT_ADMIN', 'CANNOT_SEND']);
+    });
+
+    it('names a restricted bot that is no longer in the group as removed (Codex review #2)', async () => {
+      const found = await checkWith(() => {
+        telegram.member = {
+          status: 'restricted',
+          isMember: false,
+          canManageTopics: null,
+          canSendMessages: true,
+        };
+      });
+      expect(found).toEqual({ health: 'PROBLEM', problems: ['BOT_REMOVED'] });
     });
 
     it('names a group whose topics were switched off', async () => {
@@ -1040,6 +1074,95 @@ describe('the operations log group (WP-A4)', () => {
       const done = await service.view(tenantA, owner);
       expect(done.health).toBe('HEALTHY');
       expect(done.topics.every((topic) => topic.state === 'READY')).toBe(true);
+    });
+  });
+
+  describe('Codex review #2 of PR #99', () => {
+    it('1: a deleted topic on the first claimed intent leaves no slot for the second', async () => {
+      await connectHealthy();
+      await ctx.container.settingsService.set(tenantA, owner, {
+        key: 'ops.notifications.max_per_minute',
+        value: 2,
+        expectedVersion: null,
+        idempotencyKey: key('rate'),
+      });
+      const systemTopic = (await repository.listTopics(tenantA, GROUP_CHAT)).find(
+        (topic) => topic.category === 'SYSTEM',
+      );
+      transport.deletedThreads.add(systemTopic!.messageThreadId!);
+      await raise('batch-1');
+      await raise('batch-2');
+
+      const first = await dispatcher.tick();
+      // Two calls in the window: the refused send and the resend. The second intent was
+      // claimed on the batch's budget and is handed back unsent.
+      expect(transport.messages).toHaveLength(2);
+      expect(first).toMatchObject({ claimed: 2, sent: 1, deferred: 1 });
+      const pending = (await ctx.container.notifications.list(tenantA, owner)).find(
+        (n) => n.status === 'PENDING',
+      );
+      const detail = await ctx.container.notifications.get(tenantA, owner, pending!.id);
+      // No attempt spent: nothing reached the transport for it.
+      expect(detail.attempts).toHaveLength(0);
+      expect(detail.releasedClaims.map((claim) => claim.reason)).toEqual(['rate.window_full']);
+
+      dispatcher.resetRateWindow();
+      expect((await dispatcher.tick()).sent).toBe(1);
+      expect(transport.messages).toHaveLength(3);
+      const all = await ctx.container.notifications.list(tenantA, owner);
+      expect(all.every((n) => n.status === 'SENT')).toBe(true);
+    });
+
+    it('4: a refusal is remembered under the update key, so a redelivery posts nothing', async () => {
+      const updateKey = key('update');
+      const malformed = () =>
+        service.bindFromTelegram(
+          botScope(tenantA, SEED_IDS.botA1),
+          systemJobActor(`telegram-update:${SEED_IDS.botA1}`, 'test-correlation' as CorrelationId),
+          {
+            idempotencyKey: updateKey,
+            botInstanceId: SEED_IDS.botA1,
+            chat: { id: GROUP_CHAT, type: 'supergroup', title: 'Nexa Ops', isForum: true },
+            rawCode: 'not-a-code',
+          },
+        );
+      expect(await malformed()).toBe('REFUSED');
+      expect(await malformed()).toBe('REFUSED');
+      expect(telegram.sent).toHaveLength(1);
+
+      const code = await issueCode();
+      const notForumKey = key('update');
+      expect(await bind(code, { isForum: false, updateKey: notForumKey })).toBe('NOT_FORUM');
+      expect(await bind(code, { isForum: false, updateKey: notForumKey })).toBe('NOT_FORUM');
+      expect(telegram.sent).toHaveLength(2);
+      // Still unused: a new update from the group, with topics on, connects.
+      expect(await bind(code)).toBe('CONNECTED');
+    });
+
+    it('6: a disconnect that lands while the test sends are in flight is not requeued behind', async () => {
+      await connectHealthy();
+      transport.always = { outcome: 'FAILED_PERMANENT', errorCode: 'x', errorMessage: 'no' };
+      await raise('test-race');
+      await dispatcher.tick();
+      transport.always = null;
+      expect((await service.view(tenantA, owner)).queue.preserved).toBe(1);
+
+      let release!: () => void;
+      telegram.sendGate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const entered = new Promise<void>((resolve) => {
+        telegram.sending = resolve;
+      });
+      const testing = service.sendTest(tenantA, owner, { idempotencyKey: key('test') });
+      await entered;
+      await service.disconnect(tenantA, owner, { idempotencyKey: key('disconnect') });
+      release();
+      const tested = await testing;
+
+      expect(tested.results.every((result) => result.outcome === 'SENT')).toBe(true);
+      expect(tested.opsGroup.connection).toBe('DISCONNECTED');
+      expect(tested.opsGroup.queue).toEqual({ pending: 0, preserved: 1 });
     });
   });
 });
