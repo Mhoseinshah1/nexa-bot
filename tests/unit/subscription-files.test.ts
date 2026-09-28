@@ -265,6 +265,78 @@ describe('the service, before any panel is asked', () => {
     expect(send).not.toHaveBeenCalled();
   });
 
+  const request = {
+    customerId: 'u' as UserId,
+    serviceId: 's',
+    chatId: '1',
+    botInstanceId: 'b' as never,
+  };
+
+  it('checks the permission before it reads anything', async () => {
+    const denied = new Error('denied');
+    const getForCustomer = vi.fn(async () => service as never);
+    const { built, send } = deps(new RickpanelAdapter(), {
+      services: { getForCustomer },
+      guard: {
+        check: vi.fn(async () => {
+          throw denied;
+        }),
+      } as never,
+    });
+    await expect(new SubscriptionFileService(built).send(scope, actor, request)).rejects.toBe(
+      denied,
+    );
+    expect(getForCustomer).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('never dials a panel address the URL policy refuses', async () => {
+    const base = deps(new RickpanelAdapter()).built;
+    const { built, send } = deps(new RickpanelAdapter(), {
+      panels: {
+        ...base.panels,
+        find: vi.fn(async () => ({
+          ...(await base.panels.find(scope, 'p' as never))!,
+          panel: {
+            ...(await base.panels.find(scope, 'p' as never))!.panel,
+            baseUrl: 'http://127.0.0.1:8000',
+          },
+        })) as never,
+      },
+    });
+    expect(await new SubscriptionFileService(built).send(scope, actor, request)).toEqual({
+      outcome: 'UNAVAILABLE',
+    });
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('asks nothing of a panel the operator disabled', async () => {
+    const base = deps(new RickpanelAdapter()).built;
+    const { built, send } = deps(new RickpanelAdapter(), {
+      panels: {
+        ...base.panels,
+        find: vi.fn(async () => ({
+          ...(await base.panels.find(scope, 'p' as never))!,
+          panel: { ...(await base.panels.find(scope, 'p' as never))!.panel, status: 'DISABLED' },
+        })) as never,
+      },
+    });
+    expect(await new SubscriptionFileService(built).send(scope, actor, request)).toEqual({
+      outcome: 'UNAVAILABLE',
+    });
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('asks nothing of a panel whose stored credential cannot be read', async () => {
+    const { built, send } = deps(new RickpanelAdapter(), {
+      credentials: { read: vi.fn(async () => ({ username: null, password: null, token: null })) },
+    } as never);
+    expect(await new SubscriptionFileService(built).send(scope, actor, request)).toEqual({
+      outcome: 'UNAVAILABLE',
+    });
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it('asks nothing of the panel when the tenant’s outbound budget is spent', async () => {
     const { built, send } = deps(new RickpanelAdapter(), {
       panels: {

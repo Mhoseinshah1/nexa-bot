@@ -195,7 +195,7 @@ describe('Package E — RickPanel subscription files', () => {
 
   const b64 = (text: string) => Buffer.from(text, 'utf8').toString('base64');
 
-  const tap = (data: string, telegramUserId = CUSTOMER_TG) => {
+  const tap = (data: string, telegramUserId = CUSTOMER_TG, chatType = 'private') => {
     updateSeq += 1;
     return ctx.container.botRuntime.handle(tenantA, systemActor('bot'), {
       idempotencyKey: `files-update-${String(updateSeq)}-${randomUUID()}`,
@@ -209,7 +209,7 @@ describe('Package E — RickPanel subscription files', () => {
           message: {
             message_id: updateSeq,
             date: 0,
-            chat: { id: Number(telegramUserId), type: 'private' },
+            chat: { id: Number(telegramUserId), type: chatType },
             from: { id: 999999, is_bot: true, first_name: 'Nexa' },
           },
         },
@@ -384,6 +384,42 @@ describe('Package E — RickPanel subscription files', () => {
       await tap(`sf:${service.id}`, OTHER_TG);
       expect(uploads()).toHaveLength(0);
       expect(panel.filesCalls()).toBe(0);
+    });
+
+    it('draws no files button where the panel cannot fetch files', async () => {
+      const service = await deliveredService('no-button');
+      await ctx.container.database.db.execute(
+        sql`UPDATE services SET state = 'TERMINATED', terminated_at = now() WHERE id = ${service.id}`,
+      );
+      await tap(`s:${service.id}`);
+      // The detail screen itself was drawn — it names the account — just without the button.
+      expect(
+        sent.some(
+          (one) => one.url.endsWith('/sendMessage') && one.raw.includes(service.providerUsername),
+        ),
+      ).toBe(true);
+      expect(sent.some((one) => one.raw.includes(`"callback_data":"sf:${service.id}"`))).toBe(
+        false,
+      );
+    });
+
+    it('sends nothing to a tap that did not come from a private chat', async () => {
+      const service = await deliveredService('group-tap');
+      await tap(`sf:${service.id}`, CUSTOMER_TG, 'group');
+      expect(uploads()).toHaveLength(0);
+      expect(panel.filesCalls()).toBe(0);
+    });
+
+    it('tells the customer how many formats could not be built', async () => {
+      const service = await deliveredService('partial-tap');
+      panel.filesBody = JSON.stringify([
+        { filename: 'a.json', media_type: 'application/json', content_b64: b64('{"a":1}') },
+        { filename: 'b.yaml', media_type: 'application/yaml', error: 'build failed' },
+      ]);
+      await tap(`sf:${service.id}`);
+      expect(uploads()).toHaveLength(1);
+      const reply = sent.find((one) => one.url.endsWith('/sendMessage'))!.raw;
+      expect(reply).toContain('1 فرمت از فایل‌های اتصال آماده نشد');
     });
 
     it('tells the customer how long to wait after a 429', async () => {
