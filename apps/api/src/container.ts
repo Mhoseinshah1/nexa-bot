@@ -221,6 +221,7 @@ import {
 import { DrizzleReceiptReviewPushRepository } from './modules/commerce/payments/infrastructure/drizzle-receipt-review-push.repository.js';
 import { DrizzleReceiptReviewFactsReader } from './modules/commerce/payments/infrastructure/drizzle-receipt-review-facts.reader.js';
 import {
+  notificationButtons,
   receiptReviewButtons,
   refundRequestReviewButtons,
 } from './surfaces/telegram/bot-runtime.js';
@@ -2937,8 +2938,12 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       notifications: customerNotificationRepository,
       // The refund-request sentences (WP19), read from the request row the kind names.
       serviceRefunds: serviceRefundRequests,
-      // Package F: the recipient's sentence, read from the transfer row.
+      /*
+       * Package F: the recipient's sentence, read from the transfer row, and its one button
+       * — derived from the subject by the surface that owns the callback vocabulary.
+       */
       serviceTransfers: serviceTransferService,
+      buttonsFor: notificationButtons,
       /*
        * The ledger reader the refund sentence renders from. The wallet repository
        * itself, because both figures are derived from `wallet_entries` and a
@@ -4021,6 +4026,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       trials: trialService,
       customService: customServiceFlowService,
       subscriptionFiles: subscriptionFileService,
+      serviceTransfers: serviceTransferService,
       orders: orderService,
       // The SAME messenger the delivery sweep uses, for the reason above it.
       messenger: customerMessenger,

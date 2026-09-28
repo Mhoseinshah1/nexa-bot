@@ -16,6 +16,7 @@ import {
   plainAmount,
   providerUsernameLookupSchema,
   telegramUserIdSchema,
+  serviceTransferRecipientRefusalSchema,
   uuidV7Schema,
   USAGE_REMINDER_PERCENT_MAX,
   USAGE_REMINDER_PERCENT_MIN,
@@ -48,6 +49,7 @@ import type {
   ServiceActionAvailability,
   ServiceOperatorAction,
   ServiceReminderThresholds,
+  ServiceTransferRecipientRefusal,
   SettingKey,
   TemplateKey,
   TemplateValues,
@@ -125,6 +127,7 @@ import {
 import type { CustomerCaptureService } from '../../modules/commerce/customers/application/customer-capture.service.js';
 import type { CustomerCaptureRecord } from '../../modules/commerce/customers/application/customer-capture-ports.js';
 import type { SubscriptionFileService } from '../../modules/commerce/provisioning/application/subscription-file.service.js';
+import type { ServiceTransferService } from '../../modules/commerce/provisioning/application/service-transfer.service.js';
 import type { CustomerCountersReader } from '../../modules/commerce/customers/application/customer-counters-ports.js';
 import type {
   TopupRoute,
@@ -228,6 +231,13 @@ export const BOT_INTENTS = [
    */
   'SERVICE_REFUND_ASK',
   'SERVICE_REFUND_CONFIRM',
+  /*
+   * Package F: a customer hands a service to another customer. ASK opens the window that
+   * reads the recipient's id and moves nothing; CONFIRM names the service AND the
+   * recipient's id, both read again by the transfer, and is the only tap that moves one.
+   */
+  'SERVICE_TRANSFER_ASK',
+  'SERVICE_TRANSFER_CONFIRM',
   'SERVICE_RENEW',
   'SERVICE_ADD_TRAFFIC',
   'SERVICE_ADD_TIME',
@@ -1061,6 +1071,20 @@ export const ADMIN_RECEIPT_CALLBACK_PREFIX = 'C:';
  */
 export const SERVICE_REFUND_ASK_CALLBACK_PREFIX = 'fa:';
 export const SERVICE_REFUND_CONFIRM_CALLBACK_PREFIX = 'fb:';
+/**
+ * Package F — a customer's service transfer (`docs/package-f-service-transfer-audit.md`).
+ * Two letters, like `fa:`/`fb:`: every single letter is taken, and neither begins another
+ * prefix or is begun by one — `t:`, `to:`, `tp:`, `tr:`, `tu:` and `tx:` all differ at the
+ * second character.
+ *
+ * - `ta:<service uuid>` opens the window that reads the recipient's numeric id. Moves
+ *   nothing. 39 bytes.
+ * - `tc:<service uuid>.<recipient telegram id>` confirms. At most 3 + 36 + 1 + 19 = 59 bytes,
+ *   inside Telegram's 64. Nothing on it is trusted: the transfer reads the owner, the
+ *   recipient and the service again, under the service's locks.
+ */
+export const SERVICE_TRANSFER_ASK_CALLBACK_PREFIX = 'ta:';
+export const SERVICE_TRANSFER_CONFIRM_CALLBACK_PREFIX = 'tc:';
 export const ADMIN_REFUND_REQUEST_APPROVE_CALLBACK_PREFIX = 'qa:';
 export const ADMIN_REFUND_REQUEST_REJECT_CALLBACK_PREFIX = 'qb:';
 export const ADMIN_REFUND_REQUEST_APPROVE_CONFIRM_CALLBACK_PREFIX = 'qc:';
@@ -2413,6 +2437,24 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
         id,
       );
     }
+    /* Ask before act, for the reason the terminate pair states. */
+    if (data.startsWith(SERVICE_TRANSFER_ASK_CALLBACK_PREFIX)) {
+      return callbackCommand(
+        'SERVICE_TRANSFER_ASK',
+        data.slice(SERVICE_TRANSFER_ASK_CALLBACK_PREFIX.length),
+        id,
+      );
+    }
+    if (data.startsWith(SERVICE_TRANSFER_CONFIRM_CALLBACK_PREFIX)) {
+      const pair = decodeTransferConfirm(data);
+      if (pair === null) return { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
+      return {
+        intent: 'SERVICE_TRANSFER_CONFIRM',
+        targetId: pair.serviceId,
+        secondaryId: pair.recipientTelegramUserId,
+        callbackQueryId: id,
+      };
+    }
     /* Ask before act, for the reason the terminate pair above states. */
     if (data.startsWith(SERVICE_ROTATE_ASK_CALLBACK_PREFIX)) {
       return callbackCommand(
@@ -3281,6 +3323,14 @@ export interface BotRuntimeDeps {
   readonly serviceRefunds?: Pick<
     ServiceRefundRequestService,
     'customerOffer' | 'offeredFor' | 'file'
+  >;
+  /**
+   * Package F: a customer's service transfer. Without it no service shows the button, and a
+   * crafted `ta:`/`tc:` answers that the service cannot be transferred.
+   */
+  readonly serviceTransfers?: Pick<
+    ServiceTransferService,
+    'offered' | 'begin' | 'preview' | 'transfer'
   >;
   /**
    * WP19: an administrator's decision prompts behind the review card. Without it the card's
@@ -8947,6 +8997,23 @@ export class BotRuntime {
         updateIdOf(input.update),
       );
     }
+    if (command.intent === 'SERVICE_TRANSFER_ASK' && command.targetId !== null) {
+      return this.serviceTransferAsk(scope, actor, customer, command.targetId, input);
+    }
+    if (
+      command.intent === 'SERVICE_TRANSFER_CONFIRM' &&
+      command.targetId !== null &&
+      typeof command.secondaryId === 'string'
+    ) {
+      return this.serviceTransferConfirm(
+        scope,
+        actor,
+        customer,
+        command.targetId,
+        command.secondaryId,
+        input,
+      );
+    }
     if (command.intent === 'SERVICE_ROTATE' && command.targetId !== null) {
       /*
        * Suffixed, as every other write that shares a turn with `resolveFromUpdate` is
@@ -9156,6 +9223,14 @@ export class BotRuntime {
       buttons.push({
         label: { kind: 'TEMPLATE', key: 'bot.service.refund_request_button' },
         data: `${SERVICE_REFUND_ASK_CALLBACK_PREFIX}${service.id}`,
+        row: 4,
+      });
+    }
+    // Package F: beside the refund request — both hand the service away for good.
+    if ((await this.deps.serviceTransfers?.offered(scope, service)) === true) {
+      buttons.push({
+        label: { kind: 'TEMPLATE', key: 'bot.service.transfer_button' },
+        data: `${SERVICE_TRANSFER_ASK_CALLBACK_PREFIX}${service.id}`,
         row: 4,
       });
     }
@@ -9645,6 +9720,9 @@ export class BotRuntime {
     if (capture.purpose === 'SERVICE_REFUND_REASON') {
       return this.serviceRefundReason(scope, actor, customer, capture.subjectId, text, input);
     }
+    if (capture.purpose === 'SERVICE_TRANSFER_RECIPIENT') {
+      return this.serviceTransferRecipient(scope, actor, customer, capture.subjectId, text, input);
+    }
     if (capture.purpose === 'CUSTOM_SERVICE_VOLUME' || capture.purpose === 'CUSTOM_SERVICE_DAYS') {
       return this.customServiceFigure(scope, actor, customer, capture, text, input);
     }
@@ -10021,6 +10099,165 @@ export class BotRuntime {
        */
       if (!hasRefusalReply(error)) {
         await reopen('refund-reason-retry').catch(() => undefined);
+      }
+      return refusal(error);
+    }
+  }
+
+  /**
+   * «🔄 انتقال سرویس» (Package F): opens the window that reads the recipient's numeric id and
+   * asks for it. Moves nothing; the service's eligibility is read again here rather than
+   * trusted from the drawn button.
+   */
+  private async serviceTransferAsk(
+    scope: TenantContext,
+    actor: ActorContext,
+    customer: CustomerRecord,
+    serviceId: string,
+    input: {
+      readonly idempotencyKey: string;
+      readonly botInstanceId: BotInstanceId;
+      readonly update?: unknown;
+    },
+  ): Promise<PendingReply> {
+    const transfers = this.deps.serviceTransfers;
+    if (transfers === undefined) return transferUnavailableReply(serviceId);
+    const updateId = updateIdOf(input.update);
+    const begun = await transfers.begin(scope, actor, {
+      customerId: customer.id,
+      serviceId,
+      botInstanceId: input.botInstanceId,
+      idempotencyKey: `${input.idempotencyKey}:transfer-open`,
+      // The id must be typed after this tap, as a refund reason must (WP19 round 8).
+      ...(updateId === undefined ? {} : { openedUpdateId: updateId }),
+    });
+    if (begun.outcome === 'NOT_FOUND') {
+      return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };
+    }
+    if (begun.outcome === 'NOT_TRANSFERABLE') return transferUnavailableReply(serviceId);
+    return {
+      key: 'bot.service.transfer_prompt',
+      values: {},
+      buttons: [backToServiceButton(serviceId)],
+      orderId: null,
+    };
+  }
+
+  /**
+   * The recipient's id, typed into the transfer window: the confirmation screen, or the
+   * refusal. A refusal about the recipient opens the window again, because its sentence asks
+   * for the id once more; a service that cannot be transferred, or is not theirs, does not.
+   */
+  private async serviceTransferRecipient(
+    scope: TenantContext,
+    actor: ActorContext,
+    customer: CustomerRecord,
+    serviceId: string | null,
+    text: string,
+    input: {
+      readonly idempotencyKey: string;
+      readonly botInstanceId: BotInstanceId;
+      readonly update?: unknown;
+    },
+  ): Promise<PendingReply | null> {
+    if (serviceId === null) return null;
+    const transfers = this.deps.serviceTransfers;
+    if (transfers === undefined) return transferUnavailableReply(serviceId);
+    const preview = await transfers.preview(scope, actor, {
+      customerId: customer.id,
+      serviceId,
+      text,
+    });
+    if (preview.outcome === 'NOT_FOUND') {
+      return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };
+    }
+    if (preview.outcome === 'NOT_TRANSFERABLE') return transferUnavailableReply(serviceId);
+    if (preview.outcome === 'REFUSED') {
+      const updateId = updateIdOf(input.update);
+      await this.deps.captures.open(scope, actor, {
+        idempotencyKey: `${input.idempotencyKey}:transfer-reopen`,
+        botInstanceId: input.botInstanceId,
+        customerId: customer.id,
+        purpose: 'SERVICE_TRANSFER_RECIPIENT',
+        subjectId: serviceId,
+        ...(updateId === undefined ? {} : { openedUpdateId: updateId }),
+      });
+      return {
+        key: TRANSFER_RECIPIENT_REPLIES[preview.refusal],
+        values: {},
+        buttons: [backToServiceButton(serviceId)],
+        orderId: null,
+      };
+    }
+    return {
+      key: 'bot.service.transfer_confirm',
+      values: preview.values,
+      buttons: [
+        {
+          label: { kind: 'TEMPLATE', key: 'bot.service.transfer_confirm_button' },
+          data: transferConfirmData(preview.serviceId, preview.recipientTelegramUserId),
+          row: 0,
+        },
+        { ...backToServiceButton(serviceId), row: 1 },
+      ],
+      orderId: null,
+    };
+  }
+
+  /**
+   * «✅ تأیید انتقال سرویس»: the transfer. Keyed by THIS update, so a redelivery answers with
+   * the transfer it made; a second tap is a new update, and is answered with the transfer
+   * already made rather than told it failed.
+   */
+  private async serviceTransferConfirm(
+    scope: TenantContext,
+    actor: ActorContext,
+    customer: CustomerRecord,
+    serviceId: string,
+    recipientTelegramUserId: string,
+    input: { readonly idempotencyKey: string; readonly botInstanceId: BotInstanceId },
+  ): Promise<PendingReply> {
+    const transfers = this.deps.serviceTransfers;
+    if (transfers === undefined) return transferUnavailableReply(serviceId);
+    try {
+      await transfers.transfer(scope, actor, {
+        customerId: customer.id,
+        serviceId,
+        recipientTelegramUserId,
+        botInstanceId: input.botInstanceId,
+        // Suffixed: the bare update key is already spent by `resolveFromUpdate` this turn.
+        idempotencyKey: `${input.idempotencyKey}:transfer`,
+      });
+      return {
+        key: 'bot.service.transfer_done',
+        values: {},
+        // The service is not theirs any more: back to the list, not to it.
+        buttons: [
+          {
+            label: { kind: 'TEMPLATE', key: 'bot.service.back_to_list_button' },
+            data: `${SERVICES_LIST_PAGE_CALLBACK_PREFIX}1`,
+          },
+        ],
+        orderId: null,
+      };
+    } catch (error) {
+      if (isNexaError(error) && error.code === COMMERCE_ERROR_CODES.SERVICE_NOT_FOUND) {
+        return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };
+      }
+      if (isNexaError(error) && error.code === COMMERCE_ERROR_CODES.SERVICE_NOT_TRANSFERABLE) {
+        return transferUnavailableReply(serviceId);
+      }
+      if (
+        isNexaError(error) &&
+        error.code === COMMERCE_ERROR_CODES.SERVICE_TRANSFER_RECIPIENT_REFUSED
+      ) {
+        const refusal = serviceTransferRecipientRefusalSchema.safeParse(error.details['refusal']);
+        return {
+          key: TRANSFER_RECIPIENT_REPLIES[refusal.success ? refusal.data : 'RECIPIENT_UNKNOWN'],
+          values: {},
+          buttons: [backToServiceButton(serviceId)],
+          orderId: null,
+        };
       }
       return refusal(error);
     }
@@ -12139,6 +12376,70 @@ function refundOfferReply(offer: 'PENDING' | 'UNAVAILABLE', serviceId: string): 
     buttons: [backToServiceButton(serviceId)],
     orderId: null,
   };
+}
+
+/**
+ * The sentence for each recipient refusal (Package F). Unknown and blocked are ONE
+ * sentence: telling them apart would tell a stranger which accounts an operator blocked.
+ */
+const TRANSFER_RECIPIENT_REPLIES: Readonly<Record<ServiceTransferRecipientRefusal, TemplateKey>> = {
+  RECIPIENT_INVALID: 'bot.service.transfer_recipient_invalid',
+  RECIPIENT_UNKNOWN: 'bot.service.transfer_recipient_unavailable',
+  RECIPIENT_BLOCKED: 'bot.service.transfer_recipient_unavailable',
+  RECIPIENT_SELF: 'bot.service.transfer_recipient_self',
+};
+
+/** One sentence for every reason a service cannot be transferred now, and the way back. */
+function transferUnavailableReply(serviceId: string): PendingReply {
+  return {
+    key: 'bot.service.transfer_unavailable',
+    values: {},
+    buttons: [backToServiceButton(serviceId)],
+    orderId: null,
+  };
+}
+
+/** `tc:<service uuid>.<recipient telegram id>` — at most 59 bytes. */
+export function transferConfirmData(serviceId: string, recipientTelegramUserId: string): string {
+  return `${SERVICE_TRANSFER_CONFIRM_CALLBACK_PREFIX}${serviceId}.${recipientTelegramUserId}`;
+}
+
+/**
+ * A `tc:` payload's two halves, each validated here — the service as a UUIDv7, the
+ * recipient by `telegramUserIdSchema` — or null. Anything else is UNSUPPORTED rather than a
+ * half-read that could transfer a service nobody named.
+ */
+export function decodeTransferConfirm(
+  data: string,
+): { readonly serviceId: string; readonly recipientTelegramUserId: string } | null {
+  if (!data.startsWith(SERVICE_TRANSFER_CONFIRM_CALLBACK_PREFIX)) return null;
+  const parts = data.slice(SERVICE_TRANSFER_CONFIRM_CALLBACK_PREFIX.length).split('.');
+  if (parts.length !== 2) return null;
+  const service = uuidV7Schema.safeParse(parts[0]);
+  const recipient = telegramUserIdSchema.safeParse(parts[1]);
+  if (!service.success || !recipient.success) return null;
+  return { serviceId: service.data, recipientTelegramUserId: recipient.data };
+}
+
+/**
+ * The inline buttons a customer NOTIFICATION carries, derived from its subject by kind
+ * (Package F). Handed to the notification lane by the composition root, because the
+ * callback vocabulary is this surface's: the lane stores no button and carries no payload.
+ *
+ * Only `SERVICE_TRANSFER_RECEIVED` has one — «مشخصات سرویس», opening the service through
+ * `getForCustomer` for whoever taps it.
+ */
+export function notificationButtons(
+  kind: CustomerNotificationKind,
+  subject: { readonly serviceId: string },
+): readonly CustomerButton[] {
+  if (kind !== 'SERVICE_TRANSFER_RECEIVED') return [];
+  return [
+    {
+      label: { kind: 'TEMPLATE', key: 'bot.service.transfer_details_button' },
+      data: `${SERVICE_CALLBACK_PREFIX}${subject.serviceId}`,
+    },
+  ];
 }
 
 function backToServiceButton(serviceId: string): CustomerButton {
