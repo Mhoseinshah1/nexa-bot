@@ -25,10 +25,10 @@ What the document does NOT say, and how this package handles each gap:
 
 | unstated                                | handled as                                                                                                                                             |
 | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| the response envelope                   | a bare array, or an object whose `files` is an array. Anything else is `MALFORMED_RESPONSE`, never an empty list.                                        |
-| the type of `error`                     | any present, non-null `error` marks the entry failed. Its text is never read, stored or shown.                                                          |
+| the response envelope                   | a bare array, or an object whose `files` is an array. Anything else is `MALFORMED_RESPONSE`, never an empty list.                                      |
+| the type of `error`                     | any present, non-null `error` marks the entry failed. Its text is never read, stored or shown.                                                         |
 | the `Retry-After` format                | delta-seconds are honoured. An HTTP-date or a missing header falls back to the documented window of 60 s.                                              |
-| 429 is not among the declared responses | handled anyway, because the prose promises it.                                                                                                          |
+| 429 is not among the declared responses | handled anyway, because the prose promises it.                                                                                                         |
 | a single-format endpoint                | `GET /api/user/{username}/file/{fmt}` exists and needs a `platform`. The brief says to use the all-files endpoint, and this package uses nothing else. |
 
 This code has not been run against a real RickPanel, exactly like the rest of the adapter
@@ -52,6 +52,7 @@ external acceptance gap, §8.
   - a caption.
 
   Beside the files is a count of the formats that failed.
+
 - **RickPanel declares the capability in the same change that implements it**, the D7 rule
   of `docs/rickpanel-rotate-audit.md`, on the same evidence. Marzban and 3X-UI do not declare
   it.
@@ -141,6 +142,7 @@ Inside the response, after decoding:
 ## 8. External acceptance gap
 
 The adapter and the fake agree. Two things only a real RickPanel settles:
+
 - the real envelope, `error` shape and `Retry-After` format of `/files`;
 - whether its files open in the clients they are named for.
 
