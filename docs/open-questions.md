@@ -2469,3 +2469,25 @@ Building an extension needs these decisions, and each one changes what a custome
   catalogue's add-on prices?
 - **Records.** Does a renewal write its own `order_custom_service_terms`, and does it
   carry the location label frozen at purchase or the one written today?
+
+## OQ-WPA7-01 — attachments on support's replies
+
+WP-A7 lets a CUSTOMER attach a photo or a document to a ticket; the file stays at Telegram
+and the ticket row holds its binding, the receipts' pattern. Support's replies from the Web
+Admin are text only. Sending a file the other way needs an upload path from the browser, a
+place to keep the bytes until Telegram has them (this deployment has no blob store), the
+same type and size rules, and a notification that carries a file — which the customer lane
+does not do today (`docs/wp-a7-tickets-audit.md` §8).
+
+UNRESOLVED. Nothing is built.
+
+## OQ-WPA7-02 — whether the ticket desk is exempt from the channel-membership guard
+
+Package B exempts support and help from the mandatory-channel guard, so `/paysupport` and
+the support screen always answer. The WP-A7 ticket desk is NOT exempt: the typed message
+that files a ticket is ordinary text, and exempting the desk's taps but not the text would
+open a window whose answer the guard then withholds. A customer who has not joined sees
+the join screen, and the support screen's contact button still works. Whether the owner
+wants the whole ticket flow (taps and the typed message) exempt is a product decision.
+
+UNRESOLVED. The desk follows the guard.
