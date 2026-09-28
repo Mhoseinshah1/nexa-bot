@@ -844,6 +844,24 @@ describe('client apps over HTTP', () => {
     });
     expect(removed.json()).toEqual({ id: row.id, deleted: true });
 
+    // A path id that is not a UUID is "no such entry", never a 500 from the uuid cast (C2).
+    for (const [url, payload] of [
+      [CLIENT_APP_ROUTES.update('not-a-uuid'), { ...entry(), expectedVersion: 1 }],
+      [CLIENT_APP_ROUTES.status('not-a-uuid'), { status: 'DISABLED', expectedVersion: 1 }],
+      [CLIENT_APP_ROUTES.remove("1' OR '1'='1"), { expectedVersion: 1 }],
+    ] as const) {
+      const malformed = await inject({
+        method: 'POST',
+        url: `${API_PREFIX}${url}`,
+        headers: { cookie, origin: ORIGIN },
+        payload: { ...payload, idempotencyKey: key() },
+      });
+      expect(malformed.statusCode, url).toBe(404);
+      expect(malformed.json()).toMatchObject({
+        error: { code: CONTROL_ERROR_CODES.CLIENT_APP_NOT_FOUND },
+      });
+    }
+
     const noOrigin = await inject({
       method: 'POST',
       url: `${API_PREFIX}${CLIENT_APP_ROUTES.create}`,

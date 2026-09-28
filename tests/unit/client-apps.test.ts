@@ -16,7 +16,14 @@ import {
 } from '@nexa/contracts';
 import { isClientAppRelevant } from '../../apps/api/src/modules/control/client-apps/domain/relevance';
 import { ClientAppCatalog } from '../../apps/api/src/modules/control/client-apps/application/client-app-catalog';
-import { protocolsOf } from '../../apps/api/src/modules/control/client-apps/application/customer-service-facts';
+import {
+  ProvisionedServiceFacts,
+  SERVICE_FACTS_LIMIT,
+  SERVICE_FACTS_MAX_PAGES,
+  SERVICE_FACTS_PAGE_SIZE,
+  protocolsOf,
+} from '../../apps/api/src/modules/control/client-apps/application/customer-service-facts';
+import type { ServiceRecord } from '../../apps/api/src/modules/commerce/provisioning/application/ports';
 import type {
   ClientAppRecord,
   CustomerServiceFact,
@@ -128,6 +135,33 @@ describe('an entry as the operator writes it', () => {
   it('does not mistake an ordinary sentence for a data: URL', () => {
     expect(clientAppTextProblem('Mobile data: on، سپس وصل شوید')).toBeNull();
   });
+
+  /*
+   * Codex review #1 of PR #95, C5: only `[label](link)` was checked, and Telegram
+   * auto-links a BARE address in plain text — so a bare http link was a plaintext download
+   * link sent to every customer.
+   */
+  it.each([
+    ['a bare http link', 'Download http://x.example/a.apk'],
+    ['a bare http link in Persian prose', 'برنامه را از http://x.example/a.apk بگیرید.'],
+    ['a bare https link to an IP literal', 'https://1.2.3.4/a'],
+    ['a scheme-less www host, which Telegram links as http', 'از www.example.com دانلود کنید'],
+    ['any other scheme', 'ftp://files.example.com/a.apk'],
+    ['a tg:// link', 'tg://resolve?domain=example'],
+    ['an upper-case http scheme', 'HTTP://X.EXAMPLE/a'],
+  ])('refuses %s', (_label, text) => {
+    expect(clientAppTextProblem(text)).toBe('UNSAFE_LINK');
+    expect(clientAppInputSchema.safeParse({ ...valid, guide: text }).success).toBe(false);
+    expect(clientAppInputSchema.safeParse({ ...valid, description: text }).success).toBe(false);
+  });
+
+  it.each([
+    ['a bare https link', 'https://ok.example/a'],
+    ['one ending a sentence', 'نصب از https://ok.example/a.'],
+    ['one beside a labelled link', '[دانلود](https://ok.example/a) یا https://ok.example/b'],
+  ])('accepts %s', (_label, text) => {
+    expect(clientAppTextProblem(text)).toBeNull();
+  });
 });
 
 describe('the guide as a customer reads it', () => {
@@ -146,6 +180,15 @@ describe('the guide as a customer reads it', () => {
         'دانلود: https://downloads.example.com/a',
       ].join('\n'),
     );
+  });
+
+  it('drops a stored bare link it would refuse, keeping the safe one and the prose', () => {
+    const rendered = renderClientAppGuide(
+      'Download http://x.example/a.apk, now\nwww.evil.example\nok https://ok.example/a.',
+    );
+    expect(rendered).toBe('Download , now\n\nok https://ok.example/a.');
+    expect(rendered).not.toContain('http://');
+    expect(rendered).not.toContain('www.');
   });
 
   it('neutralises an injection that got past validation: no link, no parse mode', () => {
@@ -459,6 +502,112 @@ describe('the bot’s guide screens', () => {
       'mm:',
     ]);
     expect(clientAppScreen(null).key).toBe('bot.apps.not_found');
+  });
+});
+
+describe('what is read about the customer’s services', () => {
+  const PANEL = '0191f4a0-2d3c-7c2b-9a41-00000000aaaa';
+
+  function service(n: number, state: ServiceRecord['state'], panelId = PANEL): ServiceRecord {
+    return {
+      id: uuid(1000 + n),
+      panelId,
+      state,
+      subscriptionUrl: 'https://sub.example.com/s/secret',
+    } as unknown as ServiceRecord;
+  }
+
+  /** A customer's services, newest first, served a page at a time as the repository does. */
+  function source(all: readonly ServiceRecord[], offers: string[] = []) {
+    const pagesRead: number[] = [];
+    const facts = new ProvisionedServiceFacts({
+      services: {
+        listForCustomer: (_scope, _customer, limit = 25, cursor = null) => {
+          const start = cursor === null ? 0 : Number(cursor as unknown as string);
+          pagesRead.push(start);
+          const items = all.slice(start, start + limit);
+          const next = start + limit < all.length ? String(start + limit) : null;
+          return Promise.resolve({ items, nextCursor: next as never });
+        },
+      },
+      panels: {
+        findMany: (_scope, ids) =>
+          Promise.resolve(
+            ids.map(
+              (id) =>
+                ({
+                  panel: {
+                    id,
+                    providerType: 'marzban',
+                    activation: { proxyProtocols: ['vless'], inboundTags: { vless: ['a'] } },
+                  },
+                }) as never,
+            ),
+          ),
+      },
+      subscriptionFiles: {
+        offered: (_scope, one) => {
+          offers.push(`${String(one.panelId)}|${one.state}`);
+          return Promise.resolve(one.state === 'ACTIVE');
+        },
+      },
+    });
+    return { facts, pagesRead, offers };
+  }
+
+  it('finds an older ACTIVE service behind newer TERMINATED ones (C1)', async () => {
+    const all = [
+      ...Array.from({ length: 25 }, (_, n) => service(n, 'TERMINATED')),
+      service(99, 'ACTIVE'),
+    ];
+    const read = await source(all).facts.factsFor(TENANT, CUSTOMER);
+    expect(read.map((fact) => fact.serviceId)).toEqual([uuid(1099)]);
+    expect(read[0]).toMatchObject({ linkDeliverable: true, filesOffered: true });
+  });
+
+  it('pages through the cursor, and stops at the live limit or the page bound', async () => {
+    const behindAPage = [
+      ...Array.from({ length: SERVICE_FACTS_PAGE_SIZE + 10 }, (_, n) => service(n, 'TERMINATED')),
+      service(500, 'SUSPENDED'),
+    ];
+    const one = source(behindAPage);
+    expect((await one.facts.factsFor(TENANT, CUSTOMER)).map((f) => f.serviceId)).toEqual([
+      uuid(1500),
+    ]);
+    expect(one.pagesRead).toEqual([0, SERVICE_FACTS_PAGE_SIZE]);
+
+    const manyLive = Array.from({ length: 70 }, (_, n) => service(n, 'ACTIVE'));
+    const two = source(manyLive);
+    expect(await two.facts.factsFor(TENANT, CUSTOMER)).toHaveLength(SERVICE_FACTS_LIMIT);
+    expect(two.pagesRead).toEqual([0]);
+
+    const tooDeep = [
+      ...Array.from({ length: SERVICE_FACTS_PAGE_SIZE * SERVICE_FACTS_MAX_PAGES }, (_, n) =>
+        service(n, 'TERMINATED'),
+      ),
+      service(900, 'ACTIVE'),
+    ];
+    const three = source(tooDeep);
+    expect(await three.facts.factsFor(TENANT, CUSTOMER)).toEqual([]);
+    expect(three.pagesRead).toHaveLength(SERVICE_FACTS_MAX_PAGES);
+  });
+
+  it('asks Package E once per (panel, state), not once per service (C4)', async () => {
+    const OTHER_PANEL = '0191f4a0-2d3c-7c2b-9a41-00000000bbbb';
+    const offers: string[] = [];
+    const all = [
+      ...Array.from({ length: 5 }, (_, n) => service(n, 'ACTIVE')),
+      service(10, 'SUSPENDED'),
+      service(11, 'SUSPENDED'),
+      service(12, 'ACTIVE', OTHER_PANEL),
+    ];
+    const read = await source(all, offers).facts.factsFor(TENANT, CUSTOMER);
+    expect(read).toHaveLength(8);
+    expect(offers.sort()).toEqual(
+      [`${PANEL}|ACTIVE`, `${PANEL}|SUSPENDED`, `${OTHER_PANEL}|ACTIVE`].sort(),
+    );
+    // Each service still gets its own (shared) answer.
+    expect(read.filter((fact) => fact.filesOffered)).toHaveLength(6);
   });
 });
 

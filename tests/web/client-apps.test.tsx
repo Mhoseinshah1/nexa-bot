@@ -238,6 +238,39 @@ describe('the apps page', () => {
     });
   });
 
+  it('does not carry one entry’s conflict to another (C3)', async () => {
+    const OTHER_ID = '019250ab-cdef-7012-8345-6789abcdef22';
+    stubApi([
+      listAndRow([app(), app({ id: OTHER_ID, name: 'دومی' })], app()),
+      {
+        url: `/client-apps/${APP_ID}`,
+        status: 409,
+        body: {
+          error: {
+            kind: 'conflict',
+            code: 'control.client_app_version_conflict',
+            message: 'changed',
+            correlationId: 'test',
+            details: { currentVersion: 3 },
+          },
+        },
+      },
+    ]);
+    renderPage(<ClientAppsPage denied={false} mayEdit />);
+
+    const [editA] = await screen.findAllByRole('button', { name: t('web.client_apps_edit') });
+    fireEvent.click(editA as HTMLElement);
+    fireEvent.click(screen.getByRole('button', { name: t('web.client_apps_save') }));
+    expect(await screen.findByText(t('web.client_apps_conflict'))).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: t('web.client_apps_cancel') }));
+    const [, editB] = await screen.findAllByRole('button', { name: t('web.client_apps_edit') });
+    fireEvent.click(editB as HTMLElement);
+    expect(screen.getByLabelText(t('web.client_apps_name'))).toHaveValue('دومی');
+    expect(screen.queryByText(t('web.client_apps_conflict'))).toBeNull();
+    expect(screen.queryByText(t('web.changed_elsewhere'), { exact: false })).toBeNull();
+  });
+
   it('asks for nothing it may not see', () => {
     const api = stubApi([listAndRow([app()], app())]);
     renderPage(<ClientAppsPage denied mayEdit={false} />);
