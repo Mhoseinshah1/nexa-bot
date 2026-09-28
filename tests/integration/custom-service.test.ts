@@ -778,6 +778,11 @@ describe('Package D — the custom service', () => {
       expect(coded.totals.subtotal).toEqual(money(245_000n, 'IRT'));
       expect(coded.totals.discount).toEqual(money(24_500n, 'IRT'));
       expect(coded.totals.total).toEqual(money(220_500n, 'IRT'));
+      // Re-quoted from the draft's own terms: the two formula steps, never a list price.
+      expect(coded.totals.quote.trace.slice(0, 2).map((step) => step.step)).toEqual([
+        'CUSTOM_SERVICE_FORMULA',
+        'CUSTOM_SERVICE_FORMULA',
+      ]);
       const confirmed = await h.confirm(coded);
       expect(confirmed.totals.total).toEqual(money(220_500n, 'IRT'));
       const [redeemed] = await h.rows<{ n: number }>(
@@ -875,6 +880,18 @@ describe('Package D — the custom service', () => {
         }),
       );
       expect(refusal.code).toBe('commerce.custom_service_not_extendable');
+      // And no button is offered for it in the first place.
+      const record = await new DrizzleServiceRepository(f.ctx.container.database.db).findById(
+        tenantA,
+        service!.id,
+      );
+      expect(
+        await f.ctx.container.commercialActions.availableFor(
+          tenantA,
+          customerActor(f.key()),
+          record!,
+        ),
+      ).toEqual([]);
     });
 
     it('counts a live custom order as a purchase, so the customer is no longer a first-time buyer', async () => {
