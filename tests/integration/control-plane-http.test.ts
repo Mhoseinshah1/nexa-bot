@@ -16,7 +16,9 @@ import {
   templateRevisionListResponseSchema,
   templateWriteResponseSchema,
 } from '@nexa/contracts';
+import { eq } from 'drizzle-orm';
 import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import { auditLogs } from '../../apps/api/src/infrastructure/persistence/schema';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
 import { createAdmin, migrateOnce, resetDatabase, tenantA, testConfig } from './harness';
 
@@ -243,30 +245,89 @@ describe('control plane HTTP surface', () => {
       expect(ops?.configuration.every((setting) => setting.inert)).toBe(true);
     });
 
-    it('refuses a tenant-wide toggle with no typed confirmation', async () => {
+    /**
+     * WP-A2: the owner removed the typed flag key and the reason from an ordinary
+     * toggle. The most far-reaching flag there is, sent exactly as the Web Admin now
+     * sends it — enabled, version, idempotency key and nothing else — is accepted,
+     * and the audit row still names who, when and what.
+     */
+    it('accepts a tenant-wide toggle with neither a typed key nor a reason', async () => {
       const response = await post(CONTROL_ROUTES.feature('ops_notifications'), ownerCookie, {
         enabled: true,
         expectedVersion: null,
         idempotencyKey: idempotencyKey(),
-      });
-      expect(response.statusCode).toBe(400);
-      expect(response.json()).toMatchObject({ error: { code: 'control.confirmation_required' } });
-    });
-
-    it('accepts a confirmed toggle and stops marking the configuration inert', async () => {
-      const response = await post(CONTROL_ROUTES.feature('ops_notifications'), ownerCookie, {
-        enabled: true,
-        expectedVersion: null,
-        idempotencyKey: idempotencyKey(),
-        confirmKey: 'ops_notifications',
-        reason: 'Turning alerts on for the first time.',
       });
       expect(response.statusCode).toBe(201);
 
       const body = featureFlagWriteResponseSchema.parse(response.json());
       expect(body.flag.enabled).toBe(true);
+      expect(body.flag.blastRadius).toBe('TENANT_WIDE');
+      expect(body.flag.reason).toBeNull();
       expect(body.changed).toBe(true);
       expect(body.flag.configuration.every((setting) => !setting.inert)).toBe(true);
+
+      const rows = await api.container.database.db
+        .select()
+        .from(auditLogs)
+        .where(eq(auditLogs.action, 'features.set'));
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        entityType: 'FeatureFlag',
+        entityId: 'ops_notifications',
+        actorType: 'WEB_ADMIN',
+        actorId: body.flag.updatedByAdminId,
+        result: 'SUCCESS',
+        before: { enabled: false, source: 'DEFAULT' },
+        after: { enabled: true, source: 'TENANT' },
+        reason: null,
+      });
+      expect(rows[0]?.occurredAt).toBeInstanceOf(Date);
+    });
+
+    /**
+     * Backward compatibility: a client built before WP-A2 still sends the typed key and
+     * a reason. Both are accepted, and the reason still reaches the flag row and the
+     * audit row, so nothing an older client asked to record is dropped.
+     */
+    it('still accepts, and still records, the key and reason an older client sends', async () => {
+      const response = await post(CONTROL_ROUTES.feature('ops_notifications'), ownerCookie, {
+        enabled: true,
+        expectedVersion: null,
+        idempotencyKey: idempotencyKey(),
+        confirmKey: 'ops_notifications',
+        reason: '  Turning alerts on for the first time.  ',
+      });
+      expect(response.statusCode).toBe(201);
+
+      const body = featureFlagWriteResponseSchema.parse(response.json());
+      expect(body.flag.enabled).toBe(true);
+      expect(body.flag.reason).toBe('Turning alerts on for the first time.');
+
+      const [audit] = await api.container.database.db
+        .select()
+        .from(auditLogs)
+        .where(eq(auditLogs.action, 'features.set'));
+      expect(audit?.reason).toBe('Turning alerts on for the first time.');
+    });
+
+    it('treats a blank reason as none rather than refusing it', async () => {
+      const response = await post(CONTROL_ROUTES.feature('template_overrides'), ownerCookie, {
+        enabled: false,
+        expectedVersion: null,
+        idempotencyKey: idempotencyKey(),
+        reason: '   ',
+      });
+      expect(response.statusCode).toBe(201);
+      expect(featureFlagWriteResponseSchema.parse(response.json()).flag.reason).toBeNull();
+    });
+
+    it('still refuses an authenticated caller who lacks settings.edit', async () => {
+      const response = await post(CONTROL_ROUTES.feature('ops_notifications'), supportCookie, {
+        enabled: true,
+        expectedVersion: null,
+        idempotencyKey: idempotencyKey(),
+      });
+      expect(response.statusCode).toBe(403);
     });
   });
 
