@@ -69,6 +69,7 @@ import {
   SERVICE_BUY_TIME_CALLBACK_PREFIX,
   SERVICE_ACTION_CONFIRM_CALLBACK_PREFIX,
   SERVICE_REFRESH_CALLBACK_PREFIX,
+  SERVICE_FILES_CALLBACK_PREFIX,
   MAIN_MENU_CALLBACK_DATA,
   TUTORIAL_PLATFORM_CALLBACK_PREFIX,
   TOPUP_ROUTE_CALLBACK_PREFIX,
@@ -741,6 +742,11 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.service.back_to_menu_button',
       'bot.service.capability_unsupported',
       'bot.service.connected_ack',
+      // Package E: the connection-files button and its three answers.
+      'bot.service.files_button',
+      'bot.service.files_partial',
+      'bot.service.files_rate_limited',
+      'bot.service.files_unavailable',
       'bot.service.link_button',
       'bot.service.list',
       'bot.service.list_empty',
@@ -1400,6 +1406,7 @@ describe('a callback prefix decides what happens, so no prefix may shadow anothe
     SERVICE_ACTION_CONFIRM: SERVICE_ACTION_CONFIRM_CALLBACK_PREFIX,
     // The customer UX completion's id-carrying routes.
     SERVICE_REFRESH: SERVICE_REFRESH_CALLBACK_PREFIX,
+    SERVICE_FILES: SERVICE_FILES_CALLBACK_PREFIX,
     SERVICE_NOTE: SERVICE_NOTE_CALLBACK_PREFIX,
     SERVICE_RENEW_QUOTE: SERVICE_RENEW_QUOTE_CALLBACK_PREFIX,
     TOPUP_CLOSE: TOPUP_CLOSE_CALLBACK_PREFIX,
