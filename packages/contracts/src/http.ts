@@ -4970,11 +4970,13 @@ export type ServiceActionResponse = z.infer<typeof serviceActionResponseSchema>;
  *
  * Phase 6A adds the writes. The read-only note that stood here said terminate needed
  * "the operator-initiated half of a flow whose customer half 4E built" and that a
- * transfer had no stated rule — the first is what this phase builds, and the second is
- * still true: there is NO transfer route, `services.transfer` remains a declared
- * permission with no endpoint, and `docs/open-questions.md` still carries the question
- * of what becomes of the order, the payment and the subscription the previous owner
- * holds. Inventing that answer in a controller is the guess this repository refuses.
+ * transfer had no stated rule. The first is what 6A built. The second was settled by the
+ * owner in Package F (`docs/package-f-service-transfer-audit.md`): the order, the payment
+ * and the link stay as they are and only ownership moves — and what Package F built is the
+ * CUSTOMER's transfer, from the bot. There is still NO transfer route here:
+ * `services.transfer` is the operator's key, no operator transfer was asked for, and it
+ * remains a declared permission with no endpoint. Each customer transfer is in the audit
+ * log as `service.transfer`.
  *
  * Each action is its own path rather than one `POST /operations` taking a type, because
  * the permission differs — terminate charges `services.terminate` and the rest charge

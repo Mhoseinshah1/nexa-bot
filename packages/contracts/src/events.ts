@@ -126,6 +126,9 @@ export const EVENT_TYPES = [
   // A service's subscription link was replaced by one its panel minted. The payload
   // names the customer and nothing else: both links are bearer capabilities.
   'ServiceSubscriptionRotated',
+  // Package F. A customer handed a service to another customer of the tenant. Ids only:
+  // never the subscription link, its token or a file — the link did not change hands.
+  'ServiceOwnershipTransferred',
   'ProvisioningOutcomeUnknown',
   'DiscountRedeemed',
   // WP8. The credit and its reversal are wallet entries too, and `WalletEntryRecorded`
@@ -377,6 +380,15 @@ export const EVENT_PAYLOAD_SCHEMAS = {
   }),
   ServiceSubscriptionRotated: z.object({
     customerId: z.string(),
+  }),
+  /*
+   * Package F. Aggregate is the SERVICE. The three ids are the whole fact; the
+   * `service_ownership_transfers` row carries who asked and when.
+   */
+  ServiceOwnershipTransferred: z.object({
+    serviceId: z.string(),
+    fromCustomerId: z.string(),
+    toCustomerId: z.string(),
   }),
   ProvisioningOutcomeUnknown: z.object({
     serviceId: z.string(),
