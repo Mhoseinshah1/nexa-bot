@@ -822,6 +822,22 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.trial.issued':
     'سرویس آزمایشی شما در حال ساخته شدن است. لینک اشتراک به‌محض آماده شدن برایتان ارسال می‌شود.',
   'bot.trial.button': '🎁 دریافت سرویس آزمایشی',
+  'bot.custom_service.button': '🛠 سرویس دلخواه',
+  'bot.custom_service.locations': '📍 لوکیشن سرویس دلخواه خود را انتخاب کنید:',
+  'bot.custom_service.ask_volume':
+    '📍 لوکیشن: {location}\n\n📦 حجم مورد نظر خود را به گیگابایت بفرستید؛ حداکثر با دو رقم اعشار (مثلاً 10 یا 10.5).',
+  'bot.custom_service.invalid_volume':
+    'این حجم معتبر نیست. یک عدد مثبت به گیگابایت و حداکثر با دو رقم اعشار بفرستید (مثلاً 10 یا 10.25).',
+  'bot.custom_service.ask_days':
+    '📦 حجم: {volumeBytes}\n\n⏳ مدت مورد نظر خود را به روز بفرستید؛ یک عدد صحیح (مثلاً 30).',
+  'bot.custom_service.invalid_days':
+    'این مدت معتبر نیست. تعداد روز را به صورت یک عدد صحیح مثبت بفرستید (مثلاً 30).',
+  'bot.custom_service.unavailable':
+    'سرویس دلخواه با این مشخصات در حال حاضر قابل خرید نیست. می‌توانید حجم یا مدت دیگری را امتحان کنید.',
+  'bot.custom_service.not_extendable':
+    'تمدید یا افزایش حجم و زمان برای سرویس دلخواه امکان‌پذیر نیست. می‌توانید یک سرویس دلخواه جدید خریداری کنید.',
+  'bot.custom_service.terms_changed':
+    'قیمت این سرویس دلخواه از زمان پیش‌فاکتور تغییر کرده است. مبلغی کسر نشد؛ لطفاً دوباره سفارش دهید تا قیمت فعلی را ببینید.',
   'bot.trial.not_delivered':
     'متأسفیم، سرویس آزمایشی شما ساخته نشد. این مورد جزو سهمیه سرویس آزمایشی شما حساب نمی‌شود.',
   /*
@@ -898,7 +914,9 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.support.contact': 'برای ارتباط با پشتیبانی روی دکمهٔ زیر بزنید.',
   'bot.support.unconfigured': 'در حال حاضر راه ارتباطی با پشتیبانی تنظیم نشده است.',
   'bot.order.preinvoice':
-    '🧾 پیش فاکتور شما:\n\n👤 نام کاربر: {serviceUsername}\n🔐 نام سرویس: {productName}\n📆 مدت اعتبار: {durationDays}\n💵 قیمت: {total}\n👥 حجم اکانت: {trafficBytes}\n➕ حجم افزوده: {addedTrafficBytes}\n{discountLine}\n{cashbackLine}\n\n{locationsBlock}\n\n{featuresBlock}\n\n💰 موجودی کیف پول شما: {walletBalance}\n\n💰 سفارش شما آماده پرداخت است',
+    '🧾 پیش فاکتور شما:\n\n👤 نام کاربر: {serviceUsername}\n🔐 نام سرویس: {productName}\n📆 مدت اعتبار: {durationDays}\n💵 قیمت: {total}\n👥 حجم اکانت: {trafficBytes}\n➕ حجم افزوده: {addedTrafficBytes}\n{customBlock}\n{discountLine}\n{cashbackLine}\n\n{locationsBlock}\n\n{featuresBlock}\n\n💰 موجودی کیف پول شما: {walletBalance}\n\n💰 سفارش شما آماده پرداخت است',
+  'bot.order.preinvoice_custom':
+    '🛠 سرویس دلخواه\n📍 لوکیشن: {location}\n📦 حجم: {volumeBytes} × {pricePerGb} = {volumePrice}\n⏳ مدت: {durationDays} × {pricePerDay} = {timePrice}',
   'bot.order.preinvoice_locations': '🌍 لوکیشن‌های محصول:\n{lines}',
   'bot.order.preinvoice_features': '{lines}',
   'bot.order.preinvoice_discount_line': '🏷 تخفیف: {discount} (قیمت پیش از تخفیف: {subtotal})',

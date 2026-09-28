@@ -227,6 +227,23 @@ export const FEATURE_FLAGS = [
       'referral.signup_gift.referred_percent',
     ],
   },
+  {
+    key: 'custom_service',
+    description:
+      'Let a customer buy a custom service: they choose a location, type a ' +
+      'volume in GB and a number of days, and are charged volume \u00d7 price per GB plus ' +
+      'days \u00d7 price per day from the custom-service price rules, before the ordinary ' +
+      'discounts, payment and provisioning. Off by default. Turning it on is not enough on ' +
+      'its own: a location must be offered and a VOLUME and a TIME rule must price the ' +
+      'customer on it. Turning it off withdraws the button and refuses new drafts and ' +
+      'confirmations; orders already confirmed are still paid for and delivered.',
+    defaultEnabled: false,
+    // TENANT_WIDE, like `trials`: it offers a new way to buy to every customer of the
+    // tenant at once. The brief names it `custom_service_enabled`; a flag key is the name
+    // of the feature, as every other key here is, and the flag IS the enablement.
+    blastRadius: 'TENANT_WIDE',
+    configuredBy: [],
+  },
 ] as const satisfies readonly FeatureFlagDefinition[];
 
 export type FeatureFlagKey = (typeof FEATURE_FLAGS)[number]['key'];

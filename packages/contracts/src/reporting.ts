@@ -86,6 +86,7 @@ export function orderPurposeIsSale(purpose: OrderPurpose): boolean {
     case 'RENEW':
     case 'ADD_TRAFFIC':
     case 'ADD_TIME':
+    case 'CUSTOM_SERVICE':
       return true;
     case 'TRIAL':
       return false;
@@ -103,11 +104,16 @@ export const SALE_ORDER_PURPOSES: readonly OrderPurpose[] = ORDER_PURPOSES.filte
 /** The purposes a product ranking counts: a product bought or renewed, never an add-on. */
 export const PRODUCT_RANKING_PURPOSES: readonly OrderPurpose[] = ['NEW_SERVICE', 'RENEW'];
 
-/** The purposes that carry traffic a customer bought. */
+/**
+ * The purposes that carry traffic a customer bought. A custom service sells the volume
+ * the customer typed (Package D); it is not in `PRODUCT_RANKING_PURPOSES` because there
+ * is no product to rank.
+ */
 export const TRAFFIC_SELLING_PURPOSES: readonly OrderPurpose[] = [
   'NEW_SERVICE',
   'RENEW',
   'ADD_TRAFFIC',
+  'CUSTOM_SERVICE',
 ];
 
 /**

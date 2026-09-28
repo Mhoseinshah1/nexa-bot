@@ -68,6 +68,7 @@ export * from './service-reminders.js';
 export * from './service-username.js';
 export * from './promotions.js';
 export * from './customer-ux.js';
+export * from './custom-service.js';
 export * from './templates.js';
 export * from './settings.js';
 export * from './features.js';

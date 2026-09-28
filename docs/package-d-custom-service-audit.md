@@ -104,7 +104,7 @@ purchase", and "no fake product dependency" is a named test. So:
   - Volume bounds have at most two decimals; they are integers in hundredths.
   - Days are whole, and at most `CUSTOM_SERVICE_MAX_DAYS` (3650).
   - Volume is at most the product ceiling, `MAX_TRAFFIC_BYTES`.
-  - A price is `≥ 0`, in the sales currency.
+  - A price is positive, in the sales currency: a zero would make a dimension free, and — as for a product's price — free is not a price here.
   - A panel, a customer and a tier must belong to this tenant.
 - **Overlap.**
   - Two ENABLED rules of the same dimension at the same specificity (same customer, tier and panel key) may not have intersecting ranges.

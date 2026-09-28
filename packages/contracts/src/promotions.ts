@@ -119,8 +119,18 @@ export const discountKindSchema = z.enum(DISCOUNT_KINDS);
  * added to the order later is NOT discountable until somebody decides it is. A trial is
  * free; a discount on it is a discount of nothing, and cashback on it would be money
  * minted from a free order.
+ *
+ * `CUSTOM_SERVICE` was decided (Package D §6): a custom purchase is paid for, so a code,
+ * an automatic rule and cashback may name it. Adding it widens nothing that exists — a
+ * stored rule's `applies_to` does not name it until an operator says so.
  */
-export const DISCOUNTABLE_PURPOSES = ['NEW_SERVICE', 'RENEW', 'ADD_TRAFFIC', 'ADD_TIME'] as const;
+export const DISCOUNTABLE_PURPOSES = [
+  'NEW_SERVICE',
+  'RENEW',
+  'ADD_TRAFFIC',
+  'ADD_TIME',
+  'CUSTOM_SERVICE',
+] as const;
 export type DiscountablePurpose = (typeof DISCOUNTABLE_PURPOSES)[number];
 export const discountablePurposeSchema = z.enum(DISCOUNTABLE_PURPOSES);
 
@@ -565,10 +575,21 @@ export type ResellerGrantKind = (typeof RESELLER_GRANT_KINDS)[number];
 export const resellerGrantKindSchema = z.enum(RESELLER_GRANT_KINDS);
 
 /**
- * The operations a tier can grant: every purpose a customer pays for. A trial is not a
- * commercial action and is never a reseller's to be granted or refused.
+ * The operations a tier can grant: every CATALOGUE purpose a customer pays for. A trial is
+ * not a commercial action and is never a reseller's to be granted or refused.
+ *
+ * Spelled out rather than equal to `DISCOUNTABLE_PURPOSES`, since Package D: a custom
+ * service is not in the catalogue a grant scopes, and a reseller's access to one is the
+ * custom-service price rules written for their tier (`docs/package-d-custom-service-audit.md`
+ * §7). Deriving this would have widened `reseller_tier_grants_subject_check` with a grant
+ * nothing reads.
  */
-export const RESELLER_GRANTABLE_OPERATIONS = DISCOUNTABLE_PURPOSES;
+export const RESELLER_GRANTABLE_OPERATIONS = [
+  'NEW_SERVICE',
+  'RENEW',
+  'ADD_TRAFFIC',
+  'ADD_TIME',
+] as const satisfies readonly DiscountablePurpose[];
 
 /** The dimension an entitlement refusal names, for the audit row and the operator. */
 export const RESELLER_ENTITLEMENT_DIMENSIONS = ['OPERATION', 'CATALOGUE', 'PANEL', 'BOT'] as const;
