@@ -33,6 +33,7 @@ import {
   createTestContext,
   SEED_IDS,
   tenantA,
+  tenantB,
   type TestContext,
 } from './harness';
 
@@ -936,5 +937,42 @@ describe('WP-A9 reminders', () => {
     // Ten minutes is in force, so an attempt eight minutes out is reminded.
     await payment({ state: 'PENDING', expiresInMinutes: 8 });
     expect(await pendingPass()).toEqual({ payments: 1, orders: 0 });
+  });
+  it('refuses an alert that names another tenant’s ledger entry', async () => {
+    /*
+     * Codex review #2 of PR #100: the crossing entry's key is `(tenant_id, id)`, as every
+     * other reference into the ledger is, so a tenant A alert cannot point at a tenant B
+     * entry — the database refuses it, whatever a writer believes.
+     */
+    const { customer: foreign } = await ctx.container.customers.resolveFromUpdate(
+      tenantB,
+      systemActor('resolve-foreign'),
+      {
+        idempotencyKey: 'resolve-foreign',
+        telegramUserId: '931099',
+        from: { id: 931099, first_name: 'زهرا' },
+        botInstanceId: SEED_IDS.botB1 as BotInstanceId,
+      },
+    );
+    const entry = ctx.container.ids.uuid();
+    await ctx.container.database.db.execute(sql`
+      INSERT INTO wallet_entries (id, tenant_id, customer_id, direction, reason, amount,
+                                  currency, reference)
+      VALUES (${entry}, ${tenantB.tenantId}, ${foreign.id}, 'CREDIT', 'ADMIN_CREDIT', 1000,
+              'IRT', ${`ref-${key()}`})`);
+
+    const refused = await ctx.container.database.db
+      .execute(
+        sql`
+        INSERT INTO wallet_threshold_alerts (id, tenant_id, customer_id, currency,
+                                             threshold_amount, crossing_entry_id, crossed_at)
+        VALUES (${ctx.container.ids.uuid()}, ${tenantA.tenantId}, ${customerA}, 'IRT', 50000,
+                ${entry}, now())`,
+      )
+      .then(
+        () => null,
+        (error: { cause?: { constraint?: string } }) => error.cause?.constraint ?? 'no constraint',
+      );
+    expect(refused).toBe('wallet_threshold_alerts_crossing_entry_fk');
   });
 });

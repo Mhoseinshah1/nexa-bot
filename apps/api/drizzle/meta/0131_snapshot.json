@@ -1,5 +1,5 @@
 {
-  "id": "94694787-8925-48e8-84fe-ae4314313ed8",
+  "id": "00fd013f-ef27-4672-9bfd-c4ad3d6a2ac9",
   "prevId": "4303c237-7f36-45b2-a198-823331d4ccea",
   "version": "7",
   "dialect": "postgresql",
@@ -17074,19 +17074,6 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "wallet_threshold_alerts_crossing_entry_id_wallet_entries_id_fk": {
-          "name": "wallet_threshold_alerts_crossing_entry_id_wallet_entries_id_fk",
-          "tableFrom": "wallet_threshold_alerts",
-          "tableTo": "wallet_entries",
-          "columnsFrom": [
-            "crossing_entry_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
         "wallet_threshold_alerts_customer_fk": {
           "name": "wallet_threshold_alerts_customer_fk",
           "tableFrom": "wallet_threshold_alerts",
@@ -17094,6 +17081,21 @@
           "columnsFrom": [
             "tenant_id",
             "customer_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "wallet_threshold_alerts_crossing_entry_fk": {
+          "name": "wallet_threshold_alerts_crossing_entry_fk",
+          "tableFrom": "wallet_threshold_alerts",
+          "tableTo": "wallet_entries",
+          "columnsFrom": [
+            "tenant_id",
+            "crossing_entry_id"
           ],
           "columnsTo": [
             "tenant_id",

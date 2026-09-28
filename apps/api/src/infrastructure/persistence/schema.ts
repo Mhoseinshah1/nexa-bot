@@ -5427,9 +5427,7 @@ export const walletThresholdAlerts = pgTable(
      */
     thresholdAmount: bigint('threshold_amount', { mode: 'bigint' }).notNull(),
     /** The ledger entry that took the wallet below the threshold. */
-    crossingEntryId: uuid('crossing_entry_id')
-      .notNull()
-      .references(() => walletEntries.id),
+    crossingEntryId: uuid('crossing_entry_id').notNull(),
     /** That entry's `created_at`, copied so the arm test compares two columns of one row. */
     crossedAt: timestamptz('crossed_at').notNull(),
     raisedAt: timestamptz('raised_at').notNull().defaultNow(),
@@ -5439,6 +5437,16 @@ export const walletThresholdAlerts = pgTable(
       columns: [table.tenantId, table.customerId],
       foreignColumns: [customers.tenantId, customers.id],
       name: 'wallet_threshold_alerts_customer_fk',
+    }),
+    /**
+     * The crossing entry travels WITH its tenant: a composite key onto
+     * `wallet_entries_tenant_id_key`, so an alert cannot name another tenant's ledger entry
+     * (Codex review #2 of PR #100) — the shape every other reference into the ledger has.
+     */
+    foreignKey({
+      columns: [table.tenantId, table.crossingEntryId],
+      foreignColumns: [walletEntries.tenantId, walletEntries.id],
+      name: 'wallet_threshold_alerts_crossing_entry_fk',
     }),
     /** Once per crossing: the arbiter of every insert, and why two replicas are safe. */
     unique('wallet_threshold_alerts_crossing_key').on(table.tenantId, table.crossingEntryId),
