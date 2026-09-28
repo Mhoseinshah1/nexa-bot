@@ -2052,6 +2052,14 @@ export const TEMPLATES = [
     placeholders: [],
   },
   {
+    key: 'bot.admin.operation_change_location',
+    description:
+      'The operation label inside `bot.admin.receipt` for a paid location change of an ' +
+      'existing service (WP-A6).',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
     key: 'bot.admin.operation_topup',
     description: 'The operation label inside `bot.admin.receipt` for a wallet top-up.',
     format: 'PLAIN_TEXT',
@@ -5601,6 +5609,145 @@ export const TEMPLATES = [
       },
     ],
   },
+  /*
+   * WP-A6 — service location change. The button, the choice screen and its two target
+   * buttons, the free change's confirmation and its button, the answer to a free
+   * request, and three refusals. A paid change is answered by the ordinary pre-invoice,
+   * with `bot.order.preinvoice_location_change` as its block.
+   */
+  {
+    key: 'bot.service.change_location_button',
+    description:
+      'The button that opens the location change for a service. Drawn only when the ' +
+      'service is ACTIVE, the panel’s adapter declares LOCATION_CHANGE and implements it, ' +
+      'the service’s current location is known, and at least one enabled, priced target ' +
+      'other than it is configured for this service. Not drawing it is never the control: ' +
+      'every condition is re-checked on the tap, at confirmation and when the money moves.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.location_choice',
+    description:
+      'The location change screen: where the service is now. The targets are on the ' +
+      'BUTTONS below it, each one a location the operator configured for this service, ' +
+      'with its price or «free».',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'currentLocation',
+        type: 'STRING',
+        description: 'The name of the location the service is in now, as the operator wrote it.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.location_option',
+    description:
+      'One target button on the location change screen: the location’s name and the list ' +
+      'price of moving there. The pre-invoice the tap produces states the final figure, ' +
+      'after any discount.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'location',
+        type: 'STRING',
+        description: 'The target location’s name, as the operator wrote it.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'price',
+        type: 'MONEY',
+        description: 'The list price of the move, with its currency.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.location_option_free',
+    description:
+      'One target button on the location change screen for a move the operator made free ' +
+      '(a configured price of zero — never an unconfigured one).',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'location',
+        type: 'STRING',
+        description: 'The target location’s name, as the operator wrote it.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.location_confirm_free',
+    description:
+      'The confirmation a FREE location change asks for: from where, to where, that it ' +
+      'costs nothing, and that the connection details may change — never a promise that ' +
+      'the link survives, because no panel in this release guarantees it. Nothing is ' +
+      'changed until the customer confirms.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'fromLocation',
+        type: 'STRING',
+        description: 'The location the service is in now.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'toLocation',
+        type: 'STRING',
+        description: 'The location it would be moved to.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.location_confirm_button',
+    description: 'The button that confirms a free location change.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.location_requested',
+    description:
+      'The answer to a confirmed free location change: it was recorded and will be carried ' +
+      'out on the panel, and the customer will be told the outcome — through the ' +
+      'notification lane, as for every service action. New connection details, if the ' +
+      'move produced any, are sent the same way a new link always is.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.location_same',
+    description:
+      'A location change refused because the chosen target is where the service already ' +
+      'is. Nothing was changed or charged.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.location_cooldown',
+    description:
+      'A location change refused because the service was moved too recently: the ' +
+      'operator configured a wait between two changes. Nothing was changed or charged.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.location_limit',
+    description:
+      'A location change refused because the service already had as many changes as the ' +
+      'operator allows in the rolling period. Nothing was changed or charged.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
   {
     key: 'bot.service.action_unavailable',
     description:
@@ -6505,9 +6652,44 @@ export const TEMPLATES = [
         repeatable: false,
       },
       {
+        token: 'locationChangeBlock',
+        type: 'STRING',
+        description:
+          'Rendered `bot.order.preinvoice_location_change`, for a paid location change only ' +
+          '(WP-A6): from where, to where, and that the connection details may change.',
+        required: false,
+        repeatable: false,
+      },
+      {
         token: 'walletBalance',
         type: 'MONEY',
         description: 'The customer’s balance in the order’s currency, read at render time.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.order.preinvoice_location_change',
+    description:
+      'The location change block of the pre-invoice (WP-A6): from where, to where, and that ' +
+      'the connection details may change — never a promise that the link survives, because ' +
+      'no panel in this release guarantees it. Read from the change request’s own ' +
+      'snapshot, so it states what the quote was built from even after the operator edits ' +
+      'the location.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'fromLocation',
+        type: 'STRING',
+        description: 'The location the service was in when the change was quoted.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'toLocation',
+        type: 'STRING',
+        description: 'The location it will be moved to.',
         required: true,
         repeatable: false,
       },

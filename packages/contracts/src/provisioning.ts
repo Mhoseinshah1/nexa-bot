@@ -175,6 +175,13 @@ export const OPERATION_TYPES = [
    * declares `DEVICE_LIMIT_ADJUSTMENT` and has both device-limit methods.
    */
   'ADD_DEVICES',
+  /*
+   * A move of an existing account to another location its own panel serves (WP-A6), to
+   * an absolute location key chosen when the change was quoted. Executed only on a panel
+   * whose adapter declares `LOCATION_CHANGE` and has both location methods. Free or paid:
+   * a paid one names its order, a free one names none.
+   */
+  'CHANGE_LOCATION',
 ] as const;
 export type OperationType = (typeof OPERATION_TYPES)[number];
 export const operationTypeSchema = z.enum(OPERATION_TYPES);
@@ -198,6 +205,7 @@ export const OPERATION_REQUIRED_CAPABILITIES: Readonly<Record<OperationType, rea
   ROTATE_SUBSCRIPTION: ['ROTATE_SUBSCRIPTION_LINK'],
   RECONCILE: [],
   ADD_DEVICES: ['DEVICE_LIMIT_ADJUSTMENT'],
+  CHANGE_LOCATION: ['LOCATION_CHANGE'],
 };
 
 export const OPERATION_STATES = [
@@ -425,6 +433,15 @@ export const IDEMPOTENT_MUTATIONS = [
   'ADD_TIME',
   'ROTATE_SUBSCRIPTION',
   'ADD_DEVICES',
+  /*
+   * WP-A6, on the same terms as `ADD_DEVICES`: the operation carries an ABSOLUTE location
+   * key and `ProviderAdapter.applyLocation` is specified as "make the location read as
+   * this". No adapter implements it and none declares `LOCATION_CHANGE`, so the property
+   * is a requirement on the first one that does — the same key sent twice changes nothing
+   * — to be measured on a real panel in the commit that declares it. A stranded move is
+   * verified by `readLocation`, never re-sent blind.
+   */
+  'CHANGE_LOCATION',
 ] as const satisfies readonly OperationType[];
 
 export function isIdempotentMutation(type: OperationType): boolean {
@@ -652,6 +669,12 @@ export interface OperationTarget {
    * not bought here — every type but `ADD_DEVICES`, which carries it and nothing else.
    */
   readonly deviceLimit: number | null;
+  /**
+   * The adapter-defined location key the account should then sit in (WP-A6). Absent or
+   * null: not bought here — every type but `CHANGE_LOCATION`, which carries it and
+   * nothing else. Optional on the type so the targets that predate it read unchanged.
+   */
+  readonly locationKey?: string | null;
 }
 
 /**
@@ -671,6 +694,13 @@ export const TARGETED_OPERATION_TYPES = [
    * through `readDeviceLimit` rather than against an allowance.
    */
   'ADD_DEVICES',
+  /*
+   * WP-A6. One open commercial action per service covers a location change too, and that
+   * is the rule the brief's "another change pending" and "a paid add-on or renewal
+   * racing" both need: a move and a renewal in flight together are two writes to one
+   * account nobody ordered. Verified by `readLocation` against `locationKey`.
+   */
+  'CHANGE_LOCATION',
 ] as const satisfies readonly OperationType[];
 
 export function operationTypeCarriesTarget(type: OperationType): boolean {

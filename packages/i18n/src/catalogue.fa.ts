@@ -319,6 +319,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.admin.operation_add_traffic': 'افزایش حجم سرویس',
   'bot.admin.operation_add_time': 'افزایش زمان سرویس',
   'bot.admin.operation_add_devices': 'افزایش کاربر / دستگاه سرویس',
+  'bot.admin.operation_change_location': 'تغییر لوکیشن سرویس',
   'bot.admin.operation_topup': 'افزایش موجودی کیف پول',
   'bot.admin.receipt_already_approved':
     'این رسید قبلاً تأیید شده است. اقدام دیگری روی آن ممکن نیست و چیزی جابه‌جا نشد.',
@@ -819,6 +820,21 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.service.devices_choice':
     '👥 تعداد کاربر / دستگاه مجاز فعلی این سرویس: {currentLimit}\n💵 قیمت هر کاربر اضافه: {unitPrice}\n➕ تا {remaining} کاربر دیگر قابل افزودن است.\n\nتعداد مورد نظر را انتخاب کنید:',
   'bot.service.devices_option': '➕ {quantity} کاربر — {price}',
+  // WP-A6: location change, shown only where the panel can really move the account.
+  'bot.service.change_location_button': '🌍 تغییر لوکیشن',
+  'bot.service.location_choice':
+    '🌍 تغییر لوکیشن سرویس\n\n📍 لوکیشن فعلی: {currentLocation}\n\nلوکیشن مقصد را انتخاب کنید:',
+  'bot.service.location_option': '📍 {location} — {price}',
+  'bot.service.location_option_free': '📍 {location} — رایگان',
+  'bot.service.location_confirm_free':
+    '🌍 تغییر لوکیشن سرویس\n\n📍 لوکیشن فعلی: {fromLocation}\n📍 لوکیشن جدید: {toLocation}\n💵 هزینه: رایگان\n\nℹ️ ممکن است پس از تغییر لوکیشن، لینک یا اطلاعات اتصال سرویس تغییر کند. در این صورت اطلاعات جدید برای شما ارسال می‌شود.\n\nبرای انجام تغییر، دکمهٔ تأیید را بزنید.',
+  'bot.service.location_confirm_button': '✅ تأیید تغییر لوکیشن',
+  'bot.service.location_requested':
+    '✅ درخواست تغییر لوکیشن ثبت شد و روی سرور انجام می‌شود.\nنتیجه از طریق همین ربات به شما اطلاع داده می‌شود.',
+  'bot.service.location_same': 'سرویس شما همین حالا در این لوکیشن است. تغییری انجام نشد.',
+  'bot.service.location_cooldown':
+    'لوکیشن این سرویس به‌تازگی تغییر کرده است. لطفاً بعداً دوباره تلاش کنید.',
+  'bot.service.location_limit': 'تعداد مجاز تغییر لوکیشن این سرویس در این بازه به پایان رسیده است.',
   // ONE message for "no package is configured", "the plan behind this renewal was
   // withdrawn" and "this panel cannot do it". The customer's next step is the same for
   // all three, and naming which would tell them about an operator's configuration;
@@ -958,11 +974,13 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.support.contact': 'برای ارتباط با پشتیبانی روی دکمهٔ زیر بزنید.',
   'bot.support.unconfigured': 'در حال حاضر راه ارتباطی با پشتیبانی تنظیم نشده است.',
   'bot.order.preinvoice':
-    '🧾 پیش فاکتور شما:\n\n👤 نام کاربر: {serviceUsername}\n🔐 نام سرویس: {productName}\n📆 مدت اعتبار: {durationDays}\n💵 قیمت: {total}\n👥 حجم اکانت: {trafficBytes}\n➕ حجم افزوده: {addedTrafficBytes}\n{customBlock}\n{devicesBlock}\n{discountLine}\n{cashbackLine}\n\n{locationsBlock}\n\n{featuresBlock}\n\n💰 موجودی کیف پول شما: {walletBalance}\n\n💰 سفارش شما آماده پرداخت است',
+    '🧾 پیش فاکتور شما:\n\n👤 نام کاربر: {serviceUsername}\n🔐 نام سرویس: {productName}\n📆 مدت اعتبار: {durationDays}\n💵 قیمت: {total}\n👥 حجم اکانت: {trafficBytes}\n➕ حجم افزوده: {addedTrafficBytes}\n{customBlock}\n{devicesBlock}\n{locationChangeBlock}\n{discountLine}\n{cashbackLine}\n\n{locationsBlock}\n\n{featuresBlock}\n\n💰 موجودی کیف پول شما: {walletBalance}\n\n💰 سفارش شما آماده پرداخت است',
   'bot.order.preinvoice_custom':
     '🛠 سرویس دلخواه\n📍 لوکیشن: {location}\n📦 حجم: {volumeBytes} × {pricePerGb} = {volumePrice}\n⏳ مدت: {durationDays} × {pricePerDay} = {timePrice}',
   'bot.order.preinvoice_devices':
     '👥 افزایش کاربر / دستگاه: {quantity} × {unitPrice}\n🔢 تعداد مجاز: {currentLimit} ← {targetLimit}',
+  'bot.order.preinvoice_location_change':
+    '🌍 تغییر لوکیشن: {fromLocation} ← {toLocation}\nℹ️ ممکن است پس از تغییر لوکیشن، لینک یا اطلاعات اتصال سرویس تغییر کند. در این صورت اطلاعات جدید برای شما ارسال می‌شود.',
   'bot.order.preinvoice_locations': '🌍 لوکیشن‌های محصول:\n{lines}',
   'bot.order.preinvoice_features': '{lines}',
   'bot.order.preinvoice_discount_line': '🏷 تخفیف: {discount} (قیمت پیش از تخفیف: {subtotal})',
