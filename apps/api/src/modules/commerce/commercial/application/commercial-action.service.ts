@@ -6,6 +6,7 @@ import {
   errors,
   COMMERCIAL_ORDER_PURPOSES,
   MAX_DEVICE_LIMIT,
+  MAX_MONEY_AMOUNT_MINOR,
   extendedDeviceLimit,
   isAddonPurchasable,
   isNexaError,
@@ -962,6 +963,18 @@ export class CommercialActionService {
       );
     }
     if (quantity > offer.remaining) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.SERVICE_ACTION_UNAVAILABLE,
+        'That many more users cannot be added to this service.',
+      );
+    }
+    /*
+     * A subtotal the order row cannot hold is refused before anything is written (Codex
+     * review #2 on PR #97): a rate stored before its save-time bound existed can still
+     * price `count × price` past PostgreSQL's bigint, which the insert would answer with
+     * a numeric overflow — a 500 — instead of a sentence.
+     */
+    if (offer.addon.price.amountMinor * BigInt(quantity) > MAX_MONEY_AMOUNT_MINOR) {
       throw errors.conflict(
         COMMERCE_ERROR_CODES.SERVICE_ACTION_UNAVAILABLE,
         'That many more users cannot be added to this service.',

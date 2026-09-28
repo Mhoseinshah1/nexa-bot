@@ -64,20 +64,27 @@ const CAPABLE_PROVIDERS = PROVIDER_DESCRIPTORS.filter((descriptor) =>
 
 /**
  * Every page of a keyset list, for the two scope pickers: a panel or product past the
- * first page must still be choosable. Bounded, so a runaway cursor cannot spin the page.
+ * first page must still be choosable, so this reads until the server says there is no
+ * next page — never a page count, which silently truncated the choices (Codex review #2
+ * on PR #97). A cursor the server has already handed back would loop for ever, so it is
+ * an error the picker shows, never a partial list presented as whole.
  */
-async function everyPage<T>(
+export async function everyPage<T>(
   page: (cursor: string | null) => Promise<{ items: readonly T[]; nextCursor: string | null }>,
 ): Promise<readonly T[]> {
   const items: T[] = [];
+  const seen = new Set<string>();
   let cursor: string | null = null;
-  for (let turn = 0; turn < 50; turn += 1) {
+  for (;;) {
     const next = await page(cursor);
     items.push(...next.items);
-    if (next.nextCursor === null) break;
+    if (next.nextCursor === null) return items;
+    if (seen.has(next.nextCursor)) {
+      throw new Error('the list returned a page cursor it had already returned');
+    }
+    seen.add(next.nextCursor);
     cursor = next.nextCursor;
   }
-  return items;
 }
 
 /** One page of rates. The list pages by the server's keyset cursor, never by a cap. */
@@ -457,6 +464,9 @@ export function ExtraDevicesPage({ denied, mayEdit }: { denied: boolean; mayEdit
             />
           </Field>
 
+          {(panels.isError || products.isError) && (
+            <Banner tone="danger">{t('web.extra_devices_scope_unavailable')}</Banner>
+          )}
           {maxQuantity === null && (
             <Banner tone="warn">
               {t('web.extra_devices_max_quantity_hint').replace(

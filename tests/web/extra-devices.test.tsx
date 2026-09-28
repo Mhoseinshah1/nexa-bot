@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
-import { ExtraDevicesPage } from '../../apps/web/src/pages/extra-devices';
+import { ExtraDevicesPage, everyPage } from '../../apps/web/src/pages/extra-devices';
 import { resolve } from '../../apps/web/src/app';
 import { panel, product, renderPage, stubApi } from './harness';
 
@@ -141,6 +141,34 @@ describe('the extra users / devices screen', () => {
     ]);
     renderPage(<ExtraDevicesPage denied={false} mayEdit />);
     await screen.findByText(/Tehran Z/u);
+    cleanup();
+  });
+
+  it('reads the scope lists until the last page, and refuses a repeated cursor', async () => {
+    // Past fifty pages — the count the first helper stopped at, silently.
+    let calls = 0;
+    const all = await everyPage(async (cursor) => {
+      calls += 1;
+      const at = cursor === null ? 0 : Number(cursor);
+      return { items: [at], nextCursor: at < 59 ? String(at + 1) : null };
+    });
+    expect(all).toHaveLength(60);
+    expect(calls).toBe(60);
+
+    await expect(
+      everyPage(async (cursor) => ({ items: [cursor], nextCursor: 'same' })),
+    ).rejects.toThrow(/already returned/u);
+  });
+
+  it('says so when a scope list could not be read whole', async () => {
+    stubApi([
+      { url: '/service-addons?', body: { addons: [], nextCursor: null } },
+      { url: '/panels?limit=100', body: { panels: [panel()], nextCursor: 'p-2' } },
+      { url: '/panels?limit=100&cursor=p-2', body: { panels: [], nextCursor: 'p-2' } },
+      { url: '/products', body: { products: [product()], nextCursor: null } },
+    ]);
+    renderPage(<ExtraDevicesPage denied={false} mayEdit />);
+    await screen.findByText(/فهرست کامل پنل‌ها یا محصولات خوانده نشد/u);
     cleanup();
   });
 
