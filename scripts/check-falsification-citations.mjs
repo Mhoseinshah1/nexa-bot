@@ -102,6 +102,7 @@ const RECORDS = [
   'docs/wp20-falsification.md',
   'docs/wp21-falsification.md',
   'docs/package-a-falsification.md',
+  'docs/package-b-falsification.md',
   'docs/package-c-falsification.md',
   'docs/package-d-falsification.md',
 ];
@@ -130,7 +131,7 @@ const RECORDS = [
  * have to be a map, and a map is a place for a record to be added with no entry
  * and checked against nothing — which is this script's own failure mode.
  */
-const EXPECTED = 2306;
+const EXPECTED = 2330;
 /**
  * A table whose last column is one of these is making citations.
  *

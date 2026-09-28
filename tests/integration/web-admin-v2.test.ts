@@ -738,9 +738,12 @@ describe('the Web Admin V2 surface', () => {
       );
       const byKey = new Map(body.settings.map((setting) => [setting.key, setting]));
 
-      for (const key of ['telegram.channels']) {
-        expect(byKey.get(key)?.consumer, key).toBe('PLANNED');
-      }
+      /*
+       * No setting is PLANNED any more. `telegram.channels` was the last, and it left the
+       * list with Package B: `ChannelMembershipService` reads it and the bot's central
+       * guard enforces every REQUIRED channel in it.
+       */
+      expect(body.settings.filter((setting) => setting.consumer === 'PLANNED')).toEqual([]);
       /*
        * `support.accounts` left that list with the customer UX completion: the support
        * screen's contact button is its first handle, so it is read.
@@ -762,6 +765,7 @@ describe('the Web Admin V2 surface', () => {
         'wallet.topup.minimum',
         'wallet.topup.presets',
         'support.accounts',
+        'telegram.channels',
       ]) {
         expect(byKey.get(key)?.consumer, key).toBe('ACTIVE');
       }

@@ -128,6 +128,13 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     'خوش آمدید. حساب شما در این ربات ساخته شد. برای دیدن سرویس‌ها دستور /catalog را بفرستید.',
   'bot.start.welcome_back': 'خوش آمدید. برای دیدن سرویس‌های قابل خرید دستور /catalog را بفرستید.',
   'bot.blocked': 'دسترسی این حساب به ربات بسته شده است.',
+  // Package B: mandatory channel membership.
+  'bot.channels.join_required':
+    'برای استفاده از ربات ابتدا در کانال‌های زیر عضو شوید، سپس دکمهٔ «✅ بررسی عضویت» را بزنید.',
+  'bot.channels.still_missing':
+    'هنوز عضویت شما در همهٔ کانال‌های لازم تأیید نشده است. پس از عضویت دوباره «✅ بررسی عضویت» را بزنید.',
+  'bot.channels.check_button': '✅ بررسی عضویت',
+  'bot.channels.join_private_button': 'عضویت در کانال {number}',
   // WP20, brief §3.5: the owner's sentence, word for word.
   'bot.blocked_spam':
     'کاربر گرامی، شما به دلیل ارسال پیام‌های سریع و مکرر (اسپم) از ربات مسدود شده‌اید. برای پیگیری با پشتیبانی در ارتباط باشید.',

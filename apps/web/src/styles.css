@@ -1108,6 +1108,17 @@ textarea.input {
 .input-group {
   display: flex;
 }
+/* Package B: a channel's handle, id, join link and flag — wraps on a narrow screen. */
+.channel-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.channel-row .input {
+  min-width: 0;
+  flex: 1 1 160px;
+}
 .input-group .input {
   flex: 1;
   border-start-end-radius: 0;

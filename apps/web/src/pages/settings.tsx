@@ -393,11 +393,28 @@ function HandleListEditor({
 }
 
 interface Channel {
-  readonly handle: string;
+  readonly handle?: string;
+  readonly chatId?: string;
+  readonly joinUrl?: string;
   readonly mandatory: boolean;
 }
 
-/** Revision 23: channels — add, remove, reorder, and a required-membership flag. */
+/** An emptied optional field is ABSENT, not an empty string the schema would refuse. */
+function withOptional(
+  item: Channel,
+  field: 'handle' | 'chatId' | 'joinUrl',
+  value: string,
+): Channel {
+  const next: Record<string, unknown> = { ...item };
+  if (value === '') delete next[field];
+  else next[field] = value;
+  return next as unknown as Channel;
+}
+
+/**
+ * Revision 23: channels — add, remove, reorder, and a required-membership flag.
+ * Package B: a numeric id and a join link, for a private channel, and the enforcement hint.
+ */
 function ChannelListEditor({
   value,
   onChange,
@@ -408,40 +425,65 @@ function ChannelListEditor({
   disabled: boolean;
 }) {
   return (
-    <ListEditor
-      items={value}
-      onChange={(next) => onChange([...next])}
-      addLabel={t('web.channel_add')}
-      emptyHint={t('web.channel_empty')}
-      disabled={disabled}
-      // `mandatory: false` rather than nothing. The flag is required by the
-      // schema precisely so that a channel cannot exist without an answer.
-      onAdd={() => ({ handle: '', mandatory: false })}
-      renderRow={(item, index, update) => (
-        <div className="input-group">
-          <label className="visually-hidden" htmlFor={`channel-${index}`}>
-            {`${t('web.channel_handle')} ${formatNumber(index + 1)}`}
-          </label>
-          <input
-            id={`channel-${index}`}
-            className="input ltr mono grow"
-            value={item.handle}
-            placeholder="@example"
-            disabled={disabled}
-            onChange={(event) => update({ ...item, handle: event.target.value })}
-          />
-          <Switch
-            checked={item.mandatory}
-            disabled={disabled}
-            label={`${t('web.channel_mandatory')} ${formatNumber(index + 1)}`}
-            onChange={(next) => update({ ...item, mandatory: next })}
-          />
-          <span className="muted small nowrap">
-            {item.mandatory ? t('web.channel_mandatory') : t('web.channel_optional')}
-          </span>
-        </div>
-      )}
-    />
+    <>
+      <p className="muted small">{t('web.channel_enforcement_hint')}</p>
+      <ListEditor
+        items={value}
+        onChange={(next) => onChange([...next])}
+        addLabel={t('web.channel_add')}
+        emptyHint={t('web.channel_empty')}
+        disabled={disabled}
+        // `mandatory: false` rather than nothing. The flag is required by the
+        // schema precisely so that a channel cannot exist without an answer.
+        onAdd={(): Channel => ({ mandatory: false })}
+        renderRow={(item, index, update) => (
+          <div className="channel-row">
+            <label className="visually-hidden" htmlFor={`channel-${index}`}>
+              {`${t('web.channel_handle')} ${formatNumber(index + 1)}`}
+            </label>
+            <input
+              id={`channel-${index}`}
+              className="input ltr mono grow"
+              value={item.handle ?? ''}
+              placeholder="@example"
+              disabled={disabled}
+              onChange={(event) => update(withOptional(item, 'handle', event.target.value))}
+            />
+            <label className="visually-hidden" htmlFor={`channel-id-${index}`}>
+              {`${t('web.channel_chat_id')} ${formatNumber(index + 1)}`}
+            </label>
+            <input
+              id={`channel-id-${index}`}
+              className="input ltr mono"
+              value={item.chatId ?? ''}
+              placeholder="-1001234567890"
+              disabled={disabled}
+              onChange={(event) => update(withOptional(item, 'chatId', event.target.value))}
+            />
+            <label className="visually-hidden" htmlFor={`channel-url-${index}`}>
+              {`${t('web.channel_join_url')} ${formatNumber(index + 1)}`}
+            </label>
+            <input
+              id={`channel-url-${index}`}
+              className="input ltr mono grow"
+              value={item.joinUrl ?? ''}
+              placeholder="https://t.me/+invite"
+              disabled={disabled}
+              onChange={(event) => update(withOptional(item, 'joinUrl', event.target.value))}
+            />
+            <Switch
+              checked={item.mandatory}
+              disabled={disabled}
+              label={`${t('web.channel_mandatory')} ${formatNumber(index + 1)}`}
+              onChange={(next) => update({ ...item, mandatory: next })}
+            />
+            <span className="muted small nowrap">
+              {item.mandatory ? t('web.channel_mandatory') : t('web.channel_optional')}
+            </span>
+          </div>
+        )}
+      />
+    </>
   );
 }
 
@@ -758,11 +800,17 @@ function asChannelList(value: unknown): readonly Channel[] {
   return value.flatMap((item) => {
     if (typeof item !== 'object' || item === null) return [];
     const record = item as Record<string, unknown>;
+    // Package B: an absent optional field stays absent, so a round-trip does not add an
+    // empty string the schema would refuse.
+    const text = (field: 'handle' | 'chatId' | 'joinUrl') =>
+      typeof record[field] === 'string' && record[field] !== '' ? { [field]: record[field] } : {};
     return [
       {
-        handle: typeof record['handle'] === 'string' ? record['handle'] : '',
+        ...text('handle'),
+        ...text('chatId'),
+        ...text('joinUrl'),
         mandatory: record['mandatory'] === true,
-      },
+      } as Channel,
     ];
   });
 }
