@@ -56,7 +56,7 @@ M=[
  ('F-19',[(SVC,"          if (replayed.serviceId !== input.serviceId || replayed.fromCustomerId !== sender.id) {","          if ((false as boolean) && (replayed.serviceId !== input.serviceId || replayed.fromCustomerId !== sender.id)) {")],I,'answers a replayed key'),
  ('F-20',[(SVC,"            newest !== null &&\n            recipient !== null &&\n            newest.fromCustomerId === sender.id &&\n            newest.toCustomerId === recipient.id\n","            (false as boolean)\n")],I,'double tap'),
  ('F-21',[(SVC,"            newest.fromCustomerId === sender.id &&\n            newest.toCustomerId === recipient.id\n","            newest.fromCustomerId === sender.id\n")],I,'two recipients'),
- ('F-22',[(REPO,"      .orderBy(desc(serviceOwnershipTransfers.seq))","      .orderBy(asc(serviceOwnershipTransfers.seq))"),(REPO,"import { and, desc,","import { and, asc, desc,")],I,'given back'),
+ ('F-22',[(REPO,"      .orderBy(desc(serviceOwnershipTransfers.seq))","      .orderBy(asc(serviceOwnershipTransfers.seq))"),(REPO,"import { and, count, desc,","import { and, asc, count, desc,")],I,'given back'),
  # F4/F5 — what moves, and what is written beside it
  ('F-23',[(REPO,".set({ customerId: input.toCustomerId, customerNote: null, updatedAt: input.now })",".set({ customerId: input.toCustomerId, updatedAt: input.now })")],I,'clears the sender'),
  ('F-24',[(SVC,"        await this.deps.audit.record(\n          scope,\n          actor,\n          {\n            action: 'service.transfer',","        if ((false as boolean)) await this.deps.audit.record(\n          scope,\n          actor,\n          {\n            action: 'service.transfer',")],I,'confirmed with the brief'),
