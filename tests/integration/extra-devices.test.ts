@@ -4,6 +4,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import {
   COMMERCE_ERROR_CODES,
   EMPTY_PRODUCT_DISPLAY,
+  MAX_MONEY_AMOUNT_MINOR,
   money,
   providerDescriptor,
   type ActorContext,
@@ -754,6 +755,51 @@ describe('extra users / devices on an existing service (WP-A5)', () => {
         code: COMMERCE_ERROR_CODES.SERVICE_ACTION_UNAVAILABLE,
       });
       expect(await orderState(two.order.id)).toBe('DRAFT');
+    });
+
+    it('refuses a rate, and a quote, whose total the order row could not hold', async () => {
+      /*
+       * Codex review #2 on PR #97. The price bound admits any bigint and the quote is
+       * price × count, so a rate near the ceiling overflowed the order insert — a 500.
+       */
+      const service = await activeService('overflow');
+      const half = MAX_MONEY_AMOUNT_MINOR / 2n + 1n;
+      const draftOf = (maxQuantity: number, amount: bigint) => ({
+        kind: 'ADD_DEVICES' as const,
+        title: 'گران',
+        sortOrder: 0,
+        specification: {
+          kind: 'ADD_DEVICES' as const,
+          trafficBytes: null,
+          durationDays: null,
+          maxQuantity,
+        },
+        price: money(amount, 'IRT'),
+      });
+      // (a) At save: a maximum of two at over half the ceiling is refused, on create and edit.
+      await expect(
+        ctx.container.serviceAddons.create(tenantA, owner, {
+          idempotencyKey: 'dev-overflow-create',
+          draft: draftOf(2, half),
+        }),
+      ).rejects.toMatchObject({ code: COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID });
+      const rate = await offeredRate('overflow', 3);
+      await expect(
+        ctx.container.serviceAddons.update(tenantA, owner, {
+          idempotencyKey: 'dev-overflow-edit',
+          addonId: rate,
+          edit: draftOf(2, half),
+        }),
+      ).rejects.toMatchObject({ code: COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID });
+
+      // (b) A rate stored before that bound existed: the quote refuses, and writes nothing.
+      await ctx.container.database.db.execute(
+        sql`UPDATE service_addons SET price_amount = ${half.toString()}::bigint WHERE id = ${rate}`,
+      );
+      await expect(draftDevices(service.id, rate, 2, 'overflow-quote')).rejects.toMatchObject({
+        code: COMMERCE_ERROR_CODES.SERVICE_ACTION_UNAVAILABLE,
+      });
+      expect(await countOrders('ADD_DEVICES')).toBe(0);
     });
 
     it('prices a service from the most specific rate that applies to it', async () => {

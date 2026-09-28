@@ -1,5 +1,6 @@
 import {
   COMMERCE_ERROR_CODES,
+  MAX_MONEY_AMOUNT_MINOR,
   SERVICE_ADDON_PAGE_DEFAULT,
   SERVICE_ADDON_PAGE_MAX,
   errors,
@@ -152,6 +153,7 @@ export class ServiceAddonService {
         await this.assertScopeActive(scope, tx);
         await this.assertPriceCurrency(scope, input.draft.price, tx);
         this.assertAmountMatchesKind(input.draft.kind, input.draft);
+        this.assertMaximumIsPayable(input.draft.kind, input.draft);
         await this.assertScopeTargets(scope, input.draft.kind, input.draft, tx);
 
         const created = await this.deps.repository.create(
@@ -256,6 +258,7 @@ export class ServiceAddonService {
          * mis-wired route away.
          */
         this.assertAmountMatchesKind(before.kind, input.edit);
+        this.assertMaximumIsPayable(before.kind, input.edit);
         await this.assertScopeTargets(scope, before.kind, input.edit, tx);
 
         const after = await this.deps.repository.update(
@@ -431,6 +434,24 @@ export class ServiceAddonService {
       throw errors.validation(
         COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
         'That amount is not the kind this add-on sells.',
+      );
+    }
+  }
+
+  /**
+   * The largest purchase an `ADD_DEVICES` rate allows must be an amount this system can
+   * store (Codex review #2 on PR #97). The price bound alone admits any bigint, and the
+   * quote is price × count, so a rate priced near the ceiling with a maximum of two would
+   * write an order total PostgreSQL cannot hold — a 500 at the customer's tap instead of
+   * a refusal here, where the operator can change the figure.
+   */
+  private assertMaximumIsPayable(kind: ServiceAddonKind, edit: ServiceAddonEdit): void {
+    const maxQuantity = edit.specification.maxQuantity ?? null;
+    if (kind !== 'ADD_DEVICES' || edit.price === null || maxQuantity === null) return;
+    if (edit.price.amountMinor * BigInt(maxQuantity) > MAX_MONEY_AMOUNT_MINOR) {
+      throw errors.validation(
+        COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+        'That price for the maximum number of users is past the largest amount this system stores.',
       );
     }
   }
