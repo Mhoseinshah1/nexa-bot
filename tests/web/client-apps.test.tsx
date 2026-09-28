@@ -271,6 +271,24 @@ describe('the apps page', () => {
     expect(screen.queryByText(t('web.changed_elsewhere'), { exact: false })).toBeNull();
   });
 
+  it('previews a stored bare unsafe link in the name and description as the bot sends it (C6)', async () => {
+    stubApi([
+      listAndRow(
+        [app({ name: 'App http://x.example/a.apk', description: 'از www.x.example بگیرید' })],
+        app(),
+      ),
+    ]);
+    renderPage(<ClientAppsPage denied={false} mayEdit />);
+    fireEvent.click(await screen.findByRole('button', { name: t('web.client_apps_edit') }));
+    const preview = screen.getByTestId('client-app-preview');
+    expect(preview.textContent).toContain('🟢 App');
+    expect(preview.textContent).not.toContain('http://');
+    expect(preview.textContent).not.toContain('www.');
+    // And the form refuses to save it back.
+    fireEvent.click(screen.getByRole('button', { name: t('web.client_apps_save') }));
+    expect((await screen.findAllByText(t('web.client_apps_problem_link'))).length).toBe(2);
+  });
+
   it('asks for nothing it may not see', () => {
     const api = stubApi([listAndRow([app()], app())]);
     renderPage(<ClientAppsPage denied mayEdit={false} />);

@@ -368,6 +368,25 @@ describe('the customer’s catalogue', () => {
     ).toEqual(['https://video.example.com/a', undefined, undefined]);
   });
 
+  it('neutralises a stored bare unsafe link in the name and description, keeping a safe one (C6)', async () => {
+    const written = record({
+      id: uuid(9),
+      icon: '🟢',
+      name: 'App http://x.example/a.apk',
+      description: 'از www.x.example بگیرید، یا https://ok.example/a.',
+    });
+    const reader = catalog([written], []);
+    const [listed] = await reader.appsFor(TENANT, CUSTOMER, 'ANDROID');
+    expect(listed?.label).toBe('🟢 App ');
+    const detail = await reader.appFor(TENANT, CUSTOMER, uuid(9));
+    expect(detail?.title).toBe('🟢 App ');
+    expect(detail?.description).toBe('از  بگیرید، یا https://ok.example/a.');
+    for (const text of [listed?.label, detail?.title, detail?.description]) {
+      expect(text).not.toContain('http://');
+      expect(text).not.toContain('www.');
+    }
+  });
+
   it('answers a disabled, unknown or malformed id with nothing', async () => {
     const reader = catalog(rows, []);
     expect(await reader.appFor(TENANT, CUSTOMER, uuid(2))).toBeNull();
