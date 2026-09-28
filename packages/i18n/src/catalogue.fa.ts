@@ -285,6 +285,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.admin.receipt_duration': '{durationDays}',
   'bot.admin.receipt_traffic': '{trafficBytes}',
   'bot.admin.operation_new_service': 'خرید سرویس جدید',
+  'bot.admin.operation_custom_service': 'خرید سرویس دلخواه',
   'bot.admin.operation_renew': 'تمدید سرویس',
   'bot.admin.operation_add_traffic': 'افزایش حجم سرویس',
   'bot.admin.operation_add_time': 'افزایش زمان سرویس',

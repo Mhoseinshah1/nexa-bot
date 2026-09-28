@@ -1978,6 +1978,13 @@ export const TEMPLATES = [
     placeholders: [],
   },
   {
+    key: 'bot.admin.operation_custom_service',
+    description:
+      'The operation label inside `bot.admin.receipt` for a custom service (Package D).',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
     key: 'bot.admin.operation_renew',
     description:
       'The operation label inside `bot.admin.receipt` for a renewal of an existing service.',
