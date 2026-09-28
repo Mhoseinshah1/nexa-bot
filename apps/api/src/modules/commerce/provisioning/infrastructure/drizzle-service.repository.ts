@@ -87,6 +87,7 @@ function toRecord(row: Row): ServiceRecord {
     expiresAt: row.expiresAt,
     trafficLimitBytes: row.trafficLimitBytes,
     trafficUsedBytes: row.trafficUsedBytes,
+    deviceLimit: row.deviceLimit,
     usageSyncedAt: row.usageSyncedAt,
     deliveryState: row.deliveryState as ServiceDeliveryState,
     deliveryAttempts: row.deliveryAttempts,
@@ -135,7 +136,7 @@ const NO_PAID_ACTION_WAITING = sql`NOT EXISTS (
   SELECT 1 FROM provisioning_operations waiting
    WHERE waiting.tenant_id = ${services.tenantId}
      AND waiting.service_id = ${services.id}
-     AND waiting.type IN ('RENEW', 'ADD_TRAFFIC', 'ADD_TIME')
+     AND waiting.type IN ('RENEW', 'ADD_TRAFFIC', 'ADD_TIME', 'ADD_DEVICES')
      AND waiting.state IN ('PLANNED', 'IN_FLIGHT')
 )`;
 
@@ -176,6 +177,7 @@ export class DrizzleServiceRepository implements ServiceRepository {
         subscriptionRef: draft.subscriptionRef,
         providerClientId: draft.providerClientId,
         trafficLimitBytes: draft.trafficLimitBytes,
+        deviceLimit: draft.deviceLimit,
         createdAt: now,
         updatedAt: now,
       })
@@ -985,6 +987,7 @@ export class DrizzleServiceRepository implements ServiceRepository {
     allowance: {
       readonly expiresAt: Date | null;
       readonly trafficLimitBytes: bigint | null;
+      readonly deviceLimit?: number | null;
     },
     now: Date,
     tx: TransactionScope,
@@ -994,6 +997,10 @@ export class DrizzleServiceRepository implements ServiceRepository {
     if (allowance.expiresAt !== null) patch['expiresAt'] = allowance.expiresAt;
     if (allowance.trafficLimitBytes !== null) {
       patch['trafficLimitBytes'] = allowance.trafficLimitBytes;
+    }
+    // WP-A5: the entitlement an `ADD_DEVICES` applied, from its absolute target.
+    if (allowance.deviceLimit !== undefined && allowance.deviceLimit !== null) {
+      patch['deviceLimit'] = allowance.deviceLimit;
     }
     const rows = await this.exec(tx)
       .update(services)

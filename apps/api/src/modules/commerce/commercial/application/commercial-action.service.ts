@@ -5,6 +5,8 @@ import {
   ORDER_MACHINE,
   errors,
   COMMERCIAL_ORDER_PURPOSES,
+  MAX_DEVICE_LIMIT,
+  extendedDeviceLimit,
   isAddonPurchasable,
   isNexaError,
   isPurchasable,
@@ -50,7 +52,11 @@ import type {
   OrderRepository,
   OrderTotalsRecord,
 } from '../../orders/application/ports.js';
-import { quoteAddon, quoteProduct } from '../../orders/application/order-pricing.js';
+import {
+  quoteAddon,
+  quoteDeviceAddon,
+  quoteProduct,
+} from '../../orders/application/order-pricing.js';
 import type { ResellerService } from '../../resellers/application/reseller.service.js';
 import type { PricingService } from '../../pricing/application/pricing.service.js';
 import type { ServiceRecord, ServiceRepository } from '../../provisioning/application/ports.js';
@@ -124,6 +130,22 @@ export interface CommercialOffer {
   readonly product: ProductRecord | null;
   /** The quantities on offer, when this is a quantity purchase. */
   readonly addons: readonly ServiceAddonRecord[];
+  /** WP-A5: the extra-users offer, when this is one; null for every other kind. */
+  readonly devices: DeviceOffer | null;
+}
+
+/**
+ * What a service may be sold in extra users / devices, right now (WP-A5).
+ *
+ * All of it server-derived: the limit from the service's own record, the rate from the one
+ * add-on that applies to it, and `remaining` from the rate's maximum less what the service
+ * has already been sold and not given back — counted from live orders, never a counter —
+ * and never past `MAX_DEVICE_LIMIT`.
+ */
+export interface DeviceOffer {
+  readonly addon: ServiceAddonRecord & { readonly price: Money };
+  readonly currentLimit: number;
+  readonly remaining: number;
 }
 
 export interface CommercialActionServiceDeps {
@@ -213,7 +235,18 @@ export class CommercialActionService {
 
     if (kind === 'RENEW') {
       const product = await this.renewableProduct(scope, service);
-      return { kind, product, addons: [] };
+      return { kind, product, addons: [], devices: null };
+    }
+
+    if (kind === 'ADD_DEVICES') {
+      const devices = await this.deviceOffer(scope, service, null);
+      if (devices === null) {
+        throw errors.conflict(
+          COMMERCE_ERROR_CODES.SERVICE_ACTION_UNAVAILABLE,
+          'This service cannot be given more users right now.',
+        );
+      }
+      return { kind, product: null, addons: [devices.addon], devices };
     }
 
     const addons = await this.deps.addons.listOfferable(
@@ -228,7 +261,7 @@ export class CommercialActionService {
         'Nothing of that kind is offered.',
       );
     }
-    return { kind, product: null, addons: addons.items };
+    return { kind, product: null, addons: addons.items, devices: null };
   }
 
   /**
@@ -282,6 +315,15 @@ export class CommercialActionService {
         available.push(kind);
         continue;
       }
+      /*
+       * WP-A5: extra users are offered only with a recorded limit to raise, a rate that
+       * applies to this service, and room left under its maximum — the same conditions
+       * `draft` and `confirm` re-decide.
+       */
+      if (kind === 'ADD_DEVICES') {
+        if ((await this.deviceOffer(scope, service, null)) !== null) available.push(kind);
+        continue;
+      }
       const offered = await this.deps.addons.listOfferable(
         scope,
         kind,
@@ -315,16 +357,24 @@ export class CommercialActionService {
       readonly kind: CommercialKind;
       /** Required for a quantity purchase, refused for a renewal. */
       readonly addonId?: string;
+      /**
+       * WP-A5, `ADD_DEVICES` only: how many extra users the customer chose. Bounded on the
+       * server by the rate's maximum and what the service was already sold; never a price.
+       */
+      readonly quantity?: number;
       readonly idempotencyKey: string;
     },
   ): Promise<{ readonly order: OrderRecord; readonly action: CommercialActionRecord }> {
     const serviceId = this.serviceId(input.serviceId);
     const addonId = input.addonId === undefined ? null : this.addonId(input.addonId);
+    const quantity = input.quantity ?? null;
     const requestHash = hashRequest({
       customerId,
       serviceId,
       kind: input.kind,
       addonId,
+      // Only an extra-users purchase names one, so every other kind hashes as before.
+      ...(input.kind === 'ADD_DEVICES' ? { quantity } : {}),
     });
     const denial = {
       action: `service.${input.kind.toLowerCase()}_draft`,
@@ -383,7 +433,9 @@ export class CommercialActionService {
         const priced =
           input.kind === 'RENEW'
             ? await this.quoteRenewal(scope, service, now, tx)
-            : await this.quoteAddon(scope, service, input.kind, addonId, now, tx);
+            : input.kind === 'ADD_DEVICES'
+              ? await this.quoteDevices(scope, service, addonId, quantity, now, tx)
+              : await this.quoteAddon(scope, service, input.kind, addonId, now, tx);
 
         /*
          * A reseller's tier must grant the action (`docs/wp9-reseller-audit.md` R5, R6):
@@ -429,6 +481,8 @@ export class CommercialActionService {
             addonId: priced.addonId,
             purchasedTrafficBytes: priced.purchasedTrafficBytes,
             purchasedDurationDays: priced.purchasedDurationDays,
+            purchasedDeviceCount: priced.purchasedDeviceCount,
+            addonVersion: priced.addonVersion,
             amount: priced.totals.total,
             now,
           },
@@ -461,6 +515,9 @@ export class CommercialActionService {
               addonId: priced.addonId,
               purchasedTrafficBytes: priced.purchasedTrafficBytes.toString(),
               purchasedDurationDays: priced.purchasedDurationDays,
+              purchasedDeviceCount: priced.purchasedDeviceCount,
+              addonVersion: priced.addonVersion,
+              targetDeviceLimit: priced.line.specification.deviceLimit,
               amountMinor: priced.totals.total.amountMinor.toString(),
               currency: priced.totals.currency,
             },
@@ -592,6 +649,7 @@ export class CommercialActionService {
         this.assertLifecycleAllows(action.kind, service);
         await this.assertPanelCanPerform(scope, service, action.kind, tx);
         await this.assertStillOffered(scope, action, tx);
+        if (action.kind === 'ADD_DEVICES') await this.assertDevicesStillFit(scope, action, tx);
 
         // What the quote spent, redeemed under the rules' locks, before the transition
         // (WP8 P6) — the same call `OrderService.confirm` makes, for the same reasons.
@@ -740,6 +798,8 @@ export class CommercialActionService {
       addonId: null,
       purchasedTrafficBytes: product.specification.trafficBytes,
       purchasedDurationDays: product.specification.durationDays,
+      purchasedDeviceCount: 0,
+      addonVersion: null,
       totals,
       line: {
         productId: product.id,
@@ -842,6 +902,8 @@ export class CommercialActionService {
       addonId: addon.id,
       purchasedTrafficBytes: trafficBytes,
       purchasedDurationDays: durationDays,
+      purchasedDeviceCount: 0,
+      addonVersion: null,
       totals,
       line: {
         /*
@@ -861,6 +923,156 @@ export class CommercialActionService {
         quantity: MAX_ORDER_QUANTITY,
       },
     };
+  }
+
+  /**
+   * An extra-users purchase (WP-A5): `quantity` × the one rate that applies to this service.
+   *
+   * The id names the rate the customer was shown and must still be the one that applies;
+   * the quantity must fit what the service may still be sold. The price and the target
+   * limit come off the rows, never off the callback, and the target is written onto the
+   * order line — `line_device_limit` — as the figure the quote promised.
+   */
+  private async quoteDevices(
+    scope: TenantContext,
+    service: ServiceRecord,
+    addonId: ServiceAddonId | null,
+    quantity: number | null,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<PricedAction> {
+    if (addonId === null || quantity === null || !Number.isSafeInteger(quantity) || quantity < 1) {
+      throw errors.validation(
+        COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+        'That action needs a rate and a quantity to buy.',
+      );
+    }
+    const offer = await this.deviceOffer(scope, service, null, tx);
+    if (offer === null) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.SERVICE_ACTION_UNAVAILABLE,
+        'This service cannot be given more users right now.',
+      );
+    }
+    if (offer.addon.id !== addonId) {
+      // A button drawn from a rate that has since been replaced, withdrawn or re-scoped.
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.ADDON_NOT_PURCHASABLE,
+        'That rate no longer applies to this service.',
+      );
+    }
+    if (quantity > offer.remaining) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.SERVICE_ACTION_UNAVAILABLE,
+        'That many more users cannot be added to this service.',
+      );
+    }
+    await this.assertSalesCurrency(scope, offer.addon.price, tx);
+    const target = extendedDeviceLimit(offer.currentLimit, quantity);
+    if (target === null) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.SERVICE_ACTION_UNAVAILABLE,
+        'That many more users cannot be added to this service.',
+      );
+    }
+
+    // Not a product: only a rule scoped to neither product nor category reaches it.
+    const { totals } = await this.deps.pricing.price(
+      scope,
+      {
+        base: quoteDeviceAddon(offer.addon, quantity, now),
+        purpose: 'ADD_DEVICES',
+        productId: null,
+        categoryId: null,
+        customerId: service.customerId,
+        now,
+      },
+      tx,
+    );
+    return {
+      productId: null,
+      addonId: offer.addon.id,
+      purchasedTrafficBytes: 0n,
+      purchasedDurationDays: 0,
+      purchasedDeviceCount: quantity,
+      addonVersion: offer.addon.version,
+      totals,
+      line: {
+        // Navigation, as for a package: the SERVICE's product and panel.
+        productId: service.productId,
+        panelId: service.panelId,
+        title: offer.addon.title,
+        category: null,
+        /*
+         * No bytes and no days were bought — the zeros `orders_quantity_line_check` pins
+         * for this purpose — and `deviceLimit` is the TARGET the quote promised.
+         */
+        specification: { durationDays: 0, trafficBytes: 0n, deviceLimit: target },
+        unitPrice: offer.addon.price,
+        quantity,
+      },
+    };
+  }
+
+  /**
+   * The extra-users offer for one service, or null when there is none (WP-A5).
+   *
+   * `excludeOrderId` leaves the order being confirmed out of the live count, so it is not
+   * counted against itself.
+   */
+  private async deviceOffer(
+    scope: TenantContext,
+    service: ServiceRecord,
+    excludeOrderId: OrderId | null,
+    tx?: unknown,
+  ): Promise<DeviceOffer | null> {
+    if (service.deviceLimit === null) return null;
+    const rate = await this.deps.addons.deviceRateFor(
+      scope,
+      { panelId: service.panelId, productId: service.productId },
+      await this.salesCurrency(scope, tx),
+      tx,
+    );
+    const maxQuantity = rate?.specification.maxQuantity ?? null;
+    if (rate === null || rate.price === null || maxQuantity === null) return null;
+    const sold = await this.deps.actions.liveDeviceQuantity(scope, service.id, excludeOrderId, tx);
+    const remaining = Math.min(maxQuantity - sold, MAX_DEVICE_LIMIT - service.deviceLimit);
+    if (remaining < 1) return null;
+    return {
+      addon: { ...rate, price: rate.price },
+      currentLimit: service.deviceLimit,
+      remaining,
+    };
+  }
+
+  /**
+   * Confirmation re-decides what can make an extra-users quote unfulfillable (WP-A5).
+   *
+   * Under the ORDER's lock and then the service's — the order settlement takes them in —
+   * so two confirmations for one service count each other's live orders rather than both
+   * passing on the same reading. The quote is honoured, never re-priced: what is re-decided
+   * is that the rate still applies and the quantity still fits beneath its maximum.
+   */
+  private async assertDevicesStillFit(
+    scope: TenantContext,
+    action: CommercialActionRecord,
+    tx: TransactionScope,
+  ): Promise<void> {
+    await this.deps.orders.lock(scope, action.orderId, tx);
+    await this.deps.services.lockLifecycle(scope, action.serviceId, tx);
+    const service = await this.deps.services.findById(scope, action.serviceId, tx);
+    const offer =
+      service === null ? null : await this.deviceOffer(scope, service, action.orderId, tx);
+    if (
+      offer === null ||
+      offer.addon.id !== action.addonId ||
+      action.purchasedDeviceCount > offer.remaining
+    ) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.SERVICE_ACTION_UNAVAILABLE,
+        'That many more users can no longer be added to this service.',
+      );
+    }
   }
 
   /* -------------------------------------------------------------- guards */
@@ -1077,6 +1289,8 @@ interface PricedAction {
   readonly addonId: ServiceAddonId | null;
   readonly purchasedTrafficBytes: bigint;
   readonly purchasedDurationDays: number;
+  readonly purchasedDeviceCount: number;
+  readonly addonVersion: number | null;
   readonly totals: OrderTotalsRecord;
   readonly line: OrderRecord['line'];
 }

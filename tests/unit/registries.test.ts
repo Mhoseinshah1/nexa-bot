@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  canAdjustDeviceLimit,
   failureOutcome,
   isIdempotentMutation,
   isMutatingOperation,
@@ -496,7 +497,56 @@ describe('the provider registry', () => {
         expect(typeof methods['lookupUser'], `${type}.lookupUser`).toBe('function');
         expect(isServiceAdapter(adapter), `${type} is a service adapter`).toBe(true);
       }
+      /*
+       * WP-A5: extra users need the READ as well as the write — the read is what settles
+       * a write whose answer was lost — so a declaration needs both methods.
+       */
+      if (claimed.includes('DEVICE_LIMIT_ADJUSTMENT')) {
+        expect(typeof methods['readDeviceLimit'], `${type}.readDeviceLimit`).toBe('function');
+        expect(typeof methods['applyDeviceLimit'], `${type}.applyDeviceLimit`).toBe('function');
+      }
     }
+  });
+
+  /*
+   * WP-A5, the acceptance gap stated as a test. No provider in this release has been
+   * shown to raise a live account's device limit — Marzban v0.8.4 and RickPanel's
+   * contract have no such field, and 3X-UI is frozen at its capabilities by the owner —
+   * so the guard that draws the customer's button and runs the executor branch answers
+   * NO for every registered adapter. Declaring one is a code change that must come with
+   * its real-panel acceptance, and it has to edit this line to land.
+   */
+  it('lets no registered provider adjust a device limit, and requires both methods to', () => {
+    for (const type of IMPLEMENTED_PROVIDER_TYPES) {
+      const adapter = providerAdapter(type);
+      expect(adapter.supports('DEVICE_LIMIT_ADJUSTMENT'), type).toBe(false);
+      if (isServiceAdapter(adapter)) expect(canAdjustDeviceLimit(adapter), type).toBe(false);
+    }
+    const base = providerAdapter('marzban');
+    if (!isServiceAdapter(base)) throw new Error('marzban has a service half');
+    const declaring = Object.assign(Object.create(base) as typeof base, {
+      supports: (capability: ProviderCapability) => capability === 'DEVICE_LIMIT_ADJUSTMENT',
+    });
+    const read = async () => ({ ok: true, found: false }) as const;
+    // Declared with neither method, with one of the two, then with both.
+    expect(canAdjustDeviceLimit(declaring)).toBe(false);
+    expect(
+      canAdjustDeviceLimit(Object.assign(Object.create(declaring), { readDeviceLimit: read })),
+    ).toBe(false);
+    expect(
+      canAdjustDeviceLimit(Object.assign(Object.create(declaring), { applyDeviceLimit: read })),
+    ).toBe(false);
+    expect(
+      canAdjustDeviceLimit(
+        Object.assign(Object.create(declaring), { readDeviceLimit: read, applyDeviceLimit: read }),
+      ),
+    ).toBe(true);
+    // Both methods and no declaration is still no.
+    expect(
+      canAdjustDeviceLimit(
+        Object.assign(Object.create(base), { readDeviceLimit: read, applyDeviceLimit: read }),
+      ),
+    ).toBe(false);
   });
 });
 
@@ -550,7 +600,12 @@ describe('the operation dispatch cannot fail open', () => {
     // The three commercial types joined in 4F, in the commit that wrote their dispatch
     // branches — not in the one that wrote `applyAllowance`, and not in the one that
     // planned their operations.
+    //
+    // `ADD_DEVICES` (WP-A5) joined with its dispatch branch, making eleven; the title keeps
+    // "ten" because falsification ledgers cite it by name. No descriptor declares its
+    // capability, so `decideOperability` refuses it on every panel this release knows.
     expect([...PERFORMABLE_OPERATION_TYPES].sort()).toEqual([
+      'ADD_DEVICES',
       'ADD_TIME',
       'ADD_TRAFFIC',
       'PROVISION',

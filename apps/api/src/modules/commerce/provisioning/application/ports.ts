@@ -52,6 +52,11 @@ export interface ServiceRecord {
   /** Zero means unlimited, matching the product snapshot it came from. */
   readonly trafficLimitBytes: bigint;
   readonly trafficUsedBytes: bigint;
+  /**
+   * The device / connection limit this service is entitled to (WP-A5), or null when none
+   * is recorded. Raised only by an `ADD_DEVICES` the panel applied.
+   */
+  readonly deviceLimit: number | null;
   readonly usageSyncedAt: Date | null;
   readonly deliveryState: ServiceDeliveryState;
   readonly deliveryAttempts: number;
@@ -101,6 +106,8 @@ export interface ServiceDraft {
   readonly subscriptionRef: string;
   readonly providerClientId: string;
   readonly trafficLimitBytes: bigint;
+  /** WP-A5: the order line's frozen device limit, the entitlement's starting point. */
+  readonly deviceLimit: number | null;
 }
 
 /**
@@ -556,6 +563,8 @@ export interface ServiceRepository {
     allowance: {
       readonly expiresAt: Date | null;
       readonly trafficLimitBytes: bigint | null;
+      /** WP-A5: the device limit an `ADD_DEVICES` applied. Null (or absent): untouched. */
+      readonly deviceLimit?: number | null;
     },
     now: Date,
     tx: TransactionScope,

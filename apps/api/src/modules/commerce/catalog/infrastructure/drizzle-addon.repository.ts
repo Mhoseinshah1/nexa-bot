@@ -1,7 +1,20 @@
-import { and, asc, eq, getTableColumns, isNotNull, sql, type SQL } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  getTableColumns,
+  isNotNull,
+  isNull,
+  or,
+  sql,
+  type SQL,
+} from 'drizzle-orm';
 import { money } from '@nexa/contracts';
 import type {
   CurrencyCode,
+  PanelId,
+  ProductId,
   ServiceAddonId,
   ServiceAddonKind,
   ServiceAddonStatus,
@@ -134,7 +147,8 @@ export class DrizzleServiceAddonRepository implements ServiceAddonRepository {
      */
     const rows = await this.exec(tx)
       .update(serviceAddons)
-      .set({ ...columnsFor(edit), updatedAt: now })
+      // Every edit is a new version of the rule (WP-A5): a purchase names the one it saw.
+      .set({ ...columnsFor(edit), version: sql`${serviceAddons.version} + 1`, updatedAt: now })
       .where(and(eq(serviceAddons.tenantId, tenantId), eq(serviceAddons.id, id)))
       .returning();
     const row = rows[0];
@@ -201,6 +215,43 @@ export class DrizzleServiceAddonRepository implements ServiceAddonRepository {
 
     return { items: rows.slice(0, limit).map(toRecord), hasMore: rows.length > limit };
   }
+
+  async deviceRateFor(
+    scope: TenantContext,
+    service: { readonly panelId: string; readonly productId: string | null },
+    currency: CurrencyCode,
+    tx?: unknown,
+  ): Promise<ServiceAddonRecord | null> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select()
+      .from(serviceAddons)
+      .where(
+        and(
+          eq(serviceAddons.tenantId, tenantId),
+          eq(serviceAddons.kind, 'ADD_DEVICES'),
+          eq(serviceAddons.status, 'ACTIVE'),
+          isNotNull(serviceAddons.priceAmount),
+          eq(serviceAddons.priceCurrency, currency),
+          or(isNull(serviceAddons.panelId), eq(serviceAddons.panelId, service.panelId)),
+          // A service with no product (a custom service) matches only an unscoped product.
+          service.productId === null
+            ? isNull(serviceAddons.productId)
+            : or(isNull(serviceAddons.productId), eq(serviceAddons.productId, service.productId)),
+        ),
+      )
+      .orderBy(
+        // The most specific rule first: a product match, then a panel match.
+        desc(sql`(${serviceAddons.productId} IS NOT NULL)`),
+        desc(sql`(${serviceAddons.panelId} IS NOT NULL)`),
+        asc(serviceAddons.sortOrder),
+        asc(serviceAddons.createdAt),
+        asc(serviceAddons.id),
+      )
+      .limit(1);
+    const row = rows[0];
+    return row === undefined ? null : toRecord(row);
+  }
 }
 
 /** The draft's mutable fields as columns. One place, so create and update agree. */
@@ -210,6 +261,9 @@ function columnsFor(draft: ServiceAddonEdit) {
     sortOrder: draft.sortOrder,
     trafficBytes: draft.specification.trafficBytes,
     durationDays: draft.specification.durationDays,
+    maxQuantity: draft.specification.maxQuantity ?? null,
+    panelId: draft.panelId ?? null,
+    productId: draft.productId ?? null,
     // Both halves of the price, or both null, written from ONE nullable value.
     priceAmount: draft.price === null ? null : draft.price.amountMinor,
     priceCurrency: draft.price === null ? null : draft.price.currency,
@@ -237,12 +291,21 @@ function toRecord(row: typeof serviceAddons.$inferSelect): ServiceAddonRecord {
       row.priceAmount === null || row.priceCurrency === null
         ? null
         : money(row.priceAmount, row.priceCurrency as CurrencyCode),
+    panelId: row.panelId as PanelId | null,
+    productId: row.productId as ProductId | null,
+    version: row.version,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
 }
 
 function specificationOf(row: typeof serviceAddons.$inferSelect, kind: ServiceAddonKind) {
+  if (kind === 'ADD_DEVICES') {
+    if (row.maxQuantity === null) {
+      throw new Error(`add-on ${row.id} is ADD_DEVICES with no maximum quantity.`);
+    }
+    return { kind, trafficBytes: null, durationDays: null, maxQuantity: row.maxQuantity } as const;
+  }
   if (kind === 'ADD_TRAFFIC') {
     if (row.trafficBytes === null) {
       throw new Error(`add-on ${row.id} is ADD_TRAFFIC with no traffic amount.`);

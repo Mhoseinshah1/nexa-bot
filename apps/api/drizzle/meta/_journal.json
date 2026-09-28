@@ -918,6 +918,13 @@
       "when": 1790561997460,
       "tag": "0130_package_f_service_transfer",
       "breakpoints": true
+    },
+    {
+      "idx": 131,
+      "version": "7",
+      "when": 1790629310552,
+      "tag": "0131_wpa5_extra_devices",
+      "breakpoints": true
     }
   ]
 }

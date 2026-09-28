@@ -1,4 +1,4 @@
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, inArray, ne, sql } from 'drizzle-orm';
 import { money } from '@nexa/contracts';
 import type {
   CurrencyCode,
@@ -14,7 +14,7 @@ import {
   requireTenantId,
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
-import { serviceCommercialActions } from '../../../../infrastructure/persistence/schema.js';
+import { orders, serviceCommercialActions } from '../../../../infrastructure/persistence/schema.js';
 import type {
   CommercialActionDraft,
   CommercialActionRecord,
@@ -54,6 +54,8 @@ export class DrizzleCommercialActionRepository implements CommercialActionReposi
         addonId: draft.addonId,
         purchasedTrafficBytes: draft.purchasedTrafficBytes,
         purchasedDurationDays: draft.purchasedDurationDays,
+        purchasedDeviceCount: draft.purchasedDeviceCount,
+        addonVersion: draft.addonVersion,
         amount: draft.amount.amountMinor,
         currency: draft.amount.currency,
         createdAt: draft.now,
@@ -89,6 +91,41 @@ export class DrizzleCommercialActionRepository implements CommercialActionReposi
     return row === undefined ? null : toRecord(row);
   }
 
+  async liveDeviceQuantity(
+    scope: TenantContext,
+    serviceId: string,
+    excludeOrderId: OrderId | null,
+    tx?: unknown,
+  ): Promise<number> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select({
+        total: sql<string>`COALESCE(SUM(${serviceCommercialActions.purchasedDeviceCount}), 0)`,
+      })
+      .from(serviceCommercialActions)
+      .innerJoin(
+        orders,
+        and(
+          eq(orders.tenantId, serviceCommercialActions.tenantId),
+          eq(orders.id, serviceCommercialActions.orderId),
+        ),
+      )
+      .where(
+        and(
+          eq(serviceCommercialActions.tenantId, tenantId),
+          eq(serviceCommercialActions.serviceId, serviceId),
+          eq(serviceCommercialActions.kind, 'ADD_DEVICES'),
+          // A live purchase: money is owed or was taken and not given back. A draft,
+          // a cancelled or expired order and a refund are not purchases.
+          inArray(orders.state, ['AWAITING_PAYMENT', 'PAID']),
+          ...(excludeOrderId === null
+            ? []
+            : [ne(serviceCommercialActions.orderId, excludeOrderId)]),
+        ),
+      );
+    return Number(rows[0]?.total ?? '0');
+  }
+
   async listForService(
     scope: TenantContext,
     serviceId: string,
@@ -122,6 +159,8 @@ function toRecord(row: typeof serviceCommercialActions.$inferSelect): Commercial
     addonId: row.addonId as ServiceAddonId | null,
     purchasedTrafficBytes: row.purchasedTrafficBytes,
     purchasedDurationDays: row.purchasedDurationDays,
+    purchasedDeviceCount: row.purchasedDeviceCount,
+    addonVersion: row.addonVersion,
     // The pair is reassembled as one value, so nothing downstream reads an amount
     // without its currency. `service_commercial_actions_currency_check` keeps it real.
     amount: money(row.amount, row.currency as CurrencyCode),

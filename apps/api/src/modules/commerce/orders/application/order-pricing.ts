@@ -160,6 +160,59 @@ export function quoteAddon(price: Money, quotedAt: Date): OrderTotalsRecord {
 }
 
 /**
+ * The rule label an extra-users quote carries (WP-A5). Constant for the reason the others
+ * are; the rule's own id and version are on the step and on the commercial action.
+ */
+export const DEVICE_ADDON_PRICE_RULE_LABEL = 'The per-user list price';
+
+/**
+ * An extra-users quote (WP-A5): `quantity` × the rate's price per user, as ONE base step.
+ *
+ * The step names the RULE — `ruleId` is the add-on's id — because a per-unit rate is edited
+ * in place and "which price was this" must stay answerable after it is. The version it was
+ * read at is snapshotted beside it on `service_commercial_actions.addon_version`. Every
+ * promotion `PricingService.price` applies comes on top of this, exactly as for a package.
+ */
+export function quoteDeviceAddon(
+  addon: { readonly id: string; readonly price: Money },
+  quantity: number,
+  quotedAt: Date,
+): OrderTotalsRecord {
+  const basePrecedence = PRICING_PRECEDENCE[0];
+  if (basePrecedence === undefined || basePrecedence.step !== 'BASE_PRICE') {
+    throw new Error('PRICING_PRECEDENCE no longer begins with BASE_PRICE.');
+  }
+  if (!Number.isSafeInteger(quantity) || quantity < 1) {
+    throw new Error('an extra-users quote needs a positive whole quantity');
+  }
+  const currency = addon.price.currency;
+  const subtotal = money(addon.price.amountMinor * BigInt(quantity), currency);
+  const discountMinor = clampDiscount(subtotal.amountMinor, 0n);
+  const total = money(subtotal.amountMinor - discountMinor, currency);
+  const step: PriceQuoteStep = {
+    step: 'BASE_PRICE',
+    effect: basePrecedence.effect,
+    ruleId: addon.id,
+    ruleLabel: DEVICE_ADDON_PRICE_RULE_LABEL,
+    amountBefore: zero(currency),
+    amountAfter: subtotal,
+  };
+  return {
+    subtotal,
+    discount: money(discountMinor, currency),
+    total,
+    currency,
+    quote: {
+      productId: null,
+      quotedAt: quotedAt.toISOString(),
+      currency,
+      finalAmount: total,
+      trace: [step],
+    },
+  };
+}
+
+/**
  * The rule label a trial's quote carries. Constant for the reason
  * `BASE_PRICE_RULE_LABEL` is: it is read back by a support conversation.
  */

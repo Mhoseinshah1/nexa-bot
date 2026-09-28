@@ -34,6 +34,10 @@ export interface CommercialActionRecord {
   /** What was bought. Zero in the field this kind did not buy. */
   readonly purchasedTrafficBytes: bigint;
   readonly purchasedDurationDays: number;
+  /** WP-A5: extra users / devices bought. Positive for `ADD_DEVICES`, zero otherwise. */
+  readonly purchasedDeviceCount: number;
+  /** WP-A5: the add-on version an `ADD_DEVICES` purchase was priced from; null otherwise. */
+  readonly addonVersion: number | null;
   /** What was paid, with its currency. Never an amount without one. */
   readonly amount: Money;
   readonly createdAt: Date;
@@ -49,6 +53,8 @@ export interface CommercialActionDraft {
   readonly addonId: ServiceAddonId | null;
   readonly purchasedTrafficBytes: bigint;
   readonly purchasedDurationDays: number;
+  readonly purchasedDeviceCount: number;
+  readonly addonVersion: number | null;
   readonly amount: Money;
   readonly now: Date;
 }
@@ -74,6 +80,21 @@ export interface CommercialActionRepository {
     orderId: OrderId,
     tx?: unknown,
   ): Promise<CommercialActionRecord | null>;
+
+  /**
+   * How many extra users / devices this service has been sold and not given back
+   * (WP-A5): the sum over its `ADD_DEVICES` actions whose ORDER is live — awaiting
+   * payment or paid — asked of the order at read time. There is no counter, for the reason
+   * discount limits have none: a counter nothing re-derives is a second answer to "how
+   * many". `excludeOrderId` leaves out the order being decided, so it is not counted
+   * against itself.
+   */
+  liveDeviceQuantity(
+    scope: TenantContext,
+    serviceId: string,
+    excludeOrderId: OrderId | null,
+    tx?: unknown,
+  ): Promise<number>;
 
   /** This service's actions, newest first, for a detail view and an operator's history. */
   listForService(

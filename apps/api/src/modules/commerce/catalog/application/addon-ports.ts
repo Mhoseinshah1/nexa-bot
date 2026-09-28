@@ -1,6 +1,8 @@
 import type {
   CurrencyCode,
   Money,
+  PanelId,
+  ProductId,
   ServiceAddonId,
   ServiceAddonKind,
   ServiceAddonSpecification,
@@ -41,6 +43,15 @@ export interface ServiceAddonRecord {
    * `ProductRecord.price` gives: a null price means unsellable, never free.
    */
   readonly price: Money | null;
+  /**
+   * WP-A5, `ADD_DEVICES` only: the panel and / or product this per-device rate applies
+   * to. Null is "every"; `service_addons_scope_kind_check` keeps both null on the two
+   * package kinds.
+   */
+  readonly panelId: PanelId | null;
+  readonly productId: ProductId | null;
+  /** Bumped on every edit; a device purchase snapshots the version it was priced from. */
+  readonly version: number;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }
@@ -74,6 +85,9 @@ export interface ServiceAddonDraft {
   readonly sortOrder: number;
   readonly specification: ServiceAddonSpecification;
   readonly price: Money | null;
+  /** WP-A5, `ADD_DEVICES` only. Absent or null is "every panel" / "every product". */
+  readonly panelId?: PanelId | null;
+  readonly productId?: ProductId | null;
 }
 
 /**
@@ -157,4 +171,20 @@ export interface ServiceAddonRepository {
     limit: number,
     tx?: unknown,
   ): Promise<{ readonly items: readonly ServiceAddonRecord[]; readonly hasMore: boolean }>;
+
+  /**
+   * The ONE per-device rate that applies to a service (WP-A5), or null.
+   *
+   * ACTIVE, priced, in the tenant's selling currency, and scoped to this service's panel
+   * and product or to neither — the most specific wins: a product match over a panel
+   * match over a tenant-wide row, then the operator's sort order. One rate per service
+   * rather than a list, because its `maxQuantity` is a cap on the SERVICE, and two rates
+   * offered side by side would be two caps with no answer to which one holds.
+   */
+  deviceRateFor(
+    scope: TenantContext,
+    service: { readonly panelId: string; readonly productId: string | null },
+    currency: CurrencyCode,
+    tx?: unknown,
+  ): Promise<ServiceAddonRecord | null>;
 }
