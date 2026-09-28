@@ -192,6 +192,48 @@ describe('searching and filtering the templates', () => {
   });
 
   /**
+   * Codex review #1 (C1): with overrides switched off the server answers `source: 'DEFAULT'`
+   * and the default as `body`, but keeps the stored override in `overrideBody` — which is
+   * what the editor shows. Such a template is customised, and its override is searchable.
+   */
+  it('treats a stored but suppressed override as customised, and searches its text', async () => {
+    stubApi([
+      {
+        url: '/templates',
+        body: {
+          templates: [
+            balance(),
+            view(CANCELLED, 'سفارش لغو شد.', {
+              overrideBody: 'درخواست لغو شما پذیرفته شد.',
+              source: 'DEFAULT',
+              overrideSuppressed: true,
+              version: 1,
+              revision: 1,
+            }),
+          ],
+        },
+      },
+    ]);
+    renderPage(<ContentPage mayEdit denied={false} />);
+    await screen.findByRole('heading', { name: nameOf(BALANCE) });
+    expect(editor(CANCELLED).value).toBe('درخواست لغو شما پذیرفته شد.');
+
+    fireEvent.click(screen.getByRole('button', { name: t('web.templates_filter_custom') }));
+    expect(hidden(CANCELLED)).toBe(false);
+    expect(hidden(BALANCE)).toBe(true);
+
+    fireEvent.click(screen.getByRole('button', { name: t('web.templates_filter_default') }));
+    expect(hidden(CANCELLED)).toBe(true);
+    expect(hidden(BALANCE)).toBe(false);
+
+    // Words that appear only in the override, never in `body` (the default).
+    fireEvent.click(screen.getByRole('button', { name: t('web.all') }));
+    fireEvent.change(search(), { target: { value: 'درخواست لغو شما' } });
+    expect(hidden(CANCELLED)).toBe(false);
+    expect(hidden(BALANCE)).toBe(true);
+  });
+
+  /**
    * A filter HIDES a card; it must not unmount it. The draft lives in the card's own
    * state, so unmounting it on a search would silently discard what the operator typed.
    */

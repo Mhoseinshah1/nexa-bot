@@ -50,6 +50,19 @@ const SAMPLE_HINTS: Partial<Record<TemplateViewResponse['placeholders'][number][
 
 type SourceFilter = 'all' | 'custom' | 'default';
 
+/**
+ * Whether this tenant has its own text for a template: a STORED override, applied or not.
+ *
+ * Not `source === 'TENANT'`. With the `template_overrides` feature off the server answers
+ * `source: 'DEFAULT'` and the default as `body` while keeping the tenant's text in
+ * `overrideBody` — and the editor shows that text, with the suppressed warning. Deciding
+ * by `source` filed such a template under «پیش‌فرض» while its card showed customised text.
+ * The filters, the badge and the default-body disclosure all use this one rule.
+ */
+function isCustomised(template: TemplateViewResponse): boolean {
+  return template.overrideBody !== null;
+}
+
 /** One section of the screen and the templates in it, in catalogue order. */
 interface TemplateSection {
   readonly group: TemplateGroup;
@@ -104,10 +117,13 @@ export function ContentPage({ mayEdit, denied }: { mayEdit: boolean; denied: boo
     for (const section of sections) {
       if (groupId !== '' && section.group.id !== groupId) continue;
       for (const template of section.templates) {
-        if (source === 'custom' && template.source !== 'TENANT') continue;
-        if (source === 'default' && template.source === 'TENANT') continue;
+        if (source === 'custom' && !isCustomised(template)) continue;
+        if (source === 'default' && isCustomised(template)) continue;
         const copy = templateCopy(template.key, template.description);
-        const haystack = [copy.name, copy.description, template.key, template.body];
+        // The text the EDITOR shows, not `body`: with overrides switched off `body` is
+        // the default, while the textarea holds the stored override.
+        const editable = template.overrideBody ?? template.defaultBody;
+        const haystack = [copy.name, copy.description, template.key, editable];
         if (matchesTemplateSearch(search, haystack)) shown.add(template.key);
       }
     }
@@ -488,7 +504,7 @@ const TemplateCard = memo(function TemplateCard({
               : t('web.template_format_plain')}
           </span>{' '}
           <span className="tag">
-            {template.source === 'TENANT' ? t('web.template_customised') : t('web.source_default')}
+            {isCustomised(template) ? t('web.template_customised') : t('web.source_default')}
           </span>
         </p>
 
@@ -542,7 +558,7 @@ const TemplateCard = memo(function TemplateCard({
           </p>
         )}
 
-        {template.source === 'TENANT' && (
+        {isCustomised(template) && (
           <details>
             {/* Showing the default beside the override is the one thing the
               legacy web surface got right here (WEB-BR-019). */}
