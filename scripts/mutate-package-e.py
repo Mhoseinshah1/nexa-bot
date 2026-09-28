@@ -30,6 +30,7 @@ OWNED_TAIL=("          notRefundedAway(),\n        ),\n      )\n      .limit(1);
 M=[
  # E3 — decoding and bounds
  ('E-01',[(SF,"  if (bytes.toString('base64') !== text) return null;\n","")],U,'decodes strict Base64 only'),
+ # Equivalent by construction: re-encode equality (E-01) already refuses every such text.
  ('E-02',[(SF,"text.length % 4 !== 0 || ","")],I,'refuses malformed Base64 as a failed format'),
  ('E-03',[(SF,"if (entries === null || entries.length > SUBSCRIPTION_FILES_MAX_COUNT) return null;","if (entries === null) return null;")],U,'refuses more entries than the bound'),
  ('E-04',[(SF,"      bytes.byteLength > SUBSCRIPTION_FILE_MAX_BYTES ||\n","")],U,'refuses an empty file and one past the per-file bound'),
