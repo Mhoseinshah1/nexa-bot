@@ -2005,6 +2005,17 @@ textarea.input {
   font-size: 13px;
 }
 
+/* WP-A10: the bot's message as a customer will read it — plain text, line breaks kept. */
+.bot-preview {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding: 12px;
+  margin-bottom: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg-1);
+}
+
 [hidden] {
   display: none !important;
 }
