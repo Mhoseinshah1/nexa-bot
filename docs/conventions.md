@@ -222,6 +222,12 @@ gateway setting was overwritten by an ordinary chat message.
 that declaration. Asserted over HTTP in `tests/integration/control-plane-http`.
 There is no write-to-read path anywhere in the module.
 
+The Web Admin's settings page (WP-A1) is an operator's page: it shows the value in
+force above every control, says what an empty or zero value does in the setting's own
+Persian description where that is something an operator acts on, and keeps the machine
+key and the resolved source in a closed technical disclosure. The API still returns all
+three for every read.
+
 ---
 
 ## Destructive and bulk operations
