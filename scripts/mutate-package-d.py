@@ -66,7 +66,7 @@ M=[
  ('D-29',[(REF,"    if (order.purpose !== 'NEW_SERVICE' && order.purpose !== 'CUSTOM_SERVICE') {\n      return { eligible: false, reason: 'NO_PAID_SOURCE' };","    if (order.purpose !== 'NEW_SERVICE') {\n      return { eligible: false, reason: 'NO_PAID_SOURCE' };")],I,'lets a paid custom service be the source'),
  ('D-30',[(RRF,"if (purpose === 'NEW_SERVICE' || purpose === 'CUSTOM_SERVICE') {","if (purpose === 'NEW_SERVICE') {")],I,'names the reserved username'),
  ('D-31',[(FLOW,"      !(await this.deps.pricer.volumePriceable(scope, capture.customerId, capture.subjectId, units))","      false")],I,'refuses a volume no rule prices'),
- ('D-32',[(REPO,"          eq(customServiceLocations.tenantId, tenantId),\n          eq(customServiceLocations.panelId, panelId),","          eq(customServiceLocations.panelId, panelId),")],I,'never lets another tenant'),
+ ('D-32',[(REPO,"          eq(customServiceLocations.tenantId, tenantId),\n          eq(customServiceLocations.panelId, panelId),\n        ),\n      )\n      .limit(1);","          eq(customServiceLocations.panelId, panelId),\n        ),\n      )\n      .limit(1);")],I,'never lets another tenant'),
 ]
 
 only=sys.argv[1:]
