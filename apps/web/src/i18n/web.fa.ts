@@ -2446,6 +2446,8 @@ export const WEB_FA = {
   'web.extra_devices_scope_all_panels': 'همهٔ پنل‌ها',
   'web.extra_devices_scope_all_products': 'همهٔ محصولات',
   'web.extra_devices_panel_unsupported': 'این پنل افزایش کاربر را پشتیبانی نمی‌کند',
+  'web.extra_devices_scope_unavailable':
+    'فهرست کامل پنل‌ها یا محصولات خوانده نشد، پس ممکن است همهٔ گزینه‌ها نمایش داده نشوند. صفحه را دوباره بارگذاری کنید.',
   'web.extra_devices_sort': 'ترتیب',
   'web.extra_devices_state': 'وضعیت',
   'web.extra_devices_active': 'فعال',
