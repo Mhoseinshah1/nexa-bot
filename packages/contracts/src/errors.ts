@@ -1374,10 +1374,11 @@ export const COMMERCE_ERROR_CODES = {
   /** No configured location with this id in this tenant. Another tenant's is answered the same way. */
   SERVICE_LOCATION_NOT_FOUND: 'commerce.service_location_not_found',
   /**
-   * The location cannot be written as asked: its panel or product is not this tenant's, it
-   * would be a second initial location for the panel, it duplicates a key, its price is in
-   * a currency this installation does not sell in, or a change request still names it and
-   * it cannot be deleted. The `reason` detail says which.
+   * The location cannot be written as asked: its panel or product is not this tenant's, its
+   * product is not on its panel, it would be a second initial location for the panel, it
+   * duplicates a key, its price is in a currency this installation does not sell in, the
+   * panel or the tenant already holds the most locations it may, or a change request still
+   * names it and it cannot be deleted. The `reason` detail says which.
    */
   SERVICE_LOCATION_INVALID: 'commerce.service_location_invalid',
 } as const;

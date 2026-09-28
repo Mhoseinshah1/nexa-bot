@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { type Branded, uuidV7Schema } from './ids.js';
-import { CURRENCY_CODES } from './money.js';
+import { CURRENCY_CODES, MAX_MONEY_AMOUNT_MINOR } from './money.js';
 
 /**
  * Service location change (WP-A6): moving a customer's EXISTING service to another
@@ -41,6 +41,12 @@ export const SERVICE_LOCATION_KEY_MAX_LENGTH = 120;
 export const SERVICE_LOCATION_LABEL_MAX_LENGTH = 60;
 /** A year. The longest cooldown an operator may configure between two changes. */
 export const SERVICE_LOCATION_COOLDOWN_HOURS_MAX = 8760;
+/**
+ * The most locations ONE panel may hold, product-scoped rows included — and so the most
+ * targets a service can be offered, all on one choice screen. Refused beyond, rather
+ * than configured and then unreachable from Telegram.
+ */
+export const SERVICE_LOCATIONS_PER_PANEL_MAX = 20;
 /** The most changes a rolling-period limit may allow. */
 export const SERVICE_LOCATION_MAX_CHANGES_MAX = 100;
 /** The longest rolling period a limit may be counted over. */
@@ -198,6 +204,10 @@ export const serviceLocationWriteSchema = z
   })
   .refine((a) => (a.priceAmount === null) === (a.priceCurrency === null), {
     message: 'A price is an amount and a currency, or it is absent.',
+    path: ['priceAmount'],
+  })
+  .refine((a) => a.priceAmount === null || BigInt(a.priceAmount) <= MAX_MONEY_AMOUNT_MINOR, {
+    message: 'That price is larger than an amount this system can hold.',
     path: ['priceAmount'],
   })
   .refine((a) => !a.enabled || a.priceAmount !== null, {
