@@ -28,6 +28,7 @@ MIG='apps/api/drizzle/0130_package_f_service_transfer.sql'
 
 U=('unit','tests/unit/service-transfer.test.ts')
 I=('integration','tests/integration/service-transfer.test.ts')
+UB=('unit','tests/unit/bot-runtime.test.ts')
 
 # (id, [(file, before, after)], test, name filter)
 M=[
@@ -80,6 +81,11 @@ M=[
  ('F-39',[(MIG,"  IF owner IS NOT NULL AND owner <> NEW.customer_id THEN","  IF false THEN")],I,'refuses a commercial action written for'),
  ('F-40',[(MIG,"CREATE TRIGGER service_ownership_transfers_no_update\n  BEFORE UPDATE ON service_ownership_transfers\n  FOR EACH ROW EXECUTE FUNCTION nexa_reject_mutation();--> statement-breakpoint\n","")],I,'append-only'),
  ('F-41',[(MIG,"CREATE TRIGGER service_ownership_transfers_no_delete\n  BEFORE DELETE ON service_ownership_transfers\n  FOR EACH ROW EXECUTE FUNCTION nexa_reject_mutation();","SELECT 1;")],I,'append-only'),
+ # Codex on #90 — a confirmation is bound to the ownership version it was drawn at
+ ('F-42',[(SVC,"        if (version !== input.ownershipVersion) {","        if ((false as boolean) && version !== input.ownershipVersion) {")],I,'refuses a confirmation drawn before the service changed hands'),
+ ('F-43',[(SVC,"      ownershipVersion: await this.deps.repository.countForService(scope, service.id),","      ownershipVersion: 0,")],I,'refuses a confirmation drawn before the service changed hands'),
+ ('F-44',[(BOT,"  if (parts.length !== 3) return null;","  if (parts.length !== 3 && parts.length !== 2) return null;"),(BOT,"  const version = parts[2] ?? '';","  const version = parts[2] ?? '0';")],UB,'as UNSUPPORTED, never a half-read'),
+ ('F-45',[(BOT,"    ownershipVersion > TRANSFER_CONFIRM_VERSION_MAX\n","    ownershipVersion > Number.MAX_SAFE_INTEGER\n")],UB,'draws nothing past the largest one'),
 ]
 
 def fresh_db():
