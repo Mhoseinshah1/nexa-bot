@@ -84,12 +84,13 @@ export interface CommercialActionRepository {
   /**
    * How many extra users / devices this service has been sold and not given back
    * (WP-A5): the sum over its `ADD_DEVICES` actions whose ORDER is live — awaiting
-   * payment or paid — asked of the order at read time. There is no counter, for the reason
+   * payment or paid — or whose raise was DELIVERED (its `ADD_DEVICES` operation
+   * succeeded, or may have), refunded or not, asked of the rows at read time. There is no counter, for the reason
    * discount limits have none: a counter nothing re-derives is a second answer to "how
    * many". `excludeOrderId` leaves out the order being decided, so it is not counted
    * against itself.
    */
-  liveDeviceQuantity(
+  soldDeviceQuantity(
     scope: TenantContext,
     serviceId: string,
     excludeOrderId: OrderId | null,

@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, ne, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, ne, or, sql } from 'drizzle-orm';
 import { money } from '@nexa/contracts';
 import type {
   CurrencyCode,
@@ -14,7 +14,11 @@ import {
   requireTenantId,
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
-import { orders, serviceCommercialActions } from '../../../../infrastructure/persistence/schema.js';
+import {
+  orders,
+  provisioningOperations,
+  serviceCommercialActions,
+} from '../../../../infrastructure/persistence/schema.js';
 import type {
   CommercialActionDraft,
   CommercialActionRecord,
@@ -91,7 +95,7 @@ export class DrizzleCommercialActionRepository implements CommercialActionReposi
     return row === undefined ? null : toRecord(row);
   }
 
-  async liveDeviceQuantity(
+  async soldDeviceQuantity(
     scope: TenantContext,
     serviceId: string,
     excludeOrderId: OrderId | null,
@@ -115,9 +119,38 @@ export class DrizzleCommercialActionRepository implements CommercialActionReposi
           eq(serviceCommercialActions.tenantId, tenantId),
           eq(serviceCommercialActions.serviceId, serviceId),
           eq(serviceCommercialActions.kind, 'ADD_DEVICES'),
-          // A live purchase: money is owed or was taken and not given back. A draft,
-          // a cancelled or expired order and a refund are not purchases.
-          inArray(orders.state, ['AWAITING_PAYMENT', 'PAID']),
+          /*
+           * What the service holds or may yet be given, which is two things:
+           *
+           * - a LIVE purchase — money owed or taken and not given back (awaiting payment,
+           *   or paid);
+           * - a DELIVERED one, whatever became of its money. A refund lowers neither
+           *   `services.device_limit` nor the panel's limit, so an order refunded after
+           *   its `ADD_DEVICES` succeeded still occupies the maximum; counting only live
+           *   orders let an operator's refund of a delivered purchase free its quantity
+           *   and the next purchases go past the cap (Codex review #1 on PR #97, C1).
+           *   `UNKNOWN` counts too: that write may have landed, and its verification read
+           *   either confirms it (still counted) or proves it did not (then it is FAILED
+           *   and no longer counted), so the count only ever errs towards not overselling.
+           *
+           * An order refunded because it was NEVER delivered — a refusal, a write the read
+           * proved absent — frees its quantity: its operation is FAILED or ABANDONED, or
+           * there is none. A draft, a cancelled or an expired order is not a purchase.
+           */
+          or(
+            inArray(orders.state, ['AWAITING_PAYMENT', 'PAID']),
+            and(
+              eq(orders.state, 'REFUNDED'),
+              sql`EXISTS (
+                SELECT 1 FROM ${provisioningOperations}
+                 WHERE ${provisioningOperations.tenantId} = ${serviceCommercialActions.tenantId}
+                   AND ${provisioningOperations.serviceId} = ${serviceCommercialActions.serviceId}
+                   AND ${provisioningOperations.orderId} = ${serviceCommercialActions.orderId}
+                   AND ${provisioningOperations.type} = 'ADD_DEVICES'
+                   AND ${provisioningOperations.state} IN ('SUCCEEDED', 'UNKNOWN')
+              )`,
+            ),
+          ),
           ...(excludeOrderId === null
             ? []
             : [ne(serviceCommercialActions.orderId, excludeOrderId)]),

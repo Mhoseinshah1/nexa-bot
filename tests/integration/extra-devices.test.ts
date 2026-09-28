@@ -680,6 +680,60 @@ describe('extra users / devices on an existing service (WP-A5)', () => {
       );
       expect(credits.rows[0]?.n).toBe('1');
       expect((await services.findById(tenantA, service.id))?.deviceLimit).toBe(2);
+
+      // Never delivered, so refunded quantity is free again: the whole maximum remains.
+      const offer = await ctx.container.commercialActions.offer(
+        tenantA,
+        systemActor('refused-again'),
+        customerA,
+        service.id,
+        'ADD_DEVICES',
+      );
+      expect(offer.devices?.remaining).toBe(3);
+    });
+
+    it('keeps counting a DELIVERED purchase against the maximum after an operator refunds it', async () => {
+      /*
+       * Codex review #1 on PR #97, C1. A refund lowers neither `services.device_limit` nor
+       * the panel's limit, so a delivered-then-refunded purchase still holds its devices —
+       * and counting only live orders gave its quantity back to the cap.
+       */
+      const service = await activeService('refund-delivered');
+      const rate = await offeredRate('refund-delivered', 3);
+      await fund('refund-delivered');
+      const orderId = await buyDevices(service.id, rate, 3, 'refund-delivered');
+      await ctx.container.provisionerLoop.tick();
+      expect((await operationOf(service.id))?.state).toBe('SUCCEEDED');
+      expect((await services.findById(tenantA, service.id))?.deviceLimit).toBe(5);
+
+      const payment = await ctx.container.database.db.execute<{ id: string; amount: string }>(
+        sql`SELECT id, amount::text AS amount FROM payments
+             WHERE order_id = ${orderId} AND state = 'CONFIRMED'`,
+      );
+      const paid = payment.rows[0]!;
+      await ctx.container.refunds.request(tenantA, owner, {
+        idempotencyKey: 'dev-refund-delivered-refund',
+        paymentId: paid.id,
+        amountMinor: BigInt(paid.amount),
+        reason: 'درخواست مشتری',
+      });
+      expect(await orderState(orderId)).toBe('REFUNDED');
+      // The panel and the entitlement still hold the raise the refund gave money back for.
+      expect((await services.findById(tenantA, service.id))?.deviceLimit).toBe(5);
+
+      await expect(
+        draftDevices(service.id, rate, 1, 'refund-delivered-again'),
+      ).rejects.toMatchObject({ code: COMMERCE_ERROR_CODES.SERVICE_ACTION_UNAVAILABLE });
+      await expect(
+        ctx.container.commercialActions.offer(
+          tenantA,
+          systemActor('refund-delivered-offer'),
+          customerA,
+          service.id,
+          'ADD_DEVICES',
+        ),
+      ).rejects.toMatchObject({ code: COMMERCE_ERROR_CODES.SERVICE_ACTION_UNAVAILABLE });
+      expect(devicePanel.writes).toHaveLength(1);
     });
 
     it('never sells past the maximum: counted from live orders, re-decided at confirmation', async () => {
