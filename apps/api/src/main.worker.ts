@@ -98,6 +98,10 @@ async function main(): Promise<void> {
         // customers are told nothing until their configuration stops working. Its
         // failure mode is silence, so it is health-checked rather than trusted.
         ['service-reminders', true, () => container.serviceReminderLoop.isFresh(now)],
+        // WP-A9: pending-payment and wallet low-balance reminders. Always running — each
+        // sweep reads its own flag inside its transaction and does nothing when it is off —
+        // so a stalled loop is visible whatever an operator has switched on.
+        ['customer-reminders', true, () => container.customerReminderLoop.isFresh(now)],
         // The lane that tells a customer something they did not ask for. No flag, for
         // the same reason as the line above: before Phase 4H an operator's rejection and
         // the expiry sweep both happened while the customer was not looking and nothing
@@ -178,6 +182,9 @@ async function main(): Promise<void> {
   // And the reminder lane. Nothing here dials a panel: both halves read columns
   // `SYNC_USAGE` and the commercial actions already maintain.
   container.serviceReminderLoop.start();
+  // WP-A9: and the reminders that are not about a service — a payment about to lapse, a
+  // wallet below its threshold. Both only enqueue; the lane below sends.
+  container.customerReminderLoop.start();
   // And the customer notification lane. `docs/phase4h-audit.md` §1 measured what it
   // replaces: exactly one thing could be said to a customer who was not looking.
   container.customerNotificationLoop.start();

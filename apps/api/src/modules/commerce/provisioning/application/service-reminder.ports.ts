@@ -38,6 +38,12 @@ export interface ServiceReminderCandidate {
   /** The account name on the panel. What the customer is shown, and all they are shown. */
   readonly providerUsername: string;
   readonly expiresAt: Date | null;
+  /**
+   * WP-A9: local midnight of the expiry's calendar day in the tenant's display timezone,
+   * as the candidate query computed it — the boundary `expiryReminderDue` uses for
+   * `EXPIRY_DAY`. Null with no deadline, and in the usage query, which has no use for it.
+   */
+  readonly expiryDayStartsAt: Date | null;
   readonly trafficLimitBytes: bigint;
   readonly trafficUsedBytes: bigint;
   readonly basis: ServiceReminderBasis;
@@ -92,8 +98,14 @@ export interface ServiceReminderRepository {
       readonly now: Date;
       /** The tenant's SECOND, more urgent threshold as a moment. */
       readonly secondAt: Date;
-      /** Its first. Also the window: nothing further out than this is a candidate. */
+      /** Its first. */
       readonly firstAt: Date;
+      /**
+       * WP-A9: the window. Nothing further out than this is a candidate. The week-out
+       * slot's moment when that slot is live, else `firstAt` — or less when advance
+       * warnings are off. A row inside the window but past `firstAt` is due `EXPIRY_EARLY`.
+       */
+      readonly windowAt: Date;
     },
     limit: number,
     tx: TransactionScope,

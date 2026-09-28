@@ -5386,6 +5386,76 @@ export const serviceReminders = pgTable(
 );
 
 /**
+ * WP-A9: one row per time a customer's wallet fell below the tenant's low-balance
+ * threshold — "we told them their balance was low, about THIS fall".
+ *
+ * An OCCURRENCE, like `service_reminders`, and never a flag on the customer: there is no
+ * balance column anywhere in this schema and there is none here either. Whether a wallet
+ * is low, and whether it has recovered since it was last told, is derived from the ledger
+ * on every pass; this row records only what was decided and against which entry.
+ *
+ * `crossing_entry_id` names the ledger entry that took the running balance from at or
+ * above the threshold to below it. That is what makes the alert once-per-crossing:
+ *
+ *   - two worker replicas derive the same entry and the unique key lets one of them write;
+ *   - a wallet that stays low is still the same crossing on every later pass, and the
+ *     candidate query skips any wallet with an alert raised since it was last at or above
+ *     the threshold — so an idle scan writes nothing;
+ *   - a wallet that recovers and falls again crosses at a NEW entry, which is a new row, a
+ *     new subject and a new message. Nothing is deleted or updated to re-arm it.
+ *
+ * It is the SUBJECT of the `WALLET_LOW_BALANCE` notification, for the reason
+ * `service_reminders` is: keyed on the customer, `customer_notifications_subject_key`
+ * would let a wallet be told it was low exactly once for ever.
+ */
+export const walletThresholdAlerts = pgTable(
+  'wallet_threshold_alerts',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    customerId: uuid('customer_id').notNull(),
+    /** The wallet's currency, which is the threshold's. One wallet per currency. */
+    currency: text('currency').notNull(),
+    /**
+     * The threshold in force when the fall was recorded, in minor units of `currency`.
+     *
+     * Snapshotted because the send-time re-check compares against THIS figure: an
+     * operator moving the threshold after the fact must not turn a true "your balance is
+     * low" into a superseded one, nor a false one into a sent one.
+     */
+    thresholdAmount: bigint('threshold_amount', { mode: 'bigint' }).notNull(),
+    /** The ledger entry that took the wallet below the threshold. */
+    crossingEntryId: uuid('crossing_entry_id')
+      .notNull()
+      .references(() => walletEntries.id),
+    /** That entry's `created_at`, copied so the arm test compares two columns of one row. */
+    crossedAt: timestamptz('crossed_at').notNull(),
+    raisedAt: timestamptz('raised_at').notNull().defaultNow(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+      name: 'wallet_threshold_alerts_customer_fk',
+    }),
+    /** Once per crossing: the arbiter of every insert, and why two replicas are safe. */
+    unique('wallet_threshold_alerts_crossing_key').on(table.tenantId, table.crossingEntryId),
+    /** The candidate query's "told since it was last at or above?" probe. */
+    index('wallet_threshold_alerts_wallet_idx').on(
+      table.tenantId,
+      table.customerId,
+      table.currency,
+      table.crossedAt,
+    ),
+    check('wallet_threshold_alerts_currency_check', enumCheck('currency', CURRENCY_CODES)),
+    /** A zero threshold sends nothing, so no alert can have been raised against one. */
+    check('wallet_threshold_alerts_threshold_check', sql`threshold_amount > 0`),
+  ],
+);
+
+/**
  * One commercial action bought against a service that already exists.
  *
  * The immutable evidence a renewal, an extra-traffic purchase or an extra-time purchase

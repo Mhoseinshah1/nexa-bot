@@ -10,14 +10,14 @@ absence is a decision with a reason, not an oversight.
 
 ## The reminder rows
 
-| Legacy row            | What it did                                                                                      | Nexa                                                                                                               | Where                                                |
-| --------------------- | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------- |
-| `🕚 کرون زمان`        | one configurable threshold, in days, before a service's time expires                             | TWO thresholds — `reminders.expiry_first_days` (3) and `reminders.expiry_second_days` (1) — plus an expired notice | `service_expiry_reminders`, `service_expired_notice` |
-| `🔋 کرون حجم`         | one configurable threshold, as a percentage of traffic used                                      | THREE thresholds — `reminders.usage_first_percent` (80), `_second_` (95), `_final_` (100)                          | `service_usage_reminders`                            |
-| `🕚 کرون اولین اتصال` | chased customers whose service was bought and never activated (`on_hold`), threshold 4 days, OFF | **DEFERRED** — see below                                                                                           | —                                                    |
-| `🧯 متصل نبودن کاربر` | chased customers with a live service who stopped connecting, threshold 3 days, ON                | **DEFERRED** — see below                                                                                           | —                                                    |
-| `❌ کرون حذف`         | DELETED accounts N days after their time expired (3)                                             | **DEFERRED, and deliberately**                                                                                     | —                                                    |
-| `❌ کرون حذف حجم`     | DELETED accounts N days after last connection when traffic ran out (2), Marzban only             | **DEFERRED, and deliberately**                                                                                     | —                                                    |
+| Legacy row            | What it did                                                                                      | Nexa                                                                                                                                                                      | Where                                                                               |
+| --------------------- | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `🕚 کرون زمان`        | one configurable threshold, in days, before a service's time expires                             | THREE thresholds — `reminders.expiry_early_days` (7, WP-A9), `_first_days` (3), `_second_days` (1) — the day of expiry (WP-A9) and an expired notice                      | `service_expiry_reminders`, `service_expiry_day_reminder`, `service_expired_notice` |
+| `🔋 کرون حجم`         | one configurable threshold, as a percentage of traffic used                                      | THREE thresholds — `reminders.usage_first_percent`, `_second_`, `_final_`, stored as percent USED: 80/90/95 by default since WP-A9 (20/10/5% remaining), 80/95/100 before | `service_usage_reminders`                                                           |
+| `🕚 کرون اولین اتصال` | chased customers whose service was bought and never activated (`on_hold`), threshold 4 days, OFF | **DEFERRED** — see below                                                                                                                                                  | —                                                                                   |
+| `🧯 متصل نبودن کاربر` | chased customers with a live service who stopped connecting, threshold 3 days, ON                | **DEFERRED** — see below                                                                                                                                                  | —                                                                                   |
+| `❌ کرون حذف`         | DELETED accounts N days after their time expired (3)                                             | **DEFERRED, and deliberately**                                                                                                                                            | —                                                                                   |
+| `❌ کرون حذف حجم`     | DELETED accounts N days after last connection when traffic ran out (2), Marzban only             | **DEFERRED, and deliberately**                                                                                                                                            | —                                                                                   |
 
 Sources: `docs/research/mirzabotbotcapabilitiesinvestigationcompletev2/bot-capabilities-knowledge/business-rules.md`
 CBR-003 (twelve capabilities carry nested configuration, six of them crons),
@@ -100,3 +100,16 @@ is not that decision.
   carries the service label, the remaining days and the used bytes as they were
   when the threshold was crossed, so a message delayed in the queue cannot
   render numbers from a later state.
+
+## WP-A9
+
+The owner's schedule is 7, 3 and 1 days before expiry and the day of expiry, and 20%, 10%
+and 5% of the traffic remaining. Two expiry SLOTS were added (`EXPIRY_EARLY`,
+`EXPIRY_DAY`) rather than re-meaning the existing two, so every stored row and every
+stored setting keeps its meaning; the usage keys still store percent USED and only their
+defaults and presentation moved. "The day of expiry" is the deadline's own calendar day in
+the tenant's `display_timezone`. Every reminder is now re-checked at send time: a renewal,
+added traffic or a termination between the raise and the send supersedes it. The same
+release adds a wallet low-balance alert (off by default, once per crossing) and one
+reminder per pending card-to-card payment and unpaid order. Quiet hours are not offered:
+the customer notification lane has no send-window concept.

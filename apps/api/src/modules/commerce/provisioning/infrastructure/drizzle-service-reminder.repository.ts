@@ -27,6 +27,8 @@ interface CandidateRow {
   readonly expires_at: string | null;
   readonly traffic_limit_bytes: string;
   readonly traffic_used_bytes: string;
+  /** WP-A9: the expiry query only. */
+  readonly expiry_day_starts_at?: string | null;
 }
 
 function toCandidate(row: CandidateRow): ServiceReminderCandidate {
@@ -43,6 +45,10 @@ function toCandidate(row: CandidateRow): ServiceReminderCandidate {
      * written back. See `ServiceReminderBasis`.
      */
     expiresAt: row.expires_at === null ? null : new Date(row.expires_at),
+    expiryDayStartsAt:
+      row.expiry_day_starts_at === undefined || row.expiry_day_starts_at === null
+        ? null
+        : new Date(row.expiry_day_starts_at),
     /*
      * `BigInt('123')` is exact; `Number('123')` is exact until it is not, and the
      * comparison this feeds is `used * 100 >= limit * percent`, where a rounded operand
@@ -72,7 +78,7 @@ export class DrizzleServiceReminderRepository implements ServiceReminderReposito
   }
 
   /**
-   * Services whose deadline is inside three days and whose DUE reminder is unraised.
+   * Services whose deadline is inside the window and whose DUE reminder is unraised.
    *
    * The `NOT EXISTS` matches the due kind ALONE, which is what makes each pass finite:
    * once the due kind is written the service drops out of this query entirely, and it
@@ -97,31 +103,56 @@ export class DrizzleServiceReminderRepository implements ServiceReminderReposito
    */
   async listExpiryCandidates(
     scope: TenantContext,
-    bounds: { readonly now: Date; readonly secondAt: Date; readonly firstAt: Date },
+    bounds: {
+      readonly now: Date;
+      readonly secondAt: Date;
+      readonly firstAt: Date;
+      readonly windowAt: Date;
+    },
     limit: number,
     tx: TransactionScope,
   ): Promise<readonly ServiceReminderCandidate[]> {
     const tenantId = requireTenantId(scope);
+    /*
+     * WP-A9: the ladder has five rungs, and one of them is a CALENDAR boundary.
+     *
+     * `day_start` is local midnight of the deadline's own date in the tenant's display
+     * timezone — `date_trunc` on the wall-clock time, converted back to an instant. It is
+     * computed here, SELECTED beside the row, and used by `expiryReminderDue` as given, so
+     * the filter and the decision cannot disagree across a daylight-saving change. The
+     * zone is the tenant ROW's own, which is the one every message renders dates in; no
+     * zone is written in code.
+     */
     const result = await this.exec(tx).execute(sql`
-      SELECT s.id, s.customer_id, s.provider_username, s.expires_at,
-             s.traffic_limit_bytes, s.traffic_used_bytes
-      FROM services s
-      WHERE s.tenant_id = ${tenantId}
-        AND s.state = ANY(${sql.param([...EXPIRY_REMINDER_STATES])}::text[])
-        AND s.expires_at IS NOT NULL
-        AND s.expires_at <= ${bounds.firstAt}
-        AND NOT EXISTS (
+      SELECT c.id, c.customer_id, c.provider_username, c.expires_at,
+             c.traffic_limit_bytes, c.traffic_used_bytes,
+             c.day_start AS expiry_day_starts_at
+      FROM (
+        SELECT s.id, s.tenant_id, s.customer_id, s.provider_username, s.expires_at,
+               s.traffic_limit_bytes, s.traffic_used_bytes,
+               (date_trunc('day', s.expires_at AT TIME ZONE t.display_timezone)
+                  AT TIME ZONE t.display_timezone) AS day_start
+        FROM services s
+        JOIN tenants t ON t.id = s.tenant_id
+        WHERE s.tenant_id = ${tenantId}
+          AND s.state = ANY(${sql.param([...EXPIRY_REMINDER_STATES])}::text[])
+          AND s.expires_at IS NOT NULL
+          AND s.expires_at <= ${bounds.windowAt}
+      ) c
+      WHERE NOT EXISTS (
           SELECT 1 FROM service_reminders r
-          WHERE r.tenant_id = s.tenant_id
-            AND r.service_id = s.id
+          WHERE r.tenant_id = c.tenant_id
+            AND r.service_id = c.id
             AND r.kind = CASE
-              WHEN s.expires_at <= ${bounds.now} THEN 'EXPIRED'
-              WHEN s.expires_at <= ${bounds.secondAt} THEN 'EXPIRY_SECOND'
-              ELSE 'EXPIRY_FIRST'
+              WHEN c.expires_at <= ${bounds.now} THEN 'EXPIRED'
+              WHEN c.day_start <= ${bounds.now} THEN 'EXPIRY_DAY'
+              WHEN c.expires_at <= ${bounds.secondAt} THEN 'EXPIRY_SECOND'
+              WHEN c.expires_at <= ${bounds.firstAt} THEN 'EXPIRY_FIRST'
+              ELSE 'EXPIRY_EARLY'
             END
-            AND r.basis_expires_at IS NOT DISTINCT FROM s.expires_at
+            AND r.basis_expires_at IS NOT DISTINCT FROM c.expires_at
         )
-      ORDER BY s.expires_at ASC, s.id ASC
+      ORDER BY c.expires_at ASC, c.id ASC
       LIMIT ${limit}
     `);
     return (result.rows as unknown as CandidateRow[]).map(toCandidate);

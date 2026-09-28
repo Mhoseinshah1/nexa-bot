@@ -169,7 +169,8 @@ describe('the reminder thresholds are configuration, not constants', () => {
   it('refuses usage thresholds that are not strictly increasing', async () => {
     const refusal = await setSetting('reminders.usage_second_percent', 80);
     expect(refusal).toMatch(/صعودی/);
-    expect((await config()).usageSecondPercent).toBe(95);
+    // 90 since WP-A9: 10% remaining is the owner's default for the second warning.
+    expect((await config()).usageSecondPercent).toBe(90);
   });
 
   it('allows a multi-step change to pass through a valid intermediate', async () => {
@@ -238,7 +239,13 @@ describe('the reminder thresholds are configuration, not constants', () => {
 
     expect(await setSetting('reminders.expiry_first_days', 14)).toBeNull();
     expect(await sweep()).toEqual({ expiry: 1, usage: 0 });
-    expect(await reminderKinds(id)).toEqual(['EXPIRY_FIRST']);
+    /*
+     * WP-A9: the week-out slot (seven days by default) is inside a fourteen-day first
+     * warning, so it is never due on its own — FIRST is reached first and records it as
+     * passed. The write of fourteen was ACCEPTED all the same: a tenant's older keys stay
+     * editable whatever the new slot says.
+     */
+    expect(await reminderKinds(id)).toEqual(['EXPIRY_EARLY', 'EXPIRY_FIRST']);
     expect(await notificationKinds()).toEqual(['SERVICE_EXPIRY_FIRST']);
   });
 
@@ -274,8 +281,14 @@ describe('the reminder thresholds are configuration, not constants', () => {
     expect(await sweep()).toEqual({ expiry: 1, usage: 0 });
     expect(await reminderKinds(soon)).toEqual([]);
     expect(await notificationKinds()).toEqual(['SERVICE_EXPIRED']);
-    /* The two it passed through are recorded, so re-enabling cannot back-fill them. */
-    expect(await reminderKinds(past)).toEqual(['EXPIRED', 'EXPIRY_FIRST', 'EXPIRY_SECOND']);
+    /* The four it passed through are recorded, so re-enabling cannot back-fill them. */
+    expect(await reminderKinds(past)).toEqual([
+      'EXPIRED',
+      'EXPIRY_DAY',
+      'EXPIRY_EARLY',
+      'EXPIRY_FIRST',
+      'EXPIRY_SECOND',
+    ]);
   });
 
   it('records a suppressed kind so re-enabling does not back-fill it', async () => {
@@ -285,6 +298,8 @@ describe('the reminder thresholds are configuration, not constants', () => {
     expect(await sweep()).toEqual({ expiry: 0, usage: 0 });
     expect(await reminderKinds(id), 'recorded, not skipped').toEqual([
       'EXPIRED',
+      'EXPIRY_DAY',
+      'EXPIRY_EARLY',
       'EXPIRY_FIRST',
       'EXPIRY_SECOND',
     ]);
@@ -342,7 +357,7 @@ describe('the reminder thresholds are configuration, not constants', () => {
     const result = await open(`${PREFIX.set}us:80`, TG.owner);
     expect(result.replyKey).toBe('bot.admin.reminder_refused');
     expect(lastMessage()).toContain('صعودی');
-    expect((await config()).usageSecondPercent, 'nothing was stored').toBe(95);
+    expect((await config()).usageSecondPercent, 'nothing was stored').toBe(90);
   });
 
   it('refuses a crafted setting code and a crafted value at the boundary', async () => {

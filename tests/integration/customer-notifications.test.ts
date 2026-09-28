@@ -551,7 +551,12 @@ describe('the customer notification lane', () => {
     const reader = new DrizzleNotificationSubjectReader(ctx.container.database.db);
 
     for (const kind of CUSTOMER_NOTIFICATION_KINDS) {
-      const asked = reader.stillHolds(tenantA, kind, ctx.container.ids.uuid());
+      const asked = reader.stillHolds(
+        tenantA,
+        kind,
+        ctx.container.ids.uuid(),
+        ctx.container.clock.now(),
+      );
       if (CUSTOMER_NOTIFICATION_PRECONDITIONS[kind]) {
         await expect(asked, `${kind} declares a precondition nothing can answer`).resolves.toBe(
           false,
