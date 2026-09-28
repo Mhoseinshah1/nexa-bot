@@ -54,6 +54,7 @@ purchase", and "no fake product dependency" is a named test. So:
   - the custom base price as `unit_price`, with quantity 1.
 
   That is the snapshot the provisioner and every order view already read.
+
 - **The pricing snapshot.** A new table, `order_custom_service_terms`, holds what a line cannot (§5). It is written once, in the draft's transaction, and refused an UPDATE or a DELETE.
 - **The service.** It is created from the order exactly as a `NEW_SERVICE` one is:
   - the panel comes from `order.line.panelId`;
@@ -64,39 +65,39 @@ purchase", and "no fake product dependency" is a named test. So:
 
 ## 3. Every purpose-dependent site, classified
 
-| site | CUSTOM_SERVICE |
-|---|---|
-| `orderPurposeCreatesNewService` | true |
-| `orderPurposeTargetsExistingService` | false |
-| `operationTypeForOrderPurpose` / `PURCHASED_AS` | `PROVISION` — cashback and a referral commission are earned when the PROVISION succeeds, as for a purchase |
-| `orderPurposeIsSale` (reporting) | true — it is revenue |
-| `PRODUCT_RANKING_PURPOSES` | excluded — there is no product to rank |
-| `TRAFFIC_SELLING_PURPOSES` | included — it sells traffic |
-| `DISCOUNTABLE_PURPOSES` | included (§6) |
-| `RESELLER_GRANTABLE_OPERATIONS` | NOT included — spelled out as the four it was, so no tier grant CHECK widens (§7) |
-| `isFirstPurchase` | a custom purchase counts as a purchase: a customer who bought one is not a first-time buyer |
-| first-purchase-only discounts | unchanged: still `applies_to = ['NEW_SERVICE']` only, so they never reach a custom order |
-| discount-code entry (`assertCodeable`) | allowed, as for `NEW_SERVICE` |
-| username step, capacity slot, confirm | as `NEW_SERVICE` (via `orderPurposeCreatesNewService`) |
-| settlement dispatch | as `NEW_SERVICE` (via `orderPurposeCreatesNewService`) |
-| customer refund request (WP19) | allowed: a paid order that created the service |
-| receipt-review facts | reads the username reservation, as for `NEW_SERVICE` |
-| bot follow-up after settlement, draft buttons | as `NEW_SERVICE` |
-| renew / add traffic / add time on a custom service | refused, `CUSTOM_SERVICE_NOT_EXTENDABLE` (§9) |
+| site                                               | CUSTOM_SERVICE                                                                                             |
+| -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `orderPurposeCreatesNewService`                    | true                                                                                                       |
+| `orderPurposeTargetsExistingService`               | false                                                                                                      |
+| `operationTypeForOrderPurpose` / `PURCHASED_AS`    | `PROVISION` — cashback and a referral commission are earned when the PROVISION succeeds, as for a purchase |
+| `orderPurposeIsSale` (reporting)                   | true — it is revenue                                                                                       |
+| `PRODUCT_RANKING_PURPOSES`                         | excluded — there is no product to rank                                                                     |
+| `TRAFFIC_SELLING_PURPOSES`                         | included — it sells traffic                                                                                |
+| `DISCOUNTABLE_PURPOSES`                            | included (§6)                                                                                              |
+| `RESELLER_GRANTABLE_OPERATIONS`                    | NOT included — spelled out as the four it was, so no tier grant CHECK widens (§7)                          |
+| `isFirstPurchase`                                  | a custom purchase counts as a purchase: a customer who bought one is not a first-time buyer                |
+| first-purchase-only discounts                      | unchanged: still `applies_to = ['NEW_SERVICE']` only, so they never reach a custom order                   |
+| discount-code entry (`assertCodeable`)             | allowed, as for `NEW_SERVICE`                                                                              |
+| username step, capacity slot, confirm              | as `NEW_SERVICE` (via `orderPurposeCreatesNewService`)                                                     |
+| settlement dispatch                                | as `NEW_SERVICE` (via `orderPurposeCreatesNewService`)                                                     |
+| customer refund request (WP19)                     | allowed: a paid order that created the service                                                             |
+| receipt-review facts                               | reads the username reservation, as for `NEW_SERVICE`                                                       |
+| bot follow-up after settlement, draft buttons      | as `NEW_SERVICE`                                                                                           |
+| renew / add traffic / add time on a custom service | refused, `CUSTOM_SERVICE_NOT_EXTENDABLE` (§9)                                                              |
 
 ## 4. Pricing rules (D2, D3)
 
 **Table `custom_service_price_rules`**:
 
-| column | meaning |
-|---|---|
-| `dimension` | `VOLUME` or `TIME` |
-| `min_units`, `max_units` | inclusive bounds. For VOLUME the unit is **one hundredth of a GB**, so `10.25` GB is `1025`; for TIME it is **one day** |
-| `unit_price_amount`, `currency` | price per GB (VOLUME) or per day (TIME), in the tenant's sales currency |
-| `customer_id` | a specific customer, or NULL |
-| `reseller_tier_id` | a reseller tier, or NULL. NULL on a rule with no customer means the ordinary-customer tier |
-| `panel_id` | a specific panel, or NULL for all panels |
-| `enabled` | disabled rules are ignored everywhere |
+| column                          | meaning                                                                                                                 |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `dimension`                     | `VOLUME` or `TIME`                                                                                                      |
+| `min_units`, `max_units`        | inclusive bounds. For VOLUME the unit is **one hundredth of a GB**, so `10.25` GB is `1025`; for TIME it is **one day** |
+| `unit_price_amount`, `currency` | price per GB (VOLUME) or per day (TIME), in the tenant's sales currency                                                 |
+| `customer_id`                   | a specific customer, or NULL                                                                                            |
+| `reseller_tier_id`              | a reseller tier, or NULL. NULL on a rule with no customer means the ordinary-customer tier                              |
+| `panel_id`                      | a specific panel, or NULL for all panels                                                                                |
+| `enabled`                       | disabled rules are ignored everywhere                                                                                   |
 
 - A customer rule names no tier (CHECK). Its specificity comes from the customer.
 - **Validation.**
@@ -217,6 +218,7 @@ The panel list is a courtesy. Draft creation re-decides everything, and confirma
    - the volume price and the time price.
 
    Discounts, cashback and the total come from the ordinary lines. A route's fee is shown by the ordinary payment step, as for any order.
+
 7. Explicit confirmation, the ordinary payment flow, then settlement, provisioning and delivery.
 
 No provider operation starts before settlement: the only provisioning path is `planForSettledOrder`.
@@ -260,6 +262,7 @@ Settled custom orders stay readable in the database, and nothing is lost.
 ## 11. Tests (D8)
 
 **Unit**
+
 - Selection at each specificity level.
 - A missing rule.
 - Two matching rules → unavailable.
@@ -270,6 +273,7 @@ Settled custom orders stay readable in the database, and nothing is lost.
 - The quote trace.
 
 **Integration**
+
 - Overlap refusal at the same level, and acceptance at different levels.
 - Draft and confirm end to end.
 - The snapshot is immutable after a rule edit or delete.
@@ -282,6 +286,7 @@ Settled custom orders stay readable in the database, and nothing is lost.
 - Settlement provisions a service with `product_id` NULL, through the fake provider, and reconciliation behaves as for a purchase.
 
 **Web and surface**
+
 - The rules page and the locations page.
 - The bot flow screens.
 
