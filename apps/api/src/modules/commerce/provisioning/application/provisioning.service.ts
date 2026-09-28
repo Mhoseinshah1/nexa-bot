@@ -1430,6 +1430,8 @@ export class ProvisioningService {
     action: {
       readonly serviceId: string;
       readonly kind: 'RENEW' | 'ADD_TRAFFIC' | 'ADD_TIME';
+      /** The ORDER's customer: the payer, who must still own the service. */
+      readonly customerId: UserId;
     },
     tx: TransactionScope,
     onIneligible: 'REFUSE' | 'REFUND',
@@ -1462,6 +1464,23 @@ export class ProvisioningService {
        * cannot happen.
        */
       throw new Error(`commercial action names service ${action.serviceId}, which is not there`);
+    }
+
+    /*
+     * The payer no longer owns the service (Package F). A renewal or an add-on is bought for
+     * one's own service; an order confirmed in the moment a transfer committed — the
+     * confirmation reads the service without a lock — names a service that is now somebody
+     * else's, and applying it would spend the payer's money on another customer's account.
+     * Read after the lifecycle lock a transfer also takes, so a transfer is wholly before
+     * this or wholly after it. Refused like every refusal here: a wallet purchase is not
+     * taken, and money that already arrived is given back through the one credit path.
+     */
+    if (service.customerId !== action.customerId) {
+      return refuse(
+        COMMERCE_ERROR_CODES.SERVICE_ACTION_NOT_ALLOWED,
+        'That service is no longer owned by the customer who bought this action.',
+        'SERVICE_NOT_OWNED',
+      );
     }
 
     if (!OPERATION_LEGAL_FROM[action.kind].includes(service.state)) {
@@ -1591,7 +1610,12 @@ export class ProvisioningService {
      * and a credit for money that never left would be wrong. A bank transfer passes
      * `REFUND`, gets a verdict instead of an exception, and gives the money back.
      */
-    const usable = await this.prepareCommercialAction(scope, action, tx, onIneligible);
+    const usable = await this.prepareCommercialAction(
+      scope,
+      { serviceId: action.serviceId, kind: action.kind, customerId: order.customerId },
+      tx,
+      onIneligible,
+    );
     if (usable.outcome !== 'FULFILLABLE') {
       if (onIneligible === 'REFUSE') {
         throw new Error('prepareCommercialAction returned UNFULFILLABLE under REFUSE');

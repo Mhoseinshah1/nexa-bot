@@ -6,11 +6,17 @@ import {
 } from '@nexa/contracts';
 import type { Database } from '../../../../infrastructure/persistence/database.js';
 import { requireTenantId } from '../../../../infrastructure/persistence/unit-of-work.js';
-import { services } from '../../../../infrastructure/persistence/schema.js';
+import {
+  serviceOwnershipTransfers,
+  services,
+} from '../../../../infrastructure/persistence/schema.js';
 import type { NotificationSubjectReader } from '../application/customer-notification.service.js';
 
 /** The kinds this reader has a branch for. Naming them is the second guard below. */
-const ANSWERABLE_KINDS: readonly CustomerNotificationKind[] = ['SERVICE_PROVISION_DELAYED'];
+const ANSWERABLE_KINDS: readonly CustomerNotificationKind[] = [
+  'SERVICE_PROVISION_DELAYED',
+  'SERVICE_TRANSFER_RECEIVED',
+];
 
 /**
  * Whether a kind's fact is still true, read from the subject.
@@ -30,7 +36,8 @@ const ANSWERABLE_KINDS: readonly CustomerNotificationKind[] = ['SERVICE_PROVISIO
  * that a refusal instead, and `tests/integration/customer-notifications.test.ts`
  * requires every kind declaring a precondition to appear here.
  *
- * Today that is one kind. `SERVICE_PROVISION_DELAYED` says "your service is taking
+ * Today that is two kinds. `SERVICE_TRANSFER_RECEIVED` (Package F) has its own branch
+ * below, over the transfer row. `SERVICE_PROVISION_DELAYED` says "your service is taking
  * longer than expected", which stops being true the moment the service is `ACTIVE` —
  * and arriving a second after the subscription link would be worse than not arriving at
  * all. It is equally untrue once the service is `TERMINATED`, `EXPIRED` or `SUSPENDED`,
@@ -59,6 +66,36 @@ export class DrizzleNotificationSubjectReader implements NotificationSubjectRead
     }
 
     const tenantId = requireTenantId(scope);
+
+    /*
+     * Package F: "a service was given to you" holds while the transfer's recipient still
+     * owns the service. Its subject is the TRANSFER row, so this branch reads that row and
+     * the service it names — never `services` by the subject id, which would find nothing
+     * and supersede every such message. A service passed on again, or a transfer row that
+     * is not there, is SUPERSEDED: nothing is announced that the recipient does not have.
+     */
+    if (kind === 'SERVICE_TRANSFER_RECEIVED') {
+      const [held] = await this.db
+        .select({ id: serviceOwnershipTransfers.id })
+        .from(serviceOwnershipTransfers)
+        .innerJoin(
+          services,
+          and(
+            eq(services.tenantId, serviceOwnershipTransfers.tenantId),
+            eq(services.id, serviceOwnershipTransfers.serviceId),
+            eq(services.customerId, serviceOwnershipTransfers.toCustomerId),
+          ),
+        )
+        .where(
+          and(
+            eq(serviceOwnershipTransfers.tenantId, tenantId),
+            eq(serviceOwnershipTransfers.id, subjectId),
+          ),
+        )
+        .limit(1);
+      return held !== undefined;
+    }
+
     const [row] = await this.db
       .select({ state: services.state })
       .from(services)

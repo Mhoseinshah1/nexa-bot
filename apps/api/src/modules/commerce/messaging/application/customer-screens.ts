@@ -82,6 +82,18 @@ export interface ServiceCardFacts {
   readonly rotateOffered: boolean;
 }
 
+/** What a transfer's summary shows of a service (Package F). */
+export interface ServiceSummaryFacts {
+  readonly serviceUsername: string;
+  readonly serviceLocation: string | null;
+  readonly trafficLimitBytes: bigint;
+  readonly trafficUsedBytes: bigint;
+  /** Null means usage was never read: what is left is unknown, never the whole allowance. */
+  readonly usageSyncedAt: Date | null;
+  readonly expiresAt: Date | null;
+  readonly now: Date;
+}
+
 export interface ReferralScreenFacts {
   readonly commissionPercent: number;
   readonly referralLink: string;
@@ -196,31 +208,13 @@ export class CustomerScreenComposer {
   }
 
   async serviceCard(scope: ScopeContext, facts: ServiceCardFacts): Promise<ComposedScreen> {
-    const unlimited = facts.trafficLimitBytes === UNLIMITED_TRAFFIC_BYTES;
     const known = facts.usageSyncedAt !== null;
-    const unknown = await this.templates.render(scope, 'bot.service.traffic_unknown', {});
     const usedTraffic = known
       ? await this.templates.render(scope, 'bot.service.traffic_value', {
           bytes: facts.trafficUsedBytes,
         })
-      : unknown;
-    let remainingTraffic: string;
-    if (unlimited) {
-      remainingTraffic = await this.templates.render(scope, 'bot.service.remaining_unlimited', {});
-    } else if (!known) {
-      remainingTraffic = unknown;
-    } else {
-      const remaining =
-        facts.trafficUsedBytes >= facts.trafficLimitBytes
-          ? 0n
-          : facts.trafficLimitBytes - facts.trafficUsedBytes;
-      // Whole percent, rounded DOWN: a customer with 0.9% left is told 0%, never 1%.
-      const percent = Number((remaining * 100n) / facts.trafficLimitBytes);
-      remainingTraffic = await this.templates.render(scope, 'bot.service.remaining_value', {
-        bytes: remaining,
-        percent,
-      });
-    }
+      : await this.templates.render(scope, 'bot.service.traffic_unknown', {});
+    const remainingTraffic = await this.remainingTraffic(scope, facts);
 
     const lastSeen =
       facts.lastSeen.kind === 'AT'
@@ -229,16 +223,7 @@ export class CustomerScreenComposer {
           ? await this.templates.render(scope, 'bot.service.last_seen_never', {})
           : await this.templates.render(scope, 'bot.service.last_seen_unavailable', {});
 
-    const expiry =
-      facts.expiresAt === null
-        ? { noExpiry: await this.templates.render(scope, 'bot.service.no_expiry', {}) }
-        : {
-            expiresAt: facts.expiresAt,
-            remainingDays: Math.max(
-              0,
-              Math.ceil((facts.expiresAt.getTime() - facts.now.getTime()) / DAY_MS),
-            ),
-          };
+    const expiry = await this.expiry(scope, facts);
 
     return {
       key: 'bot.service.card',
@@ -257,6 +242,60 @@ export class CustomerScreenComposer {
           ? { rotateHint: await this.templates.render(scope, 'bot.service.rotate_hint', {}) }
           : {}),
       },
+    };
+  }
+
+  /**
+   * A service's name, location and what is left of it (Package F): the lines a transfer's
+   * confirmation and the recipient's notification show. The same pieces, rendered the same
+   * way, as the service card — so the two screens cannot disagree about what is left.
+   */
+  async serviceSummary(scope: ScopeContext, facts: ServiceSummaryFacts): Promise<TemplateValues> {
+    return {
+      service: facts.serviceUsername,
+      ...(facts.serviceLocation === null ? {} : { location: facts.serviceLocation }),
+      remainingTraffic: await this.remainingTraffic(scope, facts),
+      ...(await this.expiry(scope, facts)),
+    };
+  }
+
+  /** What is left of the allowance: a figure with its percentage, unlimited, or unknown. */
+  private async remainingTraffic(
+    scope: ScopeContext,
+    facts: Pick<ServiceSummaryFacts, 'trafficLimitBytes' | 'trafficUsedBytes' | 'usageSyncedAt'>,
+  ): Promise<string> {
+    if (facts.trafficLimitBytes === UNLIMITED_TRAFFIC_BYTES) {
+      return this.templates.render(scope, 'bot.service.remaining_unlimited', {});
+    }
+    if (facts.usageSyncedAt === null) {
+      return this.templates.render(scope, 'bot.service.traffic_unknown', {});
+    }
+    const remaining =
+      facts.trafficUsedBytes >= facts.trafficLimitBytes
+        ? 0n
+        : facts.trafficLimitBytes - facts.trafficUsedBytes;
+    // Whole percent, rounded DOWN: a customer with 0.9% left is told 0%, never 1%.
+    const percent = Number((remaining * 100n) / facts.trafficLimitBytes);
+    return this.templates.render(scope, 'bot.service.remaining_value', {
+      bytes: remaining,
+      percent,
+    });
+  }
+
+  /** The deadline and the whole days to it, or the rendered no-expiry line. */
+  private async expiry(
+    scope: ScopeContext,
+    facts: Pick<ServiceSummaryFacts, 'expiresAt' | 'now'>,
+  ): Promise<TemplateValues> {
+    if (facts.expiresAt === null) {
+      return { noExpiry: await this.templates.render(scope, 'bot.service.no_expiry', {}) };
+    }
+    return {
+      expiresAt: facts.expiresAt,
+      remainingDays: Math.max(
+        0,
+        Math.ceil((facts.expiresAt.getTime() - facts.now.getTime()) / DAY_MS),
+      ),
     };
   }
 
