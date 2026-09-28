@@ -379,6 +379,32 @@ describe('Package D — the custom service', () => {
       );
     });
 
+    it('refuses a price that cannot be carried across its range, as a field error (Codex, PR #88)', async () => {
+      /*
+       * Past `bigint` the insert failed as an internal error; below it, a price times a
+       * wide range overflowed when a draft wrote its terms. Both are the rule's to refuse,
+       * at the field, when it is written.
+       */
+      const past = 9_999_999_999_999_999_999n;
+      expect((await refusalOf(h.rule({ unitPriceMinor: past }))).code).toBe(
+        'commerce.custom_service_rule_invalid',
+      );
+      const wide = { minUnits: units('1'), maxUnits: units('1000') };
+      expect(
+        (await refusalOf(h.rule({ ...wide, unitPriceMinor: 10_000_000_000_000_000n }))).code,
+      ).toBe('commerce.custom_service_rule_invalid');
+      // The same price over a range it fits is a rule.
+      expect(
+        (
+          await h.rule({
+            minUnits: units('1'),
+            maxUnits: units('1'),
+            unitPriceMinor: 10_000_000_000_000_000n,
+          })
+        ).unitPrice.amountMinor,
+      ).toBe(10_000_000_000_000_000n);
+    });
+
     it('prices a rule in the sales currency, never one the client names', async () => {
       const created = await h.rule({});
       expect(created.unitPrice.currency).toBe('IRT');
@@ -719,6 +745,26 @@ describe('Package D — the custom service', () => {
       });
     });
 
+    it('answers a panel that filled up after the quote as unavailable, never as a price change (Codex, PR #88)', async () => {
+      /*
+       * Whether the panel can take a new account is not part of the frozen terms, and
+       * `panelSales.acquire` decides it straight after the terms check. Folding it into the
+       * terms check told a customer whose panel became unsellable that the price changed,
+       * and sent them to rebuild an identically priced order.
+       */
+      await offer();
+      const order = await h.draft(customer, panelA, '10', 30);
+      await f.ctx.container.database.db.execute(
+        sql`UPDATE panels SET status = 'DISABLED' WHERE id = ${panelA}`,
+      );
+      const refusal = await refusalOf(h.confirm(order));
+      expect(refusal.code).toBe('commerce.panel_not_eligible');
+      const [row] = await h.rows<{ state: string }>(
+        sql`SELECT state FROM orders WHERE id = ${order.id}`,
+      );
+      expect(row?.state).toBe('DRAFT');
+    });
+
     it('refuses a confirmation when a more specific rule now applies, or the location was withdrawn', async () => {
       await offer();
       const first = await h.draft(customer, panelA, '10', 30);
@@ -1003,6 +1049,72 @@ describe('Package D — the custom service', () => {
       await h.confirm(await h.draft(customer, panelA, '10', 30));
       // A custom service awaiting payment is a purchase: the rule no longer applies.
       expect((await productDraft()).totals.discount).toEqual(money(0n, 'IRT'));
+    });
+
+    /*
+     * The first-purchase question is serialised only if every confirmation that can change
+     * its answer queues on the same lock. A custom order carries no first-purchase rule —
+     * the CHECK allows those only on NEW_SERVICE — so before this, its confirmation never
+     * took the lock, and a discounted NEW_SERVICE confirmation racing it could read "no
+     * earlier purchase" while this one was moving to AWAITING_PAYMENT, and both committed
+     * (Codex, PR #88). Held from outside: the confirmation must wait on it, and finish once
+     * it is released.
+     */
+    async function expectConfirmationQueuesOnFirstPurchaseLock(draft: OrderRecord) {
+      const db = f.ctx.container.database.db;
+      let open!: () => void;
+      const gate = new Promise<void>((resolve) => (open = resolve));
+      let held!: () => void;
+      const holding = new Promise<void>((resolve) => (held = resolve));
+      const holder = db.transaction(async (tx) => {
+        await tx.execute(
+          sql`SELECT pg_advisory_xact_lock(hashtextextended(${`nexa:first-purchase:${String(tenantA.tenantId)}:${String(customer)}`}, 0))`,
+        );
+        held();
+        await gate;
+      });
+      await holding;
+      let settled = false;
+      const confirming = h.confirm(draft).finally(() => {
+        settled = true;
+      });
+      const deadline = Date.now() + 5_000;
+      for (;;) {
+        const [waiting] = await h.rows<{ n: number }>(
+          sql`SELECT count(*)::int AS n FROM pg_locks WHERE NOT granted AND locktype = 'advisory'`,
+        );
+        if ((waiting?.n ?? 0) >= 1) break;
+        if (settled || Date.now() > deadline) {
+          open();
+          await holder;
+          throw new Error('the custom confirmation never waited on the first-purchase lock');
+        }
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      expect(settled).toBe(false);
+      open();
+      await holder;
+      expect((await confirming).state).toBe('AWAITING_PAYMENT');
+    }
+
+    it('queues an undiscounted custom confirmation on the first-purchase lock', async () => {
+      await offer();
+      await expectConfirmationQueuesOnFirstPurchaseLock(await h.draft(customer, panelA, '10', 30));
+    });
+
+    it('queues a discounted custom confirmation on the first-purchase lock too', async () => {
+      await offer();
+      const created = await f.ctx.container.discounts.create(tenantA, f.owner, {
+        idempotencyKey: f.key(),
+        write: { ...DISCOUNT, kind: 'AUTOMATIC', code: null, appliesTo: ['CUSTOM_SERVICE'] },
+      });
+      await f.ctx.container.discounts.activate(tenantA, f.owner, {
+        idempotencyKey: f.key(),
+        discountId: created.rule.id,
+      });
+      const draft = await h.draft(customer, panelA, '10', 30);
+      expect(draft.totals.discount.amountMinor).toBeGreaterThan(0n);
+      await expectConfirmationQueuesOnFirstPurchaseLock(draft);
     });
 
     it('lets a paid custom service be the source of a refund request', async () => {
