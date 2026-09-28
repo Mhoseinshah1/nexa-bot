@@ -139,6 +139,7 @@ export const PURPOSE_LABELS: Readonly<Record<DiscountablePurpose, WebKey>> = {
   RENEW: 'web.purpose_renew',
   ADD_TRAFFIC: 'web.purpose_add_traffic',
   ADD_TIME: 'web.purpose_add_time',
+  ADD_DEVICES: 'web.purpose_add_devices',
   CUSTOM_SERVICE: 'web.purpose_custom_service',
 };
 

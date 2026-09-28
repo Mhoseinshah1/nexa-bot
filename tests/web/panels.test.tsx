@@ -990,6 +990,7 @@ describe('the panel detail', () => {
     expiresAt: '2026-12-01T00:00:00.000Z',
     trafficLimitBytes: '53687091200',
     trafficUsedBytes: '1073741824',
+    deviceLimit: null,
     usageSyncedAt: '2026-09-15T08:00:00.000Z',
     deliveryState: 'DELIVERED',
     deliveredAt: '2026-09-10T12:35:00.000Z',

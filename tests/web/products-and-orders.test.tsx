@@ -726,6 +726,7 @@ describe('the order detail', () => {
     expiresAt: null,
     trafficLimitBytes: '53687091200',
     trafficUsedBytes: '0',
+    deviceLimit: null,
     usageSyncedAt: null,
     deliveryState: 'PENDING',
     deliveredAt: null,

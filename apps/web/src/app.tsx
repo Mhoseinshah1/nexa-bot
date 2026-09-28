@@ -25,6 +25,7 @@ import { PaymentGatewaysPage } from './pages/payment-gateways';
 import { SupportPage } from './pages/support';
 import { ProductDetailPage, ProductsPage } from './pages/products';
 import { ProductCategoriesPage } from './pages/product-categories';
+import { ExtraDevicesPage } from './pages/extra-devices';
 import { OrderDetailPage, OrdersPage } from './pages/orders';
 import { ServiceDetailPage, ServicesPage } from './pages/services';
 import { UsersPage, UserDetailPage } from './pages/users';
@@ -244,6 +245,16 @@ export const NAV: readonly NavEntry[] = [
     // EITHER, for the reason `/products` above gives in full: the route renders the
     // create form on `catalog.edit` whether or not `catalog.view` is held, and the
     // server authorizes every write on `catalog.edit` alone.
+    permission: ['catalog.view', 'catalog.edit'],
+    group: 'web.navgroup_sales',
+  },
+  {
+    // WP-A5: the extra users / devices rate — an `ADD_DEVICES` add-on, under the catalogue's
+    // own pair and for the reason `/products` gives: the create form needs only edit.
+    id: 'extra-devices',
+    path: '/extra-devices',
+    label: 'web.nav_extra_devices',
+    icon: 'products',
     permission: ['catalog.view', 'catalog.edit'],
     group: 'web.navgroup_sales',
   },
@@ -627,6 +638,14 @@ export function resolve(
       ),
       crumbs: [{ label: t('web.products_title') }],
       title: t('web.products_title'),
+    };
+  }
+
+  if (route.path === '/extra-devices') {
+    return {
+      element: <ExtraDevicesPage mayEdit={may('catalog.edit')} denied={!may('catalog.view')} />,
+      crumbs: [{ label: t('web.extra_devices_title') }],
+      title: t('web.extra_devices_title'),
     };
   }
 

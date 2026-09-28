@@ -257,6 +257,13 @@ import {
   type CustomerResponse,
   type CustomerStatus,
   PAYMENT_ACCOUNT_ROUTES,
+  SERVICE_ADDON_ROUTES,
+  serviceAddonListResponseSchema,
+  serviceAddonResponseSchema,
+  type ServiceAddonListResponse,
+  type ServiceAddonResponse,
+  type ServiceAddonKind,
+  type ServiceAddonStatus,
   BOT_ROUTES,
   botDiagnosticResponseSchema,
   botListResponseSchema,
@@ -1338,6 +1345,70 @@ export async function fetchPaymentReceiptBytes(
  * the figure at approval time is an operator able to approve a different payment from
  * the one the customer made.
  */
+// --- Service add-ons (WP-A5: the extra users / devices rate) -------------------
+
+/** One page of add-ons, optionally of one kind. The server authorizes on `catalog.view`. */
+export function fetchServiceAddons(
+  query: {
+    limit?: number;
+    cursor?: string;
+    kind?: ServiceAddonKind;
+    status?: ServiceAddonStatus;
+  } = {},
+): Promise<ServiceAddonListResponse> {
+  const params = new URLSearchParams();
+  if (query.limit !== undefined) params.set('limit', String(query.limit));
+  if (query.cursor !== undefined && query.cursor !== '') params.set('cursor', query.cursor);
+  if (query.kind !== undefined) params.set('kind', query.kind);
+  if (query.status !== undefined) params.set('status', query.status);
+  const suffix = params.toString();
+  return authedGet(
+    suffix ? `${SERVICE_ADDON_ROUTES.list}?${suffix}` : SERVICE_ADDON_ROUTES.list,
+    serviceAddonListResponseSchema,
+  );
+}
+
+/**
+ * The write body for create and edit. One shape, as for products: the kind is written on
+ * create and ignored by an edit, which checks the amount against the kind the row has.
+ */
+export interface ServiceAddonWriteInput {
+  kind: ServiceAddonKind;
+  title: string;
+  sortOrder: number;
+  trafficGb: string | null;
+  durationDays: number | null;
+  maxQuantity: number | null;
+  panelId: string | null;
+  productId: string | null;
+  priceAmount: string | null;
+  priceCurrency: CurrencyCode | null;
+  idempotencyKey: string;
+}
+
+export function createServiceAddon(input: ServiceAddonWriteInput): Promise<ServiceAddonResponse> {
+  return post(SERVICE_ADDON_ROUTES.create, input, serviceAddonResponseSchema);
+}
+
+export function updateServiceAddon(
+  input: ServiceAddonWriteInput & { id: string },
+): Promise<ServiceAddonResponse> {
+  const { id, ...body } = input;
+  return post(SERVICE_ADDON_ROUTES.update(id), body, serviceAddonResponseSchema);
+}
+
+/** Offers or withdraws one add-on. An unpriced one cannot be offered; the server says so. */
+export function setServiceAddonActive(input: {
+  id: string;
+  active: boolean;
+  idempotencyKey: string;
+}): Promise<ServiceAddonResponse> {
+  const route = input.active
+    ? SERVICE_ADDON_ROUTES.activate(input.id)
+    : SERVICE_ADDON_ROUTES.deactivate(input.id);
+  return post(route, { idempotencyKey: input.idempotencyKey }, serviceAddonResponseSchema);
+}
+
 /**
  * The manual-transfer destinations, all of them, with no cursor.
  *

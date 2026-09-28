@@ -125,6 +125,7 @@ export const ORDER_PURPOSE_LABELS: Readonly<Record<OrderPurpose, WebKey>> = {
   RENEW: 'web.purpose_renew',
   ADD_TRAFFIC: 'web.purpose_add_traffic',
   ADD_TIME: 'web.purpose_add_time',
+  ADD_DEVICES: 'web.purpose_add_devices',
   TRIAL: 'web.reseller_purchase_purpose_trial',
   CUSTOM_SERVICE: 'web.purpose_custom_service',
 };
