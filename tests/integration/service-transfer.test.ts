@@ -819,6 +819,12 @@ describe('Package F — a customer transfers a service to another customer', () 
       details: { reason: 'TRIAL' },
     });
     expect(await ctx.container.serviceTransfers.offered(tenantA, service!)).toBe(false);
+    // And the service detail the customer actually sees draws no transfer button — the
+    // bot asks the evaluator, never merely whether the feature is wired.
+    await handle(tapUpdate(`s:${service!.id}`));
+    const detail = callbacksOf(lastSent());
+    expect(detail.length).toBeGreaterThan(0);
+    expect(detail.some((data) => data.startsWith('ta:'))).toBe(false);
   });
 
   it('answers another customer’s service, and one that does not exist, as not found', async () => {
