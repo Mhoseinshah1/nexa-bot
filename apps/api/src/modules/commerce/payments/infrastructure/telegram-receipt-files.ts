@@ -50,7 +50,11 @@ export class TelegramReceiptFiles {
    * must: a method named `fetch` makes every call site indistinguishable from a real
    * one, which is a check defeated by a name.
    */
-  async download(scope: ScopeContext, receipt: PaymentReceiptRecord): Promise<TelegramFileOutcome> {
+  async download(
+    scope: ScopeContext,
+    // The binding and nothing else — a ticket attachment (WP-A7) is fetched the same way.
+    receipt: Pick<PaymentReceiptRecord, 'botInstanceId' | 'fileId'>,
+  ): Promise<TelegramFileOutcome> {
     const token = await this.deps.bots.tokenForBotInstance(scope, receipt.botInstanceId);
     if (token === null) {
       /*

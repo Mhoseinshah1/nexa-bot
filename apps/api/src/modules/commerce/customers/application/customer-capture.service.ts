@@ -183,6 +183,13 @@ export class CustomerCaptureService {
       readonly text: string;
       /** The message's own Telegram `update_id`, when known. */
       readonly updateId?: bigint;
+      /**
+       * WP-A7: read only a window with one of these purposes. A photo or a document is an
+       * answer to a ticket window and to nothing else, so a file must never close a note or
+       * a search window as though it were their text; any other window answers NO_WINDOW
+       * and is left exactly as it was.
+       */
+      readonly onlyPurposes?: readonly CustomerCapturePurpose[];
     },
   ): Promise<CaptureReadResult> {
     const requestHash = hashRequest({
@@ -190,6 +197,7 @@ export class CustomerCaptureService {
       customerId: input.customerId,
       text: input.text,
       read: true,
+      ...(input.onlyPurposes === undefined ? {} : { only: [...input.onlyPurposes] }),
     });
     const replayed = await this.deps.idempotency.find<{ captureId: string }>(
       scope,
@@ -207,6 +215,9 @@ export class CustomerCaptureService {
 
     const open = await this.deps.captures.findOpen(scope, input.botInstanceId, input.customerId);
     if (open === null) return { outcome: 'NO_WINDOW' };
+    if (input.onlyPurposes !== undefined && !input.onlyPurposes.includes(open.purpose)) {
+      return { outcome: 'NO_WINDOW' };
+    }
 
     const denial = {
       action: 'customer.capture.read',
@@ -222,6 +233,9 @@ export class CustomerCaptureService {
         tx,
       );
       if (capture === null) return { outcome: 'NO_WINDOW' } as const;
+      if (input.onlyPurposes !== undefined && !input.onlyPurposes.includes(capture.purpose)) {
+        return { outcome: 'NO_WINDOW' } as const;
+      }
       const now = this.deps.clock.now();
       if (now.getTime() >= capture.expiresAt.getTime()) {
         await this.deps.captures.close(scope, capture.id, 'EXPIRED', now, tx);

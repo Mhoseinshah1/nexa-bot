@@ -147,6 +147,19 @@ import type {
 import { decodeKeysetToken, encodeKeysetToken, type KeysetToken } from './keyset-token.js';
 import type { PanelService } from '../../modules/platform/panels/application/panel.service.js';
 import type { ReferralProgram } from '../../modules/commerce/referrals/application/referral-program.js';
+import {
+  TICKET_ATTACHMENT_MAX_BYTES,
+  TICKET_ERROR_CODES,
+  TICKET_MESSAGE_MAX_LENGTH,
+  TICKET_OPEN_MAX_PER_CUSTOMER,
+  TICKET_VIEW_MESSAGE_COUNT,
+} from '@nexa/contracts';
+import type {
+  InboundTicketFile,
+  TicketService,
+} from '../../modules/commerce/tickets/application/ticket.service.js';
+import type { TicketCategoryService } from '../../modules/commerce/tickets/application/ticket-category.service.js';
+import type { TicketScreenComposer } from '../../modules/commerce/tickets/application/ticket-screens.js';
 
 import { readHealth } from '../../modules/platform/panels/application/panel-health-view.js';
 
@@ -297,6 +310,20 @@ export const BOT_INTENTS = [
    * never replays what the customer first asked for: a pass answers the main menu.
    */
   'MEMBERSHIP_CHECK',
+  /*
+   * WP-A7 — the customer's support tickets. `TICKETS` is the list (the menu entry, /tickets
+   * and its callback), `TICKET_NEW` the category chooser, `TICKET_CATEGORY` opens the window
+   * that reads the new ticket's first message, `TICKET_VIEW` shows one conversation,
+   * `TICKET_REPLY` opens the reply window, and the close is ask-then-act. Every one names an
+   * id or nothing; the service re-reads the ticket and its owner on every write.
+   */
+  'TICKETS',
+  'TICKET_NEW',
+  'TICKET_CATEGORY',
+  'TICKET_VIEW',
+  'TICKET_REPLY',
+  'TICKET_CLOSE_ASK',
+  'TICKET_CLOSE',
   /*
    * Phase 5T — the management panel.
    *
@@ -696,6 +723,18 @@ export const GATEWAY_CHECK_CALLBACK_PREFIX = 'gc:';
  * already sent, and picks the first route as it always did.
  */
 export const GATEWAY_ROUTE_PAY_CALLBACK_PREFIX = 'gp:';
+
+/*
+ * WP-A7 — the ticket desk's callbacks: `tk` and one letter, so none shadows `t:` (terminate)
+ * or is shadowed by it. Each names a ticket, a category, or nothing.
+ */
+export const TICKETS_CALLBACK_DATA = 'tkl:';
+export const TICKET_NEW_CALLBACK_DATA = 'tkn:';
+export const TICKET_CATEGORY_CALLBACK_PREFIX = 'tkc:';
+export const TICKET_VIEW_CALLBACK_PREFIX = 'tkv:';
+export const TICKET_REPLY_CALLBACK_PREFIX = 'tkr:';
+export const TICKET_CLOSE_ASK_CALLBACK_PREFIX = 'tkq:';
+export const TICKET_CLOSE_CALLBACK_PREFIX = 'tkx:';
 
 /**
  * «🧾 ثبت پرداخت»: opens the payment-method selector for an order, `pm:<order uuid>`. It
@@ -2305,6 +2344,9 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
     if (data.startsWith(CONNECTED_CALLBACK_PREFIX)) {
       return callbackCommand('SERVICE_CONNECTED', data.slice(CONNECTED_CALLBACK_PREFIX.length), id);
     }
+    // WP-A7: the ticket desk, before the one-letter prefixes.
+    const ticket = ticketCallbackCommand(data, id);
+    if (ticket !== null) return ticket;
     if (data === SUPPORT_CALLBACK_DATA) {
       return { intent: 'SUPPORT', targetId: null, callbackQueryId: id };
     }
@@ -2933,6 +2975,10 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
   if (command === '/paysupport') {
     return { intent: 'SUPPORT', targetId: null, callbackQueryId: null };
   }
+  // WP-A7: the customer's support tickets — the menu's ticket button routes here.
+  if (command === '/tickets') {
+    return { intent: 'TICKETS', targetId: null, callbackQueryId: null };
+  }
   /*
    * The management panel's three text entries (Phase 5T).
    *
@@ -3198,6 +3244,29 @@ function callbackCommand(
   const parsed = uuidV7Schema.safeParse(rawId);
   if (!parsed.success) return { intent: 'UNSUPPORTED', targetId: null, callbackQueryId };
   return { intent, targetId: parsed.data, callbackQueryId };
+}
+
+/**
+ * WP-A7 — the ticket desk's seven callbacks, or null when `data` is none of them. Every id is
+ * validated here; anything malformed is UNSUPPORTED before a handler sees it.
+ */
+function ticketCallbackCommand(data: string, id: string | null): BotCommand | null {
+  if (data === TICKETS_CALLBACK_DATA)
+    return { intent: 'TICKETS', targetId: null, callbackQueryId: id };
+  if (data === TICKET_NEW_CALLBACK_DATA) {
+    return { intent: 'TICKET_NEW', targetId: null, callbackQueryId: id };
+  }
+  const routes: readonly (readonly [string, BotIntent])[] = [
+    [TICKET_CATEGORY_CALLBACK_PREFIX, 'TICKET_CATEGORY'],
+    [TICKET_VIEW_CALLBACK_PREFIX, 'TICKET_VIEW'],
+    [TICKET_REPLY_CALLBACK_PREFIX, 'TICKET_REPLY'],
+    [TICKET_CLOSE_ASK_CALLBACK_PREFIX, 'TICKET_CLOSE_ASK'],
+    [TICKET_CLOSE_CALLBACK_PREFIX, 'TICKET_CLOSE'],
+  ];
+  for (const [prefix, intent] of routes) {
+    if (data.startsWith(prefix)) return callbackCommand(intent, data.slice(prefix.length), id);
+  }
+  return null;
 }
 
 /**
@@ -3635,6 +3704,31 @@ export interface BotRuntimeDeps {
   readonly resellers?: Pick<ResellerService, 'standing'>;
   readonly referralGifts?: ReferralGiftSource;
   readonly media?: TenantMediaSource;
+  /** WP-A7: the customer's support tickets. Absent, the desk is not offered. */
+  readonly tickets?: TicketDeskPort;
+}
+
+/**
+ * What the bot needs of the ticket module (WP-A7): the customer's own writes and reads, the
+ * active categories, the conversation composer, and one question about windows.
+ */
+export interface TicketDeskPort {
+  readonly service: Pick<
+    TicketService,
+    'openByCustomer' | 'replyByCustomer' | 'closeByCustomer' | 'customerTickets' | 'customerTicket'
+  >;
+  readonly categories: Pick<TicketCategoryService, 'activeForCustomer'>;
+  readonly screens: Pick<TicketScreenComposer, 'statusLabel' | 'conversation'>;
+  /**
+   * Whether a file this customer just sent answers a TICKET window rather than a receipt
+   * window: a ticket window is open and was opened AFTER any open receipt window — the
+   * prompt the customer saw last is the one their file answers.
+   */
+  fileWindowIsTicket(
+    scope: TenantContext,
+    botInstanceId: BotInstanceId,
+    customerId: UserId,
+  ): Promise<boolean>;
 }
 
 export interface PaymentRouteSource {
@@ -8908,6 +9002,9 @@ export class BotRuntime {
         keyboard: (await this.isAdmin(scope, actor, input)) ? 'MAIN_MENU_ADMIN' : 'MAIN_MENU',
       };
     }
+    // WP-A7: the customer's support tickets.
+    const ticketed = await this.ticketTurn(scope, actor, command, customer, input);
+    if (ticketed !== null) return ticketed;
     if (command.intent === 'TUTORIAL') return tutorialChoice();
     if (command.intent === 'TUTORIAL_PLATFORM' && command.targetId !== null) {
       return tutorialFor(command.targetId as ConnectionGuidePlatform);
@@ -9030,6 +9127,12 @@ export class BotRuntime {
       return this.cancelPayment(scope, actor, command.targetId, customer, input.idempotencyKey);
     }
     if (command.intent === 'RECEIPT_UPLOAD' && command.file != null) {
+      /*
+       * WP-A7: a file answers a ticket window when that is the prompt the customer saw last;
+       * otherwise it is a receipt, exactly as before.
+       */
+      const ticketFile = await this.ticketFile(scope, actor, customer, command.file, input);
+      if (ticketFile !== null) return ticketFile;
       return this.submitReceipt(
         scope,
         actor,
@@ -9878,6 +9981,10 @@ export class BotRuntime {
     if (capture.purpose === 'SERVICE_TRANSFER_RECIPIENT') {
       return this.serviceTransferRecipient(scope, actor, customer, capture.subjectId, text, input);
     }
+    // WP-A7: a new ticket's first message, or a reply to one.
+    if (capture.purpose === 'TICKET_NEW_MESSAGE' || capture.purpose === 'TICKET_REPLY') {
+      return this.ticketSubmit(scope, actor, customer, capture, text, null, input);
+    }
     if (capture.purpose === 'CUSTOM_SERVICE_VOLUME' || capture.purpose === 'CUSTOM_SERVICE_DAYS') {
       return this.customServiceFigure(scope, actor, customer, capture, text, input);
     }
@@ -10566,6 +10673,468 @@ export class BotRuntime {
     }
   }
 
+  // --- WP-A7: the customer's support tickets ----------------------------------------------
+
+  /**
+   * The ticket desk's seven intents, or null for every other intent (and for all of them when
+   * the desk is not wired). Nothing here decides a fact: every write is `TicketService`'s,
+   * which re-reads the ticket and its owner inside its transaction; the screens only draw.
+   */
+  private async ticketTurn(
+    scope: TenantContext,
+    actor: ActorContext,
+    command: BotCommand,
+    customer: CustomerRecord,
+    input: {
+      readonly idempotencyKey: string;
+      readonly botInstanceId: BotInstanceId;
+      readonly update?: unknown;
+    },
+  ): Promise<PendingReply | null> {
+    const desk = this.deps.tickets;
+    if (desk === undefined) return null;
+    const id = command.targetId;
+    switch (command.intent) {
+      case 'TICKETS':
+        return this.ticketList(scope, desk, customer);
+      case 'TICKET_NEW':
+        return this.ticketNew(scope, desk, customer);
+      case 'TICKET_CATEGORY':
+        return id === null ? null : this.ticketCategory(scope, actor, desk, customer, id, input);
+      case 'TICKET_VIEW':
+        return id === null ? null : this.ticketView(scope, desk, customer, id);
+      case 'TICKET_REPLY':
+        return id === null ? null : this.ticketReplyOpen(scope, actor, desk, customer, id, input);
+      case 'TICKET_CLOSE_ASK':
+        return id === null ? null : this.ticketCloseAsk(scope, desk, customer, id);
+      case 'TICKET_CLOSE':
+        return id === null ? null : this.ticketClose(scope, actor, desk, customer, id);
+      default:
+        return null;
+    }
+  }
+
+  /** The ticket desk's list: the customer's tickets, active first, and a new one. */
+  private async ticketList(
+    scope: TenantContext,
+    desk: TicketDeskPort,
+    customer: CustomerRecord,
+  ): Promise<PendingReply> {
+    const tickets = await desk.service.customerTickets(scope, customer.id);
+    const buttons: CustomerButton[] = [];
+    for (const ticket of tickets) {
+      buttons.push({
+        label: {
+          kind: 'TEMPLATE',
+          key: 'bot.ticket.list_item_button',
+          values: {
+            status: await desk.screens.statusLabel(scope, ticket.status),
+            number: ticket.number,
+            category: ticket.categoryTitle,
+          },
+        },
+        data: `${TICKET_VIEW_CALLBACK_PREFIX}${ticket.id}`,
+      });
+    }
+    buttons.push(newTicketButton(), mainMenuButton());
+    return {
+      key: tickets.length === 0 ? 'bot.ticket.list_empty' : 'bot.ticket.list',
+      values: {},
+      buttons,
+      orderId: null,
+    };
+  }
+
+  /** A new ticket: the active categories. A courtesy check of the open-ticket rail first. */
+  private async ticketNew(
+    scope: TenantContext,
+    desk: TicketDeskPort,
+    customer: CustomerRecord,
+  ): Promise<PendingReply> {
+    const open = (await desk.service.customerTickets(scope, customer.id)).filter(
+      (ticket) => ticket.status !== 'CLOSED',
+    ).length;
+    if (open >= TICKET_OPEN_MAX_PER_CUSTOMER) {
+      return {
+        key: 'bot.ticket.open_limit',
+        values: { max: TICKET_OPEN_MAX_PER_CUSTOMER },
+        buttons: [ticketsButton()],
+        orderId: null,
+      };
+    }
+    const categories = await desk.categories.activeForCustomer(scope);
+    if (categories.length === 0) {
+      return {
+        key: 'bot.ticket.no_categories',
+        values: {},
+        buttons: [ticketsButton()],
+        orderId: null,
+      };
+    }
+    return {
+      key: 'bot.ticket.choose_category',
+      values: {},
+      buttons: [
+        ...categories.map((category) => ({
+          label: {
+            kind: 'TEMPLATE' as const,
+            key: 'bot.ticket.category_button' as const,
+            values: { title: category.title },
+          },
+          data: `${TICKET_CATEGORY_CALLBACK_PREFIX}${category.id}`,
+        })),
+        ticketsButton(),
+      ],
+      orderId: null,
+    };
+  }
+
+  /** A category was chosen: open the window that reads the new ticket's first message. */
+  private async ticketCategory(
+    scope: TenantContext,
+    actor: ActorContext,
+    desk: TicketDeskPort,
+    customer: CustomerRecord,
+    categoryId: string,
+    input: {
+      readonly idempotencyKey: string;
+      readonly botInstanceId: BotInstanceId;
+      readonly update?: unknown;
+    },
+  ): Promise<PendingReply> {
+    const category = (await desk.categories.activeForCustomer(scope)).find(
+      (candidate) => candidate.id === categoryId,
+    );
+    // A stale button for a category since hidden: the chooser again, as it now stands.
+    if (category === undefined) return this.ticketNew(scope, desk, customer);
+    const updateId = updateIdOf(input.update);
+    try {
+      await this.deps.captures.open(scope, actor, {
+        idempotencyKey: `${input.idempotencyKey}:ticket-window`,
+        botInstanceId: input.botInstanceId,
+        customerId: customer.id,
+        purpose: 'TICKET_NEW_MESSAGE',
+        subjectId: category.id,
+        // A window reads only messages sent after the tap that opened it.
+        ...(updateId === undefined ? {} : { openedUpdateId: updateId }),
+      });
+    } catch (error) {
+      return refusal(error);
+    }
+    return {
+      key: 'bot.ticket.message_prompt',
+      values: { category: category.title, max: TICKET_MESSAGE_MAX_LENGTH },
+      buttons: [ticketsButton()],
+      orderId: null,
+    };
+  }
+
+  /** One of the customer's own tickets: its heading and its latest messages. */
+  private async ticketView(
+    scope: TenantContext,
+    desk: TicketDeskPort,
+    customer: CustomerRecord,
+    ticketId: string,
+  ): Promise<PendingReply> {
+    const found = await desk.service.customerTicket(
+      scope,
+      customer.id,
+      ticketId,
+      TICKET_VIEW_MESSAGE_COUNT,
+    );
+    if (found === null) return ticketNotFound();
+    const { ticket } = found;
+    const rendered = await desk.screens.conversation(scope, found.messages, found.messageCount);
+    const active = ticket.status !== 'CLOSED';
+    return {
+      key: 'bot.ticket.view',
+      values: {
+        number: ticket.number,
+        category: ticket.categoryTitle,
+        status: await desk.screens.statusLabel(scope, ticket.status),
+        conversation: rendered.conversation,
+        ...(rendered.olderLine === null ? {} : { olderLine: rendered.olderLine }),
+      },
+      buttons: [
+        ...(active
+          ? [
+              {
+                label: { kind: 'TEMPLATE' as const, key: 'bot.ticket.reply_button' as const },
+                data: `${TICKET_REPLY_CALLBACK_PREFIX}${ticket.id}`,
+              },
+              {
+                label: { kind: 'TEMPLATE' as const, key: 'bot.ticket.close_button' as const },
+                data: `${TICKET_CLOSE_ASK_CALLBACK_PREFIX}${ticket.id}`,
+              },
+            ]
+          : [newTicketButton()]),
+        ticketsButton(),
+      ],
+      orderId: null,
+    };
+  }
+
+  /** The reply button: open the window that reads the customer's reply to this ticket. */
+  private async ticketReplyOpen(
+    scope: TenantContext,
+    actor: ActorContext,
+    desk: TicketDeskPort,
+    customer: CustomerRecord,
+    ticketId: string,
+    input: {
+      readonly idempotencyKey: string;
+      readonly botInstanceId: BotInstanceId;
+      readonly update?: unknown;
+    },
+  ): Promise<PendingReply> {
+    const found = await desk.service.customerTicket(scope, customer.id, ticketId, 1);
+    if (found === null) return ticketNotFound();
+    if (found.ticket.status === 'CLOSED') return ticketAlreadyClosed();
+    const updateId = updateIdOf(input.update);
+    try {
+      await this.deps.captures.open(scope, actor, {
+        idempotencyKey: `${input.idempotencyKey}:ticket-window`,
+        botInstanceId: input.botInstanceId,
+        customerId: customer.id,
+        purpose: 'TICKET_REPLY',
+        subjectId: found.ticket.id,
+        ...(updateId === undefined ? {} : { openedUpdateId: updateId }),
+      });
+    } catch (error) {
+      return refusal(error);
+    }
+    return {
+      key: 'bot.ticket.reply_prompt',
+      values: { number: found.ticket.number, max: TICKET_MESSAGE_MAX_LENGTH },
+      buttons: [ticketViewButton(found.ticket.id)],
+      orderId: null,
+    };
+  }
+
+  /** The close button: the question. Writes nothing; its one button is the close. */
+  private async ticketCloseAsk(
+    scope: TenantContext,
+    desk: TicketDeskPort,
+    customer: CustomerRecord,
+    ticketId: string,
+  ): Promise<PendingReply> {
+    const found = await desk.service.customerTicket(scope, customer.id, ticketId, 1);
+    if (found === null) return ticketNotFound();
+    if (found.ticket.status === 'CLOSED') return ticketAlreadyClosed();
+    return {
+      key: 'bot.ticket.close_ask',
+      values: { number: found.ticket.number },
+      buttons: [
+        {
+          label: { kind: 'TEMPLATE', key: 'bot.ticket.close_confirm_button' },
+          data: `${TICKET_CLOSE_CALLBACK_PREFIX}${found.ticket.id}`,
+        },
+        ticketViewButton(found.ticket.id),
+      ],
+      orderId: null,
+    };
+  }
+
+  /** The close itself. Closing a ticket already closed answers the same sentence. */
+  private async ticketClose(
+    scope: TenantContext,
+    actor: ActorContext,
+    desk: TicketDeskPort,
+    customer: CustomerRecord,
+    ticketId: string,
+  ): Promise<PendingReply> {
+    try {
+      const closed = await desk.service.closeByCustomer(scope, actor, {
+        customerId: customer.id,
+        ticketId,
+      });
+      return {
+        key: 'bot.ticket.closed',
+        values: { number: closed.ticket.number },
+        buttons: [ticketsButton()],
+        orderId: null,
+      };
+    } catch (error) {
+      if (isNexaError(error) && error.code === TICKET_ERROR_CODES.TICKET_NOT_FOUND) {
+        return ticketNotFound();
+      }
+      return refusal(error);
+    }
+  }
+
+  /**
+   * A photo or document, offered to the customer's ticket window — only when a ticket window
+   * is the prompt they saw last, and read with `onlyPurposes` so a file can never close some
+   * other window as though it were its text. Null leaves the file to the receipt path.
+   */
+  private async ticketFile(
+    scope: TenantContext,
+    actor: ActorContext,
+    customer: CustomerRecord,
+    file: InboundReceiptFile,
+    input: {
+      readonly idempotencyKey: string;
+      readonly botInstanceId: BotInstanceId;
+      readonly update?: unknown;
+    },
+  ): Promise<PendingReply | null> {
+    const desk = this.deps.tickets;
+    if (desk === undefined) return null;
+    if (!(await desk.fileWindowIsTicket(scope, input.botInstanceId, customer.id))) return null;
+    const updateId = updateIdOf(input.update);
+    const read = await this.deps.captures.readText(scope, actor, {
+      idempotencyKey: `${input.idempotencyKey}:capture-file`,
+      botInstanceId: input.botInstanceId,
+      customerId: customer.id,
+      text: file.caption ?? '',
+      onlyPurposes: ['TICKET_NEW_MESSAGE', 'TICKET_REPLY'],
+      ...(updateId === undefined ? {} : { updateId }),
+    });
+    if (read.outcome !== 'READ') return null;
+    return this.ticketSubmit(
+      scope,
+      actor,
+      customer,
+      read.capture,
+      file.caption,
+      {
+        kind: file.kind,
+        fileId: file.fileId,
+        fileUniqueId: file.fileUniqueId,
+        mimeType: file.mimeType,
+        fileName: file.fileName,
+        fileSize: file.fileSize,
+      },
+      input,
+    );
+  }
+
+  /**
+   * What a ticket window read — text, or a file with its caption — filed as a new ticket or
+   * a reply. The window closed when it was read; a refusal that asks the customer to try
+   * again reopens it, reading only messages sent after this one, and a refusal that is an
+   * answer ("closed", "too many open") leaves it shut.
+   */
+  private async ticketSubmit(
+    scope: TenantContext,
+    actor: ActorContext,
+    customer: CustomerRecord,
+    capture: CustomerCaptureRecord,
+    text: string | null,
+    file: InboundTicketFile | null,
+    input: {
+      readonly idempotencyKey: string;
+      readonly botInstanceId: BotInstanceId;
+      readonly update?: unknown;
+    },
+  ): Promise<PendingReply | null> {
+    const desk = this.deps.tickets;
+    if (desk === undefined || capture.subjectId === null) return null;
+    const subjectId = capture.subjectId;
+    const updateId = updateIdOf(input.update);
+    const reopen = (suffix: string) =>
+      this.deps.captures.open(scope, actor, {
+        idempotencyKey: `${input.idempotencyKey}:${suffix}`,
+        botInstanceId: input.botInstanceId,
+        customerId: customer.id,
+        purpose: capture.purpose,
+        subjectId,
+        ...(updateId === undefined ? {} : { openedUpdateId: updateId }),
+      });
+    try {
+      if (capture.purpose === 'TICKET_NEW_MESSAGE') {
+        const opened = await desk.service.openByCustomer(scope, actor, {
+          customerId: customer.id,
+          botInstanceId: input.botInstanceId,
+          categoryId: subjectId,
+          text,
+          file,
+          // The update that carried the message: a redelivery opens nothing new.
+          idempotencyKey: `${input.idempotencyKey}:ticket`,
+        });
+        return {
+          key: 'bot.ticket.created',
+          values: { number: opened.ticket.number },
+          buttons: [ticketViewButton(opened.ticket.id), ticketsButton()],
+          orderId: null,
+        };
+      }
+      const posted = await desk.service.replyByCustomer(scope, actor, {
+        customerId: customer.id,
+        botInstanceId: input.botInstanceId,
+        ticketId: subjectId,
+        text,
+        file,
+        idempotencyKey: `${input.idempotencyKey}:ticket`,
+      });
+      return {
+        key: 'bot.ticket.reply_sent',
+        values: { number: posted.ticket.number },
+        buttons: [ticketViewButton(posted.ticket.id), ticketsButton()],
+        orderId: null,
+      };
+    } catch (error) {
+      const code = isNexaError(error) ? error.code : null;
+      const back =
+        capture.purpose === 'TICKET_REPLY' ? ticketViewButton(subjectId) : ticketsButton();
+      if (code === TICKET_ERROR_CODES.TICKET_MESSAGE_INVALID) {
+        await reopen('ticket-reopen');
+        return {
+          key: 'bot.ticket.message_invalid',
+          values: { max: TICKET_MESSAGE_MAX_LENGTH },
+          buttons: [back],
+          orderId: null,
+        };
+      }
+      if (code === TICKET_ERROR_CODES.TICKET_ATTACHMENT_REFUSED) {
+        await reopen('ticket-reopen');
+        const tooLarge = isNexaError(error) && error.details['refusal'] === 'TOO_LARGE';
+        return tooLarge
+          ? {
+              key: 'bot.ticket.attachment_too_large',
+              values: { maxBytes: BigInt(TICKET_ATTACHMENT_MAX_BYTES) },
+              buttons: [back],
+              orderId: null,
+            }
+          : {
+              key: 'bot.ticket.attachment_type_refused',
+              values: {},
+              buttons: [back],
+              orderId: null,
+            };
+      }
+      if (code === TICKET_ERROR_CODES.TICKET_OPEN_LIMIT) {
+        return {
+          key: 'bot.ticket.open_limit',
+          values: { max: TICKET_OPEN_MAX_PER_CUSTOMER },
+          buttons: [ticketsButton()],
+          orderId: null,
+        };
+      }
+      if (code === TICKET_ERROR_CODES.TICKET_CATEGORY_NOT_FOUND) {
+        return this.ticketNew(scope, desk, customer);
+      }
+      if (code === TICKET_ERROR_CODES.TICKET_CLOSED) return ticketAlreadyClosed();
+      if (code === TICKET_ERROR_CODES.TICKET_NOT_FOUND) return ticketNotFound();
+      if (code === TICKET_ERROR_CODES.TICKET_MESSAGE_LIMIT) {
+        return {
+          key: 'bot.ticket.message_limit',
+          values: {},
+          buttons: [newTicketButton()],
+          orderId: null,
+        };
+      }
+      /*
+       * A failure nobody answers — the database, a timeout — wrote nothing, but reading the
+       * message already closed its window and the webhook answers 2xx, so Telegram will not
+       * redeliver. The window is reopened so the customer's next message is still read; the
+       * refund reason's rule (WP19). Best effort: the original failure is the one reported.
+       */
+      if (!hasRefusalReply(error)) await reopen('ticket-retry').catch(() => undefined);
+      return refusal(error);
+    }
+  }
+
   /**
    * The FAQ/support screen (§J): the tenant's active entries in parts split at item
    * boundaries, the earlier parts as leads and the last carrying the keyboard; with no
@@ -10575,6 +11144,8 @@ export class BotRuntime {
   private async supportScreen(scope: TenantContext): Promise<PendingReply> {
     const screen = await this.deps.support.partsFor(scope);
     const buttons: CustomerButton[] = [
+      // WP-A7: the ticket desk, from the support screen and from /paysupport alike.
+      ...(this.deps.tickets === undefined ? [] : [ticketDeskButton()]),
       ...(screen.supportUrl === null
         ? []
         : [
@@ -12612,6 +13183,53 @@ function preinvoiceButtons(order: OrderRecord, routesOffered: boolean): readonly
   ];
 }
 
+/** WP-A7: back to the customer's ticket list. */
+function ticketsButton(): CustomerButton {
+  return {
+    label: { kind: 'TEMPLATE', key: 'bot.ticket.back_button' },
+    data: TICKETS_CALLBACK_DATA,
+  };
+}
+
+/** WP-A7: the support screen's (and /paysupport's) way into the ticket desk. */
+function ticketDeskButton(): CustomerButton {
+  return {
+    label: { kind: 'TEMPLATE', key: 'bot.support.tickets_button' },
+    data: TICKETS_CALLBACK_DATA,
+  };
+}
+
+/** WP-A7: start a new ticket. */
+function newTicketButton(): CustomerButton {
+  return {
+    label: { kind: 'TEMPLATE', key: 'bot.ticket.new_button' },
+    data: TICKET_NEW_CALLBACK_DATA,
+  };
+}
+
+/** WP-A7: open one ticket's conversation. */
+function ticketViewButton(ticketId: string): CustomerButton {
+  return {
+    label: { kind: 'TEMPLATE', key: 'bot.ticket.view_button' },
+    data: `${TICKET_VIEW_CALLBACK_PREFIX}${ticketId}`,
+  };
+}
+
+/** WP-A7: a ticket that is not the customer's own, or does not exist — one answer. */
+function ticketNotFound(): PendingReply {
+  return { key: 'bot.ticket.not_found', values: {}, buttons: [ticketsButton()], orderId: null };
+}
+
+/** WP-A7: a closed ticket refuses a reply and a close; a new ticket is the way on. */
+function ticketAlreadyClosed(): PendingReply {
+  return {
+    key: 'bot.ticket.already_closed',
+    values: {},
+    buttons: [newTicketButton(), ticketsButton()],
+    orderId: null,
+  };
+}
+
 function mainMenuButton(): CustomerButton {
   return {
     label: { kind: 'TEMPLATE', key: 'bot.menu.main_button' },
@@ -12732,9 +13350,22 @@ export function decodeTransferConfirm(data: string): {
  */
 export function notificationButtons(
   kind: CustomerNotificationKind,
-  subject: { readonly serviceId: string },
+  subject: { readonly serviceId?: string; readonly ticketId?: string },
 ): readonly CustomerButton[] {
-  if (kind !== 'SERVICE_TRANSFER_RECEIVED') return [];
+  // WP-A7: support's reply opens the ticket, or its reply window, for whoever taps it.
+  if (kind === 'TICKET_REPLY' && subject.ticketId !== undefined) {
+    return [
+      {
+        label: { kind: 'TEMPLATE', key: 'bot.ticket.reply_button' },
+        data: `${TICKET_REPLY_CALLBACK_PREFIX}${subject.ticketId}`,
+      },
+      {
+        label: { kind: 'TEMPLATE', key: 'bot.ticket.view_button' },
+        data: `${TICKET_VIEW_CALLBACK_PREFIX}${subject.ticketId}`,
+      },
+    ];
+  }
+  if (kind !== 'SERVICE_TRANSFER_RECEIVED' || subject.serviceId === undefined) return [];
   return [
     {
       label: { kind: 'TEMPLATE', key: 'bot.service.transfer_details_button' },

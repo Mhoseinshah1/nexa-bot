@@ -224,6 +224,14 @@ import {
 } from './modules/commerce/payments/application/receipt-review-push-loop.js';
 import { DrizzleReceiptReviewPushRepository } from './modules/commerce/payments/infrastructure/drizzle-receipt-review-push.repository.js';
 import { DrizzleReceiptReviewFactsReader } from './modules/commerce/payments/infrastructure/drizzle-receipt-review-facts.reader.js';
+// WP-A7: the support ticket system.
+import { TicketService } from './modules/commerce/tickets/application/ticket.service.js';
+import { TicketCategoryService } from './modules/commerce/tickets/application/ticket-category.service.js';
+import { TicketScreenComposer } from './modules/commerce/tickets/application/ticket-screens.js';
+import { TicketSupportNotifyConsumer } from './modules/commerce/tickets/application/ticket-support-notify.consumer.js';
+import { DrizzleTicketRepository } from './modules/commerce/tickets/infrastructure/drizzle-ticket.repository.js';
+import { DrizzleTicketCategoryRepository } from './modules/commerce/tickets/infrastructure/drizzle-ticket-category.repository.js';
+import { DrizzleTicketContextReader } from './modules/commerce/tickets/infrastructure/drizzle-ticket-context.reader.js';
 import {
   notificationButtons,
   receiptReviewButtons,
@@ -557,6 +565,10 @@ export interface Container {
   readonly subscriptionFiles: SubscriptionFileService;
   /** Package F: a customer hands one of their services to another customer. */
   readonly serviceTransfers: ServiceTransferService;
+  /** WP-A7: support tickets, for the bot and the Web Admin alike. */
+  readonly tickets: TicketService;
+  /** WP-A7: the categories a customer files a ticket under. */
+  readonly ticketCategories: TicketCategoryService;
   /** The operator's price preview and an order's pricing detail (WP8). */
   readonly pricingRead: PricingReadService;
   /** Cashback from promise to credit to reversal (WP8 P9); driven by the provisioner loop. */
@@ -1073,6 +1085,18 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
         invoices: new DrizzleGatewayInvoiceRepository(database.db),
         wallet: new DrizzleWalletRepository(database.db),
         refundRequests: new DrizzleServiceRefundRequestRepository(database.db),
+      }),
+      /*
+       * WP-A7: a new ticket or a customer's reply → a support notification in the operator
+       * notification lane: the operations destination, and each Telegram-bound administrator
+       * who may reply. A consumer, so nothing about it can reach the customer's message. The
+       * lane is resolved lazily, as the financial log's is.
+       */
+      new TicketSupportNotifyConsumer({
+        lane: { queue: (scope, input, tx) => notifications.queue(scope, input, tx) },
+        tickets: new DrizzleTicketRepository(database.db),
+        customers: new DrizzleCustomerRepository(database.db),
+        reviewers: telegramAdmins,
       }),
     ],
     clock,
@@ -2764,6 +2788,45 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     clock,
     ids,
   });
+  /*
+   * WP-A7 — support tickets. ONE service for the bot and the Web Admin. An administrator's
+   * reply enqueues `TICKET_REPLY` on the customer lane in the transaction that writes it,
+   * through the same notifier every other producer uses.
+   */
+  const ticketRepository = new DrizzleTicketRepository(database.db);
+  const ticketCategoryRepository = new DrizzleTicketCategoryRepository(database.db);
+  const ticketCategoryService = new TicketCategoryService({
+    categories: ticketCategoryRepository,
+    templates: templateResolver,
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    clock,
+    ids,
+  });
+  const ticketService = new TicketService({
+    tickets: ticketRepository,
+    categories: ticketCategoryRepository,
+    customers: customerRepository,
+    context: new DrizzleTicketContextReader(database.db),
+    admins,
+    permissions: permissionResolver,
+    notifier: customerNotifier,
+    outbox,
+    audit,
+    opsLog,
+    guard,
+    sessions,
+    uow,
+    scopeActivity: tenants,
+    clock,
+    ids,
+  });
+  const ticketScreens = new TicketScreenComposer(templateResolver);
   const customerCounters = new DrizzleCustomerCountersReader(database.db);
   /**
    * The FAQ screen, rendered into message parts HERE — application code holds the
@@ -2964,6 +3027,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
        * — derived from the subject by the surface that owns the callback vocabulary.
        */
       serviceTransfers: serviceTransferService,
+      // WP-A7: support's reply, read from the ticket message the notification names.
+      tickets: ticketService,
       buttonsFor: notificationButtons,
       /*
        * The ledger reader the refund sentence renders from. The wallet repository
@@ -3910,6 +3975,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     customerCaptures: customerCaptureService,
     subscriptionFiles: subscriptionFileService,
     serviceTransfers: serviceTransferService,
+    tickets: ticketService,
+    ticketCategories: ticketCategoryService,
     pricingRead: pricingReadService,
     cashback: cashbackService,
     referrals: referralProgram,
@@ -4050,6 +4117,29 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       customService: customServiceFlowService,
       subscriptionFiles: subscriptionFileService,
       serviceTransfers: serviceTransferService,
+      /*
+       * WP-A7: the ticket desk. A file answers a ticket window only when that window is open
+       * and newer than any open receipt window — the prompt the customer saw last.
+       */
+      tickets: {
+        service: ticketService,
+        categories: ticketCategoryService,
+        screens: ticketScreens,
+        fileWindowIsTicket: async (scope, botInstanceId, customerId) => {
+          const now = clock.now().getTime();
+          const window = await customerCaptureRepository.findOpen(scope, botInstanceId, customerId);
+          if (window === null || window.expiresAt.getTime() <= now) return false;
+          if (window.purpose !== 'TICKET_NEW_MESSAGE' && window.purpose !== 'TICKET_REPLY') {
+            return false;
+          }
+          const receipt = await receiptCaptureRepository.findOpen(scope, botInstanceId, customerId);
+          return (
+            receipt === null ||
+            receipt.expiresAt.getTime() <= now ||
+            receipt.openedAt.getTime() < window.openedAt.getTime()
+          );
+        },
+      },
       orders: orderService,
       // The SAME messenger the delivery sweep uses, for the reason above it.
       messenger: customerMessenger,

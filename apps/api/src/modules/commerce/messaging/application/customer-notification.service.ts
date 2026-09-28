@@ -220,8 +220,20 @@ export interface CustomerNotificationDeps {
    */
   readonly buttonsFor?: (
     kind: CustomerNotificationKind,
-    subject: { readonly serviceId: string },
+    subject: { readonly serviceId?: string; readonly ticketId?: string },
   ) => readonly CustomerButton[];
+  /**
+   * WP-A7: what `TICKET_REPLY` renders — the ticket's number and category and support's
+   * reply, read at send time from the MESSAGE ROW the notification names, and the ticket
+   * the one button opens. A reader, not a payload (ADR 0030 §1). Null when the row is not
+   * a reply, which sends nothing.
+   */
+  readonly tickets?: {
+    notificationFacts(
+      scope: TenantContext,
+      messageId: string,
+    ): Promise<{ readonly values: TemplateValues; readonly ticketId: string } | null>;
+  };
   readonly uow: UnitOfWork<TransactionScope>;
   readonly clock: Clock;
   readonly scopeIsActive: (scope: TenantContext) => Promise<boolean>;
@@ -331,6 +343,15 @@ export class CustomerNotificationService {
       return {
         values: facts.values,
         buttons: this.deps.buttonsFor?.(row.kind, { serviceId: facts.serviceId }) ?? [],
+      };
+    }
+    if (row.kind === 'TICKET_REPLY') {
+      if (this.deps.tickets === undefined) return null;
+      const facts = await this.deps.tickets.notificationFacts(scope, row.subjectId);
+      if (facts === null) return null;
+      return {
+        values: facts.values,
+        buttons: this.deps.buttonsFor?.(row.kind, { ticketId: facts.ticketId }) ?? [],
       };
     }
     const values = await this.reminderValues(scope, row);
