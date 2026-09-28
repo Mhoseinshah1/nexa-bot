@@ -783,7 +783,7 @@ describe('the customer payment flow over Telegram', () => {
     const buttons = buttonsOf(lastMessage());
     expect(buttons.map((b) => b.callback_data)).toEqual([
       `w:${orderId}`,
-      `m:${orderId}`,
+      `pm:${orderId}`,
       `d:${orderId}`,
     ]);
     sent = [];
