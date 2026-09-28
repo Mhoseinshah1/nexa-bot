@@ -59,13 +59,17 @@ it stands.
 2. A tap opens a capture window, `SERVICE_TRANSFER_RECIPIENT` (subject = the service), and
    asks for the recipient's numeric id. The id is the `telegram_user_id` the recipient's own
    `/wallet` shows as «🪪 آی دی عددی».
-3. The typed id is validated by `telegramUserIdSchema`. The recipient is resolved inside the
+3. The typed id is validated by `telegramUserIdSchema`, after Persian `۰-۹` and Arabic-Indic
+   `٠-٩` digits are read as ASCII — a recipient's id copied onto a Persian keyboard is still
+   their id. The recipient is resolved inside the
    tenant by the exact lookup `CustomerRepository.list({ telegramUserId })`, the one the admin
    search already uses. The screen then shows:
-   - the service's account name and location;
+   - the service's account name and location (for a custom service, the location label its
+     order's frozen terms recorded);
    - the remaining traffic and time;
    - the recipient's numeric id and, when Telegram gave one, their display name or @username.
-4. `✅ تأیید انتقال سرویس` carries `tc:<serviceId>.<recipientTelegramId>`: at most 59 bytes,
+4. The button carries `ta:<serviceId>` (39 bytes) and opens the window; it moves nothing.
+   `✅ تأیید انتقال سرویس` carries `tc:<serviceId>.<recipientTelegramId>`: at most 59 bytes,
    under Telegram's 64. The confirmation reads the recipient again. Nothing on the button is
    trusted.
 5. The transfer commits in one transaction (§5). The sender is told
@@ -81,7 +85,14 @@ The recipient is never asked to accept, as the brief says.
 | `RECIPIENT_SELF`    | the id is the sender's own                                                                                                         |
 | `RECIPIENT_BLOCKED` | the recipient is `BLOCKED`. A blocked customer cannot use the bot, so they could not manage what they were given.                  |
 
-There is no deleted customer state in this model.
+There is no deleted customer state in this model. A typed text that is not a numeric id at
+all is `RECIPIENT_INVALID`.
+
+The four are a closed set in `packages/contracts/src/service-transfer.ts`, carried by
+`commerce.service_transfer_recipient_refused`. The customer is told `RECIPIENT_UNKNOWN` and
+`RECIPIENT_BLOCKED` in ONE sentence: telling them apart would tell a stranger which Telegram
+accounts an operator has blocked. Each recipient refusal opens the window again, because its
+sentence asks for the id once more.
 
 ## 4. Service eligibility (F3)
 
@@ -97,10 +108,13 @@ confirmation:
 - its subscription has been DELIVERED. A link still on its way would reach whoever owns
   the service when the sender retries, which is a race with no right answer.
 - no provisioning operation on it is undecided (`PLANNED`, `IN_FLIGHT`, `UNKNOWN`), other
-  than a `SYNC_USAGE` read. This covers:
+  than a SCHEDULED `SYNC_USAGE` read (`requested_by_customer_id` null). This covers:
   - a paid renewal, add-traffic or add-time not yet applied;
   - a suspend, resume or rotation on its way;
-  - a terminate an operator planned.
+  - a terminate an operator planned;
+  - a usage read the SENDER asked for. The announcer tells its outcome to whoever owns the
+    service when it ends, so the recipient would be told "your request was done" about a
+    request they never made. A scheduled read is announced to nobody, and is let through.
 - no refund request on it is `OPEN` or `EXECUTING`.
 - no commercial order for it is `AWAITING_PAYMENT`. The sender may be paying for it right
   now.
@@ -118,7 +132,8 @@ draft cannot be paid into the new owner's service:
 - confirmation already refuses with `SERVICE_NOT_FOUND`: `CommercialActionService.confirm`
   reads the service through `ownedService`, which compares its owner with the order's
   customer. Nothing changes there; a test now holds it for a transferred service;
-- settlement refuses with the `SERVICE_NOT_OWNED` preparation refusal, which is new: the
+- settlement refuses with the `SERVICE_NOT_OWNED` preparation refusal
+  (`commerce.service_action_not_allowed`, like the other preparation refusals), which is new: the
   confirmation reads the service without a lock, so an order confirmed in the moment a
   transfer commits reaches settlement naming a service its payer no longer owns.
 
@@ -140,13 +155,27 @@ key)`. A replayed update returns the row it already wrote.
      operation and refuses.
    - A settlement arriving later waits on the lifecycle lock. It then finds a service its
      payer no longer owns, and refuses (§4).
+   - The reassignment in step 4 escalates the row lock. `customer_id` is a column of
+     `services_tenant_id_customer_key`, so PostgreSQL takes `FOR UPDATE`, not
+     `NO KEY UPDATE`, for the UPDATE that changes it. That conflicts with the `FOR KEY SHARE`
+     of a foreign-key check. A commercial draft's insert already in flight on the row
+     finishes first; one arriving after it waits for the transfer to commit and then reads
+     the new owner, which the insert's owner check refuses. The key is kept for exactly
+     this serialisation, although no foreign key targets it any more. The escalation
+     cannot deadlock with a settlement: a settlement takes the lifecycle lock before it
+     inserts anything that references the service, and the transfer already holds that
+     lock when it escalates.
 3. **Re-decide everything in §3 and §4.**
    - If the sender no longer owns the service because THIS transfer already happened (the
      newest transfer row is `sender → this recipient`), the answer is the completed result,
      not an error. A double tap is two updates with two keys, and the second one must not
      say the first failed.
 4. **Write:**
-   - the `service_ownership_transfers` row (append-only);
+   - the `service_ownership_transfers` row (append-only), FIRST: the database admits the
+     change of owner only when the newest row for the service names it. "Newest" is an
+     identity column `seq`, not `created_at`, so two transfers a clock tick apart, or on
+     two replicas whose clocks disagree, still have one newest row. The row lock makes
+     `seq` their commit order;
    - `services.customer_id = recipient` and `customer_note = NULL` (F5);
    - one audit row, `service.transfer`, with `from`/`to` customer ids;
    - one outbox event, `ServiceOwnershipTransferred {serviceId, fromCustomerId,
@@ -196,22 +225,30 @@ would be the only lock in this codebase taken on a customer after a service life
   - It carries ONE inline button, `مشخصات سرویس`, whose callback is `s:<serviceId>`.
   - The button is derived from the subject by kind, never stored. So the lane still carries
     no payload (ADR-0030 §1). The tap goes through `getForCustomer` for whoever taps it.
+  - The derivation is the Telegram surface's `notificationButtons`, handed to the
+    dispatcher by the composition root: the callback vocabulary is the surface's, and the
+    messaging application does not import it. The values are read through
+    `ServiceTransferService.notificationFacts`. A transfer row or service that cannot be
+    read sends nothing and marks the row FAILED, as a reminder with no subject does.
 - **Precondition.** The notification is sent only while the recipient still owns the
   service. A service passed on again before the message left would otherwise announce
-  something the recipient no longer has.
+  something the recipient no longer has. `DrizzleNotificationSubjectReader` answers it from
+  the transfer row joined to the service on `customer_id = to_customer_id`, and SUPERSEDES
+  the row when that no longer holds.
 
 ## 8. Audit and events (F7)
 
 - The audit row `service.transfer`: entity `Service`, before `{customerId: from}`, after
-  `{customerId: to}`. The actor is the bot's `SYSTEM_JOB`, and the audit timestamp is its
+  `{customerId: to, transferId}`. The actor is the bot's `SYSTEM_JOB`, and the audit timestamp is its
   own.
 - The event `ServiceOwnershipTransferred`.
 - Neither carries the subscription URL, token or any file.
 
 ## 9. External and product gaps
 
-- **The sender keeps the link.** This follows the brief's rule, not an oversight. The
-  recipient's own `🔁 لینک جدید` (WP6-C) retires it, subject to the rotation cooldown.
+- **The sender keeps the link.** This follows the brief's rule, not an oversight. Where the
+  tenant offers it and the panel can rotate, the recipient's own `⚙️ تغییر لینک` (WP6-C)
+  retires it, subject to the rotation cooldown.
 - **No operator transfer.** Not asked for. `services.transfer` stays unserved, and the Web
   Admin sentence now says a customer transfers from the bot and the audit log carries it.
 
@@ -220,11 +257,24 @@ would be the only lock in this codebase taken on a customer after a service life
 The migration only widens what may be written:
 
 - two foreign keys narrowed to two columns;
-- three triggers;
-- a new table;
-- two re-pinned CHECK lists.
+- two trigger functions behind three triggers: `nexa_services_ownership_guard` on the
+  services INSERT and on an UPDATE of `tenant_id`, `order_id` or `customer_id`, and
+  `nexa_commercial_action_owner_guard` on the commercial-action INSERT;
+- a new table, with two append-only triggers;
+- three re-pinned CHECK constraints (the notification kind, the capture purpose and the
+  capture subject).
 
 The previous release writes nothing that violates the new rules. A service transferred under
 this release names a customer its order does not. The previous release reads that row
 without complaint, because its three-column foreign key is gone. Restoring that key would
 fail on such a row, and no rollback restores it.
+
+Two things a rolled-back release does with rows this one wrote, both bounded:
+
+- A `SERVICE_TRANSFER_RECEIVED` notification is a kind the older dispatcher cannot render,
+  so it defers the row without spending an attempt (`docs/conventions.md`, "A widened enum
+  is write-compatible, not reader-compatible").
+- A `SERVICE_TRANSFER_RECIPIENT` window still open at the rollback falls through, in the
+  older `capturedText`, to the `SERVICE_NOTE` branch: the next message the sender types in
+  those ten minutes is saved as that service's note. Ownership is re-checked by the note's
+  write, so it lands only on the sender's own service, and nothing else happens.
