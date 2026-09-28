@@ -3,17 +3,23 @@ import { createServer, type Server } from 'node:http';
 import { sql, type SQL } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  EMPTY_PRODUCT_DISPLAY,
   customServiceVolumeBytes,
   money,
   parseCustomServiceVolume,
   type ActorContext,
   type BotInstanceId,
   type CorrelationId,
+  type PanelId,
+  type ProductCategoryId,
+  type ProductId,
   type TenantContext,
   type UserId,
 } from '@nexa/contracts';
 import type { CustomServiceRuleInput } from '../../apps/api/src/modules/commerce/custom-service/application/custom-service-admin.service';
+import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
 import type { OrderRecord } from '../../apps/api/src/modules/commerce/orders/application/ports';
+import { DrizzleReceiptReviewFactsReader } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-receipt-review-facts.reader';
 import { DrizzleServiceRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-service.repository';
 import { startFakeMarzban, type FakeMarzban } from '../support/fake-marzban';
 import {
@@ -869,6 +875,89 @@ describe('Package D — the custom service', () => {
         }),
       );
       expect(refusal.code).toBe('commerce.custom_service_not_extendable');
+    });
+
+    it('counts a live custom order as a purchase, so the customer is no longer a first-time buyer', async () => {
+      await offer();
+      const products = new DrizzleProductRepository(f.ctx.container.database.db);
+      const now = f.ctx.container.clock.now();
+      const product = await products.create(tenantA, {
+        id: f.ctx.container.ids.uuid() as ProductId,
+        draft: {
+          title: 'پلن پایه',
+          description: 'یک ماهه',
+          audience: 'EVERYONE',
+          sortOrder: 10,
+          panelId: panelA as PanelId,
+          categoryId: SEED_IDS.categoryA as ProductCategoryId,
+          specification: { durationDays: 30, trafficBytes: 53_687_091_200n, deviceLimit: 2 },
+          price: money(100_000n, 'IRT'),
+          display: EMPTY_PRODUCT_DISPLAY,
+        },
+        now,
+      });
+      await products.setStatus(tenantA, product.id, 'INACTIVE', 'ACTIVE', now);
+      const created = await f.ctx.container.discounts.create(tenantA, f.owner, {
+        idempotencyKey: f.key(),
+        write: {
+          ...DISCOUNT,
+          kind: 'AUTOMATIC',
+          code: null,
+          firstPurchaseOnly: true,
+          appliesTo: ['NEW_SERVICE'],
+        },
+      });
+      await f.ctx.container.discounts.activate(tenantA, f.owner, {
+        idempotencyKey: f.key(),
+        discountId: created.rule.id,
+      });
+      const productDraft = () =>
+        f.ctx.container.orders.createDraft(tenantA, customerActor(f.key()), {
+          idempotencyKey: f.key(),
+          customerId: customer,
+          productId: product.id,
+        });
+      // Before any purchase, the first-purchase rule applies.
+      expect((await productDraft()).totals.discount).toEqual(money(10_000n, 'IRT'));
+      await h.confirm(await h.draft(customer, panelA, '10', 30));
+      // A custom service awaiting payment is a purchase: the rule no longer applies.
+      expect((await productDraft()).totals.discount).toEqual(money(0n, 'IRT'));
+    });
+
+    it('lets a paid custom service be the source of a refund request', async () => {
+      await offer();
+      const order = await h.confirm(await h.draft(customer, panelA, '10', 30));
+      await h.pay(order);
+      const [row] = await h.rows<{ id: string }>(
+        sql`SELECT id FROM services WHERE order_id = ${order.id}`,
+      );
+      await f.ctx.container.database.db.execute(
+        sql`UPDATE services SET state = 'ACTIVE', provisioned_at = now() WHERE id = ${row!.id}`,
+      );
+      const service = await new DrizzleServiceRepository(f.ctx.container.database.db).findById(
+        tenantA,
+        row!.id,
+      );
+      const eligibility = await f.ctx.container.serviceRefundRequests.eligibilityOf(
+        tenantA,
+        service!,
+        { checkFlag: false },
+      );
+      expect(eligibility.eligible).toBe(true);
+    });
+
+    it('names the reserved username on the operator’s receipt card for a custom order', async () => {
+      await offer();
+      const order = await h.confirm(await h.draft(customer, panelA, '10', 30));
+      const [held] = await h.rows<{ username: string }>(
+        sql`SELECT username FROM service_username_reservations WHERE order_id = ${order.id}`,
+      );
+      const facts = await new DrizzleReceiptReviewFactsReader(
+        f.ctx.container.database.db,
+      ).factsFor(tenantA, order.id);
+      expect(facts.purpose).toBe('CUSTOM_SERVICE');
+      expect(facts.serviceUsername).toBe(held!.username);
+      expect(facts.productTitle).toBe('🇩🇪 آلمان');
     });
   });
 
