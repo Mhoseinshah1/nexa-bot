@@ -766,7 +766,22 @@ export class NotificationDispatcher {
         const recovered = await this.routeOrUnavailable(() =>
           router.recover(intent.tenantId, category, staleTopicId),
         );
-        if (recovered.kind === 'ROUTED') {
+        // The resend is a second call to Telegram and pays the per-minute ceiling like any
+        // other (Codex review #1 of PR #99). The refused first send is charged by the batch
+        // loop once this returns, so it is counted here as already spent. With nothing left
+        // in the window the resend is DEFERRED: a retryable failure that waits for the next
+        // window. The attempt it costs is honest — a send did reach Telegram — and the
+        // next claim is routed to the recreated topic, which is now the registered one.
+        const left =
+          recovered.kind === 'ROUTED' ? (await this.remainingBudget(this.clock.now())) - 1 : 0;
+        if (recovered.kind === 'ROUTED' && left <= 0) {
+          result = {
+            outcome: 'FAILED_RETRYABLE',
+            errorCode: 'ops_group.resend_deferred',
+            errorMessage: 'The topic was recreated; the resend waits for the next rate window.',
+            retryAfterMs: Math.max(this.windowStartedAt + 60_000 - this.clock.now().getTime(), 0),
+          };
+        } else if (recovered.kind === 'ROUTED') {
           destination = { ...destination, chatId: recovered.chatId, topicId: recovered.topicId };
           // The first send reached Telegram as well; the ceiling is a courtesy to it.
           this.sentInWindow += 1;

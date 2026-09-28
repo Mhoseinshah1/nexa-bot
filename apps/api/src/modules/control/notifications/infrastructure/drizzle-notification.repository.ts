@@ -1002,6 +1002,7 @@ export class DrizzleNotificationRepository implements NotificationRepository {
       readonly now: Date;
       readonly allowance: number;
       readonly limit: number;
+      readonly completedBefore?: Date;
       readonly routeOf: (row: {
         readonly templateKey: string;
         readonly payload: Record<string, unknown>;
@@ -1025,6 +1026,9 @@ export class DrizzleNotificationRepository implements NotificationRepository {
             eq(notifications.status, 'FAILED'),
             eq(notifications.kind, 'OPERATIONAL_EVENT'),
             sql`${notifications.destination}->>'transport' = 'TELEGRAM'`,
+            ...(input.completedBefore !== undefined
+              ? [lte(notifications.completedAt, input.completedBefore)]
+              : []),
           ),
         )
         .orderBy(asc(notifications.createdAt), asc(notifications.id))

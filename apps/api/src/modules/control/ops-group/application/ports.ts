@@ -94,7 +94,11 @@ export interface OpsGroupRepository {
     },
     tx: unknown,
   ): Promise<OpsGroupRecord>;
-  /** CONNECTED ⇄ DISCONNECTED, conditional on `from`. Reconnect resets health to UNVERIFIED. */
+  /**
+   * CONNECTED ⇄ DISCONNECTED, conditional on `from`. A reconnect resets health to
+   * UNVERIFIED and stamps a new `connectedAt`, so a check that began before it cannot
+   * record its findings over it.
+   */
   transitionGroup(
     scope: ScopeContext,
     input: {
@@ -104,11 +108,18 @@ export interface OpsGroupRepository {
     },
     tx: unknown,
   ): Promise<boolean>;
-  /** Records a permission check's findings, only if the group still names `chatId`. */
+  /**
+   * Records a permission check's findings — only if the group is still CONNECTED to the
+   * very binding the check started from: the same chat, bot and `connectedAt`. A check
+   * that was still waiting on Telegram when an operator disconnected, rebound or
+   * reconnected the group changes nothing (Codex review #1 of PR #99).
+   */
   recordHealth(
     scope: ScopeContext,
     input: {
       readonly chatId: string;
+      readonly botInstanceId: string;
+      readonly connectedAt: Date;
       readonly health: OpsLogGroupHealth;
       readonly problems: readonly OpsLogGroupProblem[];
       readonly botMemberStatus: string | null;

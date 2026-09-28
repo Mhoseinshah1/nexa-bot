@@ -16,7 +16,7 @@ import { redactSecrets, redactSecretText } from '../../../../infrastructure/reda
  * redactors, so a reason string that happens to quote a URL with a token in it is
  * redacted rather than posted.
  */
-const DETAIL_KEYS: readonly string[] = [
+export const DETAIL_KEYS: readonly string[] = [
   // Who and what.
   'userId',
   'customerId',
@@ -60,6 +60,53 @@ const DETAIL_KEYS: readonly string[] = [
 const VALUE_MAX = 160;
 
 /**
+ * The whole message's bound, and its parts (Codex review #1 of PR #99).
+ *
+ * Telegram refuses a message over 4096 characters, and a refusal is PERMANENT — the
+ * event would be preserved unsent for ever for being too detailed. Thirty-odd keys at
+ * 160 characters each could pass that alone, so the detail block and the event's own
+ * message each get a budget, measured in HTML-ESCAPED characters (`&` is five on the
+ * wire), leaving the rest of the template — code, severity, tenant, bot, correlation
+ * id, times — well inside the limit. A line that would cross the budget is dropped and
+ * a marker says how many were.
+ */
+export const TELEGRAM_MESSAGE_MAX = 4096;
+export const OPERATIONAL_DETAILS_BUDGET = 1600;
+export const OPERATIONAL_MESSAGE_BUDGET = 1500;
+/** An id-like value printed beside the detail (correlation, tenant, bot). */
+export const OPERATIONAL_ID_MAX = 100;
+
+/**
+ * The length `text` takes once the renderer HTML-escapes it — the five substitutions
+ * `escapeTelegramHtml` in `@nexa/i18n` makes. Counted here rather than imported, because
+ * application code does not import the text package (the boundary check says so); the
+ * unit test renders through the real escaper and holds the two to one answer.
+ */
+const ESCAPED_WIDTH: Readonly<Record<string, number>> = {
+  '&': 5,
+  '<': 4,
+  '>': 4,
+  '"': 6,
+  "'": 5,
+};
+const escapedLength = (text: string): number => {
+  let length = 0;
+  for (const character of text) length += ESCAPED_WIDTH[character] ?? character.length;
+  return length;
+};
+
+/**
+ * `text` cut so its HTML-escaped form fits `budget`, with `…` when anything was cut.
+ * Never splits an escape: it cuts the raw text, one character at a time from the end.
+ */
+export function boundedForTelegram(text: string, budget: number): string {
+  if (escapedLength(text) <= budget) return text;
+  let end = Math.min(text.length, budget);
+  while (end > 0 && escapedLength(text.slice(0, end)) + 1 > budget) end -= 1;
+  return `${text.slice(0, end)}…`;
+}
+
+/**
  * `name: value` lines for the allowed keys the context carries, in the allow-list's
  * order, or undefined when there are none (so the template drops the line).
  *
@@ -86,7 +133,24 @@ export function operationalEventDetails(
     if (cleaned === '') continue;
     lines.push(`${key}: ${cleaned}`);
   }
-  return lines.length === 0 ? undefined : lines.join('\n');
+  if (lines.length === 0) return undefined;
+
+  // Within the budget, in the allow-list's order — ids first, then the transition, then
+  // the reason — with room kept for the marker.
+  const marker = (dropped: number) => `… (+${String(dropped)} more)`;
+  const kept: string[] = [];
+  let used = 0;
+  for (const [index, line] of lines.entries()) {
+    const cost = escapedLength(line) + 1;
+    const reserve = index < lines.length - 1 ? escapedLength(marker(lines.length)) + 1 : 0;
+    if (used + cost + reserve > OPERATIONAL_DETAILS_BUDGET) {
+      kept.push(marker(lines.length - index));
+      break;
+    }
+    kept.push(line);
+    used += cost;
+  }
+  return kept.join('\n');
 }
 
 /** A context's bot instance id, when it names one as a plain string. */

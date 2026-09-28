@@ -220,8 +220,11 @@ export class DrizzleOpsGroupRepository implements OpsGroupRepository {
       .set({
         status: input.to,
         disconnectedAt: reconnecting ? null : input.now,
-        // A group brought back is checked again before anybody calls it healthy.
-        ...(reconnecting ? { health: 'UNVERIFIED' as const, checkedAt: null } : {}),
+        // A group brought back is checked again before anybody calls it healthy, and is a
+        // new binding: a check that started before it cannot record over it.
+        ...(reconnecting
+          ? { health: 'UNVERIFIED' as const, checkedAt: null, connectedAt: input.now }
+          : {}),
         updatedAt: input.now,
       })
       .where(and(eq(opsLogGroups.tenantId, tenantId), eq(opsLogGroups.status, input.from)))
@@ -233,6 +236,8 @@ export class DrizzleOpsGroupRepository implements OpsGroupRepository {
     scope: ScopeContext,
     input: {
       readonly chatId: string;
+      readonly botInstanceId: string;
+      readonly connectedAt: Date;
       readonly health: OpsLogGroupHealth;
       readonly problems: readonly OpsLogGroupProblem[];
       readonly botMemberStatus: string | null;
@@ -252,7 +257,15 @@ export class DrizzleOpsGroupRepository implements OpsGroupRepository {
         ...(input.title !== null && input.title !== '' ? { title: input.title } : {}),
         updatedAt: input.now,
       })
-      .where(and(eq(opsLogGroups.tenantId, tenantId), eq(opsLogGroups.chatId, input.chatId)))
+      .where(
+        and(
+          eq(opsLogGroups.tenantId, tenantId),
+          eq(opsLogGroups.status, 'CONNECTED'),
+          eq(opsLogGroups.chatId, input.chatId),
+          eq(opsLogGroups.botInstanceId, input.botInstanceId),
+          eq(opsLogGroups.connectedAt, input.connectedAt),
+        ),
+      )
       .returning({ id: opsLogGroups.id });
     return rows.length > 0;
   }

@@ -11,7 +11,13 @@ import {
 } from '@nexa/contracts';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { NotificationService } from './notification.service.js';
-import { contextBotInstanceId, operationalEventDetails } from './event-details.js';
+import {
+  OPERATIONAL_ID_MAX,
+  OPERATIONAL_MESSAGE_BUDGET,
+  boundedForTelegram,
+  contextBotInstanceId,
+  operationalEventDetails,
+} from './event-details.js';
 
 /**
  * Projects operational events into notifications.
@@ -156,14 +162,22 @@ export class NotifyingOperationalEventRecorder implements OperationalEventRecord
             values: {
               severity: recorded.severity,
               code: recorded.code,
-              message: recorded.message,
+              // Bounded, like the detail, so the whole message fits Telegram's 4096.
+              message: boundedForTelegram(recorded.message, OPERATIONAL_MESSAGE_BUDGET),
               occurrences: recorded.occurrenceCount,
               firstSeenAt: recorded.firstSeenAt,
               lastSeenAt: recorded.lastSeenAt,
               tenantId: String(scope.tenantId),
               ...(botInstanceId ? { botInstanceId: String(botInstanceId) } : {}),
               ...(details ? { details } : {}),
-              ...(event.correlationId ? { correlationId: String(event.correlationId) } : {}),
+              ...(event.correlationId
+                ? {
+                    correlationId: boundedForTelegram(
+                      String(event.correlationId),
+                      OPERATIONAL_ID_MAX,
+                    ),
+                  }
+                : {}),
             },
             ...(event.correlationId ? { correlationId: event.correlationId } : {}),
             opsTopic: opsLogTopicForCode(recorded.code),

@@ -46,12 +46,13 @@ const OTHER_CHAT = '-1009999999999';
 
 /** A controllable clock for the service, so code expiry is decided by the test. */
 class TestClock implements Clock {
-  current = new Date();
+  /** Real time plus what the test advanced: the dispatcher runs on the real clock. */
+  private offsetMs = 0;
   now(): Date {
-    return new Date(this.current.getTime());
+    return new Date(Date.now() + this.offsetMs);
   }
   advance(ms: number): void {
-    this.current = new Date(this.current.getTime() + ms);
+    this.offsetMs += ms;
   }
 }
 
@@ -74,7 +75,14 @@ class FakeOpsTelegram implements OpsGroupTelegram {
   async botIdentity() {
     return { outcome: 'OK' as const, botId: '777000' };
   }
+  /** Holds `describeChat` until released, so a check can be raced against a write. */
+  chatGate: Promise<void> | null = null;
+  describing: (() => void) | null = null;
+  /** Delays `send`, so concurrent test sends overlap for real. */
+  sendDelayMs = 0;
   async describeChat() {
+    this.describing?.();
+    if (this.chatGate !== null) await this.chatGate;
     return { outcome: 'OK' as const, ...this.chat };
   }
   async botMembership() {
@@ -88,6 +96,7 @@ class FakeOpsTelegram implements OpsGroupTelegram {
     return { outcome: 'OK' as const, threadId: this.nextThread };
   }
   async send(_token: string, chatId: string, threadId: number | null, text: string) {
+    if (this.sendDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, this.sendDelayMs));
     if (threadId !== null && this.deletedThreads.has(threadId)) {
       return {
         outcome: 'FAILED' as const,
@@ -195,6 +204,8 @@ describe('the operations log group (WP-A4)', () => {
       clock,
       ids: c.ids,
       logger: c.logger,
+      // Small, so draining across passes is exercised with a handful of rows.
+      requeueBatch: 2,
     });
     transport = new ScriptedTransport();
     dispatcher = new NotificationDispatcher(
@@ -843,6 +854,192 @@ describe('the operations log group (WP-A4)', () => {
       expect(
         tested.opsGroup.topics.find((topic) => topic.category === 'PAYMENTS')?.recreatedCount,
       ).toBe(1);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Codex review #1 of PR #99
+  // -------------------------------------------------------------------------
+
+  describe('Codex review #1 of PR #99', () => {
+    /** Preserves one unsent event per key, on a healthy group. */
+    async function preserve(keys: readonly string[]): Promise<void> {
+      transport.always = { outcome: 'FAILED_PERMANENT', errorCode: 'x', errorMessage: 'no' };
+      for (const dedupe of keys) await raise(dedupe);
+      await dispatcher.tick();
+      transport.always = null;
+      expect((await service.view(tenantA, owner)).queue.preserved).toBe(keys.length);
+    }
+
+    it('C1: a check that loses a race with a disconnect changes nothing', async () => {
+      await connectHealthy();
+      await preserve(['race']);
+      // Telegram reports a change, so the group is checked again...
+      await service.membershipChanged(botScope(tenantA, SEED_IDS.botA1), system(), {
+        idempotencyKey: key('member'),
+        botInstanceId: SEED_IDS.botA1,
+        chatId: GROUP_CHAT,
+        status: 'administrator',
+      });
+      let release!: () => void;
+      telegram.chatGate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const entered = new Promise<void>((resolve) => {
+        telegram.describing = resolve;
+      });
+      // ...and while that check waits on Telegram, the operator disconnects.
+      const checking = service.verify(tenantA, owner, { idempotencyKey: key('verify') });
+      await entered;
+      await service.disconnect(tenantA, owner, { idempotencyKey: key('disconnect') });
+      release();
+      await checking;
+
+      const group = await repository.findGroup(tenantA);
+      expect(group?.status).toBe('DISCONNECTED');
+      expect(group?.health).toBe('UNVERIFIED');
+      // And nothing preserved was put back in the queue behind the operator's back.
+      expect((await service.view(tenantA, owner)).queue).toEqual({ pending: 0, preserved: 1 });
+    });
+
+    it('C1: a check that began before a reconnect cannot record over it', async () => {
+      await connectHealthy();
+      await service.disconnect(tenantA, owner, { idempotencyKey: key('disconnect') });
+      const before = await repository.findGroup(tenantA);
+      await service.reconnect(tenantA, owner, { idempotencyKey: key('reconnect') });
+      // The stale identity is the one the pre-reconnect check would carry.
+      const recorded = await repository.recordHealth(tenantA, {
+        chatId: GROUP_CHAT,
+        botInstanceId: SEED_IDS.botA1,
+        connectedAt: before!.connectedAt,
+        health: 'PROBLEM',
+        problems: ['BOT_NOT_ADMIN'],
+        botMemberStatus: 'member',
+        title: null,
+        now: clock.now(),
+      });
+      expect(recorded).toBe(false);
+      expect((await repository.findGroup(tenantA))?.health).toBe('HEALTHY');
+    });
+
+    it('C2: the resend into a recreated topic waits for the rate window instead of exceeding it', async () => {
+      await connectHealthy();
+      await ctx.container.settingsService.set(tenantA, owner, {
+        key: 'ops.notifications.max_per_minute',
+        value: 1,
+        expectedVersion: null,
+        idempotencyKey: key('rate'),
+      });
+      const systemTopic = (await repository.listTopics(tenantA, GROUP_CHAT)).find(
+        (topic) => topic.category === 'SYSTEM',
+      );
+      transport.deletedThreads.add(systemTopic!.messageThreadId!);
+      await raise('rate-recreate');
+
+      await dispatcher.tick();
+      // ONE send in this minute: the refused one. The topic is recreated, the resend waits.
+      expect(transport.messages).toHaveLength(1);
+      const [intent] = await ctx.container.notifications.list(tenantA, owner);
+      const detail = await ctx.container.notifications.get(tenantA, owner, intent!.id);
+      expect(detail.intent.status).toBe('PENDING');
+      expect(detail.attempts[0]).toMatchObject({
+        outcome: 'FAILED_RETRYABLE',
+        errorCode: 'ops_group.resend_deferred',
+      });
+      const recreated = (await repository.listTopics(tenantA, GROUP_CHAT)).find(
+        (topic) => topic.category === 'SYSTEM',
+      );
+      expect(recreated?.recreatedCount).toBe(1);
+
+      // The next minute: delivered, into the recreated topic.
+      dispatcher.resetRateWindow();
+      await makeDue();
+      expect((await dispatcher.tick()).sent).toBe(1);
+      expect(transport.messages).toHaveLength(2);
+      const last = transport.messages[1]!.destination;
+      expect(last.transport === 'TELEGRAM' ? last.topicId : null).toBe(recreated?.messageThreadId);
+    });
+
+    it('C4: two presses of one test button send one set of messages', async () => {
+      await connectHealthy();
+      const before = telegram.sent.length;
+      telegram.sendDelayMs = 50;
+      const idempotencyKey = key('test');
+      const outcomes = await Promise.allSettled([
+        service.sendTest(tenantA, owner, { idempotencyKey }),
+        service.sendTest(tenantA, owner, { idempotencyKey }),
+      ]);
+      // One set: one message per topic.
+      expect(telegram.sent.length - before).toBe(2);
+      expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1);
+      const refused = outcomes.find((outcome) => outcome.status === 'rejected');
+      expect(
+        refused?.status === 'rejected' &&
+          isNexaError(refused.reason) &&
+          refused.reason.code === 'platform.idempotency_in_flight',
+      ).toBe(true);
+      // Afterwards the key replays the first answer and still sends nothing.
+      const replay = await service.sendTest(tenantA, owner, { idempotencyKey });
+      expect(replay.results.every((result) => result.outcome === 'SENT')).toBe(true);
+      expect(telegram.sent.length - before).toBe(2);
+    });
+
+    it('C5: the automatic requeue drains every preserved row across passes, and does not cycle one that fails again', async () => {
+      await connectHealthy();
+      await preserve(['d1', 'd2', 'd3', 'd4', 'd5']);
+      await service.membershipChanged(botScope(tenantA, SEED_IDS.botA1), system(), {
+        idempotencyKey: key('member'),
+        botInstanceId: SEED_IDS.botA1,
+        chatId: GROUP_CHAT,
+        status: 'administrator',
+      });
+      // The check that finds it healthy moves the first batch of two...
+      expect(await service.maintain(tenantA, system())).toBe('CHECKED');
+      expect((await service.view(tenantA, owner)).queue).toEqual({ pending: 2, preserved: 3 });
+      // ...and the next passes drain the rest.
+      expect(await service.maintain(tenantA, system())).toBe('REQUEUED');
+      expect(await service.maintain(tenantA, system())).toBe('REQUEUED');
+      expect((await service.view(tenantA, owner)).queue).toEqual({ pending: 5, preserved: 0 });
+      expect(await service.maintain(tenantA, system())).toBe('IDLE');
+
+      // A row that fails AGAIN after its requeue is not requeued again by the drain.
+      transport.always = { outcome: 'FAILED_PERMANENT', errorCode: 'x', errorMessage: 'no' };
+      await makeDue();
+      await dispatcher.tick();
+      expect((await service.view(tenantA, owner)).queue.preserved).toBe(5);
+      expect(await service.maintain(tenantA, system())).toBe('IDLE');
+      expect((await service.view(tenantA, owner)).queue.preserved).toBe(5);
+    });
+
+    it('C6: a topic another creator holds keeps the group unverified until its lease lapses', async () => {
+      expect(await bind(await issueCode())).toBe('CONNECTED');
+      const group = await repository.findGroup(tenantA);
+      // A creator that died holding the SYSTEM topic's claim.
+      const row = await repository.ensureTopicRow(tenantA, {
+        id: ctx.container.ids.uuid(),
+        groupId: group!.id,
+        chatId: GROUP_CHAT,
+        category: 'SYSTEM',
+        now: clock.now(),
+      });
+      await repository.claimTopicCreation(tenantA, {
+        topicId: row.id,
+        token: ctx.container.ids.uuid(),
+        until: new Date(clock.now().getTime() + 60_000),
+        now: clock.now(),
+      });
+
+      expect(await service.maintain(tenantA, system())).toBe('CHECKED');
+      const held = await service.view(tenantA, owner);
+      expect(held.health).toBe('UNVERIFIED');
+      expect(held.topics.find((topic) => topic.category === 'SYSTEM')?.state).toBe('PENDING');
+
+      // The lease lapses; the next pass creates the topic and only then calls it healthy.
+      clock.advance(61_000);
+      expect(await service.maintain(tenantA, system())).toBe('CHECKED');
+      const done = await service.view(tenantA, owner);
+      expect(done.health).toBe('HEALTHY');
+      expect(done.topics.every((topic) => topic.state === 'READY')).toBe(true);
     });
   });
 });

@@ -67,6 +67,9 @@ export class OpsGroupMaintainer {
       if (scope !== null) {
         const result = await this.service.maintain(scope, this.options.actor());
         if (result === 'CHECKED') this.options.logger.info({}, 'operations log group checked');
+        if (result === 'REQUEUED') {
+          this.options.logger.info({}, 'operations log group: preserved reports requeued');
+        }
       }
       this.progress.record(this.options.now());
     } catch (error: unknown) {

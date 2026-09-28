@@ -102,6 +102,8 @@ export interface OpsGroupServiceDeps {
   readonly clock: Clock;
   readonly ids: IdGenerator;
   readonly logger: Logger;
+  /** How many preserved messages one requeue moves; `OPS_GROUP_REQUEUE_LIMIT` unless a test says. */
+  readonly requeueBatch?: number;
 }
 
 /** What the worker's or an operator's permission check found. */
@@ -288,11 +290,51 @@ export class OpsGroupService {
     await this.authorize(scope, actor, OPS_GROUP_MANAGE_PERMISSION, denial);
     const command = opsGroupActionRequestSchema.parse(input);
     const requestHash = hashRequest({ command: 'ops_group.test' });
-    const replay = await this.findReplay<OpsGroupTestResponse>(scope, actor, command, requestHash);
-    if (replay !== null) return replay;
+    // The answer lives under a key of its own, because the request's key is CLAIMED
+    // before anything is sent (Codex review #1 of PR #99): two presses of one button used
+    // to both pass the replay lookup and both send to every topic. The store is
+    // insert-once, so the claim is the first write and the answer the second.
+    const resultKey = `${command.idempotencyKey}#result`;
+    const claimed = await this.findReplay<OpsGroupTestResponse | { claimed: true }>(
+      scope,
+      actor,
+      command,
+      requestHash,
+    );
+    if (claimed !== null) {
+      const answer = await this.findReplay<OpsGroupTestResponse>(
+        scope,
+        actor,
+        { idempotencyKey: resultKey },
+        requestHash,
+      );
+      if (answer !== null) return answer;
+      throw this.testInFlight(command.idempotencyKey);
+    }
 
     const group = await this.requireConnected(scope);
-    if (!(await this.deps.scopeActivity.scopeIsActive(scope))) throw this.inactive();
+    // The claim, committed BEFORE any Telegram call. A second request with the same key
+    // loses the insert (or finds the claim above) and sends nothing. A claim whose sender
+    // died mid-send keeps answering "in flight" for that key; a new press is a new key.
+    await runAuthorizedMutation(
+      this.mutationDeps(),
+      scope,
+      actor,
+      OPS_GROUP_MANAGE_PERMISSION,
+      denial,
+      async (tx) => {
+        await this.assertScopeActive(scope, tx);
+        const stored = await this.deps.idempotency.remember(
+          scope,
+          actor.surface,
+          command.idempotencyKey,
+          requestHash,
+          { claimed: true },
+          tx,
+        );
+        if (!stored) throw this.testInFlight(command.idempotencyKey);
+      },
+    );
     const token = await this.deps.bots.tokenFor(scope, group.botInstanceId);
     const results: OpsGroupTestResponse['results'][number][] = [];
     const now = this.deps.clock.now();
@@ -328,7 +370,9 @@ export class OpsGroupService {
         );
         // A test that reached every topic proves the problem is fixed: what was preserved
         // unsent goes out again, which is the brief's "retry after a successful test".
-        if (allSent) await this.requeueInside(scope, actor, group, tx, 'test');
+        if (allSent) {
+          await this.requeueInside(scope, actor, group, tx, 'test', this.deps.clock.now());
+        }
         const response: OpsGroupTestResponse = {
           opsGroup: await this.snapshot(scope, tx),
           results,
@@ -337,7 +381,7 @@ export class OpsGroupService {
           this.deps.idempotency,
           scope,
           actor.surface,
-          command.idempotencyKey,
+          resultKey,
           requestHash,
           response,
           tx,
@@ -733,6 +777,8 @@ export class OpsGroupService {
               scope,
               {
                 chatId: input.chatId,
+                botInstanceId: group.botInstanceId,
+                connectedAt: group.connectedAt,
                 health: 'PROBLEM',
                 problems: ['BOT_REMOVED'],
                 botMemberStatus: input.status,
@@ -784,11 +830,20 @@ export class OpsGroupService {
    * for five minutes, is checked; topics that are owed are created; and a group that is
    * healthy again gets its preserved messages back in the queue.
    */
-  async maintain(scope: ScopeContext, actor: ActorContext): Promise<'CHECKED' | 'IDLE'> {
+  async maintain(
+    scope: ScopeContext,
+    actor: ActorContext,
+  ): Promise<'CHECKED' | 'REQUEUED' | 'IDLE'> {
     await this.deps.guard.check(scope, actor, OPS_GROUP_SYSTEM_PERMISSION);
     const group = await this.deps.repository.findGroup(scope);
     if (group === null || group.status !== 'CONNECTED') return 'IDLE';
     const now = this.deps.clock.now();
+    // A healthy group keeps draining what was preserved before it was found healthy, one
+    // batch per pass, until none is left (Codex review #1 of PR #99). Bounded by
+    // `checkedAt`, so a message that fails again after its requeue is not cycled.
+    if (group.health === 'HEALTHY' && group.checkedAt !== null) {
+      return (await this.drain(scope, actor, group)) > 0 ? 'REQUEUED' : 'IDLE';
+    }
     const due =
       group.health === 'UNVERIFIED' ||
       (group.health === 'PROBLEM' &&
@@ -800,6 +855,39 @@ export class OpsGroupService {
     const findings = await this.check(scope, actor, group, OPS_GROUP_SYSTEM_PERMISSION);
     await this.commitFindings(scope, actor, group, findings, OPS_GROUP_SYSTEM_PERMISSION, null);
     return 'CHECKED';
+  }
+
+  /**
+   * One batch of the healthy group's preserved messages back in the queue, under the
+   * group's row lock and only while it is still the healthy binding that was checked.
+   */
+  private async drain(
+    scope: ScopeContext,
+    actor: ActorContext,
+    group: OpsGroupRecord,
+  ): Promise<number> {
+    if (!(await this.deps.scopeActivity.scopeIsActive(scope))) return 0;
+    const denial = { action: 'ops_group.requeue', entityType: 'OpsLogGroup', entityId: group.id };
+    return runAuthorizedMutation(
+      this.mutationDeps(),
+      scope,
+      actor,
+      OPS_GROUP_SYSTEM_PERMISSION,
+      denial,
+      async (tx) => {
+        await this.assertScopeActive(scope, tx);
+        const locked = await this.deps.repository.lockGroup(scope, tx);
+        if (
+          locked === null ||
+          !sameBinding(locked, group) ||
+          locked.health !== 'HEALTHY' ||
+          locked.checkedAt === null
+        ) {
+          return 0;
+        }
+        return this.requeueInside(scope, actor, locked, tx, 'healthy', locked.checkedAt);
+      },
+    );
   }
 
   // -------------------------------------------------------------------------
@@ -983,6 +1071,12 @@ export class OpsGroupService {
       }
     }
 
+    // A topic another caller is still creating — or whose creator died holding the claim —
+    // is not a topic that exists. The check is then INCOMPLETE: the group stays
+    // UNVERIFIED, so the worker checks it again and creates the topic once the claim's
+    // lease has lapsed, instead of committing HEALTHY over a PENDING topic that nothing
+    // would revisit (Codex review #1 of PR #99).
+    let incomplete = false;
     if (problems.length === 0) {
       for (const category of OPS_LOG_TOPIC_CATEGORIES) {
         const ensured = await this.deps.provisioner.ensure(scope, actor, group, category, token);
@@ -990,12 +1084,13 @@ export class OpsGroupService {
           problems.push('TOPIC_CREATE_FAILED');
           break;
         }
+        if (ensured.kind === 'BUSY') incomplete = true;
       }
     }
 
     return {
       reached: true,
-      health: problems.length === 0 ? 'HEALTHY' : 'PROBLEM',
+      health: problems.length > 0 ? 'PROBLEM' : incomplete ? 'UNVERIFIED' : 'HEALTHY',
       problems,
       botMemberStatus: member.status,
       title: chat.title,
@@ -1025,15 +1120,18 @@ export class OpsGroupService {
       async (tx) => {
         await this.assertScopeActive(scope, tx);
         if (findings.reached) {
+          const checkedAt = this.deps.clock.now();
           const recorded = await this.deps.repository.recordHealth(
             scope,
             {
               chatId: group.chatId,
+              botInstanceId: group.botInstanceId,
+              connectedAt: group.connectedAt,
               health: findings.health,
               problems: findings.problems,
               botMemberStatus: findings.botMemberStatus,
               title: findings.title,
-              now: this.deps.clock.now(),
+              now: checkedAt,
             },
             tx,
           );
@@ -1051,8 +1149,10 @@ export class OpsGroupService {
               },
               tx,
             );
+            // Only when THIS check's findings were recorded: a stale check matched nothing
+            // above, and requeues nothing here.
             if (findings.health === 'HEALTHY') {
-              await this.requeueInside(scope, actor, group, tx, 'healthy');
+              await this.requeueInside(scope, actor, group, tx, 'healthy', checkedAt);
             }
           }
         }
@@ -1078,6 +1178,7 @@ export class OpsGroupService {
     group: OpsGroupRecord,
     tx: TransactionScope,
     trigger: 'operator' | 'healthy' | 'test',
+    completedBefore?: Date,
   ): Promise<number> {
     const allowance = await this.allowance(scope, tx);
     const requeued = await this.deps.notifications.requeuePreserved(
@@ -1085,7 +1186,8 @@ export class OpsGroupService {
       {
         now: this.deps.clock.now(),
         allowance,
-        limit: OPS_GROUP_REQUEUE_LIMIT,
+        limit: this.deps.requeueBatch ?? OPS_GROUP_REQUEUE_LIMIT,
+        ...(completedBefore !== undefined ? { completedBefore } : {}),
         routeOf: (row) =>
           row.templateKey.startsWith('ops.financial.')
             ? 'PAYMENTS'
@@ -1306,6 +1408,14 @@ export class OpsGroupService {
     return group;
   }
 
+  private testInFlight(key: string) {
+    return errors.conflict(
+      PLATFORM_ERROR_CODES.IDEMPOTENCY_IN_FLIGHT,
+      `A test send under idempotency key "${key}" is already running. Retry to read its result.`,
+      { key },
+    );
+  }
+
   private notConnected() {
     return errors.preconditionFailed(
       OPS_GROUP_ERROR_CODES.NOT_CONNECTED,
@@ -1400,4 +1510,14 @@ export class OpsGroupRouter implements OpsTopicRouter, OpsGroupDestinationReader
 
 function scopeOf(tenantId: string): ScopeContext {
   return { tenantId: tenantId as never, botInstanceId: null };
+}
+
+/** Whether two reads of the group name the same binding: chat, bot and connection. */
+function sameBinding(a: OpsGroupRecord, b: OpsGroupRecord): boolean {
+  return (
+    a.status === 'CONNECTED' &&
+    a.chatId === b.chatId &&
+    a.botInstanceId === b.botInstanceId &&
+    a.connectedAt.getTime() === b.connectedAt.getTime()
+  );
 }

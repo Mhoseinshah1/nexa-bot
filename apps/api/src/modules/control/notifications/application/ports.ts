@@ -278,6 +278,13 @@ export interface NotificationRepository {
       readonly now: Date;
       readonly allowance: number;
       readonly limit: number;
+      /**
+       * Only rows that reached FAILED at or before this instant. The automatic drain
+       * passes the moment the group was found healthy, so a row that fails AGAIN after
+       * its requeue is not requeued again until the next healthy check — a message that
+       * can never be delivered cannot be cycled for ever.
+       */
+      readonly completedBefore?: Date;
       readonly routeOf: (row: {
         readonly templateKey: string;
         readonly payload: Record<string, unknown>;
