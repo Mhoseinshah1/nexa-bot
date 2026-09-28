@@ -27,6 +27,12 @@ under the ticket's row lock. A close and a reopen also write a `SYSTEM` message
 (`CLOSED_BY_CUSTOMER`, `CLOSED_BY_SUPPORT`, `REOPENED_BY_SUPPORT`) so the conversation keeps
 the fact. `closed_at` is set exactly while `CLOSED` (an equality CHECK).
 
+The message cap never blocks a status change: a ticket holding its 500th message can still be
+closed and reopened. At the cap the move writes no `SYSTEM` row — the cap bounds the
+conversation's rows, and a fact row past it would break that bound — while the status, the
+`TicketStatusChanged` event and the audit row still record the change; that audit row carries
+`factRecorded: false` so the missing fact is visible where the change is.
+
 ## 2. The customer's reply notification, and why it is not a payload
 
 ADR-0030 §1 refuses a producer-supplied payload: the customer lane must never become "send
@@ -40,6 +46,10 @@ this customer some text". A ticket reply's text is variable, so:
   message row (`TicketService.notificationFacts`) — the shape `SERVICE_REFUND_REQUEST_REJECTED`
   already uses to read an administrator's reason from its request row. The customer is sent
   exactly what is stored in their ticket, and no caller can put anything else in front of them;
+- it is sent through **the bot the ticket was opened on** (`CustomerNotifier.notifyThrough`
+  with `tickets.bot_instance_id`), not the customer's first bot: the ticket is a conversation
+  with that bot, and a reply arriving from another of the tenant's bots would come from an
+  account the customer did not write to;
 - its two buttons (reply, view) are derived from the subject by kind (`notificationButtons`),
   never stored;
 - its precondition is `false`: a reply that was written stays written.
@@ -49,7 +59,8 @@ and stays `PENDING` with the lane's back-off; a 429 spends none; an unknown (5xx
 outcome is `UNCONFIRMED` and is never re-sent, the lane's rule against duplicates. In every
 case the reply is in the ticket: the customer reads it in the bot's conversation view, and the
 Web Admin shows each reply's delivery state, projected from the lane's own row rather than
-copied onto the message.
+copied onto the message. The reply's own response reads the message back through that same
+join, so a replayed reply answers with where its notification actually is.
 
 ## 3. Telling support
 
@@ -98,7 +109,15 @@ older ones are kept; it offers reply and an ask-then-confirm close. The two wind
 read only messages newer than the tap that opened them, and are superseded by any later
 prompt. A photo or document is offered to a ticket window only when that window is newer than
 any open receipt window, and through `readText`'s `onlyPurposes`, so a file never closes a
-note or search window as though it were its text.
+note or search window as though it were its text. The choice is made INSIDE the read's
+transaction: `readText`'s `yieldTo` takes the receipt window's own lock after the capture
+lock and reads the receipt window there, so neither window can open between the choice and
+the consumption. Nothing takes the two locks the other way round. When the receipt window
+wins, the ticket window stays open and the file goes to the receipt path, as before.
+
+A message read by a ticket window is checked against the ticket's status before its content:
+a ticket support closed while the customer's reply window was open answers «closed» and
+reopens no window, whatever the message was.
 
 A customer holds at most five open tickets and a ticket at most 500 messages — rails against a
 loop, not policies.
