@@ -21,6 +21,7 @@ import {
   serviceAddonSpecificationSchema,
   TARGETED_OPERATION_TYPES,
   UNLIMITED_TRAFFIC_BYTES,
+  DEFAULT_PANEL_POLICY,
   type OrderPurpose,
 } from '@nexa/contracts';
 
@@ -324,6 +325,8 @@ describe('availableFor separates an outage from a refusal', () => {
     return new CommercialActionService({
       guard: { check: async () => undefined },
       panels: { operability: async () => ({ ok: true, reason: null }) },
+      // WP-A8: no stored panel policy — the default, which restricts nothing.
+      panelPolicy: { forPanel: async () => ({ readable: true, policy: DEFAULT_PANEL_POLICY }) },
       products: { findById },
       addons: { listOfferable: async () => ({ items: [], hasMore: false }) },
       settings: { valueOf: async () => 'IRT' },

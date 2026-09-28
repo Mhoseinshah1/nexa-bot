@@ -11,7 +11,9 @@ import {
   type UnitOfWork,
   type UserId,
   type TemplateValues,
+  deliveryModeOf,
 } from '@nexa/contracts';
+import type { PanelPolicyGate } from '../../../platform/panels/application/panel-policy.js';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type {
@@ -188,6 +190,13 @@ export interface DeliveryServiceDeps {
    * the send it authorises.
    */
   readonly guard: PermissionGuard;
+  /**
+   * The panel's delivery mode (WP-A8): whether the card carries the QR image of the
+   * link. Either way the SAME approved card text and buttons are sent; the policy
+   * changes only whether a photo goes with them, and an unreadable policy sends the
+   * default card.
+   */
+  readonly panelPolicy: PanelPolicyGate;
 }
 
 /**
@@ -632,6 +641,18 @@ export class DeliveryService {
       subscriptionUrl: sentUrl,
     };
     const buttons = deliveryCardButtons(service.id);
+    const mode = deliveryModeOf(await this.deps.panelPolicy.forPanel(scope, service.panelId));
+    if (mode === 'CARD_TEXT') {
+      // The card as text, exactly the second half of the split below: no QR is encoded
+      // and no photo is sent, and the link is in this one message.
+      return this.deps.messenger.send(scope, {
+        chatId,
+        botInstanceId,
+        templateKey: 'bot.service.delivered',
+        values,
+        buttons,
+      });
+    }
     const png = this.deps.qr.encode(sentUrl);
     const photo = {
       chatId,

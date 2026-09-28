@@ -1,6 +1,9 @@
 import {
   COMMERCE_ERROR_CODES,
   CUSTOMER_SYNC_MIN_INTERVAL_MS,
+  customerActionVerdict,
+  effectiveCooldownMs,
+  type PanelCustomerAction,
   SERVICE_NOTE_MAX_LENGTH,
   SERVICES_LIST_PAGE_SIZE,
   extendedAllowance,
@@ -49,6 +52,10 @@ import type { ServiceUsernameRepository } from './username-ports.js';
 import type { SettingsResolver } from '../../../control/settings/application/settings-resolver.js';
 import type { FeatureFlagResolver } from '../../../control/features/application/feature-flags.service.js';
 import type { CustomerRepository } from '../../customers/application/ports.js';
+import {
+  assertCustomerPolicyAllows,
+  type PanelPolicyGate,
+} from '../../../platform/panels/application/panel-policy.js';
 
 /** Asking for a provider call to be made again is `services.edit`, not `services.view`. */
 const SERVICE_EDIT_PERMISSION = 'services.edit';
@@ -103,7 +110,29 @@ export interface ProvisioningServiceDeps {
   readonly features: Pick<FeatureFlagResolver, 'isEnabled'>;
   readonly settings: Pick<SettingsResolver, 'valueOf'>;
   readonly customers: Pick<CustomerRepository, 'findById'>;
+  /**
+   * The panel's operator policy (WP-A8): which of these a customer may ask for on this
+   * panel, and the extra wait it adds. Read INSIDE the planning transaction by
+   * `planWithin`, the one place every customer-originated operation passes, and asked
+   * only after `panels.operability` — so it can refuse and never grant. Operator and
+   * system operations never consult it.
+   */
+  readonly panelPolicy: PanelPolicyGate;
 }
+
+/**
+ * The panel-policy row each customer-originated operation is decided by (WP-A8).
+ *
+ * `SUSPEND` and `RESUME` are one row — "disable / enable" — because they are one
+ * capability pair and one decision an operator makes about a panel.
+ */
+const CUSTOMER_OPERATION_POLICY_ROW: Readonly<Partial<Record<OperationType, PanelCustomerAction>>> =
+  {
+    SUSPEND: 'DISABLE_ENABLE',
+    RESUME: 'DISABLE_ENABLE',
+    ROTATE_SUBSCRIPTION: 'ROTATE_SUBSCRIPTION',
+    SYNC_USAGE: 'USAGE_READ',
+  };
 
 /**
  * What a customer's own rotation is charged against (WP6-C).
@@ -836,7 +865,13 @@ export class ProvisioningService {
    */
   async customerSyncOffered(scope: TenantContext, service: ServiceRecord): Promise<boolean> {
     if (!OPERATION_LEGAL_FROM.SYNC_USAGE.includes(service.state)) return false;
-    return (await this.deps.panels.operability(scope, service.panelId, 'SYNC_USAGE')).ok;
+    if (!(await this.deps.panels.operability(scope, service.panelId, 'SYNC_USAGE')).ok) {
+      return false;
+    }
+    return customerActionVerdict(
+      await this.deps.panelPolicy.forPanel(scope, service.panelId),
+      'USAGE_READ',
+    ).allowed;
   }
 
   /**
@@ -875,9 +910,15 @@ export class ProvisioningService {
           }
           const fresh = await this.deps.services.findById(scope, service.id, tx);
           const syncedAt = fresh?.usageSyncedAt ?? null;
+          // WP-A8: the panel may lengthen the wait, never shorten it.
+          const interval = effectiveCooldownMs(
+            CUSTOMER_SYNC_MIN_INTERVAL_MS,
+            await this.deps.panelPolicy.forPanel(scope, service.panelId, tx),
+            'USAGE_READ',
+          );
           if (
             syncedAt !== null &&
-            this.deps.clock.now().getTime() - syncedAt.getTime() < CUSTOMER_SYNC_MIN_INTERVAL_MS
+            this.deps.clock.now().getTime() - syncedAt.getTime() < interval
           ) {
             throw errors.conflict(
               COMMERCE_ERROR_CODES.SERVICE_SYNC_TOO_SOON,
@@ -895,10 +936,14 @@ export class ProvisioningService {
     service: ServiceRecord,
   ): Promise<readonly CustomerServiceOperation[]> {
     const available: CustomerServiceOperation[] = [];
+    const policy = await this.deps.panelPolicy.forPanel(scope, service.panelId);
     for (const type of CUSTOMER_SERVICE_OPERATIONS) {
       if (!OPERATION_LEGAL_FROM[type].includes(service.state)) continue;
       const operable = await this.deps.panels.operability(scope, service.panelId, type);
-      if (operable.ok) available.push(type);
+      if (!operable.ok) continue;
+      // WP-A8: a courtesy for drawing; `planWithin` decides again inside the transaction.
+      if (!customerActionVerdict(policy, 'DISABLE_ENABLE').allowed) continue;
+      available.push(type);
     }
     return available;
   }
@@ -998,9 +1043,17 @@ export class ProvisioningService {
       'ROTATE_SUBSCRIPTION',
     );
     if (!operable.ok) return { offered: false };
-    const cooldownHours = await this.deps.settings.valueOf<number>(
+    const policy = await this.deps.panelPolicy.forPanel(scope, service.panelId);
+    if (!customerActionVerdict(policy, 'ROTATE_SUBSCRIPTION').allowed) return { offered: false };
+    const hours = await this.deps.settings.valueOf<number>(
       scope,
       'services.link_rotation_cooldown_hours',
+    );
+    // WP-A8: the wait the customer is told is the one `requestRotation` enforces — the
+    // longer of the tenant's and this panel's — rounded UP to whole hours, so the
+    // sentence never promises a rotation sooner than it will be accepted.
+    const cooldownHours = Math.ceil(
+      effectiveCooldownMs(hours * 3_600_000, policy, 'ROTATE_SUBSCRIPTION') / 3_600_000,
     );
     return { offered: true, cooldownHours };
   }
@@ -1086,7 +1139,13 @@ export class ProvisioningService {
               'services.link_rotation_cooldown_hours',
               tx,
             );
-            const availableAt = new Date(last.getTime() + hours * 3_600_000);
+            // WP-A8: the panel may lengthen the wait, never shorten it.
+            const waitMs = effectiveCooldownMs(
+              hours * 3_600_000,
+              await this.deps.panelPolicy.forPanel(scope, service.panelId, tx),
+              'ROTATE_SUBSCRIPTION',
+            );
+            const availableAt = new Date(last.getTime() + waitMs);
             if (this.deps.clock.now().getTime() < availableAt.getTime()) {
               throw errors.conflict(
                 COMMERCE_ERROR_CODES.SERVICE_ROTATION_COOLDOWN,
@@ -1345,6 +1404,23 @@ export class ProvisioningService {
       const replay = await this.deps.operations.findByOperationId(scope, operationId, tx);
       if (replay !== null) return replay;
       await origin.admission.admit(tx);
+    }
+    /*
+     * WP-A8: a CUSTOMER's request is held to the panel's operator policy, here, inside
+     * the transaction every customer-originated operation is planned in — the one place
+     * that decision is made. After a replay of this key has been answered, so a request
+     * accepted before the policy changed still returns what it planned. An operator's
+     * request, and the system's, never reach this: the policy is about what customers
+     * are offered, not about what the installation may do to a service.
+     */
+    const policyRow = CUSTOMER_OPERATION_POLICY_ROW[type];
+    if (origin.requestedBy !== 'OPERATOR' && policyRow !== undefined) {
+      const replay = await this.deps.operations.findByOperationId(scope, operationId, tx);
+      if (replay !== null) return replay;
+      assertCustomerPolicyAllows(
+        await this.deps.panelPolicy.forPanel(scope, service.panelId, tx),
+        policyRow,
+      );
     }
     const operation = await this.deps.operations.plan(
       scope,

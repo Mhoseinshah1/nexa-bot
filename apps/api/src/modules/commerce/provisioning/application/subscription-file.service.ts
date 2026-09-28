@@ -1,6 +1,7 @@
 import {
   COMMERCE_ERROR_CODES,
   canFetchSubscriptionFiles,
+  customerActionVerdict,
   isNexaError,
   isProviderType,
   providerDescriptor,
@@ -22,6 +23,7 @@ import type {
   ProbeBudget,
 } from '../../../platform/panels/application/ports.js';
 import { toProviderCredentials } from '../../../platform/panels/application/probe-core.js';
+import type { PanelPolicyGate } from '../../../platform/panels/application/panel-policy.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { SafeHttpClient } from '../../../../infrastructure/net/safe-http.js';
 import { checkUrl, type UrlPolicyOptions } from '../../../../infrastructure/net/url-policy.js';
@@ -57,6 +59,11 @@ export interface SubscriptionFileDeps {
   readonly guard: PermissionGuard;
   readonly uow: UnitOfWork<TransactionScope>;
   readonly clock: Clock;
+  /**
+   * The panel's operator policy (WP-A8): an operator may withdraw this button on one
+   * panel. Asked after the adapter check, so it can refuse and never grant.
+   */
+  readonly panelPolicy: PanelPolicyGate;
 }
 
 /**
@@ -95,10 +102,16 @@ export class SubscriptionFileService {
     if (view === null || !isProviderType(view.panel.providerType)) return false;
     if (!this.deps.implementedProviderTypes.includes(view.panel.providerType)) return false;
     // The descriptor alone cannot say the method exists; the adapter can say both.
-    return (
-      providerDescriptor(view.panel.providerType) !== null &&
-      canFetchSubscriptionFiles(this.deps.adapters(view.panel.providerType))
-    );
+    if (
+      providerDescriptor(view.panel.providerType) === null ||
+      !canFetchSubscriptionFiles(this.deps.adapters(view.panel.providerType))
+    ) {
+      return false;
+    }
+    return customerActionVerdict(
+      await this.deps.panelPolicy.forPanel(scope, service.panelId),
+      'SUBSCRIPTION_FILES',
+    ).allowed;
   }
 
   /**
@@ -159,6 +172,15 @@ export class SubscriptionFileService {
     }
     const adapter = this.deps.adapters(operable.providerType as ProviderType);
     if (!canFetchSubscriptionFiles(adapter)) return { outcome: 'UNAVAILABLE' };
+    // WP-A8: decided again on the tap, before the panel is asked for anything.
+    if (
+      !customerActionVerdict(
+        await this.deps.panelPolicy.forPanel(scope, service.panelId),
+        'SUBSCRIPTION_FILES',
+      ).allowed
+    ) {
+      return { outcome: 'UNAVAILABLE' };
+    }
     const stored = await this.deps.credentials.read(scope, service.panelId);
     const credentials = toProviderCredentials(stored, adapter.descriptor.credentialShape);
     if (credentials === null) return { outcome: 'UNAVAILABLE' };

@@ -7,6 +7,7 @@ import {
   SUBSCRIPTION_FILE_NAME_MAX_LENGTH,
   canFetchSubscriptionFiles,
   errors,
+  resolvePanelPolicy,
   type ActorContext,
   type CorrelationId,
   type ProviderAdapter,
@@ -212,6 +213,8 @@ describe('the service, before any panel is asked', () => {
       guard: { check: vi.fn(async () => undefined) } as never,
       uow: { run: async (_s: unknown, fn: (tx: unknown) => unknown) => fn({}) } as never,
       clock: { now: () => new Date('2026-09-28T00:00:00Z') },
+      // WP-A8: no stored policy, so the default — every supported action offered.
+      panelPolicy: { forPanel: vi.fn(async () => resolvePanelPolicy(null)) },
       ...overrides,
     };
     return { built, sendFile, send };
@@ -230,6 +233,36 @@ describe('the service, before any panel is asked', () => {
     expect(send).not.toHaveBeenCalled();
     expect(sendFile).not.toHaveBeenCalled();
     expect(await files.offered(scope, service as never)).toBe(false);
+  });
+
+  /*
+   * WP-A8: an operator switched the button off on this panel. It is not drawn, and a tap
+   * that arrives anyway asks the panel for nothing — the policy is decided before the
+   * budget, the credentials and the fetch.
+   */
+  it('refuses on a panel whose policy withdrew the files, and asks the panel nothing', async () => {
+    const { built, sendFile, send } = deps(new RickpanelAdapter(), {
+      panelPolicy: {
+        forPanel: vi.fn(async () =>
+          resolvePanelPolicy({
+            delivery: { mode: 'CARD_WITH_QR' },
+            actions: { SUBSCRIPTION_FILES: { customerEnabled: false } },
+          }),
+        ),
+      },
+    });
+    const files = new SubscriptionFileService(built);
+    expect(await files.offered(scope, service as never)).toBe(false);
+    const result = await files.send(scope, actor, {
+      customerId: 'u' as UserId,
+      serviceId: 's',
+      chatId: '1',
+      botInstanceId: 'b' as never,
+    });
+    expect(result).toEqual({ outcome: 'UNAVAILABLE' });
+    expect(built.panels.takeProbeBudget).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+    expect(sendFile).not.toHaveBeenCalled();
   });
 
   it('answers NOT_FOUND for a service that is not the customer’s', async () => {
