@@ -86,12 +86,13 @@ describe('a provider’s files, decoded and bounded (E3)', () => {
     const exact = Buffer.alloc(SUBSCRIPTION_FILE_MAX_BYTES, 0x61).toString('base64');
     const parsed = parseSubscriptionFiles(
       JSON.stringify([
+        { filename: 'empty', content_b64: '' },
         { filename: 'big', content_b64: big },
         { filename: 'exact', content_b64: exact },
       ]),
     );
     expect(parsed?.files.map((file) => file.fileName)).toEqual(['exact']);
-    expect(parsed?.failed).toBe(1);
+    expect(parsed?.failed).toBe(2);
   });
 
   it('stops adding files at the aggregate bound and counts the rest as failed', () => {
@@ -335,6 +336,27 @@ describe('the service, before any panel is asked', () => {
       outcome: 'UNAVAILABLE',
     });
     expect(send).not.toHaveBeenCalled();
+  });
+
+  it('tells the customer the panel’s own wait, rounded up to whole seconds and at least one', async () => {
+    const limited = (retryAfterMs: number | undefined) =>
+      ({
+        descriptor: new RickpanelAdapter().descriptor,
+        supports: (capability: string) => capability === 'SUBSCRIPTION_FILES',
+        fetchSubscriptionFiles: vi.fn(async () => ({
+          ok: false as const,
+          failure: 'RATE_LIMITED' as const,
+          status: 429,
+          ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
+        })),
+      }) as unknown as ProviderAdapter;
+    const waitFor = async (retryAfterMs: number | undefined) =>
+      new SubscriptionFileService(deps(limited(retryAfterMs)).built).send(scope, actor, request);
+
+    expect(await waitFor(1_500)).toEqual({ outcome: 'RATE_LIMITED', retryAfterSeconds: 2 });
+    expect(await waitFor(37_000)).toEqual({ outcome: 'RATE_LIMITED', retryAfterSeconds: 37 });
+    expect(await waitFor(0)).toEqual({ outcome: 'RATE_LIMITED', retryAfterSeconds: 1 });
+    expect(await waitFor(undefined)).toEqual({ outcome: 'RATE_LIMITED', retryAfterSeconds: 60 });
   });
 
   it('asks nothing of the panel when the tenant’s outbound budget is spent', async () => {

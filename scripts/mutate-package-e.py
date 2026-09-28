@@ -33,7 +33,8 @@ M=[
  ('E-02',[(SF,"text.length % 4 !== 0 || ","")],I,'refuses malformed Base64 as a failed format'),
  ('E-03',[(SF,"if (entries === null || entries.length > SUBSCRIPTION_FILES_MAX_COUNT) return null;","if (entries === null) return null;")],U,'refuses more entries than the bound'),
  ('E-04',[(SF,"      bytes.byteLength > SUBSCRIPTION_FILE_MAX_BYTES ||\n","")],U,'refuses an empty file and one past the per-file bound'),
- ('E-05',[(SF,"      bytes.byteLength === 0 ||\n","")],U,'refuses an empty file and one past the per-file bound'),
+ # Alone, each of the two empty-file guards is an equivalent mutant: the other one holds.
+ ('E-05',[(SF,"      bytes.byteLength === 0 ||\n",""),(SF,"if (text.length === 0 || text.length % 4","if (text.length % 4")],U,'refuses an empty file and one past the per-file bound'),
  ('E-06',[(SF,"      total + bytes.byteLength > SUBSCRIPTION_FILES_MAX_TOTAL_BYTES\n","      false\n")],U,'stops adding files at the aggregate bound'),
  ('E-07',[(SF,"(error !== undefined && error !== null) || ","")],U,'counts a failed format and keeps the others'),
  ('E-08',[(SF,"const base = value.split(/[/\\\\]/).pop() ?? '';","const base = value;")],U,'reduces a file name to a safe base name'),
@@ -47,7 +48,10 @@ M=[
  ('E-15',[(SF,"export const SUBSCRIPTION_FILES_DEFAULT_RETRY_MS = 60_000;","export const SUBSCRIPTION_FILES_DEFAULT_RETRY_MS = 1_000;")],A,'falls back to the documented minute'),
  ('E-16',[(SF,"return Math.min(Number(header.trim()) * 1000, 3_600_000);","return Number(header.trim()) * 1000;")],U,'honours Retry-After in seconds'),
  ('E-17',[(RP,"    if (read.status === 429) {\n      return {\n        ok: false,\n        failure: 'RATE_LIMITED',\n        status: 429,\n        retryAfterMs: retryAfterMs(read.headers['retry-after']),\n      };\n    }\n","")],A,'carries a 429 Retry-After'),
- ('E-18',[(SVC,"          retryAfterSeconds: Math.max(1, Math.ceil(waitMs / 1000)),","          retryAfterSeconds: 60,")],I,"honours the panel's 429 and Retry-After"),
+ ('E-18',[(SVC,"          retryAfterSeconds: Math.max(1, Math.ceil(waitMs / 1000)),","          retryAfterSeconds: 60,")],U,"own wait"),
+ ('E-41',[(SVC,"const waitMs = fetched.retryAfterMs ?? 60_000;","const waitMs = fetched.retryAfterMs ?? 1_000;")],U,"own wait"),
+ ('E-42',[(SVC,"          retryAfterSeconds: Math.max(1, Math.ceil(waitMs / 1000)),","          retryAfterSeconds: Math.ceil(waitMs / 1000),")],U,"own wait"),
+ ('E-43',[(SVC,"          retryAfterSeconds: Math.max(1, Math.ceil(waitMs / 1000)),","          retryAfterSeconds: Math.max(1, Math.floor(waitMs / 1000)),")],U,"own wait"),
  # The adapter's wire
  ('E-19',[(RP,"    if (read.status === 404) return { ok: true, found: false };\n","")],A,'answers a 404 as found:false'),
  ('E-20',[(RP,"path: `${USER_PATH}/${encodeURIComponent(ref.username)}/${SUBSCRIPTION_FILES_SUFFIX}`,","path: `${USER_PATH}/${ref.username}/${SUBSCRIPTION_FILES_SUFFIX}`,")],A,'asks the all-files route for the ENCODED username'),
