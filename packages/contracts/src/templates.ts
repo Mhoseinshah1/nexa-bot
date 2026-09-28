@@ -1979,8 +1979,7 @@ export const TEMPLATES = [
   },
   {
     key: 'bot.admin.operation_custom_service',
-    description:
-      'The operation label inside `bot.admin.receipt` for a custom service (Package D).',
+    description: 'The operation label inside `bot.admin.receipt` for a custom service (Package D).',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
