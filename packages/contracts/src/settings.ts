@@ -178,6 +178,67 @@ const telegramHandleSchema = z
     'A Telegram handle is @ followed by 5 to 32 letters, digits or underscores, starting with a letter.',
   );
 
+/**
+ * A private channel's invite link, or a public one's `t.me` address (Package B).
+ *
+ * `https://t.me/` only: the join button opens it, and a link anywhere else would let the
+ * setting send customers to a page that is not Telegram.
+ */
+const telegramJoinUrlSchema = z
+  .string()
+  .trim()
+  .max(256)
+  .regex(/^https:\/\/t\.me\/[A-Za-z0-9_+\-/]{1,200}$/, 'A join link is an https://t.me/ address.');
+
+/**
+ * One configured channel (Package B, `docs/package-b-channel-membership-audit.md` §2.1).
+ *
+ * - `handle`: the public `@username`. Optional since Package B — a private channel has none.
+ * - `chatId`: the numeric id Telegram is asked about when present (`-100…` for a channel).
+ * - `joinUrl`: what the join button opens — a private channel's invite link.
+ * - `mandatory`: required membership, or merely offered. Not optional and not defaulted:
+ *   a missing flag would have to be read as one of the two, and reading it as "required"
+ *   gates every customer out of the bot while reading it as "optional" silently drops a
+ *   gate the operator meant to set.
+ *
+ * Every value stored before Package B — a handle and a flag — is still valid.
+ */
+export const telegramChannelSchema = z
+  .object({
+    handle: telegramHandleSchema.optional(),
+    chatId: z
+      .string()
+      .trim()
+      .regex(/^-?\d{5,20}$/, 'A channel id is a signed integer.')
+      .optional(),
+    joinUrl: telegramJoinUrlSchema.optional(),
+    mandatory: z.boolean(),
+  })
+  .refine((channel) => channel.handle !== undefined || channel.chatId !== undefined, {
+    message: 'A channel needs a handle or an id: there is nothing to ask Telegram about.',
+  })
+  .refine(
+    (channel) =>
+      !channel.mandatory || channel.handle !== undefined || channel.joinUrl !== undefined,
+    {
+      message:
+        'A required channel needs a handle or a join link: a customer cannot join what they cannot open.',
+    },
+  );
+
+export type TelegramChannel = z.infer<typeof telegramChannelSchema>;
+
+/** The identity `getChatMember` is asked about: the id when there is one, else the handle. */
+export function telegramChannelIdentity(channel: TelegramChannel): string {
+  return channel.chatId ?? (channel.handle as string);
+}
+
+/** Where a customer joins it: the configured link, else the public handle's address. */
+export function telegramChannelJoinUrl(channel: TelegramChannel): string | null {
+  if (channel.joinUrl !== undefined) return channel.joinUrl;
+  return channel.handle === undefined ? null : `https://t.me/${channel.handle.slice(1)}`;
+}
+
 /** No duplicates: the same destination twice is a mistake, never an intent. */
 function unique<T>(of: (item: T) => string) {
   return (items: readonly T[]): boolean => new Set(items.map(of)).size === items.length;
@@ -337,28 +398,29 @@ export const SETTINGS = [
     key: 'telegram.channels',
     description:
       'The channels shown to customers, in order, each flagged as required membership or ' +
-      'optional. The legacy product could only LIST its forced-join channels from inside the ' +
-      'delete flow (GSR-006), so reading the configuration meant starting to destroy it.',
+      'optional. A REQUIRED channel is enforced (Package B): a customer who Telegram says is ' +
+      'not a member is shown the join buttons instead of the action they asked for. The legacy ' +
+      'product could only LIST its forced-join channels from inside the delete flow (GSR-006), ' +
+      'so reading the configuration meant starting to destroy it.',
     schema: z
-      .array(
-        z.object({
-          handle: telegramHandleSchema,
-          /**
-           * Required membership, or merely offered.
-           *
-           * Not optional and not defaulted. A missing flag would have to be
-           * read as one of the two, and reading it as "required" gates every
-           * customer out of the bot while reading it as "optional" silently
-           * drops a gate the operator meant to set.
-           */
-          mandatory: z.boolean(),
-        }),
-      )
+      .array(telegramChannelSchema)
       .max(10)
       .refine(
-        unique((channel: { handle: string }) => channel.handle.toLowerCase()),
+        (channels) =>
+          unique((handle: string) => handle.toLowerCase())(
+            channels.flatMap((channel) => (channel.handle === undefined ? [] : [channel.handle])),
+          ),
         {
           message: 'The same channel is listed twice.',
+        },
+      )
+      .refine(
+        (channels) =>
+          unique((chatId: string) => chatId)(
+            channels.flatMap((channel) => (channel.chatId === undefined ? [] : [channel.chatId])),
+          ),
+        {
+          message: 'The same channel id is listed twice.',
         },
       ),
     defaultValue: [],
@@ -366,7 +428,8 @@ export const SETTINGS = [
     mutability: 'RUNTIME',
     classification: 'PUBLIC',
     configures: null,
-    consumer: 'PLANNED',
+    // ACTIVE since Package B: the bot runtime's membership guard reads the REQUIRED items.
+    consumer: 'ACTIVE',
   },
   {
     key: 'sales.order_expiry_minutes',

@@ -501,8 +501,8 @@ describe('the settings the owner revisions add', () => {
     ).toBe(true);
   });
 
-  it('marks the one as having no consumer, and everything older as having one', () => {
-    const planned = SETTINGS.filter((s) => s.consumer === 'PLANNED').map((s) => s.key);
+  it('marks every setting as having a consumer', () => {
+    const planned = SETTINGS.filter((s) => (s.consumer as string) === 'PLANNED').map((s) => s.key);
     /*
      * TWO since Phase 5B. `sales.currency` left this list in Phase 4B because
      * `ProductService` now refuses a price in any other currency — the Codex review
@@ -515,11 +515,19 @@ describe('the settings the owner revisions add', () => {
      * `support.accounts` left it in the customer UX completion: the FAQ/support screen
      * opens its first account as the contact button, and draws none when it is empty.
      *
+     * `telegram.channels`, the last, left it in Package B: the bot runtime's membership
+     * guard enforces its REQUIRED items.
+     *
      * The list is exact rather than a membership check, so a key that quietly gains or
      * loses a consumer has to say so here.
      */
-    expect(planned.sort()).toEqual(['telegram.channels']);
-    for (const key of ['sales.currency', 'wallet.topup.minimum', 'wallet.topup.presets']) {
+    expect(planned.sort()).toEqual([]);
+    for (const key of [
+      'sales.currency',
+      'wallet.topup.minimum',
+      'wallet.topup.presets',
+      'telegram.channels',
+    ]) {
       expect(SETTINGS.find((s) => s.key === key)?.consumer, key).toBe('ACTIVE');
     }
     for (const s of SETTINGS.filter((s) => s.key.startsWith('ops.notifications.'))) {
