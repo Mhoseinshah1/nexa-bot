@@ -204,7 +204,7 @@ describe('the settings screen', () => {
     stubApi(
       settings([
         setting({ key: 'sales.currency', value: 'IRT', configures: null, consumer: 'PLANNED' }),
-        setting({ key: 'ops.notifications.max_attempts', value: 5, consumer: 'ACTIVE' }),
+        setting({ key: 'ops.notifications.max_per_minute', value: 5, consumer: 'ACTIVE' }),
       ]),
     );
     renderPage(<SettingsPage mayEdit denied={false} />);
@@ -217,7 +217,7 @@ describe('the settings screen', () => {
   it('offers no save control without the edit permission', async () => {
     stubApi(settings([setting()]));
     renderPage(<SettingsPage mayEdit={false} denied={false} />);
-    await screen.findByText('ops.notifications.max_attempts');
+    await screen.findByText('ops.notifications.max_per_minute');
     expect(screen.queryByRole('button', { name: 'ذخیره' })).toBeNull();
   });
 
@@ -225,12 +225,12 @@ describe('the settings screen', () => {
     stubApi([
       ...settings([setting({ version: 2, source: 'TENANT' })]),
       {
-        url: '/settings/ops.notifications.max_attempts',
+        url: '/settings/ops.notifications.max_per_minute',
         body: { setting: setting({ version: 2, source: 'TENANT' }), changed: false },
       },
     ]);
     renderPage(<SettingsPage mayEdit denied={false} />);
-    await screen.findByText('ops.notifications.max_attempts');
+    await screen.findByText('ops.notifications.max_per_minute');
     fireEvent.click(screen.getByRole('button', { name: 'ذخیره' }));
     expect(await screen.findByText('ثبت شد، اما مقداری تغییر نکرد.')).toBeInTheDocument();
   });
@@ -258,13 +258,13 @@ describe('the settings screen', () => {
     stubApi([
       ...settings([setting({ version: 2, source: 'TENANT' })]),
       {
-        url: '/settings/ops.notifications.max_attempts',
+        url: '/settings/ops.notifications.max_per_minute',
         // A 200 from another release: the shape this bundle cannot read.
         body: { unexpected: true },
       },
     ]);
     renderPage(<SettingsPage mayEdit denied={false} />);
-    await screen.findByText('ops.notifications.max_attempts');
+    await screen.findByText('ops.notifications.max_per_minute');
     fireEvent.click(screen.getByRole('button', { name: 'ذخیره' }));
 
     expect(await screen.findByText(t('web.rejected'))).toBeInTheDocument();
@@ -289,7 +289,7 @@ describe('the settings screen', () => {
   it('does blame the connection when the request never arrived', async () => {
     stubApi(settings([setting({ version: 2, source: 'TENANT' })]));
     renderPage(<SettingsPage mayEdit denied={false} />);
-    await screen.findByText('ops.notifications.max_attempts');
+    await screen.findByText('ops.notifications.max_per_minute');
 
     // The save leaves the browser and dies on the wire.
     const failing = vi.fn(() => Promise.reject(new TypeError('Failed to fetch')));

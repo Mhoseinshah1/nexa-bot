@@ -1,6 +1,11 @@
 import { useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { COMMERCE_ERROR_CODES, CURRENCY_CODES, PRODUCT_PAGE_MAX } from '@nexa/contracts';
+import {
+  COMMERCE_ERROR_CODES,
+  CURRENCY_CODES,
+  OPS_GROUP_MANAGED_SETTING_KEYS,
+  PRODUCT_PAGE_MAX,
+} from '@nexa/contracts';
 import type { CurrencyCode, MoneyWire, ResolvedSettingResponse } from '@nexa/contracts';
 import { ApiError, fetchProducts, fetchSettings, saveSetting } from '../api/client';
 import { currencyLabel, formatNumber, formatTimestamp } from '../format';
@@ -40,7 +45,11 @@ import {
  */
 export function SettingsPage({ mayEdit, denied }: { mayEdit: boolean; denied: boolean }) {
   const settings = useQuery({ queryKey: ['settings'], queryFn: fetchSettings, enabled: !denied });
-  const rows = settings.data?.settings ?? [];
+  // WP-A4: the ops group panel owns these — the manual chat and topic ids under its
+  // advanced section, the retired severity cutoff and the internal attempt ceiling nowhere.
+  const rows = (settings.data?.settings ?? []).filter(
+    (setting) => !(OPS_GROUP_MANAGED_SETTING_KEYS as readonly string[]).includes(setting.key),
+  );
 
   return (
     <>

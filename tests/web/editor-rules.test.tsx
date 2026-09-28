@@ -62,13 +62,13 @@ const template = (over: Record<string, unknown> = {}) =>
 
 const setting = (over: Record<string, unknown> = {}) =>
   resolvedSettingSchema.parse({
-    key: 'ops.notifications.max_attempts',
+    key: 'ops.notifications.max_per_minute',
     value: 5,
     source: 'DEFAULT',
     version: null,
     updatedAt: null,
     updatedByAdminId: null,
-    description: 'How many times one notification may be attempted.',
+    description: 'The ceiling on outbound operational notifications per minute.',
     zeroMeaning: 'NOT_APPLICABLE',
     mutability: 'RUNTIME',
     classification: 'PUBLIC',
@@ -591,7 +591,7 @@ describe('what the template card tells the operator', () => {
 });
 
 describe('the settings editor', () => {
-  const NUMBER_KEY = 'ops.notifications.max_attempts';
+  const NUMBER_KEY = 'ops.notifications.max_per_minute';
   const field = () => document.getElementById(`value-${NUMBER_KEY}`) as HTMLInputElement;
 
   it('sends the version the DRAFT was based on', async () => {
