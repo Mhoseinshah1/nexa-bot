@@ -65,6 +65,14 @@ import {
   TRIAL_LIMIT_MIN,
 } from './promotions.js';
 import { priceQuoteWireSchema } from './pricing.js';
+import {
+  CUSTOM_SERVICE_LABEL_MAX_LENGTH,
+  CUSTOM_SERVICE_MAX_DAYS,
+  CUSTOM_SERVICE_MAX_VOLUME_UNITS,
+  CUSTOM_SERVICE_RULE_DIMENSIONS,
+  CUSTOM_SERVICE_RULE_LEVELS,
+  parseCustomServiceVolume,
+} from './custom-service.js';
 import { parseTrafficGb, TRAFFIC_GB_PATTERN } from './traffic-input.js';
 import {
   MAX_DEVICE_LIMIT,
@@ -2690,7 +2698,12 @@ export const CASHBACK_RULE_ROUTES = {
  */
 export const pricePreviewQuerySchema = z
   .object({
-    purpose: z.enum(DISCOUNTABLE_PURPOSES),
+    /*
+     * The four CATALOGUE purposes, not `DISCOUNTABLE_PURPOSES`: a custom service is priced
+     * from a location, a volume and days, none of which this query carries, and admitting
+     * it here would make the refine below demand an add-on for one (Package D).
+     */
+    purpose: z.enum(RESELLER_GRANTABLE_OPERATIONS),
     productId: uuidV7Schema.optional(),
     addonId: uuidV7Schema.optional(),
     customerId: uuidV7Schema.optional(),
@@ -3274,7 +3287,13 @@ export const orderSummarySchema = z.object({
   id: z.string(),
   customerId: z.string(),
   state: z.enum(ORDER_STATES),
-  productId: z.string(),
+  /**
+   * What the order is FOR (Package D surfaced it): a custom service is the one purpose
+   * whose `productId` is null, and a client needs the purpose to say why.
+   */
+  purpose: z.enum(ORDER_PURPOSES),
+  /** Null for a `CUSTOM_SERVICE` order and only for one (`orders_product_purpose_check`). */
+  productId: z.string().nullable(),
   panelId: z.string(),
   lineTitle: z.string(),
   /*
@@ -3361,6 +3380,187 @@ export const ORDER_ROUTES = {
   list: '/orders',
   detail: (id: string) => `/orders/${encodeURIComponent(id)}`,
   pricing: (id: string) => `/orders/${encodeURIComponent(id)}/pricing`,
+  /** Package D: the custom-service terms the order was priced by, or `null` for any other order. */
+  customService: (id: string) => `/orders/${encodeURIComponent(id)}/custom-service`,
+} as const;
+
+// --- Package D: the custom service (docs/package-d-custom-service-audit.md) -----------
+
+/**
+ * One custom-service price rule, as the Web Admin renders it.
+ *
+ * `minimum` and `maximum` are the figures an operator typed, in the dimension's unit: GB
+ * with at most two decimals for VOLUME (`10.25`), whole days for TIME (`30`). The price is
+ * per GB or per day, in minor units of `currency`, a decimal string for the reason
+ * `productSummarySchema` gives.
+ *
+ * `customerId`, `resellerTierId` and `panelId` are the rule's specificity: a customer
+ * (never together with a tier), else a reseller tier, else — both null — the ordinary
+ * customers; a panel, else every panel.
+ */
+export const customServiceRuleSummarySchema = z.object({
+  id: z.string(),
+  dimension: z.enum(CUSTOM_SERVICE_RULE_DIMENSIONS),
+  label: z.string().nullable(),
+  minimum: z.string(),
+  maximum: z.string(),
+  unitPriceAmount: z.string(),
+  currency: z.enum(CURRENCY_CODES),
+  customerId: z.string().nullable(),
+  resellerTierId: z.string().nullable(),
+  panelId: z.string().nullable(),
+  enabled: z.boolean(),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
+});
+export type CustomServiceRuleSummaryResponse = z.infer<typeof customServiceRuleSummarySchema>;
+
+/** The digits of a whole day count: `1` to `CUSTOM_SERVICE_MAX_DAYS`, no sign, no leading zero. */
+const CUSTOM_SERVICE_DAYS_PATTERN = /^[1-9][0-9]{0,3}$/u;
+
+/**
+ * A rule as written. The bounds are validated per dimension, and the currency is not
+ * taken from the client: a rule is priced in `sales.currency`, which the service reads.
+ * Overlap with another enabled rule at the same specificity is decided by the service,
+ * under a lock, because it depends on every other rule.
+ */
+export const customServiceRuleWriteSchema = z
+  .object({
+    idempotencyKey: z.string().min(8).max(255),
+    dimension: z.enum(CUSTOM_SERVICE_RULE_DIMENSIONS),
+    label: z.string().trim().min(1).max(CUSTOM_SERVICE_LABEL_MAX_LENGTH).nullable(),
+    minimum: z.string().trim().min(1).max(16),
+    maximum: z.string().trim().min(1).max(16),
+    /** Positive: a zero price would make a dimension free, and free is not a price here. */
+    unitPriceAmount: z.string().regex(/^[1-9]\d{0,18}$/u),
+    customerId: uuidV7Schema.nullable(),
+    resellerTierId: uuidV7Schema.nullable(),
+    panelId: uuidV7Schema.nullable(),
+    enabled: z.boolean(),
+  })
+  .refine((d) => d.customerId === null || d.resellerTierId === null, {
+    message: 'A rule names a customer or a tier, not both.',
+    path: ['resellerTierId'],
+  })
+  .superRefine((d, ctx) => {
+    const bound = (text: string): bigint | null => {
+      if (d.dimension === 'TIME') {
+        if (!CUSTOM_SERVICE_DAYS_PATTERN.test(text)) return null;
+        const days = BigInt(text);
+        return days <= BigInt(CUSTOM_SERVICE_MAX_DAYS) ? days : null;
+      }
+      const units = parseCustomServiceVolume(text);
+      // The operator's form is ASCII (Package C): a converted Persian digit is refused.
+      if (units === null || !TRAFFIC_GB_PATTERN.test(text)) return null;
+      return units >= 1n && units <= CUSTOM_SERVICE_MAX_VOLUME_UNITS ? units : null;
+    };
+    const minimum = bound(d.minimum);
+    const maximum = bound(d.maximum);
+    if (minimum === null) {
+      ctx.addIssue({ code: 'custom', message: 'Not a valid lower bound.', path: ['minimum'] });
+    }
+    if (maximum === null) {
+      ctx.addIssue({ code: 'custom', message: 'Not a valid upper bound.', path: ['maximum'] });
+    }
+    if (minimum !== null && maximum !== null && maximum < minimum) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'The upper bound is below the lower bound.',
+        path: ['maximum'],
+      });
+    }
+  });
+export type CustomServiceRuleWriteRequest = z.infer<typeof customServiceRuleWriteSchema>;
+
+export const customServiceRuleDeleteSchema = z.object({
+  idempotencyKey: z.string().min(8).max(255),
+});
+export type CustomServiceRuleDeleteRequest = z.infer<typeof customServiceRuleDeleteSchema>;
+
+export const customServiceRuleListResponseSchema = z.object({
+  rules: z.array(customServiceRuleSummarySchema),
+});
+export type CustomServiceRuleListResponse = z.infer<typeof customServiceRuleListResponseSchema>;
+
+export const customServiceRuleResponseSchema = z.object({ rule: customServiceRuleSummarySchema });
+export type CustomServiceRuleResponse = z.infer<typeof customServiceRuleResponseSchema>;
+
+/**
+ * A panel offered for custom service, and the name a customer sees it by. A panel's own
+ * `name` is the operator's internal label, so a location is an explicit opt-in with its
+ * own customer-facing label.
+ */
+export const customServiceLocationSummarySchema = z.object({
+  panelId: z.string(),
+  /** The operator's internal panel name, for the Web Admin only. */
+  panelName: z.string(),
+  label: z.string(),
+  enabled: z.boolean(),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
+});
+export type CustomServiceLocationSummaryResponse = z.infer<
+  typeof customServiceLocationSummarySchema
+>;
+
+export const customServiceLocationWriteSchema = z.object({
+  idempotencyKey: z.string().min(8).max(255),
+  label: z.string().trim().min(1).max(CUSTOM_SERVICE_LABEL_MAX_LENGTH),
+  enabled: z.boolean(),
+});
+export type CustomServiceLocationWriteRequest = z.infer<typeof customServiceLocationWriteSchema>;
+
+export const customServiceLocationListResponseSchema = z.object({
+  locations: z.array(customServiceLocationSummarySchema),
+});
+export type CustomServiceLocationListResponse = z.infer<
+  typeof customServiceLocationListResponseSchema
+>;
+
+export const customServiceLocationResponseSchema = z.object({
+  location: customServiceLocationSummarySchema,
+});
+export type CustomServiceLocationResponse = z.infer<typeof customServiceLocationResponseSchema>;
+
+/**
+ * What a custom order was priced by, as its draft recorded it (brief D6). Read from the
+ * order's own snapshot, never from today's rules: editing or deleting a rule rewrites
+ * nothing here.
+ */
+export const orderCustomServiceTermsSchema = z.object({
+  panelId: z.string(),
+  locationLabel: z.string(),
+  volume: z.string(),
+  trafficBytes: z.string(),
+  durationDays: z.number().int(),
+  volumeRuleId: z.string(),
+  volumeRuleLevel: z.enum(CUSTOM_SERVICE_RULE_LEVELS),
+  pricePerGbAmount: z.string(),
+  volumeAmount: z.string(),
+  timeRuleId: z.string(),
+  timeRuleLevel: z.enum(CUSTOM_SERVICE_RULE_LEVELS),
+  pricePerDayAmount: z.string(),
+  timeAmount: z.string(),
+  baseAmount: z.string(),
+  currency: z.enum(CURRENCY_CODES),
+});
+export type OrderCustomServiceTermsResponse = z.infer<typeof orderCustomServiceTermsSchema>;
+
+export const orderCustomServiceResponseSchema = z.object({
+  terms: orderCustomServiceTermsSchema.nullable(),
+});
+export type OrderCustomServiceResponse = z.infer<typeof orderCustomServiceResponseSchema>;
+
+export const CUSTOM_SERVICE_ROUTES = {
+  rules: '/custom-service/rules',
+  createRule: '/custom-service/rules',
+  rule: (id: string) => `/custom-service/rules/${encodeURIComponent(id)}`,
+  updateRule: (id: string) => `/custom-service/rules/${encodeURIComponent(id)}`,
+  deleteRule: (id: string) => `/custom-service/rules/${encodeURIComponent(id)}/delete`,
+  locations: '/custom-service/locations',
+  saveLocation: (panelId: string) => `/custom-service/locations/${encodeURIComponent(panelId)}`,
+  deleteLocation: (panelId: string) =>
+    `/custom-service/locations/${encodeURIComponent(panelId)}/delete`,
 } as const;
 
 // --- Wallet and payments (Phase 4C) -----------------------------------------
@@ -4518,7 +4718,8 @@ export const serviceSummarySchema = z.object({
   customerId: z.string(),
   orderId: z.string(),
   panelId: z.string(),
-  productId: z.string(),
+  /** Null for a custom service (Package D): it was never a product. */
+  productId: z.string().nullable(),
   state: z.enum(SERVICE_STATES),
   /** The handle an operator types into the panel. Not a credential. */
   providerUsername: z.string(),

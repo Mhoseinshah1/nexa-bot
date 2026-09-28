@@ -337,6 +337,9 @@ export const PURCHASED_AS: Readonly<Record<OrderPurpose, OperationType>> = {
   // A trial is a create nobody paid for, and it is given back on the same lane: it
   // stops counting against the customer's limit. `docs/wp6-audit.md` A4.
   TRIAL: 'PROVISION',
+  // A custom service is a purchase delivered exactly as one (Package D): its cashback and
+  // its referral commission are earned when the PROVISION succeeds.
+  CUSTOM_SERVICE: 'PROVISION',
 };
 
 /**

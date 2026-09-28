@@ -85,6 +85,7 @@ const REGISTRY_LABELS: Readonly<Record<string, WebKey>> = {
   customer_link_rotation: 'web.flag_customer_link_rotation',
   'services.link_rotation_cooldown_hours': 'web.setting_link_rotation_cooldown_hours',
   referral_signup_gift: 'web.flag_referral_signup_gift',
+  custom_service: 'web.flag_custom_service',
   'referral.signup_gift.total': 'web.setting_referral_signup_gift_total',
   'referral.signup_gift.referrer_percent': 'web.setting_referral_signup_gift_referrer_percent',
   'referral.signup_gift.referred_percent': 'web.setting_referral_signup_gift_referred_percent',

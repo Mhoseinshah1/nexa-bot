@@ -2017,6 +2017,12 @@ export const TEMPLATES = [
     placeholders: [],
   },
   {
+    key: 'bot.admin.operation_custom_service',
+    description: 'The operation label inside `bot.admin.receipt` for a custom service (Package D).',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
     key: 'bot.admin.operation_renew',
     description:
       'The operation label inside `bot.admin.receipt` for a renewal of an existing service.',
@@ -5775,6 +5781,99 @@ export const TEMPLATES = [
     placeholders: [],
   },
   {
+    key: 'bot.custom_service.button',
+    description:
+      'The catalogue button that starts a custom service (Package D). Drawn only while the ' +
+      'custom_service flag is on and at least one location can price this customer, and ' +
+      'decided again on the server when tapped.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.custom_service.locations',
+    description:
+      'Asks the customer to choose a location for a custom service. The buttons below are ' +
+      'the location labels the operator wrote.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.custom_service.ask_volume',
+    description:
+      'Asks for the volume of a custom service, in GB, with at most two decimals. The next ' +
+      'plain message is read as the figure, for ten minutes.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'location',
+        type: 'STRING',
+        description: 'The location chosen.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.custom_service.invalid_volume',
+    description:
+      'The typed volume is not a positive GB figure with at most two decimals. The window ' +
+      'stays open, so the customer simply sends it again.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.custom_service.ask_days',
+    description:
+      'Asks for the days of a custom service, a whole positive number, after the volume was ' +
+      'read. The next plain message is read as the figure, for ten minutes.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'volumeBytes',
+        type: 'BYTES',
+        description: 'The volume just read.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.custom_service.invalid_days',
+    description:
+      'The typed day count is not a whole positive number within the limit. The window stays open.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.custom_service.unavailable',
+    description:
+      'A custom service cannot be sold for this request: the feature is off, the location is ' +
+      'no longer offered, its panel cannot take a new service, or no price rule covers this ' +
+      'volume or these days for this customer. ONE sentence for every reason, like ' +
+      '`bot.order.unavailable`: the audit row names which, and the customer can act on none ' +
+      'of them beyond trying other figures.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.custom_service.not_extendable',
+    description:
+      'A renewal, extra traffic or extra time was asked for on a custom service, which has no ' +
+      'product to renew from (`OQ-PKG-D-01`). Suggests buying a new custom service instead.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.custom_service.terms_changed',
+    description:
+      'Shown at confirmation when a price rule behind this custom-service quote changed, was ' +
+      'disabled or deleted, or the location stopped being offered, since the summary. Nothing ' +
+      'was charged and the order was not re-priced; the customer starts again and sees the ' +
+      'price as it now stands.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
     key: 'bot.trial.not_delivered',
     description:
       'A trial could not be created on its panel. Says the trial was given back, so it ' +
@@ -6242,9 +6341,78 @@ export const TEMPLATES = [
         repeatable: false,
       },
       {
+        token: 'customBlock',
+        type: 'STRING',
+        description:
+          'Rendered `bot.order.preinvoice_custom`, for a custom service only (Package D): the ' +
+          'volume and days the customer typed and the price of each.',
+        required: false,
+        repeatable: false,
+      },
+      {
         token: 'walletBalance',
         type: 'MONEY',
         description: 'The customer’s balance in the order’s currency, read at render time.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.order.preinvoice_custom',
+    description:
+      'The custom-service block of the pre-invoice (Package D): the location, then the volume ' +
+      'and the days the customer typed, each with its price per unit and its price. Read from ' +
+      "the order's own snapshot, so it states what the quote was built from even after a " +
+      'rule changes.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'location',
+        type: 'STRING',
+        description: 'The location label, as the operator wrote it.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'volumeBytes',
+        type: 'BYTES',
+        description: 'The volume bought.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'pricePerGb',
+        type: 'MONEY',
+        description: 'The price of one GB.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'volumePrice',
+        type: 'MONEY',
+        description: 'The volume price.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'durationDays',
+        type: 'DURATION_DAYS',
+        description: 'The days bought.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'pricePerDay',
+        type: 'MONEY',
+        description: 'The price of one day.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'timePrice',
+        type: 'MONEY',
+        description: 'The time price.',
         required: true,
         repeatable: false,
       },

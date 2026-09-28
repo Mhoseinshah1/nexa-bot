@@ -218,7 +218,21 @@ export interface OrderLineSnapshot {
  * reader can confuse a free order with a pricing bug, and so the one edge that lets it
  * reach `PAID` can say which orders it admits. `docs/wp6-audit.md` A1.
  */
-export const ORDER_PURPOSES = ['NEW_SERVICE', 'RENEW', 'ADD_TRAFFIC', 'ADD_TIME', 'TRIAL'] as const;
+/**
+ * `CUSTOM_SERVICE` is a new service bought outside the catalogue (Package D,
+ * `docs/package-d-custom-service-audit.md`): the customer chose the location, the volume
+ * and the days, and the price came from the operator's range rules. It creates a service
+ * exactly as `NEW_SERVICE` does, and it is the one purpose whose order names NO product —
+ * `orders_product_purpose_check` pins that, so nothing can fake one.
+ */
+export const ORDER_PURPOSES = [
+  'NEW_SERVICE',
+  'RENEW',
+  'ADD_TRAFFIC',
+  'ADD_TIME',
+  'TRIAL',
+  'CUSTOM_SERVICE',
+] as const;
 export type OrderPurpose = (typeof ORDER_PURPOSES)[number];
 export const orderPurposeSchema = z.enum(ORDER_PURPOSES);
 
@@ -261,6 +275,7 @@ export function orderPurposeCreatesNewService(purpose: OrderPurpose): boolean {
   switch (purpose) {
     case 'NEW_SERVICE':
     case 'TRIAL':
+    case 'CUSTOM_SERVICE':
       return true;
     case 'RENEW':
     case 'ADD_TRAFFIC':
@@ -290,6 +305,7 @@ export function orderPurposeTargetsExistingService(purpose: OrderPurpose): boole
       return true;
     case 'NEW_SERVICE':
     case 'TRIAL':
+    case 'CUSTOM_SERVICE':
       return false;
     default: {
       const unclassified: never = purpose;
@@ -301,8 +317,9 @@ export function orderPurposeTargetsExistingService(purpose: OrderPurpose): boole
 /**
  * The operation type a commercial purpose is executed as.
  *
- * Total over the three, and it returns `null` for `NEW_SERVICE` and `TRIAL` — the two
- * that create a service rather than act on one — rather than throwing:
+ * Total over the three, and it returns `null` for `NEW_SERVICE`, `TRIAL` and
+ * `CUSTOM_SERVICE` — the three that create a service rather than act on one — rather
+ * than throwing:
  * the caller that asks this question is the settlement dispatch, and a dispatch whose
  * safe branch is reached by catching an exception is a dispatch one refactor away from
  * catching the wrong one.

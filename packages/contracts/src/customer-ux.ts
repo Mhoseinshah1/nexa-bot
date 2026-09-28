@@ -31,6 +31,17 @@ export const CUSTOMER_CAPTURE_PURPOSES = [
    * `SERVICE_NOTE`, and the request is filed only when this window reads a valid reason.
    */
   'SERVICE_REFUND_REASON',
+  /**
+   * Package D: the volume of a custom service, in GB. `subject_id` names the PANEL the
+   * customer chose, so the figure is read for that location and no other.
+   */
+  'CUSTOM_SERVICE_VOLUME',
+  /**
+   * Package D: the days of a custom service. `subject_id` names the panel and
+   * `custom_volume_units` carries the volume the previous window read, so the draft is
+   * made from what the customer typed and never from a callback.
+   */
+  'CUSTOM_SERVICE_DAYS',
 ] as const;
 export type CustomerCapturePurpose = (typeof CUSTOMER_CAPTURE_PURPOSES)[number];
 export const customerCapturePurposeSchema = z.enum(CUSTOMER_CAPTURE_PURPOSES);

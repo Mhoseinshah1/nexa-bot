@@ -27,7 +27,7 @@ export interface CommercialActionRecord {
   readonly customerId: UserId;
   readonly serviceId: string;
   readonly orderId: OrderId;
-  readonly kind: Exclude<OrderPurpose, 'NEW_SERVICE' | 'TRIAL'>;
+  readonly kind: Exclude<OrderPurpose, 'NEW_SERVICE' | 'TRIAL' | 'CUSTOM_SERVICE'>;
   /** A renewal names the product it was quoted from; a quantity purchase the add-on. */
   readonly productId: ProductId | null;
   readonly addonId: ServiceAddonId | null;
@@ -44,7 +44,7 @@ export interface CommercialActionDraft {
   readonly customerId: UserId;
   readonly serviceId: string;
   readonly orderId: OrderId;
-  readonly kind: Exclude<OrderPurpose, 'NEW_SERVICE' | 'TRIAL'>;
+  readonly kind: Exclude<OrderPurpose, 'NEW_SERVICE' | 'TRIAL' | 'CUSTOM_SERVICE'>;
   readonly productId: ProductId | null;
   readonly addonId: ServiceAddonId | null;
   readonly purchasedTrafficBytes: bigint;

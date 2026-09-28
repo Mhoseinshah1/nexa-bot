@@ -65,6 +65,7 @@ export class DrizzleCustomerCaptureRepository implements CustomerCaptureReposito
       readonly openedAt: Date;
       readonly expiresAt: Date;
       readonly openedUpdateId?: bigint | null;
+      readonly customVolumeUnits?: bigint | null;
     },
     tx: unknown,
   ): Promise<CustomerCaptureRecord> {
@@ -82,6 +83,7 @@ export class DrizzleCustomerCaptureRepository implements CustomerCaptureReposito
         openedAt: input.openedAt,
         expiresAt: input.expiresAt,
         openedUpdateId: input.openedUpdateId ?? null,
+        customVolumeUnits: input.customVolumeUnits ?? null,
       })
       .returning();
     if (row === undefined) throw new Error('customer_text_captures insert returned no row.');
@@ -217,5 +219,6 @@ function toRecord(row: typeof customerTextCaptures.$inferSelect): CustomerCaptur
     closedAt: row.closedAt,
     closeReason: row.closeReason as CustomerCaptureCloseReason | null,
     openedUpdateId: row.openedUpdateId,
+    customVolumeUnits: row.customVolumeUnits,
   };
 }

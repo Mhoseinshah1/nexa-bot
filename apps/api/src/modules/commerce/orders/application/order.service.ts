@@ -1,4 +1,5 @@
 import {
+  customServiceVolumeBytes,
   orderPurposeCreatesNewService,
   canonicalizeCustomUsername,
   isValidCustomUsername,
@@ -56,6 +57,18 @@ import type {
   ProductCategoryRepository,
 } from '../../catalog/application/ports.js';
 import { quoteLine, quoteProduct } from './order-pricing.js';
+import {
+  customServiceBaseQuote,
+  type CustomServicePrice,
+} from '../../custom-service/domain/custom-service-pricing.js';
+import type {
+  CustomServicePricer,
+  CustomServiceUnavailableReason,
+} from '../../custom-service/application/custom-service-pricer.js';
+import type {
+  OrderCustomServiceTerms,
+  OrderCustomServiceTermsRepository,
+} from '../../custom-service/application/ports.js';
 import type { PricingService } from '../../pricing/application/pricing.service.js';
 import type { DiscountCodeCaptureRepository } from '../../pricing/application/ports.js';
 import type { OrderCursor, OrderPage, OrderRecord, OrderRepository, OrderSearch } from './ports.js';
@@ -198,7 +211,16 @@ export interface OrderServiceDeps {
    * recent prompt is the only reader across all three tables. Optional only for the
    * fixtures that build this service without one.
    */
-  readonly captures?: Pick<CustomerCaptureRepository, 'closeOpen'>;
+  readonly captures?: Pick<CustomerCaptureRepository, 'closeOpen' | 'close'>;
+  /**
+   * Package D: the custom service's pricer and the frozen terms of each custom order.
+   * Optional only for the fixtures that build this service without the feature; a
+   * custom command without it refuses as the disabled feature does.
+   */
+  readonly customService?: {
+    readonly pricer: Pick<CustomServicePricer, 'enabled' | 'quote'>;
+    readonly terms: OrderCustomServiceTermsRepository;
+  };
   readonly clock: Clock;
   readonly ids: IdGenerator;
 }
@@ -452,6 +474,242 @@ export class OrderService {
         return created;
       },
     );
+  }
+
+  /**
+   * Creates the DRAFT of a custom service (Package D, brief D4–D6): a location, a volume
+   * and a number of days, priced by the operator's range rules.
+   *
+   * The same draft as `createDraft` in every respect but where the price comes from. The
+   * order names NO product (`orders_product_purpose_check`); its line is the location's
+   * label, the days and the bytes, priced at the custom base price; and the terms that
+   * price came from — both rules, their levels and per-unit prices, and the two partial
+   * prices — are written once, beside it, and never changed. The base then goes through
+   * the ordinary pricing engine, so a discount, a code and cashback apply exactly as they
+   * do to a product.
+   *
+   * Nothing is reserved here and nothing is provisioned: the username step, the capacity
+   * slot and the money are the ordinary purchase path's, after this.
+   *
+   * `captureId` is the days window that read the figure. It is closed in THIS transaction,
+   * so a crash between the draft and the close cannot leave a window that reads the next
+   * message as a second answer to the same question.
+   */
+  async createCustomDraft(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: {
+      readonly idempotencyKey: string;
+      readonly customerId: string;
+      readonly panelId: string;
+      readonly volumeUnits: bigint;
+      readonly durationDays: number;
+      readonly captureId?: string;
+    },
+  ): Promise<OrderRecord> {
+    const customerId = this.customerId(input.customerId);
+    const requestHash = hashRequest({
+      customerId,
+      custom: true,
+      panelId: input.panelId,
+      volumeUnits: input.volumeUnits.toString(),
+      durationDays: input.durationDays,
+    });
+    await this.authorize(scope, actor, {
+      action: 'order.draft_create',
+      entityType: 'Order',
+      entityId: null,
+    });
+    const replay = await this.replay(scope, input.idempotencyKey, requestHash);
+    if (replay !== null) return replay;
+
+    const now = this.deps.clock.now();
+    const id = this.deps.ids.uuid() as OrderId;
+
+    return runAuthorizedMutation(
+      this.mutationDeps(),
+      scope,
+      actor,
+      ORDER_PLACE_PERMISSION,
+      { action: 'order.draft_create', entityType: 'Order', entityId: null },
+      async (tx) => {
+        await this.assertScopeActive(scope, tx);
+        await this.assertCustomerMayOrder(scope, customerId, tx);
+        const custom = await this.assertCustomServiceEnabled(scope, tx);
+
+        const quoted = await custom.pricer.quote(
+          scope,
+          {
+            customerId,
+            panelId: input.panelId,
+            volumeUnits: input.volumeUnits,
+            durationDays: input.durationDays,
+          },
+          tx,
+        );
+        if (quoted.kind === 'UNAVAILABLE') throw customServiceUnavailable(quoted.reason);
+        const { price, location } = quoted;
+
+        const trafficBytes = customServiceVolumeBytes(price.volumeUnits);
+        const base = customServiceBaseQuote({
+          volumeRuleId: price.volumeRule.id,
+          volumePrice: price.volumePrice,
+          timeRuleId: price.timeRule.id,
+          timePrice: price.timePrice,
+          quotedAt: now,
+        });
+        const { totals } = await this.deps.pricing.price(
+          scope,
+          {
+            base,
+            purpose: 'CUSTOM_SERVICE',
+            productId: null,
+            categoryId: null,
+            customerId,
+            now,
+          },
+          tx,
+        );
+        const expiresAt = new Date(now.getTime() + (await this.expiryMinutes(scope, tx)) * 60_000);
+
+        const created = await this.deps.repository.create(
+          scope,
+          {
+            id,
+            customerId,
+            purpose: 'CUSTOM_SERVICE',
+            line: {
+              productId: null,
+              panelId: location.panelId as OrderRecord['line']['panelId'],
+              // The location's label as the customer chose it, frozen like a product title.
+              title: location.label,
+              category: null,
+              specification: {
+                durationDays: price.durationDays,
+                trafficBytes,
+                deviceLimit: null,
+              },
+              unitPrice: price.basePrice,
+              quantity: MAX_ORDER_QUANTITY,
+            },
+            totals,
+            expiresAt,
+            now,
+          },
+          tx,
+        );
+        await custom.terms.insert(
+          scope,
+          termsOf(created.id, location.panelId, location.label, price, trafficBytes),
+          now,
+          tx,
+        );
+
+        if (input.captureId !== undefined) {
+          await this.deps.captures?.close(scope, input.captureId, 'RECEIVED', now, tx);
+        }
+
+        await this.deps.audit.record(
+          scope,
+          actor,
+          {
+            action: 'order.draft_create',
+            entityType: 'Order',
+            entityId: created.id,
+            before: null,
+            after: {
+              ...auditView(created),
+              purpose: created.purpose,
+              customService: {
+                volumeUnits: price.volumeUnits.toString(),
+                durationDays: price.durationDays,
+                volumeRuleId: price.volumeRule.id,
+                volumeRuleLevel: price.volumeLevel,
+                timeRuleId: price.timeRule.id,
+                timeRuleLevel: price.timeLevel,
+                baseMinor: price.basePrice.amountMinor.toString(),
+              },
+            },
+            result: 'SUCCESS',
+          },
+          tx,
+        );
+        await rememberOnce(
+          this.deps.idempotency,
+          scope,
+          ORDER_NAMESPACE,
+          input.idempotencyKey,
+          requestHash,
+          { orderId: created.id },
+          tx,
+        );
+        return created;
+      },
+    );
+  }
+
+  /** The feature's dependencies, or the refusal an order path answers while it is off. */
+  private async assertCustomServiceEnabled(
+    scope: TenantContext,
+    tx: TransactionScope,
+  ): Promise<NonNullable<OrderServiceDeps['customService']>> {
+    const custom = this.deps.customService;
+    if (custom === undefined || !(await custom.pricer.enabled(scope, tx))) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.CUSTOM_SERVICE_DISABLED,
+        'Custom services are not offered.',
+      );
+    }
+    return custom;
+  }
+
+  /**
+   * A custom order's quote, re-decided at confirmation (Package D §8).
+   *
+   * The price is NOT recomputed into the order. The rules that WOULD price the request now
+   * — for this customer's standing now, on this location now — are compared with the ones
+   * the quote named, rule by rule and price by price; any difference refuses with
+   * `CUSTOM_SERVICE_TERMS_CHANGED` and the customer starts again. That is the WP8 and
+   * WP9-B rule: a quote is honoured or refused, never re-priced.
+   */
+  private async assertCustomTermsHold(
+    scope: TenantContext,
+    order: OrderRecord,
+    tx: TransactionScope,
+  ): Promise<void> {
+    const custom = await this.assertCustomServiceEnabled(scope, tx);
+    const snapshot = await custom.terms.findByOrder(scope, order.id, tx);
+    if (snapshot === null) throw new Error(`custom order ${order.id} has no terms`);
+    const now = await custom.pricer.quote(
+      scope,
+      {
+        customerId: order.customerId,
+        panelId: snapshot.panelId,
+        volumeUnits: snapshot.volumeUnits,
+        durationDays: snapshot.durationDays,
+      },
+      tx,
+      // The panel's capacity and health are `panelSales.acquire`'s to refuse, below.
+      { panelEligibility: 'SKIP' },
+    );
+    const same =
+      now.kind === 'PRICED' &&
+      now.location.label === snapshot.locationLabel &&
+      now.price.volumeRule.id === snapshot.volumeRuleId &&
+      now.price.volumeLevel === snapshot.volumeRuleLevel &&
+      now.price.volumeRule.unitPrice.amountMinor === snapshot.pricePerGb.amountMinor &&
+      now.price.timeRule.id === snapshot.timeRuleId &&
+      now.price.timeLevel === snapshot.timeRuleLevel &&
+      now.price.timeRule.unitPrice.amountMinor === snapshot.pricePerDay.amountMinor &&
+      now.price.basePrice.amountMinor === snapshot.basePrice.amountMinor &&
+      now.price.basePrice.currency === snapshot.currency;
+    if (!same) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.CUSTOM_SERVICE_TERMS_CHANGED,
+        'The price of this custom service changed since it was quoted. Start again.',
+        { reason: now.kind === 'UNAVAILABLE' ? now.reason : 'RULES_CHANGED' },
+      );
+    }
   }
 
   /**
@@ -1107,11 +1365,24 @@ export class OrderService {
       );
     }
 
+    /*
+     * The base, rebuilt from the draft's OWN snapshot: the product line's unit price, or a
+     * custom order's frozen terms (Package D) — never today's product or today's rules.
+     */
+    const base =
+      before.purpose === 'CUSTOM_SERVICE'
+        ? await this.customBaseFromSnapshot(scope, before, now, tx)
+        : quoteLine(
+            before.line.productId as ProductId,
+            before.line.unitPrice,
+            before.line.quantity,
+            now,
+          );
     const priced = await this.deps.pricing.price(
       scope,
       {
-        base: quoteLine(before.line.productId, before.line.unitPrice, before.line.quantity, now),
-        purpose: 'NEW_SERVICE',
+        base,
+        purpose: before.purpose === 'CUSTOM_SERVICE' ? 'CUSTOM_SERVICE' : 'NEW_SERVICE',
         productId: before.line.productId,
         categoryId: before.line.category?.categoryId ?? null,
         customerId,
@@ -1171,7 +1442,27 @@ export class OrderService {
     return after;
   }
 
-  /** A code is entered on a DRAFT new purchase and nowhere else (P7). */
+  /** A custom draft's base quote, from its frozen terms. */
+  private async customBaseFromSnapshot(
+    scope: TenantContext,
+    order: OrderRecord,
+    now: Date,
+    tx: TransactionScope,
+  ) {
+    const terms = await this.deps.customService?.terms.findByOrder(scope, order.id, tx);
+    if (terms === undefined || terms === null) {
+      throw new Error(`custom order ${order.id} has no terms`);
+    }
+    return customServiceBaseQuote({
+      volumeRuleId: terms.volumeRuleId,
+      volumePrice: terms.volumePrice,
+      timeRuleId: terms.timeRuleId,
+      timePrice: terms.timePrice,
+      quotedAt: now,
+    });
+  }
+
+  /** A code is entered on a DRAFT new purchase — a product or a custom service — and nowhere else (P7). */
   private assertCodeable(order: OrderRecord): void {
     if (order.state !== 'DRAFT') {
       throw errors.conflict(
@@ -1179,7 +1470,7 @@ export class OrderService {
         'The discount on this order can no longer be changed.',
       );
     }
-    if (order.purpose !== 'NEW_SERVICE') {
+    if (order.purpose !== 'NEW_SERVICE' && order.purpose !== 'CUSTOM_SERVICE') {
       throw errors.conflict(
         COMMERCE_ERROR_CODES.DISCOUNT_CODE_REJECTED,
         'That discount code cannot be used.',
@@ -1336,34 +1627,42 @@ export class OrderService {
          * a product an operator withdrew, or one whose panel was unbound, between the
          * summary and the tap.
          */
-        const product = await this.deps.products.findById(scope, before.line.productId, tx);
-        if (product === null) {
-          throw errors.notFound(COMMERCE_ERROR_CODES.PRODUCT_NOT_FOUND, 'Unknown product.');
+        // A custom order has no product to re-read: its own terms are re-decided below,
+        // under the order's lock (Package D §8).
+        if (before.purpose !== 'CUSTOM_SERVICE') {
+          const product = await this.deps.products.findById(
+            scope,
+            before.line.productId as ProductId,
+            tx,
+          );
+          if (product === null) {
+            throw errors.notFound(COMMERCE_ERROR_CODES.PRODUCT_NOT_FOUND, 'Unknown product.');
+          }
+          /*
+           * Re-read and re-checked, not carried from the draft.
+           *
+           * The owner's requirement is explicit that the authoritative confirmation
+           * transaction re-checks the category rule, and the window it closes is real: an
+           * operator can deactivate a category between the summary a customer is looking
+           * at and the tap that answers it. This is the same discipline `PanelSalesGate`
+           * already applies to the panel three lines below.
+           *
+           * Under a SHARE lock, and that is what makes the re-check a guarantee rather than
+           * a narrower window. A plain read returned ACTIVE and a deactivation could commit
+           * before this transaction moved the order on — confirming a sale the operator had
+           * already withdrawn. Deactivation is an UPDATE, which waits for this lock, so the
+           * two now serialise: either the deactivation lands first and is read here, or it
+           * waits for this confirmation to finish. Found by the Codex review of this branch.
+           */
+          const category =
+            product.categoryId === null
+              ? null
+              : await this.deps.categories.findForShare(scope, product.categoryId, tx);
+          // The audience, as the draft asked it (R5). The grants themselves are decided
+          // again, authoritatively, by `pricing.redeem` below — for every order path.
+          const standing = await this.deps.resellers.standing(scope, customerId, tx);
+          this.assertOrderable(product, category, standing === null ? 'CUSTOMER' : 'RESELLER');
         }
-        /*
-         * Re-read and re-checked, not carried from the draft.
-         *
-         * The owner's requirement is explicit that the authoritative confirmation
-         * transaction re-checks the category rule, and the window it closes is real: an
-         * operator can deactivate a category between the summary a customer is looking
-         * at and the tap that answers it. This is the same discipline `PanelSalesGate`
-         * already applies to the panel three lines below.
-         *
-         * Under a SHARE lock, and that is what makes the re-check a guarantee rather than
-         * a narrower window. A plain read returned ACTIVE and a deactivation could commit
-         * before this transaction moved the order on — confirming a sale the operator had
-         * already withdrawn. Deactivation is an UPDATE, which waits for this lock, so the
-         * two now serialise: either the deactivation lands first and is read here, or it
-         * waits for this confirmation to finish. Found by the Codex review of this branch.
-         */
-        const category =
-          product.categoryId === null
-            ? null
-            : await this.deps.categories.findForShare(scope, product.categoryId, tx);
-        // The audience, as the draft asked it (R5). The grants themselves are decided
-        // again, authoritatively, by `pricing.redeem` below — for every order path.
-        const standing = await this.deps.resellers.standing(scope, customerId, tx);
-        this.assertOrderable(product, category, standing === null ? 'CUSTOMER' : 'RESELLER');
 
         /*
          * The panel is re-decided here, and the SLOT is taken here.
@@ -1417,6 +1716,14 @@ export class OrderService {
         }
         // A concurrent confirmation that got the lock first answers exactly as a replay.
         if (locked.state !== 'DRAFT') return alreadyConfirmed(locked);
+
+        /*
+         * A custom order's terms, re-decided under the order's lock and before the slot:
+         * the flag, the location and the rules as they stand now (Package D §8).
+         */
+        if (locked.purpose === 'CUSTOM_SERVICE') {
+          await this.assertCustomTermsHold(scope, locked, tx);
+        }
 
         /*
          * A slot is taken ONLY by an order that creates a service.
@@ -2189,5 +2496,42 @@ function auditView(order: OrderRecord): Record<string, unknown> {
     totalMinor: order.totals.total.amountMinor.toString(),
     currency: order.totals.currency,
     expiresAt: order.expiresAt === null ? null : order.expiresAt.toISOString(),
+  };
+}
+
+/** The one refusal a custom request answers when it cannot be priced or sold (Package D). */
+function customServiceUnavailable(reason: CustomServiceUnavailableReason) {
+  return errors.conflict(
+    COMMERCE_ERROR_CODES.CUSTOM_SERVICE_UNAVAILABLE,
+    'This custom service cannot be bought right now.',
+    { reason },
+  );
+}
+
+/** The frozen terms of a custom draft, from the price it was quoted at (brief D6). */
+function termsOf(
+  orderId: OrderId,
+  panelId: string,
+  locationLabel: string,
+  price: CustomServicePrice,
+  trafficBytes: bigint,
+): OrderCustomServiceTerms {
+  return {
+    orderId,
+    panelId,
+    locationLabel,
+    volumeUnits: price.volumeUnits,
+    trafficBytes,
+    durationDays: price.durationDays,
+    volumeRuleId: price.volumeRule.id,
+    volumeRuleLevel: price.volumeLevel,
+    pricePerGb: price.volumeRule.unitPrice,
+    volumePrice: price.volumePrice,
+    timeRuleId: price.timeRule.id,
+    timeRuleLevel: price.timeLevel,
+    pricePerDay: price.timeRule.unitPrice,
+    timePrice: price.timePrice,
+    basePrice: price.basePrice,
+    currency: price.basePrice.currency,
   };
 }

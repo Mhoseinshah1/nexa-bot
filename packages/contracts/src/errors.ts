@@ -1312,6 +1312,41 @@ export const COMMERCE_ERROR_CODES = {
    * executing or finished. Carries the current `state`. Nothing was changed.
    */
   SERVICE_REFUND_REQUEST_STATE_INVALID: 'commerce.service_refund_request_state_invalid',
+
+  // --- Package D: the custom service (docs/package-d-custom-service-audit.md) --------
+  /** The `custom_service` flag is off. Nothing new is drafted or confirmed. */
+  CUSTOM_SERVICE_DISABLED: 'commerce.custom_service_disabled',
+  /**
+   * This request cannot be priced or sold: the location is not offered, its panel is not
+   * eligible, or no VOLUME or no TIME rule prices this customer for it. The `reason`
+   * detail says which, for the audit row; the customer is told one sentence.
+   */
+  CUSTOM_SERVICE_UNAVAILABLE: 'commerce.custom_service_unavailable',
+  /**
+   * A rule the quote was priced by changed, was disabled or was deleted, or a different
+   * rule would now be selected, between the quote and its confirmation. Refused rather
+   * than re-priced, like `RESELLER_TERMS_CHANGED`.
+   */
+  CUSTOM_SERVICE_TERMS_CHANGED: 'commerce.custom_service_terms_changed',
+  /**
+   * RENEW, ADD_TRAFFIC or ADD_TIME on a custom service. Renewal re-prices a product and a
+   * custom service has none (`OQ-PKG-D-01`).
+   */
+  CUSTOM_SERVICE_NOT_EXTENDABLE: 'commerce.custom_service_not_extendable',
+  /** No custom-service price rule with this id in this tenant. */
+  CUSTOM_SERVICE_RULE_NOT_FOUND: 'commerce.custom_service_rule_not_found',
+  /**
+   * The rule would overlap an enabled rule of the same dimension at the same specificity.
+   * Carries the other rule's id.
+   */
+  CUSTOM_SERVICE_RULE_OVERLAP: 'commerce.custom_service_rule_overlap',
+  /**
+   * The rule names something this tenant does not have (a panel, a customer or a tier),
+   * or is priced in a currency other than `sales.currency`. The `field` detail names it.
+   */
+  CUSTOM_SERVICE_RULE_INVALID: 'commerce.custom_service_rule_invalid',
+  /** No custom-service location for this panel in this tenant. */
+  CUSTOM_SERVICE_LOCATION_NOT_FOUND: 'commerce.custom_service_location_not_found',
 } as const;
 
 /*

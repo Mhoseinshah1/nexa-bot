@@ -242,7 +242,8 @@ export const EVENT_PAYLOAD_SCHEMAS = {
   CustomerUnblocked: z.object({ reason: z.string().max(500).nullable() }),
   OrderConfirmed: z.object({
     customerId: z.string(),
-    productId: z.string(),
+    /** Null for a custom service (Package D), which is bought from no product. */
+    productId: z.string().nullable(),
     totalMinor: z.string(),
     currency: z.string(),
   }),

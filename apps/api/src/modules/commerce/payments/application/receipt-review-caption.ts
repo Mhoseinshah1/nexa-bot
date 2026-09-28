@@ -71,6 +71,7 @@ const OPERATION_LABELS: Readonly<Record<OrderPurpose | 'TOPUP', TemplateKey>> = 
   ADD_TIME: 'bot.admin.operation_add_time',
   // A trial is a GRANT and never has a payment; the label exists so this table is total.
   TRIAL: 'bot.admin.operation_new_service',
+  CUSTOM_SERVICE: 'bot.admin.operation_custom_service',
   TOPUP: 'bot.admin.operation_topup',
 };
 

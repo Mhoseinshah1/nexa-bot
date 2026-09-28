@@ -6,7 +6,9 @@ import {
   UNLIMITED_TRAFFIC_BYTES,
   uuidV7Schema,
   type CashbackState,
+  type OrderCustomServiceTermsResponse,
   type OrderPricingResponse,
+  type OrderPurpose,
   type OrderState,
   type OrderSummaryResponse,
   type PaymentState,
@@ -14,6 +16,7 @@ import {
 } from '@nexa/contracts';
 import {
   fetchOrder,
+  fetchOrderCustomService,
   fetchOrderPricing,
   fetchOrders,
   fetchPayments,
@@ -41,6 +44,7 @@ import {
   STATE_TONES as SERVICE_STATE_TONES,
 } from './services';
 import { PRICE_LAYER_LABELS, PRICE_LAYER_STEPS } from './resellers';
+import { CUSTOM_SERVICE_LEVEL_LABELS } from './custom-service';
 import {
   Badge,
   Banner,
@@ -108,6 +112,21 @@ export const STATE_TONES: Readonly<Record<OrderState, Tone>> = {
   CANCELLED: 'neutral',
   EXPIRED: 'neutral',
   REFUNDED: 'violet',
+};
+
+/**
+ * What an order is FOR. Total over the frozen `ORDER_PURPOSES`, so a purpose added to the
+ * contract is a compile error here rather than a blank cell. A `CUSTOM_SERVICE` order
+ * (Package D) is the one with no product, and this label is what says so where the
+ * product link would be.
+ */
+export const ORDER_PURPOSE_LABELS: Readonly<Record<OrderPurpose, WebKey>> = {
+  NEW_SERVICE: 'web.purpose_new_service',
+  RENEW: 'web.purpose_renew',
+  ADD_TRAFFIC: 'web.purpose_add_traffic',
+  ADD_TIME: 'web.purpose_add_time',
+  TRIAL: 'web.reseller_purchase_purpose_trial',
+  CUSTOM_SERVICE: 'web.purpose_custom_service',
 };
 
 /**
@@ -492,6 +511,7 @@ export function OrderDetailPage({
             <Card title={t('web.order_line_title')} hint={t('web.order_snapshot_hint')}>
               <KV
                 items={[
+                  [t('web.order_purpose'), t(ORDER_PURPOSE_LABELS[row.purpose])],
                   [t('web.product_title'), row.lineTitle],
                   [
                     t('web.order_category'),
@@ -568,6 +588,8 @@ export function OrderDetailPage({
               />
             </Card>
 
+            {row.purpose === 'CUSTOM_SERVICE' && <OrderCustomService orderId={row.id} />}
+
             <OrderPricing orderId={row.id} />
 
             <Card title={t('web.order_lifecycle_title')}>
@@ -613,13 +635,24 @@ export function OrderDetailPage({
                   ],
                   [
                     t('web.order_product'),
-                    <a
-                      key="pr"
-                      href={`/products/${encodeURIComponent(row.productId)}`}
-                      onClick={onLink}
-                    >
-                      <Ltr>{row.productId}</Ltr>
-                    </a>,
+                    /*
+                     * A custom service (Package D) was never a product, so there is
+                     * nothing to link to — and a link to `/products/null` would be a
+                     * page that cannot load. The purpose is what says why.
+                     */
+                    row.productId === null ? (
+                      <span key="pr" className="muted">
+                        {t('web.purpose_custom_service')}
+                      </span>
+                    ) : (
+                      <a
+                        key="pr"
+                        href={`/products/${encodeURIComponent(row.productId)}`}
+                        onClick={onLink}
+                      >
+                        <Ltr>{row.productId}</Ltr>
+                      </a>
+                    ),
                   ],
                   [t('web.product_panel'), <Copyable key="pa" value={row.panelId} />],
                 ]}
@@ -973,6 +1006,67 @@ function OrderPricing({ orderId }: { orderId: string }) {
         {pricing.data === undefined ? null : <OrderPricingBody pricing={pricing.data} />}
       </StateSwitch>
     </Card>
+  );
+}
+
+/**
+ * What a custom order was priced by (Package D, brief D6): the location, the volume and
+ * the days the customer typed, the two rules' prices and levels, and the three figures
+ * that follow. Its own read, `GET /orders/:id/custom-service`, from the order's own
+ * snapshot — editing or deleting a rule since rewrites nothing here.
+ */
+function OrderCustomService({ orderId }: { orderId: string }) {
+  const custom = useQuery({
+    queryKey: ['order-custom-service', orderId],
+    queryFn: () => fetchOrderCustomService(orderId),
+  });
+  const terms = custom.data?.terms;
+
+  return (
+    <Card title={t('web.order_custom_service_title')} hint={t('web.order_custom_service_hint')}>
+      <StateSwitch query={custom}>
+        {terms === undefined ? null : terms === null ? (
+          <p className="muted">{t('web.order_custom_service_none')}</p>
+        ) : (
+          <CustomServiceTerms terms={terms} />
+        )}
+      </StateSwitch>
+    </Card>
+  );
+}
+
+function CustomServiceTerms({ terms }: { terms: OrderCustomServiceTermsResponse }) {
+  const money = (amountMinor: string) => (
+    <Money value={{ amountMinor, currency: terms.currency }} />
+  );
+  return (
+    <KV
+      items={[
+        [t('web.custom_service_location'), terms.locationLabel],
+        [t('web.product_panel'), <Copyable key="pa" value={terms.panelId} />],
+        [t('web.custom_service_volume'), <Traffic key="v" bytes={terms.trafficBytes} />],
+        [t('web.custom_service_days'), <Duration key="d" days={terms.durationDays} />],
+        [t('web.custom_service_price_per_gb'), money(terms.pricePerGbAmount)],
+        [t('web.custom_service_price_per_day'), money(terms.pricePerDayAmount)],
+        [t('web.custom_service_volume_price'), money(terms.volumeAmount)],
+        [t('web.custom_service_time_price'), money(terms.timeAmount)],
+        [t('web.custom_service_base_price'), money(terms.baseAmount)],
+        [
+          t('web.custom_service_volume_rule'),
+          <span key="vr">
+            {t(CUSTOM_SERVICE_LEVEL_LABELS[terms.volumeRuleLevel])}{' '}
+            <Copyable value={terms.volumeRuleId} />
+          </span>,
+        ],
+        [
+          t('web.custom_service_time_rule'),
+          <span key="tr">
+            {t(CUSTOM_SERVICE_LEVEL_LABELS[terms.timeRuleLevel])}{' '}
+            <Copyable value={terms.timeRuleId} />
+          </span>,
+        ],
+      ]}
+    />
   );
 }
 

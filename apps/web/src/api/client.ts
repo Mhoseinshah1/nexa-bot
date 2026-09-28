@@ -64,6 +64,19 @@ import {
   type TenantMediaMimeType,
   type TenantMediaPurpose,
   type TenantMediaStateResponse,
+  CUSTOM_SERVICE_ROUTES,
+  customServiceLocationListResponseSchema,
+  customServiceLocationResponseSchema,
+  customServiceRuleListResponseSchema,
+  customServiceRuleResponseSchema,
+  orderCustomServiceResponseSchema,
+  type CustomServiceLocationListResponse,
+  type CustomServiceLocationResponse,
+  type CustomServiceRuleListResponse,
+  type CustomServiceRuleResponse,
+  type CustomServiceRuleWriteRequest,
+  type OrderCustomServiceResponse,
+  type PricePreviewQuery,
   CASHBACK_RULE_ROUTES,
   DISCOUNT_ROUTES,
   PRICE_PREVIEW_ROUTE,
@@ -82,7 +95,6 @@ import {
   type DiscountResponse,
   type DiscountStatus,
   type DiscountWriteRequest,
-  type DiscountablePurpose,
   type OrderPricingResponse,
   type PricePreviewResponse,
   TRIAL_ROUTES,
@@ -2021,7 +2033,12 @@ export function transitionCashbackRule(input: {
  * the server refuses any other pairing, so this sends exactly what it is given.
  */
 export function fetchPricePreview(query: {
-  purpose: DiscountablePurpose;
+  /*
+   * The four CATALOGUE purposes the preview route accepts, not every discountable one: a
+   * custom service (Package D) is priced from a location, a volume and days, none of
+   * which this query carries.
+   */
+  purpose: PricePreviewQuery['purpose'];
   productId?: string;
   addonId?: string;
   customerId?: string;
@@ -2043,6 +2060,100 @@ export function fetchPricePreview(query: {
 /** One order's adjustments, redemptions and cashback. Its own read, behind `orders.view`. */
 export function fetchOrderPricing(id: string): Promise<OrderPricingResponse> {
   return authedGet(ORDER_ROUTES.pricing(id), orderPricingResponseSchema);
+}
+
+// --- Package D: the custom service (docs/package-d-custom-service-audit.md) ------------
+
+/**
+ * Every custom-service price rule of the tenant. Not paged: the server returns the whole
+ * set, because a rule is one of a bounded handful an operator writes by hand.
+ */
+export function fetchCustomServiceRules(): Promise<CustomServiceRuleListResponse> {
+  return authedGet(CUSTOM_SERVICE_ROUTES.rules, customServiceRuleListResponseSchema);
+}
+
+export function fetchCustomServiceRule(id: string): Promise<CustomServiceRuleResponse> {
+  return authedGet(CUSTOM_SERVICE_ROUTES.rule(id), customServiceRuleResponseSchema);
+}
+
+/**
+ * The write body, on create and on edit, exactly as `customServiceRuleWriteSchema`
+ * declares it. The currency is not sent: a rule is priced in `sales.currency`, which the
+ * server reads.
+ */
+export type CustomServiceRuleWriteInput = CustomServiceRuleWriteRequest;
+
+export function createCustomServiceRule(
+  input: CustomServiceRuleWriteInput,
+): Promise<CustomServiceRuleResponse> {
+  return post(CUSTOM_SERVICE_ROUTES.createRule, input, customServiceRuleResponseSchema);
+}
+
+export function updateCustomServiceRule(
+  input: CustomServiceRuleWriteInput & { id: string },
+): Promise<CustomServiceRuleResponse> {
+  const { id, ...body } = input;
+  return post(CUSTOM_SERVICE_ROUTES.updateRule(id), body, customServiceRuleResponseSchema);
+}
+
+/**
+ * `{ deleted }`, as the controller answers both deletes. `false` is an honest answer — a
+ * replay after the row had already gone — so it is parsed rather than assumed away. No
+ * shared schema declares this pair's response, and the web bundle does not carry zod of
+ * its own, so the check is written out.
+ */
+const customServiceDeletedResponse = {
+  parse(value: unknown): { deleted: boolean } {
+    if (typeof value === 'object' && value !== null && 'deleted' in value) {
+      const { deleted } = value as { deleted: unknown };
+      if (typeof deleted === 'boolean') return { deleted };
+    }
+    throw new Error('Unexpected response to a custom-service delete.');
+  },
+};
+
+export function deleteCustomServiceRule(input: {
+  id: string;
+  idempotencyKey: string;
+}): Promise<{ deleted: boolean }> {
+  const { id, ...body } = input;
+  return post(CUSTOM_SERVICE_ROUTES.deleteRule(id), body, customServiceDeletedResponse);
+}
+
+/** Every panel the operator has opted in to custom service, with its customer label. */
+export function fetchCustomServiceLocations(): Promise<CustomServiceLocationListResponse> {
+  return authedGet(CUSTOM_SERVICE_ROUTES.locations, customServiceLocationListResponseSchema);
+}
+
+/** An UPSERT, keyed by the panel: the first save opts the panel in. */
+export function saveCustomServiceLocation(input: {
+  panelId: string;
+  idempotencyKey: string;
+  label: string;
+  enabled: boolean;
+}): Promise<CustomServiceLocationResponse> {
+  const { panelId, ...body } = input;
+  return post(
+    CUSTOM_SERVICE_ROUTES.saveLocation(panelId),
+    body,
+    customServiceLocationResponseSchema,
+  );
+}
+
+export function deleteCustomServiceLocation(input: {
+  panelId: string;
+  idempotencyKey: string;
+}): Promise<{ deleted: boolean }> {
+  const { panelId, ...body } = input;
+  return post(CUSTOM_SERVICE_ROUTES.deleteLocation(panelId), body, customServiceDeletedResponse);
+}
+
+/**
+ * The terms a custom order was priced by, from its own snapshot — never from today's
+ * rules. `terms` is null for any other order. Behind `orders.view`, like the pricing read.
+ */
+export function fetchOrderCustomService(id: string): Promise<OrderCustomServiceResponse> {
+  return authedGet(ORDER_ROUTES.customService(id), orderCustomServiceResponseSchema);
 }
 
 // --- Referral (WP9-A) ---------------------------------------------------------

@@ -874,13 +874,20 @@ export function ServiceDetailPage({
                   ],
                   [
                     t('web.service_product'),
-                    <a
-                      key="pr"
-                      href={`/products/${encodeURIComponent(row.productId)}`}
-                      onClick={onLink}
-                    >
-                      <Ltr>{row.productId}</Ltr>
-                    </a>,
+                    // A custom service (Package D) has no product to link to.
+                    row.productId === null ? (
+                      <span key="pr" className="muted">
+                        {t('web.purpose_custom_service')}
+                      </span>
+                    ) : (
+                      <a
+                        key="pr"
+                        href={`/products/${encodeURIComponent(row.productId)}`}
+                        onClick={onLink}
+                      >
+                        <Ltr>{row.productId}</Ltr>
+                      </a>
+                    ),
                   ],
                   [
                     t('web.service_expires_at'),

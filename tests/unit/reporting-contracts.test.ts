@@ -21,7 +21,7 @@ import {
 describe('reporting contracts', () => {
   it('counts every commercial purpose as a sale and never a trial', () => {
     expect([...SALE_ORDER_PURPOSES].sort()).toEqual(
-      ['ADD_TIME', 'ADD_TRAFFIC', 'NEW_SERVICE', 'RENEW'].sort(),
+      ['ADD_TIME', 'ADD_TRAFFIC', 'CUSTOM_SERVICE', 'NEW_SERVICE', 'RENEW'].sort(),
     );
     expect(orderPurposeIsSale('TRIAL')).toBe(false);
     for (const purpose of ORDER_PURPOSES)

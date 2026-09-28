@@ -126,6 +126,8 @@ export async function resetDatabase(db: Database): Promise<void> {
        --
        -- No backticks in here: this statement is a plain template literal, so a
        -- backtick in a comment ends it and the parse error lands twenty lines away.
+       -- Package D: the custom service, before the orders, panels and customers it names.
+       order_custom_service_terms, custom_service_price_rules, custom_service_locations,
        -- Customer UX completion. Named before the tables they reference.
        customer_text_captures, referral_signup_gifts, support_faqs, support_faq_seeds,
        tenant_media_assets,

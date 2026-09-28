@@ -645,6 +645,16 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.channels.join_private_button',
       'bot.channels.join_required',
       'bot.channels.still_missing',
+      // Package D: the custom-service flow, from the catalogue button to its refusals.
+      'bot.custom_service.ask_days',
+      'bot.custom_service.ask_volume',
+      'bot.custom_service.button',
+      'bot.custom_service.invalid_days',
+      'bot.custom_service.invalid_volume',
+      'bot.custom_service.locations',
+      'bot.custom_service.not_extendable',
+      'bot.custom_service.terms_changed',
+      'bot.custom_service.unavailable',
       'bot.discount.ask',
       'bot.discount.enter_button',
       'bot.discount.no_longer_valid',
@@ -1609,8 +1619,12 @@ describe('what follows a settlement', () => {
    * left the whole suite green. A rule that can only be reached through a webhook is a
    * rule the suite cannot distinguish from its absence.
    */
-  it('promises a service only for the purpose that creates one', () => {
+  it('promises a service only for the purposes that create one by a payment', () => {
     expect(followUpForSettlement('NEW_SERVICE')).toEqual({
+      followUpKey: 'bot.service.provisioning',
+    });
+    // Package D: a custom service is paid for and provisioned exactly as a purchase is.
+    expect(followUpForSettlement('CUSTOM_SERVICE')).toEqual({
       followUpKey: 'bot.service.provisioning',
     });
   });
@@ -1644,7 +1658,7 @@ describe('what follows a settlement', () => {
      * The three cases above between them must exhaust `ORDER_PURPOSES`. Without this a
      * purpose added to the contract would be silently untested by all of them.
      */
-    expect([...COMMERCIAL_ORDER_PURPOSES, 'NEW_SERVICE', 'TRIAL'].sort()).toEqual(
+    expect([...COMMERCIAL_ORDER_PURPOSES, 'NEW_SERVICE', 'TRIAL', 'CUSTOM_SERVICE'].sort()).toEqual(
       [...ORDER_PURPOSES].sort(),
     );
   });

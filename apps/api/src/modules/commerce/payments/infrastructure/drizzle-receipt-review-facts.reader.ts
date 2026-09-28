@@ -73,7 +73,9 @@ export class DrizzleReceiptReviewFactsReader implements ReceiptReviewFactsReader
     const purpose = order.purpose as OrderPurpose;
 
     let serviceUsername: string | null;
-    if (purpose === 'NEW_SERVICE') {
+    // An order that creates a service reads the name it reserved; a custom service reserves
+    // one exactly as a catalogue purchase does (Package D).
+    if (purpose === 'NEW_SERVICE' || purpose === 'CUSTOM_SERVICE') {
       const [held] = await this.exec(tx)
         .select({ username: serviceUsernameReservations.username })
         .from(serviceUsernameReservations)

@@ -19,7 +19,7 @@ import {
   discounts,
   orders,
 } from '../../../../infrastructure/persistence/schema.js';
-import type { DiscountUsage } from '../domain/pricing-engine.js';
+import { FIRST_PURCHASE_PURPOSES, type DiscountUsage } from '../domain/pricing-engine.js';
 import type {
   DiscountRepository,
   DiscountRuleRecord,
@@ -292,7 +292,8 @@ export class DrizzleDiscountRepository implements DiscountRepository {
     const conditions: SQL[] = [
       eq(orders.tenantId, tenantId),
       sql`${orders.customerId} = ${customerId}::uuid`,
-      eq(orders.purpose, 'NEW_SERVICE'),
+      // `FIRST_PURCHASE_PURPOSES`: a custom service is a purchase too (Package D).
+      inArray(orders.purpose, [...FIRST_PURCHASE_PURPOSES]),
       inArray(orders.state, [...LIVE_ORDER_STATES]),
     ];
     if (excludingOrderId !== null) {

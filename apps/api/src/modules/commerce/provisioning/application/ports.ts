@@ -38,7 +38,8 @@ export interface ServiceRecord {
   readonly customerId: UserId;
   readonly orderId: OrderId;
   readonly panelId: PanelId;
-  readonly productId: ProductId;
+  /** Null for a custom service (Package D), which was bought from no product. */
+  readonly productId: ProductId | null;
   readonly state: ServiceState;
   readonly providerUsername: string;
   /** The panel's `subId` for this service. A bearer capability; never derived. */
@@ -86,7 +87,8 @@ export interface ServiceDraft {
   readonly customerId: UserId;
   readonly orderId: OrderId;
   readonly panelId: PanelId;
-  readonly productId: ProductId;
+  /** Null exactly when the order is a `CUSTOM_SERVICE` one (Package D). */
+  readonly productId: ProductId | null;
   readonly providerUsername: string;
   /**
    * Both chosen by the caller, in the settling transaction, BEFORE any provider call.

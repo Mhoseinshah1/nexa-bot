@@ -146,10 +146,15 @@ export interface DiscountRepository {
   /**
    * A transaction-scoped advisory lock on `(tenant, customer)` for the first-purchase
    * question. Only confirmation takes it, so it cannot close a cycle with any row lock.
+   * EVERY confirmation of a `FIRST_PURCHASE_PURPOSES` order takes it, discounted or not:
+   * the question is only serialised if every writer that can change its answer queues.
    */
   lockFirstPurchase(scope: TenantContext, customerId: string, tx: unknown): Promise<void>;
 
-  /** True when the customer has no OTHER `NEW_SERVICE` order in `AWAITING_PAYMENT` or `PAID`. */
+  /**
+   * True when the customer has no OTHER purchase — a `NEW_SERVICE` or a `CUSTOM_SERVICE`
+   * order — in `AWAITING_PAYMENT` or `PAID`.
+   */
   isFirstPurchase(
     scope: TenantContext,
     customerId: string,

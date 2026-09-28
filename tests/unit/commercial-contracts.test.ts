@@ -32,8 +32,12 @@ import {
  * one of them decides something a customer pays for.
  */
 describe('order purpose', () => {
-  it('has exactly two purposes that produce a service: the purchase and the trial', () => {
-    expect(ORDER_PURPOSES.filter(orderPurposeCreatesNewService)).toEqual(['NEW_SERVICE', 'TRIAL']);
+  it('has exactly three purposes that produce a service: the purchase, the trial and the custom service', () => {
+    expect(ORDER_PURPOSES.filter(orderPurposeCreatesNewService)).toEqual([
+      'NEW_SERVICE',
+      'TRIAL',
+      'CUSTOM_SERVICE',
+    ]);
   });
 
   /*
@@ -53,6 +57,7 @@ describe('order purpose', () => {
   it('maps every commercial purpose onto a real operation type, and the original onto none', () => {
     expect(operationTypeForOrderPurpose('NEW_SERVICE')).toBeNull();
     expect(operationTypeForOrderPurpose('TRIAL')).toBeNull();
+    expect(operationTypeForOrderPurpose('CUSTOM_SERVICE')).toBeNull();
     for (const purpose of COMMERCIAL_ORDER_PURPOSES) {
       const type = operationTypeForOrderPurpose(purpose);
       expect(type).not.toBeNull();
