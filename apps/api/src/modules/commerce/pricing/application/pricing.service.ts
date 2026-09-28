@@ -13,6 +13,7 @@ import type { OutboxWriter } from '../../../platform/eventing/infrastructure/out
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { OrderRecord, OrderTotalsRecord } from '../../orders/application/ports.js';
 import {
+  FIRST_PURCHASE_PURPOSES,
   applyAdjustments,
   redemptionRefusal,
   type PricingResult,
@@ -200,16 +201,31 @@ export class PricingService {
       (step) => step.step === 'PROMOTIONAL_DISCOUNT' && step.ruleId !== null,
     );
 
+    /*
+     * The first-purchase lock is taken by EVERY confirmation whose order the first-purchase
+     * query counts, not only by one redeeming a first-purchase rule. A plain purchase that
+     * skips it can move to AWAITING_PAYMENT while a discounted one is reading "no earlier
+     * purchase", and both commit (Codex, PR #88). Taken after the rule locks, as before.
+     */
+    const countsAsPurchase = FIRST_PURCHASE_PURPOSES.includes(order.purpose);
+
+    if (applied.length === 0 && countsAsPurchase) {
+      await this.deps.discounts.lockFirstPurchase(scope, order.customerId, tx);
+    }
+
     if (applied.length > 0) {
       const ids = [...new Set(applied.map((step) => step.ruleId as string))].sort();
       const rules = new Map(
         (await this.deps.discounts.lockForRedemption(scope, ids, tx)).map((r) => [r.id, r]),
       );
 
-      let isFirstPurchase = true;
-      if ([...rules.values()].some((r) => r.firstPurchaseOnly)) {
-        // After the rule locks, and only here: see `lockFirstPurchase`.
+      const firstPurchaseRule = [...rules.values()].some((r) => r.firstPurchaseOnly);
+      if (firstPurchaseRule || countsAsPurchase) {
+        // After the rule locks: see `lockFirstPurchase`.
         await this.deps.discounts.lockFirstPurchase(scope, order.customerId, tx);
+      }
+      let isFirstPurchase = true;
+      if (firstPurchaseRule) {
         isFirstPurchase = await this.deps.discounts.isFirstPurchase(
           scope,
           order.customerId,

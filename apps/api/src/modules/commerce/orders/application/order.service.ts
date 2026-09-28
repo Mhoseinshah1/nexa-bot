@@ -689,6 +689,8 @@ export class OrderService {
         durationDays: snapshot.durationDays,
       },
       tx,
+      // The panel's capacity and health are `panelSales.acquire`'s to refuse, below.
+      { panelEligibility: 'SKIP' },
     );
     const same =
       now.kind === 'PRICED' &&

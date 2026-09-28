@@ -1,4 +1,5 @@
 import {
+  MAX_MONEY_AMOUNT_MINOR,
   CUSTOM_SERVICE_RULE_LEVELS,
   CUSTOM_SERVICE_VOLUME_UNITS_PER_GB,
   PRICING_PRECEDENCE,
@@ -208,6 +209,27 @@ export function priceCustomService(
       basePrice: money(volumePrice.amountMinor + timePrice.amountMinor, currency),
     },
   };
+}
+
+/**
+ * The most a rule may charge across its whole range: `max_units × unit_price` in minor
+ * units, for either dimension (Codex, PR #88).
+ *
+ * The HTTP schema accepts any positive integer, and a price that is individually storable
+ * can still overflow once it is multiplied by up to 102,400,000 hundredths of a GB or 3,650
+ * days. The overflow would surface as a database error at draft time instead of a field
+ * error when the rule is written. `order_custom_service_terms` also computes
+ * `volume_hundredths * price_per_gb` in SQL `bigint`, so that product itself has to fit.
+ *
+ * A quarter of the money ceiling keeps each component under it, keeps the sum of the two
+ * under half of it, and leaves room for the fee and totals above the base. Checked when a
+ * rule is written: the order is then bounded by what its rules allowed.
+ */
+export const CUSTOM_SERVICE_RULE_AMOUNT_CEILING = MAX_MONEY_AMOUNT_MINOR / 4n;
+
+/** Whether a rule's price across its whole range fits `CUSTOM_SERVICE_RULE_AMOUNT_CEILING`. */
+export function ruleAmountFits(maxUnits: bigint, unitPriceMinor: bigint): boolean {
+  return maxUnits * unitPriceMinor <= CUSTOM_SERVICE_RULE_AMOUNT_CEILING;
 }
 
 /** The labels the two formula steps carry in a quote's trace. Constants, like the list price's. */

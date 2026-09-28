@@ -27,6 +27,9 @@ PROV=C+'provisioning/application/provisioner.service.ts'
 RES=C+'resellers/application/reseller.service.ts'
 REF=C+'payments/application/service-refund-request.service.ts'
 RRF=C+'payments/infrastructure/drizzle-receipt-review-facts.reader.ts'
+PRS=C+'pricing/application/pricing.service.ts'
+PENG=C+'pricing/domain/pricing-engine.ts'
+DDOM=CS+'domain/custom-service-pricing.ts'
 
 U=('unit','tests/unit/custom-service-pricing.test.ts')
 I=('integration','tests/integration/custom-service.test.ts')
@@ -56,7 +59,7 @@ M=[
  ('D-21',[(CAP,"  'CUSTOM_SERVICE_VOLUME',\n  'CUSTOM_SERVICE_DAYS',\n];","];")],I,'reads the volume, keeps the window open'),
  ('D-22',[(ORD,"    if (order.purpose !== 'NEW_SERVICE' && order.purpose !== 'CUSTOM_SERVICE') {\n      throw errors.conflict(\n        COMMERCE_ERROR_CODES.DISCOUNT_CODE_REJECTED","    if (order.purpose !== 'NEW_SERVICE') {\n      throw errors.conflict(\n        COMMERCE_ERROR_CODES.DISCOUNT_CODE_REJECTED")],I,'applies a code that names CUSTOM_SERVICE'),
  ('D-23',[(ORD,"      before.purpose === 'CUSTOM_SERVICE'\n        ? await this.customBaseFromSnapshot(scope, before, now, tx)","      (false as boolean)\n        ? await this.customBaseFromSnapshot(scope, before, now, tx)")],I,'applies a code that names CUSTOM_SERVICE'),
- ('D-24',[(DISC,"inArray(orders.purpose, ['NEW_SERVICE', 'CUSTOM_SERVICE']),","eq(orders.purpose, 'NEW_SERVICE'),")],I,'counts a live custom order as a purchase'),
+ ('D-24',[(PENG,"export const FIRST_PURCHASE_PURPOSES: readonly OrderPurpose[] = ['NEW_SERVICE', 'CUSTOM_SERVICE'];","export const FIRST_PURCHASE_PURPOSES: readonly OrderPurpose[] = ['NEW_SERVICE'];")],I,'counts a live custom order as a purchase'),
  ('D-25',[(COM,"    if (service.productId === null) return available;\n","")],I,'refuses to renew or extend'),
  ('D-26',[(COM,"    assertExtendable(service);\n    this.assertLifecycleAllows(kind, service);","    this.assertLifecycleAllows(kind, service);"),
           (COM,"        assertExtendable(service);\n        this.assertLifecycleAllows(input.kind, service);","        this.assertLifecycleAllows(input.kind, service);"),
@@ -67,6 +70,12 @@ M=[
  ('D-30',[(RRF,"if (purpose === 'NEW_SERVICE' || purpose === 'CUSTOM_SERVICE') {","if (purpose === 'NEW_SERVICE') {")],I,'names the reserved username'),
  ('D-31',[(FLOW,"      !(await this.deps.pricer.volumePriceable(scope, capture.customerId, capture.subjectId, units))","      false")],I,'refuses a volume no rule prices'),
  ('D-32',[(REPO,"          eq(customServiceLocations.tenantId, tenantId),\n          eq(customServiceLocations.panelId, panelId),\n        ),\n      )\n      .limit(1);","          eq(customServiceLocations.panelId, panelId),\n        ),\n      )\n      .limit(1);")],I,'never lets another tenant'),
+ # Codex on PR #88
+ ('D-33',[(PRS,"    if (applied.length === 0 && countsAsPurchase) {\n      await this.deps.discounts.lockFirstPurchase(scope, order.customerId, tx);\n    }\n","")],I,'queues an undiscounted custom confirmation on the first-purchase lock'),
+ ('D-34',[(PRS,"      if (firstPurchaseRule || countsAsPurchase) {","      if (firstPurchaseRule) {")],I,'queues a discounted custom confirmation on the first-purchase lock too'),
+ ('D-35',[(ORD,"      { panelEligibility: 'SKIP' },\n","")],I,'answers a panel that filled up after the quote as unavailable'),
+ ('D-36',[(ADMIN,"    if (!ruleAmountFits(input.maxUnits, input.unitPriceMinor)) {","    if (false as boolean) {")],I,'refuses a price that cannot be carried across its range'),
+ ('D-37',[(DDOM,"  return maxUnits * unitPriceMinor <= CUSTOM_SERVICE_RULE_AMOUNT_CEILING;","  return maxUnits * unitPriceMinor < CUSTOM_SERVICE_RULE_AMOUNT_CEILING;")],U,'admits exactly the ceiling'),
 ]
 
 only=sys.argv[1:]

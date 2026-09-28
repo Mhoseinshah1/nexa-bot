@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   CUSTOM_SERVICE_MAX_DAYS,
+  MAX_MONEY_AMOUNT_MINOR,
   customServiceVolumeBytes,
   formatCustomServiceVolume,
   money,
@@ -9,12 +10,14 @@ import {
   parseTrafficGb,
 } from '@nexa/contracts';
 import {
+  CUSTOM_SERVICE_RULE_AMOUNT_CEILING,
   CUSTOM_SERVICE_TIME_STEP_LABEL,
   CUSTOM_SERVICE_VOLUME_STEP_LABEL,
   customServiceBaseQuote,
   customServiceTimePrice,
   customServiceVolumePrice,
   priceCustomService,
+  ruleAmountFits,
   rulesOverlap,
   selectCustomServiceRule,
   type CustomServiceRule,
@@ -316,4 +319,23 @@ describe('the figures a customer types (brief D5, Package C)', () => {
       expect(parseCustomServiceDays(text)).toBeNull();
     },
   );
+});
+
+describe('the most a rule may charge across its range (Codex, PR #88)', () => {
+  it('admits exactly the ceiling and refuses one minor unit past it', () => {
+    expect(ruleAmountFits(1n, CUSTOM_SERVICE_RULE_AMOUNT_CEILING)).toBe(true);
+    expect(ruleAmountFits(1n, CUSTOM_SERVICE_RULE_AMOUNT_CEILING + 1n)).toBe(false);
+    expect(ruleAmountFits(4n, CUSTOM_SERVICE_RULE_AMOUNT_CEILING / 4n)).toBe(true);
+    expect(ruleAmountFits(4n, CUSTOM_SERVICE_RULE_AMOUNT_CEILING / 4n + 1n)).toBe(false);
+  });
+
+  it('keeps the worst admitted order, both components at their ceiling, inside a bigint', () => {
+    // The SQL CHECK computes volume_hundredths * price_per_gb + 50 in bigint; the base is
+    // the volume component plus the time component.
+    const volumeProduct = CUSTOM_SERVICE_RULE_AMOUNT_CEILING;
+    const volumePrice = (volumeProduct + 50n) / 100n;
+    const timePrice = CUSTOM_SERVICE_RULE_AMOUNT_CEILING;
+    expect(volumeProduct + 50n).toBeLessThanOrEqual(MAX_MONEY_AMOUNT_MINOR);
+    expect(volumePrice + timePrice).toBeLessThanOrEqual(MAX_MONEY_AMOUNT_MINOR / 2n);
+  });
 });

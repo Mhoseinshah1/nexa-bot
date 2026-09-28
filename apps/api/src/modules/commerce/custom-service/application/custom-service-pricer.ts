@@ -120,6 +120,12 @@ export class CustomServicePricer {
   /**
    * The authoritative price, inside the caller's transaction: the draft's and the
    * confirmation's. The flag is the caller's to check (it refuses with its own code).
+   *
+   * `panelEligibility: 'SKIP'` is the confirmation's: whether the panel can take a new
+   * account is not part of the frozen terms, and confirmation re-decides it straight
+   * afterwards through `panelSales.acquire`, which refuses with the ordinary
+   * `PANEL_NOT_ELIGIBLE`. Deciding it here as well would tell a customer whose panel filled
+   * up that the PRICE changed (Codex, PR #88).
    */
   async quote(
     scope: TenantContext,
@@ -130,14 +136,17 @@ export class CustomServicePricer {
       readonly durationDays: number;
     },
     tx: TransactionScope,
+    options: { readonly panelEligibility: 'CHECK' | 'SKIP' } = { panelEligibility: 'CHECK' },
   ): Promise<CustomServiceQuote> {
     await this.deps.rules.lockForRead(scope, tx);
     const location = await this.deps.locations.find(scope, input.panelId, tx);
     if (location === null || !location.enabled) {
       return { kind: 'UNAVAILABLE', reason: 'LOCATION_NOT_OFFERED' };
     }
-    const eligibility = await this.deps.panelSales.evaluate(scope, input.panelId, tx);
-    if (!eligibility.eligible) return { kind: 'UNAVAILABLE', reason: 'PANEL_NOT_ELIGIBLE' };
+    if (options.panelEligibility === 'CHECK') {
+      const eligibility = await this.deps.panelSales.evaluate(scope, input.panelId, tx);
+      if (!eligibility.eligible) return { kind: 'UNAVAILABLE', reason: 'PANEL_NOT_ELIGIBLE' };
+    }
 
     const tierId = await this.tierOf(scope, input.customerId, tx);
     const rules = await this.deps.rules.list(scope, tx);

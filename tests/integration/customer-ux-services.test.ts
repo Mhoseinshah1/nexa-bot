@@ -406,7 +406,7 @@ describe('a customer looks after the services they bought', () => {
       expect(body).toContain('📦 نام محصول: پلن card');
       expect(body).toContain('🟩 ترافیک: 50 گیگابایت');
       // The create returned the panel's figure, so usage is KNOWN (0), not unread.
-      expect(body).toContain('📥 حجم مصرفی: 0 بایت');
+      expect(body).toContain('📥 حجم مصرفی: 0 گیگابایت');
       expect(body).toContain('💢 حجم باقی مانده: 50 گیگابایت (100%)');
       expect(body).toMatch(/📅 تاریخ اتمام: 14\d\d\/\d\d\/\d\d \d\d:\d\d \(30 روز\)/u);
       expect(body).toContain('📶 آخرین زمان اتصال شما: در دسترس نیست');
