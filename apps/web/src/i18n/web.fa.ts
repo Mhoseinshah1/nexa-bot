@@ -120,7 +120,7 @@ export const WEB_FA = {
     'همهٔ پیام‌های ربات بلافاصله به متن پیش‌فرض برمی‌گردند؛ متن‌های شخصی‌سازی‌شده پاک نمی‌شوند.',
   'web.feature_service_expiry_reminders_title': 'یادآوری انقضای سرویس',
   'web.feature_service_expiry_reminders_summary':
-    'پیش از پایان مدت سرویس، در دو نوبتی که در تنظیمات تعیین شده، به مشتری یادآوری می‌شود.',
+    'پیش از پایان مدت سرویس، در نوبت‌هایی که در تنظیمات تعیین شده، به مشتری یادآوری می‌شود.',
   'web.feature_service_expiry_reminders_off_effect':
     'مشتریان پیش از پایان مدت سرویس خود یادآوری دریافت نمی‌کنند.',
   'web.feature_service_expired_notice_title': 'اطلاع پایان سرویس',
@@ -133,6 +133,22 @@ export const WEB_FA = {
     'وقتی حجم سرویس مشتری رو به اتمام است، در سه آستانه‌ای که در تنظیمات تعیین شده به او هشدار داده می‌شود. سرویس‌های با حجم نامحدود هشدار نمی‌گیرند.',
   'web.feature_service_usage_reminders_off_effect':
     'مشتریان هنگام رو به اتمام بودن حجم سرویس خود هشدار دریافت نمی‌کنند.',
+  // WP-A9.
+  'web.feature_service_expiry_day_reminder_title': 'یادآوری روز انقضا',
+  'web.feature_service_expiry_day_reminder_summary':
+    'در روز پایان مدت سرویس و پیش از پایان آن، یک بار به مشتری یادآوری می‌شود.',
+  'web.feature_service_expiry_day_reminder_off_effect':
+    'مشتریان در روز انقضای سرویس خود یادآوری دریافت نمی‌کنند.',
+  'web.feature_wallet_low_balance_reminders_title': 'هشدار کمبود موجودی کیف پول',
+  'web.feature_wallet_low_balance_reminders_summary':
+    'وقتی موجودی کیف پول مشتری از مبلغ تعیین‌شده در تنظیمات کمتر شود، یک بار به او هشدار داده می‌شود.',
+  'web.feature_wallet_low_balance_reminders_off_effect':
+    'مشتریان هنگام کم شدن موجودی کیف پول خود هشدار دریافت نمی‌کنند.',
+  'web.feature_payment_pending_reminders_title': 'یادآوری پرداخت در انتظار',
+  'web.feature_payment_pending_reminders_summary':
+    'کمی پیش از پایان مهلت پرداخت کارت‌به‌کارت یا سفارش پرداخت‌نشده، یک بار به مشتری یادآوری می‌شود.',
+  'web.feature_payment_pending_reminders_off_effect':
+    'مشتریان پیش از پایان مهلت پرداخت خود یادآوری دریافت نمی‌کنند.',
   'web.feature_trials_title': 'سرویس آزمایشی رایگان',
   'web.feature_trials_summary':
     'مشتریان می‌توانند یک سرویس آزمایشی رایگان دریافت کنند. برای کار کردن، محصول سرویس آزمایشی باید در تنظیمات انتخاب شده باشد.',
@@ -2263,10 +2279,6 @@ export const WEB_FA = {
   'web.reminders_templates_hint':
     'متن هر پیام را می‌توانید همین‌جا ویرایش کنید؛ همان متنی است که در بخش «متن‌ها» هم دیده می‌شود.',
   'web.reminders_templates_denied': 'برای دیدن و ویرایش متن پیام‌ها به دسترسی «متن‌ها» نیاز است.',
-  'web.reminders_turn_off_confirm': 'آیا از خاموش کردن این یادآور مطمئن هستید؟',
-  'web.reminders_turn_off_yes': 'بله، خاموش شود',
-  'web.reminders_cancel': 'انصراف',
-  'web.reminders_toggle_reason': 'تغییر از صفحهٔ یادآورها',
   // WP6-A: the trial's flag, its two settings, and the product picker's two options.
   'web.flag_trials': 'سرویس آزمایشی',
   'web.setting_trial_product_id': 'محصول سرویس آزمایشی',

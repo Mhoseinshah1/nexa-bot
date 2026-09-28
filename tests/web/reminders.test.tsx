@@ -126,28 +126,101 @@ describe('the reminders screen', () => {
     expect(sent?.body).toMatchObject({ value: 75, expectedVersion: 4 });
   });
 
-  it('asks before turning a reminder off, and carries the confirmation for the operator', async () => {
+  it('asks the Features page’s question before turning a reminder off, and sends no key or reason', async () => {
     const calls = api();
     page();
 
     const toggle = await screen.findByRole('switch', { name: t('web.reminders_flag_usage') });
     fireEvent.click(toggle);
+    // The same dialog, question and effect sentence the Features page shows for this flag.
+    const dialog = await screen.findByRole('alertdialog');
+    expect(dialog).toHaveTextContent(t('web.feature_confirm_disable'));
+    expect(dialog).toHaveTextContent(t('web.feature_service_usage_reminders_off_effect'));
     // Nothing is sent until the question is answered.
-    expect(await screen.findByText(t('web.reminders_turn_off_confirm'))).toBeInTheDocument();
     expect(calls.calls.some((call) => call.url.includes('/features/'))).toBe(false);
 
-    fireEvent.click(screen.getByRole('button', { name: t('web.reminders_turn_off_yes') }));
+    fireEvent.click(screen.getByRole('button', { name: t('web.feature_confirm_disable_yes') }));
     await waitFor(() =>
       expect(
         calls.calls.some((call) => call.url.endsWith('/features/service_usage_reminders')),
       ).toBe(true),
     );
     const sent = calls.calls.find((call) => call.url.endsWith('/features/service_usage_reminders'));
-    expect(sent?.body).toMatchObject({
-      enabled: false,
-      confirmKey: 'service_usage_reminders',
-      reason: t('web.reminders_toggle_reason'),
-    });
+    // The flag and the version it was drawn from. No confirmation key (retired by WP-A2),
+    // and no reason — never one this screen made up for the audit row.
+    expect(Object.keys(sent?.body as object).sort()).toEqual([
+      'enabled',
+      'expectedVersion',
+      'idempotencyKey',
+    ]);
+    expect(sent?.body).toMatchObject({ enabled: false, expectedVersion: null });
+  });
+
+  it('sends nothing when the question is cancelled', async () => {
+    const calls = api();
+    page();
+
+    fireEvent.click(await screen.findByRole('switch', { name: t('web.reminders_flag_expiry') }));
+    fireEvent.click(await screen.findByRole('button', { name: t('web.feature_confirm_cancel') }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(calls.calls.some((call) => call.url.includes('/features/'))).toBe(false);
+  });
+
+  it('adopts the refreshed version after a conflict, keeping the draft, and the retry succeeds', async () => {
+    const settingsRoute = { url: '/settings', body: { settings: rows() } as unknown };
+    const writeRoute: { url: string; status?: number; body: unknown } = {
+      url: '/settings/reminders.usage_first_percent',
+      status: 409,
+      body: {
+        error: {
+          kind: 'conflict',
+          code: 'control.version_conflict',
+          message: 'somebody else changed it',
+          correlationId: 'test',
+        },
+      },
+    };
+    const calls = stubApi([
+      settingsRoute,
+      { url: '/features', body: { flags: flags() } },
+      { url: '/templates', body: { templates: [] } },
+      writeRoute,
+    ]);
+    page();
+
+    const field = await screen.findByLabelText(t('web.reminders_usage_first'));
+    // Another administrator saves the key while this page is open: version 4 becomes 7.
+    settingsRoute.body = {
+      settings: rows({ 'reminders.usage_first_percent': { value: 85, version: 7 } }),
+    };
+    fireEvent.change(field, { target: { value: '25' } });
+    const submit = field.closest('form')!.querySelector('button[type="submit"]')!;
+    fireEvent.click(submit);
+
+    const writes = () =>
+      calls.calls.filter((call) => call.url.endsWith('/settings/reminders.usage_first_percent'));
+    await waitFor(() => expect(writes()).toHaveLength(1));
+    expect(writes()[0]?.body).toMatchObject({ value: 75, expectedVersion: 4 });
+    // The conflict refetched the row; wait until the page holds version 7.
+    await waitFor(() =>
+      expect(calls.calls.filter((call) => call.url.endsWith('/settings')).length).toBeGreaterThan(
+        1,
+      ),
+    );
+
+    // The retry: the operator's 25 is still there, and it is sent against version 7.
+    writeRoute.status = 200;
+    writeRoute.body = {
+      setting: numberSetting('reminders.usage_first_percent', 75, 8),
+      changed: true,
+    };
+    expect(field).toHaveValue(25);
+    // Let the refetched row render, then retry ONCE.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    fireEvent.click(submit);
+    await waitFor(() => expect(writes()).toHaveLength(2));
+    expect(writes()[1]?.body).toMatchObject({ value: 75, expectedVersion: 7 });
+    expect(await screen.findByText(t('web.saved'))).toBeInTheDocument();
   });
 
   it('turns a reminder ON without a question', async () => {
@@ -160,7 +233,7 @@ describe('the reminders screen', () => {
         calls.calls.some((call) => call.url.endsWith('/features/wallet_low_balance_reminders')),
       ).toBe(true),
     );
-    expect(screen.queryByText(t('web.reminders_turn_off_confirm'))).toBeNull();
+    expect(screen.queryByRole('alertdialog')).toBeNull();
   });
 
   it('saves the wallet threshold in the currency the installation sells in', async () => {

@@ -1,6 +1,7 @@
-import { useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  CONTROL_ERROR_CODES,
   PENDING_PAYMENT_REMINDER_MINUTES_MAX,
   PENDING_PAYMENT_REMINDER_MINUTES_MIN,
   USAGE_REMINDER_PERCENT_MAX,
@@ -12,6 +13,7 @@ import {
   type TemplateViewResponse,
 } from '@nexa/contracts';
 import {
+  ApiError,
   fetchFeatureFlags,
   fetchSettings,
   fetchTemplates,
@@ -24,6 +26,8 @@ import { t } from '../i18n/web.fa';
 import { Badge, Banner, Card, Field, PageHead, StateSwitch, Switch } from '../ui/kit';
 import { ErrorReport } from './settings';
 import { TemplateCard } from './content';
+import { featurePresentation } from './features-catalogue';
+import { ConfirmDialog, confirmDialogOpen } from '../ui/confirm-dialog';
 
 /**
  * WP-A9: the reminders screen — every automated customer reminder on one page.
@@ -226,14 +230,14 @@ function useRefresh(): () => Promise<void> {
 }
 
 /**
- * One switch.
+ * One switch, with the Features page's own rule and dialog (WP-A2).
  *
- * Turning a switch OFF asks a plain Persian question first, because it silences a message
- * every customer of the tenant would otherwise receive; turning one ON does not. A flag
- * whose blast radius is tenant-wide still carries the server's confirmation protocol — the
- * flag's own key and a reason — and this screen supplies both itself after the question is
- * answered, with a reason that says where the change came from, so the audit row still
- * records who did what and from which screen.
+ * The write carries the flag and the version it was drawn from and nothing else: no
+ * confirmation key and no reason, which WP-A2 retired from every toggle, and never a
+ * reason this screen made up — the audit row records who, when and what on its own.
+ * Turning a switch OFF asks the same plain question the Features page asks, for exactly
+ * the flags it asks it for (`FEATURE_PRESENTATION[key].disableEffect`), so the two screens
+ * cannot disagree about which switch-offs deserve one. Turning one ON asks nothing.
  */
 function FlagRow({
   flag,
@@ -249,17 +253,15 @@ function FlagRow({
   const refresh = useRefresh();
   const submission = useSubmissionKey();
   const [asking, setAsking] = useState(false);
+  const switchSlot = useRef<HTMLSpanElement>(null);
   const toggle = useMutation({
     mutationFn: (command: {
       idempotencyKey: string;
       enabled: boolean;
       expectedVersion: number | null;
-      confirmKey?: string;
-      reason?: string;
     }) => saveFeatureFlag({ key: flag?.key ?? '', ...command }),
     onSuccess: async () => {
       submission.settle();
-      setAsking(false);
       await refresh();
     },
     onError: (error: unknown) => {
@@ -267,48 +269,101 @@ function FlagRow({
       void refresh();
     },
   });
+  const cancel = useCallback(() => setAsking(false), []);
+  const returnFocus = useCallback(
+    () => switchSlot.current?.querySelector<HTMLElement>('[role="switch"]') ?? null,
+    [],
+  );
   if (flag === undefined) return null;
 
+  // The Features page's rule, including its conservative answer for a key it does not know.
+  const presentation = featurePresentation(flag.key);
+  const disableEffect =
+    presentation === undefined ? 'web.feature_unknown_off_effect' : presentation.disableEffect;
+
   const send = (enabled: boolean) => {
-    const command = {
-      enabled,
-      expectedVersion: flag.version,
-      ...(flag.blastRadius === 'TENANT_WIDE'
-        ? { confirmKey: flag.key, reason: t('web.reminders_toggle_reason') }
-        : {}),
-    };
+    const command = { enabled, expectedVersion: flag.version };
     toggle.mutate({ ...command, idempotencyKey: submission.current(command) });
+  };
+  const onSwitch = (next: boolean) => {
+    if (confirmDialogOpen()) return;
+    if (!next && disableEffect !== null) {
+      setAsking(true);
+      return;
+    }
+    send(next);
   };
 
   return (
     <div className="field">
       <div className="row">
-        <Switch
-          checked={flag.enabled}
-          label={label}
-          disabled={!mayEdit || toggle.isPending}
-          onChange={(next) => (next ? send(true) : setAsking(true))}
-        />
+        <span ref={switchSlot} className="switch-slot">
+          <Switch
+            checked={flag.enabled}
+            label={label}
+            disabled={!mayEdit || toggle.isPending || asking}
+            onChange={onSwitch}
+          />
+        </span>
         <span>{label}</span>{' '}
         <Badge tone={flag.enabled ? 'ok' : 'neutral'}>
           {flag.enabled ? t('web.enabled') : t('web.disabled')}
         </Badge>
       </div>
       {hint !== undefined && <p className="muted small">{hint}</p>}
-      {asking && (
-        <Banner tone="warn">
-          {t('web.reminders_turn_off_confirm')}{' '}
-          <button type="button" className="btn danger sm" onClick={() => send(false)}>
-            {t('web.reminders_turn_off_yes')}
-          </button>{' '}
-          <button type="button" className="btn ghost sm" onClick={() => setAsking(false)}>
-            {t('web.reminders_cancel')}
-          </button>
-        </Banner>
+      {asking && disableEffect !== null && (
+        <ConfirmDialog
+          title={label}
+          question={t('web.feature_confirm_disable')}
+          detail={t(disableEffect)}
+          confirmLabel={t('web.feature_confirm_disable_yes')}
+          cancelLabel={t('web.feature_confirm_cancel')}
+          onConfirm={() => {
+            setAsking(false);
+            send(false);
+          }}
+          onCancel={cancel}
+          returnFocusTo={returnFocus}
+        />
       )}
       {toggle.isError && <ErrorReport error={toggle.error} />}
     </div>
   );
+}
+
+/**
+ * The version a setting's write is based on, and how it follows a conflict.
+ *
+ * Held apart from the query's version for the settings screen's reason: a write must state
+ * the version the operator's draft was based on, so a concurrent change comes back as a
+ * `VERSION_CONFLICT` instead of being overwritten unseen. After that conflict the refreshed
+ * row's version is ADOPTED — the operator has now been told, and a retry is a deliberate
+ * write over the new row — while the draft they typed is left exactly as it is. Without
+ * this every retry resubmitted the stale version and conflicted again (Codex review #2 of
+ * PR #100).
+ */
+function useVersionBasis(current: number | null | undefined): {
+  readonly basis: number | null;
+  readonly adopt: (version: number | null) => void;
+  readonly followConflict: (error: unknown) => void;
+} {
+  const [basis, setBasis] = useState<number | null>(current ?? null);
+  const [adopting, setAdopting] = useState(false);
+  useEffect(() => {
+    if (adopting && current !== undefined && current !== basis) {
+      setBasis(current);
+      setAdopting(false);
+    }
+  }, [adopting, current, basis]);
+  return {
+    basis,
+    adopt: setBasis,
+    followConflict: (error: unknown) => {
+      if (error instanceof ApiError && error.code === CONTROL_ERROR_CODES.VERSION_CONFLICT) {
+        setAdopting(true);
+      }
+    },
+  };
 }
 
 /**
@@ -340,7 +395,7 @@ function NumberRow({
 }) {
   const shown = typeof setting?.value === 'number' ? toShown(setting.value) : null;
   const [draft, setDraft] = useState(shown === null ? '' : String(shown));
-  const [basis, setBasis] = useState(setting?.version ?? null);
+  const { basis, adopt, followConflict } = useVersionBasis(setting?.version);
   const refresh = useRefresh();
   const submission = useSubmissionKey();
   const save = useMutation({
@@ -351,11 +406,12 @@ function NumberRow({
     }) => saveSetting({ key: setting?.key ?? '', ...command }),
     onSuccess: async (result) => {
       submission.settle();
-      setBasis(result.setting.version);
+      adopt(result.setting.version);
       await refresh();
     },
     onError: (error: unknown) => {
       submission.settleOn(error);
+      followConflict(error);
       void refresh();
     },
   });
@@ -425,7 +481,7 @@ function MoneyRow({
 }) {
   const stored = asMoney(setting?.value);
   const [draft, setDraft] = useState(stored.amountMinor);
-  const [basis, setBasis] = useState(setting?.version ?? null);
+  const { basis, adopt, followConflict } = useVersionBasis(setting?.version);
   const refresh = useRefresh();
   const submission = useSubmissionKey();
   const save = useMutation({
@@ -436,11 +492,12 @@ function MoneyRow({
     }) => saveSetting({ key: setting?.key ?? '', ...command }),
     onSuccess: async (result) => {
       submission.settle();
-      setBasis(result.setting.version);
+      adopt(result.setting.version);
       await refresh();
     },
     onError: (error: unknown) => {
       submission.settleOn(error);
+      followConflict(error);
       void refresh();
     },
   });
