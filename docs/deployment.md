@@ -1005,6 +1005,53 @@ docker compose --env-file /etc/nexa/deploy.env -f /opt/nexa/deploy/compose.yml \
 knows the kind reads it again, and nothing was written wrongly in between: every failure
 above is a refused read.
 
+### What a rollback strands: service location change (WP-A6)
+
+WP-A6 adds the `CHANGE_LOCATION` order purpose, operation type and commercial-action kind,
+two tables (`service_locations`, `service_location_changes`) and two service columns
+(`location_key`, `location_label`). None of those can hold anything the release before
+WP-A6 must read:
+
+- The two tables are read by nothing in the older release. Locations an operator saved on
+  the Web Admin's «تغییر لوکیشن» page simply stop being shown, and come back on the
+  roll-forward.
+- No `CHANGE_LOCATION` order, operation, commercial action or change request can exist
+  yet, and no service can have a recorded location: no provider declares
+  `LOCATION_CHANGE`, so a move is refused before anything is written. The release that
+  first declares the capability must add its own note here — the older provisioner
+  abandons an operation type it does not know, and does not refund it.
+
+What CAN exist is the purpose's name in three operator-edited lists, because
+`CHANGE_LOCATION` is discountable and reseller-grantable like every other commercial
+action:
+
+- a discount rule or a cashback rule whose «applies to» includes «تغییر لوکیشن»;
+- a reseller tier grant whose operation is «تغییر لوکیشن».
+
+The older release's pricing engine and entitlement check read those rows correctly — a
+purpose they do not know simply never matches. But its **Web Admin** parses the list
+responses with its own purpose vocabulary, so the Discounts, Cashback and reseller Tiers
+pages fail to load while any such row exists. Nothing a customer sees is affected: the
+older bot never offers a location change, and an `lc:`, `lt:` or `lf:` tap gets the
+ordinary "unsupported" answer.
+
+**Before rolling back past WP-A6**, untick «تغییر لوکیشن» on every discount and cashback
+rule that names it, and remove it from every reseller tier's grants, in the Web Admin. No
+sale of that purpose can have been made, so nothing a rule already priced changes. Roll
+back when all three counts are 0:
+
+```bash
+docker compose --env-file /etc/nexa/deploy.env -f /opt/nexa/deploy/compose.yml \
+  exec -T postgres psql -U nexa -d nexa -c \
+  "SELECT (SELECT count(*) FROM discounts WHERE 'CHANGE_LOCATION' = ANY(applies_to)) AS discounts,
+          (SELECT count(*) FROM cashback_rules WHERE 'CHANGE_LOCATION' = ANY(applies_to)) AS cashback,
+          (SELECT count(*) FROM reseller_tier_grants
+            WHERE kind = 'OPERATION' AND subject = 'CHANGE_LOCATION') AS grants"
+```
+
+**If you already rolled back** with such a row present, roll forward: the release that
+knows the purpose shows those pages again, and nothing was written wrongly in between.
+
 ### How far back you can roll
 
 **One release**, safely. Migrations are expand-only within a release
