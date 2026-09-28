@@ -147,6 +147,11 @@ import {
   TENANT_MEDIA_MIME_TYPES,
   TENANT_MEDIA_MAX_BYTES,
   PRODUCT_SERVICE_LOCATION_LABEL_MAX_LENGTH,
+  // WP-A4: the operations log group.
+  OPS_LOG_GROUP_HEALTH,
+  OPS_LOG_GROUP_PROBLEMS,
+  OPS_LOG_GROUP_STATUSES,
+  OPS_LOG_TOPIC_STATES,
 } from '@nexa/contracts';
 
 /**
@@ -234,6 +239,26 @@ export function nullableEnumCheck(column: string, values: readonly string[]): SQ
     })
     .join(', ');
   return sql.raw(`${column} IS NULL OR ${column} IN (${list})`);
+}
+
+/**
+ * A text-array column holding any subset of an enum, the empty set included (WP-A4:
+ * `ops_log_groups.problems`, where no problem is the normal case). `enumSubsetCheck`'s
+ * assertions and escaping, without its non-empty rule.
+ */
+export function enumArrayCheck(column: string, values: readonly string[]): SQL {
+  if (!/^[a-z_][a-z0-9_]*$/.test(column)) {
+    throw new Error(`enumArrayCheck: "${column}" is not a plain column name.`);
+  }
+  const list = values
+    .map((value) => {
+      if (!ENUM_LITERAL.test(value)) {
+        throw new Error(`enumArrayCheck: "${value}" is not a plain enum literal.`);
+      }
+      return `'${value.replace(/'/g, "''")}'`;
+    })
+    .join(', ');
+  return sql.raw(`${column} <@ ARRAY[${list}]::text[]`);
 }
 
 /**
@@ -7807,5 +7832,170 @@ export const serviceOwnershipTransfers = pgTable(
     check('service_ownership_transfers_parties_check', sql`from_customer_id <> to_customer_id`),
     check('service_ownership_transfers_actor_type_check', enumCheck('actor_type', ACTOR_TYPES)),
     check('service_ownership_transfers_key_check', sql`length(idempotency_key) BETWEEN 1 AND 200`),
+  ],
+);
+
+// --- WP-A4: the Telegram operations log group and the topics Nexa owns in it ----------
+
+/**
+ * The tenant's operations log group: ONE row per tenant, kept through a disconnect.
+ *
+ * The chat id is DISCOVERED, never typed: it is read from the authenticated webhook update
+ * that carried a valid one-time connection code (`ops_log_connect_codes`), so nobody
+ * copies a number and nobody can bind a group to another tenant. Reconnecting a different
+ * group replaces the chat on this row; its topics are keyed by chat, so the new group
+ * gets new topics and the old group's thread ids are never posted to again.
+ *
+ * `health` is what the last permission check found. It is never HEALTHY without
+ * `getChat` and `getChatMember` having answered — a bound row starts UNVERIFIED and the
+ * worker checks it — and `problems` says what is wrong in the Web Admin's words.
+ */
+export const opsLogGroups = pgTable(
+  'ops_log_groups',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    botInstanceId: uuid('bot_instance_id')
+      .notNull()
+      .references(() => botInstances.id),
+    /** Telegram's numeric chat id, as text (`-100…`). */
+    chatId: text('chat_id').notNull(),
+    /** The group's title as Telegram last reported it. Operator-chosen text. */
+    title: text('title').notNull(),
+    status: text('status').notNull(),
+    health: text('health').notNull().default('UNVERIFIED'),
+    problems: text('problems')
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+    /** The bot's own ChatMember status in the group, as last read. */
+    botMemberStatus: text('bot_member_status'),
+    checkedAt: timestamptz('checked_at'),
+    lastDeliveredAt: timestamptz('last_delivered_at'),
+    /** The administrator whose connection code bound the group. */
+    connectedByAdminId: uuid('connected_by_admin_id'),
+    connectedAt: timestamptz('connected_at').notNull(),
+    disconnectedAt: timestamptz('disconnected_at'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    unique('ops_log_groups_tenant_id_key').on(table.tenantId, table.id),
+    /** One binding per tenant: reconnecting another group rewrites this row. */
+    uniqueIndex('ops_log_groups_tenant_key').on(table.tenantId),
+    /** The worker's read: groups whose permissions need checking. */
+    index('ops_log_groups_check_idx')
+      .on(table.health, table.checkedAt)
+      .where(sql`status = 'CONNECTED'`),
+    foreignKey({
+      columns: [table.tenantId, table.connectedByAdminId],
+      foreignColumns: [admins.tenantId, admins.id],
+      name: 'ops_log_groups_admin_fk',
+    }),
+    check('ops_log_groups_status_check', enumCheck('status', OPS_LOG_GROUP_STATUSES)),
+    check('ops_log_groups_health_check', enumCheck('health', OPS_LOG_GROUP_HEALTH)),
+    check('ops_log_groups_problems_check', enumArrayCheck('problems', OPS_LOG_GROUP_PROBLEMS)),
+    check('ops_log_groups_chat_check', sql`chat_id ~ '^-?[0-9]{1,32}$'`),
+    // A disconnected row says when; a connected one has no such instant.
+    check(
+      'ops_log_groups_disconnected_check',
+      sql`(status = 'DISCONNECTED') = (disconnected_at IS NOT NULL)`,
+    ),
+  ],
+);
+
+/**
+ * The topic registry: one row per (group chat, category), holding the thread id Nexa
+ * created and posts to.
+ *
+ * A CATEGORY KEY column, not one column per topic, so a third topic is a row and never a
+ * migration; the CHECK pins the key's shape only. The unique key is what makes topic
+ * creation idempotent under concurrency: there is exactly one row to claim, and only the
+ * holder of `creation_claim_token` (a conditional UPDATE with a lease) calls
+ * `createForumTopic`. A second worker, a double-click and a redelivered update all find
+ * the row claimed or READY and create nothing.
+ */
+export const opsLogTopics = pgTable(
+  'ops_log_topics',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    groupId: uuid('group_id').notNull(),
+    /** The chat the thread lives in: a thread id means nothing in any other chat. */
+    chatId: text('chat_id').notNull(),
+    category: text('category').notNull(),
+    state: text('state').notNull().default('PENDING'),
+    messageThreadId: bigint('message_thread_id', { mode: 'number' }),
+    /** Who is creating the topic right now, and until when that claim holds. */
+    creationClaimToken: uuid('creation_claim_token'),
+    creationClaimedUntil: timestamptz('creation_claimed_until'),
+    recreatedCount: integer('recreated_count').notNull().default(0),
+    lastDeliveredAt: timestamptz('last_delivered_at'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('ops_log_topics_chat_category_key').on(
+      table.tenantId,
+      table.chatId,
+      table.category,
+    ),
+    foreignKey({
+      columns: [table.tenantId, table.groupId],
+      foreignColumns: [opsLogGroups.tenantId, opsLogGroups.id],
+      name: 'ops_log_topics_group_fk',
+    }),
+    check('ops_log_topics_state_check', enumCheck('state', OPS_LOG_TOPIC_STATES)),
+    check('ops_log_topics_category_check', sql`category ~ '^[A-Z][A-Z0-9_]{0,31}$'`),
+    // READY means a thread to post to; nothing else claims one.
+    check('ops_log_topics_ready_check', sql`state <> 'READY' OR message_thread_id IS NOT NULL`),
+    check('ops_log_topics_recreated_check', sql`recreated_count >= 0`),
+  ],
+);
+
+/**
+ * One-time connection codes, stored as a SHA-256 hash only.
+ *
+ * Issued by the Web Admin to one administrator for one of the tenant's bots, accepted
+ * once, for ten minutes, and only from an update that bot's own webhook delivered — the
+ * webhook route names the bot, and the lookup is keyed by tenant AND bot, so a code for
+ * one bot or tenant is simply not found through another. Consumption is a conditional
+ * UPDATE (`consumed_at IS NULL AND expires_at > now`), so a replayed update and two
+ * groups racing for one code consume it exactly once.
+ */
+export const opsLogConnectCodes = pgTable(
+  'ops_log_connect_codes',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    botInstanceId: uuid('bot_instance_id')
+      .notNull()
+      .references(() => botInstances.id),
+    codeHash: text('code_hash').notNull(),
+    issuedByAdminId: uuid('issued_by_admin_id').notNull(),
+    issuedAt: timestamptz('issued_at').notNull(),
+    expiresAt: timestamptz('expires_at').notNull(),
+    consumedAt: timestamptz('consumed_at'),
+    consumedChatId: text('consumed_chat_id'),
+  },
+  (table) => [
+    uniqueIndex('ops_log_connect_codes_hash_key').on(table.codeHash),
+    index('ops_log_connect_codes_tenant_issued_idx').on(table.tenantId, table.issuedAt),
+    foreignKey({
+      columns: [table.tenantId, table.issuedByAdminId],
+      foreignColumns: [admins.tenantId, admins.id],
+      name: 'ops_log_connect_codes_admin_fk',
+    }),
+    check('ops_log_connect_codes_expiry_check', sql`expires_at > issued_at`),
+    check(
+      'ops_log_connect_codes_consumed_check',
+      sql`(consumed_at IS NULL) = (consumed_chat_id IS NULL)`,
+    ),
   ],
 );
