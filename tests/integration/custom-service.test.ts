@@ -20,6 +20,7 @@ import type { CustomServiceRuleInput } from '../../apps/api/src/modules/commerce
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
 import type { OrderRecord } from '../../apps/api/src/modules/commerce/orders/application/ports';
 import { DrizzleReceiptReviewFactsReader } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-receipt-review-facts.reader';
+import { CUSTOM_SERVICE_RULES_LOCK_CLASS } from '../../apps/api/src/modules/commerce/custom-service/infrastructure/drizzle-custom-service.repository';
 import { DrizzleServiceRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-service.repository';
 import { startFakeMarzban, type FakeMarzban } from '../support/fake-marzban';
 import {
@@ -332,10 +333,41 @@ describe('Package D — the custom service', () => {
     });
 
     it('serialises two concurrent overlapping creates: exactly one wins', async () => {
-      const results = await Promise.allSettled([
+      /*
+       * The rules' write lock is held from outside until BOTH creates are proven waiting
+       * on it in `pg_locks`, then released together. Each then reads the rules under the
+       * lock: with it exclusive, the second reads the first's committed row; with it
+       * shared, both would read an empty table and both insert.
+       */
+      const db = f.ctx.container.database.db;
+      let open!: () => void;
+      const gate = new Promise<void>((resolve) => (open = resolve));
+      let held!: () => void;
+      const holding = new Promise<void>((resolve) => (held = resolve));
+      const holder = db.transaction(async (tx) => {
+        await tx.execute(
+          sql`SELECT pg_advisory_xact_lock(${CUSTOM_SERVICE_RULES_LOCK_CLASS}, hashtext(${String(tenantA.tenantId)}))`,
+        );
+        held();
+        await gate;
+      });
+      await holding;
+      const racing = Promise.allSettled([
         h.rule({ minUnits: units('1'), maxUnits: units('10') }),
         h.rule({ minUnits: units('5'), maxUnits: units('15') }),
       ]);
+      const deadline = Date.now() + 5_000;
+      for (;;) {
+        const [waiting] = await h.rows<{ n: number }>(
+          sql`SELECT count(*)::int AS n FROM pg_locks WHERE NOT granted AND locktype = 'advisory'`,
+        );
+        if ((waiting?.n ?? 0) >= 2) break;
+        if (Date.now() > deadline) throw new Error('the two creates never waited on the lock');
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      open();
+      await holder;
+      const results = await racing;
       expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
       const rejected = results.find((r) => r.status === 'rejected') as PromiseRejectedResult;
       expect((rejected.reason as { code: string }).code).toBe(
