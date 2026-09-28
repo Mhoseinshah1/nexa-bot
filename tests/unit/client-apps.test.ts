@@ -312,6 +312,19 @@ describe('the customer’s catalogue', () => {
     );
   });
 
+  it('re-checks a stored link as it is read, so a row written around the service costs one button', async () => {
+    const bad = record({
+      id: uuid(8),
+      officialUrl: 'https://downloads.example.com/"onclick="x',
+      helpUrl: 'https://video.example.com/a',
+    });
+    const detail = await catalog([bad], []).appFor(TENANT, CUSTOMER, uuid(8));
+    expect(detail).toMatchObject({ officialUrl: null, helpUrl: 'https://video.example.com/a' });
+    expect(
+      clientAppScreen(detail).buttons?.map((button) => (button as { url?: string }).url),
+    ).toEqual(['https://video.example.com/a', undefined, undefined]);
+  });
+
   it('answers a disabled, unknown or malformed id with nothing', async () => {
     const reader = catalog(rows, []);
     expect(await reader.appFor(TENANT, CUSTOMER, uuid(2))).toBeNull();

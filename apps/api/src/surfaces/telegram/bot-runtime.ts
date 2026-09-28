@@ -13002,9 +13002,13 @@ export function clientAppScreen(
       orderId: null,
     };
   }
-  const buttons: CustomerButton[] = [
-    { label: { kind: 'TEMPLATE', key: 'bot.apps.download_button' }, url: detail.officialUrl },
-  ];
+  const buttons: CustomerButton[] = [];
+  if (detail.officialUrl !== null) {
+    buttons.push({
+      label: { kind: 'TEMPLATE', key: 'bot.apps.download_button' },
+      url: detail.officialUrl,
+    });
+  }
   if (detail.alternativeUrl !== null) {
     buttons.push({
       label: { kind: 'TEMPLATE', key: 'bot.apps.alternative_button' },

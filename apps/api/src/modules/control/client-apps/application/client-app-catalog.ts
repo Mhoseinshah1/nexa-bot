@@ -1,5 +1,6 @@
 import {
   CLIENT_APP_PLATFORMS,
+  normalizeClientAppUrl,
   renderClientAppGuide,
   uuidV7Schema,
   type ClientAppPlatform,
@@ -32,7 +33,12 @@ export interface ClientAppDetail {
   readonly description: string;
   /** `renderClientAppGuide` of the stored guide: plain text, safe for any parse mode. */
   readonly guide: string;
-  readonly officialUrl: string;
+  /**
+   * Each link re-checked by `normalizeClientAppUrl` as it is read, and null when it fails:
+   * the service stores only links that pass, and a row written around it must cost the
+   * customer one button, not the whole reply Telegram would refuse.
+   */
+  readonly officialUrl: string | null;
   readonly alternativeUrl: string | null;
   readonly helpUrl: string | null;
   /** The app reads connection files AND one of the customer's services can hand them over. */
@@ -124,9 +130,9 @@ export class ClientAppCatalog {
       title: titleOf(row),
       description: row.description,
       guide: renderClientAppGuide(row.guide),
-      officialUrl: row.officialUrl,
-      alternativeUrl: row.alternativeUrl,
-      helpUrl: row.helpUrl,
+      officialUrl: safeLink(row.officialUrl),
+      alternativeUrl: safeLink(row.alternativeUrl),
+      helpUrl: safeLink(row.helpUrl),
       filesNote: readsFiles && facts.some((fact) => fact.filesOffered),
       service:
         only === null
@@ -139,6 +145,10 @@ export class ClientAppCatalog {
       manyServices: facts.length > 1,
     };
   }
+}
+
+function safeLink(url: string | null): string | null {
+  return url === null ? null : normalizeClientAppUrl(url);
 }
 
 function titleOf(row: ClientAppRecord): string {
