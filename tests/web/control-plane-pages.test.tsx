@@ -306,6 +306,46 @@ describe('the feature flags page', () => {
     await waitFor(() => expect(opener).toHaveFocus());
   });
 
+  /**
+   * «بله، خاموش شود» disables the switch while the write is pending, so the dialog's
+   * hand-back lands on a disabled control and focus falls to the body. Once the write
+   * settles and the switch is enabled again, focus comes back to it.
+   */
+  it('returns focus to the switch once a confirmed switch-off has settled', async () => {
+    stubApi([
+      { url: '/features', body: { flags: [flag({ enabled: true, version: 2 })] } },
+      {
+        url: '/features/ops_notifications',
+        status: 201,
+        body: { flag: flag({ enabled: false, version: 3 }), changed: true },
+      },
+    ]);
+    // Hold the POST until the test releases it; everything else answers at once.
+    const answer = globalThis.fetch;
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.stubGlobal('fetch', (input: unknown, init?: RequestInit) =>
+      init?.method === 'POST'
+        ? held.then(() => answer(input as RequestInfo, init))
+        : answer(input as RequestInfo, init),
+    );
+    renderPage(<FeaturesPage mayEdit denied={false} />);
+
+    const opener = await screen.findByRole('switch', { name: OPS_TITLE });
+    fireEvent.click(opener);
+    fireEvent.click(screen.getByRole('button', { name: t('web.feature_confirm_disable_yes') }));
+
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    await waitFor(() => expect(opener).toBeDisabled());
+    expect(opener).not.toHaveFocus();
+
+    release();
+    await waitFor(() => expect(opener).toBeEnabled());
+    await waitFor(() => expect(opener).toHaveFocus());
+  });
+
   it('shows related settings by their Persian names and current values, not as a key table', async () => {
     stubApi([
       {

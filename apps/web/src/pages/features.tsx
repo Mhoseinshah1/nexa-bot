@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { FeatureFlagResponse } from '@nexa/contracts';
 import { fetchFeatureFlags, saveFeatureFlag } from '../api/client';
@@ -106,6 +106,31 @@ function FlagCard({ flag, mayEdit }: { flag: FeatureFlagResponse; mayEdit: boole
     [],
   );
 
+  /*
+   * Focus after a CONFIRMED switch-off.
+   *
+   * «بله، خاموش شود» closes the dialog and starts the write, and the switch is disabled
+   * while the write is pending. The dialog hands focus back to a switch that is disabled,
+   * or is about to be, and focus falls to the page body. So confirming arms this. The
+   * restore waits until the write has started ('armed' to 'pending') and then settled
+   * ('pending' to idle, on success or error), by which point the switch is enabled
+   * again.
+   *
+   * Focus is restored only when it is nowhere useful. An operator who has since moved
+   * to another control keeps it. Cancel never arms this, because nothing is pending and
+   * the dialog's own hand-back already works.
+   */
+  const restoreAfterWrite = useRef<'idle' | 'armed' | 'pending'>('idle');
+  useEffect(() => {
+    if (restoreAfterWrite.current === 'armed' && toggle.isPending) {
+      restoreAfterWrite.current = 'pending';
+    } else if (restoreAfterWrite.current === 'pending' && !toggle.isPending) {
+      restoreAfterWrite.current = 'idle';
+      const active = document.activeElement;
+      if (active === null || active === document.body) returnFocus()?.focus();
+    }
+  }, [toggle.isPending, returnFocus]);
+
   return (
     <Card
       title={title}
@@ -149,6 +174,7 @@ function FlagCard({ flag, mayEdit }: { flag: FeatureFlagResponse; mayEdit: boole
           confirmLabel={t('web.feature_confirm_disable_yes')}
           cancelLabel={t('web.feature_confirm_cancel')}
           onConfirm={() => {
+            restoreAfterWrite.current = 'armed';
             setAsking(false);
             send(false);
           }}
