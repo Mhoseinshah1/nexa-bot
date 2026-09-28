@@ -247,6 +247,9 @@ describe('the feature flag registry', () => {
     // Every registered key must be one this phase actually implements. A switch
     // that turns nothing on is worse than an absent feature.
     expect([...FEATURE_FLAGS].map((f) => f.key).sort()).toEqual([
+      // Package D. Off by default; the custom-service button, the typed volume and days and
+      // the draft it switches on are reachable, and confirmation refuses while it is off.
+      'custom_service',
       // WP6-C. Off by default; the customer rotation path it switches on is reachable.
       'customer_link_rotation',
       // WP19. Off by default; the customer's refund-request path it switches on is
