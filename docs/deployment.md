@@ -948,6 +948,64 @@ docker compose --env-file /etc/nexa/deploy.env -f /opt/nexa/deploy/compose.yml \
 
 An OPEN request can wait through a rollback; it is decided after the roll-forward.
 
+### What a rollback delays or drops: support tickets (WP-A7)
+
+WP-A7 adds support tickets: a customer opens and answers them in the bot, and support
+answers in the Web Admin (Tickets). The release before WP-A7 has none of this. Its schema
+checks already accept every new value, because the migration stays, and nothing in it
+crashes on WP-A7's rows. Five things behave differently while it runs:
+
+- **A message typed into an open ticket prompt is lost.** A ticket prompt is a text
+  capture with purpose `TICKET_NEW_MESSAGE` or `TICKET_REPLY`. The old bot does not know
+  either purpose, so it treats the capture as a service note: it closes the capture as read
+  and passes the category's or the ticket's id to the note write as a service id. No service
+  has that id, so nothing is written, and the customer is told «این سرویس در دسترس شما
+  نیست.». No ticket message is filed and no service note changes. The customer has to send
+  the message again after the roll-forward. A photo or document sent to a ticket prompt
+  goes to the old bot's receipt path, as any file did before WP-A7. A prompt lasts ten
+  minutes (`CUSTOMER_TEXT_CAPTURE_TTL_MS`), so only a prompt opened in the ten minutes
+  before the rollback is affected.
+- **The desk's buttons do nothing useful.** The old bot has no «🎫 پشتیبانی / تیکت‌ها»
+  row and no `/tickets` command. A ticket button on an older message (`tkl:`, `tkn:`,
+  `tkc:`, `tkv:`, `tkr:`, `tkq:`, `tkx:`) is a callback it does not know, and it answers
+  `bot.unknown_command`.
+- **A reply support wrote and the bot has not delivered yet waits.** The old dispatcher
+  has no template for the `TICKET_REPLY` kind. It puts such a row back on the ordinary
+  back-off, without spending an attempt or stamping it, and the first pass after the
+  roll-forward delivers it. The reply itself is on the ticket either way.
+- **Support is not told about a ticket or reply that is still in the outbox.** A
+  `TicketOpened` or `TicketMessagePosted` event that the old relay reaches has no
+  consumer there, so it is marked published. A support alert already queued has an
+  `ops.support.*` template the old dispatcher does not declare. It is failed permanently
+  (`notification.render_failed`) and not delivered, the same as the financial log's rows
+  above. Its kind is `OPERATIONAL_EVENT`, so the old notifications page still lists it.
+  The ticket is still in the Web Admin after the roll-forward.
+- **Existing tickets are kept but out of reach.** The old release never reads or writes
+  the ticket tables, and its Web Admin has no Tickets page. It skips the five `tickets.*`
+  permissions granted to roles, so no role or permission page breaks. Everything comes
+  back with the roll-forward.
+
+No flag switches the ticket desk off. **Before rolling back past WP-A7**, hide every
+ticket category in the Web Admin (Tickets → categories). New tickets can no longer be
+started, although a customer can still open a reply prompt on an open ticket. Then wait
+until no ticket prompt is open:
+
+```bash
+docker compose --env-file /etc/nexa/deploy.env -f /opt/nexa/deploy/compose.yml \
+  exec -T postgres psql -U nexa -d nexa -c \
+  "SELECT count(*) FROM customer_text_captures
+    WHERE purpose IN ('TICKET_NEW_MESSAGE', 'TICKET_REPLY')
+      AND closed_at IS NULL AND expires_at > now()"
+```
+
+Roll back when that count is 0. Every open prompt has expired ten minutes after the last
+one was opened. Show the categories again after the roll-forward.
+
+**If you already rolled back** with a prompt open, roll forward. At worst each open prompt
+cost the customer one message, answered with the sentence above. Nothing was written
+wrongly in either release. Replies still waiting are delivered by the release that knows
+their kind.
+
 ### How far back you can roll
 
 **One release**, safely. Migrations are expand-only within a release
