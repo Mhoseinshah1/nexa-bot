@@ -429,7 +429,6 @@ describe('client apps — what a customer is shown', () => {
   let ownerB: ActorContext;
   let panelId: string;
   let maryam: UserId;
-  let reza: UserId;
   let updateSeq = 0;
 
   beforeAll(async () => {
@@ -489,7 +488,8 @@ describe('client apps — what a customer is shown', () => {
     panelId = created.view.panel.id;
     await validatePanelConnection(ctx.container, tenantA, panelId);
     maryam = await resolve(MARYAM, 'مریم');
-    reza = await resolve(REZA, 'رضا');
+    // Reza buys nothing: the customer with no live service.
+    await resolve(REZA, 'رضا');
   });
 
   async function resolve(telegramUserId: string, firstName: string): Promise<UserId> {
