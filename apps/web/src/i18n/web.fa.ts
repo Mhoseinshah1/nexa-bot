@@ -92,18 +92,70 @@ export const WEB_FA = {
   // Feature flags
   'web.features_title': 'قابلیت‌ها',
   'web.features_intro':
-    'هر قابلیت یک کلید روشن یا خاموش است. تنظیمات مربوط به آن در همین‌جا کنار خودش نمایش داده می‌شود.',
+    'هر قابلیت را با یک کلیک روشن یا خاموش کنید. تنظیمات مربوط به هر قابلیت کنار خودش نمایش داده می‌شود.',
   'web.enabled': 'روشن',
   'web.disabled': 'خاموش',
-  // The state and the action are different words. One string doing both jobs is
-  // how a label comes to mean two things on one screen.
-  'web.enable': 'روشن کردن',
-  'web.disable': 'خاموش کردن',
-  'web.inert': 'تا روشن‌شدن این قابلیت، این مقدار بی‌اثر است.',
-  'web.tenant_wide': 'اثر گسترده',
-  'web.confirm_key': 'برای تأیید، کلید قابلیت را بنویسید',
-  'web.confirm_reason': 'دلیل این تغییر',
-  'web.confirm_required': 'این تغییر روی همه مشتریان اثر می‌گذارد. کلید و دلیل را وارد کنید.',
+  'web.inert': 'تا روشن‌شدن این قابلیت، این تنظیمات اثری ندارند.',
+
+  /*
+   * WP-A2: each feature's Persian name and one practical sentence, read through
+   * `FEATURE_PRESENTATION` in `pages/features-catalogue.ts`. The `_off_effect` line exists
+   * only for a feature whose switch-off asks for confirmation, and is shown in that modal.
+   */
+  'web.feature_last_changed': 'آخرین تغییر',
+  'web.feature_related_settings': 'تنظیمات مرتبط',
+  'web.feature_setting_unset': 'تعیین نشده',
+  'web.feature_confirm_disable': 'آیا از خاموش کردن این قابلیت مطمئن هستید؟',
+  'web.feature_confirm_disable_yes': 'بله، خاموش شود',
+  'web.feature_confirm_cancel': 'انصراف',
+  'web.feature_ops_notifications_title': 'اعلان‌های مدیریتی',
+  'web.feature_ops_notifications_summary':
+    'خطاها و رویدادهای مهم سامانه و گزارش مالی به گروه مدیریت در تلگرام فرستاده می‌شود.',
+  'web.feature_ops_notifications_off_effect':
+    'از این پس خطاها و رویدادهای مهم به گروه مدیریت فرستاده نمی‌شوند و رویدادهای این مدت بعداً هم فرستاده نخواهند شد.',
+  'web.feature_template_overrides_title': 'شخصی‌سازی متن‌های ربات',
+  'web.feature_template_overrides_summary':
+    'متن‌هایی که در بخش «متن‌های ربات» تغییر داده‌اید در ربات به کار می‌رود. با خاموش کردن، متن‌های پیش‌فرض نمایش داده می‌شوند و متن‌های شما پاک نمی‌شوند.',
+  'web.feature_template_overrides_off_effect':
+    'همهٔ پیام‌های ربات بلافاصله به متن پیش‌فرض برمی‌گردند؛ متن‌های شخصی‌سازی‌شده پاک نمی‌شوند.',
+  'web.feature_service_expiry_reminders_title': 'یادآوری انقضای سرویس',
+  'web.feature_service_expiry_reminders_summary':
+    'پیش از پایان مدت سرویس، در دو نوبتی که در تنظیمات تعیین شده، به مشتری یادآوری می‌شود.',
+  'web.feature_service_expiry_reminders_off_effect':
+    'مشتریان پیش از پایان مدت سرویس خود یادآوری دریافت نمی‌کنند.',
+  'web.feature_service_expired_notice_title': 'اطلاع پایان سرویس',
+  'web.feature_service_expired_notice_summary':
+    'وقتی مدت سرویس مشتری به پایان رسید، یک بار به او اطلاع داده می‌شود.',
+  'web.feature_service_expired_notice_off_effect':
+    'به مشتریان اطلاع داده نمی‌شود که مدت سرویسشان به پایان رسیده است.',
+  'web.feature_service_usage_reminders_title': 'یادآوری مصرف حجم',
+  'web.feature_service_usage_reminders_summary':
+    'وقتی حجم سرویس مشتری رو به اتمام است، در سه آستانه‌ای که در تنظیمات تعیین شده به او هشدار داده می‌شود. سرویس‌های با حجم نامحدود هشدار نمی‌گیرند.',
+  'web.feature_service_usage_reminders_off_effect':
+    'مشتریان هنگام رو به اتمام بودن حجم سرویس خود هشدار دریافت نمی‌کنند.',
+  'web.feature_trials_title': 'سرویس آزمایشی رایگان',
+  'web.feature_trials_summary':
+    'مشتریان می‌توانند یک سرویس آزمایشی رایگان دریافت کنند. برای کار کردن، محصول سرویس آزمایشی باید در تنظیمات انتخاب شده باشد.',
+  'web.feature_customer_link_rotation_title': 'دریافت لینک جدید توسط مشتری',
+  'web.feature_customer_link_rotation_summary':
+    'مشتری می‌تواند از ربات برای سرویس فعال خود لینک اشتراک جدید بگیرد؛ فقط روی پنل‌هایی که این کار را پشتیبانی می‌کنند و با فاصلهٔ زمانی تعیین‌شده.',
+  'web.feature_customer_refund_requests_title': 'درخواست بازپرداخت توسط مشتری',
+  'web.feature_customer_refund_requests_summary':
+    'مشتری می‌تواند از ربات برای سرویس پرداخت‌شدهٔ خود درخواست بازپرداخت ثبت کند. مبلغ را مدیر تعیین می‌کند و پس از حذف سرویس از پنل، به کیف پول مشتری واریز می‌شود.',
+  'web.feature_referrals_title': 'برنامهٔ معرفی (زیرمجموعه‌گیری)',
+  'web.feature_referrals_summary':
+    'مشتری با لینک اختصاصی خود دیگران را معرفی می‌کند و از خریدهای آن‌ها پورسانت به کیف پولش واریز می‌شود. درصد پورسانت باید در تنظیمات تعیین شده باشد.',
+  'web.feature_referrals_off_effect':
+    'کسانی که در این مدت با لینک معرفی عضو شوند بدون معرف ثبت می‌شوند و بعداً هم به معرف وصل نخواهند شد. پورسانت‌هایی که پیش‌تر وعده داده شده‌اند همچنان پرداخت می‌شوند.',
+  'web.feature_referral_signup_gift_title': 'هدیهٔ عضویت با معرفی',
+  'web.feature_referral_signup_gift_summary':
+    'برای هر معرفی معتبر، مبلغ هدیه میان معرف و کاربر جدید تقسیم می‌شود و هر کدام یک بار سهم خود را دریافت می‌کنند.',
+  // A flag from a newer server that this panel build has no entry for.
+  'web.feature_unknown_off_effect':
+    'این قابلیت برای این نسخه از پنل ناشناخته است و خاموش کردن آن ممکن است بخشی از کار ربات را متوقف کند.',
+  'web.feature_custom_service_title': 'سرویس دلخواه',
+  'web.feature_custom_service_summary':
+    'مشتری موقعیت، حجم و مدت دلخواه خود را انتخاب می‌کند و قیمت بر اساس قیمت هر گیگابایت و هر روز محاسبه می‌شود.',
 
   // Templates
   'web.templates_title': 'متن‌های ربات',
