@@ -28,6 +28,7 @@ RES=C+'resellers/application/reseller.service.ts'
 REF=C+'payments/application/service-refund-request.service.ts'
 RRF=C+'payments/infrastructure/drizzle-receipt-review-facts.reader.ts'
 PRS=C+'pricing/application/pricing.service.ts'
+PENG=C+'pricing/domain/pricing-engine.ts'
 DDOM=CS+'domain/custom-service-pricing.ts'
 
 U=('unit','tests/unit/custom-service-pricing.test.ts')
@@ -58,7 +59,7 @@ M=[
  ('D-21',[(CAP,"  'CUSTOM_SERVICE_VOLUME',\n  'CUSTOM_SERVICE_DAYS',\n];","];")],I,'reads the volume, keeps the window open'),
  ('D-22',[(ORD,"    if (order.purpose !== 'NEW_SERVICE' && order.purpose !== 'CUSTOM_SERVICE') {\n      throw errors.conflict(\n        COMMERCE_ERROR_CODES.DISCOUNT_CODE_REJECTED","    if (order.purpose !== 'NEW_SERVICE') {\n      throw errors.conflict(\n        COMMERCE_ERROR_CODES.DISCOUNT_CODE_REJECTED")],I,'applies a code that names CUSTOM_SERVICE'),
  ('D-23',[(ORD,"      before.purpose === 'CUSTOM_SERVICE'\n        ? await this.customBaseFromSnapshot(scope, before, now, tx)","      (false as boolean)\n        ? await this.customBaseFromSnapshot(scope, before, now, tx)")],I,'applies a code that names CUSTOM_SERVICE'),
- ('D-24',[(DISC,"inArray(orders.purpose, ['NEW_SERVICE', 'CUSTOM_SERVICE']),","eq(orders.purpose, 'NEW_SERVICE'),")],I,'counts a live custom order as a purchase'),
+ ('D-24',[(PENG,"export const FIRST_PURCHASE_PURPOSES: readonly OrderPurpose[] = ['NEW_SERVICE', 'CUSTOM_SERVICE'];","export const FIRST_PURCHASE_PURPOSES: readonly OrderPurpose[] = ['NEW_SERVICE'];")],I,'counts a live custom order as a purchase'),
  ('D-25',[(COM,"    if (service.productId === null) return available;\n","")],I,'refuses to renew or extend'),
  ('D-26',[(COM,"    assertExtendable(service);\n    this.assertLifecycleAllows(kind, service);","    this.assertLifecycleAllows(kind, service);"),
           (COM,"        assertExtendable(service);\n        this.assertLifecycleAllows(input.kind, service);","        this.assertLifecycleAllows(input.kind, service);"),
