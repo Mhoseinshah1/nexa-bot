@@ -1000,6 +1000,49 @@ describe('Package F — a customer transfers a service to another customer', () 
     expect(await transfersOf(third.id)).toBe(1);
   });
 
+  it('is given back by its recipient: the newest row counts, never the first', async () => {
+    const service = await deliveredService('given-back');
+    expect((await transfer(service.id, RECIPIENT_TG)).replayed).toBe(false);
+    // The database admits B → A only because the NEWEST row names it; the first row
+    // (A → B) names the opposite direction.
+    const back = await transfer(service.id, SENDER_TG, key('back'), recipient);
+    expect(back.replayed).toBe(false);
+    expect(await ownerOf(service.id)).toBe(sender);
+    expect(await transfersOf(service.id)).toBe(2);
+    // The recipient taps their confirmation again under a new key: the newest row is theirs,
+    // so the answer is that transfer — not "not found" because the first row was not.
+    expect(await transfer(service.id, SENDER_TG, key('back-again'), recipient)).toEqual({
+      ...back,
+      replayed: true,
+    });
+  });
+
+  it('refuses a sender who has been blocked, and moves nothing', async () => {
+    const service = await deliveredService('blocked-sender');
+    await ctx.container.customers.block(tenantA, owner, {
+      idempotencyKey: 'block-sender',
+      customerId: sender,
+      reason: 'fixture',
+    });
+    expect(await refusalOf(transfer(service.id, RECIPIENT_TG))).toMatchObject({
+      code: 'commerce.customer_blocked',
+    });
+    expect(await transfersOf(service.id)).toBe(0);
+    expect(await ownerOf(service.id)).toBe(sender);
+  });
+
+  it('refuses a transfer in a tenant that has stopped accepting work', async () => {
+    const service = await deliveredService('stopped-tenant');
+    await ctx.container.database.db.execute(
+      sql`UPDATE tenants SET status = 'STOPPED' WHERE id = ${tenantA.tenantId}`,
+    );
+    expect(await refusalOf(transfer(service.id, RECIPIENT_TG))).toMatchObject({
+      code: 'commerce.request_invalid',
+    });
+    expect(await transfersOf(service.id)).toBe(0);
+    expect(await ownerOf(service.id)).toBe(sender);
+  });
+
   // =========================================================================
   // What does not move (F4, F5)
   // =========================================================================
