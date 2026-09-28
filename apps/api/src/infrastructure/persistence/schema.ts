@@ -147,6 +147,18 @@ import {
   TENANT_MEDIA_MIME_TYPES,
   TENANT_MEDIA_MAX_BYTES,
   PRODUCT_SERVICE_LOCATION_LABEL_MAX_LENGTH,
+  // WP-A7: support tickets.
+  TICKET_ATTACHMENT_FILE_NAME_MAX_LENGTH,
+  TICKET_ATTACHMENT_KINDS,
+  TICKET_ATTACHMENT_MAX_BYTES,
+  TICKET_CATEGORY_SORT_MAX,
+  TICKET_CATEGORY_TITLE_MAX_LENGTH,
+  TICKET_MESSAGE_MAX_LENGTH,
+  TICKET_MESSAGE_SENDERS,
+  TICKET_PRIORITIES,
+  TICKET_STATUSES,
+  TICKET_SUBJECT_MAX_LENGTH,
+  TICKET_SYSTEM_EVENTS,
 } from '@nexa/contracts';
 
 /**
@@ -7157,12 +7169,12 @@ export const customerTextCaptures = pgTable(
     ),
     /**
      * A note, a refund reason (WP19) and a transfer's recipient (Package F) name their
-     * service, and the two custom-service windows (Package D) their panel; the other
-     * purposes name nothing.
+     * service, the two custom-service windows (Package D) their panel, and the two ticket
+     * windows (WP-A7) their category or their ticket; the other purposes name nothing.
      */
     check(
       'customer_text_captures_subject_check',
-      sql`(purpose IN ('SERVICE_NOTE', 'SERVICE_REFUND_REASON', 'CUSTOM_SERVICE_VOLUME', 'CUSTOM_SERVICE_DAYS', 'SERVICE_TRANSFER_RECIPIENT')) = (subject_id IS NOT NULL)`,
+      sql`(purpose IN ('SERVICE_NOTE', 'SERVICE_REFUND_REASON', 'CUSTOM_SERVICE_VOLUME', 'CUSTOM_SERVICE_DAYS', 'SERVICE_TRANSFER_RECIPIENT', 'TICKET_NEW_MESSAGE', 'TICKET_REPLY')) = (subject_id IS NOT NULL)`,
     ),
     /** Only the days window carries a volume, and it always does (Package D). */
     check(
@@ -7807,5 +7819,266 @@ export const serviceOwnershipTransfers = pgTable(
     check('service_ownership_transfers_parties_check', sql`from_customer_id <> to_customer_id`),
     check('service_ownership_transfers_actor_type_check', enumCheck('actor_type', ACTOR_TYPES)),
     check('service_ownership_transfers_key_check', sql`length(idempotency_key) BETWEEN 1 AND 200`),
+  ],
+);
+
+// --- WP-A7: support tickets (docs/wp-a7-tickets-audit.md) --------------------------------
+
+/**
+ * The subjects a customer files a ticket under, as the tenant's operators maintain them.
+ *
+ * Never deleted: a category is deactivated, because tickets name it and a deleted one would
+ * leave history pointing at nothing. The five defaults are copied in from the catalogue the
+ * first time a tenant's categories are read (`ticket_category_seeds`), the FAQ's pattern.
+ */
+export const ticketCategories = pgTable(
+  'ticket_categories',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    title: text('title').notNull(),
+    sortOrder: integer('sort_order').notNull().default(0),
+    isActive: boolean('is_active').notNull().default(true),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    unique('ticket_categories_tenant_id_key').on(table.tenantId, table.id),
+    /** Two categories with one title would be two buttons a customer cannot tell apart. */
+    unique('ticket_categories_title_key').on(table.tenantId, table.title),
+    index('ticket_categories_tenant_sort_idx').on(table.tenantId, table.sortOrder, table.id),
+    check(
+      'ticket_categories_title_check',
+      sql`length(btrim(title)) BETWEEN 1 AND ${sql.raw(String(TICKET_CATEGORY_TITLE_MAX_LENGTH))}`,
+    ),
+    check(
+      'ticket_categories_sort_order_check',
+      sql`sort_order BETWEEN 0 AND ${sql.raw(String(TICKET_CATEGORY_SORT_MAX))}`,
+    ),
+  ],
+);
+
+/**
+ * That a tenant's default categories were seeded, once. A tenant that then deactivates
+ * every one is NOT re-seeded — that is a decision the operator made.
+ */
+export const ticketCategorySeeds = pgTable('ticket_category_seeds', {
+  tenantId: uuid('tenant_id')
+    .primaryKey()
+    .references(() => tenants.id),
+  seededAt: timestamptz('seeded_at').notNull().defaultNow(),
+});
+
+/**
+ * One support ticket: a customer's conversation with support about one subject.
+ *
+ * The status moves only by a conditional UPDATE naming the status it leaves
+ * (`TICKET_MACHINE`); `closed_at` is set exactly while it is CLOSED. The category's title is
+ * SNAPSHOTTED beside its id, so renaming a category does not rewrite what a customer filed
+ * under. The service, order and payment are optional context an operator links; each must be
+ * the ticket's customer's own, which the service checks at link time.
+ */
+export const tickets = pgTable(
+  'tickets',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    /**
+     * The number a customer and an operator quote («تیکت #۱۲۳»). An identity, so it is
+     * unique and increasing without a counter row to contend on.
+     */
+    number: bigint('number', { mode: 'bigint' }).generatedAlwaysAsIdentity().notNull(),
+    customerId: uuid('customer_id').notNull(),
+    /** The bot the customer opened it through. */
+    botInstanceId: uuid('bot_instance_id')
+      .notNull()
+      .references(() => botInstances.id),
+    categoryId: uuid('category_id').notNull(),
+    categoryTitle: text('category_title').notNull(),
+    subject: text('subject'),
+    status: text('status').notNull().default('OPEN'),
+    priority: text('priority').notNull().default('NORMAL'),
+    assignedAdminId: uuid('assigned_admin_id'),
+    serviceId: uuid('service_id'),
+    orderId: uuid('order_id'),
+    paymentId: uuid('payment_id'),
+    /**
+     * The key of the update that opened it. Unique for ever, so a redelivered update
+     * answers with this ticket and never opens a second.
+     */
+    openingKey: text('opening_key').notNull(),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+    lastMessageAt: timestamptz('last_message_at').notNull().defaultNow(),
+    closedAt: timestamptz('closed_at'),
+  },
+  (table) => [
+    unique('tickets_tenant_id_key').on(table.tenantId, table.id),
+    unique('tickets_opening_key').on(table.tenantId, table.openingKey),
+    /** The inbox: newest first, under a keyset on the immutable `(created_at, id)`. */
+    index('tickets_tenant_created_idx').on(table.tenantId, table.createdAt, table.id),
+    index('tickets_tenant_status_idx').on(table.tenantId, table.status, table.createdAt),
+    /** A customer's own list in the bot, and the open-ticket rail. */
+    index('tickets_tenant_customer_idx').on(table.tenantId, table.customerId, table.status),
+    index('tickets_tenant_assignee_idx').on(table.tenantId, table.assignedAdminId),
+    foreignKey({
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+      name: 'tickets_customer_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.categoryId],
+      foreignColumns: [ticketCategories.tenantId, ticketCategories.id],
+      name: 'tickets_category_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.assignedAdminId],
+      foreignColumns: [admins.tenantId, admins.id],
+      name: 'tickets_assignee_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.serviceId],
+      foreignColumns: [services.tenantId, services.id],
+      name: 'tickets_service_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.orderId],
+      foreignColumns: [orders.tenantId, orders.id],
+      name: 'tickets_order_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.paymentId],
+      foreignColumns: [payments.tenantId, payments.id],
+      name: 'tickets_payment_fk',
+    }),
+    check('tickets_status_check', enumCheck('status', TICKET_STATUSES)),
+    check('tickets_priority_check', enumCheck('priority', TICKET_PRIORITIES)),
+    /** An equality, the `customer_notifications_resolved_check` shape: closed iff stamped. */
+    check('tickets_closed_check', sql`(status = 'CLOSED') = (closed_at IS NOT NULL)`),
+    check(
+      'tickets_subject_check',
+      sql`subject IS NULL OR length(subject) BETWEEN 1 AND ${sql.raw(String(TICKET_SUBJECT_MAX_LENGTH))}`,
+    ),
+    check(
+      'tickets_category_title_check',
+      sql`length(category_title) BETWEEN 1 AND ${sql.raw(String(TICKET_CATEGORY_TITLE_MAX_LENGTH))}`,
+    ),
+    check('tickets_opening_key_check', sql`length(opening_key) BETWEEN 1 AND 300`),
+  ],
+);
+
+/**
+ * One message in a ticket — the conversation's source of truth.
+ *
+ * Append-only: `nexa_reject_mutation` refuses an UPDATE or a DELETE, so a message sent is a
+ * message kept, whatever happened to the Telegram send that carried it. An administrator's
+ * reply is pushed to the customer by a `TICKET_REPLY` row on the customer notification lane
+ * whose subject is THIS row; its delivery state is read from that row, never copied here.
+ *
+ * An attachment is a BINDING, the receipts' pattern: which bot received it and Telegram's two
+ * ids, with the declared type, name and size. The bytes stay at Telegram and are fetched
+ * through the API, which holds the token.
+ */
+export const ticketMessages = pgTable(
+  'ticket_messages',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    ticketId: uuid('ticket_id').notNull(),
+    /** The conversation's order, independent of any clock. */
+    seq: bigint('seq', { mode: 'bigint' }).generatedAlwaysAsIdentity().notNull(),
+    senderType: text('sender_type').notNull(),
+    /** Who wrote an ADMIN message; null otherwise. */
+    authorAdminId: uuid('author_admin_id'),
+    body: text('body'),
+    systemEvent: text('system_event'),
+    attachmentKind: text('attachment_kind'),
+    attachmentBotInstanceId: uuid('attachment_bot_instance_id').references(() => botInstances.id),
+    /** What `getFile` takes. Bot-scoped, and never returned to a browser. */
+    attachmentFileId: text('attachment_file_id'),
+    attachmentFileUniqueId: text('attachment_file_unique_id'),
+    attachmentMimeType: text('attachment_mime_type'),
+    attachmentFileName: text('attachment_file_name'),
+    attachmentFileSize: bigint('attachment_file_size', { mode: 'bigint' }),
+    /**
+     * The command's key — the Telegram update that carried a customer's message, or a Web
+     * request's key for an administrator's — so a redelivery answers with this row and
+     * never writes a second. Null for a SYSTEM fact, which its status change makes once.
+     */
+    idempotencyKey: text('idempotency_key'),
+    /** What the key was first used for, so the same key with different words is refused. */
+    requestHash: text('request_hash'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+  },
+  (table) => [
+    unique('ticket_messages_tenant_id_key').on(table.tenantId, table.id),
+    unique('ticket_messages_key').on(table.tenantId, table.idempotencyKey),
+    index('ticket_messages_ticket_idx').on(table.tenantId, table.ticketId, table.seq),
+    foreignKey({
+      columns: [table.tenantId, table.ticketId],
+      foreignColumns: [tickets.tenantId, tickets.id],
+      name: 'ticket_messages_ticket_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.authorAdminId],
+      foreignColumns: [admins.tenantId, admins.id],
+      name: 'ticket_messages_author_fk',
+    }),
+    check('ticket_messages_sender_check', enumCheck('sender_type', TICKET_MESSAGE_SENDERS)),
+    check(
+      'ticket_messages_system_event_check',
+      nullableEnumCheck('system_event', TICKET_SYSTEM_EVENTS),
+    ),
+    check(
+      'ticket_messages_attachment_kind_check',
+      nullableEnumCheck('attachment_kind', TICKET_ATTACHMENT_KINDS),
+    ),
+    check(
+      'ticket_messages_body_check',
+      sql`body IS NULL OR length(body) BETWEEN 1 AND ${sql.raw(String(TICKET_MESSAGE_MAX_LENGTH))}`,
+    ),
+    /** An attachment is all of its binding or none of it. */
+    check(
+      'ticket_messages_attachment_check',
+      sql`(attachment_kind IS NULL) = (attachment_file_id IS NULL)
+          AND (attachment_kind IS NULL) = (attachment_file_unique_id IS NULL)
+          AND (attachment_kind IS NULL) = (attachment_bot_instance_id IS NULL)
+          AND (attachment_kind IS NOT NULL OR (attachment_mime_type IS NULL AND attachment_file_name IS NULL AND attachment_file_size IS NULL))`,
+    ),
+    check(
+      'ticket_messages_attachment_size_check',
+      sql`attachment_file_size IS NULL OR attachment_file_size BETWEEN 1 AND ${sql.raw(String(TICKET_ATTACHMENT_MAX_BYTES))}`,
+    ),
+    check(
+      'ticket_messages_attachment_name_check',
+      sql`attachment_file_name IS NULL OR length(attachment_file_name) BETWEEN 1 AND ${sql.raw(String(TICKET_ATTACHMENT_FILE_NAME_MAX_LENGTH))}`,
+    ),
+    /**
+     * Each sender's shape: a customer writes text or a file; an administrator writes text,
+     * signed; the system records one fact from its closed set and nothing else.
+     */
+    check(
+      'ticket_messages_shape_check',
+      sql`CASE sender_type
+            WHEN 'CUSTOMER' THEN author_admin_id IS NULL AND system_event IS NULL
+                 AND (body IS NOT NULL OR attachment_kind IS NOT NULL) AND idempotency_key IS NOT NULL
+            WHEN 'ADMIN' THEN author_admin_id IS NOT NULL AND system_event IS NULL
+                 AND body IS NOT NULL AND attachment_kind IS NULL AND idempotency_key IS NOT NULL
+            WHEN 'SYSTEM' THEN author_admin_id IS NULL AND system_event IS NOT NULL
+                 AND body IS NULL AND attachment_kind IS NULL
+            ELSE false
+          END`,
+    ),
+    check(
+      'ticket_messages_key_check',
+      sql`(idempotency_key IS NULL) = (request_hash IS NULL)
+          AND (idempotency_key IS NULL OR length(idempotency_key) BETWEEN 1 AND 300)`,
+    ),
   ],
 );
