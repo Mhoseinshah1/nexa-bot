@@ -88,6 +88,8 @@ function toRecord(row: Row): ServiceRecord {
     trafficLimitBytes: row.trafficLimitBytes,
     trafficUsedBytes: row.trafficUsedBytes,
     deviceLimit: row.deviceLimit,
+    locationKey: row.locationKey,
+    locationLabel: row.locationLabel,
     usageSyncedAt: row.usageSyncedAt,
     deliveryState: row.deliveryState as ServiceDeliveryState,
     deliveryAttempts: row.deliveryAttempts,
@@ -136,7 +138,7 @@ const NO_PAID_ACTION_WAITING = sql`NOT EXISTS (
   SELECT 1 FROM provisioning_operations waiting
    WHERE waiting.tenant_id = ${services.tenantId}
      AND waiting.service_id = ${services.id}
-     AND waiting.type IN ('RENEW', 'ADD_TRAFFIC', 'ADD_TIME', 'ADD_DEVICES')
+     AND waiting.type IN ('RENEW', 'ADD_TRAFFIC', 'ADD_TIME', 'ADD_DEVICES', 'CHANGE_LOCATION')
      AND waiting.state IN ('PLANNED', 'IN_FLIGHT')
 )`;
 
@@ -573,6 +575,29 @@ export class DrizzleServiceRepository implements ServiceRepository {
         deliverySendStartedAt: null,
         updatedAt: now,
       })
+      .where(
+        and(
+          eq(services.tenantId, tenantId),
+          eq(services.id, id),
+          inArray(services.state, [...legalFrom]),
+        ),
+      )
+      .returning({ id: services.id });
+    return rows.length === 1;
+  }
+
+  async recordLocation(
+    scope: TenantContext,
+    id: string,
+    location: { readonly key: string; readonly label: string },
+    legalFrom: readonly ServiceState[],
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .update(services)
+      .set({ locationKey: location.key, locationLabel: location.label, updatedAt: now })
       .where(
         and(
           eq(services.tenantId, tenantId),

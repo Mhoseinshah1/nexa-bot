@@ -2001,6 +2001,8 @@ export class PaymentService {
         kind: action.kind,
         customerId: order.customerId,
         purchasedDeviceCount: action.purchasedDeviceCount,
+        // WP-A6: a location change's target is on the change request frozen with the order.
+        orderId: order.id,
       },
       tx,
       onIneligible,

@@ -101,12 +101,15 @@ function toRecord(row: Row): OperationRecord {
     target:
       row.targetExpiresAt === null &&
       row.targetTrafficLimitBytes === null &&
-      row.targetDeviceLimit === null
+      row.targetDeviceLimit === null &&
+      row.targetLocationKey === null
         ? null
         : {
             expiresAt: row.targetExpiresAt,
             trafficLimitBytes: row.targetTrafficLimitBytes,
             deviceLimit: row.targetDeviceLimit,
+            // WP-A6: only a `CHANGE_LOCATION` carries one, so every other target reads as before.
+            ...(row.targetLocationKey === null ? {} : { locationKey: row.targetLocationKey }),
           },
     providerReference: row.providerReference,
     failureKind: row.failureKind as ProviderFailureKind | null,
@@ -175,6 +178,7 @@ export class DrizzleOperationRepository implements OperationRepository {
         targetExpiresAt: draft.target?.expiresAt ?? null,
         targetTrafficLimitBytes: draft.target?.trafficLimitBytes ?? null,
         targetDeviceLimit: draft.target?.deviceLimit ?? null,
+        targetLocationKey: draft.target?.locationKey ?? null,
         /*
          * Due NOW, stamped rather than left null.
          *

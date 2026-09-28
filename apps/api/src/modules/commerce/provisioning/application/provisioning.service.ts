@@ -21,6 +21,7 @@ import {
   type IdGenerator,
   type OperationId,
   type OperationTarget,
+  type OrderId,
   type OperationType,
   type PermissionKey,
   type ServiceState,
@@ -103,6 +104,18 @@ export interface ProvisioningServiceDeps {
   readonly features: Pick<FeatureFlagResolver, 'isEnabled'>;
   readonly settings: Pick<SettingsResolver, 'valueOf'>;
   readonly customers: Pick<CustomerRepository, 'findById'>;
+  /**
+   * A paid location change's frozen target (WP-A6), read by the order it was quoted on.
+   * The key the operation will ask the panel for is the one the customer was shown — the
+   * change request's snapshot — never today's configuration.
+   */
+  readonly locationChanges: {
+    findByOrderId(
+      scope: TenantContext,
+      orderId: OrderId,
+      tx?: unknown,
+    ): Promise<{ readonly toLocationKey: string } | null>;
+  };
 }
 
 /**
@@ -1437,11 +1450,17 @@ export class ProvisioningService {
     scope: TenantContext,
     action: {
       readonly serviceId: string;
-      readonly kind: 'RENEW' | 'ADD_TRAFFIC' | 'ADD_TIME' | 'ADD_DEVICES';
+      readonly kind: 'RENEW' | 'ADD_TRAFFIC' | 'ADD_TIME' | 'ADD_DEVICES' | 'CHANGE_LOCATION';
       /** The ORDER's customer: the payer, who must still own the service. */
       readonly customerId: UserId;
       /** WP-A5: extra users / devices bought; zero for every other kind. */
       readonly purchasedDeviceCount?: number;
+      /**
+       * WP-A6, `CHANGE_LOCATION` only: where the move goes — the key itself for a free
+       * change, or the ORDER whose frozen change request names it for a paid one.
+       */
+      readonly targetLocationKey?: string;
+      readonly orderId?: OrderId;
     },
     tx: TransactionScope,
     onIneligible: 'REFUSE' | 'REFUND',
@@ -1526,6 +1545,33 @@ export class ProvisioningService {
       );
     }
 
+    /*
+     * WP-A6: a move to where the account already is buys nothing. The quote refused it
+     * against the location then recorded; this is the same question asked again when the
+     * money moves, because another change can land in between — and a transfer that
+     * already arrived is then given back rather than spent on a no-op.
+     */
+    if (action.kind === 'CHANGE_LOCATION') {
+      const targetKey =
+        action.targetLocationKey ??
+        (action.orderId === undefined
+          ? null
+          : ((await this.deps.locationChanges.findByOrderId(scope, action.orderId, tx))
+              ?.toLocationKey ?? null));
+      if (targetKey === null) {
+        // `service_location_changes` is written with the order; its absence is a broken
+        // database, which no refund or retry would repair.
+        throw new Error(`location change for service ${service.id} names no target`);
+      }
+      if (service.locationKey === targetKey) {
+        return refuse(
+          COMMERCE_ERROR_CODES.LOCATION_CHANGE_SAME_LOCATION,
+          'The service is already in that location.',
+          'LOCATION_UNCHANGED',
+        );
+      }
+    }
+
     const outstanding = await this.deps.operations.findOpenCommercial(scope, service.id, tx);
     if (outstanding !== null) {
       return refuse(
@@ -1601,7 +1647,7 @@ export class ProvisioningService {
     order: OrderRecord,
     action: {
       readonly serviceId: string;
-      readonly kind: 'RENEW' | 'ADD_TRAFFIC' | 'ADD_TIME' | 'ADD_DEVICES';
+      readonly kind: 'RENEW' | 'ADD_TRAFFIC' | 'ADD_TIME' | 'ADD_DEVICES' | 'CHANGE_LOCATION';
       readonly purchasedTrafficBytes: bigint;
       readonly purchasedDurationDays: number;
       /** WP-A5: extra users / devices bought; zero for every other kind. */
@@ -1645,6 +1691,7 @@ export class ProvisioningService {
         kind: action.kind,
         customerId: order.customerId,
         purchasedDeviceCount: action.purchasedDeviceCount,
+        orderId: order.id,
       },
       tx,
       onIneligible,
@@ -1685,20 +1732,40 @@ export class ProvisioningService {
         'This service cannot be given that many more users.',
       );
     }
+    /*
+     * WP-A6: a paid move's target is the key its change request froze when it was quoted,
+     * and nothing else. `prepareCommercialAction` above read the same row and refused a
+     * move to where the account already is, under this same lock.
+     */
+    const locationTarget =
+      action.kind === 'CHANGE_LOCATION'
+        ? ((await this.deps.locationChanges.findByOrderId(scope, order.id, tx))?.toLocationKey ??
+          null)
+        : null;
+    if (action.kind === 'CHANGE_LOCATION' && locationTarget === null) {
+      throw new Error(`order ${order.id} is a location change with no change request`);
+    }
     const target: OperationTarget =
-      action.kind === 'ADD_DEVICES'
-        ? { expiresAt: null, trafficLimitBytes: null, deviceLimit: deviceTarget }
-        : {
-            expiresAt:
-              action.purchasedDurationDays > 0
-                ? extendedExpiry(service.expiresAt, now, action.purchasedDurationDays)
-                : null,
-            trafficLimitBytes:
-              action.purchasedTrafficBytes > 0n || action.kind === 'RENEW'
-                ? extendedAllowance(service.trafficLimitBytes, action.purchasedTrafficBytes)
-                : null,
+      action.kind === 'CHANGE_LOCATION'
+        ? {
+            expiresAt: null,
+            trafficLimitBytes: null,
             deviceLimit: null,
-          };
+            locationKey: locationTarget,
+          }
+        : action.kind === 'ADD_DEVICES'
+          ? { expiresAt: null, trafficLimitBytes: null, deviceLimit: deviceTarget }
+          : {
+              expiresAt:
+                action.purchasedDurationDays > 0
+                  ? extendedExpiry(service.expiresAt, now, action.purchasedDurationDays)
+                  : null,
+              trafficLimitBytes:
+                action.purchasedTrafficBytes > 0n || action.kind === 'RENEW'
+                  ? extendedAllowance(service.trafficLimitBytes, action.purchasedTrafficBytes)
+                  : null,
+              deviceLimit: null,
+            };
 
     /*
      * An allowance that cannot survive the wire.
@@ -1727,7 +1794,8 @@ export class ProvisioningService {
     if (
       target.expiresAt === null &&
       target.trafficLimitBytes === null &&
-      target.deviceLimit === null
+      target.deviceLimit === null &&
+      (target.locationKey ?? null) === null
     ) {
       /*
        * A purchase that asks the panel for nothing.
@@ -1812,6 +1880,9 @@ export class ProvisioningService {
           targetExpiresAt: target.expiresAt?.toISOString() ?? null,
           targetTrafficLimitBytes: target.trafficLimitBytes?.toString() ?? null,
           targetDeviceLimit: target.deviceLimit,
+          ...(action.kind === 'CHANGE_LOCATION'
+            ? { fromLocationKey: service.locationKey, targetLocationKey: target.locationKey }
+            : {}),
         },
         result: 'SUCCESS',
       },
@@ -1819,6 +1890,88 @@ export class ProvisioningService {
     );
 
     return { outcome: 'PLANNED', operation };
+  }
+
+  /**
+   * Plans a FREE location change's operation (WP-A6), inside the request's transaction.
+   *
+   * No order and no money: a free move is asked for, not bought, so there is nothing to
+   * settle and nothing a failure could refund. Everything else is the paid move's — the
+   * same `prepareCommercialAction` refusals (owner, state, panel, a move to where the
+   * account already is, another commercial action open, a deletion or a refund request
+   * pending), asked with `REFUSE` because no money has moved, and the same one-open-
+   * commercial-action index, whose loss on a race arrives as the same named refusal.
+   *
+   * The operation id is derived from the change request's id, so a replayed request
+   * plans the same operation rather than a second one.
+   */
+  async planLocationChange(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: {
+      readonly serviceId: string;
+      readonly customerId: UserId;
+      readonly locationKey: string;
+      readonly changeId: string;
+    },
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<OperationRecord> {
+    await this.prepareCommercialAction(
+      scope,
+      {
+        serviceId: input.serviceId,
+        kind: 'CHANGE_LOCATION',
+        customerId: input.customerId,
+        targetLocationKey: input.locationKey,
+      },
+      tx,
+      'REFUSE',
+    );
+    const service = await this.deps.services.findById(scope, input.serviceId, tx);
+    if (service === null) {
+      throw new Error(`location change names service ${input.serviceId}, which is not there`);
+    }
+    const operation = await this.deps.operations.plan(
+      scope,
+      {
+        id: this.deps.ids.uuid(),
+        operationId: this.deps.operationId(`${service.id}:CHANGE_LOCATION:${input.changeId}`),
+        serviceId: service.id,
+        orderId: null,
+        // The customer asked for this, so they are owed its outcome.
+        requestedByCustomerId: service.customerId,
+        panelId: service.panelId,
+        type: 'CHANGE_LOCATION',
+        target: {
+          expiresAt: null,
+          trafficLimitBytes: null,
+          deviceLimit: null,
+          locationKey: input.locationKey,
+        },
+      },
+      now,
+      tx,
+    );
+    await this.deps.audit.record(
+      scope,
+      actor,
+      {
+        action: 'service.plan_change_location',
+        entityType: 'Service',
+        entityId: service.id,
+        before: { state: service.state, locationKey: service.locationKey },
+        after: {
+          customerId: service.customerId,
+          operationId: operation.operationId,
+          targetLocationKey: input.locationKey,
+          orderId: null,
+        },
+        result: 'SUCCESS',
+      },
+      tx,
+    );
+    return operation;
   }
 
   /** Whether a service is in a state where re-sending its configuration means anything. */

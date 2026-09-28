@@ -6,6 +6,7 @@ import type {
   OrderPurpose,
   ProductId,
   ServiceAddonId,
+  ServiceLocationId,
   TenantContext,
   UserId,
 } from '@nexa/contracts';
@@ -60,6 +61,7 @@ export class DrizzleCommercialActionRepository implements CommercialActionReposi
         purchasedDurationDays: draft.purchasedDurationDays,
         purchasedDeviceCount: draft.purchasedDeviceCount,
         addonVersion: draft.addonVersion,
+        locationId: draft.locationId,
         amount: draft.amount.amountMinor,
         currency: draft.amount.currency,
         createdAt: draft.now,
@@ -194,6 +196,7 @@ function toRecord(row: typeof serviceCommercialActions.$inferSelect): Commercial
     purchasedDurationDays: row.purchasedDurationDays,
     purchasedDeviceCount: row.purchasedDeviceCount,
     addonVersion: row.addonVersion,
+    locationId: row.locationId as ServiceLocationId | null,
     // The pair is reassembled as one value, so nothing downstream reads an amount
     // without its currency. `service_commercial_actions_currency_check` keeps it real.
     amount: money(row.amount, row.currency as CurrencyCode),

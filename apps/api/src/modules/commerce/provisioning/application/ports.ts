@@ -57,6 +57,14 @@ export interface ServiceRecord {
    * is recorded. Raised only by an `ADD_DEVICES` the panel applied.
    */
   readonly deviceLimit: number | null;
+  /**
+   * Where the account sits on its panel (WP-A6): the adapter-defined key and the name the
+   * customer was shown, both or neither. Null for a service that has never moved, which
+   * is in its panel's INITIAL location. Written only by a `CHANGE_LOCATION` the panel
+   * applied.
+   */
+  readonly locationKey: string | null;
+  readonly locationLabel: string | null;
   readonly usageSyncedAt: Date | null;
   readonly deliveryState: ServiceDeliveryState;
   readonly deliveryAttempts: number;
@@ -403,6 +411,24 @@ export interface ServiceRepository {
     scope: TenantContext,
     id: string,
     subscriptionUrl: string,
+    legalFrom: readonly ServiceState[],
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<boolean>;
+
+  /**
+   * Records the location a `CHANGE_LOCATION` left the account in (WP-A6): the key from the
+   * operation's absolute target and the name from the change request's snapshot, together.
+   *
+   * Conditional on the service still being in one of `legalFrom` — the states that still
+   * have an account — so a service terminated while the move was on the wire keeps what
+   * the terminate wrote. Touches nothing else: not the state, not the allowance, not the
+   * delivery (a changed link is `recordRotation`'s, called beside this).
+   */
+  recordLocation(
+    scope: TenantContext,
+    id: string,
+    location: { readonly key: string; readonly label: string },
     legalFrom: readonly ServiceState[],
     now: Date,
     tx: TransactionScope,

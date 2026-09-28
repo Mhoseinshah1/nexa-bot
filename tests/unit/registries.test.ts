@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   canAdjustDeviceLimit,
+  canChangeLocation,
   failureOutcome,
   isIdempotentMutation,
   isMutatingOperation,
@@ -505,6 +506,11 @@ describe('the provider registry', () => {
         expect(typeof methods['readDeviceLimit'], `${type}.readDeviceLimit`).toBe('function');
         expect(typeof methods['applyDeviceLimit'], `${type}.applyDeviceLimit`).toBe('function');
       }
+      // WP-A6: a move needs its READ as well — the read is what settles a lost answer.
+      if (claimed.includes('LOCATION_CHANGE')) {
+        expect(typeof methods['readLocation'], `${type}.readLocation`).toBe('function');
+        expect(typeof methods['applyLocation'], `${type}.applyLocation`).toBe('function');
+      }
     }
   });
 
@@ -516,6 +522,46 @@ describe('the provider registry', () => {
    * NO for every registered adapter. Declaring one is a code change that must come with
    * its real-panel acceptance, and it has to edit this line to land.
    */
+  /*
+   * WP-A6, the acceptance gap stated as a test, exactly as for extra users. No provider in
+   * this release has been shown to move a live account between locations of its own panel
+   * — Marzban's inbound re-point is unmeasured and its adapter cannot read it back, a
+   * RickPanel account has no per-user location, and 3X-UI is frozen by the owner — so the
+   * guard that draws «🌍 تغییر لوکیشن» and runs the executor branch answers NO for every
+   * registered adapter. Declaring one must come with its real-panel acceptance, and has to
+   * edit this line to land.
+   */
+  it('lets no registered provider change a location, and requires both methods to', () => {
+    for (const type of IMPLEMENTED_PROVIDER_TYPES) {
+      const adapter = providerAdapter(type);
+      expect(adapter.supports('LOCATION_CHANGE'), type).toBe(false);
+      if (isServiceAdapter(adapter)) expect(canChangeLocation(adapter), type).toBe(false);
+    }
+    const base = providerAdapter('marzban');
+    if (!isServiceAdapter(base)) throw new Error('marzban has a service half');
+    const declaring = Object.assign(Object.create(base) as typeof base, {
+      supports: (capability: ProviderCapability) => capability === 'LOCATION_CHANGE',
+    });
+    const read = async () => ({ ok: true, found: false }) as const;
+    expect(canChangeLocation(declaring)).toBe(false);
+    expect(canChangeLocation(Object.assign(Object.create(declaring), { readLocation: read }))).toBe(
+      false,
+    );
+    expect(
+      canChangeLocation(Object.assign(Object.create(declaring), { applyLocation: read })),
+    ).toBe(false);
+    expect(
+      canChangeLocation(
+        Object.assign(Object.create(declaring), { readLocation: read, applyLocation: read }),
+      ),
+    ).toBe(true);
+    expect(
+      canChangeLocation(
+        Object.assign(Object.create(base), { readLocation: read, applyLocation: read }),
+      ),
+    ).toBe(false);
+  });
+
   it('lets no registered provider adjust a device limit, and requires both methods to', () => {
     for (const type of IMPLEMENTED_PROVIDER_TYPES) {
       const adapter = providerAdapter(type);
@@ -604,10 +650,13 @@ describe('the operation dispatch cannot fail open', () => {
     // `ADD_DEVICES` (WP-A5) joined with its dispatch branch, making eleven; the title keeps
     // "ten" because falsification ledgers cite it by name. No descriptor declares its
     // capability, so `decideOperability` refuses it on every panel this release knows.
+    //
+    // `CHANGE_LOCATION` (WP-A6) joined with its dispatch branch too, on the same terms.
     expect([...PERFORMABLE_OPERATION_TYPES].sort()).toEqual([
       'ADD_DEVICES',
       'ADD_TIME',
       'ADD_TRAFFIC',
+      'CHANGE_LOCATION',
       'PROVISION',
       'RECONCILE',
       'RENEW',
