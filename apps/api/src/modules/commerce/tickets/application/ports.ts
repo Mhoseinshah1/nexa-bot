@@ -221,8 +221,15 @@ export interface TicketRepository {
     tx: unknown,
   ): Promise<TicketMessageRecord | null>;
   countMessages(scope: TenantContext, ticketId: TicketId, tx: unknown): Promise<number>;
-  /** Every message, oldest first, with its author and delivery state. */
-  messagesOf(scope: TenantContext, ticketId: TicketId): Promise<readonly TicketMessageListItem[]>;
+  /**
+   * Every message, oldest first, with its author and delivery state — or, given `only`, that
+   * one message through the SAME join, so a write's answer and the detail cannot disagree.
+   */
+  messagesOf(
+    scope: TenantContext,
+    ticketId: TicketId,
+    only?: TicketMessageId,
+  ): Promise<readonly TicketMessageListItem[]>;
   /** The newest `limit` messages, oldest first, and how many there are in all. */
   latestMessages(
     scope: TenantContext,

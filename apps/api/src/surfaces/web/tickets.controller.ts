@@ -129,12 +129,10 @@ export class TicketsController {
     });
     return {
       ticket: toSummary(await this.container.tickets.summary(scope, actor, posted.ticket.id)),
-      message: toMessageView({
-        message: posted.message,
-        authorUsername: actor.label,
-        // Just enqueued in the same transaction: the lane has not tried yet.
-        delivery: 'PENDING',
-      }),
+      // Read back through the detail's own join, so a replay reports the delivery as it is.
+      message: toMessageView(
+        await this.container.tickets.messageView(scope, actor, posted.ticket.id, posted.message.id),
+      ),
     };
   }
 

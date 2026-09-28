@@ -473,6 +473,7 @@ export class DrizzleTicketRepository implements TicketRepository {
   async messagesOf(
     scope: TenantContext,
     ticketId: TicketId,
+    only?: TicketMessageId,
   ): Promise<readonly TicketMessageListItem[]> {
     const tenantId = requireTenantId(scope);
     const rows = await this.db
@@ -499,7 +500,13 @@ export class DrizzleTicketRepository implements TicketRepository {
           eq(customerNotifications.subjectId, ticketMessages.id),
         ),
       )
-      .where(and(eq(ticketMessages.tenantId, tenantId), eq(ticketMessages.ticketId, ticketId)))
+      .where(
+        and(
+          eq(ticketMessages.tenantId, tenantId),
+          eq(ticketMessages.ticketId, ticketId),
+          ...(only === undefined ? [] : [eq(ticketMessages.id, only)]),
+        ),
+      )
       .orderBy(asc(ticketMessages.seq));
     return rows.map((row) => ({
       message: toMessage(row.message),

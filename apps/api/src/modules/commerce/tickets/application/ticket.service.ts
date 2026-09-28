@@ -113,7 +113,7 @@ export interface TicketServiceDeps {
   readonly context: TicketContextReader;
   readonly admins: Pick<AdminRepository, 'findById' | 'list'>;
   readonly permissions: Pick<PermissionResolver, 'resolve'>;
-  readonly notifier: Pick<CustomerNotifier, 'notify'>;
+  readonly notifier: Pick<CustomerNotifier, 'notifyThrough'>;
   readonly outbox: OutboxWriter;
   readonly audit: AuditWriter;
   readonly opsLog: OperationalEventRecorder;
@@ -162,14 +162,6 @@ export class TicketService {
       readonly idempotencyKey: string;
     },
   ): Promise<TicketPosted> {
-    const content = this.customerContent(input.text, input.file, input.botInstanceId);
-    const requestHash = hashRequest({
-      op: 'open',
-      customerId: input.customerId,
-      categoryId: input.categoryId,
-      body: content.body,
-      file: content.attachment?.fileUniqueId ?? null,
-    });
     const denial = { action: 'ticket.open', entityType: 'Ticket', entityId: null };
     return runAuthorizedMutation(
       this.mutationDeps(),
@@ -184,6 +176,32 @@ export class TicketService {
         // rail below both see a concurrent opening that committed while this one waited.
         await this.deps.tickets.lockCustomer(scope, input.customerId, tx);
         const replayed = await this.deps.tickets.findByOpeningKey(scope, input.idempotencyKey, tx);
+        /*
+         * The category is decided BEFORE the content (Codex review of #96): a category hidden
+         * since the prompt is an answer ("choose again"), and judging the words first would
+         * answer "send it again" and reopen a window for a category that no longer takes one.
+         */
+        const categoryId = uuidV7Schema.safeParse(input.categoryId);
+        const category =
+          replayed !== null
+            ? null
+            : categoryId.success
+              ? await this.deps.categories.findById(scope, categoryId.data, tx)
+              : null;
+        if (replayed === null && (category === null || !category.isActive)) {
+          throw errors.notFound(
+            TICKET_ERROR_CODES.TICKET_CATEGORY_NOT_FOUND,
+            'No active ticket category with that id.',
+          );
+        }
+        const content = this.customerContent(input.text, input.file, input.botInstanceId);
+        const requestHash = hashRequest({
+          op: 'open',
+          customerId: input.customerId,
+          categoryId: input.categoryId,
+          body: content.body,
+          file: content.attachment?.fileUniqueId ?? null,
+        });
         if (replayed !== null) {
           const first = await this.deps.tickets.findMessageByKey(scope, input.idempotencyKey, tx);
           if (first === null || replayed.customerId !== input.customerId) {
@@ -192,16 +210,8 @@ export class TicketService {
           this.assertSameRequest(first, requestHash);
           return { ticket: replayed, message: first, replayed: true };
         }
-        const categoryId = uuidV7Schema.safeParse(input.categoryId);
-        const category = categoryId.success
-          ? await this.deps.categories.findById(scope, categoryId.data, tx)
-          : null;
-        if (category === null || !category.isActive) {
-          throw errors.notFound(
-            TICKET_ERROR_CODES.TICKET_CATEGORY_NOT_FOUND,
-            'No active ticket category with that id.',
-          );
-        }
+        /* istanbul ignore next -- refused above whenever there is no replay. */
+        if (category === null) throw this.notFound();
         const open = await this.deps.tickets.countActiveForCustomer(scope, input.customerId, tx);
         if (open >= TICKET_OPEN_MAX_PER_CUSTOMER) {
           throw errors.conflict(
@@ -289,13 +299,6 @@ export class TicketService {
       readonly idempotencyKey: string;
     },
   ): Promise<TicketPosted> {
-    const content = this.customerContent(input.text, input.file, input.botInstanceId);
-    const requestHash = hashRequest({
-      op: 'customer-reply',
-      ticketId: input.ticketId.toLowerCase(),
-      body: content.body,
-      file: content.attachment?.fileUniqueId ?? null,
-    });
     const denial = { action: 'ticket.customer_message', entityType: 'Ticket', entityId: null };
     return runAuthorizedMutation(
       this.mutationDeps(),
@@ -307,6 +310,22 @@ export class TicketService {
         await this.assertScopeActive(scope, tx);
         await this.assertCustomerActive(scope, input.customerId, tx);
         const ticket = await this.ownedForUpdate(scope, input.customerId, input.ticketId, tx);
+        /*
+         * A CLOSED ticket is decided BEFORE the content (Codex review of #96). Support may
+         * close the ticket after the customer opened the reply prompt; judging the words
+         * first answered a blank or oversized message with "send it again" and reopened the
+         * window for a ticket that refuses every message. A redelivery of a message that WAS
+         * written still answers with that message.
+         */
+        const written = await this.deps.tickets.findMessageByKey(scope, input.idempotencyKey, tx);
+        if (written === null && ticket.status === 'CLOSED') throw this.closed();
+        const content = this.customerContent(input.text, input.file, input.botInstanceId);
+        const requestHash = hashRequest({
+          op: 'customer-reply',
+          ticketId: input.ticketId.toLowerCase(),
+          body: content.body,
+          file: content.attachment?.fileUniqueId ?? null,
+        });
         const replay = await this.replayOf(scope, input.idempotencyKey, requestHash, ticket, tx);
         if (replay !== null) return replay;
         return this.post(scope, actor, tx, ticket, {
@@ -446,6 +465,23 @@ export class TicketService {
     return { item, messages, customer };
   }
 
+  /**
+   * One message as the detail shows it — author and the lane's delivery state — after a
+   * write. A replayed reply answers with where its notification actually is, not with the
+   * PENDING it was on the first call (Codex review of #96).
+   */
+  async messageView(
+    scope: TenantContext,
+    actor: ActorContext,
+    ticketId: string,
+    messageId: TicketMessageId,
+  ): Promise<TicketMessageListItem> {
+    await this.deps.guard.check(scope, actor, TICKETS_VIEW_PERMISSION);
+    const [item] = await this.deps.tickets.messagesOf(scope, this.ticketIdOf(ticketId), messageId);
+    if (item === undefined) throw this.notFound();
+    return item;
+  }
+
   /** The inbox row for one ticket, after a write. Charged the view key like any read. */
   async summary(
     scope: TenantContext,
@@ -500,11 +536,14 @@ export class TicketService {
         });
         /*
          * The customer is told through the lane, in THIS transaction: the notification can
-         * exist only if the message does, and names it — never its text.
+         * exist only if the message does, and names it — never its text. It goes through the
+         * bot the TICKET was opened on, not the customer's first bot: that is the conversation
+         * the customer is holding it in, and the reply's buttons only make sense there.
          */
-        await this.deps.notifier.notify(
+        await this.deps.notifier.notifyThrough(
           scope,
           ticket.customerId,
+          ticket.botInstanceId,
           'TICKET_REPLY',
           posted.message.id,
           this.deps.clock.now(),
@@ -795,9 +834,7 @@ export class TicketService {
     },
   ): Promise<TicketPosted> {
     const next = ticketStatusAfterMessage(ticket.status, input.senderType);
-    if (next === null) {
-      throw errors.conflict(TICKET_ERROR_CODES.TICKET_CLOSED, 'This ticket is closed.');
-    }
+    if (next === null) throw this.closed();
     if (
       (await this.deps.tickets.countMessages(scope, ticket.id, tx)) >=
       TICKET_MESSAGES_MAX_PER_TICKET
@@ -893,18 +930,30 @@ export class TicketService {
     fact: TicketSystemEvent | null,
   ): Promise<TicketRecord> {
     const now = this.deps.clock.now();
+    /*
+     * A status change is ALWAYS allowed, the message cap notwithstanding: a ticket at its
+     * 500th message must still be closable, and refusing the close would leave it open for
+     * ever. What the cap bounds is the conversation's rows, so at the cap the move writes
+     * no SYSTEM fact row — the status, the outbox event and the audit row below still
+     * record it (Codex review of #96). Counted under the ticket's row lock, which every
+     * writer of a message holds.
+     */
+    const recordsFact =
+      fact !== null &&
+      (await this.deps.tickets.countMessages(scope, ticket.id, tx)) <
+        TICKET_MESSAGES_MAX_PER_TICKET;
     const moved = await this.deps.tickets.moveStatus(
       scope,
       ticket.id,
       ticket.status,
       to,
       now,
-      { touch: fact !== null },
+      { touch: recordsFact },
       tx,
     );
     /* istanbul ignore next -- the row lock is held; nothing else can move it. */
     if (moved === null) throw this.moved();
-    if (fact !== null) {
+    if (fact !== null && recordsFact) {
       await this.deps.tickets.insertMessage(
         scope,
         {
@@ -936,7 +985,8 @@ export class TicketService {
         entityType: 'Ticket',
         entityId: ticket.id,
         before: { status: ticket.status },
-        after: { status: to },
+        // `factRecorded: false` says the cap left the conversation without its SYSTEM row.
+        after: { status: to, ...(fact !== null && !recordsFact ? { factRecorded: false } : {}) },
         result: 'SUCCESS',
       },
       tx,
@@ -1062,8 +1112,8 @@ export class TicketService {
     }
     const username = value.replace(/^@/u, '').toLowerCase();
     if (username === '') return null;
-    const page = await this.deps.customers.list(scope, { usernamePrefix: username }, 20, null);
-    return page.items.find((item) => item.username?.toLowerCase() === username)?.id ?? null;
+    const page = await this.deps.customers.list(scope, { username }, 1, null);
+    return page.items[0]?.id ?? null;
   }
 
   private adminIdOf(actor: ActorContext): string {
@@ -1126,6 +1176,10 @@ export class TicketService {
 
   private notFound() {
     return errors.notFound(TICKET_ERROR_CODES.TICKET_NOT_FOUND, 'Unknown ticket.');
+  }
+
+  private closed() {
+    return errors.conflict(TICKET_ERROR_CODES.TICKET_CLOSED, 'This ticket is closed.');
   }
 
   private messageInvalid() {

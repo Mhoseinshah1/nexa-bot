@@ -3720,16 +3720,25 @@ export interface TicketDeskPort {
   readonly categories: Pick<TicketCategoryService, 'activeForCustomer'>;
   readonly screens: Pick<TicketScreenComposer, 'statusLabel' | 'conversation'>;
   /**
-   * Whether a file this customer just sent answers a TICKET window rather than a receipt
-   * window: a ticket window is open and was opened AFTER any open receipt window — the
-   * prompt the customer saw last is the one their file answers.
+   * The customer's open, unexpired receipt window's `openedAt`, or null — read UNDER the
+   * receipt window's own lock, in the transaction the ticket window is read in. A file
+   * answers whichever of the two prompts the customer saw last; asking this inside the
+   * read, after the ticket window's lock, is what makes that choice and the consumption
+   * one decision (Codex review of #96: two unlocked reads before the transaction let a
+   * receipt window open between the choice and the read).
    */
-  fileWindowIsTicket(
+  receiptWindowOpenedAt(
     scope: TenantContext,
     botInstanceId: BotInstanceId,
     customerId: UserId,
-  ): Promise<boolean>;
+    tx: CaptureReadTransaction,
+  ): Promise<Date | null>;
 }
+
+/** The transaction a capture read hands its `yieldTo` reader. */
+export type CaptureReadTransaction = Parameters<
+  NonNullable<Parameters<CustomerCaptureService['readText']>[2]['yieldTo']>
+>[0];
 
 export interface PaymentRouteSource {
   routesFor(
@@ -10966,6 +10975,12 @@ export class BotRuntime {
    * A photo or document, offered to the customer's ticket window — only when a ticket window
    * is the prompt they saw last, and read with `onlyPurposes` so a file can never close some
    * other window as though it were its text. Null leaves the file to the receipt path.
+   *
+   * "Saw last" is decided inside the read's transaction, under the ticket window's lock and
+   * then the receipt window's: a receipt window at least as new wins and the ticket window
+   * stays open. The receipt path that runs after a null is reached only when the receipt
+   * window was the newer one at that instant; a ticket window opened afterwards is newer
+   * than this file, and — as with `openedUpdateId` — not what it answered.
    */
   private async ticketFile(
     scope: TenantContext,
@@ -10980,7 +10995,6 @@ export class BotRuntime {
   ): Promise<PendingReply | null> {
     const desk = this.deps.tickets;
     if (desk === undefined) return null;
-    if (!(await desk.fileWindowIsTicket(scope, input.botInstanceId, customer.id))) return null;
     const updateId = updateIdOf(input.update);
     const read = await this.deps.captures.readText(scope, actor, {
       idempotencyKey: `${input.idempotencyKey}:capture-file`,
@@ -10988,6 +11002,7 @@ export class BotRuntime {
       customerId: customer.id,
       text: file.caption ?? '',
       onlyPurposes: ['TICKET_NEW_MESSAGE', 'TICKET_REPLY'],
+      yieldTo: (tx) => desk.receiptWindowOpenedAt(scope, input.botInstanceId, customer.id, tx),
       ...(updateId === undefined ? {} : { updateId }),
     });
     if (read.outcome !== 'READ') return null;

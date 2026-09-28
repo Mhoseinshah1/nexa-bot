@@ -4119,25 +4119,26 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       serviceTransfers: serviceTransferService,
       /*
        * WP-A7: the ticket desk. A file answers a ticket window only when that window is open
-       * and newer than any open receipt window — the prompt the customer saw last.
+       * and newer than any open receipt window — the prompt the customer saw last — and the
+       * receipt window is read here under ITS lock, inside the capture read's transaction
+       * (which already holds the capture lock), so the choice cannot go stale before the read.
        */
       tickets: {
         service: ticketService,
         categories: ticketCategoryService,
         screens: ticketScreens,
-        fileWindowIsTicket: async (scope, botInstanceId, customerId) => {
-          const now = clock.now().getTime();
-          const window = await customerCaptureRepository.findOpen(scope, botInstanceId, customerId);
-          if (window === null || window.expiresAt.getTime() <= now) return false;
-          if (window.purpose !== 'TICKET_NEW_MESSAGE' && window.purpose !== 'TICKET_REPLY') {
-            return false;
-          }
-          const receipt = await receiptCaptureRepository.findOpen(scope, botInstanceId, customerId);
-          return (
-            receipt === null ||
-            receipt.expiresAt.getTime() <= now ||
-            receipt.openedAt.getTime() < window.openedAt.getTime()
+        receiptWindowOpenedAt: async (scope, botInstanceId, customerId, tx) => {
+          await receiptCaptureRepository.lockForCustomer(scope, botInstanceId, customerId, tx);
+          const receipt = await receiptCaptureRepository.findOpen(
+            scope,
+            botInstanceId,
+            customerId,
+            tx,
           );
+          if (receipt === null || receipt.expiresAt.getTime() <= clock.now().getTime()) {
+            return null;
+          }
+          return receipt.openedAt;
         },
       },
       orders: orderService,

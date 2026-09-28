@@ -5,6 +5,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   SESSION_COOKIE_NAME,
   TICKET_ATTACHMENT_MAX_BYTES,
+  TICKET_MESSAGES_MAX_PER_TICKET,
   isNexaError,
   money,
   type PaymentGatewayConfig,
@@ -15,6 +16,7 @@ import {
 } from '@nexa/contracts';
 import { CATALOGUE_FA } from '@nexa/i18n';
 import { TicketsController } from '../../apps/api/src/surfaces/web/tickets.controller';
+import { RECEIPT_CAPTURE_LOCK_CLASS } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-receipt.repository';
 import {
   adminActorFor,
   createAdmin,
@@ -43,6 +45,8 @@ type FastifyReply = Parameters<TicketsController['attachment']>[1];
 
 const BOT_A = SEED_IDS.botA1 as BotInstanceId;
 const BOT_B = SEED_IDS.botB1 as BotInstanceId;
+// Seeded STOPPED; the one test that needs a second bot in tenant A starts it.
+const BOT_A2 = SEED_IDS.botA2 as BotInstanceId;
 const CUSTOMER_TG = '951001';
 const OTHER_TG = '951002';
 const FOREIGN_TG = '951003';
@@ -1083,5 +1087,284 @@ describe('WP-A7 — support tickets', () => {
     expect(headers['content-type']).toBe('application/octet-stream');
     expect(headers['content-disposition']).toBe(`attachment; filename="${withFile.id}"`);
     expect(String(body)).toBe('%PDF-1.4 ticket');
+  });
+  // ===========================================================================
+  // Codex review of #96
+  // ===========================================================================
+
+  it('sends support’s reply through the bot the ticket was opened on, not the customer’s first bot', async () => {
+    await ctx.container.database.db.execute(
+      sql`UPDATE bot_instances SET status = 'ACTIVE' WHERE id = ${BOT_A2}`,
+    );
+    // The customer registered through BOT_A (beforeEach) and opens this ticket through BOT_A2.
+    const viaA2 = (update: Envelope): Envelope => ({ ...update, botInstanceId: BOT_A2 });
+    await handle(viaA2(tap('tkn:')));
+    const category = callbacksOf(lastSent()).find((data) => data.startsWith('tkc:'))!;
+    await handle(viaA2(tap(category)));
+    await handle(viaA2(text('از ربات دوم می‌نویسم')));
+    const [ticket] = await rows<{ id: string; bot_instance_id: string }>(
+      sql`SELECT id, bot_instance_id FROM tickets`,
+    );
+    expect(ticket!.bot_instance_id).toBe(BOT_A2);
+
+    const web = await webAs(owner);
+    await web.controller.reply(web.request, ticket!.id, {
+      idempotencyKey: 'reply-through-a2',
+      text: 'پاسخ از پشتیبانی',
+    });
+    const [queued] = await rows<{ bot_instance_id: string }>(
+      sql`SELECT bot_instance_id FROM customer_notifications WHERE kind = 'TICKET_REPLY'`,
+    );
+    expect(queued!.bot_instance_id).toBe(BOT_A2);
+
+    sent = [];
+    await deliver();
+    const toCustomer = messages().filter((one) => String(one.body.chat_id) === CUSTOMER_TG);
+    expect(toCustomer).toHaveLength(1);
+    expect(toCustomer[0]!.url).toContain('seed-token-acme-2');
+    expect(toCustomer[0]!.url).not.toContain('seed-token-acme-1');
+  });
+
+  /** Runs `body` while a holder connection owns this customer's RECEIPT window lock. */
+  async function withReceiptLockHeld<T>(
+    body: (holder: { query(text: string, values?: unknown[]): Promise<unknown> }) => Promise<T>,
+  ): Promise<T> {
+    return ctx.container.database.withClient(async (holder) => {
+      await holder.query('BEGIN');
+      try {
+        await holder.query('SELECT pg_advisory_xact_lock($1, hashtext($2))', [
+          RECEIPT_CAPTURE_LOCK_CLASS,
+          `${tenantA.tenantId}:${BOT_A}:${customer}`,
+        ]);
+        const result = await body(holder);
+        await holder.query('COMMIT');
+        return result;
+      } catch (error: unknown) {
+        await holder.query('ROLLBACK');
+        throw error;
+      }
+    });
+  }
+
+  async function pendingTopup(key: string): Promise<string> {
+    await ctx.container.paymentGateways.configure(tenantA, adminActorFor(owner), {
+      idempotencyKey: `cfg-${key}`,
+      provider: 'MANUAL_TRANSFER',
+      config: OPEN_ROUTE,
+    });
+    const topup = await ctx.container.payments.requestWalletTopupTyped(
+      { ...tenantA, botInstanceId: BOT_A },
+      systemActor(key),
+      customer,
+      { idempotencyKey: key, amount: money(500_000n, 'IRT'), provider: 'MANUAL_TRANSFER' },
+    );
+    return topup.payment.id;
+  }
+
+  const openTicketWindows = () =>
+    count(
+      sql`SELECT count(*)::int AS n FROM customer_text_captures
+           WHERE customer_id = ${customer} AND closed_at IS NULL
+             AND purpose IN ('TICKET_NEW_MESSAGE', 'TICKET_REPLY')`,
+    );
+
+  it('decides between a ticket window and a receipt window under both locks, in the read', async () => {
+    const ticketId = await openThroughBot('رسید یا تیکت');
+    const paymentId = await pendingTopup('topup-race');
+    await handle(tap(`tkr:${ticketId}`));
+    expect(await openTicketWindows()).toBe(1);
+
+    /*
+     * The receipt window opens WHILE the photo is being read: the holder owns the receipt
+     * lock, the photo's read blocks on it (holding the ticket window's lock), and the
+     * holder opens a receipt window and commits. The read must then see the newer receipt
+     * window and leave the ticket window alone. The unlocked choice this replaced made its
+     * decision before the holder committed, and filed the photo into the ticket.
+     */
+    const { running } = await withReceiptLockHeld(async (holder) => {
+      const running = handle(photoMessage('رسید'));
+      const deadline = Date.now() + 5_000;
+      for (;;) {
+        const waiting = await count(
+          sql`SELECT count(*)::int AS n FROM pg_locks
+               WHERE locktype = 'advisory' AND classid = ${RECEIPT_CAPTURE_LOCK_CLASS}
+                 AND objid = (SELECT hashtext(${`${tenantA.tenantId}:${BOT_A}:${customer}`})::oid)
+                 AND NOT granted`,
+        );
+        if (waiting >= 1) break;
+        if (Date.now() > deadline) {
+          await running.catch(() => undefined);
+          throw new Error('the ticket file read never waited on the receipt window lock');
+        }
+        await new Promise((done) => setTimeout(done, 25));
+      }
+      await holder.query(
+        `INSERT INTO receipt_captures (id, tenant_id, bot_instance_id, customer_id, payment_id, opened_at, expires_at)
+         VALUES ($1, $2, $3, $4, $5, clock_timestamp(), clock_timestamp() + interval '10 minutes')`,
+        [randomUUID(), tenantA.tenantId, BOT_A, customer, paymentId],
+      );
+      // Wrapped, so the holder commits BEFORE the read is awaited.
+      return { running };
+    });
+
+    const outcome = await running;
+    expect(outcome.replyKey).not.toBe('bot.ticket.reply_sent');
+    expect(
+      await count(
+        sql`SELECT count(*)::int AS n FROM ticket_messages WHERE ticket_id = ${ticketId}`,
+      ),
+    ).toBe(1);
+    expect(await openTicketWindows()).toBe(1);
+    expect(
+      await count(
+        sql`SELECT count(*)::int AS n FROM payment_receipts WHERE payment_id = ${paymentId}`,
+      ),
+    ).toBe(1);
+  });
+
+  it('files a photo into the ticket when the ticket window is the newer prompt', async () => {
+    const ticketId = await openThroughBot('اول رسید، بعد تیکت');
+    const paymentId = await pendingTopup('topup-older');
+    await ctx.container.database.db.execute(
+      sql`INSERT INTO receipt_captures (id, tenant_id, bot_instance_id, customer_id, payment_id, opened_at, expires_at)
+          VALUES (${randomUUID()}, ${tenantA.tenantId}, ${BOT_A}, ${customer}, ${paymentId},
+                  now() - interval '1 minute', now() + interval '10 minutes')`,
+    );
+    await handle(tap(`tkr:${ticketId}`));
+    const filed = await handle(photoMessage('تصویر خطا'));
+    expect(filed.replyKey).toBe('bot.ticket.reply_sent');
+    expect(
+      await count(
+        sql`SELECT count(*)::int AS n FROM payment_receipts WHERE payment_id = ${paymentId}`,
+      ),
+    ).toBe(0);
+    // The receipt window is untouched: still open for the receipt it was opened for.
+    expect(
+      await count(
+        sql`SELECT count(*)::int AS n FROM receipt_captures WHERE payment_id = ${paymentId} AND closed_at IS NULL`,
+      ),
+    ).toBe(1);
+  });
+
+  it('tells the customer a ticket support closed is closed, and reopens no window for it', async () => {
+    const ticketId = await openThroughBot('پنجرهٔ کهنه');
+    await handle(tap(`tkr:${ticketId}`));
+    await ctx.container.tickets.setStatus(tenantA, adminActorFor(owner), {
+      ticketId,
+      status: 'CLOSED',
+    });
+    // Content the service would refuse as invalid — which it used to check FIRST, and the
+    // runtime answered by reopening a reply window on a closed ticket.
+    const blank = await handle(text('   '));
+    expect(blank.replyKey).toBe('bot.ticket.already_closed');
+    expect(await openTicketWindows()).toBe(0);
+
+    await handle(tap(`tkv:${ticketId}`));
+    await ctx.container.database.db.execute(
+      sql`INSERT INTO customer_text_captures (id, tenant_id, bot_instance_id, customer_id, purpose, subject_id, opened_at, expires_at)
+          VALUES (${randomUUID()}, ${tenantA.tenantId}, ${BOT_A}, ${customer}, 'TICKET_REPLY', ${ticketId},
+                  now(), now() + interval '10 minutes')`,
+    );
+    const long = await handle(text('ب'.repeat(3001)));
+    expect(long.replyKey).toBe('bot.ticket.already_closed');
+    expect(await openTicketWindows()).toBe(0);
+    expect(
+      await count(
+        sql`SELECT count(*)::int AS n FROM ticket_messages WHERE ticket_id = ${ticketId} AND sender_type = 'CUSTOMER'`,
+      ),
+    ).toBe(1);
+  });
+
+  it('closes and reopens a ticket at its message cap, writing no fact row past the cap', async () => {
+    const ticketId = await openThroughBot('پر');
+    // One below the cap: the opening message plus these.
+    await ctx.container.database.db.execute(
+      sql`INSERT INTO ticket_messages (id, tenant_id, ticket_id, sender_type, body, idempotency_key, request_hash)
+          SELECT gen_random_uuid(), ${tenantA.tenantId}, ${ticketId}, 'CUSTOMER', 'پیام ' || g,
+                 'bulk-' || g, 'hash-' || g
+            FROM generate_series(1, ${TICKET_MESSAGES_MAX_PER_TICKET - 2}) AS g`,
+    );
+    const total = () =>
+      count(sql`SELECT count(*)::int AS n FROM ticket_messages WHERE ticket_id = ${ticketId}`);
+    expect(await total()).toBe(TICKET_MESSAGES_MAX_PER_TICKET - 1);
+    const actor = adminActorFor(owner);
+
+    // Below the cap the close writes its fact, which fills the ticket.
+    expect(
+      (await ctx.container.tickets.setStatus(tenantA, actor, { ticketId, status: 'CLOSED' })).ticket
+        .status,
+    ).toBe('CLOSED');
+    expect(await total()).toBe(TICKET_MESSAGES_MAX_PER_TICKET);
+
+    // At the cap the reopen and the next close still happen, and add no row.
+    expect(
+      (
+        await ctx.container.tickets.setStatus(tenantA, actor, {
+          ticketId,
+          status: 'WAITING_FOR_SUPPORT',
+        })
+      ).ticket.status,
+    ).toBe('WAITING_FOR_SUPPORT');
+    expect(
+      (
+        await ctx.container.tickets.closeByCustomer(tenantA, systemActor('cap-close'), {
+          customerId: customer,
+          ticketId,
+        })
+      ).ticket.status,
+    ).toBe('CLOSED');
+    expect(await total()).toBe(TICKET_MESSAGES_MAX_PER_TICKET);
+
+    // Each is still audited, and says the conversation did not get its fact.
+    const audits = await rows<{ action: string; after: Record<string, unknown> }>(
+      sql`SELECT action, after FROM audit_logs
+           WHERE entity_id = ${ticketId} AND action IN ('ticket.status', 'ticket.close')
+           ORDER BY occurred_at, id`,
+    );
+    expect(audits).toEqual([
+      { action: 'ticket.status', after: { status: 'CLOSED' } },
+      { action: 'ticket.status', after: { status: 'WAITING_FOR_SUPPORT', factRecorded: false } },
+      { action: 'ticket.close', after: { status: 'CLOSED', factRecorded: false } },
+    ]);
+  });
+
+  it('filters the inbox by an exact username, however many usernames share its prefix', async () => {
+    const ticketId = await openThroughBot('نام کاربری');
+    // Registered LAST, so more than a page of prefix matches sorts ahead of it.
+    await ctx.container.database.db.execute(
+      sql`UPDATE customers SET username = 'Mary', created_at = now() + interval '1 hour'
+           WHERE id = ${customer}`,
+    );
+    for (let index = 0; index < 21; index += 1) {
+      const telegramUserId = String(952_000 + index);
+      await ctx.container.customers.resolveFromUpdate(tenantA, systemActor(`m-${String(index)}`), {
+        idempotencyKey: `resolve-mary-${String(index)}`,
+        telegramUserId,
+        from: { id: Number(telegramUserId), first_name: 'M', username: `mary${String(index)}` },
+        botInstanceId: BOT_A,
+      });
+    }
+    const web = await webAs(owner);
+    for (const spelled of ['mary', '@MARY', ' Mary ']) {
+      expect(
+        (await web.controller.list(web.request, { customer: spelled })).tickets.map(
+          (one) => one.id,
+        ),
+      ).toEqual([ticketId]);
+    }
+    // A prefix is not a name.
+    expect((await web.controller.list(web.request, { customer: 'mar' })).tickets).toHaveLength(0);
+  });
+
+  it('answers a replayed reply with the delivery the lane reached, not PENDING', async () => {
+    const ticketId = await openThroughBot('بازپخش');
+    const web = await webAs(owner);
+    const request = { idempotencyKey: 'reply-replayed-1', text: 'پاسخ یک‌بار' };
+    const first = await web.controller.reply(web.request, ticketId, request);
+    expect(first.message.delivery).toBe('PENDING');
+    await deliver();
+    const again = await web.controller.reply(web.request, ticketId, request);
+    expect(again.message).toMatchObject({ id: first.message.id, delivery: 'DELIVERED' });
+    expect(again.message.authorAdminUsername).toBe('owner-tickets');
   });
 });

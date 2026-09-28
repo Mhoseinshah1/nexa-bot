@@ -190,6 +190,18 @@ export class CustomerCaptureService {
        * and is left exactly as it was.
        */
       readonly onlyPurposes?: readonly CustomerCapturePurpose[];
+      /**
+       * WP-A7: a window in ANOTHER table that answers the same message, read inside this
+       * read's transaction AFTER this table's lock — the caller takes that table's own lock
+       * in it and returns the competing window's `openedAt`, or null when none is open. When
+       * the competitor is at least as new, this window is not the answer: NO_WINDOW, and the
+       * window stays open. The choice and the consumption are then one decision under both
+       * locks, so neither window can open between them (Codex review of #96).
+       *
+       * Lock order: this table's lock, then the competitor's. Nothing takes them the other
+       * way round, which is what keeps the pair deadlock-free.
+       */
+      readonly yieldTo?: (tx: TransactionScope) => Promise<Date | null>;
     },
   ): Promise<CaptureReadResult> {
     const requestHash = hashRequest({
@@ -198,6 +210,7 @@ export class CustomerCaptureService {
       text: input.text,
       read: true,
       ...(input.onlyPurposes === undefined ? {} : { only: [...input.onlyPurposes] }),
+      ...(input.yieldTo === undefined ? {} : { yields: true }),
     });
     const replayed = await this.deps.idempotency.find<{ captureId: string }>(
       scope,
@@ -253,6 +266,12 @@ export class CustomerCaptureService {
         input.updateId <= capture.openedUpdateId
       ) {
         return { outcome: 'NO_WINDOW' } as const;
+      }
+      if (input.yieldTo !== undefined) {
+        const competing = await input.yieldTo(tx);
+        if (competing !== null && competing.getTime() >= capture.openedAt.getTime()) {
+          return { outcome: 'NO_WINDOW' } as const;
+        }
       }
       // An amount window that already holds its figure is waiting for a ROUTE, not for
       // text; a second figure typed under the buttons is not an answer to anything.

@@ -82,6 +82,41 @@ export class CustomerNotifier {
   ): Promise<boolean> {
     const botInstanceId = await this.deps.bots.botFor(scope, customerId, tx);
     if (botInstanceId === null) return false;
+    return this.enqueue(scope, customerId, botInstanceId, kind, subjectId, now, tx, notBefore);
+  }
+
+  /**
+   * Queues one through a bot the SUBJECT names, rather than the customer's first bot.
+   *
+   * WP-A7: a support ticket is a conversation with ONE bot — the one the customer opened it
+   * through — and a reply sent from another bot of the tenant arrives from an account the
+   * customer did not write to, which for a tenant running a public bot and a reseller bot
+   * exposes the link between them (Codex review of #96). The bot is a fact of the subject,
+   * read by the producer in its own transaction; the row still carries a kind and an id and
+   * nothing else, so the lane still carries no payload (ADR 0030 §1).
+   */
+  async notifyThrough(
+    scope: TenantContext,
+    customerId: UserId,
+    botInstanceId: BotInstanceId,
+    kind: CustomerNotificationKind,
+    subjectId: string,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<boolean> {
+    return this.enqueue(scope, customerId, botInstanceId, kind, subjectId, now, tx, null);
+  }
+
+  private enqueue(
+    scope: TenantContext,
+    customerId: UserId,
+    botInstanceId: BotInstanceId,
+    kind: CustomerNotificationKind,
+    subjectId: string,
+    now: Date,
+    tx: TransactionScope,
+    notBefore: Date | null | undefined,
+  ): Promise<boolean> {
     return this.deps.notifications.enqueue(
       scope,
       {
