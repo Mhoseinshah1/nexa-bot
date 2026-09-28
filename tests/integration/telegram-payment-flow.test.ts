@@ -786,6 +786,16 @@ describe('the customer payment flow over Telegram', () => {
       `pm:${orderId}`,
       `d:${orderId}`,
     ]);
+
+    // «🧾 ثبت پرداخت» opens the method selector (`pm:`), and THAT is where a gateway would
+    // appear: it lists the manual transfer and the close button, and nothing else.
+    sent = [];
+    await tap(`pm:${orderId}`);
+    expect(buttonsOf(lastMessage()).map((b) => b.callback_data)).toEqual([
+      `m:${orderId}`,
+      `px:${orderId}`,
+    ]);
+    expect(await payments()).toHaveLength(0);
     sent = [];
 
     await tap(`g:${orderId}`);
