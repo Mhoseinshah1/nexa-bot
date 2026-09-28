@@ -238,7 +238,7 @@ describe('product display metadata', () => {
       sortOrder: 0,
       panelId: null,
       durationDays: 30,
-      trafficBytes: '0',
+      trafficGb: null,
       deviceLimit: null,
       priceAmount: null,
       priceCurrency: null,

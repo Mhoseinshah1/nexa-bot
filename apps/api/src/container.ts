@@ -2,6 +2,7 @@ import { fileURLToPath } from 'node:url';
 import {
   ADMIN_MENU_BUTTON,
   ADMIN_MENU_COMMAND,
+  CHANNEL_MEMBERSHIP_TIMEOUT_MS,
   MAIN_MENU_BUTTONS,
   MAX_REQUESTS_PER_PROBE,
   OPERATION_LEASE_SECONDS_MIN,
@@ -10,6 +11,7 @@ import {
 } from '@nexa/contracts';
 import type {
   AuditWriter,
+  TelegramChannel,
   Clock,
   CurrencyCode,
   IdGenerator,
@@ -65,6 +67,8 @@ import { createDatabase, type DatabaseHandle } from './infrastructure/persistenc
 import { createRedis, type RedisHandle } from './infrastructure/redis/redis.js';
 import { RedisInteractionCounter } from './infrastructure/redis/redis-interaction-counter.js';
 import { AntiSpamService } from './modules/commerce/customers/application/anti-spam.service.js';
+import { ChannelMembershipService } from './modules/commerce/customers/application/channel-membership.service.js';
+import { TelegramChatMemberReader } from './modules/commerce/customers/infrastructure/telegram-chat-member.reader.js';
 import {
   DrizzleUnitOfWork,
   type TransactionScope,
@@ -1164,6 +1168,23 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
 
   const settingRepository = new DrizzleSettingRepository(database.db);
   const settingsResolver = new SettingsResolver(settingRepository, opsLog);
+  /*
+   * Package B — mandatory channel membership. `getChatMember` through the receiving bot's
+   * own token, bounded well under the send timeout because a customer's turn waits on it,
+   * failing OPEN into an operations condition when Telegram cannot say.
+   */
+  const channelMembership = new ChannelMembershipService({
+    reader: new TelegramChatMemberReader({
+      bots: botInstances,
+      apiBaseUrl: config.TELEGRAM_API_BASE_URL,
+      timeoutMs: Math.min(CHANNEL_MEMBERSHIP_TIMEOUT_MS, config.NOTIFICATION_SEND_TIMEOUT_MS),
+    }),
+    channels: (scope) => settingsResolver.valueOf<TelegramChannel[]>(scope, 'telegram.channels'),
+    opsEvents: opsLog,
+    conditions: new DrizzleOperationalConditionReader(database.db),
+    clock,
+    logger,
+  });
   // Read by provisioning (WP6-C) as well as by the trial, so it is built with the
   // settings resolver rather than beside the service that first needed it.
   const featureFlagRepository = new DrizzleFeatureFlagRepository(database.db);
@@ -3883,6 +3904,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     botRuntime: new BotRuntime({
       // WP20: more than 20 interactions in 10 s blocks the customer; fails open.
       antiSpam,
+      // Package B: the REQUIRED channels, enforced before any business action; fails open.
+      membership: channelMembership,
       // WP11A: the external-gateway attempt's customer reads and the check tap.
       gateway: gatewayPayments,
       /*
