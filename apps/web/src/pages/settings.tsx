@@ -941,7 +941,6 @@ export function messageFor(error: unknown): string {
     const reseller = RESELLER_MESSAGES[error.code];
     if (reseller !== undefined) return t(reseller);
     if (error.code === 'control.version_conflict') return t('web.conflict');
-    if (error.code === 'control.confirmation_required') return t('web.confirm_required');
     if (error.code === 'control.destination_not_configured') return t('web.destination_missing');
     if (error.code === 'commerce.referral_gift_terms_invalid')
       return t('web.referral_gift_terms_invalid');

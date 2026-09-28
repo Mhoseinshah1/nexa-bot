@@ -96,9 +96,6 @@ export const WEB_FA = {
   'web.enabled': 'روشن',
   'web.disabled': 'خاموش',
   'web.inert': 'تا روشن‌شدن این قابلیت، این تنظیمات اثری ندارند.',
-  // No toggle asks for a typed key or a reason any more (WP-A2); a server that still
-  // answers `control.confirmation_required` is older than this page.
-  'web.confirm_required': 'این تغییر نیاز به تأیید دارد. صفحه را دوباره بارگذاری کنید.',
 
   /*
    * WP-A2: each feature's Persian name and one practical sentence, read through
