@@ -416,13 +416,16 @@ describe('a customer looks after the services they bought', () => {
       expect(body).not.toContain('تغییر لینک');
 
       const buttons = buttonsOf(lastMarkup());
-      // No `t:`: a customer cannot end a service (WP15 G1). Suspend (`u:`) stays.
+      // No `t:`: a customer cannot end a service (WP15 G1). Suspend (`u:`) stays. An
+      // ACTIVE, delivered, paid service with nothing pending may change hands (Package F),
+      // so «🔄 انتقال سرویس» (`ta:`) is drawn on the refund request's row, above the way back.
       expect(buttons).toEqual([
         `rs:${service.id}`,
         `r:${service.id}`,
         `nt:${service.id}`,
         `n:${service.id}`,
         `u:${service.id}`,
+        `ta:${service.id}`,
         'sl:1',
       ]);
       const markup = lastMarkup();
