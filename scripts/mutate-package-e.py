@@ -85,6 +85,10 @@ for mid,edits,(project,test),filt in M:
     if s.count(a)!=1:
       print(mid,'ANCHOR MISSING in',f,s.count(a),flush=True); ok=False; break
     open(f,'w').write(s.replace(a,b)); files.add(f)
+  # `@nexa/contracts` resolves to its dist, so a contract mutation is rebuilt to be seen.
+  contracts=any(f.startswith('packages/contracts/') for f in files)
+  build=['pnpm','--filter','@nexa/contracts','build']
+  if ok and contracts: subprocess.run(build,capture_output=True)
   if ok:
     r=subprocess.run(['pnpm','exec','vitest','run','--project',project,test,'-t',filt],capture_output=True,text=True)
     out=r.stdout+r.stderr
@@ -92,3 +96,4 @@ for mid,edits,(project,test),filt in M:
     summ=[l.strip() for l in out.splitlines() if 'Tests ' in l]
     print(mid,'KILLED' if r.returncode!=0 else 'SURVIVED',summ,failed[:3],flush=True)
   for f in files: subprocess.run(['git','checkout','--',f])
+  if contracts: subprocess.run(build,capture_output=True)
