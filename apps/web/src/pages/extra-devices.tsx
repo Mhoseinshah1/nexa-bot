@@ -25,6 +25,7 @@ import {
   Badge,
   Banner,
   Card,
+  CursorPager,
   DataTable,
   Empty,
   Field,
@@ -60,6 +61,27 @@ const CURRENCY_LABEL: Readonly<Record<SalesCurrencyCode, WebKey>> = {
 const CAPABLE_PROVIDERS = PROVIDER_DESCRIPTORS.filter((descriptor) =>
   descriptor.capabilities.includes('DEVICE_LIMIT_ADJUSTMENT'),
 );
+
+/**
+ * Every page of a keyset list, for the two scope pickers: a panel or product past the
+ * first page must still be choosable. Bounded, so a runaway cursor cannot spin the page.
+ */
+async function everyPage<T>(
+  page: (cursor: string | null) => Promise<{ items: readonly T[]; nextCursor: string | null }>,
+): Promise<readonly T[]> {
+  const items: T[] = [];
+  let cursor: string | null = null;
+  for (let turn = 0; turn < 50; turn += 1) {
+    const next = await page(cursor);
+    items.push(...next.items);
+    if (next.nextCursor === null) break;
+    cursor = next.nextCursor;
+  }
+  return items;
+}
+
+/** One page of rates. The list pages by the server's keyset cursor, never by a cap. */
+const RATE_PAGE_SIZE = 50;
 
 const EMPTY_FORM = {
   title: '',
@@ -97,9 +119,23 @@ export function ExtraDevicesPage({ denied, mayEdit }: { denied: boolean; mayEdit
   const notify = useToast();
   const submission = useSubmissionKey();
 
+  /*
+   * A keyset page at a time, walked with the server's own cursor — never "the first
+   * hundred", which left the hundred-and-first rate creatable and then unreachable
+   * (Codex review #1 on PR #97, C2). `trail` is the cursors of the pages behind this one,
+   * so the way back is exact; the list is `created_at, id` ascending, so the next page is
+   * NEWER, and the pager says so.
+   */
+  const [trail, setTrail] = useState<readonly (string | null)[]>([]);
+  const [cursor, setCursor] = useState<string | null>(null);
   const rates = useQuery({
-    queryKey: ['service-addons', 'ADD_DEVICES'],
-    queryFn: () => fetchServiceAddons({ kind: 'ADD_DEVICES', limit: 100 }),
+    queryKey: ['service-addons', 'ADD_DEVICES', cursor],
+    queryFn: () =>
+      fetchServiceAddons({
+        kind: 'ADD_DEVICES',
+        limit: RATE_PAGE_SIZE,
+        ...(cursor === null ? {} : { cursor }),
+      }),
     enabled: !denied,
   });
   /*
@@ -108,13 +144,21 @@ export function ExtraDevicesPage({ denied, mayEdit }: { denied: boolean; mayEdit
    */
   const panels = useQuery({
     queryKey: ['panels', 'extra-devices-scope'],
-    queryFn: () => fetchPanels({ limit: 100 }),
+    queryFn: () =>
+      everyPage(async (cursor) => {
+        const page = await fetchPanels({ limit: 100, ...(cursor === null ? {} : { cursor }) });
+        return { items: page.panels, nextCursor: page.nextCursor };
+      }),
     enabled: mayEdit,
     retry: false,
   });
   const products = useQuery({
     queryKey: ['products', 'extra-devices-scope'],
-    queryFn: () => fetchProducts({ limit: 100 }),
+    queryFn: () =>
+      everyPage(async (cursor) => {
+        const page = await fetchProducts({ limit: 100, ...(cursor === null ? {} : { cursor }) });
+        return { items: page.products, nextCursor: page.nextCursor };
+      }),
     enabled: mayEdit,
     retry: false,
   });
@@ -126,11 +170,11 @@ export function ExtraDevicesPage({ denied, mayEdit }: { denied: boolean; mayEdit
   const panelName = (id: string | null): string =>
     id === null
       ? t('web.extra_devices_scope_all_panels')
-      : (panels.data?.panels.find((one) => one.id === id)?.name ?? id);
+      : (panels.data?.find((one) => one.id === id)?.name ?? id);
   const productName = (id: string | null): string =>
     id === null
       ? t('web.extra_devices_scope_all_products')
-      : (products.data?.products.find((one) => one.id === id)?.title ?? id);
+      : (products.data?.find((one) => one.id === id)?.title ?? id);
 
   const reset = () => {
     setEditing(null);
@@ -292,6 +336,23 @@ export function ExtraDevicesPage({ denied, mayEdit }: { denied: boolean; mayEdit
             rowKey={(row) => row.id}
             caption={t('web.extra_devices_rates')}
           />
+          <CursorPager
+            shown={rows.length}
+            hasPrevious={trail.length > 0}
+            hasNext={(rates.data?.nextCursor ?? null) !== null}
+            onPrevious={() => {
+              setCursor(trail[trail.length - 1] ?? null);
+              setTrail(trail.slice(0, -1));
+            }}
+            onNext={() => {
+              const next = rates.data?.nextCursor ?? null;
+              if (next === null) return;
+              setTrail([...trail, cursor]);
+              setCursor(next);
+            }}
+            nextLabel="web.newer"
+            previousLabel="web.older"
+          />
         </Card>
       </StateSwitch>
 
@@ -363,7 +424,7 @@ export function ExtraDevicesPage({ denied, mayEdit }: { denied: boolean; mayEdit
               onChange={(event) => setForm({ ...form, panelId: event.target.value })}
             >
               <option value="">{t('web.extra_devices_scope_all_panels')}</option>
-              {(panels.data?.panels ?? []).map((one) => (
+              {(panels.data ?? []).map((one) => (
                 <option key={one.id} value={one.id}>
                   {one.capabilities.includes('DEVICE_LIMIT_ADJUSTMENT')
                     ? one.name
@@ -379,7 +440,7 @@ export function ExtraDevicesPage({ denied, mayEdit }: { denied: boolean; mayEdit
               onChange={(event) => setForm({ ...form, productId: event.target.value })}
             >
               <option value="">{t('web.extra_devices_scope_all_products')}</option>
-              {(products.data?.products ?? []).map((one) => (
+              {(products.data ?? []).map((one) => (
                 <option key={one.id} value={one.id}>
                   {one.title}
                 </option>

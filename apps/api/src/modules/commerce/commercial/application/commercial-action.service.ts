@@ -139,7 +139,7 @@ export interface CommercialOffer {
  *
  * All of it server-derived: the limit from the service's own record, the rate from the one
  * add-on that applies to it, and `remaining` from the rate's maximum less what the service
- * has already been sold and not given back — counted from live orders, never a counter —
+ * has been sold — live orders, and delivered ones even if refunded; never a counter —
  * and never past `MAX_DEVICE_LIMIT`.
  */
 export interface DeviceOffer {
@@ -1035,7 +1035,7 @@ export class CommercialActionService {
     );
     const maxQuantity = rate?.specification.maxQuantity ?? null;
     if (rate === null || rate.price === null || maxQuantity === null) return null;
-    const sold = await this.deps.actions.liveDeviceQuantity(scope, service.id, excludeOrderId, tx);
+    const sold = await this.deps.actions.soldDeviceQuantity(scope, service.id, excludeOrderId, tx);
     const remaining = Math.min(maxQuantity - sold, MAX_DEVICE_LIMIT - service.deviceLimit);
     if (remaining < 1) return null;
     return {
