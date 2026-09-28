@@ -31,6 +31,8 @@ mutated, because a mutation would need a second migration:
 - the frozen-terms trigger;
 - the arithmetic CHECKs on `order_custom_service_terms`.
 
+The one Codex review of PR #88 found three defects, and each fix has its own rows, D-33..D-37. Every row, D-01..D-37, was then re-run against the fixed code. D-24 now mutates `FIRST_PURCHASE_PURPOSES`, the one list the first-purchase query and the lock both read.
+
 Every row is killed.
 
 | #    | rule                                                                              | tests that die                                                                                                                                   | result |
@@ -67,3 +69,8 @@ Every row is killed.
 | D-30 | The receipt card names the username a custom order reserved                       | `integration/custom-service.test.ts` › names the reserved username on the operator’s receipt card for a custom order                             | KILLED |
 | D-31 | A volume no rule prices is refused before the days are asked                      | `integration/custom-service.test.ts` › refuses a volume no rule prices before asking for the days                                                | KILLED |
 | D-32 | A location is read in the caller's tenant only                                    | `integration/custom-service.test.ts` › never lets another tenant’s customer buy on this tenant’s location                                        | KILLED |
+| D-33 | An undiscounted purchase confirmation takes the first-purchase lock               | `integration/custom-service.test.ts` › queues an undiscounted custom confirmation on the first-purchase lock                                     | KILLED |
+| D-34 | A discounted purchase confirmation takes it too, not only a first-purchase rule's | `integration/custom-service.test.ts` › queues a discounted custom confirmation on the first-purchase lock too                                    | KILLED |
+| D-35 | Confirmation's terms check leaves panel eligibility to `panelSales.acquire`       | `integration/custom-service.test.ts` › answers a panel that filled up after the quote as unavailable, never as a price change (Codex, PR #88)    | KILLED |
+| D-36 | A rule's price across its range is refused past the ceiling, at the field         | `integration/custom-service.test.ts` › refuses a price that cannot be carried across its range, as a field error (Codex, PR #88)                 | KILLED |
+| D-37 | The ceiling admits exactly its bound                                              | `unit/custom-service-pricing.test.ts` › admits exactly the ceiling and refuses one minor unit past it                                            | KILLED |

@@ -30,7 +30,7 @@ import type { SettingsResolver } from '../../../control/settings/application/set
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { CustomerRepository } from '../../customers/application/ports.js';
 import type { ResellerRepository } from '../../resellers/application/ports.js';
-import { rulesOverlap } from '../domain/custom-service-pricing.js';
+import { ruleAmountFits, rulesOverlap } from '../domain/custom-service-pricing.js';
 import {
   CUSTOM_SERVICE_MAX_RULES,
   type CustomServiceLocationRecord,
@@ -394,6 +394,12 @@ export class CustomServiceAdminService {
       throw invalid('maximum', 'The range is empty.');
     }
     if (input.unitPriceMinor <= 0n) throw invalid('unitPriceAmount', 'A price is positive.');
+    if (!ruleAmountFits(input.maxUnits, input.unitPriceMinor)) {
+      throw invalid(
+        'unitPriceAmount',
+        'This price across this range is more than an order can carry.',
+      );
+    }
     if (
       input.panelId !== null &&
       (await this.deps.panels.find(scope, input.panelId, tx)) === null

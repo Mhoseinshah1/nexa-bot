@@ -11,10 +11,20 @@ import {
   type DiscountStatus,
   type DiscountType,
   type DiscountablePurpose,
+  type OrderPurpose,
   type PriceQuoteCashback,
   type PriceQuoteStep,
 } from '@nexa/contracts';
 import type { OrderTotalsRecord } from '../../orders/application/ports.js';
+
+/**
+ * The purposes that make a customer no longer a first-time buyer (Package D): a service
+ * bought from the catalogue, or a custom one. A trial is not a purchase and a renewal is not
+ * a first one. The first-purchase query counts exactly these, and every confirmation of one
+ * of these takes the first-purchase lock — a confirmation that can enter the counted set but
+ * skips the lock is the race the lock exists to close.
+ */
+export const FIRST_PURCHASE_PURPOSES: readonly OrderPurpose[] = ['NEW_SERVICE', 'CUSTOM_SERVICE'];
 
 /**
  * The pricing engine (`docs/wp8-pricing-audit.md` P1, P2, P4, P5, P8).
