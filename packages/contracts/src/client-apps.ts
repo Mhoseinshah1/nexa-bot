@@ -191,6 +191,27 @@ const EXECUTABLE_SCHEME =
   /\b(?:javascript|vbscript)\s*:|\bdata\s*:\s*(?:[a-z-]+\/|[;,])|\bfile\s*:\s*\/\//iu;
 /** `[label](target)`, the one inline construct the guide admits. */
 const LINK = /\[([^\]\n]{1,200})\]\(([^)\s]{1,2100})\)/gu;
+/**
+ * A link written BARE in the text: any `scheme://…`, or a `www.` host with no scheme.
+ *
+ * Telegram auto-links both in a plain-text message — a `www.` host as `http://` — so a
+ * bare `http://…` in a guide or a description is a plaintext download link as surely as
+ * a `[label](http://…)` is, and only the latter used to be checked (Codex review #1 of
+ * PR #95, C5). A bare token is acceptable only as an `https://` link that
+ * `normalizeClientAppUrl` accepts; every other scheme, and every scheme-less `www.` host,
+ * is refused. A bare domain with neither (`example.com/app.apk`) is not matched: it
+ * cannot be told from a file name, and refusing every dotted word would refuse ordinary
+ * guide text.
+ */
+const BARE_URL = /(?:\b[a-z][a-z0-9+.-]*:\/\/|\bwww\.)[^\s<>"'`]*/giu;
+/** Sentence punctuation that follows a link in prose and is not part of it. */
+const TRAILING_PUNCTUATION = /[.,;:!?)\]}\u060C\u061B]+$/u;
+
+/** Whether a bare URL-like token is one this product lets a customer be sent to. */
+function isSafeBareUrl(token: string): boolean {
+  const core = token.replace(TRAILING_PUNCTUATION, '');
+  return /^https:\/\//iu.test(core) && normalizeClientAppUrl(core) !== null;
+}
 
 /** Why a piece of operator text is refused, or null when it is acceptable. */
 export type ClientAppTextProblem = 'CONTROL' | 'MARKUP' | 'EXECUTABLE_SCHEME' | 'UNSAFE_LINK';
@@ -211,6 +232,11 @@ export function clientAppTextProblem(value: string): ClientAppTextProblem | null
   for (const match of value.matchAll(LINK)) {
     if (normalizeClientAppUrl(match[2] ?? '') === null) return 'UNSAFE_LINK';
   }
+  // The links' targets were judged above; what remains is text, bare links included.
+  const text = value.replace(LINK, (_whole, label: string) => label);
+  for (const match of text.matchAll(BARE_URL)) {
+    if (!isSafeBareUrl(match[0])) return 'UNSAFE_LINK';
+  }
   return null;
 }
 
@@ -218,7 +244,7 @@ const PROBLEM_MESSAGES: Readonly<Record<ClientAppTextProblem, string>> = {
   CONTROL: 'must not contain control characters',
   MARKUP: 'must not contain HTML',
   EXECUTABLE_SCHEME: 'must not contain javascript:, data:, vbscript: or file: links',
-  UNSAFE_LINK: 'every [label](link) must be an https:// link to a named host',
+  UNSAFE_LINK: 'every link, bare or [label](link), must be an https:// link to a named host',
 };
 
 function safeText(max: number, options: { readonly multiline: boolean }) {
@@ -249,6 +275,7 @@ function safeText(max: number, options: { readonly multiline: boolean }) {
  *     drawn `<number>. `;
  *   - `[label](https://…)` is a link, drawn `label: https://…` so Telegram makes the
  *     address tappable on its own;
+ *   - a bare `https://…` link is kept as written;
  *   - a blank line separates paragraphs; runs of blank lines collapse to one.
  * Everything else is literal text. There is no bold, no heading and no raw HTML, because
  * the detail message is sent with NO parse mode: a subset that promised emphasis would
@@ -256,7 +283,9 @@ function safeText(max: number, options: { readonly multiline: boolean }) {
  *
  * Total and pure: a link that fails `normalizeClientAppUrl` — which validation already
  * refuses, so only a row written around it could hold one — is drawn as its label alone,
- * never as a link, and markup has nothing to be interpreted by.
+ * never as a link; a bare URL-like token that `clientAppTextProblem` would refuse
+ * (`http://…`, `www.…`, any other scheme) is DROPPED, its trailing punctuation kept, so
+ * Telegram has nothing to auto-link; and markup has nothing to be interpreted by.
  */
 export function renderClientAppGuide(content: string): string {
   const lines = content.replace(/\r\n?/gu, '\n').split('\n');
@@ -275,10 +304,14 @@ export function renderClientAppGuide(content: string): string {
 }
 
 function inline(text: string): string {
-  return text.replace(LINK, (_whole, label: string, target: string) => {
-    const url = normalizeClientAppUrl(target);
-    return url === null ? label : `${label}: ${url}`;
-  });
+  return text
+    .replace(LINK, (_whole, label: string, target: string) => {
+      const url = normalizeClientAppUrl(target);
+      return url === null ? label : `${label}: ${url}`;
+    })
+    .replace(BARE_URL, (token) =>
+      isSafeBareUrl(token) ? token : (TRAILING_PUNCTUATION.exec(token)?.[0] ?? ''),
+    );
 }
 
 // --- The entry ------------------------------------------------------------------------------
