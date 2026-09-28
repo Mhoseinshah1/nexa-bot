@@ -29,6 +29,11 @@ export const BOT_COMMANDS = [
    * (Package A). It is the existing support screen, not a second channel.
    */
   { command: 'paysupport', description: 'bot.command.paysupport' },
+  /*
+   * WP-A7: the customer's support tickets. `/paysupport` stays the support screen Telegram
+   * requires, and that screen links here.
+   */
+  { command: 'tickets', description: 'bot.command.tickets' },
 ] as const;
 
 export type BotCommandName = (typeof BOT_COMMANDS)[number]['command'];
@@ -77,6 +82,8 @@ export const MAIN_MENU_ROWS: readonly (readonly BotMenuButton[])[] = [
     { label: 'bot.menu.wallet', command: 'wallet' },
     { label: 'bot.menu.help', command: 'help' },
   ],
+  // WP-A7: the ticket desk, on a row of its own.
+  [{ label: 'bot.menu.tickets', command: 'tickets' }],
 ];
 
 /** Every menu button, flattened. The rows are layout; this is the set. */

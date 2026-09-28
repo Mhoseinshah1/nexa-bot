@@ -168,7 +168,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   // One list in `BOT_COMMANDS` feeds both, so a command cannot be registered and
   // undocumented, or documented and unregistered.
   'bot.help':
-    'دستورهای این ربات:\n/catalog — دیدن و خرید سرویس‌ها\n/services — سرویس‌های من و مدیریت آن‌ها\n/wallet — موجودی کیف پول\n/paysupport — پشتیبانی پرداخت\n/help — همین راهنما',
+    'دستورهای این ربات:\n/catalog — دیدن و خرید سرویس‌ها\n/services — سرویس‌های من و مدیریت آن‌ها\n/wallet — موجودی کیف پول\n/paysupport — پشتیبانی پرداخت\n/tickets — تیکت‌های پشتیبانی\n/help — همین راهنما',
   'bot.command.start': 'شروع',
   'bot.command.catalog': 'خرید سرویس',
   'bot.command.services': 'سرویس‌های من',
@@ -1076,4 +1076,67 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.referral.gift_claimed': '🎁 هدیهٔ عضویت به کیف پول شما واریز شد: {amount}',
   'bot.referral.gift_nothing': 'در حال حاضر هدیهٔ عضویتی برای دریافت ندارید.',
   'bot.referral.gift_disabled': 'هدیهٔ عضویت در حال حاضر فعال نیست.',
+
+  // WP-A7 — support tickets (`docs/wp-a7-tickets-audit.md`).
+  'bot.command.tickets': 'تیکت‌های پشتیبانی',
+  'bot.menu.tickets': '🎫 پشتیبانی / تیکت‌ها',
+  'bot.support.tickets_button': '🎫 تیکت‌های پشتیبانی',
+  'bot.ticket.list':
+    '🎫 تیکت‌های پشتیبانی\n\nتیکت‌های شما در زیر آمده است؛ برای دیدن گفتگو روی هر تیکت بزنید. برای طرح موضوعی تازه «➕ تیکت جدید» را بزنید.',
+  'bot.ticket.list_empty':
+    '🎫 تیکت‌های پشتیبانی\n\nهنوز تیکتی ثبت نکرده‌اید. برای ارتباط با پشتیبانی «➕ تیکت جدید» را بزنید.',
+  'bot.ticket.list_item_button': '{status} | #{number} {category}',
+  'bot.ticket.new_button': '➕ تیکت جدید',
+  'bot.ticket.back_button': '🔙 بازگشت به تیکت‌ها',
+  'bot.ticket.choose_category': '📂 موضوع تیکت خود را انتخاب کنید:',
+  'bot.ticket.category_button': '{title}',
+  'bot.ticket.no_categories': 'در حال حاضر ثبت تیکت ممکن نیست. لطفاً بعداً دوباره تلاش کنید.',
+  'bot.ticket.message_prompt':
+    '📝 موضوع: {category}\n\nپیام خود را بنویسید و بفرستید (حداکثر {max} نویسه).\nمی‌توانید به‌جای متن، یک عکس یا فایل (PDF، تصویر یا متن) همراه با توضیح بفرستید.',
+  'bot.ticket.reply_prompt':
+    '✍️ پاسخ خود را برای تیکت #{number} بنویسید و بفرستید (حداکثر {max} نویسه).\nمی‌توانید یک عکس یا فایل (PDF، تصویر یا متن) هم بفرستید.',
+  'bot.ticket.message_invalid': 'پیام باید بین ۱ تا {max} نویسه باشد. لطفاً دوباره بفرستید.',
+  'bot.ticket.attachment_too_large':
+    'حجم فایل بیش از حد مجاز ({maxBytes}) است. لطفاً فایل کوچک‌تری بفرستید.',
+  'bot.ticket.attachment_type_refused':
+    'این نوع فایل پذیرفته نمی‌شود. فقط عکس، PDF، تصویر (JPG، PNG، WEBP) یا فایل متنی (TXT) بفرستید.',
+  'bot.ticket.created':
+    '✅ تیکت #{number} ثبت شد.\nپاسخ پشتیبانی در همین ربات برای شما فرستاده می‌شود.',
+  'bot.ticket.reply_sent': '✅ پیام شما به تیکت #{number} افزوده شد.',
+  'bot.ticket.open_limit':
+    'شما {max} تیکت باز دارید. پیش از ثبت تیکت تازه، منتظر پاسخ بمانید یا یکی از تیکت‌های باز را ببندید.',
+  'bot.ticket.message_limit': 'این تیکت به سقف پیام‌ها رسیده است. لطفاً یک تیکت تازه ثبت کنید.',
+  'bot.ticket.view':
+    '🎫 تیکت #{number}\n📂 موضوع: {category}\n📌 وضعیت: {status}\n\n{olderLine}\n{conversation}',
+  'bot.ticket.view_older': '… {count} پیام قدیمی‌تر در پنل پشتیبانی نگه داشته شده است.',
+  'bot.ticket.line_customer': '👤 شما — {at}\n{text}',
+  'bot.ticket.line_support': '🎧 پشتیبانی — {at}\n{text}',
+  'bot.ticket.line_closed_by_customer': '🔒 {at} — تیکت را بستید.',
+  'bot.ticket.line_closed_by_support': '🔒 {at} — پشتیبانی تیکت را بست.',
+  'bot.ticket.line_reopened': '🔓 {at} — پشتیبانی تیکت را دوباره باز کرد.',
+  'bot.ticket.attachment_marker': '📎 پیوست',
+  'bot.ticket.reply_button': '✍️ ارسال پاسخ',
+  'bot.ticket.close_button': '🔒 بستن تیکت',
+  'bot.ticket.close_ask':
+    'تیکت #{number} بسته شود؟ پس از بستن، پیامی در این تیکت فرستاده نمی‌شود و برای موضوع تازه باید تیکت جدید ثبت کنید.',
+  'bot.ticket.close_confirm_button': '✅ بله، بسته شود',
+  'bot.ticket.closed': '🔒 تیکت #{number} بسته شد. از همراهی شما سپاسگزاریم.',
+  'bot.ticket.already_closed': 'این تیکت بسته شده است. برای ادامهٔ گفتگو یک تیکت جدید ثبت کنید.',
+  'bot.ticket.not_found': 'این تیکت پیدا نشد.',
+  'bot.ticket.status_open': '🆕 باز',
+  'bot.ticket.status_waiting_for_customer': '💬 منتظر پاسخ شما',
+  'bot.ticket.status_waiting_for_support': '⏳ در انتظار پشتیبانی',
+  'bot.ticket.status_closed': '🔒 بسته‌شده',
+  'bot.ticket.support_replied':
+    '📩 پاسخ پشتیبانی به تیکت #{number}\n📂 موضوع: {category}\n\n{text}',
+  'bot.ticket.view_button': '🎫 مشاهده تیکت',
+  'bot.ticket.category_default_1': 'مشکل اتصال',
+  'bot.ticket.category_default_2': 'خرید و پرداخت',
+  'bot.ticket.category_default_3': 'سرویس',
+  'bot.ticket.category_default_4': 'حساب کاربری',
+  'bot.ticket.category_default_5': 'سایر',
+  'ops.support.ticket_opened':
+    '🎫 تیکت جدید #{number}\n\n📂 موضوع: {category}\n👤 کاربر: {displayName} | {username} | {telegramId}\n🕒 زمان: {at}\n\nبرای دیدن گفتگو و پاسخ، بخش «تیکت‌های پشتیبانی» پنل مدیریت را باز کنید.',
+  'ops.support.customer_replied':
+    '💬 پیام تازهٔ کاربر در تیکت #{number}\n\n📂 موضوع: {category}\n👤 کاربر: {displayName} | {username} | {telegramId}\n🕒 زمان: {at}\n\nبرای دیدن گفتگو و پاسخ، بخش «تیکت‌های پشتیبانی» پنل مدیریت را باز کنید.',
 };

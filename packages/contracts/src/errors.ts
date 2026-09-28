@@ -1412,3 +1412,36 @@ export const BOT_ERROR_CODES = {
 } as const;
 
 export type CommerceErrorCode = (typeof COMMERCE_ERROR_CODES)[keyof typeof COMMERCE_ERROR_CODES];
+
+/**
+ * WP-A7 — support tickets (`docs/wp-a7-tickets-audit.md`). One remedy each; a ticket of
+ * another tenant, another customer's ticket and a ticket that does not exist are all
+ * `TICKET_NOT_FOUND`, so the answer is not an oracle for which ids exist.
+ */
+export const TICKET_ERROR_CODES = {
+  TICKET_NOT_FOUND: 'ticket.not_found',
+  /** A message to a CLOSED ticket. Support reopens it; a customer opens a new one. */
+  TICKET_CLOSED: 'ticket.closed',
+  /** The status change has no edge from where the ticket stands (`TICKET_MACHINE`). */
+  TICKET_TRANSITION_INVALID: 'ticket.transition_invalid',
+  /** The text is empty with nothing attached, or longer than `TICKET_MESSAGE_MAX_LENGTH`. */
+  TICKET_MESSAGE_INVALID: 'ticket.message_invalid',
+  /** The file is refused; the `refusal` detail is a `TICKET_ATTACHMENT_REFUSALS` member. */
+  TICKET_ATTACHMENT_REFUSED: 'ticket.attachment_refused',
+  /** The customer already has `TICKET_OPEN_MAX_PER_CUSTOMER` open tickets. */
+  TICKET_OPEN_LIMIT: 'ticket.open_limit',
+  /** The ticket already holds `TICKET_MESSAGES_MAX_PER_TICKET` messages. */
+  TICKET_MESSAGE_LIMIT: 'ticket.message_limit',
+  /** No ACTIVE category with that id in this tenant. */
+  TICKET_CATEGORY_NOT_FOUND: 'ticket.category_not_found',
+  /** The title is empty, longer than its bound, or already used by another category. */
+  TICKET_CATEGORY_INVALID: 'ticket.category_invalid',
+  /** The tenant already has `TICKET_CATEGORY_MAX` categories. */
+  TICKET_CATEGORY_LIMIT: 'ticket.category_limit',
+  /** The assignee is not an ACTIVE administrator of this tenant who may read tickets. */
+  TICKET_ASSIGNEE_INVALID: 'ticket.assignee_invalid',
+  /** A linked service, order or payment is not the ticket's customer's own. */
+  TICKET_LINK_INVALID: 'ticket.link_invalid',
+  /** The message has no attachment, or its file can no longer be fetched from Telegram. */
+  TICKET_ATTACHMENT_UNAVAILABLE: 'ticket.attachment_unavailable',
+} as const;

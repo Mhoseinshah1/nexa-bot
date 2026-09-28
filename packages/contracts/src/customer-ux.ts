@@ -49,6 +49,14 @@ export const CUSTOMER_CAPTURE_PURPOSES = [
    * confirmation screen, and only its button transfers.
    */
   'SERVICE_TRANSFER_RECIPIENT',
+  /**
+   * WP-A7: the first message of a new ticket — text, or a photo or document with its caption.
+   * `subject_id` names the CATEGORY the customer chose; the ticket is opened only when this
+   * window reads a valid message.
+   */
+  'TICKET_NEW_MESSAGE',
+  /** WP-A7: a reply to one of the customer's tickets. `subject_id` names the TICKET. */
+  'TICKET_REPLY',
 ] as const;
 export type CustomerCapturePurpose = (typeof CUSTOMER_CAPTURE_PURPOSES)[number];
 export const customerCapturePurposeSchema = z.enum(CUSTOMER_CAPTURE_PURPOSES);
