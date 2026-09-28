@@ -140,36 +140,32 @@ export const PERMISSIONS = [
   p('services.edit', 'Edit a service'),
   p('services.terminate', 'Terminate a service', 'HIGH'),
   /*
-   * DECLARED, seeded to nothing, and charged by nothing — deliberately, and not the
-   * way `users.edit` is.
+   * DECLARED, seeded to nothing, and charged by nothing — and now for a different reason
+   * than before.
    *
-   * `users.edit` is uncharged because the product has an answer: every customer
-   * attribute comes from Telegram and is overwritten on the next update, so an
-   * operator edit would look like a correction and silently not be one.
+   * Until Package F this key was uncharged because the product had no rule for a transfer:
+   * what becomes of the order, the payment, the link the previous owner holds, the
+   * capacity slot and the username reservation. The owner settled all of it (the post-WP20
+   * brief, Package F; `docs/package-f-service-transfer-audit.md`):
    *
-   * This one is uncharged because the product has NO answer, and each of the four
-   * unresolved questions is one a wrong guess makes expensive:
+   *   - the ORDER and its PAYMENT stay the payer's, and so do the wallet entries, cashback,
+   *     referral commission and every earlier renewal. History is not rewritten; only
+   *     `services.customer_id` moves, through an append-only `service_ownership_transfers`
+   *     row the database requires for the change.
+   *   - the LINK is not rotated merely because ownership changed. The recipient may rotate
+   *     it themselves.
+   *   - the CAPACITY SLOT and the USERNAME RESERVATION are keyed to the order, which does
+   *     not move, so neither changes.
    *
-   *   - the ORDER. A service is the thing an order bought. Moving the service without
-   *     the order leaves a customer's purchase history naming an account they do not
-   *     have; moving it with the order rewrites what somebody paid for.
-   *   - the PAYMENT. Money moved from one wallet. A transfer either leaves the payer
-   *     paying for somebody else's account or implies a refund nobody requested, and
-   *     `RefundService.refundUndeliverable` is the ONE credit path — a second answer
-   *     to "how much did we give back" is the thing a ledger exists to prevent.
-   *   - the LINK. `subscriptionUrl` is a BEARER capability: whoever holds it has the
-   *     service. A transfer that does not rotate it hands the new owner an account the
-   *     old owner can still use, and rotating it is a provider operation with no
-   *     capability declared for it on either adapter.
-   *   - the CAPACITY SLOT and the username RESERVATION, both of which are keyed to a
-   *     customer and a panel and would have to move atomically with the row.
+   * What is BUILT is the CUSTOMER's path: an owner hands their own service to another
+   * customer from the bot, charged `maintenance.run` like every customer write through the
+   * webhook's `SYSTEM_JOB`. This key is the OPERATOR's, and no operator route transfers a
+   * service — none was asked for. So it stays declared and unserved.
    *
-   * `web.services_transfer_absent` says the same thing to an operator, in words, rather
-   * than as a disabled button — a disabled control claims "this exists and you lack
-   * permission", which is a different and false statement.
-   *
-   * So the key stays declared and unreachable until the owner settles the rule. Do not
-   * wire it to an endpoint to make a permission matrix look complete.
+   * `web.services_transfer_absent` says so to an operator in words, rather than as a
+   * disabled button — a disabled control claims "this exists and you lack permission",
+   * which is a different and false statement. Do not wire this key to an endpoint to make
+   * a permission matrix look complete: an operator transfer is its own product decision.
    */
   p('services.transfer', 'Transfer a service to another customer', 'HIGH'),
 

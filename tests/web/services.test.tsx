@@ -615,14 +615,17 @@ describe('the service detail', () => {
     });
   });
 
-  it('still says a transfer is not built, rather than drawing a disabled button', async () => {
+  it('still says an operator transfer is not built, rather than drawing a disabled button', async () => {
     stubApi(detail());
     renderPage(<ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit mayTerminate />);
     await screen.findByText('nx-7f3a91');
 
-    expect(
-      screen.getByText(/انتقال سرویس به مشتری دیگر در این نسخه ساخته نشده است/),
-    ).toBeInTheDocument();
+    // Package F built the CUSTOMER's transfer, from the bot; the sentence says so, and
+    // where each transfer is recorded.
+    const sentence = screen.getByText(/انتقال سرویس از پنل مدیریت ساخته نشده است/);
+    expect(sentence).toBeInTheDocument();
+    expect(sentence.textContent).toMatch(/از داخل ربات/);
+    expect(sentence.textContent).toMatch(/service\.transfer/);
     expect(screen.queryByRole('button', { name: /انتقال/ })).toBeNull();
   });
 

@@ -911,6 +911,13 @@
       "when": 1790554864719,
       "tag": "0129_package_d_custom_service",
       "breakpoints": true
+    },
+    {
+      "idx": 130,
+      "version": "7",
+      "when": 1790561997460,
+      "tag": "0130_package_f_service_transfer",
+      "breakpoints": true
     }
   ]
 }

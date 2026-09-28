@@ -1347,6 +1347,19 @@ export const COMMERCE_ERROR_CODES = {
   CUSTOM_SERVICE_RULE_INVALID: 'commerce.custom_service_rule_invalid',
   /** No custom-service location for this panel in this tenant. */
   CUSTOM_SERVICE_LOCATION_NOT_FOUND: 'commerce.custom_service_location_not_found',
+
+  // --- Package F: service transfer (docs/package-f-service-transfer-audit.md) ---------
+  /**
+   * The recipient named for a transfer cannot be given the service. The `refusal` detail is
+   * a `SERVICE_TRANSFER_RECIPIENT_REFUSALS` member. Nothing was written.
+   */
+  SERVICE_TRANSFER_RECIPIENT_REFUSED: 'commerce.service_transfer_recipient_refused',
+  /**
+   * The service cannot change hands now. The `reason` detail is a
+   * `SERVICE_TRANSFER_INELIGIBILITY_REASONS` member; a customer is told one sentence for
+   * every reason. Nothing was written.
+   */
+  SERVICE_NOT_TRANSFERABLE: 'commerce.service_not_transferable',
 } as const;
 
 /*

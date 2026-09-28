@@ -13,6 +13,7 @@ import {
 } from '@nexa/contracts';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type {
+  CustomerButton,
   CustomerMessenger,
   CustomerNotificationRecord,
   CustomerNotificationRepository,
@@ -199,6 +200,28 @@ export interface CustomerNotificationDeps {
       reasons: readonly PaymentCreditReason[],
     ) => Promise<Money | null>;
   };
+  /**
+   * Package F: what `SERVICE_TRANSFER_RECEIVED` renders — the service's name, location and
+   * what is left of it — read at send time from the transfer row the notification names,
+   * and the service that transfer moved. A reader, not a payload (ADR 0030 §1). Null when
+   * the row or the service cannot be read.
+   */
+  readonly serviceTransfers?: {
+    notificationFacts(
+      scope: TenantContext,
+      transferId: string,
+    ): Promise<{ readonly values: TemplateValues; readonly serviceId: string } | null>;
+  };
+  /**
+   * The inline buttons a kind carries, derived from what its subject names — never stored,
+   * so the lane still carries no payload. Supplied by the composition root, because the
+   * callback vocabulary is the Telegram surface's and this application service must not
+   * import it. Absent, or an empty list, means no keyboard.
+   */
+  readonly buttonsFor?: (
+    kind: CustomerNotificationKind,
+    subject: { readonly serviceId: string },
+  ) => readonly CustomerButton[];
   readonly uow: UnitOfWork<TransactionScope>;
   readonly clock: Clock;
   readonly scopeIsActive: (scope: TenantContext) => Promise<boolean>;
@@ -287,6 +310,31 @@ export class CustomerNotificationService {
       errored: counts.errored ?? 0,
       lost: counts.lost ?? 0,
     };
+  }
+
+  /**
+   * The message's values and its inline buttons, or `null` when its subject cannot state the
+   * fact. Only a transfer's notification carries a button (Package F); every other kind's
+   * values are `reminderValues`'.
+   */
+  private async contentOf(
+    scope: TenantContext,
+    row: CustomerNotificationRecord,
+  ): Promise<{
+    readonly values: TemplateValues;
+    readonly buttons: readonly CustomerButton[];
+  } | null> {
+    if (row.kind === 'SERVICE_TRANSFER_RECEIVED') {
+      if (this.deps.serviceTransfers === undefined) return null;
+      const facts = await this.deps.serviceTransfers.notificationFacts(scope, row.subjectId);
+      if (facts === null) return null;
+      return {
+        values: facts.values,
+        buttons: this.deps.buttonsFor?.(row.kind, { serviceId: facts.serviceId }) ?? [],
+      };
+    }
+    const values = await this.reminderValues(scope, row);
+    return values === null ? null : { values, buttons: [] };
   }
 
   /**
@@ -505,8 +553,8 @@ export class CustomerNotificationService {
        * sent. The order is the same one the unsupported-kind check above is placed for,
        * and for the same reason.
        */
-      const values = await this.reminderValues(scope, row);
-      if (values === null) {
+      const content = await this.contentOf(scope, row);
+      if (content === null) {
         /*
          * A reminder naming a row that is not there.
          *
@@ -545,7 +593,9 @@ export class CustomerNotificationService {
         chatId: lookup.contact.chatId,
         botInstanceId: row.botInstanceId,
         templateKey: CUSTOMER_NOTIFICATION_TEMPLATES[row.kind],
-        values,
+        values: content.values,
+        // Absent rather than empty: Telegram draws an empty keyboard as a blank attachment.
+        ...(content.buttons.length === 0 ? {} : { buttons: content.buttons }),
       });
 
       const at = this.deps.clock.now();

@@ -225,6 +225,7 @@ import {
 import { DrizzleReceiptReviewPushRepository } from './modules/commerce/payments/infrastructure/drizzle-receipt-review-push.repository.js';
 import { DrizzleReceiptReviewFactsReader } from './modules/commerce/payments/infrastructure/drizzle-receipt-review-facts.reader.js';
 import {
+  notificationButtons,
   receiptReviewButtons,
   refundRequestReviewButtons,
 } from './surfaces/telegram/bot-runtime.js';
@@ -317,6 +318,8 @@ import { DrizzleUsernameCaptureRepository } from './modules/commerce/provisionin
 import { DrizzleOperationRepository } from './modules/commerce/provisioning/infrastructure/drizzle-operation.repository.js';
 import { ProvisioningService } from './modules/commerce/provisioning/application/provisioning.service.js';
 import { SubscriptionFileService } from './modules/commerce/provisioning/application/subscription-file.service.js';
+import { ServiceTransferService } from './modules/commerce/provisioning/application/service-transfer.service.js';
+import { DrizzleServiceTransferRepository } from './modules/commerce/provisioning/infrastructure/drizzle-service-transfer.repository.js';
 import { ServiceAdminService } from './modules/commerce/provisioning/application/service-admin.service.js';
 import { decideOperability } from './modules/commerce/provisioning/application/panel-operability.js';
 import {
@@ -552,6 +555,8 @@ export interface Container {
   readonly customerCaptures: CustomerCaptureService;
   /** Package E: a panel's connection files, fetched and sent to their owner. */
   readonly subscriptionFiles: SubscriptionFileService;
+  /** Package F: a customer hands one of their services to another customer. */
+  readonly serviceTransfers: ServiceTransferService;
   /** The operator's price preview and an order's pricing detail (WP8). */
   readonly pricingRead: PricingReadService;
   /** Cashback from promise to credit to reversal (WP8 P9); driven by the provisioner loop. */
@@ -2723,6 +2728,42 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     guard,
   });
   const customerScreens = new CustomerScreenComposer(templateResolver);
+  /**
+   * Package F — a customer hands one of their services to another customer of the tenant.
+   * Only ownership moves: no provider is called, and the order, payment and ledger are left
+   * as written. The recipient is told through the notification lane, in the transaction
+   * that commits the transfer.
+   */
+  const serviceTransferService = new ServiceTransferService({
+    repository: new DrizzleServiceTransferRepository(database.db),
+    services: serviceRepository,
+    orders: orderRepository,
+    customers: customerRepository,
+    captures: customerCaptureService,
+    screens: customerScreens,
+    /*
+     * The location the service card shows, and for a custom service (Package D) the label
+     * its order's frozen terms recorded — the one location that order was sold for.
+     */
+    locationOf: async (scope, service) => {
+      if (service.productId === null) {
+        const terms = await orderCustomServiceTermsRepository.findByOrder(scope, service.orderId);
+        return terms?.locationLabel ?? null;
+      }
+      const product = await productRepository.findById(scope, service.productId);
+      return product?.display.serviceLocationLabel ?? null;
+    },
+    notifier: customerNotifier,
+    outbox,
+    audit,
+    opsLog,
+    guard,
+    sessions,
+    uow,
+    scopeActivity: tenants,
+    clock,
+    ids,
+  });
   const customerCounters = new DrizzleCustomerCountersReader(database.db);
   /**
    * The FAQ screen, rendered into message parts HERE — application code holds the
@@ -2918,6 +2959,12 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       notifications: customerNotificationRepository,
       // The refund-request sentences (WP19), read from the request row the kind names.
       serviceRefunds: serviceRefundRequests,
+      /*
+       * Package F: the recipient's sentence, read from the transfer row, and its one button
+       * — derived from the subject by the surface that owns the callback vocabulary.
+       */
+      serviceTransfers: serviceTransferService,
+      buttonsFor: notificationButtons,
       /*
        * The ledger reader the refund sentence renders from. The wallet repository
        * itself, because both figures are derived from `wallet_entries` and a
@@ -3862,6 +3909,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     customServiceFlow: customServiceFlowService,
     customerCaptures: customerCaptureService,
     subscriptionFiles: subscriptionFileService,
+    serviceTransfers: serviceTransferService,
     pricingRead: pricingReadService,
     cashback: cashbackService,
     referrals: referralProgram,
@@ -4001,6 +4049,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       trials: trialService,
       customService: customServiceFlowService,
       subscriptionFiles: subscriptionFileService,
+      serviceTransfers: serviceTransferService,
       orders: orderService,
       // The SAME messenger the delivery sweep uses, for the reason above it.
       messenger: customerMessenger,

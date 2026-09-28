@@ -2147,11 +2147,11 @@ describe('a provisioned service announces itself', () => {
      * whether it exists.
      *
      * The OTHER customer taps, rather than the service being reassigned. Reassigning it
-     * was the first shape and the database refused it: `services_order_fk` is composite
-     * on `(tenant_id, order_id, customer_id)`, so a service cannot change hands without
-     * its order. That is the schema making the same point this test does, and the
-     * realistic version — somebody else pressing the button — is the one a customer can
-     * actually perform.
+     * was the first shape and the database refused it — then because `services_order_fk`
+     * was composite on the customer, and since Package F because
+     * `nexa_services_ownership_guard` admits a new owner only through a
+     * `service_ownership_transfers` row. The realistic version — somebody else pressing
+     * the button — is the one a customer can actually perform.
      */
     const orderId = await paidOrder('bot-foreign');
     await ctx.container.provisionerLoop.tick();

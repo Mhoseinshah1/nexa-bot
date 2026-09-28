@@ -63,6 +63,7 @@ export * from './refunds.js';
 export * from './messaging-reliability.js';
 export * from './channel-membership.js';
 export * from './service-refund-requests.js';
+export * from './service-transfer.js';
 export * from './payment-receipts.js';
 export * from './provisioning.js';
 export * from './service-reminders.js';

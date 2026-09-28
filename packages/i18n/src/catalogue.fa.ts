@@ -65,6 +65,28 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     'در حال حاضر امکان ثبت درخواست بازگشت وجه برای این سرویس وجود ندارد.',
   'bot.service.refund_request_pending':
     'برای این سرویس یک درخواست بازگشت وجه در حال بررسی است. نتیجه به شما اطلاع داده می‌شود.',
+  /*
+   * Package F. The button, the prompt, the confirmation button, the sender's success
+   * sentence, the recipient's heading and its button are the brief's words, verbatim.
+   */
+  'bot.service.transfer_button': '🔄 انتقال سرویس',
+  'bot.service.transfer_prompt':
+    'سرویس را به چه کاربری می‌خواهید انتقال دهید؟ شناسه کاربری عددی مقصد را ارسال کنید.',
+  'bot.service.transfer_confirm':
+    '🔄 انتقال سرویس\n\n👤 نام سرویس: {service}\n🌍 موقعیت سرویس: {location}\n💢 حجم باقی مانده: {remainingTraffic}\n📅 تاریخ اتمام: {expiresAt} ({remainingDays} روز)\n{noExpiry}\n\n🪪 آی دی عددی کاربر مقصد: {recipientId}\n👤 نام کاربر مقصد: {recipientName}\n\nبا تأیید، این سرویس از فهرست سرویس‌های شما خارج و به کاربر مقصد منتقل می‌شود و یادداشت شما روی آن پاک می‌شود.\n\nآیا انتقال سرویس را تأیید می‌کنید؟',
+  'bot.service.transfer_confirm_button': '✅ تأیید انتقال سرویس',
+  'bot.service.transfer_done': '✅ سرویس با موفقیت به کاربر مقصد منتقل شد.',
+  'bot.service.transfer_received':
+    '🎁 یک سرویس برای شما انتقال داده شد\n\n👤 نام سرویس: {service}\n🌍 موقعیت سرویس: {location}\n💢 حجم باقی مانده: {remainingTraffic}\n📅 تاریخ اتمام: {expiresAt} ({remainingDays} روز)\n{noExpiry}\n\nبرای دیدن مشخصات سرویس، دکمهٔ زیر را بزنید.',
+  'bot.service.transfer_details_button': 'مشخصات سرویس',
+  'bot.service.transfer_recipient_invalid':
+    'این یک شناسه کاربری عددی معتبر نیست. شناسه کاربری عددی مقصد را دوباره ارسال کنید.',
+  'bot.service.transfer_recipient_unavailable':
+    'کاربری با این شناسه در ربات پیدا نشد یا امکان دریافت سرویس را ندارد. شناسه را بررسی کنید و دوباره ارسال کنید.',
+  'bot.service.transfer_recipient_self':
+    'نمی‌توانید سرویس را به خودتان انتقال دهید. شناسه کاربری عددی کاربر مقصد را ارسال کنید.',
+  'bot.service.transfer_unavailable':
+    'انتقال این سرویس در حال حاضر ممکن نیست. سرویس باید فعال یا خاموش باشد، سرویس تست نباشد و پرداخت، درخواست یا عملیات در جریانی نداشته باشد.',
   'bot.admin.refund_request_card':
     '📨 درخواست بازگشت وجه جدید\n\n🆔 شناسه درخواست: {requestId}\n🕒 زمان: {requestedAt}\n\n👤 کاربر: {displayName} | {username} | {telegramId}\n\n📦 سرویس: {serviceUsername} ({serviceId})\n🛍 محصول: {product}\n📍 وضعیت: {state}\n⏳ انقضا: {expiresAt}\n📊 مصرف: {usedTraffic} از {trafficLimit}\n\n💰 مبلغ اصلی خرید: {principal}\n💵 باقی‌مانده قابل بازگشت: {remaining}\n\n📝 دلیل کاربر: {reason}',
   'bot.admin.refund_request_approve_button': '✅ تأیید درخواست',

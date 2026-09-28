@@ -7881,6 +7881,196 @@ export const TEMPLATES = [
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
+  /*
+   * Package F: a customer hands a service to another customer of the tenant
+   * (`docs/package-f-service-transfer-audit.md`). The button, the prompt, the confirmation
+   * button, the success sentence and the recipient's heading are the brief's own words.
+   */
+  {
+    key: 'bot.service.transfer_button',
+    description:
+      "Package F: the button on a customer's service detail that starts a transfer. Drawn only while the service is transferable; the confirmation decides again.",
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.transfer_prompt',
+    description:
+      "Package F: asks for the numeric Telegram id of the customer the service is to be handed to (the brief's wording). The next message is read as that id and moves nothing.",
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.transfer_confirm',
+    description:
+      "Package F: the confirmation screen. Names the service, its location and what is left of it, and the recipient's numeric id and, when Telegram gave one, their name or username. Says the service leaves the sender's list and their note is cleared. Nothing is moved by this screen.",
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'service',
+        type: 'STRING',
+        description: 'The account name on the panel, which is what the customer sees.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'location',
+        type: 'STRING',
+        description:
+          'The service location label, as the service card shows it. Absent when none is recorded.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'remainingTraffic',
+        type: 'STRING',
+        description:
+          'What is left of the allowance, rendered as the service card renders it: a figure with its percentage, unlimited, or not yet read from the panel.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'expiresAt',
+        type: 'DATETIME',
+        description: 'When the service ends. Absent for a service with no expiry.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'remainingDays',
+        type: 'NUMBER',
+        description:
+          'Whole days left until expiresAt, rounded up, never below zero. Absent with expiresAt.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'noExpiry',
+        type: 'STRING',
+        description:
+          'The no-expiry line, rendered, for a service with no expiry; absent otherwise.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'recipientId',
+        type: 'STRING',
+        description: 'The numeric Telegram id of the recipient, as typed and resolved.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'recipientName',
+        type: 'STRING',
+        description:
+          "The recipient's name and @username as Telegram last gave them. Absent when Telegram gave neither.",
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.transfer_confirm_button',
+    description:
+      "Package F: the only button that transfers a service. Carries the service and the recipient's id; the transfer reads both again.",
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.transfer_done',
+    description:
+      "Package F: the service now belongs to the recipient (the brief's wording). Also the answer to a repeated confirmation of the same transfer.",
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.transfer_received',
+    description:
+      "Package F: the recipient's notification. A service was handed to them; the values are read at send time from the transfer row and the service, and the one button opens that service.",
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'service',
+        type: 'STRING',
+        description: 'The account name on the panel, which is what the customer sees.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'location',
+        type: 'STRING',
+        description:
+          'The service location label, as the service card shows it. Absent when none is recorded.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'remainingTraffic',
+        type: 'STRING',
+        description:
+          'What is left of the allowance, rendered as the service card renders it: a figure with its percentage, unlimited, or not yet read from the panel.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'expiresAt',
+        type: 'DATETIME',
+        description: 'When the service ends. Absent for a service with no expiry.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'remainingDays',
+        type: 'NUMBER',
+        description:
+          'Whole days left until expiresAt, rounded up, never below zero. Absent with expiresAt.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'noExpiry',
+        type: 'STRING',
+        description:
+          'The no-expiry line, rendered, for a service with no expiry; absent otherwise.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.transfer_details_button',
+    description:
+      "Package F: the one button on the recipient's notification. Opens the service through the ordinary ownership check of whoever taps it.",
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.transfer_recipient_invalid',
+    description:
+      'Package F: the typed text is not a numeric Telegram id. The window is opened again.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.transfer_recipient_unavailable',
+    description:
+      'Package F: no customer of this bot has that id, or that customer cannot receive a service. ONE sentence for both, so a refusal does not say which accounts an operator has blocked. The window is opened again.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.transfer_recipient_self',
+    description: "Package F: the id typed is the sender's own. The window is opened again.",
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.transfer_unavailable',
+    description:
+      'Package F: this service cannot be transferred now. One sentence for every reason: its state, an undelivered link, a pending payment, request or operation, or a trial.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
   {
     key: 'bot.admin.refund_request_card',
     description:

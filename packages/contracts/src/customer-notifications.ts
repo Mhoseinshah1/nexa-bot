@@ -214,6 +214,17 @@ export const CUSTOMER_NOTIFICATION_KINDS = [
   'SERVICE_REFUND_REQUEST_APPROVED',
   /** WP19. An administrator refused the request; the reason is read from the request row. */
   'SERVICE_REFUND_REQUEST_REJECTED',
+  /**
+   * Package F. Another customer handed this customer one of their services.
+   * `service_ownership_transfers.id` is the subject — one row per transfer, so a service
+   * given, given away and given back is three facts, each told once.
+   *
+   * Its values (the account name, the location, what is left) are read at send time from
+   * the transfer row and the service, and its ONE button — «مشخصات سرویس», opening the
+   * service — is derived from the subject by kind, never stored: the lane still carries no
+   * payload (ADR 0030 §1).
+   */
+  'SERVICE_TRANSFER_RECEIVED',
 ] as const;
 export type CustomerNotificationKind = (typeof CUSTOMER_NOTIFICATION_KINDS)[number];
 export const customerNotificationKindSchema = z.enum(CUSTOMER_NOTIFICATION_KINDS);
@@ -322,6 +333,14 @@ export const CUSTOMER_NOTIFICATION_PRECONDITIONS: Readonly<
   SERVICE_REFUND_REQUEST_REGISTERED: false,
   SERVICE_REFUND_REQUEST_APPROVED: false,
   SERVICE_REFUND_REQUEST_REJECTED: false,
+  /*
+   * `true`, and the second kind that is: "a service was given to you" is a claim about who
+   * owns the service NOW. A service passed on again before the message left would announce
+   * something the recipient no longer has, and its button would open a service that
+   * answers «not found». The reader checks the transfer's service is still owned by the
+   * transfer's recipient, and SUPERSEDES the message when it is not.
+   */
+  SERVICE_TRANSFER_RECEIVED: true,
 };
 
 /**
@@ -379,6 +398,7 @@ export const CUSTOMER_NOTIFICATION_TEMPLATES: Readonly<
   SERVICE_REFUND_REQUEST_REGISTERED: 'bot.service.refund_request_registered',
   SERVICE_REFUND_REQUEST_APPROVED: 'bot.service.refund_request_approved',
   SERVICE_REFUND_REQUEST_REJECTED: 'bot.service.refund_request_rejected',
+  SERVICE_TRANSFER_RECEIVED: 'bot.service.transfer_received',
 };
 
 /**

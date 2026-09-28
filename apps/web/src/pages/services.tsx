@@ -93,10 +93,11 @@ import {
  * rather than shown a control that records a denial when pressed, and again by the
  * server, which is the one that counts. `services.terminate` is its own key.
  *
- * `services.transfer` is still declared with no endpoint, and
- * `services_transfer_absent` says so in words rather than as a disabled button: a
- * disabled control claims "this exists and you lack permission", which is a different
- * and false statement.
+ * `services.transfer` is still declared with no endpoint: Package F built the CUSTOMER's
+ * transfer, from the bot, and no operator transfer. `services_transfer_absent` says so in
+ * words, and that each customer transfer is in the audit log, rather than as a disabled
+ * button: a disabled control claims "this exists and you lack permission", which is a
+ * different and false statement.
  */
 
 export const STATE_LABELS: Readonly<Record<ServiceState, WebKey>> = {

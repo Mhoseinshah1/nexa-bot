@@ -42,6 +42,13 @@ export const CUSTOMER_CAPTURE_PURPOSES = [
    * made from what the customer typed and never from a callback.
    */
   'CUSTOM_SERVICE_DAYS',
+  /**
+   * Package F: the numeric Telegram id of the customer a service is to be handed to.
+   * `subject_id` names the SERVICE, like `SERVICE_REFUND_REASON`; the window reads only
+   * messages newer than the tap that opened it, and moves nothing — the typed id opens a
+   * confirmation screen, and only its button transfers.
+   */
+  'SERVICE_TRANSFER_RECIPIENT',
 ] as const;
 export type CustomerCapturePurpose = (typeof CUSTOMER_CAPTURE_PURPOSES)[number];
 export const customerCapturePurposeSchema = z.enum(CUSTOMER_CAPTURE_PURPOSES);

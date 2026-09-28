@@ -1996,7 +1996,7 @@ export class PaymentService {
     }
     return this.deps.provisioning.prepareCommercialAction(
       scope,
-      { serviceId: action.serviceId, kind: action.kind },
+      { serviceId: action.serviceId, kind: action.kind, customerId: order.customerId },
       tx,
       onIneligible,
     );

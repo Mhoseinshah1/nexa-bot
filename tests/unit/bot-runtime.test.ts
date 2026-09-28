@@ -70,6 +70,12 @@ import {
   SERVICE_ACTION_CONFIRM_CALLBACK_PREFIX,
   SERVICE_REFRESH_CALLBACK_PREFIX,
   SERVICE_FILES_CALLBACK_PREFIX,
+  SERVICE_TRANSFER_ASK_CALLBACK_PREFIX,
+  SERVICE_TRANSFER_CONFIRM_CALLBACK_PREFIX,
+  decodeTransferConfirm,
+  notificationButtons,
+  TRANSFER_CONFIRM_VERSION_MAX,
+  transferConfirmData,
   MAIN_MENU_CALLBACK_DATA,
   TUTORIAL_PLATFORM_CALLBACK_PREFIX,
   TOPUP_ROUTE_CALLBACK_PREFIX,
@@ -794,6 +800,26 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.service.search_results',
       'bot.service.suspend_button',
       /*
+       * Package F: a customer hands a service to another customer. Reviewed, one at a time:
+       * the button and the prompt ASK and move nothing; the confirmation names what moves
+       * and says the note is cleared; only its button transfers; `transfer_done` is said
+       * once the transfer committed, and again to a repeated tap of the same transfer; the
+       * three recipient refusals each ask for the id again, and unknown and blocked are ONE
+       * sentence; `transfer_unavailable` is one sentence for every reason about the service.
+       * `transfer_details_button` is the recipient notification's button, drawn by
+       * `notificationButtons` for the lane — `transfer_received` itself is the lane's.
+       */
+      'bot.service.transfer_button',
+      'bot.service.transfer_confirm',
+      'bot.service.transfer_confirm_button',
+      'bot.service.transfer_details_button',
+      'bot.service.transfer_done',
+      'bot.service.transfer_prompt',
+      'bot.service.transfer_recipient_invalid',
+      'bot.service.transfer_recipient_self',
+      'bot.service.transfer_recipient_unavailable',
+      'bot.service.transfer_unavailable',
+      /*
        * `bot.service.terminate_button`, `terminate_confirm` and `terminate_confirm_button`
        * LEFT this set in WP15 G1: a customer can no longer terminate, and a stale tap is
        * answered `bot.service.capability_unsupported`. The keys stay in the catalogue —
@@ -1412,6 +1438,8 @@ describe('a callback prefix decides what happens, so no prefix may shadow anothe
     // The customer UX completion's id-carrying routes.
     SERVICE_REFRESH: SERVICE_REFRESH_CALLBACK_PREFIX,
     SERVICE_FILES: SERVICE_FILES_CALLBACK_PREFIX,
+    // Package F: `ta:` begins with `t` like `t:`, `to:` and `tp:`; the shadowing case proves it safe.
+    SERVICE_TRANSFER_ASK: SERVICE_TRANSFER_ASK_CALLBACK_PREFIX,
     SERVICE_NOTE: SERVICE_NOTE_CALLBACK_PREFIX,
     SERVICE_RENEW_QUOTE: SERVICE_RENEW_QUOTE_CALLBACK_PREFIX,
     TOPUP_CLOSE: TOPUP_CLOSE_CALLBACK_PREFIX,
@@ -1459,6 +1487,8 @@ describe('a callback prefix decides what happens, so no prefix may shadow anothe
     SERVICES_LIST_PAGE: SERVICES_LIST_PAGE_CALLBACK_PREFIX,
     SERVICES_SEARCH: SERVICES_SEARCH_CALLBACK_DATA,
     REFERRAL_GIFT: REFERRAL_GIFT_CALLBACK_DATA,
+    // Package F: a service and a recipient's numeric id, not a uuid alone.
+    SERVICE_TRANSFER_CONFIRM: SERVICE_TRANSFER_CONFIRM_CALLBACK_PREFIX,
   };
 
   const ALL_PREFIXES: Readonly<Record<string, string>> = {
@@ -1594,6 +1624,81 @@ describe('a callback prefix decides what happens, so no prefix may shadow anothe
         ).toBe('UNSUPPORTED');
       }
     }
+  });
+
+  describe('the transfer confirmation (Package F)', () => {
+    const service = '0191f4a0-2d3c-7c2b-9a41-6f2b0c7e51aa';
+    const tap = (data: string) => intentOf({ callback_query: { id: 'cbq', data } });
+
+    it('carries the service, the recipient id and the ownership version, inside 64 bytes', () => {
+      // The longest id `telegramUserIdSchema` admits: nineteen digits; the largest version.
+      const longest = '9'.repeat(19);
+      const data = transferConfirmData(service, longest, TRANSFER_CONFIRM_VERSION_MAX);
+      expect(data).toBe(`tc:${service}.${longest}.zzzz`);
+      expect(Buffer.byteLength(data ?? '', 'utf8')).toBe(64);
+      expect(tap(data ?? '')).toMatchObject({
+        intent: 'SERVICE_TRANSFER_CONFIRM',
+        targetId: service,
+        secondaryId: longest,
+        ownershipVersion: TRANSFER_CONFIRM_VERSION_MAX,
+      });
+      expect(decodeTransferConfirm(data ?? '')).toEqual({
+        serviceId: service,
+        recipientTelegramUserId: longest,
+        ownershipVersion: TRANSFER_CONFIRM_VERSION_MAX,
+      });
+    });
+
+    it('round-trips every version shape, and draws nothing past the largest one', () => {
+      for (const version of [0, 1, 35, 36, 1295, 1296, TRANSFER_CONFIRM_VERSION_MAX]) {
+        const data = transferConfirmData(service, '42', version);
+        expect(decodeTransferConfirm(data ?? '')?.ownershipVersion, String(version)).toBe(version);
+      }
+      expect(transferConfirmData(service, '42', TRANSFER_CONFIRM_VERSION_MAX + 1)).toBeNull();
+      expect(transferConfirmData(service, '42', -1)).toBeNull();
+      expect(transferConfirmData(service, '42', 1.5)).toBeNull();
+    });
+
+    it.each([
+      ['no recipient', `tc:${service}`],
+      ['an empty recipient', `tc:${service}.`],
+      ['no version, as a confirmation drawn before versions were carried', `tc:${service}.123`],
+      ['an empty version', `tc:${service}.123.`],
+      ['a fourth part', `tc:${service}.123.4.5`],
+      ['a version with a leading zero', `tc:${service}.123.01`],
+      ['an upper-case version', `tc:${service}.123.A`],
+      ['a five-digit version', `tc:${service}.123.10000`],
+      ['a negative version', `tc:${service}.123.-1`],
+      ['a leading zero', `tc:${service}.0123.0`],
+      ['a negative id', `tc:${service}.-5.0`],
+      ['twenty digits', `tc:${service}.${'1'.repeat(20)}.0`],
+      ['a service that is no uuid', 'tc:not-a-uuid.123.0'],
+      ['Persian digits, which only the typed id accepts', `tc:${service}.۱۲۳.0`],
+    ])('answers %s as UNSUPPORTED, never a half-read', (_label, data) => {
+      expect(tap(data).intent).toBe('UNSUPPORTED');
+      expect(decodeTransferConfirm(data)).toBeNull();
+    });
+
+    it('routes the ask to its own intent, which moves nothing', () => {
+      expect(tap(`${SERVICE_TRANSFER_ASK_CALLBACK_PREFIX}${service}`)).toMatchObject({
+        intent: 'SERVICE_TRANSFER_ASK',
+        targetId: service,
+      });
+    });
+
+    it("gives the recipient's notification ONE button, opening that service", () => {
+      expect(notificationButtons('SERVICE_TRANSFER_RECEIVED', { serviceId: service })).toEqual([
+        {
+          label: { kind: 'TEMPLATE', key: 'bot.service.transfer_details_button' },
+          data: `s:${service}`,
+        },
+      ]);
+      // Every other kind carries no keyboard at all.
+      expect(notificationButtons('SERVICE_ACTION_SUCCEEDED', { serviceId: service })).toEqual([]);
+      expect(
+        notificationButtons('SERVICE_REFUND_REQUEST_APPROVED', { serviceId: service }),
+      ).toEqual([]);
+    });
   });
 
   it('never routes anything but the confirmation button to SERVICE_TERMINATE', () => {

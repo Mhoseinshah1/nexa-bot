@@ -5097,10 +5097,16 @@ export const services = pgTable(
       foreignColumns: [customers.tenantId, customers.id],
       name: 'services_customer_fk',
     }),
-    /** The customer travels with the order, or a service lands in the wrong list. */
+    /**
+     * The order that bought the service. Two columns since Package F: a service's customer
+     * is its order's at CREATION — `nexa_services_ownership_guard` refuses an insert that
+     * disagrees — and afterwards changes only through a `service_ownership_transfers` row,
+     * which the same trigger requires. The three-column form made the order's customer the
+     * owner for ever, which is what a transfer is not (`docs/package-f-service-transfer-audit.md`).
+     */
     foreignKey({
-      columns: [table.tenantId, table.orderId, table.customerId],
-      foreignColumns: [orders.tenantId, orders.id, orders.customerId],
+      columns: [table.tenantId, table.orderId],
+      foreignColumns: [orders.tenantId, orders.id],
       name: 'services_order_fk',
     }),
     foreignKey({
@@ -5220,14 +5226,15 @@ export const services = pgTable(
       .where(sql`delivery_state = 'PENDING'`),
     unique('services_tenant_id_key').on(table.tenantId, table.id),
     /**
-     * Redundant against the primary key, and the target of a CUSTOMER-bearing
-     * composite reference — exactly as `orders_tenant_id_customer_key` is.
+     * Redundant against the primary key. It was the target of the three-column reference
+     * `service_commercial_actions` held until Package F, which now references the service
+     * by two columns and checks the owner with a trigger at insert.
      *
-     * `service_commercial_actions` names a service and a customer, and a two-column
-     * `(tenant_id, service_id)` reference would let the pair disagree: a renewal one
-     * customer paid for, recorded against another customer's account. The three-column
-     * form makes that unrepresentable rather than merely unlikely, and it needs this
-     * index to point at.
+     * Kept, and not for a reference: `customer_id` being in a unique key is what makes an
+     * UPDATE of it take `FOR UPDATE` rather than `FOR NO KEY UPDATE`. So a transfer's
+     * reassignment waits for a foreign-key check already in flight on the row — a
+     * commercial draft's — and one arriving after it waits for the transfer and then reads
+     * the new owner, instead of the two interleaving.
      */
     unique('services_tenant_id_customer_key').on(table.tenantId, table.id, table.customerId),
   ],
@@ -5451,10 +5458,15 @@ export const serviceCommercialActions = pgTable(
       foreignColumns: [customers.tenantId, customers.id],
       name: 'service_commercial_actions_customer_fk',
     }),
-    /** The customer travels with the service, or a renewal lands on the wrong account. */
+    /**
+     * The service. Two columns since Package F: a row is append-only and outlives a
+     * transfer, so it names the customer who OWNED the service when it was written, which
+     * `nexa_commercial_action_owner_guard` requires at insert. The three-column form made
+     * even an abandoned renewal draft pin the service to its payer for ever.
+     */
     foreignKey({
-      columns: [table.tenantId, table.serviceId, table.customerId],
-      foreignColumns: [services.tenantId, services.id, services.customerId],
+      columns: [table.tenantId, table.serviceId],
+      foreignColumns: [services.tenantId, services.id],
       name: 'service_commercial_actions_service_fk',
     }),
     /** And with the order, so the money and the effect cannot name two people. */
@@ -7144,12 +7156,13 @@ export const customerTextCaptures = pgTable(
           AND (amount_minor IS NULL OR purpose = 'TOPUP_AMOUNT')`,
     ),
     /**
-     * A note and a refund reason (WP19) name their service, and the two custom-service
-     * windows (Package D) their panel; the other purposes name nothing.
+     * A note, a refund reason (WP19) and a transfer's recipient (Package F) name their
+     * service, and the two custom-service windows (Package D) their panel; the other
+     * purposes name nothing.
      */
     check(
       'customer_text_captures_subject_check',
-      sql`(purpose IN ('SERVICE_NOTE', 'SERVICE_REFUND_REASON', 'CUSTOM_SERVICE_VOLUME', 'CUSTOM_SERVICE_DAYS')) = (subject_id IS NOT NULL)`,
+      sql`(purpose IN ('SERVICE_NOTE', 'SERVICE_REFUND_REASON', 'CUSTOM_SERVICE_VOLUME', 'CUSTOM_SERVICE_DAYS', 'SERVICE_TRANSFER_RECIPIENT')) = (subject_id IS NOT NULL)`,
     ),
     /** Only the days window carries a volume, and it always does (Package D). */
     check(
@@ -7722,5 +7735,77 @@ export const orderCustomServiceTerms = pgTable(
       'order_custom_service_terms_base_amount_check',
       sql`base_amount = volume_amount + time_amount`,
     ),
+  ],
+);
+
+/**
+ * Package F — one row per change of a service's owner (`docs/package-f-service-transfer-audit.md`).
+ *
+ * Append-only: `nexa_reject_mutation` refuses an UPDATE or a DELETE, like the audit log.
+ * It is the evidence `services.customer_id` moved legitimately, and more than evidence:
+ * `nexa_services_ownership_guard` refuses a change of that column unless the NEWEST row
+ * here for the service names exactly the old owner and the new one. So no writer — a
+ * refactor, a script, an operator's SQL — can hand a service over without leaving this
+ * row, in the same transaction.
+ *
+ * Nothing financial is here, deliberately. The order, its payment and every ledger entry
+ * stay the payer's; this records only who owned the service before and after.
+ */
+export const serviceOwnershipTransfers = pgTable(
+  'service_ownership_transfers',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    /**
+     * The order the rows were written in, per service. "Newest" is decided by this and not
+     * by `created_at`: two transfers of one service a clock tick apart — or on two replicas
+     * whose clocks disagree — must still have one newest row, and the row lock that
+     * serialises them makes this sequence their commit order.
+     */
+    seq: bigint('seq', { mode: 'bigint' }).generatedAlwaysAsIdentity().notNull(),
+    serviceId: uuid('service_id').notNull(),
+    fromCustomerId: uuid('from_customer_id').notNull(),
+    toCustomerId: uuid('to_customer_id').notNull(),
+    /** The bot the sender confirmed through. */
+    botInstanceId: uuid('bot_instance_id')
+      .notNull()
+      .references(() => botInstances.id),
+    /**
+     * The confirmation's idempotency key — the Telegram update that carried the tap. Unique
+     * for ever, so a redelivered update answers with this row and never transfers again.
+     */
+    idempotencyKey: text('idempotency_key').notNull(),
+    /** Who asked, as the audit row records it: captured at action time. */
+    actorType: text('actor_type').notNull(),
+    actorLabel: text('actor_label'),
+    correlationId: text('correlation_id').notNull(),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+  },
+  (table) => [
+    unique('service_ownership_transfers_tenant_id_key').on(table.tenantId, table.id),
+    unique('service_ownership_transfers_key').on(table.tenantId, table.idempotencyKey),
+    /** The newest transfer of a service: the ownership guard's read, and the replay's. */
+    index('service_ownership_transfers_service_idx').on(table.tenantId, table.serviceId, table.seq),
+    foreignKey({
+      columns: [table.tenantId, table.serviceId],
+      foreignColumns: [services.tenantId, services.id],
+      name: 'service_ownership_transfers_service_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.fromCustomerId],
+      foreignColumns: [customers.tenantId, customers.id],
+      name: 'service_ownership_transfers_from_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.toCustomerId],
+      foreignColumns: [customers.tenantId, customers.id],
+      name: 'service_ownership_transfers_to_fk',
+    }),
+    /** A service is never "transferred" to the customer who already has it. */
+    check('service_ownership_transfers_parties_check', sql`from_customer_id <> to_customer_id`),
+    check('service_ownership_transfers_actor_type_check', enumCheck('actor_type', ACTOR_TYPES)),
+    check('service_ownership_transfers_key_check', sql`length(idempotency_key) BETWEEN 1 AND 200`),
   ],
 );
