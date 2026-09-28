@@ -70,9 +70,11 @@ export const FEATURE_FLAGS = [
   {
     key: 'ops_notifications',
     description:
-      'Project operational events at or above the configured severity into the operations ' +
-      'destination, and the financial log into its payments topic (WP18). Off by default: a destination has to be configured and tested first, and a ' +
-      'flag that is on before its configuration exists is the inert-setting trap in reverse.',
+      'Project operational events into the operations log group — routed to its system or ' +
+      'payments topic by event (WP-A4), not filtered by severity — and the financial log into ' +
+      'its payments topic (WP18). Off by default: a destination has to be connected and tested ' +
+      'first, and a flag that is on before its configuration exists is the inert-setting trap ' +
+      'in reverse.',
     defaultEnabled: false,
     // Turning this off means nobody is told when things fail. That is worth
     // saying out loud before it happens.
@@ -81,7 +83,6 @@ export const FEATURE_FLAGS = [
       'ops.notifications.telegram_chat_id',
       'ops.notifications.telegram_topic_id',
       'ops.notifications.payments_topic_id',
-      'ops.notifications.min_severity',
       'ops.notifications.max_attempts',
       'ops.notifications.max_per_minute',
     ],

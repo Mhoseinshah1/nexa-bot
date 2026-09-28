@@ -75,6 +75,7 @@ export * from './templates.js';
 export * from './settings.js';
 export * from './features.js';
 export * from './notifications.js';
+export * from './ops-log-group.js';
 export * from './backup.js';
 export * from './recovery.js';
 export * from './secrets.js';

@@ -65,8 +65,8 @@ describe('control-plane isolation and concurrency', () => {
         ownerB,
         'ops.notifications.max_attempts',
       );
-      // B sees the DEFAULT, not A's value and not an error.
-      expect(seenByB.value).toBe(5);
+      // B sees the DEFAULT (ten since WP-A4), not A's value and not an error.
+      expect(seenByB.value).toBe(10);
       expect(seenByB.source).toBe('DEFAULT');
     });
 
@@ -519,7 +519,7 @@ describe('control-plane isolation and concurrency', () => {
       // and is still scoped to the tenant it was given.
       expect(
         await ctx.container.settingsResolver.valueOf(tenantA, 'ops.notifications.max_attempts'),
-      ).toBe(5);
+      ).toBe(10);
     });
   });
 });

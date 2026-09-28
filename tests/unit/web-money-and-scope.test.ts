@@ -520,8 +520,12 @@ describe('the settings the owner revisions add', () => {
      *
      * The list is exact rather than a membership check, so a key that quietly gains or
      * loses a consumer has to say so here.
+     *
+     * `ops.notifications.min_severity` came BACK onto it in WP-A4, as a retirement rather
+     * than a plan: the Telegram ops stream follows explicit event-to-topic routing now, so
+     * nothing reads the threshold, and it stays declared only so a stored value parses.
      */
-    expect(planned.sort()).toEqual([]);
+    expect(planned.sort()).toEqual(['ops.notifications.min_severity']);
     for (const key of [
       'sales.currency',
       'wallet.topup.minimum',
@@ -530,7 +534,9 @@ describe('the settings the owner revisions add', () => {
     ]) {
       expect(SETTINGS.find((s) => s.key === key)?.consumer, key).toBe('ACTIVE');
     }
-    for (const s of SETTINGS.filter((s) => s.key.startsWith('ops.notifications.'))) {
+    for (const s of SETTINGS.filter(
+      (s) => s.key.startsWith('ops.notifications.') && s.key !== 'ops.notifications.min_severity',
+    )) {
       expect(s.consumer, s.key).toBe('ACTIVE');
     }
   });
