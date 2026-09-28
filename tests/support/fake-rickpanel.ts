@@ -131,7 +131,44 @@ export interface FakeRickpanel {
   createCalls(): number;
   /** How many `revoke_sub` calls reached the panel, whatever they did. */
   revokeCalls(): number;
+  /**
+   * Package E: the body `GET /api/user/{name}/files` answers with, or null for the
+   * panel's own — one JSON config and one plain-text list per user, both built from the
+   * user's subscription token, which is how a test can prove the bytes were never kept.
+   */
+  filesBody: string | null;
+  /**
+   * Package E: the panel's documented limit, "once a minute per user", enforced: a
+   * second content read inside the window answers 429 with `Retry-After` in seconds.
+   * Zero turns it off.
+   */
+  filesWindowMs: number;
+  /** How many content reads of `/files` reached the panel, limited or not. */
+  filesCalls(): number;
   close(): Promise<void>;
+}
+
+/** The two formats the fake builds for a user, from its token (Package E). */
+export function fakeRickpanelFiles(user: FakeRickpanelUser): readonly {
+  readonly filename: string;
+  readonly media_type: string;
+  readonly content: string;
+  readonly caption: string;
+}[] {
+  return [
+    {
+      filename: `${user.username}.json`,
+      media_type: 'application/json',
+      content: JSON.stringify({ outbounds: [{ token: user.subToken }] }),
+      caption: `${user.username} — JSON`,
+    },
+    {
+      filename: `${user.username}.txt`,
+      media_type: 'text/plain; charset=utf-8',
+      content: `vless://${user.subToken}@node.example.test:443`,
+      caption: `${user.username} — links`,
+    },
+  ];
 }
 
 /** What the owner's panel generated from a `{"vless": {}}` seed: more than was asked for. */
@@ -158,6 +195,9 @@ export async function startFakeRickpanel(
   let droppedReads = 0;
   let unappliedPutFailures = 0;
   let stringNumbers = false;
+  let filesBody: string | null = null;
+  let filesWindowMs = 60_000;
+  const filesReadAt = new Map<string, number>();
   let omitUsedTraffic = false;
   let rotationCounter = 0;
 
@@ -267,6 +307,36 @@ export async function startFakeRickpanel(
         // happens while the call is on the wire, from the caller's side.
         void hook().then(() => json(200, present(held)));
         return;
+      }
+
+      const files = /^\/api\/user\/([^/]+)\/files$/.exec(path);
+      if (files !== null && method === 'GET') {
+        const held = users.get(decodeURIComponent(files[1] ?? ''));
+        // "A user you do not own answers 404, the same as one that does not exist."
+        if (held === undefined) return void json(404, { detail: 'User not found' });
+        const last = filesReadAt.get(held.username);
+        const now = Date.now();
+        if (filesWindowMs > 0 && last !== undefined && now - last < filesWindowMs) {
+          response.writeHead(429, {
+            'content-type': 'application/json',
+            'retry-after': String(Math.ceil((filesWindowMs - (now - last)) / 1000)),
+          });
+          return void response.end(JSON.stringify({ detail: 'Too many requests' }));
+        }
+        filesReadAt.set(held.username, now);
+        if (filesBody !== null) {
+          response.writeHead(200, { 'content-type': 'application/json' });
+          return void response.end(filesBody);
+        }
+        return void json(
+          200,
+          fakeRickpanelFiles(held).map((one) => ({
+            filename: one.filename,
+            media_type: one.media_type,
+            caption: one.caption,
+            content_b64: Buffer.from(one.content, 'utf8').toString('base64'),
+          })),
+        );
       }
 
       const single = /^\/api\/user\/([^/]+)$/.exec(path);
@@ -392,6 +462,20 @@ export async function startFakeRickpanel(
     set revokeMode(next: RickpanelRevokeMode) {
       revokeMode = next;
     },
+    get filesBody() {
+      return filesBody;
+    },
+    set filesBody(next: string | null) {
+      filesBody = next;
+    },
+    get filesWindowMs() {
+      return filesWindowMs;
+    },
+    set filesWindowMs(next: number) {
+      filesWindowMs = next;
+    },
+    filesCalls: () =>
+      requests.filter((one) => one.method === 'GET' && /\/files(\?|$)/.test(one.path)).length,
     requests,
     users,
     createCalls: () =>

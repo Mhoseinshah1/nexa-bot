@@ -251,6 +251,10 @@ describe('panel HTTP surface', () => {
           // owner's panel and proven per call by a read-back
           // (`docs/rickpanel-rotate-audit.md`). Named absent for the other two below.
           'ROTATE_SUBSCRIPTION_LINK',
+          // Package E: `GET /api/user/{username}/files`, declared in the change that
+          // implements it (`docs/package-e-rickpanel-files-audit.md` §2). Named absent for
+          // the other two below.
+          'SUBSCRIPTION_FILES',
         ],
         sanaei: [
           'HEALTH_CHECK',
@@ -284,6 +288,10 @@ describe('panel HTTP surface', () => {
         if (provider.key !== 'rickpanel') {
           expect(provider.capabilities, `${provider.key}.ROTATE_SUBSCRIPTION_LINK`).not.toContain(
             'ROTATE_SUBSCRIPTION_LINK',
+          );
+          // Package E: neither Marzban nor 3X-UI has a files endpoint this code calls.
+          expect(provider.capabilities, `${provider.key}.SUBSCRIPTION_FILES`).not.toContain(
+            'SUBSCRIPTION_FILES',
           );
         }
         /*

@@ -739,6 +739,14 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.service.subscription': 'لینک اشتراک شما:\n<code>{subscriptionUrl}</code>',
   'bot.service.resend_button': 'ارسال دوباره لینک اشتراک',
   'bot.service.rotate_button': '⚙️ تغییر لینک',
+  'bot.service.files_button': '📁 دریافت فایل‌های اتصال',
+  'bot.service.file_caption': '{caption}',
+  'bot.service.files_partial':
+    '⚠️ {failed} فرمت از فایل‌های اتصال آماده نشد. فایل‌های دیگر ارسال شدند.',
+  'bot.service.files_unavailable':
+    'فایل‌های اتصال این سرویس در حال حاضر در دسترس نیست. لطفاً کمی بعد دوباره امتحان کنید.',
+  'bot.service.files_rate_limited':
+    'فایل‌های اتصال به‌تازگی درخواست شده‌اند. لطفاً {seconds} ثانیه دیگر دوباره امتحان کنید.',
   // Says nothing about the old link on purpose: that it stops working is not proven
   // (OQ-RP-07), and templates.ts records why a sentence here must not imply it.
   'bot.service.rotate_ask':

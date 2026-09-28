@@ -5015,6 +5015,70 @@ export const TEMPLATES = [
     ],
   },
   {
+    key: 'bot.service.files_button',
+    description:
+      "The service detail's button that fetches the panel's ready-made connection files " +
+      '(Package E). Drawn only when the panel can fetch them.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.file_caption',
+    description:
+      "The caption on one connection file: the panel's own ready-made caption, cleaned and " +
+      "bounded. PLAIN_TEXT, so a panel's text is never parsed as markup.",
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'caption',
+        type: 'STRING',
+        description: "The panel's caption for this file.",
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.files_partial',
+    description:
+      'Sent after the connection files that could be sent, when some formats could not be ' +
+      'prepared. Names how many, never why.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'failed',
+        type: 'NUMBER',
+        description: 'How many formats could not be sent.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.files_unavailable',
+    description:
+      'The one answer when no connection file can be sent right now: none usable, the panel ' +
+      'unreadable, or its budget spent. A customer can act on none of the reasons.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.files_rate_limited',
+    description:
+      'The panel limits how often the files may be read. Names how long to wait, from the ' +
+      "panel's own Retry-After.",
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'seconds',
+        type: 'NUMBER',
+        description: 'Seconds until another request will be answered.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
     key: 'bot.service.detail',
     description:
       'One service, as its owner sees it. Usage and expiry come from the last ' +

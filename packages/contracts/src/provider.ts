@@ -49,6 +49,13 @@ export const PROVIDER_CAPABILITIES = [
   'LIMIT_DEVICES',
   'INACTIVE_ACCOUNT_INBOUND',
   'HEALTH_CHECK',
+  /*
+   * The panel's own ready-made connection files, fetched on a customer's request
+   * (Package E). Not `DELIVER_CONFIG_FILE`, which names a delivery SHAPE nothing
+   * produces: this is a READ of files the panel builds, and it is gated by
+   * `canFetchSubscriptionFiles`, which also requires the method.
+   */
+  'SUBSCRIPTION_FILES',
 ] as const;
 export type ProviderCapability = (typeof PROVIDER_CAPABILITIES)[number];
 
@@ -1194,7 +1201,85 @@ export interface ProviderAdapter extends ProviderConnectionAdapter {
     ref: ProviderUserRef,
     previousUrl: string | null,
   ): Promise<ProviderRotationOutcome>;
+
+  /**
+   * The panel's ready-made connection files for one account (Package E).
+   *
+   * A READ: nothing on the panel changes, so it is never an operation and never
+   * retried. The bytes are returned in memory, decoded and bounded by the adapter
+   * (`SUBSCRIPTION_FILES_MAX_COUNT` and the two byte bounds), and they are credentials:
+   * the caller sends them to the account's owner and keeps them nowhere.
+   *
+   * Optional, and gated by `canFetchSubscriptionFiles`, which requires the method AND
+   * the `SUBSCRIPTION_FILES` capability.
+   */
+  fetchSubscriptionFiles?(
+    target: ProviderServiceTarget,
+    http: ProviderHttpClient,
+    ref: ProviderUserRef,
+  ): Promise<ProviderSubscriptionFilesOutcome>;
 }
+
+/*
+ * The bounds on one fetch of subscription files (Package E, brief E3).
+ *
+ * The response itself is bounded first, by the panel HTTP client's
+ * `PANEL_HTTP_MAX_RESPONSE_BYTES`, which an adapter cannot widen. These bound what is
+ * decoded from it: more entries than the count is a malformed answer, and a file past
+ * either byte bound is one failed format, never a truncated file.
+ */
+export const SUBSCRIPTION_FILES_MAX_COUNT = 20;
+export const SUBSCRIPTION_FILE_MAX_BYTES = 5 * 1024 * 1024;
+export const SUBSCRIPTION_FILES_MAX_TOTAL_BYTES = 20 * 1024 * 1024;
+/** A file name, reduced to a base name, is at most this long. */
+export const SUBSCRIPTION_FILE_NAME_MAX_LENGTH = 128;
+/** A provider's ready-made caption is cut to this, below Telegram's 1024. */
+export const SUBSCRIPTION_FILE_CAPTION_MAX_LENGTH = 900;
+
+/**
+ * The media types a subscription file is sent as. Closed: a provider's `media_type` is
+ * mapped into this set, and anything else goes as `application/octet-stream`, which
+ * Telegram accepts for any document.
+ */
+export const SUBSCRIPTION_FILE_MEDIA_TYPES = [
+  'application/octet-stream',
+  'text/plain',
+  'application/json',
+  'application/yaml',
+  'application/x-yaml',
+  'text/yaml',
+  'application/xml',
+  'text/xml',
+  'image/png',
+] as const;
+export type SubscriptionFileMediaType = (typeof SUBSCRIPTION_FILE_MEDIA_TYPES)[number];
+
+/** One file a provider built, decoded, named and typed. Held in memory only. */
+export interface ProviderSubscriptionFile {
+  readonly fileName: string;
+  readonly mediaType: SubscriptionFileMediaType;
+  readonly bytes: Uint8Array;
+  /** The provider's own caption, cleaned and bounded; null when it gave none. */
+  readonly caption: string | null;
+}
+
+/**
+ * What a fetch of subscription files produced.
+ *
+ * `failed` counts the formats the provider reported as failed, and the ones this
+ * installation refused (malformed Base64, out of bounds) — the customer is told one
+ * number, never why. `found: false` is the panel saying it does not hold the account.
+ * A 429 carries `retryAfterMs` when the provider said how long to wait.
+ */
+export type ProviderSubscriptionFilesOutcome =
+  | {
+      readonly ok: true;
+      readonly found: true;
+      readonly files: readonly ProviderSubscriptionFile[];
+      readonly failed: number;
+    }
+  | { readonly ok: true; readonly found: false }
+  | (ProviderFailureResult & { readonly retryAfterMs?: number });
 
 /**
  * What a rotation produced.
@@ -1267,6 +1352,18 @@ export type CanRotateSubscription = ProviderAdapter &
 export function canRotateSubscription(adapter: ProviderAdapter): adapter is CanRotateSubscription {
   return (
     typeof adapter.rotateSubscription === 'function' && adapter.supports('ROTATE_SUBSCRIPTION_LINK')
+  );
+}
+
+/** An adapter narrowed to one it is safe to call `fetchSubscriptionFiles` on. */
+export type CanFetchSubscriptionFiles = ProviderAdapter &
+  Pick<Required<ProviderAdapter>, 'fetchSubscriptionFiles'>;
+
+export function canFetchSubscriptionFiles(
+  adapter: ProviderAdapter,
+): adapter is CanFetchSubscriptionFiles {
+  return (
+    typeof adapter.fetchSubscriptionFiles === 'function' && adapter.supports('SUBSCRIPTION_FILES')
   );
 }
 
@@ -1464,6 +1561,8 @@ const RICKPANEL: ProviderDescriptor = {
     'ADD_VOLUME',
     'ADD_TIME',
     'ROTATE_SUBSCRIPTION_LINK',
+    // `GET /api/user/{username}/files` (Package E, `docs/package-e-rickpanel-files-audit.md`).
+    'SUBSCRIPTION_FILES',
   ],
   // A token exchange, then a status read. The create path's read-back is not a
   // probe and is budgeted by the operation, not by this number.

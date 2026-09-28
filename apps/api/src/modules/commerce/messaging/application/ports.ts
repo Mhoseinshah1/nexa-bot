@@ -7,6 +7,7 @@ import type {
   TemplateValues,
   TenantContext,
   UserId,
+  SubscriptionFileMediaType,
 } from '@nexa/contracts';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 
@@ -194,8 +195,9 @@ export interface CustomerFileMessage {
    * multipart upload. A union rather than two optional fields so a message cannot name
    * both, or neither.
    *
-   * `mimeType` is closed to the two raster types `sendPhoto` accepts. A document of an
-   * arbitrary type is not something this product sends a customer.
+   * `mimeType` is closed: the two raster types `sendPhoto` accepts, and the vetted set a
+   * panel's connection file is sent as (`SUBSCRIPTION_FILE_MEDIA_TYPES`, Package E). A
+   * document of an arbitrary type is not something this product sends a customer.
    */
   readonly source: CustomerFileSource;
   /**
@@ -218,7 +220,12 @@ export type CustomerFileSource =
       readonly kind: 'BYTES';
       readonly bytes: Uint8Array;
       readonly fileName: string;
-      readonly mimeType: 'image/png' | 'image/jpeg';
+      /*
+       * The two raster types `sendPhoto` accepts, and the closed set a subscription file
+       * is sent as (Package E) — each vetted in `@nexa/contracts`, never a provider's
+       * string passed through.
+       */
+      readonly mimeType: 'image/png' | 'image/jpeg' | SubscriptionFileMediaType;
     };
 
 /**

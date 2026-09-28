@@ -413,6 +413,10 @@ describe('the provider registry', () => {
         // Measured on the owner's panel and proven per call by a read-back:
         // `docs/rickpanel-rotate-audit.md`. Marzban and 3X-UI stay without it.
         'ROTATE_SUBSCRIPTION_LINK',
+        // Package E: `GET /api/user/{username}/files`, on the owner's OpenAPI document
+        // and the fake, with the same gap as the rest of this list
+        // (`docs/package-e-rickpanel-files-audit.md` §8).
+        'SUBSCRIPTION_FILES',
       ],
       // `LIMIT_DEVICES` for Sanaei only, and the asymmetry is the whole point of this
       // map being per provider. `SanaeiAdapter.createUser` writes `limitIp` from the
