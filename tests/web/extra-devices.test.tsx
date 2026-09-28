@@ -104,6 +104,46 @@ describe('the extra users / devices screen', () => {
     cleanup();
   });
 
+  it('walks the rate list by its cursor, so a rate past the first page is reachable', async () => {
+    /*
+     * Codex review #1 on PR #97, C2: the page read the first hundred and ignored
+     * `nextCursor`, so a later rate could be created and never seen or edited again.
+     */
+    const later = { ...RATE, id: '019250ab-cdef-7012-8345-6789abcdef78', title: 'تعرفهٔ دوم' };
+    const api = stubApi([
+      { url: '/service-addons?limit=50&kind', body: { addons: [RATE], nextCursor: 'c-2' } },
+      { url: '/service-addons?limit=50&cursor=c-2', body: { addons: [later], nextCursor: null } },
+      { url: '/panels', body: { panels: [panel()], nextCursor: null } },
+      { url: '/products', body: { products: [product()], nextCursor: null } },
+    ]);
+    renderPage(<ExtraDevicesPage denied={false} mayEdit={false} />);
+    await screen.findByText('کاربر اضافه');
+    expect(screen.queryByText('تعرفهٔ دوم')).toBeNull();
+
+    fireEvent.click(screen.getByText('تازه‌تر'));
+    await screen.findByText('تعرفهٔ دوم');
+    expect(api.calls.some((call) => call.url.includes('cursor=c-2'))).toBe(true);
+    expect(screen.queryByText('کاربر اضافه')).toBeNull();
+
+    // And back, to exactly the page it came from.
+    fireEvent.click(screen.getByText('قدیمی‌تر'));
+    await screen.findByText('کاربر اضافه');
+    cleanup();
+  });
+
+  it('offers every panel and product as a scope, past the first page of either', async () => {
+    const far = panel({ id: '01a05e35-c9ad-7e93-bef3-1ed9b55292d9', name: 'Tehran Z' });
+    stubApi([
+      { url: '/service-addons?', body: { addons: [], nextCursor: null } },
+      { url: '/panels?limit=100', body: { panels: [panel()], nextCursor: 'p-2' } },
+      { url: '/panels?limit=100&cursor=p-2', body: { panels: [far], nextCursor: null } },
+      { url: '/products', body: { products: [product()], nextCursor: null } },
+    ]);
+    renderPage(<ExtraDevicesPage denied={false} mayEdit />);
+    await screen.findByText(/Tehran Z/u);
+    cleanup();
+  });
+
   it('is routed at /extra-devices, under the catalogue permissions', () => {
     const route = { path: '/extra-devices', query: new URLSearchParams() };
     const viewer = resolve(route, ['catalog.view']);
