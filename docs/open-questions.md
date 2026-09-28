@@ -2444,3 +2444,28 @@ It is related to the Phase-5 DECISION "Where do exchange rates and gateway fees 
 and to OQ-WP10-01 (no external gateway is named).
 
 UNRESOLVED. Nothing is built (`docs/wp17-payment-phase3-audit.md` F1).
+
+## OQ-PKG-D-01 — how a custom service is renewed or extended
+
+Package D sells a custom service: a location, a volume and a number of days, priced by
+the operator's range rules. It creates a service that names **no product**. Every path
+that extends a service starts from its product:
+
+- **RENEW** re-prices the product the service was bought from.
+- **ADD_TRAFFIC** and **ADD_TIME** copy it onto the add-on order.
+
+So on a service with no product, all three refuse `CUSTOM_SERVICE_NOT_EXTENDABLE`, and
+the Telegram buttons are not drawn (`docs/package-d-custom-service-audit.md` §9). The
+customer can still buy another custom service.
+
+Building an extension needs these decisions, and each one changes what a customer pays:
+
+- **The price of a renewal.** Is it today's custom rules for the same volume and days,
+  or the price the order froze? The first can differ from what the customer paid; the
+  second honours rules that may have been deleted.
+- **Whose rules.** The customer's standing moves: a customer who became a reseller, or
+  whose tier changed, would be priced at a different level than the purchase was.
+- **Add-ons.** Are they priced by the VOLUME and TIME rules at the delta, or by the
+  catalogue's add-on prices?
+- **Records.** Does a renewal write its own `order_custom_service_terms`, and does it
+  carry the location label frozen at purchase or the one written today?
