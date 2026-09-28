@@ -49,6 +49,10 @@ export const serviceTransferRecipientRefusalSchema = z.enum(SERVICE_TRANSFER_REC
  *   paying for it right now.
  * - `TRIAL` — the service came from a free trial, which counts against the claimant's own
  *   allowance and does not move.
+ * - `CONFIRMATION_STALE` — the confirmation was made before the service last changed hands.
+ *   Telegram leaves an old keyboard tappable, so a sender who gave a service away and was
+ *   given it back could otherwise re-send it from a screen that predates both. Decided only
+ *   at confirmation, against the ownership version the confirmation carries.
  */
 export const SERVICE_TRANSFER_INELIGIBILITY_REASONS = [
   'SERVICE_STATE',
@@ -57,6 +61,7 @@ export const SERVICE_TRANSFER_INELIGIBILITY_REASONS = [
   'REFUND_REQUESTED',
   'PAYMENT_PENDING',
   'TRIAL',
+  'CONFIRMATION_STALE',
 ] as const;
 export type ServiceTransferIneligibilityReason =
   (typeof SERVICE_TRANSFER_INELIGIBILITY_REASONS)[number];
