@@ -292,6 +292,24 @@ import {
   type ServiceRefundRequestState,
   type RefundListResponse,
   type RefundResponse,
+  // WP-A7: support tickets.
+  TICKET_ROUTES,
+  ticketAssigneesResponseSchema,
+  ticketCategoryListResponseSchema,
+  ticketCategoryResponseSchema,
+  ticketDetailResponseSchema,
+  ticketListResponseSchema,
+  ticketMutationResponseSchema,
+  ticketReplyResponseSchema,
+  type TicketAssigneesResponse,
+  type TicketCategoryListResponse,
+  type TicketCategoryResponse,
+  type TicketDetailResponse,
+  type TicketListResponse,
+  type TicketMutationResponse,
+  type TicketPriority,
+  type TicketReplyResponse,
+  type TicketStatus,
 } from '@nexa/contracts';
 
 /**
@@ -2521,4 +2539,150 @@ export function replaceBotToken(input: {
 /** Ask Telegram what it holds for this bot. A read; nothing is stored. */
 export function checkBot(id: string): Promise<BotDiagnosticResponse> {
   return post(BOT_ROUTES.diagnostics(id), {}, botDiagnosticResponseSchema);
+}
+
+// ---------------------------------------------------------------------------
+// WP-A7 — support tickets
+// ---------------------------------------------------------------------------
+
+/** The inbox's filters, as the page holds them; each is optional and sent only when set. */
+export interface TicketFilters {
+  readonly status?: TicketStatus;
+  readonly categoryId?: string;
+  /** A customer's id, numeric Telegram id or username — whatever the operator holds. */
+  readonly customer?: string;
+  /** An administrator's id, `me` or `none`. */
+  readonly assigned?: string;
+  /** Half-open `[from, to)` on the creation time, as ISO instants. */
+  readonly from?: string;
+  readonly to?: string;
+  readonly cursor?: { readonly at: string; readonly id: string };
+}
+
+export function fetchTickets(filters: TicketFilters = {}): Promise<TicketListResponse> {
+  const params = new URLSearchParams();
+  if (filters.status !== undefined) params.set('status', filters.status);
+  if (filters.categoryId !== undefined) params.set('categoryId', filters.categoryId);
+  if (filters.customer !== undefined) params.set('customer', filters.customer);
+  if (filters.assigned !== undefined) params.set('assigned', filters.assigned);
+  if (filters.from !== undefined) params.set('from', filters.from);
+  if (filters.to !== undefined) params.set('to', filters.to);
+  if (filters.cursor !== undefined) {
+    params.set('before', filters.cursor.at);
+    params.set('beforeId', filters.cursor.id);
+  }
+  const suffix = params.toString();
+  return authedGet(
+    suffix ? `${TICKET_ROUTES.list}?${suffix}` : TICKET_ROUTES.list,
+    ticketListResponseSchema,
+  );
+}
+
+export function fetchTicket(id: string): Promise<TicketDetailResponse> {
+  return authedGet(TICKET_ROUTES.detail(id), ticketDetailResponseSchema);
+}
+
+/** Who a ticket may be assigned to. `tickets.assign`. */
+export function fetchTicketAssignees(): Promise<TicketAssigneesResponse> {
+  return authedGet(TICKET_ROUTES.assignees, ticketAssigneesResponseSchema);
+}
+
+/**
+ * Support's reply. The key is minted per submission: a retry after a dropped response is
+ * the same reply, and the server refuses the key reused with other words.
+ */
+export function replyToTicket(input: {
+  ticketId: string;
+  idempotencyKey: string;
+  text: string;
+}): Promise<TicketReplyResponse> {
+  return post(
+    TICKET_ROUTES.reply(input.ticketId),
+    { idempotencyKey: input.idempotencyKey, text: input.text },
+    ticketReplyResponseSchema,
+  );
+}
+
+/** A target status: close, reopen or triage. `changed: false` when it was already there. */
+export function setTicketStatus(input: {
+  ticketId: string;
+  status: TicketStatus;
+}): Promise<TicketMutationResponse> {
+  return post(
+    TICKET_ROUTES.status(input.ticketId),
+    { status: input.status },
+    ticketMutationResponseSchema,
+  );
+}
+
+export function assignTicket(input: {
+  ticketId: string;
+  adminId: string | null;
+}): Promise<TicketMutationResponse> {
+  return post(
+    TICKET_ROUTES.assign(input.ticketId),
+    { adminId: input.adminId },
+    ticketMutationResponseSchema,
+  );
+}
+
+export function setTicketPriority(input: {
+  ticketId: string;
+  priority: TicketPriority;
+}): Promise<TicketMutationResponse> {
+  return post(
+    TICKET_ROUTES.priority(input.ticketId),
+    { priority: input.priority },
+    ticketMutationResponseSchema,
+  );
+}
+
+export function setTicketLinks(input: {
+  ticketId: string;
+  serviceId: string | null;
+  orderId: string | null;
+  paymentId: string | null;
+}): Promise<TicketMutationResponse> {
+  const { ticketId, ...body } = input;
+  return post(TICKET_ROUTES.links(ticketId), body, ticketMutationResponseSchema);
+}
+
+/**
+ * One attachment's bytes, as a Blob this tab owns — the receipts' rule: the API serves
+ * them as an octet-stream `attachment` with `nosniff`, and the page decides from the
+ * RECORD whether it may show the file as an image; a document stays a download.
+ */
+export async function fetchTicketAttachment(messageId: string): Promise<Blob> {
+  const response = await fetch(`${API_PREFIX}${TICKET_ROUTES.attachment(messageId)}`, {
+    credentials: 'same-origin',
+    headers: { accept: 'application/octet-stream' },
+  });
+  if (!response.ok) {
+    const payload: unknown = await response.json().catch(() => null);
+    throw toApiError(response.status, payload);
+  }
+  return response.blob();
+}
+
+export function fetchTicketCategories(): Promise<TicketCategoryListResponse> {
+  return authedGet(TICKET_ROUTES.categories, ticketCategoryListResponseSchema);
+}
+
+export function createTicketCategory(input: {
+  idempotencyKey: string;
+  title: string;
+  sortOrder: number;
+}): Promise<TicketCategoryResponse> {
+  return post(TICKET_ROUTES.categories, input, ticketCategoryResponseSchema);
+}
+
+/** Rename, reorder, hide or show. A category is never deleted: tickets name it. */
+export function updateTicketCategory(input: {
+  id: string;
+  title?: string;
+  sortOrder?: number;
+  isActive?: boolean;
+}): Promise<TicketCategoryResponse> {
+  const { id, ...body } = input;
+  return post(TICKET_ROUTES.category(id), body, ticketCategoryResponseSchema);
 }

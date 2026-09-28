@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Inject, Param, Patch, Post, Query, Req, Res } from '@nestjs/common';
+import { Body, Controller, Get, Inject, Param, Post, Query, Req, Res } from '@nestjs/common';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import {
   API_PREFIX,
@@ -249,7 +249,7 @@ export class TicketsController {
     return { category: toCategoryView(result.category), changed: result.changed };
   }
 
-  @Patch(routePattern(TICKET_ROUTES.category, 'categoryId'))
+  @Post(routePattern(TICKET_ROUTES.category, 'categoryId'))
   async updateCategory(
     @Req() request: FastifyRequest,
     @Param('categoryId') categoryId: string,
