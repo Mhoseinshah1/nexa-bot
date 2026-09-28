@@ -23,6 +23,7 @@ import {
   normaliseDiscountCode,
   templateDefinition,
   COMMERCE_ERROR_CODES,
+  DEVICE_ADDON_MAX_QUANTITY,
   NexaError,
 } from '@nexa/contracts';
 import {
@@ -67,6 +68,10 @@ import {
   SERVICE_ADD_TIME_CALLBACK_PREFIX,
   SERVICE_BUY_TRAFFIC_CALLBACK_PREFIX,
   SERVICE_BUY_TIME_CALLBACK_PREFIX,
+  SERVICE_ADD_DEVICES_CALLBACK_PREFIX,
+  SERVICE_BUY_DEVICES_CALLBACK_PREFIX,
+  decodeDeviceQuantity,
+  encodeDeviceQuantity,
   SERVICE_ACTION_CONFIRM_CALLBACK_PREFIX,
   SERVICE_REFRESH_CALLBACK_PREFIX,
   SERVICE_FILES_CALLBACK_PREFIX,
@@ -570,6 +575,13 @@ describe('profile metadata, normalised before it is ever stored', () => {
      *   `bot.service.addon_option`     one package: what it adds, what it costs. The
      *                                  price is a MONEY value, so a customer never
      *                                  reads a bare number whose currency is implied.
+     *   `bot.service.add_devices_button`
+     *   `bot.service.devices_choice`
+     *   `bot.service.devices_option`   WP-A5's extra users: drawn only where the
+     *                                  panel's adapter declares and implements
+     *                                  DEVICE_LIMIT_ADJUSTMENT and a priced rate has
+     *                                  room left; the count on each button is bounded
+     *                                  by the server and its price is a MONEY value.
      *   `bot.service.action_quote`     the offer being answered. The number is the one
      *                                  the order was written with and is never re-taken,
      *                                  so nobody is charged a price they did not see.
@@ -746,6 +758,7 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.service.action_not_allowed',
       'bot.service.action_requested',
       'bot.service.action_unavailable',
+      'bot.service.add_devices_button',
       'bot.service.add_traffic_button',
       'bot.service.addon_choice',
       'bot.service.addon_option',
@@ -753,6 +766,8 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.service.back_to_menu_button',
       'bot.service.capability_unsupported',
       'bot.service.connected_ack',
+      'bot.service.devices_choice',
+      'bot.service.devices_option',
       // Package E: the connection-files button and its three answers.
       'bot.service.files_button',
       'bot.service.files_partial',
@@ -1434,6 +1449,8 @@ describe('a callback prefix decides what happens, so no prefix may shadow anothe
     SERVICE_RENEW: SERVICE_RENEW_CALLBACK_PREFIX,
     SERVICE_ADD_TRAFFIC: SERVICE_ADD_TRAFFIC_CALLBACK_PREFIX,
     SERVICE_ADD_TIME: SERVICE_ADD_TIME_CALLBACK_PREFIX,
+    // WP-A5: `dv:` begins with `d` like `d:`, `dc:` and `dx:`; the shadowing case proves it safe.
+    SERVICE_ADD_DEVICES: SERVICE_ADD_DEVICES_CALLBACK_PREFIX,
     SERVICE_ACTION_CONFIRM: SERVICE_ACTION_CONFIRM_CALLBACK_PREFIX,
     // The customer UX completion's id-carrying routes.
     SERVICE_REFRESH: SERVICE_REFRESH_CALLBACK_PREFIX,
@@ -1489,6 +1506,8 @@ describe('a callback prefix decides what happens, so no prefix may shadow anothe
     REFERRAL_GIFT: REFERRAL_GIFT_CALLBACK_DATA,
     // Package F: a service and a recipient's numeric id, not a uuid alone.
     SERVICE_TRANSFER_CONFIRM: SERVICE_TRANSFER_CONFIRM_CALLBACK_PREFIX,
+    // WP-A5: a service-and-rate pair and a bounded count.
+    SERVICE_BUY_DEVICES: SERVICE_BUY_DEVICES_CALLBACK_PREFIX,
   };
 
   const ALL_PREFIXES: Readonly<Record<string, string>> = {
@@ -1624,6 +1643,38 @@ describe('a callback prefix decides what happens, so no prefix may shadow anothe
         ).toBe('UNSUPPORTED');
       }
     }
+  });
+
+  describe('the extra-users quantity (WP-A5)', () => {
+    const service = '0191f4a0-2d3c-7c2b-9a41-6f2b0c7e51aa';
+    const addon = '0191f4a0-9e77-7d18-8c03-2b9d4e5a1f60';
+    const tap = (data: string) => intentOf({ callback_query: { id: 'cbq', data } });
+
+    it('carries the service, the rate and the count, inside 64 bytes', () => {
+      const data = encodeDeviceQuantity(service, addon, DEVICE_ADDON_MAX_QUANTITY);
+      expect(Buffer.byteLength(data, 'utf8')).toBeLessThanOrEqual(64);
+      const command = tap(data);
+      expect(command.intent).toBe('SERVICE_BUY_DEVICES');
+      expect(command.targetId).toBe(service);
+      expect(command.secondaryId).toBe(addon);
+      expect(command.quantity).toBe(DEVICE_ADDON_MAX_QUANTITY);
+    });
+
+    /*
+     * The count is a CHOICE the server bounds again, and the boundary still refuses every
+     * shape a modified client could send in its place: zero, a sign, a leading zero, a
+     * fraction, a count past the add-on maximum, a second dot, or no count at all.
+     */
+    it('refuses every count that is not a bounded whole number', () => {
+      const pair = encodeDeviceQuantity(service, addon, 1).slice(0, -2);
+      for (const count of ['0', '-1', '+1', '01', '1.5', '1e1', '', 'x', '999']) {
+        expect(tap(`${pair}.${count}`).intent, count).toBe('UNSUPPORTED');
+      }
+      expect(tap(`${pair}.${String(DEVICE_ADDON_MAX_QUANTITY + 1)}`).intent).toBe('UNSUPPORTED');
+      expect(tap(`${pair}.1.2`).intent).toBe('UNSUPPORTED');
+      expect(tap(pair).intent).toBe('UNSUPPORTED');
+      expect(decodeDeviceQuantity(`${SERVICE_BUY_DEVICES_CALLBACK_PREFIX}short.1`)).toBeNull();
+    });
   });
 
   describe('the transfer confirmation (Package F)', () => {
