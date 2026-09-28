@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  COMMERCE_ERROR_CODES,
   SUBSCRIPTION_FILES_MAX_COUNT,
   SUBSCRIPTION_FILE_CAPTION_MAX_LENGTH,
   SUBSCRIPTION_FILE_MAX_BYTES,
   SUBSCRIPTION_FILE_NAME_MAX_LENGTH,
   canFetchSubscriptionFiles,
+  errors,
   type ActorContext,
   type CorrelationId,
   type ProviderAdapter,
@@ -234,7 +236,7 @@ describe('the service, before any panel is asked', () => {
     const { built, send } = deps(new RickpanelAdapter(), {
       services: {
         getForCustomer: vi.fn(async () => {
-          throw new Error('not found');
+          throw errors.notFound(COMMERCE_ERROR_CODES.SERVICE_NOT_FOUND, 'Unknown service.');
         }),
       },
     });
@@ -245,6 +247,26 @@ describe('the service, before any panel is asked', () => {
       botInstanceId: 'b' as never,
     });
     expect(result).toEqual({ outcome: 'NOT_FOUND' });
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('lets a failed ownership read propagate, never answering it as NOT_FOUND', async () => {
+    const outage = new Error('connection terminated');
+    const { built, send } = deps(new RickpanelAdapter(), {
+      services: {
+        getForCustomer: vi.fn(async () => {
+          throw outage;
+        }),
+      },
+    });
+    await expect(
+      new SubscriptionFileService(built).send(scope, actor, {
+        customerId: 'u' as UserId,
+        serviceId: 's',
+        chatId: '1',
+        botInstanceId: 'b' as never,
+      }),
+    ).rejects.toBe(outage);
     expect(send).not.toHaveBeenCalled();
   });
 

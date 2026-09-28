@@ -1,5 +1,7 @@
 import {
+  COMMERCE_ERROR_CODES,
   canFetchSubscriptionFiles,
+  isNexaError,
   isProviderType,
   providerDescriptor,
   type ActorContext,
@@ -122,8 +124,14 @@ export class SubscriptionFileService {
     let service: ServiceRecord;
     try {
       service = await this.deps.services.getForCustomer(scope, input.customerId, input.serviceId);
-    } catch {
-      return { outcome: 'NOT_FOUND' };
+    } catch (error) {
+      // Only the not-found answer is translated. A database that could not be read is an
+      // outage, not "no such service": it propagates, so the update fails where it can be
+      // seen rather than telling the owner their service does not exist.
+      if (isNexaError(error) && error.code === COMMERCE_ERROR_CODES.SERVICE_NOT_FOUND) {
+        return { outcome: 'NOT_FOUND' };
+      }
+      throw error;
     }
     if (!SUBSCRIPTION_FILE_STATES.includes(service.state)) return { outcome: 'UNAVAILABLE' };
 

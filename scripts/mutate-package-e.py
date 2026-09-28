@@ -62,7 +62,9 @@ M=[
  ('E-23',[(CON,"    // `GET /api/user/{username}/files` (Package E, `docs/package-e-rickpanel-files-audit.md`).\n    'SUBSCRIPTION_FILES',\n","")],U,'is offered by RickPanel and by no other provider'),
  # E2/E3 — the service
  ('E-24',[(SVC,"    await this.deps.guard.check(scope, actor, SUBSCRIPTION_FILES_PERMISSION);\n","")],U,'checks the permission before it reads anything'),
- ('E-25',[(SVC,"    } catch {\n      return { outcome: 'NOT_FOUND' };\n    }","    } catch (error) {\n      throw error;\n    }")],I,"never sends another customer's files"),
+ ('E-25',[(SVC,"      if (isNexaError(error) && error.code === COMMERCE_ERROR_CODES.SERVICE_NOT_FOUND) {\n        return { outcome: 'NOT_FOUND' };\n      }\n","")],I,"never sends another customer's files"),
+ # Codex on #89: only SERVICE_NOT_FOUND is translated; an outage propagates.
+ ('E-44',[(SVC,"      if (isNexaError(error) && error.code === COMMERCE_ERROR_CODES.SERVICE_NOT_FOUND) {","      if ((true as boolean) || (isNexaError(error) && error.code === COMMERCE_ERROR_CODES.SERVICE_NOT_FOUND)) {")],U,'lets a failed ownership read propagate'),
  ('E-26',[(REPO,"          eq(services.customerId, customerId),\n"+OWNED_TAIL,OWNED_TAIL)],I,"never sends another customer's files"),
  ('E-27',[(REPO,"          eq(services.tenantId, tenantId),\n          eq(services.id, id),\n          eq(services.customerId, customerId),\n"+OWNED_TAIL,"          eq(services.id, id),\n          eq(services.customerId, customerId),\n"+OWNED_TAIL)],I,"never serves another tenant's service"),
  ('E-28',[(SVC,"    if (!SUBSCRIPTION_FILE_STATES.includes(service.state)) return { outcome: 'UNAVAILABLE' };\n","")],U,'does not offer, nor fetch, the files of a service that is not readable'),
