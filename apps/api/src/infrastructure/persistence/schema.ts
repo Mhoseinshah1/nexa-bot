@@ -130,6 +130,10 @@ import {
   RESELLER_PRICE_LAYERS,
   TRIAL_LIMIT_MAX,
   TRIAL_LIMIT_MIN,
+  // Package D: the custom service.
+  CUSTOM_SERVICE_LABEL_MAX_LENGTH,
+  CUSTOM_SERVICE_RULE_DIMENSIONS,
+  CUSTOM_SERVICE_RULE_LEVELS,
   // Customer UX completion.
   CUSTOMER_CAPTURE_PURPOSES,
   CUSTOMER_CAPTURE_CLOSE_REASONS,
@@ -3085,8 +3089,15 @@ export const orders = pgTable(
      */
     purpose: text('purpose').notNull().default('NEW_SERVICE'),
 
-    /** Navigation only. The snapshot below is the truth about this purchase. */
-    productId: uuid('product_id').notNull(),
+    /**
+     * Navigation only. The snapshot below is the truth about this purchase.
+     *
+     * NULL for a `CUSTOM_SERVICE` order and only for one (Package D,
+     * `orders_product_purpose_check`): a custom service is bought from a location and
+     * the operator's range rules, never from a product, and naming one would be the
+     * invisible product the brief forbids.
+     */
+    productId: uuid('product_id'),
     panelId: uuid('panel_id').notNull(),
     lineTitle: text('line_title').notNull(),
     lineDurationDays: integer('line_duration_days').notNull(),
@@ -3184,6 +3195,18 @@ export const orders = pgTable(
      * — present or future — can turn the free edge into a way to charge somebody.
      */
     check('orders_trial_is_free_check', sql`purpose <> 'TRIAL' OR total_amount = 0`),
+    /** A custom service names no product, and every other purpose names one (Package D). */
+    check('orders_product_purpose_check', sql`(product_id IS NULL) = (purpose = 'CUSTOM_SERVICE')`),
+    /**
+     * A custom service is a positive volume for a positive number of days, bought once.
+     * Zero means "unlimited" on a product snapshot; a customer cannot type an unlimited
+     * custom service, so the overload is refused here rather than read.
+     */
+    check(
+      'orders_custom_service_line_check',
+      sql`purpose <> 'CUSTOM_SERVICE'
+          OR (line_traffic_bytes > 0 AND line_duration_days > 0 AND line_quantity = 1)`,
+    ),
     check(
       'orders_quantity_line_check',
       sql`purpose NOT IN ('ADD_TRAFFIC', 'ADD_TIME')
@@ -4956,8 +4979,14 @@ export const services = pgTable(
     /** The order that created it. A renewal is a NEW order against the SAME service. */
     orderId: uuid('order_id').notNull(),
     panelId: uuid('panel_id').notNull(),
-    /** Navigation and reporting. The snapshot of what was bought is on the order. */
-    productId: uuid('product_id').notNull(),
+    /**
+     * Navigation and reporting. The snapshot of what was bought is on the order.
+     *
+     * NULL exactly when the order that created the service is a `CUSTOM_SERVICE` one
+     * (Package D). `nexa_service_requires_purchase_order` pins that pairing, because a
+     * CHECK cannot see the order row.
+     */
+    productId: uuid('product_id'),
     state: text('state').notNull().default('PENDING_PROVISION'),
     /** The order's reserved name, frozen before payment. Unique per panel, for adoption. */
     providerUsername: text('provider_username').notNull(),
@@ -7073,6 +7102,12 @@ export const customerTextCaptures = pgTable(
      * a refund request. Null for every other window, which keeps its old reading.
      */
     openedUpdateId: bigint('opened_update_id', { mode: 'bigint' }),
+    /**
+     * Package D: the custom-service volume the previous window read, in hundredths of a GB,
+     * carried by the `CUSTOM_SERVICE_DAYS` window that asks for the days — and only by it.
+     * The draft is made from what the customer typed, never from a callback.
+     */
+    customVolumeUnits: bigint('custom_volume_units', { mode: 'bigint' }),
   },
   (table) => [
     foreignKey({
@@ -7109,12 +7144,18 @@ export const customerTextCaptures = pgTable(
           AND (amount_minor IS NULL OR purpose = 'TOPUP_AMOUNT')`,
     ),
     /**
-     * A note and a refund reason (WP19) name their service; the other two purposes name
-     * nothing.
+     * A note and a refund reason (WP19) name their service, and the two custom-service
+     * windows (Package D) their panel; the other purposes name nothing.
      */
     check(
       'customer_text_captures_subject_check',
-      sql`(purpose IN ('SERVICE_NOTE', 'SERVICE_REFUND_REASON')) = (subject_id IS NOT NULL)`,
+      sql`(purpose IN ('SERVICE_NOTE', 'SERVICE_REFUND_REASON', 'CUSTOM_SERVICE_VOLUME', 'CUSTOM_SERVICE_DAYS')) = (subject_id IS NOT NULL)`,
+    ),
+    /** Only the days window carries a volume, and it always does (Package D). */
+    check(
+      'customer_text_captures_custom_volume_check',
+      sql`(purpose = 'CUSTOM_SERVICE_DAYS') = (custom_volume_units IS NOT NULL)
+          AND (custom_volume_units IS NULL OR custom_volume_units > 0)`,
     ),
   ],
 );
@@ -7506,5 +7547,180 @@ export const serviceRefundRequestPushes = pgTable(
       sql`(state <> 'PENDING') = (resolved_at IS NOT NULL)`,
     ),
     check('service_refund_request_pushes_attempts_check', sql`attempts >= 0`),
+  ],
+);
+
+// --- Package D: the custom service (docs/package-d-custom-service-audit.md) -----------
+
+/**
+ * A panel offered for custom service, and the name a customer sees it by.
+ *
+ * An explicit opt-in: a panel's `name` is the operator's internal label, so it is never
+ * shown to a customer, and a panel with no row here is not a custom-service location.
+ * Whether the panel can take a new service right now is still `PanelSalesGate`'s answer.
+ */
+export const customServiceLocations = pgTable(
+  'custom_service_locations',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    panelId: uuid('panel_id').notNull(),
+    label: text('label').notNull(),
+    enabled: boolean('enabled').notNull().default(true),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.tenantId, table.panelId], name: 'custom_service_locations_pk' }),
+    foreignKey({
+      columns: [table.tenantId, table.panelId],
+      foreignColumns: [panels.tenantId, panels.id],
+      name: 'custom_service_locations_panel_fk',
+    }),
+    check(
+      'custom_service_locations_label_check',
+      sql`length(btrim(label)) BETWEEN 1 AND ${sql.raw(String(CUSTOM_SERVICE_LABEL_MAX_LENGTH))}`,
+    ),
+  ],
+);
+
+/**
+ * One custom-service price rule (brief D2).
+ *
+ * `min_units`/`max_units` are inclusive, in the dimension's unit: hundredths of a GB for
+ * VOLUME, days for TIME. The price is per GB or per day. Specificity is the triple
+ * (customer, tier, panel): a customer rule names no tier; a rule with neither is the
+ * ordinary customers'; a null panel is every panel.
+ *
+ * Overlap between enabled rules of one dimension at one specificity is refused by the
+ * service under a per-tenant advisory lock, not here: an exclusion constraint would need
+ * `btree_gist`, which this schema has never required.
+ */
+export const customServicePriceRules = pgTable(
+  'custom_service_price_rules',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    dimension: text('dimension').notNull(),
+    label: text('label'),
+    minUnits: bigint('min_units', { mode: 'bigint' }).notNull(),
+    maxUnits: bigint('max_units', { mode: 'bigint' }).notNull(),
+    unitPriceAmount: bigint('unit_price_amount', { mode: 'bigint' }).notNull(),
+    currency: text('currency').notNull(),
+    customerId: uuid('customer_id'),
+    resellerTierId: uuid('reseller_tier_id'),
+    panelId: uuid('panel_id'),
+    enabled: boolean('enabled').notNull().default(true),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('custom_service_price_rules_tenant_id_key').on(table.tenantId, table.id),
+    index('custom_service_price_rules_tenant_dimension_idx').on(
+      table.tenantId,
+      table.dimension,
+      table.enabled,
+    ),
+    foreignKey({
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+      name: 'custom_service_price_rules_customer_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.resellerTierId],
+      foreignColumns: [resellerTiers.tenantId, resellerTiers.id],
+      name: 'custom_service_price_rules_tier_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.panelId],
+      foreignColumns: [panels.tenantId, panels.id],
+      name: 'custom_service_price_rules_panel_fk',
+    }),
+    check(
+      'custom_service_price_rules_dimension_check',
+      enumCheck('dimension', CUSTOM_SERVICE_RULE_DIMENSIONS),
+    ),
+    check('custom_service_price_rules_currency_check', enumCheck('currency', CURRENCY_CODES)),
+    check('custom_service_price_rules_range_check', sql`min_units >= 1 AND max_units >= min_units`),
+    check('custom_service_price_rules_price_check', sql`unit_price_amount > 0`),
+    check(
+      'custom_service_price_rules_specificity_check',
+      sql`customer_id IS NULL OR reseller_tier_id IS NULL`,
+    ),
+    check(
+      'custom_service_price_rules_label_check',
+      sql`label IS NULL OR length(btrim(label)) BETWEEN 1 AND ${sql.raw(String(CUSTOM_SERVICE_LABEL_MAX_LENGTH))}`,
+    ),
+  ],
+);
+
+/**
+ * What a custom order was priced by, written ONCE in the draft's transaction (brief D6).
+ *
+ * Rule ids are copied, not foreign keys, and a trigger refuses UPDATE and DELETE: editing
+ * or deleting a rule later rewrites nothing here. The CHECKs pin the arithmetic, so a
+ * stored row cannot say one price and mean another.
+ */
+export const orderCustomServiceTerms = pgTable(
+  'order_custom_service_terms',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    orderId: uuid('order_id').notNull(),
+    panelId: uuid('panel_id').notNull(),
+    locationLabel: text('location_label').notNull(),
+    volumeUnits: bigint('volume_units', { mode: 'bigint' }).notNull(),
+    trafficBytes: bigint('traffic_bytes', { mode: 'bigint' }).notNull(),
+    durationDays: integer('duration_days').notNull(),
+    volumeRuleId: uuid('volume_rule_id').notNull(),
+    volumeRuleLevel: text('volume_rule_level').notNull(),
+    pricePerGbAmount: bigint('price_per_gb_amount', { mode: 'bigint' }).notNull(),
+    volumeAmount: bigint('volume_amount', { mode: 'bigint' }).notNull(),
+    timeRuleId: uuid('time_rule_id').notNull(),
+    timeRuleLevel: text('time_rule_level').notNull(),
+    pricePerDayAmount: bigint('price_per_day_amount', { mode: 'bigint' }).notNull(),
+    timeAmount: bigint('time_amount', { mode: 'bigint' }).notNull(),
+    baseAmount: bigint('base_amount', { mode: 'bigint' }).notNull(),
+    currency: text('currency').notNull(),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.tenantId, table.orderId], name: 'order_custom_service_terms_pk' }),
+    foreignKey({
+      columns: [table.tenantId, table.orderId],
+      foreignColumns: [orders.tenantId, orders.id],
+      name: 'order_custom_service_terms_order_fk',
+    }),
+    check('order_custom_service_terms_currency_check', enumCheck('currency', CURRENCY_CODES)),
+    check(
+      'order_custom_service_terms_volume_level_check',
+      enumCheck('volume_rule_level', CUSTOM_SERVICE_RULE_LEVELS),
+    ),
+    check(
+      'order_custom_service_terms_time_level_check',
+      enumCheck('time_rule_level', CUSTOM_SERVICE_RULE_LEVELS),
+    ),
+    check(
+      'order_custom_service_terms_positive_check',
+      sql`volume_units > 0 AND traffic_bytes > 0 AND duration_days > 0
+          AND price_per_gb_amount > 0 AND price_per_day_amount > 0`,
+    ),
+    /** The arithmetic, as the brief states it: half-up to the minor unit, then a sum. */
+    check(
+      'order_custom_service_terms_volume_amount_check',
+      sql`volume_amount = (volume_units * price_per_gb_amount + 50) / 100`,
+    ),
+    check(
+      'order_custom_service_terms_time_amount_check',
+      sql`time_amount = duration_days * price_per_day_amount`,
+    ),
+    check(
+      'order_custom_service_terms_base_amount_check',
+      sql`base_amount = volume_amount + time_amount`,
+    ),
   ],
 );
