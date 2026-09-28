@@ -1,0 +1,137 @@
+import { describe, expect, it } from 'vitest';
+import { cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
+import { ServiceLocationsPage } from '../../apps/web/src/pages/service-locations';
+import { resolve } from '../../apps/web/src/app';
+import { panel, product, renderPage, stubApi } from './harness';
+
+/**
+ * The service location change's configuration (WP-A6), in Persian, under the catalogue's
+ * own two permissions.
+ *
+ * What these cases protect is what an operator can get wrong without noticing: selling a
+ * move that is free by omission, writing a limit without its period, being told nothing
+ * about a panel that cannot move an account, or being shown write controls the server
+ * will refuse.
+ */
+
+const INITIAL = {
+  id: '019250ab-cdef-7012-8345-6789abcdef91',
+  panelId: String(panel()['id']),
+  productId: null,
+  locationKey: 'de-1',
+  label: 'آلمان',
+  initial: true,
+  enabled: false,
+  priceAmount: null,
+  priceCurrency: null,
+  cooldownHours: null,
+  maxChanges: null,
+  periodDays: null,
+  sortOrder: 0,
+  version: 1,
+  createdAt: '2026-09-10T12:30:00.000Z',
+  updatedAt: '2026-09-11T12:30:00.000Z',
+};
+
+const TARGET = {
+  ...INITIAL,
+  id: '019250ab-cdef-7012-8345-6789abcdef92',
+  locationKey: 'nl-1',
+  label: 'هلند',
+  initial: false,
+  enabled: true,
+  priceAmount: '0',
+  priceCurrency: 'IRT',
+  cooldownHours: 24,
+  maxChanges: 2,
+  periodDays: 30,
+  version: 3,
+};
+
+const routes = (locations: unknown[] = [INITIAL, TARGET]) => [
+  { url: '/service-locations', body: { locations } },
+  { url: '/panels', body: { panels: [panel()], nextCursor: null } },
+  { url: '/products', body: { products: [product()], nextCursor: null } },
+];
+
+describe('the service location screen', () => {
+  it('lists the locations, the initial one, free and the limits, and says no panel can move one', async () => {
+    stubApi(routes());
+    const { container } = renderPage(<ServiceLocationsPage denied={false} mayEdit={false} />);
+    await screen.findByText('هلند');
+
+    expect(container.textContent).toContain('آلمان');
+    expect(container.textContent).toContain('اولیه');
+    expect(container.textContent).toContain('رایگان');
+    expect(container.textContent).toContain('24 ساعت فاصله');
+    expect(container.textContent).toContain('2 تغییر در 30 روز');
+    // Derived from the adapters' declared capabilities: none declares it.
+    expect(container.textContent).toContain('هیچ‌یک از انواع پنل پشتیبانی‌شده');
+    // A view-only role is given no write control at all.
+    expect(container.textContent).not.toContain('لوکیشن جدید');
+    expect(container.textContent).not.toContain('ویرایش');
+    cleanup();
+  });
+
+  it('writes a priced target, and never an enabled one without a price', async () => {
+    const api = stubApi(routes([]));
+    renderPage(<ServiceLocationsPage denied={false} mayEdit />);
+    await screen.findByText('لوکیشن جدید');
+    // The panel list marks a panel whose adapter cannot move an account.
+    await screen.findByText(/این پنل تغییر لوکیشن را پشتیبانی نمی‌کند/u);
+
+    fireEvent.change(screen.getByLabelText('پنل'), { target: { value: String(panel()['id']) } });
+    fireEvent.change(screen.getByLabelText('نام لوکیشن'), { target: { value: 'هلند' } });
+    fireEvent.change(screen.getByLabelText('شناسهٔ لوکیشن در پنل'), { target: { value: 'nl-1' } });
+    fireEvent.click(screen.getByLabelText('به‌عنوان مقصد به مشتری عرضه شود'));
+    // Enabled and unpriced is refused before it is sent: unconfigured is never free.
+    expect((screen.getByText('ذخیره') as HTMLButtonElement).disabled).toBe(true);
+
+    fireEvent.change(screen.getByLabelText('هزینهٔ انتقال'), { target: { value: '30000' } });
+    fireEvent.change(screen.getByLabelText('فاصلهٔ لازم بین دو تغییر (ساعت)'), {
+      target: { value: '12' },
+    });
+    fireEvent.click(screen.getByText('ذخیره'));
+
+    await waitFor(() =>
+      expect(
+        api.calls.some((call) => call.method === 'POST' && call.url.endsWith('/service-locations')),
+      ).toBe(true),
+    );
+    const write = api.calls.find((call) => call.method === 'POST')!;
+    expect(write.body).toMatchObject({
+      panelId: panel()['id'],
+      productId: null,
+      locationKey: 'nl-1',
+      label: 'هلند',
+      initial: false,
+      enabled: true,
+      priceAmount: '30000',
+      priceCurrency: 'IRT',
+      cooldownHours: 12,
+      maxChanges: null,
+      periodDays: null,
+    });
+    cleanup();
+  });
+
+  it('takes a rolling limit only as a number of changes AND a period', async () => {
+    stubApi(routes([]));
+    renderPage(<ServiceLocationsPage denied={false} mayEdit />);
+    await screen.findByText('لوکیشن جدید');
+    await screen.findByText(/این پنل تغییر لوکیشن را پشتیبانی نمی‌کند/u);
+    fireEvent.change(screen.getByLabelText('پنل'), { target: { value: String(panel()['id']) } });
+    fireEvent.change(screen.getByLabelText('نام لوکیشن'), { target: { value: 'x' } });
+    fireEvent.change(screen.getByLabelText('شناسهٔ لوکیشن در پنل'), { target: { value: 'x' } });
+    fireEvent.change(screen.getByLabelText('حداکثر تعداد تغییر'), { target: { value: '2' } });
+    expect((screen.getByText('ذخیره') as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(screen.getByLabelText('در بازهٔ چند روز'), { target: { value: '30' } });
+    expect((screen.getByText('ذخیره') as HTMLButtonElement).disabled).toBe(false);
+    cleanup();
+  });
+
+  it('is routed at /service-locations, under the catalogue permissions', () => {
+    const route = { path: '/service-locations', query: new URLSearchParams() };
+    expect(resolve(route, ['catalog.view']).title).toBe('تغییر لوکیشن سرویس');
+  });
+});

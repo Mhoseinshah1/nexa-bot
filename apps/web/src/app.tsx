@@ -26,6 +26,7 @@ import { SupportPage } from './pages/support';
 import { ProductDetailPage, ProductsPage } from './pages/products';
 import { ProductCategoriesPage } from './pages/product-categories';
 import { ExtraDevicesPage } from './pages/extra-devices';
+import { ServiceLocationsPage } from './pages/service-locations';
 import { OrderDetailPage, OrdersPage } from './pages/orders';
 import { ServiceDetailPage, ServicesPage } from './pages/services';
 import { UsersPage, UserDetailPage } from './pages/users';
@@ -254,6 +255,16 @@ export const NAV: readonly NavEntry[] = [
     id: 'extra-devices',
     path: '/extra-devices',
     label: 'web.nav_extra_devices',
+    icon: 'products',
+    permission: ['catalog.view', 'catalog.edit'],
+    group: 'web.navgroup_sales',
+  },
+  {
+    // WP-A6: a panel's locations and the price of moving a service there, under the
+    // catalogue's own pair, for the reason the entry above gives.
+    id: 'service-locations',
+    path: '/service-locations',
+    label: 'web.nav_service_locations',
     icon: 'products',
     permission: ['catalog.view', 'catalog.edit'],
     group: 'web.navgroup_sales',
@@ -638,6 +649,14 @@ export function resolve(
       ),
       crumbs: [{ label: t('web.products_title') }],
       title: t('web.products_title'),
+    };
+  }
+
+  if (route.path === '/service-locations') {
+    return {
+      element: <ServiceLocationsPage mayEdit={may('catalog.edit')} denied={!may('catalog.view')} />,
+      crumbs: [{ label: t('web.service_locations_title') }],
+      title: t('web.service_locations_title'),
     };
   }
 

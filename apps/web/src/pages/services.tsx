@@ -147,6 +147,7 @@ export const OPERATION_TYPE_LABELS: Readonly<Record<OperationType, WebKey>> = {
   ADD_TRAFFIC: 'web.operation_type_add_traffic',
   ADD_TIME: 'web.operation_type_add_time',
   ADD_DEVICES: 'web.operation_type_add_devices',
+  CHANGE_LOCATION: 'web.operation_type_change_location',
   SUSPEND: 'web.operation_type_suspend',
   RESUME: 'web.operation_type_resume',
   TERMINATE: 'web.operation_type_terminate',
