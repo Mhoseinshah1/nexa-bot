@@ -70,6 +70,13 @@ export type CaptureReadResult =
    */
   | { readonly outcome: 'READ'; readonly capture: CustomerCaptureRecord; readonly text: string };
 
+/** The windows a read does not close; see `readText`. */
+const STAYS_OPEN_ON_READ: readonly CustomerCapturePurpose[] = [
+  'TOPUP_AMOUNT',
+  'CUSTOM_SERVICE_VOLUME',
+  'CUSTOM_SERVICE_DAYS',
+];
+
 /**
  * A customer's plain-text windows (customer UX completion §N).
  *
@@ -94,6 +101,8 @@ export class CustomerCaptureService {
       readonly subjectId: string | null;
       /** The update that opened it: a refund-reason window reads only newer ones (round 8). */
       readonly openedUpdateId?: bigint;
+      /** Package D: the volume a `CUSTOM_SERVICE_DAYS` window carries. */
+      readonly customVolumeUnits?: bigint;
     },
   ): Promise<CustomerCaptureRecord> {
     const denial = {
@@ -107,6 +116,9 @@ export class CustomerCaptureService {
       customerId: input.customerId,
       purpose: input.purpose,
       subjectId: input.subjectId,
+      ...(input.customVolumeUnits === undefined
+        ? {}
+        : { customVolumeUnits: input.customVolumeUnits.toString() }),
     });
     const replayed = await this.deps.idempotency.find<{ captureId: string }>(
       scope,
@@ -138,6 +150,7 @@ export class CustomerCaptureService {
           openedAt: now,
           expiresAt: new Date(now.getTime() + CUSTOMER_TEXT_CAPTURE_TTL_MS),
           openedUpdateId: input.openedUpdateId ?? null,
+          customVolumeUnits: input.customVolumeUnits ?? null,
         },
         tx,
       );
@@ -230,7 +243,14 @@ export class CustomerCaptureService {
       // An amount window that already holds its figure is waiting for a ROUTE, not for
       // text; a second figure typed under the buttons is not an answer to anything.
       if (capture.state === 'AMOUNT_RECORDED') return { outcome: 'NO_WINDOW' } as const;
-      if (capture.purpose !== 'TOPUP_AMOUNT') {
+      /*
+       * A window that must survive a figure it refuses stays open on a read: the top-up
+       * amount, and the two custom-service figures (Package D) — "that is not a valid
+       * volume, send it again" is a promise the next message is still read. Each is closed
+       * by the step that ACCEPTS its figure: the next window supersedes the volume one, and
+       * the draft's own transaction closes the days one.
+       */
+      if (!STAYS_OPEN_ON_READ.includes(capture.purpose)) {
         await this.deps.captures.close(scope, capture.id, 'RECEIVED', now, tx);
       }
       await rememberOnce(

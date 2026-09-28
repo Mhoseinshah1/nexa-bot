@@ -292,7 +292,9 @@ export class DrizzleDiscountRepository implements DiscountRepository {
     const conditions: SQL[] = [
       eq(orders.tenantId, tenantId),
       sql`${orders.customerId} = ${customerId}::uuid`,
-      eq(orders.purpose, 'NEW_SERVICE'),
+      // A custom service is a purchase too (Package D): a customer who bought one is not a
+      // first-time buyer. A trial is not a purchase and a renewal is not a first one.
+      inArray(orders.purpose, ['NEW_SERVICE', 'CUSTOM_SERVICE']),
       inArray(orders.state, [...LIVE_ORDER_STATES]),
     ];
     if (excludingOrderId !== null) {

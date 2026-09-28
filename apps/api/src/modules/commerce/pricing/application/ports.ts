@@ -149,7 +149,10 @@ export interface DiscountRepository {
    */
   lockFirstPurchase(scope: TenantContext, customerId: string, tx: unknown): Promise<void>;
 
-  /** True when the customer has no OTHER `NEW_SERVICE` order in `AWAITING_PAYMENT` or `PAID`. */
+  /**
+   * True when the customer has no OTHER purchase — a `NEW_SERVICE` or a `CUSTOM_SERVICE`
+   * order — in `AWAITING_PAYMENT` or `PAID`.
+   */
   isFirstPurchase(
     scope: TenantContext,
     customerId: string,

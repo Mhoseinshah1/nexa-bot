@@ -33,6 +33,11 @@ export interface CustomerCaptureRecord {
   readonly closeReason: CustomerCaptureCloseReason | null;
   /** The update that opened it; set for a refund-reason window only (round 8). */
   readonly openedUpdateId: bigint | null;
+  /**
+   * Package D: the volume, in hundredths of a GB, a `CUSTOM_SERVICE_DAYS` window carries
+   * from the window that read it. Null for every other purpose, by CHECK.
+   */
+  readonly customVolumeUnits: bigint | null;
 }
 
 export interface CustomerCaptureRepository {
@@ -59,6 +64,7 @@ export interface CustomerCaptureRepository {
       readonly openedAt: Date;
       readonly expiresAt: Date;
       readonly openedUpdateId?: bigint | null;
+      readonly customVolumeUnits?: bigint | null;
     },
     tx: unknown,
   ): Promise<CustomerCaptureRecord>;

@@ -257,6 +257,14 @@ import {
   GatewayPaymentLoop,
 } from './modules/commerce/payments/application/gateway-payment-loop.js';
 import { OrderService } from './modules/commerce/orders/application/order.service.js';
+import { CustomServiceAdminService } from './modules/commerce/custom-service/application/custom-service-admin.service.js';
+import { CustomServiceFlowService } from './modules/commerce/custom-service/application/custom-service-flow.service.js';
+import { CustomServicePricer } from './modules/commerce/custom-service/application/custom-service-pricer.js';
+import {
+  DrizzleCustomServiceLocationRepository,
+  DrizzleCustomServiceRuleRepository,
+  DrizzleOrderCustomServiceTermsRepository,
+} from './modules/commerce/custom-service/infrastructure/drizzle-custom-service.repository.js';
 import { DrizzleOrderRepository } from './modules/commerce/orders/infrastructure/drizzle-order.repository.js';
 import { DiscountAdminService } from './modules/commerce/pricing/application/discount-admin.service.js';
 import { CashbackRuleAdminService } from './modules/commerce/pricing/application/cashback-rule-admin.service.js';
@@ -531,6 +539,12 @@ export interface Container {
   readonly discounts: DiscountAdminService;
   /** Cashback rules, as an operator manages them (WP8). */
   readonly cashbackRules: CashbackRuleAdminService;
+  /** Package D: the custom service's rules, locations and an order's frozen terms. */
+  readonly customServiceAdmin: CustomServiceAdminService;
+  /** Package D: the customer's flow — the locations, the typed volume and days, the draft. */
+  readonly customServiceFlow: CustomServiceFlowService;
+  /** The customer's generic text window (customer UX completion §N). */
+  readonly customerCaptures: CustomerCaptureService;
   /** The operator's price preview and an order's pricing detail (WP8). */
   readonly pricingRead: PricingReadService;
   /** Cashback from promise to credit to reversal (WP8 P9); driven by the provisioner loop. */
@@ -1521,7 +1535,43 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   });
   const discountCodeCaptureRepository = new DrizzleDiscountCodeCaptureRepository(database.db);
   const customerCaptureRepository = new DrizzleCustomerCaptureRepository(database.db);
+  /*
+   * Package D — the custom service. One pricer, asked by the location list, the typed
+   * volume, the draft and the confirmation alike, so none of them can price differently.
+   */
+  const customServiceRuleRepository = new DrizzleCustomServiceRuleRepository(database.db);
+  const customServiceLocationRepository = new DrizzleCustomServiceLocationRepository(database.db);
+  const orderCustomServiceTermsRepository = new DrizzleOrderCustomServiceTermsRepository(
+    database.db,
+  );
+  const customServicePricer = new CustomServicePricer({
+    rules: customServiceRuleRepository,
+    locations: customServiceLocationRepository,
+    panelSales: panelSalesGate,
+    resellers: resellerService,
+    features: featureFlagResolver,
+    settings: settingsResolver,
+  });
+  const customServiceAdminService = new CustomServiceAdminService({
+    rules: customServiceRuleRepository,
+    locations: customServiceLocationRepository,
+    terms: orderCustomServiceTermsRepository,
+    panels: panelRepository,
+    customers: customerRepository,
+    tiers: resellerRepository,
+    settings: settingsResolver,
+    guard,
+    audit,
+    opsLog,
+    sessions,
+    scopeActivity: tenants,
+    uow,
+    idempotency,
+    clock,
+    ids,
+  });
   const orderService = new OrderService({
+    customService: { pricer: customServicePricer, terms: orderCustomServiceTermsRepository },
     pricing: pricingService,
     resellers: resellerService,
     discountCodes: discountCodeCaptureRepository,
@@ -2641,6 +2691,13 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     clock,
     ids,
   });
+  const customServiceFlowService = new CustomServiceFlowService({
+    pricer: customServicePricer,
+    captures: customerCaptureService,
+    orders: orderService,
+    terms: orderCustomServiceTermsRepository,
+    guard,
+  });
   const customerScreens = new CustomerScreenComposer(templateResolver);
   const customerCounters = new DrizzleCustomerCountersReader(database.db);
   /**
@@ -3050,7 +3107,10 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       factsFor: async (scope, service) => {
         const order = await orderRepository.findById(scope, service.orderId);
         if (order === null) return null;
-        const product = await productRepository.findById(scope, service.productId);
+        const product =
+          service.productId === null
+            ? null
+            : await productRepository.findById(scope, service.productId);
         return {
           productName: order.line.title,
           serviceLocation: product?.display.serviceLocationLabel ?? null,
@@ -3754,6 +3814,9 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     serviceAddons: serviceAddonService,
     discounts: discountAdminService,
     cashbackRules: cashbackRuleAdminService,
+    customServiceAdmin: customServiceAdminService,
+    customServiceFlow: customServiceFlowService,
+    customerCaptures: customerCaptureService,
     pricingRead: pricingReadService,
     cashback: cashbackService,
     referrals: referralProgram,
@@ -3842,6 +3905,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       support: { partsFor: supportScreenParts },
       productDisplay: {
         displayFor: async (scope, productId) => {
+          // A custom service (Package D) was bought from no product, so it has no display.
+          if (productId === null) return null;
           const product = await productRepository.findById(scope, productId);
           return product === null ? null : product.display;
         },
@@ -3887,6 +3952,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       products: productService,
       commercial: commercialActionService,
       trials: trialService,
+      customService: customServiceFlowService,
       orders: orderService,
       // The SAME messenger the delivery sweep uses, for the reason above it.
       messenger: customerMessenger,

@@ -1,4 +1,5 @@
 import {
+  type ProductId,
   COMMERCE_ERROR_CODES,
   MAX_ORDER_QUANTITY,
   ORDER_MACHINE,
@@ -89,7 +90,26 @@ function isOfferRefusal(error: unknown): boolean {
   return isNexaError(error) && OFFER_REFUSALS.includes(error.code);
 }
 
-export type CommercialKind = Exclude<OrderPurpose, 'NEW_SERVICE' | 'TRIAL'>;
+/**
+ * A custom service (Package D) is renewed and extended by nothing in this release.
+ *
+ * Renewal re-prices a PRODUCT and a custom service has none; an add-on on one would write
+ * an order naming no product under a purpose that must name one. Refused with its own
+ * code, before anything is quoted, so a stale button answers a sentence rather than a
+ * product lookup of `null` (`OQ-PKG-D-01`).
+ */
+function assertExtendable(
+  service: ServiceRecord,
+): asserts service is ServiceRecord & { readonly productId: ProductId } {
+  if (service.productId === null) {
+    throw errors.conflict(
+      COMMERCE_ERROR_CODES.CUSTOM_SERVICE_NOT_EXTENDABLE,
+      'A custom service cannot be renewed or extended.',
+    );
+  }
+}
+
+export type CommercialKind = Exclude<OrderPurpose, 'NEW_SERVICE' | 'TRIAL' | 'CUSTOM_SERVICE'>;
 
 /**
  * What a customer may buy for one service, right now, server-derived.
@@ -187,6 +207,7 @@ export class CommercialActionService {
   ): Promise<CommercialOffer> {
     await this.deps.guard.check(scope, actor, COMMERCIAL_ACTION_PERMISSION);
     const service = await this.ownedService(scope, customerId, serviceId);
+    assertExtendable(service);
     this.assertLifecycleAllows(kind, service);
     await this.assertPanelCanPerform(scope, service, kind);
 
@@ -231,6 +252,8 @@ export class CommercialActionService {
   ): Promise<readonly CommercialKind[]> {
     await this.deps.guard.check(scope, actor, COMMERCIAL_ACTION_PERMISSION);
     const available: CommercialKind[] = [];
+    // A custom service has nothing to renew from and no add-on path (Package D §9).
+    if (service.productId === null) return available;
     for (const kind of COMMERCIAL_ORDER_PURPOSES as readonly CommercialKind[]) {
       if (!OPERATION_LEGAL_FROM[kind].includes(service.state)) continue;
       const operable = await this.deps.panels.operability(scope, service.panelId, kind);
@@ -353,6 +376,7 @@ export class CommercialActionService {
          * that counts.
          */
         const service = await this.ownedService(scope, customerId, serviceId, tx);
+        assertExtendable(service);
         this.assertLifecycleAllows(input.kind, service);
         await this.assertPanelCanPerform(scope, service, input.kind, tx);
 
@@ -371,7 +395,8 @@ export class CommercialActionService {
           await this.deps.resellers.assertEntitled(
             scope,
             standing,
-            { operation: input.kind, productId: priced.line.productId, panelId: service.panelId },
+            // The service's product: a renewal's line names it and an add-on's copies it.
+            { operation: input.kind, productId: service.productId, panelId: service.panelId },
             tx,
           );
         }
@@ -932,6 +957,7 @@ export class CommercialActionService {
     service: ServiceRecord,
     tx?: unknown,
   ): Promise<ProductRecord> {
+    assertExtendable(service);
     const product = await this.deps.products.findById(scope, service.productId, tx);
     if (product === null || !isPurchasable(product.status) || product.price === null) {
       throw errors.conflict(

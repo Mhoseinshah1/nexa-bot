@@ -187,6 +187,13 @@ export class ResellerService {
     tx: TransactionScope,
   ): Promise<void> {
     if (!isDiscountablePurpose(order.purpose)) return;
+    /*
+     * A custom service carries no reseller layer and records no terms (Package D §7): an
+     * ACTIVE reseller is priced by the custom-service rules written for their tier, and
+     * applying the tier's percentage on top would be a second answer to what they pay.
+     * Its quote was built without `applyResellerLayer`, so there is nothing to compare.
+     */
+    if (order.purpose === 'CUSTOM_SERVICE') return;
     const quoted = quotedResellerLayer(order.totals.quote.trace);
     const standing = await this.standing(scope, order.customerId, tx);
 
@@ -195,10 +202,13 @@ export class ResellerService {
       return;
     }
 
+    const productId = order.line.productId;
+    // Every purpose but CUSTOM_SERVICE names a product (`orders_product_purpose_check`).
+    if (productId === null) throw new Error(`order ${order.id} names no product`);
     await this.assertEntitled(
       scope,
       standing,
-      { operation: order.purpose, productId: order.line.productId, panelId: order.line.panelId },
+      { operation: order.purpose, productId, panelId: order.line.panelId },
       tx,
     );
 

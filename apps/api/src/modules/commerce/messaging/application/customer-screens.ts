@@ -39,6 +39,19 @@ export interface PreinvoiceFacts {
   readonly locations: readonly string[];
   readonly features: readonly string[];
   readonly walletBalance: Money;
+  /**
+   * A custom service's breakdown (Package D), from the order's frozen terms; null or
+   * absent for every other order.
+   */
+  readonly custom?: {
+    readonly location: string;
+    readonly volumeBytes: bigint;
+    readonly pricePerGb: Money;
+    readonly volumePrice: Money;
+    readonly durationDays: number;
+    readonly pricePerDay: Money;
+    readonly timePrice: Money;
+  } | null;
 }
 
 export interface WalletSummaryFacts {
@@ -140,6 +153,19 @@ export class CustomerScreenComposer {
         : {
             featuresBlock: await this.templates.render(scope, 'bot.order.preinvoice_features', {
               lines: lines(facts.features),
+            }),
+          }),
+      ...(facts.custom === null || facts.custom === undefined
+        ? {}
+        : {
+            customBlock: await this.templates.render(scope, 'bot.order.preinvoice_custom', {
+              location: facts.custom.location,
+              volumeBytes: facts.custom.volumeBytes,
+              pricePerGb: facts.custom.pricePerGb,
+              volumePrice: facts.custom.volumePrice,
+              durationDays: facts.custom.durationDays,
+              pricePerDay: facts.custom.pricePerDay,
+              timePrice: facts.custom.timePrice,
             }),
           }),
       walletBalance: facts.walletBalance,

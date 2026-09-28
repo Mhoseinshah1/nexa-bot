@@ -189,7 +189,10 @@ export class ServiceRefundRequestService {
     }
     const order = await this.deps.orders.findById(scope, service.orderId, tx);
     if (order === null) return { eligible: false, reason: 'SOURCE_UNRESOLVED' };
-    if (order.purpose !== 'NEW_SERVICE') return { eligible: false, reason: 'NO_PAID_SOURCE' };
+    // The purchase that created the service: a catalogue one or a custom one (Package D).
+    if (order.purpose !== 'NEW_SERVICE' && order.purpose !== 'CUSTOM_SERVICE') {
+      return { eligible: false, reason: 'NO_PAID_SOURCE' };
+    }
     const payment = await this.deps.payments.findConfirmedForOrder(scope, order.id, tx);
     if (payment === null) {
       // A trial or a zero-total order has no payment; anything else here is unresolved.
@@ -1100,7 +1103,7 @@ export class ServiceRefundRequestService {
       displayName: name === '' ? '—' : name,
       serviceId: service.id,
       serviceUsername: service.providerUsername,
-      product: order?.line.title ?? service.productId,
+      product: order?.line.title ?? service.productId ?? '—',
       state: service.state,
       ...(service.expiresAt === null ? {} : { expiresAt: service.expiresAt }),
       usedTraffic: service.trafficUsedBytes,

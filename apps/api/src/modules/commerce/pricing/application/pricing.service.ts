@@ -106,7 +106,10 @@ export class PricingService {
      * customer: the operator's preview without one prices the list.
      */
     const terms =
-      request.customerId === null
+      request.customerId === null ||
+      // A custom service is priced by its own tier rules; the reseller layer on top would
+      // be a second answer to what a reseller pays (Package D §7).
+      request.purpose === 'CUSTOM_SERVICE'
         ? null
         : await this.deps.resellers.pricingTerms(scope, request.customerId, tx);
     const base = terms === null ? request.base : applyResellerLayer(request.base, terms);

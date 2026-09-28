@@ -409,7 +409,7 @@ function toRecord(row: typeof orders.$inferSelect): OrderRecord {
     state: row.state as OrderState,
     purpose: row.purpose as OrderPurpose,
     line: {
-      productId: row.productId as ProductId,
+      productId: row.productId as ProductId | null,
       panelId: row.panelId as PanelId,
       title: row.lineTitle,
       /*

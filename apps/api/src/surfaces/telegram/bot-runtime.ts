@@ -123,6 +123,7 @@ import {
   TUTORIAL_CALLBACK_DATA,
 } from '../../modules/commerce/provisioning/application/delivery.service.js';
 import type { CustomerCaptureService } from '../../modules/commerce/customers/application/customer-capture.service.js';
+import type { CustomerCaptureRecord } from '../../modules/commerce/customers/application/customer-capture-ports.js';
 import type { CustomerCountersReader } from '../../modules/commerce/customers/application/customer-counters-ports.js';
 import type {
   TopupRoute,
@@ -172,6 +173,13 @@ export const BOT_INTENTS = [
    * are all decided on the server, under the customer's lock, when the tap arrives.
    */
   'TRIAL_CLAIM',
+  /*
+   * Package D — the custom service. MENU carries nothing and lists the locations decided
+   * on the server; LOCATION carries the panel's id and opens the volume window. The
+   * figures themselves arrive as `USERNAME_TEXT` and are read by their capture windows.
+   */
+  'CUSTOM_SERVICE_MENU',
+  'CUSTOM_SERVICE_LOCATION',
   'ORDER',
   'CONFIRM',
   'WALLET',
@@ -2043,6 +2051,13 @@ export const CATEGORY_CALLBACK_PREFIX = 'ck:';
  * start with it.
  */
 export const TRIAL_CALLBACK_DATA = 'tr:';
+/**
+ * Package D. The catalogue's custom-service button (the whole data: it carries nothing),
+ * and a location's button (the panel's id). Two letters each, parsed before the one-letter
+ * prefixes: `c:` is confirm's, and neither `cu:` nor `cv:` starts with it.
+ */
+export const CUSTOM_SERVICE_CALLBACK_DATA = 'cu:';
+export const CUSTOM_SERVICE_LOCATION_CALLBACK_PREFIX = 'cv:';
 
 /**
  * A page number out of callback data, or null.
@@ -2141,6 +2156,16 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
      */
     if (data === TRIAL_CALLBACK_DATA) {
       return { intent: 'TRIAL_CLAIM', targetId: null, callbackQueryId: id };
+    }
+    if (data === CUSTOM_SERVICE_CALLBACK_DATA) {
+      return { intent: 'CUSTOM_SERVICE_MENU', targetId: null, callbackQueryId: id };
+    }
+    if (data.startsWith(CUSTOM_SERVICE_LOCATION_CALLBACK_PREFIX)) {
+      const panel = uuidV7Schema.safeParse(
+        data.slice(CUSTOM_SERVICE_LOCATION_CALLBACK_PREFIX.length),
+      );
+      if (!panel.success) return { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
+      return { intent: 'CUSTOM_SERVICE_LOCATION', targetId: panel.data, callbackQueryId: id };
     }
     if (data.startsWith(CATALOG_PAGE_CALLBACK_PREFIX)) {
       const page = parseCatalogPage(data.slice(CATALOG_PAGE_CALLBACK_PREFIX.length));
@@ -3130,6 +3155,60 @@ export function privateChatIdOf(update: unknown): string | null {
   return typeof chat.id === 'number' || typeof chat.id === 'string' ? String(chat.id) : null;
 }
 
+/** What the runtime needs of the custom-service flow (Package D). */
+export interface CustomServiceSurface {
+  offeredLocations(
+    scope: TenantContext,
+    actor: ActorContext,
+    customerId: UserId,
+  ): Promise<readonly { readonly panelId: string; readonly label: string }[]>;
+  begin(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: {
+      readonly idempotencyKey: string;
+      readonly botInstanceId: BotInstanceId;
+      readonly customerId: UserId;
+      readonly panelId: string;
+    },
+  ): Promise<
+    | { readonly outcome: 'ASK_VOLUME'; readonly location: { readonly label: string } }
+    | { readonly outcome: 'UNAVAILABLE' }
+  >;
+  recordVolume(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: {
+      readonly capture: CustomerCaptureRecord;
+      readonly text: string;
+      readonly botInstanceId: BotInstanceId;
+    },
+  ): Promise<
+    | { readonly outcome: 'INVALID' }
+    | { readonly outcome: 'UNAVAILABLE' }
+    | { readonly outcome: 'ASK_DAYS'; readonly volumeBytes: bigint }
+  >;
+  recordDays(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: { readonly capture: CustomerCaptureRecord; readonly text: string },
+  ): Promise<
+    { readonly outcome: 'INVALID' } | { readonly outcome: 'DRAFTED'; readonly order: OrderRecord }
+  >;
+  termsFor(
+    scope: TenantContext,
+    orderId: string,
+  ): Promise<{
+    readonly locationLabel: string;
+    readonly trafficBytes: bigint;
+    readonly pricePerGb: Money;
+    readonly volumePrice: Money;
+    readonly durationDays: number;
+    readonly pricePerDay: Money;
+    readonly timePrice: Money;
+  } | null>;
+}
+
 export interface BotRuntimeDeps {
   readonly customers: CustomerService;
   readonly messenger: CustomerMessenger;
@@ -3141,6 +3220,11 @@ export interface BotRuntimeDeps {
    * simply offers no trial — which is also what a tenant with the flag off sees.
    */
   readonly trials?: Pick<TrialService, 'availabilityFor' | 'claim'>;
+  /**
+   * Package D — the custom-service flow. Optional for the fixtures that build a runtime
+   * without it: then no button is drawn and a stale tap answers the unavailable sentence.
+   */
+  readonly customService?: CustomServiceSurface;
   /** The referral program (WP9): its terms, for the wallet button, and the invite. */
   readonly referrals?: Pick<ReferralProgram, 'terms' | 'invite'>;
   readonly orders: OrderService;
@@ -3417,7 +3501,8 @@ export interface SupportScreenSource {
 export interface ProductDisplaySource {
   displayFor(
     scope: TenantContext,
-    productId: ProductId,
+    /** Null for a custom service (Package D), which answers null. */
+    productId: ProductId | null,
   ): Promise<{
     readonly displayLocations: readonly string[];
     readonly displayFeatures: readonly string[];
@@ -3740,6 +3825,15 @@ export const REFUSAL_REPLIES: Readonly<Record<string, TemplateKey>> = {
    * re-priced, and they start again. Unmapped until the PR #69 review, which is silence.
    */
   [COMMERCE_ERROR_CODES.RESELLER_TERMS_CHANGED]: 'bot.order.terms_changed',
+  /*
+   * Package D. Off, not offered here, or not priced: one sentence, like
+   * `bot.order.unavailable` — the audit row carries which. A changed rule at confirmation
+   * and an extension of a custom service each have their own.
+   */
+  [COMMERCE_ERROR_CODES.CUSTOM_SERVICE_DISABLED]: 'bot.custom_service.unavailable',
+  [COMMERCE_ERROR_CODES.CUSTOM_SERVICE_UNAVAILABLE]: 'bot.custom_service.unavailable',
+  [COMMERCE_ERROR_CODES.CUSTOM_SERVICE_TERMS_CHANGED]: 'bot.custom_service.terms_changed',
+  [COMMERCE_ERROR_CODES.CUSTOM_SERVICE_NOT_EXTENDABLE]: 'bot.custom_service.not_extendable',
   [COMMERCE_ERROR_CODES.PRODUCT_NOT_PRICED]: 'bot.order.unavailable',
   [COMMERCE_ERROR_CODES.PRODUCT_NOT_FULFILLABLE]: 'bot.order.unavailable',
   /*
@@ -6926,7 +7020,7 @@ export class BotRuntime {
         customer: customer?.telegramUserId ?? '-',
         username: service.providerUsername,
         panel: service.panelId,
-        product: title ?? service.productId,
+        product: title ?? service.productId ?? '-',
         state: service.state,
         delivery: service.deliveryState,
         usedTrafficBytes: service.trafficUsedBytes,
@@ -8491,6 +8585,15 @@ export class BotRuntime {
     if (command.intent === 'TRIAL_CLAIM') {
       return this.claimTrial(scope, actor, customer, input.idempotencyKey);
     }
+    if (command.intent === 'CUSTOM_SERVICE_MENU') {
+      return this.customServiceMenu(scope, actor, customer);
+    }
+    if (command.intent === 'CUSTOM_SERVICE_LOCATION' && command.targetId !== null) {
+      return this.customServiceLocation(scope, actor, customer, command.targetId, {
+        idempotencyKey: input.idempotencyKey,
+        botInstanceId: input.botInstanceId,
+      });
+    }
     if (command.intent === 'CATEGORY' && command.targetId !== null) {
       return this.categoryPage(scope, actor, command.targetId, command.page ?? 0, customer.id);
     }
@@ -9461,6 +9564,9 @@ export class BotRuntime {
     if (capture.purpose === 'SERVICE_REFUND_REASON') {
       return this.serviceRefundReason(scope, actor, customer, capture.subjectId, text, input);
     }
+    if (capture.purpose === 'CUSTOM_SERVICE_VOLUME' || capture.purpose === 'CUSTOM_SERVICE_DAYS') {
+      return this.customServiceFigure(scope, actor, customer, capture, text, input);
+    }
     // SERVICE_NOTE: the window names the service; the write re-checks ownership.
     if (capture.subjectId === null) return null;
     try {
@@ -10089,6 +10195,17 @@ export class BotRuntime {
       page === 0 && (await this.trialOffered(scope, actor, customer))
         ? [{ label: { kind: 'TEMPLATE', key: 'bot.trial.button' }, data: TRIAL_CALLBACK_DATA }]
         : [];
+    /*
+     * The custom service (Package D), beside the trial and on the first page only: drawn
+     * when at least one location could price this customer now. A courtesy — every step
+     * after the tap decides again.
+     */
+    if (page === 0 && (await this.customServiceOffered(scope, actor, customer))) {
+      trial.push({
+        label: { kind: 'TEMPLATE', key: 'bot.custom_service.button' },
+        data: CUSTOM_SERVICE_CALLBACK_DATA,
+      });
+    }
     if (items.length === 0) {
       if (page > 0) return this.catalogue(scope, actor, 0, customer);
       return { key: 'bot.catalog.empty', values: {}, buttons: trial, orderId: null };
@@ -10118,6 +10235,121 @@ export class BotRuntime {
       });
     }
     return { key: 'bot.catalog.categories_heading', values: {}, buttons, orderId: null };
+  }
+
+  /** Whether to draw the custom-service button (Package D): some location prices this customer. */
+  private async customServiceOffered(
+    scope: TenantContext,
+    actor: ActorContext,
+    customer: CustomerRecord,
+  ): Promise<boolean> {
+    if (this.deps.customService === undefined) return false;
+    return (await this.deps.customService.offeredLocations(scope, actor, customer.id)).length > 0;
+  }
+
+  /** The custom-service button: the locations, each by the label the operator wrote. */
+  private async customServiceMenu(
+    scope: TenantContext,
+    actor: ActorContext,
+    customer: CustomerRecord,
+  ): Promise<PendingReply> {
+    const locations =
+      this.deps.customService === undefined
+        ? []
+        : await this.deps.customService.offeredLocations(scope, actor, customer.id);
+    if (locations.length === 0) {
+      return { key: 'bot.custom_service.unavailable', values: {}, buttons: [], orderId: null };
+    }
+    return {
+      key: 'bot.custom_service.locations',
+      values: {},
+      buttons: locations.map((location) => ({
+        label: { kind: 'TEXT' as const, text: location.label },
+        data: `${CUSTOM_SERVICE_LOCATION_CALLBACK_PREFIX}${location.panelId}`,
+      })),
+      orderId: null,
+    };
+  }
+
+  /** A location was tapped: re-decided, then the volume question and its window. */
+  private async customServiceLocation(
+    scope: TenantContext,
+    actor: ActorContext,
+    customer: CustomerRecord,
+    panelId: string,
+    input: { readonly idempotencyKey: string; readonly botInstanceId: BotInstanceId },
+  ): Promise<PendingReply> {
+    if (this.deps.customService === undefined) {
+      return { key: 'bot.custom_service.unavailable', values: {}, buttons: [], orderId: null };
+    }
+    const begun = await this.deps.customService.begin(scope, actor, {
+      idempotencyKey: `${input.idempotencyKey}:custom-service-volume`,
+      botInstanceId: input.botInstanceId,
+      customerId: customer.id,
+      panelId,
+    });
+    if (begun.outcome === 'UNAVAILABLE') {
+      return { key: 'bot.custom_service.unavailable', values: {}, buttons: [], orderId: null };
+    }
+    return {
+      key: 'bot.custom_service.ask_volume',
+      values: { location: begun.location.label },
+      buttons: [],
+      orderId: null,
+    };
+  }
+
+  /**
+   * A figure a custom-service window read (Package D): the volume, then the days, then
+   * the draft and the ordinary username step and pre-invoice.
+   */
+  private async customServiceFigure(
+    scope: TenantContext,
+    actor: ActorContext,
+    customer: CustomerRecord,
+    capture: CustomerCaptureRecord,
+    text: string,
+    input: { readonly idempotencyKey: string; readonly botInstanceId: BotInstanceId },
+  ): Promise<PendingReply> {
+    const flow = this.deps.customService;
+    if (flow === undefined || capture.customerId !== customer.id) {
+      return { key: 'bot.custom_service.unavailable', values: {}, buttons: [], orderId: null };
+    }
+    if (capture.purpose === 'CUSTOM_SERVICE_VOLUME') {
+      const volume = await flow.recordVolume(scope, actor, {
+        capture,
+        text,
+        botInstanceId: input.botInstanceId,
+      });
+      if (volume.outcome === 'INVALID') {
+        return { key: 'bot.custom_service.invalid_volume', values: {}, buttons: [], orderId: null };
+      }
+      if (volume.outcome === 'UNAVAILABLE') {
+        return { key: 'bot.custom_service.unavailable', values: {}, buttons: [], orderId: null };
+      }
+      return {
+        key: 'bot.custom_service.ask_days',
+        values: { volumeBytes: volume.volumeBytes },
+        buttons: [],
+        orderId: null,
+      };
+    }
+    try {
+      const days = await flow.recordDays(scope, actor, { capture, text });
+      if (days.outcome === 'INVALID') {
+        return { key: 'bot.custom_service.invalid_days', values: {}, buttons: [], orderId: null };
+      }
+      return this.afterDraft(
+        scope,
+        actor,
+        days.order,
+        customer,
+        input.botInstanceId,
+        input.idempotencyKey,
+      );
+    } catch (error) {
+      return refusal(error);
+    }
   }
 
   /** Whether to draw the trial button for this customer. Never throws a reply away. */
@@ -10248,14 +10480,32 @@ export class BotRuntime {
   ): Promise<PendingReply> {
     const discounted = order.totals.discount.amountMinor > 0n;
     const cashback = order.totals.quote.cashback;
-    const commercial = order.purpose !== 'NEW_SERVICE';
+    // A purchase shows the plan's allowance; an action on an existing service does not.
+    const commercial = order.purpose !== 'NEW_SERVICE' && order.purpose !== 'CUSTOM_SERVICE';
     // Marketing display data for the plan being bought or renewed; a package has none.
     const display =
       order.purpose === 'ADD_TRAFFIC' || order.purpose === 'ADD_TIME'
         ? null
         : await this.deps.productDisplay.displayFor(scope, order.line.productId);
     const balance = await this.deps.wallet.balanceForCustomer(scope, actor, customer.id);
+    // A custom service shows what it was priced from, from the order's frozen terms.
+    const custom =
+      order.purpose === 'CUSTOM_SERVICE'
+        ? await this.deps.customService?.termsFor(scope, order.id)
+        : undefined;
     const screen = await this.deps.screens.preinvoice(scope, {
+      custom:
+        custom === undefined || custom === null
+          ? null
+          : {
+              location: custom.locationLabel,
+              volumeBytes: custom.trafficBytes,
+              pricePerGb: custom.pricePerGb,
+              volumePrice: custom.volumePrice,
+              durationDays: custom.durationDays,
+              pricePerDay: custom.pricePerDay,
+              timePrice: custom.timePrice,
+            },
       serviceUsername: username,
       productName: order.line.title,
       durationDays: order.purpose === 'ADD_TRAFFIC' ? null : order.line.specification.durationDays,
@@ -10958,7 +11208,7 @@ export class BotRuntime {
     customer: CustomerRecord,
     idempotencyKey: string,
   ): Promise<OrderRecord> {
-    if (order.purpose === 'NEW_SERVICE') {
+    if (order.purpose === 'NEW_SERVICE' || order.purpose === 'CUSTOM_SERVICE') {
       return this.deps.orders.confirm(scope, actor, {
         idempotencyKey: `${idempotencyKey}:confirm`,
         customerId: customer.id,
@@ -11640,7 +11890,9 @@ export class BotRuntime {
 export function followUpForSettlement(purpose: OrderPurpose): {
   readonly followUpKey?: TemplateKey;
 } {
-  return purpose === 'NEW_SERVICE' ? { followUpKey: 'bot.service.provisioning' } : {};
+  return purpose === 'NEW_SERVICE' || purpose === 'CUSTOM_SERVICE'
+    ? { followUpKey: 'bot.service.provisioning' }
+    : {};
 }
 
 /**
@@ -11756,7 +12008,8 @@ function preinvoiceButtons(
           },
         ]
       : []),
-    ...(order.state === 'DRAFT' && order.purpose === 'NEW_SERVICE'
+    ...(order.state === 'DRAFT' &&
+    (order.purpose === 'NEW_SERVICE' || order.purpose === 'CUSTOM_SERVICE')
       ? [
           order.discountCode === null
             ? {

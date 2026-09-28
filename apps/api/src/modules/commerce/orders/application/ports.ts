@@ -23,7 +23,11 @@ import type {
  * «محصول حذف‌شده» is what a report that joins on today's product row produces.
  */
 export interface OrderLine {
-  readonly productId: ProductId;
+  /**
+   * Null for a `CUSTOM_SERVICE` order and only for one (Package D,
+   * `orders_product_purpose_check`): a custom service is bought from no product.
+   */
+  readonly productId: ProductId | null;
   readonly panelId: PanelId;
   readonly title: string;
   /**

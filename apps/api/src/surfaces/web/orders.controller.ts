@@ -124,6 +124,7 @@ function toSummary(record: OrderRecord): OrderSummaryResponse {
     id: record.id,
     customerId: record.customerId,
     state: record.state,
+    purpose: record.purpose,
     productId: record.line.productId,
     panelId: record.line.panelId,
     lineTitle: record.line.title,
