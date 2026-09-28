@@ -311,6 +311,16 @@ describe('the service detail', () => {
     expect(screen.getByText(/50/)).toBeInTheDocument();
   });
 
+  it('shows the limit and the used traffic in GB, never a switched unit (Package C)', async () => {
+    stubApi(detail({ trafficLimitBytes: '11005853696', trafficUsedBytes: '536870912' }));
+    renderPage(<ServiceDetailPage id={SERVICE_ID} denied={false} mayEdit mayTerminate />);
+
+    expect(await screen.findByText('10.25')).toBeInTheDocument();
+    // Half a GB used reads 0.5 GB, where the old rule read 512 MB.
+    expect(screen.getByText('0.5')).toBeInTheDocument();
+    expect(screen.queryByText('مگابایت')).toBeNull();
+  });
+
   /** The same prohibition as on the list, on the screen that shows one service. */
   it('renders no subscription url on the detail either', async () => {
     stubApi(detail({ subscriptionUrl: 'https://panel.example/sub/DEADBEEFDEADBEEF' }));

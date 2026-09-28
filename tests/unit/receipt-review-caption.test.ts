@@ -112,8 +112,8 @@ describe('the reviewer’s caption (File 01 §4)', () => {
       order: 'پلن ویژه',
       // A duration is shown in its unit, never as the stored integer (pre-release §4).
       durationDays: '30 روز',
-      // A byte figure is shown in a unit, never as the stored integer (pre-release §3).
-      trafficBytes: '5 بایت',
+      // A byte figure is shown in a unit, never as the stored integer (pre-release §3), in GB since Package C.
+      trafficBytes: '0 گیگابایت',
       serviceUsername: 'zahra01',
       name: 'زهرا احمدی',
       customer: '750900',

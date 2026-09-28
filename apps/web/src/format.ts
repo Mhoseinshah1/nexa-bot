@@ -1,10 +1,12 @@
 import {
   CURRENCY_EXPONENT,
+  formatTrafficGb,
   splitByteCount,
   type ByteUnit,
   type CurrencyCode,
   type MoneyWire,
 } from '@nexa/contracts';
+import { groupTrafficFigure } from '@nexa/i18n';
 import { t, type WebKey } from './i18n/web.fa';
 
 /**
@@ -199,7 +201,21 @@ const BYTE_UNIT_KEYS: Readonly<Record<ByteUnit, WebKey>> = {
 };
 
 /**
- * A traffic allowance as a figure and a unit.
+ * A traffic AMOUNT as the figure the Web Admin shows in GB (Package C): at most two
+ * decimals, the nearest hundredth, trailing zeros dropped, thousands grouped — `10`,
+ * `10.5`, `10.25`, `1,024`. The same figure the bot shows (`formatBytes` in
+ * `@nexa/i18n`), because both are `formatTrafficGb` grouped by one function. The unit is
+ * `web.unit_gib`, from the catalogue.
+ *
+ * Every traffic amount goes through here. `splitBytes` below is for file sizes only.
+ */
+export function formatTrafficGbText(bytes: bigint): string {
+  return groupTrafficFigure(formatTrafficGb(bytes));
+}
+
+/**
+ * A byte count — a file's size — as a figure and a unit. Traffic amounts are shown in GB by
+ * `formatTrafficGbText`, not here (Package C).
  *
  * `bigint` in, because the value crosses the wire as a decimal STRING for a reason: a
  * byte count passes 2^53 at eight petabytes and `Number` would round it. The division is

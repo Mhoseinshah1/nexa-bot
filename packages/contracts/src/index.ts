@@ -48,6 +48,7 @@ export * from './pricing.js';
  */
 export * from './customer.js';
 export * from './catalog.js';
+export * from './traffic-input.js';
 export * from './commerce.js';
 export * from './customer-notifications.js';
 export * from './bot-commands.js';

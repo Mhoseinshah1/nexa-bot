@@ -20,7 +20,7 @@ import {
   fetchServiceOperations,
   fetchServices,
 } from '../api/client';
-import { currencyLabel, formatNumber, formatTimestamp, splitBytes } from '../format';
+import { currencyLabel, formatNumber, formatTimestamp, formatTrafficGbText } from '../format';
 import { mayRequest, queryState } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
 import { setQueries, setQuery, useLinkHandler, type Route } from '../router';
@@ -131,10 +131,9 @@ function Dash() {
 function Traffic({ bytes }: { bytes: string }) {
   const value = BigInt(bytes);
   if (value === UNLIMITED_TRAFFIC_BYTES) return <span>{t('web.product_unlimited')}</span>;
-  const { value: amount, unit } = splitBytes(value);
   return (
     <span className="nowrap">
-      <Ltr>{amount}</Ltr> {t(unit)}
+      <Ltr>{formatTrafficGbText(value)}</Ltr> {t('web.unit_gib')}
     </span>
   );
 }

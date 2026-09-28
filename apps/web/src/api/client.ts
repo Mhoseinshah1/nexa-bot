@@ -901,7 +901,8 @@ export interface ProductWriteInput {
   sortOrder: number;
   panelId: string | null;
   durationDays: number;
-  trafficBytes: string;
+  /** GB with at most two decimals (WP21), or null for an explicit "no traffic limit". */
+  trafficGb: string | null;
   deviceLimit: number | null;
   priceAmount: string | null;
   priceCurrency: CurrencyCode | null;

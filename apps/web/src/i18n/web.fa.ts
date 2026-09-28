@@ -1685,8 +1685,9 @@ export const WEB_FA = {
   'web.product_duration_hint': 'به روز. صفر یعنی بدون محدودیت زمانی.',
   'web.product_days_unit': 'روز',
   'web.product_traffic': 'حجم',
-  'web.product_traffic_bytes': 'حجم (بایت)',
-  'web.product_traffic_hint': 'به بایت. صفر یعنی بدون محدودیت حجم.',
+  'web.product_traffic_gb': 'حجم (گیگابایت)',
+  'web.product_traffic_hint': 'به گیگابایت، حداکثر با دو رقم اعشار؛ مثلاً 10.25',
+  'web.product_traffic_unlimited': 'بدون محدودیت حجم',
   'web.product_unlimited': 'نامحدود',
   'web.product_device_limit': 'سقف دستگاه',
   'web.product_device_limit_hint':
@@ -1747,7 +1748,8 @@ export const WEB_FA = {
   'web.product_problem_title': 'عنوان نمی‌تواند خالی باشد.',
   'web.product_problem_sort': 'ترتیب باید عددی صحیح و در بازهٔ مجاز باشد.',
   'web.product_problem_duration': 'مدت باید عددی صحیح و در بازهٔ مجاز باشد.',
-  'web.product_problem_traffic': 'حجم باید عددی صحیح به بایت باشد.',
+  'web.product_problem_traffic':
+    'حجم باید عددی بزرگ‌تر از صفر به گیگابایت، حداکثر با دو رقم اعشار باشد؛ یا «بدون محدودیت حجم» را انتخاب کنید.',
   'web.product_problem_devices': 'سقف دستگاه باید عددی صحیح و بزرگ‌تر از صفر باشد یا خالی بماند.',
   'web.product_problem_price': 'قیمت باید عددی صحیح و بزرگ‌تر از صفر باشد یا خالی بماند.',
   /*

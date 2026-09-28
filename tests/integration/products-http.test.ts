@@ -9,7 +9,10 @@ import {
   PANEL_ERROR_CODES,
   PLATFORM_ERROR_CODES,
   PRODUCT_ROUTES,
+  SERVICE_ADDON_ROUTES,
+  formatTrafficGb,
   productListResponseSchema,
+  serviceAddonResponseSchema,
   productResponseSchema,
   SESSION_COOKIE_NAME,
 } from '@nexa/contracts';
@@ -187,7 +190,8 @@ describe('product HTTP surface', () => {
      */
     categoryId: SEED_IDS.categoryA,
     durationDays: 30,
-    trafficBytes: '53687091200',
+    // GB as an operator types it (WP21): 50 GB is 53,687,091,200 bytes.
+    trafficGb: '50',
     deviceLimit: 2,
     priceAmount: '250000',
     priceCurrency: 'IRT',
@@ -358,7 +362,7 @@ describe('product HTTP surface', () => {
      * ninety thousand billion — large, and a number a hyperinflated currency reaches.
      *
      * `trafficBytes` is asserted as a string here too but NOT with an oversized value:
-     * `MAX_TRAFFIC_BYTES` is 1 PiB, which is BELOW 2^53, so no legal traffic allowance
+     * `MAX_TRAFFIC_BYTES` is 1000 TiB, which is BELOW 2^53, so no legal traffic allowance
      * can overflow a double. Claiming otherwise would be an assertion that cannot fail
      * for the reason it names.
      */
@@ -438,14 +442,16 @@ describe('product HTTP surface', () => {
   });
 
   it('refuses a traffic allowance past the contract cap', async () => {
-    // `MAX_TRAFFIC_BYTES`, 1 PiB. The bound is in the schema, so this is a 400 rather
-    // than a row nothing can deliver.
+    // `MAX_TRAFFIC_BYTES`, 1,024,000 GB. The bound is in the schema, so this is a 400
+    // rather than a row nothing can deliver.
     const response = await post(
       PRODUCT_ROUTES.create,
       editorCookie,
-      body({ trafficBytes: '1099511627776001' }),
+      body({ trafficGb: '1024000.01' }),
     );
     expect(response.statusCode).toBe(400);
+    const atCap = await post(PRODUCT_ROUTES.create, editorCookie, body({ trafficGb: '1024000' }));
+    expect(atCap.statusCode, atCap.body).toBe(201);
   });
 
   it('refuses an input a column cannot hold, as a 400 naming the field', async () => {
@@ -903,5 +909,124 @@ describe('product HTTP surface', () => {
     const row = audits.rows[0] as { before: { title: string }; after: { title: string } };
     expect(row.before.title).toBe('پلن یک‌ماهه');
     expect(row.after.title).toBe('پلن دوماهه');
+  });
+  // -------------------------------------------------------------------------
+  // WP21 — traffic is typed in GB with at most two decimals; bytes are stored
+  // -------------------------------------------------------------------------
+
+  const storedBytes = async (id: string) =>
+    String(
+      (
+        (await api.container.database.db.execute(
+          sql`SELECT traffic_bytes::text AS b FROM products WHERE id = ${id}`,
+        )) as unknown as { rows: { b: string }[] }
+      ).rows[0]?.b,
+    );
+
+  it('stores 10.25 GB as its exact bytes, and 0.01 GB rounded to the nearest byte (WP21)', async () => {
+    const quarter = await createProduct({ trafficGb: '10.25' });
+    expect(await storedBytes(quarter.id)).toBe('11005853696');
+    expect(quarter.trafficBytes).toBe('11005853696');
+    expect(formatTrafficGb(BigInt(quarter.trafficBytes))).toBe('10.25');
+
+    const hundredth = await createProduct({ trafficGb: '0.01' });
+    expect(await storedBytes(hundredth.id)).toBe('10737418');
+  });
+
+  it('stores an explicit unlimited as zero bytes, and refuses a typed zero (WP21)', async () => {
+    const unlimited = await createProduct({ trafficGb: null });
+    expect(await storedBytes(unlimited.id)).toBe('0');
+    for (const zero of ['0', '0.00']) {
+      const refused = await post(PRODUCT_ROUTES.create, editorCookie, body({ trafficGb: zero }));
+      expect(refused.statusCode, zero).toBe(400);
+    }
+  });
+
+  it('refuses three decimals, a sign, an exponent, a comma and raw bytes (WP21)', async () => {
+    for (const trafficGb of ['1.234', '-1', '1e3', '1,5', '.5']) {
+      const refused = await post(PRODUCT_ROUTES.create, editorCookie, body({ trafficGb }));
+      expect(refused.statusCode, trafficGb).toBe(400);
+    }
+    const bytes = await post(
+      PRODUCT_ROUTES.create,
+      editorCookie,
+      body({ trafficGb: undefined, trafficBytes: '53687091200' }),
+    );
+    expect(bytes.statusCode).toBe(400);
+  });
+
+  it('keeps a historical byte count an edit did not touch, and stores one it did (WP21)', async () => {
+    const created = await createProduct();
+    // A value stored before WP21, in raw bytes, that no hundredth of a GB equals.
+    await api.container.database.db.execute(
+      sql`UPDATE products SET traffic_bytes = 1000000000 WHERE id = ${created.id}`,
+    );
+    const shown = formatTrafficGb(1_000_000_000n);
+    expect(shown).toBe('0.93');
+
+    const retitled = await post(
+      PRODUCT_ROUTES.update(created.id),
+      editorCookie,
+      body({ title: 'پلن ویرایش‌شده', trafficGb: shown }),
+    );
+    expect(retitled.statusCode, retitled.body).toBe(201);
+    expect(await storedBytes(created.id), 'the figure it showed, sent back').toBe('1000000000');
+
+    const changed = await post(
+      PRODUCT_ROUTES.update(created.id),
+      editorCookie,
+      body({ trafficGb: '0.94' }),
+    );
+    expect(changed.statusCode, changed.body).toBe(201);
+    expect(await storedBytes(created.id)).toBe('1009317315');
+  });
+
+  it('takes an add-on’s traffic in GB too, and never zero (WP21)', async () => {
+    const addon = (trafficGb: string) => ({
+      idempotencyKey: `wp21-addon-${trafficGb}`,
+      kind: 'ADD_TRAFFIC',
+      title: 'حجم اضافه',
+      sortOrder: 0,
+      trafficGb,
+      durationDays: null,
+      priceAmount: '50000',
+      priceCurrency: 'IRT',
+    });
+    const created = await post(SERVICE_ADDON_ROUTES.create, editorCookie, addon('2.5'));
+    expect(created.statusCode, created.body).toBe(201);
+    expect(serviceAddonResponseSchema.parse(created.json()).addon.trafficBytes).toBe('2684354560');
+    const zero = await post(SERVICE_ADDON_ROUTES.create, editorCookie, addon('0'));
+    expect(zero.statusCode).toBe(400);
+  });
+
+  it('keeps an add-on’s historical byte count an edit did not touch (WP21)', async () => {
+    const body = (trafficGb: string, key: string) => ({
+      idempotencyKey: `wp21-addon-edit-${key}`,
+      kind: 'ADD_TRAFFIC',
+      title: 'حجم اضافه',
+      sortOrder: 0,
+      trafficGb,
+      durationDays: null,
+      priceAmount: '50000',
+      priceCurrency: 'IRT',
+    });
+    const created = await post(SERVICE_ADDON_ROUTES.create, editorCookie, body('1', 'create'));
+    expect(created.statusCode, created.body).toBe(201);
+    const id = serviceAddonResponseSchema.parse(created.json()).addon.id;
+    await api.container.database.db.execute(
+      sql`UPDATE service_addons SET traffic_bytes = 1000000000 WHERE id = ${id}`,
+    );
+    const untouched = await post(
+      SERVICE_ADDON_ROUTES.update(id),
+      editorCookie,
+      body('0.93', 'same'),
+    );
+    expect(untouched.statusCode, untouched.body).toBe(201);
+    expect(serviceAddonResponseSchema.parse(untouched.json()).addon.trafficBytes).toBe(
+      '1000000000',
+    );
+    const changed = await post(SERVICE_ADDON_ROUTES.update(id), editorCookie, body('0.94', 'new'));
+    expect(changed.statusCode, changed.body).toBe(201);
+    expect(serviceAddonResponseSchema.parse(changed.json()).addon.trafficBytes).toBe('1009317315');
   });
 });

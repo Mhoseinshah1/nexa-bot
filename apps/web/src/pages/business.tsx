@@ -32,7 +32,7 @@ import {
   reportExportUrl,
   type ReportRangeSelection,
 } from '../api/client';
-import { splitBytes } from '../format';
+import { formatTrafficGbText } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
 import { pollUnlessFinal } from '../polling';
 import {
@@ -125,10 +125,9 @@ const REFERRER_RANKING_LABELS: Readonly<Record<ReportReferrerRanking, WebKey>> =
   COMMISSION: 'web.report_rank_by_commission',
 };
 
-/** A byte count in the catalogue's units. Zero is zero bytes here: unlimited lines are counted apart. */
+/** Traffic in GB (Package C). Zero is zero here: unlimited lines are counted apart. */
 function bytesText(bytes: bigint): string {
-  const { value, unit } = splitBytes(bytes);
-  return `${value} ${t(unit)}`;
+  return `${formatTrafficGbText(bytes)} ${t('web.unit_gib')}`;
 }
 
 /** Every query here shares this prefix, so one refresh re-reads them all. */

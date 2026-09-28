@@ -3,8 +3,7 @@ import {
   UNLIMITED_DURATION_DAYS,
   UNLIMITED_TRAFFIC_BYTES,
   isMoneyValue,
-  splitByteCount,
-  type ByteUnit,
+  formatTrafficGb,
   type Calendar,
   placeholderTokensIn,
   templateDefinition,
@@ -96,9 +95,11 @@ export function escapeTelegramHtml(value: string): string {
     .replace(/'/g, '&#39;');
 }
 
-const BYTE_UNIT_WORD: Record<Locale, Readonly<Record<ByteUnit, string>>> = {
-  fa: { PIB: 'پتابایت', TIB: 'ترابایت', GIB: 'گیگابایت', MIB: 'مگابایت', BYTE: 'بایت' },
-};
+/**
+ * The unit every traffic amount is shown in (Package C): the gigabyte, which is the
+ * binary 1 GiB this codebase has always shown and `BYTES_PER_GB` names.
+ */
+const GB_WORD: Record<Locale, string> = { fa: 'گیگابایت' };
 
 /**
  * The word an unlimited allowance is shown as — the Web Admin's own word. One word for
@@ -110,12 +111,25 @@ const UNLIMITED_WORD: Record<Locale, string> = { fa: 'نامحدود' };
 /** The unit a duration is shown in. Days are the only unit a plan is sold in. */
 const DAY_WORD: Record<Locale, string> = { fa: 'روز' };
 
-/** A byte QUANTITY, human-readable: `53687091200` is «50 گیگابایت». Zero is «0 بایت». */
+/**
+ * A traffic QUANTITY in GB (Package C, `docs/package-c-gb-normalization-audit.md`):
+ * `formatTrafficGb`'s figure — at most two decimals, the nearest hundredth, trailing zeros
+ * dropped — grouped in thousands, then the unit. `10737418240` is «10 گیگابایت»,
+ * `11274289152` «10.5 گیگابایت», `11005853696` «10.25 گیگابایت», zero «0 گیگابایت».
+ *
+ * Every traffic amount a person is shown goes through here or the Web Admin's
+ * `formatTrafficGbText`, which returns the same figure: one rule for the bot and the
+ * admin. Never a JavaScript float, and never a raw byte count.
+ */
 export function formatBytes(bytes: bigint, locale: Locale = DEFAULT_LOCALE): string {
-  const { whole, tenths, unit } = splitByteCount(bytes);
-  const grouped = whole.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-  const amount = tenths === 0n ? grouped : `${grouped}.${tenths.toString()}`;
-  return `${amount} ${BYTE_UNIT_WORD[locale][unit]}`;
+  return `${groupTrafficFigure(formatTrafficGb(bytes))} ${GB_WORD[locale]}`;
+}
+
+/** `1024.5` as `1,024.5`: thousands in the whole part only, the sign kept. */
+export function groupTrafficFigure(figure: string): string {
+  const [whole = '', fraction] = figure.split('.');
+  const grouped = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  return fraction === undefined ? grouped : `${grouped}.${fraction}`;
 }
 
 /** A traffic ALLOWANCE: `UNLIMITED_TRAFFIC_BYTES` is the word for unlimited, never «0». */
