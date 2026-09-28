@@ -925,6 +925,13 @@
       "when": 1790629310552,
       "tag": "0131_wpa5_extra_devices",
       "breakpoints": true
+    },
+    {
+      "idx": 132,
+      "version": "7",
+      "when": 1790636262652,
+      "tag": "0133_wpa8_panel_policies",
+      "breakpoints": true
     }
   ]
 }
