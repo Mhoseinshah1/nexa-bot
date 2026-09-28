@@ -304,14 +304,31 @@ export function renderClientAppGuide(content: string): string {
 }
 
 function inline(text: string): string {
-  return text
-    .replace(LINK, (_whole, label: string, target: string) => {
+  return neutralizeClientAppBareLinks(
+    text.replace(LINK, (_whole, label: string, target: string) => {
       const url = normalizeClientAppUrl(target);
       return url === null ? label : `${label}: ${url}`;
-    })
-    .replace(BARE_URL, (token) =>
-      isSafeBareUrl(token) ? token : (TRAILING_PUNCTUATION.exec(token)?.[0] ?? ''),
-    );
+    }),
+  );
+}
+
+/**
+ * Operator text with every bare URL-like token `clientAppTextProblem` would refuse —
+ * `http://…`, a scheme-less `www.…`, any scheme but https, an https link
+ * `normalizeClientAppUrl` refuses — DROPPED, its trailing punctuation kept. A safe bare
+ * `https://` link and all other text are left exactly as written.
+ *
+ * The one implementation of that step: `renderClientAppGuide` applies it to the guide, and
+ * the customer's read applies it to an entry's name, icon and description (Codex review #2
+ * of PR #95, C6). Validation already refuses such a token in every field, so this only
+ * changes a row written around the service — a restore, a migration, a hand edit — and
+ * there it is what keeps Telegram from auto-linking a plaintext address in the message.
+ * Total and pure.
+ */
+export function neutralizeClientAppBareLinks(text: string): string {
+  return text.replace(BARE_URL, (token) =>
+    isSafeBareUrl(token) ? token : (TRAILING_PUNCTUATION.exec(token)?.[0] ?? ''),
+  );
 }
 
 // --- The entry ------------------------------------------------------------------------------
