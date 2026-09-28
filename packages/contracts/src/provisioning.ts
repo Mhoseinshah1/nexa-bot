@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { StateMachineDefinition } from './state-machine.js';
 import type { ProviderFailureKind } from './provider.js';
+import { MAX_DEVICE_LIMIT } from './catalog.js';
 
 /**
  * Services and the operations that change them.
@@ -168,6 +169,12 @@ export const OPERATION_TYPES = [
   'SYNC_USAGE',
   'ROTATE_SUBSCRIPTION',
   'RECONCILE',
+  /*
+   * A paid raise of an existing account's device / connection limit (WP-A5), to an
+   * absolute target computed once at settlement. Executed only on a panel whose adapter
+   * declares `DEVICE_LIMIT_ADJUSTMENT` and has both device-limit methods.
+   */
+  'ADD_DEVICES',
 ] as const;
 export type OperationType = (typeof OPERATION_TYPES)[number];
 export const operationTypeSchema = z.enum(OPERATION_TYPES);
@@ -190,6 +197,7 @@ export const OPERATION_REQUIRED_CAPABILITIES: Readonly<Record<OperationType, rea
   SYNC_USAGE: ['READ_USAGE'],
   ROTATE_SUBSCRIPTION: ['ROTATE_SUBSCRIPTION_LINK'],
   RECONCILE: [],
+  ADD_DEVICES: ['DEVICE_LIMIT_ADJUSTMENT'],
 };
 
 export const OPERATION_STATES = [
@@ -621,6 +629,11 @@ export interface OperationTarget {
   readonly expiresAt: Date | null;
   /** The absolute TOTAL allowance, consumption included. Null: not bought here. */
   readonly trafficLimitBytes: bigint | null;
+  /**
+   * The absolute device / connection limit the account should then hold (WP-A5). Null:
+   * not bought here — every type but `ADD_DEVICES`, which carries it and nothing else.
+   */
+  readonly deviceLimit: number | null;
 }
 
 /**
@@ -633,6 +646,13 @@ export const TARGETED_OPERATION_TYPES = [
   'RENEW',
   'ADD_TRAFFIC',
   'ADD_TIME',
+  /*
+   * WP-A5. A commercial write like the three above, so it shares their serialisation
+   * (one open commercial action per service), their no-blind-replay rule after a crash
+   * mid-call, and their bounded verification READS — settled against `deviceLimit`
+   * through `readDeviceLimit` rather than against an allowance.
+   */
+  'ADD_DEVICES',
 ] as const satisfies readonly OperationType[];
 
 export function operationTypeCarriesTarget(type: OperationType): boolean {
@@ -684,4 +704,20 @@ export function extendedExpiry(currentExpiry: Date | null, now: Date, days: numb
 export function extendedAllowance(currentLimitBytes: bigint, purchasedBytes: bigint): bigint {
   if (currentLimitBytes === 0n || purchasedBytes === 0n) return 0n;
   return currentLimitBytes + purchasedBytes;
+}
+
+/**
+ * The absolute device limit a bought quantity produces, from the limit in force (WP-A5).
+ *
+ * Strictly additive, and only from a KNOWN limit: a service with no recorded limit is
+ * either unlimited or untracked, and in neither case is there a number to add devices
+ * to — so the answer is null and the purchase is not offered. A quantity that would take
+ * the limit past `MAX_DEVICE_LIMIT` is refused rather than clamped, because a clamp would
+ * sell a customer devices and give them fewer.
+ */
+export function extendedDeviceLimit(currentLimit: number | null, quantity: number): number | null {
+  if (currentLimit === null || currentLimit <= 0) return null;
+  if (!Number.isSafeInteger(quantity) || quantity <= 0) return null;
+  const target = currentLimit + quantity;
+  return target > MAX_DEVICE_LIMIT ? null : target;
 }

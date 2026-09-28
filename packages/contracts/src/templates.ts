@@ -2044,6 +2044,14 @@ export const TEMPLATES = [
     placeholders: [],
   },
   {
+    key: 'bot.admin.operation_add_devices',
+    description:
+      'The operation label inside `bot.admin.receipt` for extra users / devices on an ' +
+      'existing service (WP-A5).',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
     key: 'bot.admin.operation_topup',
     description: 'The operation label inside `bot.admin.receipt` for a wallet top-up.',
     format: 'PLAIN_TEXT',
@@ -5522,6 +5530,77 @@ export const TEMPLATES = [
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
+  /*
+   * WP-A5 — extra users / devices. Four keys: the button, the choice screen, one
+   * quantity button, and the pre-invoice block that states what the order bought.
+   */
+  {
+    key: 'bot.service.add_devices_button',
+    description:
+      'The button that opens the extra users / devices offer for a service. Drawn only ' +
+      'when the service is ACTIVE, its device limit is recorded, the panel’s adapter ' +
+      'declares DEVICE_LIMIT_ADJUSTMENT and implements it, and a priced extra-users ' +
+      'add-on applies to this service with room left under its maximum. Not drawing it ' +
+      'is never the control: every condition is re-checked on the tap, at confirmation ' +
+      'and when the money moves.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.devices_choice',
+    description:
+      'The extra users / devices screen: how many the service allows now, the price of ' +
+      'one more, and how many more can still be bought. The quantities are on the ' +
+      'BUTTONS below it, each bounded by the server from the configured maximum.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'currentLimit',
+        type: 'NUMBER',
+        description: 'The device limit the service holds now, from its own record.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'unitPrice',
+        type: 'MONEY',
+        description: 'The price of ONE extra user / device, with its currency.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'remaining',
+        type: 'NUMBER',
+        description: 'How many more may still be bought for this service.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.devices_option',
+    description:
+      'One quantity button on the extra users / devices screen: how many, and the list ' +
+      'price of that many. The quote screen the customer answers is where the final ' +
+      'figure — after any discount — is stated.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'quantity',
+        type: 'NUMBER',
+        description: 'How many extra users / devices this button buys.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'price',
+        type: 'MONEY',
+        description: 'The list price of that many, with its currency.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
   {
     key: 'bot.service.action_unavailable',
     description:
@@ -6417,9 +6496,56 @@ export const TEMPLATES = [
         repeatable: false,
       },
       {
+        token: 'devicesBlock',
+        type: 'STRING',
+        description:
+          'Rendered `bot.order.preinvoice_devices`, for an extra users / devices purchase only ' +
+          '(WP-A5): how many, the price of one, and the limit before and after.',
+        required: false,
+        repeatable: false,
+      },
+      {
         token: 'walletBalance',
         type: 'MONEY',
         description: 'The customer’s balance in the order’s currency, read at render time.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.order.preinvoice_devices',
+    description:
+      'The extra users / devices block of the pre-invoice (WP-A5): how many were bought, ' +
+      'the price of one, and the limit before and after. Read from the order’s own ' +
+      'snapshot, so it states what the quote was built from even after the add-on changes.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'quantity',
+        type: 'NUMBER',
+        description: 'How many extra users / devices were bought.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'unitPrice',
+        type: 'MONEY',
+        description: 'The price of one, as quoted.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'currentLimit',
+        type: 'NUMBER',
+        description: 'The limit the service held when the order was quoted.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'targetLimit',
+        type: 'NUMBER',
+        description: 'The limit the service will hold once the panel applies it.',
         required: true,
         repeatable: false,
       },
