@@ -556,7 +556,12 @@ function TicketCategoriesCard({
       render: (row) =>
         mayEdit ? <CategoryTitleEditor category={row} onSave={update.mutate} /> : row.title,
     },
-    { key: 'order', header: t('web.ticket_category_order'), render: (row) => row.sortOrder },
+    {
+      key: 'order',
+      header: t('web.ticket_category_order'),
+      render: (row) =>
+        mayEdit ? <CategoryOrderEditor category={row} onSave={update.mutate} /> : row.sortOrder,
+    },
     {
       key: 'active',
       header: t('web.status'),
@@ -663,6 +668,43 @@ function CategoryTitleEditor({
         onClick={() => normalized !== null && onSave({ id: category.id, title: normalized })}
       >
         {t('web.ticket_category_rename')}
+      </button>
+    </span>
+  );
+}
+
+/**
+ * The display order of an existing category, through the same update the title uses.
+ * Persian and Arabic digits are read as the create form reads them; anything else keeps
+ * the button disabled rather than being reinterpreted.
+ */
+function CategoryOrderEditor({
+  category,
+  onSave,
+}: {
+  category: TicketCategoryView;
+  onSave: (input: { id: string; sortOrder: number }) => void;
+}) {
+  const [value, setValue] = useState(String(category.sortOrder));
+  useEffect(() => setValue(String(category.sortOrder)), [category.sortOrder]);
+  const sortOrder = sortOrderOf(value);
+  return (
+    <span className="btn-group">
+      <input
+        aria-label={t('web.ticket_category_order')}
+        inputMode="numeric"
+        size={6}
+        value={value}
+        aria-invalid={sortOrder === null}
+        onChange={(event) => setValue(event.target.value)}
+      />
+      <button
+        type="button"
+        className="btn sm"
+        disabled={sortOrder === null || sortOrder === category.sortOrder}
+        onClick={() => sortOrder !== null && onSave({ id: category.id, sortOrder })}
+      >
+        {t('web.ticket_category_reorder')}
       </button>
     </span>
   );

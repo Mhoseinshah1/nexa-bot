@@ -212,6 +212,58 @@ describe('the ticket inbox', () => {
     expect(typeof (posted.body as { idempotencyKey: string }).idempotencyKey).toBe('string');
   });
 
+  it('edits an existing category’s display order through the category update', async () => {
+    const api = stubApi([
+      { url: '/tickets', body: { tickets: [], nextCursor: null } },
+      { url: '/ticket-categories', body: categories },
+      {
+        url: `/ticket-categories/${CATEGORY_ID}`,
+        body: { category: { ...categories.categories[0], sortOrder: 25 }, changed: true },
+      },
+    ]);
+    renderPage(<TicketsPage route={route()} denied={false} mayAssign={false} mayEditCategories />);
+    const table = await screen.findByRole('table', { name: t('web.ticket_categories_title') });
+    const order = within(table).getByLabelText(t('web.ticket_category_order'));
+    const save = within(table).getByRole('button', { name: t('web.ticket_category_reorder') });
+    expect((order as HTMLInputElement).value).toBe('10');
+    // Unchanged, and then not a number: nothing to save either time.
+    expect((save as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(order, { target: { value: '2.5' } });
+    expect((save as HTMLButtonElement).disabled).toBe(true);
+    // Persian digits are read as the create form reads them.
+    fireEvent.change(order, { target: { value: '۲۵' } });
+    expect((save as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(save);
+    await waitFor(() =>
+      expect(
+        api.calls.some(
+          (call) =>
+            call.method === 'POST' && call.url.endsWith(`/ticket-categories/${CATEGORY_ID}`),
+        ),
+      ).toBe(true),
+    );
+    const posted = api.calls.find((call) =>
+      call.url.endsWith(`/ticket-categories/${CATEGORY_ID}`),
+    )!;
+    expect(posted.body).toEqual({ sortOrder: 25 });
+  });
+
+  it('shows the display order as plain text to a viewer who cannot edit categories', async () => {
+    stubApi([
+      { url: '/tickets', body: { tickets: [], nextCursor: null } },
+      { url: '/ticket-categories', body: categories },
+    ]);
+    renderPage(
+      <TicketsPage route={route()} denied={false} mayAssign={false} mayEditCategories={false} />,
+    );
+    const table = await screen.findByRole('table', { name: t('web.ticket_categories_title') });
+    expect(within(table).queryByLabelText(t('web.ticket_category_order'))).toBeNull();
+    expect(
+      within(table).queryByRole('button', { name: t('web.ticket_category_reorder') }),
+    ).toBeNull();
+    expect(within(table).getByText('10')).toBeTruthy();
+  });
+
   it('is a navigation entry for tickets.view, and routes a conversation', () => {
     const entry = NAV.find((candidate) => candidate.id === 'tickets')!;
     expect(navPermitted(entry, ['tickets.view'])).toBe(true);

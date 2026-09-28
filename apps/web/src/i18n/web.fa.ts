@@ -3256,6 +3256,7 @@ export const WEB_FA = {
   'web.ticket_category_hide': 'پنهان کردن',
   'web.ticket_category_show': 'نمایش در ربات',
   'web.ticket_category_rename': 'تغییر نام',
+  'web.ticket_category_reorder': 'ذخیرهٔ ترتیب',
   'web.ticket_category_add': 'افزودن دسته',
   'web.ticket_category_created': 'دسته افزوده شد.',
   'web.ticket_category_saved': 'دسته ذخیره شد.',
