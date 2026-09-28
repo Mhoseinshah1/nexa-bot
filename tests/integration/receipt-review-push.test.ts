@@ -695,8 +695,9 @@ describe('the administrators’ receipt push', () => {
       expect(caption).toContain('یادداشت مشتری'); // the customer's note
       expect(caption).not.toContain('file-caption'); // never a file id
       // The order's frozen volume and duration (1 byte, 30 days), typed through their labels.
-      // The frozen allowance in a unit, never the stored integer (pre-release §3).
-      expect(caption).toMatch(/حجم محصول: 1 بایت\n/u);
+      // The frozen allowance in a unit, never the stored integer (pre-release §3). Always
+      // GB to the hundredth under Package C, so the fixture's single byte reads as zero.
+      expect(caption).toMatch(/حجم محصول: 0 گیگابایت\n/u);
       // The duration in its unit as well, never the bare figure (pre-release §4).
       expect(caption).toMatch(/مدت محصول: 30 روز\n/u);
     }
