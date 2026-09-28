@@ -765,6 +765,14 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.service.back_to_list_button',
       'bot.service.back_to_menu_button',
       'bot.service.capability_unsupported',
+      /*
+       * WP-A6: the location change. Its copy was reviewed against this case's rule: the
+       * request's answer promises an outcome message, which the notification lane sends for
+       * every customer-requested operation, and the confirmation promises new connection
+       * details only IF they change — which the delivery lane sends when a move rotates the
+       * link. Neither promises the link survives.
+       */
+      'bot.service.change_location_button',
       'bot.service.connected_ack',
       'bot.service.devices_choice',
       'bot.service.devices_option',
@@ -777,6 +785,15 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.service.list',
       'bot.service.list_empty',
       'bot.service.list_item_button',
+      'bot.service.location_choice',
+      'bot.service.location_confirm_button',
+      'bot.service.location_confirm_free',
+      'bot.service.location_cooldown',
+      'bot.service.location_limit',
+      'bot.service.location_option',
+      'bot.service.location_option_free',
+      'bot.service.location_requested',
+      'bot.service.location_same',
       'bot.service.next_page_button',
       'bot.service.not_found',
       'bot.service.note_button',

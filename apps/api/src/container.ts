@@ -4155,6 +4155,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       // mechanism that stops a redelivery becoming a second order.
       products: productService,
       commercial: commercialActionService,
+      // WP-A6: a customer's free location change.
+      locationChanges: locationChangeService,
       trials: trialService,
       customService: customServiceFlowService,
       subscriptionFiles: subscriptionFileService,
