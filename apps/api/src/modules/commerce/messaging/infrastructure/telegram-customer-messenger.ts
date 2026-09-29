@@ -10,7 +10,12 @@ import { ADMIN_MENU_BUTTON, MAIN_MENU_ROWS, errors, templateDefinition } from '@
 import { CATALOGUE_FA, formatMoney } from '@nexa/i18n';
 import {
   callbackAnswerBody,
+  clearKeyboardBody,
+  deleteMessageBody,
+  editCaptionBody,
+  editTextBody,
   fileMessageBody,
+  isMessageNotModified,
   fileUploadBody,
   telegramSend,
   textMessageBody,
@@ -28,7 +33,9 @@ import type {
   CustomerButton,
   CustomerButtonLabel,
   CustomerButtonRow,
+  CustomerEditMessage,
   CustomerFileMessage,
+  CustomerMessageRef,
   CustomerMessage,
   CustomerMessenger,
   CustomerSendConditionReader,
@@ -258,21 +265,23 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
       text.length <= TELEGRAM_MESSAGE_MAX ? [text] : splitMessageBody(text, TELEGRAM_MESSAGE_MAX);
     const sequence = parts.length === 0 ? [text] : parts;
     let worst: ClassifiedOutcome = { sent: { outcome: 'DELIVERED' }, errorCode: null };
+    // R2: the id of the part that carries the keyboard, so a later turn can edit it.
+    let lastMessageId: number | null = null;
     for (const [index, part] of sequence.entries()) {
       const last = index === sequence.length - 1;
-      const answer = this.classify(
-        await telegramSend({
-          token,
-          apiBaseUrl: this.apiBaseUrl,
-          timeoutMs: this.timeoutMs,
-          body: textMessageBody({
-            chatId: message.chatId,
-            text: part,
-            html,
-            ...(last ? { buttons, ...(keyboard === undefined ? {} : { keyboard }) } : {}),
-          }),
+      const raw = await telegramSend({
+        token,
+        apiBaseUrl: this.apiBaseUrl,
+        timeoutMs: this.timeoutMs,
+        body: textMessageBody({
+          chatId: message.chatId,
+          text: part,
+          html,
+          ...(last ? { buttons, ...(keyboard === undefined ? {} : { keyboard }) } : {}),
         }),
-      );
+      });
+      if (last && raw.outcome === 'SUCCEEDED') lastMessageId = raw.messageId;
+      const answer = this.classify(raw);
       if (worstOutcome(worst.sent.outcome, answer.sent.outcome) !== worst.sent.outcome) {
         worst = answer;
       }
@@ -281,7 +290,7 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
 
     if (worst.sent.outcome === 'DELIVERED') {
       await this.recordRecovery(scope, message.botInstanceId);
-      return worst.sent;
+      return lastMessageId === null ? worst.sent : { ...worst.sent, messageId: lastMessageId };
     }
     /*
      * A rate limit is NOT recorded as a failure condition. It is this installation
@@ -432,10 +441,98 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
      */
     const outcome = await telegramSend(request);
     const sent = this.classify(outcome).sent;
+    if (outcome.outcome !== 'SUCCEEDED') return sent;
     // HF-A7: the handle Telegram gave the delivered file, so an upload's bytes can be let go.
-    return outcome.outcome === 'SUCCEEDED' && outcome.file !== undefined
-      ? { ...sent, file: outcome.file }
-      : sent;
+    // R2: and the message's own id, so a decision can later edit its caption in place.
+    return {
+      ...sent,
+      ...(outcome.file === undefined ? {} : { file: outcome.file }),
+      ...(outcome.messageId === null ? {} : { messageId: outcome.messageId }),
+    };
+  }
+
+  /**
+   * R2: one message this bot sent, edited in place — its text, or its caption.
+   *
+   * Rendered exactly as `send` renders (the tenant's template, the key's own format, the
+   * same labels), and classified by the same `classify`. Two answers are decided here and
+   * not by Telegram: a text over the message bound is REFUSED without a request, because an
+   * edit cannot be split and the caller's fallback — a send — can; and "message is not
+   * modified" is DELIVERED, because the message already shows what was asked for.
+   *
+   * Like `sendFile`, nothing here opens the "this bot is not replying" condition: an edit
+   * that fails leaves the old screen in place, and every caller has a send to fall back on.
+   */
+  async edit(scope: TenantContext, message: CustomerEditMessage): Promise<CustomerSendResult> {
+    const token = await this.bots.tokenForBotInstance(scope, message.botInstanceId);
+    if (token === null) return { outcome: 'REFUSED' };
+    const text = await this.templates.render(scope, message.templateKey, message.values);
+    const html = templateDefinition(message.templateKey).format === 'TELEGRAM_HTML';
+    if (message.caption === true && html && text.length > TELEGRAM_CAPTION_MAX) {
+      return { outcome: 'REFUSED', reason: 'CAPTION_OVER_BOUND' };
+    }
+    if (message.caption !== true && text.length > TELEGRAM_MESSAGE_MAX) {
+      return { outcome: 'REFUSED' };
+    }
+    const buttons = await this.labelButtons(scope, message.buttons ?? []);
+    const outcome = await telegramSend({
+      token,
+      apiBaseUrl: this.apiBaseUrl,
+      timeoutMs: this.timeoutMs,
+      method: message.caption === true ? 'editMessageCaption' : 'editMessageText',
+      body:
+        message.caption === true
+          ? editCaptionBody({
+              chatId: message.chatId,
+              messageId: message.messageId,
+              caption: text,
+              html,
+              buttons,
+            })
+          : editTextBody({
+              chatId: message.chatId,
+              messageId: message.messageId,
+              text,
+              html,
+              buttons,
+            }),
+    });
+    if (isMessageNotModified(outcome))
+      return { outcome: 'DELIVERED', messageId: message.messageId };
+    const sent = this.classify(outcome).sent;
+    return sent.outcome === 'DELIVERED' ? { ...sent, messageId: message.messageId } : sent;
+  }
+
+  /** R2: every button off a message this bot sent; its text stays. */
+  async clearButtons(
+    scope: TenantContext,
+    message: CustomerMessageRef,
+  ): Promise<CustomerSendResult> {
+    const token = await this.bots.tokenForBotInstance(scope, message.botInstanceId);
+    if (token === null) return { outcome: 'REFUSED' };
+    const outcome = await telegramSend({
+      token,
+      apiBaseUrl: this.apiBaseUrl,
+      timeoutMs: this.timeoutMs,
+      method: 'editMessageReplyMarkup',
+      body: clearKeyboardBody(message),
+    });
+    if (isMessageNotModified(outcome)) return { outcome: 'DELIVERED' };
+    return this.classify(outcome).sent;
+  }
+
+  /** R2: deletes a message in a private chat. Best effort; the outcome is returned. */
+  async remove(scope: TenantContext, message: CustomerMessageRef): Promise<CustomerSendResult> {
+    const token = await this.bots.tokenForBotInstance(scope, message.botInstanceId);
+    if (token === null) return { outcome: 'REFUSED' };
+    const outcome = await telegramSend({
+      token,
+      apiBaseUrl: this.apiBaseUrl,
+      timeoutMs: this.timeoutMs,
+      method: 'deleteMessage',
+      body: deleteMessageBody(message),
+    });
+    return this.classify(outcome).sent;
   }
 
   private async recordFailure(

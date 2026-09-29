@@ -283,6 +283,40 @@ export interface CustomerSendResult {
    * is what lets the staged bytes be cleared once Telegram holds them.
    */
   readonly file?: { readonly fileId: string; readonly fileUniqueId: string };
+  /**
+   * R2: Telegram's id for the message a `send` or `sendFile` delivered (the LAST part of a
+   * split text) — present only with `DELIVERED`, and only when the answer named one. It is
+   * what lets a later turn edit that message in place instead of sending another.
+   */
+  readonly messageId?: number;
+}
+
+/**
+ * R2 (v0.3.5 real-test items 3–5): one message this bot already sent, changed in place.
+ *
+ * The same template-key rule as `CustomerMessage` — never text — and the same keyboard rule,
+ * except that NO buttons means the keyboard is removed: a message edited into a result keeps
+ * nothing that could ask for the decision again.
+ */
+export interface CustomerEditMessage {
+  readonly chatId: string;
+  readonly messageId: number;
+  readonly botInstanceId: BotInstanceId;
+  readonly templateKey: TemplateKey;
+  readonly values: TemplateValues;
+  readonly buttons?: readonly CustomerButton[];
+  /**
+   * The message is a FILE whose caption carries the text (a reviewer's receipt), so its
+   * caption is what changes. Telegram cannot turn a photo into a text message.
+   */
+  readonly caption?: boolean;
+}
+
+/** A message this bot sent, named for a keyboard removal or a deletion. */
+export interface CustomerMessageRef {
+  readonly chatId: string;
+  readonly messageId: number;
+  readonly botInstanceId: BotInstanceId;
 }
 
 /**
@@ -335,6 +369,24 @@ export interface CustomerMessenger {
     scope: TenantContext,
     input: { readonly callbackQueryId: string; readonly botInstanceId: BotInstanceId },
   ): Promise<void>;
+
+  /**
+   * R2: edits a message this bot sent — its text, or its caption — into a template, with the
+   * given keyboard or none. Never throws for a send failure, like `send`. A refusal because
+   * the message already says exactly this is DELIVERED: it is in the state asked for. A text
+   * over Telegram's bound is REFUSED without a request, and the caller sends instead (a send
+   * can split; an edit cannot).
+   */
+  edit(scope: TenantContext, message: CustomerEditMessage): Promise<CustomerSendResult>;
+
+  /** R2: takes every button off a message this bot sent; its text stays. */
+  clearButtons(scope: TenantContext, message: CustomerMessageRef): Promise<CustomerSendResult>;
+
+  /**
+   * R2: deletes a message in a private chat — one this bot sent, or the customer's own typed
+   * answer to a wizard step. Best effort: Telegram refuses a message older than 48 hours.
+   */
+  remove(scope: TenantContext, message: CustomerMessageRef): Promise<CustomerSendResult>;
 }
 
 /**

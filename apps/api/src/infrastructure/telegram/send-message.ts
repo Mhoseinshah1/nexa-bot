@@ -477,6 +477,88 @@ export function fileUploadBody(input: {
 }
 
 /**
+ * R2 (v0.3.5 real-test items 3–5): the bodies that change a message this bot ALREADY SENT,
+ * rather than sending another. `editMessageText` for a text message, `editMessageCaption`
+ * for a file whose caption carries the text (a reviewer's receipt), `editMessageReplyMarkup`
+ * to take a keyboard off a message whose text stays, and `deleteMessage`.
+ *
+ * The keyboard rules are `textMessageBody`'s, with one difference that is the point of an
+ * edit: NO buttons means the keyboard is REMOVED, so a message edited into a result keeps
+ * no button that could ask for the decision again. Telegram removes an inline keyboard from
+ * an edited message whose `reply_markup` is omitted; an explicit empty one says the same
+ * thing where the method would otherwise leave the keyboard alone.
+ */
+export function editTextBody(input: {
+  readonly chatId: string;
+  readonly messageId: number;
+  readonly text: string;
+  readonly html: boolean;
+  readonly buttons?: readonly TelegramButton[];
+}): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    chat_id: input.chatId,
+    message_id: input.messageId,
+    text: input.text,
+    link_preview_options: { is_disabled: true },
+  };
+  if (input.html) body.parse_mode = 'HTML';
+  if (input.buttons !== undefined && input.buttons.length > 0) {
+    body.reply_markup = { inline_keyboard: telegramButtonMarkup(input.buttons) };
+  }
+  return body;
+}
+
+/** `editMessageCaption`: the same caption rules as `fileMessageBody`. */
+export function editCaptionBody(input: {
+  readonly chatId: string;
+  readonly messageId: number;
+  readonly caption: string;
+  readonly html: boolean;
+  readonly buttons?: readonly TelegramButton[];
+}): Record<string, unknown> {
+  return {
+    chat_id: input.chatId,
+    message_id: input.messageId,
+    ...captionAndKeyboardFields(input),
+  };
+}
+
+/** `editMessageReplyMarkup` with an EMPTY keyboard: the text stays, every button goes. */
+export function clearKeyboardBody(input: {
+  readonly chatId: string;
+  readonly messageId: number;
+}): Record<string, unknown> {
+  return {
+    chat_id: input.chatId,
+    message_id: input.messageId,
+    reply_markup: { inline_keyboard: [] },
+  };
+}
+
+/** `deleteMessage`. */
+export function deleteMessageBody(input: {
+  readonly chatId: string;
+  readonly messageId: number;
+}): Record<string, unknown> {
+  return { chat_id: input.chatId, message_id: input.messageId };
+}
+
+/**
+ * Whether Telegram refused an edit ONLY because the message already says exactly this.
+ *
+ * `400 Bad Request: message is not modified` is the answer to an edit whose text and
+ * keyboard are what the message already shows — a redelivered update, or the worker and the
+ * turn racing to the same invoice. The message is in the state the caller wanted, so the
+ * messenger reports it as delivered rather than as a refusal somebody would act on.
+ */
+export function isMessageNotModified(outcome: TelegramSendOutcome): boolean {
+  return (
+    outcome.outcome === 'FAILED_PERMANENT' &&
+    outcome.errorMessage.toLowerCase().includes('message is not modified')
+  );
+}
+
+/**
  * The body of an `answerCallbackQuery` call.
  *
  * No `text`, deliberately. Telegram would show it as a toast, and every message this
