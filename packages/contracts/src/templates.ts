@@ -2242,6 +2242,44 @@ export const TEMPLATES = [
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
+  /*
+   * R2 (v0.3.5 real-test item 3): what the ORIGINAL review message becomes once a decision
+   * is taken on it. The receipt message is edited in place — its caption when it carries the
+   * file, its text when it went out as text — and loses its buttons, so the reviewer, and any
+   * other reviewer whose copy was recorded, sees the outcome where the question was.
+   */
+  {
+    key: 'bot.admin.review_approved',
+    description:
+      'R2: the receipt review message, edited in place after the payment was approved. ' +
+      'Replaces the caption or text and removes the decision buttons.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.review_rejected',
+    description:
+      'R2: the receipt review message, edited in place after the payment was rejected ' +
+      '(with its mandatory reason).',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.review_blocked',
+    description:
+      'R2: the receipt review message, edited in place after the reviewer blocked the ' +
+      'customer from it. The payment itself is still pending in the review queue.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.review_credited',
+    description:
+      'R2: the receipt review message, edited in place after the reviewer credited an amount ' +
+      "to the customer's wallet as the receipt's disposition.",
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
   {
     key: 'bot.admin.credit_button',
     description:
@@ -6223,6 +6261,67 @@ export const TEMPLATES = [
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
+  /*
+   * R2 (v0.3.5 real-test item 11): a successful RENEWAL is its own result message, never
+   * the generic "your request was applied". Sent by the notification lane as
+   * `SERVICE_RENEWED`; every value is read at send time from the operation the row names.
+   */
+  {
+    key: 'bot.service.renewed',
+    description:
+      'R2: the dedicated result of a successful renewal, sent as a NEW message by the ' +
+      'customer notification lane (SERVICE_RENEWED) after the payment message was closed. ' +
+      'Its values are read at send time from the renewal operation, its order and the ' +
+      'service; its one button opens the renewed service.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'username',
+        type: 'STRING',
+        description: 'The renewed account name on the panel, as the service card shows it.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'durationDays',
+        type: 'DURATION_DAYS',
+        description: 'How long the renewal bought, from the order that paid for it.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'expiresAt',
+        type: 'DATETIME',
+        description: 'The new expiry the renewal left the service at. Absent when it has none.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'reference',
+        type: 'STRING',
+        description:
+          'The tracking code of the payment that paid for the renewal. Absent when none was recorded.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.renewed_details_button',
+    description:
+      'R2: the one button on the renewal result. Opens the renewed service card directly, ' +
+      'through the ordinary ownership check of whoever taps it.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.renew_paid',
+    description:
+      'R2: what the renewal payment message becomes once a wallet payment settled it: the ' +
+      'wizard is closed with no buttons, and the renewal result follows as its own message.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
   {
     key: 'bot.service.capability_unsupported',
     description:
@@ -7522,8 +7621,9 @@ export const TEMPLATES = [
     description:
       'Answers a customer who chose an external gateway while the invoice is still being ' +
       'created by the background worker (no external call is made while Telegram waits). ' +
-      'It asks them to press the check button in a few seconds. It must not say anything ' +
-      'was paid or charged.',
+      'R2: the SAME message is edited into the invoice by the worker as soon as it is ready, ' +
+      'so it says the link will appear here; the check button stays as a fallback. It must ' +
+      'not say anything was paid or charged.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
