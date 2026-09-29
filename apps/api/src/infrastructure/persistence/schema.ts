@@ -9651,6 +9651,12 @@ export const bulkOperations = pgTable(
     audienceAsOf: timestamptz('audience_as_of').notNull(),
     itemCount: integer('item_count').notNull(),
     audienceFingerprint: text('audience_fingerprint').notNull(),
+    /**
+     * The earliest instant an item may be processed (NULL = at once). The items are frozen
+     * at creation all the same; only the processing waits, and the claim query itself
+     * enforces it.
+     */
+    notBefore: timestamptz('not_before'),
     createdByAdminId: uuid('created_by_admin_id')
       .notNull()
       .references(() => admins.id),
