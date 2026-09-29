@@ -100,6 +100,12 @@ export interface ServiceAddonDraft {
  */
 export type ServiceAddonEdit = Omit<ServiceAddonDraft, 'kind'>;
 
+/** WP-A8: the largest single package a panel admits; null for no cap on that axis. */
+export interface AddonCap {
+  readonly maxTrafficBytes: bigint | null;
+  readonly maxDurationDays: number | null;
+}
+
 export interface ServiceAddonRepository {
   create(
     scope: TenantContext,
@@ -169,6 +175,12 @@ export interface ServiceAddonRepository {
     kind: ServiceAddonKind,
     currency: CurrencyCode,
     limit: number,
+    /**
+     * WP-A8: a panel's per-purchase cap, applied IN the query, before the limit. Filtering
+     * a first page afterwards reported "nothing offered" whenever that page was all over
+     * the cap while a later package fitted. Absent or null means no cap.
+     */
+    within?: AddonCap,
     tx?: unknown,
   ): Promise<{ readonly items: readonly ServiceAddonRecord[]; readonly hasMore: boolean }>;
 

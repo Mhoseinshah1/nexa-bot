@@ -199,9 +199,23 @@ export class PanelAdvancedService {
             'This panel is archived. Restore it before editing.',
           );
         }
+        const stored = await this.deps.policies.find(tenant, id, tx);
+        /*
+         * An entry for an action the adapter cannot perform NOW is accepted only when it
+         * is exactly the entry already stored — so an operator's restriction outlives a
+         * capability that disappeared and came back, and saving an unrelated field does
+         * not drop it. A new or changed entry for such an action is still refused: it
+         * would be a setting over a behaviour the product does not have.
+         */
+        const kept = resolvePanelPolicy(stored?.policy ?? null);
         const unsupported = unsupportedPolicyActions(
           command.policy,
           this.registryFor(view.panel.providerType),
+        ).filter(
+          (action) =>
+            !kept.readable ||
+            canonical(kept.policy.actions[action] ?? null) !==
+              canonical(command.policy.actions[action]),
         );
         if (unsupported.length > 0) {
           throw errors.validation(
@@ -210,7 +224,6 @@ export class PanelAdvancedService {
             { actions: [...unsupported] },
           );
         }
-        const stored = await this.deps.policies.find(tenant, id, tx);
         const revision = stored?.revision ?? 0;
         if (command.expectedRevision !== revision) {
           throw errors.conflict(
@@ -286,6 +299,10 @@ export class PanelAdvancedService {
   /**
    * The Super Admin's raw view. Read-only; its own permission, charged here.
    *
+   * ADDITIVE to `panels.view`, which `panels.get` charges as well: this is a detail of a
+   * panel, reached from the panel's own page, and the page is `panels.view`'s. A role
+   * holding only this key would pass the endpoint and be refused the page it lives on.
+   *
    * No credential can appear: the view type carries the three set-at timestamps and
    * nothing else, because the repository never selects a ciphertext.
    */
@@ -296,7 +313,7 @@ export class PanelAdvancedService {
   ): Promise<PanelTechnicalResponse> {
     const tenant = this.tenant(scope);
     await this.deps.guard.check(scope, actor, PANELS_TECHNICAL_VIEW);
-    const view = await this.deps.panels.readAuthorized(tenant, this.panelId(panelId));
+    const view = await this.deps.panels.get(scope, actor, panelId);
     const stored = await this.deps.policies.find(tenant, view.panel.id);
     const descriptor = providerDescriptor(view.panel.providerType);
     const health = view.health;

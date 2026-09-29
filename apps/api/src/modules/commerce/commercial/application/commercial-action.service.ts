@@ -294,15 +294,12 @@ export class CommercialActionService {
       return { kind, product: null, addons: [devices.addon], devices };
     }
 
-    const addons = await this.deps.addons.listOfferable(
+    const offerable = await this.offerableAddons(
       scope,
+      service,
       kind === 'ADD_TRAFFIC' ? 'ADD_TRAFFIC' : 'ADD_TIME',
-      await this.salesCurrency(scope),
       ADDON_OFFER_LIMIT,
     );
-    // WP-A8: only the packages this panel's per-purchase cap admits.
-    const policy = await this.deps.panelPolicy.forPanel(scope, service.panelId);
-    const offerable = addons.items.filter((addon) => withinPanelCap(policy, addon.specification));
     if (offerable.length === 0) {
       throw errors.conflict(
         COMMERCE_ERROR_CODES.SERVICE_ACTION_UNAVAILABLE,
@@ -375,17 +372,9 @@ export class CommercialActionService {
         if ((await this.deviceOffer(scope, service, null)) !== null) available.push(kind);
         continue;
       }
-      const offered = await this.deps.addons.listOfferable(
-        scope,
-        kind,
-        await this.salesCurrency(scope),
-        ADDON_OFFER_LIMIT,
-      );
-      // The same first page `offer` lists, filtered by the same cap, so the button is
-      // drawn exactly when its tap has something to show.
-      if (offered.items.some((addon) => withinPanelCap(policy, addon.specification))) {
-        available.push(kind);
-      }
+      // The same helper `offer` lists through, so the button is drawn exactly when its
+      // tap has something to show.
+      if ((await this.offerableAddons(scope, service, kind, 1)).length > 0) available.push(kind);
     }
     return available;
   }
@@ -1307,6 +1296,31 @@ export class CommercialActionService {
   }
 
   /** The unit this installation sells in, read where it is needed rather than cached. */
+  /**
+   * The packages of one kind this service may be offered, at most `limit` of them (WP-A8).
+   *
+   * The ONE read `offer` and `availableFor` share, with the panel's per-purchase cap
+   * applied in the query before the limit — so ten packages over the cap cannot hide an
+   * eleventh that fits, and the two callers cannot disagree about whether anything is on
+   * sale.
+   */
+  private async offerableAddons(
+    scope: TenantContext,
+    service: ServiceRecord,
+    kind: 'ADD_TRAFFIC' | 'ADD_TIME',
+    limit: number,
+  ): Promise<readonly ServiceAddonRecord[]> {
+    const policy = await this.deps.panelPolicy.forPanel(scope, service.panelId);
+    const page = await this.deps.addons.listOfferable(
+      scope,
+      kind,
+      await this.salesCurrency(scope),
+      limit,
+      { maxTrafficBytes: policyMaxTrafficBytes(policy), maxDurationDays: policyMaxDays(policy) },
+    );
+    return page.items;
+  }
+
   private async salesCurrency(scope: TenantContext, tx?: unknown): Promise<SalesCurrencyCode> {
     return this.deps.settings.valueOf<SalesCurrencyCode>(scope, 'sales.currency', tx);
   }

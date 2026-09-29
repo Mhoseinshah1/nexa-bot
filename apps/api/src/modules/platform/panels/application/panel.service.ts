@@ -412,8 +412,7 @@ export class PanelService {
   /**
    * WP-A8: one panel with its capacity and sellability, for a caller that has ALREADY
    * charged its own permission — the policy write answers with the panel it wrote, as
-   * `update` does, and the technical view charges `panels.technical.view`. Never a
-   * surface's entry point: it checks nothing.
+   * `update` does, under `panels.edit`. Never a surface's entry point: it checks nothing.
    */
   async readAuthorized(scope: TenantContext, panelId: string): Promise<PanelWithCapacity> {
     return this.oneWithCapacity(scope, await this.require(scope, panelId));

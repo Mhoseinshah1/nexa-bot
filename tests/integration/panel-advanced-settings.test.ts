@@ -22,7 +22,11 @@ import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/ca
 import { DrizzleOperationRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-operation.repository';
 import { DrizzleServiceRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-service.repository';
 import type { ServiceRecord } from '../../apps/api/src/modules/commerce/provisioning/application/ports';
-import { auditLogs, panelPolicies } from '../../apps/api/src/infrastructure/persistence/schema';
+import {
+  adminPermissionOverrides,
+  auditLogs,
+  panelPolicies,
+} from '../../apps/api/src/infrastructure/persistence/schema';
 import { startFakeRickpanel, type FakeRickpanel } from '../support/fake-rickpanel';
 import {
   adminActorFor,
@@ -234,13 +238,13 @@ describe('advanced provider settings', () => {
     });
   }
 
-  async function offeredTraffic(key: string, gb: bigint): Promise<string> {
+  async function offeredTraffic(key: string, gb: bigint, sortOrder = Number(gb)): Promise<string> {
     const created = await ctx.container.serviceAddons.create(tenantA, owner, {
       idempotencyKey: `${key}-addon`,
       draft: {
         kind: 'ADD_TRAFFIC',
         title: `${gb.toString()} GB`,
-        sortOrder: Number(gb),
+        sortOrder,
         specification: {
           kind: 'ADD_TRAFFIC',
           trafficBytes: gb * BYTES_PER_GB,
@@ -317,6 +321,30 @@ describe('advanced provider settings', () => {
       (await refusalOf(ctx.container.panelAdvanced.technical(tenantA, technicalRole, panelId)))
         .code,
     ).toBe('platform.permission_denied');
+    /*
+     * Codex #1 on PR #102: the key is ADDITIVE to `panels.view`. A role granted it
+     * without `panels.view` would pass the endpoint and be refused the page it is on.
+     */
+    const supportRole = await createAdmin(ctx.container, tenantA, {
+      username: 'tech-only-adv',
+      roleKeys: ['support'],
+    });
+    await ctx.container.database.db.insert(adminPermissionOverrides).values({
+      tenantId: tenantA.tenantId,
+      adminId: supportRole.id,
+      permissionKey: 'panels.technical.view',
+      effect: 'GRANT',
+      reason: 'Debugs an integration.',
+      expiresAt: null,
+    });
+    expect(
+      (
+        await refusalOf(
+          ctx.container.panelAdvanced.technical(tenantA, adminActorFor(supportRole), panelId),
+        )
+      ).details?.['permission'],
+    ).toBe('panels.view');
+
     // The technical role still reads the Persian registry and diagnostics.
     await expect(
       ctx.container.panelAdvanced.advanced(tenantA, technicalRole, panelId),
@@ -613,6 +641,72 @@ describe('advanced provider settings', () => {
         idempotencyKey: 'cap-draft-small',
       }),
     ).resolves.toMatchObject({ action: { kind: 'ADD_TRAFFIC' } });
+  });
+
+  /*
+   * Codex #1 on PR #102: the cap was applied AFTER the first page was read, so a page of
+   * ten packages over the cap hid an eleventh that fits, and both the offer and the
+   * button said nothing was on sale.
+   */
+  it('finds a package under the cap behind a full page of packages over it', async () => {
+    const service = await deliveredService('page');
+    for (let index = 1; index <= 10; index += 1) {
+      await offeredTraffic(`big-${String(index)}`, 100n, index);
+    }
+    const fits = await offeredTraffic('fits', 10n, 11);
+    await setPolicy(policyWith({ ADD_TRAFFIC: { customerEnabled: true, maxTrafficGb: 50 } }));
+
+    expect(
+      await ctx.container.commercialActions.availableFor(tenantA, systemActor('page-a'), service),
+    ).toContain('ADD_TRAFFIC');
+    const offer = await ctx.container.commercialActions.offer(
+      tenantA,
+      systemActor('page-offer'),
+      customerId,
+      service.id,
+      'ADD_TRAFFIC',
+    );
+    expect(offer.addons.map((addon) => addon.id)).toEqual([fits]);
+  });
+
+  /*
+   * Codex #1 on PR #102: an entry for an action the adapter no longer supports — stored
+   * while it did — is kept through a save of an unrelated field, and only a CHANGE to it
+   * is refused. RickPanel has no extra-users capability, so a row naming one stands for
+   * a capability that has since disappeared.
+   */
+  it('keeps a stored restriction on an action the panel no longer supports', async () => {
+    const orphan = { customerEnabled: false, maxDeviceLimit: null };
+    await ctx.container.database.db.insert(panelPolicies).values({
+      tenantId: tenantA.tenantId,
+      panelId,
+      policy: policyWith({ EXTRA_DEVICES: orphan }),
+      revision: 1,
+    });
+
+    const saved = await ctx.container.panelAdvanced.updatePolicy(tenantA, owner, panelId, {
+      policy: policyWith({ EXTRA_DEVICES: orphan, RENEW: { customerEnabled: false } }),
+      expectedRevision: 1,
+      idempotencyKey: 'keep-orphan',
+    });
+    expect(saved.changed).toBe(true);
+    expect(saved.advanced.policy.policy.actions).toEqual({
+      EXTRA_DEVICES: orphan,
+      RENEW: { customerEnabled: false },
+    });
+
+    const changed = await refusalOf(
+      ctx.container.panelAdvanced.updatePolicy(tenantA, owner, panelId, {
+        policy: policyWith({
+          EXTRA_DEVICES: { customerEnabled: false, maxDeviceLimit: 3 },
+          RENEW: { customerEnabled: false },
+        }),
+        expectedRevision: 2,
+        idempotencyKey: 'change-orphan',
+      }),
+    );
+    expect(changed.code).toBe(PANEL_ERROR_CODES.PANEL_POLICY_CAPABILITY_UNSUPPORTED);
+    expect(changed.details?.['actions']).toEqual(['EXTRA_DEVICES']);
   });
 
   it('delivers the card as text, with no photo, on a CARD_TEXT panel', async () => {
