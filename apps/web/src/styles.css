@@ -2231,10 +2231,6 @@ textarea.input {
   background: var(--bg-1);
 }
 
-[hidden] {
-  display: none !important;
-}
-
 /* R1: «دکمه‌های ربات» — the main-menu keyboard as the customer will see it. */
 .menu-preview {
   display: flex;
@@ -2255,4 +2251,8 @@ textarea.input {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--bg-1);
+}
+
+[hidden] {
+  display: none !important;
 }
