@@ -552,7 +552,7 @@ describe('one ticket', () => {
       target: { value: 'پیوست' },
     });
     const posts = () => api.calls.filter((call) => call.url.endsWith('/messages'));
-    const sendWith = async (bytes: Uint8Array, count: number) => {
+    const sendWith = async (bytes: Uint8Array<ArrayBuffer>, count: number) => {
       await pick(new File([bytes], 'screen.png', { type: 'image/png' }));
       const send = screen.getByRole('button', { name: t('web.ticket_reply_send') });
       await waitFor(() => expect(send).toBeEnabled());
