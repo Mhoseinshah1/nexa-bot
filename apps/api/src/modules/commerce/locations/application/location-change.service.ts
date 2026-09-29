@@ -27,6 +27,7 @@ import type { ScopeActivityReader } from '../../../platform/system/application/r
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { ServiceRepository } from '../../provisioning/application/ports.js';
 import type { ProvisioningService } from '../../provisioning/application/provisioning.service.js';
+import type { ResellerService } from '../../resellers/application/reseller.service.js';
 import { OPERATION_LEGAL_FROM } from '../../provisioning/application/provision-executor.js';
 import type { LocationChangePolicy } from './location-change-policy.js';
 import type { LocationChangeRepository } from './ports.js';
@@ -46,6 +47,12 @@ export interface LocationChangeServiceDeps {
   readonly policy: Pick<LocationChangePolicy, 'decide'>;
   readonly changes: Pick<LocationChangeRepository, 'create'>;
   readonly provisioning: Pick<ProvisioningService, 'planLocationChange'>;
+  /**
+   * A reseller's standing and entitlements (`docs/wp9-reseller-audit.md` R5, R6): a free
+   * move is still an operation a reseller's tier must grant, decided exactly as the paid
+   * quote decides it — deny by default for an ACTIVE reseller without the grant.
+   */
+  readonly resellers: Pick<ResellerService, 'standing' | 'assertEntitled'>;
   /** Whether THIS service's panel can move an account — the executor's own question. */
   readonly panels: {
     operability(
@@ -134,6 +141,14 @@ export class LocationChangeService {
         if (service === null || service.customerId !== customerId) {
           throw errors.notFound(COMMERCE_ERROR_CODES.SERVICE_NOT_FOUND, 'Unknown service.');
         }
+        // A custom service (Package D) is moved by nothing in this release, as the quote says.
+        const productId = service.productId;
+        if (productId === null) {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.CUSTOM_SERVICE_NOT_EXTENDABLE,
+            'A custom service cannot be renewed or extended.',
+          );
+        }
         if (!OPERATION_LEGAL_FROM.CHANGE_LOCATION.includes(service.state)) {
           throw errors.conflict(
             COMMERCE_ERROR_CODES.SERVICE_ACTION_NOT_ALLOWED,
@@ -171,6 +186,21 @@ export class LocationChangeService {
           );
         }
 
+        // Inside the transaction, from the grants in force now — as `draft` asks it.
+        const standing = await this.deps.resellers.standing(scope, customerId, tx);
+        if (standing !== null) {
+          await this.deps.resellers.assertEntitled(
+            scope,
+            standing,
+            {
+              operation: 'CHANGE_LOCATION',
+              productId,
+              panelId: service.panelId,
+            },
+            tx,
+          );
+        }
+
         const changeId = this.deps.ids.uuid();
         const operation = await this.deps.provisioning.planLocationChange(
           scope,
@@ -197,6 +227,7 @@ export class LocationChangeService {
             toLocationKey: target.locationKey,
             toLocationLabel: target.label,
             price: target.price,
+            limits: target.limits,
             orderId: null,
             operationId: operation.id,
             now,

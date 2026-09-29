@@ -1,5 +1,5 @@
 {
-  "id": "5707fafe-363b-409b-baef-ed3d8c387b7d",
+  "id": "53dcbd31-308b-4e17-badc-c874c0012503",
   "prevId": "4e13b914-3526-4f90-b120-ffb09d154c0b",
   "version": "7",
   "dialect": "postgresql",
@@ -13580,6 +13580,24 @@
           "primaryKey": false,
           "notNull": true
         },
+        "cooldown_hours": {
+          "name": "cooldown_hours",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "max_changes": {
+          "name": "max_changes",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "period_days": {
+          "name": "period_days",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
         "order_id": {
           "name": "order_id",
           "type": "uuid",
@@ -13795,6 +13813,10 @@
         "service_location_changes_version_check": {
           "name": "service_location_changes_version_check",
           "value": "location_version >= 1"
+        },
+        "service_location_changes_limits_check": {
+          "name": "service_location_changes_limits_check",
+          "value": "(cooldown_hours IS NULL OR cooldown_hours >= 1)\n          AND (max_changes IS NULL) = (period_days IS NULL)\n          AND (max_changes IS NULL OR (max_changes >= 1 AND period_days >= 1))"
         }
       },
       "isRLSEnabled": false

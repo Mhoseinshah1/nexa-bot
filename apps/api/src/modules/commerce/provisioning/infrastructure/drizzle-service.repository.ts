@@ -609,6 +609,30 @@ export class DrizzleServiceRepository implements ServiceRepository {
     return rows.length === 1;
   }
 
+  async recordLocationForUnmoved(
+    scope: TenantContext,
+    panelId: string,
+    location: { readonly key: string; readonly label: string },
+    legalFrom: readonly ServiceState[],
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<number> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .update(services)
+      .set({ locationKey: location.key, locationLabel: location.label, updatedAt: now })
+      .where(
+        and(
+          eq(services.tenantId, tenantId),
+          eq(services.panelId, panelId),
+          isNull(services.locationKey),
+          inArray(services.state, [...legalFrom]),
+        ),
+      )
+      .returning({ id: services.id });
+    return rows.length;
+  }
+
   /**
    * Resolves sends that were handed to Telegram by a process that then died.
    *

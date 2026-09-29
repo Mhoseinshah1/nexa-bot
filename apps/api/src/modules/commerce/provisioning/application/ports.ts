@@ -435,6 +435,23 @@ export interface ServiceRepository {
   ): Promise<boolean>;
 
   /**
+   * Freezes a panel's OLD initial location onto every never-moved service on it (WP-A6),
+   * before an operator's write changes what "never moved" means there: a NULL location is
+   * read as the panel's initial location, so editing, unmarking, moving or deleting that
+   * row would otherwise silently relocate every such service. Only `legalFrom` states —
+   * the ones with an account that exists or may — and only rows still NULL, so a move
+   * applied concurrently is never overwritten. Returns how many were recorded.
+   */
+  recordLocationForUnmoved(
+    scope: TenantContext,
+    panelId: string,
+    location: { readonly key: string; readonly label: string },
+    legalFrom: readonly ServiceState[],
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<number>;
+
+  /**
    * Resolves sends whose sender died, so the automatic lane never repeats one.
    *
    * A stamped row past its lease becomes `UNCONFIRMED` if it was `PENDING`, and simply

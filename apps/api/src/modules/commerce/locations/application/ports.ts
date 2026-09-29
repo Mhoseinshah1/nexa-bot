@@ -104,6 +104,13 @@ export interface ServiceLocationRepository {
 
   delete(scope: TenantContext, id: ServiceLocationId, tx: TransactionScope): Promise<boolean>;
 
+  /**
+   * Serialises every write to this tenant's locations (Codex review #1 on PR #101): taken
+   * FIRST in each write's transaction, so the per-tenant and per-panel counts a create
+   * checks cannot both be read by two concurrent creates.
+   */
+  lockForWrite(scope: TenantContext, tx: TransactionScope): Promise<void>;
+
   /** Whether any change request or commercial action names this location. */
   isReferenced(scope: TenantContext, id: ServiceLocationId, tx: TransactionScope): Promise<boolean>;
 }
@@ -122,6 +129,8 @@ export interface LocationChangeRecord {
   readonly toLocationLabel: string;
   /** The configured list price at quote time; zero is free. The charged total is the order's. */
   readonly price: Money;
+  /** The cooldown and limit it was quoted under — what a paid move's confirmation honours. */
+  readonly limits: LocationChangeLimits;
   /** A paid change's order; null for a free one. */
   readonly orderId: OrderId | null;
   /** A free change's operation row id; null for a paid one (its operation names the order). */
@@ -140,6 +149,7 @@ export interface LocationChangeDraft {
   readonly toLocationKey: string;
   readonly toLocationLabel: string;
   readonly price: Money;
+  readonly limits: LocationChangeLimits;
   readonly orderId: OrderId | null;
   readonly operationId: string | null;
   readonly now: Date;

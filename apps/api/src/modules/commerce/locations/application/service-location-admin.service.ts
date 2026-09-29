@@ -2,6 +2,7 @@ import {
   COMMERCE_ERROR_CODES,
   errors,
   money,
+  SERVICE_LOCATIONS_PER_PANEL_MAX,
   serviceLocationIdSchema,
   type ActorContext,
   type AuditWriter,
@@ -16,6 +17,7 @@ import {
   type ProductId,
   type SalesCurrencyCode,
   type ServiceLocationId,
+  type ServiceState,
   type TenantContext,
   type UnitOfWork,
 } from '@nexa/contracts';
@@ -69,7 +71,23 @@ export interface ServiceLocationAdminServiceDeps {
   /** Whether a panel / product named here exists in THIS tenant. */
   readonly targets: {
     panelExists(scope: TenantContext, panelId: string, tx: TransactionScope): Promise<boolean>;
-    productExists(scope: TenantContext, productId: string, tx: TransactionScope): Promise<boolean>;
+    /** The product's own panel, or `undefined` when there is no such product in THIS tenant. */
+    productPanel(
+      scope: TenantContext,
+      productId: string,
+      tx: TransactionScope,
+    ): Promise<string | null | undefined>;
+  };
+  /** Where a panel's never-moved services are frozen before its initial location changes. */
+  readonly services: {
+    recordLocationForUnmoved(
+      scope: TenantContext,
+      panelId: string,
+      location: { readonly key: string; readonly label: string },
+      legalFrom: readonly ServiceState[],
+      now: Date,
+      tx: TransactionScope,
+    ): Promise<number>;
   };
   readonly settings: SettingsResolver;
   readonly guard: PermissionGuard;
@@ -84,6 +102,19 @@ export interface ServiceLocationAdminServiceDeps {
 }
 
 type Denial = { action: string; entityType: string; entityId: string | null };
+
+/**
+ * The never-moved services an initial-location change freezes: every state with an
+ * account that exists or may. Not `PENDING_PROVISION` — its account is not made yet, and
+ * it will be made wherever the panel places new accounts from now on, which is what its
+ * NULL goes on meaning — and not `TERMINATED`, which has none.
+ */
+const UNMOVED_FREEZE_STATES: readonly ServiceState[] = [
+  'ACTIVE',
+  'SUSPENDED',
+  'EXPIRED',
+  'UNRECONCILED',
+];
 
 /**
  * The operator's side of the location change (WP-A6): a panel's locations, the one new
@@ -125,7 +156,10 @@ export class ServiceLocationAdminService {
     const now = this.deps.clock.now();
     const id = this.deps.ids.uuid() as ServiceLocationId;
     return this.mutate(scope, actor, denial, async (tx) => {
+      // FIRST, so two concurrent creates cannot both read a count one below a cap.
+      await this.deps.repository.lockForWrite(scope, tx);
       const draft = await this.validated(scope, input.location, tx);
+      await this.assertPanelHasRoom(scope, draft.panelId, tx);
       const existing = await this.deps.repository.list(scope, SERVICE_LOCATION_LIST_LIMIT, tx);
       if (existing.length >= SERVICE_LOCATION_LIST_LIMIT) {
         throw invalid(
@@ -171,9 +205,11 @@ export class ServiceLocationAdminService {
 
     const now = this.deps.clock.now();
     return this.mutate(scope, actor, denial, async (tx) => {
+      await this.deps.repository.lockForWrite(scope, tx);
       const before = await this.deps.repository.findById(scope, locationId, tx);
       if (before === null) throw notFound();
       const draft = await this.validated(scope, input.location, tx);
+      if (draft.panelId !== before.panelId) await this.assertPanelHasRoom(scope, draft.panelId, tx);
       /*
        * A save that lands on exactly what is stored changes nothing and says so — and
        * bumps no version, so a change request quoted a moment ago is not refused over an
@@ -191,18 +227,24 @@ export class ServiceLocationAdminService {
         );
         return { location: before, changed: false };
       }
+      /*
+       * Whether the panel's initial location stays the SAME place. A rename alone does:
+       * never-moved services are still there and read the new name. A new key, another
+       * panel or an unmarked row does not, and freezes the old one onto them first.
+       */
+      const stillInitial =
+        draft.initial &&
+        draft.panelId === before.panelId &&
+        draft.locationKey === before.locationKey;
+      const frozen =
+        before.initial && !stillInitial ? await this.freezeUnmoved(scope, before, now, tx) : 0;
       const updated = await this.deps.repository.update(scope, locationId, draft, now, tx);
       if (!updated.ok) throw conflictError(updated.conflict);
       if (updated.record === null) throw notFound();
-      await this.audit(
-        scope,
-        actor,
-        tx,
-        denial.action,
-        locationId,
-        view(before),
-        view(updated.record),
-      );
+      await this.audit(scope, actor, tx, denial.action, locationId, view(before), {
+        ...view(updated.record),
+        ...(before.initial && !stillInitial ? { unmovedServicesFrozen: frozen } : {}),
+      });
       await rememberOnce(
         this.deps.idempotency,
         scope,
@@ -242,7 +284,9 @@ export class ServiceLocationAdminService {
     );
     if (replay !== null) return { deleted: replay.result.deleted };
 
+    const now = this.deps.clock.now();
     return this.mutate(scope, actor, denial, async (tx) => {
+      await this.deps.repository.lockForWrite(scope, tx);
       const before = await this.deps.repository.findById(scope, locationId, tx);
       if (before === null) throw notFound();
       if (await this.deps.repository.isReferenced(scope, locationId, tx)) {
@@ -252,8 +296,17 @@ export class ServiceLocationAdminService {
           { reason: 'IN_USE' },
         );
       }
+      const frozen = before.initial ? await this.freezeUnmoved(scope, before, now, tx) : 0;
       const deleted = await this.deps.repository.delete(scope, locationId, tx);
-      await this.audit(scope, actor, tx, denial.action, locationId, view(before), null);
+      await this.audit(
+        scope,
+        actor,
+        tx,
+        denial.action,
+        locationId,
+        view(before),
+        before.initial ? { unmovedServicesFrozen: frozen } : null,
+      );
       await rememberOnce(
         this.deps.idempotency,
         scope,
@@ -276,11 +329,14 @@ export class ServiceLocationAdminService {
     if (!(await this.deps.targets.panelExists(scope, input.panelId, tx))) {
       throw invalid('PANEL', 'Unknown panel.');
     }
-    if (
-      input.productId !== null &&
-      !(await this.deps.targets.productExists(scope, input.productId, tx))
-    ) {
-      throw invalid('PRODUCT', 'Unknown product.');
+    if (input.productId !== null) {
+      const productPanel = await this.deps.targets.productPanel(scope, input.productId, tx);
+      if (productPanel === undefined) throw invalid('PRODUCT', 'Unknown product.');
+      // A product-scoped offer names a product sold on THIS panel; any other could never
+      // apply to a service here, and would read as though it did (Codex #1, PR #101).
+      if (productPanel !== input.panelId) {
+        throw invalid('PRODUCT_PANEL', 'That product is not sold on this panel.');
+      }
     }
     if (input.initial && input.productId !== null) {
       throw invalid('INITIAL_SCOPE', 'The initial location belongs to the whole panel.');
@@ -310,6 +366,45 @@ export class ServiceLocationAdminService {
       limits: input.limits,
       sortOrder: input.sortOrder,
     };
+  }
+
+  /** A panel holds at most `SERVICE_LOCATIONS_PER_PANEL_MAX` rows: one choice screen. */
+  private async assertPanelHasRoom(
+    scope: TenantContext,
+    panelId: string,
+    tx: TransactionScope,
+  ): Promise<void> {
+    const rows = await this.deps.repository.forPanel(scope, panelId, tx);
+    if (rows.length >= SERVICE_LOCATIONS_PER_PANEL_MAX) {
+      throw invalid(
+        'PANEL_FULL',
+        `A panel may hold at most ${SERVICE_LOCATIONS_PER_PANEL_MAX} locations.`,
+      );
+    }
+  }
+
+  /**
+   * Before a panel's initial location changes, freeze it onto every never-moved service
+   * there (Codex review #1 on PR #101). A service with no recorded location is read as
+   * being in its panel's CURRENT initial location, so editing, unmarking, moving or
+   * deleting that row without this would silently relocate every such service — and the
+   * next quote would name the wrong origin, or refuse a move as "already there". In the
+   * write's own transaction, under the tenant's location lock.
+   */
+  private async freezeUnmoved(
+    scope: TenantContext,
+    initial: ServiceLocationRecord,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<number> {
+    return this.deps.services.recordLocationForUnmoved(
+      scope,
+      initial.panelId,
+      { key: initial.locationKey, label: initial.label },
+      UNMOVED_FREEZE_STATES,
+      now,
+      tx,
+    );
   }
 
   private async replayed(

@@ -2,6 +2,8 @@ import {
   COMMERCE_ERROR_CODES,
   errors,
   locationChangeWindow,
+  type Clock,
+  type LocationChangeLimits,
   type Money,
   type OrderId,
   type SalesCurrencyCode,
@@ -36,6 +38,7 @@ export interface LocationChangePolicyDeps {
   readonly locations: Pick<ServiceLocationRepository, 'forPanel'>;
   readonly changes: Pick<LocationChangeRepository, 'countedRequestTimes'>;
   readonly settings: SettingsResolver;
+  readonly clock: Clock;
 }
 
 /**
@@ -80,8 +83,19 @@ export class LocationChangePolicy {
     const current = currentLocation(service, rows);
     if (current === null) return null;
     const currency = await this.salesCurrency(scope, tx);
+    /*
+     * The cooldown and the rolling limit too, from the same history and through the same
+     * `locationChangeWindow` that `decide` asks (Codex review #1 on PR #101): a target its
+     * window refuses is not drawn, and a service every target refuses is offered nothing,
+     * so the button is not a promise its tap then breaks.
+     */
+    const history = await this.history(scope, service, null, tx);
+    const now = this.deps.clock.now();
     const targets = resolvedTargets(rows, service.productId).filter(
-      (row): row is LocationTarget => row.locationKey !== current.key && isOffered(row, currency),
+      (row): row is LocationTarget =>
+        row.locationKey !== current.key &&
+        isOffered(row, currency) &&
+        locationChangeWindow(row.limits, history, now).ok,
     );
     return targets.length === 0 ? null : { current, targets };
   }
@@ -93,6 +107,10 @@ export class LocationChangePolicy {
    * `excludeOrderId` leaves the order being confirmed out of the history it is checked
    * against. Called under the service's lifecycle lock by every write, so two requests for
    * one service count each other rather than both passing on one reading.
+   *
+   * `frozenLimits` is a paid move's confirmation: the window is decided against the
+   * cooldown and limit the QUOTE was made under, never against terms written since — the
+   * quote is honoured, and only what makes it unfulfillable is decided again.
    */
   async decide(
     scope: TenantContext,
@@ -101,6 +119,7 @@ export class LocationChangePolicy {
     now: Date,
     excludeOrderId: OrderId | null,
     tx?: unknown,
+    frozenLimits?: LocationChangeLimits,
   ): Promise<{ readonly current: LocationPosition; readonly target: LocationTarget }> {
     const unavailable = () =>
       errors.conflict(
@@ -124,13 +143,8 @@ export class LocationChangePolicy {
       );
     }
 
-    const history = await this.deps.changes.countedRequestTimes(
-      scope,
-      service.id,
-      excludeOrderId,
-      tx,
-    );
-    const window = locationChangeWindow(chosen.limits, history, now);
+    const history = await this.history(scope, service, excludeOrderId, tx);
+    const window = locationChangeWindow(frozenLimits ?? chosen.limits, history, now);
     if (!window.ok) {
       throw window.reason === 'COOLDOWN'
         ? errors.conflict(
@@ -143,6 +157,16 @@ export class LocationChangePolicy {
           );
     }
     return { current, target: chosen };
+  }
+
+  /** The request times that still count against this service's window. */
+  private async history(
+    scope: TenantContext,
+    service: ServiceRecord,
+    excludeOrderId: OrderId | null,
+    tx?: unknown,
+  ): Promise<readonly Date[]> {
+    return this.deps.changes.countedRequestTimes(scope, service.id, excludeOrderId, tx);
   }
 
   private async salesCurrency(scope: TenantContext, tx?: unknown): Promise<SalesCurrencyCode> {

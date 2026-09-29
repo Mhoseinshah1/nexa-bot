@@ -8101,6 +8101,14 @@ export const serviceLocationChanges = pgTable(
     /** The configured list price at quote time. The CHARGED total is the order's. */
     priceAmount: bigint('price_amount', { mode: 'bigint' }).notNull(),
     priceCurrency: text('price_currency').notNull(),
+    /**
+     * The cooldown and rolling limit the change was quoted under, frozen with it (Codex
+     * review #1 on PR #101): a paid move's confirmation decides its window against THESE,
+     * never against terms an operator wrote after the customer was shown the quote.
+     */
+    cooldownHours: integer('cooldown_hours'),
+    maxChanges: integer('max_changes'),
+    periodDays: integer('period_days'),
     /** A paid change's order. Exactly one of this and `operation_id` is set. */
     orderId: uuid('order_id'),
     /** A free change's operation, planned in the same transaction as this row. */
@@ -8155,5 +8163,11 @@ export const serviceLocationChanges = pgTable(
     check('service_location_changes_currency_check', enumCheck('price_currency', CURRENCY_CODES)),
     check('service_location_changes_moves_check', sql`from_location_key <> to_location_key`),
     check('service_location_changes_version_check', sql`location_version >= 1`),
+    check(
+      'service_location_changes_limits_check',
+      sql`(cooldown_hours IS NULL OR cooldown_hours >= 1)
+          AND (max_changes IS NULL) = (period_days IS NULL)
+          AND (max_changes IS NULL OR (max_changes >= 1 AND period_days >= 1))`,
+    ),
   ],
 );

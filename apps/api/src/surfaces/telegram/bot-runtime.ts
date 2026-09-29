@@ -19,6 +19,7 @@ import {
   serviceTransferRecipientRefusalSchema,
   uuidV7Schema,
   DEVICE_ADDON_MAX_QUANTITY,
+  SERVICE_LOCATIONS_PER_PANEL_MAX,
   USAGE_REMINDER_PERCENT_MAX,
   USAGE_REMINDER_PERCENT_MIN,
   CONNECTION_GUIDE_PLATFORMS,
@@ -920,8 +921,12 @@ export const SERVICE_CHANGE_LOCATION_CALLBACK_PREFIX = 'lc:';
 export const SERVICE_LOCATION_TARGET_CALLBACK_PREFIX = 'lt:';
 export const SERVICE_LOCATION_CONFIRM_CALLBACK_PREFIX = 'lf:';
 
-/** How many targets one choice screen draws: a readable keyboard, not a quota. */
-export const LOCATION_TARGETS_SHOWN = 20;
+/**
+ * How many targets one choice screen draws: every one a panel may hold. The admin refuses a
+ * panel's 21st location (`SERVICE_LOCATIONS_PER_PANEL_MAX`), so no configured target is
+ * ever cut off this screen; the slice is the bound restated, not a second quota.
+ */
+export const LOCATION_TARGETS_SHOWN = SERVICE_LOCATIONS_PER_PANEL_MAX;
 
 /**
  * The service and location of an `lt:` or `lf:` tap, or null. Both halves through the

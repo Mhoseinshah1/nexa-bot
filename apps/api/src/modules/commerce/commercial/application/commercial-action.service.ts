@@ -568,6 +568,8 @@ export class CommercialActionService {
               toLocationKey: priced.location.target.locationKey,
               toLocationLabel: priced.location.target.label,
               price: priced.location.target.price,
+              // Frozen with the quote: confirmation decides the window against THESE.
+              limits: priced.location.target.limits,
               orderId: order.id,
               operationId: null,
               now,
@@ -1338,6 +1340,8 @@ export class CommercialActionService {
       now,
       action.orderId,
       tx,
+      // The cooldown and limit the customer was quoted under, not today's (Codex #1, PR #101).
+      change.limits,
     );
     if (target.locationKey !== change.toLocationKey) {
       // The operator re-pointed the location since the quote: what was shown is gone.

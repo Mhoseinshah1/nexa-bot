@@ -38,11 +38,24 @@ import type {
  * Every query carries the tenant, the primary-key lookups included, for the reason every
  * repository here states: a lookup by id alone returns another tenant's row.
  */
+/**
+ * The advisory-lock class for a tenant's location writes ("SL" in ASCII is taken by the
+ * service lifecycle lock, so "LC"). One class per purpose, as every lock here has.
+ */
+export const SERVICE_LOCATION_WRITE_LOCK_CLASS = 0x4c43;
+
 export class DrizzleServiceLocationRepository implements ServiceLocationRepository {
   constructor(private readonly db: Database) {}
 
   private exec(tx?: unknown): Executor {
     return (tx as TransactionScope | undefined)?.tx ?? this.db;
+  }
+
+  async lockForWrite(scope: TenantContext, tx: TransactionScope): Promise<void> {
+    const tenantId = requireTenantId(scope);
+    await this.exec(tx).execute(
+      sql`SELECT pg_advisory_xact_lock(${SERVICE_LOCATION_WRITE_LOCK_CLASS}, hashtext(${tenantId}))`,
+    );
   }
 
   async list(
@@ -236,6 +249,9 @@ export class DrizzleLocationChangeRepository implements LocationChangeRepository
         toLocationLabel: draft.toLocationLabel,
         priceAmount: draft.price.amountMinor,
         priceCurrency: draft.price.currency,
+        cooldownHours: draft.limits.cooldownHours,
+        maxChanges: draft.limits.maxChanges,
+        periodDays: draft.limits.periodDays,
         orderId: draft.orderId,
         operationId: draft.operationId,
         createdAt: draft.now,
@@ -439,6 +455,11 @@ function toChange(row: typeof serviceLocationChanges.$inferSelect): LocationChan
     toLocationKey: row.toLocationKey,
     toLocationLabel: row.toLocationLabel,
     price: money(row.priceAmount, row.priceCurrency as CurrencyCode),
+    limits: {
+      cooldownHours: row.cooldownHours,
+      maxChanges: row.maxChanges,
+      periodDays: row.periodDays,
+    },
     orderId: row.orderId as OrderId | null,
     operationId: row.operationId,
     createdAt: row.createdAt,

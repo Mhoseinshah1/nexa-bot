@@ -1419,14 +1419,26 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     locations: serviceLocationRepository,
     changes: locationChangeRepository,
     settings: settingsResolver,
+    clock,
   });
   const serviceLocationAdminService = new ServiceLocationAdminService({
     repository: serviceLocationRepository,
     targets: {
       panelExists: async (scope, panelId, tx) =>
         (await panelRepository.find(scope, panelId, tx)) !== null,
-      productExists: async (scope, productId, tx) =>
-        (await productRepository.findById(scope, productId as ProductId, tx)) !== null,
+      productPanel: async (scope, productId, tx) => {
+        const product = await productRepository.findById(scope, productId as ProductId, tx);
+        return product === null ? undefined : product.panelId;
+      },
+    },
+    /*
+     * Where a panel's never-moved services are frozen before its initial location changes.
+     * A closure, because the service repository is built further down: it is read when a
+     * write runs, never at construction.
+     */
+    services: {
+      recordLocationForUnmoved: (scope, panelId, location, legalFrom, now, tx) =>
+        serviceRepository.recordLocationForUnmoved(scope, panelId, location, legalFrom, now, tx),
     },
     settings: settingsResolver,
     guard,
@@ -1854,6 +1866,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     policy: locationChangePolicy,
     changes: locationChangeRepository,
     provisioning: provisioningService,
+    resellers: resellerService,
     panels: panelOperability,
     guard,
     audit,

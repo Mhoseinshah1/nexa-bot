@@ -7,8 +7,11 @@
 --                              scope, cooldown and rolling-period limit; a version per edit.
 -- service_location_changes     one row per requested change, written once: from / to (keys and
 --                              names), the location and version it was quoted from, the list
---                              price, and the ORDER (paid) or the OPERATION (free) behind it.
--- services                     location_key / location_label, written only by an applied move.
+--                              price, the cooldown and limit it was quoted under, and the ORDER
+--                              (paid) or the OPERATION (free) behind it.
+-- services                     location_key / location_label, written by an applied move, and
+--                              by an operator's change to a panel's initial location, which
+--                              first freezes the old one onto every never-moved service.
 -- orders                       CHANGE_LOCATION purpose; its line buys no bytes, days or devices.
 -- service_commercial_actions   location_id is the third, mutually exclusive price source.
 -- provisioning_operations      CHANGE_LOCATION type with target_location_key, and it joins the
@@ -27,6 +30,9 @@ CREATE TABLE "service_location_changes" (
 	"to_location_label" text NOT NULL,
 	"price_amount" bigint NOT NULL,
 	"price_currency" text NOT NULL,
+	"cooldown_hours" integer,
+	"max_changes" integer,
+	"period_days" integer,
 	"order_id" uuid,
 	"operation_id" uuid,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
@@ -35,7 +41,10 @@ CREATE TABLE "service_location_changes" (
 	CONSTRAINT "service_location_changes_price_check" CHECK (price_amount >= 0 AND (price_amount = 0) = (order_id IS NULL)),
 	CONSTRAINT "service_location_changes_currency_check" CHECK (price_currency IN ('IRT', 'IRR', 'USD', 'EUR', 'USDT')),
 	CONSTRAINT "service_location_changes_moves_check" CHECK (from_location_key <> to_location_key),
-	CONSTRAINT "service_location_changes_version_check" CHECK (location_version >= 1)
+	CONSTRAINT "service_location_changes_version_check" CHECK (location_version >= 1),
+	CONSTRAINT "service_location_changes_limits_check" CHECK ((cooldown_hours IS NULL OR cooldown_hours >= 1)
+          AND (max_changes IS NULL) = (period_days IS NULL)
+          AND (max_changes IS NULL OR (max_changes >= 1 AND period_days >= 1)))
 );
 --> statement-breakpoint
 CREATE TABLE "service_locations" (
