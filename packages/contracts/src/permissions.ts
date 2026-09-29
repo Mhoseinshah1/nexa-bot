@@ -185,7 +185,9 @@ export const PERMISSIONS = [
    * integration; normal operators read the same facts in Persian through `panels.view`.
    * HIGH because it is the one panel read that shows internal identifiers rather than
    * their meaning. No credential is reachable through it: the credential fields are
-   * set-at timestamps, as on every other panel read.
+   * set-at timestamps, as on every other panel read. ADDITIVE to `panels.view`: the view
+   * is a detail of a panel, so the endpoint charges both, and this key alone reaches
+   * nothing.
    */
   p('panels.technical.view', "View a panel's raw technical configuration", 'HIGH'),
 
