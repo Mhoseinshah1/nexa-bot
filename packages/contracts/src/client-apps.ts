@@ -86,6 +86,142 @@ export const CLIENT_APP_SORT_MAX = 100_000;
  */
 export const CLIENT_APP_MAX_ENTRIES = 60;
 
+// --- The image (HF-A10) -------------------------------------------------------------------
+
+/**
+ * An entry's optional picture: one raster image per entry, stored with the entry and sent
+ * by the bot ahead of the app's screen. The emoji `icon` stays what the list's buttons
+ * show — an inline keyboard button carries text and nothing else.
+ *
+ * The storage rule the referral banner set (`tenant_media_assets`): the BYTES in the
+ * database, bounded by a CHECK, never a filesystem path and never a bot-scoped Telegram
+ * `file_id` as the source of truth. Bounded in total by `CLIENT_APP_MAX_ENTRIES`, and
+ * removed with its entry, so there is nothing to retain or collect.
+ *
+ * PNG and JPEG only — the two types `sendPhoto` is known to take, and the banner's two.
+ * NEVER SVG: it is a document that can carry script, not a picture, and Telegram does not
+ * send it as a photo anyway. The declared type must match the file's own magic number.
+ */
+export const CLIENT_APP_IMAGE_MIME_TYPES = ['image/png', 'image/jpeg'] as const;
+export type ClientAppImageMimeType = (typeof CLIENT_APP_IMAGE_MIME_TYPES)[number];
+export const clientAppImageMimeTypeSchema = z.enum(CLIENT_APP_IMAGE_MIME_TYPES);
+
+/** 512 KiB. A picture of an app needs far less; sixty of them stay a few tens of MiB. */
+export const CLIENT_APP_IMAGE_MAX_BYTES = 512 * 1024;
+/** Each side, in pixels. Below the minimum is not a picture; above the maximum is not an icon. */
+export const CLIENT_APP_IMAGE_MIN_SIDE = 16;
+export const CLIENT_APP_IMAGE_MAX_SIDE = 2048;
+/** Telegram refuses a photo whose sides differ by more than a factor of 20. */
+export const CLIENT_APP_IMAGE_MAX_ASPECT = 20;
+
+/** Why a file is refused as an entry's image. */
+export type ClientAppImageProblem =
+  | 'EMPTY'
+  | 'TOO_LARGE'
+  /** The bytes do not begin with the declared type's magic number. */
+  | 'TYPE_MISMATCH'
+  /** The header that states the dimensions is missing or truncated. */
+  | 'UNREADABLE'
+  /** Outside `CLIENT_APP_IMAGE_MIN_SIDE`..`MAX_SIDE`, or more elongated than `MAX_ASPECT`. */
+  | 'DIMENSIONS';
+
+export type ClientAppImageInspection =
+  | { readonly ok: true; readonly width: number; readonly height: number }
+  | { readonly ok: false; readonly problem: ClientAppImageProblem };
+
+const IMAGE_MAGIC: Readonly<Record<ClientAppImageMimeType, readonly number[]>> = {
+  'image/png': [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a],
+  'image/jpeg': [0xff, 0xd8, 0xff],
+};
+
+/**
+ * Whether `bytes` are an image this product accepts under the declared type, and its size.
+ *
+ * Reads HEADERS only and decodes nothing: the magic number, then PNG's `IHDR` or the first
+ * JPEG start-of-frame. The server and the Web Admin call this one function, so the form
+ * refuses exactly what the service would. Total and pure; every read is bounds-checked, so
+ * a truncated or hostile header is `UNREADABLE`, never an exception.
+ */
+export function inspectClientAppImage(
+  mimeType: ClientAppImageMimeType,
+  bytes: Uint8Array,
+): ClientAppImageInspection {
+  if (bytes.byteLength === 0) return { ok: false, problem: 'EMPTY' };
+  if (bytes.byteLength > CLIENT_APP_IMAGE_MAX_BYTES) return { ok: false, problem: 'TOO_LARGE' };
+  const magic = IMAGE_MAGIC[mimeType];
+  if (bytes.byteLength < magic.length || !magic.every((byte, index) => bytes[index] === byte)) {
+    return { ok: false, problem: 'TYPE_MISMATCH' };
+  }
+  const size = mimeType === 'image/png' ? pngSize(bytes) : jpegSize(bytes);
+  if (size === null) return { ok: false, problem: 'UNREADABLE' };
+  const { width, height } = size;
+  const within = (side: number) =>
+    side >= CLIENT_APP_IMAGE_MIN_SIDE && side <= CLIENT_APP_IMAGE_MAX_SIDE;
+  if (
+    !within(width) ||
+    !within(height) ||
+    Math.max(width, height) > CLIENT_APP_IMAGE_MAX_ASPECT * Math.min(width, height)
+  ) {
+    return { ok: false, problem: 'DIMENSIONS' };
+  }
+  return { ok: true, width, height };
+}
+
+function uint16(bytes: Uint8Array, at: number): number | null {
+  if (at < 0 || at + 2 > bytes.byteLength) return null;
+  return ((bytes[at] as number) << 8) | (bytes[at + 1] as number);
+}
+
+function uint32(bytes: Uint8Array, at: number): number | null {
+  const high = uint16(bytes, at);
+  const low = uint16(bytes, at + 2);
+  return high === null || low === null ? null : high * 0x10000 + low;
+}
+
+/** The signature, then the FIRST chunk, which the PNG specification requires to be `IHDR`. */
+function pngSize(bytes: Uint8Array): { width: number; height: number } | null {
+  const IHDR = [0x49, 0x48, 0x44, 0x52];
+  if (bytes.byteLength < 24 || !IHDR.every((byte, index) => bytes[12 + index] === byte)) {
+    return null;
+  }
+  const width = uint32(bytes, 16);
+  const height = uint32(bytes, 20);
+  return width === null || height === null ? null : { width, height };
+}
+
+/**
+ * The segments after SOI, walked by their lengths to the first start-of-frame. Markers
+ * without a length (RST0–7, TEM) are stepped over; reaching start-of-scan, end-of-image or
+ * the end of the bytes first is `null`. Every step advances, so the walk ends.
+ */
+function jpegSize(bytes: Uint8Array): { width: number; height: number } | null {
+  let at = 2;
+  while (at < bytes.byteLength) {
+    if (bytes[at] !== 0xff) return null;
+    // Fill bytes: any number of 0xFF may precede a marker.
+    while (at < bytes.byteLength && bytes[at] === 0xff) at += 1;
+    if (at >= bytes.byteLength) return null;
+    const marker = bytes[at] as number;
+    at += 1;
+    if ((marker >= 0xd0 && marker <= 0xd7) || marker === 0x01) continue;
+    if (marker === 0xd9 || marker === 0xda) return null;
+    const length = uint16(bytes, at);
+    if (length === null || length < 2) return null;
+    // SOF0–SOF15, less DHT (C4), JPG (C8) and DAC (CC), which share the range.
+    const isFrame =
+      marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc;
+    if (isFrame) {
+      // length(2) precision(1) height(2) width(2)
+      if (length < 7) return null;
+      const height = uint16(bytes, at + 3);
+      const width = uint16(bytes, at + 5);
+      return width === null || height === null ? null : { width, height };
+    }
+    at += length;
+  }
+  return null;
+}
+
 // --- Links ------------------------------------------------------------------------------
 
 /**
@@ -379,6 +515,20 @@ export type ClientAppInput = z.output<typeof clientAppInputSchema>;
 
 // --- HTTP -------------------------------------------------------------------------------------
 
+/**
+ * What the Web Admin sees of an entry's image: metadata, never the bytes. The bytes are
+ * served on their own route (`CLIENT_APP_ROUTES.image`) for the editor's preview.
+ */
+export const clientAppImageSchema = z.object({
+  mimeType: clientAppImageMimeTypeSchema,
+  byteLength: z.number().int(),
+  width: z.number().int(),
+  height: z.number().int(),
+  sha256: z.string(),
+  updatedAt: z.iso.datetime(),
+});
+export type ClientAppImageResponse = z.infer<typeof clientAppImageSchema>;
+
 export const clientAppSchema = z.object({
   id: z.string(),
   platform: clientAppPlatformSchema,
@@ -397,6 +547,8 @@ export const clientAppSchema = z.object({
   version: z.number().int(),
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),
+  /** HF-A10. Null when the entry has no picture, which is the emoji-and-text screen. */
+  image: clientAppImageSchema.nullable(),
 });
 export type ClientAppResponse = z.infer<typeof clientAppSchema>;
 
@@ -434,10 +586,39 @@ export type DeleteClientAppRequest = z.infer<typeof deleteClientAppRequestSchema
 export const clientAppDeletedSchema = z.object({ id: z.string(), deleted: z.literal(true) });
 export type ClientAppDeletedResponse = z.infer<typeof clientAppDeletedSchema>;
 
+/**
+ * HF-A10. Sets or replaces an entry's image: base64 in JSON, the referral banner's shape,
+ * bounded here by the DECODED size so a padded payload cannot pass. The service decodes
+ * and runs `inspectClientAppImage` on the bytes before storing. States the entry's version
+ * like every other write on it, and bumps it.
+ */
+export const uploadClientAppImageRequestSchema = z.object({
+  idempotencyKey: idempotencyKeySchema,
+  expectedVersion: z.number().int().min(1),
+  mimeType: clientAppImageMimeTypeSchema,
+  contentBase64: z
+    .string()
+    .regex(/^[A-Za-z0-9+/]+={0,2}$/u)
+    .refine((value) => Math.floor((value.length * 3) / 4) <= CLIENT_APP_IMAGE_MAX_BYTES + 3, {
+      message: `at most ${CLIENT_APP_IMAGE_MAX_BYTES} bytes`,
+    }),
+});
+export type UploadClientAppImageRequest = z.infer<typeof uploadClientAppImageRequestSchema>;
+
+/** HF-A10. Removes an entry's image; the entry goes back to its emoji and text. */
+export const clearClientAppImageRequestSchema = z.object({
+  idempotencyKey: idempotencyKeySchema,
+  expectedVersion: z.number().int().min(1),
+});
+export type ClearClientAppImageRequest = z.infer<typeof clearClientAppImageRequestSchema>;
+
 export const CLIENT_APP_ROUTES = {
   list: '/client-apps',
   create: '/client-apps',
   update: (id: string) => `/client-apps/${encodeURIComponent(id)}`,
   status: (id: string) => `/client-apps/${encodeURIComponent(id)}/status`,
   remove: (id: string) => `/client-apps/${encodeURIComponent(id)}/delete`,
+  /** GET: the stored image's bytes, as the type they were verified to be. POST: upload. */
+  image: (id: string) => `/client-apps/${encodeURIComponent(id)}/image`,
+  clearImage: (id: string) => `/client-apps/${encodeURIComponent(id)}/image/clear`,
 } as const;

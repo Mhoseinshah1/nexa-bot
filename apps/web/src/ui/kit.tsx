@@ -2,6 +2,7 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -878,14 +879,31 @@ const ToastContext = createContext<Notify>(() => undefined);
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<readonly Toast[]>([]);
   const next = useRef(0);
+  /*
+   * The dismissal timers still pending. They are cleared when the provider unmounts:
+   * a timer that outlived it fired into a torn-down tree — after a sign-out, and in the
+   * web suite after the test environment was gone, where it threw `window is not
+   * defined` and failed a run whose every test had passed.
+   */
+  const timers = useRef(new Set<number>());
+
+  useEffect(() => {
+    const pending = timers.current;
+    return () => {
+      for (const timer of pending) window.clearTimeout(timer);
+      pending.clear();
+    };
+  }, []);
 
   const notify = useCallback<Notify>((toast) => {
     next.current += 1;
     const id = next.current;
     setToasts((current) => [...current, { ...toast, id }]);
-    window.setTimeout(() => {
+    const timer = window.setTimeout(() => {
+      timers.current.delete(timer);
       setToasts((current) => current.filter((entry) => entry.id !== id));
     }, 4000);
+    timers.current.add(timer);
   }, []);
 
   return (

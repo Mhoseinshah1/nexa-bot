@@ -1,16 +1,22 @@
 import { describe, expect, it } from 'vitest';
 import {
+  CLIENT_APP_IMAGE_MAX_BYTES,
+  CLIENT_APP_IMAGE_MAX_SIDE,
+  CLIENT_APP_IMAGE_MIN_SIDE,
   CLIENT_APP_PLATFORMS,
   CONNECTION_GUIDE_PLATFORMS,
   MARZBAN_PROXY_PROTOCOLS,
   CLIENT_APP_PROTOCOLS,
   ROLE_SEEDS,
   clientAppInputSchema,
+  clientAppSchema,
   clientAppTextProblem,
+  inspectClientAppImage,
   normalizeClientAppUrl,
   permissionDefinition,
   renderClientAppGuide,
   templateDefinition,
+  uploadClientAppImageRequestSchema,
   type ClientAppPlatform,
   type UserId,
 } from '@nexa/contracts';
@@ -25,6 +31,7 @@ import {
 } from '../../apps/api/src/modules/control/client-apps/application/customer-service-facts';
 import type { ServiceRecord } from '../../apps/api/src/modules/commerce/provisioning/application/ports';
 import type {
+  ClientAppImageContent,
   ClientAppRecord,
   CustomerServiceFact,
 } from '../../apps/api/src/modules/control/client-apps/application/ports';
@@ -288,11 +295,16 @@ function record(overrides: Partial<ClientAppRecord> & { id: string }): ClientApp
     version: 1,
     createdAt: new Date('2026-09-01T00:00:00Z'),
     updatedAt: new Date('2026-09-01T00:00:00Z'),
+    image: null,
     ...overrides,
   };
 }
 
-function catalog(rows: readonly ClientAppRecord[], facts: readonly CustomerServiceFact[]) {
+function catalog(
+  rows: readonly ClientAppRecord[],
+  facts: readonly CustomerServiceFact[],
+  images: ReadonlyMap<string, ClientAppImageContent> = new Map(),
+) {
   return new ClientAppCatalog({
     repository: {
       // The repository's contract: tenant rows, filtered, in `sort_order` order.
@@ -304,6 +316,7 @@ function catalog(rows: readonly ClientAppRecord[], facts: readonly CustomerServi
             .sort((a, b) => a.sortOrder - b.sortOrder),
         ),
       find: (_scope, id) => Promise.resolve(rows.find((row) => row.id === id) ?? null),
+      imageContent: (_scope, id) => Promise.resolve(images.get(id) ?? null),
     },
     facts: { factsFor: () => Promise.resolve(facts) },
   });
@@ -492,6 +505,7 @@ describe('the bot’s guide screens', () => {
       filesNote: true,
       service: { id: uuid(900), link: true, files: true },
       manyServices: false,
+      image: null,
     };
     const screen = clientAppScreen(detail);
     expect(screen.key).toBe('bot.apps.detail_files');
@@ -640,5 +654,241 @@ describe('who may manage the apps', () => {
         .sort();
     expect(holders('client_apps.edit')).toEqual(['operator', 'owner']);
     expect(holders('client_apps.view')).toEqual(['observer', 'operator', 'owner', 'support']);
+  });
+});
+
+// ============================================================================
+// HF-A10 — an entry's picture
+// ============================================================================
+
+/** The first 24 bytes a PNG needs for its size to be read: signature, IHDR length, type, w, h. */
+function pngHeader(width: number, height: number, total = 64): Uint8Array {
+  const bytes = new Uint8Array(total);
+  bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52]);
+  new DataView(bytes.buffer).setUint32(16, width);
+  new DataView(bytes.buffer).setUint32(20, height);
+  return bytes;
+}
+
+/** SOI, an APP0 segment to walk past, then a baseline start-of-frame, then EOI. */
+function jpegHeader(width: number, height: number, frameMarker = 0xc0): Uint8Array {
+  const app0 = [0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 1, 1, 0, 0, 1, 0, 1, 0, 0];
+  const sof = [
+    0xff,
+    frameMarker,
+    0x00,
+    0x11,
+    0x08,
+    height >> 8,
+    height & 0xff,
+    width >> 8,
+    width & 0xff,
+    3,
+    1,
+    0x22,
+    0,
+    2,
+    0x11,
+    1,
+    3,
+    0x11,
+    1,
+  ];
+  return new Uint8Array([0xff, 0xd8, ...app0, 0xff, 0xff, ...sof, 0xff, 0xd9]);
+}
+
+describe('an entry’s picture, as the server and the form both judge it', () => {
+  it('accepts a PNG and a JPEG, and reads the size from their headers', () => {
+    expect(inspectClientAppImage('image/png', pngHeader(512, 256))).toEqual({
+      ok: true,
+      width: 512,
+      height: 256,
+    });
+    expect(inspectClientAppImage('image/jpeg', jpegHeader(300, 200))).toEqual({
+      ok: true,
+      width: 300,
+      height: 200,
+    });
+    // A progressive JPEG's frame is SOF2; DHT (C4), which shares the range, is walked past.
+    const progressive = jpegHeader(64, 64, 0xc2);
+    expect(inspectClientAppImage('image/jpeg', progressive)).toMatchObject({ ok: true });
+    const dhtFirst = jpegHeader(64, 64);
+    const withDht = new Uint8Array([
+      ...dhtFirst.slice(0, 20),
+      0xff,
+      0xc4,
+      0x00,
+      0x03,
+      0x00,
+      ...dhtFirst.slice(20),
+    ]);
+    expect(inspectClientAppImage('image/jpeg', withDht)).toMatchObject({
+      ok: true,
+      width: 64,
+      height: 64,
+    });
+  });
+
+  it('refuses a file whose bytes are not the type it claims — an SVG above all', () => {
+    const svg = new TextEncoder().encode(
+      '<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)" width="64" height="64"/>',
+    );
+    expect(inspectClientAppImage('image/png', svg)).toEqual({
+      ok: false,
+      problem: 'TYPE_MISMATCH',
+    });
+    expect(inspectClientAppImage('image/jpeg', svg)).toEqual({
+      ok: false,
+      problem: 'TYPE_MISMATCH',
+    });
+    expect(inspectClientAppImage('image/png', jpegHeader(64, 64))).toEqual({
+      ok: false,
+      problem: 'TYPE_MISMATCH',
+    });
+    expect(inspectClientAppImage('image/jpeg', pngHeader(64, 64))).toEqual({
+      ok: false,
+      problem: 'TYPE_MISMATCH',
+    });
+    // And the wire refuses every type but the two, SVG and WebP included, before any byte is read.
+    for (const mimeType of ['image/svg+xml', 'image/webp', 'image/gif', 'text/html']) {
+      expect(
+        uploadClientAppImageRequestSchema.safeParse({
+          idempotencyKey: 'image-key-1',
+          expectedVersion: 1,
+          mimeType,
+          contentBase64: 'AAAA',
+        }).success,
+        mimeType,
+      ).toBe(false);
+    }
+  });
+
+  it('refuses an empty file and one over the bound, on the bytes and on the wire', () => {
+    expect(inspectClientAppImage('image/png', new Uint8Array())).toEqual({
+      ok: false,
+      problem: 'EMPTY',
+    });
+    expect(
+      inspectClientAppImage('image/png', pngHeader(64, 64, CLIENT_APP_IMAGE_MAX_BYTES)),
+    ).toMatchObject({ ok: true });
+    expect(
+      inspectClientAppImage('image/png', pngHeader(64, 64, CLIENT_APP_IMAGE_MAX_BYTES + 1)),
+    ).toEqual({ ok: false, problem: 'TOO_LARGE' });
+    const wire = (bytes: number) =>
+      uploadClientAppImageRequestSchema.safeParse({
+        idempotencyKey: 'image-key-1',
+        expectedVersion: 1,
+        mimeType: 'image/png',
+        contentBase64: Buffer.alloc(bytes, 1).toString('base64'),
+      }).success;
+    expect(wire(CLIENT_APP_IMAGE_MAX_BYTES)).toBe(true);
+    expect(wire(CLIENT_APP_IMAGE_MAX_BYTES + 4)).toBe(false);
+  });
+
+  it('refuses a picture too small, too large or too elongated to be one', () => {
+    const problem = (width: number, height: number) => {
+      const result = inspectClientAppImage('image/png', pngHeader(width, height));
+      return result.ok ? 'OK' : result.problem;
+    };
+    expect(problem(CLIENT_APP_IMAGE_MIN_SIDE, CLIENT_APP_IMAGE_MIN_SIDE)).toBe('OK');
+    expect(problem(CLIENT_APP_IMAGE_MAX_SIDE, CLIENT_APP_IMAGE_MAX_SIDE)).toBe('OK');
+    expect(problem(CLIENT_APP_IMAGE_MIN_SIDE - 1, 64)).toBe('DIMENSIONS');
+    expect(problem(64, CLIENT_APP_IMAGE_MAX_SIDE + 1)).toBe('DIMENSIONS');
+    expect(problem(0, 0)).toBe('DIMENSIONS');
+    // A PNG may state up to 2^31 - 1 per side; a header is not a promise to decode.
+    expect(problem(0x7fffffff, 0x7fffffff)).toBe('DIMENSIONS');
+    expect(problem(20 * 50, 50)).toBe('OK');
+    expect(problem(20 * 50 + 1, 50)).toBe('DIMENSIONS');
+  });
+
+  it('calls a truncated or headerless file unreadable, and never throws on hostile bytes', () => {
+    expect(inspectClientAppImage('image/png', pngHeader(64, 64).slice(0, 20))).toEqual({
+      ok: false,
+      problem: 'UNREADABLE',
+    });
+    const noIhdr = pngHeader(64, 64);
+    noIhdr[12] = 0x69;
+    expect(inspectClientAppImage('image/png', noIhdr)).toEqual({
+      ok: false,
+      problem: 'UNREADABLE',
+    });
+    // Straight to start-of-scan, with no frame to say the size.
+    expect(
+      inspectClientAppImage('image/jpeg', new Uint8Array([0xff, 0xd8, 0xff, 0xda, 0, 2, 0, 0])),
+    ).toEqual({ ok: false, problem: 'UNREADABLE' });
+    // A frame header cut short.
+    expect(inspectClientAppImage('image/jpeg', jpegHeader(64, 64).slice(0, 26))).toEqual({
+      ok: false,
+      problem: 'UNREADABLE',
+    });
+    // Seeded noise behind each magic number: an answer every time, never an exception.
+    let seed = 7;
+    const next = () => (seed = (seed * 1_103_515_245 + 12_345) % 2_147_483_648) & 0xff;
+    for (let round = 0; round < 500; round += 1) {
+      const noise = Uint8Array.from({ length: 8 + (round % 90) }, next);
+      noise.set([0xff, 0xd8, 0xff], 0);
+      expect(() => inspectClientAppImage('image/jpeg', noise)).not.toThrow();
+      noise.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
+      expect(() => inspectClientAppImage('image/png', noise)).not.toThrow();
+    }
+  });
+
+  it('is metadata on the wire, never bytes', () => {
+    expect(Object.keys(clientAppSchema.shape.image.unwrap().shape).sort()).toEqual([
+      'byteLength',
+      'height',
+      'mimeType',
+      'sha256',
+      'updatedAt',
+      'width',
+    ]);
+  });
+
+  it('is read for the customer only when the row has one, and is sent ahead of the screen', async () => {
+    const bytes = pngHeader(64, 64);
+    const withImage = record({
+      id: uuid(40),
+      image: {
+        mimeType: 'image/png',
+        byteLength: bytes.byteLength,
+        width: 64,
+        height: 64,
+        sha256: 'a'.repeat(64),
+        updatedAt: new Date('2026-09-01T00:00:00Z'),
+      },
+    });
+    const without = record({ id: uuid(41) });
+    const reads: string[] = [];
+    const reader = new ClientAppCatalog({
+      repository: {
+        list: () => Promise.resolve([withImage, without]),
+        find: (_scope, id) =>
+          Promise.resolve([withImage, without].find((r) => r.id === id) ?? null),
+        imageContent: (_scope, id) => {
+          reads.push(id);
+          return Promise.resolve(id === withImage.id ? { bytes, mimeType: 'image/png' } : null);
+        },
+      },
+      facts: { factsFor: () => Promise.resolve([]) },
+    });
+
+    const plain = await reader.appFor(TENANT, CUSTOMER, without.id);
+    expect(plain?.image).toBeNull();
+    expect(reads, 'no bytes are asked for an entry with no picture').toEqual([]);
+    const plainScreen = clientAppScreen(plain);
+    expect(plainScreen.lead, 'no picture: the emoji-and-text screen, unchanged').toBeUndefined();
+
+    const pictured = await reader.appFor(TENANT, CUSTOMER, withImage.id);
+    if (pictured === null) throw new Error('the pictured entry is enabled');
+    expect(reads).toEqual([withImage.id]);
+    const screen = clientAppScreen(pictured);
+    expect(screen.lead).toEqual([
+      { kind: 'PHOTO_BYTES', bytes, mimeType: 'image/png', fileName: 'app.png' },
+    ]);
+    // The screen itself is what it would be without the picture.
+    expect({ ...screen, lead: undefined }).toEqual({
+      ...clientAppScreen({ ...pictured, image: null }),
+      lead: undefined,
+    });
   });
 });

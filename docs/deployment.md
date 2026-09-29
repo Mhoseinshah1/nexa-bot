@@ -1228,6 +1228,46 @@ While it runs:
 Nothing needs doing before rolling back past WP-A9. After the roll-forward, a wallet that
 fell below its threshold during the rollback is told on the first low-balance pass, once.
 
+### What a rollback can make unreadable: the location-change switch (HF-A6A8)
+
+HF-A6A8 adds one entry to a panel's policy, `LOCATION_CHANGE` — the «تغییر لوکیشن سرویس»
+switch on the panel's «قابلیت‌ها» tab. No migration: it lives in the existing
+`panel_policies.policy` JSON. The release before it parses that JSON with a strict schema
+that has no such entry, so a stored policy naming it reads there as UNREADABLE, and an
+unreadable policy refuses every customer action on its panel until it is saved again.
+
+In this release that row cannot be written through the product. The write path accepts the
+entry only for a panel whose adapter implements AND declares `LOCATION_CHANGE`, and no
+provider declares it (`docs/provider-capability-audit.md`). So nothing is expected to need
+doing. **Before rolling back past HF-A6A8**, confirm it:
+
+```bash
+docker compose --env-file /etc/nexa/deploy.env -f /opt/nexa/deploy/compose.yml \
+  exec -T postgres psql -U nexa -d nexa -c \
+  "SELECT panel_id, revision FROM panel_policies WHERE policy->'actions' ? 'LOCATION_CHANGE'"
+```
+
+If a row is listed, save that panel's policy without the switch before rolling back, or,
+after the rollback, save the policy once from the old Web Admin, which writes it without
+the entry.
+
+### What a rollback hides: client app pictures (HF-A10)
+
+HF-A10 lets an operator attach a PNG or JPEG picture to a client app entry. The bot
+sends it ahead of that app's screen. The migration adds seven nullable `image_*`
+columns and one CHECK to `client_apps`. The release before HF-A10 names its columns
+explicitly and never reads or writes these, and its inserts leave them NULL, which
+the CHECK accepts. While it runs:
+
+- **No picture is sent.** Every app screen is the emoji-and-text screen it was
+  before HF-A10.
+- **The old Web Admin cannot show, upload or remove a picture.** An edit, a switch
+  on or off, or a delete there leaves a stored picture as it was. A delete removes
+  the picture with its row, as it does on either release.
+
+Nothing needs doing before rolling back past HF-A10. After the roll-forward, every
+picture that was not deleted with its entry is sent again.
+
 ### What a rollback keeps waiting: the durable operations log (HF-A4)
 
 HF-A4 makes every event routed to the operations log durable: it is queued even while no

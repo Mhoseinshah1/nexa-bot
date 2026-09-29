@@ -1,11 +1,15 @@
+import { createHash } from 'node:crypto';
 import {
+  CLIENT_APP_IMAGE_MAX_BYTES,
   CLIENT_APP_MAX_ENTRIES,
   COMMERCE_ERROR_CODES,
   CONTROL_ERROR_CODES,
   clientAppInputSchema,
   errors,
+  inspectClientAppImage,
   type ActorContext,
   type AuditWriter,
+  type ClientAppImageMimeType,
   type ClientAppInput,
   type ClientAppStatus,
   type Clock,
@@ -26,7 +30,12 @@ import { hashRequest } from '../../../platform/idempotency/infrastructure/drizzl
 import type { SessionRepository } from '../../../platform/identity/application/ports.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
-import type { ClientAppRecord, ClientAppRepository } from './ports.js';
+import type {
+  ClientAppImageContent,
+  ClientAppImageDraft,
+  ClientAppRecord,
+  ClientAppRepository,
+} from './ports.js';
 
 export const CLIENT_APP_VIEW_PERMISSION = 'client_apps.view' satisfies PermissionKey;
 export const CLIENT_APP_EDIT_PERMISSION = 'client_apps.edit' satisfies PermissionKey;
@@ -55,7 +64,9 @@ interface AppResult {
  * `SupportFaqService`'s shape, deliberately: one read under `client_apps.view` and four
  * writes under `client_apps.edit`, each its own command with its own audit action, because
  * "who changed this link", "who hid this app" and "who removed it" are three questions and
- * a payload diff should not be the only way to answer one of them.
+ * a payload diff should not be the only way to answer one of them. HF-A10 adds the
+ * picture's two writes, `client_app.image_upload` and `client_app.image_clear`, and the
+ * editor's read of its bytes, on the same terms.
  *
  * Every write:
  *   - is authorised BEFORE the replay lookup, so a guessed key cannot hand an unauthorised
@@ -323,6 +334,151 @@ export class ClientAppService {
     );
   }
 
+  /**
+   * HF-A10 — sets or replaces the entry's picture.
+   *
+   * The bytes are decoded and inspected BEFORE anything is looked up, by
+   * `inspectClientAppImage`, the function the Web Admin form runs too: the declared type
+   * must be the file's own magic number, and its header must state a size inside the
+   * bounds. A refusal is `MEDIA_INVALID` with the reason, the referral banner's code.
+   *
+   * The request hash is the digest of the bytes, not the bytes — the banner's reasoning.
+   * States the entry's version and bumps it, like every other write on an entry, so an
+   * editor holding an older row is refused rather than silently overtaken.
+   */
+  async uploadImage(
+    scope: TenantContext,
+    actor: ActorContext,
+    command: {
+      readonly idempotencyKey: string;
+      readonly id: string;
+      readonly expectedVersion: number;
+      readonly mimeType: ClientAppImageMimeType;
+      readonly contentBase64: string;
+    },
+  ): Promise<ClientAppRecord> {
+    const denial = {
+      action: 'client_app.image_upload',
+      entityType: 'ClientApp',
+      entityId: command.id,
+    };
+    await this.authorize(scope, actor, denial);
+    const image = decodeImage(command.mimeType, command.contentBase64);
+
+    const requestHash = hashRequest({
+      id: command.id,
+      image: true,
+      mimeType: image.mimeType,
+      sha256: image.sha256,
+      expectedVersion: command.expectedVersion,
+    });
+    const replayed = await this.replay(scope, command.idempotencyKey, requestHash);
+    if (replayed !== null) return replayed;
+
+    return this.writeImage(scope, actor, command, denial, requestHash, image);
+  }
+
+  /**
+   * HF-A10 — removes the entry's picture; the bot goes back to the emoji and the text.
+   * Nothing to remove is a no-op that says so, `setStatus`'s rule: the row unchanged, no
+   * audit row, no version bump.
+   */
+  async clearImage(
+    scope: TenantContext,
+    actor: ActorContext,
+    command: {
+      readonly idempotencyKey: string;
+      readonly id: string;
+      readonly expectedVersion: number;
+    },
+  ): Promise<ClientAppRecord> {
+    const denial = {
+      action: 'client_app.image_clear',
+      entityType: 'ClientApp',
+      entityId: command.id,
+    };
+    await this.authorize(scope, actor, denial);
+
+    const requestHash = hashRequest({
+      id: command.id,
+      image: null,
+      expectedVersion: command.expectedVersion,
+    });
+    const replayed = await this.replay(scope, command.idempotencyKey, requestHash);
+    if (replayed !== null) return replayed;
+
+    return this.writeImage(scope, actor, command, denial, requestHash, null);
+  }
+
+  /**
+   * HF-A10 — the stored bytes, for the editor's preview, under `client_apps.view`. A
+   * disabled entry's picture is served too: the operator is looking at the row. Another
+   * tenant's id, a malformed one and an entry with no picture are all "not found".
+   */
+  async imageForOperator(
+    scope: TenantContext,
+    actor: ActorContext,
+    id: string,
+  ): Promise<ClientAppImageContent> {
+    await this.deps.guard.check(scope, actor, CLIENT_APP_VIEW_PERMISSION);
+    const content = UUID_SHAPE.test(id) ? await this.deps.repository.imageContent(scope, id) : null;
+    if (content === null) {
+      throw errors.notFound(
+        CONTROL_ERROR_CODES.CLIENT_APP_NOT_FOUND,
+        'No such client app entry, or it has no image.',
+      );
+    }
+    return content;
+  }
+
+  private writeImage(
+    scope: TenantContext,
+    actor: ActorContext,
+    command: {
+      readonly idempotencyKey: string;
+      readonly id: string;
+      readonly expectedVersion: number;
+    },
+    denial: { action: string; entityType: string; entityId: string },
+    requestHash: string,
+    image: ClientAppImageDraft | null,
+  ): Promise<ClientAppRecord> {
+    const now = this.deps.clock.now();
+    return runAuthorizedMutation(
+      this.mutationDeps(),
+      scope,
+      actor,
+      CLIENT_APP_EDIT_PERMISSION,
+      denial,
+      async (tx) => {
+        await this.assertScopeActive(scope, tx);
+        const before = await this.require(scope, command.id, tx);
+        this.assertVersion(before, command.expectedVersion);
+        if (image === null && before.image === null) {
+          await this.remember(scope, command.idempotencyKey, requestHash, command.id, tx);
+          return before;
+        }
+        const after = await this.deps.repository.setImage(
+          scope,
+          command.id,
+          { image, expectedVersion: command.expectedVersion },
+          now,
+          tx,
+        );
+        if (after === null) throw this.versionConflict(await this.require(scope, command.id, tx));
+
+        await this.record(scope, actor, tx, {
+          action: denial.action,
+          entityId: command.id,
+          before: auditView(before),
+          after: auditView(after),
+        });
+        await this.remember(scope, command.idempotencyKey, requestHash, command.id, tx);
+        return after;
+      },
+    );
+  }
+
   // -------------------------------------------------------------------------
 
   /**
@@ -498,7 +654,34 @@ function parseInput(command: ClientAppInput): ClientAppInput {
   return parsed.data;
 }
 
-/** Every mutable field plus the version, so a before/after pair answers what an edit changed. */
+/**
+ * Base64 to an inspected image, or `MEDIA_INVALID` naming why not. The size is judged on
+ * the DECODED bytes: the wire schema bounds the encoded string, and the two differ.
+ */
+function decodeImage(mimeType: ClientAppImageMimeType, contentBase64: string): ClientAppImageDraft {
+  const bytes = Buffer.from(contentBase64, 'base64');
+  const inspected = inspectClientAppImage(mimeType, bytes);
+  if (!inspected.ok) {
+    throw errors.validation(COMMERCE_ERROR_CODES.MEDIA_INVALID, 'The image is not acceptable.', {
+      reason: inspected.problem,
+      mimeType,
+      byteLength: bytes.byteLength,
+      maxBytes: CLIENT_APP_IMAGE_MAX_BYTES,
+    });
+  }
+  return {
+    content: new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength),
+    mimeType,
+    width: inspected.width,
+    height: inspected.height,
+    sha256: createHash('sha256').update(bytes).digest('hex'),
+  };
+}
+
+/**
+ * Every mutable field plus the version, so a before/after pair answers what an edit changed.
+ * The image as its metadata — the digest says which picture it was — never its bytes.
+ */
 function auditView(row: ClientAppRecord): Record<string, unknown> {
   return {
     platform: row.platform,
@@ -515,5 +698,15 @@ function auditView(row: ClientAppRecord): Record<string, unknown> {
     status: row.status,
     sortOrder: row.sortOrder,
     version: row.version,
+    image:
+      row.image === null
+        ? null
+        : {
+            mimeType: row.image.mimeType,
+            byteLength: row.image.byteLength,
+            width: row.image.width,
+            height: row.image.height,
+            sha256: row.image.sha256,
+          },
   };
 }

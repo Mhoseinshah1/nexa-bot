@@ -446,6 +446,12 @@ describe('the production Caddy routing', () => {
     expect(routes).toMatch(/object-src 'none'/);
   });
 
+  it('lets the Web Admin preview images it built from fetched bytes', () => {
+    // payments.tsx and tickets.tsx preview a receipt or an attachment through
+    // URL.createObjectURL; a CSP without `blob:` in img-src blocks exactly those.
+    expect(routes).toMatch(/img-src 'self' data: blob:;/);
+  });
+
   it('never caches index.html and always caches hashed assets', () => {
     // index.html names the hashed bundles; a cached copy points at files the
     // next release no longer has.

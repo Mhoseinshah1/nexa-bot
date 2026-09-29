@@ -1,13 +1,15 @@
-import { Body, Controller, Get, Inject, Param, Post, Req } from '@nestjs/common';
-import type { FastifyRequest } from 'fastify';
+import { Body, Controller, Get, Inject, Param, Post, Req, Res } from '@nestjs/common';
+import type { FastifyReply, FastifyRequest } from 'fastify';
 import {
   API_PREFIX,
   CLIENT_APP_ROUTES,
+  clearClientAppImageRequestSchema,
   createClientAppRequestSchema,
   deleteClientAppRequestSchema,
   routePattern,
   setClientAppStatusRequestSchema,
   updateClientAppRequestSchema,
+  uploadClientAppImageRequestSchema,
   type ClientAppDeletedResponse,
   type ClientAppListResponse,
   type ClientAppResponse,
@@ -23,7 +25,8 @@ import type { ClientAppRecord } from '../../modules/control/client-apps/applicat
  *
  * One read and four writes — create, edit, enable/disable and delete — for the reason the
  * FAQ controller gives: rewording an entry, hiding it and removing it are different
- * operator decisions with different audit rows.
+ * operator decisions with different audit rows. HF-A10 adds the picture: its bytes for
+ * the preview, its upload and its removal.
  *
  * Authentication happens here; AUTHORIZATION does not — `ClientAppService` charges
  * `client_apps.view` and `client_apps.edit` itself.
@@ -79,6 +82,54 @@ export class ClientAppController {
     return this.container.clientApps.remove(scope, actor, { ...input, id });
   }
 
+  /**
+   * HF-A10 — the stored picture's bytes, for the editor's preview (`<img src>` on this
+   * origin, which the Web Admin's `img-src 'self'` admits).
+   *
+   * Served as the type the SERVICE verified against the file's magic number when it was
+   * stored — PNG or JPEG, never a type the uploader chose — with `nosniff`, `inline`, and
+   * this API's own `default-src 'none'` policy, so a file opened on its own is an image
+   * and nothing else. `@Res()` because a returned `Buffer` would be JSON-serialised.
+   */
+  @Get(routePattern(CLIENT_APP_ROUTES.image, 'id'))
+  async image(
+    @Req() request: FastifyRequest,
+    @Res() reply: FastifyReply,
+    @Param('id') id: string,
+  ): Promise<void> {
+    const { scope, actor } = await this.authenticate(request);
+    const content = await this.container.clientApps.imageForOperator(scope, actor, id);
+    await reply
+      .header('content-type', content.mimeType)
+      .header('x-content-type-options', 'nosniff')
+      .header('content-disposition', 'inline')
+      .header('content-length', String(content.bytes.byteLength))
+      .header('cache-control', 'no-store')
+      .send(Buffer.from(content.bytes));
+  }
+
+  @Post(routePattern(CLIENT_APP_ROUTES.image, 'id'))
+  async uploadImage(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ): Promise<ClientAppResponse> {
+    const { scope, actor } = await this.authenticate(request, { write: true });
+    const input = uploadClientAppImageRequestSchema.parse(body);
+    return toView(await this.container.clientApps.uploadImage(scope, actor, { ...input, id }));
+  }
+
+  @Post(routePattern(CLIENT_APP_ROUTES.clearImage, 'id'))
+  async clearImage(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ): Promise<ClientAppResponse> {
+    const { scope, actor } = await this.authenticate(request, { write: true });
+    const input = clearClientAppImageRequestSchema.parse(body);
+    return toView(await this.container.clientApps.clearImage(scope, actor, { ...input, id }));
+  }
+
   private async authenticate(
     request: FastifyRequest,
     options: { write?: boolean } = {},
@@ -121,5 +172,16 @@ function toView(row: ClientAppRecord): ClientAppResponse {
     version: row.version,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
+    image:
+      row.image === null
+        ? null
+        : {
+            mimeType: row.image.mimeType,
+            byteLength: row.image.byteLength,
+            width: row.image.width,
+            height: row.image.height,
+            sha256: row.image.sha256,
+            updatedAt: row.image.updatedAt.toISOString(),
+          },
   };
 }

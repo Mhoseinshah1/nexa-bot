@@ -5,6 +5,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import {
   API_PREFIX,
   AUTH_ROUTES,
+  CLIENT_APP_IMAGE_MAX_BYTES,
   CLIENT_APP_MAX_ENTRIES,
   CLIENT_APP_ROUTES,
   COMMERCE_ERROR_CODES,
@@ -88,6 +89,29 @@ function entry(overrides: Partial<ClientAppInput> = {}): ClientAppInput {
     ...overrides,
   };
 }
+
+/**
+ * HF-A10. A file with a real PNG header stating `width`×`height`, padded to `total` bytes.
+ * The server reads headers and decodes nothing, so this is exactly what it judges.
+ */
+function png(width: number, height: number, total = 256): Buffer {
+  const bytes = Buffer.alloc(total, 0x2a);
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13]).copy(bytes);
+  bytes.write('IHDR', 12, 'latin1');
+  bytes.writeUInt32BE(width, 16);
+  bytes.writeUInt32BE(height, 20);
+  return bytes;
+}
+
+const detailsOf = async (work: Promise<unknown>): Promise<Record<string, unknown>> => {
+  try {
+    await work;
+  } catch (error) {
+    if (isNexaError(error)) return { code: error.code, ...(error.details ?? {}) };
+    throw error;
+  }
+  throw new Error('expected a refusal');
+};
 
 describe('client apps — the operator’s service', () => {
   let ctx: TestContext;
@@ -396,6 +420,231 @@ describe('client apps — the operator’s service', () => {
         }),
       ),
     ).toBe(COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID);
+    // The picture's two writes read the stop inside their transaction too (HF-A10).
+    for (const attempt of [
+      () =>
+        ctx.container.clientApps.uploadImage(tenantB, ownerB, {
+          id: row?.id ?? '',
+          expectedVersion: 1,
+          mimeType: 'image/png',
+          contentBase64: png(64, 64).toString('base64'),
+          idempotencyKey: key(),
+        }),
+      () =>
+        ctx.container.clientApps.clearImage(tenantB, ownerB, {
+          id: row?.id ?? '',
+          expectedVersion: 1,
+          idempotencyKey: key(),
+        }),
+    ]) {
+      expect(await codeOf(attempt())).toBe(COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID);
+    }
+  });
+
+  // --- HF-A10: the picture ---------------------------------------------------------------
+
+  it('stores a verified picture with its entry, audits it as metadata, and states the version', async () => {
+    const created = await ctx.container.clientApps.create(tenantA, ownerA, {
+      ...entry(),
+      idempotencyKey: key(),
+    });
+    const bytes = png(128, 96);
+    const upload = {
+      id: created.id,
+      expectedVersion: 1,
+      mimeType: 'image/png' as const,
+      contentBase64: bytes.toString('base64'),
+      idempotencyKey: key(),
+    };
+    const stored = await ctx.container.clientApps.uploadImage(tenantA, ownerA, upload);
+    expect(stored.version).toBe(2);
+    expect(stored.image).toMatchObject({
+      mimeType: 'image/png',
+      byteLength: bytes.byteLength,
+      width: 128,
+      height: 96,
+    });
+    expect(stored.image?.sha256).toMatch(/^[0-9a-f]{64}$/u);
+    const served = await ctx.container.clientApps.imageForOperator(tenantA, ownerA, created.id);
+    expect(Buffer.from(served.bytes).equals(bytes)).toBe(true);
+    expect(served.mimeType).toBe('image/png');
+
+    // A replay is the first answer, not a second write.
+    expect(await ctx.container.clientApps.uploadImage(tenantA, ownerA, upload)).toMatchObject({
+      version: 2,
+    });
+    const audits = await auditOf('client_app.image_upload');
+    expect(audits).toHaveLength(1);
+    expect(audits[0]?.before).toMatchObject({ image: null, version: 1 });
+    expect(audits[0]?.after).toMatchObject({
+      image: { mimeType: 'image/png', byteLength: bytes.byteLength, width: 128, height: 96 },
+      version: 2,
+    });
+    expect(JSON.stringify(audits[0]), 'the audit row never carries the bytes').not.toContain(
+      bytes.toString('base64').slice(0, 24),
+    );
+
+    // An editor holding version 1 is refused, and the stored picture is untouched.
+    expect(
+      await codeOf(
+        ctx.container.clientApps.uploadImage(tenantA, ownerA, {
+          ...upload,
+          contentBase64: png(64, 64).toString('base64'),
+          idempotencyKey: key(),
+        }),
+      ),
+    ).toBe(CONTROL_ERROR_CODES.CLIENT_APP_VERSION_CONFLICT);
+
+    // A text edit keeps the picture; clearing removes it and bumps the version once.
+    const edited = await ctx.container.clientApps.update(tenantA, ownerA, {
+      ...entry({ name: 'ویرایش' }),
+      id: created.id,
+      expectedVersion: 2,
+      idempotencyKey: key(),
+    });
+    expect(edited.image?.sha256).toBe(stored.image?.sha256);
+    const cleared = await ctx.container.clientApps.clearImage(tenantA, ownerA, {
+      id: created.id,
+      expectedVersion: 3,
+      idempotencyKey: key(),
+    });
+    expect(cleared).toMatchObject({ image: null, version: 4 });
+    expect(
+      await codeOf(ctx.container.clientApps.imageForOperator(tenantA, ownerA, created.id)),
+    ).toBe(CONTROL_ERROR_CODES.CLIENT_APP_NOT_FOUND);
+    // Nothing left to clear: the row as it was, and no audit row for a change that did not happen.
+    const again = await ctx.container.clientApps.clearImage(tenantA, ownerA, {
+      id: created.id,
+      expectedVersion: 4,
+      idempotencyKey: key(),
+    });
+    expect(again).toMatchObject({ image: null, version: 4 });
+    expect(await auditOf('client_app.image_clear')).toHaveLength(1);
+
+    // Deleting the entry deletes its picture with it: there is nothing to collect later.
+    await ctx.container.clientApps.uploadImage(tenantA, ownerA, {
+      ...upload,
+      expectedVersion: 4,
+      idempotencyKey: key(),
+    });
+    await ctx.container.clientApps.remove(tenantA, ownerA, {
+      id: created.id,
+      expectedVersion: 5,
+      idempotencyKey: key(),
+    });
+    const { rows } = (await ctx.container.database.db.execute(
+      sql`SELECT count(*)::int AS n FROM client_apps WHERE image_content IS NOT NULL`,
+    )) as unknown as { rows: { n: number }[] };
+    expect(rows[0]?.n).toBe(0);
+  });
+
+  it('refuses a picture that is not what it claims, too large or the wrong size, storing nothing', async () => {
+    const created = await ctx.container.clientApps.create(tenantA, ownerA, {
+      ...entry(),
+      idempotencyKey: key(),
+    });
+    const attempt = (mimeType: 'image/png' | 'image/jpeg', bytes: Buffer) =>
+      detailsOf(
+        ctx.container.clientApps.uploadImage(tenantA, ownerA, {
+          id: created.id,
+          expectedVersion: 1,
+          mimeType,
+          contentBase64: bytes.toString('base64'),
+          idempotencyKey: key(),
+        }),
+      );
+    const svg = Buffer.from(
+      '<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)" width="64" height="64"/>',
+    );
+    expect(await attempt('image/png', svg)).toMatchObject({
+      code: COMMERCE_ERROR_CODES.MEDIA_INVALID,
+      reason: 'TYPE_MISMATCH',
+    });
+    expect(await attempt('image/jpeg', png(64, 64))).toMatchObject({ reason: 'TYPE_MISMATCH' });
+    expect(await attempt('image/png', png(64, 64, CLIENT_APP_IMAGE_MAX_BYTES + 1))).toMatchObject({
+      reason: 'TOO_LARGE',
+    });
+    expect(await attempt('image/png', png(8, 8))).toMatchObject({ reason: 'DIMENSIONS' });
+    expect(await attempt('image/png', png(64, 64).subarray(0, 20))).toMatchObject({
+      reason: 'UNREADABLE',
+    });
+    const [row] = await ctx.container.clientApps.listForOperator(tenantA, ownerA);
+    expect(row).toMatchObject({ image: null, version: 1 });
+    expect(await auditOf('client_app.image_upload')).toEqual([]);
+
+    // The table holds the shape for a writer that goes around the service: bytes with no
+    // type, and bytes over the bound, are both refused.
+    await expect(
+      ctx.container.database.db.execute(
+        sql`UPDATE client_apps SET image_content = ${png(64, 64)}, image_updated_at = now(),
+              image_byte_length = 256, image_width = 64, image_height = 64,
+              image_sha256 = ${'a'.repeat(64)}
+            WHERE id = ${created.id}`,
+      ),
+    ).rejects.toMatchObject({ cause: { constraint: 'client_apps_image_check' } });
+    const big = png(64, 64, CLIENT_APP_IMAGE_MAX_BYTES + 1);
+    await expect(
+      ctx.container.database.db.execute(
+        sql`UPDATE client_apps SET image_content = ${big}, image_mime_type = 'image/png',
+              image_byte_length = ${big.byteLength}, image_width = 64, image_height = 64,
+              image_sha256 = ${'a'.repeat(64)}, image_updated_at = now()
+            WHERE id = ${created.id}`,
+      ),
+    ).rejects.toMatchObject({ cause: { constraint: 'client_apps_image_check' } });
+  });
+
+  it('keeps each tenant’s picture its own, and lets support look but not write', async () => {
+    const mine = await ctx.container.clientApps.create(tenantA, ownerA, {
+      ...entry(),
+      idempotencyKey: key(),
+    });
+    await ctx.container.clientApps.uploadImage(tenantA, ownerA, {
+      id: mine.id,
+      expectedVersion: 1,
+      mimeType: 'image/png',
+      contentBase64: png(64, 64).toString('base64'),
+      idempotencyKey: key(),
+    });
+    for (const attempt of [
+      () => ctx.container.clientApps.imageForOperator(tenantB, ownerB, mine.id),
+      () =>
+        ctx.container.clientApps.uploadImage(tenantB, ownerB, {
+          id: mine.id,
+          expectedVersion: 2,
+          mimeType: 'image/png',
+          contentBase64: png(32, 32).toString('base64'),
+          idempotencyKey: key(),
+        }),
+      () =>
+        ctx.container.clientApps.clearImage(tenantB, ownerB, {
+          id: mine.id,
+          expectedVersion: 2,
+          idempotencyKey: key(),
+        }),
+    ]) {
+      expect(await codeOf(attempt())).toBe(CONTROL_ERROR_CODES.CLIENT_APP_NOT_FOUND);
+    }
+    const customer = '0191f4a0-0000-7000-8000-0000000000c1' as UserId;
+    expect(await ctx.container.clientAppCatalog.appFor(tenantB, customer, mine.id)).toBeNull();
+
+    expect(
+      (await ctx.container.clientApps.imageForOperator(tenantA, supportA, mine.id)).mimeType,
+    ).toBe('image/png');
+    expect(
+      await codeOf(
+        ctx.container.clientApps.clearImage(tenantA, supportA, {
+          id: mine.id,
+          expectedVersion: 2,
+          idempotencyKey: key(),
+        }),
+      ),
+    ).toBe('platform.permission_denied');
+    const denied = (await auditOf('client_app.image_clear')).filter(
+      (one) => one.result === 'DENIED',
+    );
+    expect(denied).toHaveLength(1);
+    const [still] = await ctx.container.clientApps.listForOperator(tenantA, ownerA);
+    expect(still).toMatchObject({ version: 2, image: { width: 64, height: 64 } });
   });
 });
 
@@ -418,6 +667,8 @@ const systemActor = (correlationId: string): ActorContext => ({
 interface Sent {
   readonly url: string;
   readonly body: Record<string, unknown>;
+  /** The request as it arrived: a photo goes up as multipart, which is not JSON. */
+  readonly raw: Buffer;
 }
 
 describe('client apps — what a customer is shown', () => {
@@ -430,6 +681,8 @@ describe('client apps — what a customer is shown', () => {
   let panelId: string;
   let maryam: UserId;
   let updateSeq = 0;
+  /** HF-A10: when set, `sendPhoto` is refused as Telegram refuses a broken image. */
+  let refusePhotos = false;
 
   beforeAll(async () => {
     sent = [];
@@ -443,7 +696,18 @@ describe('client apps — what a customer is shown', () => {
         } catch {
           body = { unparseable: true };
         }
-        sent.push({ url: request.url ?? '', body });
+        sent.push({ url: request.url ?? '', body, raw: Buffer.concat(chunks) });
+        if (refusePhotos && String(request.url).includes('/sendPhoto')) {
+          response.writeHead(400, { 'content-type': 'application/json' });
+          response.end(
+            JSON.stringify({
+              ok: false,
+              error_code: 400,
+              description: 'Bad Request: IMAGE_PROCESS_FAILED',
+            }),
+          );
+          return;
+        }
         response.writeHead(200, { 'content-type': 'application/json' });
         response.end(JSON.stringify({ ok: true, result: { message_id: 11 } }));
       });
@@ -470,6 +734,7 @@ describe('client apps — what a customer is shown', () => {
     await ctx.reset();
     ctx.container.setInstallationTenant(tenantA.tenantId);
     sent = [];
+    refusePhotos = false;
     panel = await startFakeMarzban({ host: '127.0.0.2' });
     owner = adminActorFor(
       await createAdmin(ctx.container, tenantA, { username: 'owner-appbot', roleKeys: ['owner'] }),
@@ -748,6 +1013,75 @@ describe('client apps — what a customer is shown', () => {
     expect(lastText()).toContain('تازه');
     expect(urls()).toEqual(['https://new.example.com/a', 'https://video.example.com/a']);
   });
+
+  it('sends an app’s picture ahead of its screen, and the screen alone when Telegram refuses it', async () => {
+    const plain = await add({ name: 'بی‌تصویر', icon: '🟢', sortOrder: 1 });
+    const pictured = await add({ name: 'باتصویر', icon: '🔵', sortOrder: 2 });
+    const bytes = png(200, 200);
+    await ctx.container.clientApps.uploadImage(tenantA, owner, {
+      id: pictured,
+      expectedVersion: 1,
+      mimeType: 'image/png',
+      contentBase64: bytes.toString('base64'),
+      idempotencyKey: key(),
+    });
+    const theirs = await add({ name: 'مال دیگری' }, tenantB);
+    await ctx.container.clientApps.uploadImage(tenantB, ownerB, {
+      id: theirs,
+      expectedVersion: 1,
+      mimeType: 'image/png',
+      contentBase64: png(300, 300).toString('base64'),
+      idempotencyKey: key(),
+    });
+
+    // The list is buttons, which carry text only: the emoji stays what marks each app.
+    await handle(tap('to:ANDROID', REZA));
+    expect(lastMarkup()).toContain('🔵 باتصویر');
+
+    // No picture: the emoji-and-text screen, exactly as before, and no photo at all.
+    sent = [];
+    expect((await handle(tap(`ca:${plain}`, REZA))).replyKey).toBe('bot.apps.detail');
+    expect(sent.some((one) => one.url.includes('/sendPhoto'))).toBe(false);
+    expect(lastText()).toContain('🟢 بی‌تصویر');
+
+    // A picture: the photo first, carrying the stored bytes, then the same screen.
+    sent = [];
+    expect((await handle(tap(`ca:${pictured}`, REZA))).replyKey).toBe('bot.apps.detail');
+    const order = sent.map((one) => one.url.split('/').at(-1));
+    expect(order.indexOf('sendPhoto')).toBeGreaterThanOrEqual(0);
+    expect(order.indexOf('sendPhoto')).toBeLessThan(order.lastIndexOf('sendMessage'));
+    const photo = sent.find((one) => one.url.includes('/sendPhoto'));
+    expect(photo?.raw.includes(bytes), 'the photo is the stored bytes').toBe(true);
+    expect(lastText()).toContain('🔵 باتصویر');
+
+    // Telegram refuses the picture: the customer still gets the screen they asked for.
+    refusePhotos = true;
+    sent = [];
+    expect((await handle(tap(`ca:${pictured}`, REZA))).replyKey).toBe('bot.apps.detail');
+    expect(
+      sent.some((one) => one.url.includes('/sendPhoto')),
+      'the picture was tried',
+    ).toBe(true);
+    expect(lastText()).toContain('🔵 باتصویر');
+    expect(urls()).toEqual(['https://downloads.example.com/app.apk']);
+
+    // Another tenant's entry, picture and all, is not this tenant's customer's to see.
+    refusePhotos = false;
+    sent = [];
+    expect((await handle(tap(`ca:${theirs}`, REZA))).replyKey).toBe('bot.apps.not_found');
+    expect(sent.some((one) => one.url.includes('/sendPhoto'))).toBe(false);
+
+    // A disabled entry's picture is not sent either.
+    await ctx.container.clientApps.setStatus(tenantA, owner, {
+      id: pictured,
+      status: 'DISABLED',
+      expectedVersion: 2,
+      idempotencyKey: key(),
+    });
+    sent = [];
+    expect((await handle(tap(`ca:${pictured}`, REZA))).replyKey).toBe('bot.apps.not_found');
+    expect(sent.some((one) => one.url.includes('/sendPhoto'))).toBe(false);
+  });
 });
 
 // ============================================================================
@@ -874,5 +1208,114 @@ describe('client apps over HTTP', () => {
       url: `${API_PREFIX}${CLIENT_APP_ROUTES.list}`,
     });
     expect(anonymous.statusCode).toBe(401);
+  });
+
+  it('uploads, serves and clears a picture, served only as the type it was verified to be', async () => {
+    const created = await inject({
+      method: 'POST',
+      url: `${API_PREFIX}${CLIENT_APP_ROUTES.create}`,
+      headers: { cookie, origin: ORIGIN },
+      payload: { ...entry(), idempotencyKey: key() },
+    });
+    const row = clientAppSchema.parse(created.json());
+    expect(row.image).toBeNull();
+
+    // The largest file allowed fits the API's JSON body limit as base64.
+    const bytes = png(512, 512, CLIENT_APP_IMAGE_MAX_BYTES);
+    const uploaded = await inject({
+      method: 'POST',
+      url: `${API_PREFIX}${CLIENT_APP_ROUTES.image(row.id)}`,
+      headers: { cookie, origin: ORIGIN },
+      payload: {
+        expectedVersion: 1,
+        mimeType: 'image/png',
+        contentBase64: bytes.toString('base64'),
+        idempotencyKey: key(),
+      },
+    });
+    expect(uploaded.statusCode).toBe(201);
+    const withImage = clientAppSchema.parse(uploaded.json());
+    expect(withImage).toMatchObject({
+      version: 2,
+      image: { mimeType: 'image/png', byteLength: bytes.byteLength, width: 512, height: 512 },
+    });
+    expect(uploaded.body).not.toContain(bytes.toString('base64').slice(0, 32));
+    const listed = await inject({
+      method: 'GET',
+      url: `${API_PREFIX}${CLIENT_APP_ROUTES.list}`,
+      headers: { cookie },
+    });
+    expect(clientAppListSchema.parse(listed.json()).items[0]?.image?.sha256).toBe(
+      withImage.image?.sha256,
+    );
+
+    const served = await inject({
+      method: 'GET',
+      url: `${API_PREFIX}${CLIENT_APP_ROUTES.image(row.id)}?v=${withImage.image?.sha256 ?? ''}`,
+      headers: { cookie },
+    });
+    expect(served.statusCode).toBe(200);
+    expect(served.headers['content-type']).toBe('image/png');
+    expect(served.headers['x-content-type-options']).toBe('nosniff');
+    expect(String(served.headers['content-security-policy'])).toContain("default-src 'none'");
+    expect(served.rawPayload.equals(bytes)).toBe(true);
+
+    const anonymous = await inject({
+      method: 'GET',
+      url: `${API_PREFIX}${CLIENT_APP_ROUTES.image(row.id)}`,
+    });
+    expect(anonymous.statusCode).toBe(401);
+
+    // SVG and WebP are refused at the wire; bytes that are not what they claim, by the service.
+    for (const [mimeType, content, code] of [
+      ['image/svg+xml', Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>'), null],
+      ['image/webp', Buffer.from('RIFF\0\0\0\0WEBPVP8 '), null],
+      [
+        'image/png',
+        Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>'),
+        'commerce.media_invalid',
+      ],
+    ] as const) {
+      const refused = await inject({
+        method: 'POST',
+        url: `${API_PREFIX}${CLIENT_APP_ROUTES.image(row.id)}`,
+        headers: { cookie, origin: ORIGIN },
+        payload: {
+          expectedVersion: 2,
+          mimeType,
+          contentBase64: content.toString('base64'),
+          idempotencyKey: key(),
+        },
+      });
+      expect(refused.statusCode, mimeType).toBe(400);
+      if (code !== null) expect(refused.json()).toMatchObject({ error: { code } });
+    }
+
+    const noOrigin = await inject({
+      method: 'POST',
+      url: `${API_PREFIX}${CLIENT_APP_ROUTES.clearImage(row.id)}`,
+      headers: { cookie },
+      payload: { expectedVersion: 2, idempotencyKey: key() },
+    });
+    expect(noOrigin.statusCode).toBe(403);
+    const cleared = await inject({
+      method: 'POST',
+      url: `${API_PREFIX}${CLIENT_APP_ROUTES.clearImage(row.id)}`,
+      headers: { cookie, origin: ORIGIN },
+      payload: { expectedVersion: 2, idempotencyKey: key() },
+    });
+    expect(clientAppSchema.parse(cleared.json())).toMatchObject({ image: null, version: 3 });
+
+    for (const id of [row.id, 'not-a-uuid']) {
+      const gone = await inject({
+        method: 'GET',
+        url: `${API_PREFIX}${CLIENT_APP_ROUTES.image(id)}`,
+        headers: { cookie },
+      });
+      expect(gone.statusCode, id).toBe(404);
+      expect(gone.json()).toMatchObject({
+        error: { code: CONTROL_ERROR_CODES.CLIENT_APP_NOT_FOUND },
+      });
+    }
   });
 });

@@ -169,6 +169,10 @@ describe('dynamic route registration', () => {
       ['GET', 'media/REFERRAL_BANNER'],
       ['POST', 'media/REFERRAL_BANNER'],
       ['POST', 'media/REFERRAL_BANNER/clear'],
+      // HF-A10: a client app's picture.
+      ['GET', `client-apps/${id}/image`],
+      ['POST', `client-apps/${id}/image`],
+      ['POST', `client-apps/${id}/image/clear`],
       // WP9-B: reseller tiers and resellers.
       ['GET', 'reseller-tiers'],
       ['POST', 'reseller-tiers'],
