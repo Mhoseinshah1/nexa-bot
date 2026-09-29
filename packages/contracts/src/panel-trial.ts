@@ -42,7 +42,10 @@ export const panelTrialSchema = z.object({
   /** Offered to customers — while the `trials` flag is on and the panel may take new accounts. */
   enabled: z.boolean(),
   /** Bytes, as a decimal string; null when this panel has never been configured. */
-  trafficBytes: z.string().regex(/^[0-9]+$/u).nullable(),
+  trafficBytes: z
+    .string()
+    .regex(/^[0-9]+$/u)
+    .nullable(),
   durationHours: z.number().int().nullable(),
   /** The name a customer chooses it by; null means the panel's own name. */
   label: z.string().nullable(),

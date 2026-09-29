@@ -59,9 +59,7 @@ export const REFERRAL_MENU_COMMAND = 'referral';
 
 /** What a main-menu button may stand for: a registered command, or one of the two above. */
 export type MainMenuCommand =
-  | BotCommandName
-  | typeof TRIAL_MENU_COMMAND
-  | typeof REFERRAL_MENU_COMMAND;
+  BotCommandName | typeof TRIAL_MENU_COMMAND | typeof REFERRAL_MENU_COMMAND;
 
 /**
  * The stable identity of each main-menu button (R1, «دکمه‌های ربات»).
@@ -253,10 +251,7 @@ export function resolveMainMenuLayout(
   stored: readonly MainMenuLayoutEntry[],
 ): readonly MainMenuLayoutEntry[] {
   const named = new Set(stored.map((entry) => entry.button));
-  return [
-    ...stored,
-    ...DEFAULT_MAIN_MENU_LAYOUT.filter((entry) => !named.has(entry.button)),
-  ];
+  return [...stored, ...DEFAULT_MAIN_MENU_LAYOUT.filter((entry) => !named.has(entry.button))];
 }
 
 /**
