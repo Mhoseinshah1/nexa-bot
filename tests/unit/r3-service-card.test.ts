@@ -130,6 +130,7 @@ describe('the card editor', () => {
 
   const claimed: ClaimedCard = {
     operationId: 'op-1',
+    outcome: 'SUCCEEDED',
     serviceId: 'service-1',
     customerId: 'customer-1' as UserId,
     botInstanceId: BOT,
@@ -145,6 +146,7 @@ describe('the card editor', () => {
     readonly send?: CustomerSendResult;
   }) {
     const log: string[] = [];
+    const renders: string[] = [];
     const edits: CustomerEditMessage[] = [];
     const sends: CustomerMessage[] = [];
     const cards: OperationCardRepository = {
@@ -156,12 +158,13 @@ describe('the card editor', () => {
       },
       release: async (_scope, _id, retryAt) => void log.push(`release@${retryAt.toISOString()}`),
       dueForAnswer: async () => ['op-1'],
+      claimRotationCard: async () => null,
     };
     const editor = new OperationCardEditor({
       cards,
       renderer: {
-        cardFor: async () =>
-          options.card === false
+        cardFor: async (_scope, _customer, _service, notice) =>
+          renders.push(notice ?? 'none') > 0 && options.card === false
             ? null
             : {
                 key: 'bot.service.card',
@@ -183,7 +186,7 @@ describe('the card editor', () => {
       uow: passthroughUow,
       clock: { now: () => new Date('2026-09-29T00:00:00Z') },
     });
-    return { editor, log, edits, sends };
+    return { editor, log, renders, edits, sends };
   }
 
   it('edits the card it was asked from, once, and sends nothing else', async () => {
@@ -193,6 +196,19 @@ describe('the card editor', () => {
       ['42', 7, BOT],
     ]);
     expect(sends).toEqual([]);
+  });
+
+  /*
+   * Round N (F4): a change that definitely did not happen is answered on the card too —
+   * drawn as the service still is, with the failure notice; a success carries none.
+   */
+  it('draws a failed change with the failure notice, and a success without one', async () => {
+    const failed = editorWith({ claim: { ...claimed, outcome: 'FAILED' } });
+    expect(await failed.editor.answer(scope, 'op-1')).toBe('EDITED');
+    expect(failed.renders).toEqual(['bot.service.notice_action_failed']);
+    const succeeded = editorWith({});
+    await succeeded.editor.answer(scope, 'op-1');
+    expect(succeeded.renders).toEqual(['none']);
   });
 
   it('sends the card once as a new message when the old one cannot be edited', async () => {
