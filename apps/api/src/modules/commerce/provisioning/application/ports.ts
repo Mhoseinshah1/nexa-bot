@@ -438,9 +438,11 @@ export interface ServiceRepository {
    * Freezes a panel's OLD initial location onto every never-moved service on it (WP-A6),
    * before an operator's write changes what "never moved" means there: a NULL location is
    * read as the panel's initial location, so editing, unmarking, moving or deleting that
-   * row would otherwise silently relocate every such service. Only `legalFrom` states —
-   * the ones with an account that exists or may — and only rows still NULL, so a move
-   * applied concurrently is never overwritten. Returns how many were recorded.
+   * row would otherwise silently relocate every such service. Every `legalFrom` state —
+   * the ones with an account that exists or may — and a `PENDING_PROVISION` one only when
+   * its create has STARTED (a stamped `PROVISION` still `IN_FLIGHT` or `UNKNOWN`), decided
+   * after the candidates' row locks are held, the lock that create's stamp takes. Only rows
+   * still NULL, so a move applied concurrently is never overwritten. Returns how many.
    */
   recordLocationForUnmoved(
     scope: TenantContext,
@@ -830,6 +832,19 @@ export interface OperationRepository {
     type: OperationType,
     tx?: unknown,
   ): Promise<OperationRecord | null>;
+
+  /**
+   * Whether an operation of this type is open for a service in the WIDER sense — `PLANNED`,
+   * `IN_FLIGHT` or `UNKNOWN` (WP-A6): a write whose answer was lost is still being
+   * settled, and another write to the same account must wait for it. Asked under the
+   * service's lifecycle lock by the planners that exclude each other.
+   */
+  hasUnsettled(
+    scope: TenantContext,
+    serviceId: string,
+    type: OperationType,
+    tx?: unknown,
+  ): Promise<boolean>;
 
   /**
    * Any open `RENEW`, `ADD_TRAFFIC` or `ADD_TIME` for this service.

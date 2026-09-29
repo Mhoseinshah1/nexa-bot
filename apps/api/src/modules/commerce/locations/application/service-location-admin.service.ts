@@ -105,9 +105,11 @@ type Denial = { action: string; entityType: string; entityId: string | null };
 
 /**
  * The never-moved services an initial-location change freezes: every state with an
- * account that exists or may. Not `PENDING_PROVISION` — its account is not made yet, and
- * it will be made wherever the panel places new accounts from now on, which is what its
- * NULL goes on meaning — and not `TERMINATED`, which has none.
+ * account that exists or may, and not `TERMINATED`, which has none. A `PENDING_PROVISION`
+ * service is frozen too once its create has STARTED — its account may already be at the
+ * old location — which the repository decides under the row lock that create's stamp
+ * takes (Codex review #2 on PR #101). One whose create has not started keeps NULL: it will
+ * be made wherever the panel places new accounts from now on.
  */
 const UNMOVED_FREEZE_STATES: readonly ServiceState[] = [
   'ACTIVE',

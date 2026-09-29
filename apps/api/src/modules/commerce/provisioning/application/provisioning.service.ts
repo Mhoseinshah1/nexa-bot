@@ -1346,6 +1346,15 @@ export class ProvisioningService {
         );
       }
     }
+    /*
+     * WP-A6: a rotation and a location move exclude each other (Codex review #2 on
+     * PR #101) — both end by storing the link the panel serves, and two in flight could
+     * leave the older one stored. The lifecycle lock is the one `prepareCommercialAction`
+     * asks the mirror question under; taken last, after any row lock, as every planner
+     * takes it. An open rotation, and a replay of this key, are still RETURNED first.
+     */
+    if (type === 'ROTATE_SUBSCRIPTION')
+      await this.deps.services.lockLifecycle(scope, service.id, tx);
     const open = await this.deps.operations.findOpen(scope, service.id, type, tx);
     if (open !== null) return open;
     const operationId = this.deps.operationId(`${service.id}:${type}:${input.idempotencyKey}`);
@@ -1358,6 +1367,16 @@ export class ProvisioningService {
       const replay = await this.deps.operations.findByOperationId(scope, operationId, tx);
       if (replay !== null) return replay;
       await origin.admission.admit(tx);
+    }
+    // After the open-rotation return and the replay, so neither is refused by the rule.
+    if (
+      type === 'ROTATE_SUBSCRIPTION' &&
+      (await this.deps.operations.hasUnsettled(scope, service.id, 'CHANGE_LOCATION', tx))
+    ) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.SERVICE_ACTION_IN_PROGRESS,
+        'This service is being moved to another location; try again once it has moved.',
+      );
     }
     const operation = await this.deps.operations.plan(
       scope,
@@ -1568,6 +1587,19 @@ export class ProvisioningService {
           COMMERCE_ERROR_CODES.LOCATION_CHANGE_SAME_LOCATION,
           'The service is already in that location.',
           'LOCATION_UNCHANGED',
+        );
+      }
+      /*
+       * A move and a link rotation both end by storing the link the panel then serves, so
+       * two in flight together could leave the OLDER one stored (Codex review #2 on
+       * PR #101). They exclude each other in both directions under this lifecycle lock:
+       * the rotation planner takes the same lock and asks the mirror question.
+       */
+      if (await this.deps.operations.hasUnsettled(scope, service.id, 'ROTATE_SUBSCRIPTION', tx)) {
+        return refuse(
+          COMMERCE_ERROR_CODES.SERVICE_ACTION_IN_PROGRESS,
+          'This service has a new link being made; try again once it is delivered.',
+          'ROTATION_IN_PROGRESS',
         );
       }
     }

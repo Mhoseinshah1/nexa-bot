@@ -405,6 +405,28 @@ export class DrizzleOperationRepository implements OperationRepository {
     return row === undefined ? null : toRecord(row);
   }
 
+  async hasUnsettled(
+    scope: TenantContext,
+    serviceId: string,
+    type: OperationType,
+    tx?: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select({ id: provisioningOperations.id })
+      .from(provisioningOperations)
+      .where(
+        and(
+          eq(provisioningOperations.tenantId, tenantId),
+          eq(provisioningOperations.serviceId, serviceId),
+          eq(provisioningOperations.type, type),
+          inArray(provisioningOperations.state, ['PLANNED', 'IN_FLIGHT', 'UNKNOWN']),
+        ),
+      )
+      .limit(1);
+    return rows.length > 0;
+  }
+
   async lastSucceededCustomerRequest(
     scope: TenantContext,
     serviceId: string,
