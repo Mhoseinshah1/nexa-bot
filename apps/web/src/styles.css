@@ -698,6 +698,26 @@ textarea {
   display: grid;
   gap: 14px;
 }
+
+/*
+ * WP-A1: the settings page, one section per group of settings. The heading names the
+ * group; each setting inside is still its own card, saved by its own button.
+ */
+.settings-group {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+.settings-group-head {
+  font-size: 14px;
+  color: var(--fg-2);
+}
+.settings-technical {
+  margin-top: 12px;
+}
+.settings-technical summary {
+  cursor: pointer;
+}
 .grid.c2 {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }

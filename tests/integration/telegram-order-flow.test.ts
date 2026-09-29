@@ -527,15 +527,16 @@ describe('the customer purchase flow over Telegram', () => {
     expect(text).toContain('حجم اکانت: 50 گیگابایت');
     expect(text).not.toContain('53687091200');
 
-    // The payment buttons name the ORDER rather than the product — wallet, then the
-    // card-to-card route the seed allows — and, on a new-purchase draft, the one order a
-    // code can reach (WP8 P7), enter a code; then the way back to the menu.
+    // The payment buttons name the ORDER rather than the product — wallet, then «🧾 ثبت
+    // پرداخت», which opens the payment-method selector (`pm:`) rather than choosing a route
+    // itself — and, on a new-purchase draft, the one order a code can reach (WP8 P7), enter a
+    // code; then the way back to the menu.
     const buttons = buttonsOf(lastMessage());
     expect(buttons).toHaveLength(4);
     expect(buttons[0]?.text).toBe(CATALOGUE_FA['bot.payment.wallet_button']);
     expect(buttons[0]?.callback_data).toBe(`w:${String(rows[0]?.['id'])}`);
     expect(buttons[1]?.text).toBe(CATALOGUE_FA['bot.payment.manual_button']);
-    expect(buttons[1]?.callback_data).toBe(`m:${String(rows[0]?.['id'])}`);
+    expect(buttons[1]?.callback_data).toBe(`pm:${String(rows[0]?.['id'])}`);
     expect(buttons[2]?.text).toBe(CATALOGUE_FA['bot.discount.enter_button']);
     expect(buttons[2]?.callback_data).toBe(`dc:${String(rows[0]?.['id'])}`);
     expect(buttons[3]?.callback_data).toBe('mm:');
@@ -592,7 +593,7 @@ describe('the customer purchase flow over Telegram', () => {
     await tap(`Z:${orderId}`);
     expect(buttonsOf(lastMessage()).map((b) => b.callback_data)).toEqual([
       `w:${orderId}`,
-      `m:${orderId}`,
+      `pm:${orderId}`,
       `dc:${orderId}`,
       'mm:',
     ]);
@@ -616,7 +617,7 @@ describe('the customer purchase flow over Telegram', () => {
     expect(text).toContain(`قیمت: ${formatMoney(money(200_000n, 'IRT'))}`);
     expect(buttonsOf(lastMessage()).map((b) => b.callback_data)).toEqual([
       `w:${orderId}`,
-      `m:${orderId}`,
+      `pm:${orderId}`,
       `dx:${orderId}`,
       'mm:',
     ]);
@@ -630,7 +631,7 @@ describe('the customer purchase flow over Telegram', () => {
     expect(String(lastMessage()?.body['text'])).not.toContain('تخفیف');
     expect(buttonsOf(lastMessage()).map((b) => b.callback_data)).toEqual([
       `w:${orderId}`,
-      `m:${orderId}`,
+      `pm:${orderId}`,
       `dc:${orderId}`,
       'mm:',
     ]);
@@ -775,7 +776,7 @@ describe('the customer purchase flow over Telegram', () => {
     const buttons = buttonsOf(lastMessage());
     expect(buttons.map((b) => b.callback_data)).toEqual([
       `w:${orderId}`,
-      `m:${orderId}`,
+      `pm:${orderId}`,
       `d:${orderId}`,
     ]);
     expect(buttons.map((b) => b.text)).toEqual([
