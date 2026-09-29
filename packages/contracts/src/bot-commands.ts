@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import type { TemplateKey } from './templates.js';
 
 /**
@@ -44,12 +45,65 @@ export const BOT_COMMANDS = [
 
 export type BotCommandName = (typeof BOT_COMMANDS)[number]['command'];
 
+/**
+ * R1: the two main-menu commands that are NOT registered with `setMyCommands`.
+ *
+ * Both are features a tenant may have switched off (`trials`, `referrals`), and Telegram's
+ * command list is per BOT: registering `/trial` would advertise a trial to every customer
+ * of a tenant that offers none. So they are reachable by their main-menu button, and by
+ * typing them, exactly as `/admin` is — and a turn that resolves one answers from the
+ * feature's own state, never from the button having been drawn.
+ */
+export const TRIAL_MENU_COMMAND = 'trial';
+export const REFERRAL_MENU_COMMAND = 'referral';
+
+/** What a main-menu button may stand for: a registered command, or one of the two above. */
+export type MainMenuCommand =
+  | BotCommandName
+  | typeof TRIAL_MENU_COMMAND
+  | typeof REFERRAL_MENU_COMMAND;
+
+/**
+ * The stable identity of each main-menu button (R1, «دکمه‌های ربات»).
+ *
+ * What the Web Admin's bot-buttons page stores in `bot.main_menu` — never a label, which an
+ * operator may rewrite, and never a position, which they may reorder. Closed, like every
+ * other vocabulary a setting holds: an id nothing here declares fails at the schema.
+ */
+export const MAIN_MENU_BUTTON_IDS = [
+  'catalog',
+  'services',
+  'wallet',
+  'help',
+  'trial',
+  'referral',
+  'apps',
+  'tickets',
+] as const;
+export type MainMenuButtonId = (typeof MAIN_MENU_BUTTON_IDS)[number];
+
 /** One button on the persistent main menu: a label, and the command it stands for. */
 export interface BotMenuButton {
-  /** The label the customer sees AND the text a tap sends back. */
+  readonly id: MainMenuButtonId;
+  /**
+   * The label the customer sees AND the text a tap sends back — rendered through the
+   * tenant's own templates since R1, and routed from the same rendering (see
+   * `MAIN_MENU_ROWS`).
+   */
   readonly label: TemplateKey;
   /** The command this button is exactly equivalent to. Not a second handler. */
-  readonly command: BotCommandName;
+  readonly command: MainMenuCommand;
+  /** Drawn on a row of its own: its label is long, and it is a place of its own. */
+  readonly wide: boolean;
+  /**
+   * The feature flag that must be ON for the button to be drawn, or null.
+   *
+   * A keyboard is a promise, so a button for a feature a tenant has switched off is not
+   * drawn at all — whatever the bot-buttons page says. A feature that is on but has
+   * nothing to offer right now (no panel with a trial) is still drawn, and its tap says
+   * so in one plain sentence: that is the owner's decision for the trial button (R1).
+   */
+  readonly feature: 'trials' | 'referrals' | null;
 }
 
 /**
@@ -70,32 +124,140 @@ export interface BotMenuButton {
  *
  * ## What is deliberately NOT here
  *
- * A button for anything this release cannot do. Referral, reseller, affiliate, cashback,
- * promotions, a wheel and a trial are Phase 7, and a keyboard is a promise: a button that
- * answers "not available" is the legacy system's defect — a menu describing a product
- * that does not exist — reproduced deliberately. The list grows when a capability ships.
+ * A button for anything this release cannot do. Reseller, affiliate, promotions and a
+ * wheel are not built, and a keyboard is a promise: a button that answers "not
+ * available" is the legacy system's defect — a menu describing a product that does not
+ * exist — reproduced deliberately. The list grows when a capability ships; the trial and
+ * the referral program shipped (R1), each drawn only while its feature flag is on.
+ *
+ * ## Labels are the tenant's, and so are the routes (R1)
+ *
+ * Until R1 the keyboard was drawn from the SHARED catalogue, because a label a tenant
+ * could rename was a route a tenant could break — and the tenant's `bot.menu.*` overrides
+ * were accepted by the texts screen and then ignored. Now the keyboard's labels are
+ * rendered through the tenant's templates AND the route table a tap is matched against is
+ * built from the SAME rendering, so a renamed button still routes; the shared defaults
+ * stay in the route table too, so a keyboard already sitting in a chat keeps working after
+ * a rename. The order and the on/off switches are `bot.main_menu`.
  *
  * The keyboard also carries NO identifiers and therefore no authority. Every contextual
  * action — a product, a payment, a service, a confirmation — stays on `callback_data`
  * with its validated id and its ownership check. This is navigation and nothing else.
  */
-export const MAIN_MENU_ROWS: readonly (readonly BotMenuButton[])[] = [
-  [
-    { label: 'bot.menu.catalog', command: 'catalog' },
-    { label: 'bot.menu.services', command: 'services' },
-  ],
-  [
-    { label: 'bot.menu.wallet', command: 'wallet' },
-    { label: 'bot.menu.help', command: 'help' },
-  ],
+export const MAIN_MENU_BUTTONS: readonly BotMenuButton[] = [
+  { id: 'catalog', label: 'bot.menu.catalog', command: 'catalog', wide: false, feature: null },
+  { id: 'services', label: 'bot.menu.services', command: 'services', wide: false, feature: null },
+  { id: 'wallet', label: 'bot.menu.wallet', command: 'wallet', wide: false, feature: null },
+  { id: 'help', label: 'bot.menu.help', command: 'help', wide: false, feature: null },
+  // R1: «🧪 دریافت سرویس تست» and «👥 زیرمجموعه‌گیری», side by side, each behind its flag.
+  {
+    id: 'trial',
+    label: 'bot.menu.trial',
+    command: TRIAL_MENU_COMMAND,
+    wide: false,
+    feature: 'trials',
+  },
+  {
+    id: 'referral',
+    label: 'bot.menu.referral',
+    command: REFERRAL_MENU_COMMAND,
+    wide: false,
+    feature: 'referrals',
+  },
   // WP-A10: a row of its own — the label is long, and it is a place, like the four above.
-  [{ label: 'bot.menu.apps', command: 'apps' }],
+  { id: 'apps', label: 'bot.menu.apps', command: 'apps', wide: true, feature: null },
   // WP-A7: the ticket desk, on a row of its own.
-  [{ label: 'bot.menu.tickets', command: 'tickets' }],
+  { id: 'tickets', label: 'bot.menu.tickets', command: 'tickets', wide: true, feature: null },
 ];
 
-/** Every menu button, flattened. The rows are layout; this is the set. */
-export const MAIN_MENU_BUTTONS: readonly BotMenuButton[] = MAIN_MENU_ROWS.flat();
+/** The declared button for an id. Total over `MAIN_MENU_BUTTON_IDS`. */
+export function mainMenuButton(id: MainMenuButtonId): BotMenuButton {
+  const found = MAIN_MENU_BUTTONS.find((button) => button.id === id);
+  if (found === undefined) throw new Error(`main-menu button ${id} is not declared`);
+  return found;
+}
+
+/**
+ * Buttons, in order, packed into rows: two to a row, and a `wide` one alone.
+ *
+ * The one layout rule, so the default keyboard and a reordered one are drawn the same way
+ * and an operator reordering buttons never has to think about rows.
+ */
+export function packMainMenuRows<T extends Pick<BotMenuButton, 'wide'>>(
+  buttons: readonly T[],
+): T[][] {
+  const rows: T[][] = [];
+  let open: T[] | null = null;
+  for (const button of buttons) {
+    if (button.wide) {
+      rows.push([button]);
+      open = null;
+      continue;
+    }
+    if (open !== null && open.length < 2) {
+      open.push(button);
+      if (open.length === 2) open = null;
+      continue;
+    }
+    open = [button];
+    rows.push(open);
+  }
+  return rows;
+}
+
+/** The default keyboard, every declared button in its declared order. */
+export const MAIN_MENU_ROWS: readonly (readonly BotMenuButton[])[] =
+  packMainMenuRows(MAIN_MENU_BUTTONS);
+
+/**
+ * The operator's arrangement of the main menu (R1, `bot.main_menu`): the buttons in the
+ * order they are drawn, each switched on or off.
+ *
+ * An id at most once. A declared button the stored value does not name — one a later
+ * release added — is appended in its declared place, switched ON, so shipping a button
+ * never needs a migration of anybody's arrangement (`resolveMainMenuLayout`).
+ *
+ * At least one button with no feature gate must be on: every feature-gated button can be
+ * hidden by its flag, and a keyboard with no buttons at all is one Telegram refuses —
+ * which would take every reply that carries it down with it.
+ */
+export const mainMenuLayoutEntrySchema = z
+  .object({ button: z.enum(MAIN_MENU_BUTTON_IDS), enabled: z.boolean() })
+  .strict();
+export type MainMenuLayoutEntry = z.infer<typeof mainMenuLayoutEntrySchema>;
+
+export const mainMenuLayoutSchema = z
+  .array(mainMenuLayoutEntrySchema)
+  .max(MAIN_MENU_BUTTON_IDS.length)
+  .refine((entries) => new Set(entries.map((entry) => entry.button)).size === entries.length, {
+    message: 'Each button may appear once.',
+  })
+  .refine(
+    (entries) =>
+      resolveMainMenuLayout(entries).some(
+        (entry) => entry.enabled && mainMenuButton(entry.button).feature === null,
+      ),
+    { message: 'At least one button that no feature switch can hide must stay on.' },
+  );
+
+/** Every declared button, in its declared order, switched on. */
+export const DEFAULT_MAIN_MENU_LAYOUT: readonly MainMenuLayoutEntry[] = MAIN_MENU_BUTTONS.map(
+  (button) => ({ button: button.id, enabled: true }),
+);
+
+/**
+ * A stored arrangement, completed: its entries in its order, then every declared button it
+ * does not name, in declared order and switched on.
+ */
+export function resolveMainMenuLayout(
+  stored: readonly MainMenuLayoutEntry[],
+): readonly MainMenuLayoutEntry[] {
+  const named = new Set(stored.map((entry) => entry.button));
+  return [
+    ...stored,
+    ...DEFAULT_MAIN_MENU_LAYOUT.filter((entry) => !named.has(entry.button)),
+  ];
+}
 
 /**
  * The management panel's entry, and why it is not in `MAIN_MENU_ROWS`.

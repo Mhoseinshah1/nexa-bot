@@ -35,6 +35,7 @@ import {
   TOPUP_PRESETS_MAX,
 } from './payment.js';
 import { referralSignupGiftShareSchema } from './customer-ux.js';
+import { DEFAULT_MAIN_MENU_LAYOUT, mainMenuLayoutSchema } from './bot-commands.js';
 
 /**
  * The settings registry.
@@ -833,26 +834,51 @@ export const SETTINGS = [
     consumer: 'ACTIVE',
   },
   /*
-   * The trial's configuration. Both are inert while the `trials` flag is off, which is
-   * the default: a tenant has to turn the flag on AND choose a product before a customer
-   * is offered anything. `docs/wp6-audit.md` A6.
+   * R1: the main menu's arrangement, edited on the Web Admin's «دکمه‌های ربات» page and
+   * nowhere else (it is not drawn on the settings page). The labels are templates
+   * (`bot.menu.*`), edited on the same page through the texts screen's own card.
+   */
+  {
+    key: 'bot.main_menu',
+    description:
+      'The customer main-menu keyboard: its buttons in the order they are drawn, two to a ' +
+      'row with the long ones on a row of their own, each switched on or off. A button a ' +
+      'feature switch governs (the trial, the referral program) is drawn only while that ' +
+      'feature is on, whatever this says. A button this value does not name is drawn in its ' +
+      'default place. At least one button no feature can hide must stay on.',
+    schema: mainMenuLayoutSchema,
+    defaultValue: [...DEFAULT_MAIN_MENU_LAYOUT],
+    configures: null,
+    // An empty list is not "no keyboard": every button is then drawn in its default place.
+    zeroMeaning: 'LITERAL',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  /*
+   * The trial's configuration. Inert while the `trials` flag is off, which is the default:
+   * a tenant has to turn the flag on AND enable a trial on at least one panel before a
+   * customer is offered anything (R1; `docs/wp6-audit.md` A6 before it). The product key
+   * is retired and kept only so a stored value keeps parsing.
    */
   {
     key: 'trial.product_id',
     description:
-      'The product a trial is issued as. Its panel, duration and traffic are copied onto ' +
-      'the trial order when a customer takes one, so editing the product later changes no ' +
-      'trial already issued. Empty means no trial is configured, and a customer is told the ' +
-      'installation offers none. The product needs no price; one without a price is never ' +
-      'sold from the catalogue, which is the usual way to keep a trial product out of it. ' +
-      'Inert while the trials flag is off.',
+      'RETIRED (R1). This named the product a trial was issued as. A trial is now configured ' +
+      'per panel — enabled, traffic and hours — on the panel\u2019s own screen, and is issued ' +
+      'from no product at all. Migration 0140 copied a configured product\u2019s panel, ' +
+      'traffic and duration onto that panel\u2019s trial configuration once; nothing reads ' +
+      'this value since. It stays declared so a stored value keeps parsing, and it is not ' +
+      'shown on the normal settings page.',
     schema: uuidV7Schema.nullable(),
     defaultValue: null,
-    configures: 'trials',
+    // It configures nothing now; saying otherwise would draw it beside the feature.
+    configures: null,
     zeroMeaning: 'DISABLES',
     mutability: 'RUNTIME',
     classification: 'PUBLIC',
-    consumer: 'ACTIVE',
+    // Nothing reads it. `PLANNED` is the registry's only word for "stored and unread".
+    consumer: 'PLANNED',
   },
   {
     key: 'trial.limit_per_customer',

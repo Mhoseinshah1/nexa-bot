@@ -490,8 +490,11 @@ export const EVENT_PAYLOAD_SCHEMAS = {
   }),
   TrialIssued: z.object({
     customerId: z.string(),
-    productId: z.string(),
+    /** Null since R1: a trial is issued from a panel's trial configuration, not a product. */
+    productId: z.string().nullable(),
     serviceId: z.string(),
+    /** The panel whose trial was taken (R1). Absent on an event written before R1. */
+    panelId: z.string().optional(),
   }),
   /*
    * WP-A7. Aggregate is the TICKET. Ids and closed vocabularies only: the text of a

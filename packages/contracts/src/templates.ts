@@ -215,14 +215,15 @@ export const TEMPLATES = [
     placeholders: [],
   },
   /*
-   * The four labels on the persistent main-menu keyboard.
+   * The labels on the persistent main-menu keyboard.
    *
    * They are template keys for the reason every other customer-facing string is one —
    * `nexa-conventions` admits no literal in a surface, and the i18n missing-key check
    * covers what is declared here. What is DIFFERENT about them is stated where they are
-   * used: `MAIN_MENU_ROWS` is a ROUTING table, and the surface reads these four from the
-   * shared catalogue rather than from a tenant's overrides, because a label a tenant can
-   * rename is a route a tenant can break.
+   * used: `MAIN_MENU_ROWS` is a ROUTING table. Since R1 the keyboard is drawn from the
+   * tenant's own rendering of these keys and the route table is built from that SAME
+   * rendering (plus the shared defaults, for keyboards already in a chat), so a tenant
+   * renaming a button renames its route with it rather than breaking it.
    */
   {
     key: 'bot.menu.catalog',
@@ -247,6 +248,29 @@ export const TEMPLATES = [
     key: 'bot.menu.help',
     description:
       'The main-menu button that answers with the command list. Routes exactly as /help.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  /*
+   * R1: the trial's and the referral program's main-menu buttons. Each is drawn only while
+   * its feature flag is on and the operator has not switched it off on the bot-buttons
+   * page; the tap answers from the feature's own state either way.
+   */
+  {
+    key: 'bot.menu.trial',
+    description:
+      'The main-menu button that takes a free trial service: straight to the one panel ' +
+      'that offers one, or to a choice when several do. Drawn only while the trials flag ' +
+      'is on. Routes exactly as /trial.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.menu.referral',
+    description:
+      'The main-menu button that opens the referral program: the forwardable invite, then ' +
+      'the customer’s own figures. Drawn only while the referrals flag is on. Routes ' +
+      'exactly as /referral.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
@@ -6345,9 +6369,9 @@ export const TEMPLATES = [
   {
     key: 'bot.trial.unavailable',
     description:
-      'Shown when a trial cannot be issued — unconfigured, the customer\u2019s limit reached, or the ' +
-      'configured product is unavailable. One message, for the reason the discount ' +
-      'rejection gives.',
+      'Shown when a trial cannot be issued — no panel offers one right now, the ' +
+      'customer\u2019s limit is reached, or the chosen panel can no longer take one. One ' +
+      'message, for the reason the discount rejection gives.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
@@ -6364,10 +6388,53 @@ export const TEMPLATES = [
     key: 'bot.trial.button',
     description:
       'The button on the catalogue that takes a trial. Drawn only when this customer can ' +
-      'take one right now — the flag is on, a product is configured and available, and ' +
-      'they are under their limit — and decided again on the server when tapped.',
+      'take one right now — the flag is on, at least one panel offers an enabled trial it ' +
+      'can take a new account for, and they are under their limit — and decided again on ' +
+      'the server when tapped.',
     format: 'PLAIN_TEXT',
     placeholders: [],
+  },
+  /*
+   * R1: the choice of panel, when more than one offers a trial. Only panels whose trial is
+   * enabled and configured AND which the one eligibility evaluator lets take a new account
+   * are listed; with exactly one the trial is taken directly and this is never shown.
+   */
+  {
+    key: 'bot.trial.choose_panel',
+    description:
+      'Asks the customer which server to take their free trial on, above one button per ' +
+      'panel that offers one right now. Shown only when more than one does.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.trial.panel_button',
+    description:
+      'One panel on the trial choice: its trial name, the traffic and the hours it gives.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'label',
+        type: 'STRING',
+        description: 'The trial’s name as the operator set it, else the panel’s name.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'traffic',
+        type: 'BYTES',
+        description: 'The trial’s traffic allowance.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'hours',
+        type: 'NUMBER',
+        description: 'How many hours the trial lasts.',
+        required: false,
+        repeatable: false,
+      },
+    ],
   },
   {
     key: 'bot.custom_service.button',
@@ -8370,11 +8437,11 @@ export const TEMPLATES = [
   {
     key: 'bot.referral.screen',
     description:
-      'The referral screen. Every figure comes from settings or rows: the commission ' +
-      'percent from `referral.commission_percent`, the gift block from the signup-gift ' +
-      'settings (absent when the flag is off), the counts and totals from referrals, ' +
-      'orders and the ledger. The link is the customer’s own. Sent as the banner’s ' +
-      'caption when it fits, else after the banner.',
+      'RETIRED (R1): the single referral screen, which put the invite and the customer’s ' +
+      'own figures in one message — so forwarding the invite forwarded the figures too. ' +
+      'Replaced by `bot.referral.invite_card` (forwardable, no figures) and ' +
+      '`bot.referral.dashboard` (the figures and the buttons). Nothing renders it; it ' +
+      'stays declared so a stored override keeps parsing.',
     format: 'PLAIN_TEXT',
     placeholders: [
       {
@@ -8492,6 +8559,112 @@ export const TEMPLATES = [
   {
     key: 'bot.referral.gift_disabled',
     description: 'The signup gift is off or its terms are incomplete.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  /*
+   * R1: the referral program in exactly two messages. The first is the one a customer
+   * forwards to a friend — the banner, the introduction and the link — and carries NO
+   * figure about the customer. The second is theirs alone: the terms, the figures and the
+   * buttons. Every figure is the one `ReferralSignupGiftService.stats` and
+   * `ReferralProgram.terms` already compute; nothing here is a second calculation.
+   */
+  {
+    key: 'bot.referral.invite_card',
+    description:
+      'The forwardable invite: an introduction for a FRIEND and the customer’s personal ' +
+      'link. Sent as the referral banner’s caption when there is a banner and it fits, ' +
+      'else as text. Never carries a figure about the customer, because it is the ' +
+      'message they forward.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'referralLink',
+        type: 'STRING',
+        description: 'The customer’s personal invite link.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.referral.dashboard',
+    description:
+      'The customer’s own referral figures, under the invite: the membership-gift terms ' +
+      '(absent while the gift is off), the purchase commission and its scope, the minimum ' +
+      'order that earns one, how many joined through them, their delivered purchases and ' +
+      'total, and the commission received net of reversals. Carries the share, claim-gift ' +
+      'and back buttons.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'commissionPercent',
+        type: 'NUMBER',
+        description: 'The purchase commission, whole percent.',
+        required: true,
+        repeatable: true,
+      },
+      {
+        token: 'commissionScope',
+        type: 'STRING',
+        description:
+          'Rendered `bot.referral.scope_first_order` or `bot.referral.scope_every_order`.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'minimumOrder',
+        type: 'MONEY',
+        description: 'The smallest order that earns a commission; absent when there is none.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'giftBlock',
+        type: 'STRING',
+        description: 'Rendered `bot.referral.gift_block`, when the signup gift is on.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'referralCount',
+        type: 'NUMBER',
+        description: 'Customers attributed to this one.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'referredPurchaseCount',
+        type: 'NUMBER',
+        description: 'Delivered orders of those customers.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'referredPurchaseTotal',
+        type: 'MONEY',
+        description: 'The sum of those orders.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'commissionReceivedTotal',
+        type: 'MONEY',
+        description: 'Commission credited, net of reversals.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.referral.scope_first_order',
+    description: 'The commission scope when only a referred customer’s first order earns one.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.referral.scope_every_order',
+    description: 'The commission scope when every order of a referred customer earns one.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },

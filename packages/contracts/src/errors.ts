@@ -1251,6 +1251,11 @@ export const COMMERCE_ERROR_CODES = {
    */
   TRIAL_RESET_NOTHING: 'commerce.trial_reset_nothing',
   /**
+   * R1: a panel's trial configuration changed since the form was drawn. Nothing was written;
+   * the operator reloads and decides again — the panel policy's rule (WP-A8).
+   */
+  TRIAL_CONFIG_STALE: 'commerce.trial_config_stale',
+  /**
    * An entered discount code that will not be applied — for EVERY reason.
    *
    * Unknown, inactive, out of its window, out of scope, exhausted, or skipped by the

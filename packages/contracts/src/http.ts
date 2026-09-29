@@ -4776,8 +4776,10 @@ export const serviceSummarySchema = z.object({
   customerId: z.string(),
   orderId: z.string(),
   panelId: z.string(),
-  /** Null for a custom service (Package D): it was never a product. */
+  /** Null for a custom service (Package D) and for a trial since R1: neither was a product. */
   productId: z.string().nullable(),
+  /** R1: a free trial (`services.is_trial`), issued from a panel's trial configuration. */
+  isTrial: z.boolean(),
   state: z.enum(SERVICE_STATES),
   /** The handle an operator types into the panel. Not a credential. */
   providerUsername: z.string(),

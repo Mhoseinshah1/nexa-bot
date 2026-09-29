@@ -47,12 +47,17 @@ export const TRAFFIC_GB_PATTERN = /^(0|[1-9][0-9]{0,8})(\.[0-9]{1,2})?$/u;
  * caller's decision, and no caller here reads it as "unlimited".
  */
 export function parseTrafficGb(text: string): bigint | null {
+  const hundredths = typedHundredths(text);
+  return hundredths === null ? null : (hundredths * BYTES_PER_GB + 50n) / 100n;
+}
+
+/** The typed figure in hundredths of its unit, or null — the one grammar both units share. */
+function typedHundredths(text: string): bigint | null {
   const match = TRAFFIC_GB_PATTERN.exec(text.trim());
   if (match === null) return null;
   const whole = BigInt(match[1] ?? '0');
   const decimals = (match[2] ?? '.').slice(1).padEnd(TRAFFIC_GB_MAX_DECIMALS, '0');
-  const hundredths = whole * 100n + BigInt(decimals);
-  return (hundredths * BYTES_PER_GB + 50n) / 100n;
+  return whole * 100n + BigInt(decimals);
 }
 
 /**
@@ -93,4 +98,51 @@ export function trafficBytesAfterEdit(stored: bigint, submitted: bigint): bigint
   // figure the operator typed.
   if ((stored === 0n) !== (submitted === 0n)) return submitted;
   return formatTrafficGb(stored) === formatTrafficGb(submitted) ? stored : submitted;
+}
+
+// ---------------------------------------------------------------------------
+// R1: megabytes, for the per-panel trial allowance
+// ---------------------------------------------------------------------------
+
+/**
+ * Bytes in one MB as this codebase displays it: a mebibyte, for the reason a GB is a GiB —
+ * `formatBytes` renders 104857600 as «100 مگابایت», so a trial configured as 100 MB is
+ * shown back as exactly that.
+ */
+export const BYTES_PER_MB = 1_048_576n;
+
+/** The two units a person may type a traffic figure in. */
+export const TRAFFIC_INPUT_UNITS = ['GB', 'MB'] as const;
+export type TrafficInputUnit = (typeof TRAFFIC_INPUT_UNITS)[number];
+
+/**
+ * A typed figure in either unit, as bytes — the SAME grammar (`TRAFFIC_GB_PATTERN`) and the
+ * same rounding for both, so "0.5 GB" and "512 MB" are two spellings of one allowance and
+ * nothing about the MB path is a second parser. Null when the text is not a figure the
+ * pattern admits.
+ */
+export function parseTrafficInput(text: string, unit: TrafficInputUnit): bigint | null {
+  const hundredths = typedHundredths(text);
+  if (hundredths === null) return null;
+  return (hundredths * (unit === 'GB' ? BYTES_PER_GB : BYTES_PER_MB) + 50n) / 100n;
+}
+
+/**
+ * A byte count as the figure and unit an edit form shows: MB below one GB, GB from one GB
+ * up, each at most two decimals — so a stored 100 MB trial is shown as `100` MB, never as
+ * `0.1` GB that would store a different number of bytes on the next save.
+ */
+export function trafficInputOf(bytes: bigint): {
+  readonly amount: string;
+  readonly unit: TrafficInputUnit;
+} {
+  if (bytes >= BYTES_PER_GB) return { amount: formatTrafficGb(bytes), unit: 'GB' };
+  const hundredths = (bytes * 100n + BYTES_PER_MB / 2n) / BYTES_PER_MB;
+  const whole = hundredths / 100n;
+  const fraction = hundredths % 100n;
+  const amount =
+    fraction === 0n
+      ? whole.toString()
+      : `${whole.toString()}.${fraction.toString().padStart(2, '0').replace(/0$/u, '')}`;
+  return { amount, unit: 'MB' };
 }
