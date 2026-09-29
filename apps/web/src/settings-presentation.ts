@@ -251,6 +251,13 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
     group: 'reminders',
     control: { kind: 'integer', unit: 'web.unit_minutes' },
   },
+  // Round N, package D.
+  'reminders.reseller_minimum_days': {
+    title: 'web.setting_reminders_reseller_minimum_days',
+    description: 'web.setting_reminders_reseller_minimum_days_desc',
+    group: 'reminders',
+    control: { kind: 'integer', unit: 'web.unit_days' },
+  },
   // HF-A9: the quiet window, as the HH:MM text the registry stores. The reminders page
   // edits the same two keys with a time picker.
   'reminders.quiet_hours_start': {

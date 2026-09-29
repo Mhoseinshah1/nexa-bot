@@ -98,7 +98,7 @@ const GRANT_KIND_HINTS: Readonly<Record<ResellerGrantKind, WebKey>> = {
   OPERATION: 'web.reseller_grant_hint_operation',
 };
 
-const DIMENSION_LABELS: Readonly<Record<ResellerEntitlementDimension, WebKey>> = {
+export const DIMENSION_LABELS: Readonly<Record<ResellerEntitlementDimension, WebKey>> = {
   OPERATION: 'web.reseller_dimension_operation',
   CATALOGUE: 'web.reseller_dimension_catalogue',
   PANEL: 'web.reseller_dimension_panel',
@@ -222,7 +222,7 @@ function modesOf(state: GrantsState): Record<ResellerGrantKind, GrantMode> {
 }
 
 /** The badge a kind wears: red for nothing, green for everything, a count otherwise. */
-function KindBadge({ entry, count }: { entry: GrantMode; count: number }) {
+export function KindBadge({ entry, count }: { entry: GrantMode; count: number }) {
   if (entry === 'NONE') return <Badge tone="danger">{t('web.reseller_grant_none')}</Badge>;
   if (entry === 'ALL') return <Badge tone="ok">{t('web.reseller_grant_all')}</Badge>;
   return (
@@ -245,13 +245,13 @@ function BlockedBanner({ blocked }: { blocked: readonly ResellerEntitlementDimen
 // The pickers' options
 // ---------------------------------------------------------------------------
 
-interface Option {
+export interface Option {
   readonly id: string;
   readonly label: string;
 }
 
 /** Per kind: the complete list to tick from, or null when the subjects must be typed. */
-type GrantOptions = Readonly<Record<ResellerGrantKind, readonly Option[] | null>>;
+export type GrantOptions = Readonly<Record<ResellerGrantKind, readonly Option[] | null>>;
 
 /**
  * The catalogue and the fleet, read only when the editor is open and the actor may read
@@ -259,7 +259,7 @@ type GrantOptions = Readonly<Record<ResellerGrantKind, readonly Option[] | null>
  * hundred-and-first product is worse than a box asking for an id — so a `nextCursor`, a
  * refusal or a failure all fall back to typing, and the field says why.
  */
-function useGrantOptions(enabled: { catalogue: boolean; panels: boolean }): {
+export function useGrantOptions(enabled: { catalogue: boolean; panels: boolean }): {
   options: GrantOptions;
   names: ReadonlyMap<string, string>;
 } {
@@ -569,7 +569,7 @@ function GrantsReadOnly({
 // Grants — the editor
 // ---------------------------------------------------------------------------
 
-function GrantsEditor({
+export function GrantsEditor({
   tier,
   options,
   names,
@@ -603,6 +603,8 @@ function GrantsEditor({
       notify({ tone: 'ok', message: t('web.reseller_grants_saved') });
       void queries.invalidateQueries({ queryKey: ['reseller-tiers'] });
       void queries.invalidateQueries({ queryKey: ['reseller-tier-history'] });
+      // Round N: a reseller's effective policy inherits the tier's grants it does not override.
+      void queries.invalidateQueries({ queryKey: ['reseller-policy'] });
     },
     onError: (error) => submission.settleOn(error),
   });
@@ -647,7 +649,7 @@ function GrantsEditor({
   );
 }
 
-function KindEditor({
+export function KindEditor({
   kind,
   entry,
   options,

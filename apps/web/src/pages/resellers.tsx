@@ -54,6 +54,7 @@ import {
   ResellerHistoryCard,
   ResellerPurchasesCard,
 } from './reseller-standing';
+import { ResellerPolicyCard } from './reseller-plans';
 
 /**
  * Resellers — who buys at a reseller's price, on which tier, and on how much credit
@@ -254,6 +255,8 @@ export function ResellersPage({
   mayViewWallet,
   mayViewOrders,
   mayViewAudit,
+  mayViewCatalog = false,
+  mayViewPanels = false,
 }: {
   route: Route;
   /** No `resellers.view`: no list, no tiers, and no edit (it opens from a row). */
@@ -266,6 +269,9 @@ export function ResellersPage({
   mayViewOrders: boolean;
   /** WP14: `audit.view` for the change history. */
   mayViewAudit: boolean;
+  /** Round N: `catalog.view` and `panels.view`, for names in the effective-policy card. */
+  mayViewCatalog?: boolean;
+  mayViewPanels?: boolean;
 }) {
   const onLink = useLinkHandler();
   const applied = route.query.get('search') ?? '';
@@ -497,6 +503,13 @@ export function ResellersPage({
           <ResellerCreditCard customerId={viewing} mayViewWallet={mayViewWallet} />
           <ResellerPurchasesCard customerId={viewing} mayViewOrders={mayViewOrders} />
           <ResellerHistoryCard customerId={viewing} mayViewAudit={mayViewAudit} />
+          {/* Round N: what this reseller may sell, inherited or their own, and the minimum. */}
+          <ResellerPolicyCard
+            customerId={viewing}
+            mayEdit={mayEdit}
+            mayViewCatalog={mayViewCatalog}
+            mayViewPanels={mayViewPanels}
+          />
         </div>
       )}
 
@@ -507,6 +520,10 @@ export function ResellersPage({
         <p>
           <a href="/reseller-tiers" onClick={onLink}>
             {t('web.resellers_tiers_link')}
+          </a>
+          {t('web.list_separator')}
+          <a href="/reseller-plans" onClick={onLink}>
+            {t('web.reseller_plans_title')}
           </a>
         </p>
       </Card>
