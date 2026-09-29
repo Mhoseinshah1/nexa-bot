@@ -6941,7 +6941,10 @@ export const campaigns = pgTable(
       'campaigns_scheduled_check',
       sql`state IN ('DRAFT', 'CANCELLED') OR scheduled_at IS NOT NULL`,
     ),
-    check('campaigns_started_check', sql`state NOT IN ('ACTIVE', 'PAUSED') OR started_at IS NOT NULL`),
+    check(
+      'campaigns_started_check',
+      sql`state NOT IN ('ACTIVE', 'PAUSED') OR started_at IS NOT NULL`,
+    ),
     check('campaigns_completed_check', sql`(state = 'COMPLETED') = (completed_at IS NOT NULL)`),
     check('campaigns_cancelled_check', sql`(state = 'CANCELLED') = (cancelled_at IS NOT NULL)`),
     check('campaigns_paused_check', sql`(state = 'PAUSED') = (paused_at IS NOT NULL)`),

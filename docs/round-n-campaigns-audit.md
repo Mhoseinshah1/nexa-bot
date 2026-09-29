@@ -70,19 +70,19 @@ Owned by Agent E (B1/B2) and reused here; see §5.
 
 From the lead's audit (`mirza-audit.md` §2 C1), which cites the corpus:
 
-| Behaviour | Status | What Nexa keeps |
-| --- | --- | --- |
-| Any campaign entity, schedule or attribution | NOT_EXPOSED (zero corpus hits) | Nothing. A campaign is a **Nexa addition**, never labelled parity. |
-| Discount codes: percentage only; total and per-user caps; lifetime in hours (0 = unlimited); scope by tier, panel→product, section (buy/renew/both), first purchase only; case-insensitive; applied on the pre-invoice via `🎟 اعمال کد تخفیف` | VERIFIED (SBR-014..021, store crossmap) | The campaign's discount action is the EXISTING engine's rule, which already carries percentage, both caps, a window, product/category and purpose scope and first purchase. |
-| Discount tier scope (`f`/`n`/`n2`) and panel scope | VERIFIED in Mirza | NOT expressible in Nexa's discount engine, which has no tier or panel dimension. Not added here (§3 D4): a campaign creates rules, it does not grow the pricing engine. |
-| Whether the total cap counts users or redemptions; stacking and precedence; how a valid redemption is displayed | UNKNOWN | Nexa's engine decides (live redemptions; priority + stackable). |
-| Cashback: per gateway, per tier on top-up, on renewal, refund button | PARTIAL (existence only) | Standing settings in Mirza, not campaigns. The campaign's cashback action is Nexa's WP8 cashback rule. |
-| Start gift `💝 هدیه استارت` | VERIFIED (existence) | A standing setting, not a campaign. Not touched. |
-| Referral: percent, flat per-referral gift, minimum purchase, per-user override | VERIFIED | Standing tenant-wide terms. See D8 for why a campaign does not adjust them. |
-| Lucky wheel, nightly lottery | VERIFIED (existence); prizes UNKNOWN | Out of scope. |
-| Mass top-up `👥 شارژ همگانی`: amount → tier → purchase history → notify, executes with no count, no total, no confirmation | VERIFIED (flow and the ABSENCE of safeguards) | The wallet-gift action goes through E's mass credit, which adds the count, the total liability and the confirmation Mirza lacks. |
-| Cancelling the mass top-up's message cancels only the message, never the credit | VERIFIED (UBR-023) | A campaign's cancel stops future work and never reverses a completed financial effect (D6). |
-| `🔋 حجم یا زمان همگانی` | VERIFIED (existence only); every behaviour UNKNOWN | Nothing is parity. The traffic/time action is whatever E's bulk engine does. |
+| Behaviour                                                                                                                                                                                                                                     | Status                                             | What Nexa keeps                                                                                                                                                             |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Any campaign entity, schedule or attribution                                                                                                                                                                                                  | NOT_EXPOSED (zero corpus hits)                     | Nothing. A campaign is a **Nexa addition**, never labelled parity.                                                                                                          |
+| Discount codes: percentage only; total and per-user caps; lifetime in hours (0 = unlimited); scope by tier, panel→product, section (buy/renew/both), first purchase only; case-insensitive; applied on the pre-invoice via `🎟 اعمال کد تخفیف` | VERIFIED (SBR-014..021, store crossmap)            | The campaign's discount action is the EXISTING engine's rule, which already carries percentage, both caps, a window, product/category and purpose scope and first purchase. |
+| Discount tier scope (`f`/`n`/`n2`) and panel scope                                                                                                                                                                                            | VERIFIED in Mirza                                  | NOT expressible in Nexa's discount engine, which has no tier or panel dimension. Not added here (§3 D4): a campaign creates rules, it does not grow the pricing engine.     |
+| Whether the total cap counts users or redemptions; stacking and precedence; how a valid redemption is displayed                                                                                                                               | UNKNOWN                                            | Nexa's engine decides (live redemptions; priority + stackable).                                                                                                             |
+| Cashback: per gateway, per tier on top-up, on renewal, refund button                                                                                                                                                                          | PARTIAL (existence only)                           | Standing settings in Mirza, not campaigns. The campaign's cashback action is Nexa's WP8 cashback rule.                                                                      |
+| Start gift `💝 هدیه استارت`                                                                                                                                                                                                                   | VERIFIED (existence)                               | A standing setting, not a campaign. Not touched.                                                                                                                            |
+| Referral: percent, flat per-referral gift, minimum purchase, per-user override                                                                                                                                                                | VERIFIED                                           | Standing tenant-wide terms. See D8 for why a campaign does not adjust them.                                                                                                 |
+| Lucky wheel, nightly lottery                                                                                                                                                                                                                  | VERIFIED (existence); prizes UNKNOWN               | Out of scope.                                                                                                                                                               |
+| Mass top-up `👥 شارژ همگانی`: amount → tier → purchase history → notify, executes with no count, no total, no confirmation                                                                                                                    | VERIFIED (flow and the ABSENCE of safeguards)      | The wallet-gift action goes through E's mass credit, which adds the count, the total liability and the confirmation Mirza lacks.                                            |
+| Cancelling the mass top-up's message cancels only the message, never the credit                                                                                                                                                               | VERIFIED (UBR-023)                                 | A campaign's cancel stops future work and never reverses a completed financial effect (D6).                                                                                 |
+| `🔋 حجم یا زمان همگانی`                                                                                                                                                                                                                       | VERIFIED (existence only); every behaviour UNKNOWN | Nothing is parity. The traffic/time action is whatever E's bulk engine does.                                                                                                |
 
 So the whole Campaign concept, its states, its schedule and its analytics are Nexa's own
 design. The only parity claims this package makes are the ones E's and WP8's engines
@@ -110,13 +110,13 @@ or calls a provider.
 state. `COMPLETED` and `CANCELLED` are terminal. Declared as `CAMPAIGN_MACHINE` in the
 contracts and registered with `STATE_MACHINES`, so the validator checks it.
 
-| edge | who | condition |
-| --- | --- | --- |
-| DRAFT → SCHEDULED | operator, after the preview | `campaigns.manage` AND each action's own permission; window valid and not already over |
-| SCHEDULED → ACTIVE | the worker (`SYSTEM_JOB`) | `now ≥ starts_at` |
-| ACTIVE → PAUSED, PAUSED → ACTIVE | operator | `now < ends_at` for a resume |
-| ACTIVE/PAUSED → COMPLETED | the worker | `now ≥ ends_at` |
-| DRAFT/SCHEDULED/ACTIVE/PAUSED → CANCELLED | operator | — |
+| edge                                      | who                         | condition                                                                              |
+| ----------------------------------------- | --------------------------- | -------------------------------------------------------------------------------------- |
+| DRAFT → SCHEDULED                         | operator, after the preview | `campaigns.manage` AND each action's own permission; window valid and not already over |
+| SCHEDULED → ACTIVE                        | the worker (`SYSTEM_JOB`)   | `now ≥ starts_at`                                                                      |
+| ACTIVE → PAUSED, PAUSED → ACTIVE          | operator                    | `now < ends_at` for a resume                                                           |
+| ACTIVE/PAUSED → COMPLETED                 | the worker                  | `now ≥ ends_at`                                                                        |
+| DRAFT/SCHEDULED/ACTIVE/PAUSED → CANCELLED | operator                    | —                                                                                      |
 
 There is no `setState`. Each edge is `UPDATE … SET state = $to WHERE id = $id AND state IN
 ($from…) [AND time condition]`, and a row that did not move is reported as unchanged
@@ -227,15 +227,15 @@ Recorded as OQ-C1-02.
 Every figure the campaign page shows is a query over rows that name the campaign's own
 linked records:
 
-| figure | source |
-| --- | --- |
-| targeted customers | the frozen audience materialization (E) |
-| announcement sent / failed / blocked / not attempted | E's per-recipient delivery rows |
+| figure                                                                                | source                                                                                     |
+| ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| targeted customers                                                                    | the frozen audience materialization (E)                                                    |
+| announcement sent / failed / blocked / not attempted                                  | E's per-recipient delivery rows                                                            |
 | orders that redeemed the campaign's discount, by order state, and the discount amount | `discount_redemptions` where `discount_id` = the campaign's rule, joined to `orders.state` |
-| cashback promised / earned / void, and reversed | `order_cashback` where `rule_id` = the campaign's rule; `cashback_reversals` |
-| wallet gifts credited, and total credited | E's per-recipient mass-credit rows |
-| traffic/time operations succeeded / failed / unknown | E's per-service operation rows |
-| status and timing | the campaign row |
+| cashback promised / earned / void, and reversed                                       | `order_cashback` where `rule_id` = the campaign's rule; `cashback_reversals`               |
+| wallet gifts credited, and total credited                                             | E's per-recipient mass-credit rows                                                         |
+| traffic/time operations succeeded / failed / unknown                                  | E's per-service operation rows                                                             |
+| status and timing                                                                     | the campaign row                                                                           |
 
 There is no "revenue caused by the campaign" and no "conversion rate": nothing persists
 that a purchase was CAUSED by an announcement. The page shows the order totals of orders
@@ -352,15 +352,15 @@ with the code; anything else (the database, a crash) leaves it `PENDING` — nev
 
 ## 6. Tests the package owes, and what each regression is pinned by
 
-| brief regression | pinned by (`tests/integration/campaigns.test.ts` unless named) |
-| --- | --- |
-| scheduled activation idempotent, multi-worker safe | "the worker lane" (two replicas on one tick move a campaign once; one audit row), "refuses each edge in the database itself…" |
-| existing discount/cashback engines reused | "creates nothing priced while a DRAFT, and ACTIVE rules windowed…" (the order is priced by `OrderService` through `PricingService.price`; the trace names the campaign's rule), "leaves the price alone before the window opens…" |
+| brief regression                                               | pinned by (`tests/integration/campaigns.test.ts` unless named)                                                                                                                                                                                                                                 |
+| -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| scheduled activation idempotent, multi-worker safe             | "the worker lane" (two replicas on one tick move a campaign once; one audit row), "refuses each edge in the database itself…"                                                                                                                                                                  |
+| existing discount/cashback engines reused                      | "creates nothing priced while a DRAFT, and ACTIVE rules windowed…" (the order is priced by `OrderService` through `PricingService.price`; the trace names the campaign's rule), "leaves the price alone before the window opens…"                                                              |
 | cancel stops future work, undoes no completed financial effect | "cancel stops future work and undoes no completed financial effect" (redemptions, an EARNED and a PENDING cashback, the credit; no reversal), "credits nothing before the start, and a cancel before it credits nothing", "shows the exact liability, then credits each customer exactly once" |
-| audience engine shared with Broadcast | the service is built with `container.audience` (no stand-in); "refuses a confirmation whose audience moved…" (a new registration moves the set) |
-| analytics never claim unpersisted attribution | "reports only persisted attribution…" (response keys pinned; an order before the campaign is not counted); `tests/web/campaigns.test.tsx` › "reports persisted facts only" |
-| Telegram failure does not roll back money | "a failed announcement rolls back no financial action" |
-| each action's own permission | "charges each action's own permission", "charges the mass-credit permission" |
+| audience engine shared with Broadcast                          | the service is built with `container.audience` (no stand-in); "refuses a confirmation whose audience moved…" (a new registration moves the set)                                                                                                                                                |
+| analytics never claim unpersisted attribution                  | "reports only persisted attribution…" (response keys pinned; an order before the campaign is not counted); `tests/web/campaigns.test.tsx` › "reports persisted facts only"                                                                                                                     |
+| Telegram failure does not roll back money                      | "a failed announcement rolls back no financial action"                                                                                                                                                                                                                                         |
+| each action's own permission                                   | "charges each action's own permission", "charges the mass-credit permission"                                                                                                                                                                                                                   |
 
 Falsification, run on this branch (revert the rule, watch the named test fail, restore):
 
@@ -388,8 +388,8 @@ Falsification, run on this branch (revert the rule, watch the named test fail, r
 
 ## 7. UNKNOWN / open
 
-| id | question | meanwhile |
-| --- | --- | --- |
+| id       | question                                                                   | meanwhile                                                                            |
+| -------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
 | OQ-C1-01 | Should a discount or cashback rule be restricted to a campaign's audience? | No. The audience decides who is told; the rule's scope decides who is eligible (D4). |
-| OQ-C1-02 | Should a campaign be able to raise the referral commission for a window? | No (D8). Referral terms stay on the settings page. |
-| OQ-C1-03 | Mirza's discount tier and panel scope (VERIFIED in Mirza) | Not in Nexa's engine; unchanged by this package. |
+| OQ-C1-02 | Should a campaign be able to raise the referral commission for a window?   | No (D8). Referral terms stay on the settings page.                                   |
+| OQ-C1-03 | Mirza's discount tier and panel scope (VERIFIED in Mirza)                  | Not in Nexa's engine; unchanged by this package.                                     |
