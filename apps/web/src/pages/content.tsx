@@ -1,7 +1,13 @@
-import { useState, type FormEvent } from 'react';
+import { memo, useMemo, useState, type FormEvent, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { TemplateViewResponse } from '@nexa/contracts';
 import {
+  CONTROL_ERROR_CODES,
+  coerceTemplateValue,
+  type PlaceholderDefinition,
+  type TemplateViewResponse,
+} from '@nexa/contracts';
+import {
+  ApiError,
   fetchTemplateRevisions,
   fetchTemplates,
   previewTemplate,
@@ -12,8 +18,17 @@ import { formatTimestamp } from '../format';
 import { finalAnswer } from '../polling';
 import { useSubmissionKey } from '../submission-key';
 import { t, type WebKey } from '../i18n/web.fa';
+import {
+  TEMPLATE_GROUPS,
+  matchesTemplateSearch,
+  placeholderLabel,
+  placeholderTypeLabel,
+  templateCopy,
+  templateGroupOf,
+  type TemplateGroup,
+} from '../template-copy';
 import { ErrorReport } from './settings';
-import { Card, PageHead, StateSwitch } from '../ui/kit';
+import { Banner, Card, Ltr, Num, PageHead, Pills, StateSwitch } from '../ui/kit';
 
 /**
  * What a sample value has to look like in a text field, per declared type.
@@ -26,12 +41,33 @@ import { Card, PageHead, StateSwitch } from '../ui/kit';
 const SAMPLE_HINTS: Partial<Record<TemplateViewResponse['placeholders'][number]['type'], WebKey>> =
   {
     NUMBER: 'web.sample_number',
-    DURATION_DAYS: 'web.sample_number',
-    BYTES: 'web.sample_number',
-    TRAFFIC_LIMIT: 'web.sample_number',
+    DURATION_DAYS: 'web.sample_days',
+    BYTES: 'web.sample_bytes',
+    TRAFFIC_LIMIT: 'web.sample_traffic_limit',
     DATETIME: 'web.sample_datetime',
     MONEY: 'web.sample_money',
   };
+
+type SourceFilter = 'all' | 'custom' | 'default';
+
+/**
+ * Whether this tenant has its own text for a template: a STORED override, applied or not.
+ *
+ * Not `source === 'TENANT'`. With the `template_overrides` feature off the server answers
+ * `source: 'DEFAULT'` and the default as `body` while keeping the tenant's text in
+ * `overrideBody` — and the editor shows that text, with the suppressed warning. Deciding
+ * by `source` filed such a template under «پیش‌فرض» while its card showed customised text.
+ * The filters, the badge and the default-body disclosure all use this one rule.
+ */
+function isCustomised(template: TemplateViewResponse): boolean {
+  return template.overrideBody !== null;
+}
+
+/** One section of the screen and the templates in it, in catalogue order. */
+interface TemplateSection {
+  readonly group: TemplateGroup;
+  readonly templates: readonly TemplateViewResponse[];
+}
 
 /**
  * The template screen.
@@ -45,6 +81,12 @@ const SAMPLE_HINTS: Partial<Record<TemplateViewResponse['placeholders'][number][
  *
  * The preview is a separate, explicitly-labelled call with values the
  * administrator types, and it stores nothing.
+ *
+ * Every card is titled with its Persian name (`template-copy.ts`) and grouped into
+ * sections; the raw key stays on the card as a small technical detail. The search
+ * and the filters HIDE cards rather than unmounting them: a card holds its operator's
+ * unsaved draft in its own state, and a filter that unmounted it would silently throw
+ * that draft away the moment somebody searched for something else.
  */
 export function ContentPage({ mayEdit, denied }: { mayEdit: boolean; denied: boolean }) {
   const templates = useQuery({
@@ -52,7 +94,47 @@ export function ContentPage({ mayEdit, denied }: { mayEdit: boolean; denied: boo
     queryFn: fetchTemplates,
     enabled: !denied,
   });
-  const rows = templates.data?.templates ?? [];
+  const rows = useMemo(() => templates.data?.templates ?? [], [templates.data]);
+
+  const [search, setSearch] = useState('');
+  const [groupId, setGroupId] = useState('');
+  const [source, setSource] = useState<SourceFilter>('all');
+
+  const sections = useMemo<TemplateSection[]>(() => {
+    const byGroup = new Map<string, TemplateViewResponse[]>();
+    for (const template of rows) {
+      const id = templateGroupOf(template.key).id;
+      byGroup.set(id, [...(byGroup.get(id) ?? []), template]);
+    }
+    return TEMPLATE_GROUPS.filter((group) => byGroup.has(group.id)).map((group) => ({
+      group,
+      templates: byGroup.get(group.id) ?? [],
+    }));
+  }, [rows]);
+
+  const visible = useMemo(() => {
+    const shown = new Set<string>();
+    for (const section of sections) {
+      if (groupId !== '' && section.group.id !== groupId) continue;
+      for (const template of section.templates) {
+        if (source === 'custom' && !isCustomised(template)) continue;
+        if (source === 'default' && isCustomised(template)) continue;
+        const copy = templateCopy(template.key, template.description);
+        // The text the EDITOR shows, not `body`: with overrides switched off `body` is
+        // the default, while the textarea holds the stored override.
+        const editable = template.overrideBody ?? template.defaultBody;
+        const haystack = [copy.name, copy.description, template.key, editable];
+        if (matchesTemplateSearch(search, haystack)) shown.add(template.key);
+      }
+    }
+    return shown;
+  }, [sections, search, groupId, source]);
+
+  const clearFilters = () => {
+    setSearch('');
+    setGroupId('');
+    setSource('all');
+  };
 
   return (
     <>
@@ -62,16 +144,93 @@ export function ContentPage({ mayEdit, denied }: { mayEdit: boolean; denied: boo
         maturity="now"
       />
       <StateSwitch query={templates} denied={denied} isEmpty={rows.length === 0}>
-        {rows.map((template) => (
-          <TemplateCard key={template.key} template={template} mayEdit={mayEdit} />
-        ))}
+        <div className="grid template-stack">
+          <Card>
+            <div className="toolbar">
+              <label className="visually-hidden" htmlFor="templates-search">
+                {t('web.templates_search')}
+              </label>
+              <input
+                id="templates-search"
+                type="search"
+                className="input template-search"
+                value={search}
+                placeholder={t('web.templates_search_placeholder')}
+                onChange={(event) => setSearch(event.target.value)}
+              />
+              <label className="visually-hidden" htmlFor="templates-group">
+                {t('web.templates_group')}
+              </label>
+              <select
+                id="templates-group"
+                className="input sm"
+                value={groupId}
+                onChange={(event) => setGroupId(event.target.value)}
+              >
+                <option value="">{t('web.templates_group_all')}</option>
+                {sections.map((section) => (
+                  <option key={section.group.id} value={section.group.id}>
+                    {section.group.label}
+                  </option>
+                ))}
+              </select>
+              <Pills
+                value={source}
+                onChange={setSource}
+                items={[
+                  { id: 'all', label: t('web.all') },
+                  { id: 'custom', label: t('web.templates_filter_custom') },
+                  { id: 'default', label: t('web.templates_filter_default') },
+                ]}
+              />
+              <span className="spacer" />
+              <span className="muted small">
+                {t('web.templates_count')}: <Num value={visible.size} />{' '}
+                {t('web.templates_count_of')} <Num value={rows.length} />
+              </span>
+            </div>
+          </Card>
+
+          {visible.size === 0 && (
+            <Card>
+              <p>{t('web.templates_no_match')}</p>
+              <div className="actions">
+                <button type="button" className="btn" onClick={clearFilters}>
+                  {t('web.templates_clear_filters')}
+                </button>
+              </div>
+            </Card>
+          )}
+
+          {sections.map((section) => (
+            <section
+              key={section.group.id}
+              className="grid template-stack"
+              hidden={!section.templates.some((template) => visible.has(template.key))}
+            >
+              <h2>{section.group.label}</h2>
+              {section.templates.map((template) => (
+                <div key={template.key} hidden={!visible.has(template.key)}>
+                  <TemplateCard template={template} mayEdit={mayEdit} />
+                </div>
+              ))}
+            </section>
+          ))}
+        </div>
       </StateSwitch>
     </>
   );
 }
 
-/** Exported for the reminders screen (WP-A9), which edits its own templates in place. */
-export function TemplateCard({
+/**
+ * Memoised, because typing in the search box re-renders the page and the page holds
+ * every card: without it each keystroke re-rendered all of them. The row objects come
+ * from the query cache, which shares structure across refetches, so an unchanged row
+ * is the same object and its card is skipped.
+ *
+ * Exported for the reminders screen (WP-A9), which edits its own templates in place.
+ */
+export const TemplateCard = memo(function TemplateCard({
   template,
   mayEdit,
 }: {
@@ -79,6 +238,9 @@ export function TemplateCard({
   mayEdit: boolean;
 }) {
   const client = useQueryClient();
+  const copy = templateCopy(template.key, template.description);
+  const labelOf = (placeholder: TemplateViewResponse['placeholders'][number]) =>
+    placeholderLabel(template.key, placeholder.token, placeholder.description);
 
   /**
    * The template the draft is based on, held apart from the one the query has.
@@ -318,22 +480,42 @@ export function TemplateCard({
   };
 
   return (
-    <Card title={template.key}>
+    <Card
+      className="template-card"
+      title={copy.localized ? <BidiText text={copy.name} /> : <Ltr>{copy.name}</Ltr>}
+      hint={
+        // A key with no Persian entry falls back to its English catalogue description,
+        // which is one left-to-right run rather than Latin islands in a Persian line.
+        copy.localized ? (
+          <BidiText text={copy.description} />
+        ) : (
+          <Ltr mono={false}>{copy.description}</Ltr>
+        )
+      }
+    >
       <form onSubmit={onSubmit}>
-        <h3>
-          <code>{template.key}</code>
-          <span className="tag">{template.format}</span>
+        {/* The raw key is a technical detail: small, and never the title. */}
+        <p className="muted small">
+          {t('web.template_technical_key')}:{' '}
+          <Ltr>
+            <code>{template.key}</code>
+          </Ltr>{' '}
           <span className="tag">
-            {template.source === 'TENANT' ? t('web.source_tenant') : t('web.source_default')}
+            {template.format === 'TELEGRAM_HTML'
+              ? t('web.template_format_html')
+              : t('web.template_format_plain')}
+          </span>{' '}
+          <span className="tag">
+            {isCustomised(template) ? t('web.template_customised') : t('web.source_default')}
           </span>
-        </h3>
-        <p>{template.description}</p>
+        </p>
 
         {template.overrideSuppressed && <p className="error">{t('web.override_suppressed')}</p>}
 
         <label htmlFor={`body-${template.key}`}>{t('web.template_body')}</label>
         <textarea
           id={`body-${template.key}`}
+          className="input"
           value={draft}
           rows={4}
           maxLength={template.maxLength}
@@ -341,6 +523,25 @@ export function TemplateCard({
           disabled={!mayEdit}
           dir="auto"
         />
+        <p className="muted small">
+          {/* In words, not `n / max`: a slash between two numbers reads backwards in
+            a right-to-left line. */}
+          {t('web.template_length')}: <Num value={draft.length} /> {t('web.templates_count_of')}{' '}
+          <Num value={template.maxLength} /> {t('web.template_length_unit')}
+          {' — '}
+          {template.format === 'TELEGRAM_HTML'
+            ? t('web.template_format_html_hint')
+            : t('web.template_format_plain_hint')}
+        </p>
+        {template.placeholders.length > 0 && (
+          <p className="small template-tokens">
+            {template.placeholders.map((placeholder) => (
+              <span key={placeholder.token} className="tag">
+                <Ltr>{`{${placeholder.token}}`}</Ltr>&nbsp;{labelOf(placeholder)}
+              </span>
+            ))}
+          </p>
+        )}
 
         {changedElsewhere && (
           <p className="notice">
@@ -359,7 +560,7 @@ export function TemplateCard({
           </p>
         )}
 
-        {template.source === 'TENANT' && (
+        {isCustomised(template) && (
           <details>
             {/* Showing the default beside the override is the one thing the
               legacy web surface got right here (WEB-BR-019). */}
@@ -368,29 +569,54 @@ export function TemplateCard({
           </details>
         )}
 
-        <details>
-          <summary>{t('web.placeholders')}</summary>
-          <table>
-            <thead>
-              <tr>
-                <th>{t('web.key')}</th>
-                <th>{t('web.description')}</th>
-                <th>{t('web.required')}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {template.placeholders.map((placeholder) => (
-                <tr key={placeholder.token}>
-                  <td>
-                    <code>{`{${placeholder.token}}`}</code> <small>{placeholder.type}</small>
-                  </td>
-                  <td>{placeholder.description}</td>
-                  <td>{placeholder.required ? '✓' : '—'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </details>
+        {template.placeholders.length === 0 ? (
+          <p className="muted small">{t('web.template_no_placeholders')}</p>
+        ) : (
+          <details>
+            <summary>
+              {t('web.placeholders')} (<Num value={template.placeholders.length} />)
+            </summary>
+            {/* The token is the contract and is shown exactly as it must be typed;
+              the Persian beside it only explains it. */}
+            <p className="muted small">{t('web.template_placeholders_hint')}</p>
+            <div className="template-table">
+              <table>
+                <thead>
+                  <tr>
+                    <th>{t('web.template_placeholder_token')}</th>
+                    <th>{t('web.description')}</th>
+                    <th>{t('web.template_placeholder_type')}</th>
+                    <th>{t('web.required')}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {template.placeholders.map((placeholder) => (
+                    <tr key={placeholder.token}>
+                      <td>
+                        <Ltr>
+                          <code>{`{${placeholder.token}}`}</code>
+                        </Ltr>
+                      </td>
+                      <td>{labelOf(placeholder)}</td>
+                      <td>{placeholderTypeLabel(placeholder.type)}</td>
+                      <td>
+                        {placeholder.required
+                          ? t('web.template_required_yes')
+                          : t('web.template_required_no')}
+                        {placeholder.repeatable && (
+                          <>
+                            {t('web.list_separator')}
+                            {t('web.template_repeatable')}
+                          </>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </details>
+        )}
 
         <details>
           <summary>{t('web.preview')}</summary>
@@ -399,10 +625,11 @@ export function TemplateCard({
           {template.placeholders.map((placeholder) => (
             <div key={placeholder.token}>
               <label htmlFor={`sample-${template.key}-${placeholder.token}`}>
-                {`{${placeholder.token}}`}
+                <Ltr>{`{${placeholder.token}}`}</Ltr> {labelOf(placeholder)}
               </label>
               <input
                 id={`sample-${template.key}-${placeholder.token}`}
+                className="input"
                 value={sample[placeholder.token] ?? ''}
                 placeholder={hintFor(placeholder.type)}
                 onChange={(event) =>
@@ -428,10 +655,16 @@ export function TemplateCard({
               />
             </div>
           ))}
-          <button type="button" onClick={runPreview} disabled={preview.isPending}>
+          <button type="button" className="btn" onClick={runPreview} disabled={preview.isPending}>
             {t('web.preview')}
           </button>
-          {preview.isError && <ErrorReport error={preview.error} />}
+          {preview.isError && (
+            <TemplateErrorReport
+              error={preview.error}
+              template={template}
+              samples={preview.variables?.values}
+            />
+          )}
           {preview.data && (
             <>
               {/* The rendered output is of the body it was rendered from, and
@@ -442,7 +675,12 @@ export function TemplateCard({
               {preview.data.unresolved.length > 0 && (
                 <p className="notice">
                   {t('web.preview_unresolved')}:{' '}
-                  {preview.data.unresolved.join(t('web.list_separator'))}
+                  {preview.data.unresolved.map((token, index) => (
+                    <span key={token}>
+                      {index > 0 && t('web.list_separator')}
+                      <TokenWithLabel template={template} token={token} />
+                    </span>
+                  ))}
                 </p>
               )}
             </>
@@ -527,7 +765,7 @@ export function TemplateCard({
 
         {mayEdit && (
           <div className="actions">
-            <button type="submit" disabled={save.isPending}>
+            <button type="submit" className="btn primary" disabled={save.isPending}>
               {save.isPending ? t('web.saving') : t('web.save')}
             </button>
             {/*
@@ -540,6 +778,7 @@ export function TemplateCard({
             {revertable !== null && (
               <button
                 type="button"
+                className="btn"
                 onClick={() => {
                   if (revertable === null) return;
                   const command = {
@@ -558,8 +797,8 @@ export function TemplateCard({
         {mayEdit && revertable !== null && <p className="notice">{t('web.revert_note')}</p>}
 
         {/* Which placeholder was wrong, not just that something was. */}
-        {save.isError && <ErrorReport error={save.error} />}
-        {undo.isError && <ErrorReport error={undo.error} />}
+        {save.isError && <TemplateErrorReport error={save.error} template={template} />}
+        {undo.isError && <TemplateErrorReport error={undo.error} template={template} />}
         {/* A no-op says so, exactly as a setting write does. Answering "saved"
           for a save that stored nothing is the legacy pattern verbatim. */}
         {save.isSuccess && (
@@ -568,10 +807,175 @@ export function TemplateCard({
       </form>
     </Card>
   );
-}
+});
 
 /** The text form a sample value has to take, or nothing for a plain string. */
 function hintFor(type: TemplateViewResponse['placeholders'][number]['type']): string | undefined {
   const key = SAMPLE_HINTS[type];
   return key ? t(key) : undefined;
+}
+
+/** `{token}` in its own isolate, then its Persian helper — how every issue names a token. */
+function TokenWithLabel({ template, token }: { template: TemplateViewResponse; token: string }) {
+  const declared = template.placeholders.find((placeholder) => placeholder.token === token);
+  const label =
+    declared === undefined
+      ? undefined
+      : placeholderLabel(template.key, token, declared.description);
+  return (
+    <>
+      <Ltr>{`{${token}}`}</Ltr>
+      {label !== undefined && ` (${label})`}
+    </>
+  );
+}
+
+/** One refusal, in Persian: what is wrong and, where it is about one, which token. */
+interface TemplateIssueCopy {
+  readonly text: string;
+  readonly token?: string;
+  readonly hint?: string;
+}
+
+/**
+ * A refusal of THIS screen's commands, said in Persian.
+ *
+ * The server's messages and issue details are English sentences for a log. What an
+ * operator needs is which rule the body broke and which `{token}` it is about, and the
+ * structured half of the refusal already carries both: `validateTemplateBody` returns
+ * `{ kind, token }`, so the sentence is chosen here by KIND and the token is shown as
+ * typed. A refusal this screen has no Persian for — a conflict, a permission, a dropped
+ * connection — goes to the shared `ErrorReport`, which already speaks Persian for those.
+ */
+function templateRefusal(
+  error: unknown,
+  template: TemplateViewResponse,
+  samples: Readonly<Record<string, string>> | undefined,
+): { readonly message: string; readonly issues: readonly TemplateIssueCopy[] } | null {
+  if (!(error instanceof ApiError)) return null;
+  const raw = error.details?.issues;
+  const details: readonly unknown[] = Array.isArray(raw) ? raw : [];
+
+  switch (error.code) {
+    case CONTROL_ERROR_CODES.TEMPLATE_INVALID:
+      return { message: t('web.template_invalid'), issues: details.map(bodyIssue) };
+
+    case CONTROL_ERROR_CODES.INVALID_VALUE: {
+      /*
+       * The sample values, re-checked by the SAME function the server ran.
+       *
+       * The server's problems are sentences with the token inside them; parsing a token
+       * back out of English prose is the fragile half. `coerceTemplateValue` is the one
+       * implementation both sides import, so running it over what this preview sent
+       * names exactly the fields the server refused.
+       */
+      const issues: TemplateIssueCopy[] = [];
+      for (const placeholder of template.placeholders) {
+        const typed = samples?.[placeholder.token];
+        if (typed === undefined || typed.trim() === '') continue;
+        const coerced = coerceTemplateValue(placeholder as PlaceholderDefinition, typed);
+        if (coerced.ok) continue;
+        const hint = hintFor(placeholder.type);
+        issues.push({
+          text: t('web.template_sample_invalid'),
+          token: placeholder.token,
+          ...(hint === undefined ? {} : { hint }),
+        });
+      }
+      return { message: t('web.template_samples_invalid'), issues };
+    }
+
+    case CONTROL_ERROR_CODES.TEMPLATE_NOT_OVERRIDDEN:
+      return { message: t('web.template_not_overridden'), issues: [] };
+
+    case CONTROL_ERROR_CODES.UNKNOWN_KEY:
+      return { message: t('web.template_unknown_key'), issues: [] };
+
+    // The request schema refuses an empty body before the service ever sees it.
+    case 'request.invalid':
+      return details.some((issue) => (issue as { path?: unknown }).path === 'body')
+        ? { message: t('web.template_invalid'), issues: [{ text: t('web.template_issue_empty') }] }
+        : null;
+
+    default:
+      return null;
+  }
+}
+
+/** One `validateTemplateBody` issue, by its kind. An unknown kind keeps its own words. */
+function bodyIssue(issue: unknown): TemplateIssueCopy {
+  const shaped = (typeof issue === 'object' && issue !== null ? issue : {}) as {
+    kind?: unknown;
+    token?: unknown;
+    detail?: unknown;
+  };
+  const token = typeof shaped.token === 'string' ? shaped.token : undefined;
+  const withToken = (key: WebKey): TemplateIssueCopy =>
+    token === undefined ? { text: t(key) } : { text: t(key), token };
+  switch (shaped.kind) {
+    case 'EMPTY':
+      return { text: t('web.template_issue_empty') };
+    case 'TOO_LONG':
+      return { text: t('web.template_issue_too_long') };
+    case 'UNKNOWN_PLACEHOLDER':
+      return withToken('web.template_issue_unknown');
+    case 'MISSING_REQUIRED_PLACEHOLDER':
+      return withToken('web.template_issue_missing');
+    case 'REPEATED_PLACEHOLDER':
+      return withToken('web.template_issue_repeated');
+    default:
+      if (typeof issue === 'string') return { text: issue };
+      return { text: typeof shaped.detail === 'string' ? shaped.detail : JSON.stringify(issue) };
+  }
+}
+
+function TemplateErrorReport({
+  error,
+  template,
+  samples,
+}: {
+  error: unknown;
+  template: TemplateViewResponse;
+  samples?: Readonly<Record<string, string>> | undefined;
+}) {
+  const refusal = templateRefusal(error, template, samples);
+  if (refusal === null) return <ErrorReport error={error} />;
+  const lines: ReactNode[] = refusal.issues.map((issue, index) => (
+    // The index is part of the key, for the reason `ErrorReport` gives.
+    <li key={`${index}:${issue.text}:${issue.token ?? ''}`}>
+      {issue.text}
+      {issue.token !== undefined && (
+        <>
+          {': '}
+          <TokenWithLabel template={template} token={issue.token} />
+        </>
+      )}
+      {issue.hint !== undefined && ` — ${issue.hint}`}
+    </li>
+  ));
+  return (
+    <>
+      <Banner tone="danger">{refusal.message}</Banner>
+      {lines.length > 0 && <ul className="danger">{lines}</ul>}
+    </>
+  );
+}
+
+/**
+ * A Latin run — a `/command`, a product name, `iOS` — isolated inside Persian text.
+ *
+ * Without the isolate the bidi algorithm resolves the run's neutral edges against the
+ * Persian around it, so a title naming `/start` is drawn with the slash on the wrong side
+ * of `start`. A trailing full stop is left outside the run, where the sentence needs it.
+ */
+const LATIN_RUN = /([/@{]?[A-Za-z0-9](?:[A-Za-z0-9_./@{}:+-]*[A-Za-z0-9_}])?)/;
+
+function BidiText({ text }: { text: string }) {
+  return (
+    <>
+      {text
+        .split(LATIN_RUN)
+        .map((part, index) => (index % 2 === 1 ? <bdi key={index}>{part}</bdi> : part))}
+    </>
+  );
 }

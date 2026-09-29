@@ -56,7 +56,6 @@ export const WEB_FA = {
   // A list separator is punctuation, but it is still Persian text and it still
   // belongs in the catalogue rather than typed into a component.
   'web.list_separator': '، ',
-  'web.value': 'مقدار',
   'web.source': 'منبع',
   'web.source_default': 'پیش‌فرض',
   'web.source_tenant': 'تنظیم‌شده',
@@ -79,15 +78,136 @@ export const WEB_FA = {
 
   // Settings
   'web.settings_title': 'تنظیمات',
-  'web.settings_intro':
-    'هر تنظیم مقدار فعلی، منبع آن، و معنای صفر یا خالی بودنش را نشان می‌دهد. برای خواندن یک مقدار لازم نیست آن را بازنویسی کنید.',
-  'web.zero_meaning': 'معنای صفر یا خالی',
-  'web.zero_disables': 'صفر یا خالی این قابلیت را غیرفعال می‌کند.',
-  'web.zero_unlimited': 'صفر یعنی بدون محدودیت.',
-  'web.zero_literal': 'صفر یک مقدار عادی است و معنای ویژه‌ای ندارد.',
-  'web.zero_not_applicable': 'صفر یا خالی برای این کلید مجاز نیست.',
-  'web.sensitive': 'حساس',
+  'web.settings_intro': 'تنظیمات موردنظر را تغییر دهید و ذخیره کنید.',
   'web.restart_required': 'نیازمند راه‌اندازی مجدد',
+  /*
+   * WP-A1: the operator's settings page. Titles, descriptions and groups for every
+   * registry key, read through `settings-presentation.ts` (a total map, so a key without
+   * a Persian name does not compile). Descriptions say what the setting does for the
+   * business, in a sentence or two; how the value is stored, where it came from and the
+   * engineering history behind it stay in the contract, not on the operator's screen.
+   */
+  'web.settings_group_sales': 'فروش و سفارش',
+  'web.settings_group_wallet': 'کیف پول',
+  'web.settings_group_services': 'سرویس‌ها',
+  'web.settings_group_reminders': 'یادآوری‌ها',
+  'web.settings_group_trial': 'سرویس آزمایشی',
+  'web.settings_group_referral': 'معرفی دوستان',
+  'web.settings_group_support': 'پشتیبانی و کانال‌ها',
+  'web.settings_group_ops': 'گزارش‌های مدیریتی',
+  'web.settings_group_other': 'سایر تنظیمات',
+  'web.settings_current_value': 'مقدار فعلی',
+  'web.settings_value_unset': 'تنظیم نشده',
+  'web.settings_range_from': 'عدد صحیح از',
+  'web.settings_range_to': 'تا',
+  'web.settings_optional_empty': 'برای تنظیم‌نکردن، خالی بگذارید.',
+  'web.settings_needs_feature':
+    'این تنظیم فقط وقتی اثر دارد که قابلیت مربوط به آن در بخش «قابلیت‌ها» روشن باشد.',
+  'web.settings_technical': 'اطلاعات فنی',
+  'web.settings_technical_key': 'شناسهٔ فنی',
+  'web.settings_technical_issues': 'جزئیات خطا',
+  'web.settings_invalid_value':
+    'این مقدار پذیرفته نشد. مقدار واردشده را بررسی کنید و دوباره ذخیره کنید.',
+  'web.settings_currency_not_sales': 'غیر از واحد پول فروشگاه',
+  'web.settings_money_currency_mismatch':
+    'این مبلغ به واحد پول فروشگاه نیست و با هیچ مبلغی مقایسه نمی‌شود، پس این تنظیم کار نمی‌کند. واحد پول را به واحد پول فروشگاه تغییر دهید.',
+  'web.settings_presets_currency_mismatch':
+    'برخی از این مبالغ به واحد پول فروشگاه نیستند و به مشتری نشان داده نمی‌شوند.',
+  'web.settings_unknown_title': 'تنظیم ناشناخته',
+  'web.settings_unknown_desc':
+    'این تنظیم در این نسخه از پنل مدیریت شناخته نمی‌شود. صفحه را تازه کنید.',
+  'web.unit_days': 'روز',
+  'web.unit_percent': 'درصد',
+  'web.unit_times': 'بار',
+  'web.unit_messages': 'پیام',
+  'web.setting_severity_debug': 'جزئیات اشکال‌زدایی',
+  'web.setting_severity_info': 'اطلاع',
+  'web.setting_severity_warn': 'هشدار',
+  'web.setting_severity_error': 'خطا',
+  'web.setting_severity_critical': 'بحرانی',
+
+  'web.setting_ops_chat_id': 'گروه تلگرام گزارش‌های مدیریتی',
+  'web.setting_ops_chat_id_desc':
+    'گفت‌وگوی تلگرامی که گزارش‌های مدیریتی به آن فرستاده می‌شود. اگر خالی باشد، گزارشی فرستاده نمی‌شود.',
+  'web.setting_ops_topic_id': 'تاپیک گزارش‌های سیستم',
+  'web.setting_ops_topic_id_desc':
+    'تاپیکی از همان گروه که گزارش‌های مدیریتی در آن منتشر می‌شود. اگر خالی باشد، پیام‌ها در خود گروه فرستاده می‌شوند.',
+  'web.setting_ops_payments_topic_id': 'تاپیک گزارش‌های پرداخت',
+  'web.setting_ops_payments_topic_id_desc':
+    'تاپیکی از همان گروه برای گزارش پرداخت‌ها، شارژها، ردشدن‌ها و بازپرداخت‌ها. اگر خالی باشد، این گزارش‌ها در تاپیک گزارش‌های سیستم فرستاده می‌شوند.',
+  'web.setting_ops_min_severity': 'کمترین اهمیت برای ارسال',
+  'web.setting_ops_min_severity_desc':
+    'فقط رویدادهایی که اهمیتشان در این سطح یا بالاتر است به گروه گزارش فرستاده می‌شوند.',
+  'web.setting_ops_max_attempts': 'دفعات تلاش برای ارسال هر گزارش',
+  'web.setting_ops_max_attempts_desc':
+    'برای ارسال هر گزارش حداکثر این تعداد بار تلاش می‌شود؛ پس از آن ارسال ناموفق ثبت می‌شود.',
+  'web.setting_ops_max_per_minute': 'سقف ارسال گزارش در هر دقیقه',
+  'web.setting_ops_max_per_minute_desc':
+    'بیشترین تعداد گزارش مدیریتی که در یک دقیقه به تلگرام فرستاده می‌شود.',
+  'web.setting_sales_currency_desc':
+    'واحد پولی که قیمت محصولات و مبالغ تازه با آن تعیین می‌شود. تغییر آن قیمت‌های ثبت‌شده را تبدیل نمی‌کند.',
+  'web.setting_sales_currency_refused':
+    'تا وقتی پرداخت‌های قابل بازپرداختی به واحد پول فعلی وجود دارد، واحد پول فروشگاه را نمی‌توان تغییر داد. ابتدا آن پرداخت‌ها را تسویه یا بازپرداخت کنید.',
+  'web.setting_support_accounts': 'حساب‌های پشتیبانی',
+  'web.setting_support_accounts_desc':
+    'حساب‌های تلگرامی پشتیبانی که به مشتری معرفی می‌شوند، به همین ترتیب. دکمهٔ تماس با پشتیبانی به نخستین حساب باز می‌شود و اگر فهرست خالی باشد نمایش داده نمی‌شود.',
+  'web.setting_telegram_channels': 'کانال‌های ربات',
+  'web.setting_telegram_channels_desc':
+    'کانال‌هایی که به مشتری نشان داده می‌شوند، به همین ترتیب. مشتری تا عضو کانال‌های اجباری نشود نمی‌تواند از ربات استفاده کند.',
+  'web.setting_order_expiry_minutes': 'مهلت نگه‌داشتن سفارش پرداخت‌نشده',
+  'web.setting_order_expiry_minutes_desc':
+    'سفارشی که در این مدت پرداخت نشود منقضی می‌شود و مشتری باید دوباره سفارش دهد.',
+  'web.setting_payment_window_minutes': 'مهلت پرداخت',
+  'web.setting_payment_window_minutes_desc':
+    'مدتی که یک پرداخت در انتظار باز می‌ماند؛ پس از آن پرداخت و سفارشش منقضی می‌شوند.',
+  'web.setting_usage_sync_minutes': 'فاصلهٔ به‌روزرسانی مصرف سرویس‌ها',
+  'web.setting_usage_sync_minutes_desc':
+    'هر چند دقیقه یک بار مصرف حجم سرویس‌ها از پنل خوانده شود. عدد کمتر اطلاعات تازه‌تری به مشتری می‌دهد و درخواست بیشتری به پنل می‌فرستد.',
+  'web.setting_topup_minimum_desc':
+    'کمترین مبلغی که مشتری می‌تواند کیف پولش را با آن شارژ کند. صفر یعنی بدون حداقل. اگر به واحد پولی غیر از واحد پول فروشگاه باشد، شارژ کیف پول پذیرفته نمی‌شود.',
+  'web.setting_topup_maximum': 'بیشینهٔ شارژ کیف پول',
+  'web.setting_topup_maximum_desc':
+    'بیشترین مبلغی که مشتری می‌تواند برای شارژ کیف پول وارد کند. صفر یعنی بدون سقف. اگر به واحد پولی غیر از واحد پول فروشگاه باشد، شارژ کیف پول پذیرفته نمی‌شود.',
+  'web.setting_topup_presets_desc':
+    'مبالغ آماده‌ای که هنگام شارژ کیف پول به‌صورت دکمه به مشتری پیشنهاد می‌شوند. فقط مبالغی که به واحد پول فروشگاه هستند نمایش داده می‌شوند.',
+  'web.setting_reminders_expiry_first_days_desc':
+    'چند روز پیش از پایان اعتبار سرویس، نخستین یادآوری به مشتری فرستاده شود. باید بیشتر از یادآور دوم باشد.',
+  'web.setting_reminders_expiry_second_days_desc':
+    'چند روز پیش از پایان اعتبار سرویس، یادآوری دوم فرستاده شود. باید کمتر از یادآور اول باشد.',
+  'web.setting_reminders_usage_first_percent_desc':
+    'وقتی مصرف سرویس به این درصد از حجم برسد، نخستین هشدار فرستاده می‌شود. سرویس‌های حجم نامحدود هشدار نمی‌گیرند.',
+  'web.setting_reminders_usage_second_percent_desc':
+    'هشدار دوم مصرف حجم. باید بیشتر از آستانهٔ اول و کمتر از آستانهٔ پایانی باشد.',
+  'web.setting_reminders_usage_final_percent_desc':
+    'هشدار پایانی مصرف حجم؛ ۱۰۰ یعنی لحظهٔ تمام‌شدن حجم. باید بیشتر از آستانهٔ دوم باشد.',
+  // WP-A9.
+  'web.setting_reminders_expiry_early_days_desc':
+    'چند روز پیش از پایان اعتبار سرویس، یادآور هفتگی فرستاده شود؛ زودتر از یادآور اول. صفر یعنی این یادآور فرستاده نشود.',
+  'web.setting_reminders_payment_pending_minutes_desc':
+    'چند دقیقه پیش از پایان مهلت، یک بار به مشتری‌ای که هنوز کارت‌به‌کارت نکرده یا سفارشش را پرداخت نکرده یادآوری شود.',
+  'web.setting_wallet_low_balance_threshold_desc':
+    'وقتی موجودی کیف پول مشتری از این مبلغ کمتر شود، یک بار به او هشدار داده می‌شود. صفر یعنی هشداری فرستاده نشود. باید به واحد پول فروشگاه باشد.',
+  'web.setting_trial_product_id_desc':
+    'محصولی که سرویس آزمایشی بر اساس آن ساخته می‌شود. اگر محصولی انتخاب نشود، سرویس آزمایشی ارائه نمی‌شود.',
+  'web.setting_trial_limit_per_customer_desc':
+    'هر مشتری چند بار می‌تواند سرویس آزمایشی بگیرد. صفر یعنی سرویس آزمایشی به کسی داده نمی‌شود.',
+  'web.setting_link_rotation_cooldown_hours_desc':
+    'مشتری پس از دریافت لینک اشتراک تازه، باید این مدت صبر کند تا دوباره بتواند لینک تازه بگیرد.',
+  'web.setting_referral_commission_percent': 'درصد پورسانت معرفی',
+  'web.setting_referral_commission_percent_desc':
+    'چند درصد از مبلغ سفارش پرداخت‌شدهٔ کاربر معرفی‌شده به معرف داده شود. اگر خالی بماند، برنامهٔ معرفی اجرا نمی‌شود.',
+  'web.setting_referral_commission_scope': 'سفارش‌های مشمول پورسانت',
+  'web.setting_referral_commission_scope_desc':
+    'پورسانت فقط برای نخستین سفارش پرداخت‌شدهٔ کاربر معرفی‌شده داده شود یا برای همهٔ سفارش‌هایش. تغییر آن فقط روی معرفی‌های بعدی اثر دارد.',
+  'web.setting_referral_minimum_order_amount': 'حداقل مبلغ سفارش برای پورسانت',
+  'web.setting_referral_minimum_order_amount_desc':
+    'سفارش‌هایی که مبلغشان کمتر از این مقدار است پورسانتی ندارند. صفر یعنی بدون حداقل. اگر به واحد پولی غیر از واحد پول سفارش باشد، هیچ سفارشی پورسانت نمی‌گیرد؛ مبلغ‌ها تبدیل ارز نمی‌شوند.',
+  'web.setting_referral_signup_gift_total_desc':
+    'کل هدیه‌ای که پس از یک معرفی معتبر میان معرف و کاربر تازه تقسیم می‌شود. صفر یعنی هدیه‌ای پرداخت نمی‌شود. باید به واحد پول فروشگاه باشد، وگرنه هدیهٔ عضویت روشن نمی‌شود.',
+  'web.setting_referral_signup_gift_referrer_percent_desc':
+    'سهم معرف از هدیهٔ عضویت. جمع سهم معرف و کاربر تازه باید ۱۰۰ باشد.',
+  'web.setting_referral_signup_gift_referred_percent_desc':
+    'سهم کاربر تازه از هدیهٔ عضویت. جمع سهم معرف و کاربر تازه باید ۱۰۰ باشد.',
 
   // Feature flags
   'web.features_title': 'قابلیت‌ها',
@@ -176,24 +296,65 @@ export const WEB_FA = {
   // Templates
   'web.templates_title': 'متن‌های ربات',
   'web.templates_intro':
-    'متن‌ها به صورت خام ذخیره می‌شوند. آنچه در کادر ویرایش می‌بینید همان چیزی است که ذخیره شده — نه نتیجهٔ جای‌گذاری مقادیر.',
-  'web.template_body': 'متن خام',
+    'پیام‌هایی که ربات برای مشتریان و مدیران می‌فرستد. آنچه در کادر ویرایش می‌بینید همان متن ذخیره‌شده است؛ متغیرهای داخل آکولاد هنگام ارسال با مقدار واقعی جایگزین می‌شوند.',
+  'web.template_body': 'متن پیام',
   'web.template_default': 'متن پیش‌فرض',
-  'web.placeholders': 'متغیرها',
+  'web.placeholders': 'متغیرهای قابل استفاده',
   'web.required': 'الزامی',
   'web.preview': 'پیش‌نمایش',
   'web.preview_values': 'مقادیر نمونه برای پیش‌نمایش',
   'web.preview_note': 'پیش‌نمایش هیچ چیزی را ذخیره نمی‌کند و مقادیر آن از حساب شما گرفته نمی‌شود.',
   'web.preview_unresolved': 'متغیرهایی که مقداری برایشان داده نشده و دست‌نخورده مانده‌اند',
   'web.revert': 'بازگرداندن به پیش‌فرض',
-  'web.revert_note': 'بازگرداندن، متن اختصاصی را حذف می‌کند. تاریخچه حذف نمی‌شود.',
+  'web.revert_note':
+    'بازگرداندن، متن سفارشی را حذف می‌کند و متن پیش‌فرض دوباره اعمال می‌شود. تاریخچه حذف نمی‌شود.',
   'web.revisions': 'تاریخچه',
   'web.revision': 'نسخه',
   'web.action': 'عملیات',
   'web.action_set': 'ثبت',
   'web.action_revert': 'بازگردانی',
   'web.override_suppressed':
-    'متن اختصاصی این کلید ذخیره شده است اما اعمال نمی‌شود، چون قابلیت متن‌های اختصاصی خاموش است.',
+    'متن سفارشی این پیام ذخیره شده است اما اعمال نمی‌شود، چون قابلیت متن‌های سفارشی خاموش است.',
+  'web.templates_search': 'جست‌وجو در متن‌ها',
+  'web.templates_search_placeholder': 'نام پیام، توضیح، بخشی از متن یا کلید فنی…',
+  'web.templates_group': 'بخش',
+  'web.templates_group_all': 'همهٔ بخش‌ها',
+  'web.templates_filter_custom': 'سفارشی‌شده',
+  'web.templates_filter_default': 'پیش‌فرض',
+  'web.templates_count': 'متن‌های نمایش‌داده‌شده',
+  'web.templates_count_of': 'از',
+  'web.templates_no_match': 'متنی با این جست‌وجو یا فیلتر پیدا نشد.',
+  'web.templates_clear_filters': 'پاک کردن جست‌وجو و فیلترها',
+  'web.template_technical_key': 'کلید فنی',
+  'web.template_customised': 'سفارشی‌شده',
+  'web.template_format_plain': 'متن ساده',
+  'web.template_format_html': 'HTML تلگرام',
+  'web.template_format_plain_hint':
+    'این پیام به صورت متن ساده فرستاده می‌شود؛ برچسب‌هایی مثل <b> پردازش نمی‌شوند و همان‌طور که نوشته شده‌اند دیده می‌شوند.',
+  'web.template_format_html_hint':
+    'در این پیام می‌توانید از برچسب‌های قالب‌بندی تلگرام مانند <b>، <i> و <code> استفاده کنید.',
+  'web.template_length': 'طول متن',
+  'web.template_length_unit': 'نویسه',
+  'web.template_placeholders_hint':
+    'متغیرها را دقیقاً با همین نوشتار انگلیسی و داخل آکولاد در متن بگذارید؛ ربات هنگام ارسال، مقدار واقعی را جای آن‌ها می‌گذارد. نام متغیرها را ترجمه یا تغییر ندهید.',
+  'web.template_no_placeholders': 'این پیام متغیری ندارد.',
+  'web.template_placeholder_token': 'متغیر',
+  'web.template_placeholder_type': 'نوع مقدار',
+  'web.template_required_yes': 'بله',
+  'web.template_required_no': 'خیر',
+  'web.template_repeatable': 'قابل تکرار',
+  'web.template_invalid': 'این متن پذیرفته نشد. موارد زیر را اصلاح کنید.',
+  'web.template_issue_empty': 'متن پیام نمی‌تواند خالی باشد.',
+  'web.template_issue_too_long': 'متن از حداکثر طول مجاز این پیام بلندتر است؛ آن را کوتاه کنید.',
+  'web.template_issue_unknown':
+    'این متغیر برای این پیام تعریف نشده است و اگر ذخیره می‌شد، عیناً برای گیرنده فرستاده می‌شد',
+  'web.template_issue_missing': 'این متغیر در این پیام اجباری است و نباید حذف شود',
+  'web.template_issue_repeated': 'این متغیر فقط یک بار می‌تواند در متن بیاید',
+  'web.template_samples_invalid': 'مقدار نمونهٔ برخی متغیرها با نوع آن‌ها جور نیست.',
+  'web.template_sample_invalid': 'مقدار نمونه معتبر نیست',
+  'web.template_not_overridden':
+    'این پیام از قبل روی متن پیش‌فرض است و چیزی برای بازگرداندن نیست. صفحه را تازه کنید.',
+  'web.template_unknown_key': 'این پیام در نسخهٔ فعلی سامانه وجود ندارد. صفحه را تازه کنید.',
 
   // Operations
   'web.notifications_title': 'اعلان‌ها',
@@ -262,12 +423,16 @@ export const WEB_FA = {
     'این ردیف پس از آغاز ویرایش شما جای دیگری تغییر کرده است. ذخیره‌کردن تنها فیلدهایی را می‌فرستد که خودتان تغییر داده‌اید.',
   'web.reload_value': 'گرفتن مقدار تازه',
   'web.stored_value_invalid':
-    'مقدار ذخیره‌شده با تعریف این کلید نمی‌خواند، پس پیش‌فرض اعمال می‌شود. ذخیره‌کردن یک مقدار معتبر آن را اصلاح می‌کند.',
+    'مقدار ذخیره‌شدهٔ این تنظیم دیگر معتبر نیست و فعلاً مقدار اولیه اعمال می‌شود. با ذخیرهٔ یک مقدار معتبر اصلاح می‌شود.',
   'web.unsaved_changes': 'تغییرات ذخیره‌نشده دارید.',
   'web.preview_stale': 'متن پس از این پیش‌نمایش تغییر کرده است. دوباره پیش‌نمایش بگیرید.',
   'web.discard': 'دورانداختن تغییرات',
-  'web.sample_number': 'یک عدد درست، مثلاً ۳۰',
-  'web.sample_datetime': 'یک تاریخ، مثلاً 2026-09-02T08:00:00Z',
+  'web.sample_number': 'یک عدد صحیح با رقم لاتین، مثلاً 30',
+  'web.sample_days': 'تعداد روز با رقم لاتین، مثلاً 30؛ صفر یعنی نامحدود',
+  'web.sample_bytes': 'حجم به بایت با رقم لاتین، مثلاً 10737418240 برای ۱۰ گیگابایت',
+  'web.sample_traffic_limit':
+    'سقف حجم به بایت با رقم لاتین، مثلاً 10737418240 برای ۱۰ گیگابایت؛ صفر یعنی نامحدود',
+  'web.sample_datetime': 'یک تاریخ به قالب ISO، مثلاً 2026-09-02T08:00:00Z (Z یعنی به وقت UTC)',
   'web.sample_money': 'مبلغ به کوچک‌ترین واحد و سپس ارز، مثلاً 1250000 IRR',
   'web.older': 'قدیمی‌تر',
   // Shared chrome added in Phase 3D
@@ -619,9 +784,6 @@ export const WEB_FA = {
   'web.setting_topup_minimum': 'کمینهٔ شارژ کیف پول',
   'web.setting_sales_currency': 'واحد پول فروشگاه',
   'web.setting_topup_presets': 'مبالغ شارژ کیف پول',
-  'web.topup_presets_title': 'مبالغ پیشنهادی شارژ',
-  'web.topup_presets_body':
-    'این مبالغ به‌ترتیب به مشتری نشان داده می‌شوند. تنها مبالغی که به واحد پول فروشگاه هستند نمایش داده می‌شوند؛ تبدیل ارز در این سامانه وجود ندارد. فهرست خالی یعنی شارژ کیف پول ارائه نمی‌شود.',
   'web.topup_preset_add': 'افزودن مبلغ',
   'web.topup_preset_empty': 'هیچ مبلغی تنظیم نشده است.',
   'web.admin_active': 'فعال',
@@ -992,7 +1154,7 @@ export const WEB_FA = {
 
   // --- Settings, new keys --------------------------------------------------
   'web.setting_no_consumer':
-    'این مقدار ذخیره، نسخه‌گذاری و ثبت می‌شود، اما در این نسخه چیزی آن را نمی‌خواند. تا ساخته‌شدن مصرف‌کننده‌اش هیچ رفتاری تغییر نمی‌کند.',
+    'این تنظیم ذخیره می‌شود، اما در این نسخه هنوز چیزی آن را نمی‌خواند و روی رفتار ربات اثری ندارد.',
   'web.currency': 'واحد پول',
   'web.amount_minor': 'مبلغ به کوچک‌ترین واحد',
   'web.support_handle': 'شناسهٔ پشتیبانی',
@@ -1006,10 +1168,7 @@ export const WEB_FA = {
   'web.channel_chat_id': 'شناسهٔ عددی کانال',
   'web.channel_join_url': 'لینک عضویت',
   'web.channel_enforcement_hint':
-    'عضویت در کانال‌های اجباری پیش از هر کار مشتری با getChatMember بررسی می‌شود. ربات باید در هر کانال اجباری مدیر باشد؛ کانال خصوصی به شناسهٔ عددی و لینک عضویت نیاز دارد. اگر ربات نتواند عضویت را بررسی کند، آن کانال موقتاً اجرا نمی‌شود و وضعیت «channels.membership_unavailable» در گزارش عملیات باز می‌ماند.',
-  'web.topup_precedence_title': 'اولویت حداقل شارژ',
-  'web.topup_precedence_body':
-    'حداقلِ مخصوص هر درگاه بر این مقدار عمومی مقدم است. چنین چیزی هنوز قابل تعریف نیست: در این سامانه هیچ درگاه پرداختی ثبت نشده که بتوان تنظیم اختصاصی را به آن نسبت داد.',
+    'ربات باید در هر کانال اجباری مدیر باشد. برای کانال خصوصی، شناسهٔ عددی و لینک عضویت را وارد کنید.',
 
   // --- Customers (Phase 4A) ------------------------------------------------
   'web.users_title': 'کاربران',
@@ -2200,28 +2359,21 @@ export const WEB_FA = {
   /*
    * Persian names for the reminder settings and switches.
    *
-   * ADDITIVE, and keyed by the registry key. A row with no entry here is titled by its
-   * machine key exactly as every row was before — which is why this is a lookup and not
-   * a required field: naming five of twenty-two keys and leaving seventeen bare would
-   * be worse than the consistent bareness it replaces, and a `Record<SettingKey, …>`
-   * would force seventeen names nobody has agreed on.
-   *
-   * The machine key is still shown beside the name. An operator reading the Telegram
-   * section sees `reminders.usage_first_percent` there, and two surfaces naming one
-   * setting differently is how a support conversation goes wrong.
+   * The setting titles here are read through `settings-presentation.ts`, which is TOTAL
+   * over the registry (WP-A1); the flag names through `registryLabel` in `settings.tsx`.
+   * A setting's unit is shown beside its field, so it is not repeated in the title.
    */
-  'web.setting_reminders_expiry_first_days': 'یادآور اول پیش از انقضا (روز)',
-  'web.setting_reminders_expiry_second_days': 'یادآور دوم پیش از انقضا (روز)',
-  'web.setting_reminders_usage_first_percent': 'آستانه اول مصرف حجم (درصد)',
-  'web.setting_reminders_usage_second_percent': 'آستانه دوم مصرف حجم (درصد)',
-  'web.setting_reminders_usage_final_percent': 'آستانه پایانی مصرف حجم (درصد)',
+  'web.setting_reminders_expiry_first_days': 'یادآور اول پیش از انقضا',
+  'web.setting_reminders_expiry_second_days': 'یادآور دوم پیش از انقضا',
+  'web.setting_reminders_usage_first_percent': 'آستانهٔ اول مصرف حجم',
+  'web.setting_reminders_usage_second_percent': 'آستانهٔ دوم مصرف حجم',
+  'web.setting_reminders_usage_final_percent': 'آستانهٔ پایانی مصرف حجم',
   'web.flag_service_expiry_reminders': 'یادآور پیش از انقضای سرویس',
   'web.flag_service_expired_notice': 'اعلام پایان اعتبار سرویس',
   'web.flag_service_usage_reminders': 'یادآور مصرف حجم سرویس',
   // WP-A9: the names of the reminder keys and switches this package added.
-  'web.setting_reminders_expiry_early_days': 'یادآور هفتگی پیش از انقضا (روز)',
-  'web.setting_reminders_payment_pending_minutes':
-    'یادآور پرداخت در انتظار (دقیقه پیش از پایان مهلت)',
+  'web.setting_reminders_expiry_early_days': 'یادآور هفتگی پیش از انقضا',
+  'web.setting_reminders_payment_pending_minutes': 'زمان یادآور پرداخت در انتظار',
   'web.setting_wallet_low_balance_threshold': 'آستانهٔ هشدار کمبود موجودی کیف پول',
   'web.flag_service_expiry_day_reminder': 'یادآور روز انقضای سرویس',
   'web.flag_wallet_low_balance_reminders': 'هشدار کمبود موجودی کیف پول',
@@ -2284,13 +2436,14 @@ export const WEB_FA = {
   'web.setting_trial_product_id': 'محصول سرویس آزمایشی',
   'web.setting_trial_limit_per_customer': 'تعداد مجاز سرویس آزمایشی برای هر مشتری',
   'web.flag_customer_link_rotation': 'دریافت لینک اشتراک جدید توسط مشتری',
-  'web.setting_link_rotation_cooldown_hours': 'فاصلهٔ مجاز بین دو درخواست لینک جدید (ساعت)',
+  'web.setting_link_rotation_cooldown_hours': 'فاصلهٔ مجاز بین دو درخواست لینک جدید',
   'web.flag_referral_signup_gift': 'هدیهٔ عضویت از طریق معرفی',
   'web.setting_referral_signup_gift_total': 'مبلغ کل هدیهٔ عضویت',
-  'web.setting_referral_signup_gift_referrer_percent': 'سهم معرف از هدیهٔ عضویت (درصد)',
-  'web.setting_referral_signup_gift_referred_percent': 'سهم کاربر معرفی‌شده از هدیهٔ عضویت (درصد)',
+  'web.setting_referral_signup_gift_referrer_percent': 'سهم معرف از هدیهٔ عضویت',
+  'web.setting_referral_signup_gift_referred_percent': 'سهم کاربر معرفی‌شده از هدیهٔ عضویت',
   'web.trial_product_none': 'هیچ‌کدام (سرویس آزمایشی ارائه نمی‌شود)',
   'web.trial_product_unlisted': 'محصول فعلی (در فهرست محصولات فعال نیست)',
+  'web.trial_product_current': 'محصول فعلی',
 
   // WP6-B: a customer's trial allowance, the override, the global reset and its history.
   'web.nav_trials': 'سرویس آزمایشی',

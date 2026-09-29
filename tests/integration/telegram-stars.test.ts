@@ -794,7 +794,10 @@ describe('Telegram Stars (Package A)', () => {
     it('draws one named button per external route', async () => {
       await enableStars();
       const orderId = await draftOrder(260_000n);
-      // The pre-invoice the customer's last tap drew.
+      // Since PR #91 the pre-invoice carries «🧾 ثبت پرداخت» (`pm:`), and the routes are the
+      // buttons of the selector it opens.
+      calls = [];
+      await tapAs(MARYAM, `pm:${orderId}`);
       const markup = JSON.stringify(
         calls.filter((call) => call.method === 'sendMessage').map((call) => call.body.reply_markup),
       );
