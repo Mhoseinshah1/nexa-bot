@@ -120,6 +120,18 @@ function partsOf(at: Date, calendar: Calendar, timezone: string, withTime: boole
   return out;
 }
 
+/**
+ * The wall-clock hour and minute an instant reads in a zone, 24-hour (HF-A9: quiet hours).
+ * The same ICU parts `civilDateOf` reads, so a date and a time of day cannot disagree.
+ */
+export function wallTimeOf(
+  at: Date,
+  timezone: string,
+): { readonly hour: number; readonly minute: number } {
+  const { hour, minute } = partsOf(at, 'gregorian', timezone, true);
+  return { hour, minute };
+}
+
 /** The calendar date an instant falls on, in a zone. */
 export function civilDateOf(at: Date, presentation: ReportPresentation): CivilDate {
   const { year, month, day } = partsOf(at, presentation.calendar, presentation.timezone, false);
@@ -205,8 +217,10 @@ export function localInstant(
   date: CivilDate,
   hour: number,
   presentation: ReportPresentation,
+  /** HF-A9: a wall time that is not on the hour (a quiet window ending at 07:30). */
+  minute = 0,
 ): Date {
-  const naive = utcDayOf(date, presentation.calendar) * DAY_MS + hour * 3_600_000;
+  const naive = utcDayOf(date, presentation.calendar) * DAY_MS + hour * 3_600_000 + minute * 60_000;
   const wallAt = (at: number): number => {
     const wall = partsOf(new Date(at), 'gregorian', presentation.timezone, true);
     return Date.UTC(wall.year, wall.month - 1, wall.day, wall.hour, wall.minute, wall.second);

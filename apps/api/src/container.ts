@@ -142,6 +142,7 @@ import { DrizzleSettingRepository } from './modules/control/settings/infrastruct
 import { SettingsResolver } from './modules/control/settings/application/settings-resolver.js';
 import { SettingsService } from './modules/control/settings/application/settings.service.js';
 import { ReminderThresholdsGuard } from './modules/control/settings/application/reminder-thresholds.guard.js';
+import { QuietHoursGuard } from './modules/control/settings/application/quiet-hours.guard.js';
 import { SignupGiftTermsGuard } from './modules/control/settings/application/signup-gift-terms.guard.js';
 import { SignupGiftActivationGuard } from './modules/control/features/application/signup-gift-activation.guard.js';
 import { TenantMediaService } from './modules/control/media/application/tenant-media.service.js';
@@ -342,6 +343,7 @@ import {
   CustomerReminderLoop,
 } from './modules/commerce/messaging/application/customer-reminder-loop.js';
 import { DrizzleCustomerReminderFactsReader } from './modules/commerce/messaging/infrastructure/drizzle-customer-reminder-facts.reader.js';
+import { SettingsQuietHoursReader } from './modules/commerce/messaging/infrastructure/settings-quiet-hours.reader.js';
 import {
   ServiceReminderLoop,
   SERVICE_REMINDER_INTERVAL_MS,
@@ -548,6 +550,8 @@ export interface Container {
   readonly customerNotificationLoop: CustomerNotificationLoop;
   /** The lane's repository, shared so producers enqueue through the same object. */
   readonly customerNotifications: DrizzleCustomerNotificationRepository;
+  /** HF-A9: the quiet window the lane defers reminders by — the instance it is given. */
+  readonly reminderQuietHours: SettingsQuietHoursReader;
   readonly audit: AuditWriter;
   readonly opsLog: OperationalEventRecorder;
   /**
@@ -2733,6 +2737,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       // per-key schema can say so — see `ReminderThresholdsGuard`.
       // WP-A9: plus the week-out slot's own guard, asked only when that key is written.
       ...ReminderThresholdsGuard.withEarly(settingsResolver),
+      // HF-A9: the quiet window's start and end may not be equal.
+      ...QuietHoursGuard.all(settingsResolver),
       // The signup gift's three terms have to make a whole while the gift is on.
       ...SignupGiftTermsGuard.all(settingsResolver, featureFlagResolver),
     ],
@@ -3272,6 +3278,18 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    * rendering and the 429 classification cannot diverge between the reply path and the
    * background one.
    */
+  /*
+   * HF-A9: the quiet window, from the flag, its two settings and the tenant's display
+   * timezone. Readers only — the reason `serviceReminderSweep` gives — and the same cached
+   * presentation reader every rendered date uses, so the window and "expires today" agree
+   * about the tenant's local day. Exposed on the container so a test drives the lane with
+   * the very reader production uses.
+   */
+  const reminderQuietHours = new SettingsQuietHoursReader({
+    settings: settingsResolver,
+    features: featureFlagResolver,
+    presentation: templatePresentation,
+  });
   const customerNotificationLoop = new CustomerNotificationLoop(
     new CustomerNotificationService({
       notifications: customerNotificationRepository,
@@ -3324,6 +3342,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       reminderSnapshots: new DrizzleServiceReminderSnapshotReader(database.db),
       // WP-A9: the wallet alert's and the two pending reminders' send-time values.
       reminderFacts: new DrizzleCustomerReminderFactsReader(database.db),
+      // HF-A9: reminders claimed inside the tenant's quiet window wait for its end.
+      quietHours: reminderQuietHours,
       logger,
     }),
     {
@@ -4290,6 +4310,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     walletLowBalanceSweep,
     customerNotificationLoop,
     customerNotifications: customerNotificationRepository,
+    reminderQuietHours,
     audit,
     opsLog,
     opsLogWriter,

@@ -3,6 +3,7 @@ import {
   CUSTOMER_NOTIFICATION_BACKOFF_MS,
   CUSTOMER_NOTIFICATION_MAX_ATTEMPTS,
   CUSTOMER_NOTIFICATION_PRECONDITIONS,
+  CUSTOMER_NOTIFICATION_QUIET_HOURS,
   CUSTOMER_NOTIFICATION_TEMPLATES,
   SERVICE_REMINDER_NOTIFICATION_KINDS,
   type Clock,
@@ -43,6 +44,26 @@ export interface NotificationSubjectReader {
      */
     now: Date,
   ): Promise<boolean>;
+}
+
+/**
+ * A tenant's quiet window, resolved for one pass (HF-A9).
+ *
+ * `quietUntil` answers, for an instant, when the window holding it ends — or `null` when
+ * the instant is not inside it. An OBJECT resolved once per pass and asked per row, so a
+ * pass reads the flag, the two settings and the tenant's timezone once, and a pass that runs
+ * across the window's edge still answers each row by the clock at that row.
+ *
+ * The wall-clock arithmetic is behind this port because it is ICU's and lives beside the
+ * report calendar in infrastructure; the dispatcher only ever holds an instant.
+ */
+export interface QuietHoursSchedule {
+  quietUntil(at: Date): Date | null;
+}
+
+/** Resolves the quiet window for a pass: `null` when quiet hours are off. */
+export interface QuietHoursReader {
+  scheduleFor(scope: TenantContext): Promise<QuietHoursSchedule | null>;
 }
 
 /** How long a claimed row is held before another pass may take it. */
@@ -90,6 +111,11 @@ export interface NotificationSweepReport {
   readonly blocked: number;
   /** Claimed, then found to belong to a customer with no reachable chat at all. */
   readonly unreachable: number;
+  /**
+   * HF-A9: a reminder claimed inside the tenant's quiet window, put back on the queue until
+   * the window ends. No attempt spent, nothing sent, no row written — the same row waits.
+   */
+  readonly quietHours: number;
   /** The send threw. The lease stands and the row comes back later. */
   readonly errored: number;
   /**
@@ -261,6 +287,12 @@ export interface CustomerNotificationDeps {
       messageId: string,
     ): Promise<{ readonly values: TemplateValues; readonly ticketId: string } | null>;
   };
+  /**
+   * HF-A9: the tenant's quiet window. Asked once per pass; a reminder kind
+   * (`CUSTOMER_NOTIFICATION_QUIET_HOURS`) claimed inside it is deferred to its end. Absent
+   * means no quiet hours at all, which is what every kind had before.
+   */
+  readonly quietHours?: QuietHoursReader;
   readonly uow: UnitOfWork<TransactionScope>;
   readonly clock: Clock;
   readonly scopeIsActive: (scope: TenantContext) => Promise<boolean>;
@@ -308,6 +340,7 @@ export class CustomerNotificationService {
       unsupported: 0,
       blocked: 0,
       unreachable: 0,
+      quietHours: 0,
       errored: 0,
       lost: 0,
     };
@@ -326,13 +359,20 @@ export class CustomerNotificationService {
       this.deps.notifications.reapStranded(scope, now, limit, tx),
     );
 
+    /*
+     * The quiet window, once per pass and BEFORE the claim (HF-A9). A read that throws
+     * fails the pass before any row is leased, so nothing is held behind a lease for it.
+     */
+    const quiet =
+      this.deps.quietHours === undefined ? null : await this.deps.quietHours.scheduleFor(scope);
+
     const leaseUntil = new Date(now.getTime() + NOTIFICATION_LEASE_MS);
     const claimed = await this.deps.notifications.claimDue(scope, now, leaseUntil, limit);
 
     const report = { ...empty, claimed: claimed.length };
     const counts: Record<string, number> = {};
     for (const row of claimed) {
-      const outcome = await this.deliverOne(scope, row);
+      const outcome = await this.deliverOne(scope, row, quiet);
       counts[outcome] = (counts[outcome] ?? 0) + 1;
     }
     return {
@@ -346,6 +386,7 @@ export class CustomerNotificationService {
       unsupported: counts.unsupported ?? 0,
       blocked: counts.blocked ?? 0,
       unreachable: counts.unreachable ?? 0,
+      quietHours: counts.quietHours ?? 0,
       errored: counts.errored ?? 0,
       lost: counts.lost ?? 0,
     };
@@ -497,7 +538,11 @@ export class CustomerNotificationService {
     };
   }
 
-  private async deliverOne(scope: TenantContext, row: CustomerNotificationRecord): Promise<string> {
+  private async deliverOne(
+    scope: TenantContext,
+    row: CustomerNotificationRecord,
+    quiet: QuietHoursSchedule | null,
+  ): Promise<string> {
     try {
       /*
        * A kind this build cannot render: put it back, spend nothing, stamp nothing.
@@ -561,6 +606,42 @@ export class CustomerNotificationService {
             ),
           );
           return 'superseded';
+        }
+      }
+
+      /*
+       * Quiet hours (HF-A9): a REMINDER claimed inside the tenant's window is held until the
+       * window ends — never dropped, never duplicated, never sent at night.
+       *
+       * Here, at DISPATCH, rather than in each producer, because this is the one place every
+       * reminder passes: the service sweep, the wallet sweep and the pending-payment sweep
+       * all enqueue and never send, so one check covers all eleven kinds and any added later
+       * that `CUSTOMER_NOTIFICATION_QUIET_HOURS` marks. It also covers a reminder queued
+       * BEFORE the window that only becomes due inside it — held back by a rate limit, a
+       * retry backoff or a stopped worker — which a producer-side check could not see.
+       *
+       * Held by `deferUntil`, the lane's own "back on the queue, no attempt spent": the same
+       * row, still `PENDING`, with `next_attempt_at` at the window's end. Nothing is
+       * inserted, so `customer_notifications_subject_key` still names exactly one row per
+       * fact; the producers' own keys (`service_reminders`, `wallet_threshold_alerts`, the
+       * subject key on a payment or order) are untouched, so a later sweep inside the window
+       * finds the fact already raised and raises nothing.
+       *
+       * AFTER the precondition, so a reminder that is already stale is resolved SUPERSEDED
+       * now rather than held for hours first; and the precondition runs again when the held
+       * row is claimed at the window's end — every kind held here declares one — so a
+       * service renewed, a payment settled, an order cancelled or a wallet topped up while
+       * it waited is superseded then, not sent. BEFORE the stamp, like every other
+       * put-back, because the stamp is what makes an unsent message look sent.
+       */
+      if (quiet !== null && CUSTOMER_NOTIFICATION_QUIET_HOURS[row.kind]) {
+        const at = this.deps.clock.now();
+        const until = quiet.quietUntil(at);
+        if (until !== null) {
+          await this.deps.uow.run(scope, async (tx) =>
+            this.deps.notifications.deferUntil(scope, row.id, until, at, tx),
+          );
+          return 'quietHours';
         }
       }
 
