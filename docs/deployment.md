@@ -1420,6 +1420,41 @@ the previous release writes. While the release before R1 runs:
 
 Nothing needs doing before rolling back past R1.
 
+### What a rollback delays: broadcasts and mass operations (round N, B1/B2)
+
+Round N adds «ارسال همگانی» (broadcasts), «عملیات گروهی» (mass wallet credit and mass
+traffic/time grants) and the shared audience they are selected by
+(`docs/round-n-broadcast-audit.md`). Migrations `0144_round_n_broadcast` and
+`0145_round_n_bulk_not_before` only add: new tables, an index on `trial_grants`, a widened
+notification-kind CHECK, and role rows for three new permissions. The release before them
+never reads the new tables. While it runs:
+
+- **A broadcast that is sending stops, and nothing is lost.** The old worker has no
+  broadcast dispatcher, so every recipient still `PENDING` waits. A send stamped at the
+  moment the new worker stopped was either recorded (the worker's shutdown waits for the pass
+  in flight) or is resolved `UNCONFIRMED` by the reaper after the roll-forward and is never
+  sent twice. A `SCHEDULED` broadcast whose time passes during the rollback starts, late,
+  on the roll-forward; cancel it first if late is wrong.
+- **A mass operation stops between items, never inside one.** Each item is one
+  transaction, so an item is either wholly credited (or planned) or untouched. Items still
+  `PENDING` wait. Traffic/time operations already planned are ordinary `ADD_TRAFFIC` /
+  `ADD_TIME` provisioning operations with no order, which the previous provisioner executes
+  and reconciles as it does a free location change; their bulk items are settled from the
+  operation's state after the roll-forward. This was exercised against this release's
+  provisioner only.
+- **The two new notices wait.** `WALLET_MASS_CREDITED` and `SERVICE_GIFT_APPLIED` have no
+  template in the old dispatcher, which defers them without spending an attempt; they are
+  delivered after the roll-forward.
+- **Staged broadcast media is kept.** The old worker has no retention sweep for it; nothing
+  new can be staged while it runs, so what is held stays within the 200 MB per-tenant bound
+  and is cleared by the new sweep after the roll-forward.
+- **The pages are gone from the old Web Admin** and the new permissions are charged by
+  nothing; the role rows stay and apply again with the roll-forward.
+
+Nothing needs doing before rolling back past round N. Pausing a broadcast that is sending is
+the courteous step, so its report says «متوقف‌شده» rather than «در حال ارسال» while the old
+release runs.
+
 ### How far back you can roll
 
 **One release**, safely. Migrations are expand-only within a release
