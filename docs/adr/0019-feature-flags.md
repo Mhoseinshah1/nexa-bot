@@ -81,6 +81,27 @@ operator states what they are turning off, and the audit row records the reason.
 `settings.destructive` is not a "more powerful settings" permission and is not
 used here.
 
+#### Amended by WP-A2
+
+The owner removed the typed confirmation from feature flags. An operator must
+never type an internal key, and an ordinary enable or disable does not ask for a
+reason. So:
+
+- The server refuses no toggle for want of `confirmKey` or `reason`. Both are
+  still accepted, so an older client keeps working. `confirmKey` is ignored. A
+  given reason is trimmed, stored on the flag row and written to the audit row as
+  before. The audit row records actor, time, action, before and after either way.
+- `blastRadius` stays declared and descriptive. It no longer gates the write.
+- The Web Admin asks a plain yes/cancel question before switching off only those
+  features whose switch-off silently stops something people rely on, or loses
+  what happens while it is off. That set is in
+  `apps/web/src/pages/features-catalogue.ts`, not in the contract, because it
+  changes nothing the server does.
+
+The CBR-009 lesson still holds on the screen: the whole-bot kill switch is not
+drawn like the dice toggle. What changed is the form the difference takes. It is
+now a question the operator answers, not a test the operator passes.
+
 ## What was drafted and removed
 
 `opslog_retention`, with an `opslog.retention_days` setting behind it. Both were

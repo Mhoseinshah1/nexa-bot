@@ -698,6 +698,26 @@ textarea {
   display: grid;
   gap: 14px;
 }
+
+/*
+ * WP-A1: the settings page, one section per group of settings. The heading names the
+ * group; each setting inside is still its own card, saved by its own button.
+ */
+.settings-group {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+.settings-group-head {
+  font-size: 14px;
+  color: var(--fg-2);
+}
+.settings-technical {
+  margin-top: 12px;
+}
+.settings-technical summary {
+  cursor: pointer;
+}
 .grid.c2 {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
@@ -1841,6 +1861,78 @@ textarea.input {
   fill: var(--text-3);
 }
 
+/* --- Features (WP-A2) ------------------------------------------------------ */
+
+.feature-settings {
+  margin-top: 12px;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+.feature-settings h3 {
+  margin: 0 0 6px;
+  color: var(--fg-2);
+  font-weight: 600;
+}
+.feature-settings dl {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12.75px;
+}
+.feature-settings dl > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+}
+.feature-settings dt {
+  color: var(--fg-2);
+}
+.feature-settings dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Holds a feature's switch so focus can be handed back to it; adds no box. */
+.switch-slot {
+  display: contents;
+}
+
+/* A plain yes/cancel confirmation over the page (`ui/confirm-dialog.tsx`). */
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.5);
+}
+.dialog {
+  width: 100%;
+  max-width: 420px;
+  background: var(--bg-2);
+  border: 1px solid var(--line-2);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  padding: 18px;
+}
+.dialog h2 {
+  margin: 0 0 8px;
+  font-size: 15px;
+}
+.dialog p {
+  margin: 0 0 8px;
+}
+.dialog-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-start;
+  margin-top: 14px;
+}
+
 /*
  * `hidden` means hidden, whatever else a rule says about display.
  *
@@ -2003,6 +2095,76 @@ textarea.input {
   min-height: 22px;
   margin-top: 6px;
   font-size: 13px;
+}
+
+/* --- Bot texts (the template screen, WP-A3) -------------------------------- */
+
+/*
+ * The editor and its helpers stacked with room between them. The card used to be
+ * a bare form: a textarea a few words wide with its label beside it.
+ */
+.template-card form > * + * {
+  margin-top: 10px;
+}
+.template-card label {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 12.25px;
+  font-weight: 500;
+  color: var(--fg-2);
+}
+.template-card textarea.input {
+  display: block;
+  width: 100%;
+  min-height: 120px;
+}
+.template-card input.input {
+  width: 100%;
+  max-width: 460px;
+}
+.template-card details > summary {
+  cursor: pointer;
+  font-weight: 500;
+  color: var(--fg-2);
+}
+.template-card details[open] > summary {
+  margin-bottom: 8px;
+}
+.template-card table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+.template-card th,
+.template-card td {
+  padding: 6px 8px;
+  text-align: start;
+  border-bottom: 1px solid var(--line);
+}
+/*
+ * One column that may shrink to the viewport. A bare `.grid` sizes its implicit track to
+ * its widest child, which on a phone made the whole screen scroll sideways.
+ */
+.template-stack {
+  grid-template-columns: minmax(0, 1fr);
+}
+.template-card code {
+  overflow-wrap: anywhere;
+}
+/* Grows to fill the toolbar, and shrinks below it on a phone instead of widening the page. */
+.template-search {
+  flex: 1 1 260px;
+  min-width: 0;
+}
+/* Four columns and long tokens: the table scrolls inside the card, the page does not. */
+.template-table {
+  overflow-x: auto;
+}
+/* A token chip wraps as a whole; many of them wrap as a list. */
+.template-tokens {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 [hidden] {

@@ -5959,6 +5959,13 @@ contract change and a product decision, and a dropdown does not get to make
 it by omission. `sales.currency` IS narrowed, by its own schema, and its
 editor says so.
 
+WP-A1 (Settings UX) later narrowed the select's OFFER to the store's selling
+currency, and kept the rule this row protects: a stored code outside it stays
+selectable, with a warning, so a save never rewrites a currency nobody chose.
+The row now cites the test that pins that half. Re-measured on the WP-A1
+branch: 2/42, `expected 'IRT' to be 'USD'` (`settings.tsx` restored to
+`61ca2e25ad9fb124`).
+
 The fixes: the list and the profile poll through `pollUnlessFinal` (the list
 at the detail's cadence, the profile once a minute); the select maps
 `CURRENCY_CODES`; the attention card reads `nextCursor` and, when it is set,
@@ -5976,14 +5983,14 @@ Each rule reverted in the working tree, its suite run, the file restored and
 its hash compared (`falsify57.out` in the session scratchpad; the hashes are
 quoted here so the restore is checkable against the commit).
 
-| #   | rule                                                             | mutation                                                  | tests that die                                                                                                       |
-| --- | ---------------------------------------------------------------- | --------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| CX1 | the panel list polls                                             | delete its `refetchInterval`                              | `permissions-and-refresh.test.tsx` › re-reads the list so a new health result appears in it                          |
-| CX2 | the top-up select offers every code `moneySchema` accepts        | back to `['IRT', 'IRR']`                                  | `settings-and-alerts.test.tsx` › offers every currency the top-up minimum accepts, and keeps a stored dollar minimum |
-| CX3 | a full first page makes the attention count a floor, and says so | `truncated = false`                                       | `permissions-and-refresh.test.tsx` › says the attention count is a floor when the first page was full                |
-| CX4 | the monitor profile polls                                        | delete its `refetchInterval`                              | `settings-and-alerts.test.tsx` › re-reads the monitor profile while the monitor tab stays open                       |
-| CX5 | the notification detail follows the list's denied state          | remove `!denied` from the query and all four render gates | `control-plane-pages.test.tsx` › hides the notification detail when log access is revoked                            |
-| CX6 | a cursor is ours only if it re-encodes to itself                 | delete the canonical check                                | `panels-http.test.ts` › refuses a malformed cursor with a 400 rather than restarting the traversal                   |
+| #   | rule                                                             | mutation                                                  | tests that die                                                                                                  |
+| --- | ---------------------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| CX1 | the panel list polls                                             | delete its `refetchInterval`                              | `permissions-and-refresh.test.tsx` › re-reads the list so a new health result appears in it                     |
+| CX2 | the top-up select keeps a stored code `moneySchema` accepts      | back to `['IRT', 'IRR']`                                  | `settings-and-alerts.test.tsx` › keeps a stored dollar minimum selectable, offers the store currency, and warns |
+| CX3 | a full first page makes the attention count a floor, and says so | `truncated = false`                                       | `permissions-and-refresh.test.tsx` › says the attention count is a floor when the first page was full           |
+| CX4 | the monitor profile polls                                        | delete its `refetchInterval`                              | `settings-and-alerts.test.tsx` › re-reads the monitor profile while the monitor tab stays open                  |
+| CX5 | the notification detail follows the list's denied state          | remove `!denied` from the query and all four render gates | `control-plane-pages.test.tsx` › hides the notification detail when log access is revoked                       |
+| CX6 | a cursor is ours only if it re-encodes to itself                 | delete the canonical check                                | `panels-http.test.ts` › refuses a malformed cursor with a 400 rather than restarting the traversal              |
 
 Measured: CX1 — 1/36, `expected 1 to be greater than 1` (`panels.tsx`
 `62afc6135d6b792d`). CX2 — 1/38, `expected 'IRT' to be 'USD'`

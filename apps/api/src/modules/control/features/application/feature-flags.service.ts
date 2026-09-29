@@ -77,22 +77,28 @@ export const setFeatureFlagCommandSchema = z.object({
   enabled: z.boolean(),
   expectedVersion: z.number().int().positive().nullable(),
   /**
-   * Typed confirmation of the target's identity, for a TENANT_WIDE flag.
+   * RETIRED (WP-A2), and accepted only so an older client is not refused.
    *
-   * ADR-0010 asks for confirmation proportional to blast radius, and this is
-   * the shape it prescribes for a change that is not merely cosmetic: the
-   * operator names what they are changing. In the legacy system the whole-bot
-   * kill switch is rendered identically to the dice toggle and takes one press.
+   * It was the typed confirmation of ADR-0010: a TENANT_WIDE toggle was refused unless
+   * the operator typed the flag's own key. The owner removed it — an operator must never
+   * type an internal key — so it is parsed, never read, and never part of the request
+   * hash. The key in the path is the only name the write uses.
    */
   confirmKey: z.string().optional(),
-  // TRIMMED before it is measured. `min(3)` accepted three spaces, and the
-  // guard below only asks whether a reason is present — so a TENANT_WIDE
-  // toggle could commit with an audit row explaining nothing, which is the
-  // whole safeguard defeated by the cheapest possible input.
+  /**
+   * An optional note for the audit row, no longer required of any flag (WP-A2).
+   *
+   * Trimmed, and a blank one becomes NO reason rather than a refusal or an empty string
+   * in the audit column. The old `min(3)` existed because a mandatory reason of three
+   * spaces defeated the safeguard; with nothing mandatory there is nothing to defeat, and
+   * refusing "  " would fail an old client for sending less than it used to have to.
+   * The audit row records actor, time and action whether or not a reason is given.
+   */
   reason: z
     .string()
     .transform((value) => value.trim())
-    .pipe(z.string().min(3).max(500))
+    .pipe(z.string().max(500))
+    .transform((value) => (value === '' ? undefined : value))
     .optional(),
 });
 export type SetFeatureFlagCommand = z.infer<typeof setFeatureFlagCommandSchema>;
@@ -231,31 +237,17 @@ export class FeatureFlagsService {
 
     const command = setFeatureFlagCommandSchema.parse(input);
     const key = this.requireKey(command.key);
-    const definition = featureFlagDefinition(key);
-
-    if (definition.blastRadius === 'TENANT_WIDE') {
-      if (command.confirmKey !== key) {
-        throw errors.validation(
-          CONTROL_ERROR_CODES.CONFIRMATION_REQUIRED,
-          `${key} affects every customer of this tenant. Confirm by naming the flag.`,
-          { key, blastRadius: definition.blastRadius },
-        );
-      }
-      if (!command.reason) {
-        throw errors.validation(
-          CONTROL_ERROR_CODES.CONFIRMATION_REQUIRED,
-          `${key} affects every customer of this tenant. A reason is required.`,
-          { key },
-        );
-      }
-    }
+    // No typed key and no reason is asked of any flag (WP-A2). Blast radius is
+    // shown by the surface; it does not gate the write.
 
     // The reason is part of the request, so it is part of the hash.
     //
     // It is persisted and audited, and leaving it out made a retry that carried
     // a DIFFERENT reason look like the same request: the store answered with the
     // first one's result, so the API accepted a reason it never stored. For a
-    // TENANT_WIDE toggle the reason is the half a reviewer reads later.
+    // TENANT_WIDE toggle the reason is the half a reviewer reads later. Optional
+    // since WP-A2, and an absent one hashes as null, so a replay without a reason
+    // matches the first request without one.
     const requestHash = hashRequest({
       key,
       enabled: command.enabled,

@@ -33,6 +33,7 @@ import {
   isSettingKey,
   parseSettingValue,
   settingDefinition,
+  settingIntegerRange,
   type FeatureFlagKey,
   type SettingKey,
 } from '@nexa/contracts';
@@ -174,6 +175,32 @@ describe('the settings registry', () => {
       expect(forbidden.test(setting.key), setting.key).toBe(false);
     }
     expect(SETTINGS.every((s) => s.classification !== ('SECRET' as never))).toBe(true);
+  });
+
+  /**
+   * WP-A1: the admin's numeric field states the range it accepts, and that range is read
+   * from the schema. Checked against the schema at both edges, for every key that reports
+   * one, so the statement on screen and the rule the server enforces cannot disagree.
+   */
+  it('reports the exact integer range each numeric setting accepts', () => {
+    const ranged = SETTINGS.map((s) => s.key as SettingKey).flatMap((key) => {
+      const range = settingIntegerRange(key);
+      return range === null ? [] : [{ key, range }];
+    });
+    expect(ranged.length).toBeGreaterThan(10);
+    for (const { key, range } of ranged) {
+      expect(parseSettingValue(key, range.min).ok, `${key} min`).toBe(true);
+      expect(parseSettingValue(key, range.max).ok, `${key} max`).toBe(true);
+      expect(parseSettingValue(key, range.min - 1).ok, `${key} below`).toBe(false);
+      expect(parseSettingValue(key, range.max + 1).ok, `${key} above`).toBe(false);
+    }
+    expect(settingIntegerRange('ops.notifications.max_attempts')).toEqual({ min: 1, max: 10 });
+    // Nullable: null is "not set", not a bound, so the number inside still has a range.
+    expect(settingIntegerRange('referral.commission_percent')).not.toBeNull();
+    // No ceiling an operator could use, and not a number at all.
+    expect(settingIntegerRange('ops.notifications.telegram_topic_id')).toBeNull();
+    expect(settingIntegerRange('sales.currency')).toBeNull();
+    expect(settingIntegerRange('wallet.topup.minimum')).toBeNull();
   });
 });
 
