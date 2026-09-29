@@ -363,3 +363,66 @@ alone, with no network:
 - **`OQ-WP13-01`** — what `DISABLED` means for a bot, and who may clear it.
 - **`OQ-WP13-02`** — whether a BotFather token revocation keeps the bot's webhook
   registration. The live check answers it per installation, from Telegram.
+
+---
+
+## 7. R4 amendment (v0.3.5 real-test brief, item 12) — replacement registers the webhook
+
+Testing v0.3.5 on a real bot found the defect D4 left open: a new token was accepted and
+the bot stayed offline. D4 stored the token after `getMe` and deliberately touched neither
+the webhook nor the secret, leaving `OQ-WP13-02` to the live check and to `botctl telegram
+register`. That remedy did not work either: the bootstrap's rerun decided "already
+registered" from this installation's own row (`registrationIsCurrent`), which still said
+registered, and returned without calling Telegram.
+
+What changed, and what did not:
+
+- **Replacement is staged, and nothing is stored until Telegram is shown to deliver
+  here.** Local checks (permission, the token's claimed id, the route and secret this
+  process serves, the recorded origin, tenant activity), then a per-bot claim, then
+  `getMe` (valid, `is_bot`, the SAME id), `getWebhookInfo` (the prior registration),
+  `setWebhook` (the installation's URL and secret, `drop_pending_updates: false`,
+  `allowed_updates: []` — the documented reset to the default set), `getWebhookInfo` again
+  (the registration must be EXACTLY the expected URL, with no update type the bot handles
+  left out), and only then one transaction storing the token, the identity `getMe` reported
+  and the webhook marker. The response carries that verification as a diagnostic.
+- **The webhook URL is recomposed, never supplied.** §1.4 still holds — the API is not told
+  the public origin — but it has the origin the installer registered and recorded
+  (`webhook_url`), the source `DrizzlePublicOriginReader` already uses for payment
+  callbacks. The URL is recomposed through the one composition the bootstrap also uses
+  (`domain/webhook-url.ts`) and trusted only when the recomposition equals the record. No
+  record, or one that is not this bot's route on https, is refused with
+  `bot.webhook_origin_unknown` before anything is sent.
+- **Compensation.** A failure after `setWebhook` puts Telegram back as far as it can be: a
+  bot that had no webhook has none again; one that delivered here already needs nothing
+  undone; one registered elsewhere cannot be restored (Telegram never reveals the secret),
+  so its webhook is removed and Telegram holds the updates. Removal is compare-then-delete
+  — a registration somebody made meanwhile is left alone. Each such failure opens the
+  operational event `bot.token_replacement_incomplete` for that bot (closed by the next
+  replacement that completes, `bot.token_replacement_completed`) and answers a 4xx whose
+  details name the stage, the compensation, the expected and actual URL and Telegram's
+  redacted reason. Nothing reports "replaced" unless the storing transaction committed.
+- **One replacement at a time per bot.** `bot_instances.token_replacement_claim` and
+  `…_claimed_until` (migration `0140`) are a lease taken by conditional UPDATE before the
+  first Telegram call; activation is conditional on it still being this attempt's. A second
+  submission while one runs — same key or another — is `bot.token_replacement_in_progress`
+  and makes no Telegram call. A replayed key answers the first result, verification
+  included.
+- **The same token is no longer a short-cut.** It is registered and verified like any
+  other and answers `changed: false`; that is how a bot left silent by v0.3.5 is repaired.
+- **The bootstrap asks too.** A rerun that would answer ALREADY_COMPLETE first reads the
+  registration; one that shows another URL (none included) or a narrowed update set is
+  re-registered, keeping the queue. An unreadable answer leaves the old behaviour.
+- **The username is refreshed** from `getMe` (it drifts on a BotFather rename,
+  `OQ-TG-02`), and written only when no other row holds it: the column is unique, and a
+  stale copy elsewhere must not fail a verified replacement.
+- **Unchanged:** same bot only (ADR-0029: never a repoint), `settings.destructive`, the
+  token never in the request hash, no domain event (no state machine moved).
+
+The live check (D5) now carries the URL this installation expects beside the one Telegram
+reports, an exact comparison, and a `verdict` — ready to receive, or every problem in the
+way, each with its remedy in the Web Admin.
+
+What a crash cannot cover: a process that dies between `setWebhook` and the storing
+transaction leaves Telegram registered here and the old token stored, with the claim held
+until its five-minute lease lapses. Submitting the token again after that converges.
