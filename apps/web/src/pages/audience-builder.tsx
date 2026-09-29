@@ -31,6 +31,8 @@ import { Banner, Field, KV } from '../ui/kit';
 /** The definition as the builder edits it: the contract's input shape. */
 export interface AudienceDraft {
   version: 1;
+  /** Hand-picked customers (Mirza's per-user send); null means no restriction. */
+  customerIds: string[] | null;
   customerStatus: AudienceCustomerStatus;
   segment: { ordinary: boolean; resellerTierIds: string[] } | null;
   purchase: AudiencePurchaseFilter;
@@ -55,6 +57,7 @@ export interface AudienceDraft {
 
 export const EMPTY_AUDIENCE: AudienceDraft = {
   version: 1,
+  customerIds: null,
   customerStatus: 'ACTIVE',
   segment: null,
   purchase: 'ANY',
@@ -191,6 +194,27 @@ export function AudienceBuilder({
           </label>
         ))}
       </div>
+
+      <Field
+        label={t('web.aud_customer_ids')}
+        htmlFor="aud-ids"
+        hint={t('web.aud_customer_ids_hint')}
+      >
+        <textarea
+          id="aud-ids"
+          dir="ltr"
+          rows={2}
+          disabled={disabled}
+          value={(value.customerIds ?? []).join('\n')}
+          onChange={(event) => {
+            const ids = event.target.value
+              .split(/[\s,]+/u)
+              .map((id) => id.trim())
+              .filter((id) => id !== '');
+            set({ customerIds: ids.length === 0 ? null : ids });
+          }}
+        />
+      </Field>
 
       <div className="grid-2">
         <Field label={t('web.aud_purchase')} htmlFor="aud-purchase">
@@ -482,6 +506,9 @@ export function describeAudience(definition: unknown): string[] {
   const d = draftOf(definition);
   const lines: string[] = [];
   lines.push(`${t('web.aud_status')}: ${t(STATUS_LABELS[d.customerStatus])}`);
+  if (d.customerIds !== null) {
+    lines.push(`${t('web.aud_customer_ids')}: ${formatNumber(d.customerIds.length)}`);
+  }
   if (d.segment !== null) {
     const parts = [
       ...(d.segment.ordinary ? [t('web.aud_ordinary')] : []),
