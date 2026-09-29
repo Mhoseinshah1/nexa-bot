@@ -763,11 +763,11 @@ describe('the panel detail', () => {
     expect(rowFor(t('web.cap_row_renew'))[1]).toBe(t('web.cap_supported'));
     expect(rowFor(t('web.cap_row_renew'))[3]).toBe(t('web.cap_customer_available'));
     expect(rowFor(t('web.cap_row_location_change'))[1]).toBe(t('web.cap_unsupported'));
-    expect(rowFor(t('web.cap_row_location_change'))[2]).toBe(t('web.cap_gap_not_in_release'));
+    expect(rowFor(t('web.cap_row_location_change'))[2]).toBe(t('web.cap_gap_not_supported'));
     expect(rowFor(t('web.cap_row_extra_devices'))[3]).toBe(t('web.cap_blocker_unsupported'));
     expect(rowFor(t('web.cap_row_terminate'))[3]).toBe(t('web.cap_customer_operator_only'));
     // No internal identifier leaks into the operator's screen.
-    for (const raw of ['RENEW_USER', 'EXTRA_DEVICES', 'NOT_IN_RELEASE', 'LOCATION_CHANGE']) {
+    for (const raw of ['RENEW_USER', 'EXTRA_DEVICES', 'NOT_SUPPORTED', 'LOCATION_CHANGE']) {
       expect(container.textContent ?? '', raw).not.toContain(raw);
     }
   });

@@ -307,7 +307,7 @@ describe('advanced provider settings', () => {
       'USAGE_READ',
       'TERMINATE',
     ]);
-    expect(row('LOCATION_CHANGE')).toMatchObject({ supported: false, gap: 'NOT_IN_RELEASE' });
+    expect(row('LOCATION_CHANGE')).toMatchObject({ supported: false, gap: 'NOT_SUPPORTED' });
     expect(row('EXTRA_DEVICES')?.customer).toEqual({ available: false, blocker: 'UNSUPPORTED' });
     // Rotation is supported and needs the tenant switch as well.
     expect(row('ROTATE_SUBSCRIPTION')?.customer).toEqual({

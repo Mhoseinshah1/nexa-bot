@@ -339,7 +339,7 @@ export function capabilityRegistry(
       : {
           row,
           supported: false,
-          gap: row === 'LOCATION_CHANGE' ? 'NOT_IN_RELEASE' : 'NOT_SUPPORTED',
+          gap: 'NOT_SUPPORTED',
         },
   );
 }

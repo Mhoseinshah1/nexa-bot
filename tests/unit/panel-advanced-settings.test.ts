@@ -6,6 +6,7 @@ import {
   canAddTime,
   canAddVolume,
   canAdjustDeviceLimit,
+  canChangeLocation,
   canDeleteUser,
   canDisableUser,
   canEnableUser,
@@ -74,6 +75,17 @@ function declaring(
   });
 }
 
+/**
+ * An adapter with WP-A6's two location methods added over another's, whatever it
+ * declares. Never a real provider: no provider declares `LOCATION_CHANGE` in this release.
+ */
+function withLocationMethods(base: ProviderConnectionAdapter): ProviderConnectionAdapter {
+  return Object.assign(Object.create(base) as ProviderConnectionAdapter, {
+    readLocation: async () => ({ ok: true, found: false }),
+    applyLocation: async () => ({ ok: true, found: false }),
+  });
+}
+
 /** An adapter with one method removed, whatever it declares. */
 function without(base: ProviderConnectionAdapter, method: keyof ProviderAdapter) {
   return Object.assign(Object.create(base) as ProviderConnectionAdapter, { [method]: undefined });
@@ -117,14 +129,33 @@ describe('the capability registry', () => {
     expect(supportedRows(new SanaeiAdapter())).toEqual(['CREATE_SERVICE', 'USAGE_READ']);
   });
 
-  it('reads location change as absent from this release for every provider', () => {
+  it('reads location change as unsupported by every provider', () => {
     for (const type of IMPLEMENTED_PROVIDER_TYPES) {
       expect(entryFor(providerAdapter(type), 'LOCATION_CHANGE')).toEqual({
         row: 'LOCATION_CHANGE',
         supported: false,
-        gap: 'NOT_IN_RELEASE',
+        gap: 'NOT_SUPPORTED',
       });
     }
+  });
+
+  /*
+   * The row asks WP-A6's guard, so it can read supported — for an adapter that declares
+   * `LOCATION_CHANGE` AND has both location methods — and says why when either half is
+   * missing. The adapters here are synthetic; no provider declares the capability.
+   */
+  it('reads location change from the declaration and both location methods', () => {
+    const rick = new RickpanelAdapter();
+    const declares = [...rick.descriptor.capabilities, 'LOCATION_CHANGE' as const];
+    const full = declaring(withLocationMethods(rick), declares);
+    expect(canChangeLocation(full as ProviderAdapter)).toBe(true);
+    expect(entryFor(full, 'LOCATION_CHANGE')).toEqual({
+      row: 'LOCATION_CHANGE',
+      supported: true,
+      gap: null,
+    });
+    expect(entryFor(withLocationMethods(rick), 'LOCATION_CHANGE').gap).toBe('NOT_DECLARED');
+    expect(entryFor(declaring(rick, declares), 'LOCATION_CHANGE').gap).toBe('NOT_IMPLEMENTED');
   });
 
   it('reads reset traffic and extra users as unsupported by every provider', () => {
@@ -201,6 +232,8 @@ describe('the capability registry', () => {
       without(rick, 'applyAllowance'),
       without(rick, 'terminateUser'),
       without(rick, 'fetchSubscriptionFiles'),
+      declaring(withLocationMethods(rick), [...rick.descriptor.capabilities, 'LOCATION_CHANGE']),
+      withLocationMethods(rick),
     ];
     const guards: Partial<Record<CapabilityRegistryRow, (adapter: ProviderAdapter) => boolean>> = {
       RENEW: canRenewUser,
@@ -210,6 +243,7 @@ describe('the capability registry', () => {
       ROTATE_SUBSCRIPTION: canRotateSubscription,
       SUBSCRIPTION_FILES: canFetchSubscriptionFiles,
       EXTRA_DEVICES: canAdjustDeviceLimit,
+      LOCATION_CHANGE: canChangeLocation,
       TERMINATE: canDeleteUser,
       CREATE_SERVICE: (adapter) => adapter.supports('CREATE_USER'),
       USAGE_READ: (adapter) => adapter.supports('READ_USAGE'),
