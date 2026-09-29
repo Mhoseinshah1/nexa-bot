@@ -118,6 +118,9 @@ async function main(): Promise<void> {
         // that looks exactly like nothing being wrong — so it is health-checked rather
         // than trusted.
         ['customer-notifications', true, () => container.customerNotificationLoop.isFresh(now)],
+        // Round N: the broadcast lane. No flag: a confirmed broadcast nobody sends is a
+        // report that says "sending" for ever, and silence is what a stalled lane looks like.
+        ['broadcasts', true, () => container.broadcastLoop.isFresh(now)],
         // The administrators' receipt push (ADR-0031). No flag, for the customer lane's
         // reason: a receipt nobody is told about is a customer waiting on a reviewer who
         // does not know, and silence is exactly what a stalled lane looks like.
@@ -204,6 +207,8 @@ async function main(): Promise<void> {
   // And the customer notification lane. `docs/phase4h-audit.md` §1 measured what it
   // replaces: exactly one thing could be said to a customer who was not looking.
   container.customerNotificationLoop.start();
+  // Round N: and the broadcast lane — frozen recipients, paced per bot, at most once.
+  container.broadcastLoop.start();
   // And the administrators' receipt push: a new card-to-card receipt, to every Telegram
   // administrator who may decide it (WP10 follow-up §3, ADR-0031).
   container.receiptReviewPushLoop.start();
