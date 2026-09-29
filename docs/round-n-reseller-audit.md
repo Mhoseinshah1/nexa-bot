@@ -22,17 +22,17 @@ repayment, no settlement, no ageing, no fee, no wallet debit, no sub-bots.**
 
 ## 1. What already exists
 
-| Owner's need                                  | Already there                                                                                                                                                                                                                  | Gap                                                                                             |
-| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------- |
-| Allowed Products per tier                     | `reseller_tier_grants` kind `PRODUCT`, subject a `products.id` (the existing catalogue — there is no second one), or `*`. Edited on `/reseller-tiers` through the grants editor, with product and category pickers.             | Not discoverable next to the plan settings; no preview of what a reseller can actually buy.   |
-| Allowed categories / panels                   | The same grants, kinds `CATEGORY` and `PANEL` (and `BOT`, `OPERATION`). A product is allowed when it OR its category is granted (one dimension, `CATALOGUE`).                                                                  | None.                                                                                           |
-| Per-reseller overrides                        | Pricing only: `resellers.pricing_mode` `TIER` / `LIST_PRICE` / `PERCENTAGE_DISCOUNT`, a `USER_OVERRIDE` step that REPLACES the tier's `TIER_PRICE` (R3). Credit limit: own, else the tier's (R8).                            | **No per-reseller entitlement override.** Every reseller on a tier can sell exactly the same.  |
-| Tier / per-reseller pricing on the same Products | The tier's rate and the reseller's own rate, applied by `PricingService.price` over `pricing-engine.ts` to the existing product's list price, frozen in the quote trace and in `order_reseller_terms` at confirmation (R3, R9). | None. A per-product reseller PRICE LIST is refused by the contract (`RESELLER_PRICING_MODES`: "a rate, never a price list") and by WP9 R14; this package keeps that. |
-| Effective-policy preview                      | The reseller edit form shows the tier's pricing next to "use the tier's". Nothing shows the entitlement a reseller ends up with.                                                                                               | **Missing.**                                                                                    |
-| Monthly minimum                               | Nothing. WP9 R14 and WP14 §3 list the monthly floor (`O-2`) as not built.                                                                                                                                                      | **Missing.**                                                                                    |
-| A reseller's sales in a period                | WP12 §5.7: PAID orders settled in the period that have an `order_reseller_terms` row, `sum(orders.total_amount)` per currency, sale purposes only (`SALE_ORDER_PURPOSES`). One SQL statement in `DrizzleReportingRepository.resellers`. | Not reusable: the `sold` CTE is inline in that one statement.                                  |
-| Periods in the tenant calendar                | `report-calendar.ts` (`resolveReportPeriod`, `IntlTimePeriodResolver`): the ONE implementation of `TimePeriodResolver`, ICU calendar arithmetic, half-open `[start, end)` UTC boundaries, `THIS_MONTH` / `PREVIOUS_MONTH` in the tenant's `display_timezone` and `calendar` (Jalali by default). DST-safe through `localInstant`. | None.                                                                                           |
-| Notifications                                 | The customer notification lane (ADR-0030): closed `CUSTOMER_NOTIFICATION_KINDS` pinned by a CHECK, one frozen template per kind, no payload; values read at send time from the SUBJECT row (the `WALLET_LOW_BALANCE` / `wallet_threshold_alerts` precedent: one occurrence row per fact, unique, `ON CONFLICT DO NOTHING`, then `notify`). `CustomerReminderLoop` runs the per-tenant sweeps. | Two kinds, one occurrence table and one sweep.                                                  |
+| Owner's need                                     | Already there                                                                                                                                                                                                                                                                                                                                                                                 | Gap                                                                                                                                                                  |
+| ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Allowed Products per tier                        | `reseller_tier_grants` kind `PRODUCT`, subject a `products.id` (the existing catalogue — there is no second one), or `*`. Edited on `/reseller-tiers` through the grants editor, with product and category pickers.                                                                                                                                                                           | Not discoverable next to the plan settings; no preview of what a reseller can actually buy.                                                                          |
+| Allowed categories / panels                      | The same grants, kinds `CATEGORY` and `PANEL` (and `BOT`, `OPERATION`). A product is allowed when it OR its category is granted (one dimension, `CATALOGUE`).                                                                                                                                                                                                                                 | None.                                                                                                                                                                |
+| Per-reseller overrides                           | Pricing only: `resellers.pricing_mode` `TIER` / `LIST_PRICE` / `PERCENTAGE_DISCOUNT`, a `USER_OVERRIDE` step that REPLACES the tier's `TIER_PRICE` (R3). Credit limit: own, else the tier's (R8).                                                                                                                                                                                             | **No per-reseller entitlement override.** Every reseller on a tier can sell exactly the same.                                                                        |
+| Tier / per-reseller pricing on the same Products | The tier's rate and the reseller's own rate, applied by `PricingService.price` over `pricing-engine.ts` to the existing product's list price, frozen in the quote trace and in `order_reseller_terms` at confirmation (R3, R9).                                                                                                                                                               | None. A per-product reseller PRICE LIST is refused by the contract (`RESELLER_PRICING_MODES`: "a rate, never a price list") and by WP9 R14; this package keeps that. |
+| Effective-policy preview                         | The reseller edit form shows the tier's pricing next to "use the tier's". Nothing shows the entitlement a reseller ends up with.                                                                                                                                                                                                                                                              | **Missing.**                                                                                                                                                         |
+| Monthly minimum                                  | Nothing. WP9 R14 and WP14 §3 list the monthly floor (`O-2`) as not built.                                                                                                                                                                                                                                                                                                                     | **Missing.**                                                                                                                                                         |
+| A reseller's sales in a period                   | WP12 §5.7: PAID orders settled in the period that have an `order_reseller_terms` row, `sum(orders.total_amount)` per currency, sale purposes only (`SALE_ORDER_PURPOSES`). One SQL statement in `DrizzleReportingRepository.resellers`.                                                                                                                                                       | Not reusable: the `sold` CTE is inline in that one statement.                                                                                                        |
+| Periods in the tenant calendar                   | `report-calendar.ts` (`resolveReportPeriod`, `IntlTimePeriodResolver`): the ONE implementation of `TimePeriodResolver`, ICU calendar arithmetic, half-open `[start, end)` UTC boundaries, `THIS_MONTH` / `PREVIOUS_MONTH` in the tenant's `display_timezone` and `calendar` (Jalali by default). DST-safe through `localInstant`.                                                             | None.                                                                                                                                                                |
+| Notifications                                    | The customer notification lane (ADR-0030): closed `CUSTOMER_NOTIFICATION_KINDS` pinned by a CHECK, one frozen template per kind, no payload; values read at send time from the SUBJECT row (the `WALLET_LOW_BALANCE` / `wallet_threshold_alerts` precedent: one occurrence row per fact, unique, `ON CONFLICT DO NOTHING`, then `notify`). `CustomerReminderLoop` runs the per-tenant sweeps. | Two kinds, one occurrence table and one sweep.                                                                                                                       |
 
 Every caller of the reseller rules goes through `ResellerService.standing(...).grants`: the
 catalogue courtesy (`ProductService` → `catalogueScope`), `OrderService.createDraft`, the
@@ -142,8 +142,8 @@ month and the previous one.
   until an operator sets a minimum (every minimum defaults to none).
 - `RESELLER_MINIMUM_ACHIEVED`: once the month's sales reach the minimum. Behind
   `reseller_minimum_achieved_notices`, OFF by default (a Nexa addition).
-- Subject: a `reseller_minimum_notices` row, unique on `(tenant, reseller, kind,
-  period_start)`, written `ON CONFLICT DO NOTHING` — at most one reminder and one
+- Subject: a `reseller_minimum_notices` row, unique on (tenant, reseller, kind, month),
+  written `ON CONFLICT DO NOTHING` — at most one reminder and one
   achievement per reseller per month, whatever the number of worker replicas or restarts;
   the lane's `customer_notifications_subject_key` then sends each once.
 - No payload (ADR-0030 §1): the values are read at send time from the notice row (the
@@ -167,16 +167,16 @@ unchanged.
 
 ## 4. Mirza evidence (`scratchpad/mirza-audit.md` §2 R2) and what is deliberately not built
 
-| Mirza behaviour                                                                                     | Status   | Nexa                                                                                     |
-| --------------------------------------------------------------------------------------------------- | -------- | ---------------------------------------------------------------------------------------- |
-| A per-tier monthly floor `📊 کف خرید ماهانه نمایندگی`; `0` means no requirement                   | VERIFIED | Per-tier minimum; null or 0 is none.                                                     |
-| A separate enabled flag                                                                             | VERIFIED | The minimum is inert at 0; the reminder has its own flag.                                |
-| A warning 3 days before month end                                                                   | VERIFIED | `reminders.reseller_minimum_days`, default 3.                                            |
-| What counts (`حداقل مبلغ پرداختی`)                                                                  | UNKNOWN  | Nexa's own decision: WP12's reseller sales amount (§3.2). Not parity.                    |
-| Which calendar                                                                                      | UNKNOWN  | Nexa's own decision: the tenant calendar (§3.3). Not parity. Consistent with `O-2`'s fallback (paid purchases, Jalali month). |
-| A reseller below the floor "loses reseller status"                                                  | PARTIAL — declared on a settings screen, never observed at runtime | **Intentionally NOT implemented.** No demotion, suspension or block. The metric it rests on is UNKNOWN and the owner's brief forbids an invented consequence. `O-2`'s 48-hour grace period exists only for a consequence, so it is not built either. |
-| The sales bot stops when a reseller leaves                                                          | PARTIAL  | Not applicable: Nexa has no reseller sub-bots, and none are built.                       |
-| Per-reseller floor override; a progress screen                                                      | NOT_EXPOSED | Nexa additions under the brief; not parity.                                          |
+| Mirza behaviour                                                                 | Status                                                             | Nexa                                                                                                                                                                                                                                                 |
+| ------------------------------------------------------------------------------- | ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A per-tier monthly floor `📊 کف خرید ماهانه نمایندگی`; `0` means no requirement | VERIFIED                                                           | Per-tier minimum; null or 0 is none.                                                                                                                                                                                                                 |
+| A separate enabled flag                                                         | VERIFIED                                                           | The minimum is inert at 0; the reminder has its own flag.                                                                                                                                                                                            |
+| A warning 3 days before month end                                               | VERIFIED                                                           | `reminders.reseller_minimum_days`, default 3.                                                                                                                                                                                                        |
+| What counts (`حداقل مبلغ پرداختی`)                                              | UNKNOWN                                                            | Nexa's own decision: WP12's reseller sales amount (§3.2). Not parity.                                                                                                                                                                                |
+| Which calendar                                                                  | UNKNOWN                                                            | Nexa's own decision: the tenant calendar (§3.3). Not parity. Consistent with `O-2`'s fallback (paid purchases, Jalali month).                                                                                                                        |
+| A reseller below the floor "loses reseller status"                              | PARTIAL — declared on a settings screen, never observed at runtime | **Intentionally NOT implemented.** No demotion, suspension or block. The metric it rests on is UNKNOWN and the owner's brief forbids an invented consequence. `O-2`'s 48-hour grace period exists only for a consequence, so it is not built either. |
+| The sales bot stops when a reseller leaves                                      | PARTIAL                                                            | Not applicable: Nexa has no reseller sub-bots, and none are built.                                                                                                                                                                                   |
+| Per-reseller floor override; a progress screen                                  | NOT_EXPOSED                                                        | Nexa additions under the brief; not parity.                                                                                                                                                                                                          |
 
 ---
 
@@ -189,13 +189,13 @@ dimension vocabulary; the route shapes and schemas below.
 Migration `0144_round_n_reseller_controls`: two nullable minimum pairs, the two override
 tables, the notice table, the widened notification-kind CHECK.
 
-| Route                                           | Permission                        | Write? |
-| ----------------------------------------------- | --------------------------------- | ------ |
-| `POST /reseller-tiers/:id/monthly-minimum`      | `resellers.edit`                  | yes, idempotent, audited `reseller_tier.monthly_minimum` |
-| `POST /resellers/:customerId/grants`            | `resellers.edit`                  | yes, idempotent, audited `reseller.grants_override`      |
-| `POST /resellers/:customerId/monthly-minimum`   | `resellers.edit`                  | yes, idempotent, audited `reseller.monthly_minimum`      |
-| `GET /resellers/:customerId/policy`             | `resellers.view`                  | no     |
-| `GET /reseller-minimums`                        | `resellers.view` and `orders.view` | no — per-reseller sales figures are order amounts, which `orders.view` already reads (the WP14 D2 split) |
+| Route                                         | Permission                         | Write?                                                                                                   |
+| --------------------------------------------- | ---------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `POST /reseller-tiers/:id/monthly-minimum`    | `resellers.edit`                   | yes, idempotent, audited `reseller_tier.monthly_minimum`                                                 |
+| `POST /resellers/:customerId/grants`          | `resellers.edit`                   | yes, idempotent, audited `reseller.grants_override`                                                      |
+| `POST /resellers/:customerId/monthly-minimum` | `resellers.edit`                   | yes, idempotent, audited `reseller.monthly_minimum`                                                      |
+| `GET /resellers/:customerId/policy`           | `resellers.view`                   | no                                                                                                       |
+| `GET /reseller-minimums`                      | `resellers.view` and `orders.view` | no — per-reseller sales figures are order amounts, which `orders.view` already reads (the WP14 D2 split) |
 
 Every write reads `ScopeActivityReader` inside its transaction, and carries an idempotency
 key.
@@ -204,4 +204,56 @@ key.
 
 ## 6. What was built, and the evidence
 
-(Filled in when the package is complete.)
+Built as §2–§5 describe.
+
+| Piece                                 | Where                                                                                                                                      |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| The override precedence, stated once  | `resellers/domain/entitlement.ts` — `effectiveGrants`                                                                                      |
+| Every caller judged by it             | `ResellerService.standing` returns the effective grants; nothing else changed in the order, pricing or catalogue paths                     |
+| Override write and preview            | `ResellerAdminService.replaceOverrides`, `.policy`; `DrizzleResellerRepository.overridesOf`, `.replaceOverrides`                           |
+| The minimum, stated once              | `resellers/domain/monthly-minimum.ts` — `effectiveMonthlyMinimum`, `minimumStanding`                                                       |
+| Minimum writes                        | `ResellerAdminService.setTierMinimum`, `.setMinimum`                                                                                       |
+| One definition of a reseller's sales  | `resellerSalesStatement` in `drizzle-reporting.repository.ts`, now used by the resellers report, the progress read and the notices         |
+| The tenant-calendar month             | `infrastructure/time/monthly-period.ts` — `TenantMonthlyPeriods`, over `resolveReportPeriod` and `localInstant`                            |
+| Progress and the notice sweep         | `resellers/application/reseller-minimum.service.ts`; the sweep runs on `CustomerReminderLoop` at the service-reminder cadence              |
+| Send-time values and the precondition | `resellers/infrastructure/drizzle-reseller-minimum-facts.ts`, called from the lane's facts and subject readers                             |
+| Web Admin                             | `pages/reseller-plans.tsx` (`/reseller-plans`); the policy card also on `/resellers`; the grants editor exported from `reseller-tiers.tsx` |
+| Rollback                              | `docs/deployment.md` — "What a rollback changes: reseller overrides and the monthly minimum"                                               |
+
+Tests:
+
+- `tests/unit/reseller-entitlement.test.ts`: `effectiveGrants` — narrowing drops the tier's
+  categories with its products, widening one dimension only, an empty override denies, a
+  grant outside its dimension is ignored, order does not matter; and the catalogue
+  agreement test over every tier grant subset × every dimension subset × three override
+  grant sets (2048 × 16 × 3 grant sets × 24 subjects).
+- `tests/unit/reseller-monthly-minimum.test.ts`: own-else-tier, an own zero, a tier zero,
+  floored progress, SUSPENDED; the Jalali month in Tehran (boundaries, the previous month
+  meeting it exactly, the last instant before local midnight), the reminder start and days
+  left, and a Berlin month across spring-forward and fall-back.
+- `tests/integration/reseller-plan-controls.test.ts` (16), real PostgreSQL: an override
+  narrows the catalogue and the draft to named existing Products for one reseller only; a
+  withdrawal after the draft is refused at confirmation and writes no terms; a widening
+  REPLACES the tier's panel; the preview's tier/override/effective and per-Product
+  answers; audit before/after, replay, foreign and misfiled subjects; tenant isolation;
+  tier and own minimums against the resellers report's own figure; a pre-registration
+  purchase and a fully refunded order not counted; SUSPENDED and zero; the permission
+  split (resellers.view + orders.view; resellers.edit to write); one reminder and one
+  achievement per reseller per month across passes and two concurrent replicas; nothing
+  with both switches off; **no ledger entry, payment, settlement reason, status or tier
+  change**; rendered values; supersession when the reseller reaches the minimum or an
+  operator removes it.
+- `tests/web/reseller-plans.test.tsx` (12): the nav entry and title, tiers in words with no
+  raw enum, the server's progress figures and the "no consequence" sentence, period and
+  filter sent to the server, no progress request without `orders.view`, the tier-minimum
+  body (zero is null), the preview, and an override body carrying only the own
+  dimensions.
+
+Mutations, each reverted after its run:
+
+| Mutation                                                      | Failed                                                  |
+| ------------------------------------------------------------- | ------------------------------------------------------- |
+| `effectiveGrants` replacing per KIND instead of per dimension | 3 unit cases                                            |
+| `standing` ignoring the override                              | 3 integration cases (catalogue, confirmation, widening) |
+| The reminder's precondition always holding                    | the integration supersession case                       |
+| `overridesBodyFrom` not masking inherited dimensions          | the web helper case                                     |

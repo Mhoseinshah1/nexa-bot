@@ -1420,6 +1420,33 @@ the previous release writes. While the release before R1 runs:
 
 Nothing needs doing before rolling back past R1.
 
+### What a rollback changes: reseller overrides and the monthly minimum (round N, package D)
+
+Package D lets an operator override a tier's entitlements for one reseller, set a monthly
+minimum sales figure on a tier or a reseller, and tell a reseller about it
+(`docs/round-n-reseller-audit.md`). Migration `0144_round_n_reseller_controls` only adds:
+three tables, two nullable column pairs and a widened notification-kind CHECK. While the
+release before package D runs:
+
+- **Every reseller is judged by their tier's grants again.** The old release does not read
+  `reseller_entitlement_overrides`, so a reseller an override NARROWED can again buy what
+  the tier allows, and one it WIDENED is refused what only the override allowed — at the
+  catalogue and at confirmation alike, since both read the same grants. If a narrowing
+  override exists for a reason that must hold during the rollback (a Product a reseller must
+  not sell), put it in the tier or suspend the reseller before rolling back. The overrides
+  are kept and come back into force with the roll-forward.
+- **The two monthly-minimum kinds wait.** A `RESELLER_MINIMUM_REMINDER` or
+  `RESELLER_MINIMUM_ACHIEVED` row still `PENDING` has no template in the old dispatcher,
+  which defers it without spending an attempt; after the roll-forward the reminder is
+  re-checked before it is sent, so a reseller who reached the minimum meanwhile is not
+  told they are behind.
+- **No notice is raised and the progress page is gone.** The minimums, the flags and
+  `reminders.reseller_minimum_days` are kept but ignored. The minimum never had a
+  consequence, so nothing about money, status or tiers differs.
+
+Nothing needs doing before rolling back past package D unless a narrowing override must
+keep holding (above).
+
 ### How far back you can roll
 
 **One release**, safely. Migrations are expand-only within a release
