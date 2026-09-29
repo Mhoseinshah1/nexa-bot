@@ -204,6 +204,16 @@ body that uses an undeclared token, drops a required one, or repeats a
 single-use one; the web editor, the service and the tests all call that one
 function, so they cannot disagree about what is valid.
 
+**What an operator reads about a template.** The Web Admin titles each template
+with a Persian name and one sentence on where the bot uses it, and explains each
+`{token}` with a Persian label, from `apps/web/src/i18n/templates.fa.ts`. That is
+admin chrome, not contract: the catalogue's English descriptions stay as they are,
+and a token is never renamed — `{amount}` is shown with «مبلغ» beside it. An entry
+is optional at the type level, so a key without one degrades to its raw key and
+catalogue description rather than breaking the screen, and
+`tests/unit/template-copy.test.ts` fails on every key, token or section left
+without one — so a package that adds a template key adds its Persian name too.
+
 ---
 
 ## Settings are readable

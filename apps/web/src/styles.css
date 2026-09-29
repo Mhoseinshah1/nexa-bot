@@ -2025,6 +2025,76 @@ textarea.input {
   font-size: 13px;
 }
 
+/* --- Bot texts (the template screen, WP-A3) -------------------------------- */
+
+/*
+ * The editor and its helpers stacked with room between them. The card used to be
+ * a bare form: a textarea a few words wide with its label beside it.
+ */
+.template-card form > * + * {
+  margin-top: 10px;
+}
+.template-card label {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 12.25px;
+  font-weight: 500;
+  color: var(--fg-2);
+}
+.template-card textarea.input {
+  display: block;
+  width: 100%;
+  min-height: 120px;
+}
+.template-card input.input {
+  width: 100%;
+  max-width: 460px;
+}
+.template-card details > summary {
+  cursor: pointer;
+  font-weight: 500;
+  color: var(--fg-2);
+}
+.template-card details[open] > summary {
+  margin-bottom: 8px;
+}
+.template-card table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+.template-card th,
+.template-card td {
+  padding: 6px 8px;
+  text-align: start;
+  border-bottom: 1px solid var(--line);
+}
+/*
+ * One column that may shrink to the viewport. A bare `.grid` sizes its implicit track to
+ * its widest child, which on a phone made the whole screen scroll sideways.
+ */
+.template-stack {
+  grid-template-columns: minmax(0, 1fr);
+}
+.template-card code {
+  overflow-wrap: anywhere;
+}
+/* Grows to fill the toolbar, and shrinks below it on a phone instead of widening the page. */
+.template-search {
+  flex: 1 1 260px;
+  min-width: 0;
+}
+/* Four columns and long tokens: the table scrolls inside the card, the page does not. */
+.template-table {
+  overflow-x: auto;
+}
+/* A token chip wraps as a whole; many of them wrap as a list. */
+.template-tokens {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 [hidden] {
   display: none !important;
 }
