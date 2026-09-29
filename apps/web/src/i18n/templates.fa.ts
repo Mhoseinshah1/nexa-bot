@@ -98,6 +98,16 @@ export const TEMPLATE_GROUPS_FA: readonly TemplateGroupDefinition[] = [
   },
   { id: 'transfer', label: 'انتقال سرویس', prefixes: ['bot.service.transfer_'] },
   {
+    id: 'extra_devices',
+    label: 'افزایش تعداد کاربر / دستگاه',
+    prefixes: ['bot.service.add_devices_button', 'bot.service.devices_'],
+  },
+  {
+    id: 'location_change',
+    label: 'تغییر لوکیشن سرویس',
+    prefixes: ['bot.service.change_location_button', 'bot.service.location_'],
+  },
+  {
     id: 'refund_request',
     label: 'درخواست بازگشت وجه (مشتری)',
     prefixes: ['bot.service.refund_request_'],
@@ -227,6 +237,8 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   cooldownHours: 'فاصلهٔ مجاز (ساعت)',
   correlationId: 'شناسهٔ پیگیری',
   current: 'مقدار فعلی',
+  currentLimit: 'سقف فعلی تعداد کاربر / دستگاه',
+  currentLocation: 'لوکیشن فعلی سرویس',
   custom: 'نشانهٔ روشن بودن انتخاب دلخواه',
   customBlock: 'بخش سرویس دلخواه',
   customTemplate: 'نشانهٔ انتخاب الگوی سفارشی',
@@ -235,6 +247,7 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   days: 'روزهای باقی‌مانده',
   delivery: 'وضعیت تحویل لینک',
   destination: 'اطلاعات حساب مقصد',
+  devicesBlock: 'بخش افزایش تعداد کاربر / دستگاه',
   discount: 'مبلغ تخفیف',
   discountLine: 'خط تخفیف',
   displayName: 'نام نمایشی',
@@ -253,6 +266,7 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   firstPercent: 'آستانهٔ اول مصرف (درصد)',
   firstSeen: 'زمان نخستین تماس',
   firstSeenAt: 'زمان نخستین رخداد',
+  fromLocation: 'لوکیشن مبدأ',
   gift: 'مبلغ هدیه',
   giftBlock: 'بخش هدیهٔ عضویت',
   health: 'وضعیت سلامت',
@@ -262,6 +276,7 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   limit: 'سقف تعداد',
   lines: 'فهرست خط‌به‌خط',
   location: 'لوکیشن',
+  locationChangeBlock: 'بخش تغییر لوکیشن',
   locationsBlock: 'بخش لوکیشن‌ها',
   max: 'حداکثر تعداد نویسه',
   maximum: 'حداکثر مبلغ',
@@ -298,6 +313,7 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   productName: 'نام محصول',
   productTitle: 'عنوان محصول',
   products: 'تعداد محصولات',
+  quantity: 'تعداد',
   provider: 'نوع پنل',
   providerFinalAmount: 'مبلغ نهایی گزارش‌شده توسط درگاه',
   providerInvoiceId: 'شناسهٔ فاکتور درگاه',
@@ -348,17 +364,20 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   subscriptionUrl: 'لینک اشتراک',
   subtotal: 'قیمت پیش از تخفیف',
   syncedAt: 'زمان آخرین همگام‌سازی',
+  targetLimit: 'سقف تازهٔ تعداد کاربر / دستگاه',
   telegram: 'اتصال تلگرام',
   telegramId: 'شناسهٔ عددی تلگرام',
   telegramIdRandom: 'نشانهٔ انتخاب شناسهٔ تلگرام + تصادفی',
   template: 'الگو',
   timePrice: 'قیمت زمان',
+  toLocation: 'لوکیشن مقصد',
   title: 'عنوان',
   total: 'مبلغ کل',
   totalTraffic: 'کل حجم',
   totalTrafficBytes: 'کل حجم',
   trafficBytes: 'حجم',
   trafficLimit: 'سقف حجم',
+  unitPrice: 'قیمت واحد',
   usage: 'وضعیت یادآور مصرف',
   usagePercent: 'درصد مصرف',
   usedTraffic: 'حجم مصرف‌شده',
@@ -425,6 +444,21 @@ export const PLACEHOLDER_LABEL_OVERRIDES_FA: Partial<
   'bot.wallet.topup_method_button': { name: 'نام روش پرداخت' },
   'bot.wallet.topup_method_gift_button': { name: 'نام روش پرداخت', percent: 'درصد هدیهٔ شارژ' },
   'bot.referral.gift_block': { total: 'مجموع هدیه' },
+  'bot.service.devices_choice': {
+    remaining: 'تعداد قابل خرید باقی‌مانده',
+    unitPrice: 'قیمت هر کاربر / دستگاه',
+  },
+  'bot.service.devices_option': {
+    quantity: 'تعداد کاربر / دستگاه این دکمه',
+    price: 'قیمت این تعداد',
+  },
+  'bot.service.location_option': { location: 'لوکیشن مقصد', price: 'قیمت انتقال' },
+  'bot.service.location_option_free': { location: 'لوکیشن مقصد' },
+  'bot.order.preinvoice_devices': {
+    quantity: 'تعداد کاربر / دستگاه خریداری‌شده',
+    unitPrice: 'قیمت هر کاربر / دستگاه',
+    currentLimit: 'سقف پیش از خرید',
+  },
 };
 
 /**
@@ -659,6 +693,14 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'bot.order.preinvoice_cashback_line': [
     'خط کش‌بک در پیش‌فاکتور',
     'کش‌بکی که پس از تحویل سرویس واریز می‌شود؛ فقط وقتی کش‌بک وعده داده شده است.',
+  ],
+  'bot.order.preinvoice_devices': [
+    'بخش افزایش کاربر / دستگاه در پیش‌فاکتور',
+    'تعداد خریداری‌شده، قیمت هر واحد و سقف پیش و پس از خرید؛ از روی سفارش خوانده می‌شود، نه تنظیمات امروز.',
+  ],
+  'bot.order.preinvoice_location_change': [
+    'بخش تغییر لوکیشن در پیش‌فاکتور',
+    'لوکیشن مبدأ و مقصد و اینکه مشخصات اتصال ممکن است عوض شود؛ از روی درخواست ثبت‌شده خوانده می‌شود، نه تنظیمات امروز.',
   ],
 
   // --- Service username -------------------------------------------------------------
@@ -1502,6 +1544,62 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
     'یک پیام برای همهٔ دلایل: وضعیت سرویس، لینک تحویل‌نشده، پرداخت یا درخواست در جریان، یا سرویس آزمایشی.',
   ],
 
+  // --- Extra users / devices ----------------------------------------------------------
+  'bot.service.add_devices_button': [
+    'دکمهٔ افزایش کاربر / دستگاه',
+    'پیشنهاد خرید کاربر / دستگاه اضافه را باز می‌کند؛ فقط وقتی سرویس فعال است، پنل آن را پشتیبانی می‌کند و افزودنی قیمت‌دار با ظرفیت باقی‌مانده وجود دارد.',
+  ],
+  'bot.service.devices_choice': [
+    'انتخاب تعداد کاربر / دستگاه اضافه',
+    'سقف فعلی، قیمت هر واحد و تعدادی که هنوز می‌شود خرید؛ تعدادها روی دکمه‌های زیر آن است.',
+  ],
+  'bot.service.devices_option': [
+    'دکمهٔ یک تعداد کاربر / دستگاه',
+    'تعداد و قیمت فهرست آن تعداد؛ مبلغ نهایی پس از تخفیف در پیش‌فاکتور گفته می‌شود.',
+  ],
+
+  // --- Service location change --------------------------------------------------------
+  'bot.service.change_location_button': [
+    'دکمهٔ تغییر لوکیشن',
+    'تغییر لوکیشن سرویس را باز می‌کند؛ فقط وقتی سرویس فعال است، پنل آن را پشتیبانی می‌کند و دست‌کم یک لوکیشن مقصد فعال و قیمت‌دار تعریف شده است.',
+  ],
+  'bot.service.location_choice': [
+    'صفحهٔ انتخاب لوکیشن مقصد',
+    'لوکیشن فعلی سرویس را می‌گوید؛ لوکیشن‌های مقصد با قیمت یا «رایگان» روی دکمه‌های زیر آن است.',
+  ],
+  'bot.service.location_option': [
+    'دکمهٔ لوکیشن مقصد پولی',
+    'نام لوکیشن مقصد و قیمت فهرست انتقال؛ مبلغ نهایی پس از تخفیف در پیش‌فاکتور گفته می‌شود.',
+  ],
+  'bot.service.location_option_free': [
+    'دکمهٔ لوکیشن مقصد رایگان',
+    'لوکیشنی که مدیر انتقال به آن را رایگان کرده (قیمت صفر، نه قیمت تعریف‌نشده).',
+  ],
+  'bot.service.location_confirm_free': [
+    'تأیید تغییر لوکیشن رایگان',
+    'مبدأ، مقصد، رایگان بودن و اینکه مشخصات اتصال ممکن است عوض شود؛ تا تأیید مشتری چیزی تغییر نمی‌کند.',
+  ],
+  'bot.service.location_confirm_button': [
+    'دکمهٔ تأیید تغییر لوکیشن',
+    'تنها دکمه‌ای که تغییر لوکیشن رایگان را ثبت می‌کند.',
+  ],
+  'bot.service.location_requested': [
+    'درخواست تغییر لوکیشن ثبت شد',
+    'تغییر رایگان ثبت شد و روی پنل انجام می‌شود؛ نتیجه و مشخصات اتصال تازه از راه اعلان‌ها می‌رسد.',
+  ],
+  'bot.service.location_same': [
+    'لوکیشن مقصد همان لوکیشن فعلی است',
+    'سرویس همین حالا در لوکیشن انتخاب‌شده است؛ چیزی تغییر نکرد و مبلغی کسر نشد.',
+  ],
+  'bot.service.location_cooldown': [
+    'تغییر لوکیشن زودتر از فاصلهٔ مجاز',
+    'از آخرین تغییر لوکیشن کمتر از فاصلهٔ تعیین‌شدهٔ مدیر گذشته است؛ چیزی تغییر نکرد و مبلغی کسر نشد.',
+  ],
+  'bot.service.location_limit': [
+    'سقف دفعات تغییر لوکیشن',
+    'سرویس در این بازه به سقف دفعات مجاز تغییر لوکیشن رسیده است؛ چیزی تغییر نکرد و مبلغی کسر نشد.',
+  ],
+
   // --- Customer refund requests -----------------------------------------------------
   'bot.service.refund_request_button': [
     'دکمهٔ درخواست بازگشت وجه',
@@ -1705,6 +1803,14 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'bot.admin.operation_add_time': [
     'برچسب عملیات: افزایش زمان',
     'نوع عملیات در کارت رسید برای خرید زمان اضافه.',
+  ],
+  'bot.admin.operation_add_devices': [
+    'برچسب عملیات: افزایش کاربر / دستگاه',
+    'نوع عملیات در کارت رسید برای خرید کاربر / دستگاه اضافه روی سرویس موجود.',
+  ],
+  'bot.admin.operation_change_location': [
+    'برچسب عملیات: تغییر لوکیشن',
+    'نوع عملیات در کارت رسید برای تغییر لوکیشن پولی سرویس موجود.',
   ],
   'bot.admin.operation_topup': [
     'برچسب عملیات: شارژ کیف پول',
