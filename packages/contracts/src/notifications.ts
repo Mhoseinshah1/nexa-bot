@@ -98,25 +98,44 @@ export type NotificationTransportKind = (typeof NOTIFICATION_TRANSPORTS)[number]
  * across every past report for precisely the opposite reason.
  */
 export const notificationDestinationSchema = z.discriminatedUnion('transport', [
-  z.object({
-    transport: z.literal('TELEGRAM'),
-    chatId: z.string().min(1),
-    /** The forum topic, when the destination group uses them (UNK-GS-002). */
-    topicId: z.number().int().positive().nullable(),
-    /**
-     * WP-A4: the Nexa-owned topic this message is routed to in the connected ops group.
-     *
-     * When present, `chatId` and `topicId` are the SNAPSHOT of where the group and topic
-     * stood when the intent was queued — history — and the dispatcher resolves the group's
-     * CURRENT chat and thread at send time, so a topic an operator deleted is recreated and
-     * a preserved message retried after a reconnect reaches the group as it is now.
-     *
-     * Optional and a plain pattern rather than an enum, both for a release that does not
-     * know it: an older reader strips the key and posts to the snapshot, and a newer
-     * category is routed to the system topic rather than failing (`opsLogTopicCategoryOf`).
-     */
-    opsTopic: z.string().regex(OPS_LOG_TOPIC_CATEGORY_PATTERN).optional(),
-  }),
+  z
+    .object({
+      transport: z.literal('TELEGRAM'),
+      /**
+       * Null ONLY on a message routed to the operations log group (`opsTopic` set) that was
+       * queued while no group was connected and no manual chat was configured (HF-A4).
+       *
+       * The owner's rule is that an event routed to the operations log is recorded before any
+       * send is attempted and is never dropped, so "no group yet" is queued rather than
+       * discarded. There is no chat to snapshot, and inventing one would record a history that
+       * never happened: null says so. The dispatcher resolves the group at send time, as it
+       * does for every `opsTopic` message; until one is connected each attempt is a retryable
+       * `ops_group.not_connected`, and the message is preserved, then requeued once a group is
+       * connected and verified.
+       *
+       * An older release refuses this shape when it parses the row and files the message as
+       * FAILED, which keeps it: the next requeue on a release that reads it sends it.
+       */
+      chatId: z.string().min(1).nullable(),
+      /** The forum topic, when the destination group uses them (UNK-GS-002). */
+      topicId: z.number().int().positive().nullable(),
+      /**
+       * WP-A4: the Nexa-owned topic this message is routed to in the connected ops group.
+       *
+       * When present, `chatId` and `topicId` are the SNAPSHOT of where the group and topic
+       * stood when the intent was queued — history — and the dispatcher resolves the group's
+       * CURRENT chat and thread at send time, so a topic an operator deleted is recreated and
+       * a preserved message retried after a reconnect reaches the group as it is now.
+       *
+       * Optional and a plain pattern rather than an enum, both for a release that does not
+       * know it: an older reader strips the key and posts to the snapshot, and a newer
+       * category is routed to the system topic rather than failing (`opsLogTopicCategoryOf`).
+       */
+      opsTopic: z.string().regex(OPS_LOG_TOPIC_CATEGORY_PATTERN).optional(),
+    })
+    .refine((destination) => destination.chatId !== null || destination.opsTopic !== undefined, {
+      message: 'A Telegram destination without a chat must be routed to an operations topic.',
+    }),
   z.object({
     transport: z.literal('RECORDING'),
   }),
