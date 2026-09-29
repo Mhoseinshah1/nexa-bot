@@ -1112,6 +1112,147 @@ describe('service location change (WP-A6)', () => {
       expect(await count('service_location_changes')).toBe(1);
     });
 
+    it('freezes a service whose create has STARTED, and leaves one not yet started to the new initial', async () => {
+      // Codex review #2 on PR #101: two services paid for and not yet provisioned.
+      const { de } = await standardLocations();
+      const product = await products.create(tenantA, {
+        id: ctx.container.ids.uuid() as ProductId,
+        draft: {
+          title: 'پلن در صف',
+          description: null,
+          audience: 'EVERYONE',
+          sortOrder: 10,
+          panelId: panelId as PanelId,
+          categoryId: SEED_IDS.categoryA as ProductCategoryId,
+          specification: { durationDays: 30, trafficBytes: 1_073_741_824n, deviceLimit: null },
+          price: money(20_000n, 'IRT'),
+          display: EMPTY_PRODUCT_DISPLAY,
+        },
+        now: ctx.container.clock.now(),
+      });
+      await products.setStatus(
+        tenantA,
+        product.id,
+        'INACTIVE',
+        'ACTIVE',
+        ctx.container.clock.now(),
+      );
+      await fund('pending');
+      const pending: string[] = [];
+      for (const key of ['pending-started', 'pending-queued']) {
+        const draft = await ctx.container.orders.createDraft(tenantA, systemActor(key), {
+          idempotencyKey: `${key}-draft`,
+          customerId: customerA,
+          productId: product.id,
+        });
+        await ctx.container.orders.confirm(tenantA, systemActor(key), {
+          idempotencyKey: `${key}-confirm`,
+          customerId: customerA,
+          orderId: draft.id,
+        });
+        await ctx.container.payments.settleFromWallet(tenantA, systemActor(key), customerA, {
+          idempotencyKey: `${key}-pay`,
+          orderId: draft.id,
+        });
+        const service = await services.findByOrderId(tenantA, draft.id);
+        expect(service?.state).toBe('PENDING_PROVISION');
+        pending.push(service!.id);
+      }
+      const [started, queued] = pending as [string, string];
+      // The first one's create is on the wire: stamped and claimed, exactly as the
+      // provisioner leaves it between the stamp and the panel's answer.
+      await ctx.container.database.db.execute(sql`
+        UPDATE provisioning_operations
+           SET state = 'IN_FLIGHT', attempts = 1, claimed_by = 'test-worker',
+               lease_until = now() + interval '5 minutes', call_started_at = now()
+         WHERE service_id = ${started} AND type = 'PROVISION'`);
+
+      await ctx.container.serviceLocations.update(tenantA, owner, {
+        idempotencyKey: 'loc-pending-edit',
+        locationId: de,
+        location: location({
+          locationKey: 'de-2',
+          label: 'آلمان ۲',
+          initial: true,
+          enabled: false,
+          price: null,
+        }),
+      });
+      expect(await services.findById(tenantA, started)).toMatchObject({
+        locationKey: 'de',
+        locationLabel: 'آلمان',
+      });
+      expect((await services.findById(tenantA, queued))?.locationKey).toBeNull();
+    });
+
+    it('lets a FREE move left waiting not hold expiry, while a paid one still does', async () => {
+      // Codex review #2 on PR #101: the hold is for money already taken, and nothing else.
+      const free = await activeService('expiry-free');
+      const paid = await activeService('expiry-paid');
+      const { nl, fi } = await standardLocations();
+      await fund('expiry-paid');
+      await requestFree(free.id, fi, 'expiry-free');
+      await buyMove(paid.id, nl, 'expiry-paid');
+      await ctx.container.database.db.execute(sql`
+        UPDATE provisioning_operations SET next_attempt_at = now() + interval '1 day'
+         WHERE type = 'CHANGE_LOCATION'`);
+      await ctx.container.database.db.execute(sql`
+        UPDATE services SET expires_at = now() - interval '1 hour'
+         WHERE id IN (${free.id}, ${paid.id})`);
+
+      await ctx.container.provisionerLoop.tick();
+
+      expect((await services.findById(tenantA, free.id))?.state).toBe('EXPIRED');
+      expect((await services.findById(tenantA, paid.id))?.state).toBe('ACTIVE');
+    });
+
+    it('keeps a location move and a link rotation apart, in both directions', async () => {
+      // Codex review #2 on PR #101: both end by storing the link the panel serves.
+      const descriptor = providerDescriptor('marzban')!;
+      const capabilities = descriptor.capabilities as ProviderCapability[];
+      const proto = MarzbanAdapter.prototype as unknown as Record<string, unknown>;
+      const hadRotation = capabilities.includes('ROTATE_SUBSCRIPTION_LINK');
+      if (!hadRotation) capabilities.push('ROTATE_SUBSCRIPTION_LINK');
+      proto['rotateSubscription'] = async () => ({
+        ok: true,
+        found: true,
+        subscriptionUrl: 'https://sub.example.test/sub/rotated',
+      });
+      try {
+        const moving = await activeService('exclusive-move');
+        const rotating = await activeService('exclusive-rotate');
+        const { fi } = await standardLocations();
+        const rotate = (serviceId: string, key: string) =>
+          ctx.container.provisioning.requestFromOperator(
+            tenantA,
+            owner,
+            serviceId,
+            'ROTATE_SUBSCRIPTION',
+            { idempotencyKey: key },
+          );
+
+        // A move is open: a rotation of the same service is refused.
+        await requestFree(moving.id, fi, 'exclusive-move');
+        await expect(rotate(moving.id, 'exclusive-rotate-1')).rejects.toMatchObject({
+          code: COMMERCE_ERROR_CODES.SERVICE_ACTION_IN_PROGRESS,
+        });
+
+        // A rotation is open: a move of the same service is refused.
+        await rotate(rotating.id, 'exclusive-rotate-2');
+        await expect(requestFree(rotating.id, fi, 'exclusive-move-2')).rejects.toMatchObject({
+          code: COMMERCE_ERROR_CODES.SERVICE_ACTION_IN_PROGRESS,
+        });
+        expect(
+          (await operations.listForService(tenantA, rotating.id, 20)).filter(
+            (one) => one.type === 'CHANGE_LOCATION',
+          ),
+        ).toEqual([]);
+      } finally {
+        if (!hadRotation) capabilities.splice(capabilities.indexOf('ROTATE_SUBSCRIPTION_LINK'), 1);
+        delete proto['rotateSubscription'];
+      }
+    });
+
     it("keeps one tenant's service and locations out of another's reach", async () => {
       const service = await activeService('iso');
       const { nl, fi } = await standardLocations();
