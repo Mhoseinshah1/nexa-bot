@@ -9668,20 +9668,6 @@ export class BotRuntime {
   }
 
   /**
-   * One service, as its owner sees it.
-   *
-   * `getForCustomer` asks for the service by id AND owner in one query, so an id that is
-   * not theirs, an id that does not exist, and a service a completed refund request took
-   * out of their view (WP19) all arrive here as `SERVICE_NOT_FOUND` — and all answer
-   * `bot.service.not_found`. Keeping them the same
-   * answer is what stops this being an oracle for guessing service ids.
-   *
-   * The usage figure is reported WITH the moment it was read. A figure with no `asOf` is
-   * a figure a customer reads as live, and `usage_synced_at` is null until the first
-   * `SYNC_USAGE` succeeds — so the template gets an absent `syncedAt` rather than a
-   * fabricated one, which is the whole reason that placeholder is not required.
-   */
-  /**
    * R3 item 10: the customer's own service card, exactly as `serviceDetail` draws it, for
    * the provisioner to edit into the card a disable or enable was asked from. Null when
    * the service is not theirs to see any more (the same answer the tap would get), so
@@ -9702,6 +9688,20 @@ export class BotRuntime {
     return { key: reply.key, values: reply.values, buttons: reply.buttons };
   }
 
+  /**
+   * One service, as its owner sees it.
+   *
+   * `getForCustomer` asks for the service by id AND owner in one query, so an id that is
+   * not theirs, an id that does not exist, and a service a completed refund request took
+   * out of their view (WP19) all arrive here as `SERVICE_NOT_FOUND` — and all answer
+   * `bot.service.not_found`. Keeping them the same
+   * answer is what stops this being an oracle for guessing service ids.
+   *
+   * The usage figure is reported WITH the moment it was read. A figure with no `asOf` is
+   * a figure a customer reads as live, and `usage_synced_at` is null until the first
+   * `SYNC_USAGE` succeeds — so the template gets an absent `syncedAt` rather than a
+   * fabricated one, which is the whole reason that placeholder is not required.
+   */
   private async serviceDetail(
     scope: TenantContext,
     actor: ActorContext,
@@ -14096,13 +14096,10 @@ export function notificationButtons(
   ];
 }
 
-/**
- * R3: back to the service card, drawn IN PLACE (`sv:`). The same label the other "back to
- * the service" buttons carry.
- */
+/** R3: back to the service card, drawn IN PLACE (`sv:`). */
 function backToCardButton(serviceId: string): CustomerButton {
   return {
-    label: { kind: 'TEMPLATE', key: 'bot.service.back_to_list_button' },
+    label: { kind: 'TEMPLATE', key: 'bot.service.back_to_card_button' },
     data: `${SERVICE_CARD_CALLBACK_PREFIX}${serviceId}`,
   };
 }
