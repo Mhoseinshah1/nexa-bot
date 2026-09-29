@@ -149,6 +149,28 @@ describe('the service location screen', () => {
     cleanup();
   });
 
+  it('gives an edit-only role a working form: the panels it may list, ids for the rest', async () => {
+    // Codex review #2 on PR #101: `catalog.edit` without `catalog.view` saw an empty picker.
+    const api = stubApi(routes());
+    renderPage(<ServiceLocationsPage denied mayEdit mayReadPanels />);
+    await screen.findByText('لوکیشن جدید');
+    // `panels.view` is held, so the panel list is read and offered.
+    await screen.findByText(/Frankfurt A/u);
+    // `catalog.view` is not: the product list is never asked for, and its id is typed.
+    expect(api.calls.some((call) => call.url.includes('/products'))).toBe(false);
+    expect(screen.getByLabelText('محصول').tagName).toBe('INPUT');
+    cleanup();
+  });
+
+  it('takes a typed panel id from a role that may not list panels, and never asks', async () => {
+    const api = stubApi(routes());
+    renderPage(<ServiceLocationsPage denied mayEdit mayReadPanels={false} />);
+    await screen.findByText('لوکیشن جدید');
+    expect(screen.getByLabelText('پنل').tagName).toBe('INPUT');
+    expect(api.calls.some((call) => call.url.includes('/panels'))).toBe(false);
+    cleanup();
+  });
+
   it('is routed at /service-locations, under the catalogue permissions', () => {
     const route = { path: '/service-locations', query: new URLSearchParams() };
     expect(resolve(route, ['catalog.view']).title).toBe('تغییر لوکیشن سرویس');

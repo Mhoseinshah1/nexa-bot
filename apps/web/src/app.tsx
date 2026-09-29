@@ -654,7 +654,13 @@ export function resolve(
 
   if (route.path === '/service-locations') {
     return {
-      element: <ServiceLocationsPage mayEdit={may('catalog.edit')} denied={!may('catalog.view')} />,
+      element: (
+        <ServiceLocationsPage
+          mayEdit={may('catalog.edit')}
+          denied={!may('catalog.view')}
+          mayReadPanels={may('panels.view')}
+        />
+      ),
       crumbs: [{ label: t('web.service_locations_title') }],
       title: t('web.service_locations_title'),
     };

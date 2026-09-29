@@ -130,7 +130,16 @@ function boundedOrNull(raw: string, max: number): number | null | 'INVALID' {
   return parsed >= 1 && parsed <= max ? parsed : 'INVALID';
 }
 
-export function ServiceLocationsPage({ denied, mayEdit }: { denied: boolean; mayEdit: boolean }) {
+export function ServiceLocationsPage({
+  denied,
+  mayEdit,
+  mayReadPanels = true,
+}: {
+  denied: boolean;
+  mayEdit: boolean;
+  /** `panels.view`, which the panel list charges. Without it the form takes a panel id. */
+  mayReadPanels?: boolean;
+}) {
   const queries = useQueryClient();
   const notify = useToast();
   const submission = useSubmissionKey();
@@ -141,9 +150,14 @@ export function ServiceLocationsPage({ denied, mayEdit }: { denied: boolean; may
     enabled: !denied,
   });
   /*
-   * The two pickers. Each is a courtesy: a role without `panels.view` sees ids rather than
-   * names, and the server checks the chosen id against this tenant either way.
+   * The two pickers, read for a viewer's table AND an editor's form (Codex review #2 on
+   * PR #101: an edit-only role got an empty panel list). Each is asked only of a role its
+   * list endpoint admits — panels charge `panels.view`, products `catalog.view` — and
+   * where it cannot be read the form takes the id typed instead; the server checks the
+   * id against this tenant either way.
    */
+  const readPanels = mayReadPanels && (!denied || mayEdit);
+  const readProducts = !denied;
   const panels = useQuery({
     queryKey: ['panels', 'service-locations'],
     queryFn: () =>
@@ -151,7 +165,7 @@ export function ServiceLocationsPage({ denied, mayEdit }: { denied: boolean; may
         const page = await fetchPanels({ limit: 100, ...(cursor === null ? {} : { cursor }) });
         return { items: page.panels, nextCursor: page.nextCursor };
       }),
-    enabled: !denied,
+    enabled: readPanels,
     retry: false,
   });
   const products = useQuery({
@@ -161,9 +175,13 @@ export function ServiceLocationsPage({ denied, mayEdit }: { denied: boolean; may
         const page = await fetchProducts({ limit: 100, ...(cursor === null ? {} : { cursor }) });
         return { items: page.products, nextCursor: page.nextCursor };
       }),
-    enabled: !denied,
+    enabled: readProducts,
     retry: false,
   });
+
+  // A list the form may choose from: permitted and read. Otherwise the id is typed.
+  const panelList = readPanels && !panels.isError;
+  const productList = readProducts && !products.isError;
 
   const [editing, setEditing] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
@@ -405,34 +423,47 @@ export function ServiceLocationsPage({ denied, mayEdit }: { denied: boolean; may
           )}
           hint={t('web.service_locations_form_hint')}
         >
-          <Field label={t('web.service_locations_panel')} htmlFor="sl-panel">
-            <select
-              id="sl-panel"
-              value={form.panelId}
-              onChange={(event) =>
-                // A product scope names a product of THIS panel; another panel's is cleared.
-                setForm({
-                  ...form,
-                  panelId: event.target.value,
-                  productId:
-                    products.data?.find((one) => one.id === form.productId)?.panelId ===
-                    event.target.value
-                      ? form.productId
-                      : '',
-                })
-              }
-            >
-              <option value="" disabled>
-                —
-              </option>
-              {(panels.data ?? []).map((one) => (
-                <option key={one.id} value={one.id}>
-                  {one.capabilities.includes('LOCATION_CHANGE')
-                    ? one.name
-                    : `${one.name} — ${t('web.service_locations_panel_unsupported')}`}
+          <Field
+            label={t('web.service_locations_panel')}
+            htmlFor="sl-panel"
+            {...(panelList ? {} : { hint: t('web.service_locations_panel_id_hint') })}
+          >
+            {!panelList ? (
+              <input
+                id="sl-panel"
+                dir="ltr"
+                value={form.panelId}
+                onChange={(event) => setForm({ ...form, panelId: event.target.value.trim() })}
+              />
+            ) : (
+              <select
+                id="sl-panel"
+                value={form.panelId}
+                onChange={(event) =>
+                  // A product scope names a product of THIS panel; another panel's is cleared.
+                  setForm({
+                    ...form,
+                    panelId: event.target.value,
+                    productId:
+                      products.data?.find((one) => one.id === form.productId)?.panelId ===
+                      event.target.value
+                        ? form.productId
+                        : '',
+                  })
+                }
+              >
+                <option value="" disabled>
+                  —
                 </option>
-              ))}
-            </select>
+                {(panels.data ?? []).map((one) => (
+                  <option key={one.id} value={one.id}>
+                    {one.capabilities.includes('LOCATION_CHANGE')
+                      ? one.name
+                      : `${one.name} — ${t('web.service_locations_panel_unsupported')}`}
+                  </option>
+                ))}
+              </select>
+            )}
           </Field>
           <Field
             label={t('web.service_locations_label')}
@@ -461,24 +492,38 @@ export function ServiceLocationsPage({ denied, mayEdit }: { denied: boolean; may
           </Field>
           <Field
             label={t('web.service_locations_product')}
-            hint={t('web.service_locations_product_hint')}
+            hint={t(
+              productList
+                ? 'web.service_locations_product_hint'
+                : 'web.service_locations_product_id_hint',
+            )}
             htmlFor="sl-product"
           >
-            <select
-              id="sl-product"
-              value={form.productId}
-              onChange={(event) => setForm({ ...form, productId: event.target.value })}
-            >
-              <option value="">{t('web.service_locations_all_products')}</option>
-              {/* Only this panel's products: a scope elsewhere could never apply here. */}
-              {(products.data ?? [])
-                .filter((one) => one.panelId === form.panelId)
-                .map((one) => (
-                  <option key={one.id} value={one.id}>
-                    {one.title}
-                  </option>
-                ))}
-            </select>
+            {!productList ? (
+              <input
+                id="sl-product"
+                dir="ltr"
+                placeholder={t('web.service_locations_all_products')}
+                value={form.productId}
+                onChange={(event) => setForm({ ...form, productId: event.target.value.trim() })}
+              />
+            ) : (
+              <select
+                id="sl-product"
+                value={form.productId}
+                onChange={(event) => setForm({ ...form, productId: event.target.value })}
+              >
+                <option value="">{t('web.service_locations_all_products')}</option>
+                {/* Only this panel's products: a scope elsewhere could never apply here. */}
+                {(products.data ?? [])
+                  .filter((one) => one.panelId === form.panelId)
+                  .map((one) => (
+                    <option key={one.id} value={one.id}>
+                      {one.title}
+                    </option>
+                  ))}
+              </select>
+            )}
           </Field>
           <Field
             label={t('web.service_locations_initial')}

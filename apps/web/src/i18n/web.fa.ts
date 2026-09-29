@@ -2481,6 +2481,10 @@ export const WEB_FA = {
     'بدون لوکیشن اولیه و دست‌کم یک لوکیشن مقصدِ فعال و قیمت‌دار، تغییر لوکیشن به مشتری پیشنهاد نمی‌شود. تنظیم‌نشده هرگز به معنای رایگان نیست.',
   'web.service_locations_panel': 'پنل',
   'web.service_locations_panel_unsupported': 'این پنل تغییر لوکیشن را پشتیبانی نمی‌کند',
+  'web.service_locations_panel_id_hint':
+    'فهرست پنل‌ها برای نقش شما خواندنی نیست؛ شناسهٔ پنل را وارد کنید.',
+  'web.service_locations_product_id_hint':
+    'فهرست محصولات برای نقش شما خواندنی نیست؛ برای همهٔ محصولات خالی بگذارید یا شناسهٔ محصول را وارد کنید.',
   'web.service_locations_product': 'محصول',
   'web.service_locations_all_products': 'همهٔ محصولات این پنل',
   'web.service_locations_product_hint':
