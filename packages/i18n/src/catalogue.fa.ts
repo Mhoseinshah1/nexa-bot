@@ -356,6 +356,17 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.admin.review_blocked': '⛔ کاربر بلاک شد',
   'bot.admin.review_credited': '💳 مبلغ به کیف پول واریز شد',
   /*
+   * F1 (round N): the COMPLETE final record the review message becomes. A line whose facts
+   * the payment does not have is dropped whole by the renderer (optional placeholders).
+   */
+  'bot.admin.review_final':
+    '{outcome}\n\nنوع عملیات: {operation}\nنام محصول: {order}\nحجم محصول: {trafficBytes}\nمدت محصول: {durationDays}\nنام کاربری سرویس: {serviceUsername}\n\nنام اکانت کاربر: {name}\nشناسه عددی کاربر: {customer}\nیوزرنیم تلگرام: {username}\n\nمبلغ پرداختی: {total}\nکد پیگیری پرداخت: {reference}\nمبلغ واریز شده به کیف پول: {creditedAmount}\nموجودی کیف پول پیش از واریز: {walletBefore}\nموجودی کیف پول پس از واریز: {walletAfter}',
+  'bot.admin.review_repeat_approved': 'این پرداخت قبلاً تأیید شده است.',
+  'bot.admin.review_repeat_rejected': 'این پرداخت قبلاً رد شده است.',
+  'bot.admin.review_repeat_credited': 'مبلغ این پرداخت قبلاً به کیف پول واریز شده است.',
+  'bot.admin.review_repeat_blocked': 'این کاربر قبلاً بلاک شده است.',
+  'bot.admin.review_repeat_gone': 'این پرداخت دیگر در انتظار بررسی نیست.',
+  /*
    * Payment File 02 §12 — the third disposition, in Telegram. The capture reads ONE
    * message from ONE administrator about ONE payment, for five minutes, and nothing moves
    * until the stated amount is confirmed.
@@ -1101,6 +1112,8 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     'این روش پرداخت در حال حاضر در دسترس نیست. لطفاً روش دیگری را انتخاب کنید یا کمی بعد دوباره تلاش کنید.',
   'bot.payment.gateway_unknown':
     'پاسخ درگاه برای ساخت این فاکتور دریافت نشد و لینکی برای آن در دسترس نیست. از این فاکتور مبلغی ثبت نشده است؛ می‌توانید دوباره پرداخت را آغاز کنید.',
+  'bot.payment.gateway_no_link':
+    'درگاه ساخت این فاکتور را اعلام کرد اما لینک پرداختی برای آن نفرستاد، بنابراین از اینجا قابل پرداخت نیست. از این فاکتور مبلغی ثبت نشده است؛ می‌توانید دوباره پرداخت را آغاز کنید یا روش دیگری انتخاب کنید.',
   'bot.payment.gateway_closed':
     'این فاکتور دیگر قابل پرداخت نیست (مهلت آن تمام شده یا بسته شده است). برای پرداخت می‌توانید دوباره اقدام کنید.',
   'bot.wallet.summary':

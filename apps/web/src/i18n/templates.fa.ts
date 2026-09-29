@@ -262,6 +262,7 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   cooldownHours: 'فاصلهٔ مجاز (ساعت)',
   correlationId: 'شناسهٔ پیگیری',
   count: 'تعداد',
+  creditedAmount: 'مبلغ واریزشده به کیف پول',
   current: 'مقدار فعلی',
   currentLimit: 'تعداد کاربر / دستگاه مجاز فعلی',
   currentLocation: 'لوکیشن فعلی سرویس',
@@ -432,7 +433,9 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   visibility: 'نمایش به مشتری',
   volumeBytes: 'حجم',
   volumePrice: 'قیمت حجم',
+  walletAfter: 'موجودی کیف پول پس از واریز',
   walletBalance: 'موجودی کیف پول',
+  walletBefore: 'موجودی کیف پول پیش از واریز',
 };
 
 /**
@@ -452,6 +455,12 @@ export const PLACEHOLDER_LABEL_OVERRIDES_FA: Partial<
   'bot.order.summary_cashback': { username: 'نام کاربری سرویس' },
   'bot.order.summary_discounted_cashback': { username: 'نام کاربری سرویس' },
   'bot.admin.receipt': { name: 'نام مشتری', order: 'محصول سفارش' },
+  'bot.admin.review_final': {
+    name: 'نام مشتری',
+    order: 'محصول سفارش',
+    total: 'مبلغ پرداخت',
+    outcome: 'نتیجهٔ بررسی (یکی از چهار متن نتیجه)',
+  },
   'bot.admin.service': { username: 'نام کاربری سرویس روی پنل' },
   'bot.admin.reminder_saved': { value: 'مقدار تازه' },
   'bot.admin.panel_detail': { name: 'نام پنل', status: 'وضعیت پنل' },
@@ -1215,6 +1224,10 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'bot.payment.gateway_unknown': [
     'پاسخ درگاه دریافت نشد',
     'پاسخ درگاه برای ساخت فاکتور گم شد و لینکی نمایش داده نمی‌شود؛ چیزی پرداخت‌شده ثبت نشده است.',
+  ],
+  'bot.payment.gateway_no_link': [
+    'درگاه لینک پرداخت نفرستاد',
+    'درگاه ساخت فاکتور را اعلام کرد اما لینکی که مشتری بتواند باز کند برنگرداند؛ مبلغی ثبت نشده و مشتری می‌تواند پرداخت تازه‌ای شروع کند.',
   ],
   'bot.payment.gateway_closed': [
     'فاکتور درگاه بسته شده',
@@ -2206,6 +2219,30 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'bot.admin.review_credited': [
     'نتیجهٔ بررسی رسید: واریز به کیف پول',
     'پیام اصلی بررسی رسید پس از واریز مبلغ به کیف پول مشتری به این متن تبدیل می‌شود و دکمه‌هایش حذف می‌شود.',
+  ],
+  'bot.admin.review_final': [
+    'سابقهٔ نهایی بررسی رسید',
+    'پیام اصلی بررسی رسید پس از تصمیم به این سابقهٔ کامل تبدیل می‌شود: خط نتیجه، نوع عملیات، محصول، نام کاربری سرویس، شناسه و یوزرنیم تلگرام مشتری، مبلغ و کد پیگیری، و برای واریز به کیف پول موجودی پیش و پس از آن. سطری که مقداری ندارد حذف می‌شود.',
+  ],
+  'bot.admin.review_repeat_approved': [
+    'پاسخ دکمهٔ تکراری: قبلاً تأیید شده',
+    'وقتی روی پیامی که قبلاً نهایی شده دوباره دکمه‌ای زده شود و پرداخت تأیید شده باشد، همین متن کوتاه نشان داده می‌شود و کاری تکرار نمی‌شود.',
+  ],
+  'bot.admin.review_repeat_rejected': [
+    'پاسخ دکمهٔ تکراری: قبلاً رد شده',
+    'وقتی روی پیامی که قبلاً نهایی شده دوباره دکمه‌ای زده شود و پرداخت رد شده باشد، همین متن کوتاه نشان داده می‌شود.',
+  ],
+  'bot.admin.review_repeat_credited': [
+    'پاسخ دکمهٔ تکراری: قبلاً به کیف پول واریز شده',
+    'وقتی روی پیامی که قبلاً نهایی شده دوباره دکمه‌ای زده شود و رسید با واریز به کیف پول بسته شده باشد؛ چیزی دوباره واریز نمی‌شود.',
+  ],
+  'bot.admin.review_repeat_blocked': [
+    'پاسخ دکمهٔ تکراری: کاربر قبلاً بلاک شده',
+    'وقتی روی پیامی که با بلاک کردن مشتری نهایی شده دوباره دکمه‌ای زده شود و پرداخت هنوز تصمیمی نگرفته باشد.',
+  ],
+  'bot.admin.review_repeat_gone': [
+    'پاسخ دکمهٔ تکراری: دیگر در انتظار بررسی نیست',
+    'وقتی روی پیامی که قبلاً نهایی شده دوباره دکمه‌ای زده شود و پرداخت به هر دلیل دیگری دیگر در انتظار بررسی نباشد.',
   ],
   'bot.admin.reject_reason_prompt': [
     'درخواست دلیل رد پرداخت',
