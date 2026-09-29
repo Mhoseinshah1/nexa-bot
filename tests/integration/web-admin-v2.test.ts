@@ -748,10 +748,14 @@ describe('the Web Admin V2 surface', () => {
        * stopped being read in WP-A4, when the Telegram ops stream moved to explicit
        * event-to-topic routing. It stays declared so a stored value keeps parsing, and
        * `PLANNED` is the registry's only word for "stored and unread".
+       *
+       * The second is `trial.product_id`, retired by R1: a trial is configured per panel
+       * and issued from no product, the R1 migration carried a configured product across
+       * once, and nothing reads the key since. It stays declared for the same reason.
        */
       expect(
         body.settings.filter((setting) => setting.consumer === 'PLANNED').map((s) => s.key),
-      ).toEqual(['ops.notifications.min_severity']);
+      ).toEqual(['ops.notifications.min_severity', 'trial.product_id']);
       /*
        * `support.accounts` left that list with the customer UX completion: the support
        * screen's contact button is its first handle, so it is read.
