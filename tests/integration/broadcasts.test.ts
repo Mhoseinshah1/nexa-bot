@@ -287,15 +287,21 @@ describe('broadcast', () => {
     expect(transport.delivered).toHaveLength(0);
 
     await ctx.container.broadcasts.resume(tenantA, owner, broadcast.id);
-    // Deliver exactly one, then cancel the rest.
-    transport.crashOn = null;
+    // One recipient is claimed by a worker that has not stamped it yet; then the cancel.
     const repository = new DrizzleBroadcastRepository(ctx.container.database.db);
-    const claimed = await repository.claimForBot(tenantA, SEED_IDS.botA1, {
-      now: clock.now(),
-      leaseUntil: new Date(clock.now().getTime() + BROADCAST_LEASE_MS),
-      max: 1,
-      perSecond: BROADCAST_SENDS_PER_SECOND,
-    });
+    const claimed = await ctx.container.uow.run(tenantA, (tx) =>
+      repository.claimForBot(
+        tenantA,
+        SEED_IDS.botA1,
+        {
+          now: clock.now(),
+          leaseUntil: new Date(clock.now().getTime() + BROADCAST_LEASE_MS),
+          max: 1,
+          perSecond: BROADCAST_SENDS_PER_SECOND,
+        },
+        tx,
+      ),
+    );
     expect(claimed).toHaveLength(1);
     const cancelled = await ctx.container.broadcasts.cancel(tenantA, owner, broadcast.id);
     expect(cancelled.state).toBe('CANCELLED');

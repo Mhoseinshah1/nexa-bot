@@ -176,10 +176,10 @@ export interface BulkOperationRepository {
   lockNextPending(
     scope: TenantContext,
     now: Date,
+    /** Items that already failed unexpectedly in this pass, so one cannot hold the rest. */
+    exclude: readonly string[],
     tx: TransactionScope,
   ): Promise<LockedItem | null>;
-  /** Moves an item to the back of the queue after an unexpected error. */
-  touch(scope: TenantContext, itemId: string, now: Date): Promise<void>;
   markCredited(
     scope: TenantContext,
     itemId: string,

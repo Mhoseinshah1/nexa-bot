@@ -468,7 +468,12 @@ export class DrizzleBulkOperationRepository implements BulkOperationRepository {
 
   // --- the processor's half -----------------------------------------------------------
 
-  async lockNextPending(scope: TenantContext, now: Date, tx: TransactionScope) {
+  async lockNextPending(
+    scope: TenantContext,
+    now: Date,
+    exclude: readonly string[],
+    tx: TransactionScope,
+  ) {
     const tenantId = requireTenantId(scope);
     const at = sql`${now.toISOString()}::timestamptz`;
     const [row] = await this.rows<{
@@ -496,7 +501,8 @@ export class DrizzleBulkOperationRepository implements BulkOperationRepository {
            WHERE i.tenant_id = ${tenantId}::uuid AND i.state = 'PENDING'
              AND o.state = 'RUNNING'
              AND (o.not_before IS NULL OR o.not_before <= ${at})
-           ORDER BY i.updated_at, i.id
+             AND NOT (i.id = ANY(${sql.param([...exclude])}::uuid[]))
+           ORDER BY i.bulk_operation_id, i.id
            LIMIT 1
            FOR UPDATE OF i SKIP LOCKED`,
       tx,
@@ -517,13 +523,6 @@ export class DrizzleBulkOperationRepository implements BulkOperationRepository {
       createdByAdminId: row.created_by_admin_id,
       requiresActiveCustomer: row.customer_status === 'ACTIVE',
     } satisfies LockedItem;
-  }
-
-  async touch(scope: TenantContext, itemId: string, now: Date) {
-    const tenantId = requireTenantId(scope);
-    await this.db.execute(sql`
-      UPDATE bulk_operation_items SET updated_at = ${now.toISOString()}::timestamptz
-       WHERE tenant_id = ${tenantId}::uuid AND id = ${itemId}::uuid AND state = 'PENDING'`);
   }
 
   private async moveFromPending(

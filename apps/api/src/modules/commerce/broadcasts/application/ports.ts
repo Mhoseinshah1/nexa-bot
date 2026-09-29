@@ -240,7 +240,7 @@ export interface BroadcastRepository {
   botsWithWork(scope: TenantContext, now: Date): Promise<readonly string[]>;
   /**
    * Claims up to `max` of one bot's due recipients within the bot's shared pacing budget, in
-   * one transaction that takes the pacing row's lock first.
+   * the caller's transaction, taking the pacing row's lock first.
    */
   claimForBot(
     scope: TenantContext,
@@ -251,6 +251,7 @@ export interface BroadcastRepository {
       readonly max: number;
       readonly perSecond: number;
     },
+    tx: TransactionScope,
   ): Promise<readonly ClaimedRecipient[]>;
   content(scope: TenantContext, id: string): Promise<BroadcastContent | null>;
   customerStatus(scope: TenantContext, customerId: string): Promise<string | null>;

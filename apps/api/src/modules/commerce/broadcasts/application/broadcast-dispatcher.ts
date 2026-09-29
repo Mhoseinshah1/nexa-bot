@@ -140,12 +140,20 @@ export class BroadcastDispatcher {
     };
 
     for (const bot of await this.deps.repository.botsWithWork(scope, now)) {
-      const claimed = await this.deps.repository.claimForBot(scope, bot, {
-        now,
-        leaseUntil: new Date(now.getTime() + BROADCAST_LEASE_MS),
-        max: PER_BOT_PASS,
-        perSecond: BROADCAST_SENDS_PER_SECOND,
-      });
+      // Through the unit of work, so a recovery's quiesce refuses the claim like every write.
+      const claimed = await this.deps.uow.run(scope, (tx) =>
+        this.deps.repository.claimForBot(
+          scope,
+          bot,
+          {
+            now,
+            leaseUntil: new Date(now.getTime() + BROADCAST_LEASE_MS),
+            max: PER_BOT_PASS,
+            perSecond: BROADCAST_SENDS_PER_SECOND,
+          },
+          tx,
+        ),
+      );
       tally.claimed += claimed.length;
       let index = 0;
       const worker = async () => {
