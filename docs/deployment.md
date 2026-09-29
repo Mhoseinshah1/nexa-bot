@@ -1420,6 +1420,31 @@ the previous release writes. While the release before R1 runs:
 
 Nothing needs doing before rolling back past R1.
 
+### What a rollback leaves running: campaigns (round N, C1)
+
+Round N's campaigns (`docs/round-n-campaigns-audit.md`) add two tables, `campaigns` and
+`campaign_actions` (migration `0146_round_n_campaigns`), and backfill `campaigns.view` and
+`campaigns.manage` into the owner, observer and sales roles (`0147`). Both only add. A
+campaign owns no price, credit or send of its own: what it made lives in the engines it
+composed. So while a release without campaigns runs:
+
+- **A campaign's discount and cashback keep applying on their own window.** They are
+  ordinary rows in `discounts` and `cashback_rules`, windowed to the campaign, and the old
+  pricing engine reads them like any other rule. To stop one during the rollback,
+  deactivate it on the discounts page; the campaign page resumes managing it after the
+  roll-forward (a resume re-activates it).
+- **Its gifts and its announcement are the Broadcast and mass-operation rows** the
+  round-N release created; what a rollback does to those is that release's own section.
+- **No campaign changes state.** The worker lane that marks a campaign ACTIVE at its start
+  and COMPLETED at its end is not in the old release, so the Web Admin shows a stale state
+  after the roll-forward until the first tick (a minute) catches up — one tick moves a
+  campaign whose whole window passed straight to COMPLETED. Nothing financial depends on
+  that lane.
+- **The Campaigns page is gone from the old Web Admin**; the old release skips the two
+  permission keys, so no role page breaks.
+
+Nothing needs doing before rolling back past C1.
+
 ### How far back you can roll
 
 **One release**, safely. Migrations are expand-only within a release

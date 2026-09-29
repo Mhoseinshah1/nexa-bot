@@ -2550,3 +2550,30 @@ the join screen, and the support screen's contact button still works. Whether th
 wants the whole ticket flow (taps and the typed message) exempt is a product decision.
 
 UNRESOLVED. The desk follows the guard.
+
+## OQ-C1-01 — should a campaign's discount or cashback be restricted to its audience?
+
+The discount and cashback engines scope a rule by product, category, purpose, first purchase
+and one optional customer; they have no audience dimension. A campaign's audience therefore
+decides who is TOLD and who is GIFTED, and its discount and cashback reach whoever their own
+scope reaches (`docs/round-n-campaigns-audit.md` D4). Restricting eligibility to an audience
+would be a change to the one pricing boundary and a second place segmentation is decided.
+
+UNRESOLVED. The Web Admin states the difference on the campaign page.
+
+## OQ-C1-02 — should a campaign be able to raise the referral commission for a window?
+
+Referral terms are tenant-wide settings with no window and no audience; a campaign could only
+express an incentive by writing `referral.commission_percent` at its start and writing it
+back at its end — a lost update against any operator edit in between — and the commission
+scope is snapshotted per referral at registration (`docs/round-n-campaigns-audit.md` D8).
+
+UNRESOLVED. Not built; the referral terms stay on the settings page.
+
+## OQ-C1-03 — Mirza's discount tier and panel scope
+
+Mirza's discount codes can be scoped by user group (`f`/`n`/`n2`) and by panel (VERIFIED,
+SBR-017..021). Nexa's discount engine has neither dimension, and a campaign creates rules in
+that engine rather than growing it.
+
+UNRESOLVED. Unchanged by C1.
