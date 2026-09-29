@@ -112,7 +112,6 @@ export type TrialClaimResult =
       readonly replayed?: true;
     };
 
-
 /**
  * A refusal discovered AFTER something was written, carried out of the transaction so
  * the writes roll back and the caller still gets an answer rather than an error.
@@ -406,7 +405,12 @@ export class TrialService {
             eventType: 'TrialIssued',
             aggregateType: 'Trial',
             aggregateId: granted.id,
-            payload: { customerId, productId: null, serviceId: service.id, panelId: config.panelId },
+            payload: {
+              customerId,
+              productId: null,
+              serviceId: service.id,
+              panelId: config.panelId,
+            },
           });
 
           await this.deps.audit.record(

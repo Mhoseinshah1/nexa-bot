@@ -322,9 +322,18 @@ export function ServicesPage({
       key: 'username',
       header: t('web.service_username'),
       render: (row) => (
-        <a href={`/services/${encodeURIComponent(row.id)}`} onClick={onLink} className="strong">
-          <Ltr>{row.providerUsername}</Ltr>
-        </a>
+        <>
+          <a href={`/services/${encodeURIComponent(row.id)}`} onClick={onLink} className="strong">
+            <Ltr>{row.providerUsername}</Ltr>
+          </a>
+          {/* R1: a free trial, as the database marks it (`services.is_trial`). */}
+          {row.isTrial && (
+            <>
+              {' '}
+              <Badge tone="info">{t('web.service_trial_badge')}</Badge>
+            </>
+          )}
+        </>
       ),
     },
     {

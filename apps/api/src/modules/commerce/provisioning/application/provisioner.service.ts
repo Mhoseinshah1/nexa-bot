@@ -1596,9 +1596,7 @@ export class ProvisionerService {
             // path shows a customer whose provisioning a panel outage delayed.
             expiresAt:
               verdict.expiresAt ??
-              (bought === null
-                ? null
-                : expiryFor(now, bought.durationDays, bought.durationHours)),
+              (bought === null ? null : expiryFor(now, bought.durationDays, bought.durationHours)),
             trafficUsedBytes: verdict.usedBytes,
             usageSyncedAt: verdict.usedBytes === null ? null : now,
           },

@@ -86,6 +86,13 @@ export type SettingControl =
   | { readonly kind: 'channel_list' }
   | { readonly kind: 'product' };
 
+/**
+ * Registry keys with a page of their own, which the Settings page does not draw (R1):
+ * the main menu's arrangement is a list with an order and switches, edited on the
+ * «دکمه‌های ربات» page beside the labels it arranges.
+ */
+export const SETTINGS_MANAGED_ELSEWHERE: readonly SettingKey[] = ['bot.main_menu'];
+
 export interface SettingPresentation {
   readonly title: WebKey;
   readonly description: WebKey;
@@ -263,6 +270,16 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
     description: 'web.setting_wallet_low_balance_threshold_desc',
     group: 'wallet',
     control: { kind: 'money' },
+  },
+  /*
+   * R1: the main menu's arrangement. Edited on the «دکمه‌های ربات» page, never here
+   * (`SETTINGS_MANAGED_ELSEWHERE`); the entry exists because this map is total.
+   */
+  'bot.main_menu': {
+    title: 'web.setting_bot_main_menu',
+    description: 'web.setting_bot_main_menu_desc',
+    group: 'support',
+    control: { kind: 'text' },
   },
   'trial.product_id': {
     title: 'web.setting_trial_product_id',

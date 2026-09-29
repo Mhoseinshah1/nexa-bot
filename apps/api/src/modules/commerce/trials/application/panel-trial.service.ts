@@ -307,7 +307,10 @@ function auditValues(config: PanelTrialConfigRecord) {
   };
 }
 
-function toResponse(panelId: string, config: PanelTrialConfigRecord | null): PanelTrialResponseBody {
+function toResponse(
+  panelId: string,
+  config: PanelTrialConfigRecord | null,
+): PanelTrialResponseBody {
   if (config === null) {
     return {
       panelId,
