@@ -27,8 +27,18 @@ import type { ScopeActivityReader } from '../../../platform/system/application/r
  * و در حال اعمال روی سرور است» and the lane later sent «درخواست شما با موفقیت روی سرور
  * اعمال شد» — two messages about a switch. Now the tap sends nothing, and a SUCCEEDED
  * operation edits the card it was asked from: 🟢 ↔ 🔴, with the switch button turned
- * round. A failure is still told through the lane (`SERVICE_ACTION_FAILED`), and the card
- * is left exactly as it was, because nothing changed.
+ * round.
+ *
+ * Round N (F4, `docs/n-service-ux-audit.md`): this is THE service card's message identity
+ * and answer — the one mechanism, extended rather than joined by a second. The tap turns the
+ * card «working» before the operation is planned (so nothing later can overwrite a final
+ * answer with a loading one); a disable, an enable or a link change that ENDS without
+ * happening is answered here too, the card redrawn as the service still is with
+ * `bot.service.notice_action_failed` (the lane's separate failure message is no longer
+ * sent for a request that has a card); and a link change's SUCCESS is answered on the same
+ * card by the delivery lane, which takes it through `claimRotationCard`. A change whose
+ * outcome is `UNKNOWN` is not answered until it is reconciled to a terminal state: the card
+ * reads «working» until then, and never claims success or failure it does not know.
  */
 
 /** Which Telegram message a request was made from: the card, as the bot that drew it. */
@@ -46,9 +56,25 @@ export interface CardMessageRef {
  */
 export const CARD_ANSWERED_OPERATIONS: readonly OperationType[] = ['SUSPEND', 'RESUME'];
 
+/**
+ * Round N (F4): the operation types whose FAILURE is answered on the card they were asked
+ * from. The tap turned the card into «working» (`bot.service.state_working`) with no
+ * action buttons, so the card itself must come back when the change ends without
+ * happening — as the service still is, with `bot.service.notice_action_failed` — rather
+ * than stay «working» beside a separate failure message. A rotation's SUCCESS is not here:
+ * the delivery lane answers it with the new link, on the same card (`claimRotationCard`).
+ */
+export const CARD_FAILURE_ANSWERED_OPERATIONS: readonly OperationType[] = [
+  'SUSPEND',
+  'RESUME',
+  'ROTATE_SUBSCRIPTION',
+];
+
 /** A card claimed for its one answer. */
 export interface ClaimedCard extends CardMessageRef {
   readonly operationId: string;
+  /** Round N (F4): what the card is answering — the change happened, or definitely did not. */
+  readonly outcome: 'SUCCEEDED' | 'FAILED';
   readonly serviceId: string;
   readonly customerId: UserId;
 }
@@ -94,8 +120,21 @@ export interface OperationCardRepository {
   ): Promise<void>;
 
   /**
-   * Cards of SUCCEEDED operations nobody answered, completed before `before`, whose
-   * `next_attempt_at` is not after `now`.
+   * Round N (F4): the card of the service's latest successful customer link change, taken
+   * for its one answer (a conditional UPDATE of `answered_at` from NULL) by the delivery
+   * lane that is about to deliver the new link — so the link lands ON the card. Null when
+   * the change was not asked from a card, or its card is already answered.
+   */
+  claimRotationCard(
+    scope: TenantContext,
+    serviceId: string,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<(CardMessageRef & { readonly operationId: string }) | null>;
+
+  /**
+   * Cards of answerable operations (a success, or since round N a terminal failure) nobody
+   * answered, completed before `before`, whose `next_attempt_at` is not after `now`.
    */
   dueForAnswer(
     scope: TenantContext,
@@ -112,6 +151,8 @@ export interface ServiceCardRenderer {
     scope: TenantContext,
     customerId: UserId,
     serviceId: string,
+    /** Round N (F4): a one-line notice under the card's status. */
+    notice?: TemplateKey,
   ): Promise<{
     readonly key: TemplateKey;
     readonly values: TemplateValues;
@@ -199,7 +240,17 @@ export class OperationCardEditor {
     if (claimed === 'INACTIVE') return 'INACTIVE';
     if (claimed === null) return 'NONE';
 
-    const card = await this.deps.renderer.cardFor(scope, claimed.customerId, claimed.serviceId);
+    /*
+     * Round N (F4): a change that definitely did not happen is told ON the card — the service
+     * as it still is, with the notice — instead of in a separate message; the announcer
+     * stamps it without one (`answeredElsewhere`).
+     */
+    const card = await this.deps.renderer.cardFor(
+      scope,
+      claimed.customerId,
+      claimed.serviceId,
+      claimed.outcome === 'FAILED' ? 'bot.service.notice_action_failed' : undefined,
+    );
     // No longer the customer's to see (refunded, moved to someone else): nothing to draw.
     if (card === null) return 'GONE';
 

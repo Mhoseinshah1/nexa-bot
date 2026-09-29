@@ -324,12 +324,16 @@ describe('a customer rotating their own subscription link', () => {
     expect(await rotations(service.id), 'the question alone plans nothing').toHaveLength(0);
 
     // The confirmation puts the card back and sends nothing: no «request registered».
+    // Round N (F4): the card reads «working», with no action, until the panel answers.
     sent = [];
     const confirmed = await tap(`rd:${service.id}`);
+    const cardMessageId = updateSeq;
     expect(confirmed.intent).toBe('SERVICE_ROTATE');
-    expect(confirmed.replyKey).toBe('bot.service.card');
+    expect(confirmed.replyKey).toBeNull();
     expect(sent.filter((one) => one.url.endsWith('/sendMessage'))).toHaveLength(0);
     expect(lastEdit()).toContain(service.providerUsername);
+    expect(lastEdit()).toContain('در حال اعمال درخواست شما روی سرور');
+    expect(lastEdit()).not.toContain(`rc:${service.id}`);
 
     // RickPanel reads files once a minute per user; the purchase's own read was just now.
     panel.forgetFileReads();
@@ -349,16 +353,21 @@ describe('a customer rotating their own subscription link', () => {
       String(one.body['text'] ?? one.body['caption'] ?? one.body['unparseable'] ?? '');
     const announcement = sent.find((one) => textOf(one).includes(after.subscriptionUrl ?? '-'));
     expect(announcement, 'the new link was sent').toBeDefined();
+    // Round N (F4): ON the same card — an edit of the message the change was asked from.
+    expect(announcement!.url.endsWith('/editMessageText')).toBe(true);
+    expect(announcement!.body['message_id']).toBe(cardMessageId);
+    expect(JSON.stringify(announcement!.body['reply_markup'])).toContain(`sv:${service.id}`);
     expect(textOf(announcement!)).toContain(
       `لینک اشتراک سرویس ${service.providerUsername} با موفقیت تغییر کرد`,
     );
     expect(textOf(announcement!)).toContain('لینک قبلی دیگر قابل استفاده نیست');
     // …then the new connection files, after it.
     const announcedAt = sent.indexOf(announcement!);
+    // Round N (F2): as one album.
     const documents = sent
       .map((one, index) => ({ one, index }))
-      .filter(({ one }) => one.url.endsWith('/sendDocument'));
-    expect(documents.length).toBeGreaterThan(0);
+      .filter(({ one }) => one.url.endsWith('/sendMediaGroup'));
+    expect(documents).toHaveLength(1);
     expect(documents.every(({ index }) => index > announcedAt)).toBe(true);
     // Never «service created», never «request applied».
     for (const one of sent) {
@@ -385,7 +394,48 @@ describe('a customer rotating their own subscription link', () => {
     // Told once: the next tick sends neither the link nor the files again.
     sent = [];
     await ctx.container.provisionerLoop.tick();
-    expect(sent.filter((one) => one.url.endsWith('/sendDocument'))).toHaveLength(0);
+    expect(
+      sent.filter(
+        (one) => one.url.endsWith('/sendDocument') || one.url.endsWith('/sendMediaGroup'),
+      ),
+    ).toHaveLength(0);
+    expect(sent.filter((one) => one.url.endsWith('/editMessageText'))).toHaveLength(0);
+  });
+
+  /*
+   * Round N (F4): a link change that definitely did not happen is answered ON the card that
+   * read «working» — the card as it still is, the failure line on it — and never by a
+   * separate message, never with a new link, never «service created».
+   */
+  it('a link change the panel did not make puts the card back with the failure on it', async () => {
+    await enableRotation();
+    const service = await deliveredService('fail-card');
+    panel.revokeMode = 'no-op-200';
+    sent = [];
+    await tap(`rd:${service.id}`);
+    const cardMessageId = updateSeq;
+    expect(lastEdit()).toContain('در حال اعمال درخواست شما روی سرور');
+
+    sent = [];
+    await ctx.container.provisionerLoop.tick();
+    const [operation] = await rotations(service.id);
+    expect(operation?.state).toBe('FAILED');
+    expect((await reload(service.id)).subscriptionUrl).toBe(service.subscriptionUrl);
+    const edits = sent.filter((one) => one.url.endsWith('/editMessageText'));
+    expect(edits).toHaveLength(1);
+    expect(edits[0]?.body['message_id']).toBe(cardMessageId);
+    const text = String(edits[0]?.body['text']);
+    expect(text).toContain('درخواست قبلی شما روی سرور انجام نشد');
+    expect(text).not.toContain('در حال اعمال درخواست شما روی سرور');
+    expect(text).not.toContain('تغییر کرد');
+    expect(JSON.stringify(edits[0]?.body['reply_markup'])).toContain(`rc:${service.id}`);
+    expect(sent.filter((one) => one.url.endsWith('/sendMessage'))).toHaveLength(0);
+    expect(
+      await count(
+        sql`SELECT count(*)::int AS n FROM customer_notifications WHERE kind = 'SERVICE_ACTION_FAILED'`,
+      ),
+      'the card is the answer',
+    ).toBe(0);
   });
 
   // =========================================================================

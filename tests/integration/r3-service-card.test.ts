@@ -262,9 +262,11 @@ describe('R3 — service delivery, connection files and the service card', () =>
     ).rows[0]?.n ?? 0;
 
   const of = (method: string) => sent.filter((one) => one.method === method);
-  const captionOf = (one: Sent) => /name="caption"\r\n\r\n([^\r]*)\r\n/u.exec(one.raw)?.[1];
 
-  /** The delivery message first, then every file after it, each captioned with the username. */
+  /**
+   * The delivery message first, then every file after it — since round N (F2) as ONE album,
+   * in the panel's order, each file with the panel's own caption.
+   */
   function expectDetailsThenFiles(service: ServiceRecord): void {
     const details = sent.findIndex(
       (one) =>
@@ -272,17 +274,24 @@ describe('R3 — service delivery, connection files and the service card', () =>
         one.raw.includes(service.subscriptionUrl ?? '-'),
     );
     expect(details, 'the service details were delivered').toBeGreaterThanOrEqual(0);
-    const documents = sent
+    const albums = sent
       .map((one, index) => ({ one, index }))
-      .filter(({ one }) => one.method === 'sendDocument');
-    expect(documents.map(({ one }) => /filename="([^"]+)"/u.exec(one.raw)?.[1])).toEqual([
+      .filter(({ one }) => one.method === 'sendMediaGroup');
+    expect(albums).toHaveLength(1);
+    expect(of('sendDocument'), 'no file goes on its own').toHaveLength(0);
+    const [{ one, index }] = albums as [{ one: Sent; index: number }];
+    expect(index, 'files come after the details').toBeGreaterThan(details);
+    expect([...one.raw.matchAll(/filename="([^"]+)"/gu)].map((match) => match[1])).toEqual([
       `${service.providerUsername}.json`,
       `${service.providerUsername}.txt`,
     ]);
-    for (const { one, index } of documents) {
-      expect(index, 'files come after the details').toBeGreaterThan(details);
-      expect(captionOf(one)).toBe(`👤 نام کاربری: ${service.providerUsername}`);
-    }
+    const media = JSON.parse(/name="media"\r\n\r\n([^\r]*)\r\n/u.exec(one.raw)?.[1] ?? '[]') as {
+      caption?: string;
+    }[];
+    expect(media.map((item) => item.caption)).toEqual([
+      `${service.providerUsername} — JSON`,
+      `${service.providerUsername} — links`,
+    ]);
   }
 
   // =========================================================================
@@ -300,6 +309,7 @@ describe('R3 — service delivery, connection files and the service card', () =>
       sent = [];
       await ctx.container.provisionerLoop.tick();
       expect(of('sendDocument')).toHaveLength(0);
+      expect(of('sendMediaGroup')).toHaveLength(0);
       expect(panel.filesCalls()).toBe(1);
     });
 
@@ -321,6 +331,7 @@ describe('R3 — service delivery, connection files and the service card', () =>
       expect(service.state).toBe('ACTIVE');
       expect(service.deliveryState).toBe('DELIVERED');
       expect(of('sendDocument')).toHaveLength(0);
+      expect(of('sendMediaGroup')).toHaveLength(0);
       expect(
         await count(
           sql`SELECT count(*)::int AS n FROM provisioning_operations
@@ -332,15 +343,16 @@ describe('R3 — service delivery, connection files and the service card', () =>
     });
 
     it('Telegram refusing a file does not touch the delivered service', async () => {
-      answers['sendDocument'] = {
+      answers['sendMediaGroup'] = {
         status: 400,
         body: { ok: false, error_code: 400, description: 'Bad Request: file rejected' },
       };
       const service = await paidService('files-refused');
       expect(service.state).toBe('ACTIVE');
       expect(service.deliveryState).toBe('DELIVERED');
-      // One attempt, then it stops: nothing is retried.
-      expect(of('sendDocument')).toHaveLength(1);
+      // One attempt, then it stops: nothing is retried, and no file goes on its own instead.
+      expect(of('sendMediaGroup')).toHaveLength(1);
+      expect(of('sendDocument')).toHaveLength(0);
     });
 
     it('never logs or stores the file bytes', async () => {
@@ -378,13 +390,20 @@ describe('R3 — service delivery, connection files and the service card', () =>
       const service = await paidService('switch');
       sent = [];
 
-      // The tap itself sends nothing: no «request registered».
+      // The tap sends nothing new: no «request registered». Round N (F4): the SAME card
+      // reads «working», with no switch to tap twice, until the panel has answered.
       const tapped = await tap(`u:${service.id}`, CARD);
       expect(tapped.replyKey).toBeNull();
       expect(of('sendMessage')).toHaveLength(0);
-      expect(of('editMessageText')).toHaveLength(0);
+      const [working] = of('editMessageText');
+      expect(of('editMessageText')).toHaveLength(1);
+      expect(working?.body['message_id']).toBe(CARD);
+      expect(String(working?.body['text'])).toContain('⏳');
+      expect(JSON.stringify(working?.body['reply_markup'])).not.toContain(`"u:${service.id}"`);
+      expect(JSON.stringify(working?.body['reply_markup'])).not.toContain(`"e:${service.id}"`);
       expect(of('answerCallbackQuery')).toHaveLength(1);
 
+      sent = [];
       await ctx.container.provisionerLoop.tick();
       expect((await services.findById(tenantA, service.id as never))?.state).toBe('SUSPENDED');
       expect(panel.users.get(service.providerUsername)?.status).toBe('disabled');
@@ -411,6 +430,7 @@ describe('R3 — service delivery, connection files and the service card', () =>
 
       // Enable, from the same card: back to active, and the switch turned round again.
       await tap(`e:${service.id}`, CARD);
+      sent = [];
       await ctx.container.provisionerLoop.tick();
       expect((await services.findById(tenantA, service.id as never))?.state).toBe('ACTIVE');
       const [enabled] = of('editMessageText');
@@ -430,6 +450,10 @@ describe('R3 — service delivery, connection files and the service card', () =>
       };
       sent = [];
       await tap(`u:${service.id}`, CARD);
+      // The «working» edit is best effort: refused, it is not sent instead.
+      expect(of('editMessageText')).toHaveLength(1);
+      expect(of('sendMessage')).toHaveLength(0);
+      sent = [];
       await ctx.container.provisionerLoop.tick();
       expect(of('editMessageText')).toHaveLength(1);
       const cards = of('sendMessage');
@@ -443,19 +467,43 @@ describe('R3 — service delivery, connection files and the service card', () =>
       expect(of('editMessageText')).toHaveLength(0);
     });
 
-    it('a disable the panel cannot perform leaves the card as it was and is told as a failure', async () => {
+    it('a disable the panel cannot perform puts the card back as it was, with the failure on it', async () => {
       const service = await paidService('switch-fail');
       (panel.users as Map<string, unknown>).delete(service.providerUsername);
-      sent = [];
       await tap(`u:${service.id}`, CARD);
+      sent = [];
       await ctx.container.provisionerLoop.tick();
       expect((await services.findById(tenantA, service.id as never))?.state).toBe('ACTIVE');
-      expect(of('editMessageText'), 'the card never says inactive').toHaveLength(0);
+      // Round N (F4): the card that read «working» is answered ON the card — still active,
+      // the switch offered again, and the failure line under the status. Never «inactive».
+      const [answered] = of('editMessageText');
+      expect(of('editMessageText')).toHaveLength(1);
+      expect(answered?.body['message_id']).toBe(CARD);
+      const text = String(answered?.body['text']);
+      expect(text).toContain('🟢');
+      expect(text).not.toContain('🔴');
+      expect(text).not.toContain('⏳');
+      expect(text).toContain('درخواست قبلی شما روی سرور انجام نشد');
+      expect(JSON.stringify(answered?.body['reply_markup'])).toContain(`"u:${service.id}"`);
+      expect(of('sendMessage'), 'no separate failure message').toHaveLength(0);
       expect(
         await count(
           sql`SELECT count(*)::int AS n FROM customer_notifications WHERE kind = 'SERVICE_ACTION_FAILED'`,
         ),
-      ).toBe(1);
+        'the card is the answer',
+      ).toBe(0);
+      const [operation] = (
+        (await ctx.container.database.db.execute(
+          sql`SELECT announced_at FROM provisioning_operations
+               WHERE service_id = ${service.id} AND type = 'SUSPEND'`,
+        )) as unknown as { rows: { announced_at: Date | null }[] }
+      ).rows;
+      expect(operation?.announced_at, 'still answered once').not.toBeNull();
+
+      // Told once.
+      sent = [];
+      await ctx.container.provisionerLoop.tick();
+      expect(of('editMessageText')).toHaveLength(0);
     });
 
     it('a double tap plans one operation and keeps the first card', async () => {
@@ -471,6 +519,7 @@ describe('R3 — service delivery, connection files and the service card', () =>
       expect(await count(sql`SELECT count(*)::int AS n FROM operation_card_messages`)).toBe(1);
       sent = [];
       await ctx.container.provisionerLoop.tick();
+      // The card the operation was asked from is the one answered.
       expect(of('editMessageText').map((one) => one.body['message_id'])).toEqual([CARD]);
     });
 
@@ -569,6 +618,62 @@ describe('R3 — service delivery, connection files and the service card', () =>
       expect(of('editMessageText')).toHaveLength(1);
       expect(of('sendMessage')).toHaveLength(1);
       await heldCard(service, 20);
+    });
+  });
+
+  // =========================================================================
+  // Round N (F4) — every service action works from, and answers on, the same card
+  // =========================================================================
+
+  describe('round N: the same card', () => {
+    const CARD = 6160;
+
+    it('reads «working» wherever it is drawn while a change is unsettled, then final', async () => {
+      const service = await paidService('working-any');
+      await tap(`u:${service.id}`, CARD);
+      // The card opened again — from another message — before the panel has answered.
+      sent = [];
+      await tap(`sv:${service.id}`, CARD + 1);
+      const [redrawn] = of('editMessageText');
+      expect(redrawn?.body['message_id']).toBe(CARD + 1);
+      expect(String(redrawn?.body['text'])).toContain('⏳');
+      expect(JSON.stringify(redrawn?.body['reply_markup'])).not.toContain(`"u:${service.id}"`);
+
+      await ctx.container.provisionerLoop.tick();
+      sent = [];
+      await tap(`sv:${service.id}`, CARD + 1);
+      const [settled] = of('editMessageText');
+      expect(String(settled?.body['text'])).toContain('🔴');
+      expect(String(settled?.body['text'])).not.toContain('⏳');
+      expect(JSON.stringify(settled?.body['reply_markup'])).toContain(`"e:${service.id}"`);
+    });
+
+    it('opens every sub-screen IN the card, with a way back that restores the card in place', async () => {
+      const service = await paidService('in-card');
+      for (const data of [
+        `n:${service.id}`,
+        `v:${service.id}`,
+        `nt:${service.id}`,
+        `fa:${service.id}`,
+        `ta:${service.id}`,
+      ]) {
+        sent = [];
+        const reply = await tap(data, CARD);
+        expect(reply.replyKey, data).not.toBeNull();
+        expect(of('sendMessage'), `${data}: no new message`).toHaveLength(0);
+        const [screen] = of('editMessageText');
+        expect(screen?.body['message_id'], `${data}: the card's own message`).toBe(CARD);
+        expect(JSON.stringify(screen?.body['reply_markup']), `${data}: a way back`).toContain(
+          `"sv:${service.id}"`,
+        );
+      }
+      sent = [];
+      await tap(`sv:${service.id}`, CARD);
+      expect(of('sendMessage')).toHaveLength(0);
+      const [card] = of('editMessageText');
+      expect(card?.body['message_id']).toBe(CARD);
+      expect(String(card?.body['text'])).toContain(service.providerUsername);
+      expect(JSON.stringify(card?.body['reply_markup'])).toContain(`"u:${service.id}"`);
     });
   });
 });
