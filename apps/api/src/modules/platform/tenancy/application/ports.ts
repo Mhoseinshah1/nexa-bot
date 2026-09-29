@@ -233,6 +233,11 @@ export interface BotBootstrapTelegram {
      * action with no count and no confirmation.
      */
     readonly dropPendingUpdates: boolean;
+    /**
+     * R4 — send `allowed_updates: []`, the Bot API's reset to its default set. Omitted,
+     * Telegram keeps whatever list the previous registration had.
+     */
+    readonly resetAllowedUpdates?: boolean;
   }): Promise<WebhookRegistration>;
 
   /**

@@ -175,6 +175,7 @@ class FakeTelegram implements BotBootstrapTelegram {
     url: string;
     secretToken: string;
     dropPendingUpdates: boolean;
+    resetAllowedUpdates?: boolean;
   }[] = [];
   probe: BotIdentityProbe = { outcome: 'IDENTIFIED', botId: '8123456789', username: 'acme_bot' };
   registration: WebhookRegistration = { outcome: 'REGISTERED' };
@@ -212,6 +213,7 @@ class FakeTelegram implements BotBootstrapTelegram {
     readonly url: string;
     readonly secretToken: string;
     readonly dropPendingUpdates: boolean;
+    readonly resetAllowedUpdates?: boolean;
   }): Promise<WebhookRegistration> {
     expect(currentTransactionLabel()).toBeUndefined();
     this.webhookCalls.push({ ...input });
@@ -764,6 +766,37 @@ describe('bot bootstrap — a rerun reconciles and never rotates', () => {
       // A running installation: whatever Telegram queued is customers' messages.
       expect(telegram.webhookCalls[1], label).toMatchObject({ url, dropPendingUpdates: false });
     }
+  });
+
+  /*
+   * R4 lead review. The Bot API keeps the previous `allowed_updates` when the field is
+   * omitted, so a re-registration sent here because the list was NARROWED must reset it,
+   * or every rerun re-registers and leaves the fault in place. A fresh install resets
+   * too: the empty list is Telegram's default set, the one this installation relies on.
+   */
+  it('resets allowed_updates on every registration, create and reconcile alike', async () => {
+    const { service, telegram } = await installed();
+    expect(telegram.webhookCalls[0]).toMatchObject({
+      dropPendingUpdates: true,
+      resetAllowedUpdates: true,
+    });
+    const url = telegram.webhookCalls[0]?.url ?? '';
+    telegram.held = {
+      outcome: 'READ',
+      url,
+      pendingUpdateCount: 0,
+      lastErrorAt: null,
+      lastErrorMessage: null,
+      maxConnections: 40,
+      allowedUpdates: ['message'],
+    };
+
+    await service.execute(scope, { token: null, publicBaseUrl: ORIGIN });
+    expect(telegram.webhookCalls[1]).toMatchObject({
+      url,
+      dropPendingUpdates: false,
+      resetAllowedUpdates: true,
+    });
   });
 
   it('still asks Telegram whether the stored token works', async () => {

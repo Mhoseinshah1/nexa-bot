@@ -466,6 +466,14 @@ export class BotBootstrapService {
        * by name.
        */
       dropPendingUpdates: ensured.createdNow,
+      /*
+       * R4: Telegram's default update set, on a create and a reconcile alike. The Bot API
+       * KEEPS the previous `allowed_updates` when the field is omitted, so without this a
+       * rerun that `telegramStillHolds` sent here BECAUSE the list was narrowed would
+       * re-register and leave it narrowed — on every rerun. An empty list is the default
+       * set, so a fresh install registers exactly what it always did.
+       */
+      resetAllowedUpdates: true,
     });
     if (registered.outcome !== 'REGISTERED') {
       /*
