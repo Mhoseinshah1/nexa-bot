@@ -227,6 +227,7 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   cooldownHours: 'فاصلهٔ مجاز (ساعت)',
   correlationId: 'شناسهٔ پیگیری',
   current: 'مقدار فعلی',
+  currentLimit: 'تعداد کاربر / دستگاه مجاز فعلی',
   custom: 'نشانهٔ روشن بودن انتخاب دلخواه',
   customBlock: 'بخش سرویس دلخواه',
   customTemplate: 'نشانهٔ انتخاب الگوی سفارشی',
@@ -235,6 +236,7 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   days: 'روزهای باقی‌مانده',
   delivery: 'وضعیت تحویل لینک',
   destination: 'اطلاعات حساب مقصد',
+  devicesBlock: 'بخش افزایش کاربر / دستگاه',
   discount: 'مبلغ تخفیف',
   discountLine: 'خط تخفیف',
   displayName: 'نام نمایشی',
@@ -301,6 +303,7 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   provider: 'نوع پنل',
   providerFinalAmount: 'مبلغ نهایی گزارش‌شده توسط درگاه',
   providerInvoiceId: 'شناسهٔ فاکتور درگاه',
+  quantity: 'تعداد',
   query: 'عبارت جست‌وجو',
   question: 'پرسش',
   random: 'نشانهٔ انتخاب تصادفی',
@@ -348,6 +351,7 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   subscriptionUrl: 'لینک اشتراک',
   subtotal: 'قیمت پیش از تخفیف',
   syncedAt: 'زمان آخرین همگام‌سازی',
+  targetLimit: 'تعداد مجاز پس از افزایش',
   telegram: 'اتصال تلگرام',
   telegramId: 'شناسهٔ عددی تلگرام',
   telegramIdRandom: 'نشانهٔ انتخاب شناسهٔ تلگرام + تصادفی',
@@ -359,6 +363,7 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   totalTrafficBytes: 'کل حجم',
   trafficBytes: 'حجم',
   trafficLimit: 'سقف حجم',
+  unitPrice: 'قیمت هر واحد',
   usage: 'وضعیت یادآور مصرف',
   usagePercent: 'درصد مصرف',
   usedTraffic: 'حجم مصرف‌شده',
@@ -417,6 +422,12 @@ export const PLACEHOLDER_LABEL_OVERRIDES_FA: Partial<
   'bot.order.preinvoice_locations': { lines: 'فهرست لوکیشن‌ها' },
   'bot.order.preinvoice_features': { lines: 'فهرست ویژگی‌ها' },
   'bot.service.addon_option': { title: 'نام بسته' },
+  'bot.service.devices_choice': {
+    remaining: 'تعداد کاربر قابل افزودن',
+    unitPrice: 'قیمت هر کاربر اضافه',
+  },
+  'bot.service.devices_option': { quantity: 'تعداد کاربر', price: 'قیمت این تعداد' },
+  'bot.order.preinvoice_devices': { unitPrice: 'قیمت هر کاربر اضافه' },
   'bot.service.renew_option_button': { title: 'نام محصول' },
   'bot.service.list': { total: 'تعداد کل سرویس‌ها' },
   'bot.service.list_item_button': { username: 'نام کاربری سرویس' },
@@ -639,6 +650,10 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'bot.order.preinvoice': [
     'پیش‌فاکتور خرید',
     'پیش‌فاکتوری که مشتری از روی آن پرداخت می‌کند: نام کاربری، محصول، مدت، حجم، مبلغ و موجودی کیف پول.',
+  ],
+  'bot.order.preinvoice_devices': [
+    'بخش افزایش کاربر / دستگاه در پیش‌فاکتور',
+    'تعداد خریده‌شده، قیمت هر کاربر و تعداد مجاز پیش و پس از افزایش؛ فقط برای خرید کاربر اضافه.',
   ],
   'bot.order.preinvoice_custom': [
     'بخش سرویس دلخواه در پیش‌فاکتور',
@@ -1333,6 +1348,18 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
     'دکمهٔ خرید زمان اضافه',
     'بسته‌های زمان اضافهٔ قابل خرید را نشان می‌دهد.',
   ],
+  'bot.service.add_devices_button': [
+    'دکمهٔ افزایش کاربر / دستگاه',
+    'پیشنهاد خرید کاربر یا دستگاه اضافه را باز می‌کند؛ فقط وقتی پنل سرویس این قابلیت را دارد و تعرفه‌ای فعال است نمایش داده می‌شود.',
+  ],
+  'bot.service.devices_choice': [
+    'انتخاب تعداد کاربر / دستگاه اضافه',
+    'تعداد مجاز فعلی، قیمت هر کاربر و تعدادی که هنوز قابل خرید است؛ تعدادها روی دکمه‌های زیر آن هستند.',
+  ],
+  'bot.service.devices_option': [
+    'دکمهٔ هر تعداد کاربر اضافه',
+    'یک تعداد و قیمت آن، پیش از هر تخفیف؛ مبلغ نهایی در پیش‌فاکتور می‌آید.',
+  ],
   'bot.service.addon_choice': [
     'عنوان انتخاب بستهٔ افزودنی',
     'عنوان بالای بسته‌های حجم یا زمان اضافه؛ مقدار و قیمت روی دکمه‌ها است.',
@@ -1705,6 +1732,10 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'bot.admin.operation_add_time': [
     'برچسب عملیات: افزایش زمان',
     'نوع عملیات در کارت رسید برای خرید زمان اضافه.',
+  ],
+  'bot.admin.operation_add_devices': [
+    'برچسب عملیات: افزایش کاربر / دستگاه',
+    'نوع عملیات در کارت رسید برای خرید کاربر یا دستگاه اضافه.',
   ],
   'bot.admin.operation_topup': [
     'برچسب عملیات: شارژ کیف پول',
