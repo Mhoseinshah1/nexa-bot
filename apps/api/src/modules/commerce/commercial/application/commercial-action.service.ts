@@ -143,23 +143,24 @@ export type CommercialKind = Exclude<OrderPurpose, 'NEW_SERVICE' | 'TRIAL' | 'CU
  * a purchase no policy can switch off would be the one customer action an operator
  * cannot stop on a panel.
  *
- * `CHANGE_LOCATION` (WP-A6) is the one explicit null: the panel policy has no row for a
- * move yet, and a move is decided by `LocationChangePolicy` and the panel's declared
- * `LOCATION_CHANGE` capability, which no provider declares in this release. Giving it a
- * per-panel switch is a contract change of its own.
+ * `CHANGE_LOCATION` (WP-A6) is decided by the `LOCATION_CHANGE` row (HF-A6A8), so the
+ * same `assertPanelCanPerform` that asks the capability also refuses a move an operator
+ * switched off on this panel — at the button, the choice screen, the tapped target, the
+ * quote and its confirmation. The free move, which is no commercial order, asks the same
+ * row in `LocationChangeService.requestFree`. With that, every commercial kind has a row,
+ * and the type no longer admits a kind the policy cannot restrict.
  */
-const COMMERCIAL_POLICY_ROW: Readonly<Record<CommercialKind, PanelCustomerAction | null>> = {
+const COMMERCIAL_POLICY_ROW: Readonly<Record<CommercialKind, PanelCustomerAction>> = {
   RENEW: 'RENEW',
   ADD_TRAFFIC: 'ADD_TRAFFIC',
   ADD_TIME: 'ADD_TIME',
   ADD_DEVICES: 'EXTRA_DEVICES',
-  CHANGE_LOCATION: null,
+  CHANGE_LOCATION: 'LOCATION_CHANGE',
 };
 
-/** The policy's verdict for one kind; a kind with no policy row is not restricted by it. */
+/** The policy's verdict for one kind. */
 function commercialPolicyAllows(resolved: ResolvedPanelPolicy, kind: CommercialKind): boolean {
-  const row = COMMERCIAL_POLICY_ROW[kind];
-  return row === null || customerActionVerdict(resolved, row).allowed;
+  return customerActionVerdict(resolved, COMMERCIAL_POLICY_ROW[kind]).allowed;
 }
 
 /**
@@ -1524,13 +1525,10 @@ export class CommercialActionService {
      * is one — so a confirmation after an operator switched the action off on this
      * panel is refused before any money moves, whatever the button said.
      */
-    const row = COMMERCIAL_POLICY_ROW[kind];
-    if (row !== null) {
-      assertCustomerPolicyAllows(
-        await this.deps.panelPolicy.forPanel(scope, service.panelId, tx),
-        row,
-      );
-    }
+    assertCustomerPolicyAllows(
+      await this.deps.panelPolicy.forPanel(scope, service.panelId, tx),
+      COMMERCIAL_POLICY_ROW[kind],
+    );
   }
 
   /**

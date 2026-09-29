@@ -374,6 +374,51 @@ describe('the panel policy', () => {
       unsupportedPolicyActions(parsed, deriveCapabilityRegistry(new RickpanelAdapter())),
     ).toEqual(['EXTRA_DEVICES']);
   });
+
+  /*
+   * HF-A6A8: «تغییر لوکیشن سرویس» is a switch and nothing else — its cooldown and limit
+   * live on each location — and it is a policy entry only where the adapter both has the
+   * two location methods AND declares the capability. No shipped adapter does.
+   */
+  it('takes a location-change switch, with no knob, and only where the adapter can move', () => {
+    const off = panelPolicySchema.safeParse(
+      policy({ LOCATION_CHANGE: { customerEnabled: false } }),
+    );
+    expect(off.success).toBe(true);
+    expect(
+      panelPolicySchema.safeParse(
+        policy({ LOCATION_CHANGE: { customerEnabled: true, cooldownMinutes: 60 } }),
+      ).success,
+    ).toBe(false);
+    if (!off.success) throw new Error('unreachable');
+    expect(customerActionVerdict(resolvePanelPolicy(off.data), 'LOCATION_CHANGE')).toEqual({
+      allowed: false,
+      reason: 'POLICY_DISABLED',
+    });
+
+    for (const type of IMPLEMENTED_PROVIDER_TYPES) {
+      expect(
+        unsupportedPolicyActions(off.data, deriveCapabilityRegistry(providerAdapter(type))),
+        type,
+      ).toEqual(['LOCATION_CHANGE']);
+    }
+    const rick = new RickpanelAdapter();
+    const declares = [...rick.descriptor.capabilities, 'LOCATION_CHANGE' as const];
+    // Implemented AND declared: accepted.
+    expect(
+      unsupportedPolicyActions(
+        off.data,
+        deriveCapabilityRegistry(declaring(withLocationMethods(rick), declares)),
+      ),
+    ).toEqual([]);
+    // Either half alone is not enough.
+    expect(
+      unsupportedPolicyActions(off.data, deriveCapabilityRegistry(withLocationMethods(rick))),
+    ).toEqual(['LOCATION_CHANGE']);
+    expect(
+      unsupportedPolicyActions(off.data, deriveCapabilityRegistry(declaring(rick, declares))),
+    ).toEqual(['LOCATION_CHANGE']);
+  });
 });
 
 describe('panel diagnostics', () => {
