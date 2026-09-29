@@ -111,6 +111,7 @@ describe('the live verdict', () => {
     botStatus: 'ACTIVE' as const,
     secret: 'MATCHES' as const,
     identified: true,
+    isBot: true,
     sameBot: true,
     webhook: { url: EXPECTED, narrowed: false },
     expectedUrl: EXPECTED,
@@ -140,6 +141,9 @@ describe('the live verdict', () => {
       'TOKEN_NOT_ACCEPTED',
     ]);
     expect(liveProblems({ ...ready, sameBot: false })).toEqual(['DIFFERENT_BOT']);
+    // Codex F4: an answer that does not say `is_bot: true` is not a bot token accepted.
+    expect(liveProblems({ ...ready, isBot: false })).toEqual(['TOKEN_NOT_ACCEPTED']);
+    expect(liveProblems({ ...ready, isBot: null })).toEqual(['TOKEN_NOT_ACCEPTED']);
     expect(liveProblems({ ...ready, secret: 'DIFFERS' })).toEqual(['WEBHOOK_SECRET_NOT_CURRENT']);
     expect(liveProblems({ ...ready, secret: 'UNKNOWN' })).toEqual(['WEBHOOK_SECRET_NOT_CURRENT']);
   });

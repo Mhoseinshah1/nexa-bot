@@ -131,11 +131,40 @@ class FakeBots implements BotBootstrapRepository {
     });
   }
 
+  /**
+   * R4 — the token-replacement claim, as the conditional UPDATEs keep it: free, or held
+   * by one id until an instant. `claimCalls` counts every attempt to take it.
+   */
+  claim: { id: string; until: Date } | null = null;
+  claimCalls = 0;
+
+  async claimTokenReplacement(
+    _scope: unknown,
+    _id: string,
+    claim: { readonly id: string; readonly now: Date; readonly until: Date },
+  ): Promise<boolean> {
+    this.claimCalls += 1;
+    if (this.claim !== null && this.claim.until > claim.now) return false;
+    this.claim = { id: claim.id, until: claim.until };
+    return true;
+  }
+
+  async releaseTokenReplacement(_scope: unknown, _id: string, claimId: string): Promise<void> {
+    if (this.claim?.id === claimId) this.claim = null;
+  }
+
   async markWebhookRegistered(
     _scope: unknown,
     id: string,
-    input: { readonly url: string; readonly secretFingerprint: string; readonly now: Date },
-  ): Promise<void> {
+    input: {
+      readonly url: string;
+      readonly secretFingerprint: string;
+      readonly now: Date;
+      readonly claimId: string;
+    },
+  ): Promise<boolean> {
+    // Written only while the registration still holds the claim, as the SQL requires.
+    if (this.claim?.id !== input.claimId) return false;
     this.webhookMarks.push({ id, url: input.url });
     const row = this.rows.find((candidate) => candidate.id === id);
     if (row) {
@@ -143,6 +172,7 @@ class FakeBots implements BotBootstrapRepository {
       row.webhookUrl = input.url;
       row.webhookSecretFingerprint = input.secretFingerprint;
     }
+    return true;
   }
 
   async recordTelegramIdentity(
@@ -322,6 +352,7 @@ function build(overrides: Partial<BotBootstrapDeps> = {}): {
     telegram,
     webhookSecret: () => SECRET,
     webhookEnabled: () => true,
+    telegramCallTimeoutMs: 10_000,
   };
 
   const composed = { ...deps, ...overrides };
@@ -797,6 +828,47 @@ describe('bot bootstrap — a rerun reconciles and never rotates', () => {
       dropPendingUpdates: false,
       resetAllowedUpdates: true,
     });
+  });
+
+  // Codex F5: a REJECTED read is Telegram's answer, not a flake; only UNREACHABLE keeps
+  // the marker's word. The rerun re-registers, and a rejected token fails there.
+  it('re-registers when Telegram REJECTS the webhook read, rather than trusting the marker', async () => {
+    const { service, telegram } = await installed();
+    telegram.held = { outcome: 'REJECTED' };
+    const result = await service.execute(scope, { token: null, publicBaseUrl: ORIGIN });
+    expect(result.kind).toBe('RECONCILED');
+    expect(telegram.webhookCalls).toHaveLength(2);
+
+    // UNREACHABLE is still no evidence either way.
+    const quiet = await installed();
+    quiet.telegram.held = { outcome: 'UNREACHABLE' };
+    expect((await quiet.service.execute(scope, { token: null, publicBaseUrl: ORIGIN })).kind).toBe(
+      'ALREADY_COMPLETE',
+    );
+  });
+
+  // Codex F6: the registration takes the same claim a Web Admin replacement holds.
+  it('refuses to register while a token replacement holds the claim, and registers after', async () => {
+    const { service, bots, telegram } = build();
+    bots.claim = { id: 'web-admin-replacement', until: new Date('2999-01-01T00:00:00Z') };
+
+    const error = await service
+      .execute(scope, { token: TOKEN, publicBaseUrl: ORIGIN })
+      .then(() => null)
+      .catch((caught: unknown) => caught);
+    expect(isNexaError(error) && error.kind).toBe('CONFLICT');
+    expect(isNexaError(error) && error.message).toContain('in progress in the Web Admin');
+    expect(telegram.webhookCalls).toHaveLength(0);
+    expect(bots.webhookMarks).toHaveLength(0);
+    expect(bots.claim?.id).toBe('web-admin-replacement');
+
+    bots.claim = null;
+    const done = await service.execute(scope, { token: null, publicBaseUrl: ORIGIN });
+    expect(done.kind).toBe('RECONCILED');
+    expect(telegram.webhookCalls).toHaveLength(1);
+    expect(bots.webhookMarks).toHaveLength(1);
+    // Released after the marker, whatever happened.
+    expect(bots.claim).toBeNull();
   });
 
   it('still asks Telegram whether the stored token works', async () => {

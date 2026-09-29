@@ -407,12 +407,32 @@ What changed, and what did not:
   first Telegram call; activation is conditional on it still being this attempt's. A second
   submission while one runs — same key or another — is `bot.token_replacement_in_progress`
   and makes no Telegram call. A replayed key answers the first result, verification
-  included.
+  included. The lease is derived from the Telegram call timeout — seven sequential calls
+  plus a minute, never under five minutes (`domain/token-replacement-lease.ts`) — so a
+  slow attempt cannot outlive it.
+- **The installer takes the same claim.** `botctl telegram register` claims the bot before
+  its `setWebhook`, writes its marker only while it still holds the claim, and releases it
+  afterwards; while a Web Admin replacement holds it, the command refuses with a remedy.
+  The two writers of a bot's webhook cannot interleave.
+- **Inbound updates wait while a claim is live.** The webhook route answers 409 for a bot
+  with a live claim, before anything is read or written for the update. The replacement
+  registers the webhook before it stores the token, and Telegram may start flushing its
+  queue at once; handled then, an update would be answered with the revoked token and lost
+  after a 2xx. Held, Telegram delivers it again with back-off (it keeps updates for a day),
+  and a claim left by a dead process lapses with its lease.
+- **An ambiguous commit is read, not guessed.** When the storing transaction throws, its
+  idempotency record — written in the same transaction — says whether it committed. If it
+  did, that is the answer and nothing is compensated; if the record cannot be read, nothing
+  destructive runs and the compensation is reported `FAILED`.
+- **`is_bot` counts in the verdict too:** a live check whose `getMe` answer does not say
+  `is_bot: true` reports `TOKEN_NOT_ACCEPTED`.
 - **The same token is no longer a short-cut.** It is registered and verified like any
   other and answers `changed: false`; that is how a bot left silent by v0.3.5 is repaired.
 - **The bootstrap asks too.** A rerun that would answer ALREADY_COMPLETE first reads the
-  registration; one that shows another URL (none included) or a narrowed update set is
-  re-registered, keeping the queue. An unreadable answer leaves the old behaviour.
+  registration. Another URL (none included) or a narrowed update set is re-registered,
+  keeping the queue and resetting the update set; a token Telegram refuses goes on to the
+  registration too, which fails with the existing clear error. Only an unreachable read
+  leaves the old behaviour.
 - **The username is refreshed** from `getMe` (it drifts on a BotFather rename,
   `OQ-TG-02`), and written only when no other row holds it: the column is unique, and a
   stale copy elsewhere must not fail a verified replacement.
@@ -425,4 +445,5 @@ way, each with its remedy in the Web Admin.
 
 What a crash cannot cover: a process that dies between `setWebhook` and the storing
 transaction leaves Telegram registered here and the old token stored, with the claim held
-until its five-minute lease lapses. Submitting the token again after that converges.
+until its lease lapses — inbound updates are held for that long, not lost. Submitting the
+token again after that converges.

@@ -449,6 +449,7 @@ describe('WP13 bot management', () => {
         ids: c.ids,
         webhookSecret: () => WEBHOOK_SECRET,
         webhookEnabled: () => true,
+        telegramCallTimeoutMs: 10_000,
       };
       service = new BotManagementService(deps);
       await db().execute(sql`
@@ -654,6 +655,7 @@ describe('WP13 bot management', () => {
         ids: c.ids,
         webhookSecret: () => WEBHOOK_SECRET,
         webhookEnabled: () => true,
+        telegramCallTimeoutMs: 10_000,
       });
 
       const outcome = await watched.replaceToken(scope, owner, {
@@ -665,6 +667,75 @@ describe('WP13 bot management', () => {
       expect(calls).toEqual(REPLACEMENT_CALLS);
       expect(readInside).toEqual([true]);
       expect(await api.container.botInstances.resolveToken(scope as never, BOT_A1)).toBe(mine);
+    });
+
+    /*
+     * Codex F3. A COMMIT that landed and whose acknowledgement was lost throws like one
+     * that did not. Compensating then would delete a verified webhook for a token that WAS
+     * stored, so the durable outcome is read first.
+     */
+    describe('an activation whose outcome is ambiguous', () => {
+      /** A unit of work that commits the activation (its second run) and then throws. */
+      const ackLost = (): BotManagementServiceDeps['uow'] => {
+        let runs = 0;
+        return {
+          ...deps.uow,
+          run: async (runScope, fn) => {
+            runs += 1;
+            const result = await deps.uow.run(runScope, fn);
+            if (runs === 2) throw new Error('connection lost after COMMIT');
+            return result;
+          },
+        } as BotManagementServiceDeps['uow'];
+      };
+
+      beforeEach(() => {
+        // No webhook before, so a compensation WOULD delete the one this attempt set.
+        webhook = { ...(webhook as Extract<BotWebhookRead, { outcome: 'READ' }>), url: null };
+      });
+
+      it('answers the committed replacement and compensates nothing', async () => {
+        const next = tokenFor(TELEGRAM_ID, 'committed');
+        const ambiguous = new BotManagementService({ ...deps, uow: ackLost() });
+        const outcome = await ambiguous.replaceToken(scope, owner, {
+          idempotencyKey: 'ack-lost',
+          botId: BOT_A1,
+          token: next,
+        });
+        expect(outcome.changed).toBe(true);
+        expect(outcome.verification?.webhook.matchesExpected).toBe(true);
+        expect(calls).not.toContain('removeWebhook');
+        expect(await api.container.botInstances.resolveToken(scope as never, BOT_A1)).toBe(next);
+      });
+
+      it('runs nothing destructive when the outcome cannot be read, and says so', async () => {
+        // The replay check on arrival reads normally; the read after the lost COMMIT fails.
+        let finds = 0;
+        const ambiguous = new BotManagementService({
+          ...deps,
+          uow: ackLost(),
+          idempotency: {
+            ...deps.idempotency,
+            find: async (...args: Parameters<typeof deps.idempotency.find>) => {
+              finds += 1;
+              if (finds > 1) throw new Error('database unreachable');
+              return deps.idempotency.find(...args);
+            },
+            remember: deps.idempotency.remember.bind(deps.idempotency),
+          },
+        });
+        const error = await ambiguous
+          .replaceToken(scope, owner, {
+            idempotencyKey: 'ack-lost-unknown',
+            botId: BOT_A1,
+            token: tokenFor(TELEGRAM_ID, 'unknown'),
+          })
+          .then(() => null)
+          .catch((caught: unknown) => caught);
+        expect(isNexaError(error) && error.code).toBe(BOT_ERROR_CODES.BOT_TOKEN_ACTIVATION_FAILED);
+        expect(isNexaError(error) && error.details['compensation']).toBe('FAILED');
+        expect(calls).not.toContain('removeWebhook');
+      });
     });
 
     it('refuses a reused key sent with a different token, and never reports it replaced', async () => {

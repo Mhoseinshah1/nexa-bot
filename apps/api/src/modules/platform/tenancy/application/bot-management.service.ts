@@ -44,6 +44,7 @@ import {
   readinessOf,
   webhookSecretState,
 } from '../domain/bot-readiness.js';
+import { tokenReplacementLeaseMs } from '../domain/token-replacement-lease.js';
 import { allowedUpdatesNarrowed, expectedWebhookUrl } from '../domain/webhook-url.js';
 import type {
   BotManagementRecord,
@@ -65,14 +66,6 @@ import { webhookSecretFingerprint } from './webhook-fingerprint.js';
 export const BOTS_VIEW_PERMISSION = 'settings.view' satisfies PermissionKey;
 export const BOTS_OPERATE_PERMISSION = 'settings.edit' satisfies PermissionKey;
 export const BOTS_TOKEN_PERMISSION = 'settings.destructive' satisfies PermissionKey;
-
-/**
- * R4 — how long a token replacement's claim on its bot lasts. Longer than the worst case
- * of the calls it covers (four Telegram calls, and three more to compensate, each bounded
- * by the call core's timeout — `NOTIFICATION_SEND_TIMEOUT_MS`, 10 s by default), and
- * short enough that a process that died holding it blocks the next attempt for minutes.
- */
-export const TOKEN_REPLACEMENT_LEASE_MS = 5 * 60_000;
 
 /**
  * R4 — the operational-event codes a replacement writes. Part of the schema once shipped
@@ -120,6 +113,11 @@ export interface BotManagementServiceDeps {
   readonly clock: Clock;
   /** Mints a token replacement's claim id (R4). */
   readonly ids: IdGenerator;
+  /**
+   * The Telegram call timeout (`NOTIFICATION_SEND_TIMEOUT_MS`) the gateway was built with,
+   * from which the claim's lease is derived (`tokenReplacementLeaseMs`).
+   */
+  readonly telegramCallTimeoutMs: number;
   /** `TELEGRAM_WEBHOOK_SECRET` as this process read it; empty means not configured. */
   readonly webhookSecret: () => string;
   /** `TELEGRAM_WEBHOOK_ENABLED` as this process read it. */
@@ -422,7 +420,13 @@ export class BotManagementService {
         const taken = await this.deps.repository.claimTokenReplacement(
           scope,
           botId,
-          { id: claimId, now, until: new Date(now.getTime() + TOKEN_REPLACEMENT_LEASE_MS) },
+          {
+            id: claimId,
+            now,
+            until: new Date(
+              now.getTime() + tokenReplacementLeaseMs(this.deps.telegramCallTimeoutMs),
+            ),
+          },
           tx,
         );
         if (!taken) {
@@ -668,7 +672,21 @@ export class BotManagementService {
         },
       );
     } catch (error) {
-      const compensation = await this.compensate(token, priorKind, expectedUrl);
+      /*
+       * An error here does not prove nothing committed: a COMMIT that landed and whose
+       * acknowledgement was lost throws exactly like one that did not. Compensating then
+       * would delete a verified webhook for a token that WAS stored. So the durable
+       * outcome is read first — the idempotency record is written in the activating
+       * transaction, so it exists if and only if that transaction committed. Committed:
+       * that is the answer, and nothing is undone. Unknowable: nothing destructive is run
+       * on a guess; the compensation is reported FAILED and the operational event says so.
+       */
+      const durable = await this.durableOutcome(scope, input.idempotencyKey, input.requestHash);
+      if (durable.state === 'COMMITTED') return durable.outcome;
+      const compensation =
+        durable.state === 'UNKNOWN'
+          ? ('FAILED' as const)
+          : await this.compensate(token, priorKind, expectedUrl);
       await this.recordIncomplete(scope, botId, 'ACTIVATE', compensation);
       throw this.replacementFailure(BOT_ERROR_CODES.BOT_TOKEN_ACTIVATION_FAILED, 'CONFLICT', {
         message:
@@ -684,6 +702,26 @@ export class BotManagementService {
         },
         cause: error,
       });
+    }
+  }
+
+  /** Whether a replacement's activation committed, read from its idempotency record. */
+  private async durableOutcome(
+    scope: TenantContext,
+    idempotencyKey: string,
+    requestHash: string,
+  ): Promise<
+    | { readonly state: 'COMMITTED'; readonly outcome: BotTokenReplacementOutcome }
+    | { readonly state: 'NOT_COMMITTED' }
+    | { readonly state: 'UNKNOWN' }
+  > {
+    try {
+      const outcome = await this.replayReplacement(scope, idempotencyKey, requestHash);
+      return outcome === null ? { state: 'NOT_COMMITTED' } : { state: 'COMMITTED', outcome };
+    } catch (error) {
+      // The read failed, so whether the activation committed cannot be established.
+      void error;
+      return { state: 'UNKNOWN' };
     }
   }
 
@@ -877,6 +915,7 @@ export class BotManagementService {
       botStatus: record.status,
       secret: view.webhook.secret,
       identified: identified !== null,
+      isBot: identified?.isBot ?? null,
       sameBot:
         identified === null || record.telegramBotId === null
           ? null

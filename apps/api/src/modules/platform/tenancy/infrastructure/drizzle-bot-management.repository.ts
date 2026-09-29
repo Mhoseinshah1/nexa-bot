@@ -1,4 +1,4 @@
-import { and, asc, eq, isNull, lte, or, sql } from 'drizzle-orm';
+import { and, asc, eq, sql } from 'drizzle-orm';
 import {
   asId,
   type BotInstanceId,
@@ -45,7 +45,7 @@ export class DrizzleBotManagementRepository implements BotManagementRepository {
     private readonly cipher: SecretCipher,
     private readonly bots: Pick<
       DrizzleBotInstanceRepository,
-      'resolveToken' | 'tokenForBotInstance'
+      'resolveToken' | 'tokenForBotInstance' | 'claimTokenReplacement' | 'releaseTokenReplacement'
     >,
   ) {}
 
@@ -123,49 +123,23 @@ export class DrizzleBotManagementRepository implements BotManagementRepository {
     return updated.length === 1;
   }
 
-  async claimTokenReplacement(
+  /** The one claim implementation, shared with the installer (`TokenReplacementClaims`). */
+  claimTokenReplacement(
     scope: ScopeContext,
     id: BotInstanceId,
     claim: { readonly id: string; readonly now: Date; readonly until: Date },
     tx: unknown,
   ): Promise<boolean> {
-    const tenantId = requireTenantId(scope);
-    const updated = await executorOf(this.db, tx)
-      .update(botInstances)
-      .set({ tokenReplacementClaim: claim.id, tokenReplacementClaimedUntil: claim.until })
-      .where(
-        and(
-          eq(botInstances.tenantId, tenantId),
-          eq(botInstances.id, id),
-          // Free, or lapsed: a process that died holding it blocks the next attempt for
-          // the lease and no longer. `claim.now` is the Clock's, like every timestamp here.
-          or(
-            isNull(botInstances.tokenReplacementClaim),
-            lte(botInstances.tokenReplacementClaimedUntil, claim.now),
-          ),
-        ),
-      )
-      .returning({ id: botInstances.id });
-    return updated.length === 1;
+    return this.bots.claimTokenReplacement(scope, id, claim, tx);
   }
 
-  async releaseTokenReplacement(
+  releaseTokenReplacement(
     scope: ScopeContext,
     id: BotInstanceId,
     claimId: string,
     tx: unknown,
   ): Promise<void> {
-    const tenantId = requireTenantId(scope);
-    await executorOf(this.db, tx)
-      .update(botInstances)
-      .set({ tokenReplacementClaim: null, tokenReplacementClaimedUntil: null })
-      .where(
-        and(
-          eq(botInstances.tenantId, tenantId),
-          eq(botInstances.id, id),
-          eq(botInstances.tokenReplacementClaim, claimId),
-        ),
-      );
+    return this.bots.releaseTokenReplacement(scope, id, claimId, tx);
   }
 
   async activateTokenReplacement(

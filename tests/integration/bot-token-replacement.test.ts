@@ -369,8 +369,13 @@ describe('R4 — Telegram bot token replacement registers and verifies the webho
       ).json(),
     ).bot;
     expect(after).toEqual(before);
-    // ...Telegram still delivers to this installation, and the installation still takes it.
+    // ...Telegram still delivers to this installation, and once the replacement that took
+    // the claim over is done (Codex F1 holds updates while it runs), the installation
+    // takes them.
     expect(telegram.registration(TELEGRAM_ID)?.url).toBe(EXPECTED_URL);
+    await db().execute(sql`
+      UPDATE bot_instances SET token_replacement_claim = NULL, token_replacement_claimed_until = NULL
+       WHERE id = ${BOT_A1}`);
     expect((await deliverUpdate(7)).statusCode).toBeLessThan(300);
     expect(await openIncomplete()).toEqual([
       {
@@ -512,5 +517,52 @@ describe('R4 — Telegram bot token replacement registers and verifies the webho
     expect(errorOf(response).code).toBe(BOT_ERROR_CODES.BOT_WEBHOOK_ORIGIN_UNKNOWN);
     expect(telegram.calls).toEqual([]);
     expect(await storedToken()).toBe(oldToken);
+  });
+
+  /*
+   * Codex F1. A replacement registers the webhook before it stores the token, and Telegram
+   * may start flushing its queue at once. Handled then, an update would be answered with
+   * the revoked token still stored and lost after a 2xx; held with a non-2xx, Telegram
+   * delivers it again once the replacement is done.
+   */
+  it('holds inbound updates while a live replacement claim is held, and handles them after', async () => {
+    const ping = (updateId: number) =>
+      inject({
+        method: 'POST',
+        url: `/telegram/webhook/${BOT_A1}`,
+        headers: { [TELEGRAM_SECRET_TOKEN_HEADER]: WEBHOOK_SECRET },
+        payload: {
+          update_id: updateId,
+          message: { message_id: 1, date: 0, chat: { id: 1, type: 'private' }, text: '/ping' },
+        },
+      });
+    const handled = (updateId: number) =>
+      count(sql`SELECT count(*)::int AS n FROM request_idempotency
+                 WHERE key = ${`telegram:${BOT_A1}:update:${updateId}`}`);
+    const claim = (until: string) =>
+      db().execute(sql`
+        UPDATE bot_instances
+           SET token_replacement_claim = '01900000-0000-7000-8000-00000000ffff',
+               token_replacement_claimed_until = ${until}::timestamptz
+         WHERE id = ${BOT_A1}`);
+
+    await claim(new Date(Date.now() + 60 * 60_000).toISOString());
+    const held = await ping(901);
+    expect(held.statusCode).toBe(409);
+    expect(errorOf(held).code).toBe(BOT_ERROR_CODES.BOT_TOKEN_REPLACEMENT_IN_PROGRESS);
+    // Nothing written for it, so the redelivery is not a replay of a half-handled update.
+    expect(await handled(901)).toBe(0);
+
+    await db().execute(sql`
+      UPDATE bot_instances SET token_replacement_claim = NULL, token_replacement_claimed_until = NULL
+       WHERE id = ${BOT_A1}`);
+    const redelivered = await ping(901);
+    expect(redelivered.statusCode).toBeLessThan(300);
+    expect(await handled(901)).toBe(1);
+
+    // A claim whose lease lapsed (its holder died) holds nothing back.
+    await claim(new Date(Date.now() - 1_000).toISOString());
+    expect((await ping(902)).statusCode).toBeLessThan(300);
+    expect(await handled(902)).toBe(1);
   });
 });

@@ -130,6 +130,11 @@ export function liveProblems(input: {
   readonly secret: BotWebhookSecretState;
   /** `getMe` identified a bot, and whether it is the recorded one (null: none recorded). */
   readonly identified: boolean;
+  /**
+   * `User.is_bot` from that answer. The Bot API always sends `true` for a token; anything
+   * else did not come from Telegram's Bot API, so the token is not counted as accepted.
+   */
+  readonly isBot: boolean | null;
   readonly sameBot: boolean | null;
   /** Telegram's webhook, when it could be read; null when it could not (or was skipped). */
   readonly webhook: {
@@ -144,7 +149,7 @@ export function liveProblems(input: {
   }
   if (!input.tenantActive) problems.push('TENANT_INACTIVE');
   if (input.botStatus !== 'ACTIVE') problems.push('BOT_NOT_ACTIVE');
-  if (!input.identified) {
+  if (!input.identified || input.isBot !== true) {
     problems.push('TOKEN_NOT_ACCEPTED');
   } else if (input.sameBot === false) {
     problems.push('DIFFERENT_BOT');
