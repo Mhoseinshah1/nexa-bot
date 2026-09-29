@@ -10,12 +10,23 @@ import {
   trialOverrideListResponseSchema,
   trialResetListResponseSchema,
   trialResetPreviewResponseSchema,
+  PANEL_TRIAL_ROUTES,
+  panelTrialOverviewResponseSchema,
+  panelTrialResponseSchema,
+  updatePanelTrialResponseSchema,
 } from '@nexa/contracts';
 import type { BotInstanceId, UserId } from '@nexa/contracts';
 import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
 import { seed, SEED_IDS } from '../../apps/api/src/infrastructure/persistence/seed';
 import { DrizzleCustomerRepository } from '../../apps/api/src/modules/commerce/customers/infrastructure/drizzle-customer.repository';
-import { createAdmin, migrateOnce, resetDatabase, tenantA, testConfig } from './harness';
+import {
+  adminActorFor,
+  createAdmin,
+  migrateOnce,
+  resetDatabase,
+  tenantA,
+  testConfig,
+} from './harness';
 
 /**
  * The trial routes over HTTP (WP6-B): every response parses against its contract schema,
@@ -212,5 +223,65 @@ describe('trial HTTP surface', () => {
       reason: 'count only',
     });
     expect(countOnly.statusCode).toBe(400);
+  });
+
+  it('reads and replaces one panel’s trial on panels.view / panels.edit, and lists every panel’s (R1)', async () => {
+    const owner = adminActorFor(
+      await createAdmin(api.container, tenantA, { username: 'panel-owner', roleKeys: ['owner'] }),
+    );
+    const created = await api.container.panels.create(tenantA, owner, {
+      name: 'Rick',
+      providerType: 'rickpanel',
+      baseUrl: 'https://rick.example.test',
+      credentials: { username: 'rick', password: 'rick-password' },
+      activation: {},
+      idempotencyKey: idempotencyKey(),
+    });
+    const panelId = created.view.panel.id;
+
+    const unconfigured = await get(PANEL_TRIAL_ROUTES.trial(panelId), observerCookie);
+    expect(unconfigured.statusCode).toBe(200);
+    expect(panelTrialResponseSchema.parse(unconfigured.json()).trial).toMatchObject({
+      enabled: false,
+      trafficBytes: null,
+      revision: 0,
+    });
+
+    const body = {
+      idempotencyKey: idempotencyKey(),
+      expectedRevision: 0,
+      enabled: true,
+      trafficAmount: '100',
+      trafficUnit: 'MB',
+      durationHours: 72,
+      label: 'آلمان',
+    };
+    // An observer reads panels and may not edit one: refused, and nothing is stored.
+    const refused = await post(PANEL_TRIAL_ROUTES.trial(panelId), observerCookie, body);
+    expect(refused.statusCode).toBe(403);
+    const saved = await post(PANEL_TRIAL_ROUTES.trial(panelId), ownerCookie, body);
+    expect(saved.statusCode).toBe(201);
+    expect(updatePanelTrialResponseSchema.parse(saved.json())).toMatchObject({
+      changed: true,
+      trial: { enabled: true, trafficBytes: '104857600', durationHours: 72, revision: 1 },
+    });
+    // The same key again is the same answer, not a second write.
+    const replay = await post(PANEL_TRIAL_ROUTES.trial(panelId), ownerCookie, body);
+    expect(updatePanelTrialResponseSchema.parse(replay.json()).trial.revision).toBe(1);
+    // A body past the ceiling is refused at the boundary.
+    const tooBig = await post(PANEL_TRIAL_ROUTES.trial(panelId), ownerCookie, {
+      ...body,
+      idempotencyKey: idempotencyKey(),
+      expectedRevision: 1,
+      trafficAmount: '101',
+      trafficUnit: 'GB',
+    });
+    expect(tooBig.statusCode).toBe(400);
+
+    const overview = await get(PANEL_TRIAL_ROUTES.overview, observerCookie);
+    expect(overview.statusCode).toBe(200);
+    expect(panelTrialOverviewResponseSchema.parse(overview.json()).panels).toEqual([
+      expect.objectContaining({ panelId, panelName: 'Rick', offeredNow: false }),
+    ]);
   });
 });

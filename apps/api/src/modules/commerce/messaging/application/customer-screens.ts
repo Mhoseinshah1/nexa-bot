@@ -2,6 +2,7 @@ import {
   UNLIMITED_TRAFFIC_BYTES,
   type Money,
   type PaymentGatewayProvider,
+  type ReferralCommissionScope,
   type ProviderLastSeen,
   type ScopeContext,
   type ServiceState,
@@ -112,9 +113,17 @@ export interface ServiceSummaryFacts {
   readonly now: Date;
 }
 
+/**
+ * The customer's referral figures and the program's terms, for the dashboard (R1). Every
+ * figure is one `ReferralProgram.terms` or `ReferralSignupGiftService.stats` computed —
+ * this composes, it does not calculate.
+ */
 export interface ReferralScreenFacts {
   readonly commissionPercent: number;
-  readonly referralLink: string;
+  /** Whether only a referred customer's first order earns a commission, or every one. */
+  readonly commissionScope: ReferralCommissionScope;
+  /** The smallest order that earns one; zero means there is no minimum. */
+  readonly minimumOrder: Money;
   readonly gift: {
     readonly total: Money;
     readonly referrerPercent: number;
@@ -351,12 +360,41 @@ export class CustomerScreenComposer {
     return this.templates.render(scope, ROUTE_NAME_KEYS[route.provider], {});
   }
 
-  async referralScreen(scope: ScopeContext, facts: ReferralScreenFacts): Promise<ComposedScreen> {
+  /**
+   * R1, message 1: the invite a customer FORWARDS — the program's introduction and their
+   * link, with no figure about them at all. The commission percent is the program's term.
+   */
+  referralInviteCard(facts: {
+    readonly commissionPercent: number;
+    readonly referralLink: string;
+  }): ComposedScreen {
     return {
-      key: 'bot.referral.screen',
+      key: 'bot.referral.invite_card',
+      values: { commissionPercent: facts.commissionPercent, referralLink: facts.referralLink },
+    };
+  }
+
+  /**
+   * R1, message 2: the customer's own dashboard — the gift terms (absent while the gift is
+   * off), the commission, its scope and minimum (absent when there is none), and the
+   * figures. Never the link: that is the invite's, and the share button's.
+   */
+  async referralDashboard(
+    scope: ScopeContext,
+    facts: ReferralScreenFacts,
+  ): Promise<ComposedScreen> {
+    return {
+      key: 'bot.referral.dashboard',
       values: {
         commissionPercent: facts.commissionPercent,
-        referralLink: facts.referralLink,
+        commissionScope: await this.templates.render(
+          scope,
+          facts.commissionScope === 'FIRST_PAID_ORDER'
+            ? 'bot.referral.scope_first_order'
+            : 'bot.referral.scope_every_order',
+          {},
+        ),
+        ...(facts.minimumOrder.amountMinor > 0n ? { minimumOrder: facts.minimumOrder } : {}),
         ...(facts.gift === null
           ? {}
           : {

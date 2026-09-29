@@ -17,6 +17,7 @@ import { t, type WebKey } from '../i18n/web.fa';
 import {
   SETTING_GROUPS,
   SETTING_GROUP_TITLES,
+  SETTINGS_MANAGED_ELSEWHERE,
   integerRange,
   settingPresentation,
   type SelectOption,
@@ -62,8 +63,11 @@ export function SettingsPage({ mayEdit, denied }: { mayEdit: boolean; denied: bo
   const salesCurrency = sellingCurrencyOf(all);
   // WP-A4: the ops group panel owns these — the manual chat and topic ids under its
   // advanced section, the retired severity cutoff and the internal attempt ceiling nowhere.
+  // R1: the main menu's arrangement is edited on the «دکمه‌های ربات» page.
   const rows = all.filter(
-    (setting) => !(OPS_GROUP_MANAGED_SETTING_KEYS as readonly string[]).includes(setting.key),
+    (setting) =>
+      !(OPS_GROUP_MANAGED_SETTING_KEYS as readonly string[]).includes(setting.key) &&
+      !(SETTINGS_MANAGED_ELSEWHERE as readonly string[]).includes(setting.key),
   );
 
   return (

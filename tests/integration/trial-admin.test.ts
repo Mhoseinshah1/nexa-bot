@@ -2,20 +2,15 @@ import { randomUUID } from 'node:crypto';
 import { sql } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
-  EMPTY_PRODUCT_DISPLAY,
   COMMERCE_ERROR_CODES,
   PLATFORM_ERROR_CODES,
   isNexaError,
   type ActorContext,
   type BotInstanceId,
   type CorrelationId,
-  type PanelId,
-  type ProductCategoryId,
-  type ProductId,
   type TenantContext,
   type UserId,
 } from '@nexa/contracts';
-import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
 import { startFakeRickpanel, type FakeRickpanel } from '../support/fake-rickpanel';
 import {
   adminActorFor,
@@ -58,6 +53,7 @@ describe('trial overrides and the global reset', () => {
   let observer: ActorContext;
   let alice: UserId;
   let bob: UserId;
+  let trialPanelId: string;
 
   beforeAll(async () => {
     ctx = await createTestContext({ PANEL_HTTP_ALLOW_LOOPBACK: 'true' });
@@ -95,23 +91,17 @@ describe('trial overrides and the global reset', () => {
     const panelId = created.view.panel.id;
     await validatePanelConnection(ctx.container, tenantA, panelId);
 
-    const products = new DrizzleProductRepository(ctx.container.database.db);
-    const product = await products.create(tenantA, {
-      id: ctx.container.ids.uuid() as ProductId,
-      draft: {
-        title: 'تست',
-        description: null,
-        audience: 'HIDDEN',
-        sortOrder: 90,
-        panelId: panelId as PanelId,
-        categoryId: SEED_IDS.categoryA as ProductCategoryId,
-        specification: { durationDays: 1, trafficBytes: 1_073_741_824n, deviceLimit: null },
-        price: null,
-        display: EMPTY_PRODUCT_DISPLAY,
-      },
-      now: ctx.container.clock.now(),
+    // R1: a trial is configured on the panel, from no product.
+    await ctx.container.panelTrials.update(tenantA, owner, panelId, {
+      idempotencyKey: randomUUID(),
+      expectedRevision: 0,
+      enabled: true,
+      trafficAmount: '1',
+      trafficUnit: 'GB',
+      durationHours: 24,
+      label: null,
     });
-    await products.setStatus(tenantA, product.id, 'INACTIVE', 'ACTIVE', ctx.container.clock.now());
+    trialPanelId = panelId;
 
     await ctx.container.featureFlags.set(tenantA, owner, {
       key: 'trials',
@@ -122,7 +112,6 @@ describe('trial overrides and the global reset', () => {
       reason: 'offer a trial',
       idempotencyKey: randomUUID(),
     });
-    await setSetting('trial.product_id', product.id);
 
     alice = await customer(tenantA, '960001', BOT_A);
     bob = await customer(tenantA, '960002', BOT_A);
@@ -162,7 +151,10 @@ describe('trial overrides and the global reset', () => {
   }
 
   const claim = (who: UserId, key: string) =>
-    ctx.container.trials.claim(tenantA, systemActor(key), who, { idempotencyKey: key });
+    ctx.container.trials.claim(tenantA, systemActor(key), who, {
+      idempotencyKey: key,
+      panelId: trialPanelId,
+    });
 
   const setOverride = (who: UserId, limit: number, actor: ActorContext = operator, key?: string) =>
     ctx.container.trialAdmin.setOverride(tenantA, actor, {

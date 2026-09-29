@@ -12,6 +12,7 @@ import { OpsGroupPage } from '../../apps/web/src/pages/ops-group';
 import {
   SETTING_GROUP_TITLES,
   SETTING_PRESENTATION,
+  SETTINGS_MANAGED_ELSEWHERE,
 } from '../../apps/web/src/settings-presentation';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { renderPage, setting, stubApi } from './harness';
@@ -47,7 +48,10 @@ const EVERY_SETTING = SETTINGS.map((definition) =>
  * attempt ceiling; they keep their presentation entries, which stay total over the registry.
  */
 const VISIBLE_KEYS = SETTING_KEYS.filter(
-  (key) => !(OPS_GROUP_MANAGED_SETTING_KEYS as readonly string[]).includes(key),
+  (key) =>
+    !(OPS_GROUP_MANAGED_SETTING_KEYS as readonly string[]).includes(key) &&
+    // R1: the main menu's arrangement is edited on the «دکمه‌های ربات» page.
+    !SETTINGS_MANAGED_ELSEWHERE.includes(key),
 );
 
 /** A connected, healthy ops group, for the page that now edits the manual topic id. */
@@ -168,8 +172,9 @@ describe('the settings page', () => {
     expect(screen.getAllByRole('button', { name: t('web.save') })).toHaveLength(
       VISIBLE_KEYS.length,
     );
-    // WP-A4: the keys the ops group panel owns are not drawn here at all.
-    for (const key of OPS_GROUP_MANAGED_SETTING_KEYS) {
+    // WP-A4: the keys the ops group panel owns are not drawn here at all; nor, since R1,
+    // the main menu's arrangement, which the «دکمه‌های ربات» page edits.
+    for (const key of [...OPS_GROUP_MANAGED_SETTING_KEYS, ...SETTINGS_MANAGED_ELSEWHERE]) {
       expect(
         screen.queryByRole('heading', { name: t(SETTING_PRESENTATION[key].title) }),
         key,

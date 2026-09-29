@@ -357,6 +357,15 @@ import {
   type TicketReplyAttachment,
   type TicketReplyResponse,
   type TicketStatus,
+  // R1: the per-panel trial configuration.
+  PANEL_TRIAL_ROUTES,
+  panelTrialOverviewResponseSchema,
+  panelTrialResponseSchema,
+  updatePanelTrialResponseSchema,
+  type PanelTrialOverviewResponse,
+  type PanelTrialResponse,
+  type UpdatePanelTrialRequest,
+  type UpdatePanelTrialResponse,
 } from '@nexa/contracts';
 
 /**
@@ -2211,6 +2220,24 @@ export function fetchTrialResets(
     suffix ? `${TRIAL_ROUTES.resets}?${suffix}` : TRIAL_ROUTES.resets,
     trialResetListResponseSchema,
   );
+}
+
+// --- R1: each panel's free trial -------------------------------------------------
+
+export function fetchPanelTrial(panelId: string): Promise<PanelTrialResponse> {
+  return authedGet(PANEL_TRIAL_ROUTES.trial(panelId), panelTrialResponseSchema);
+}
+
+/** Whole, with the revision the form was drawn from; a stale one is refused, not merged. */
+export function savePanelTrial(
+  panelId: string,
+  body: UpdatePanelTrialRequest,
+): Promise<UpdatePanelTrialResponse> {
+  return post(PANEL_TRIAL_ROUTES.trial(panelId), body, updatePanelTrialResponseSchema);
+}
+
+export function fetchTrialPanels(): Promise<PanelTrialOverviewResponse> {
+  return authedGet(PANEL_TRIAL_ROUTES.overview, panelTrialOverviewResponseSchema);
 }
 
 // --- Discounts, cashback rules and pricing (WP8) ------------------------------

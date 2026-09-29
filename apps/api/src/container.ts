@@ -168,6 +168,9 @@ import { ServiceAddonService } from './modules/commerce/catalog/application/addo
 import { CommercialActionService } from './modules/commerce/commercial/application/commercial-action.service.js';
 import { TrialService } from './modules/commerce/trials/application/trial.service.js';
 import { TrialProductGuard } from './modules/commerce/trials/application/trial-product.guard.js';
+import { MainMenuLayout } from './modules/commerce/messaging/application/main-menu.js';
+import { DrizzlePanelTrialConfigRepository } from './modules/commerce/trials/infrastructure/drizzle-panel-trial-config.repository.js';
+import { PanelTrialService } from './modules/commerce/trials/application/panel-trial.service.js';
 import { DrizzleTrialGrantRepository } from './modules/commerce/trials/infrastructure/drizzle-trial-grant.repository.js';
 import { DrizzleTrialOverrideRepository } from './modules/commerce/trials/infrastructure/drizzle-trial-override.repository.js';
 import { DrizzleTrialResetRepository } from './modules/commerce/trials/infrastructure/drizzle-trial-reset.repository.js';
@@ -661,6 +664,8 @@ export interface Container {
   readonly trials: TrialService;
   /** The operator's trial overrides, global reset and view (WP6-B). */
   readonly trialAdmin: TrialAdminService;
+  /** R1: each panel's free trial, for an operator. */
+  readonly panelTrials: PanelTrialService;
   readonly wallet: WalletService;
   readonly payments: PaymentService;
   readonly paymentAccounts: PaymentAccountService;
@@ -1273,6 +1278,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     products: productRepository,
   });
   const trialGrantRepository = new DrizzleTrialGrantRepository(database.db);
+  // R1: the per-panel trial configuration a trial is issued from.
+  const panelTrialConfigRepository = new DrizzlePanelTrialConfigRepository(database.db);
   const trialOverrideRepository = new DrizzleTrialOverrideRepository(database.db);
   const trialResetRepository = new DrizzleTrialResetRepository(database.db);
 
@@ -2770,7 +2777,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     grants: trialGrantRepository,
     overrides: trialOverrideRepository,
     orders: orderRepository,
-    products: productRepository,
+    configs: panelTrialConfigRepository,
+    panels: panelRepository,
     customers: customerRepository,
     wallet: walletRepository,
     usernames: usernameLane,
@@ -2811,6 +2819,25 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     scopeActivity: tenants,
     clock,
     ids,
+  });
+  /**
+   * R1: each panel's trial, for an operator — and the overview that asks the SAME offer
+   * evaluator the bot does (`trialPanelVerdicts`), read-only.
+   */
+  const panelTrials = new PanelTrialService({
+    configs: panelTrialConfigRepository,
+    panels: panelRepository,
+    features: featureFlagResolver,
+    panelSales: panelSalesGate,
+    usernames: usernameLane,
+    guard,
+    audit,
+    opsLog,
+    sessions,
+    uow,
+    idempotency,
+    scopeActivity: tenants,
+    clock,
   });
   const featureFlags = new FeatureFlagsService(
     guard,
@@ -3247,6 +3274,16 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    * Built here rather than inline in `botRuntime` because the provisioner role needs it
    * too and does not construct a bot runtime.
    */
+  /**
+   * R1: the customer main menu as each tenant has it — «دکمه‌های ربات». ONE object read by
+   * the messenger (the keyboard it draws) and the runtime (the labels a tap is matched
+   * against), so the two cannot disagree about a renamed or hidden button.
+   */
+  const mainMenuLayout = new MainMenuLayout({
+    settings: settingsResolver,
+    features: featureFlagResolver,
+    templates: templateResolver,
+  });
   const customerMessenger = new TelegramCustomerMessenger(
     // The tenant's own renderer, so an override lands in exactly the messages a
     // customer reads. It validates values against the key's declaration on the way
@@ -3264,6 +3301,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     new DrizzleOperationalConditionReader(database.db),
     config.TELEGRAM_API_BASE_URL,
     config.NOTIFICATION_SEND_TIMEOUT_MS,
+    mainMenuLayout,
   );
 
   /**
@@ -3627,7 +3665,9 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     purchases: {
       specificationFor: async (scope, orderId, tx) => {
         const order = await orderRepository.findById(scope, orderId, tx);
-        return order?.line.specification ?? null;
+        return order === null
+          ? null
+          : { ...order.line.specification, durationHours: order.line.durationHours ?? null };
       },
     },
     /*
@@ -4456,6 +4496,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     locationChanges: locationChangeService,
     trials: trialService,
     trialAdmin: trialAdminService,
+    panelTrials,
     wallet: walletService,
     payments: paymentService,
     paymentAccounts: paymentAccountService,
@@ -4515,6 +4556,9 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
          */
         [CATALOGUE_FA[ADMIN_MENU_BUTTON.label], `/${ADMIN_MENU_COMMAND}`] as const,
       ]),
+      // R1: this tenant's own labels, matched BEFORE the shared ones above so a renamed
+      // button routes under its new name — the same object the messenger draws from.
+      menuRoutes: mainMenuLayout,
       destinations: paymentDestinationRenderer,
       receipts: receiptService,
       receiptCredits: receiptCreditCaptureService,

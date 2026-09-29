@@ -6,7 +6,13 @@ import type {
   TemplateValues,
   TenantContext,
 } from '@nexa/contracts';
-import { ADMIN_MENU_BUTTON, MAIN_MENU_ROWS, errors, templateDefinition } from '@nexa/contracts';
+import {
+  ADMIN_MENU_BUTTON,
+  MAIN_MENU_BUTTONS,
+  errors,
+  packMainMenuRows,
+  templateDefinition,
+} from '@nexa/contracts';
 import { CATALOGUE_FA, formatMoney } from '@nexa/i18n';
 import {
   callbackAnswerBody,
@@ -181,6 +187,12 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
     private readonly conditions: CustomerSendConditionReader,
     private readonly apiBaseUrl: string,
     private readonly timeoutMs: number,
+    /**
+     * R1: the tenant's own main menu — its arrangement, its switches and its labels
+     * (`MainMenuLayout`). Absent only in a stand-in, which draws the default keyboard's
+     * ungated buttons from the shared catalogue, as every keyboard was drawn before R1.
+     */
+    private readonly menu?: { rowsFor(scope: ScopeContext): Promise<string[][]> },
   ) {}
 
   async send(scope: TenantContext, message: CustomerMessage): Promise<CustomerSendResult> {
@@ -213,19 +225,23 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
      */
     const buttons = await this.labelButtons(scope, message.buttons ?? []);
     /*
-     * The main menu's labels come from the SHARED catalogue, not this tenant's.
+     * The main menu, as this tenant has it (R1).
      *
-     * Every other string this messenger sends is the tenant's, and this is the one
-     * departure. The four labels are ROUTES: `intentOf` matches a tap against exactly
-     * these strings, so the constant that draws the keyboard has to be the constant
-     * that matches it. A per-tenant label would let a tenant rename a button into a
-     * string nothing routes, and the customer would press it and be told the bot did
-     * not understand — with nothing anywhere recording why.
+     * Until R1 its labels came from the SHARED catalogue, because the four labels were
+     * ROUTES and a per-tenant label could be renamed into a string nothing routed. Now the
+     * labels are the tenant's AND the route table the runtime matches a tap against is
+     * built from the same rendering (`MainMenuLayout.routesFor`), so a renamed button
+     * routes under its new name. The stand-in fallback draws only the ungated buttons: a
+     * feature-gated one without its flag read would be a promise nobody checked.
      */
     const customerRows =
       message.keyboard === undefined
         ? undefined
-        : MAIN_MENU_ROWS.map((row) => row.map((button) => CATALOGUE_FA[button.label]));
+        : this.menu !== undefined
+          ? await this.menu.rowsFor(scope)
+          : packMainMenuRows(MAIN_MENU_BUTTONS.filter((button) => button.feature === null)).map(
+              (row) => row.map((button) => CATALOGUE_FA[button.label]),
+            );
     /*
      * The admin row is APPENDED to the customer rows rather than replacing them.
      *
@@ -388,7 +404,11 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
      * the receipt review's note was sized around. The caller decides the arrangement —
      * typically the file bare and the text as its own message, which `send` will split.
      */
-    if (caption !== undefined && html && caption.length > TELEGRAM_CAPTION_MAX) {
+    if (
+      caption !== undefined &&
+      (html || message.captionWhole === true) &&
+      caption.length > TELEGRAM_CAPTION_MAX
+    ) {
       return { outcome: 'REFUSED', reason: 'CAPTION_OVER_BOUND' };
     }
     const buttons = await this.labelButtons(scope, message.buttons ?? []);

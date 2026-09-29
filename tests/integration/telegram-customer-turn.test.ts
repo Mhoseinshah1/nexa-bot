@@ -265,9 +265,70 @@ describe('the customer Telegram turn', () => {
     // command-driven, which is the thing staging acceptance objected to.
     expect(markup?.one_time_keyboard).toBe(false);
 
-    // Exactly the six this release can perform (WP-A10's apps and WP-A7's tickets
-    // included). A Phase 7 button here would be a promise the product cannot keep.
-    expect(MAIN_MENU_BUTTONS).toHaveLength(6);
+    // The six this release always draws (WP-A10's apps and WP-A7's tickets included),
+    // plus R1's trial and referral buttons, which a tenant with their flags off — every
+    // tenant by default — does not see: the keyboard above is exactly the six.
+    expect(MAIN_MENU_BUTTONS).toHaveLength(8);
+  });
+
+  it('draws the tenant’s own main menu — order, switches, flags, labels — and routes a renamed button (R1)', async () => {
+    /*
+     * «دکمه‌های ربات». The arrangement is the `bot.main_menu` setting, the labels are the
+     * tenant's `bot.menu.*` templates, and the two new buttons appear only while their
+     * feature flags are on. A renamed button must route under its NEW name — the keyboard
+     * and the route table are read from one object — and its old name keeps working for
+     * a keyboard already sitting in the chat.
+     */
+    const owner = adminActorFor(
+      await createAdmin(api.container, tenantA, { username: 'menu-owner', roleKeys: ['owner'] }),
+    );
+    for (const flagKey of ['trials', 'referrals'] as const) {
+      const flag = (await api.container.featureFlags.list(tenantA, owner)).find(
+        (row) => row.key === flagKey,
+      );
+      await api.container.featureFlags.set(tenantA, owner, {
+        key: flagKey,
+        enabled: true,
+        expectedVersion: flag?.version ?? null,
+        confirmKey: flagKey,
+        reason: 'menu test',
+        idempotencyKey: `menu-flag-${flagKey}`,
+      });
+    }
+    await api.container.settingsService.set(tenantA, owner, {
+      key: 'bot.main_menu',
+      value: [
+        { button: 'trial', enabled: true },
+        { button: 'help', enabled: false },
+      ],
+      expectedVersion: null,
+      idempotencyKey: 'menu-layout',
+    });
+    await api.container.templatesService.set(tenantA, owner, {
+      key: 'bot.menu.trial',
+      body: '🎁 تست رایگان',
+      expectedVersion: null,
+      expectedRevision: null,
+      idempotencyKey: 'menu-label',
+    });
+
+    await start();
+    const markup = sent[0]?.body['reply_markup'] as { keyboard?: { text: string }[][] } | undefined;
+    expect(markup?.keyboard?.map((row) => row.map((button) => button.text))).toEqual([
+      ['🎁 تست رایگان', CATALOGUE_FA['bot.menu.catalog']],
+      [CATALOGUE_FA['bot.menu.services'], CATALOGUE_FA['bot.menu.wallet']],
+      [CATALOGUE_FA['bot.menu.referral']],
+      [CATALOGUE_FA['bot.menu.apps']],
+      [CATALOGUE_FA['bot.menu.tickets']],
+    ]);
+
+    // The renamed label routes to the trial — no panel offers one here, so the one
+    // Persian sentence — and so does the shared default a stale keyboard would send.
+    for (const label of ['🎁 تست رایگان', CATALOGUE_FA['bot.menu.trial']]) {
+      sent = [];
+      await start({ text: label });
+      expect(sent.at(-1)?.body['text']).toBe(CATALOGUE_FA['bot.trial.unavailable']);
+    }
   });
 
   it('still opens the management panel for a BLOCKED customer who is an administrator', async () => {

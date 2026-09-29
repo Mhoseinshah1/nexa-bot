@@ -385,6 +385,7 @@ function toSummary(record: ServiceRecord): ServiceSummaryResponse {
     orderId: record.orderId,
     panelId: record.panelId,
     productId: record.productId,
+    isTrial: record.isTrial,
     state: record.state,
     providerUsername: record.providerUsername,
     providerUserId: record.providerUserId,

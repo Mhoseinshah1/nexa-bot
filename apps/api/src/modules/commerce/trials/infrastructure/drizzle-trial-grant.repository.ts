@@ -80,7 +80,7 @@ export class DrizzleTrialGrantRepository implements TrialGrantRepository {
       id: row.id,
       customerId: row.customerId as UserId,
       orderId: row.orderId as OrderId,
-      productId: row.productId as ProductId,
+      productId: row.productId as ProductId | null,
       serviceId: row.serviceId,
       createdAt: row.createdAt,
       releasedAt: row.releasedAt,

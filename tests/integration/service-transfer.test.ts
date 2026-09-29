@@ -790,28 +790,16 @@ describe('Package F — a customer transfers a service to another customer', () 
   );
 
   it('refuses a trial, and draws no button for one', async () => {
-    const trialProduct = await products.create(tenantA, {
-      id: ctx.container.ids.uuid() as ProductId,
-      draft: {
-        title: 'تست یک‌روزه',
-        description: null,
-        audience: 'HIDDEN',
-        sortOrder: 90,
-        panelId: panelId as PanelId,
-        categoryId: SEED_IDS.categoryA as ProductCategoryId,
-        specification: { durationDays: 1, trafficBytes: 1_073_741_824n, deviceLimit: null },
-        price: null,
-        display: EMPTY_PRODUCT_DISPLAY,
-      },
-      now: ctx.container.clock.now(),
+    // R1: the panel's own trial, issued from no product.
+    await ctx.container.panelTrials.update(tenantA, owner, panelId, {
+      idempotencyKey: key('trial-config'),
+      expectedRevision: 0,
+      enabled: true,
+      trafficAmount: '1',
+      trafficUnit: 'GB',
+      durationHours: 24,
+      label: null,
     });
-    await products.setStatus(
-      tenantA,
-      trialProduct.id,
-      'INACTIVE',
-      'ACTIVE',
-      ctx.container.clock.now(),
-    );
     await ctx.container.featureFlags.set(tenantA, owner, {
       key: 'trials',
       enabled: true,
@@ -820,14 +808,9 @@ describe('Package F — a customer transfers a service to another customer', () 
       reason: 'offer a trial',
       idempotencyKey: key('trial-flag'),
     });
-    await ctx.container.settingsService.set(tenantA, owner, {
-      key: 'trial.product_id',
-      value: trialProduct.id,
-      expectedVersion: null,
-      idempotencyKey: key('trial-product'),
-    });
     const claimed = await ctx.container.trials.claim(tenantA, systemActor('trial'), sender, {
       idempotencyKey: key('trial-claim'),
+      panelId,
     });
     if (claimed.outcome !== 'ISSUED') throw new Error(JSON.stringify(claimed));
     await ctx.container.provisionerLoop.tick();

@@ -1349,6 +1349,35 @@ mid-read is taken over as dead after three panel timeouts. While that release ru
 
 Nothing needs doing before rolling back past R3.
 
+### What a rollback changes: per-panel trials and the bot's buttons (R1)
+
+R1 configures the free trial per panel (`panel_trial_configs`) and issues it from no
+product; it marks trial services `is_trial`; and it lets an operator arrange and relabel
+the main-menu keyboard on «دکمه‌های ربات» (`bot.main_menu` and the `bot.menu.*` texts).
+Migration `0142_r1_trial_per_panel_and_main_menu` only adds: a table, two nullable columns, a widened CHECK, a
+`trial_grants.product_id` that may be null, and trigger bodies that accept everything
+the previous release writes. While the release before R1 runs:
+
+- **Its trial reads `trial.product_id` again.** The migration copied that product's panel,
+  traffic and duration onto the panel's trial once and left the setting stored, so a
+  tenant that had a trial product is offered it again from the product, as before R1; a
+  tenant whose trial was set up only on a panel is offered none. Nothing is lost: the
+  per-panel rows come back into force with the roll-forward.
+- **A trial issued by R1 and not yet provisioned** is provisioned from its day count —
+  its hours rounded UP to whole days — because the old provisioner does not know
+  `line_duration_hours`. A 72-hour trial is exactly 3 days; a 12-hour one gets a day.
+- **Services are still marked**: the trigger sets `is_trial` from the creating order on
+  every insert, the old release's included.
+- **The keyboard reverts to the shared default of that release** — its six buttons, in
+  their fixed order and labels. The arrangement and the relabelled `bot.menu.*` texts are
+  kept and come back with the roll-forward. A customer tapping, on a keyboard R1 drew, a
+  relabelled button or the trial or referral button (which that release does not have) is
+  answered as unknown text until then; the next reply redraws the old keyboard.
+- **The panel trial tab and «دکمه‌های ربات» are gone from the old Web Admin**; the
+  configuration they wrote is kept.
+
+Nothing needs doing before rolling back past R1.
+
 ### How far back you can roll
 
 **One release**, safely. Migrations are expand-only within a release

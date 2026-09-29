@@ -192,7 +192,18 @@ export function providerRefFor(service: {
   };
 }
 
-export function expiryFor(now: Date, durationDays: number): Date | null {
+export function expiryFor(
+  now: Date,
+  durationDays: number,
+  /**
+   * R1: a trial's length in hours, when its order carries one. It wins over the day count
+   * beside it, which is the same length rounded UP for readers that know only days.
+   */
+  durationHours: number | null = null,
+): Date | null {
+  if (durationHours !== null && durationHours > 0) {
+    return new Date(now.getTime() + durationHours * 3_600_000);
+  }
   if (durationDays === UNLIMITED_DURATION_DAYS || durationDays <= 0) return null;
   return new Date(now.getTime() + durationDays * 86_400_000);
 }

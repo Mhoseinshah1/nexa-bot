@@ -11,6 +11,7 @@ import { ToastProvider } from './ui/kit';
 import { DashboardPage } from './pages/dashboard';
 import { PanelsPage, PanelDetailPage, NewPanelPage, ProvidersPage } from './pages/panels';
 import { SettingsPage } from './pages/settings';
+import { BotButtonsPage } from './pages/bot-buttons';
 import { FeaturesPage } from './pages/features';
 import { ContentPage } from './pages/content';
 import { RemindersPage } from './pages/reminders';
@@ -207,7 +208,8 @@ export const NAV: readonly NavEntry[] = [
     // ANY of the three, for the reason `/products` gives: the page serves three
     // capabilities — the override list, the global reset and its history — each
     // charged by the server on its own key.
-    permission: ['users.view', 'settings.destructive', 'settings.view'],
+    // R1: and `panels.view`, which the per-panel trial overview is charged on.
+    permission: ['users.view', 'settings.destructive', 'settings.view', 'panels.view'],
     group: 'web.navgroup_sales',
   },
   {
@@ -469,6 +471,15 @@ export const NAV: readonly NavEntry[] = [
     group: 'web.navgroup_config',
   },
   {
+    // R1: the customer main menu — order, switches (a setting) and labels (templates).
+    id: 'bot-buttons',
+    path: '/bot-buttons',
+    label: 'web.nav_bot_buttons',
+    icon: 'bots',
+    permission: 'settings.view',
+    group: 'web.navgroup_config',
+  },
+  {
     id: 'settings',
     path: '/settings',
     label: 'web.nav_settings',
@@ -680,6 +691,7 @@ export function resolve(
           // The preview names customers, so it is `users.view` as well (Codex, PR #65).
           mayReset={may('settings.destructive') && may('users.view')}
           mayViewHistory={may('settings.view')}
+          mayViewPanels={may('panels.view')}
         />
       ),
       crumbs: [{ label: t('web.trials_title') }],
@@ -1183,6 +1195,21 @@ export function resolve(
       ),
       crumbs: [{ label: t('web.nav_reminders') }],
       title: t('web.nav_reminders'),
+    };
+  }
+
+  if (route.path === '/bot-buttons') {
+    return {
+      element: (
+        <BotButtonsPage
+          mayEdit={may('settings.edit')}
+          denied={!may('settings.view')}
+          mayViewTemplates={may('templates.view')}
+          mayEditTemplates={may('templates.edit')}
+        />
+      ),
+      crumbs: [{ label: t('web.nav_bot_buttons') }],
+      title: t('web.nav_bot_buttons'),
     };
   }
 

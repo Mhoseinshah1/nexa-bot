@@ -281,7 +281,8 @@ export const TRIAL_RULE_LABEL = 'A trial: nothing is charged';
  * the total this returns to be zero; this is the one place that produces it.
  */
 export function quoteTrial(
-  product: ProductRecord,
+  /** Null since R1: a trial is issued from a panel's trial configuration, not a product. */
+  productId: ProductRecord['id'] | null,
   currency: Money['currency'],
   quotedAt: Date,
 ): OrderTotalsRecord {
@@ -304,7 +305,7 @@ export function quoteTrial(
     total: nothing,
     currency,
     quote: {
-      productId: product.id,
+      productId,
       quotedAt: quotedAt.toISOString(),
       currency,
       finalAmount: nothing,

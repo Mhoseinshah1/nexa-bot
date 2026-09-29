@@ -269,39 +269,72 @@ describe('the pre-invoice', () => {
   });
 });
 
-describe('the referral screen', () => {
-  it('renders the approved copy with the configured figures, never hard-coded ones', async () => {
-    const screen = await composer.referralScreen(scope, {
+describe('the referral screens (R1: exactly two messages)', () => {
+  const figures = {
+    commissionPercent: 15,
+    commissionScope: 'FIRST_PAID_ORDER' as const,
+    minimumOrder: money(0n, 'IRT'),
+    gift: { total: money(40_000n, 'IRT'), referrerPercent: 70, referredPercent: 30 },
+    referralCount: 5,
+    referredPurchaseCount: 2,
+    referredPurchaseTotal: money(600_000n, 'IRT'),
+    commissionReceivedTotal: money(90_000n, 'IRT'),
+  };
+
+  it('renders the forwardable invite with the approved copy, the rate and the link — and no figure about the customer', () => {
+    const card = composer.referralInviteCard({
       commissionPercent: 15,
       referralLink: 'https://t.me/nexa_bot?start=ref-ABCDEFGH',
-      gift: { total: money(40_000n, 'IRT'), referrerPercent: 70, referredPercent: 30 },
-      referralCount: 5,
-      referredPurchaseCount: 2,
-      referredPurchaseTotal: money(600_000n, 'IRT'),
-      commissionReceivedTotal: money(90_000n, 'IRT'),
     });
-    const text = render(screen.key, screen.values);
+    const text = render(card.key, card.values);
+    expect(card.key).toBe('bot.referral.invite_card');
+    expect(text.startsWith('💼 زیرمجموعه‌گیری و هدیه خوش‌آمد')).toBe(true);
     expect(text).toContain(
       'به ازای هر فرد جدیدی که برای اولین بار با لینک شما وارد ربات شود و خرید انجام دهد 15 درصد پورسانت دریافت کنید!',
     );
     expect(text).toContain('🔗 https://t.me/nexa_bot?start=ref-ABCDEFGH');
+    expect(text.endsWith('📢 دعوت کن، هدیه بگیر، رشد کن!')).toBe(true);
+    // Nothing a customer would not want forwarded: no counts, no totals, no gift shares.
+    expect(text).not.toContain('📊');
+    expect(text).not.toContain('زیرمجموعه‌ها:');
+    expect(text).not.toContain('پورسانت دریافتی');
+    expect(text).not.toContain('هدیه عضویت:');
+    expect(text).not.toContain('{');
+  });
+
+  it('renders the dashboard with every figure, the gift terms and the commission scope — never the link', async () => {
+    const screen = await composer.referralDashboard(scope, figures);
+    const text = render(screen.key, screen.values);
+    expect(screen.key).toBe('bot.referral.dashboard');
     expect(text).toContain(
       '🎁 هدیه عضویت:\n• مجموع هدیه: 40,000 تومان\n• 70٪ برای شما (معرف)\n• 30٪ برای زیرمجموعه (کاربر جدید)',
     );
     expect(text).toContain(
-      '💸 پورسانت خرید:\n• 15 درصد از مبلغ خرید زیرمجموعه به شما تعلق می‌گیرد',
+      '💸 پورسانت خرید:\n• 15 درصد از مبلغ خرید زیرمجموعه به شما تعلق می‌گیرد\n• فقط برای اولین خرید هر زیرمجموعه',
     );
     expect(text).toContain(
       '📊 آمار شما:\n• زیرمجموعه‌ها: 5 نفر\n• خریدها: 2 عدد\n• مجموع خرید: 600,000 تومان\n• پورسانت دریافتی: 90,000 تومان',
     );
-    expect(text.endsWith('📢 دعوت کن، هدیه بگیر، رشد کن!')).toBe(true);
+    // No minimum configured: the line is dropped, not shown as zero.
+    expect(text).not.toContain('حداقل مبلغ خرید');
+    expect(text).not.toContain('https://');
     expect(text).not.toContain('10 درصد');
   });
 
+  it('names the minimum order and the every-order scope when they are configured', async () => {
+    const screen = await composer.referralDashboard(scope, {
+      ...figures,
+      commissionScope: 'EVERY_PAID_ORDER',
+      minimumOrder: money(200_000n, 'IRT'),
+    });
+    const text = render(screen.key, screen.values);
+    expect(text).toContain('• برای همهٔ خریدهای زیرمجموعه');
+    expect(text).toContain('• حداقل مبلغ خرید: 200,000 تومان');
+  });
+
   it('omits the gift block when the signup gift is off', async () => {
-    const screen = await composer.referralScreen(scope, {
-      commissionPercent: 10,
-      referralLink: 'https://t.me/x?start=ref-A',
+    const screen = await composer.referralDashboard(scope, {
+      ...figures,
       gift: null,
       referralCount: 0,
       referredPurchaseCount: 0,

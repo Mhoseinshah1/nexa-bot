@@ -1082,7 +1082,7 @@ export class ProvisionerService {
       // Zero is the schema's unlimited and null is the adapter's. One translation, here.
       volumeBytes: service.trafficLimitBytes === 0n ? null : service.trafficLimitBytes,
       durationDays: bought.durationDays,
-      expiresAt: expiryFor(now, bought.durationDays),
+      expiresAt: expiryFor(now, bought.durationDays, bought.durationHours),
       deviceLimit: bought.deviceLimit,
     });
     const finishedAt = this.deps.clock.now();
@@ -1123,7 +1123,8 @@ export class ProvisionerService {
         providerUserId: created.providerUserId,
         subscriptionUrl:
           created.delivery.kind === 'SUBSCRIPTION_LINK' ? created.delivery.url : null,
-        expiresAt: created.usage?.expiresAt ?? expiryFor(now, bought.durationDays),
+        expiresAt:
+          created.usage?.expiresAt ?? expiryFor(now, bought.durationDays, bought.durationHours),
         trafficUsedBytes: created.usage?.usedBytes ?? null,
         usageSyncedAt: created.usage === null ? null : finishedAt,
       },
@@ -1594,7 +1595,8 @@ export class ProvisionerService {
             // counted from the moment of adoption — the same generosity the create
             // path shows a customer whose provisioning a panel outage delayed.
             expiresAt:
-              verdict.expiresAt ?? (bought === null ? null : expiryFor(now, bought.durationDays)),
+              verdict.expiresAt ??
+              (bought === null ? null : expiryFor(now, bought.durationDays, bought.durationHours)),
             trafficUsedBytes: verdict.usedBytes,
             usageSyncedAt: verdict.usedBytes === null ? null : now,
           },
