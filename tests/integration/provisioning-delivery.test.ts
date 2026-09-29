@@ -2223,7 +2223,11 @@ describe('a provisioned service announces itself', () => {
 
     // And the request itself is refused, not merely undrawn.
     const tapped = await runtime().handle(tenantA, systemActor('bot'), tapUpdate(`u:${id}`));
-    expect(tapped.replyKey).toBe('bot.service.capability_unsupported');
+    // R3: refused as a notice on the button, the card left as it is.
+    expect(tapped.replyKey).toBeNull();
+    expect(
+      JSON.stringify(sent.filter((one) => one.url.endsWith('/answerCallbackQuery')).at(-1)),
+    ).toContain('این قابلیت برای سرویس شما در دسترس نیست');
     expect(
       (await operations.listForService(tenantA, id, 50)).some(
         (operation) => operation.type === 'SUSPEND',

@@ -839,6 +839,11 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.service.prev_page_button',
       'bot.service.provisioning',
       'bot.service.refresh_button',
+      /*
+       * R3 item 7: the notice on the refresh button when the panel could not be read. It
+       * claims nothing happened and asks only for a later retry of a READ.
+       */
+      'bot.service.refresh_failed',
       'bot.service.refresh_requested',
       'bot.service.refresh_too_soon',
       'bot.service.refund_request_ask',

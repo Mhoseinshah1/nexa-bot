@@ -146,6 +146,43 @@ export class SubscriptionFileService {
       }
       throw error;
     }
+    return this.fetchAndSend(scope, service, input.chatId, input.botInstanceId);
+  }
+
+  /**
+   * R3 item 6: every available file, sent right after the automatic delivery of a
+   * service's link — a new purchase, a trial, or a link change. Called by
+   * `DeliveryService`'s sweep ONLY after the link message was recorded DELIVERED, for
+   * any purchase kind, because the delivery lane does not know or care what bought the
+   * service.
+   *
+   * The sweep's own service row, not a customer's tap, so there is no ownership to
+   * decide: the service is the one just announced, to the chat it was announced to. The
+   * permission is still charged — background work does not skip the guard — and every
+   * other rule of `send` holds unchanged: the state, the panel's operability and URL
+   * policy, the adapter's capability, the operator's per-panel switch, the probe budget.
+   *
+   * What it returns is for the caller's log and a test. Nothing here may change the
+   * service or its delivery record: a file that did not arrive is not a failed
+   * provisioning, and the customer still has «📁 دریافت فایل‌های اتصال».
+   */
+  async sendAfterDelivery(
+    scope: TenantContext,
+    actor: ActorContext,
+    service: ServiceRecord,
+    input: { readonly chatId: string; readonly botInstanceId: BotInstanceId },
+  ): Promise<SubscriptionFilesResult> {
+    await this.deps.guard.check(scope, actor, SUBSCRIPTION_FILES_PERMISSION);
+    return this.fetchAndSend(scope, service, input.chatId, input.botInstanceId);
+  }
+
+  /** The shared half of `send` and `sendAfterDelivery`: decide, read, send. */
+  private async fetchAndSend(
+    scope: TenantContext,
+    service: ServiceRecord,
+    chatId: string,
+    botInstanceId: BotInstanceId,
+  ): Promise<SubscriptionFilesResult> {
     if (!SUBSCRIPTION_FILE_STATES.includes(service.state)) return { outcome: 'UNAVAILABLE' };
 
     const view = await this.deps.panels.find(scope, service.panelId);
@@ -213,8 +250,8 @@ export class SubscriptionFileService {
     let sent = 0;
     for (const file of fetched.files) {
       const result = await this.deps.messenger.sendFile(scope, {
-        chatId: input.chatId,
-        botInstanceId: input.botInstanceId,
+        chatId,
+        botInstanceId,
         kind: 'DOCUMENT',
         source: {
           kind: 'BYTES',
@@ -222,14 +259,17 @@ export class SubscriptionFileService {
           fileName: file.fileName,
           mimeType: file.mediaType,
         },
-        ...(file.caption === null
-          ? {}
-          : {
-              caption: {
-                templateKey: 'bot.service.file_caption' as const,
-                values: { caption: file.caption },
-              },
-            }),
+        /*
+         * R3 item 8: this installation's own caption — the service username — and never
+         * the panel's. The panel's caption carried «Limit», «Expires» and raw `<code>`
+         * markup, none of which helps a customer and all of which was sent verbatim.
+         * `file.caption` is still parsed and bounded by the adapter; it is simply not
+         * shown.
+         */
+        caption: {
+          templateKey: 'bot.service.connection_file_caption' as const,
+          values: { serviceUsername: service.providerUsername },
+        },
       });
       // Telegram declining, or answering nobody knows what: stop, and retry nothing.
       if (result.outcome !== 'DELIVERED') return { outcome: 'STOPPED', sent };

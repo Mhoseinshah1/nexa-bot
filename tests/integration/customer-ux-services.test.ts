@@ -3,7 +3,6 @@ import { sql } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   EMPTY_PRODUCT_DISPLAY,
-  OPERATION_MAX_ATTEMPTS,
   money,
   type ActorContext,
   type BotInstanceId,
@@ -540,7 +539,16 @@ describe('a customer looks after the services they bought', () => {
   // §H1 — the refresh
   // =========================================================================
   describe('«♻️ بروزرسانی اطلاعات»', () => {
-    it('queues a usage read the customer asked for, writes what the panel said, and tells them', async () => {
+    /*
+     * R3 item 7: one bounded read on the tap, and the SAME card edited with the answer —
+     * no «request registered», no «result later», no operation and no queued message.
+     */
+    const edits = () => sent.filter((one) => one.url.includes('/editMessageText'));
+    const answers = () => sent.filter((one) => one.url.includes('/answerCallbackQuery'));
+    const reads = (username: string) =>
+      panel.requests.filter((one) => one.method === 'GET' && one.path.includes(username)).length;
+
+    it('reads the panel on the tap and edits the SAME card with what it said', async () => {
       const service = await activeService('refresh');
       const user = panel.users.get(service.username);
       if (user === undefined) throw new Error('no panel user');
@@ -548,58 +556,77 @@ describe('a customer looks after the services they bought', () => {
       await ctx.container.database.db.execute(
         sql`UPDATE services SET usage_synced_at = now() - interval '10 minutes' WHERE id = ${service.id}`,
       );
+      sent = [];
 
-      const result = await handle(tap(`rs:${service.id}`));
-      expect(result.replyKey).toBe('bot.service.refresh_requested');
-      const queued = (await operations.listForService(tenantA, service.id, 50)).find(
-        (operation) => operation.type === 'SYNC_USAGE',
-      );
-      expect(queued?.requestedByCustomerId).toBe(maryam);
-
-      await ctx.container.provisionerLoop.tick();
+      const update = tap(`rs:${service.id}`);
+      const result = await handle(update);
+      expect(result.replyKey).toBe('bot.service.card');
       const row = await services.findById(tenantA, service.id);
       expect(row?.trafficUsedBytes).toBe(5_368_709_120n);
+      // The card the button is on — its own chat and message id — rewritten in place.
+      expect(messages(), 'no new message').toHaveLength(0);
+      expect(edits()).toHaveLength(1);
+      const tapped = (
+        update.update as unknown as { callback_query: { message: { message_id: number } } }
+      ).callback_query.message.message_id;
+      expect(edits()[0]?.body['message_id']).toBe(tapped);
+      expect(edits()[0]?.body['chat_id']).toBe(MARYAM);
+      expect(String(edits()[0]?.body['text'])).toContain('📥 حجم مصرفی: 5 گیگابایت');
+      expect(JSON.stringify(edits()[0]?.body['reply_markup'])).toContain(`rs:${service.id}`);
+      // A read, not an operation: nothing queued, nobody told anything later.
+      expect(
+        (await operations.listForService(tenantA, service.id, 50)).filter(
+          (operation) => operation.type === 'SYNC_USAGE',
+        ),
+      ).toHaveLength(0);
       const announced = await ctx.container.database.db.execute(
-        sql`SELECT kind FROM customer_notifications WHERE tenant_id = ${tenantA.tenantId} ORDER BY created_at`,
+        sql`SELECT kind FROM customer_notifications WHERE tenant_id = ${tenantA.tenantId}`,
       );
-      expect(announced.rows.map((r) => (r as { kind: string }).kind)).toContain(
-        'SERVICE_ACTION_SUCCEEDED',
-      );
+      expect(announced.rows).toHaveLength(0);
 
-      // A second tap right after the read: nothing new, and the customer is told why.
+      // A second tap inside the minimum interval redraws the card and asks the panel nothing.
+      const before = reads(service.username);
+      sent = [];
       const again = await handle(tap(`rs:${service.id}`));
-      expect(again.replyKey).toBe('bot.service.refresh_too_soon');
+      expect(again.replyKey).toBe('bot.service.card');
+      expect(reads(service.username)).toBe(before);
+      expect(edits()).toHaveLength(1);
+      expect(messages()).toHaveLength(0);
     });
 
-    it('a read the panel refuses erases nothing and is announced as a failure', async () => {
+    it('a read the panel refuses leaves the card intact and answers with a notice', async () => {
       const service = await activeService('refresh-fail');
       await ctx.container.database.db.execute(
         sql`UPDATE services SET traffic_used_bytes = 1024, usage_synced_at = now() - interval '10 minutes' WHERE id = ${service.id}`,
       );
       panel.forget(service.username);
-      await handle(tap(`rs:${service.id}`));
-      await ctx.container.database.db.execute(
-        // One attempt left: `claimDue` claims `attempts < OPERATION_MAX_ATTEMPTS` only, so
-        // a count at or above the bound is never run at all, and this failure is terminal.
-        sql`UPDATE provisioning_operations
-               SET next_attempt_at = now() - interval '1 hour', attempts = ${OPERATION_MAX_ATTEMPTS - 1}`,
-      );
-      await ctx.container.provisionerLoop.tick();
+      sent = [];
+      const result = await handle(tap(`rs:${service.id}`));
+      expect(result.replyKey).toBeNull();
       const row = await services.findById(tenantA, service.id);
       expect(row?.trafficUsedBytes).toBe(1024n);
       expect(row?.state).toBe('ACTIVE');
-      const announced = await ctx.container.database.db.execute(
-        sql`SELECT kind FROM customer_notifications WHERE tenant_id = ${tenantA.tenantId}`,
-      );
-      expect(announced.rows.map((r) => (r as { kind: string }).kind)).toContain(
-        'SERVICE_ACTION_FAILED',
-      );
+      // Nothing edited, nothing sent: only the button's own notice.
+      expect(edits()).toHaveLength(0);
+      expect(messages()).toHaveLength(0);
+      expect(answers()).toHaveLength(1);
+      expect(String(answers()[0]?.body['text'])).toContain('خواندن اطلاعات از سرور ممکن نشد');
+      expect(
+        (await operations.listForService(tenantA, service.id, 50)).filter(
+          (operation) => operation.type === 'SYNC_USAGE',
+        ),
+      ).toHaveLength(0);
     });
 
     it('cannot be asked for another customer’s service', async () => {
       const theirs = await activeService('refresh-theirs', reza);
+      const before = reads(theirs.username);
+      sent = [];
       const result = await handle(tap(`rs:${theirs.id}`));
-      expect(result.replyKey).toBe('bot.service.not_found');
+      expect(result.replyKey).toBeNull();
+      expect(reads(theirs.username)).toBe(before);
+      expect(edits()).toHaveLength(0);
+      expect(String(answers()[0]?.body['text'])).toContain('این سرویس در دسترس شما نیست');
       expect(await operations.listForService(tenantA, theirs.id, 50)).toEqual(
         expect.not.arrayContaining([expect.objectContaining({ type: 'SYNC_USAGE' })]),
       );

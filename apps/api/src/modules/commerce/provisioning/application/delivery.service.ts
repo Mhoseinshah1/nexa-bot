@@ -197,6 +197,47 @@ export interface DeliveryServiceDeps {
    * default card.
    */
   readonly panelPolicy: PanelPolicyGate;
+  /**
+   * R3 item 6: the connection files, sent right after an AUTOMATIC delivery was recorded
+   * DELIVERED — for every purchase kind, since this lane never knows what bought the
+   * service. Optional: without it the lane sends the link and nothing more.
+   */
+  readonly files?: AutomaticFileSender;
+  /**
+   * R3 item 9: whether the service's link has been changed since it was created. The
+   * automatic lane then announces the NEW link as a link change — never as «service
+   * created». Optional: without it every automatic delivery is the purchase card.
+   */
+  readonly rotations?: RotationHistoryReader;
+}
+
+/**
+ * R3 item 6: what sends a service's connection files after its link was delivered.
+ *
+ * Never throws for the files: a file that did not arrive is not a failed delivery and
+ * certainly not a failed provisioning, and the customer can still ask for them from the
+ * service card. Whatever it returns is for a log line.
+ */
+export interface AutomaticFileSender {
+  afterDelivery(
+    scope: TenantContext,
+    service: ServiceRecord,
+    contact: { readonly chatId: string; readonly botInstanceId: BotInstanceId },
+  ): Promise<unknown>;
+}
+
+/**
+ * R3 item 9: has a `ROTATE_SUBSCRIPTION` on this service SUCCEEDED?
+ *
+ * The one fact that tells the two automatic deliveries apart. Delivery is re-armed to
+ * `PENDING` by exactly two writers: the provisioning that created the service, and a
+ * rotation (`recordRotation`). A rotation needs an ACTIVE service, which exists only
+ * after the first delivery was armed; so once any rotation has succeeded, a pending
+ * automatic delivery is the rotation's new link. Derived from the operation rows — the
+ * record of what happened — rather than from a flag somebody must remember to set.
+ */
+export interface RotationHistoryReader {
+  hasRotated(scope: TenantContext, serviceId: string): Promise<boolean>;
 }
 
 /**
@@ -236,6 +277,12 @@ export class DeliveryService {
     service: ServiceRecord,
     chatId: string,
     botInstanceId: BotInstanceId,
+    /**
+     * R3 item 9: announce the link as a CHANGED link of this same service. Set only by
+     * the automatic lane, from `RotationHistoryReader`; a customer's or operator's resend
+     * keeps the card it always sent.
+     */
+    options: { readonly rotated?: boolean } = {},
   ): Promise<DeliveryRecord> {
     if (service.subscriptionUrl === null) {
       /*
@@ -327,7 +374,10 @@ export class DeliveryService {
      * it, and the record of the old link's send must not land on the row that now holds
      * the new one: that would mark a link DELIVERED the customer never received.
      */
-    const result = await this.sendCard(scope, service, chatId, botInstanceId, sentUrl);
+    const result =
+      options.rotated === true
+        ? await this.sendRotated(scope, service, chatId, botInstanceId, sentUrl)
+        : await this.sendCard(scope, service, chatId, botInstanceId, sentUrl);
 
     const now = this.deps.clock.now();
 
@@ -502,12 +552,23 @@ export class DeliveryService {
           undeliverable += 1;
           continue;
         }
+        const rotated = (await this.deps.rotations?.hasRotated(scope, service.id)) === true;
         const record = await this.deliver(
           scope,
           service,
           lookup.contact.chatId,
           lookup.contact.botInstanceId,
+          { rotated },
         );
+        /*
+         * R3 item 6: the connection files, immediately after the link — only when this
+         * sweep's send was DELIVERED and recorded, so a message that may not have arrived
+         * is not followed by files, and a send somebody else recorded is not answered
+         * twice. Its failure is swallowed by `sendFilesAfter` and changes nothing here.
+         */
+        if (record.recorded && record.state === 'DELIVERED') {
+          await this.sendFilesAfter(scope, service, lookup.contact);
+        }
         if (!record.recorded) {
           // Sent, and the outcome could not be written because somebody else had
           // already moved the row. Counted as its own thing rather than folded into
@@ -542,6 +603,27 @@ export class DeliveryService {
       errored,
       lost,
     };
+  }
+
+  /**
+   * R3 item 6: the files after a delivered link. Never throws and never writes: the
+   * delivery is recorded already, the service is ACTIVE, and neither may be touched by
+   * a file Telegram or the panel declined. The files service keeps every secret in
+   * memory; nothing about them is logged here.
+   */
+  private async sendFilesAfter(
+    scope: TenantContext,
+    service: ServiceRecord,
+    contact: { readonly chatId: string; readonly botInstanceId: BotInstanceId },
+  ): Promise<void> {
+    if (this.deps.files === undefined) return;
+    try {
+      await this.deps.files.afterDelivery(scope, service, contact);
+    } catch {
+      // Deliberately swallowed: the link is delivered and recorded, and the customer
+      // can still ask for the files from the card («📁 دریافت فایل‌های اتصال»).
+      return;
+    }
   }
 
   /**
@@ -685,6 +767,62 @@ export class DeliveryService {
       buttons,
     });
     return second;
+  }
+
+  /**
+   * R3 item 9: the new link after a link change on the SAME service — «the link of
+   * service X changed; the previous link is no longer usable; replace it in your apps»,
+   * then the link. Never the purchase card: nothing was created.
+   *
+   * The panel's delivery mode is honoured exactly as the card's is: the QR of `sentUrl`
+   * with this text as its caption, or the text alone; and an over-bound caption falls
+   * back to the photo with its short caption followed by the text. The card's buttons
+   * (guide, connected, problem) go with it.
+   */
+  private async sendRotated(
+    scope: TenantContext,
+    service: ServiceRecord,
+    chatId: string,
+    botInstanceId: BotInstanceId,
+    sentUrl: string,
+  ): Promise<CustomerSendResult> {
+    const values: TemplateValues = {
+      serviceUsername: service.providerUsername,
+      subscriptionUrl: sentUrl,
+    };
+    const buttons = deliveryCardButtons(service.id);
+    const text = {
+      chatId,
+      botInstanceId,
+      templateKey: 'bot.service.link_rotated' as const,
+      values,
+      buttons,
+    };
+    const mode = deliveryModeOf(await this.deps.panelPolicy.forPanel(scope, service.panelId));
+    if (mode === 'CARD_TEXT') return this.deps.messenger.send(scope, text);
+    const photo = {
+      chatId,
+      botInstanceId,
+      kind: 'PHOTO' as const,
+      source: {
+        kind: 'BYTES' as const,
+        bytes: this.deps.qr.encode(sentUrl),
+        fileName: 'subscription.png',
+        mimeType: 'image/png' as const,
+      },
+    };
+    const single = await this.deps.messenger.sendFile(scope, {
+      ...photo,
+      caption: { templateKey: 'bot.service.link_rotated', values },
+      buttons,
+    });
+    if (single.outcome !== 'REFUSED' || single.reason !== 'CAPTION_OVER_BOUND') return single;
+    const first = await this.deps.messenger.sendFile(scope, {
+      ...photo,
+      caption: { templateKey: 'bot.service.delivered_qr_caption', values: {} },
+    });
+    if (first.outcome !== 'DELIVERED') return first;
+    return this.deps.messenger.send(scope, text);
   }
 
   async redeliver(

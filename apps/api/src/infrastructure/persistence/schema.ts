@@ -6260,6 +6260,57 @@ export const provisioningOperations = pgTable(
 );
 
 /**
+ * R3 (v0.3.5 real-test fixes, item 10): the service card a customer's request was made
+ * from, so the result can be shown ON that card.
+ *
+ * A disable or an enable is an operation the provisioner performs later, in another
+ * process; the tap that asked for it is long answered by then. This row is how the
+ * provisioner knows which Telegram message to edit: the chat and message the tap came
+ * from, and the bot that drew it (a `message_id` is only meaningful to that bot, and a
+ * reply from a different bot leaks the relationship between them — `CustomerMessage`).
+ *
+ * One row per operation, written in the SAME transaction that plans it — only when it
+ * is newly planned, so a double tap keeps the first card — and never changed except by
+ * `answered_at`. Nothing here is a secret: a chat id and a message number.
+ *
+ * `answered_at` is the told-once claim. Stamped by a conditional UPDATE before the edit
+ * is sent, so two provisioner replicas cannot both edit (or both fall back to sending
+ * the card); released only for a 429, which is Telegram declining to look at the edit.
+ */
+export const operationCardMessages = pgTable(
+  'operation_card_messages',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    /** `provisioning_operations.id` — the row, not the derived `operation_id`. */
+    operationId: uuid('operation_id').notNull(),
+    botInstanceId: uuid('bot_instance_id').notNull(),
+    chatId: text('chat_id').notNull(),
+    messageId: bigint('message_id', { mode: 'number' }).notNull(),
+    answeredAt: timestamptz('answered_at'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({
+      name: 'operation_card_messages_pkey',
+      columns: [table.tenantId, table.operationId],
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.operationId],
+      foreignColumns: [provisioningOperations.tenantId, provisioningOperations.id],
+      name: 'operation_card_messages_operation_fk',
+    }),
+    /** The sweep's claim surface: cards nobody has answered for, oldest first. */
+    index('operation_card_messages_unanswered_idx')
+      .on(table.tenantId, table.createdAt)
+      .where(sql`answered_at IS NULL`),
+    check('operation_card_messages_message_id_check', sql`message_id > 0`),
+    check('operation_card_messages_chat_id_check', sql`chat_id ~ '^-?[0-9]{1,20}$'`),
+  ],
+);
+
+/**
  * A discount rule (`docs/wp8-pricing-audit.md` P3).
  *
  * A `CODE` rule applies when a customer enters its code; an `AUTOMATIC` rule applies to

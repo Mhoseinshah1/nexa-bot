@@ -65,6 +65,8 @@ describe('announcing how an operation turned out', () => {
     requestedByCustomerId: UserId | null = CUSTOMER,
     /** Null means terminal for a FAILED row; a date means a retry is scheduled. */
     nextAttemptAt: Date | null = null,
+    /** R3: the request was made from a service card, which the card editor answers. */
+    answeredOnCard = false,
   ) {
     const queued: Queued[] = [];
     /*
@@ -84,6 +86,7 @@ describe('announcing how an operation turned out', () => {
           customerId: CUSTOMER,
           requestedByCustomerId,
           nextAttemptAt,
+          answeredOnCard,
         }),
         dueForAnnouncement: async () => [],
       },
@@ -192,9 +195,56 @@ describe('announcing how an operation turned out', () => {
 
   it('announces every operation a customer can start from My Services', async () => {
     for (const type of CUSTOMER_REQUESTABLE_OPERATIONS) {
+      // R3: a link change's success is answered by the delivery of the new link instead.
+      if (type === 'ROTATE_SUBSCRIPTION') continue;
       const { announcer, queued } = announcerFor(type, 'SUCCEEDED');
       await announcer.announce(scope, 'operation-1');
       expect(queued.length, `${type} must be announced`).toBe(1);
+    }
+    // …and its failure is still told, like every other request's.
+    for (const outcome of ['ABANDONED', 'FAILED'] as OperationState[]) {
+      const { announcer, queued } = announcerFor('ROTATE_SUBSCRIPTION', outcome);
+      await announcer.announce(scope, 'operation-1');
+      expect(
+        queued.map((one) => one.kind),
+        `ROTATE_SUBSCRIPTION/${outcome}`,
+      ).toEqual(['SERVICE_ACTION_FAILED']);
+    }
+  });
+
+  it('R3: a success answered elsewhere is stamped and queues nothing', async () => {
+    /*
+     * A link change: the delivery lane sends «the link changed» with the new link and the
+     * files. A disable or enable asked from a card: the card itself is edited. A second
+     * «request applied» sentence would be the intermediate message the owner removed.
+     */
+    for (const [type, onCard] of [
+      ['ROTATE_SUBSCRIPTION', false],
+      ['SUSPEND', true],
+      ['RESUME', true],
+    ] as const) {
+      const { announcer, queued, stamped } = announcerFor(
+        type,
+        'SUCCEEDED',
+        CUSTOMER,
+        null,
+        onCard,
+      );
+      await announcer.announce(scope, 'operation-1');
+      expect(queued, `${type} success`).toEqual([]);
+      expect(stamped, `${type} is answered`).toEqual(['operation-1']);
+    }
+  });
+
+  it('R3: a disable or enable with no card is still told by message, and a card never hides a failure', async () => {
+    for (const type of ['SUSPEND', 'RESUME'] as const) {
+      const plain = announcerFor(type, 'SUCCEEDED', CUSTOMER, null, false);
+      await plain.announcer.announce(scope, 'operation-1');
+      expect(plain.queued.map((one) => one.kind)).toEqual(['SERVICE_ACTION_SUCCEEDED']);
+
+      const failed = announcerFor(type, 'FAILED', CUSTOMER, null, true);
+      await failed.announcer.announce(scope, 'operation-1');
+      expect(failed.queued.map((one) => one.kind)).toEqual(['SERVICE_ACTION_FAILED']);
     }
   });
 

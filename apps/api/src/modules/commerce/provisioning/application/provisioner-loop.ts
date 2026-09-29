@@ -2,6 +2,7 @@ import type { TenantContext } from '@nexa/contracts';
 import type { DeliveryService } from './delivery.service.js';
 import type { OperationOutcomeAnnouncer } from '../../messaging/application/operation-outcome-announcer.js';
 import type { ProvisionerService } from './provisioner.service.js';
+import type { OperationCardEditor } from './operation-card.js';
 
 /**
  * The loop that drives the executor, and the readiness signal it earns.
@@ -77,6 +78,8 @@ export class ProvisionerLoop {
        * runs the `TERMINATE`, so a deletion is credited one tick later at most.
        */
       readonly serviceRefunds: { settleDue(scope: TenantContext, limit: number): Promise<number> };
+      /** R3 item 10: the service cards to edit when a disable or enable succeeds. */
+      readonly cards?: Pick<OperationCardEditor, 'answer' | 'answerDue'>;
       readonly tickMs: number;
       readonly now: () => number;
       /**
@@ -172,6 +175,12 @@ export class ProvisionerLoop {
          * off and retry — is correct rather than merely harmless. Queued, not sent.
          */
         await this.outcomes.announce(scope, result.operationId);
+        /*
+         * R3 item 10: a disable or enable asked from a service card is answered ON the
+         * card, in this tick. `answer` claims first and does nothing for any other
+         * operation, so calling it for every result is safe.
+         */
+        await this.options.cards?.answer(scope, result.operationId);
         if (result.kind === 'REFUSED') break;
       }
       /*
@@ -204,6 +213,8 @@ export class ProvisionerLoop {
        * limits are somebody else's.
        */
       await this.outcomes.announceDue(scope, DRAIN_LIMIT);
+      // R3: cards a crash left unanswered, after the grace.
+      await this.options.cards?.answerDue(scope, DRAIN_LIMIT);
     } catch (error: unknown) {
       /*
        * A failed tick makes NO progress, deliberately.
