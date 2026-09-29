@@ -1328,6 +1328,29 @@ While the release before it runs:
 
 Nothing needs doing before rolling back past HF-A9.
 
+### What a rollback delays or loses: edit-in-place wizards and the renewal result (R2)
+
+R2 edits the customer's purchase and top-up wizard in place, edits an administrator's
+receipt-review message into its decision, has the gateway worker edit the invoice message
+the moment the invoice is ready, and ends a renewal with its own `SERVICE_RENEWED` result.
+Its migration adds two tables (`telegram_wizards`, `telegram_review_messages`) and widens the
+notification kind CHECK. The migration stays: the old release never reads the new tables,
+and the widened CHECK accepts everything either release writes. While it runs:
+
+- **Every step is a new message again**, as before R2. A wizard message the new release left
+  on screen still works: its buttons are ordinary callbacks the old release answers with a
+  new message. Nothing is edited; nothing is refused as stale.
+- **A ready gateway invoice waits for «🔄 بررسی وضعیت پرداخت».** The old worker does not
+  edit the loading screen; the invoice itself is created and settled exactly as before.
+- **A renewal result not yet sent waits.** The old dispatcher has no template for
+  `SERVICE_RENEWED`: it defers the row without spending an attempt or stamping it, and the
+  first pass after the roll-forward sends it. A renewal that succeeds DURING the rollback is
+  announced by the old release with the generic `SERVICE_ACTION_SUCCEEDED`, as before.
+- **A receipt decision taken in the old release does not edit the review message**; the
+  decision itself is unchanged. The rows the new release recorded are kept and ignored.
+
+Nothing needs doing before rolling back past R2.
+
 ### How far back you can roll
 
 **One release**, safely. Migrations are expand-only within a release
