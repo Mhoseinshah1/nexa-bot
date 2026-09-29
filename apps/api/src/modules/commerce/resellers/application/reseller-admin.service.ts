@@ -568,7 +568,11 @@ export class ResellerAdminService {
   async setTierMinimum(
     scope: TenantContext,
     actor: ActorContext,
-    input: { readonly idempotencyKey: string; readonly tierId: string; readonly minimum: Money | null },
+    input: {
+      readonly idempotencyKey: string;
+      readonly tierId: string;
+      readonly minimum: Money | null;
+    },
   ): Promise<ResellerTierListing> {
     const tierId = this.id(input.tierId, 'tier');
     const minimum = normaliseMinimum(input.minimum, 'TIER');
@@ -632,7 +636,11 @@ export class ResellerAdminService {
     const customerId = this.id(input.customerId, 'customer');
     const minimum = normaliseMinimum(input.minimum, 'RESELLER');
     const requestHash = hashRequest({ customerId, minimum: serialisableMoney(minimum) });
-    const denial = { action: 'reseller.monthly_minimum', entityType: 'Customer', entityId: customerId };
+    const denial = {
+      action: 'reseller.monthly_minimum',
+      entityType: 'Customer',
+      entityId: customerId,
+    };
     await this.authorize(scope, actor, denial);
 
     const replay = await this.replay<{ customerId: string }>(
@@ -1103,9 +1111,7 @@ function normaliseMinimum(minimum: Money | null, on: 'TIER' | 'RESELLER'): Money
 }
 
 function serialisableMoney(value: Money | null) {
-  return value === null
-    ? null
-    : { amount: value.amountMinor.toString(), currency: value.currency };
+  return value === null ? null : { amount: value.amountMinor.toString(), currency: value.currency };
 }
 
 /**

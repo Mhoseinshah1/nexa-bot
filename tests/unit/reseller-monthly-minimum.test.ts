@@ -65,9 +65,7 @@ describe('minimumStanding', () => {
       remaining: 0n,
       progressBasisPoints: 10_000,
     });
-    expect(minimumStanding('ACTIVE', IRT(1_000_000n), 2_500_000n).progressBasisPoints).toBe(
-      25_000,
-    );
+    expect(minimumStanding('ACTIVE', IRT(1_000_000n), 2_500_000n).progressBasisPoints).toBe(25_000);
   });
 
   it('has no minimum, and no figures, when none applies', () => {

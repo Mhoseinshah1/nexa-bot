@@ -436,9 +436,7 @@ function toResellerSummary(reseller: ResellerListing): ResellerSummaryResponse {
 }
 
 function wireMoney(value: Money | null): { amount: string; currency: CurrencyCode } | null {
-  return value === null
-    ? null
-    : { amount: value.amountMinor.toString(), currency: value.currency };
+  return value === null ? null : { amount: value.amountMinor.toString(), currency: value.currency };
 }
 
 function toPolicy(policy: ResellerPolicyRecord): ResellerPolicyResponse['policy'] {

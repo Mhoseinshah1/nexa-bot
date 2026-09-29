@@ -292,11 +292,7 @@ export interface ResellerRepository {
   ): Promise<readonly ResellerListing[]>;
 
   /** The notices already raised for a month, as `${customerId}:${kind}`. */
-  noticesIn(
-    scope: TenantContext,
-    periodStart: Date,
-    tx: unknown,
-  ): Promise<ReadonlySet<string>>;
+  noticesIn(scope: TenantContext, periodStart: Date, tx: unknown): Promise<ReadonlySet<string>>;
 
   /**
    * Records one notice, or `false` when this (reseller, kind, month) already has one — the

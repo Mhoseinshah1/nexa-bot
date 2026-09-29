@@ -302,7 +302,11 @@ describe('effectiveGrants: the per-reseller override over the tier', () => {
       dimensions: ['BOT', 'CATALOGUE'],
       grants: [...override.grants].reverse(),
     };
-    for (const s of [subject(), subject({ productId: OTHER_PRODUCT }), subject({ botInstanceId: 'bot-2' })]) {
+    for (const s of [
+      subject(),
+      subject({ productId: OTHER_PRODUCT }),
+      subject({ botInstanceId: 'bot-2' }),
+    ]) {
       expect(decideEntitlement(effectiveGrants([...TIER].reverse(), reversed), s)).toEqual(
         decideEntitlement(effectiveGrants(TIER, override), s),
       );
@@ -328,7 +332,13 @@ describe('catalogueScope agrees with decideEntitlement under every override shap
     for (const categoryId of [CATEGORY, null])
       for (const panelId of [PANEL, 'panel-2'])
         for (const botInstanceId of [BOT, 'bot-2', null])
-          subjects.push({ operation: 'NEW_SERVICE', productId, categoryId, panelId, botInstanceId });
+          subjects.push({
+            operation: 'NEW_SERVICE',
+            productId,
+            categoryId,
+            panelId,
+            botInstanceId,
+          });
 
   it('over every tier grant subset × dimension subset × override grant set', () => {
     let checked = 0;

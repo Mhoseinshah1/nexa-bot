@@ -56,7 +56,8 @@ export function minimumStanding(
   minimum: Money | null,
   achieved: bigint,
 ): MinimumStanding {
-  if (status !== 'ACTIVE') return { state: 'NOT_ACTIVE', remaining: null, progressBasisPoints: null };
+  if (status !== 'ACTIVE')
+    return { state: 'NOT_ACTIVE', remaining: null, progressBasisPoints: null };
   if (minimum === null || minimum.amountMinor <= 0n) {
     return { state: 'NO_MINIMUM', remaining: null, progressBasisPoints: null };
   }
@@ -67,7 +68,11 @@ export function minimumStanding(
     remaining: reached ? 0n : minimum.amountMinor - achieved,
     // Clamped to [0, PROGRESS_CEILING] only so the figure stays an exact JavaScript number.
     progressBasisPoints: Number(
-      basis < 0n ? 0n : basis > PROGRESS_CEILING_BASIS_POINTS ? PROGRESS_CEILING_BASIS_POINTS : basis,
+      basis < 0n
+        ? 0n
+        : basis > PROGRESS_CEILING_BASIS_POINTS
+          ? PROGRESS_CEILING_BASIS_POINTS
+          : basis,
     ),
   };
 }

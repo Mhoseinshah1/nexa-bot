@@ -314,7 +314,10 @@ describe('reseller plan controls and the monthly minimum (round N, package D)', 
         { dimension: 'PANEL', grants: [{ kind: 'PANEL', subject: panelA2 }] },
       ]);
       expect((await draft(resellerOne, onA2)).state).toBe('DRAFT');
-      await expect(draft(resellerTwo, onA2), 'the tier still refuses everyone else').rejects.toEqual(
+      await expect(
+        draft(resellerTwo, onA2),
+        'the tier still refuses everyone else',
+      ).rejects.toEqual(
         refusal(COMMERCE_ERROR_CODES.RESELLER_NOT_ENTITLED, { dimension: 'PANEL' }),
       );
       // REPLACES, never adds: the tier's panel A is no longer granted to this reseller.
@@ -369,7 +372,9 @@ describe('reseller plan controls and the monthly minimum (round N, package D)', 
         source: 'TIER',
       });
       // A read is the same answer.
-      expect(await ctx.container.resellersAdmin.policy(tenantA, owner, resellerOne)).toEqual(policy);
+      expect(await ctx.container.resellersAdmin.policy(tenantA, owner, resellerOne)).toEqual(
+        policy,
+      );
     });
 
     it('audits the override with its before and after, replays a key, and refuses a foreign subject', async () => {
@@ -446,9 +451,8 @@ describe('reseller plan controls and the monthly minimum (round N, package D)', 
         customerId,
         minimum: amount === null ? null : money(amount, 'IRT'),
       });
-    const progress = (
-      query: Parameters<typeof ctx.container.resellerMinimums.progress>[2] = {},
-    ) => ctx.container.resellerMinimums.progress(tenantA, owner, query);
+    const progress = (query: Parameters<typeof ctx.container.resellerMinimums.progress>[2] = {}) =>
+      ctx.container.resellerMinimums.progress(tenantA, owner, query);
 
     it('tracks tier and own minimums against the reports’ own sales figure, per reseller', async () => {
       const resellerThree = await customer('960003');
@@ -510,7 +514,9 @@ describe('reseller plan controls and the monthly minimum (round N, package D)', 
       });
       for (const row of reported.rows) {
         const ours = byCustomer.get(row.resellerCustomerId);
-        expect(row.sales).toEqual([{ currency: 'IRT', amount: String(ours?.achieved.amountMinor) }]);
+        expect(row.sales).toEqual([
+          { currency: 'IRT', amount: String(ours?.achieved.amountMinor) },
+        ]);
       }
     });
 
@@ -521,9 +527,9 @@ describe('reseller plan controls and the monthly minimum (round N, package D)', 
       await sold(resellerOne, 30_000n);
       await register(resellerOne, tierId);
       const { orderId, paymentId } = await sold(resellerOne, 70_000n);
-      expect(
-        (await progress()).rows.find((r) => r.customerId === resellerOne)?.achieved,
-      ).toEqual(money(70_000n, 'IRT'));
+      expect((await progress()).rows.find((r) => r.customerId === resellerOne)?.achieved).toEqual(
+        money(70_000n, 'IRT'),
+      );
 
       await ctx.container.database.db.execute(sql`
         UPDATE provisioning_operations
@@ -568,21 +574,23 @@ describe('reseller plan controls and the monthly minimum (round N, package D)', 
       const support = adminActorFor(
         await createAdmin(ctx.container, tenantA, { username: 'support-n', roleKeys: ['support'] }),
       );
-      await expect(ctx.container.resellerMinimums.progress(tenantA, support, {})).rejects.toMatchObject(
-        denied,
-      );
+      await expect(
+        ctx.container.resellerMinimums.progress(tenantA, support, {}),
+      ).rejects.toMatchObject(denied);
       // Finance holds both; without orders.view the sums of order amounts are refused.
       const finance = adminActorFor(
         await createAdmin(ctx.container, tenantA, { username: 'finance-n', roleKeys: ['finance'] }),
       );
-      expect((await ctx.container.resellerMinimums.progress(tenantA, finance, {})).rows).toEqual([]);
+      expect((await ctx.container.resellerMinimums.progress(tenantA, finance, {})).rows).toEqual(
+        [],
+      );
       await ctx.container.database.db.execute(sql`
         DELETE FROM role_permissions rp USING roles r
          WHERE r.id = rp.role_id AND r.tenant_id = rp.tenant_id
            AND r.key = 'finance' AND rp.permission_key = 'orders.view'`);
-      await expect(ctx.container.resellerMinimums.progress(tenantA, finance, {})).rejects.toMatchObject(
-        denied,
-      );
+      await expect(
+        ctx.container.resellerMinimums.progress(tenantA, finance, {}),
+      ).rejects.toMatchObject(denied);
       // The writes need resellers.edit, which finance does not hold.
       const tierId = await tier();
       await expect(
@@ -615,7 +623,9 @@ describe('reseller plan controls and the monthly minimum (round N, package D)', 
               ? days
               : settingDefinition(settingKey).defaultValue) as T,
         },
-        features: { isEnabled: async (_scope: unknown, flag: FeatureFlagKey) => flags[flag] ?? false },
+        features: {
+          isEnabled: async (_scope: unknown, flag: FeatureFlagKey) => flags[flag] ?? false,
+        },
         notifier: new CustomerNotifier({
           notifications: new DrizzleCustomerNotificationRepository(db),
           bots: { botFor: async () => BOT_A },
@@ -707,7 +717,10 @@ describe('reseller plan controls and the monthly minimum (round N, package D)', 
       const first = await sweep(at(window), flags);
       const again = await sweep(at(window + 60_000), flags);
       // A second replica on the same instant: the unique key is the arbiter.
-      const replica = await Promise.all([sweep(at(window + 120_000), flags), sweep(at(window + 120_000), flags)]);
+      const replica = await Promise.all([
+        sweep(at(window + 120_000), flags),
+        sweep(at(window + 120_000), flags),
+      ]);
       expect(first + again + replica[0] + replica[1] + (window > now ? 1 : 0)).toBe(2);
       expect(await noticeRows()).toEqual([
         { customer_id: resellerTwo, kind: 'ACHIEVED', minimum_amount: '100000' },
@@ -737,14 +750,21 @@ describe('reseller plan controls and the monthly minimum (round N, package D)', 
         );
       const ledgerBefore = await ledger();
       const resellersBefore = await resellerRows();
-      const paymentsBefore = await rows<{ n: number }>(sql`SELECT count(*)::int AS n FROM payments`);
+      const paymentsBefore = await rows<{ n: number }>(
+        sql`SELECT count(*)::int AS n FROM payments`,
+      );
 
       const window = await inReminderWindow();
-      await sweep(at(window), { reseller_minimum_reminders: true, reseller_minimum_achieved_notices: true });
+      await sweep(at(window), {
+        reseller_minimum_reminders: true,
+        reseller_minimum_achieved_notices: true,
+      });
       await dispatcher(at(window)).deliverDue(tenantA, 200);
 
       expect(await ledger(), 'no ledger entry — no debt, fee or debit').toEqual(ledgerBefore);
-      expect(await resellerRows(), 'no demotion, suspension or tier change').toEqual(resellersBefore);
+      expect(await resellerRows(), 'no demotion, suspension or tier change').toEqual(
+        resellersBefore,
+      );
       expect(await rows<{ n: number }>(sql`SELECT count(*)::int AS n FROM payments`)).toEqual(
         paymentsBefore,
       );
@@ -752,15 +772,18 @@ describe('reseller plan controls and the monthly minimum (round N, package D)', 
         SELECT count(*)::int AS n FROM wallet_entries
          WHERE reason IN ('RESELLER_SETTLEMENT', 'RESELLER_MEMBERSHIP_FEE')`);
       expect(settlement[0]?.n).toBe(0);
-      expect((await ctx.container.resellersAdmin.getTier(tenantA, owner, tierId)).monthlyMinimum).toEqual(
-        money(100_000n, 'IRT'),
-      );
+      expect(
+        (await ctx.container.resellersAdmin.getTier(tenantA, owner, tierId)).monthlyMinimum,
+      ).toEqual(money(100_000n, 'IRT'));
     });
 
     it('renders the minimum, the live sales, what remains and the days left', async () => {
       await belowAndAchieved();
       const window = await inReminderWindow();
-      await sweep(at(window), { reseller_minimum_reminders: true, reseller_minimum_achieved_notices: true });
+      await sweep(at(window), {
+        reseller_minimum_reminders: true,
+        reseller_minimum_achieved_notices: true,
+      });
       await dispatcher(at(window)).deliverDue(tenantA, 200);
 
       const reminder = sends.find((s) => s.templateKey === 'bot.reseller.minimum_reminder');
