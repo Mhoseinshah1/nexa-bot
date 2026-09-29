@@ -317,6 +317,7 @@ import {
   clientAppListSchema,
   clientAppSchema,
   type ClientAppDeletedResponse,
+  type ClientAppImageMimeType,
   type ClientAppListResponse,
   type ClientAppResponse,
   type ClientAppStatus,
@@ -351,6 +352,7 @@ import {
   type TicketListResponse,
   type TicketMutationResponse,
   type TicketPriority,
+  type TicketReplyAttachment,
   type TicketReplyResponse,
   type TicketStatus,
 } from '@nexa/contracts';
@@ -1735,6 +1737,36 @@ export function deleteClientApp(input: {
   return post(CLIENT_APP_ROUTES.remove(id), body, clientAppDeletedSchema);
 }
 
+/** HF-A10. The picture as base64; the server re-inspects the bytes and bumps the version. */
+export function uploadClientAppImage(input: {
+  id: string;
+  idempotencyKey: string;
+  expectedVersion: number;
+  mimeType: ClientAppImageMimeType;
+  contentBase64: string;
+}): Promise<ClientAppResponse> {
+  const { id, ...body } = input;
+  return post(CLIENT_APP_ROUTES.image(id), body, clientAppSchema);
+}
+
+export function clearClientAppImage(input: {
+  id: string;
+  idempotencyKey: string;
+  expectedVersion: number;
+}): Promise<ClientAppResponse> {
+  const { id, ...body } = input;
+  return post(CLIENT_APP_ROUTES.clearImage(id), body, clientAppSchema);
+}
+
+/**
+ * The stored picture, for an `<img src>` on this origin: the session cookie travels with
+ * it, and the Web Admin's `img-src 'self'` admits it where a `blob:` URL would not be.
+ * The digest in the query names the version, so a replaced picture is fetched afresh.
+ */
+export function clientAppImageUrl(id: string, sha256: string): string {
+  return `${API_PREFIX}${CLIENT_APP_ROUTES.image(id)}?v=${encodeURIComponent(sha256)}`;
+}
+
 export function fetchPanels(
   query: { limit?: number; cursor?: string; archived?: PanelListArchivedMode } = {},
 ): Promise<PanelListResponse> {
@@ -2854,10 +2886,16 @@ export function replyToTicket(input: {
   ticketId: string;
   idempotencyKey: string;
   text: string;
+  /** HF-A7: one file beside the text, as base64; the server judges its bytes again. */
+  attachment?: TicketReplyAttachment;
 }): Promise<TicketReplyResponse> {
   return post(
     TICKET_ROUTES.reply(input.ticketId),
-    { idempotencyKey: input.idempotencyKey, text: input.text },
+    {
+      idempotencyKey: input.idempotencyKey,
+      text: input.text,
+      ...(input.attachment === undefined ? {} : { attachment: input.attachment }),
+    },
     ticketReplyResponseSchema,
   );
 }

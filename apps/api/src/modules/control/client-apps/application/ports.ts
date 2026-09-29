@@ -1,5 +1,6 @@
 import type {
   ClientAppDeliveryKind,
+  ClientAppImageMimeType,
   ClientAppInput,
   ClientAppPlatform,
   ClientAppProtocol,
@@ -30,6 +31,33 @@ export interface ClientAppRecord {
   readonly version: number;
   readonly createdAt: Date;
   readonly updatedAt: Date;
+  /** HF-A10. The picture's metadata, never its bytes; null when there is none. */
+  readonly image: ClientAppImageMeta | null;
+}
+
+/** What is known about a stored image without reading it. */
+export interface ClientAppImageMeta {
+  readonly mimeType: ClientAppImageMimeType;
+  readonly byteLength: number;
+  readonly width: number;
+  readonly height: number;
+  readonly sha256: string;
+  readonly updatedAt: Date;
+}
+
+/** The bytes, and the type they were verified to be when they were stored. */
+export interface ClientAppImageContent {
+  readonly bytes: Uint8Array;
+  readonly mimeType: ClientAppImageMimeType;
+}
+
+/** An image as the service writes it: bytes already inspected. */
+export interface ClientAppImageDraft {
+  readonly content: Uint8Array;
+  readonly mimeType: ClientAppImageMimeType;
+  readonly width: number;
+  readonly height: number;
+  readonly sha256: string;
 }
 
 /**
@@ -82,6 +110,26 @@ export interface ClientAppRepository {
   remove(scope: ScopeContext, id: string, expectedVersion: number, tx: unknown): Promise<boolean>;
   /** Every row of the tenant, whatever its status: the bound `CLIENT_APP_MAX_ENTRIES` is on. */
   count(scope: ScopeContext, tx?: unknown): Promise<number>;
+  /**
+   * HF-A10. Sets (`image` non-null) or clears (`null`) the entry's picture. Conditional on
+   * `expectedVersion`; bumps the version. Null when the row moved or is absent.
+   */
+  setImage(
+    scope: ScopeContext,
+    id: string,
+    input: { readonly image: ClientAppImageDraft | null; readonly expectedVersion: number },
+    now: Date,
+    tx: unknown,
+  ): Promise<ClientAppRecord | null>;
+  /**
+   * HF-A10. The ONE read of the bytes. Tenant-scoped like every other method, and with no
+   * status filter: the caller decides whether a disabled entry's picture may be served.
+   */
+  imageContent(
+    scope: ScopeContext,
+    id: string,
+    tx?: unknown,
+  ): Promise<ClientAppImageContent | null>;
 }
 
 /**

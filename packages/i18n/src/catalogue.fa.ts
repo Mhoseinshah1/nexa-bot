@@ -1210,6 +1210,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.ticket.status_closed': '🔒 بسته‌شده',
   'bot.ticket.support_replied':
     '📩 پاسخ پشتیبانی به تیکت #{number}\n📂 موضوع: {category}\n\n{text}',
+  'bot.ticket.support_attachment': '📎 پیوست پاسخ پشتیبانی به تیکت #{number}\n📂 موضوع: {category}',
   'bot.ticket.view_button': '🎫 مشاهده تیکت',
   'bot.ticket.category_default_1': 'مشکل اتصال',
   'bot.ticket.category_default_2': 'خرید و پرداخت',

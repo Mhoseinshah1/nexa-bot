@@ -1251,6 +1251,67 @@ If a row is listed, save that panel's policy without the switch before rolling b
 after the rollback, save the policy once from the old Web Admin, which writes it without
 the entry.
 
+### What a rollback hides: client app pictures (HF-A10)
+
+HF-A10 lets an operator attach a PNG or JPEG picture to a client app entry. The bot
+sends it ahead of that app's screen. The migration adds seven nullable `image_*`
+columns and one CHECK to `client_apps`. The release before HF-A10 names its columns
+explicitly and never reads or writes these, and its inserts leave them NULL, which
+the CHECK accepts. While it runs:
+
+- **No picture is sent.** Every app screen is the emoji-and-text screen it was
+  before HF-A10.
+- **The old Web Admin cannot show, upload or remove a picture.** An edit, a switch
+  on or off, or a delete there leaves a stored picture as it was. A delete removes
+  the picture with its row, as it does on either release.
+
+Nothing needs doing before rolling back past HF-A10. After the roll-forward, every
+picture that was not deleted with its entry is sent again.
+
+### What a rollback keeps waiting: the durable operations log (HF-A4)
+
+HF-A4 makes every event routed to the operations log durable: it is queued even while no
+group is connected (with no chat on its destination, only its topic), a refusal that is
+about the group rather than the message is retried rather than failed, a Telegram 429 is
+not counted against the ten attempts, and a message that spends its attempts against a
+healthy group asks for the group to be checked again, which requeues it once the check
+passes. There is no migration. The release before it, while it runs:
+
+- **Drops what is raised while no group and no manual chat exist**, as it did before, and
+  counts every 429 as a failed attempt.
+- **Files a queued message with no chat as FAILED** on its first claim ("The stored
+  destination is not valid"), without sending anything. That keeps it: nothing deletes a
+  notification. After the roll-forward, the next check that finds the group healthy, or
+  «ارسال مجدد گزارش‌های ارسال‌نشده», queues it again.
+- **Reads a raised `max_attempts`** on a message that met 429s as an ordinary larger
+  allowance, which it honours.
+
+Nothing needs doing before rolling back past HF-A4.
+
+### What a rollback delays: support's files on ticket replies (HF-A7)
+
+HF-A7 lets support attach an image or an allowed document to a ticket reply in the Web
+Admin. The file is kept in `ticket_reply_files` until Telegram accepts it and is sent as its
+own `TICKET_REPLY_ATTACHMENT` notification beside the reply's text. The release before HF-A7
+has none of this. The migration stays: the old release never reads the new table, and the
+widened notification CHECK accepts everything either release writes. While it runs:
+
+- **A file not yet delivered waits.** The old dispatcher has no template for
+  `TICKET_REPLY_ATTACHMENT`. It defers the row without spending an attempt or stamping it,
+  and the first pass after the roll-forward sends it. The reply's TEXT is an ordinary
+  `TICKET_REPLY` and is delivered by the old release as before.
+- **Support cannot attach a file.** The old Web Admin has no file picker, and the old API
+  does not read the `attachment` field of a reply. A reply sent through the old Web Admin is
+  text only.
+- **The old Web Admin does not show support's files** on the conversation. The reply's text
+  is shown; the file row is kept and appears again after the roll-forward.
+- **Undelivered bytes are not cleared.** The old worker has no retention sweep for the new
+  table. Nothing new can be staged while the old release runs, so what is held stays at or
+  below the 100 MB per-tenant bound, and the new release's sweep clears it after the
+  roll-forward.
+
+Nothing needs doing before rolling back past HF-A7.
+
 ### What a rollback delays or drops: reminder quiet hours (HF-A9)
 
 HF-A9 holds a reminder that falls due inside the tenant's quiet window until the window

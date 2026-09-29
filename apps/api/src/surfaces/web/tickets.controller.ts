@@ -125,6 +125,8 @@ export class TicketsController {
     const posted = await this.container.tickets.reply(scope, actor, {
       ticketId,
       text: input.text,
+      // HF-A7: one file beside the text, judged by the service against its bytes.
+      attachment: input.attachment ?? null,
       idempotencyKey: input.idempotencyKey,
     });
     return {
@@ -199,6 +201,10 @@ export class TicketsController {
    * `nosniff` and `application/octet-stream` whatever the customer declared, so a file a
    * customer uploaded is never rendered in the admin origin, and no `file_id` ever reaches
    * a browser.
+   *
+   * HF-A7: support's own file is served by the same route with the same headers — from the
+   * bytes still staged here while Telegram has not taken it, and from Telegram, with the
+   * ticket's bot, once it has.
    */
   @Get(routePattern(TICKET_ROUTES.attachment, 'messageId'))
   async attachment(
@@ -207,26 +213,28 @@ export class TicketsController {
     @Param('messageId') messageId: string,
   ): Promise<void> {
     const { scope, actor } = await this.authenticate(request);
-    const { message, attachment } = await this.container.tickets.attachmentOf(
-      scope,
-      actor,
-      messageId,
-    );
-    const fetched = await this.container.receiptFiles.download(scope, attachment);
-    if (fetched.outcome !== 'SUCCEEDED') {
-      throw errors.preconditionFailed(
-        TICKET_ERROR_CODES.TICKET_ATTACHMENT_UNAVAILABLE,
-        'This attachment can no longer be fetched from Telegram.',
-      );
+    const { message, source } = await this.container.tickets.attachmentOf(scope, actor, messageId);
+    let bytes: Uint8Array;
+    if (source.kind === 'STORED') {
+      bytes = source.bytes;
+    } else {
+      const fetched = await this.container.receiptFiles.download(scope, source.binding);
+      if (fetched.outcome !== 'SUCCEEDED') {
+        throw errors.preconditionFailed(
+          TICKET_ERROR_CODES.TICKET_ATTACHMENT_UNAVAILABLE,
+          'This attachment can no longer be fetched from Telegram.',
+        );
+      }
+      bytes = fetched.bytes;
     }
     await reply
       .header('content-type', 'application/octet-stream')
       .header('x-content-type-options', 'nosniff')
       // The message's UUID: no quote, newline or semicolon, so the header is safe to build.
       .header('content-disposition', `attachment; filename="${message.id}"`)
-      .header('content-length', String(fetched.bytes.byteLength))
+      .header('content-length', String(bytes.byteLength))
       .header('cache-control', 'no-store')
-      .send(Buffer.from(fetched.bytes));
+      .send(Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength));
   }
 
   @Get(TICKET_ROUTES.categories)
@@ -341,17 +349,26 @@ function toMessageView(item: TicketMessageListItem): TicketMessageView {
     body: message.body,
     systemEvent: message.systemEvent,
     attachment:
-      message.attachment === null
-        ? null
-        : {
+      message.attachment !== null
+        ? {
             kind: message.attachment.kind,
             mimeType: message.attachment.mimeType,
             fileName: message.attachment.fileName,
             // Safe as a number: an attachment is bounded at ten megabytes.
             fileSize:
               message.attachment.fileSize === null ? null : Number(message.attachment.fileSize),
-          },
+          }
+        : item.replyFile !== null
+          ? {
+              // HF-A7: support's file — what it is, never where its bytes or handle are.
+              kind: item.replyFile.kind,
+              mimeType: item.replyFile.mimeType,
+              fileName: item.replyFile.fileName,
+              fileSize: item.replyFile.byteLength,
+            }
+          : null,
     delivery: message.senderType === 'ADMIN' ? item.delivery : null,
+    attachmentDelivery: item.replyFile === null ? null : item.attachmentDelivery,
     createdAt: message.createdAt.toISOString(),
   };
 }

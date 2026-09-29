@@ -1311,7 +1311,11 @@ export const COMMERCE_ERROR_CODES = {
   SUPPORT_FAQ_VERSION_CONFLICT: 'commerce.support_faq_version_conflict',
   /** The tenant already holds `SUPPORT_FAQ_MAX_ENTRIES`. */
   SUPPORT_FAQ_LIMIT: 'commerce.support_faq_limit',
-  /** The uploaded banner is not a PNG/JPEG under the size bound, or is not what it claims. */
+  /**
+   * The uploaded banner is not a PNG/JPEG under the size bound, or is not what it claims.
+   * HF-A10: also a client app's image, whose `details.reason` adds `UNREADABLE` and
+   * `DIMENSIONS` to the banner's `EMPTY`, `TOO_LARGE` and `TYPE_MISMATCH`.
+   */
   MEDIA_INVALID: 'commerce.media_invalid',
   /** The gift shares do not total 100 while the flag is (or is being turned) on. */
   REFERRAL_GIFT_TERMS_INVALID: 'commerce.referral_gift_terms_invalid',
@@ -1466,7 +1470,10 @@ export const TICKET_ERROR_CODES = {
   TICKET_TRANSITION_INVALID: 'ticket.transition_invalid',
   /** The text is empty with nothing attached, or longer than `TICKET_MESSAGE_MAX_LENGTH`. */
   TICKET_MESSAGE_INVALID: 'ticket.message_invalid',
-  /** The file is refused; the `refusal` detail is a `TICKET_ATTACHMENT_REFUSALS` member. */
+  /**
+   * The file is refused; the `refusal` detail is a `TICKET_ATTACHMENT_REFUSALS` member for a
+   * customer's file, and a `TICKET_REPLY_FILE_REFUSALS` member for support's (HF-A7).
+   */
   TICKET_ATTACHMENT_REFUSED: 'ticket.attachment_refused',
   /** The customer already has `TICKET_OPEN_MAX_PER_CUSTOMER` open tickets. */
   TICKET_OPEN_LIMIT: 'ticket.open_limit',
@@ -1484,4 +1491,10 @@ export const TICKET_ERROR_CODES = {
   TICKET_LINK_INVALID: 'ticket.link_invalid',
   /** The message has no attachment, or its file can no longer be fetched from Telegram. */
   TICKET_ATTACHMENT_UNAVAILABLE: 'ticket.attachment_unavailable',
+  /**
+   * HF-A7: support's file would take the tenant's undelivered files past
+   * `TICKET_REPLY_FILE_STAGED_MAX_BYTES`. Nothing is written; it clears as Telegram accepts
+   * the files already waiting.
+   */
+  TICKET_ATTACHMENT_STORAGE_FULL: 'ticket.attachment_storage_full',
 } as const;

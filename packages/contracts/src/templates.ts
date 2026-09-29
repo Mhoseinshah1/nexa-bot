@@ -9673,6 +9673,28 @@ export const TEMPLATES = [
     ],
   },
   {
+    key: 'bot.ticket.support_attachment',
+    description:
+      "HF-A7: the caption on the file support attached to a reply (TICKET_REPLY_ATTACHMENT). The file is sent beside the reply's own message; the values are read at send time from the ticket.",
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'number',
+        type: 'NUMBER',
+        description: 'The ticket number.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'category',
+        type: 'STRING',
+        description: "The ticket's category title.",
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
     key: 'bot.ticket.view_button',
     description: "WP-A7: the notification's button that opens the ticket.",
     format: 'PLAIN_TEXT',

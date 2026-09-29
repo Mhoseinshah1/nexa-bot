@@ -5037,11 +5037,11 @@ export class BotRuntime {
             });
       if (led.outcome !== 'DELIVERED') {
         /*
-         * A photo lead is the referral banner: an image an operator uploaded, which a
-         * structurally broken file or a transient refusal can keep from going out on
-         * every request. The screen behind it — the link, the gift, the statistics —
-         * is what the customer asked for, so a banner that fails is dropped and the
-         * reply goes on. A TEXT lead is an earlier part of the one message, and a
+         * A photo lead is the referral banner or a client app's picture (HF-A10): an
+         * image an operator uploaded, which a structurally broken file or a transient
+         * refusal can keep from going out on every request. The screen behind it — the
+         * link, the gift, the statistics; the app's links and guide — is what the
+         * customer asked for, so a picture that fails is dropped and the reply goes on. A TEXT lead is an earlier part of the one message, and a
          * keyboard without the text it belongs to is worse than no reply.
          */
         if (lead.kind === 'PHOTO_BYTES') continue;
@@ -11325,7 +11325,12 @@ export class BotRuntime {
     );
     if (found === null) return ticketNotFound();
     const { ticket } = found;
-    const rendered = await desk.screens.conversation(scope, found.messages, found.messageCount);
+    const rendered = await desk.screens.conversation(
+      scope,
+      found.messages,
+      found.messageCount,
+      found.filed,
+    );
     const active = ticket.status !== 'CLOSED';
     return {
       key: 'bot.ticket.view',
@@ -14117,6 +14122,12 @@ export function clientAppPlatformScreen(
  * opens Package E's files — so each is re-decided on its own tap exactly as it is from the
  * service card, and this screen never carries a subscription URL itself. With more than
  * one live service the customer is sent to «سرویس‌های من» to pick one.
+ *
+ * HF-A10: an entry with a picture sends it FIRST, as a bare photo lead — the referral
+ * banner's arrangement, because the guide can outgrow a photo caption (1,024 characters)
+ * and the text must never be cut. The lead is decorative: the composer drops a photo
+ * Telegram refuses and sends the screen regardless, so the fallback is the emoji-and-text
+ * screen an entry without a picture always gets.
  */
 export function clientAppScreen(
   detail: Awaited<ReturnType<ClientAppCatalog['appFor']>>,
@@ -14176,6 +14187,18 @@ export function clientAppScreen(
     values: { app: detail.title, description: detail.description, guide: detail.guide },
     buttons,
     orderId: null,
+    ...(detail.image === null
+      ? {}
+      : {
+          lead: [
+            {
+              kind: 'PHOTO_BYTES' as const,
+              bytes: detail.image.bytes,
+              mimeType: detail.image.mimeType,
+              fileName: detail.image.mimeType === 'image/png' ? 'app.png' : 'app.jpg',
+            },
+          ],
+        }),
   };
 }
 

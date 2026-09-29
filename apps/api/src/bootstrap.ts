@@ -4,6 +4,8 @@ import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fa
 import {
   RECOVERY_ROUTES,
   TENANT_MEDIA_MAX_BYTES,
+  TICKET_MESSAGE_MAX_LENGTH,
+  TICKET_REPLY_FILE_MAX_BYTES,
   type SalesCurrencyCode,
   type TenantContext,
 } from '@nexa/contracts';
@@ -29,6 +31,11 @@ const TENANT_MEDIA_UPLOAD_ROUTE = /\/media\/[^/]+$/u;
 /** The base64 form of a file at the bound, plus room for the JSON around it. */
 const TENANT_MEDIA_UPLOAD_BODY_LIMIT_BYTES =
   Math.ceil((TENANT_MEDIA_MAX_BYTES * 4) / 3) + 16 * 1024;
+/** HF-A7: a ticket reply, which may carry support's file as base64 beside its text. */
+const TICKET_REPLY_ROUTE = /\/tickets\/[^/]+\/messages$/u;
+/** The base64 form of the largest allowed file, the text at its bound, and the envelope. */
+const TICKET_REPLY_BODY_LIMIT_BYTES =
+  Math.ceil((TICKET_REPLY_FILE_MAX_BYTES * 4) / 3) + TICKET_MESSAGE_MAX_LENGTH * 4 * 6 + 16 * 1024;
 
 /**
  * Resolves the primary tenant this installation serves.
@@ -210,6 +217,14 @@ export async function createApiApp(config: AppConfig = loadConfig()): Promise<Ap
     const methods = Array.isArray(route.method) ? route.method : [route.method];
     if (methods.includes('POST') && TENANT_MEDIA_UPLOAD_ROUTE.test(route.url)) {
       route.bodyLimit = TENANT_MEDIA_UPLOAD_BODY_LIMIT_BYTES;
+    }
+    /*
+     * HF-A7: a ticket reply carries support's file the same way, so it is raised the same
+     * way — to the encoded size of the largest allowed file. The schema bounds the decoded
+     * size and the service holds each type to its own bound and signature.
+     */
+    if (methods.includes('POST') && TICKET_REPLY_ROUTE.test(route.url)) {
+      route.bodyLimit = TICKET_REPLY_BODY_LIMIT_BYTES;
     }
   });
 

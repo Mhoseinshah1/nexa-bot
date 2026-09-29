@@ -270,6 +270,290 @@ export function ticketAttachmentRefusal(file: {
   return allowed.extensions.includes(extension) ? null : 'TYPE_NOT_ALLOWED';
 }
 
+// --- Support's attachments (HF-A7) -----------------------------------------------------
+
+/**
+ * What support may attach to a reply from the Web Admin: a closed allow-list, each type
+ * with the Telegram shape it is sent as, the file-name extensions it may carry, the one
+ * extension it is SENT with, and its own size bound.
+ *
+ * The bytes travel the other way from a customer's file, so the rule is stricter than
+ * `TICKET_DOCUMENT_TYPES`: the declared MIME type, the file name's last extension AND the
+ * bytes' own signature must all name the same type (`ticketReplyFileRefusal`). Anything not
+ * here — an executable, a script, an archive, an installer, HTML, SVG, an Office document —
+ * is refused whatever it is called.
+ *
+ * - `image/jpeg` and `image/png` go as a PHOTO, bounded at five megabytes (Telegram's own
+ *   photo ceiling is ten; a screenshot is far below either).
+ * - `application/pdf` goes as a DOCUMENT, bounded at ten megabytes — the customer's own
+ *   attachment bound (`TICKET_ATTACHMENT_MAX_BYTES`), and half of the twenty Telegram lets a
+ *   bot download again, which is how the Web Admin reads a delivered file back.
+ * - `text/plain` goes as a DOCUMENT, bounded at one megabyte, and only when it is valid
+ *   UTF-8 with no control characters, no `#!` interpreter line and no leading markup.
+ *
+ * WEBP is deliberately absent: Telegram may present a `.webp` document as a sticker, and
+ * nothing here has verified what `sendPhoto` does with one.
+ */
+export const TICKET_REPLY_FILE_TYPES = [
+  {
+    mimeType: 'image/jpeg',
+    kind: 'PHOTO',
+    extension: 'jpg',
+    extensions: ['jpg', 'jpeg'],
+    maxBytes: 5 * 1024 * 1024,
+  },
+  {
+    mimeType: 'image/png',
+    kind: 'PHOTO',
+    extension: 'png',
+    extensions: ['png'],
+    maxBytes: 5 * 1024 * 1024,
+  },
+  {
+    mimeType: 'application/pdf',
+    kind: 'DOCUMENT',
+    extension: 'pdf',
+    extensions: ['pdf'],
+    maxBytes: 10 * 1024 * 1024,
+  },
+  {
+    mimeType: 'text/plain',
+    kind: 'DOCUMENT',
+    extension: 'txt',
+    extensions: ['txt'],
+    maxBytes: 1024 * 1024,
+  },
+] as const satisfies readonly {
+  readonly mimeType: string;
+  readonly kind: TicketAttachmentKind;
+  readonly extension: string;
+  readonly extensions: readonly string[];
+  readonly maxBytes: number;
+}[];
+export type TicketReplyFileType = (typeof TICKET_REPLY_FILE_TYPES)[number];
+export type TicketReplyFileMimeType = TicketReplyFileType['mimeType'];
+export const TICKET_REPLY_FILE_MIME_TYPES: readonly TicketReplyFileMimeType[] =
+  TICKET_REPLY_FILE_TYPES.map((type) => type.mimeType);
+
+/** The largest file of any allowed type. The HTTP schema and the table's CHECK use it. */
+export const TICKET_REPLY_FILE_MAX_BYTES = Math.max(
+  ...TICKET_REPLY_FILE_TYPES.map((type) => type.maxBytes),
+);
+
+/**
+ * How many bytes of support's files one tenant may hold UNDELIVERED at once.
+ *
+ * A file is kept in the database only until Telegram has it: the delivery stamps Telegram's
+ * own `file_id` and clears the bytes in the same transaction. What is left is what Telegram
+ * has not accepted yet — a queue behind a rate limit, a customer who blocked the bot, an
+ * outage — and this is the ceiling on it, so the staging table is never an unbounded blob
+ * store. A reply whose file would cross it is refused (`ticket.attachment_storage_full`)
+ * and writes nothing.
+ */
+export const TICKET_REPLY_FILE_STAGED_MAX_BYTES = 100 * 1024 * 1024;
+
+/**
+ * How long an undelivered file's bytes are kept. After this the bytes are cleared whatever
+ * the delivery did; the message, the file's name, type, size and digest stay in the ticket.
+ * A delivery still waiting then finds no bytes and fails rather than send something else.
+ */
+export const TICKET_REPLY_FILE_RETENTION_DAYS = 7;
+
+/**
+ * Why support's file was refused. Nothing is written for any of them.
+ *
+ * - `EMPTY` — no bytes.
+ * - `TYPE_NOT_ALLOWED` — the declared type is not on the list, or the name's last extension
+ *   does not belong to it.
+ * - `TOO_LARGE` — over the type's own bound.
+ * - `NAME_NOT_ALLOWED` — an earlier part of the name is an executable or script extension
+ *   (`invoice.exe.pdf`): refused rather than trusted to the last dot.
+ * - `CONTENT_MISMATCH` — the bytes are not what the type and the name say: a program renamed
+ *   `x.pdf`, a script renamed `x.txt`, a PNG declared as JPEG.
+ */
+export const TICKET_REPLY_FILE_REFUSALS = [
+  'EMPTY',
+  'TYPE_NOT_ALLOWED',
+  'TOO_LARGE',
+  'NAME_NOT_ALLOWED',
+  'CONTENT_MISMATCH',
+] as const;
+export type TicketReplyFileRefusal = (typeof TICKET_REPLY_FILE_REFUSALS)[number];
+
+/**
+ * Extensions that run something, install something or render active content. A name that
+ * carries one ANYWHERE before its last extension is refused (`NAME_NOT_ALLOWED`); as the
+ * last extension it is already refused by the allow-list.
+ */
+export const TICKET_REPLY_DANGEROUS_EXTENSIONS: ReadonlySet<string> = new Set(
+  (
+    'exe msi msp msc bat cmd com scr pif cpl dll sys lnk reg inf hta gadget ' +
+    'application appx msix sh bash zsh csh ksh fish command run bin elf out so dylib ' +
+    'app dmg pkg deb rpm appimage snap flatpak js mjs cjs jse vbs vbe wsf wsh ws ps1 ' +
+    'psm1 psd1 py pyc pyw pl rb php phtml lua tcl awk jar class war ear apk xapk ' +
+    'apks aab ipa html htm xhtml shtml svg svgz xml xsl swf iso img vhd vhdx vmdk ' +
+    'docm xlsm pptm dotm xlam'
+  ).split(' '),
+);
+
+function startsWithBytes(bytes: Uint8Array, prefix: readonly number[]): boolean {
+  return bytes.byteLength >= prefix.length && prefix.every((byte, index) => bytes[index] === byte);
+}
+
+/**
+ * Whether the bytes are plain text a customer can safely open: valid UTF-8, no NUL, no C0
+ * control other than a tab, a line feed, a form feed and a carriage return, no DEL or C1
+ * control, and neither an interpreter line (`#!`) nor markup (`<` first) at the start.
+ * Decoded by hand rather than through `TextDecoder`, so the rule is the same in the API and
+ * the browser whatever their runtimes provide.
+ */
+function isPlainText(bytes: Uint8Array): boolean {
+  let index = 0;
+  // A UTF-8 byte-order mark is allowed and skipped.
+  if (startsWithBytes(bytes, [0xef, 0xbb, 0xbf])) index = 3;
+  let firstVisible: number | null = null;
+  while (index < bytes.byteLength) {
+    const lead = bytes[index] ?? 0;
+    if (lead < 0x80) {
+      if (lead === 0x7f) return false;
+      if (lead < 0x20 && lead !== 0x09 && lead !== 0x0a && lead !== 0x0c && lead !== 0x0d) {
+        return false;
+      }
+      if (firstVisible === null && lead > 0x20) firstVisible = index;
+      index += 1;
+      continue;
+    }
+    // Multi-byte: the lead byte decides the length; overlongs and surrogates are refused.
+    let length: number;
+    let min: number;
+    let codePoint: number;
+    if (lead >= 0xc2 && lead <= 0xdf) {
+      length = 2;
+      min = 0x80;
+      codePoint = lead & 0x1f;
+    } else if (lead >= 0xe0 && lead <= 0xef) {
+      length = 3;
+      min = 0x800;
+      codePoint = lead & 0x0f;
+    } else if (lead >= 0xf0 && lead <= 0xf4) {
+      length = 4;
+      min = 0x10000;
+      codePoint = lead & 0x07;
+    } else {
+      return false;
+    }
+    if (index + length > bytes.byteLength) return false;
+    for (let offset = 1; offset < length; offset += 1) {
+      const next = bytes[index + offset] ?? 0;
+      if ((next & 0xc0) !== 0x80) return false;
+      codePoint = (codePoint << 6) | (next & 0x3f);
+    }
+    if (codePoint < min || codePoint > 0x10ffff) return false;
+    if (codePoint >= 0xd800 && codePoint <= 0xdfff) return false;
+    // C1 controls are not text either.
+    if (codePoint <= 0x9f) return false;
+    if (firstVisible === null) firstVisible = index;
+    index += length;
+  }
+  if (firstVisible === null) return false;
+  const first = bytes[firstVisible];
+  // `<` first: HTML, SVG, XML, a PHP opening tag — markup, not text.
+  if (first === 0x3c) return false;
+  // `#!` first: an interpreter line, which is a script whatever it is named.
+  if (first === 0x23 && bytes[firstVisible + 1] === 0x21) return false;
+  return true;
+}
+
+/**
+ * The allowed type the bytes THEMSELVES are, by signature, or `null` — never by what the
+ * caller declared. JPEG `FF D8 FF`, PNG's eight-byte signature, PDF `%PDF-` at offset zero,
+ * and plain text by `isPlainText`. A Windows program (`MZ`), an ELF or Mach-O binary, a ZIP
+ * (and so a JAR, an APK or an Office document) and a script with an interpreter line are
+ * none of these, and answer `null`.
+ */
+export function sniffTicketReplyFile(bytes: Uint8Array): TicketReplyFileMimeType | null {
+  if (startsWithBytes(bytes, [0xff, 0xd8, 0xff])) return 'image/jpeg';
+  if (startsWithBytes(bytes, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) {
+    return 'image/png';
+  }
+  if (startsWithBytes(bytes, [0x25, 0x50, 0x44, 0x46, 0x2d])) return 'application/pdf';
+  if (isPlainText(bytes)) return 'text/plain';
+  return null;
+}
+
+/** The allowed type a declared MIME type names, or `undefined`. */
+export function ticketReplyFileTypeOf(mimeType: string): TicketReplyFileType | undefined {
+  const declared = mimeType.trim().toLowerCase();
+  return TICKET_REPLY_FILE_TYPES.find((type) => type.mimeType === declared);
+}
+
+/** The dot-separated parts of a file name's last path segment, lowercased. */
+function nameParts(fileName: string): string[] {
+  const base = fileName.split(/[/\\]/u).pop() ?? '';
+  return base
+    .trim()
+    .toLowerCase()
+    .split('.')
+    .map((part) => part.trim());
+}
+
+/**
+ * Whether support may send this file, and if not why — the ONE rule the Web Admin asks
+ * before uploading and the API asks before storing. Nothing about it is trusted to the
+ * browser: the API decodes the bytes and asks again.
+ *
+ * Declared type, size, name and bytes, in that order: the declared type must be on the
+ * allow-list, the bytes within that type's bound, the name's last extension one of the
+ * type's and no earlier part of it an executable's, and the bytes' own signature the
+ * declared type.
+ */
+export function ticketReplyFileRefusal(file: {
+  readonly fileName: string;
+  readonly mimeType: string;
+  readonly bytes: Uint8Array;
+}): TicketReplyFileRefusal | null {
+  if (file.bytes.byteLength === 0) return 'EMPTY';
+  const type = ticketReplyFileTypeOf(file.mimeType);
+  if (type === undefined) return 'TYPE_NOT_ALLOWED';
+  if (file.bytes.byteLength > type.maxBytes) return 'TOO_LARGE';
+  const parts = nameParts(file.fileName);
+  if (parts.length < 2) return 'TYPE_NOT_ALLOWED';
+  const extension = parts[parts.length - 1] ?? '';
+  if (!(type.extensions as readonly string[]).includes(extension)) return 'TYPE_NOT_ALLOWED';
+  if (parts.slice(1, -1).some((part) => TICKET_REPLY_DANGEROUS_EXTENSIONS.has(part))) {
+    return 'NAME_NOT_ALLOWED';
+  }
+  if (sniffTicketReplyFile(file.bytes) !== type.mimeType) return 'CONTENT_MISMATCH';
+  return null;
+}
+
+/**
+ * The name support's file is stored and SENT under: the last path segment, control
+ * characters, quotes and shell or path punctuation replaced, bounded, and ending in the
+ * type's own extension whatever it ended in before — so the customer's device is told the
+ * type the bytes were verified to be. An empty stem becomes `file`.
+ */
+export function ticketReplyFileNameOf(raw: string, type: TicketReplyFileType): string {
+  const base = raw.split(/[/\\]/u).pop() ?? '';
+  const cleaned = Array.from(base)
+    .filter((character) => {
+      const code = character.codePointAt(0) ?? 0;
+      return !(code < 0x20 || (code >= 0x7f && code <= 0x9f));
+    })
+    .join('')
+    .replace(/["'`<>|:*?]/gu, '_')
+    .trim();
+  const dot = cleaned.lastIndexOf('.');
+  const stem = (dot >= 0 ? cleaned.slice(0, dot) : cleaned).replace(/^\.+/u, '').trim();
+  const suffix = `.${type.extension}`;
+  const room = TICKET_ATTACHMENT_FILE_NAME_MAX_LENGTH - suffix.length;
+  const bounded = Array.from(stem === '' ? 'file' : stem)
+    .slice(0, room)
+    .join('')
+    .trim();
+  return `${bounded === '' ? 'file' : bounded}${suffix}`;
+}
+
 // --- Rails -----------------------------------------------------------------------------
 
 /** How many tickets one customer may have open at once. A rail against a loop, not a policy. */
@@ -396,6 +680,12 @@ export const ticketMessageViewSchema = z.object({
   systemEvent: z.enum(TICKET_SYSTEM_EVENTS).nullable(),
   attachment: ticketAttachmentViewSchema.nullable(),
   delivery: z.enum(CUSTOMER_NOTIFICATION_STATES).nullable(),
+  /**
+   * HF-A7: how far support's FILE got — the `TICKET_REPLY_ATTACHMENT` row's own state, beside
+   * the text's `delivery`. The two are separate sends and each has its own outcome. `null`
+   * for a message that sent no file.
+   */
+  attachmentDelivery: z.enum(CUSTOMER_NOTIFICATION_STATES).nullable(),
   createdAt: z.iso.datetime(),
 });
 export type TicketMessageView = z.infer<typeof ticketMessageViewSchema>;
@@ -450,9 +740,31 @@ export const ticketListResponseSchema = z.object({
 });
 export type TicketListResponse = z.infer<typeof ticketListResponseSchema>;
 
+/**
+ * Support's file on a reply (HF-A7): its name, its declared type, and its bytes as base64 —
+ * the tenant media upload's shape. Bounded here by the DECODED size of the largest allowed
+ * type; the API decodes the bytes and judges them with `ticketReplyFileRefusal`, which holds
+ * each type to its own bound and to its own signature.
+ */
+export const ticketReplyAttachmentSchema = z.object({
+  fileName: z.string().min(1).max(255),
+  mimeType: z.string().min(1).max(100),
+  contentBase64: z
+    .string()
+    .min(4)
+    .regex(/^[A-Za-z0-9+/]+={0,2}$/u)
+    .refine((value) => value.length % 4 === 0, { message: 'padded base64' })
+    .refine((value) => Math.floor((value.length * 3) / 4) <= TICKET_REPLY_FILE_MAX_BYTES + 3, {
+      message: `at most ${TICKET_REPLY_FILE_MAX_BYTES} bytes`,
+    }),
+});
+export type TicketReplyAttachment = z.infer<typeof ticketReplyAttachmentSchema>;
+
 export const ticketReplyRequestSchema = z.object({
   idempotencyKey: z.string().min(8).max(255),
   text: z.string().max(TICKET_MESSAGE_MAX_LENGTH * 4),
+  /** Optional: a reply is always its text, and may carry one file beside it. */
+  attachment: ticketReplyAttachmentSchema.optional(),
 });
 export type TicketReplyRequest = z.infer<typeof ticketReplyRequestSchema>;
 

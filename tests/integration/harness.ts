@@ -128,6 +128,8 @@ export async function resetDatabase(db: Database): Promise<void> {
        -- backtick in a comment ends it and the parse error lands twenty lines away.
        -- WP-A7: ticket messages before their tickets, tickets before the categories,
        -- customers, services, orders and payments they name.
+       -- HF-A7: support's staged files, before the messages and tickets they name.
+       ticket_reply_files,
        ticket_messages, tickets, ticket_categories, ticket_category_seeds,
        -- Package D: the custom service, before the orders, panels and customers it names.
        order_custom_service_terms, custom_service_price_rules, custom_service_locations,

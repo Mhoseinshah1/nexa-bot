@@ -266,6 +266,18 @@ export const CUSTOMER_NOTIFICATION_KINDS = [
   'PAYMENT_PENDING_REMINDER',
   /** An order's own window is about to close unpaid. `orders.id` is the subject. */
   'ORDER_PENDING_REMINDER',
+  /**
+   * HF-A7. The FILE support attached to a reply. `ticket_messages.id` is the subject — the
+   * same message `TICKET_REPLY` names, so one reply with a file is two rows and two sends,
+   * each with its own outcome: the text is never held hostage to a file Telegram refuses,
+   * and a file is never re-sent because its text was.
+   *
+   * Not a payload either (ADR 0030 §1): the dispatcher reads the bytes, their type and their
+   * name from `ticket_reply_files` by the message id at send time, and the caption's number
+   * and category from the ticket. Once Telegram has the file, the delivery stamps Telegram's
+   * `file_id` on that row and clears the bytes in the same transaction.
+   */
+  'TICKET_REPLY_ATTACHMENT',
 ] as const;
 export type CustomerNotificationKind = (typeof CUSTOMER_NOTIFICATION_KINDS)[number];
 export const customerNotificationKindSchema = z.enum(CUSTOMER_NOTIFICATION_KINDS);
@@ -407,6 +419,12 @@ export const CUSTOMER_NOTIFICATION_PRECONDITIONS: Readonly<
    */
   PAYMENT_PENDING_REMINDER: true,
   ORDER_PENDING_REMINDER: true,
+  /*
+   * HF-A7. `false`, for `TICKET_REPLY`'s reason: the file is part of a reply that was
+   * written, and a late copy is still the answer. A file whose bytes were cleared before it
+   * left is not "no longer true" — the dispatcher finds nothing to send and FAILS it.
+   */
+  TICKET_REPLY_ATTACHMENT: false,
 };
 
 /**
@@ -472,6 +490,8 @@ export const CUSTOMER_NOTIFICATION_QUIET_HOURS: Readonly<
    */
   PAYMENT_PENDING_REMINDER: true,
   ORDER_PENDING_REMINDER: true,
+  // HF-A7: support's file on a ticket reply is part of the reply, sent with its text — never held.
+  TICKET_REPLY_ATTACHMENT: false,
 };
 
 /**
@@ -536,6 +556,8 @@ export const CUSTOMER_NOTIFICATION_TEMPLATES: Readonly<
   WALLET_LOW_BALANCE: 'bot.wallet.low_balance',
   PAYMENT_PENDING_REMINDER: 'bot.payment.pending_reminder',
   ORDER_PENDING_REMINDER: 'bot.order.pending_reminder',
+  // HF-A7: the file's caption. PLAIN_TEXT, so an over-long override is cut, never refused.
+  TICKET_REPLY_ATTACHMENT: 'bot.ticket.support_attachment',
 };
 
 /**

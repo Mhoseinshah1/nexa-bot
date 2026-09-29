@@ -140,6 +140,13 @@ export interface OpsGroupRepository {
     input: { readonly chatId: string; readonly botInstanceId: string; readonly now: Date },
     tx?: unknown,
   ): Promise<boolean>;
+  /**
+   * HF-A4: a message spent its allowance against a group recorded HEALTHY, so that record
+   * is no longer evidence. The CONNECTED, HEALTHY group becomes UNVERIFIED — checked again
+   * on the worker's next pass — and nothing else: a PROBLEM group is already rechecked on
+   * its own schedule, and a disconnected one is left alone. A conditional UPDATE.
+   */
+  markHealthyForRecheck(scope: ScopeContext, input: { readonly now: Date }): Promise<boolean>;
   noteDelivered(
     scope: ScopeContext,
     input: { readonly chatId: string; readonly category: string; readonly at: Date },

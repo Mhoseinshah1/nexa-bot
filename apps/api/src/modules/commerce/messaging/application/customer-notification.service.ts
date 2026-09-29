@@ -10,6 +10,8 @@ import {
   type Clock,
   type CustomerNotificationKind,
   type TemplateValues,
+  type TicketAttachmentKind,
+  type TicketReplyFileMimeType,
   type TenantContext,
   type UnitOfWork,
 } from '@nexa/contracts';
@@ -131,6 +133,14 @@ export interface NotificationSweepReport {
    * and only this one can produce a second message to the same customer.
    */
   readonly lost: number;
+}
+
+/** A file a notification carries (HF-A7): support's, sent by bytes. */
+export interface NotificationFile {
+  readonly kind: TicketAttachmentKind;
+  readonly bytes: Uint8Array;
+  readonly fileName: string;
+  readonly mimeType: TicketReplyFileMimeType;
 }
 
 /** The ledger reasons a payment's credit sentence can name. */
@@ -297,6 +307,30 @@ export interface CustomerNotificationDeps {
       scope: TenantContext,
       messageId: string,
     ): Promise<{ readonly values: TemplateValues; readonly ticketId: string } | null>;
+    /**
+     * HF-A7: what `TICKET_REPLY_ATTACHMENT` sends — support's file and its caption's values,
+     * read at send time from the file row the MESSAGE id names. A reader, not a payload.
+     * Null when there is nothing to send (no file, or its bytes already cleared).
+     */
+    attachmentFacts(
+      scope: TenantContext,
+      messageId: string,
+    ): Promise<{
+      readonly values: TemplateValues;
+      readonly ticketId: string;
+      readonly file: NotificationFile;
+    } | null>;
+    /**
+     * HF-A7: Telegram accepted the file — stamp its handle and clear the staged bytes, in
+     * the transaction that records the delivery.
+     */
+    attachmentDelivered(
+      scope: TenantContext,
+      messageId: string,
+      file: { readonly fileId: string; readonly fileUniqueId: string },
+      at: Date,
+      tx: TransactionScope,
+    ): Promise<boolean>;
   };
   /**
    * HF-A9: the tenant's quiet window. Asked once per pass; a reminder kind
@@ -433,7 +467,15 @@ export class CustomerNotificationService {
   ): Promise<{
     readonly values: TemplateValues;
     readonly buttons: readonly CustomerButton[];
+    /** HF-A7: a file to send, with the kind's template as its caption, instead of text. */
+    readonly file?: NotificationFile;
   } | null> {
+    if (row.kind === 'TICKET_REPLY_ATTACHMENT') {
+      if (this.deps.tickets === undefined) return null;
+      const facts = await this.deps.tickets.attachmentFacts(scope, row.subjectId);
+      if (facts === null) return null;
+      return { values: facts.values, buttons: [], file: facts.file };
+    }
     if (row.kind === 'SERVICE_TRANSFER_RECEIVED') {
       if (this.deps.serviceTransfers === undefined) return null;
       const facts = await this.deps.serviceTransfers.notificationFacts(scope, row.subjectId);
@@ -771,14 +813,37 @@ export class CustomerNotificationService {
       );
       if (!started) return 'lost';
 
-      const result = await this.deps.messenger.send(scope, {
-        chatId: lookup.contact.chatId,
-        botInstanceId: row.botInstanceId,
-        templateKey: CUSTOMER_NOTIFICATION_TEMPLATES[row.kind],
-        values: content.values,
-        // Absent rather than empty: Telegram draws an empty keyboard as a blank attachment.
-        ...(content.buttons.length === 0 ? {} : { buttons: content.buttons }),
-      });
+      /*
+       * HF-A7: a kind that carries a FILE goes up as one upload, its template the caption.
+       * Still ONE Telegram request for one row, so the outcome below means exactly what it
+       * means for text — including that an UNKNOWN upload is never sent again.
+       */
+      const result =
+        content.file === undefined
+          ? await this.deps.messenger.send(scope, {
+              chatId: lookup.contact.chatId,
+              botInstanceId: row.botInstanceId,
+              templateKey: CUSTOMER_NOTIFICATION_TEMPLATES[row.kind],
+              values: content.values,
+              // Absent rather than empty: Telegram draws an empty keyboard as a blank attachment.
+              ...(content.buttons.length === 0 ? {} : { buttons: content.buttons }),
+            })
+          : await this.deps.messenger.sendFile(scope, {
+              chatId: lookup.contact.chatId,
+              botInstanceId: row.botInstanceId,
+              kind: content.file.kind,
+              source: {
+                kind: 'BYTES',
+                bytes: content.file.bytes,
+                fileName: content.file.fileName,
+                mimeType: content.file.mimeType,
+              },
+              caption: {
+                templateKey: CUSTOMER_NOTIFICATION_TEMPLATES[row.kind],
+                values: content.values,
+              },
+              ...(content.buttons.length === 0 ? {} : { buttons: content.buttons }),
+            });
 
       const at = this.deps.clock.now();
 
@@ -811,8 +876,8 @@ export class CustomerNotificationService {
               ? 'FAILED'
               : 'PENDING';
 
-      const recorded = await this.deps.uow.run(scope, async (tx) =>
-        this.deps.notifications.record(
+      const recorded = await this.deps.uow.run(scope, async (tx) => {
+        const moved = await this.deps.notifications.record(
           scope,
           row.id,
           to,
@@ -823,8 +888,23 @@ export class CustomerNotificationService {
           },
           at,
           tx,
-        ),
-      );
+        );
+        /*
+         * HF-A7: a delivered file's handle is stamped and its staged bytes cleared in THIS
+         * transaction, so "delivered" and "the bytes are gone" commit together. A delivery
+         * whose answer carried no readable handle keeps the bytes until the retention sweep.
+         */
+        if (
+          moved &&
+          to === 'DELIVERED' &&
+          content.file !== undefined &&
+          result.file !== undefined &&
+          this.deps.tickets !== undefined
+        ) {
+          await this.deps.tickets.attachmentDelivered(scope, row.subjectId, result.file, at, tx);
+        }
+        return moved;
+      });
       if (!recorded) return 'lost';
 
       return to === 'DELIVERED'

@@ -1020,6 +1020,21 @@ export class OpsGroupService {
     await this.deps.repository.addProblem(scope, { chatId, problem, now: this.deps.clock.now() });
   }
 
+  /**
+   * HF-A4: a message routed to the group was preserved after failures that were not about
+   * the message — Telegram unreachable for longer than the allowance lasts, a topic that
+   * could not be recreated. The group is checked again on the worker's next pass; a check
+   * that finds it healthy puts the preserved messages back in the queue (`commitFindings`),
+   * so an outage the group recovers from does not leave them waiting for an operator.
+   *
+   * Bookkeeping, like `noteProblem`: unaudited, and it decides nothing about the group but
+   * that it should be looked at. It cannot cycle faster than a message can exhaust — ten
+   * attempts on the lane's back-off — and only a check that reaches Telegram requeues.
+   */
+  async noteExhausted(scope: ScopeContext): Promise<void> {
+    await this.deps.repository.markHealthyForRecheck(scope, { now: this.deps.clock.now() });
+  }
+
   // -------------------------------------------------------------------------
   // Internals
   // -------------------------------------------------------------------------
@@ -1536,6 +1551,10 @@ export class OpsGroupRouter implements OpsTopicRouter, OpsGroupDestinationReader
 
   problem(tenantId: string, chatId: string, problem: OpsLogGroupProblem): Promise<void> {
     return this.service.noteProblem(scopeOf(tenantId), chatId, problem);
+  }
+
+  exhausted(tenantId: string): Promise<void> {
+    return this.service.noteExhausted(scopeOf(tenantId));
   }
 }
 

@@ -134,8 +134,11 @@
 			# nothing is third-party, so this is as tight as the application
 			# actually needs. `font-src 'self'` is what the font needs and it was
 			# already here; the sentence above it said "one stylesheet" and
-			# stopped, one asset class out of date.
-			Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"
+			# stopped, one asset class out of date. `img-src blob:` is for the
+			# previews the pages build from bytes they fetched from this origin
+			# (a payment receipt, a ticket attachment) with URL.createObjectURL;
+			# without it those previews render as broken images behind Caddy.
+			Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"
 			X-Content-Type-Options "nosniff"
 			Referrer-Policy "no-referrer"
 			Permissions-Policy "geolocation=(), camera=(), microphone=()"

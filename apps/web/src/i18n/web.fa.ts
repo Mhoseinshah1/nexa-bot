@@ -1707,6 +1707,32 @@ export const WEB_FA = {
   'web.client_apps_conflict':
     'این برنامه از زمانی که باز کردید تغییر کرده است. نسخهٔ تازه را بارگذاری کنید و تغییر را دوباره اعمال کنید.',
   'web.client_apps_limit': 'سقف تعداد برنامه‌ها پر شده است. یکی را حذف کنید.',
+  // HF-A10 — an entry's optional picture.
+  'web.client_apps_image_title': 'تصویر برنامه',
+  'web.client_apps_image_hint':
+    'اختیاری. ربات این تصویر را پیش از صفحهٔ برنامه می‌فرستد. اگر تصویری نباشد یا تلگرام آن را نپذیرد، همان صفحهٔ متنی با نماد (ایموجی) فرستاده می‌شود. دکمه‌های فهرست برنامه‌ها همیشه فقط نماد و نام را نشان می‌دهند.',
+  'web.client_apps_image_none': 'تصویری تنظیم نشده است؛ ربات نماد و متن را نشان می‌دهد.',
+  'web.client_apps_image_save_first': 'برای افزودن تصویر، ابتدا برنامه را ذخیره کنید.',
+  'web.client_apps_image_file': 'فایل تصویر',
+  'web.client_apps_image_file_hint':
+    'PNG یا JPEG، حداکثر ۵۱۲ کیلوبایت، هر ضلع بین ۱۶ تا ۲۰۴۸ پیکسل. SVG پذیرفته نمی‌شود.',
+  'web.client_apps_image_upload': 'بارگذاری تصویر',
+  'web.client_apps_image_uploading': 'در حال بارگذاری…',
+  'web.client_apps_image_clear': 'حذف تصویر',
+  'web.client_apps_image_uploaded': 'تصویر برنامه ذخیره شد.',
+  'web.client_apps_image_cleared': 'تصویر برنامه حذف شد.',
+  'web.client_apps_image_alt': 'تصویر ذخیره‌شدهٔ برنامه',
+  'web.client_apps_image_picked_alt': 'پیش‌نمایش فایل انتخاب‌شده',
+  'web.client_apps_image_type': 'نوع فایل',
+  'web.client_apps_image_size': 'اندازه',
+  'web.client_apps_image_dimensions': 'ابعاد (پیکسل)',
+  'web.client_apps_image_invalid_type': 'فقط فایل PNG یا JPEG پذیرفته می‌شود.',
+  'web.client_apps_image_empty': 'فایل خالی است.',
+  'web.client_apps_image_too_large': 'اندازهٔ فایل بیش از ۵۱۲ کیلوبایت است.',
+  'web.client_apps_image_mismatch': 'محتوای فایل با نوع اعلام‌شده‌اش هم‌خوانی ندارد.',
+  'web.client_apps_image_unreadable': 'ابعاد تصویر خوانده نشد؛ فایل ناقص یا خراب است.',
+  'web.client_apps_image_bad_dimensions':
+    'هر ضلع تصویر باید بین ۱۶ تا ۲۰۴۸ پیکسل باشد و ضلع بلندتر بیش از ۲۰ برابر ضلع کوتاه‌تر نباشد.',
   'web.payment_resolution': 'نتیجهٔ بدون دریافت وجه',
   'web.payment_destination': 'مقصد واریز اعلام‌شده',
   'web.payment_destination_label': 'عنوان حساب',
@@ -3733,7 +3759,7 @@ export const WEB_FA = {
   'web.opsgroup_queue_pending': 'در انتظار ارسال',
   'web.opsgroup_queue_preserved': 'ارسال‌نشده (نگه‌داشته‌شده)',
   'web.opsgroup_queue_hint':
-    'گزارشی که پس از چند بار تلاش ارسال نشود حذف نمی‌شود و اینجا می‌ماند. پس از رفع مشکل، دوباره ارسال می‌شود.',
+    'هر گزارش پیش از ارسال ثبت می‌شود و هیچ گزارشی حذف نمی‌شود، حتی وقتی گروه متصل نیست. گزارشی که پس از ۱۰ بار تلاش ارسال نشود اینجا نگه داشته می‌شود و پس از اتصال مجدد یا رفع مشکل، خودکار دوباره ارسال می‌شود؛ این دکمه همین کار را همین حالا انجام می‌دهد.',
   'web.opsgroup_requeue': 'ارسال مجدد گزارش‌های ارسال‌نشده',
   'web.opsgroup_requeued_done': 'تعداد گزارش‌هایی که دوباره در صف ارسال قرار گرفت:',
   'web.opsgroup_connect_title': 'اتصال گروه تلگرام',
@@ -4012,6 +4038,23 @@ export const WEB_FA = {
   'web.ticket_reply_send': 'ارسال پاسخ',
   'web.ticket_reply_sent': 'پاسخ ثبت شد و برای ارسال به مشتری در صف قرار گرفت.',
   'web.ticket_reply_closed': 'این تیکت بسته است. برای پاسخ، ابتدا آن را دوباره باز کنید.',
+  // HF-A7: support's file on a reply.
+  'web.ticket_reply_file': 'پیوست (اختیاری)',
+  'web.ticket_reply_file_hint':
+    'تصویر JPEG یا PNG تا ۵ مگابایت، فایل PDF تا ۱۰ مگابایت یا فایل متنی TXT تا ۱ مگابایت. فایل اجرایی، اسکریپت، فایل فشرده و صفحهٔ وب پذیرفته نمی‌شود. پیوست جدا از متن پاسخ برای مشتری فرستاده می‌شود.',
+  'web.ticket_reply_file_clear': 'حذف پیوست',
+  'web.ticket_reply_file_empty': 'این فایل خالی است.',
+  'web.ticket_reply_file_type':
+    'این نوع فایل مجاز نیست. فقط تصویر JPEG یا PNG، فایل PDF یا فایل متنی TXT با پسوند درست پذیرفته می‌شود.',
+  'web.ticket_reply_file_too_large':
+    'حجم فایل بیش از حد مجاز است: تصویر تا ۵ مگابایت، PDF تا ۱۰ مگابایت و فایل متنی تا ۱ مگابایت.',
+  'web.ticket_reply_file_name':
+    'نام فایل پسوند یک فایل اجرایی یا اسکریپت را در خود دارد. نام فایل را تغییر دهید.',
+  'web.ticket_reply_file_content':
+    'محتوای فایل با نوع و پسوند آن یکی نیست؛ ممکن است فایل اجرایی یا اسکریپتی باشد که تغییر نام داده شده است.',
+  'web.ticket_reply_file_unreadable': 'این فایل خوانده نشد. دوباره انتخاب کنید.',
+  'web.ticket_attachment_delivery': 'ارسال پیوست',
+  'web.ticket_attachment_alt_support': 'تصویر ارسالی پشتیبانی',
   'web.ticket_categories_title': 'دسته‌های تیکت',
   'web.ticket_categories_hint':
     'دسته‌هایی که مشتری هنگام ثبت تیکت در ربات انتخاب می‌کند. دسته‌ها حذف نمی‌شوند؛ دستهٔ پنهان از فهرست ربات برداشته می‌شود.',
@@ -4038,6 +4081,8 @@ export const WEB_FA = {
   'web.ticket_fault_category_missing': 'این دسته پیدا نشد.',
   'web.ticket_fault_not_found': 'این تیکت پیدا نشد.',
   'web.ticket_fault_attachment': 'این پیوست دیگر از تلگرام قابل دریافت نیست.',
+  'web.ticket_fault_storage_full':
+    'پیوست‌های زیادی هنوز در انتظار ارسال به تلگرام هستند. کمی بعد دوباره تلاش کنید یا پاسخ را بدون پیوست بفرستید.',
   'web.ticket_fault_retry':
     'این درخواست پیش‌تر با متن دیگری ثبت شده است. صفحه را تازه کنید و دوباره بفرستید.',
 } as const;

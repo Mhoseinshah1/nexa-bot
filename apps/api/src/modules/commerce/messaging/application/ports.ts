@@ -8,6 +8,7 @@ import type {
   TenantContext,
   UserId,
   SubscriptionFileMediaType,
+  TicketReplyFileMimeType,
 } from '@nexa/contracts';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 
@@ -225,7 +226,12 @@ export type CustomerFileSource =
        * is sent as (Package E) — each vetted in `@nexa/contracts`, never a provider's
        * string passed through.
        */
-      readonly mimeType: 'image/png' | 'image/jpeg' | SubscriptionFileMediaType;
+      readonly mimeType:
+        | 'image/png'
+        | 'image/jpeg'
+        | SubscriptionFileMediaType
+        // HF-A7: support's file on a ticket reply, from its own vetted allow-list.
+        | TicketReplyFileMimeType;
     };
 
 /**
@@ -271,6 +277,12 @@ export interface CustomerSendResult {
    * than reading a 400 that names neither the field nor the bound.
    */
   readonly reason?: CustomerSendRefusal;
+  /**
+   * HF-A7: Telegram's handle for the file an upload delivered, read from its answer —
+   * present only with `DELIVERED`, from `sendFile`, and only when the answer named one. It
+   * is what lets the staged bytes be cleared once Telegram holds them.
+   */
+  readonly file?: { readonly fileId: string; readonly fileUniqueId: string };
 }
 
 /**

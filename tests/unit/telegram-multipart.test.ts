@@ -3,6 +3,7 @@ import { encodeMultipart } from '../../apps/api/src/infrastructure/telegram/mult
 import {
   fileMessageBody,
   fileUploadBody,
+  sentFileOf,
   telegramButtonMarkup,
   telegramSend,
   type TelegramRequest,
@@ -185,6 +186,33 @@ describe('telegramSend with an upload', () => {
       },
     },
   };
+
+  it('reads the delivered file’s handle from a media answer, and nothing it does not recognise (HF-A7)', async () => {
+    respond(200, {
+      ok: true,
+      result: {
+        message_id: 9,
+        photo: [
+          { file_id: 'small', file_unique_id: 'u-small' },
+          { file_id: 'large', file_unique_id: 'u-large' },
+        ],
+      },
+    });
+    expect(await telegramSend(upload)).toEqual({
+      outcome: 'SUCCEEDED',
+      messageId: 9,
+      file: { fileId: 'large', fileUniqueId: 'u-large' },
+    });
+    expect(sentFileOf({ document: { file_id: 'd', file_unique_id: 'u-d' } })).toEqual({
+      fileId: 'd',
+      fileUniqueId: 'u-d',
+    });
+    expect(sentFileOf({ document: { file_id: 'd' } })).toBeNull();
+    expect(sentFileOf({ document: { file_id: '', file_unique_id: 'u' } })).toBeNull();
+    expect(sentFileOf({ photo: [] })).toBeNull();
+    expect(sentFileOf({ message_id: 1, text: 'hi' })).toBeNull();
+    expect(sentFileOf(null)).toBeNull();
+  });
 
   it('posts multipart to the named method and reads the message id', async () => {
     respond(200, { ok: true, result: { message_id: 9 } });

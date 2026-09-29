@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import {
   COMMERCE_ERROR_CODES,
   PLATFORM_ERROR_CODES,
@@ -7,12 +8,16 @@ import {
   TICKET_MESSAGES_MAX_PER_TICKET,
   TICKET_OPEN_MAX_PER_CUSTOMER,
   TICKET_PAGE_MAX,
+  TICKET_REPLY_FILE_STAGED_MAX_BYTES,
   errors,
   isTicketTextWithinBound,
   normalizeTicketText,
   telegramUserIdSchema,
   ticketAttachmentRefusal,
   ticketManualEvent,
+  ticketReplyFileNameOf,
+  ticketReplyFileRefusal,
+  ticketReplyFileTypeOf,
   ticketStatusAfterMessage,
   ticketSubjectOf,
   uuidV7Schema,
@@ -32,6 +37,8 @@ import {
   type TicketId,
   type TicketMessageId,
   type TicketPriority,
+  type TicketReplyAttachment,
+  type TicketReplyFileMimeType,
   type TicketStatus,
   type TicketSystemEvent,
   type UnitOfWork,
@@ -64,6 +71,7 @@ import type {
   TicketMessageListItem,
   TicketMessageRecord,
   TicketRecord,
+  TicketReplyFileRecord,
   TicketRepository,
 } from './ports.js';
 import { TICKETS_VIEW_PERMISSION } from './ticket-category.service.js';
@@ -423,6 +431,8 @@ export class TicketService {
     readonly ticket: TicketRecord;
     readonly messages: readonly TicketMessageRecord[];
     readonly messageCount: number;
+    /** Which of `messages` carry a file from support (HF-A7). */
+    readonly filed: ReadonlySet<string>;
   } | null> {
     const id = uuidV7Schema.safeParse(ticketId);
     if (!id.success) return null;
@@ -435,7 +445,12 @@ export class TicketService {
       return null;
     }
     const latest = await this.deps.tickets.latestMessages(scope, ticket.id, messageCount);
-    return { ticket, messages: latest.messages, messageCount: latest.messageCount };
+    return {
+      ticket,
+      messages: latest.messages,
+      messageCount: latest.messageCount,
+      filed: latest.filed,
+    };
   }
 
   /**
@@ -458,6 +473,56 @@ export class TicketService {
       values: { number: ticket.number, category: ticket.categoryTitle, text: message.body },
       ticketId: ticket.id,
     };
+  }
+
+  /**
+   * HF-A7: what `TICKET_REPLY_ATTACHMENT` sends — support's file, its type and its name, and
+   * the caption's ticket number and category — read from the file's row and the ticket by
+   * the MESSAGE id the notification names. Null when there is no such file or its bytes were
+   * already cleared: the dispatcher then fails the row rather than send anything else.
+   *
+   * Unguarded, for `notificationFacts`' reason: its one caller is the notification lane.
+   */
+  async attachmentFacts(
+    scope: TenantContext,
+    messageId: string,
+  ): Promise<{
+    readonly values: TemplateValues;
+    readonly ticketId: string;
+    readonly file: {
+      readonly kind: TicketAttachmentKind;
+      readonly bytes: Uint8Array;
+      readonly fileName: string;
+      readonly mimeType: TicketReplyFileMimeType;
+    };
+  } | null> {
+    const file = await this.deps.tickets.findReplyFile(scope, messageId);
+    if (file === null || !file.staged) return null;
+    const [ticket, bytes] = await Promise.all([
+      this.deps.tickets.findById(scope, file.ticketId),
+      this.deps.tickets.replyFileContent(scope, messageId),
+    ]);
+    if (ticket === null || bytes === null) return null;
+    return {
+      values: { number: ticket.number, category: ticket.categoryTitle },
+      ticketId: ticket.id,
+      file: { kind: file.kind, bytes, fileName: file.fileName, mimeType: file.mimeType },
+    };
+  }
+
+  /**
+   * HF-A7: Telegram accepted support's file. Its `file_id` is stamped and the bytes cleared,
+   * in the transaction that records the delivery — from here the Web Admin reads the file
+   * back from Telegram, and the staging area holds nothing for it. Called by the lane only.
+   */
+  async attachmentDelivered(
+    scope: TenantContext,
+    messageId: string,
+    file: { readonly fileId: string; readonly fileUniqueId: string },
+    at: Date,
+    tx: TransactionScope,
+  ): Promise<boolean> {
+    return this.deps.tickets.markReplyFileDelivered(scope, messageId, file, at, tx);
   }
 
   // --- support, through the Web Admin -----------------------------------------------------
@@ -549,7 +614,13 @@ export class TicketService {
   async reply(
     scope: TenantContext,
     actor: ActorContext,
-    input: { readonly ticketId: string; readonly text: string; readonly idempotencyKey: string },
+    input: {
+      readonly ticketId: string;
+      readonly text: string;
+      /** HF-A7: one file beside the text, judged here before anything is written. */
+      readonly attachment?: TicketReplyAttachment | null;
+      readonly idempotencyKey: string;
+    },
   ): Promise<TicketPosted> {
     const body = normalizeTicketText(input.text);
     if (body === null || !isTicketTextWithinBound(body)) throw this.messageInvalid();
@@ -557,9 +628,25 @@ export class TicketService {
     const denial = { action: 'ticket.reply', entityType: 'Ticket', entityId: ticketId };
     await this.authorize(scope, actor, REPLY_PERMISSION, denial);
     const adminId = this.adminIdOf(actor);
+    const file =
+      input.attachment === undefined || input.attachment === null
+        ? null
+        : replyFileOf(input.attachment);
     // Namespaced by surface and administrator: two surfaces, or two people, never share a key.
     const key = `${actor.surface}:${adminId}:${input.idempotencyKey}`;
-    const requestHash = hashRequest({ op: 'admin-reply', ticketId, body });
+    /*
+     * The file is part of the request: the same key with another file is another command.
+     * Its digest, never its bytes. A reply with no file hashes exactly as it always did, so a
+     * key in flight across the release that added files still replays.
+     */
+    const requestHash = hashRequest({
+      op: 'admin-reply',
+      ticketId,
+      body,
+      ...(file === null
+        ? {}
+        : { file: { sha256: file.sha256, mimeType: file.mimeType, fileName: file.fileName } }),
+    });
     return runAuthorizedMutation(
       this.mutationDeps(),
       scope,
@@ -572,6 +659,22 @@ export class TicketService {
         if (ticket === null) throw this.notFound();
         const replay = await this.replayOf(scope, key, requestHash, ticket, tx);
         if (replay !== null) return replay;
+        if (file !== null) {
+          /*
+           * The staging bound, under the tenant's staging lock so two replies cannot each
+           * fit and together cross it. Checked before anything is written: a refusal here
+           * leaves no message, no file and no notification.
+           */
+          await this.deps.tickets.lockReplyFileStaging(scope, tx);
+          const staged = await this.deps.tickets.stagedReplyFileBytes(scope, tx);
+          if (staged + file.bytes.byteLength > TICKET_REPLY_FILE_STAGED_MAX_BYTES) {
+            throw errors.conflict(
+              TICKET_ERROR_CODES.TICKET_ATTACHMENT_STORAGE_FULL,
+              'Too many of support’s files are still waiting for Telegram.',
+              { maxBytes: TICKET_REPLY_FILE_STAGED_MAX_BYTES },
+            );
+          }
+        }
         const posted = await this.post(scope, actor, tx, ticket, {
           senderType: 'ADMIN',
           authorAdminId: adminId as AdminId,
@@ -580,22 +683,72 @@ export class TicketService {
           idempotencyKey: key,
           requestHash,
           audit: 'ticket.reply',
+          ...(file === null
+            ? {}
+            : {
+                auditFile: {
+                  kind: file.kind,
+                  mimeType: file.mimeType,
+                  byteLength: file.bytes.byteLength,
+                  sha256: file.sha256,
+                },
+              }),
         });
+        /* istanbul ignore next -- the row lock is held and the key was checked above. */
+        if (posted.replayed) return posted;
         /*
          * The customer is told through the lane, in THIS transaction: the notification can
          * exist only if the message does, and names it — never its text. It goes through the
          * bot the TICKET was opened on, not the customer's first bot: that is the conversation
          * the customer is holding it in, and the reply's buttons only make sense there.
          */
+        /*
+         * One instant for both lane rows (Codex review of #108): the lane claims oldest
+         * first, `created_at` then `id`, so with equal times the text — enqueued first, with
+         * the earlier UUIDv7 — is handed to the dispatcher before the file.
+         */
+        const enqueuedAt = this.deps.clock.now();
         await this.deps.notifier.notifyThrough(
           scope,
           ticket.customerId,
           ticket.botInstanceId,
           'TICKET_REPLY',
           posted.message.id,
-          this.deps.clock.now(),
+          enqueuedAt,
           tx,
         );
+        /*
+         * HF-A7: support's file, staged beside the message it belongs to, and its OWN lane
+         * row, enqueued after the text's so the text leaves first. Both commit with the
+         * message or not at all; a Telegram failure later loses neither — the lane keeps
+         * the row's state, and the bytes stay here until Telegram takes them.
+         */
+        if (file !== null) {
+          await this.deps.tickets.insertReplyFile(
+            scope,
+            {
+              messageId: posted.message.id,
+              ticketId: ticket.id,
+              botInstanceId: ticket.botInstanceId,
+              kind: file.kind,
+              mimeType: file.mimeType,
+              fileName: file.fileName,
+              content: file.bytes,
+              sha256: file.sha256,
+              now: this.deps.clock.now(),
+            },
+            tx,
+          );
+          await this.deps.notifier.notifyThrough(
+            scope,
+            ticket.customerId,
+            ticket.botInstanceId,
+            'TICKET_REPLY_ATTACHMENT',
+            posted.message.id,
+            enqueuedAt,
+            tx,
+          );
+        }
         return posted;
       },
     );
@@ -845,18 +998,61 @@ export class TicketService {
     messageId: string,
   ): Promise<{
     readonly message: TicketMessageRecord;
-    readonly attachment: TicketAttachmentRecord;
+    /**
+     * Where the bytes are: at Telegram, fetched with the binding's bot — a customer's file,
+     * or support's once Telegram accepted it — or still held here, for support's file that
+     * Telegram has not taken yet (HF-A7).
+     */
+    readonly source:
+      | {
+          readonly kind: 'TELEGRAM';
+          readonly binding: Pick<TicketAttachmentRecord, 'botInstanceId' | 'fileId'>;
+        }
+      | { readonly kind: 'STORED'; readonly bytes: Uint8Array };
   }> {
     await this.deps.guard.check(scope, actor, TICKETS_VIEW_PERMISSION);
     const id = uuidV7Schema.safeParse(messageId);
     const message = id.success ? await this.deps.tickets.findMessageById(scope, id.data) : null;
-    if (message === null || message.attachment === null) {
-      throw errors.notFound(
-        TICKET_ERROR_CODES.TICKET_ATTACHMENT_UNAVAILABLE,
-        'That message carries no attachment.',
-      );
+    if (message !== null && message.attachment !== null) {
+      return { message, source: { kind: 'TELEGRAM', binding: message.attachment } };
     }
-    return { message, attachment: message.attachment };
+    const file =
+      message !== null && message.senderType === 'ADMIN'
+        ? await this.deps.tickets.findReplyFile(scope, message.id)
+        : null;
+    if (message !== null && file !== null) {
+      const source = await this.replyFileSource(scope, file);
+      if (source !== null) return { message, source };
+    }
+    throw errors.notFound(
+      TICKET_ERROR_CODES.TICKET_ATTACHMENT_UNAVAILABLE,
+      'That message carries no attachment.',
+    );
+  }
+
+  /** Support's file: the held bytes, else Telegram's handle, else nothing left to read. */
+  private async replyFileSource(
+    scope: TenantContext,
+    file: TicketReplyFileRecord,
+  ): Promise<
+    | {
+        readonly kind: 'TELEGRAM';
+        readonly binding: Pick<TicketAttachmentRecord, 'botInstanceId' | 'fileId'>;
+      }
+    | { readonly kind: 'STORED'; readonly bytes: Uint8Array }
+    | null
+  > {
+    if (file.staged) {
+      const bytes = await this.deps.tickets.replyFileContent(scope, file.messageId);
+      if (bytes !== null) return { kind: 'STORED', bytes };
+    }
+    // Re-read: the delivery may have stamped the handle and cleared the bytes meanwhile.
+    const now = file.staged ? await this.deps.tickets.findReplyFile(scope, file.messageId) : file;
+    if (now === null || now.telegramFileId === null) return null;
+    return {
+      kind: 'TELEGRAM',
+      binding: { botInstanceId: now.botInstanceId, fileId: now.telegramFileId },
+    };
   }
 
   // --- the shared write ------------------------------------------------------------------
@@ -878,6 +1074,13 @@ export class TicketService {
       readonly idempotencyKey: string;
       readonly requestHash: string;
       readonly audit: string;
+      /** HF-A7: support's file, as the audit names it — facts, never its name or bytes. */
+      readonly auditFile?: {
+        readonly kind: TicketAttachmentKind;
+        readonly mimeType: string;
+        readonly byteLength: number;
+        readonly sha256: string;
+      };
     },
   ): Promise<TicketPosted> {
     const next = ticketStatusAfterMessage(ticket.status, input.senderType);
@@ -958,7 +1161,8 @@ export class TicketService {
         after: {
           status: next,
           messageId: message.id,
-          attachment: message.attachment?.kind ?? null,
+          attachment: message.attachment?.kind ?? input.auditFile?.kind ?? null,
+          ...(input.auditFile === undefined ? {} : { file: input.auditFile }),
         },
         result: 'SUCCESS',
       },
@@ -1265,6 +1469,42 @@ export class TicketService {
       clock: this.deps.clock,
     };
   }
+}
+
+/**
+ * Support's file, decoded and judged (HF-A7): the ONE rule the Web Admin also asks
+ * (`ticketReplyFileRefusal`), asked again here of the decoded bytes, because nothing a
+ * browser decided is trusted. A refusal writes nothing.
+ */
+function replyFileOf(attachment: TicketReplyAttachment): {
+  readonly kind: TicketAttachmentKind;
+  readonly mimeType: TicketReplyFileMimeType;
+  readonly fileName: string;
+  readonly bytes: Uint8Array;
+  readonly sha256: string;
+} {
+  const decoded = Buffer.from(attachment.contentBase64, 'base64');
+  const bytes = new Uint8Array(decoded.buffer, decoded.byteOffset, decoded.byteLength);
+  const refusal = ticketReplyFileRefusal({
+    fileName: attachment.fileName,
+    mimeType: attachment.mimeType,
+    bytes,
+  });
+  const type = ticketReplyFileTypeOf(attachment.mimeType);
+  if (refusal !== null || type === undefined) {
+    throw errors.validation(
+      TICKET_ERROR_CODES.TICKET_ATTACHMENT_REFUSED,
+      'This file cannot be attached to a reply.',
+      { refusal: refusal ?? 'TYPE_NOT_ALLOWED' },
+    );
+  }
+  return {
+    kind: type.kind,
+    mimeType: type.mimeType,
+    fileName: ticketReplyFileNameOf(attachment.fileName, type),
+    bytes,
+    sha256: createHash('sha256').update(bytes).digest('hex'),
+  };
 }
 
 /** A file name as stored: control characters and path separators removed, bounded, or null. */

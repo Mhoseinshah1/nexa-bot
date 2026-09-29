@@ -1,4 +1,5 @@
-import { and, asc, count, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
+import { and, asc, count, desc, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
 import {
   TICKET_ACTIVE_STATUSES,
   type AdminId,
@@ -11,6 +12,7 @@ import {
   type TicketMessageId,
   type TicketMessageSender,
   type TicketPriority,
+  type TicketReplyFileMimeType,
   type TicketStatus,
   type TicketSystemEvent,
   type UserId,
@@ -25,6 +27,7 @@ import {
   customerNotifications,
   customers,
   ticketMessages,
+  ticketReplyFiles,
   tickets,
 } from '../../../../infrastructure/persistence/schema.js';
 import type {
@@ -34,11 +37,70 @@ import type {
   TicketMessageListItem,
   TicketMessageRecord,
   TicketRecord,
+  TicketReplyFileRecord,
   TicketRepository,
 } from '../application/ports.js';
 
 /** One customer's ticket openings, serialised (`lockCustomer`). 'TK'. */
 export const TICKET_CUSTOMER_LOCK_CLASS = 0x544b;
+/** One tenant's staging of support's files, serialised (`lockReplyFileStaging`). 'TF'. */
+export const TICKET_REPLY_FILE_LOCK_CLASS = 0x5446;
+
+/**
+ * The `TICKET_REPLY_ATTACHMENT` lane row, joined beside the `TICKET_REPLY` one: the same
+ * table under a second name, so one message reads both of its deliveries in one query.
+ */
+const attachmentNotifications = alias(customerNotifications, 'attachment_notifications');
+
+/** Every column but the bytes: nothing that lists or describes a file ever loads them. */
+const replyFileColumns = {
+  messageId: ticketReplyFiles.messageId,
+  ticketId: ticketReplyFiles.ticketId,
+  botInstanceId: ticketReplyFiles.botInstanceId,
+  kind: ticketReplyFiles.kind,
+  mimeType: ticketReplyFiles.mimeType,
+  fileName: ticketReplyFiles.fileName,
+  byteLength: ticketReplyFiles.byteLength,
+  sha256: ticketReplyFiles.sha256,
+  purgedAt: ticketReplyFiles.purgedAt,
+  telegramFileId: ticketReplyFiles.telegramFileId,
+  telegramFileUniqueId: ticketReplyFiles.telegramFileUniqueId,
+  createdAt: ticketReplyFiles.createdAt,
+};
+
+type ReplyFileRow = {
+  readonly messageId: string;
+  readonly ticketId: string;
+  readonly botInstanceId: string;
+  readonly kind: string;
+  readonly mimeType: string;
+  readonly fileName: string;
+  readonly byteLength: number;
+  readonly sha256: string;
+  readonly purgedAt: Date | null;
+  readonly telegramFileId: string | null;
+  readonly telegramFileUniqueId: string | null;
+  readonly createdAt: Date;
+};
+
+function toReplyFile(row: ReplyFileRow): TicketReplyFileRecord {
+  return {
+    messageId: row.messageId as TicketMessageId,
+    ticketId: row.ticketId as TicketId,
+    botInstanceId: row.botInstanceId as BotInstanceId,
+    // Casts rather than re-validation: both columns' CHECKs are built from the contract.
+    kind: row.kind as TicketAttachmentKind,
+    mimeType: row.mimeType as TicketReplyFileMimeType,
+    fileName: row.fileName,
+    byteLength: row.byteLength,
+    sha256: row.sha256,
+    // `purged_at` is set exactly when the bytes are gone (`ticket_reply_files_content_check`).
+    staged: row.purgedAt === null,
+    telegramFileId: row.telegramFileId,
+    telegramFileUniqueId: row.telegramFileUniqueId,
+    createdAt: row.createdAt,
+  };
+}
 
 type TicketRow = typeof tickets.$inferSelect;
 type MessageRow = typeof ticketMessages.$inferSelect;
@@ -490,6 +552,8 @@ export class DrizzleTicketRepository implements TicketRepository {
         message: ticketMessages,
         authorUsername: admins.username,
         delivery: customerNotifications.state,
+        replyFile: replyFileColumns,
+        attachmentDelivery: attachmentNotifications.state,
       })
       .from(ticketMessages)
       .leftJoin(
@@ -509,6 +573,22 @@ export class DrizzleTicketRepository implements TicketRepository {
           eq(customerNotifications.subjectId, ticketMessages.id),
         ),
       )
+      // HF-A7: support's file on the message, and ITS delivery — a second lane row.
+      .leftJoin(
+        ticketReplyFiles,
+        and(
+          eq(ticketReplyFiles.tenantId, ticketMessages.tenantId),
+          eq(ticketReplyFiles.messageId, ticketMessages.id),
+        ),
+      )
+      .leftJoin(
+        attachmentNotifications,
+        and(
+          eq(attachmentNotifications.tenantId, ticketMessages.tenantId),
+          eq(attachmentNotifications.kind, 'TICKET_REPLY_ATTACHMENT'),
+          eq(attachmentNotifications.subjectId, ticketMessages.id),
+        ),
+      )
       .where(
         and(
           eq(ticketMessages.tenantId, tenantId),
@@ -521,6 +601,12 @@ export class DrizzleTicketRepository implements TicketRepository {
       message: toMessage(row.message),
       authorUsername: row.authorUsername,
       delivery: row.delivery === null ? null : (row.delivery as CustomerNotificationState),
+      // A left join yields an all-null object for a message with no file.
+      replyFile: row.replyFile === null ? null : toReplyFile(row.replyFile),
+      attachmentDelivery:
+        row.attachmentDelivery === null
+          ? null
+          : (row.attachmentDelivery as CustomerNotificationState),
     }));
   }
 
@@ -528,19 +614,169 @@ export class DrizzleTicketRepository implements TicketRepository {
     scope: TenantContext,
     ticketId: TicketId,
     limit: number,
-  ): Promise<{ readonly messages: readonly TicketMessageRecord[]; readonly messageCount: number }> {
+  ): Promise<{
+    readonly messages: readonly TicketMessageRecord[];
+    readonly messageCount: number;
+    readonly filed: ReadonlySet<string>;
+  }> {
     const tenantId = requireTenantId(scope);
     const where = and(eq(ticketMessages.tenantId, tenantId), eq(ticketMessages.ticketId, ticketId));
     const [rows, totals] = await Promise.all([
       this.db
-        .select()
+        .select({ message: ticketMessages, filedId: ticketReplyFiles.messageId })
         .from(ticketMessages)
+        .leftJoin(
+          ticketReplyFiles,
+          and(
+            eq(ticketReplyFiles.tenantId, ticketMessages.tenantId),
+            eq(ticketReplyFiles.messageId, ticketMessages.id),
+          ),
+        )
         .where(where)
         .orderBy(desc(ticketMessages.seq))
         .limit(Math.max(1, limit)),
       this.db.select({ total: count() }).from(ticketMessages).where(where),
     ]);
-    return { messages: rows.map(toMessage).reverse(), messageCount: Number(totals[0]?.total ?? 0) };
+    return {
+      messages: rows.map((row) => toMessage(row.message)).reverse(),
+      messageCount: Number(totals[0]?.total ?? 0),
+      filed: new Set(rows.flatMap((row) => (row.filedId === null ? [] : [row.filedId]))),
+    };
+  }
+
+  // --- HF-A7: support's files ------------------------------------------------------------
+
+  async lockReplyFileStaging(scope: TenantContext, tx: unknown): Promise<void> {
+    const tenantId = requireTenantId(scope);
+    await this.exec(tx).execute(
+      sql`SELECT pg_advisory_xact_lock(${TICKET_REPLY_FILE_LOCK_CLASS}, hashtext(${tenantId}))`,
+    );
+  }
+
+  async stagedReplyFileBytes(scope: TenantContext, tx: unknown): Promise<number> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select({ total: sql<string>`coalesce(sum(${ticketReplyFiles.byteLength}), 0)` })
+      .from(ticketReplyFiles)
+      .where(and(eq(ticketReplyFiles.tenantId, tenantId), isNotNull(ticketReplyFiles.content)));
+    return Number(rows[0]?.total ?? 0);
+  }
+
+  async insertReplyFile(
+    scope: TenantContext,
+    input: Parameters<TicketRepository['insertReplyFile']>[1],
+    tx: unknown,
+  ): Promise<TicketReplyFileRecord> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .insert(ticketReplyFiles)
+      .values({
+        tenantId,
+        messageId: input.messageId,
+        ticketId: input.ticketId,
+        botInstanceId: input.botInstanceId,
+        kind: input.kind,
+        mimeType: input.mimeType,
+        fileName: input.fileName,
+        byteLength: input.content.byteLength,
+        sha256: input.sha256,
+        content: Buffer.from(
+          input.content.buffer,
+          input.content.byteOffset,
+          input.content.byteLength,
+        ),
+        createdAt: input.now,
+      })
+      .returning(replyFileColumns);
+    const row = rows[0];
+    /* istanbul ignore next -- an INSERT ... RETURNING that inserted returns its row. */
+    if (row === undefined) throw new Error('A reply file insert returned no row.');
+    return toReplyFile(row);
+  }
+
+  async findReplyFile(
+    scope: TenantContext,
+    messageId: string,
+    tx?: unknown,
+  ): Promise<TicketReplyFileRecord | null> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select(replyFileColumns)
+      .from(ticketReplyFiles)
+      .where(
+        and(eq(ticketReplyFiles.tenantId, tenantId), eq(ticketReplyFiles.messageId, messageId)),
+      )
+      .limit(1);
+    const row = rows[0];
+    return row === undefined ? null : toReplyFile(row);
+  }
+
+  async replyFileContent(scope: TenantContext, messageId: string): Promise<Uint8Array | null> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.db
+      .select({ content: ticketReplyFiles.content })
+      .from(ticketReplyFiles)
+      .where(
+        and(eq(ticketReplyFiles.tenantId, tenantId), eq(ticketReplyFiles.messageId, messageId)),
+      )
+      .limit(1);
+    const content = rows[0]?.content ?? null;
+    return content === null
+      ? null
+      : new Uint8Array(content.buffer, content.byteOffset, content.byteLength);
+  }
+
+  async markReplyFileDelivered(
+    scope: TenantContext,
+    messageId: string,
+    file: { readonly fileId: string; readonly fileUniqueId: string },
+    at: Date,
+    tx: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    /*
+     * Conditional on NO handle yet, not on the bytes still being here (Codex review of #108):
+     * the retention sweep may clear the bytes between the dispatcher's read and Telegram's
+     * answer, and a stamp that required them would leave a delivered file with neither bytes
+     * nor a handle. An existing handle is never overwritten. `purged_at` keeps the sweep's
+     * time when the bytes were already gone, so both CHECKs hold either way.
+     */
+    const rows = await this.exec(tx)
+      .update(ticketReplyFiles)
+      .set({
+        telegramFileId: file.fileId,
+        telegramFileUniqueId: file.fileUniqueId,
+        content: null,
+        purgedAt: sql`coalesce(${ticketReplyFiles.purgedAt}, ${at})`,
+      })
+      .where(
+        and(
+          eq(ticketReplyFiles.tenantId, tenantId),
+          eq(ticketReplyFiles.messageId, messageId),
+          isNull(ticketReplyFiles.telegramFileId),
+        ),
+      )
+      .returning({ messageId: ticketReplyFiles.messageId });
+    return rows.length > 0;
+  }
+
+  async purgeReplyFileContentBefore(cutoff: Date, at: Date, limit: number): Promise<number> {
+    // Oldest first, bounded, and only rows still holding bytes: the partial index's shape.
+    // SKIP LOCKED, so a delivery stamping one of these rows is never waited on.
+    const rows = await this.db
+      .update(ticketReplyFiles)
+      .set({ content: null, purgedAt: at })
+      .where(
+        sql`(${ticketReplyFiles.tenantId}, ${ticketReplyFiles.messageId}) IN (
+          SELECT candidate.tenant_id, candidate.message_id FROM ${ticketReplyFiles} AS candidate
+           WHERE candidate.content IS NOT NULL AND candidate.created_at < ${cutoff}
+           ORDER BY candidate.created_at ASC
+           LIMIT ${Math.max(1, limit)}
+           FOR UPDATE SKIP LOCKED
+        )`,
+      )
+      .returning({ messageId: ticketReplyFiles.messageId });
+    return rows.length;
   }
 }
 

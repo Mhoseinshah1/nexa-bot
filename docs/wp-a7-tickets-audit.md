@@ -154,9 +154,73 @@ with ownership as the authorization; another customer's ticket and another tenan
 
 ## 8. Where it stops
 
-- An administrator's reply is text only. A file from support would need an upload path and a
-  store this deployment does not have (`OQ-WPA7-01`).
+- An administrator's reply was text only until HF-A7, which added support's file (§9,
+  `OQ-WPA7-01`).
 - The ticket desk is behind the mandatory-channel guard like every other customer action;
   the basic support screen and `/paysupport` stay exempt as before (`OQ-WPA7-02`).
 - There is no Telegram admin screen for tickets; support answers in the Web Admin. The
   personal notification tells an administrator where to go.
+
+## 9. Support's file on a reply (HF-A7)
+
+The owner asked that support can send an image or an allowed document with a reply. That
+needs a type and size limit, no dangerous executable, no unbounded database blob, and the
+message kept when Telegram delivery fails. Tenant isolation must hold.
+
+**The rule.** `ticketReplyFileRefusal` in `@nexa/contracts` is the one rule. The Web Admin
+asks it before uploading, and the API asks it again of the decoded bytes. It allows JPEG
+and PNG, sent as a photo, up to 5 MB each. It allows PDF up to 10 MB and plain text up to
+1 MB, both sent as a document. The declared MIME type, the name's last extension and the
+bytes' own signature (`sniffTicketReplyFile`) must all name the same type. An executable's
+or script's extension anywhere earlier in the name is refused, as in `invoice.exe.pdf`.
+Text must be valid UTF-8 with no control characters, and it may not start with `#!` or
+with markup. So a program renamed `x.pdf`, a shell script renamed `x.txt`, an archive, an
+installer, an APK or JAR, HTML and SVG are all refused. The file is sent under a cleaned
+name that ends in the verified type's extension. A refusal writes nothing.
+
+**Where the bytes are.** Telegram gives a bot a `file_id` only for a file it has already
+sent somewhere. So the upload cannot happen before the message exists without sending it
+to someone. The file is therefore staged in `ticket_reply_files`, one row per message. The
+row holds the verified bytes, the name, the type, the size and the SHA-256, and the bot is
+the ticket's. The bytes are bounded three ways:
+
+- each type's size bound, enforced by a CHECK;
+- `TICKET_REPLY_FILE_STAGED_MAX_BYTES`, 100 MB of undelivered files per tenant, checked
+  under a per-tenant advisory lock. A reply that would cross it is refused with
+  `ticket.attachment_storage_full`;
+- the lifetime. The delivery Telegram accepts stamps Telegram's `file_id` and clears the
+  bytes in the transaction that records it. The worker's `ticket-reply-file-sweeper`
+  clears any bytes older than `TICKET_REPLY_FILE_RETENTION_DAYS` (7). This covers a file
+  Telegram refused three times, an unconfirmed upload, or a blocked customer.
+
+The row itself stays, so the conversation keeps the fact that a file was sent.
+
+**The message first.** The reply's `ticket_messages` row is written as before. The file
+row, the `TICKET_REPLY` notification and a second notification, `TICKET_REPLY_ATTACHMENT`,
+are written in the same transaction. Both notifications name the message id. The
+dispatcher reads the bytes and the caption's values from the file row at send time. It
+sends them as ONE multipart `sendPhoto` or `sendDocument` through the ticket's bot, with
+`bot.ticket.support_attachment` as a plain-text caption. So the text and the file are two
+sends with two outcomes, and each has the lane's rules:
+
+- a refusal retries, up to three attempts;
+- a 429 spends no attempt;
+- an unknown outcome is `UNCONFIRMED` and is never uploaded again;
+- bytes cleared before the send FAIL the row and send nothing else.
+
+The Web Admin shows the file on the message with its own delivery state
+(`attachmentDelivery`). It reads the file back through the attachment route. While the
+file is staged, the route serves the stored bytes. After delivery, it fetches the file from
+Telegram with the ticket's bot. Either way it uses the same octet-stream, `attachment`,
+`nosniff` and `no-store` headers. No `file_id` reaches a browser. The bot's conversation
+view marks support's message with the attachment marker.
+
+**Idempotency and tenancy.** The file's SHA-256, type and name are part of the reply's
+request hash. A replay or double click therefore stages and sends the file once. The same
+key with another file, or with no file, is refused as a payload mismatch. The hash of a
+reply with no file is unchanged. Every read and write carries the tenant. The file row's
+message, ticket and tenant are composite foreign keys. Another tenant's message is
+`ticket.attachment_unavailable`, and its ticket is `ticket.not_found`.
+
+**Not verified against the real Telegram.** The upload path has been exercised only
+against the integration suite's stand-in for the Bot API.

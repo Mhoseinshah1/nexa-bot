@@ -181,6 +181,58 @@ describe('notification delivery', () => {
       expect(events.map((event) => event.code)).toContain('panel.unreachable');
       expect(await ctx.container.notifications.list(tenantA, owner)).toHaveLength(0);
     });
+
+    it('tries the event and its notification together once more before giving the notification up (HF-A4)', async () => {
+      // A transient failure of the combined transaction — a lost connection — used to fall
+      // straight back to recording the event alone, which dropped the Telegram message.
+      const uow = ctx.container.uow;
+      const real = uow.run.bind(uow);
+      let refused = 0;
+      uow.run = ((scope, work) => {
+        if (refused === 0) {
+          refused += 1;
+          return Promise.reject(new Error('the connection was lost'));
+        }
+        return real(scope, work);
+      }) as typeof uow.run;
+      try {
+        expect((await raiseError('retried-together')).isNew).toBe(true);
+      } finally {
+        uow.run = real;
+      }
+
+      expect(refused).toBe(1);
+      const queued = await ctx.container.notifications.list(tenantA, owner);
+      expect(queued).toHaveLength(1);
+      expect(queued[0]?.kind).toBe('OPERATIONAL_EVENT');
+    });
+  });
+
+  describe('HF-A4: the projection alone is retried (Codex review of PR #106)', () => {
+    it('queues the notification when only its first insert fails, inside a committed event', async () => {
+      // The combined transaction does NOT fail here — the savepoint catches the queue's
+      // failure — so the whole-transaction retry never runs. The projection's own second
+      // attempt is what keeps the message.
+      const real = ctx.container.notifications.queue.bind(ctx.container.notifications);
+      let refused = 0;
+      ctx.container.notifications.queue = ((...args: Parameters<typeof real>) => {
+        if (refused === 0) {
+          refused += 1;
+          return Promise.reject(new Error('canceling statement due to statement timeout'));
+        }
+        return real(...args);
+      }) as typeof real;
+      try {
+        expect((await raiseError('projection-retried')).isNew).toBe(true);
+      } finally {
+        ctx.container.notifications.queue = real;
+      }
+
+      expect(refused).toBe(1);
+      const queued = await ctx.container.notifications.list(tenantA, owner);
+      expect(queued).toHaveLength(1);
+      expect(queued[0]?.kind).toBe('OPERATIONAL_EVENT');
+    });
   });
 
   describe('the dispatcher', () => {

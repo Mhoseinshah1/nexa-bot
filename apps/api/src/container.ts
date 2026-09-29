@@ -6,6 +6,7 @@ import {
   MAIN_MENU_BUTTONS,
   MAX_REQUESTS_PER_PROBE,
   OPERATION_LEASE_SECONDS_MIN,
+  TICKET_REPLY_FILE_RETENTION_DAYS,
   canAdjustDeviceLimit,
   canChangeLocation,
   faqNumberMarker,
@@ -505,6 +506,8 @@ export interface Container {
   readonly sessionSweeper: RetentionSweeper;
   readonly backupRunSweeper: RetentionSweeper;
   readonly recoveryRequestSweeper: RetentionSweeper;
+  /** HF-A7: clears support's reply files Telegram never took, after their retention. */
+  readonly ticketReplyFileSweeper: RetentionSweeper;
   /**
    * The lane that expires unpaid payments and the orders they were against.
    *
@@ -3090,6 +3093,33 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     ids,
   });
   const ticketScreens = new TicketScreenComposer(templateResolver);
+  /**
+   * HF-A7: retention for support's staged reply files. A delivered file's bytes are cleared
+   * by the delivery itself; this clears what Telegram never took — a customer who blocked
+   * the bot, an unconfirmed upload — once it is `TICKET_REPLY_FILE_RETENTION_DAYS` old. The
+   * row, and the message it belongs to, stay. Hourly: a held file counts against the
+   * tenant's staging bound until it is cleared.
+   */
+  const ticketReplyFileSweeper = new RetentionSweeper(
+    {
+      name: 'ticket-reply-files',
+      purge: (now, limit) =>
+        ticketRepository.purgeReplyFileContentBefore(
+          new Date(now.getTime() - TICKET_REPLY_FILE_RETENTION_DAYS * 24 * 3_600_000),
+          now,
+          limit,
+        ),
+    },
+    clock,
+    logger,
+    {
+      intervalMs: 3_600_000,
+      initialDelayMs: 90_000,
+      // Small batches: each row cleared can release up to ten megabytes of bytea.
+      batchSize: 50,
+      maxBatchesPerTick: 100,
+    },
+  );
   const customerCounters = new DrizzleCustomerCountersReader(database.db);
   /**
    * The FAQ screen, rendered into message parts HERE — application code holds the
@@ -4297,6 +4327,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     sessionSweeper,
     backupRunSweeper,
     recoveryRequestSweeper,
+    ticketReplyFileSweeper,
     paymentExpiryLoop,
     gatewayPayments,
     gatewayPaymentLoop,
@@ -4625,6 +4656,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       await sessionSweeper.stop();
       await backupRunSweeper.stop();
       await recoveryRequestSweeper.stop();
+      await ticketReplyFileSweeper.stop();
       await paymentExpiryLoop.stop();
       await gatewayPaymentLoop.stop();
       await serviceReminderLoop.stop();

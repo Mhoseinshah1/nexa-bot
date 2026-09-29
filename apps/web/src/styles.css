@@ -1992,6 +1992,18 @@ textarea.input {
   /* The image is untrusted content from a customer; nothing about it is a control. */
   pointer-events: none;
 }
+/* HF-A10: a client app's picture — the stored copy, the picked file, the bot preview. */
+.client-app-image {
+  display: block;
+  max-width: min(100%, 240px);
+  max-height: 240px;
+  width: auto;
+  height: auto;
+  margin-block-end: 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  pointer-events: none;
+}
 
 /* ---------------------------------------------------------- WP12 reports --- */
 

@@ -1,6 +1,13 @@
-import { describe, expect, it } from 'vitest';
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
-import { TicketDetailPage, TicketsPage, dayEnd, dayStart } from '../../apps/web/src/pages/tickets';
+import { describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import {
+  TicketDetailPage,
+  TicketsPage,
+  dayEnd,
+  dayStart,
+  ticketFault,
+} from '../../apps/web/src/pages/tickets';
+import { ApiError } from '../../apps/web/src/api/client';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { NAV, navPermitted, resolve } from '../../apps/web/src/app';
 import { renderPage, stubApi } from './harness';
@@ -56,6 +63,7 @@ const message = (overrides: Record<string, unknown> = {}) => ({
   systemEvent: null,
   attachment: null,
   delivery: null,
+  attachmentDelivery: null,
   createdAt: '2026-09-20T10:00:00.000Z',
   ...overrides,
 });
@@ -340,6 +348,278 @@ describe('one ticket', () => {
     expect(posted.method).toBe('POST');
     expect(Object.keys(posted.body as object).sort()).toEqual(['idempotencyKey', 'text']);
     expect((posted.body as { text: string }).text).toBe('درست شد؟');
+  });
+
+  // --- HF-A7: support's file on a reply -------------------------------------------------
+
+  const replyPage = () => {
+    const api = stubApi([
+      { url: `/tickets/${TICKET_ID}`, body: detail() },
+      {
+        url: `/tickets/${TICKET_ID}/messages`,
+        body: {
+          ticket: summary({ status: 'WAITING_FOR_CUSTOMER' }),
+          message: message({
+            id: '019340ab-cdef-7012-8345-6789abcdef0a',
+            senderType: 'ADMIN',
+            authorAdminId: ADMIN_ID,
+            authorAdminUsername: 'owner',
+            body: 'تصویر پیوست است.',
+            attachment: {
+              kind: 'PHOTO',
+              mimeType: 'image/png',
+              fileName: 'screen.png',
+              fileSize: 12,
+            },
+            delivery: 'PENDING',
+            attachmentDelivery: 'PENDING',
+          }),
+        },
+      },
+    ]);
+    renderPage(
+      <TicketDetailPage
+        id={TICKET_ID}
+        denied={false}
+        mayReply
+        mayAssign={false}
+        mayClose={false}
+      />,
+    );
+    return api;
+  };
+  const pick = async (file: File) => {
+    const input = await screen.findByLabelText(t('web.ticket_reply_file'));
+    fireEvent.change(input, { target: { files: [file] } });
+  };
+  const PNG = new Uint8Array([
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x41, 0x42, 0x43, 0x44,
+  ]);
+  const EXE = new Uint8Array([0x4d, 0x5a, 0x90, 0x00, 0x03, 0x00, 0x00, 0x00]);
+
+  it('sends support’s file with the reply, as base64 beside the text', async () => {
+    const api = replyPage();
+    fireEvent.change(await screen.findByLabelText(t('web.ticket_reply_text')), {
+      target: { value: 'تصویر پیوست است.' },
+    });
+    await pick(new File([PNG], 'screen.png', { type: 'image/png' }));
+    const send = screen.getByRole('button', { name: t('web.ticket_reply_send') });
+    // Sendable only once the file has been read and judged.
+    await waitFor(() => expect(send).toBeEnabled());
+    fireEvent.click(send);
+    await waitFor(() =>
+      expect(api.calls.some((call) => call.url.endsWith('/messages'))).toBe(true),
+    );
+    const posted = api.calls.find((call) => call.url.endsWith('/messages'))!;
+    expect(posted.body).toMatchObject({
+      text: 'تصویر پیوست است.',
+      attachment: {
+        fileName: 'screen.png',
+        mimeType: 'image/png',
+        contentBase64: Buffer.from(PNG).toString('base64'),
+      },
+    });
+  });
+
+  it('refuses a spoofed, unlisted or oversized file in Persian before anything is sent', async () => {
+    const api = replyPage();
+    fireEvent.change(await screen.findByLabelText(t('web.ticket_reply_text')), {
+      target: { value: 'پیوست' },
+    });
+    const send = screen.getByRole('button', { name: t('web.ticket_reply_send') });
+
+    // A program renamed to a PDF: the bytes say what it is.
+    await pick(new File([EXE], 'guide.pdf', { type: 'application/pdf' }));
+    expect(await screen.findByText(t('web.ticket_reply_file_content'))).toBeTruthy();
+    expect((send as HTMLButtonElement).disabled).toBe(true);
+
+    // An executable declared as one.
+    await pick(new File([EXE], 'setup.exe', { type: 'application/x-msdownload' }));
+    expect(await screen.findByText(t('web.ticket_reply_file_type'))).toBeTruthy();
+
+    // An executable's extension hidden inside the name.
+    await pick(
+      new File([new TextEncoder().encode('%PDF-1.7')], 'a.exe.pdf', { type: 'application/pdf' }),
+    );
+    expect(await screen.findByText(t('web.ticket_reply_file_name'))).toBeTruthy();
+
+    // One byte over a photo's bound, refused without reading it.
+    const big = new Uint8Array(5 * 1024 * 1024 + 1);
+    big.set(PNG);
+    await pick(new File([big], 'big.png', { type: 'image/png' }));
+    expect(await screen.findByText(t('web.ticket_reply_file_too_large'))).toBeTruthy();
+    expect((send as HTMLButtonElement).disabled).toBe(true);
+
+    // Removing the file sends the text alone.
+    fireEvent.click(screen.getByRole('button', { name: t('web.ticket_reply_file_clear') }));
+    await waitFor(() => expect((send as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(send);
+    await waitFor(() =>
+      expect(api.calls.some((call) => call.url.endsWith('/messages'))).toBe(true),
+    );
+    const posted = api.calls.find((call) => call.url.endsWith('/messages'))!;
+    expect(Object.keys(posted.body as object).sort()).toEqual(['idempotencyKey', 'text']);
+  });
+
+  it('sends the file the input shows when an earlier read finishes last, and nothing while one is read (Codex #108)', async () => {
+    // A FileReader whose reads finish when the test says so, in the order it says.
+    const original = globalThis.FileReader;
+    const pending: DeferredReader[] = [];
+    class DeferredReader {
+      result: ArrayBuffer | null = null;
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      private file: File | null = null;
+      readAsArrayBuffer(file: File) {
+        this.file = file;
+        pending.push(this);
+      }
+      /** The real reader's answer, delivered now. */
+      async finish() {
+        const file = this.file as File;
+        this.result = await new Promise<ArrayBuffer>((resolve) => {
+          const real = new original();
+          real.onload = () => resolve(real.result as ArrayBuffer);
+          real.readAsArrayBuffer(file);
+        });
+        this.onload?.();
+      }
+    }
+    vi.stubGlobal('FileReader', DeferredReader);
+    try {
+      const api = replyPage();
+      fireEvent.change(await screen.findByLabelText(t('web.ticket_reply_text')), {
+        target: { value: 'کدام فایل؟' },
+      });
+      const send = screen.getByRole('button', { name: t('web.ticket_reply_send') });
+      const FIRST = new Uint8Array([...PNG, 0x01]);
+      const SECOND = new Uint8Array([...PNG, 0x02]);
+      await pick(new File([FIRST], 'first.png', { type: 'image/png' }));
+      await pick(new File([SECOND], 'second.png', { type: 'image/png' }));
+      expect(pending).toHaveLength(2);
+      // The FIRST file's read finishes while the second is still being read: nothing is sent.
+      await act(async () => {
+        await (pending[0] as DeferredReader).finish();
+      });
+      expect(send).toBeDisabled();
+      fireEvent.click(send);
+      expect(api.calls.some((call) => call.url.endsWith('/messages'))).toBe(false);
+      // The second finishes: it, and only it, is what goes.
+      await act(async () => {
+        await (pending[1] as DeferredReader).finish();
+      });
+      await waitFor(() => expect(send).toBeEnabled());
+      fireEvent.click(send);
+      await waitFor(() =>
+        expect(api.calls.some((call) => call.url.endsWith('/messages'))).toBe(true),
+      );
+      const posted = api.calls.find((call) => call.url.endsWith('/messages'))!.body as {
+        attachment: { fileName: string; contentBase64: string };
+      };
+      expect(posted.attachment.fileName).toBe('second.png');
+      expect(posted.attachment.contentBase64).toBe(Buffer.from(SECOND).toString('base64'));
+    } finally {
+      vi.stubGlobal('FileReader', original);
+    }
+  });
+
+  it('gives a different file a new key after an ambiguous failure, even with the same name and size (Codex #108)', async () => {
+    const api = stubApi([
+      { url: `/tickets/${TICKET_ID}`, body: detail() },
+      {
+        url: `/tickets/${TICKET_ID}/messages`,
+        status: 503,
+        body: {
+          error: {
+            kind: 'unavailable',
+            code: 'platform.unavailable',
+            message: 'try again',
+            correlationId: 'test',
+          },
+        },
+      },
+    ]);
+    renderPage(
+      <TicketDetailPage
+        id={TICKET_ID}
+        denied={false}
+        mayReply
+        mayAssign={false}
+        mayClose={false}
+      />,
+    );
+    fireEvent.change(await screen.findByLabelText(t('web.ticket_reply_text')), {
+      target: { value: 'پیوست' },
+    });
+    const posts = () => api.calls.filter((call) => call.url.endsWith('/messages'));
+    const sendWith = async (bytes: Uint8Array<ArrayBuffer>, count: number) => {
+      await pick(new File([bytes], 'screen.png', { type: 'image/png' }));
+      const send = screen.getByRole('button', { name: t('web.ticket_reply_send') });
+      await waitFor(() => expect(send).toBeEnabled());
+      fireEvent.click(send);
+      await waitFor(() => expect(posts()).toHaveLength(count));
+      await waitFor(() => expect(send).toBeEnabled());
+    };
+    const keyOf = (index: number) =>
+      (posts()[index]?.body as { idempotencyKey: string }).idempotencyKey;
+
+    await sendWith(new Uint8Array([...PNG, 0x01]), 1);
+    // The same file again is a retry of the same question: the held key.
+    await sendWith(new Uint8Array([...PNG, 0x01]), 2);
+    expect(keyOf(1)).toBe(keyOf(0));
+    // A different file with the same name and the same size is a new command.
+    await sendWith(new Uint8Array([...PNG, 0x02]), 3);
+    expect(keyOf(2)).not.toBe(keyOf(0));
+  });
+
+  it('names the server’s own refusal of a file, and a full staging area, in Persian', () => {
+    expect(
+      ticketFault(
+        new ApiError(422, 'ticket.attachment_refused', 'refused', { refusal: 'CONTENT_MISMATCH' }),
+      ),
+    ).toBe(t('web.ticket_reply_file_content'));
+    expect(ticketFault(new ApiError(409, 'ticket.attachment_storage_full', 'full', {}))).toBe(
+      t('web.ticket_fault_storage_full'),
+    );
+  });
+
+  it('shows support’s file and its own delivery beside the text’s', async () => {
+    stubApi([
+      {
+        url: `/tickets/${TICKET_ID}`,
+        body: detail({}, [
+          message({
+            id: '019340ab-cdef-7012-8345-6789abcdef0b',
+            senderType: 'ADMIN',
+            authorAdminId: ADMIN_ID,
+            authorAdminUsername: 'owner',
+            body: 'راهنما پیوست است.',
+            attachment: {
+              kind: 'DOCUMENT',
+              mimeType: 'application/pdf',
+              fileName: 'guide.pdf',
+              fileSize: 4096,
+            },
+            delivery: 'DELIVERED',
+            attachmentDelivery: 'UNCONFIRMED',
+          }),
+        ]),
+      },
+    ]);
+    renderPage(
+      <TicketDetailPage
+        id={TICKET_ID}
+        denied={false}
+        mayReply={false}
+        mayAssign={false}
+        mayClose={false}
+      />,
+    );
+    expect(await screen.findByText('guide.pdf')).toBeTruthy();
+    expect(screen.getByText(t('web.ticket_attachment_delivery'))).toBeTruthy();
+    expect(screen.getByText(t('web.ticket_delivery_delivered'))).toBeTruthy();
+    expect(screen.getByText(t('web.ticket_delivery_unconfirmed'))).toBeTruthy();
+    expect(screen.getByRole('button', { name: t('web.ticket_attachment_download') })).toBeTruthy();
   });
 
   it('offers only the status changes the machine allows from where the ticket stands', async () => {

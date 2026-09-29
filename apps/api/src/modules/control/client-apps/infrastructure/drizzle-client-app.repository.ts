@@ -2,6 +2,7 @@ import { and, asc, count, eq, sql } from 'drizzle-orm';
 import {
   CLIENT_APP_PLATFORMS,
   type ClientAppDeliveryKind,
+  type ClientAppImageMimeType,
   type ClientAppInput,
   type ClientAppPlatform,
   type ClientAppProtocol,
@@ -15,9 +16,18 @@ import {
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { clientApps } from '../../../../infrastructure/persistence/schema.js';
-import type { ClientAppRecord, ClientAppRepository } from '../application/ports.js';
+import type {
+  ClientAppImageContent,
+  ClientAppImageDraft,
+  ClientAppRecord,
+  ClientAppRepository,
+} from '../application/ports.js';
 
-/** The columns the record is built from. Selected explicitly, in one place. */
+/**
+ * The columns the record is built from. Selected explicitly, in one place — and never
+ * `image_content`: the bytes are read by `imageContent` alone, so a list of sixty entries
+ * does not drag sixty pictures out of TOAST.
+ */
 const COLUMNS = {
   id: clientApps.id,
   platform: clientApps.platform,
@@ -36,6 +46,12 @@ const COLUMNS = {
   version: clientApps.version,
   createdAt: clientApps.createdAt,
   updatedAt: clientApps.updatedAt,
+  imageMimeType: clientApps.imageMimeType,
+  imageByteLength: clientApps.imageByteLength,
+  imageWidth: clientApps.imageWidth,
+  imageHeight: clientApps.imageHeight,
+  imageSha256: clientApps.imageSha256,
+  imageUpdatedAt: clientApps.imageUpdatedAt,
 } as const;
 
 interface Row {
@@ -56,6 +72,12 @@ interface Row {
   readonly version: number;
   readonly createdAt: Date;
   readonly updatedAt: Date;
+  readonly imageMimeType: string | null;
+  readonly imageByteLength: number | null;
+  readonly imageWidth: number | null;
+  readonly imageHeight: number | null;
+  readonly imageSha256: string | null;
+  readonly imageUpdatedAt: Date | null;
 }
 
 function toRecord(row: Row): ClientAppRecord {
@@ -79,6 +101,23 @@ function toRecord(row: Row): ClientAppRecord {
     version: row.version,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
+    // `client_apps_image_check` makes the six all-or-none; the type is its contract member.
+    image:
+      row.imageMimeType === null ||
+      row.imageByteLength === null ||
+      row.imageWidth === null ||
+      row.imageHeight === null ||
+      row.imageSha256 === null ||
+      row.imageUpdatedAt === null
+        ? null
+        : {
+            mimeType: row.imageMimeType as ClientAppImageMimeType,
+            byteLength: row.imageByteLength,
+            width: row.imageWidth,
+            height: row.imageHeight,
+            sha256: row.imageSha256,
+            updatedAt: row.imageUpdatedAt,
+          },
   };
 }
 
@@ -248,6 +287,60 @@ export class DrizzleClientAppRepository implements ClientAppRepository {
       )
       .returning({ id: clientApps.id });
     return rows.length > 0;
+  }
+
+  async setImage(
+    scope: ScopeContext,
+    id: string,
+    input: { readonly image: ClientAppImageDraft | null; readonly expectedVersion: number },
+    now: Date,
+    tx: unknown,
+  ): Promise<ClientAppRecord | null> {
+    const tenantId = requireTenantId(scope);
+    const image = input.image;
+    const rows = await this.exec(tx)
+      .update(clientApps)
+      .set({
+        imageContent: image === null ? null : Buffer.from(image.content),
+        imageMimeType: image?.mimeType ?? null,
+        imageByteLength: image?.content.byteLength ?? null,
+        imageWidth: image?.width ?? null,
+        imageHeight: image?.height ?? null,
+        imageSha256: image?.sha256 ?? null,
+        imageUpdatedAt: image === null ? null : now,
+        version: sql`${clientApps.version} + 1`,
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(clientApps.tenantId, tenantId),
+          eq(clientApps.id, id),
+          eq(clientApps.version, input.expectedVersion),
+        ),
+      )
+      .returning(COLUMNS);
+    const row = rows[0];
+    return row === undefined ? null : toRecord(row);
+  }
+
+  async imageContent(
+    scope: ScopeContext,
+    id: string,
+    tx?: unknown,
+  ): Promise<ClientAppImageContent | null> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select({ content: clientApps.imageContent, mimeType: clientApps.imageMimeType })
+      .from(clientApps)
+      .where(and(eq(clientApps.tenantId, tenantId), eq(clientApps.id, id)))
+      .limit(1);
+    const row = rows[0];
+    if (row === undefined || row.content === null || row.mimeType === null) return null;
+    const bytes = row.content;
+    return {
+      bytes: new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength),
+      mimeType: row.mimeType as ClientAppImageMimeType,
+    };
   }
 
   async count(scope: ScopeContext, tx?: unknown): Promise<number> {
