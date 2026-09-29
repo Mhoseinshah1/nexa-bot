@@ -4,7 +4,7 @@ import { SettingsPage } from '../../apps/web/src/pages/settings';
 import { AlertsPage } from '../../apps/web/src/pages/alerts';
 import { SystemPage } from '../../apps/web/src/pages/system';
 import { event, renderPage, setting, stubApi } from './harness';
-import { CURRENCY_CODES, MANAGEMENT_EVENT_CODES } from '@nexa/contracts';
+import { MANAGEMENT_EVENT_CODES } from '@nexa/contracts';
 import { t } from '../../apps/web/src/i18n/web.fa';
 
 const settings = (rows: unknown[]) => [{ url: '/settings', body: { settings: rows } }];
@@ -29,7 +29,7 @@ describe('the settings screen', () => {
     );
     renderPage(<SettingsPage mayEdit denied={false} />);
 
-    await screen.findByText('support.accounts');
+    await screen.findByRole('heading', { name: t('web.setting_support_accounts') });
     // One label per row, distinguished by its position: three identically
     // labelled fields are indistinguishable to a screen reader.
     expect((screen.getByLabelText('شناسهٔ پشتیبانی 1') as HTMLInputElement).value).toBe(
@@ -80,7 +80,7 @@ describe('the settings screen', () => {
       },
     ]);
     renderPage(<SettingsPage mayEdit denied={false} />);
-    await screen.findByText('support.accounts');
+    await screen.findByRole('heading', { name: t('web.setting_support_accounts') });
 
     // The SECOND row's "move up", named by its position rather than found by
     // index into an ambiguous list.
@@ -111,20 +111,20 @@ describe('the settings screen', () => {
     );
     renderPage(<SettingsPage mayEdit denied={false} />);
 
-    await screen.findByText('telegram.channels');
+    await screen.findByRole('heading', { name: t('web.setting_telegram_channels') });
     expect((screen.getByLabelText('شناسهٔ کانال 1') as HTMLInputElement).value).toBe('@Channel1');
     const flag = screen.getByRole('switch', { name: 'عضویت اجباری 1' });
     expect(flag).toHaveAttribute('aria-checked', 'true');
   });
 
   /**
-   * Owner revision 24 — an amount AND a currency, plus the precedence rule.
+   * Owner revision 24 — an amount AND a currency.
    *
-   * The per-gateway override cannot be expressed: no payment gateway is
-   * registered anywhere in this system, so there is nothing for an override to
-   * be keyed by. The screen says that rather than leaving the gap.
+   * WP-A1: the banner that used to sit over this field ("no payment gateway is
+   * registered anywhere in this system") was an engineering note, and a false one
+   * since gateways exist; the operator is told what the minimum does, in Persian.
    */
-  it('edits the top-up minimum as money and states the precedence it cannot yet honour', async () => {
+  it('edits the top-up minimum as money, with no engineering note over it', async () => {
     stubApi(
       settings([
         setting({
@@ -138,29 +138,33 @@ describe('the settings screen', () => {
     );
     renderPage(<SettingsPage mayEdit denied={false} />);
 
-    await screen.findByText('wallet.topup.minimum');
+    await screen.findByRole('heading', { name: t('web.setting_topup_minimum') });
     expect((screen.getByLabelText('مبلغ به کوچک‌ترین واحد') as HTMLInputElement).value).toBe(
       '20000',
     );
     expect(
       (screen.getByLabelText('واحد پول — کمینهٔ شارژ کیف پول') as HTMLSelectElement).value,
     ).toBe('IRT');
-    expect(screen.getByText(/حداقلِ مخصوص هر درگاه/)).toBeInTheDocument();
-    expect(screen.getByText(/هیچ درگاه پرداختی ثبت نشده/)).toBeInTheDocument();
+    expect(screen.getByText(t('web.setting_topup_minimum_desc'))).toBeInTheDocument();
+    expect(screen.queryByText(/حداقلِ مخصوص هر درگاه/)).toBeNull();
+    expect(screen.queryByText(/هیچ درگاه پرداختی ثبت نشده/)).toBeNull();
   });
 
   /**
-   * Codex, review five: `wallet.topup.minimum` is `moneySchema`, which accepts
-   * five currencies, and this select offered two. A minimum written through
-   * the API in dollars was a valid stored value the screen could neither show
-   * nor keep — a controlled select with no matching option shows its first,
-   * and saving rewrote the currency to Toman. The screen offers what the
-   * server accepts; narrowing the server is a product decision, not an
-   * omission in a dropdown.
+   * Codex, review five: `wallet.topup.minimum` is `moneySchema`, which accepts five
+   * currencies, and a controlled select with no matching option shows its first — so a
+   * minimum stored in dollars was rewritten to Toman on save. The stored currency stays
+   * an option.
+   *
+   * WP-A1 review F3: but the minimum is compared with the SELLING currency and converted
+   * nowhere, so a non-zero minimum in dollars makes top-up unavailable. The choice
+   * offered is therefore the selling currency, plus the stored one, labelled as not the
+   * store's, with a warning over the row.
    */
-  it('offers every currency the top-up minimum accepts, and keeps a stored dollar minimum', async () => {
+  it('keeps a stored dollar minimum selectable, offers the store currency, and warns', async () => {
     stubApi(
       settings([
+        setting({ key: 'sales.currency', value: 'IRT', configures: null }),
         setting({
           key: 'wallet.topup.minimum',
           value: { amountMinor: '500', currency: 'USD' },
@@ -171,11 +175,32 @@ describe('the settings screen', () => {
       ]),
     );
     renderPage(<SettingsPage mayEdit denied={false} />);
-    await screen.findByText('wallet.topup.minimum');
+    await screen.findByRole('heading', { name: t('web.setting_topup_minimum') });
 
     const select = screen.getByLabelText('واحد پول — کمینهٔ شارژ کیف پول') as HTMLSelectElement;
     expect(select.value).toBe('USD');
-    expect([...select.options].map((option) => option.value)).toEqual([...CURRENCY_CODES]);
+    expect([...select.options].map((option) => option.value)).toEqual(['IRT', 'USD']);
+    expect(screen.getByText(t('web.settings_money_currency_mismatch'))).toBeInTheDocument();
+  });
+
+  it('offers only the store currency for a money setting already in it', async () => {
+    stubApi(
+      settings([
+        setting({ key: 'sales.currency', value: 'IRR', configures: null }),
+        setting({
+          key: 'referral.minimum_order_amount',
+          value: { amountMinor: '0', currency: 'IRR' },
+          configures: 'referrals',
+        }),
+      ]),
+    );
+    renderPage(<SettingsPage mayEdit denied={false} />);
+    await screen.findByRole('heading', { name: t('web.setting_referral_minimum_order_amount') });
+    const select = screen.getByLabelText(
+      `${t('web.currency')} — ${t('web.setting_referral_minimum_order_amount')}`,
+    ) as HTMLSelectElement;
+    expect([...select.options].map((option) => option.value)).toEqual(['IRR']);
+    expect(screen.queryByText(t('web.settings_money_currency_mismatch'))).toBeNull();
   });
 
   /** Owner revision 1 — the currency every amount inherits. */
@@ -186,7 +211,7 @@ describe('the settings screen', () => {
       ]),
     );
     renderPage(<SettingsPage mayEdit denied={false} />);
-    await screen.findByText('sales.currency');
+    await screen.findByRole('heading', { name: t('web.setting_sales_currency') });
 
     const select = screen.getByLabelText('واحد پول — واحد پول فروشگاه') as HTMLSelectElement;
     expect([...select.options].map((option) => option.value)).toEqual(['IRT', 'IRR']);
@@ -208,7 +233,7 @@ describe('the settings screen', () => {
       ]),
     );
     renderPage(<SettingsPage mayEdit denied={false} />);
-    await screen.findByText('sales.currency');
+    await screen.findByRole('heading', { name: t('web.setting_sales_currency') });
 
     // Exactly one of the two rows carries the warning.
     expect(screen.getAllByText(/چیزی آن را نمی‌خواند/)).toHaveLength(1);
@@ -217,7 +242,7 @@ describe('the settings screen', () => {
   it('offers no save control without the edit permission', async () => {
     stubApi(settings([setting()]));
     renderPage(<SettingsPage mayEdit={false} denied={false} />);
-    await screen.findByText('ops.notifications.max_attempts');
+    await screen.findByRole('heading', { name: t('web.setting_ops_max_attempts') });
     expect(screen.queryByRole('button', { name: 'ذخیره' })).toBeNull();
   });
 
@@ -230,7 +255,7 @@ describe('the settings screen', () => {
       },
     ]);
     renderPage(<SettingsPage mayEdit denied={false} />);
-    await screen.findByText('ops.notifications.max_attempts');
+    await screen.findByRole('heading', { name: t('web.setting_ops_max_attempts') });
     fireEvent.click(screen.getByRole('button', { name: 'ذخیره' }));
     expect(await screen.findByText('ثبت شد، اما مقداری تغییر نکرد.')).toBeInTheDocument();
   });
@@ -264,7 +289,7 @@ describe('the settings screen', () => {
       },
     ]);
     renderPage(<SettingsPage mayEdit denied={false} />);
-    await screen.findByText('ops.notifications.max_attempts');
+    await screen.findByRole('heading', { name: t('web.setting_ops_max_attempts') });
     fireEvent.click(screen.getByRole('button', { name: 'ذخیره' }));
 
     expect(await screen.findByText(t('web.rejected'))).toBeInTheDocument();
@@ -289,7 +314,7 @@ describe('the settings screen', () => {
   it('does blame the connection when the request never arrived', async () => {
     stubApi(settings([setting({ version: 2, source: 'TENANT' })]));
     renderPage(<SettingsPage mayEdit denied={false} />);
-    await screen.findByText('ops.notifications.max_attempts');
+    await screen.findByRole('heading', { name: t('web.setting_ops_max_attempts') });
 
     // The save leaves the browser and dies on the wire.
     const failing = vi.fn(() => Promise.reject(new TypeError('Failed to fetch')));
@@ -305,9 +330,7 @@ describe('the settings screen', () => {
   it('reports a stored value the registry no longer accepts', async () => {
     stubApi(settings([setting({ storedValueInvalid: true, version: 4, source: 'DEFAULT' })]));
     renderPage(<SettingsPage mayEdit denied={false} />);
-    expect(
-      await screen.findByText(/مقدار ذخیره‌شده با تعریف این کلید نمی‌خواند/),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(t('web.stored_value_invalid'))).toBeInTheDocument();
   });
 });
 
