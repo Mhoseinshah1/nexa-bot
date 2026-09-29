@@ -173,6 +173,7 @@ import {
   TICKET_ATTACHMENT_FILE_NAME_MAX_LENGTH,
   TICKET_ATTACHMENT_KINDS,
   TICKET_ATTACHMENT_MAX_BYTES,
+  TICKET_REPLY_FILE_TYPES,
   TICKET_CATEGORY_SORT_MAX,
   TICKET_CATEGORY_TITLE_MAX_LENGTH,
   TICKET_MESSAGE_MAX_LENGTH,
@@ -7490,9 +7491,9 @@ export const customerNotifications = pgTable(
 // --- Customer UX completion (docs/customer-ux-completion-audit.md) -------------
 
 /**
- * PostgreSQL `bytea`, which drizzle's pg-core does not model. The one consumer is the
- * tenant media slot below; a second consumer is a reason to move this beside the other
- * helpers, not to write a second definition.
+ * PostgreSQL `bytea`, which drizzle's pg-core does not model. Two consumers, both below:
+ * the tenant media slot and support's staged reply files (HF-A7) — one definition, never a
+ * second.
  */
 const bytea = customType<{ data: Buffer; driverData: Buffer }>({
   dataType: () => 'bytea',
@@ -8763,6 +8764,104 @@ export const ticketMessages = pgTable(
       'ticket_messages_key_check',
       sql`(idempotency_key IS NULL) = (request_hash IS NULL)
           AND (idempotency_key IS NULL OR length(idempotency_key) BETWEEN 1 AND 300)`,
+    ),
+  ],
+);
+
+// --- HF-A7: the files support attaches to a ticket reply -------------------------------
+
+/**
+ * One file support attached to a reply from the Web Admin — its STAGING, and afterwards its
+ * binding.
+ *
+ * The bytes are here only until Telegram has them. The reply's `ticket_messages` row is
+ * written first and never changes; this row names it, holds the verified file, and is what
+ * the `TICKET_REPLY_ATTACHMENT` notification reads at send time. The delivery that Telegram
+ * accepts stamps Telegram's own `file_id` here and clears `content` in the same
+ * transaction; from then on the Web Admin reads the file back from Telegram, the way it
+ * reads a customer's. Bytes Telegram never took are cleared by the worker's retention
+ * sweep after `TICKET_REPLY_FILE_RETENTION_DAYS`, and while they wait the tenant is held to
+ * `TICKET_REPLY_FILE_STAGED_MAX_BYTES` of them — so this is a bounded, short-lived staging
+ * area, never a blob store.
+ *
+ * Tenant-scoped end to end: the message, the ticket and the bot are composite foreign keys
+ * on `(tenant_id, …)`, and every query carries the tenant. `bot_instance_id` is the ticket's
+ * bot, whose token sends the file and whose namespace the stamped `file_id` belongs to.
+ */
+export const ticketReplyFiles = pgTable(
+  'ticket_reply_files',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    messageId: uuid('message_id').notNull(),
+    ticketId: uuid('ticket_id').notNull(),
+    botInstanceId: uuid('bot_instance_id')
+      .notNull()
+      .references(() => botInstances.id),
+    kind: text('kind').notNull(),
+    mimeType: text('mime_type').notNull(),
+    /** The name it is sent under, already cleaned and ending in the verified type's extension. */
+    fileName: text('file_name').notNull(),
+    byteLength: integer('byte_length').notNull(),
+    sha256: text('sha256').notNull(),
+    /** The bytes, until Telegram has them or the retention clears them. */
+    content: bytea('content'),
+    /** When `content` was cleared, by the delivery or by the retention sweep. */
+    purgedAt: timestamptz('purged_at'),
+    /** Telegram's handle for the delivered file, in `bot_instance_id`'s namespace. */
+    telegramFileId: text('telegram_file_id'),
+    telegramFileUniqueId: text('telegram_file_unique_id'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({ name: 'ticket_reply_files_pk', columns: [table.tenantId, table.messageId] }),
+    foreignKey({
+      columns: [table.tenantId, table.messageId],
+      foreignColumns: [ticketMessages.tenantId, ticketMessages.id],
+      name: 'ticket_reply_files_message_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.ticketId],
+      foreignColumns: [tickets.tenantId, tickets.id],
+      name: 'ticket_reply_files_ticket_fk',
+    }),
+    /** What the staging bound sums, and what the retention sweep walks: the held bytes. */
+    index('ticket_reply_files_staged_idx')
+      .on(table.tenantId, table.createdAt)
+      .where(sql`content IS NOT NULL`),
+    index('ticket_reply_files_retention_idx')
+      .on(table.createdAt)
+      .where(sql`content IS NOT NULL`),
+    check('ticket_reply_files_kind_check', enumCheck('kind', TICKET_ATTACHMENT_KINDS)),
+    /*
+     * The allow-list, by hand for the reason `tenant_media_assets_mime_check` gives: each
+     * type with the shape it is sent as and its own size bound, from the contract.
+     */
+    check(
+      'ticket_reply_files_type_check',
+      sql`CASE mime_type ${sql.raw(
+        TICKET_REPLY_FILE_TYPES.map((type) => {
+          if (!/^[a-z]+\/[a-z0-9.+-]+$/.test(type.mimeType) || !/^[A-Z]+$/.test(type.kind)) {
+            throw new Error(`ticket_reply_files: "${type.mimeType}" is not a plain literal.`);
+          }
+          return `WHEN '${type.mimeType}' THEN kind = '${type.kind}' AND byte_length BETWEEN 1 AND ${String(type.maxBytes)}`;
+        }).join(' '),
+      )} ELSE false END`,
+    ),
+    check(
+      'ticket_reply_files_content_check',
+      sql`(content IS NULL) = (purged_at IS NOT NULL)
+          AND (content IS NULL OR octet_length(content) = byte_length)`,
+    ),
+    check(
+      'ticket_reply_files_telegram_check',
+      sql`(telegram_file_id IS NULL) = (telegram_file_unique_id IS NULL)`,
+    ),
+    check('ticket_reply_files_sha256_check', sql`sha256 ~ '^[0-9a-f]{64}$'`),
+    check(
+      'ticket_reply_files_name_check',
+      sql`length(file_name) BETWEEN 1 AND ${sql.raw(String(TICKET_ATTACHMENT_FILE_NAME_MAX_LENGTH))}`,
     ),
   ],
 );

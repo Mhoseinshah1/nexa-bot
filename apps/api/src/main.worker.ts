@@ -80,6 +80,9 @@ async function main(): Promise<void> {
         // the line above: it bounds a table that gains rows whenever an operator
         // uploads an archive, which has nothing to do with any schedule.
         ['recovery-request-sweeper', true, () => container.recoveryRequestSweeper.isFresh(now)],
+        // HF-A7: support's staged reply files. No flag: the bytes it clears count against the
+        // tenant's staging bound, and a stalled sweep would refuse support's next file.
+        ['ticket-reply-file-sweeper', true, () => container.ticketReplyFileSweeper.isFresh(now)],
         // The lane that closes an unpaid payment and the order it was against.
         // No flag: a payment nothing expires is the defect it exists to close, and an
         // installation that could switch it off would be one whose orders say they
@@ -176,6 +179,8 @@ async function main(): Promise<void> {
   // installation with the schedule switched off too.
   container.backupRunSweeper.start();
   container.recoveryRequestSweeper.start();
+  // HF-A7: and support's reply files Telegram never took, once they are past retention.
+  container.ticketReplyFileSweeper.start();
   // And the payment/order expiry lane. OQ-4C-01's answer: until this release the
   // deadline a customer was shown was only ever a refusal, so a month-old order still
   // read as awaiting payment and an operator could not tell it from this morning's.

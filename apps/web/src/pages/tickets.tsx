@@ -1,20 +1,33 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type FormEvent,
+  type ReactNode,
+} from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   TICKET_CATEGORY_TITLE_MAX_LENGTH,
   TICKET_MESSAGE_MAX_LENGTH,
   TICKET_PRIORITIES,
+  TICKET_REPLY_FILE_MIME_TYPES,
+  TICKET_REPLY_FILE_TYPES,
   TICKET_STATUSES,
   isTicketTextWithinBound,
   normalizeTicketCategoryTitle,
   normalizeTicketText,
   ticketManualEvent,
+  ticketReplyFileRefusal,
+  ticketReplyFileTypeOf,
   type CustomerNotificationState,
   type SessionResponse,
   type TicketCategoryView,
   type TicketDetailResponse,
   type TicketMessageView,
   type TicketPriority,
+  type TicketReplyAttachment,
+  type TicketReplyFileRefusal,
   type TicketStatus,
   type TicketSummary,
   type TicketSystemEvent,
@@ -147,15 +160,105 @@ const FAULTS: Readonly<Record<string, WebKey>> = {
   'ticket.category_not_found': 'web.ticket_fault_category_missing',
   'ticket.not_found': 'web.ticket_fault_not_found',
   'ticket.attachment_unavailable': 'web.ticket_fault_attachment',
+  'ticket.attachment_storage_full': 'web.ticket_fault_storage_full',
   'platform.idempotency_payload_mismatch': 'web.ticket_fault_retry',
+};
+
+/** HF-A7: why support's file was refused — by this page before upload, or by the server. */
+export const REPLY_FILE_FAULTS: Readonly<Record<TicketReplyFileRefusal, WebKey>> = {
+  EMPTY: 'web.ticket_reply_file_empty',
+  TYPE_NOT_ALLOWED: 'web.ticket_reply_file_type',
+  TOO_LARGE: 'web.ticket_reply_file_too_large',
+  NAME_NOT_ALLOWED: 'web.ticket_reply_file_name',
+  CONTENT_MISMATCH: 'web.ticket_reply_file_content',
 };
 
 export function ticketFault(error: unknown): string {
   if (error instanceof ApiError) {
+    // The server's own judgement of support's file names which rule refused it.
+    const refusal = error.details?.refusal;
+    if (
+      error.code === 'ticket.attachment_refused' &&
+      typeof refusal === 'string' &&
+      refusal in REPLY_FILE_FAULTS
+    ) {
+      return t(REPLY_FILE_FAULTS[refusal as TicketReplyFileRefusal]);
+    }
     const key = FAULTS[error.code];
     if (key !== undefined) return t(key);
   }
   return messageFor(error);
+}
+
+/** Support's chosen file, read and judged in the browser, or the reason it cannot be sent. */
+export type PickedReplyFile =
+  | { readonly kind: 'NONE' }
+  /** A chosen file still being read: nothing may be sent until it is judged. */
+  | { readonly kind: 'READING' }
+  | { readonly kind: 'INVALID'; readonly reason: WebKey }
+  | {
+      readonly kind: 'READY';
+      readonly attachment: TicketReplyAttachment;
+      readonly byteLength: number;
+    };
+
+/** Bytes as base64, in chunks so a ten-megabyte file does not overflow the argument list. */
+function base64Of(bytes: Uint8Array): string {
+  let binary = '';
+  for (let index = 0; index < bytes.byteLength; index += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
+  }
+  return btoa(binary);
+}
+
+/**
+ * Reads the chosen file and asks the SAME rule the server asks (`ticketReplyFileRefusal`):
+ * the declared type, its size bound, the name, and the bytes' own signature. This only spares
+ * the operator an upload the server would refuse; the server decodes the bytes and asks again.
+ * A browser that declares no type is judged by the name's extension, and still by the bytes.
+ */
+export function readReplyFile(file: File): Promise<PickedReplyFile> {
+  const extension = file.name.split('.').pop()?.toLowerCase() ?? '';
+  const declared =
+    file.type !== ''
+      ? file.type
+      : (TICKET_REPLY_FILE_TYPES.find((type) =>
+          (type.extensions as readonly string[]).includes(extension),
+        )?.mimeType ?? '');
+  const type = ticketReplyFileTypeOf(declared);
+  const invalid = (reason: TicketReplyFileRefusal): Promise<PickedReplyFile> =>
+    Promise.resolve({ kind: 'INVALID', reason: REPLY_FILE_FAULTS[reason] });
+  // Refused before a byte is read: an unlisted type, an empty file, or one over its bound.
+  if (type === undefined) return invalid('TYPE_NOT_ALLOWED');
+  if (file.size === 0) return invalid('EMPTY');
+  if (file.size > type.maxBytes) return invalid('TOO_LARGE');
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onerror = () => resolve({ kind: 'INVALID', reason: 'web.ticket_reply_file_unreadable' });
+    reader.onload = () => {
+      const result = reader.result;
+      if (result === null || typeof result === 'string') {
+        resolve({ kind: 'INVALID', reason: 'web.ticket_reply_file_unreadable' });
+        return;
+      }
+      const bytes = new Uint8Array(result);
+      const refusal = ticketReplyFileRefusal({ fileName: file.name, mimeType: declared, bytes });
+      if (refusal !== null) {
+        resolve({ kind: 'INVALID', reason: REPLY_FILE_FAULTS[refusal] });
+        return;
+      }
+      resolve({
+        kind: 'READY',
+        attachment: {
+          fileName: file.name,
+          mimeType: type.mimeType,
+          contentBase64: base64Of(bytes),
+        },
+        byteLength: bytes.byteLength,
+      });
+    };
+    reader.readAsArrayBuffer(file);
+  });
 }
 
 /** A `YYYY-MM-DD` from a date input, as the operator's own midnight, or null. */
@@ -1107,6 +1210,8 @@ function TicketAttachment({ message }: { message: TicketMessageView }) {
   if (attachment === null) return null;
   const photo = attachment.kind === 'PHOTO';
   const size = attachment.fileSize === null ? null : splitBytes(BigInt(attachment.fileSize));
+  // HF-A7: support's file is its own send, so it has its own delivery beside the text's.
+  const delivery = message.attachmentDelivery;
   return (
     <div className="receipt">
       <KV
@@ -1120,6 +1225,16 @@ function TicketAttachment({ message }: { message: TicketMessageView }) {
             t('web.ticket_attachment_size'),
             size === null ? <Dash key="s" /> : `${size.value} ${t(size.unit)}`,
           ],
+          ...(delivery === null
+            ? []
+            : [
+                [
+                  t('web.ticket_attachment_delivery'),
+                  <Badge key="d" tone={DELIVERY_TONES[delivery]}>
+                    {t(DELIVERY_LABELS[delivery])}
+                  </Badge>,
+                ] satisfies [ReactNode, ReactNode],
+              ]),
         ]}
       />
       <div className="btn-group">
@@ -1135,7 +1250,15 @@ function TicketAttachment({ message }: { message: TicketMessageView }) {
       {failed && <Banner tone="warn">{t('web.ticket_attachment_failed')}</Banner>}
       {objectUrl !== null &&
         (photo ? (
-          <img className="receipt-image" src={objectUrl} alt={t('web.ticket_attachment_alt')} />
+          <img
+            className="receipt-image"
+            src={objectUrl}
+            alt={t(
+              message.senderType === 'ADMIN'
+                ? 'web.ticket_attachment_alt_support'
+                : 'web.ticket_attachment_alt',
+            )}
+          />
         ) : (
           <div className="btn-group">
             <a className="btn sm" href={objectUrl} download={attachment.fileName ?? message.id}>
@@ -1152,18 +1275,73 @@ function TicketReplyCard({ ticket }: { ticket: TicketSummary }) {
   const queries = useQueryClient();
   const submission = useSubmissionKey();
   const [text, setText] = useState('');
+  // HF-A7: one optional file, judged in the browser before it is sent and again by the server.
+  const [picked, setPicked] = useState<PickedReplyFile>({ kind: 'NONE' });
+  // Remounts the file input, the one way to clear what a file input shows.
+  const [fileInput, setFileInput] = useState(0);
+  /*
+   * The latest selection (Codex review of #108, the `client-apps.tsx` ticket). A read that
+   * completes after a newer file was picked, or after the file was removed, is discarded,
+   * so what is sent is always the file the input shows — never an earlier pick's bytes.
+   */
+  const selection = useRef(0);
   const body = normalizeTicketText(text);
-  const valid = body !== null && isTicketTextWithinBound(body);
+  // Nothing is sendable while a chosen file is being read, or when it was refused.
+  const valid =
+    body !== null &&
+    isTicketTextWithinBound(body) &&
+    picked.kind !== 'INVALID' &&
+    picked.kind !== 'READING';
+  const clearFile = () => {
+    selection.current += 1;
+    setPicked({ kind: 'NONE' });
+    setFileInput((value) => value + 1);
+  };
+  const onPick = (file: File | undefined) => {
+    selection.current += 1;
+    const ticketOfPick = selection.current;
+    // The previous pick is gone the moment a new one is made, ready or not.
+    if (file === undefined) {
+      setPicked({ kind: 'NONE' });
+      return;
+    }
+    setPicked({ kind: 'READING' });
+    void readReplyFile(file).then((result) => {
+      if (selection.current === ticketOfPick) setPicked(result);
+    });
+  };
   const reply = useMutation({
-    mutationFn: (value: string) =>
+    // The file travels as the mutation's VARIABLE, for the reason the referral banner states.
+    mutationFn: (value: { readonly text: string; readonly file: PickedReplyFile }) =>
       replyToTicket({
         ticketId: ticket.id,
-        idempotencyKey: submission.current({ ticket: ticket.id, text: value }),
-        text: value,
+        // A different file is a different command; retrying the same one is not.
+        idempotencyKey: submission.current({
+          ticket: ticket.id,
+          text: value.text,
+          /*
+           * The CONTENT is part of the fingerprint, not only the name and size (Codex review
+           * of #108, #104's rule): a key held across an ambiguous failure must not be reused
+           * for a different file sharing both, which the server refuses as a payload
+           * mismatch. The base64 itself, not a Web Crypto digest — `crypto.subtle` exists
+           * only in a secure context.
+           */
+          file:
+            value.file.kind === 'READY'
+              ? {
+                  name: value.file.attachment.fileName,
+                  size: value.file.byteLength,
+                  content: value.file.attachment.contentBase64,
+                }
+              : null,
+        }),
+        text: value.text,
+        ...(value.file.kind === 'READY' ? { attachment: value.file.attachment } : {}),
       }),
     onSuccess: () => {
       submission.settle();
       setText('');
+      clearFile();
       notify({ tone: 'ok', message: t('web.ticket_reply_sent') });
       void queries.invalidateQueries({ queryKey: ['ticket', ticket.id] });
       void queries.invalidateQueries({ queryKey: ['tickets'] });
@@ -1183,7 +1361,7 @@ function TicketReplyCard({ ticket }: { ticket: TicketSummary }) {
       <form
         onSubmit={(event) => {
           event.preventDefault();
-          if (body !== null && valid) reply.mutate(body);
+          if (body !== null && valid) reply.mutate({ text: body, file: picked });
         }}
       >
         <Field
@@ -1199,7 +1377,32 @@ function TicketReplyCard({ ticket }: { ticket: TicketSummary }) {
             onChange={(event) => setText(event.target.value)}
           />
         </Field>
+        <Field
+          label={t('web.ticket_reply_file')}
+          hint={t('web.ticket_reply_file_hint')}
+          htmlFor="ticket-reply-file"
+          {...(picked.kind === 'INVALID' ? { error: t(picked.reason) } : {})}
+        >
+          <input
+            key={fileInput}
+            id="ticket-reply-file"
+            type="file"
+            accept={[
+              ...TICKET_REPLY_FILE_MIME_TYPES,
+              ...TICKET_REPLY_FILE_TYPES.flatMap((type) =>
+                type.extensions.map((extension) => `.${extension}`),
+              ),
+            ].join(',')}
+            disabled={reply.isPending}
+            onChange={(event: ChangeEvent<HTMLInputElement>) => onPick(event.target.files?.[0])}
+          />
+        </Field>
         <div className="btn-group">
+          {picked.kind !== 'NONE' && (
+            <button type="button" className="btn sm" disabled={reply.isPending} onClick={clearFile}>
+              {t('web.ticket_reply_file_clear')}
+            </button>
+          )}
           <button type="submit" className="btn primary sm" disabled={!valid || reply.isPending}>
             {t('web.ticket_reply_send')}
           </button>

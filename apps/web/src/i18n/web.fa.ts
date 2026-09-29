@@ -4013,6 +4013,23 @@ export const WEB_FA = {
   'web.ticket_reply_send': 'ارسال پاسخ',
   'web.ticket_reply_sent': 'پاسخ ثبت شد و برای ارسال به مشتری در صف قرار گرفت.',
   'web.ticket_reply_closed': 'این تیکت بسته است. برای پاسخ، ابتدا آن را دوباره باز کنید.',
+  // HF-A7: support's file on a reply.
+  'web.ticket_reply_file': 'پیوست (اختیاری)',
+  'web.ticket_reply_file_hint':
+    'تصویر JPEG یا PNG تا ۵ مگابایت، فایل PDF تا ۱۰ مگابایت یا فایل متنی TXT تا ۱ مگابایت. فایل اجرایی، اسکریپت، فایل فشرده و صفحهٔ وب پذیرفته نمی‌شود. پیوست جدا از متن پاسخ برای مشتری فرستاده می‌شود.',
+  'web.ticket_reply_file_clear': 'حذف پیوست',
+  'web.ticket_reply_file_empty': 'این فایل خالی است.',
+  'web.ticket_reply_file_type':
+    'این نوع فایل مجاز نیست. فقط تصویر JPEG یا PNG، فایل PDF یا فایل متنی TXT با پسوند درست پذیرفته می‌شود.',
+  'web.ticket_reply_file_too_large':
+    'حجم فایل بیش از حد مجاز است: تصویر تا ۵ مگابایت، PDF تا ۱۰ مگابایت و فایل متنی تا ۱ مگابایت.',
+  'web.ticket_reply_file_name':
+    'نام فایل پسوند یک فایل اجرایی یا اسکریپت را در خود دارد. نام فایل را تغییر دهید.',
+  'web.ticket_reply_file_content':
+    'محتوای فایل با نوع و پسوند آن یکی نیست؛ ممکن است فایل اجرایی یا اسکریپتی باشد که تغییر نام داده شده است.',
+  'web.ticket_reply_file_unreadable': 'این فایل خوانده نشد. دوباره انتخاب کنید.',
+  'web.ticket_attachment_delivery': 'ارسال پیوست',
+  'web.ticket_attachment_alt_support': 'تصویر ارسالی پشتیبانی',
   'web.ticket_categories_title': 'دسته‌های تیکت',
   'web.ticket_categories_hint':
     'دسته‌هایی که مشتری هنگام ثبت تیکت در ربات انتخاب می‌کند. دسته‌ها حذف نمی‌شوند؛ دستهٔ پنهان از فهرست ربات برداشته می‌شود.',
@@ -4039,6 +4056,8 @@ export const WEB_FA = {
   'web.ticket_fault_category_missing': 'این دسته پیدا نشد.',
   'web.ticket_fault_not_found': 'این تیکت پیدا نشد.',
   'web.ticket_fault_attachment': 'این پیوست دیگر از تلگرام قابل دریافت نیست.',
+  'web.ticket_fault_storage_full':
+    'پیوست‌های زیادی هنوز در انتظار ارسال به تلگرام هستند. کمی بعد دوباره تلاش کنید یا پاسخ را بدون پیوست بفرستید.',
   'web.ticket_fault_retry':
     'این درخواست پیش‌تر با متن دیگری ثبت شده است. صفحه را تازه کنید و دوباره بفرستید.',
 } as const;

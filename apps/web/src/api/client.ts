@@ -352,6 +352,7 @@ import {
   type TicketListResponse,
   type TicketMutationResponse,
   type TicketPriority,
+  type TicketReplyAttachment,
   type TicketReplyResponse,
   type TicketStatus,
 } from '@nexa/contracts';
@@ -2885,10 +2886,16 @@ export function replyToTicket(input: {
   ticketId: string;
   idempotencyKey: string;
   text: string;
+  /** HF-A7: one file beside the text, as base64; the server judges its bytes again. */
+  attachment?: TicketReplyAttachment;
 }): Promise<TicketReplyResponse> {
   return post(
     TICKET_ROUTES.reply(input.ticketId),
-    { idempotencyKey: input.idempotencyKey, text: input.text },
+    {
+      idempotencyKey: input.idempotencyKey,
+      text: input.text,
+      ...(input.attachment === undefined ? {} : { attachment: input.attachment }),
+    },
     ticketReplyResponseSchema,
   );
 }

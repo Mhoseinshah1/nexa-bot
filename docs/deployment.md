@@ -1288,6 +1288,30 @@ passes. There is no migration. The release before it, while it runs:
 
 Nothing needs doing before rolling back past HF-A4.
 
+### What a rollback delays: support's files on ticket replies (HF-A7)
+
+HF-A7 lets support attach an image or an allowed document to a ticket reply in the Web
+Admin. The file is kept in `ticket_reply_files` until Telegram accepts it and is sent as its
+own `TICKET_REPLY_ATTACHMENT` notification beside the reply's text. The release before HF-A7
+has none of this. The migration stays: the old release never reads the new table, and the
+widened notification CHECK accepts everything either release writes. While it runs:
+
+- **A file not yet delivered waits.** The old dispatcher has no template for
+  `TICKET_REPLY_ATTACHMENT`. It defers the row without spending an attempt or stamping it,
+  and the first pass after the roll-forward sends it. The reply's TEXT is an ordinary
+  `TICKET_REPLY` and is delivered by the old release as before.
+- **Support cannot attach a file.** The old Web Admin has no file picker, and the old API
+  does not read the `attachment` field of a reply. A reply sent through the old Web Admin is
+  text only.
+- **The old Web Admin does not show support's files** on the conversation. The reply's text
+  is shown; the file row is kept and appears again after the roll-forward.
+- **Undelivered bytes are not cleared.** The old worker has no retention sweep for the new
+  table. Nothing new can be staged while the old release runs, so what is held stays at or
+  below the 100 MB per-tenant bound, and the new release's sweep clears it after the
+  roll-forward.
+
+Nothing needs doing before rolling back past HF-A7.
+
 ### How far back you can roll
 
 **One release**, safely. Migrations are expand-only within a release

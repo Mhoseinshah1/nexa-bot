@@ -499,6 +499,7 @@ export const PLACEHOLDER_LABEL_OVERRIDES_FA: Partial<
   'bot.ticket.category_button': { title: 'نام دسته' },
   'bot.ticket.message_prompt': { category: 'موضوع تیکت' },
   'bot.ticket.support_replied': { text: 'متن پاسخ پشتیبانی', category: 'موضوع تیکت' },
+  'bot.ticket.support_attachment': { number: 'شمارهٔ تیکت', category: 'موضوع تیکت' },
   'ops.support.ticket_opened': { number: 'شمارهٔ تیکت', category: 'موضوع تیکت' },
   'ops.support.customer_replied': { number: 'شمارهٔ تیکت', category: 'موضوع تیکت' },
 };
@@ -1998,6 +1999,10 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'bot.ticket.support_replied': [
     'پاسخ پشتیبانی به تیکت (اعلان به مشتری)',
     'وقتی پشتیبانی در پنل پاسخ می‌دهد برای مشتری فرستاده می‌شود؛ متن پاسخ هنگام ارسال از خود تیکت خوانده می‌شود.',
+  ],
+  'bot.ticket.support_attachment': [
+    'پیوست پاسخ پشتیبانی (اعلان به مشتری)',
+    'زیرنویس عکس یا فایلی که پشتیبانی همراه پاسخ فرستاده است؛ جدا از متن پاسخ برای مشتری ارسال می‌شود.',
   ],
   'bot.ticket.view_button': ['دکمهٔ مشاهدهٔ تیکت', 'در اعلان پاسخ پشتیبانی، تیکت را باز می‌کند.'],
   'bot.ticket.category_default_1': [

@@ -34,7 +34,16 @@ export { TELEGRAM_CAPTION_MAX };
  *   legacy log group's repeated-identical-error pattern with a scheduler in front.
  */
 export type TelegramSendOutcome =
-  | { readonly outcome: 'SUCCEEDED'; readonly messageId: number | null }
+  | {
+      readonly outcome: 'SUCCEEDED';
+      readonly messageId: number | null;
+      /**
+       * HF-A7: the file a `sendPhoto` or `sendDocument` delivered, as Telegram now holds it
+       * — the largest size of a photo, or the document. Absent for a text message, and for
+       * an answer that did not name one in the expected shape.
+       */
+      readonly file?: { readonly fileId: string; readonly fileUniqueId: string };
+    }
   | {
       readonly outcome: 'FAILED_RETRYABLE';
       readonly errorCode: string;
@@ -106,7 +115,36 @@ export async function telegramSend(request: TelegramRequest): Promise<TelegramSe
   // `result`; this narrows it, which is why the bootstrap needed its own callers
   // rather than a wider return type here.
   const result = call.result as { message_id?: number } | null;
-  return { outcome: 'SUCCEEDED', messageId: result?.message_id ?? null };
+  const file = sentFileOf(call.result);
+  return {
+    outcome: 'SUCCEEDED',
+    messageId: result?.message_id ?? null,
+    ...(file === null ? {} : { file }),
+  };
+}
+
+/**
+ * The delivered file's handle from a media send's `Message`: `document`, or the LAST entry of
+ * `photo` (Telegram lists a photo's sizes smallest first). `null` unless both ids are
+ * non-empty strings — an answer this code does not recognise is not guessed at.
+ */
+export function sentFileOf(
+  result: unknown,
+): { readonly fileId: string; readonly fileUniqueId: string } | null {
+  if (typeof result !== 'object' || result === null) return null;
+  const message = result as { document?: unknown; photo?: unknown };
+  const candidate = Array.isArray(message.photo) ? message.photo.at(-1) : message.document;
+  if (typeof candidate !== 'object' || candidate === null) return null;
+  const { file_id: fileId, file_unique_id: fileUniqueId } = candidate as {
+    file_id?: unknown;
+    file_unique_id?: unknown;
+  };
+  return typeof fileId === 'string' &&
+    fileId !== '' &&
+    typeof fileUniqueId === 'string' &&
+    fileUniqueId !== ''
+    ? { fileId, fileUniqueId }
+    : null;
 }
 
 /**
