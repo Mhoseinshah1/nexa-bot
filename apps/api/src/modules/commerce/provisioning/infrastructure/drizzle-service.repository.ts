@@ -78,6 +78,7 @@ function toRecord(row: Row): ServiceRecord {
     orderId: row.orderId as OrderId,
     panelId: row.panelId as PanelId,
     productId: row.productId as ProductId | null,
+    isTrial: row.isTrial,
     state: row.state as ServiceState,
     providerUsername: row.providerUsername,
     subscriptionRef: row.subscriptionRef,

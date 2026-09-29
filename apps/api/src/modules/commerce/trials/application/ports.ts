@@ -1,4 +1,11 @@
-import type { CustomerStatus, OrderId, ProductId, TenantContext, UserId } from '@nexa/contracts';
+import type {
+  CustomerStatus,
+  OrderId,
+  PanelId,
+  ProductId,
+  TenantContext,
+  UserId,
+} from '@nexa/contracts';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 
 /**
@@ -12,7 +19,8 @@ export interface TrialGrantRecord {
   readonly id: string;
   readonly customerId: UserId;
   readonly orderId: OrderId;
-  readonly productId: ProductId;
+  /** The trial product before R1; null for every grant since (the panel is on the order). */
+  readonly productId: ProductId | null;
   readonly serviceId: string | null;
   readonly createdAt: Date;
   readonly releasedAt: Date | null;
@@ -22,7 +30,7 @@ export interface TrialGrantDraft {
   readonly id: string;
   readonly customerId: UserId;
   readonly orderId: OrderId;
-  readonly productId: ProductId;
+  readonly productId: ProductId | null;
   readonly serviceId: string;
   readonly now: Date;
 }
@@ -162,4 +170,50 @@ export interface TrialResetRepository {
     readonly items: readonly TrialResetRecord[];
     readonly nextCursor: TrialResetCursor | null;
   }>;
+}
+
+/**
+ * R1: one panel's trial configuration, as `panel_trial_configs` stores it. No row means the
+ * panel offers no trial.
+ */
+export interface PanelTrialConfigRecord {
+  readonly panelId: PanelId;
+  readonly enabled: boolean;
+  /** Positive, and at most `PANEL_TRIAL_TRAFFIC_MAX_BYTES`. Never "unlimited". */
+  readonly trafficBytes: bigint;
+  readonly durationHours: number;
+  /** The customer-facing name; null means the panel's own name. */
+  readonly label: string | null;
+  readonly revision: number;
+  readonly updatedAt: Date;
+}
+
+export interface PanelTrialConfigWrite {
+  readonly enabled: boolean;
+  readonly trafficBytes: bigint;
+  readonly durationHours: number;
+  readonly label: string | null;
+}
+
+export interface PanelTrialConfigRepository {
+  find(
+    scope: TenantContext,
+    panelId: string,
+    tx?: TransactionScope,
+  ): Promise<PanelTrialConfigRecord | null>;
+  /** Every configured panel of the tenant, enabled or not, in panel-id order. */
+  list(scope: TenantContext, tx?: TransactionScope): Promise<readonly PanelTrialConfigRecord[]>;
+  /**
+   * Insert (`expectedRevision` 0) or replace (`revision = expectedRevision`), as ONE
+   * conditional write. Null when the stored revision is not the expected one — including
+   * an insert that lost to a concurrent one — so the caller answers "stale".
+   */
+  save(
+    scope: TenantContext,
+    panelId: string,
+    write: PanelTrialConfigWrite,
+    expectedRevision: number,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<PanelTrialConfigRecord | null>;
 }

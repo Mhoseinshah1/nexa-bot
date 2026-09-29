@@ -10,7 +10,10 @@ import {
   trialOverrideListQuerySchema,
   trialResetListQuerySchema,
   type CustomerTrialResponse,
+  type PanelTrialOverviewResponse,
+  type PanelTrialResponse,
   type TenantContext,
+  type UpdatePanelTrialResponse,
   type TrialOverrideListResponse,
   type TrialResetListResponse,
   type TrialResetPreviewResponse,
@@ -81,6 +84,36 @@ export class TrialsController {
       reason: command.reason ?? null,
     });
     return { trial: toAllowance(allowance) };
+  }
+
+  /**
+   * R1: one panel's free trial. `panels.view` to read, `panels.edit` to replace — both
+   * charged by `PanelTrialService`, and the write refused for a stale revision.
+   */
+  @Get('panels/:id/trial')
+  async panelTrial(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+  ): Promise<PanelTrialResponse> {
+    const { scope, actor } = await this.authenticate(request);
+    return { trial: await this.container.panelTrials.get(scope, actor, id) };
+  }
+
+  @Post('panels/:id/trial')
+  async updatePanelTrial(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ): Promise<UpdatePanelTrialResponse> {
+    const { scope, actor } = await this.authenticate(request, { write: true });
+    return this.container.panelTrials.update(scope, actor, id, body);
+  }
+
+  /** R1: every configured panel's trial and whether a customer is offered it now. */
+  @Get('trials/panels')
+  async panelTrials(@Req() request: FastifyRequest): Promise<PanelTrialOverviewResponse> {
+    const { scope, actor } = await this.authenticate(request);
+    return this.container.panelTrials.overview(scope, actor);
   }
 
   @Get('trials/overrides')

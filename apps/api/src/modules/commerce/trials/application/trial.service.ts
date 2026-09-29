@@ -6,6 +6,7 @@ import {
   isNexaError,
   money,
   nextState,
+  uuidV7Schema,
   type ActorContext,
   type AuditWriter,
   type Clock,
@@ -13,6 +14,7 @@ import {
   type IdempotencyStore,
   type OperationalEventRecorder,
   type OrderId,
+  type PanelId,
   type PermissionKey,
   type SalesCurrencyCode,
   type TenantContext,
@@ -33,7 +35,6 @@ import type { SettingsResolver } from '../../../control/settings/application/set
 import type { FeatureFlagResolver } from '../../../control/features/application/feature-flags.service.js';
 import type { OutboxWriter } from '../../../platform/eventing/infrastructure/outbox-writer.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
-import type { ProductRecord, ProductRepository } from '../../catalog/application/ports.js';
 import type { CustomerRepository } from '../../customers/application/ports.js';
 import type { OrderRecord, OrderRepository } from '../../orders/application/ports.js';
 import { quoteTrial } from '../../orders/application/order-pricing.js';
@@ -42,8 +43,15 @@ import type { ProvisioningService } from '../../provisioning/application/provisi
 import type { OrderUsernameLane } from '../../provisioning/application/username-lane.js';
 import type { WalletRepository } from '../../wallet/application/ports.js';
 import type { PanelSalesGate } from '../../../platform/panels/application/panel-sales-gate.js';
-import type { TrialGrantRepository, TrialOverrideRepository } from './ports.js';
+import type { PanelRepository } from '../../../platform/panels/application/ports.js';
+import type {
+  PanelTrialConfigRecord,
+  PanelTrialConfigRepository,
+  TrialGrantRepository,
+  TrialOverrideRepository,
+} from './ports.js';
 import { trialAllowanceFor } from './trial-allowance.js';
+import { trialOffersFor, type TrialOffer } from './trial-offers.js';
 
 /**
  * The permission a customer's own trial claim is charged against.
@@ -70,9 +78,13 @@ const USERNAME_REFUSALS: readonly string[] = [
   COMMERCE_ERROR_CODES.SERVICE_USERNAME_EXHAUSTED,
 ];
 
-/** Whether this customer could take a trial right now, and if not, why. */
+/**
+ * Whether this customer could take a trial right now, and if so on which panels — one or
+ * more, never zero — and if not, why.
+ */
 export type TrialAvailability =
-  { readonly available: true } | { readonly available: false; readonly reason: TrialRejection };
+  | { readonly available: true; readonly offers: readonly TrialOffer[] }
+  | { readonly available: false; readonly reason: TrialRejection };
 
 /**
  * What a claim's idempotency record holds: the trial it issued, or the refusal it gave.
@@ -100,8 +112,6 @@ export type TrialClaimResult =
       readonly replayed?: true;
     };
 
-/** The configured trial product, with the panel it is issued on known to exist. */
-type TrialProduct = ProductRecord & { readonly panelId: NonNullable<ProductRecord['panelId']> };
 
 /**
  * A refusal discovered AFTER something was written, carried out of the transaction so
@@ -118,14 +128,17 @@ export interface TrialServiceDeps {
   /** The customer's custom limit, read by the one allowance evaluator. */
   readonly overrides: Pick<TrialOverrideRepository, 'find'>;
   readonly orders: OrderRepository;
-  readonly products: ProductRepository;
+  /** R1: each panel's trial — what a trial IS since the product setting was retired. */
+  readonly configs: Pick<PanelTrialConfigRepository, 'find' | 'list'>;
+  /** The panel's name, the title of a trial whose configuration names none. */
+  readonly panels: Pick<PanelRepository, 'find' | 'findMany'>;
   readonly customers: Pick<CustomerRepository, 'findById'>;
   /** The customer row lock — the same lock settlement and the wallet take. */
   readonly wallet: Pick<WalletRepository, 'lockCustomer'>;
   readonly usernames: Pick<OrderUsernameLane, 'require' | 'modesFor'>;
   /**
-   * The catalogue's own panel eligibility, read-only. Only `availabilityFor` asks it:
-   * the claim decides the panel again under its lock in `prepareFulfilment`.
+   * The catalogue's own panel eligibility, read-only. Only the offer asks it: the claim
+   * decides the panel again under its lock in `prepareFulfilment`.
    */
   readonly panelSales: Pick<PanelSalesGate, 'evaluateMany'>;
   readonly provisioning: Pick<ProvisioningService, 'prepareFulfilment' | 'planForSettledOrder'>;
@@ -144,7 +157,7 @@ export interface TrialServiceDeps {
 }
 
 /**
- * The trial, end to end on the application side. `docs/wp6-audit.md` §2.
+ * The trial, end to end on the application side. `docs/wp6-audit.md` §2; R1.
  *
  * A trial is an ORDER — purpose `TRIAL`, total zero — that reaches `PAID` through the
  * order machine's `GRANT` edge and is then provisioned by exactly the path a purchase
@@ -152,6 +165,12 @@ export interface TrialServiceDeps {
  * `planForSettledOrder` records the service and the `PROVISION` operation. Nothing here
  * talks to a panel, and nothing here touches money: no wallet entry, no payment, no
  * discount, no referral, no reseller margin (plan §7.1).
+ *
+ * Since R1 the order names NO product. What it grants is the chosen panel's trial
+ * configuration (`panel_trial_configs`): its traffic, its hours — frozen on the order's
+ * line, so editing the configuration later changes no trial already issued — and its
+ * name as the line's title. The service the order produces is marked `is_trial` by the
+ * database itself. Delivery, the service card and its actions are the ordinary ones.
  *
  * Eligibility is ADR-0015's limit minus used, decided under the customer's row lock so
  * two concurrent claims serialise and the second counts the first. The limit is the
@@ -164,8 +183,13 @@ export class TrialService {
   constructor(private readonly deps: TrialServiceDeps) {}
 
   /**
-   * Whether to OFFER a trial. A courtesy for the surface, never trusted: `claim`
-   * decides every one of these again inside its transaction, under the lock.
+   * Whether to OFFER a trial, and on which panels. A courtesy for the surface, never
+   * trusted: `claim` decides every one of these again inside its transaction, under the
+   * customer's lock and the panel's.
+   *
+   * The panels are `trialOffersFor`'s: enabled, eligible by the one evaluator, and able
+   * to name the account themselves. Without that the button was offered for a trial the
+   * tap could only refuse (Codex, PR #64).
    */
   async availabilityFor(
     scope: TenantContext,
@@ -173,22 +197,17 @@ export class TrialService {
     customerId: UserId,
   ): Promise<TrialAvailability> {
     await this.deps.guard.check(scope, actor, TRIAL_CLAIM_PERMISSION);
-    const decision = await this.decideBeforeWriting(scope, customerId);
-    if ('refusal' in decision) return { available: false, reason: decision.refusal };
+    const refusal = await this.refusalBeforeWriting(scope, customerId);
+    if (refusal !== null) return { available: false, reason: refusal };
+    const offers = await trialOffersFor(this.deps, scope);
+    if (offers.length > 0) return { available: true, offers };
     /*
-     * The two things a claim would find out only after writing: whether the panel can
-     * take a new account now, and whether its username policy lets the installation
-     * choose the name. Asked of the SAME evaluator the catalogue lists by and the same
-     * lane the claim reserves through, read-only. Without them the button was offered
-     * for a trial the tap could only refuse (Codex, PR #64).
+     * UNCONFIGURED when no panel has an enabled trial at all, PRODUCT_UNAVAILABLE when one
+     * has and none can take a new account now. The customer hears one sentence for both;
+     * the operator's audit row does not.
      */
-    const panelId = decision.product.panelId;
-    const verdict = (await this.deps.panelSales.evaluateMany(scope, [panelId])).get(panelId);
-    if (verdict?.eligible !== true) return { available: false, reason: 'PRODUCT_UNAVAILABLE' };
-    if (!(await this.deps.usernames.modesFor(scope, panelId)).includes('AUTOMATIC')) {
-      return { available: false, reason: 'PRODUCT_UNAVAILABLE' };
-    }
-    return { available: true };
+    const configured = (await this.deps.configs.list(scope)).some((config) => config.enabled);
+    return { available: false, reason: configured ? 'PRODUCT_UNAVAILABLE' : 'UNCONFIGURED' };
   }
 
   /**
@@ -201,9 +220,13 @@ export class TrialService {
     scope: TenantContext,
     actor: ActorContext,
     customerId: UserId,
-    input: { readonly idempotencyKey: string },
+    input: {
+      readonly idempotencyKey: string;
+      /** The panel whose trial the customer chose — or the only one offered. */
+      readonly panelId: string;
+    },
   ): Promise<TrialClaimResult> {
-    const requestHash = hashRequest({ customerId, kind: 'TRIAL' });
+    const requestHash = hashRequest({ customerId, kind: 'TRIAL', panelId: input.panelId });
     const denial = { action: 'trial.claim', entityType: 'Customer', entityId: customerId };
     await this.authorize(scope, actor, denial);
 
@@ -242,13 +265,18 @@ export class TrialService {
           const already = await this.replay(scope, input.idempotencyKey, requestHash);
           if (already !== null) return already;
 
-          const decision = await this.decideBeforeWriting(scope, customerId, tx);
-          if ('refusal' in decision) {
-            return { outcome: 'REFUSED', reason: decision.refusal } as const;
-          }
-          // The record the decision approved, carried rather than read again: a second
-          // read could find the product gone and had to be cast past that possibility.
-          const product = decision.product;
+          const refusal = await this.refusalBeforeWriting(scope, customerId, tx);
+          if (refusal !== null) return { outcome: 'REFUSED', reason: refusal } as const;
+          /*
+           * The chosen panel's trial, read inside the transaction: a trial switched off, or
+           * a panel id the customer never had offered, is refused here and nothing is
+           * written. Whether the panel may take the account is decided below, under its
+           * lock, by the evaluator settlement uses.
+           */
+          const config = await this.configFor(scope, input.panelId, tx);
+          if (config === null) throw new TrialRefused('PRODUCT_UNAVAILABLE');
+          const panel = await this.deps.panels.find(scope, config.panelId, tx);
+          if (panel === null) throw new TrialRefused('PRODUCT_UNAVAILABLE');
           const currency = await this.deps.settings.valueOf<SalesCurrencyCode>(
             scope,
             'sales.currency',
@@ -262,11 +290,13 @@ export class TrialService {
           const expiresAt = new Date(now.getTime() + expiryMinutes * 60_000);
 
           /*
-           * The snapshot. Panel, duration, traffic and device limit are copied from the
-           * product as it reads NOW, and `nexa_orders_snapshot_guard` freezes them the
-           * moment `confirmed_at` is written below — so editing the trial product later
-           * changes no trial already issued (plan §7.1). No category: a trial is not
-           * something a customer browsed to, and the column's null is its honest value.
+           * The snapshot: the panel, the traffic and the hours, copied from the panel's
+           * trial configuration as it reads NOW, and frozen by `nexa_orders_snapshot_guard`
+           * the moment `confirmed_at` is written below — so editing the trial later
+           * changes no trial already issued. No product and no category: a trial is not
+           * something a customer bought or browsed to, and a null is the honest value for
+           * both. `durationDays` is the hours rounded UP, for every reader that knows only
+           * days; the provisioner computes the expiry from the hours.
            */
           const draft = await this.deps.orders.create(
             scope,
@@ -275,15 +305,20 @@ export class TrialService {
               customerId,
               purpose: 'TRIAL',
               line: {
-                productId: product.id,
-                panelId: product.panelId,
-                title: product.title,
+                productId: null,
+                panelId: config.panelId,
+                title: config.label ?? panel.panel.name,
                 category: null,
-                specification: product.specification,
+                specification: {
+                  durationDays: Math.ceil(config.durationHours / 24),
+                  trafficBytes: config.trafficBytes,
+                  deviceLimit: null,
+                },
+                durationHours: config.durationHours,
                 unitPrice: money(0n, currency),
                 quantity: MAX_ORDER_QUANTITY,
               },
-              totals: quoteTrial(product, currency, now),
+              totals: quoteTrial(null, currency, now),
               expiresAt,
               now,
             },
@@ -305,7 +340,7 @@ export class TrialService {
           try {
             await this.deps.usernames.require(
               scope,
-              { orderId: draft.id, customerId, panelId: product.panelId, expiresAt },
+              { orderId: draft.id, customerId, panelId: config.panelId, expiresAt },
               tx,
             );
           } catch (error) {
@@ -357,7 +392,7 @@ export class TrialService {
               id: this.deps.ids.uuid(),
               customerId,
               orderId: granted.id,
-              productId: product.id,
+              productId: null,
               serviceId: service.id,
               now,
             },
@@ -371,7 +406,7 @@ export class TrialService {
             eventType: 'TrialIssued',
             aggregateType: 'Trial',
             aggregateId: granted.id,
-            payload: { customerId, productId: product.id, serviceId: service.id },
+            payload: { customerId, productId: null, serviceId: service.id, panelId: config.panelId },
           });
 
           await this.deps.audit.record(
@@ -385,10 +420,9 @@ export class TrialService {
               after: {
                 orderId: granted.id,
                 serviceId: service.id,
-                productId: product.id,
-                panelId: product.panelId,
-                durationDays: product.specification.durationDays,
-                trafficBytes: product.specification.trafficBytes.toString(),
+                panelId: config.panelId,
+                durationHours: config.durationHours,
+                trafficBytes: config.trafficBytes.toString(),
               },
               result: 'SUCCESS',
             },
@@ -427,33 +461,25 @@ export class TrialService {
   }
 
   /**
-   * Every refusal that can be decided without writing anything, in the order a
-   * customer's situation is most usefully described. `null` means none applies.
+   * Every refusal about the CUSTOMER that can be decided without writing anything, in the
+   * order a customer's situation is most usefully described. `null` means none applies.
    *
    * Shared by `availabilityFor` and `claim` so the button and the tap cannot disagree
-   * about what makes a trial available — the second only adds the checks that need a
-   * row to exist first.
+   * about what makes a trial available — the second only adds the checks that need a row
+   * to exist first.
    */
-  private async decideBeforeWriting(
+  private async refusalBeforeWriting(
     scope: TenantContext,
     customerId: UserId,
     tx?: TransactionScope,
-  ): Promise<{ readonly refusal: TrialRejection } | { readonly product: TrialProduct }> {
-    if (!(await this.deps.features.isEnabled(scope, 'trials', tx))) {
-      return { refusal: 'UNCONFIGURED' };
-    }
-    const productId = await this.deps.settings.valueOf<string | null>(
-      scope,
-      'trial.product_id',
-      tx,
-    );
-    if (productId === null) return { refusal: 'UNCONFIGURED' };
+  ): Promise<TrialRejection | null> {
+    if (!(await this.deps.features.isEnabled(scope, 'trials', tx))) return 'UNCONFIGURED';
 
     const customer = await this.deps.customers.findById(scope, customerId, tx);
     if (customer === null) {
       throw errors.notFound(COMMERCE_ERROR_CODES.CUSTOMER_NOT_FOUND, 'Unknown customer.');
     }
-    if (customer.status === 'BLOCKED') return { refusal: 'CUSTOMER_BLOCKED' };
+    if (customer.status === 'BLOCKED') return 'CUSTOMER_BLOCKED';
 
     /*
      * The ONE allowance evaluator, the same function the operator's view renders
@@ -462,31 +488,23 @@ export class TrialService {
      * zero trials, never unlimited (ADR-0015): `used >= 0` refuses everyone.
      */
     const allowance = await trialAllowanceFor(this.deps, scope, customerId, tx);
-    if (allowance.used >= allowance.effectiveLimit) return { refusal: 'LIMIT_REACHED' };
-
-    const product = await this.configuredProduct(scope, tx);
-    if (product === null) return { refusal: 'PRODUCT_UNAVAILABLE' };
-    return { product };
+    if (allowance.used >= allowance.effectiveLimit) return 'LIMIT_REACHED';
+    return null;
   }
 
   /**
-   * The configured trial product, when it can be issued: it exists in this tenant, it
-   * is ACTIVE and it names a panel. A price is not required — a trial product usually
-   * has none, which is what keeps it out of the catalogue.
+   * The chosen panel's trial, when it can be issued: configured on this tenant's panel
+   * and enabled. A panel id that is not a uuid is simply no trial — it came from a
+   * customer's callback, which Telegram signs nothing about.
    */
-  private async configuredProduct(
+  private async configFor(
     scope: TenantContext,
-    tx?: TransactionScope,
-  ): Promise<TrialProduct | null> {
-    const productId = await this.deps.settings.valueOf<string | null>(
-      scope,
-      'trial.product_id',
-      tx,
-    );
-    if (productId === null) return null;
-    const product = await this.deps.products.findById(scope, productId as ProductRecord['id'], tx);
-    if (product === null || product.status !== 'ACTIVE' || product.panelId === null) return null;
-    return { ...product, panelId: product.panelId };
+    panelId: string,
+    tx: TransactionScope,
+  ): Promise<(PanelTrialConfigRecord & { readonly panelId: PanelId }) | null> {
+    if (!uuidV7Schema.safeParse(panelId).success) return null;
+    const config = await this.deps.configs.find(scope, panelId, tx);
+    return config === null || !config.enabled ? null : config;
   }
 
   /**

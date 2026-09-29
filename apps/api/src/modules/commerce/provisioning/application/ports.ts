@@ -38,8 +38,16 @@ export interface ServiceRecord {
   readonly customerId: UserId;
   readonly orderId: OrderId;
   readonly panelId: PanelId;
-  /** Null for a custom service (Package D), which was bought from no product. */
+  /**
+   * Null for a custom service (Package D), which was bought from no product, and for a
+   * trial issued from a panel's trial configuration (R1).
+   */
   readonly productId: ProductId | null;
+  /**
+   * R1: a free trial — `services.is_trial`, which the database sets from the creating
+   * order's purpose and never lets change. Read, never written by the application.
+   */
+  readonly isTrial: boolean;
   readonly state: ServiceState;
   readonly providerUsername: string;
   /** The panel's `subId` for this service. A bearer capability; never derived. */
@@ -1261,12 +1269,21 @@ export interface PanelOperabilityReader {
   ): Promise<PanelOperability>;
 }
 
+/**
+ * What an order froze, as the provisioner reads it: the product-shaped specification and,
+ * for a trial issued from a panel's trial configuration (R1), its length in hours — null on
+ * every other order.
+ */
+export type PurchasedSpecification = ProductSpecification & {
+  readonly durationHours: number | null;
+};
+
 export interface PurchaseSnapshotReader {
   specificationFor(
     scope: TenantContext,
     orderId: OrderId,
     tx?: unknown,
-  ): Promise<ProductSpecification | null>;
+  ): Promise<PurchasedSpecification | null>;
 }
 
 /**

@@ -46,6 +46,13 @@ export interface OrderLine {
    */
   readonly category: OrderCategorySnapshot | null;
   readonly specification: ProductSpecification;
+  /**
+   * R1: a trial's length in hours, on a `TRIAL` order issued from a panel's trial
+   * configuration; absent or null on every other line. When present it, not
+   * `specification.durationDays` (the same length rounded up to whole days, for readers
+   * that know only days), is what the service's expiry is computed from.
+   */
+  readonly durationHours?: number | null;
   readonly unitPrice: Money;
   readonly quantity: number;
 }
