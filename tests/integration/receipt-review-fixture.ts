@@ -355,7 +355,9 @@ export function tap(f: ReceiptFixture, data: string, telegramUserId: string) {
           from: { id: Number(telegramUserId), is_bot: false, first_name: 'کاربر' },
           data,
           message: {
-            message_id: 1,
+            // R2: each tap from its own message, as a real chat has; the receipt-review
+            // cases that tap ONE message twice build that message themselves.
+            message_id: 1000 + updateSeq,
             date: 0,
             chat: { id: Number(telegramUserId), type: 'private' },
           },
@@ -364,6 +366,48 @@ export function tap(f: ReceiptFixture, data: string, telegramUserId: string) {
       telegramUserId,
     ),
   );
+}
+
+/**
+ * R2: a tap on ONE named message — the receipt a reviewer was sent (a photo, so its caption
+ * is what an edit changes) or a prompt the bot sent — so a case can tap the same message
+ * twice, as a double tap or a redelivery does. `replayOf` re-sends an earlier update
+ * verbatim, idempotency key included: Telegram redelivering it.
+ */
+export function tapOn(
+  f: ReceiptFixture,
+  data: string,
+  telegramUserId: string,
+  message: { readonly id: number; readonly photo?: boolean },
+) {
+  f.sent = [];
+  const update = baseUpdate(
+    {
+      callback_query: {
+        id: `cbq-${String(updateSeq)}`,
+        from: { id: Number(telegramUserId), is_bot: false, first_name: 'کاربر' },
+        data,
+        message: {
+          message_id: message.id,
+          date: 0,
+          chat: { id: Number(telegramUserId), type: 'private' },
+          ...(message.photo === true
+            ? { photo: [{ file_id: 'receipt', file_unique_id: 'u-receipt', width: 9, height: 9 }] }
+            : {}),
+        },
+      },
+    },
+    telegramUserId,
+  );
+  return {
+    update,
+    result: f.ctx.container.botRuntime.handle(tenantA, systemActor('bot'), update),
+  };
+}
+
+export function replayOf(f: ReceiptFixture, update: ReturnType<typeof baseUpdate>) {
+  f.sent = [];
+  return f.ctx.container.botRuntime.handle(tenantA, systemActor('bot'), update);
 }
 
 export function say(f: ReceiptFixture, message: string, telegramUserId: string) {
@@ -413,7 +457,14 @@ export function photoUpdate(fileId: string, telegramUserId: string, idempotencyK
 
 export const lastReply = (f: ReceiptFixture): Record<string, unknown> => {
   const replies = f.sent.filter((one) =>
-    ['sendMessage', 'sendPhoto', 'sendDocument'].includes(one.method),
+    [
+      'sendMessage',
+      'sendPhoto',
+      'sendDocument',
+      // R2: a decision edits the message it was taken on.
+      'editMessageText',
+      'editMessageCaption',
+    ].includes(one.method),
   );
   return replies[replies.length - 1]?.body ?? {};
 };

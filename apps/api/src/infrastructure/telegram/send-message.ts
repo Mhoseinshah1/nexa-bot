@@ -442,6 +442,52 @@ function captionAndKeyboardFields(input: {
 }
 
 /**
+ * R2 (v0.3.5 real-test items 3–5), beside R3's `editMessageBody` and on its rules: the
+ * other three ways this bot changes a message it ALREADY SENT. `editMessageCaption` for a
+ * file whose caption carries the text (a reviewer's receipt), `editMessageReplyMarkup` to
+ * take a keyboard off a message whose text stays, and `deleteMessage`.
+ *
+ * The keyboard is always sent, even empty, for the reason `editMessageBody` gives: a
+ * message edited into a result must keep no button that could ask for the decision again.
+ */
+export function editCaptionBody(input: {
+  readonly chatId: string;
+  readonly messageId: number;
+  readonly caption: string;
+  readonly html: boolean;
+  readonly buttons: readonly TelegramButton[];
+}): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    chat_id: input.chatId,
+    message_id: input.messageId,
+    caption: input.html ? input.caption : boundCaption(input.caption),
+    reply_markup: { inline_keyboard: telegramButtonMarkup(input.buttons) },
+  };
+  if (input.html) body.parse_mode = 'HTML';
+  return body;
+}
+
+/** `editMessageReplyMarkup` with an EMPTY keyboard: the text stays, every button goes. */
+export function clearKeyboardBody(input: {
+  readonly chatId: string;
+  readonly messageId: number;
+}): Record<string, unknown> {
+  return {
+    chat_id: input.chatId,
+    message_id: input.messageId,
+    reply_markup: { inline_keyboard: [] },
+  };
+}
+
+/** `deleteMessage`. */
+export function deleteMessageBody(input: {
+  readonly chatId: string;
+  readonly messageId: number;
+}): Record<string, unknown> {
+  return { chat_id: input.chatId, message_id: input.messageId };
+}
+
+/**
  * The upload of a `sendPhoto` or `sendDocument` from BYTES this installation holds — a
  * subscription QR code it has just rendered — with the same caption and keyboard rules
  * as `fileMessageBody`.

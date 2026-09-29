@@ -289,6 +289,19 @@ export interface CustomerSendResult {
    * is what lets the staged bytes be cleared once Telegram holds them.
    */
   readonly file?: { readonly fileId: string; readonly fileUniqueId: string };
+  /**
+   * R2: Telegram's id for the message a `send` or `sendFile` delivered (the LAST part of a
+   * split text) — present only with `DELIVERED`, and only when the answer named one. It is
+   * what lets a later turn edit that message in place instead of sending another.
+   */
+  readonly messageId?: number;
+}
+
+/** R2: a message this bot sent, named for a keyboard removal or a deletion. */
+export interface CustomerMessageRef {
+  readonly chatId: string;
+  readonly messageId: number;
+  readonly botInstanceId: BotInstanceId;
 }
 
 /**
@@ -344,6 +357,23 @@ export interface CustomerMessenger {
    * a `reason`, without a request — see `CustomerSendRefusal`.
    */
   sendFile(scope: TenantContext, message: CustomerFileMessage): Promise<CustomerSendResult>;
+
+  /**
+   * R2 (v0.3.5 real-test items 3–5), beside R3's `edit` and on its rules: the receipt a
+   * reviewer was sent is a FILE, whose CAPTION is what an edit changes (`editMessageCaption`)
+   * — Telegram cannot turn a photo into a text message. Same outcomes as `edit`: DELIVERED
+   * for "not modified", REFUSED `NOT_EDITABLE` for every definite refusal.
+   */
+  editCaption?(scope: TenantContext, message: CustomerEditMessage): Promise<CustomerSendResult>;
+
+  /** R2: takes every button off a message this bot sent; its text stays. */
+  clearButtons?(scope: TenantContext, message: CustomerMessageRef): Promise<CustomerSendResult>;
+
+  /**
+   * R2: deletes a message in a private chat — the customer's own typed answer to a wizard
+   * step. Best effort: Telegram refuses a message older than 48 hours.
+   */
+  remove?(scope: TenantContext, message: CustomerMessageRef): Promise<CustomerSendResult>;
 
   /**
    * Stops the spinner on a tapped button. Best effort, and the outcome is not returned.

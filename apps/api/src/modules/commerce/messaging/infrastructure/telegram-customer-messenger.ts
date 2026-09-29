@@ -22,6 +22,10 @@ import {
   fileUploadBody,
   telegramSend,
   textMessageBody,
+  // R2: the caption edit, the keyboard removal and the deletion.
+  clearKeyboardBody,
+  deleteMessageBody,
+  editCaptionBody,
   type TelegramButton,
   type TelegramRequest,
   type TelegramSendOutcome,
@@ -39,6 +43,7 @@ import type {
   CustomerEditMessage,
   CustomerFileMessage,
   CustomerMessage,
+  CustomerMessageRef,
   CustomerMessenger,
   CustomerSendConditionReader,
   CustomerSendResult,
@@ -277,21 +282,23 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
       text.length <= TELEGRAM_MESSAGE_MAX ? [text] : splitMessageBody(text, TELEGRAM_MESSAGE_MAX);
     const sequence = parts.length === 0 ? [text] : parts;
     let worst: ClassifiedOutcome = { sent: { outcome: 'DELIVERED' }, errorCode: null };
+    // R2: the id of the part that carries the keyboard, so a later turn can edit it.
+    let lastMessageId: number | null = null;
     for (const [index, part] of sequence.entries()) {
       const last = index === sequence.length - 1;
-      const answer = this.classify(
-        await telegramSend({
-          token,
-          apiBaseUrl: this.apiBaseUrl,
-          timeoutMs: this.timeoutMs,
-          body: textMessageBody({
-            chatId: message.chatId,
-            text: part,
-            html,
-            ...(last ? { buttons, ...(keyboard === undefined ? {} : { keyboard }) } : {}),
-          }),
+      const raw = await telegramSend({
+        token,
+        apiBaseUrl: this.apiBaseUrl,
+        timeoutMs: this.timeoutMs,
+        body: textMessageBody({
+          chatId: message.chatId,
+          text: part,
+          html,
+          ...(last ? { buttons, ...(keyboard === undefined ? {} : { keyboard }) } : {}),
         }),
-      );
+      });
+      if (last && raw.outcome === 'SUCCEEDED') lastMessageId = raw.messageId;
+      const answer = this.classify(raw);
       if (worstOutcome(worst.sent.outcome, answer.sent.outcome) !== worst.sent.outcome) {
         worst = answer;
       }
@@ -300,7 +307,7 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
 
     if (worst.sent.outcome === 'DELIVERED') {
       await this.recordRecovery(scope, message.botInstanceId);
-      return worst.sent;
+      return lastMessageId === null ? worst.sent : { ...worst.sent, messageId: lastMessageId };
     }
     /*
      * A rate limit is NOT recorded as a failure condition. It is this installation
@@ -455,10 +462,83 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
      */
     const outcome = await telegramSend(request);
     const sent = this.classify(outcome).sent;
+    if (outcome.outcome !== 'SUCCEEDED') return sent;
     // HF-A7: the handle Telegram gave the delivered file, so an upload's bytes can be let go.
-    return outcome.outcome === 'SUCCEEDED' && outcome.file !== undefined
-      ? { ...sent, file: outcome.file }
-      : sent;
+    // R2: and the message's own id, so a decision can later edit its caption in place.
+    return {
+      ...sent,
+      ...(outcome.file === undefined ? {} : { file: outcome.file }),
+      ...(outcome.messageId === null ? {} : { messageId: outcome.messageId }),
+    };
+  }
+
+  /**
+   * R2: a FILE message's caption, edited in place — a reviewer's receipt turned into the
+   * decision taken on it. R3's `edit` rules: the tenant's template in the key's own format,
+   * the keyboard always sent (an empty one removes the buttons), "not modified" is
+   * DELIVERED, and every definite refusal is REFUSED `NOT_EDITABLE`. An HTML caption over
+   * the bound is refused without a request; a plain one is cut, as `sendFile` cuts it.
+   */
+  async editCaption(
+    scope: TenantContext,
+    message: CustomerEditMessage,
+  ): Promise<CustomerSendResult> {
+    const token = await this.bots.tokenForBotInstance(scope, message.botInstanceId);
+    if (token === null) return { outcome: 'REFUSED' };
+    const caption = await this.templates.render(scope, message.templateKey, message.values);
+    const html = templateDefinition(message.templateKey).format === 'TELEGRAM_HTML';
+    if (caption.length === 0 || (html && caption.length > TELEGRAM_CAPTION_MAX)) {
+      return { outcome: 'REFUSED', reason: 'NOT_EDITABLE' };
+    }
+    const buttons = await this.labelButtons(scope, message.buttons);
+    const outcome = await telegramSend({
+      token,
+      apiBaseUrl: this.apiBaseUrl,
+      timeoutMs: this.timeoutMs,
+      method: 'editMessageCaption',
+      body: editCaptionBody({
+        chatId: message.chatId,
+        messageId: message.messageId,
+        caption,
+        html,
+        buttons,
+      }),
+    });
+    if (isMessageNotModified(outcome)) return { outcome: 'DELIVERED' };
+    const sent = this.classify(outcome).sent;
+    return sent.outcome === 'REFUSED' ? { outcome: 'REFUSED', reason: 'NOT_EDITABLE' } : sent;
+  }
+
+  /** R2: every button off a message this bot sent; its text stays. */
+  async clearButtons(
+    scope: TenantContext,
+    message: CustomerMessageRef,
+  ): Promise<CustomerSendResult> {
+    const token = await this.bots.tokenForBotInstance(scope, message.botInstanceId);
+    if (token === null) return { outcome: 'REFUSED' };
+    const outcome = await telegramSend({
+      token,
+      apiBaseUrl: this.apiBaseUrl,
+      timeoutMs: this.timeoutMs,
+      method: 'editMessageReplyMarkup',
+      body: clearKeyboardBody(message),
+    });
+    if (isMessageNotModified(outcome)) return { outcome: 'DELIVERED' };
+    return this.classify(outcome).sent;
+  }
+
+  /** R2: deletes a message in a private chat. Best effort; the outcome is returned. */
+  async remove(scope: TenantContext, message: CustomerMessageRef): Promise<CustomerSendResult> {
+    const token = await this.bots.tokenForBotInstance(scope, message.botInstanceId);
+    if (token === null) return { outcome: 'REFUSED' };
+    const outcome = await telegramSend({
+      token,
+      apiBaseUrl: this.apiBaseUrl,
+      timeoutMs: this.timeoutMs,
+      method: 'deleteMessage',
+      body: deleteMessageBody(message),
+    });
+    return this.classify(outcome).sent;
   }
 
   private async recordFailure(

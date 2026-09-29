@@ -1312,6 +1312,48 @@ widened notification CHECK accepts everything either release writes. While it ru
 
 Nothing needs doing before rolling back past HF-A7.
 
+### What a rollback delays or loses: edit-in-place wizards and the renewal result (R2)
+
+R2 edits the customer's purchase and top-up wizard in place, edits an administrator's
+receipt-review message into its decision, has the gateway worker edit the invoice message
+the moment the invoice is ready, and ends a renewal with its own `SERVICE_RENEWED` result.
+Its migration adds two tables (`telegram_wizards`, `telegram_review_messages`) and widens the
+notification kind CHECK. The migration stays: the old release never reads the new tables,
+and the widened CHECK accepts everything either release writes. While it runs:
+
+- **Every step is a new message again**, as before R2. A wizard message the new release left
+  on screen still works: its buttons are ordinary callbacks the old release answers with a
+  new message. Nothing is edited; nothing is refused as stale.
+- **A ready gateway invoice waits for «🔄 بررسی وضعیت پرداخت».** The old worker does not
+  edit the loading screen; the invoice itself is created and settled exactly as before.
+- **A renewal result not yet sent waits.** The old dispatcher has no template for
+  `SERVICE_RENEWED`: it defers the row without spending an attempt or stamping it, and the
+  first pass after the roll-forward sends it. A renewal that succeeds DURING the rollback is
+  announced by the old release with the generic `SERVICE_ACTION_SUCCEEDED`, as before.
+- **A receipt decision taken in the old release does not edit the review message**; the
+  decision itself is unchanged. The rows the new release recorded are kept and ignored.
+
+Nothing needs doing before rolling back past R2.
+
+Three notes on R2 itself, for whoever operates or extends it:
+
+- **`SERVICE_RENEWED` carries no payload** (ADR 0030 §1). The announcer enqueues the kind and
+  the RENEW operation's id; `DrizzleRenewalFactsReader` reads the account name, the duration,
+  the new expiry and the tracking code at send time from that operation, its order, its
+  service and the confirmed payment — the shape `TICKET_REPLY` and `TICKET_REPLY_ATTACHMENT`
+  already use (`docs/wp-a7-tickets-audit.md` §2). A read that finds no succeeded renewal
+  sends nothing.
+- **`telegram_wizards` and `telegram_review_messages` are not pruned yet.** Each tracked
+  message keeps its row; a retention sweep is a known limitation, not yet built.
+- **The state writes take no idempotency key of their own.** Each is one conditional
+  statement naming what it moves from: a claim names the step, the lease and, for a
+  redelivery, the update's key; a landing names the claim's version; a review stamp names
+  an unstamped row. So a replayed update either passes the gate again by its own key and
+  repeats writes that are idempotent by that key, or matches nothing. That is safe because
+  the rows are presentation only: the order, payment and capture writes behind a tap keep
+  their own idempotency keys, and the worst a replay can do here is answer a tap as stale
+  or show the same screen again.
+
 ### What a rollback delays or drops: reminder quiet hours (HF-A9)
 
 HF-A9 holds a reminder that falls due inside the tenant's quiet window until the window

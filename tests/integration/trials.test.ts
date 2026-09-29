@@ -891,6 +891,13 @@ describe('a free trial', () => {
       from: { id: Number(telegramUserId), first_name: 'سارا' },
     };
   };
+  // R2: a catalogue page tapped from a message is that message EDITED.
+  const lastMessage = () =>
+    JSON.stringify(
+      sent
+        .filter((one) => one.url.includes('/sendMessage') || one.url.includes('/editMessageText'))
+        .at(-1) ?? {},
+    );
   const typed = (text: string, telegramUserId: string) => {
     updateSeq += 1;
     return {
@@ -910,8 +917,6 @@ describe('a free trial', () => {
       from: { id: Number(telegramUserId), first_name: 'سارا' },
     };
   };
-  const lastMessage = () =>
-    JSON.stringify(sent.filter((one) => one.url.includes('/sendMessage')).at(-1) ?? {});
   const grants = () => count(sql`SELECT count(*)::int AS n FROM trial_grants`);
 
   it('takes the trial straight from the main-menu button when one panel offers it', async () => {

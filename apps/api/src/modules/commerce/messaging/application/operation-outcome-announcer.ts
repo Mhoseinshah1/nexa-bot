@@ -1,4 +1,10 @@
-import type { OperationState, OperationType, TenantContext, UserId } from '@nexa/contracts';
+import type {
+  CustomerNotificationKind,
+  OperationState,
+  OperationType,
+  TenantContext,
+  UserId,
+} from '@nexa/contracts';
 import type { UnitOfWork, Clock } from '@nexa/contracts';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { CustomerNotifier } from './customer-notifier.js';
@@ -82,6 +88,18 @@ export function successAnsweredElsewhere(subject: {
  * this installation's housekeeping.
  */
 export const DELAY_ANNOUNCED_OPERATIONS: readonly OperationType[] = ['PROVISION', 'RECONCILE'];
+
+/**
+ * R2 (v0.3.5 real-test item 11): which kind tells a customer their request SUCCEEDED.
+ *
+ * A renewal ends with its own result — the account, what was bought, the new expiry, the
+ * payment's tracking code and a button to the service — so it is `SERVICE_RENEWED`. Every
+ * other customer-requested operation keeps the one shared `SERVICE_ACTION_SUCCEEDED`
+ * sentence exactly as before; a failure is `SERVICE_ACTION_FAILED` whatever the type.
+ */
+export function successKindFor(type: OperationType): CustomerNotificationKind {
+  return type === 'RENEW' ? 'SERVICE_RENEWED' : 'SERVICE_ACTION_SUCCEEDED';
+}
 
 /**
  * How long a terminal operation is left to the loop before the sweep takes it.
@@ -363,7 +381,7 @@ export class OperationOutcomeAnnouncer {
       await this.deps.notifier.notify(
         scope,
         subject.customerId,
-        outcome === 'SUCCEEDED' ? 'SERVICE_ACTION_SUCCEEDED' : 'SERVICE_ACTION_FAILED',
+        outcome === 'SUCCEEDED' ? successKindFor(subject.type) : 'SERVICE_ACTION_FAILED',
         operationId,
         this.deps.clock.now(),
         tx,

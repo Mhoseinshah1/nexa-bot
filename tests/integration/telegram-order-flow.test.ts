@@ -228,8 +228,12 @@ describe('the customer purchase flow over Telegram', () => {
     return after;
   }
 
-  /** Only the messages, so an `answerCallbackQuery` does not shift every index. */
-  const messages = () => sent.filter((one) => one.url.includes('/sendMessage'));
+  /**
+   * Only the messages, so an `answerCallbackQuery` does not shift every index. Since R2 a
+   * wizard step is the tapped message EDITED (`editMessageText`), so both count.
+   */
+  const messages = () =>
+    sent.filter((one) => one.url.includes('/sendMessage') || one.url.includes('/editMessageText'));
   const lastMessage = () => messages()[messages().length - 1];
   const buttonsOf = (message: Sent | undefined) =>
     (

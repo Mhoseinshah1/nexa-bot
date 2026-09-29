@@ -278,6 +278,20 @@ export const CUSTOMER_NOTIFICATION_KINDS = [
    * `file_id` on that row and clears the bytes in the same transaction.
    */
   'TICKET_REPLY_ATTACHMENT',
+  /**
+   * R2 (v0.3.5 real-test item 11). A RENEWAL the customer paid for reached the panel.
+   * `provisioning_operations.id` is the subject — the RENEW operation, exactly as
+   * `SERVICE_ACTION_SUCCEEDED` names it — so a service renewed twice is two facts, each
+   * told once.
+   *
+   * Its own kind rather than `SERVICE_ACTION_SUCCEEDED`, which stays the one sentence for
+   * every OTHER customer-requested operation: a renewal ends with a dedicated result — the
+   * account name, what was bought, the new expiry and the payment's tracking code — and a
+   * button opening the renewed service. Not a payload either (ADR 0030 §1): the dispatcher
+   * reads every value at send time from the operation, its order, the payment that paid for
+   * it and the service; the producer passes a kind and the operation id and nothing else.
+   */
+  'SERVICE_RENEWED',
 ] as const;
 export type CustomerNotificationKind = (typeof CUSTOMER_NOTIFICATION_KINDS)[number];
 export const customerNotificationKindSchema = z.enum(CUSTOMER_NOTIFICATION_KINDS);
@@ -425,6 +439,12 @@ export const CUSTOMER_NOTIFICATION_PRECONDITIONS: Readonly<
    * left is not "no longer true" — the dispatcher finds nothing to send and FAILS it.
    */
   TICKET_REPLY_ATTACHMENT: false,
+  /*
+   * R2. `false`: a renewal that reached the panel stays renewed — the operation is terminal
+   * and SUCCEEDED — and a late copy of the result is still true. Its figures are the
+   * operation's own frozen target and the order's frozen line, not today's service row.
+   */
+  SERVICE_RENEWED: false,
 };
 
 /**
@@ -492,6 +512,8 @@ export const CUSTOMER_NOTIFICATION_QUIET_HOURS: Readonly<
   ORDER_PENDING_REMINDER: true,
   // HF-A7: support's file on a ticket reply is part of the reply, sent with its text — never held.
   TICKET_REPLY_ATTACHMENT: false,
+  // R2: the result of a renewal the customer just paid for is expected NOW.
+  SERVICE_RENEWED: false,
 };
 
 /**
@@ -558,6 +580,8 @@ export const CUSTOMER_NOTIFICATION_TEMPLATES: Readonly<
   ORDER_PENDING_REMINDER: 'bot.order.pending_reminder',
   // HF-A7: the file's caption. PLAIN_TEXT, so an over-long override is cut, never refused.
   TICKET_REPLY_ATTACHMENT: 'bot.ticket.support_attachment',
+  // R2: the dedicated renewal result, its values read at send time from the operation.
+  SERVICE_RENEWED: 'bot.service.renewed',
 };
 
 /**

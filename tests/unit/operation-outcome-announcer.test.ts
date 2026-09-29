@@ -135,12 +135,38 @@ describe('announcing how an operation turned out', () => {
       ['ABANDONED', 'SERVICE_ACTION_FAILED'],
     ];
     for (const [outcome, kind] of announced) {
-      const { announcer, queued } = announcerFor('RENEW', outcome);
+      // ADD_TRAFFIC: a renewal's success has its own kind since R2 (the case below).
+      const { announcer, queued } = announcerFor('ADD_TRAFFIC', outcome);
       await announcer.announce(scope, 'operation-1');
       expect(
         queued.map((q) => q.kind),
         `${outcome} must be announced`,
       ).toEqual([kind]);
+    }
+  });
+
+  /*
+   * R2 (v0.3.5 real-test item 11): a successful RENEWAL ends with its own result — the
+   * account, the duration, the new expiry, the tracking code — never the generic sentence.
+   * Its failure is still the shared one, and every other type's success is unchanged.
+   */
+  it('announces a SUCCEEDED renewal as SERVICE_RENEWED, and only a renewal', async () => {
+    const renewed = announcerFor('RENEW', 'SUCCEEDED');
+    await renewed.announcer.announce(scope, 'operation-1');
+    expect(renewed.queued.map((q) => q.kind)).toEqual(['SERVICE_RENEWED']);
+    expect(renewed.queued[0]?.subjectId).toBe('operation-1');
+
+    const failed = announcerFor('RENEW', 'ABANDONED');
+    await failed.announcer.announce(scope, 'operation-1');
+    expect(failed.queued.map((q) => q.kind)).toEqual(['SERVICE_ACTION_FAILED']);
+
+    for (const type of ['ADD_TIME', 'ADD_TRAFFIC', 'SUSPEND', 'RESUME'] as const) {
+      const other = announcerFor(type, 'SUCCEEDED');
+      await other.announcer.announce(scope, 'operation-1');
+      expect(
+        other.queued.map((q) => q.kind),
+        type,
+      ).toEqual(['SERVICE_ACTION_SUCCEEDED']);
     }
   });
 

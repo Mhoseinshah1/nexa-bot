@@ -100,6 +100,7 @@ import type {
   CustomerSendResult,
   CustomerMessenger,
   MainMenuVariant,
+  CustomerEditMessage,
 } from '../../modules/commerce/messaging/application/ports.js';
 import type { CustomerRecord } from '../../modules/commerce/customers/application/ports.js';
 import type { ProductService } from '../../modules/commerce/catalog/application/product.service.js';
@@ -154,6 +155,20 @@ import type {
   ServiceOperationHistory,
 } from '../../modules/commerce/provisioning/application/service-admin.service.js';
 import { decodeKeysetToken, encodeKeysetToken, type KeysetToken } from './keyset-token.js';
+import type { TelegramWizardRecord } from '../../modules/commerce/messaging/application/telegram-message-state.js';
+import type { TelegramReviewOutcome } from '@nexa/contracts';
+import {
+  REVIEW_OUTCOME_KEYS,
+  REVIEW_TAP_INTENTS,
+  WIZARD_GATES,
+  callbackOriginOf,
+  typedMessageOf,
+  type CallbackOrigin,
+  type InvoiceScreensPort,
+  type MessageStatePort,
+  type ReviewDirective,
+  type WizardDirective,
+} from './wizard-state.js';
 import type { PanelService } from '../../modules/platform/panels/application/panel.service.js';
 import type { ReferralProgram } from '../../modules/commerce/referrals/application/referral-program.js';
 import {
@@ -1270,7 +1285,17 @@ function membershipRequired(
     label: { kind: 'TEMPLATE', key: 'bot.channels.check_button' },
     data: MEMBERSHIP_CHECK_CALLBACK_DATA,
   });
-  return { key, values: {}, buttons, orderId: null };
+  return {
+    key,
+    values: {},
+    buttons,
+    orderId: null,
+    /*
+     * R2: a gate, not a step — its own message, so the screen the customer tapped stays
+     * behind it and works again once they have joined.
+     */
+    wizard: { kind: 'ORDER', step: 'NOTICE', placement: 'NEW' },
+  };
 }
 
 export const ADMIN_PANEL_CALLBACK_PREFIX = 'A:';
@@ -3929,6 +3954,39 @@ export interface BotRuntimeDeps {
   readonly media?: TenantMediaSource;
   /** WP-A7: the customer's support tickets. Absent, the desk is not offered. */
   readonly tickets?: TicketDeskPort;
+  /**
+   * R2 (items 3–5): which Telegram message shows a wizard or a receipt review, and whether a
+   * tap still belongs to the screen it shows. Absent, every reply is a new message, as before.
+   */
+  readonly messageState?: Pick<
+    MessageStatePort,
+    | 'claim'
+    | 'claimLatest'
+    | 'land'
+    | 'release'
+    | 'move'
+    | 'register'
+    | 'moveAll'
+    | 'recordReview'
+    | 'findReview'
+    | 'finaliseReviews'
+    | 'unfinaliseReview'
+  >;
+  /** R2 (item 4): the invoice screens the gateway worker edits too. */
+  readonly invoiceScreens?: InvoiceScreensPort;
+  /**
+   * R2: the order a customer's open typed-answer window names — a username or a discount
+   * code — or null. Read AFTER a typed answer was refused (the refusal rolled back its own
+   * transaction and left the window open), so the refusal is shown on THAT order's wizard
+   * rather than on the chat's most recently touched one, which may be another order's.
+   * Presentation only: it decides which message is edited, never anything about the order.
+   */
+  readonly answerWindowOrder?: (
+    scope: TenantContext,
+    botInstanceId: string,
+    customerId: string,
+    window: 'USERNAME' | 'DISCOUNT',
+  ) => Promise<string | null>;
 }
 
 /**
@@ -4149,6 +4207,14 @@ export interface PendingReply {
   readonly values: TemplateValues;
   readonly buttons: readonly CustomerButton[];
   readonly orderId: string | null;
+  /**
+   * R2 (item 5): the wizard screen this reply shows. A reply answering a wizard tap is
+   * EDITED into the tapped message; one answering a typed step is edited into the wizard
+   * message that asked for it; one sent as a new message becomes that message's wizard.
+   */
+  readonly wizard?: WizardDirective;
+  /** R2 (item 3): what this reply does to the receipt-review messages of one payment. */
+  readonly review?: ReviewDirective;
   /**
    * A SECOND message, sent after the first, about a different fact.
    *
@@ -4802,6 +4868,33 @@ export function blockedReply(
   return { key: 'bot.blocked_with_reason', values: { reason }, buttons: [], orderId: null };
 }
 
+/**
+ * R2: one message this bot sent, edited in place through R3's `edit` port — its text — or,
+ * for a file whose caption carries the text (a reviewer's receipt), `editCaption`. A
+ * messenger without the method answers REFUSED `NOT_EDITABLE`, which every caller already
+ * treats as "send it instead" (R3's one fallback).
+ */
+export async function editSent(
+  messenger: CustomerMessenger,
+  scope: TenantContext,
+  message: CustomerEditMessage,
+  caption: boolean,
+): Promise<CustomerSendResult> {
+  if (caption) {
+    return messenger.editCaption === undefined
+      ? { outcome: 'REFUSED', reason: 'NOT_EDITABLE' }
+      : messenger.editCaption(scope, message);
+  }
+  return messenger.edit === undefined
+    ? { outcome: 'REFUSED', reason: 'NOT_EDITABLE' }
+    : messenger.edit(scope, message);
+}
+
+/** R2: a reply, with what it does to the receipt-review messages of its payment. */
+function withReview(review: ReviewDirective, reply: PendingReply): PendingReply {
+  return { ...reply, review };
+}
+
 /** The rejection capture's cancel button. */
 function rejectCancelButton(captureId: string): CustomerButton {
   return {
@@ -5034,14 +5127,59 @@ export class BotRuntime {
       arrival === 'BLOCKED' && command.intent === 'USERNAME_TEXT' && command.args?.[0] !== undefined
         ? await this.adminCaptureText(scope, actor, command.args[0], input)
         : null;
-    const answered =
-      arrival === 'BLOCKED'
-        ? (blockedAdminText ??
-          (ADMIN_INTENTS.has(command.intent)
-            ? await this.adminTurn(scope, actor, command, input)
-            : null) ??
-          blocked)
-        : await this.guardedAct(scope, actor, command, customer, arrival, input);
+    /*
+     * R2 (items 3 and 5): the two gates a tap passes BEFORE any work runs.
+     *
+     * A receipt-review tap on a message already finalised into its decision is answered —
+     * `answerCallbackQuery`, below — and nothing else: the decision is never asked for a
+     * second time, and no message is sent or edited.
+     *
+     * A wizard tap claims its message: honoured only while the message still shows the
+     * screen the button belongs to and no other turn holds it. A stale tap is answered the
+     * same way, so a double tap or an old keyboard cannot move the wizard backward or repeat
+     * a draft, a payment or an invoice. The services behind every step still re-decide their
+     * own writes under their own locks; this only stops the surface asking twice.
+     */
+    const origin = callbackOriginOf(input.update);
+    const state = this.deps.messageState;
+    const repeatedReview =
+      state !== undefined && origin !== null && REVIEW_TAP_INTENTS.has(command.intent)
+        ? ((await state.findReview(scope, this.refOf(input.botInstanceId, origin)))?.finalisedAt ??
+            null) !== null
+        : false;
+    const gate = WIZARD_GATES.get(command.intent);
+    let claim: TelegramWizardRecord | null = null;
+    let staleWizard = false;
+    if (state !== undefined && gate !== undefined && origin !== null && arrival !== 'BLOCKED') {
+      const claimed = await state.claim(scope, actor, {
+        ref: this.refOf(input.botInstanceId, origin),
+        kind: gate.kind,
+        adoptAs: gate.adoptAs,
+        from: gate.from,
+        updateKey: input.idempotencyKey,
+      });
+      if (claimed.outcome === 'CLAIMED') claim = claimed.wizard;
+      else if (claimed.outcome === 'STALE') staleWizard = true;
+    }
+    let answered: PendingReply;
+    try {
+      answered =
+        repeatedReview || staleWizard
+          ? { key: null, values: {}, buttons: [], orderId: null }
+          : arrival === 'BLOCKED'
+            ? (blockedAdminText ??
+              (ADMIN_INTENTS.has(command.intent)
+                ? await this.adminTurn(scope, actor, command, input)
+                : null) ??
+              blocked)
+            : await this.guardedAct(scope, actor, command, customer, arrival, input);
+    } catch (error) {
+      // A turn that failed gives its claim back rather than freezing the message for its lease.
+      if (state !== undefined && claim !== null) {
+        await state.release(scope, actor, claim).catch(() => false);
+      }
+      throw error;
+    }
     /*
      * A blocked customer who is still over the limit is not answered (brief §3.5: protect
      * the transport from outbound amplification). Only the interaction that TOOK the block
@@ -5066,6 +5204,10 @@ export class BotRuntime {
         : answered;
 
     const chatId = privateChatIdOf(input.update);
+    // R2: a reply that sends nothing gives its wizard claim back unchanged.
+    if (state !== undefined && claim !== null && (reply.key === null || chatId === null)) {
+      await state.release(scope, actor, claim);
+    }
 
     /*
      * 3. The reply, after the commit, and only into a private chat.
@@ -5101,8 +5243,82 @@ export class BotRuntime {
       };
     }
 
-    const asText = () =>
-      this.deps.messenger.send(scope, {
+    /*
+     * R2 (item 3): a receipt decision edits the ORIGINAL review message — and the prompts it
+     * opened — in place. Null means there was nothing recorded to edit, and the reply goes
+     * out as it always did.
+     */
+    if (state !== undefined && origin !== null && reply.review?.outcome !== undefined) {
+      const reviewed = await this.finaliseReview(scope, actor, reply, origin, input.botInstanceId);
+      if (reviewed !== null) {
+        await this.stopSpinner(scope, command, input.botInstanceId);
+        return {
+          intent,
+          arrival,
+          customerId: customer.id,
+          replyKey: reply.key,
+          orderId: reply.orderId,
+          sent: reviewed,
+        };
+      }
+    }
+
+    /*
+     * R2 (item 5): a wizard step is the SAME message, edited. Null means the reply is its own
+     * message after all — a refusal the customer must be able to come back from, a typed
+     * answer no wizard was waiting for — and it goes out as it always did.
+     */
+    if (state !== undefined && (claim !== null || reply.wizard?.anchor !== undefined)) {
+      const edited = await this.editWizard(scope, actor, reply, claim, origin, chatId, input);
+      if (edited !== null) {
+        if (edited === 'DELIVERED' && reply.followUpKey !== undefined) {
+          await this.deps.messenger.send(scope, {
+            chatId,
+            templateKey: reply.followUpKey,
+            values: {},
+            botInstanceId: input.botInstanceId,
+          });
+        }
+        if (edited === 'RATE_LIMITED' && reply.fallback !== undefined) {
+          await this.deps.queueRateLimitedFact(
+            scope,
+            customer.id,
+            reply.fallback.kind,
+            reply.fallback.subjectId,
+            undefined,
+          );
+        }
+        await this.stopSpinner(scope, command, input.botInstanceId);
+        return {
+          intent,
+          arrival,
+          customerId: customer.id,
+          replyKey: reply.key,
+          orderId: reply.orderId,
+          sent: edited,
+        };
+      }
+    }
+    // A reply that is its own message after all: a receipt prompt's origin is still recorded.
+    if (
+      state !== undefined &&
+      origin !== null &&
+      reply.review?.origin !== undefined &&
+      reply.review.paymentId !== null
+    ) {
+      await state.recordReview(scope, actor, {
+        ref: this.refOf(input.botInstanceId, origin),
+        paymentId: reply.review.paymentId,
+        role: reply.review.origin,
+        hasMedia: origin.media,
+      });
+    }
+
+    // R2: whether the reply went out as text, so a file's text fallback is recorded as text.
+    let wentAsText = false;
+    const asText = () => {
+      wentAsText = true;
+      return this.deps.messenger.send(scope, {
         chatId,
         templateKey: reply.key as TemplateKey,
         values: reply.values,
@@ -5110,6 +5326,7 @@ export class BotRuntime {
         ...(reply.buttons.length === 0 ? {} : { buttons: reply.buttons }),
         ...(reply.keyboard === undefined ? {} : { keyboard: reply.keyboard }),
       });
+    };
     /*
      * A reply that IS a file (§10's single review message) goes as the file with this
      * reply as its caption, and falls back to text only on a definite refusal — see
@@ -5231,6 +5448,39 @@ export class BotRuntime {
               ...(reply.buttons.length === 0 ? {} : { buttons: reply.buttons }),
             });
     if (reply.media !== undefined && sent.outcome === 'REFUSED') sent = await asText();
+    /*
+     * R2: a new message that IS a wizard screen or a review message is recorded against its
+     * Telegram id, so the next tap on it — or the decision taken on it — edits it in place.
+     */
+    const sentAsFile = reply.media !== undefined && !wentAsText;
+    if (state !== undefined && sent.outcome === 'DELIVERED' && sent.messageId !== undefined) {
+      const ref = {
+        // A receipt goes out from the bot that RECEIVED it, and its taps come back there.
+        botInstanceId:
+          sentAsFile && reply.media !== undefined ? reply.media.botInstanceId : input.botInstanceId,
+        chatId,
+        messageId: sent.messageId,
+      };
+      if (reply.wizard !== undefined && reply.wizard.placement !== 'NEW') {
+        await state.register(scope, actor, {
+          ref,
+          landing: {
+            kind: reply.wizard.kind,
+            step: reply.wizard.step,
+            subjectId: reply.wizard.subjectId ?? null,
+            paymentId: reply.wizard.paymentId ?? null,
+          },
+        });
+      }
+      if (reply.review?.sent !== undefined && reply.review.paymentId !== null) {
+        await state.recordReview(scope, actor, {
+          ref,
+          paymentId: reply.review.paymentId,
+          role: reply.review.sent,
+          hasMedia: sentAsFile,
+        });
+      }
+    }
     for (const attachment of reply.attachments ?? []) {
       await this.deps.messenger.sendFile(scope, {
         chatId,
@@ -5946,6 +6196,8 @@ export class BotRuntime {
       buttons: this.receiptDecisionButtons(item.payment.id, permissions),
       orderId: null,
       ...(first === undefined ? {} : { media: first, attachments: rest }),
+      // R2: recorded once sent, so the decision taken on it edits it in place.
+      review: { paymentId: item.payment.id, sent: 'REVIEW' },
     };
   }
 
@@ -5959,24 +6211,38 @@ export class BotRuntime {
     scope: TenantContext,
     actor: ActorContext,
     paymentId: string,
+    /**
+     * R2 (item 3): the tap came from a message of this payment's review — the receipt, or a
+     * prompt — and that message is edited into the decision already taken, once: a receipt
+     * into the outcome's one line (`finaliseReview`), a prompt into this sentence. Absent,
+     * a new message, as before.
+     */
+    tapped?: 'REVIEW' | 'PROMPT',
   ): Promise<PendingReply> {
     const found = await this.deps.receipts.dispositionOf(scope, actor, paymentId as PaymentId);
-    const reply = (key: TemplateKey, values: TemplateValues = {}): PendingReply => ({
+    const reply = (
+      key: TemplateKey,
+      outcome: TelegramReviewOutcome | 'GONE',
+      values: TemplateValues = {},
+    ): PendingReply => ({
       key,
       values,
       buttons: [],
       orderId: null,
+      ...(tapped === undefined ? {} : { review: { paymentId, origin: tapped, outcome } }),
     });
-    if (found === null) return reply('bot.admin.receipt_gone');
+    if (found === null) return reply('bot.admin.receipt_gone', 'GONE');
     switch (found.disposition) {
       case 'APPROVED':
-        return reply('bot.admin.receipt_already_approved');
+        return reply('bot.admin.receipt_already_approved', 'APPROVED');
       case 'REJECTED':
-        return reply('bot.admin.receipt_already_rejected');
+        return reply('bot.admin.receipt_already_rejected', 'REJECTED');
       case 'CREDITED_TO_WALLET':
         return found.credit === null
-          ? reply('bot.admin.receipt_gone')
-          : reply('bot.admin.receipt_already_credited', { amount: found.credit.amount });
+          ? reply('bot.admin.receipt_gone', 'GONE')
+          : reply('bot.admin.receipt_already_credited', 'CREDITED', {
+              amount: found.credit.amount,
+            });
     }
   }
 
@@ -6013,7 +6279,7 @@ export class BotRuntime {
         botInstanceId,
         paymentId,
       });
-      if (opened.outcome === 'GONE') return this.decidedReply(scope, actor, paymentId);
+      if (opened.outcome === 'GONE') return this.decidedReply(scope, actor, paymentId, 'REVIEW');
       return {
         key: 'bot.admin.credit_amount_prompt',
         values: {
@@ -6023,6 +6289,7 @@ export class BotRuntime {
         },
         buttons: [creditCancelButton(opened.capture.id)],
         orderId: null,
+        review: { paymentId: opened.payment.id, origin: 'REVIEW', sent: 'PROMPT' },
       };
     } catch (error) {
       if (
@@ -6030,7 +6297,7 @@ export class BotRuntime {
         error.code === COMMERCE_ERROR_CODES.PAYMENT_STATE_INVALID &&
         error.details['reason'] !== 'NO_RECEIPT'
       ) {
-        return this.decidedReply(scope, actor, paymentId);
+        return this.decidedReply(scope, actor, paymentId, 'REVIEW');
       }
       return creditRefusal(error);
     }
@@ -6101,6 +6368,7 @@ export class BotRuntime {
               { ...creditCancelButton(result.capture.id), row: 0 },
             ],
             orderId: null,
+            review: { paymentId: result.payment.id, sent: 'PROMPT' },
           };
       }
     } catch {
@@ -6124,6 +6392,8 @@ export class BotRuntime {
           values: { amount: result.amount, reference: result.result.payment.reference },
           buttons: [],
           orderId: null,
+          // R2: this confirmation in place, and the receipt it came from into its one line.
+          review: { paymentId: result.result.payment.id, origin: 'PROMPT', outcome: 'CREDITED' },
         };
       }
       if (result.outcome === 'CLOSED' && result.reason !== 'CANCELLED') {
@@ -6182,12 +6452,11 @@ export class BotRuntime {
     ): PendingReply => ({ key, values, buttons, orderId: null });
     const who = (customer: CustomerRecord | null, fallback: string): string =>
       customer?.telegramUserId ?? fallback;
-    const askReply = (asked: ReasonAskResult): PendingReply => {
+    const askReply = (asked: ReasonAskResult, tapped: 'REVIEW' | 'PROMPT'): PendingReply => {
       if (asked.outcome === 'GONE') return reply('bot.admin.receipt_gone');
-      return reply(
-        'bot.admin.block_ask',
-        { customer: who(asked.customer, asked.payment.customerId) },
-        [
+      return withReview(
+        { paymentId: asked.payment.id, origin: tapped, sent: 'PROMPT' },
+        reply('bot.admin.block_ask', { customer: who(asked.customer, asked.payment.customerId) }, [
           {
             label: { kind: 'TEMPLATE', key: 'bot.admin.block_yes_button' },
             data: `${ADMIN_BLOCK_OPEN_CALLBACK_PREFIX}${asked.payment.id}`,
@@ -6199,13 +6468,13 @@ export class BotRuntime {
             data: `${ADMIN_RECEIPT_CALLBACK_PREFIX}${asked.payment.id}`,
             row: 0,
           },
-        ],
+        ]),
       );
     };
 
     switch (intent) {
       case 'ADMIN_BLOCK_ASK':
-        return askReply(await blocks.ask(scope, actor, targetId));
+        return askReply(await blocks.ask(scope, actor, targetId), 'REVIEW');
       case 'ADMIN_BLOCK_OPEN': {
         const opened = await blocks.open(scope, actor, {
           idempotencyKey: `${input.idempotencyKey}:block-open`,
@@ -6213,21 +6482,28 @@ export class BotRuntime {
           targetId,
         });
         if (opened.outcome === 'GONE') return reply('bot.admin.receipt_gone');
-        return reply(
-          'bot.admin.block_reason_prompt',
-          {
-            customer: who(opened.customer, opened.payment.customerId),
-            minutes: Math.round(ADMIN_AMOUNT_CAPTURE_TTL_MS / 60_000),
-          },
-          [blockCancelButton(opened.capture.id)],
+        return withReview(
+          { paymentId: opened.payment.id, origin: 'PROMPT', sent: 'PROMPT' },
+          reply(
+            'bot.admin.block_reason_prompt',
+            {
+              customer: who(opened.customer, opened.payment.customerId),
+              minutes: Math.round(ADMIN_AMOUNT_CAPTURE_TTL_MS / 60_000),
+            },
+            [blockCancelButton(opened.capture.id)],
+          ),
         );
       }
       case 'ADMIN_BLOCK_CONFIRM': {
         const done = await blocks.confirm(scope, actor, { captureId: targetId });
         if (done.outcome === 'DONE') {
-          return reply(
-            done.result.changed ? 'bot.admin.blocked_from_receipt' : 'bot.admin.block_already',
-            { customer: done.result.customer.telegramUserId },
+          // R2: the payment is read from this confirmation's own record.
+          return withReview(
+            { paymentId: null, origin: 'PROMPT', outcome: 'BLOCKED' },
+            reply(
+              done.result.changed ? 'bot.admin.blocked_from_receipt' : 'bot.admin.block_already',
+              { customer: done.result.customer.telegramUserId },
+            ),
           );
         }
         if (done.outcome === 'CLOSED') {
@@ -6256,7 +6532,7 @@ export class BotRuntime {
             customer: who(standing.customer, standing.payment.customerId),
           });
         }
-        return askReply(standing);
+        return askReply(standing, 'PROMPT');
       }
       default:
         return null;
@@ -6584,6 +6860,7 @@ export class BotRuntime {
               { ...rejectCancelButton(result.capture.id), row: 0 },
             ],
             orderId: null,
+            review: { paymentId: result.payment.id, sent: 'PROMPT' },
           };
       }
     } catch {
@@ -6643,6 +6920,7 @@ export class BotRuntime {
               { ...blockCancelButton(result.capture.id), row: 0 },
             ],
             orderId: null,
+            review: { paymentId: result.payment.id, sent: 'PROMPT' },
           };
       }
     } catch {
@@ -6672,7 +6950,7 @@ export class BotRuntime {
     idempotencyKey: string,
   ): Promise<PendingReply> {
     const item = await this.deps.receipts.reviewItem(scope, actor, paymentId as PaymentId);
-    if (item === null) return this.decidedReply(scope, actor, paymentId);
+    if (item === null) return this.decidedReply(scope, actor, paymentId, 'REVIEW');
     try {
       await this.deps.payments.confirmManualTransfer(scope, actor, paymentId, {
         idempotencyKey: `${idempotencyKey}:admin-approve`,
@@ -6683,9 +6961,19 @@ export class BotRuntime {
         // A receipt-review decision: the service refuses a transfer with no stored receipt.
         requireReceipt: true,
       });
-      return { key: 'bot.admin.approved', values: {}, buttons: [], orderId: null };
+      /*
+       * R2 (item 3): the receipt message the approval was tapped on becomes the result, in
+       * place and without its buttons; every other recorded message of this payment too.
+       */
+      return {
+        key: 'bot.admin.approved',
+        values: {},
+        buttons: [],
+        orderId: null,
+        review: { paymentId, origin: 'REVIEW', outcome: 'APPROVED' },
+      };
     } catch (error) {
-      return this.lostDecision(scope, actor, paymentId, error);
+      return this.lostDecision(scope, actor, paymentId, error, 'REVIEW');
     }
   }
 
@@ -6699,13 +6987,14 @@ export class BotRuntime {
     actor: ActorContext,
     paymentId: string,
     error: unknown,
+    tapped?: 'REVIEW' | 'PROMPT',
   ): Promise<PendingReply> {
     if (
       isNexaError(error) &&
       error.code === COMMERCE_ERROR_CODES.PAYMENT_STATE_INVALID &&
       error.details['reason'] !== 'NO_RECEIPT'
     ) {
-      return this.decidedReply(scope, actor, paymentId);
+      return this.decidedReply(scope, actor, paymentId, tapped);
     }
     throw error;
   }
@@ -6739,7 +7028,9 @@ export class BotRuntime {
           botInstanceId: input.botInstanceId,
           targetId,
         });
-        if (opened.outcome === 'GONE') return this.decidedReply(scope, actor, targetId);
+        if (opened.outcome === 'GONE') {
+          return this.decidedReply(scope, actor, targetId, 'REVIEW');
+        }
         return {
           key: 'bot.admin.reject_reason_prompt',
           values: {
@@ -6748,12 +7039,19 @@ export class BotRuntime {
           },
           buttons: [rejectCancelButton(opened.capture.id)],
           orderId: null,
+          review: { paymentId: opened.payment.id, origin: 'REVIEW', sent: 'PROMPT' },
         };
       }
       case 'ADMIN_REJECT_CONFIRM': {
         try {
           const done = await rejects.confirm(scope, actor, { captureId: targetId });
-          if (done.outcome === 'DONE') return reply('bot.admin.rejected');
+          if (done.outcome === 'DONE') {
+            // R2: the payment is read from this confirmation's own record.
+            return {
+              ...reply('bot.admin.rejected'),
+              review: { paymentId: null, origin: 'PROMPT', outcome: 'REJECTED' },
+            };
+          }
           if (done.outcome === 'CLOSED') {
             return reply(
               done.reason === 'CANCELLED'
@@ -10730,6 +11028,26 @@ export class BotRuntime {
     result: Awaited<ReturnType<WalletTopupFlowService['recordAmountText']>>,
     captureId: string,
   ): Promise<PendingReply> {
+    const reply = await this.topupAmountScreen(scope, result, captureId);
+    /*
+     * R2: a TYPED amount continues the wizard that asked for it — anchored on the amount
+     * screen of this capture. A tapped preset has its claim and ignores the anchor.
+     */
+    return {
+      ...reply,
+      wizard: {
+        ...(reply.wizard ?? { kind: 'TOPUP', step: 'NOTICE' }),
+        anchor: { steps: ['AMOUNT'], subjectId: captureId },
+      },
+    };
+  }
+
+  private async topupAmountScreen(
+    scope: TenantContext,
+    result: Awaited<ReturnType<WalletTopupFlowService['recordAmountText']>>,
+    captureId: string,
+  ): Promise<PendingReply> {
+    const amountStep: WizardDirective = { kind: 'TOPUP', step: 'AMOUNT', subjectId: captureId };
     const close = {
       label: { kind: 'TEMPLATE' as const, key: 'bot.wallet.topup_close_button' as const },
       data: `${TOPUP_CLOSE_CALLBACK_PREFIX}${captureId}`,
@@ -10743,6 +11061,7 @@ export class BotRuntime {
         values: {},
         buttons: [close],
         orderId: null,
+        wizard: amountStep,
       };
     }
     if (result.outcome === 'BELOW_MINIMUM') {
@@ -10751,6 +11070,7 @@ export class BotRuntime {
         values: { minimum: result.minimum },
         buttons: [close],
         orderId: null,
+        wizard: amountStep,
       };
     }
     if (result.outcome === 'ABOVE_MAXIMUM') {
@@ -10759,6 +11079,7 @@ export class BotRuntime {
         values: { maximum: result.maximum },
         buttons: [close],
         orderId: null,
+        wizard: amountStep,
       };
     }
     return this.topupChooser(scope, captureId, result.routes);
@@ -10778,12 +11099,14 @@ export class BotRuntime {
       label: { kind: 'TEMPLATE' as const, key: 'bot.wallet.topup_close_button' as const },
       data: `${TOPUP_CLOSE_CALLBACK_PREFIX}${captureId}`,
     };
+    const methods: WizardDirective = { kind: 'TOPUP', step: 'METHODS', subjectId: captureId };
     if (routes.length === 0) {
       return {
         key: 'bot.wallet.topup_none_available',
         values: {},
         buttons: [close],
         orderId: null,
+        wizard: methods,
       };
     }
     const buttons: CustomerButton[] = [];
@@ -10802,7 +11125,13 @@ export class BotRuntime {
       });
     }
     buttons.push(close);
-    return { key: 'bot.wallet.topup_method_prompt', values: {}, buttons, orderId: null };
+    return {
+      key: 'bot.wallet.topup_method_prompt',
+      values: {},
+      buttons,
+      orderId: null,
+      wizard: methods,
+    };
   }
 
   private async topupRoute(
@@ -10845,6 +11174,7 @@ export class BotRuntime {
       values: {},
       buttons: [mainMenuButton()],
       orderId: null,
+      wizard: { kind: 'TOPUP', step: 'CLOSED' },
     };
   }
 
@@ -12076,7 +12406,13 @@ export class BotRuntime {
         data: `${CATALOG_PAGE_CALLBACK_PREFIX}${page + 1}`,
       });
     }
-    return { key: 'bot.catalog.categories_heading', values: {}, buttons, orderId: null };
+    return {
+      key: 'bot.catalog.categories_heading',
+      values: {},
+      buttons,
+      orderId: null,
+      wizard: { kind: 'ORDER', step: 'CATEGORIES' },
+    };
   }
 
   /** Whether to draw the custom-service button (Package D): some location prices this customer. */
@@ -12334,7 +12670,13 @@ export class BotRuntime {
     };
     if (items.length === 0) {
       if (page > 0) return this.categoryPage(scope, actor, categoryId, 0, customerId);
-      return { key: 'bot.catalog.category_empty', values: {}, buttons: [back], orderId: null };
+      return {
+        key: 'bot.catalog.category_empty',
+        values: {},
+        buttons: [back],
+        orderId: null,
+        wizard: { kind: 'ORDER', step: 'PRODUCTS' },
+      };
     }
     const buttons: CustomerButton[] = [];
     for (const product of items) {
@@ -12360,7 +12702,13 @@ export class BotRuntime {
       });
     }
     buttons.push(back);
-    return { key: 'bot.catalog.heading', values: {}, buttons, orderId: null };
+    return {
+      key: 'bot.catalog.heading',
+      values: {},
+      buttons,
+      orderId: null,
+      wizard: { kind: 'ORDER', step: 'PRODUCTS' },
+    };
   }
 
   /**
@@ -12459,6 +12807,7 @@ export class BotRuntime {
       values: screen.values,
       buttons: preinvoiceButtons(order, routes.length > 0),
       orderId: order.id,
+      wizard: { kind: 'ORDER', step: 'PREINVOICE', subjectId: order.id },
     };
   }
 
@@ -12497,7 +12846,13 @@ export class BotRuntime {
         customerId: customer.id,
         orderId,
       });
-      return { key: 'bot.discount.ask', values: {}, buttons: [], orderId };
+      return {
+        key: 'bot.discount.ask',
+        values: {},
+        buttons: [],
+        orderId,
+        wizard: { kind: 'ORDER', step: 'DISCOUNT', subjectId: orderId },
+      };
     } catch (error) {
       return refusal(error);
     }
@@ -12546,11 +12901,32 @@ export class BotRuntime {
       if (result.outcome === 'NO_WINDOW') {
         return { key: 'bot.unknown_command', values: {}, buttons: [], orderId: null };
       }
-      return this.repricedSummary(scope, actor, result.order, customer);
+      const summary = await this.repricedSummary(scope, actor, result.order, customer);
+      // R2: the wizard that asked for the code shows the re-priced pre-invoice.
+      return {
+        ...summary,
+        wizard: {
+          kind: 'ORDER',
+          step: 'PREINVOICE',
+          subjectId: result.order.id,
+          anchor: { steps: ['DISCOUNT'], subjectId: result.order.id },
+        },
+      };
     } catch (error) {
       // `DISCOUNT_CODE_REJECTED` through the shared table: one sentence for every reason,
-      // and the window left open by the rolled-back transaction.
-      return refusal(error);
+      // and the window left open by the rolled-back transaction — on ITS order's wizard.
+      const refused = refusal(error);
+      const orderId =
+        (await this.deps.answerWindowOrder?.(scope, botInstanceId, customer.id, 'DISCOUNT')) ??
+        null;
+      return {
+        ...refused,
+        wizard: {
+          kind: 'ORDER',
+          step: 'DISCOUNT',
+          anchor: { steps: ['DISCOUNT'], subjectId: orderId },
+        },
+      };
     }
   }
 
@@ -12617,7 +12993,13 @@ export class BotRuntime {
         data: `${USERNAME_AUTOMATIC_CALLBACK_PREFIX}${order.id}`,
       });
     }
-    return { key: 'bot.username.choose', values: {}, buttons, orderId: order.id };
+    return {
+      key: 'bot.username.choose',
+      values: {},
+      buttons,
+      orderId: order.id,
+      wizard: { kind: 'ORDER', step: 'USERNAME', subjectId: order.id },
+    };
   }
 
   /** The installation draws a name, and the summary shows the one it drew. */
@@ -12673,7 +13055,13 @@ export class BotRuntime {
         customerId: customer.id,
         orderId,
       });
-      return { key: 'bot.username.instructions', values: {}, buttons: [], orderId };
+      return {
+        key: 'bot.username.instructions',
+        values: {},
+        buttons: [],
+        orderId,
+        wizard: { kind: 'ORDER', step: 'USERNAME', subjectId: orderId },
+      };
     } catch (error) {
       return refusal(error);
     }
@@ -12712,7 +13100,23 @@ export class BotRuntime {
         customerId: customer.id,
         orderId: result.reservation.orderId,
       });
-      return this.preinvoice(scope, actor, order, customer, result.reservation.username);
+      const summary = await this.preinvoice(
+        scope,
+        actor,
+        order,
+        customer,
+        result.reservation.username,
+      );
+      // R2: the wizard that asked for the name shows the pre-invoice.
+      return {
+        ...summary,
+        wizard: {
+          kind: 'ORDER',
+          step: 'PREINVOICE',
+          subjectId: order.id,
+          anchor: { steps: ['USERNAME'], subjectId: order.id },
+        },
+      };
     } catch (error) {
       /*
        * Every refusal through the shared table, and NOTHING about the window.
@@ -12726,7 +13130,23 @@ export class BotRuntime {
        * at all and `refusal` rethrew it. One table for all five is what makes the two
        * paths answer alike.
        */
-      return refusal(error);
+      /*
+       * R2: shown in the wizard that asked; the window stays open, so the step does too. The
+       * refusal names no order, so the open window is asked which one: with two purchases
+       * open, the chat's most recently touched USERNAME wizard may be the OTHER order's.
+       */
+      const refused = refusal(error);
+      const orderId =
+        (await this.deps.answerWindowOrder?.(scope, botInstanceId, customer.id, 'USERNAME')) ??
+        null;
+      return {
+        ...refused,
+        wizard: {
+          kind: 'ORDER',
+          step: 'USERNAME',
+          anchor: { steps: ['USERNAME'], subjectId: orderId },
+        },
+      };
     }
   }
 
@@ -12811,6 +13231,7 @@ export class BotRuntime {
         (await this.orderRouteButtons(scope, customer.id, order.id, order.totals.total)).length > 0,
       ),
       orderId: order.id,
+      wizard: { kind: 'ORDER', step: 'AWAITING_PAYMENT', subjectId: order.id },
     };
   }
 
@@ -13037,6 +13458,7 @@ export class BotRuntime {
         },
       ],
       orderId: null,
+      wizard: { kind: 'TOPUP', step: 'AMOUNT', subjectId: begun.capture.id },
     };
   }
 
@@ -13059,7 +13481,13 @@ export class BotRuntime {
     const presets = await this.deps.payments.topupPresets(scope);
     const preset = presets.find((candidate) => candidate.amountMinor.toString() === amountMinor);
     if (preset === undefined) {
-      return { key: 'bot.wallet.topup_refused', values: {}, buttons: [], orderId: null };
+      return {
+        key: 'bot.wallet.topup_refused',
+        values: {},
+        buttons: [],
+        orderId: null,
+        wizard: { kind: 'TOPUP', step: 'NOTICE' },
+      };
     }
     const begun = await this.deps.topup.begin(scope, actor, {
       customerId: customer.id,
@@ -13123,6 +13551,8 @@ export class BotRuntime {
             values: { shortfall },
             buttons: [topupButton(), mainMenuButton()],
             orderId,
+            // R2: its own message, so the pre-invoice stays payable after a top-up.
+            wizard: WALLET_SHORT,
           };
         }
         await this.confirmDraft(scope, actor, before, customer, idempotencyKey);
@@ -13135,16 +13565,29 @@ export class BotRuntime {
         idempotencyKey: `${idempotencyKey}:wallet-pay`,
         orderId,
       });
+      /*
+       * R2 (items 5 and 11): the wizard is CLOSED here, in place and with no buttons, and
+       * what follows is a NEW message — the delivery of a new service, or the renewal's own
+       * result from the notification lane. A renewal is not closed with the generic "order
+       * paid" sentence: its payment message says the renewal is on its way.
+       */
       return {
-        key: 'bot.order.settled',
+        key: order.purpose === 'RENEW' ? 'bot.service.renew_paid' : 'bot.order.settled',
         values: {},
         buttons: [],
         orderId: order.id,
         ...followUpForSettlement(order.purpose),
+        wizard: { kind: 'ORDER', step: 'CLOSED', subjectId: order.id },
       };
     } catch (error) {
       if (isNexaError(error) && error.code === COMMERCE_ERROR_CODES.ORDER_TRANSFER_UNDER_REVIEW) {
-        return { key: 'bot.payment.transfer_under_review', values: {}, buttons: [], orderId };
+        return {
+          key: 'bot.payment.transfer_under_review',
+          values: {},
+          buttons: [],
+          orderId,
+          wizard: WALLET_SHORT,
+        };
       }
       if (isNexaError(error) && error.code === COMMERCE_ERROR_CODES.WALLET_INSUFFICIENT_FUNDS) {
         const shortfall = shortfallOf(error.details);
@@ -13154,6 +13597,7 @@ export class BotRuntime {
             values: { shortfall },
             buttons: [topupButton(), mainMenuButton()],
             orderId,
+            wizard: WALLET_SHORT,
           };
         }
       }
@@ -13322,6 +13766,7 @@ export class BotRuntime {
           values: {},
           buttons: [close],
           orderId: order.id,
+          wizard: { kind: 'ORDER', step: 'METHODS', subjectId: order.id },
         };
       }
       return {
@@ -13329,6 +13774,7 @@ export class BotRuntime {
         values: {},
         buttons: [...routes, close],
         orderId: order.id,
+        wizard: { kind: 'ORDER', step: 'METHODS', subjectId: order.id },
       };
     } catch (error) {
       return refusal(error);
@@ -13407,7 +13853,10 @@ export class BotRuntime {
           candidate.descriptor.settlesVia === 'GATEWAY' &&
           (provider === null || candidate.provider === provider),
       );
-      if (route === undefined) return gatewayUnavailable();
+      // R2: in the wizard, a way back to the other methods rather than a dead end.
+      if (route === undefined) {
+        return { ...gatewayUnavailable(), buttons: [payMethodsButton(orderId), mainMenuButton()] };
+      }
       if (before.state === 'DRAFT') {
         await this.confirmDraft(scope, actor, before, customer, idempotencyKey);
       }
@@ -13418,7 +13867,10 @@ export class BotRuntime {
       });
       return this.gatewayAttemptReply(attempt, orderId);
     } catch (error) {
-      return gatewayRefusal(error);
+      const refused = gatewayRefusal(error);
+      return refused.key === 'bot.payment.gateway_unavailable'
+        ? { ...refused, buttons: [payMethodsButton(orderId), mainMenuButton()] }
+        : refused;
     }
   }
 
@@ -13445,102 +13897,12 @@ export class BotRuntime {
     return this.gatewayAttemptReply({ ...view, reissued: true }, view.payment.orderId);
   }
 
-  /**
-   * An external-gateway attempt, as the customer sees it (brief §11, §23).
-   *
-   * Only a CONFIRMED payment is ever called paid, and a payment is CONFIRMED only by the
-   * gateway's own inquiry through the one settlement path. The link is the invoice's web
-   * link when the gateway returned one, else its Telegram link; nothing is fabricated.
-   */
+  /** An external-gateway attempt, as the customer sees it: `gatewayAttemptScreen`, now. */
   private gatewayAttemptReply(
     attempt: GatewayAttempt | GatewayAttemptView,
     orderId: string | null,
   ): PendingReply {
-    const { payment, invoice } = attempt;
-    const check: CustomerButton = {
-      label: { kind: 'TEMPLATE', key: 'bot.payment.gateway_check_button' },
-      data: `${GATEWAY_CHECK_CALLBACK_PREFIX}${payment.id}`,
-    };
-    const reply = (key: TemplateKey, buttons: readonly CustomerButton[]): PendingReply => ({
-      key,
-      values: {},
-      buttons: [...buttons, mainMenuButton()],
-      orderId,
-    });
-    if (payment.state === 'CONFIRMED') return reply('bot.payment.gateway_confirmed', []);
-    if (payment.state === 'FAILED') {
-      // A create the gateway refused is "unavailable"; an invoice it did not approve failed.
-      return reply(
-        invoice.creationState === 'CREATE_FAILED'
-          ? 'bot.payment.gateway_unavailable'
-          : 'bot.payment.gateway_failed',
-        [],
-      );
-    }
-    const now = this.deps.clock.now().getTime();
-    if (
-      payment.state !== 'PENDING' ||
-      payment.expiresAt === null ||
-      payment.expiresAt.getTime() <= now
-    ) {
-      return reply('bot.payment.gateway_closed', []);
-    }
-    /*
-     * Telegram Stars (Package A): the invoice is its own Telegram message, sent by this
-     * bot, so there is no link to draw. The summary shows the principal, the fee when
-     * there is one, the payable in the sales currency and the Stars asked for — all from
-     * THIS attempt's snapshot — while the invoice is being sent and once it has been.
-     */
-    if (
-      PAYMENT_GATEWAY_DESCRIPTORS[invoice.provider].invoiceCredential === 'BOT_TOKEN' &&
-      (invoice.creationState === 'CREATING' || invoice.creationState === 'CREATED')
-    ) {
-      return {
-        ...starsInvoiceBody(payment, invoice.sentAmount),
-        buttons: [check, mainMenuButton()],
-        orderId,
-      };
-    }
-    if (invoice.creationState === 'CREATING')
-      return reply('bot.payment.gateway_preparing', [check]);
-    const link = invoice.webInvoiceUrl ?? invoice.invoiceUrl;
-    if (invoice.creationState !== 'CREATED' || link === null) {
-      return reply('bot.payment.gateway_unknown', []);
-    }
-    /*
-     * A route that charges a customer fee shows the three figures apart (WP18): the
-     * principal — the order amount, or the top-up the wallet receives — the gateway fee,
-     * and the payable the invoice asks for. From THIS attempt's snapshot, never the
-     * route's current rate. With no fee the single amount is already all three.
-     */
-    const fee = payment.customerFee;
-    const invoiceBody: Pick<PendingReply, 'key' | 'values'> =
-      fee !== null && fee.fee.amountMinor > 0n
-        ? {
-            key:
-              payment.orderId === null
-                ? 'bot.payment.gateway_invoice_topup_fee'
-                : 'bot.payment.gateway_invoice_order_fee',
-            values: {
-              principal: payment.amount,
-              fee: fee.fee,
-              payable: fee.payable,
-              expiresAt: payment.expiresAt,
-            },
-          }
-        : {
-            key: 'bot.payment.gateway_invoice',
-            values: { total: payment.amount, expiresAt: payment.expiresAt },
-          };
-    return {
-      ...invoiceBody,
-      buttons: [
-        { label: { kind: 'TEMPLATE', key: 'bot.payment.gateway_pay_button' }, url: link },
-        check,
-        mainMenuButton(),
-      ],
-      orderId,
-    };
+    return gatewayAttemptScreen(attempt, orderId, this.deps.clock.now());
   }
 
   /**
@@ -13648,6 +14010,13 @@ export class BotRuntime {
         },
       ],
       orderId,
+      // R2: the invoice screen of the order's (or the top-up's) wizard.
+      wizard: {
+        kind: orderId === null ? 'TOPUP' : 'ORDER',
+        step: 'INVOICE',
+        paymentId: payment.id,
+        ...(orderId === null ? {} : { subjectId: orderId }),
+      },
     };
   }
 
@@ -13927,6 +14296,237 @@ export class BotRuntime {
   }
 
   /** Best effort, after the answer, and never allowed to fail the turn. */
+  /** R2: the tapped message, by its identity. */
+  private refOf(
+    botInstanceId: BotInstanceId,
+    origin: CallbackOrigin,
+  ): { botInstanceId: BotInstanceId; chatId: string; messageId: number } {
+    return { botInstanceId, chatId: origin.chatId, messageId: origin.messageId };
+  }
+
+  /**
+   * R2 (item 5): shows a wizard step by EDITING the wizard's message.
+   *
+   * The message is the tapped one (`claim`), or — for a typed answer — the chat's latest
+   * wizard waiting at the step that asked for it (`reply.wizard.anchor`), in which case the
+   * customer's own typed message is deleted once the wizard shows the next step, so the
+   * wizard stays the last thing in the chat.
+   *
+   * Null hands the reply back to the ordinary send: nothing was waiting for a typed answer,
+   * or the reply must be its own message (`placement: 'NEW'`, a main-menu keyboard, a file).
+   *
+   * The landing is written BEFORE the edit, so a tap on the new keyboard finds the new
+   * screen. When Telegram refuses the edit outright (a message it will not edit any more),
+   * the smallest fallback is taken: the same screen as a NEW message, and the wizard moves
+   * onto it. A landing overtaken by the gateway worker — which has the fresher invoice —
+   * answers nothing: the worker's edit is the one the message keeps.
+   */
+  private async editWizard(
+    scope: TenantContext,
+    actor: ActorContext,
+    reply: PendingReply,
+    claim: TelegramWizardRecord | null,
+    origin: CallbackOrigin | null,
+    chatId: string,
+    input: {
+      readonly botInstanceId: BotInstanceId;
+      readonly update: unknown;
+      readonly idempotencyKey: string;
+    },
+  ): Promise<CustomerSendOutcome | 'NOT_ATTEMPTED' | null> {
+    const state = this.deps.messageState;
+    if (state === undefined || reply.key === null) return null;
+    const directive = reply.wizard;
+    let target = claim;
+    let typed = false;
+    if (target === null) {
+      if (directive?.anchor === undefined) return null;
+      target = await state.claimLatest(scope, actor, {
+        botInstanceId: input.botInstanceId,
+        chatId,
+        kind: directive.kind,
+        steps: directive.anchor.steps,
+        subjectId: directive.anchor.subjectId ?? null,
+        updateKey: input.idempotencyKey,
+      });
+      if (target === null) return null;
+      typed = true;
+    }
+    /*
+     * Its own message after all: a reply the handler marked so; one that needs the reply
+     * keyboard, a file or a lead (Telegram edits none of them into a text message); and a
+     * bare refusal no handler drew for the wizard — a product withdrawn, a code refused —
+     * which must not replace the screen the customer can still choose from with a dead end.
+     */
+    if (
+      directive?.placement === 'NEW' ||
+      (directive === undefined && reply.buttons.length === 0) ||
+      reply.keyboard !== undefined ||
+      reply.media !== undefined ||
+      reply.lead !== undefined
+    ) {
+      await state.release(scope, actor, target);
+      return null;
+    }
+    const loading = directive?.invoicePending === true && directive.paymentId != null;
+    const landed = await state.land(scope, actor, target, {
+      kind: directive?.kind ?? target.kind,
+      step: directive?.step ?? 'NOTICE',
+      subjectId: directive?.subjectId !== undefined ? directive.subjectId : target.subjectId,
+      paymentId: directive?.paymentId !== undefined ? directive.paymentId : target.paymentId,
+      updateKey: input.idempotencyKey,
+      // The loading screen is landed at INVOICE_LOADING and HELD until it is marked below.
+      ...(loading ? { hold: true } : {}),
+    });
+    if (!landed) return 'NOT_ATTEMPTED';
+    let edited = await editSent(
+      this.deps.messenger,
+      scope,
+      {
+        chatId: target.chatId,
+        messageId: target.messageId,
+        botInstanceId: target.botInstanceId,
+        templateKey: reply.key,
+        values: reply.values,
+        buttons: reply.buttons,
+      },
+      !typed && origin !== null && origin.media,
+    );
+    if (edited.outcome === 'REFUSED') {
+      edited = await this.deps.messenger.send(scope, {
+        chatId: target.chatId,
+        templateKey: reply.key,
+        values: reply.values,
+        botInstanceId: target.botInstanceId,
+        ...(reply.buttons.length === 0 ? {} : { buttons: reply.buttons }),
+      });
+      if (edited.outcome === 'DELIVERED' && edited.messageId !== undefined) {
+        await state.move(scope, actor, target.id, edited.messageId);
+      }
+    }
+    if (typed && edited.outcome === 'DELIVERED') {
+      const own = typedMessageOf(input.update);
+      if (own !== null && this.deps.messenger.remove !== undefined) {
+        await this.deps.messenger.remove(scope, {
+          chatId: own.chatId,
+          messageId: own.messageId,
+          botInstanceId: input.botInstanceId,
+        });
+      }
+    }
+    /*
+     * R2 (item 4): the invoice is still being created in the worker. The loading screen was
+     * landed at `INVOICE_LOADING`, a step the worker never moves from — so an outcome the
+     * worker committed while this turn was editing cannot be edited in and then buried under
+     * the loading screen. Only NOW that the loading edit has been asked for is THIS wizard
+     * marked `INVOICE_PENDING` (which clears the hold), and the attempt read again: whichever
+     * of this turn and the worker moves the mark first edits the message into the invoice or
+     * the attempt's end, so neither waits for a status-check tap.
+     */
+    if (loading && directive.paymentId != null) {
+      await state.moveAll(
+        scope,
+        actor,
+        { paymentId: directive.paymentId, id: target.id },
+        ['INVOICE_LOADING'],
+        'INVOICE_PENDING',
+      );
+      await this.deps.invoiceScreens?.refresh(scope, directive.paymentId);
+    }
+    return edited.outcome;
+  }
+
+  /**
+   * R2 (item 3): a receipt decision, shown where the question was.
+   *
+   * The tapped message is recorded (when the directive names its role) and then every
+   * unfinalised message of the payment is stamped — only this chat's for a block, which
+   * decides nothing about the payment. Exactly the messages THIS call stamped are edited: the
+   * tapped one into this reply, every other receipt into the outcome's one line, every other
+   * prompt loses its buttons. A tapped message another turn already stamped is answered and
+   * nothing else — the repeated-tap rule, reached through a race instead of the gate.
+   *
+   * An edit Telegram definitely did not apply has its stamp cleared, so a later tap can
+   * finish it. Null when no payment could be named: the reply goes out as before.
+   */
+  private async finaliseReview(
+    scope: TenantContext,
+    actor: ActorContext,
+    reply: PendingReply,
+    origin: CallbackOrigin,
+    botInstanceId: BotInstanceId,
+  ): Promise<CustomerSendOutcome | 'NOT_ATTEMPTED' | null> {
+    const state = this.deps.messageState;
+    const directive = reply.review;
+    if (state === undefined || directive?.outcome === undefined || reply.key === null) return null;
+    const ref = this.refOf(botInstanceId, origin);
+    const tapped = await state.findReview(scope, ref);
+    const paymentId = directive.paymentId ?? tapped?.paymentId ?? null;
+    if (paymentId === null) return null;
+    if (tapped === null) {
+      await state.recordReview(scope, actor, {
+        ref,
+        paymentId,
+        role: directive.origin ?? 'PROMPT',
+        hasMedia: origin.media,
+      });
+    }
+    const outcome = directive.outcome;
+    const stamped = await state.finaliseReviews(
+      scope,
+      actor,
+      outcome === 'BLOCKED' ? { paymentId, chatId: origin.chatId } : { paymentId },
+    );
+    const same = (row: { botInstanceId: string; chatId: string; messageId: number }): boolean =>
+      row.botInstanceId === ref.botInstanceId &&
+      row.chatId === ref.chatId &&
+      row.messageId === ref.messageId;
+    const clearFailed = async (id: string, result: CustomerSendResult): Promise<void> => {
+      if (result.outcome === 'REFUSED' || result.outcome === 'RATE_LIMITED') {
+        await state.unfinaliseReview(scope, actor, id);
+      }
+    };
+    let answer: CustomerSendOutcome | 'NOT_ATTEMPTED' = 'NOT_ATTEMPTED';
+    for (const row of stamped) {
+      const message = {
+        chatId: row.chatId,
+        messageId: row.messageId,
+        botInstanceId: row.botInstanceId,
+      };
+      if (same(row)) {
+        // A receipt becomes the outcome's one line; a prompt becomes this reply's sentence.
+        const receipt = row.role === 'REVIEW';
+        const edited = await editSent(
+          this.deps.messenger,
+          scope,
+          {
+            ...message,
+            templateKey: receipt ? REVIEW_OUTCOME_KEYS[outcome] : reply.key,
+            values: receipt ? {} : reply.values,
+            buttons: receipt ? [] : reply.buttons,
+          },
+          origin.media,
+        );
+        await clearFailed(row.id, edited);
+        answer = edited.outcome;
+        continue;
+      }
+      const other =
+        row.role === 'REVIEW'
+          ? await editSent(
+              this.deps.messenger,
+              scope,
+              { ...message, templateKey: REVIEW_OUTCOME_KEYS[outcome], values: {}, buttons: [] },
+              row.hasMedia,
+            )
+          : this.deps.messenger.clearButtons === undefined
+            ? ({ outcome: 'REFUSED' } as const)
+            : await this.deps.messenger.clearButtons(scope, message);
+      await clearFailed(row.id, other);
+    }
+    return answer;
+  }
+
   private async stopSpinner(
     scope: TenantContext,
     command: BotCommand,
@@ -14159,6 +14759,144 @@ function ticketAlreadyClosed(): PendingReply {
   };
 }
 
+/**
+ * An external-gateway attempt, as the customer sees it (brief §11, §23) — and, since R2
+ * (item 4), the SAME screen whether the turn draws it or the gateway worker edits the wizard
+ * message into it once the invoice is ready (`WizardInvoiceScreens`). A pure function of the
+ * attempt and the moment, so the two can never show different things for one attempt.
+ *
+ * Only a CONFIRMED payment is ever called paid, and a payment is CONFIRMED only by the
+ * gateway's own inquiry through the one settlement path. The link is the invoice's web link
+ * when the gateway returned one, else its Telegram link; nothing is fabricated.
+ *
+ * Every screen that ends the attempt without an invoice — refused, not approved, closed, or
+ * a create whose answer was lost — says so truthfully and offers a way back to choosing how
+ * to pay (the order's method selector, or the top-up's amount), never a retry of THIS
+ * attempt: an attempt whose create is unknown is never created again (TonPays rule three).
+ */
+export function gatewayAttemptScreen(
+  attempt: GatewayAttempt | GatewayAttemptView,
+  orderId: string | null,
+  at: Date,
+): PendingReply {
+  const { payment, invoice } = attempt;
+  const kind = payment.orderId === null ? ('TOPUP' as const) : ('ORDER' as const);
+  const check: CustomerButton = {
+    label: { kind: 'TEMPLATE', key: 'bot.payment.gateway_check_button' },
+    data: `${GATEWAY_CHECK_CALLBACK_PREFIX}${payment.id}`,
+  };
+  const retry: CustomerButton =
+    payment.orderId === null ? topupButton() : payMethodsButton(payment.orderId);
+  const screen = (
+    key: TemplateKey,
+    buttons: readonly CustomerButton[],
+    step: WizardDirective['step'],
+    pending = false,
+  ): PendingReply => ({
+    key,
+    values: {},
+    buttons: [...buttons, mainMenuButton()],
+    orderId,
+    wizard: {
+      kind,
+      step,
+      paymentId: payment.id,
+      ...(pending ? { invoicePending: true } : {}),
+    },
+  });
+  if (payment.state === 'CONFIRMED') return screen('bot.payment.gateway_confirmed', [], 'CLOSED');
+  if (payment.state === 'FAILED') {
+    // A create the gateway refused is "unavailable"; an invoice it did not approve failed.
+    return screen(
+      invoice.creationState === 'CREATE_FAILED'
+        ? 'bot.payment.gateway_unavailable'
+        : 'bot.payment.gateway_failed',
+      [retry],
+      'NOTICE',
+    );
+  }
+  if (
+    payment.state !== 'PENDING' ||
+    payment.expiresAt === null ||
+    payment.expiresAt.getTime() <= at.getTime()
+  ) {
+    return screen('bot.payment.gateway_closed', [retry], 'NOTICE');
+  }
+  /*
+   * Telegram Stars (Package A): the invoice is its own Telegram message, sent by this bot —
+   * Telegram cannot turn a text message into an invoice, so it follows this one. The summary
+   * shows the principal, the fee when there is one, the payable in the sales currency and the
+   * Stars asked for — all from THIS attempt's snapshot — while the invoice is being sent and
+   * once it has been.
+   */
+  if (
+    PAYMENT_GATEWAY_DESCRIPTORS[invoice.provider].invoiceCredential === 'BOT_TOKEN' &&
+    (invoice.creationState === 'CREATING' || invoice.creationState === 'CREATED')
+  ) {
+    return {
+      ...starsInvoiceBody(payment, invoice.sentAmount),
+      buttons: [check, mainMenuButton()],
+      orderId,
+      wizard: { kind, step: 'INVOICE', paymentId: payment.id },
+    };
+  }
+  /*
+   * The loading screen: the worker edits this very message into the invoice once it exists.
+   * Landed at `INVOICE_LOADING` and marked `INVOICE_PENDING` by the turn once its edit has
+   * been asked for (`editWizard`). It carries the check button, gated from both, so a
+   * worker edit that did not land is one tap from the current attempt.
+   */
+  if (invoice.creationState === 'CREATING') {
+    return screen('bot.payment.gateway_preparing', [check], 'INVOICE_LOADING', true);
+  }
+  const link = invoice.webInvoiceUrl ?? invoice.invoiceUrl;
+  if (invoice.creationState !== 'CREATED' || link === null) {
+    return screen('bot.payment.gateway_unknown', [retry], 'NOTICE');
+  }
+  /*
+   * A route that charges a customer fee shows the three figures apart (WP18): the
+   * principal — the order amount, or the top-up the wallet receives — the gateway fee, and
+   * the payable the invoice asks for. From THIS attempt's snapshot, never the route's
+   * current rate. With no fee the single amount is already all three.
+   */
+  const fee = payment.customerFee;
+  const invoiceBody: Pick<PendingReply, 'key' | 'values'> =
+    fee !== null && fee.fee.amountMinor > 0n
+      ? {
+          key:
+            payment.orderId === null
+              ? 'bot.payment.gateway_invoice_topup_fee'
+              : 'bot.payment.gateway_invoice_order_fee',
+          values: {
+            principal: payment.amount,
+            fee: fee.fee,
+            payable: fee.payable,
+            expiresAt: payment.expiresAt,
+          },
+        }
+      : {
+          key: 'bot.payment.gateway_invoice',
+          values: { total: payment.amount, expiresAt: payment.expiresAt },
+        };
+  return {
+    ...invoiceBody,
+    buttons: [
+      { label: { kind: 'TEMPLATE', key: 'bot.payment.gateway_pay_button' }, url: link },
+      check,
+      mainMenuButton(),
+    ],
+    orderId,
+    wizard: { kind, step: 'INVOICE', paymentId: payment.id },
+  };
+}
+
+/**
+ * R2: a wallet refusal the customer acts on and comes back from — too little balance, a
+ * transfer already under review — goes out as its OWN message, so the pre-invoice it answers
+ * stays on screen and payable once they have topped up.
+ */
+const WALLET_SHORT: WizardDirective = { kind: 'ORDER', step: 'PREINVOICE', placement: 'NEW' };
+
 /** The one trial refusal, with the way back to the main menu. */
 function trialUnavailable(): PendingReply {
   return { key: 'bot.trial.unavailable', values: {}, buttons: [mainMenuButton()], orderId: null };
@@ -14296,6 +15034,15 @@ export function notificationButtons(
       {
         label: { kind: 'TEMPLATE', key: 'bot.ticket.view_button' },
         data: `${TICKET_VIEW_CALLBACK_PREFIX}${subject.ticketId}`,
+      },
+    ];
+  }
+  // R2 (item 11): the renewal result's one button opens the renewed service's card.
+  if (kind === 'SERVICE_RENEWED' && subject.serviceId !== undefined) {
+    return [
+      {
+        label: { kind: 'TEMPLATE', key: 'bot.service.renewed_details_button' },
+        data: `${SERVICE_CALLBACK_PREFIX}${subject.serviceId}`,
       },
     ];
   }

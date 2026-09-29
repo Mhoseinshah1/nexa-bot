@@ -247,7 +247,9 @@ describe('the customer payment flow over Telegram', () => {
     });
   }
 
-  const messages = () => sent.filter((one) => one.url.includes('/sendMessage'));
+  // R2: a wizard step is the tapped message EDITED, so an edit is a message here too.
+  const messages = () =>
+    sent.filter((one) => one.url.includes('/sendMessage') || one.url.includes('/editMessageText'));
   const lastMessage = () => messages()[messages().length - 1];
   const buttonsOf = (message: Sent | undefined) =>
     (

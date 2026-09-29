@@ -1002,6 +1002,13 @@
       "when": 1790686553771,
       "tag": "0142_r1_trial_per_panel_and_main_menu",
       "breakpoints": true
+    },
+    {
+      "idx": 143,
+      "version": "7",
+      "when": 1790695657959,
+      "tag": "0143_r2_telegram_message_state",
+      "breakpoints": true
     }
   ]
 }

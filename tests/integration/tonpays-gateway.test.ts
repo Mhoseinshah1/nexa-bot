@@ -203,27 +203,50 @@ describe('TonPays, through the one settlement path', () => {
   let lane: GatewayPaymentService;
   let offsetMs: number;
   let updateSeq = 0;
-  /** Every `sendMessage` body the bot sent to the fake Telegram. */
+  /** Every `sendMessage` body — and, since R2, every `editMessageText` — the bot sent. */
   const sent: Record<string, unknown>[] = [];
   const lastMarkup = () => JSON.stringify(sent[sent.length - 1]?.['reply_markup'] ?? {});
   const lastText = () => String(sent[sent.length - 1]?.['text'] ?? '');
+  /**
+   * R2: runs when an `editMessageText` reaches "Telegram", BEFORE it is applied — so whatever
+   * it does happens between the caller's decision to edit and the edit landing. Answering
+   * `RATE_LIMITED` refuses the edit with a 429, which Telegram never applies.
+   */
+  let beforeEdit: ((body: Record<string, unknown>) => Promise<'RATE_LIMITED' | void>) | null = null;
 
   beforeAll(async () => {
     telegram = createServer((request, response) => {
       const chunks: Buffer[] = [];
       request.on('data', (chunk: Buffer) => chunks.push(chunk));
       request.on('end', () => {
-        try {
-          if ((request.url ?? '').includes('/sendMessage')) {
-            sent.push(
-              JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>,
-            );
+        void (async () => {
+          const url = request.url ?? '';
+          let body: Record<string, unknown> | null = null;
+          try {
+            body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>;
+          } catch {
+            // a multipart upload; not what these cases read
           }
-        } catch {
-          // a multipart upload; not what these cases read
-        }
-        response.writeHead(200, { 'content-type': 'application/json' });
-        response.end(JSON.stringify({ ok: true, result: { message_id: 11 } }));
+          if (body !== null && url.includes('/editMessageText') && beforeEdit !== null) {
+            if ((await beforeEdit(body)) === 'RATE_LIMITED') {
+              response.writeHead(429, { 'content-type': 'application/json' });
+              response.end(
+                JSON.stringify({
+                  ok: false,
+                  error_code: 429,
+                  description: 'Too Many Requests: retry after 1',
+                  parameters: { retry_after: 1 },
+                }),
+              );
+              return;
+            }
+          }
+          if (body !== null && (url.includes('/sendMessage') || url.includes('/editMessageText'))) {
+            sent.push(body);
+          }
+          response.writeHead(200, { 'content-type': 'application/json' });
+          response.end(JSON.stringify({ ok: true, result: { message_id: 11 } }));
+        })();
       });
     });
     await new Promise<void>((resolve) => telegram.listen(0, '127.0.0.1', resolve));
@@ -278,6 +301,7 @@ describe('TonPays, through the one settlement path', () => {
 
     tonpays = new FakeTonPays();
     offsetMs = 0;
+    beforeEdit = null;
     lane = laneWith(tonpays);
   });
 
@@ -287,6 +311,8 @@ describe('TonPays, through the one settlement path', () => {
     overrides: {
       readonly budget?: GatewayCallBudget;
       readonly payments?: GatewayPaymentServiceDeps['payments'];
+      /** R2: the customer's invoice message, edited by the worker once the invoice is ready. */
+      readonly invoiceScreens?: GatewayPaymentServiceDeps['invoiceScreens'];
     } = {},
   ): GatewayPaymentService {
     const db = ctx.container.database.db;
@@ -316,6 +342,9 @@ describe('TonPays, through the one settlement path', () => {
       clock: { now: () => new Date(Date.now() + offsetMs) },
       ids: ctx.container.ids,
       logger: { info: () => undefined, warn: () => undefined, error: () => undefined },
+      ...(overrides.invoiceScreens === undefined
+        ? {}
+        : { invoiceScreens: overrides.invoiceScreens }),
     });
   }
 
@@ -361,7 +390,10 @@ describe('TonPays, through the one settlement path', () => {
     return row.id;
   }
 
-  const tap = (data: string) => {
+  const tap = (data: string) => tapOn(null, data);
+
+  /** A tap on one message by its id; null taps a message nothing has tracked before. */
+  const tapOn = (messageId: number | null, data: string) => {
     updateSeq += 1;
     return ctx.container.botRuntime.handle(tenantA, systemActor('bot'), {
       idempotencyKey: `tp-update-${String(updateSeq)}`,
@@ -373,7 +405,7 @@ describe('TonPays, through the one settlement path', () => {
           from: { id: Number(MARYAM), first_name: 'مریم', is_bot: false },
           data,
           message: {
-            message_id: updateSeq,
+            message_id: messageId ?? updateSeq,
             date: 0,
             chat: { id: Number(MARYAM), type: 'private' },
             from: { id: 999999, is_bot: true, first_name: 'Nexa' },
@@ -556,6 +588,222 @@ describe('TonPays, through the one settlement path', () => {
       expect(lastMarkup()).not.toContain(invoice.invoice_url!);
       expect(lastText()).toContain('250,000');
       expect(lastText()).not.toContain('تأیید و ثبت شد');
+    });
+
+    /*
+     * R2 (v0.3.5 real-test item 4): the customer taps the gateway, sees the loading screen,
+     * and the SAME message becomes the invoice — amount, deadline, the pay link, the status
+     * check and the main menu — as soon as the worker has created it. No status-check tap.
+     */
+    it('R2: edits the tapped message into the ready invoice without a status-check tap', async () => {
+      await enableTonPays();
+      lane = laneWith(tonpays, { invoiceScreens: ctx.container.wizardScreens });
+      const orderId = await draftOrder();
+      const { paymentId } = await payWithGateway(orderId);
+      const message = updateSeq;
+      const onMessage = () => sent.filter((body) => body['message_id'] === message);
+      expect(onMessage().at(-1)?.['text']).toContain('در حال ساخت');
+      const checksBefore = tonpays.checks.length;
+
+      await pass();
+
+      const invoice = await invoiceOf(paymentId);
+      const ready = onMessage().at(-1);
+      expect(ready?.['text']).toContain('250,000');
+      expect(ready?.['text']).toContain('مهلت پرداخت');
+      const markup = JSON.stringify(ready?.['reply_markup'] ?? {});
+      expect(markup).toContain(`"url":"${invoice.web_invoice_url!}"`);
+      expect(markup).toContain(`gc:${paymentId}`);
+      expect(markup).toContain('"callback_data":"mm:"');
+      // Nobody tapped «بررسی وضعیت پرداخت»: the worker created it and edited the message.
+      expect(tonpays.checks.length).toBe(checksBefore);
+      const [wizard] = await rows<{ step: string }>(
+        sql`SELECT step FROM telegram_wizards WHERE payment_id = ${paymentId}`,
+      );
+      expect(wizard?.step).toBe('INVOICE');
+    });
+
+    it('R2: a create whose answer was lost edits the same message into a truthful end, never re-sent', async () => {
+      await enableTonPays();
+      lane = laneWith(tonpays, { invoiceScreens: ctx.container.wizardScreens });
+      tonpays.createMode = 'SERVER_ERROR';
+      const orderId = await draftOrder();
+      const { paymentId } = await payWithGateway(orderId);
+      const message = updateSeq;
+
+      await pass();
+      await pass();
+
+      const last = sent.filter((body) => body['message_id'] === message).at(-1);
+      expect(String(last?.['text'])).toContain('پاسخ درگاه');
+      const markup = JSON.stringify(last?.['reply_markup'] ?? {});
+      expect(markup).toContain(`pm:${orderId}`);
+      expect(markup).not.toContain('"url"');
+      // TonPays rule three: the lost create is never retried and never re-keyed.
+      expect(tonpays.creates).toHaveLength(1);
+      expect((await invoiceOf(paymentId)).creation_state).toBe('CREATE_UNKNOWN');
+    });
+
+    /*
+     * R2 finding F1: the turn LANDS its loading screen before it edits the message. A worker
+     * that commits the attempt's end in between must not be able to claim that landing —
+     * it would edit the end in, and the turn's loading edit would then bury it for ever
+     * under "the link will appear here", with a check button whose gate no longer matched.
+     */
+    it('R2: an end the worker commits between the turn landing the loading screen and its edit ends on the end screen, not the loading screen', async () => {
+      await enableTonPays();
+      lane = laneWith(tonpays, { invoiceScreens: ctx.container.wizardScreens });
+      const orderId = await draftOrder();
+      tonpays.createMode = { code: 'INVALID_API_KEY', status: 401 };
+      let raced = false;
+      beforeEdit = async (body) => {
+        if (!String(body['text']).includes('در حال ساخت')) return;
+        beforeEdit = null;
+        // The loading edit has been asked for and not applied: the worker runs now.
+        await pass();
+        raced = true;
+      };
+      const { paymentId } = await payWithGateway(orderId);
+      const message = updateSeq;
+      expect(raced).toBe(true);
+      expect((await paymentOf(paymentId)).state).toBe('FAILED');
+
+      const onMessage = sent.filter((body) => body['message_id'] === message);
+      const last = onMessage.at(-1);
+      expect(String(last?.['text'])).not.toContain('در حال ساخت');
+      const markup = JSON.stringify(last?.['reply_markup'] ?? {});
+      expect(markup).toContain(`pm:${orderId}`);
+      expect(markup).not.toContain('gc:');
+      const [wizard] = await rows<{ step: string }>(
+        sql`SELECT step FROM telegram_wizards WHERE payment_id = ${paymentId}`,
+      );
+      expect(wizard?.step).toBe('NOTICE');
+
+      // The end screen's own button is honoured: back to choosing how to pay.
+      const back = await tapOn(message, `pm:${orderId}`);
+      expect(back.replyKey).not.toBeNull();
+    });
+
+    /*
+     * The loading screen is HELD by the turn that landed it until that turn marks it: a check
+     * tap arriving in between is stale, so it cannot draw the attempt's end and then have the
+     * turn's loading edit land on top. A turn that died in between frees it with its lease,
+     * and then the loading screen's check button is what recovers it.
+     */
+    it('R2: a check tap on a loading screen its turn still holds is stale; once the hold lapses it renders the attempt', async () => {
+      await enableTonPays();
+      lane = laneWith(tonpays, { invoiceScreens: ctx.container.wizardScreens });
+      const orderId = await draftOrder();
+      tonpays.createMode = { code: 'INVALID_API_KEY', status: 401 };
+      let paymentId = '';
+      let inBetween: Awaited<ReturnType<typeof tapOn>> | null = null;
+      beforeEdit = async (body) => {
+        if (!String(body['text']).includes('در حال ساخت')) return;
+        beforeEdit = null;
+        await pass();
+        const [row] = await rows<{ id: string }>(
+          sql`SELECT id FROM payments WHERE order_id = ${orderId} AND method = 'GATEWAY'`,
+        );
+        paymentId = row?.id ?? '';
+        inBetween = await tapOn(Number(body['message_id']), `gc:${paymentId}`);
+      };
+      await payWithGateway(orderId);
+      const message = updateSeq - 1;
+      expect(inBetween).not.toBeNull();
+      expect(inBetween!.replyKey).toBeNull();
+      expect(
+        String(sent.filter((body) => body['message_id'] === message).at(-1)?.['text']),
+      ).not.toContain('در حال ساخت');
+
+      // A turn that died between its landing and its mark: the landing, held, never marked.
+      await ctx.container.database.db.execute(
+        sql`UPDATE telegram_wizards SET step = 'INVOICE_LOADING', busy_until = now() - interval '1 second'
+            WHERE payment_id = ${paymentId}`,
+      );
+      sent.length = 0;
+      const recovered = await tapOn(message, `gc:${paymentId}`);
+      expect(recovered.replyKey).not.toBeNull();
+      expect(JSON.stringify(sent.at(-1)?.['reply_markup'] ?? {})).toContain(`pm:${orderId}`);
+      const [wizard] = await rows<{ step: string }>(
+        sql`SELECT step FROM telegram_wizards WHERE payment_id = ${paymentId}`,
+      );
+      expect(wizard?.step).toBe('NOTICE');
+    });
+
+    /*
+     * A turn marks only the loading screen IT landed. Another message showing the same attempt
+     * whose own turn still holds it at INVOICE_LOADING has not had its loading edit yet: marked
+     * by this turn, it could be edited into the invoice and then buried by that edit.
+     */
+    it('R2: a turn marks only its own loading screen, never another message’s held landing of the same attempt', async () => {
+      await enableTonPays();
+      lane = laneWith(tonpays, { invoiceScreens: ctx.container.wizardScreens });
+      const orderId = await draftOrder();
+      beforeEdit = async (body) => {
+        if (!String(body['text']).includes('در حال ساخت')) return;
+        beforeEdit = null;
+        // Another turn's landing of this attempt on message 424242, held and not yet edited.
+        await ctx.container.database.db.execute(
+          sql`INSERT INTO telegram_wizards (id, tenant_id, bot_instance_id, chat_id, message_id,
+                kind, step, version, payment_id, busy_until, created_at, updated_at)
+              SELECT gen_random_uuid(), tenant_id, ${BOT_A}, ${MARYAM}, 424242, 'ORDER',
+                'INVOICE_LOADING', 1, id, now() + interval '30 seconds', now(), now()
+              FROM payments WHERE order_id = ${orderId} AND method = 'GATEWAY'`,
+        );
+      };
+      const { paymentId } = await payWithGateway(orderId);
+      const steps = await rows<{ message_id: string; step: string }>(
+        sql`SELECT message_id::text AS message_id, step FROM telegram_wizards
+            WHERE payment_id = ${paymentId} ORDER BY message_id`,
+      );
+      expect(steps).toEqual([
+        { message_id: String(updateSeq), step: 'INVOICE_PENDING' },
+        { message_id: '424242', step: 'INVOICE_LOADING' },
+      ]);
+    });
+
+    /*
+     * R2 finding F4: a worker edit Telegram answers with a 429 was NOT applied. The wizard is
+     * put back on the step whose screen the message still shows, so that screen's check
+     * button — the loading screen carries it — renders the committed attempt in place.
+     */
+    it('R2: a worker edit Telegram rate-limited puts the wizard back, and the loading screen’s check button finishes it', async () => {
+      await enableTonPays();
+      lane = laneWith(tonpays, { invoiceScreens: ctx.container.wizardScreens });
+      const orderId = await draftOrder();
+      tonpays.createMode = { code: 'INVALID_API_KEY', status: 401 };
+      const { paymentId } = await payWithGateway(orderId);
+      const message = updateSeq;
+      const onMessage = () => sent.filter((body) => body['message_id'] === message);
+      const stepOf = async () =>
+        (
+          await rows<{ step: string }>(
+            sql`SELECT step FROM telegram_wizards WHERE payment_id = ${paymentId}`,
+          )
+        )[0]?.step;
+      expect(await stepOf()).toBe('INVOICE_PENDING');
+      expect(JSON.stringify(onMessage().at(-1)?.['reply_markup'] ?? {})).toContain(
+        `gc:${paymentId}`,
+      );
+
+      let limited = 0;
+      beforeEdit = () => {
+        limited += 1;
+        beforeEdit = null;
+        return Promise.resolve('RATE_LIMITED');
+      };
+      await pass();
+      expect(limited).toBe(1);
+      expect((await paymentOf(paymentId)).state).toBe('FAILED');
+      // Still the loading screen, and still at the step whose check button it carries.
+      expect(String(onMessage().at(-1)?.['text'])).toContain('در حال ساخت');
+      expect(await stepOf()).toBe('INVOICE_PENDING');
+
+      const checked = await tapOn(message, `gc:${paymentId}`);
+      expect(checked.replyKey).not.toBeNull();
+      expect(String(onMessage().at(-1)?.['text'])).not.toContain('در حال ساخت');
+      expect(JSON.stringify(onMessage().at(-1)?.['reply_markup'] ?? {})).toContain(`pm:${orderId}`);
+      expect(await stepOf()).toBe('NOTICE');
     });
 
     it('offers web_invoice_url first and falls back to invoice_url, never inventing one', async () => {

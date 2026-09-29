@@ -89,7 +89,7 @@ describe('a message over the Telegram bound', () => {
       buttons: [{ label: { kind: 'TEXT', text: 'go' }, data: 'g:1' }],
       keyboard: 'MAIN_MENU',
     });
-    expect(result).toEqual({ outcome: 'DELIVERED' });
+    expect(result).toEqual({ outcome: 'DELIVERED', messageId: 1 });
     expect(calls.length).toBeGreaterThan(1);
     const texts = calls.map((call) => call.body?.text as string);
     for (const text of texts) expect(text.length).toBeLessThanOrEqual(TELEGRAM_MESSAGE_MAX);
@@ -224,7 +224,7 @@ describe('a file with a caption', () => {
       caption: { templateKey: HTML_KEY, values: {} },
       buttons: [{ label: { kind: 'TEXT', text: 'open' }, url: 'https://example.net/s' }],
     });
-    expect(result).toEqual({ outcome: 'DELIVERED' });
+    expect(result).toEqual({ outcome: 'DELIVERED', messageId: 1 });
     expect(calls[0]?.url).toContain('/sendPhoto');
     expect(calls[0]?.body).toBeNull();
     const wire = calls[0]?.multipart ?? '';
@@ -268,7 +268,7 @@ describe('a file with a caption', () => {
       source: { kind: 'FILE_ID', fileId: 'f' },
       caption: { templateKey: PLAIN_KEY, values: {} },
     });
-    expect(result).toEqual({ outcome: 'DELIVERED' });
+    expect(result).toEqual({ outcome: 'DELIVERED', messageId: 1 });
     const caption = calls[0]?.body?.caption as string;
     expect(caption.length).toBe(TELEGRAM_CAPTION_MAX);
     expect(caption.endsWith('…')).toBe(true);
@@ -285,5 +285,95 @@ describe('a file with a caption', () => {
         source: { kind: 'FILE_ID', fileId: 'f' },
       }),
     ).toEqual({ outcome: 'RATE_LIMITED' });
+  });
+});
+
+/*
+ * R2 (v0.3.5 real-test items 3–5): the three edits beside R3's `edit` — a file's caption, a
+ * keyboard taken off, and a deletion — on `edit`'s rules.
+ */
+describe('a sent message changed in place (R2)', () => {
+  it('edits a FILE by its caption, and an empty keyboard removes the buttons', async () => {
+    const { messenger, calls, respondWith } = harness({ [PLAIN_KEY]: '✅ پرداخت تأیید شد' });
+    respondWith([OK]);
+    const result = await messenger.editCaption(scope, {
+      chatId: '42',
+      messageId: 78,
+      botInstanceId,
+      templateKey: PLAIN_KEY,
+      values: {},
+      buttons: [],
+    });
+    expect(result).toEqual({ outcome: 'DELIVERED' });
+    expect(calls[0]?.url).toContain('/editMessageCaption');
+    expect(calls[0]?.body).toEqual({
+      chat_id: '42',
+      message_id: 78,
+      caption: '✅ پرداخت تأیید شد',
+      reply_markup: { inline_keyboard: [] },
+    });
+  });
+
+  it('reads "message is not modified" as delivered, and any other refusal as NOT_EDITABLE', async () => {
+    const same = harness({ [PLAIN_KEY]: 'same' });
+    same.respondWith([
+      {
+        status: 400,
+        body: { ok: false, error_code: 400, description: 'Bad Request: message is not modified' },
+      },
+    ]);
+    const edit = {
+      chatId: '42',
+      messageId: 79,
+      botInstanceId,
+      templateKey: PLAIN_KEY,
+      values: {},
+      buttons: [],
+    } as const;
+    expect((await same.messenger.editCaption(scope, edit)).outcome).toBe('DELIVERED');
+
+    const gone = harness({ [PLAIN_KEY]: 'x' });
+    gone.respondWith([
+      {
+        status: 400,
+        body: { ok: false, error_code: 400, description: 'message to edit not found' },
+      },
+    ]);
+    expect(await gone.messenger.editCaption(scope, edit)).toEqual({
+      outcome: 'REFUSED',
+      reason: 'NOT_EDITABLE',
+    });
+  });
+
+  it('refuses an HTML caption over the bound without asking Telegram', async () => {
+    const { messenger, calls, respondWith } = harness({
+      [HTML_KEY]: 'y'.repeat(TELEGRAM_CAPTION_MAX + 1),
+    });
+    respondWith([OK]);
+    const result = await messenger.editCaption(scope, {
+      chatId: '42',
+      messageId: 80,
+      botInstanceId,
+      templateKey: HTML_KEY,
+      values: {},
+      buttons: [],
+    });
+    expect(result).toEqual({ outcome: 'REFUSED', reason: 'NOT_EDITABLE' });
+    expect(calls).toHaveLength(0);
+  });
+
+  it('takes every button off, and deletes a message, by its id', async () => {
+    const { messenger, calls, respondWith } = harness({});
+    respondWith([OK, { status: 200, body: { ok: true, result: true } }]);
+    await messenger.clearButtons(scope, { chatId: '42', messageId: 82, botInstanceId });
+    await messenger.remove(scope, { chatId: '42', messageId: 83, botInstanceId });
+    expect(calls[0]?.url).toContain('/editMessageReplyMarkup');
+    expect(calls[0]?.body).toEqual({
+      chat_id: '42',
+      message_id: 82,
+      reply_markup: { inline_keyboard: [] },
+    });
+    expect(calls[1]?.url).toContain('/deleteMessage');
+    expect(calls[1]?.body).toEqual({ chat_id: '42', message_id: 83 });
   });
 });

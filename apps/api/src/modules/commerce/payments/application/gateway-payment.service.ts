@@ -131,6 +131,16 @@ export interface GatewayPaymentServiceDeps {
     warn: (context: Record<string, unknown>, message: string) => void;
     error: (context: Record<string, unknown>, message: string) => void;
   };
+  /**
+   * R2 (v0.3.5 real-test item 4): the customer's Telegram message showing this attempt,
+   * edited in place once the attempt's state has moved — the invoice ready, the create
+   * refused or lost, the payment approved or not. Called AFTER the outcome committed and
+   * outside every transaction; it reads the committed attempt and decides nothing about it.
+   * Absent, the customer sees the change on their next status-check tap, as before.
+   */
+  readonly invoiceScreens?: {
+    refresh(scope: TenantContext, paymentId: string): Promise<void>;
+  };
 }
 
 /** What one pass did, for the loop's log and for a test. Counts only; no identifiers. */
@@ -229,6 +239,8 @@ export class GatewayPaymentService {
         break;
       }
       report[result] += 1;
+      // R2: the invoice is ready, refused or unknown — the waiting message shows it now.
+      if (result !== 'createDeferred') await this.refreshScreens(scope, claimed.invoice.paymentId);
     }
 
     if (!report.budgetExhausted) {
@@ -259,9 +271,29 @@ export class GatewayPaymentService {
         if (result === 'SETTLED') report.settled += 1;
         if (result === 'UNSUCCESSFUL') report.unsuccessful += 1;
         if (result === 'LATE') report.lateCompletions += 1;
+        // R2: an attempt that settled or ended is shown so on the message that shows it.
+        if (result === 'SETTLED' || result === 'UNSUCCESSFUL' || result === 'LATE') {
+          await this.refreshScreens(scope, claimed.invoice.paymentId);
+        }
       }
     }
     return report;
+  }
+
+  /**
+   * R2: best effort, and never the lane's failure — a Telegram edit that cannot be made
+   * leaves the customer's status-check button, and must not stop the next invoice.
+   */
+  private async refreshScreens(scope: TenantContext, paymentId: string): Promise<void> {
+    if (this.deps.invoiceScreens === undefined) return;
+    try {
+      await this.deps.invoiceScreens.refresh(scope, paymentId);
+    } catch (error: unknown) {
+      this.deps.logger.warn(
+        { paymentId, error: error instanceof Error ? error.name : 'unknown' },
+        'gateway invoice screen refresh failed',
+      );
+    }
   }
 
   private async releaseUnreached(

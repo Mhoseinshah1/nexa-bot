@@ -191,6 +191,10 @@ import {
   OPS_LOG_GROUP_PROBLEMS,
   OPS_LOG_GROUP_STATUSES,
   OPS_LOG_TOPIC_STATES,
+  // R2: the Telegram messages edited in place.
+  TELEGRAM_WIZARD_KINDS,
+  TELEGRAM_WIZARD_STEPS,
+  TELEGRAM_REVIEW_MESSAGE_ROLES,
 } from '@nexa/contracts';
 
 /**
@@ -9213,5 +9217,124 @@ export const opsLogConnectCodes = pgTable(
       'ops_log_connect_codes_consumed_check',
       sql`(consumed_at IS NULL) = (consumed_chat_id IS NULL)`,
     ),
+  ],
+);
+
+/**
+ * R2 (v0.3.5 real-test item 5): one customer WIZARD message — the purchase or the wallet
+ * top-up — that Telegram edits in place from step to step instead of receiving a new message
+ * per step.
+ *
+ * Presentation state, keyed by the Telegram message itself: `(bot, chat, message)` is the
+ * wizard's identity, so an older wizard message keeps its own state and an order still
+ * payable from it stays payable. `step` is the screen the message SHOWS; a tapped button is
+ * honoured only when the message still shows the screen the button belongs to, and every
+ * transition is a conditional UPDATE on `version` taken before the work runs
+ * (`busy_until` is that claim's lease), so a double tap or a keyboard Telegram had not yet
+ * replaced is answered without effect — never a step backward, never a second draft,
+ * payment or invoice. Nothing here decides money: the order, the payment and the capture
+ * still re-decide every write under their own locks.
+ *
+ * `payment_id` is the attempt an `INVOICE`/`INVOICE_PENDING` message shows; the gateway
+ * worker finds the message through it when the invoice it was creating is ready.
+ */
+export const telegramWizards = pgTable(
+  'telegram_wizards',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    botInstanceId: uuid('bot_instance_id')
+      .notNull()
+      .references(() => botInstances.id),
+    chatId: text('chat_id').notNull(),
+    messageId: bigint('message_id', { mode: 'number' }).notNull(),
+    kind: text('kind').notNull(),
+    step: text('step').notNull(),
+    version: integer('version').notNull().default(0),
+    /** The order (ORDER) or the amount capture (TOPUP) the screen is about. */
+    subjectId: uuid('subject_id'),
+    paymentId: uuid('payment_id'),
+    busyUntil: timestamptz('busy_until'),
+    /**
+     * The Telegram update whose turn put this screen on the message. A REDELIVERY of that
+     * same update — Telegram did not see our 200, perhaps after the edit never went out —
+     * is let through the gate again and replays to the same result (every write behind it
+     * is idempotent by the update's key), so a lost edit is repaired rather than frozen.
+     */
+    lastUpdateKey: text('last_update_key'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('telegram_wizards_message_key').on(
+      table.tenantId,
+      table.botInstanceId,
+      table.chatId,
+      table.messageId,
+    ),
+    index('telegram_wizards_payment_idx')
+      .on(table.tenantId, table.paymentId)
+      .where(sql`payment_id IS NOT NULL`),
+    index('telegram_wizards_subject_idx')
+      .on(table.tenantId, table.subjectId)
+      .where(sql`subject_id IS NOT NULL`),
+    index('telegram_wizards_chat_idx').on(
+      table.tenantId,
+      table.botInstanceId,
+      table.chatId,
+      table.updatedAt,
+    ),
+    check('telegram_wizards_kind_check', enumCheck('kind', TELEGRAM_WIZARD_KINDS)),
+    check('telegram_wizards_step_check', enumCheck('step', TELEGRAM_WIZARD_STEPS)),
+    check('telegram_wizards_version_check', sql`version >= 0`),
+    check('telegram_wizards_message_check', sql`message_id > 0`),
+  ],
+);
+
+/**
+ * R2 (v0.3.5 real-test item 3): an administrator's receipt-review message, or a prompt a
+ * decision opened from it, recorded so the decision can edit it in place into its result.
+ *
+ * `finalised_at` is what makes a repeated tap harmless: a callback from a message already
+ * finalised is answered (`answerCallbackQuery`) and nothing else — no decision is asked for
+ * again, no message is sent or edited. The decisions themselves keep their own locks and
+ * idempotency; this row only records which message shows the outcome.
+ */
+export const telegramReviewMessages = pgTable(
+  'telegram_review_messages',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    botInstanceId: uuid('bot_instance_id')
+      .notNull()
+      .references(() => botInstances.id),
+    chatId: text('chat_id').notNull(),
+    messageId: bigint('message_id', { mode: 'number' }).notNull(),
+    paymentId: uuid('payment_id').notNull(),
+    role: text('role').notNull(),
+    /** Whether the message carries the receipt FILE, so its caption is what is edited. */
+    hasMedia: boolean('has_media').notNull(),
+    finalisedAt: timestamptz('finalised_at'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('telegram_review_messages_message_key').on(
+      table.tenantId,
+      table.botInstanceId,
+      table.chatId,
+      table.messageId,
+    ),
+    index('telegram_review_messages_payment_idx').on(table.tenantId, table.paymentId),
+    foreignKey({
+      columns: [table.tenantId, table.paymentId],
+      foreignColumns: [payments.tenantId, payments.id],
+      name: 'telegram_review_messages_payment_fk',
+    }),
+    check('telegram_review_messages_role_check', enumCheck('role', TELEGRAM_REVIEW_MESSAGE_ROLES)),
+    check('telegram_review_messages_message_check', sql`message_id > 0`),
   ],
 );

@@ -523,7 +523,16 @@ describe('the Telegram receipt review, as one message with three decisions', () 
   const runtime = () => ctx.container.botRuntime;
   const method = (url: string) => url.split('/').pop() ?? '';
   const replies = () =>
-    sent.filter((one) => ['sendMessage', 'sendPhoto', 'sendDocument'].includes(method(one.url)));
+    sent.filter((one) =>
+      [
+        'sendMessage',
+        'sendPhoto',
+        'sendDocument',
+        // R2: a decision edits the message it was taken on.
+        'editMessageText',
+        'editMessageCaption',
+      ].includes(method(one.url)),
+    );
   const lastReply = () => replies()[replies().length - 1]?.body ?? {};
   const lastText = () => String(lastReply()['text'] ?? lastReply()['caption'] ?? '');
   const lastKeyboard = () => keyboardOf(lastReply());
@@ -746,7 +755,9 @@ describe('the Telegram receipt review, as one message with three decisions', () 
           from: { id: Number(telegramUserId), is_bot: false, first_name: 'کاربر' },
           data,
           message: {
-            message_id: 1,
+            // R2: each tap from its own message, as a real chat has; the receipt-review
+            // cases that tap ONE message twice build that message themselves.
+            message_id: 1000 + updateSeq,
             date: 0,
             chat: { id: Number(telegramUserId), type: 'private' },
           },

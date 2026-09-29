@@ -785,7 +785,11 @@ describe('Telegram Stars (Package A)', () => {
       const orderId = await draftOrder(260_000n);
       calls = [];
       await tapAs(MARYAM, `gp:${orderId}.TELEGRAM_STARS`);
-      const text = String(calls.find((call) => call.method === 'sendMessage')?.body.text ?? '');
+      // R2: the method chooser's message is edited into the summary.
+      const text = String(
+        calls.find((call) => call.method === 'sendMessage' || call.method === 'editMessageText')
+          ?.body.text ?? '',
+      );
       // 260,000 + 13,000 = 273,000 → 210 Stars.
       expect(text).toContain('210');
       expect(JSON.stringify(calls.at(-1)?.body.reply_markup ?? {})).not.toContain('"url"');
@@ -799,7 +803,9 @@ describe('Telegram Stars (Package A)', () => {
       calls = [];
       await tapAs(MARYAM, `pm:${orderId}`);
       const markup = JSON.stringify(
-        calls.filter((call) => call.method === 'sendMessage').map((call) => call.body.reply_markup),
+        calls
+          .filter((call) => call.method === 'sendMessage' || call.method === 'editMessageText')
+          .map((call) => call.body.reply_markup),
       );
       expect(markup).toContain(`gp:${orderId}.TELEGRAM_STARS`);
       expect(markup).not.toContain(`"g:${orderId}"`);
