@@ -66,6 +66,8 @@ describe('the wizard is one message, edited in place', () => {
   let maryam: UserId;
   let owner: ActorContext;
   let updateSeq = 0;
+  /** Messages Telegram will no longer edit: an edit of one is refused with a 400. */
+  const uneditable = new Set<number>();
 
   beforeAll(async () => {
     calls = [];
@@ -80,6 +82,18 @@ describe('the wizard is one message, edited in place', () => {
           body = {};
         }
         const method = (request.url ?? '').split('/').pop() ?? '';
+        if (method === 'editMessageText' && uneditable.has(Number(body['message_id']))) {
+          calls.push({ method, body, sentId: null });
+          response.writeHead(400, { 'content-type': 'application/json' });
+          response.end(
+            JSON.stringify({
+              ok: false,
+              error_code: 400,
+              description: "Bad Request: message can't be edited",
+            }),
+          );
+          return;
+        }
         const sends =
           method === 'sendMessage' || method === 'sendPhoto' || method === 'sendDocument';
         const sentId = sends ? (nextMessageId += 1) : null;
@@ -114,6 +128,7 @@ describe('the wizard is one message, edited in place', () => {
     products = new DrizzleProductRepository(ctx.container.database.db);
     services = new DrizzleServiceRepository(ctx.container.database.db);
     calls = [];
+    uneditable.clear();
     panel = await startFakeMarzban({ host: '127.0.0.2' });
     owner = adminActorFor(
       await createAdmin(ctx.container, tenantA, { username: 'owner-r2', roleKeys: ['owner'] }),
@@ -334,6 +349,47 @@ describe('the wizard is one message, edited in place', () => {
     expect(methods()).toEqual(['answerCallbackQuery']);
     expect(await debits()).toBe(1);
     expect((await draftOrders()).map((o) => o.state)).toEqual(['PAID']);
+  });
+
+  /*
+   * R2 finding F2: when Telegram refuses an edit, the screen goes out as a NEW message and
+   * the wizard moves onto it. The message it LEFT still carries its keyboard; untracked, its
+   * next tap was adopted as a fresh wizard and claimed — an old button moving the flow
+   * backward (here: a second draft from the product list two screens back).
+   */
+  it('a message the wizard left after a refused edit stays closed: its old keyboard is stale and the wizard does not move', async () => {
+    const productId = await product('left');
+    const wizard = 750;
+    await tapOn(wizard, `ck:${SEED_IDS.categoryA}.0`);
+    await tapOn(wizard, `p:${productId}`);
+    const [order] = await draftOrders();
+    if (order === undefined) throw new Error('no draft');
+
+    // Telegram will not edit the wizard message any more: the pre-invoice is sent anew.
+    uneditable.add(wizard);
+    await tapOn(wizard, `Z:${order.id}`);
+    const fresh = calls.find((call) => call.method === 'sendMessage');
+    const freshId = fresh?.sentId;
+    if (freshId === null || freshId === undefined) throw new Error('no fallback message');
+    expect(buttonsOf(fresh)).toContain(`w:${order.id}`);
+
+    // The product button on the message the wizard left: answered, and nothing else.
+    const stale = await tapOn(wizard, `p:${productId}`);
+    expect(stale.replyKey).toBeNull();
+    expect(methods()).toEqual(['answerCallbackQuery']);
+    expect(await draftOrders()).toHaveLength(1);
+
+    const tracked = await rows<{ message_id: string; step: string }>(
+      sql`SELECT message_id::text AS message_id, step FROM telegram_wizards
+          WHERE tenant_id = ${tenantA.tenantId} AND message_id IN (${wizard}, ${freshId})
+          ORDER BY message_id`,
+    );
+    expect(new Map(tracked.map((row) => [row.message_id, row.step]))).toEqual(
+      new Map([
+        [String(wizard), 'CLOSED'],
+        [String(freshId), 'PREINVOICE'],
+      ]),
+    );
   });
 
   it('a typed username continues the SAME wizard message, and the typed message is removed', async () => {

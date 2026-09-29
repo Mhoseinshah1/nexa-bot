@@ -239,6 +239,7 @@ export class DrizzleTelegramMessageStateRepository implements TelegramMessageSta
     scope: TenantContext,
     id: string,
     messageId: number,
+    leftBehindId: string,
     now: Date,
     tx: TransactionScope,
   ): Promise<boolean> {
@@ -272,7 +273,32 @@ export class DrizzleTelegramMessageStateRepository implements TelegramMessageSta
       .set({ messageId, updatedAt: now })
       .where(and(eq(telegramWizards.tenantId, tenantId), eq(telegramWizards.id, id)))
       .returning({ id: telegramWizards.id });
-    return rows.length > 0;
+    if (rows.length === 0) return false;
+    /*
+     * The message the wizard LEFT still carries its keyboard. Untracked, its next tap would
+     * be adopted as a fresh wizard at the gate's first step and claimed — an old button
+     * moving the flow backward. So it keeps a row of its own, CLOSED, which honours nothing:
+     * no order, no payment, no update key, so neither a move nor a redelivery reopens it.
+     * Same transaction as the move, which has just vacated its identity.
+     */
+    await this.exec(tx)
+      .insert(telegramWizards)
+      .values({
+        id: leftBehindId,
+        tenantId,
+        botInstanceId: row.botInstanceId,
+        chatId: row.chatId,
+        messageId: row.messageId,
+        kind: row.kind,
+        step: 'CLOSED',
+        version: 0,
+        subjectId: null,
+        paymentId: null,
+        createdAt: now,
+        updatedAt: now,
+      })
+      .onConflictDoNothing();
+    return true;
   }
 
   async latestWizard(

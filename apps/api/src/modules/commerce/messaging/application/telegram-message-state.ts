@@ -150,11 +150,17 @@ export interface TelegramMessageStateRepository {
     tx: TransactionScope,
   ): Promise<boolean>;
 
-  /** The wizard now lives on another message (an edit Telegram refused, sent anew). */
+  /**
+   * The wizard now lives on another message (an edit Telegram refused, sent anew). The
+   * message it LEFT keeps a row of its own, `CLOSED`, under `leftBehindId`: its keyboard is
+   * still in the chat, and an untracked message would be adopted by the next tap on it and
+   * move the wizard backward.
+   */
   moveWizard(
     scope: TenantContext,
     id: string,
     messageId: number,
+    leftBehindId: string,
     now: Date,
     tx: TransactionScope,
   ): Promise<boolean>;
@@ -445,7 +451,10 @@ export class TelegramMessageStateService {
     );
   }
 
-  /** The wizard's screen was sent as a new message (Telegram refused the edit). */
+  /**
+   * The wizard's screen was sent as a new message (Telegram refused the edit). The message
+   * it left stays tracked, CLOSED, so a tap on its old keyboard is stale.
+   */
   move(
     scope: TenantContext,
     actor: ActorContext,
@@ -453,7 +462,7 @@ export class TelegramMessageStateService {
     messageId: number,
   ): Promise<boolean> {
     return this.write(scope, actor, wizardId, false, (tx, now) =>
-      this.deps.repository.moveWizard(scope, wizardId, messageId, now, tx),
+      this.deps.repository.moveWizard(scope, wizardId, messageId, this.deps.ids.uuid(), now, tx),
     );
   }
 
