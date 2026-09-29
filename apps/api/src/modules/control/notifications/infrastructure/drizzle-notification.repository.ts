@@ -370,7 +370,13 @@ export class DrizzleNotificationRepository implements NotificationRepository {
             sql`${spentAttempts} < ${notifications.maxAttempts}`,
           ),
         )
-        .orderBy(asc(notifications.nextAttemptAt))
+        // Oldest first among intents due together (HF-A4): a requeue makes a whole backlog
+        // due at one instant, and without the tie-break it would go out in arbitrary order.
+        .orderBy(
+          asc(notifications.nextAttemptAt),
+          asc(notifications.createdAt),
+          asc(notifications.id),
+        )
         .limit(limit)
         .for('update', { skipLocked: true });
 
@@ -408,7 +414,12 @@ export class DrizzleNotificationRepository implements NotificationRepository {
         )
         .groupBy(notificationReleasedClaims.notificationId);
       const byId = new Map(releases.map((r) => [String(r.notificationId), r.count]));
-      return claimed.map((row) => toIntent(row, byId.get(String(row.id)) ?? 0));
+      // In the order they were selected: `UPDATE ... RETURNING` promises none, and the
+      // dispatcher sends a batch in the order it is handed.
+      const position = new Map(due.map((row, index) => [String(row.id), index]));
+      return claimed
+        .sort((a, b) => (position.get(String(a.id)) ?? 0) - (position.get(String(b.id)) ?? 0))
+        .map((row) => toIntent(row, byId.get(String(row.id)) ?? 0));
     });
   }
 
@@ -856,6 +867,7 @@ export class DrizzleNotificationRepository implements NotificationRepository {
     readonly retryAfterMs: number | null;
     readonly nextStatus: NotificationStatus;
     readonly nextAttemptAt: Date;
+    readonly extendAllowance?: boolean;
   }): Promise<{ readonly moved: boolean }> {
     // GUARANTEED BY MECHANISM: the attempt row and the status change commit
     // together (one transaction); one attempt number carries at most one
@@ -973,6 +985,12 @@ export class DrizzleNotificationRepository implements NotificationRepository {
           // The CHECK constraint insists a terminal status carries a completion
           // time and a pending one does not, so the two can never disagree.
           completedAt: input.nextStatus === 'PENDING' ? null : input.finishedAt,
+          // A 429 is not counted (HF-A4): one more attempt, in the write that records it,
+          // and only on the claim that owns the row — a refused status change extends
+          // nothing.
+          ...(input.extendAllowance === true
+            ? { maxAttempts: sql`${notifications.maxAttempts} + 1` }
+            : {}),
         })
         .where(
           and(

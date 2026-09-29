@@ -94,6 +94,22 @@ export class NotifyingOperationalEventRecorder implements OperationalEventRecord
     try {
       return await this.uow.run(scope, (opened) => this.recordAndProject(scope, event, opened));
     } catch (error) {
+      // Once more TOGETHER before the projection is given up (HF-A4: an event routed to the
+      // operations log is never dropped). A transient failure of the combined write — a
+      // lost connection, a serialisation failure — is the ordinary case, and a second
+      // attempt keeps both halves. It announces nothing twice for a deduped event: if the
+      // first attempt had in fact committed, its intent committed with it, and this one
+      // collapses onto that row with `isNew` and `reopened` false, so it queues nothing. An
+      // event with no dedupe key can gain a second row and a second message, which is the
+      // same bounded, visible cost as the fallback below, and a duplicate is not a loss.
+      const retried = await this.uow
+        .run(scope, (opened) => this.recordAndProject(scope, event, opened))
+        .then(
+          (recorded) => recorded,
+          () => null,
+        );
+      if (retried !== null) return retried;
+
       // The WRITE must stand. The event is the authoritative record and the
       // notification is a projection of it, so if the two cannot be committed
       // together the right thing to lose is the projection.

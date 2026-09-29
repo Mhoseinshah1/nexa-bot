@@ -2,6 +2,7 @@ import {
   money,
   notificationDestinationSchema,
   opsLogTopicCategoryOf,
+  OPS_GROUP_ERROR_CODES,
   templateDefinition,
   type Clock,
   type CorrelationId,
@@ -171,6 +172,15 @@ export class NotificationDispatcher {
   private windowStartedAt = 0;
   private sentInWindow = 0;
   /**
+   * Telegram answered 429: nothing is sent before this instant (HF-A4).
+   *
+   * Its `retry_after` is about the BOT, not about the one message it refused, so every
+   * claim behind it in the batch would be refused too. Holding the whole dispatcher
+   * hands those claims back unsent — their attempts returned — instead of spending one
+   * attempt each on a refusal that was already announced.
+   */
+  private pausedUntil = 0;
+  /**
    * Whose rate ceiling applies. Set at boot, once the installation's tenant is
    * resolved — the same shape `Container.setInstallationTenant` uses, and for
    * the same reason: the tenant is a row, so it is not known while the object
@@ -197,6 +207,7 @@ export class NotificationDispatcher {
   resetRateWindow(): void {
     this.windowStartedAt = 0;
     this.sentInWindow = 0;
+    this.pausedUntil = 0;
   }
 
   constructor(
@@ -803,10 +814,28 @@ export class NotificationDispatcher {
           },
           startedAt,
         );
+        if (recorded === 'FAILED') await this.noteExhausted(intent);
         return { result: recorded, reachedTransport: false };
       }
       destination = { ...destination, chatId: route.chatId, topicId: route.topicId };
       botInstanceId = route.botInstanceId;
+    }
+
+    // HF-A4: a message queued before any operations group existed names no chat, and only
+    // the router can give it one. A dispatcher built without the router, or a route that
+    // did not apply, leaves it waiting — a retryable attempt, preserved when the allowance
+    // is spent — and never hands the transport a message with nowhere to go.
+    if (destination.transport === 'TELEGRAM' && destination.chatId === null) {
+      const recorded = await this.record(
+        intent,
+        {
+          outcome: 'FAILED_RETRYABLE',
+          errorCode: OPS_GROUP_ERROR_CODES.NOT_CONNECTED,
+          errorMessage: 'No operations log group is connected to send this to.',
+        },
+        startedAt,
+      );
+      return { result: recorded, reachedTransport: false };
     }
 
     const html = definition.format === 'TELEGRAM_HTML';
@@ -866,25 +895,59 @@ export class NotificationDispatcher {
       const problem = result.outcome !== 'SUCCEEDED' ? result.chatProblem : undefined;
       if (problem !== undefined && destination.transport === 'TELEGRAM') {
         const chatId = destination.chatId;
-        await this.bestEffort('record an ops group problem', () =>
-          router.problem(intent.tenantId, chatId, problem),
-        );
+        if (chatId !== null) {
+          await this.bestEffort('record an ops group problem', () =>
+            router.problem(intent.tenantId, chatId, problem),
+          );
+        }
+        // HF-A4: RETRYABLE here, whatever Telegram's status code. The refusal is about the
+        // GROUP — a bot removed, a right withdrawn, a bot stopped — which an operator
+        // repairs, not about this message, so the message keeps its full allowance and is
+        // preserved rather than failed on its first attempt. Only a refusal of the MESSAGE
+        // itself (a bad entity, say) stays permanent.
+        if (result.outcome === 'FAILED_PERMANENT') {
+          result = {
+            outcome: 'FAILED_RETRYABLE',
+            errorCode: result.errorCode,
+            errorMessage: result.errorMessage,
+            chatProblem: problem,
+          };
+        }
       }
     }
     if (category !== null && this.opsRouter !== null && result.outcome === 'SUCCEEDED') {
       const router = this.opsRouter;
-      const chatId = destination.transport === 'TELEGRAM' ? destination.chatId : '';
+      // Never null here: a chat-less message is refused before it reaches the transport.
+      const chatId = (destination.transport === 'TELEGRAM' ? destination.chatId : null) ?? '';
       await this.bestEffort('record an ops group delivery', () =>
         router.delivered(intent.tenantId, category, chatId, this.clock.now()),
       );
     }
 
     const recorded = await this.record(intent, result, startedAt);
+    if (category !== null && recorded === 'FAILED' && result.outcome === 'FAILED_RETRYABLE') {
+      await this.noteExhausted(intent);
+    }
     return {
       result: recorded,
       reachedTransport: true,
       alreadyTrue: recorded === 'SUPERSEDED' && result.outcome === 'SUCCEEDED',
     };
+  }
+
+  /**
+   * An operations-group message spent its whole allowance on failures that were not about
+   * the message itself (HF-A4). It is preserved, and the group is asked to be checked
+   * again: a check that finds it healthy — Telegram answering again after an outage, a
+   * topic recreated — puts the preserved messages back in the queue. Bookkeeping, so it
+   * never costs the delivery its recorded outcome.
+   */
+  private async noteExhausted(intent: NotificationIntent): Promise<void> {
+    const router = this.opsRouter;
+    if (router === null) return;
+    await this.bestEffort('ask for the ops group to be checked again', () =>
+      router.exhausted(intent.tenantId),
+    );
   }
 
   /**
@@ -906,13 +969,21 @@ export class NotificationDispatcher {
     botInstanceId: string | undefined,
   ): Promise<TransportResult> {
     try {
-      return await this.transport.send({
+      const result = await this.transport.send({
         destination,
         text,
         html,
         tenantId: intent.tenantId,
         ...(botInstanceId !== undefined ? { botInstanceId } : {}),
       });
+      if (result.outcome === 'FAILED_RETRYABLE' && result.rateLimited === true) {
+        // Nothing more leaves this process until Telegram's wait is over — or, when it named
+        // none, until the current window closes. See `pausedUntil`.
+        const now = this.clock.now().getTime();
+        const wait = result.retryAfterMs ?? Math.max(this.windowStartedAt + 60_000 - now, 0);
+        this.pausedUntil = Math.max(this.pausedUntil, now + wait);
+      }
+      return result;
     } catch (error) {
       return {
         outcome: 'FAILED_RETRYABLE',
@@ -956,6 +1027,7 @@ export class NotificationDispatcher {
           errorCode: string;
           errorMessage: string;
           retryAfterMs?: number;
+          rateLimited?: boolean;
         },
     startedAt: Date,
   ): Promise<DeliveryOutcomeReport['result']> {
@@ -978,13 +1050,24 @@ export class NotificationDispatcher {
     // whether a message ever gets its allowance.
     const spent = intent.attemptCount - intent.releasedCount;
 
+    // A 429 is THROUGHPUT, not a failure of the message (HF-A4: the rate limit never costs
+    // an event its delivery). The attempt row is written — it happened, and it says what
+    // Telegram asked us to wait — but the allowance is raised by one in the same write, so
+    // the attempt is not counted against it and no run of 429s can exhaust a message. It
+    // stays PENDING until Telegram's `retry_after` has passed. Kept apart from a timeout,
+    // which IS counted: CLAUDE.md, a 429 is not an unknown outcome.
+    const rateLimited = result.outcome === 'FAILED_RETRYABLE' && result.rateLimited === true;
+
     let nextStatus: NotificationStatus;
     let nextAttemptAt: Date;
 
     if (result.outcome === 'SUCCEEDED') {
       nextStatus = 'SENT';
       nextAttemptAt = finishedAt;
-    } else if (result.outcome === 'FAILED_PERMANENT' || spent >= intent.maxAttempts) {
+    } else if (
+      result.outcome === 'FAILED_PERMANENT' ||
+      (!rateLimited && spent >= intent.maxAttempts)
+    ) {
       // Bounded on purpose. A permanently wrong destination retried forever is
       // the legacy log group's sixty-identical-errors failure with a scheduler
       // in front of it.
@@ -1015,6 +1098,7 @@ export class NotificationDispatcher {
           : null,
       nextStatus,
       nextAttemptAt,
+      extendAllowance: rateLimited,
     });
 
     // The row did not move, so this attempt's claim has been superseded by a
@@ -1050,6 +1134,7 @@ export class NotificationDispatcher {
    * about ("twenty a minute") is worth more than one that is smoother.
    */
   private async remainingBudget(now: Date): Promise<number> {
+    if (now.getTime() < this.pausedUntil) return 0;
     if (now.getTime() - this.windowStartedAt >= 60_000) {
       this.windowStartedAt = now.getTime();
       this.sentInWindow = 0;
