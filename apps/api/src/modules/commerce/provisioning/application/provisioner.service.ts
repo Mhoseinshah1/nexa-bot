@@ -2,7 +2,9 @@ import {
   canAddTime,
   canAddVolume,
   canAdjustDeviceLimit,
+  canChangeLocation,
   deviceLimitReached,
+  locationReached,
   canDeleteUser,
   canDisableUser,
   canRenewUser,
@@ -31,6 +33,7 @@ import {
   type OrderPurpose,
   type ProviderAdapter,
   type ProviderDeviceLimitOutcome,
+  type ProviderLocationOutcome,
   type ProviderFailureDetail,
   type ProviderFailureKind,
   type ProviderRemovalOutcome,
@@ -81,6 +84,8 @@ import {
   allowanceCall,
   deviceLimitCall,
   deviceLimitReadCall,
+  locationCall,
+  locationReadCall,
   suspendCall,
   terminateCall,
   usageSyncCall,
@@ -325,6 +330,22 @@ export interface ProvisionerDeps {
    * a change takes effect without a restart.
    */
   readonly settings: SettingsResolver;
+  /**
+   * The change request a `CHANGE_LOCATION` carries out (WP-A6) — by its operation when
+   * free, by its order when paid — for the NAME the service records beside the key. A
+   * read, and only of the frozen snapshot: the key comes off the operation's own target.
+   */
+  readonly locationChanges: {
+    findForOperation(
+      scope: TenantContext,
+      operation: { readonly id: string; readonly orderId: OrderId | null },
+      tx?: unknown,
+    ): Promise<{
+      readonly fromLocationKey: string;
+      readonly toLocationKey: string;
+      readonly toLocationLabel: string;
+    } | null>;
+  };
 }
 
 /**
@@ -347,6 +368,8 @@ export const PURCHASED_AS: Readonly<Record<OrderPurpose, OperationType>> = {
   CUSTOM_SERVICE: 'PROVISION',
   // WP-A5: extra users are delivered by the raise they bought, and only that op refunds.
   ADD_DEVICES: 'ADD_DEVICES',
+  // WP-A6: a paid move is delivered by the move it bought, and only that op refunds it.
+  CHANGE_LOCATION: 'CHANGE_LOCATION',
 };
 
 /**
@@ -967,6 +990,25 @@ export class ProvisionerService {
           operation.target,
           deviceTarget,
           await deviceLimitCall(adapter, target, http, ref, deviceTarget),
+        );
+      }
+      /*
+       * WP-A6: a move, behind the three-question guard — the read, the write and the
+       * declaration — to the absolute key its request stored. `decideOperability` has
+       * already refused a panel that does not declare `LOCATION_CHANGE`.
+       */
+      case 'CHANGE_LOCATION': {
+        const locationKey = operation.target?.locationKey ?? null;
+        if (!canChangeLocation(adapter) || operation.target === null || locationKey === null) {
+          await this.refuse(scope, operation, service, 'CAPABILITY_UNSUPPORTED', now);
+          return this.refused(operation, 'CAPABILITY_UNSUPPORTED');
+        }
+        return this.finishLocationChange(
+          scope,
+          operation,
+          service,
+          locationKey,
+          await locationCall(adapter, target, http, ref, locationKey),
         );
       }
       case 'PROVISION':
@@ -2226,6 +2268,196 @@ export class ProvisionerService {
   }
 
   /**
+   * What one location write established (WP-A6), under the rules an allowance keeps.
+   *
+   * - A failure that says nothing reached the panel keeps the ordinary retry-then-refund
+   *   path (a free move has nothing to refund, and the refund is a no-op for it).
+   * - Any other failure may have MOVED the account, so it is never refunded and never sent
+   *   again blind: `IN_FLIGHT -> UNKNOWN`, and bounded READS compare where the panel holds
+   *   it with the absolute target (`verifyOneAllowance`).
+   * - An answer that reaches the target is the move, recorded on the service.
+   * - An answer that does NOT reach it is not a verdict — the adapter contract makes that
+   *   `MALFORMED_RESPONSE` — so it is verified, never trusted either way.
+   */
+  private async finishLocationChange(
+    scope: TenantContext,
+    operation: OperationRecord,
+    service: ServiceRecord,
+    locationKey: string,
+    changed: ProviderLocationOutcome,
+  ): Promise<ExecutionResult> {
+    const now = this.deps.clock.now();
+    const serviceId = service.id;
+
+    if (!changed.ok) {
+      if (!(SAFE_TO_REPLAY_FAILURE_KINDS as readonly string[]).includes(changed.failure)) {
+        await this.deferToVerification(
+          scope,
+          operation,
+          changed.failure,
+          failureNote(changed.failure, changed.status, changed.detail),
+          now,
+        );
+        return this.attempted(operation, serviceId, 'UNKNOWN', changed.failure);
+      }
+      const outcome = outcomeFor(changed.failure, operation.type);
+      await this.recordManagementFailure(
+        scope,
+        operation,
+        service,
+        outcome,
+        changed.failure,
+        failureNote(changed.failure, changed.status, changed.detail),
+        now,
+      );
+      return this.attempted(operation, serviceId, outcome, changed.failure);
+    }
+
+    if (!changed.found) {
+      // The panel answered, authenticated, that it does not hold the account. Nothing was
+      // moved, so the service keeps its location and a paid move is refunded as definitive.
+      await this.recordManagementFailure(
+        scope,
+        operation,
+        service,
+        'FAILED',
+        null,
+        'the panel does not have this service’s account',
+        now,
+      );
+      return this.attempted(operation, serviceId, 'FAILED', null);
+    }
+
+    if (!locationReached(locationKey, changed.locationKey)) {
+      await this.deferToVerification(
+        scope,
+        operation,
+        'MALFORMED_RESPONSE',
+        'the panel answered without the target location',
+        now,
+      );
+      return this.attempted(operation, serviceId, 'UNKNOWN', 'MALFORMED_RESPONSE');
+    }
+
+    await this.recordLocationApplied(
+      scope,
+      operation,
+      service,
+      locationKey,
+      changed.subscriptionUrl,
+      'IN_FLIGHT',
+      now,
+    );
+    return this.attempted(operation, serviceId, 'SUCCEEDED', null);
+  }
+
+  /**
+   * The move an operation made true, written to the service with its audit row (WP-A6).
+   *
+   * Shared by the answered write and by the verification READ that found the target
+   * reached. In ONE transaction: the operation's `SUCCEEDED`, the service's key and the
+   * name its change request froze, and — when the panel now serves a DIFFERENT link — the
+   * new link with delivery re-armed exactly as a rotation re-arms it, so the customer is
+   * sent the connection details the move produced through the lane every link goes by.
+   * A panel that reports no link leaves the stored one; nothing assembled here is ever
+   * delivered.
+   *
+   * The service state is untouched, and the old financial history with it: this is the
+   * same service record, moved.
+   */
+  private async recordLocationApplied(
+    scope: TenantContext,
+    operation: OperationRecord,
+    service: ServiceRecord,
+    locationKey: string,
+    subscriptionUrl: string | null,
+    fromOperationState: 'IN_FLIGHT' | 'UNKNOWN',
+    now: Date,
+  ): Promise<void> {
+    const serviceId = service.id;
+    const actor = this.actor();
+    await this.deps.uow.run(scope, async (tx) => {
+      const moved = await this.deps.operations.transition(
+        scope,
+        operation.id,
+        fromOperationState,
+        'SUCCEEDED',
+        fromOperationState === 'UNKNOWN' ? { nextAttemptAt: null } : {},
+        now,
+        tx,
+      );
+      if (!moved && fromOperationState === 'UNKNOWN') return;
+      const change = await this.deps.locationChanges.findForOperation(scope, operation, tx);
+      /*
+       * The name the customer chose it by. A change request is written with every
+       * `CHANGE_LOCATION`, so its absence is a broken database — and the key alone is
+       * still recorded, under the key as its name, rather than forgetting where the
+       * account now is.
+       */
+      const label = change?.toLocationKey === locationKey ? change.toLocationLabel : locationKey;
+      const recorded = await this.deps.services.recordLocation(
+        scope,
+        serviceId,
+        { key: locationKey, label },
+        ROTATION_STORE_STATES,
+        now,
+        tx,
+      );
+      if (!recorded) return;
+      const linkChanged = subscriptionUrl !== null && subscriptionUrl !== service.subscriptionUrl;
+      if (linkChanged) {
+        await this.deps.services.recordRotation(
+          scope,
+          serviceId,
+          subscriptionUrl,
+          ROTATION_STORE_STATES,
+          now,
+          tx,
+        );
+      }
+      await this.deps.audit.record(
+        scope,
+        actor,
+        {
+          action: 'service.change_location',
+          entityType: 'Service',
+          entityId: serviceId,
+          before: { locationKey: service.locationKey, locationLabel: service.locationLabel },
+          after: {
+            locationKey,
+            locationLabel: label,
+            orderId: operation.orderId,
+            operationId: operation.operationId,
+            providerReference: operation.providerReference,
+            // Whether the link changed, never the link: both are bearer capabilities.
+            connectionDetailsChanged: linkChanged,
+          },
+          result: 'SUCCESS',
+        },
+        tx,
+      );
+      await this.deps.outbox.write(tx, actor, {
+        eventType: 'ServiceLocationChanged',
+        aggregateType: 'Service',
+        aggregateId: serviceId,
+        payload: {
+          customerId: service.customerId,
+          fromLocationKey: service.locationKey ?? change?.fromLocationKey ?? null,
+          toLocationKey: locationKey,
+        },
+      });
+      if (linkChanged) {
+        await this.deps.outbox.write(tx, actor, {
+          eventType: 'ServiceSubscriptionRotated',
+          aggregateType: 'Service',
+          aggregateId: serviceId,
+          payload: { customerId: service.customerId },
+        });
+      }
+    });
+  }
+
+  /**
    * The allowance an operation made true, written to the service with its audit row.
    *
    * Shared by the write that was answered (`IN_FLIGHT`) and by the verification READ
@@ -2525,6 +2757,38 @@ export class ProvisionerService {
       readonly reached: boolean;
       readonly usage: ProviderUsage | null;
     };
+    /*
+     * WP-A6: a lost move is settled by the LOCATION read against the stored key — never by
+     * `lookupUser`, which says nothing about where the account is.
+     */
+    if (operation.type === 'CHANGE_LOCATION') {
+      const locationKey = target.locationKey ?? null;
+      if (!canChangeLocation(adapter) || locationKey === null) {
+        return this.rescheduleVerification(
+          scope,
+          operation,
+          true,
+          'the panel cannot read a location; an operator must decide',
+          now,
+        );
+      }
+      const read = await locationReadCall(adapter, providerTarget, http, providerRefFor(service));
+      if (!read.ok) return again(failureNote(read.failure, read.status, read.detail));
+      const readAt = this.deps.clock.now();
+      if (read.found && locationReached(locationKey, read.locationKey)) {
+        await this.recordLocationApplied(
+          scope,
+          operation,
+          service,
+          locationKey,
+          read.subscriptionUrl,
+          'UNKNOWN',
+          readAt,
+        );
+        return;
+      }
+      return this.failVerified(scope, operation, service, read.found, readAt);
+    }
     if (operation.type === 'ADD_DEVICES') {
       const deviceTarget = target.deviceLimit;
       if (!canAdjustDeviceLimit(adapter) || deviceTarget === null) {
@@ -2576,7 +2840,20 @@ export class ProvisionerService {
       );
       return;
     }
-    // Definitive: the account is gone, or it answered and does not hold the target.
+    return this.failVerified(scope, operation, service, found.found, readAt);
+  }
+
+  /**
+   * Definitive, from a verification READ: the account is gone, or it answered and does not
+   * hold the target. `UNKNOWN -> FAILED` and the ordinary refund rule, by `PURCHASED_AS`.
+   */
+  private async failVerified(
+    scope: TenantContext,
+    operation: OperationRecord,
+    service: ServiceRecord,
+    accountFound: boolean,
+    readAt: Date,
+  ): Promise<void> {
     await this.deps.uow.run(scope, async (tx) => {
       const moved = await this.deps.operations.transition(
         scope,
@@ -2584,7 +2861,7 @@ export class ProvisionerService {
         'UNKNOWN',
         'FAILED',
         {
-          failureMessage: found.found
+          failureMessage: accountFound
             ? 'verified: the panel does not hold what this operation asked for'
             : 'verified: the panel does not have this service’s account',
           // Cleared, or the announcer reads a FAILED row with a date as one still retrying
@@ -2601,7 +2878,8 @@ export class ProvisionerService {
           orderId: operation.orderId,
           purchasedAs: operation.type,
           service,
-          reason: 'ALLOWANCE_NOT_APPLIED',
+          reason:
+            operation.type === 'CHANGE_LOCATION' ? 'LOCATION_NOT_APPLIED' : 'ALLOWANCE_NOT_APPLIED',
           now: readAt,
         },
         tx,

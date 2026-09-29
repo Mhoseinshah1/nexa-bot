@@ -231,6 +231,14 @@ export interface OrderLineSnapshot {
  * `ADD_DEVICES` operation that raises the account's limit to an absolute target. It names
  * a service and produces none, exactly like the other two quantity purchases.
  */
+/**
+ * `CHANGE_LOCATION` (WP-A6) is a PAID move of an existing service to another location
+ * its own panel serves, priced by the operator's configured target and delivered as a
+ * `CHANGE_LOCATION` operation to an absolute location key. It names a service and
+ * produces none; its line buys neither bytes nor days. A FREE change is not an order at
+ * all — nothing is paid, so nothing is settled or refunded — and plans its operation
+ * directly.
+ */
 export const ORDER_PURPOSES = [
   'NEW_SERVICE',
   'RENEW',
@@ -239,6 +247,7 @@ export const ORDER_PURPOSES = [
   'TRIAL',
   'CUSTOM_SERVICE',
   'ADD_DEVICES',
+  'CHANGE_LOCATION',
 ] as const;
 export type OrderPurpose = (typeof ORDER_PURPOSES)[number];
 export const orderPurposeSchema = z.enum(ORDER_PURPOSES);
@@ -288,6 +297,7 @@ export function orderPurposeCreatesNewService(purpose: OrderPurpose): boolean {
     case 'ADD_TRAFFIC':
     case 'ADD_TIME':
     case 'ADD_DEVICES':
+    case 'CHANGE_LOCATION':
       return false;
     default: {
       const unclassified: never = purpose;
@@ -311,6 +321,7 @@ export function orderPurposeTargetsExistingService(purpose: OrderPurpose): boole
     case 'ADD_TRAFFIC':
     case 'ADD_TIME':
     case 'ADD_DEVICES':
+    case 'CHANGE_LOCATION':
       return true;
     case 'NEW_SERVICE':
     case 'TRIAL':
@@ -335,9 +346,9 @@ export function orderPurposeTargetsExistingService(purpose: OrderPurpose): boole
  */
 export function operationTypeForOrderPurpose(
   purpose: OrderPurpose,
-): 'RENEW' | 'ADD_TRAFFIC' | 'ADD_TIME' | 'ADD_DEVICES' | null {
+): 'RENEW' | 'ADD_TRAFFIC' | 'ADD_TIME' | 'ADD_DEVICES' | 'CHANGE_LOCATION' | null {
   return orderPurposeTargetsExistingService(purpose)
-    ? (purpose as 'RENEW' | 'ADD_TRAFFIC' | 'ADD_TIME' | 'ADD_DEVICES')
+    ? (purpose as 'RENEW' | 'ADD_TRAFFIC' | 'ADD_TIME' | 'ADD_DEVICES' | 'CHANGE_LOCATION')
     : null;
 }
 

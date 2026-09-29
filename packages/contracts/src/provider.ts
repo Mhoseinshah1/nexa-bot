@@ -65,6 +65,14 @@ export const PROVIDER_CAPABILITIES = [
    * each descriptor below records the evidence it was measured against.
    */
   'DEVICE_LIMIT_ADJUSTMENT',
+  /*
+   * Moving an EXISTING account to another location its OWN panel serves, as one absolute
+   * write that a read can verify (WP-A6) — never a delete and a re-create, never another
+   * panel. Gated by `canChangeLocation`, which requires BOTH methods — `readLocation` and
+   * `applyLocation` — AND this declaration. Declared by no provider in this release; each
+   * descriptor below records the evidence it was measured against.
+   */
+  'LOCATION_CHANGE',
 ] as const;
 export type ProviderCapability = (typeof PROVIDER_CAPABILITIES)[number];
 
@@ -1276,7 +1284,77 @@ export interface ProviderAdapter extends ProviderConnectionAdapter {
     ref: ProviderUserRef,
     deviceLimit: number,
   ): Promise<ProviderDeviceLimitOutcome>;
+
+  /**
+   * The location the account sits in NOW, as the panel holds it (WP-A6).
+   *
+   * A READ, and the evidence every ambiguous `applyLocation` is settled by: after a move
+   * whose answer was lost the executor never sends it again blind — it asks this, and
+   * compares the key the panel reports with the absolute target the operation persisted
+   * (`locationReached`). So an adapter must never report `found: false` because a request
+   * failed, and never report a key it did not read off the panel's own record.
+   *
+   * `locationKey` is null for an account in no location the adapter can name — which
+   * reaches no target. `subscriptionUrl` is the link the panel serves for the account now,
+   * read from the panel, or null where the answer carries none.
+   *
+   * Optional, and gated by `canChangeLocation`, which requires this method, its write twin
+   * below AND the `LOCATION_CHANGE` capability.
+   */
+  readLocation?(
+    target: ProviderServiceTarget,
+    http: ProviderHttpClient,
+    ref: ProviderUserRef,
+  ): Promise<ProviderLocationOutcome>;
+
+  /**
+   * Make the account's location read as `locationKey` (WP-A6), on the panel it is on.
+   *
+   * An ABSOLUTE target, never "the next location" or a relative move: replaying "put the
+   * account in X" is a no-op, which is what lets a stranded write be settled by a read
+   * instead of a guess. The key is chosen once, when the change is quoted, and stored on
+   * the operation row.
+   *
+   * Three rules an implementation must keep, and the contract states them because nothing
+   * below the type can:
+   *
+   *   - It moves the SAME account. Deleting it and creating another one is not this
+   *     method, whatever the panel's API makes convenient: the customer's usage, expiry
+   *     and history live on that account, and a re-create is a second account whose
+   *     failure half-way leaves the customer with none.
+   *   - `locationKey` on success is what the panel reports AFTER the write — read from its
+   *     own answer or a read-back — never the value that was sent. A 2xx whose record
+   *     cannot be read, or does not carry the target, is `MALFORMED_RESPONSE`, which the
+   *     executor treats as ambiguous and settles with `readLocation`.
+   *   - `subscriptionUrl` is the link the panel serves after the move, read from the panel.
+   *     A move that rotated the link must report the NEW one, because Nexa delivers what
+   *     this field says and nothing it assembled itself; no adapter may promise the link
+   *     survives a move unless the panel's own contract says so.
+   */
+  applyLocation?(
+    target: ProviderServiceTarget,
+    http: ProviderHttpClient,
+    ref: ProviderUserRef,
+    locationKey: string,
+  ): Promise<ProviderLocationOutcome>;
 }
+
+/**
+ * What a location read or move established (WP-A6).
+ *
+ * `found` carries exactly the meaning it has on `ProviderLookupOutcome`: `false` is the
+ * panel answering, authenticated, that it does not hold the account — never a failed
+ * request.
+ */
+export type ProviderLocationOutcome =
+  | {
+      readonly ok: true;
+      readonly found: true;
+      readonly locationKey: string | null;
+      readonly subscriptionUrl: string | null;
+    }
+  | { readonly ok: true; readonly found: false }
+  | ProviderFailureResult;
 
 /**
  * What a device-limit read or write established (WP-A5).
@@ -1498,6 +1576,24 @@ export function canAdjustDeviceLimit(adapter: ProviderAdapter): adapter is CanAd
   );
 }
 
+/** An adapter narrowed to one it is safe to read and move an account's location on (WP-A6). */
+export type CanChangeLocation = ProviderAdapter &
+  Pick<Required<ProviderAdapter>, 'readLocation' | 'applyLocation'>;
+
+/*
+ * THREE questions, all required: the read, the write and the declaration — for the reason
+ * `canAdjustDeviceLimit` gives. A move that could be sent but not read back would leave
+ * every lost answer undecidable: the customer's money taken and nobody able to say where
+ * their account is.
+ */
+export function canChangeLocation(adapter: ProviderAdapter): adapter is CanChangeLocation {
+  return (
+    typeof adapter.readLocation === 'function' &&
+    typeof adapter.applyLocation === 'function' &&
+    adapter.supports('LOCATION_CHANGE')
+  );
+}
+
 /** Whether this adapter implements the service half, not just the connection half. */
 export function isServiceAdapter(adapter: ProviderConnectionAdapter): adapter is ProviderAdapter {
   const candidate = adapter as Partial<ProviderAdapter>;
@@ -1578,6 +1674,16 @@ const MARZBAN: ProviderDescriptor = {
    * (`app/models/user.py`) carry proxies, inbounds, expiry, data limit, reset strategy,
    * note and on-hold fields, and nothing that bounds devices — so there is no field an
    * adapter could raise, and extra users are never offered on a Marzban panel.
+   *
+   * `LOCATION_CHANGE` (WP-A6) is absent because nothing about it has been measured. The
+   * closest v0.8.4 has to a per-account location is the account's inbound set:
+   * `UserModify.inbounds` is accepted by `PUT /api/user/{username}` and
+   * `crud.update_user` recomputes `excluded_inbounds` from it (`app/db/crud.py`), while a
+   * `Node` (`app/db/models.py`) serves every inbound rather than being assignable to one
+   * user. But this adapter writes one inbound set per PANEL from its activation, has no
+   * read of an account's inbounds (`lookupUser` reads usage), and no real panel has shown
+   * what a re-pointed account serves afterwards or that the same move sent twice changes
+   * nothing. A capability is declared after that acceptance, never before.
    */
   capabilities: [
     'HEALTH_CHECK',
@@ -1661,6 +1767,11 @@ const MARZBAN: ProviderDescriptor = {
  * `auto_delete_in_days` — and none bounds devices, IPs or connections; its only mention
  * of devices is a "multi-device warning" rendered on the subscription page. A capability
  * resting on a field nobody has seen is the promise this array's history is made of.
+ *
+ * `LOCATION_CHANGE` (WP-A6) stays undeclared because a RickPanel account HAS no location
+ * of its own to move: the panel's API documentation says `inbounds` and a partial
+ * `proxies` set are accepted but ignored, and every user gets every protocol and every
+ * inbound (`docs/providers/rickpanel.md`). There is no per-account field to write.
  */
 const RICKPANEL: ProviderDescriptor = {
   key: 'rickpanel',
@@ -1752,6 +1863,13 @@ const SANAEI: ProviderDescriptor = {
    * owner's correction in `docs/phase4e-audit.md` freezes 3X-UI at the capabilities it
    * has, with no new mutable scope, and raising a live client's limit is exactly that.
    * Declaring it needs the owner's decision first and a real-panel acceptance after.
+   *
+   * `LOCATION_CHANGE` (WP-A6) is absent for the same freeze. A v3.7.0 client carries
+   * `inboundIds` (`GET panel/api/clients/get/:email` answers them, `docs/providers/
+   * sanaei-3xui.md`), so re-pointing one might be expressible through
+   * `POST panel/api/clients/update/:email` — but what that route does with `inboundIds`
+   * has been neither read nor measured, and moving a live client is new mutable scope the
+   * owner's correction forbids whatever the answer.
    */
   capabilities: [
     'HEALTH_CHECK',

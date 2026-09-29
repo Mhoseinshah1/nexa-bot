@@ -11,6 +11,7 @@ import { TrialsController } from './surfaces/web/trials.controller.js';
 import { ProductsController } from './surfaces/web/products.controller.js';
 import { ProductCategoriesController } from './surfaces/web/product-categories.controller.js';
 import { ServiceAddonsController } from './surfaces/web/service-addons.controller.js';
+import { ServiceLocationsController } from './surfaces/web/service-locations.controller.js';
 import { PricingController } from './surfaces/web/pricing.controller.js';
 import { CustomServiceController } from './surfaces/web/custom-service.controller.js';
 import { ReferralsController } from './surfaces/web/referrals.controller.js';
@@ -75,6 +76,8 @@ export class AppModule implements NestModule {
         ProductsController as never,
         ProductCategoriesController as never,
         ServiceAddonsController as never,
+        // WP-A6: the operator's service locations.
+        ServiceLocationsController as never,
         PricingController as never,
         CustomServiceController as never,
         ReferralsController as never,

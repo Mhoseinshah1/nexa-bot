@@ -50,6 +50,14 @@ export interface PreinvoiceFacts {
     readonly targetLimit: number;
   } | null;
   /**
+   * A paid location change (WP-A6), from the change request frozen with the order: from
+   * where and to where. Null or absent for every other order.
+   */
+  readonly locationChange?: {
+    readonly fromLocation: string;
+    readonly toLocation: string;
+  } | null;
+  /**
    * A custom service's breakdown (Package D), from the order's frozen terms; null or
    * absent for every other order.
    */
@@ -199,6 +207,18 @@ export class CustomerScreenComposer {
               currentLimit: facts.devices.currentLimit,
               targetLimit: facts.devices.targetLimit,
             }),
+          }),
+      ...(facts.locationChange === null || facts.locationChange === undefined
+        ? {}
+        : {
+            locationChangeBlock: await this.templates.render(
+              scope,
+              'bot.order.preinvoice_location_change',
+              {
+                fromLocation: facts.locationChange.fromLocation,
+                toLocation: facts.locationChange.toLocation,
+              },
+            ),
           }),
       walletBalance: facts.walletBalance,
     };

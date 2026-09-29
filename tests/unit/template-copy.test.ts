@@ -112,6 +112,15 @@ describe('sections', () => {
     expect(templateGroupOf('bot.payment.receipt_prompt').id).toBe('payment');
   });
 
+  it('gives the location change and the extra users / devices screens their own sections', () => {
+    expect(templateGroupOf('bot.service.change_location_button').id).toBe('location_change');
+    expect(templateGroupOf('bot.service.location_confirm_free').id).toBe('location_change');
+    expect(templateGroupOf('bot.service.add_devices_button').id).toBe('extra_devices');
+    expect(templateGroupOf('bot.service.devices_choice').id).toBe('extra_devices');
+    // The pre-invoice blocks stay with the pre-invoice they are part of.
+    expect(templateGroupOf('bot.order.preinvoice_location_change').id).toBe('catalog');
+  });
+
   it('sends a key no section claims to the catch-all', () => {
     expect(templateGroupOf('something.new').id).toBe('other');
   });

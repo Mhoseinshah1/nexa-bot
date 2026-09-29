@@ -99,6 +99,16 @@ export const TEMPLATE_GROUPS_FA: readonly TemplateGroupDefinition[] = [
   },
   { id: 'transfer', label: 'انتقال سرویس', prefixes: ['bot.service.transfer_'] },
   {
+    id: 'extra_devices',
+    label: 'افزایش تعداد کاربر / دستگاه',
+    prefixes: ['bot.service.add_devices_button', 'bot.service.devices_'],
+  },
+  {
+    id: 'location_change',
+    label: 'تغییر لوکیشن سرویس',
+    prefixes: ['bot.service.change_location_button', 'bot.service.location_'],
+  },
+  {
     id: 'refund_request',
     label: 'درخواست بازگشت وجه (مشتری)',
     prefixes: ['bot.service.refund_request_'],
@@ -230,6 +240,7 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   correlationId: 'شناسهٔ پیگیری',
   current: 'مقدار فعلی',
   currentLimit: 'تعداد کاربر / دستگاه مجاز فعلی',
+  currentLocation: 'لوکیشن فعلی سرویس',
   custom: 'نشانهٔ روشن بودن انتخاب دلخواه',
   customBlock: 'بخش سرویس دلخواه',
   customTemplate: 'نشانهٔ انتخاب الگوی سفارشی',
@@ -258,6 +269,7 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   firstPercent: 'آستانهٔ اول مصرف (درصد)',
   firstSeen: 'زمان نخستین تماس',
   firstSeenAt: 'زمان نخستین رخداد',
+  fromLocation: 'لوکیشن مبدأ',
   gift: 'مبلغ هدیه',
   giftBlock: 'بخش هدیهٔ عضویت',
   guide: 'متن آموزش اتصال برنامه',
@@ -268,6 +280,7 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   limit: 'سقف تعداد',
   lines: 'فهرست خط‌به‌خط',
   location: 'لوکیشن',
+  locationChangeBlock: 'بخش تغییر لوکیشن',
   locationsBlock: 'بخش لوکیشن‌ها',
   max: 'حداکثر تعداد نویسه',
   maximum: 'حداکثر مبلغ',
@@ -304,10 +317,10 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   productName: 'نام محصول',
   productTitle: 'عنوان محصول',
   products: 'تعداد محصولات',
+  quantity: 'تعداد',
   provider: 'نوع پنل',
   providerFinalAmount: 'مبلغ نهایی گزارش‌شده توسط درگاه',
   providerInvoiceId: 'شناسهٔ فاکتور درگاه',
-  quantity: 'تعداد',
   query: 'عبارت جست‌وجو',
   question: 'پرسش',
   random: 'نشانهٔ انتخاب تصادفی',
@@ -361,6 +374,7 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   telegramIdRandom: 'نشانهٔ انتخاب شناسهٔ تلگرام + تصادفی',
   template: 'الگو',
   timePrice: 'قیمت زمان',
+  toLocation: 'لوکیشن مقصد',
   title: 'عنوان',
   total: 'مبلغ کل',
   totalTraffic: 'کل حجم',
@@ -440,6 +454,8 @@ export const PLACEHOLDER_LABEL_OVERRIDES_FA: Partial<
   'bot.wallet.topup_method_button': { name: 'نام روش پرداخت' },
   'bot.wallet.topup_method_gift_button': { name: 'نام روش پرداخت', percent: 'درصد هدیهٔ شارژ' },
   'bot.referral.gift_block': { total: 'مجموع هدیه' },
+  'bot.service.location_option': { location: 'لوکیشن مقصد', price: 'قیمت انتقال' },
+  'bot.service.location_option_free': { location: 'لوکیشن مقصد' },
 };
 
 /**
@@ -686,6 +702,10 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'bot.order.preinvoice_cashback_line': [
     'خط کش‌بک در پیش‌فاکتور',
     'کش‌بکی که پس از تحویل سرویس واریز می‌شود؛ فقط وقتی کش‌بک وعده داده شده است.',
+  ],
+  'bot.order.preinvoice_location_change': [
+    'بخش تغییر لوکیشن در پیش‌فاکتور',
+    'لوکیشن مبدأ و مقصد و اینکه مشخصات اتصال ممکن است عوض شود؛ از روی درخواست ثبت‌شده خوانده می‌شود، نه تنظیمات امروز.',
   ],
 
   // --- Service username -------------------------------------------------------------
@@ -1584,6 +1604,48 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
     'یک پیام برای همهٔ دلایل: وضعیت سرویس، لینک تحویل‌نشده، پرداخت یا درخواست در جریان، یا سرویس آزمایشی.',
   ],
 
+  // --- Service location change --------------------------------------------------------
+  'bot.service.change_location_button': [
+    'دکمهٔ تغییر لوکیشن',
+    'تغییر لوکیشن سرویس را باز می‌کند؛ فقط وقتی سرویس فعال است، پنل آن را پشتیبانی می‌کند و دست‌کم یک لوکیشن مقصد فعال و قیمت‌دار تعریف شده است.',
+  ],
+  'bot.service.location_choice': [
+    'صفحهٔ انتخاب لوکیشن مقصد',
+    'لوکیشن فعلی سرویس را می‌گوید؛ لوکیشن‌های مقصد با قیمت یا «رایگان» روی دکمه‌های زیر آن است.',
+  ],
+  'bot.service.location_option': [
+    'دکمهٔ لوکیشن مقصد پولی',
+    'نام لوکیشن مقصد و قیمت فهرست انتقال؛ مبلغ نهایی پس از تخفیف در پیش‌فاکتور گفته می‌شود.',
+  ],
+  'bot.service.location_option_free': [
+    'دکمهٔ لوکیشن مقصد رایگان',
+    'لوکیشنی که مدیر انتقال به آن را رایگان کرده (قیمت صفر، نه قیمت تعریف‌نشده).',
+  ],
+  'bot.service.location_confirm_free': [
+    'تأیید تغییر لوکیشن رایگان',
+    'مبدأ، مقصد، رایگان بودن و اینکه مشخصات اتصال ممکن است عوض شود؛ تا تأیید مشتری چیزی تغییر نمی‌کند.',
+  ],
+  'bot.service.location_confirm_button': [
+    'دکمهٔ تأیید تغییر لوکیشن',
+    'تنها دکمه‌ای که تغییر لوکیشن رایگان را ثبت می‌کند.',
+  ],
+  'bot.service.location_requested': [
+    'درخواست تغییر لوکیشن ثبت شد',
+    'تغییر رایگان ثبت شد و روی پنل انجام می‌شود؛ نتیجه و مشخصات اتصال تازه از راه اعلان‌ها می‌رسد.',
+  ],
+  'bot.service.location_same': [
+    'لوکیشن مقصد همان لوکیشن فعلی است',
+    'سرویس همین حالا در لوکیشن انتخاب‌شده است؛ چیزی تغییر نکرد و مبلغی کسر نشد.',
+  ],
+  'bot.service.location_cooldown': [
+    'تغییر لوکیشن زودتر از فاصلهٔ مجاز',
+    'از آخرین تغییر لوکیشن کمتر از فاصلهٔ تعیین‌شدهٔ مدیر گذشته است؛ چیزی تغییر نکرد و مبلغی کسر نشد.',
+  ],
+  'bot.service.location_limit': [
+    'سقف دفعات تغییر لوکیشن',
+    'سرویس در این بازه به سقف دفعات مجاز تغییر لوکیشن رسیده است؛ چیزی تغییر نکرد و مبلغی کسر نشد.',
+  ],
+
   // --- Customer refund requests -----------------------------------------------------
   'bot.service.refund_request_button': [
     'دکمهٔ درخواست بازگشت وجه',
@@ -1791,6 +1853,10 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'bot.admin.operation_add_devices': [
     'برچسب عملیات: افزایش کاربر / دستگاه',
     'نوع عملیات در کارت رسید برای خرید کاربر یا دستگاه اضافه.',
+  ],
+  'bot.admin.operation_change_location': [
+    'برچسب عملیات: تغییر لوکیشن',
+    'نوع عملیات در کارت رسید برای تغییر لوکیشن پولی سرویس موجود.',
   ],
   'bot.admin.operation_topup': [
     'برچسب عملیات: شارژ کیف پول',

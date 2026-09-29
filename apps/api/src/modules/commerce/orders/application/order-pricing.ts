@@ -213,6 +213,57 @@ export function quoteDeviceAddon(
 }
 
 /**
+ * The rule label a location change's quote carries (WP-A6). Constant for the reason the
+ * others are; the configured location's id is the step's `ruleId`, and its version is on
+ * the change request.
+ */
+export const LOCATION_CHANGE_PRICE_RULE_LABEL = "The location's move price";
+
+/**
+ * A paid location change's quote (WP-A6): the configured target's price, as ONE base step
+ * naming the location it came from. Every promotion `PricingService.price` applies comes
+ * on top of this, exactly as for an add-on. A free target never reaches here — a free move
+ * is requested, not bought.
+ */
+export function quoteLocationChange(
+  location: { readonly id: string; readonly price: Money },
+  quotedAt: Date,
+): OrderTotalsRecord {
+  const basePrecedence = PRICING_PRECEDENCE[0];
+  if (basePrecedence === undefined || basePrecedence.step !== 'BASE_PRICE') {
+    throw new Error('PRICING_PRECEDENCE no longer begins with BASE_PRICE.');
+  }
+  if (location.price.amountMinor <= 0n) {
+    throw new Error('a location change is quoted only for a priced target');
+  }
+  const currency = location.price.currency;
+  const subtotal = money(location.price.amountMinor, currency);
+  const discountMinor = clampDiscount(subtotal.amountMinor, 0n);
+  const total = money(subtotal.amountMinor - discountMinor, currency);
+  const step: PriceQuoteStep = {
+    step: 'BASE_PRICE',
+    effect: basePrecedence.effect,
+    ruleId: location.id,
+    ruleLabel: LOCATION_CHANGE_PRICE_RULE_LABEL,
+    amountBefore: zero(currency),
+    amountAfter: subtotal,
+  };
+  return {
+    subtotal,
+    discount: money(discountMinor, currency),
+    total,
+    currency,
+    quote: {
+      productId: null,
+      quotedAt: quotedAt.toISOString(),
+      currency,
+      finalAmount: total,
+      trace: [step],
+    },
+  };
+}
+
+/**
  * The rule label a trial's quote carries. Constant for the reason
  * `BASE_PRICE_RULE_LABEL` is: it is read back by a support conversation.
  */

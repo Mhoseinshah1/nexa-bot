@@ -1887,6 +1887,7 @@ export const WEB_FA = {
   // --- Product categories ---------------------------------------------------
   'web.nav_product_categories': 'دسته‌بندی‌ها',
   'web.nav_extra_devices': 'افزایش کاربر / دستگاه',
+  'web.nav_service_locations': 'تغییر لوکیشن',
   'web.categories_title': 'دسته‌بندی محصولات',
   'web.categories_subtitle': 'هر محصول فروختنی دقیقاً در یک دسته قرار می‌گیرد.',
   'web.categories_empty': 'هنوز دسته‌ای ساخته نشده است',
@@ -2329,6 +2330,7 @@ export const WEB_FA = {
   'web.operation_type_add_traffic': 'افزودن حجم',
   'web.operation_type_add_time': 'افزودن زمان',
   'web.operation_type_add_devices': 'افزایش کاربر / دستگاه',
+  'web.operation_type_change_location': 'تغییر لوکیشن',
   'web.operation_type_suspend': 'قطع موقت',
   'web.operation_type_resume': 'وصل دوباره',
   'web.operation_type_terminate': 'حذف',
@@ -2696,6 +2698,7 @@ export const WEB_FA = {
   'web.purpose_add_traffic': 'افزایش حجم',
   'web.purpose_add_time': 'افزایش زمان',
   'web.purpose_add_devices': 'افزایش کاربر / دستگاه',
+  'web.purpose_change_location': 'تغییر لوکیشن',
   // WP-A5: the extra users / devices rate — an `ADD_DEVICES` add-on, in operator words.
   'web.extra_devices_title': 'افزایش کاربر / دستگاه',
   'web.extra_devices_subtitle':
@@ -2743,6 +2746,81 @@ export const WEB_FA = {
   'web.extra_devices_save': 'ذخیره',
   'web.extra_devices_cancel_edit': 'انصراف از ویرایش',
   'web.extra_devices_saved': 'تعرفه ذخیره شد.',
+  // WP-A6: the service location change — a panel's locations and the price of moving there.
+  'web.service_locations_title': 'تغییر لوکیشن سرویس',
+  'web.service_locations_subtitle':
+    'لوکیشن‌های هر پنل، لوکیشنی که سرویس‌های جدید در آن ساخته می‌شوند، و هزینه و محدودیت انتقال سرویس فعلی مشتری به هر لوکیشن.',
+  'web.service_locations_no_capable_panel':
+    'در این نسخه هیچ‌یک از انواع پنل پشتیبانی‌شده امکان جابه‌جایی امن سرویس موجود بین لوکیشن‌ها را ندارد. تنظیماتی که اینجا ذخیره کنید تا وقتی پنلی با این قابلیت وصل نشود به هیچ مشتری‌ای نمایش داده نمی‌شود.',
+  'web.service_locations_capable_panels':
+    'دکمهٔ «🌍 تغییر لوکیشن» فقط برای سرویس‌هایی نمایش داده می‌شود که روی این نوع پنل‌ها هستند: {providers}',
+  'web.service_locations_list': 'لوکیشن‌ها',
+  'web.service_locations_empty': 'هنوز لوکیشنی تعریف نشده است',
+  'web.service_locations_empty_hint':
+    'بدون لوکیشن اولیه و دست‌کم یک لوکیشن مقصدِ فعال و قیمت‌دار، تغییر لوکیشن به مشتری پیشنهاد نمی‌شود. تنظیم‌نشده هرگز به معنای رایگان نیست.',
+  'web.service_locations_panel': 'پنل',
+  'web.service_locations_panel_unsupported': 'این پنل تغییر لوکیشن را پشتیبانی نمی‌کند',
+  'web.service_locations_panel_id_hint':
+    'فهرست پنل‌ها برای نقش شما خواندنی نیست؛ شناسهٔ پنل را وارد کنید.',
+  'web.service_locations_product_id_hint':
+    'فهرست محصولات برای نقش شما خواندنی نیست؛ برای همهٔ محصولات خالی بگذارید یا شناسهٔ محصول را وارد کنید.',
+  'web.service_locations_product': 'محصول',
+  'web.service_locations_all_products': 'همهٔ محصولات این پنل',
+  'web.service_locations_product_hint':
+    'اگر برای یک لوکیشن هم ردیف عمومی و هم ردیف مخصوص محصول باشد، ردیف مخصوص محصول برای سرویس‌های همان محصول اعمال می‌شود؛ حتی اگر غیرفعال باشد.',
+  'web.service_locations_key': 'شناسهٔ لوکیشن در پنل',
+  'web.service_locations_key_hint':
+    'همان شناسه‌ای که پنل برای این لوکیشن به کار می‌برد. به مشتری نمایش داده نمی‌شود.',
+  'web.service_locations_label': 'نام لوکیشن',
+  'web.service_locations_label_hint': 'نامی که مشتری در ربات می‌بیند؛ مثلاً «🇩🇪 آلمان».',
+  'web.service_locations_initial': 'لوکیشن اولیهٔ سرویس‌های جدید این پنل',
+  'web.service_locations_initial_hint':
+    'هر پنل یک لوکیشن اولیه دارد. بدون آن، معلوم نیست سرویسی که هنوز جابه‌جا نشده کجاست و تغییر لوکیشن برایش پیشنهاد نمی‌شود.',
+  'web.service_locations_enabled': 'به‌عنوان مقصد به مشتری عرضه شود',
+  'web.service_locations_price': 'هزینهٔ انتقال',
+  'web.service_locations_price_hint':
+    'برای انتقال رایگان صفر وارد کنید. خالی یعنی این لوکیشن مقصد فروش نیست.',
+  'web.service_locations_free': 'رایگان',
+  'web.service_locations_unpriced': 'بدون قیمت',
+  'web.service_locations_currency': 'واحد پول',
+  'web.service_locations_cooldown': 'فاصلهٔ لازم بین دو تغییر (ساعت)',
+  'web.service_locations_cooldown_hint': 'اختیاری. خالی یعنی بدون فاصلهٔ اجباری.',
+  'web.service_locations_max_changes': 'حداکثر تعداد تغییر',
+  'web.service_locations_period_days': 'در بازهٔ چند روز',
+  'web.service_locations_limit_hint':
+    'اختیاری و همراه هم؛ مثلاً ۲ تغییر در ۳۰ روز. خالی یعنی بدون سقف.',
+  'web.service_locations_limit_pair': 'حداکثر تعداد تغییر و بازهٔ روز را با هم وارد کنید.',
+  'web.service_locations_limits': 'محدودیت‌ها',
+  'web.service_locations_no_limits': 'بدون محدودیت',
+  'web.service_locations_cooldown_value': '{hours} ساعت فاصله',
+  'web.service_locations_limit_value': '{max} تغییر در {days} روز',
+  'web.service_locations_sort': 'ترتیب',
+  'web.service_locations_state': 'وضعیت',
+  'web.service_locations_target_on': 'مقصد فعال',
+  'web.service_locations_target_off': 'مقصد نیست',
+  'web.service_locations_initial_badge': 'اولیه',
+  'web.service_locations_updated': 'آخرین تغییر',
+  'web.service_locations_actions': 'عملیات',
+  'web.service_locations_edit': 'ویرایش',
+  'web.service_locations_delete': 'حذف',
+  'web.service_locations_new': 'لوکیشن جدید',
+  'web.service_locations_editing': 'ویرایش لوکیشن',
+  'web.service_locations_form_hint':
+    'تغییر قیمت یا محدودیت فقط روی درخواست‌های بعدی اثر دارد؛ هر درخواست نام، قیمت و نسخهٔ لوکیشنی را که با آن ثبت شده نگه می‌دارد. لینک یا اطلاعات اتصال مشتری ممکن است پس از جابه‌جایی تغییر کند؛ در این صورت اطلاعات جدید برایش فرستاده می‌شود.',
+  'web.service_locations_save': 'ذخیره',
+  'web.service_locations_cancel_edit': 'انصراف از ویرایش',
+  'web.service_locations_saved': 'لوکیشن ذخیره شد.',
+  'web.service_locations_unchanged': 'تغییری برای ذخیره نبود.',
+  'web.service_locations_deleted': 'لوکیشن حذف شد.',
+  'web.service_locations_error_in_use':
+    'درخواست تغییر لوکیشنی به این لوکیشن اشاره می‌کند و نمی‌توان آن را حذف کرد؛ به‌جای حذف، آن را از مقصدها خارج کنید.',
+  'web.service_locations_error_duplicate': 'این پنل برای همین محصول‌ها لوکیشنی با همین شناسه دارد.',
+  'web.service_locations_error_second_initial': 'این پنل از قبل یک لوکیشن اولیه دارد.',
+  'web.service_locations_error_currency': 'قیمت باید با واحد پول فروش این نصب باشد.',
+  'web.service_locations_error_product_panel': 'این محصول روی پنل انتخاب‌شده فروخته نمی‌شود.',
+  'web.service_locations_error_panel_full':
+    'این پنل به حداکثر تعداد لوکیشن رسیده است (۲۰ ردیف، همراه با ردیف‌های مخصوص محصول).',
+  'web.service_locations_error_count': 'به حداکثر تعداد لوکیشن‌های این نصب (۵۰۰) رسیده‌اید.',
 
   'web.preview_title': 'پیش‌نمایش قیمت',
   'web.preview_hint':
