@@ -866,7 +866,7 @@ export const SETTINGS = [
     description:
       'RETIRED (R1). This named the product a trial was issued as. A trial is now configured ' +
       'per panel — enabled, traffic and hours — on the panel\u2019s own screen, and is issued ' +
-      'from no product at all. Migration 0140 copied a configured product\u2019s panel, ' +
+      'from no product at all. Migration 0142 copied a configured product\u2019s panel, ' +
       'traffic and duration onto that panel\u2019s trial configuration once; nothing reads ' +
       'this value since. It stays declared so a stored value keeps parsing, and it is not ' +
       'shown on the normal settings page.',
