@@ -36,6 +36,7 @@ import { RecoveryController } from './surfaces/web/recovery.controller.js';
 import { SystemController } from './surfaces/web/system.controller.js';
 import { AudienceController } from './surfaces/web/audience.controller.js';
 import { BroadcastsController } from './surfaces/web/broadcasts.controller.js';
+import { BulkOperationsController } from './surfaces/web/bulk-operations.controller.js';
 import { TelegramWebhookController } from './surfaces/telegram/webhook.controller.js';
 import { GatewayWebhookController } from './surfaces/gateway/webhook.controller.js';
 import { CorrelationMiddleware } from './surfaces/web/correlation.middleware.js';
@@ -107,6 +108,7 @@ export class AppModule implements NestModule {
         // Round N: the shared audience.
         AudienceController as never,
         BroadcastsController as never,
+        BulkOperationsController as never,
       );
     }
 
