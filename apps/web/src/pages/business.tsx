@@ -83,6 +83,8 @@ const PURPOSE_LABELS: Readonly<Record<OrderPurpose, WebKey>> = {
   RENEW: 'web.purpose_renew',
   ADD_TRAFFIC: 'web.purpose_add_traffic',
   ADD_TIME: 'web.purpose_add_time',
+  ADD_DEVICES: 'web.purpose_add_devices',
+  CHANGE_LOCATION: 'web.purpose_change_location',
   TRIAL: 'web.report_purpose_trial',
   CUSTOM_SERVICE: 'web.purpose_custom_service',
 };

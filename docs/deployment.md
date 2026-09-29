@@ -948,6 +948,257 @@ docker compose --env-file /etc/nexa/deploy.env -f /opt/nexa/deploy/compose.yml \
 
 An OPEN request can wait through a rollback; it is decided after the roll-forward.
 
+### What a rollback strands: extra-users rates (WP-A5)
+
+WP-A5 adds a third service add-on kind, `ADD_DEVICES`: the per-user rate an operator
+sets on the Web Admin's «افزایش کاربر / دستگاه» page. The release before WP-A5 maps every
+add-on row it reads as either `ADD_TRAFFIC` or `ADD_TIME`
+(`DrizzleServiceAddonRepository.specificationOf`), and an `ADD_DEVICES` row has neither a
+traffic amount nor a duration, so it throws. That release has no add-on screen in its Web
+Admin; what fails is its add-on API:
+
+- `GET /service-addons` answers **500** whenever the page it reads holds an
+  `ADD_DEVICES` row — with no `kind` filter, or with `status` alone. Filtered to
+  `kind=ADD_TRAFFIC` or `kind=ADD_TIME` it is unaffected. Filtered to
+  `kind=ADD_DEVICES` it answers **400**: its contract does not know the kind.
+- `GET` and `POST /service-addons/:id`, `/activate` and `/deactivate` answer **500** for
+  an `ADD_DEVICES` id.
+- The price preview (Web Admin, Discounts) answers **500** for an `ADD_DEVICES` add-on id.
+
+Nothing a customer sees is affected. The old bot lists add-ons filtered to its own two
+kinds, so extra traffic and extra time are offered as before. A `dv:` or `dq:` button tap
+reaches no handler there and gets the ordinary "unsupported" answer. Orders, operations
+and commercial actions of kind `ADD_DEVICES` cannot exist yet: no provider declares
+`DEVICE_LIMIT_ADJUSTMENT`, so nothing of that kind can be drafted, let alone paid for. The
+release that first declares the capability must add its own note here. The old
+provisioner abandons an operation type it does not know, and it does not refund it.
+
+**During the update itself** the same failures can meet the new Web Admin page, if one
+of its requests reaches an old API replica. They last only as long as old and new
+replicas both run, and a reload after the update answers them.
+
+**Before rolling back past WP-A5**, delete the extra-users rates. Withdrawing a rate is
+not enough, because the old release reads inactive rows too. Nothing references a rate
+yet, so the delete removes nothing else. If the database refuses it with a
+foreign-key error, something does reference a rate; stop and do not roll back. First
+save the rates so you can re-enter them after the roll-forward:
+
+```bash
+docker compose --env-file /etc/nexa/deploy.env -f /opt/nexa/deploy/compose.yml \
+  exec -T postgres psql -U nexa -d nexa -c \
+  "SELECT id, title, status, price_amount, price_currency, max_quantity, panel_id, product_id
+     FROM service_addons WHERE kind = 'ADD_DEVICES'"
+docker compose --env-file /etc/nexa/deploy.env -f /opt/nexa/deploy/compose.yml \
+  exec -T postgres psql -U nexa -d nexa -c \
+  "DELETE FROM service_addons WHERE kind = 'ADD_DEVICES'"
+```
+
+Roll back when this count is 0:
+
+```bash
+docker compose --env-file /etc/nexa/deploy.env -f /opt/nexa/deploy/compose.yml \
+  exec -T postgres psql -U nexa -d nexa -c \
+  "SELECT count(*) FROM service_addons WHERE kind = 'ADD_DEVICES'"
+```
+
+**If you already rolled back** with such a row present, roll forward. The release that
+knows the kind reads it again, and nothing was written wrongly in between: every failure
+above is a refused read.
+
+### What a rollback strands: service location change (WP-A6)
+
+WP-A6 adds the `CHANGE_LOCATION` order purpose, operation type and commercial-action kind,
+two tables (`service_locations`, `service_location_changes`) and two service columns
+(`location_key`, `location_label`). None of those can hold anything the release before
+WP-A6 must read:
+
+- The two tables are read by nothing in the older release. Locations an operator saved on
+  the Web Admin's «تغییر لوکیشن» page simply stop being shown, and come back on the
+  roll-forward.
+- No `CHANGE_LOCATION` order, operation, commercial action or change request can exist
+  yet, and no service can have a recorded location: no provider declares
+  `LOCATION_CHANGE`, so a move is refused before anything is written. The release that
+  first declares the capability must add its own note here — the older provisioner
+  abandons an operation type it does not know, and does not refund it.
+
+What CAN exist is the purpose's name in three operator-edited lists, because
+`CHANGE_LOCATION` is discountable and reseller-grantable like every other commercial
+action:
+
+- a discount rule or a cashback rule whose «applies to» includes «تغییر لوکیشن»;
+- a reseller tier grant whose operation is «تغییر لوکیشن».
+
+The older release's pricing engine and entitlement check read those rows correctly — a
+purpose they do not know simply never matches. But its **Web Admin** parses the list
+responses with its own purpose vocabulary, so the Discounts, Cashback and reseller Tiers
+pages fail to load while any such row exists. Nothing a customer sees is affected: the
+older bot never offers a location change, and an `lc:`, `lt:` or `lf:` tap gets the
+ordinary "unsupported" answer.
+
+**Before rolling back past WP-A6**, untick «تغییر لوکیشن» on every discount and cashback
+rule that names it, and remove it from every reseller tier's grants, in the Web Admin. No
+sale of that purpose can have been made, so nothing a rule already priced changes. Roll
+back when all three counts are 0:
+
+```bash
+docker compose --env-file /etc/nexa/deploy.env -f /opt/nexa/deploy/compose.yml \
+  exec -T postgres psql -U nexa -d nexa -c \
+  "SELECT (SELECT count(*) FROM discounts WHERE 'CHANGE_LOCATION' = ANY(applies_to)) AS discounts,
+          (SELECT count(*) FROM cashback_rules WHERE 'CHANGE_LOCATION' = ANY(applies_to)) AS cashback,
+          (SELECT count(*) FROM reseller_tier_grants
+            WHERE kind = 'OPERATION' AND subject = 'CHANGE_LOCATION') AS grants"
+```
+
+**If you already rolled back** with such a row present, roll forward: the release that
+knows the purpose shows those pages again, and nothing was written wrongly in between.
+
+### What a rollback strands: panel policies (WP-A8)
+
+WP-A8 adds `panel_policies`: one row per panel an operator configured on the panel's
+«قابلیت‌ها» tab — which customer actions that panel offers, the extra cooldowns and
+per-purchase caps it adds, and whether its services are delivered with or without the QR
+image. The release before WP-A8 neither reads nor writes the table, so nothing fails
+there: every restriction simply stops applying.
+
+- Every customer action switched off on a panel is offered again, wherever the adapter
+  supports it and the tenant's own switches allow it: renewal, extra traffic, extra time,
+  a customer's own suspend and resume, link rotation, subscription files and the usage
+  refresh.
+- A panel's longer cooldown for rotation or refresh falls back to the tenant's
+  `services.link_rotation_cooldown_hours` and the built-in one-minute refresh interval.
+- The per-purchase traffic and time caps and the device-limit ceiling vanish: every
+  package the catalogue offers is offered on every panel again.
+- A panel set to deliver the card as text sends the QR card again.
+
+Nothing else is affected. The `panels.technical.view` rows the migration added to the
+`owner` roles are skipped by the old release, which ignores a permission key it does not
+know (`DrizzleRoleRepository`). `panel.policy_update` audit rows are ordinary audit rows.
+Operator actions and the provisioner never read a policy, so no paid order changes course.
+
+**During the update itself** the new Web Admin can meet an old API replica: its
+Capabilities tab and the diagnostics card on the Health tab answer an error, and the
+provider catalogue and the new-panel form refuse the old `/providers` answer, which has no
+capability registry. They last only as long as old and new replicas both run, and a reload
+after the update answers them.
+
+**Before rolling back past WP-A8**, read the policies you would lose:
+
+```bash
+docker compose --env-file /etc/nexa/deploy.env -f /opt/nexa/deploy/compose.yml \
+  exec -T postgres psql -U nexa -d nexa -c \
+  "SELECT p.name, pp.revision, pp.policy FROM panel_policies pp
+     JOIN panels p ON p.tenant_id = pp.tenant_id AND p.id = pp.panel_id"
+```
+
+For any restriction that must hold while the old release runs, use the old release's own
+tenant-wide control: switch the `customer_link_rotation` flag off, or deactivate the
+add-on packages that must not be sold. Renewal, a customer's suspend and resume,
+subscription files and the refresh have no tenant-wide switch there, and are offered
+again until the roll-forward.
+
+**If you already rolled back**, roll forward. The rows were never touched by the old
+release, and every policy applies again as soon as the new release reads it.
+
+### What a rollback delays or drops: support tickets (WP-A7)
+
+WP-A7 adds support tickets: a customer opens and answers them in the bot, and support
+answers in the Web Admin (Tickets). The release before WP-A7 has none of this. Its schema
+checks already accept every new value, because the migration stays, and nothing in it
+crashes on WP-A7's rows. Five things behave differently while it runs:
+
+- **A message typed into an open ticket prompt is lost.** A ticket prompt is a text
+  capture with purpose `TICKET_NEW_MESSAGE` or `TICKET_REPLY`. The old bot does not know
+  either purpose, so it treats the capture as a service note: it closes the capture as read
+  and passes the category's or the ticket's id to the note write as a service id. No service
+  has that id, so nothing is written, and the customer is told «این سرویس در دسترس شما
+  نیست.». No ticket message is filed and no service note changes. The customer has to send
+  the message again after the roll-forward. A photo or document sent to a ticket prompt
+  goes to the old bot's receipt path, as any file did before WP-A7. A prompt lasts ten
+  minutes (`CUSTOMER_TEXT_CAPTURE_TTL_MS`), so only a prompt opened in the ten minutes
+  before the rollback is affected.
+- **The desk's buttons do nothing useful.** The old bot has no «🎫 پشتیبانی / تیکت‌ها»
+  row and no `/tickets` command. A ticket button on an older message (`tkl:`, `tkn:`,
+  `tkc:`, `tkv:`, `tkr:`, `tkq:`, `tkx:`) is a callback it does not know, and it answers
+  `bot.unknown_command`.
+- **A reply support wrote and the bot has not delivered yet waits.** The old dispatcher
+  has no template for the `TICKET_REPLY` kind. It puts such a row back on the ordinary
+  back-off, without spending an attempt or stamping it, and the first pass after the
+  roll-forward delivers it. The reply itself is on the ticket either way.
+- **Support is not told about a ticket or reply that is still in the outbox.** A
+  `TicketOpened` or `TicketMessagePosted` event that the old relay reaches has no
+  consumer there, so it is marked published. A support alert already queued has an
+  `ops.support.*` template the old dispatcher does not declare. It is failed permanently
+  (`notification.render_failed`) and not delivered, the same as the financial log's rows
+  above. Its kind is `OPERATIONAL_EVENT`, so the old notifications page still lists it.
+  The ticket is still in the Web Admin after the roll-forward.
+- **Existing tickets are kept but out of reach.** The old release never reads or writes
+  the ticket tables, and its Web Admin has no Tickets page. It skips the five `tickets.*`
+  permissions granted to roles, so no role or permission page breaks. Everything comes
+  back with the roll-forward.
+
+No flag switches the ticket desk off. **Before rolling back past WP-A7**, hide every
+ticket category in the Web Admin (Tickets → categories). New tickets can no longer be
+started, although a customer can still open a reply prompt on an open ticket. Then wait
+until no ticket prompt is open:
+
+```bash
+docker compose --env-file /etc/nexa/deploy.env -f /opt/nexa/deploy/compose.yml \
+  exec -T postgres psql -U nexa -d nexa -c \
+  "SELECT count(*) FROM customer_text_captures
+    WHERE purpose IN ('TICKET_NEW_MESSAGE', 'TICKET_REPLY')
+      AND closed_at IS NULL AND expires_at > now()"
+```
+
+Roll back when that count is 0. Every open prompt has expired ten minutes after the last
+one was opened. Show the categories again after the roll-forward.
+
+**If you already rolled back** with a prompt open, roll forward. At worst each open prompt
+cost the customer one message, answered with the sentence above. Nothing was written
+wrongly in either release. Replies still waiting are delivered by the release that knows
+their kind.
+
+### What a rollback stops: the operations log group (WP-A4)
+
+WP-A4 connects the operations log group by a one-time code, keeps the group and the
+topics Nexa created in `ops_log_groups` and `ops_log_topics`, and routes every
+operational event to a topic instead of filtering by severity. The release before WP-A4
+has none of this. The migration stays and its tables are untouched; the old release never
+reads them. While it runs:
+
+- **New reports stop unless the manual chat id is set.** The old lane finds its
+  destination in `ops.notifications.telegram_chat_id` only. On an installation that
+  connected a group and never set that key, nothing new is queued. The operational events
+  are still recorded, and the Web Admin's alerts page still shows them.
+- **Severity filtering returns.** The old projector reads `ops.notifications.min_severity`
+  again (default `ERROR`), so INFO and WARN events are no longer queued.
+- **Reports already queued go to where the group was when they were queued.** The old
+  dispatcher ignores the stored `opsTopic` and posts to the chat and topic snapshot on the
+  row, from the tenant's active bot. A topic deleted since, or a group whose bot is not the
+  tenant's first active bot, fails the message permanently. Nothing is deleted: after the
+  roll-forward, «ارسال مجدد گزارش‌های ارسال‌نشده» on the ops group page queues it again.
+- **The group cannot be connected or checked.** The old bot treats `/start ops-…` in a
+  group as an ordinary contact and `/connect_ops` as an unknown command, and it ignores
+  `my_chat_member`. A code issued before the rollback may expire unused; issue a new one
+  after the roll-forward.
+- **The old Web Admin shows the manual keys again** on the settings page, and has no ops
+  group page. An `OpsLogGroupChanged` event still in the outbox has no consumer there and
+  is marked published.
+
+**Before rolling back past WP-A4**, if reports must keep reaching the group, put its chat
+id in the manual setting. The chat id is not shown in the Web Admin; read it from the
+database:
+
+```bash
+docker compose --env-file /etc/nexa/deploy.env -f /opt/nexa/deploy/compose.yml \
+  exec -T postgres psql -U nexa -d nexa -c \
+  "SELECT chat_id FROM ops_log_groups WHERE status = 'CONNECTED'"
+```
+
+Then save that value as the group's chat id under «پیشرفته: مقصد دستی» on the ops group
+page. It is used only while no group is connected, so leaving it set after the
+roll-forward changes nothing. Topics are not carried over: the manual destination posts
+to the group itself unless you also set a topic id.
+
 ### How far back you can roll
 
 **One release**, safely. Migrations are expand-only within a release

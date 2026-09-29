@@ -2097,6 +2097,47 @@ textarea.input {
   font-size: 13px;
 }
 
+/* ---------------------------------------------------------- WP-A7 tickets --- */
+
+/*
+ * One ticket's conversation, oldest first. Support's replies sit on the accent side so an
+ * operator reading back can tell at a glance who said what; a system fact is one quiet line.
+ */
+.ticket-thread {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 12px;
+}
+.ticket-message {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px 14px;
+  display: grid;
+  gap: 8px;
+}
+.ticket-message.support {
+  border-color: var(--accent-soft);
+  background: var(--accent-soft);
+}
+.ticket-message.system {
+  border-style: dashed;
+  padding: 6px 14px;
+}
+.ticket-message-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.ticket-body {
+  margin: 0;
+  /* The customer's and support's own line breaks are part of what they wrote. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 /* --- Bot texts (the template screen, WP-A3) -------------------------------- */
 
 /*
@@ -2165,6 +2206,17 @@ textarea.input {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+
+/* WP-A10: the bot's message as a customer will read it — plain text, line breaks kept. */
+.bot-preview {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding: 12px;
+  margin-bottom: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg-1);
 }
 
 [hidden] {

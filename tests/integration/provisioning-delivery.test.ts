@@ -1634,6 +1634,7 @@ describe('a provisioned service announces itself', () => {
                 target: {
                   expiresAt: new Date(ctx.container.clock.now().getTime() + 86_400_000),
                   trafficLimitBytes: 1_000n,
+                  deviceLimit: null,
                 },
               }
             : {}),

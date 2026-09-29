@@ -8,6 +8,8 @@ import {
   productStatusRequestSchema,
   serviceAddonListQuerySchema,
   serviceAddonWriteSchema,
+  type PanelId,
+  type ProductId,
   type ServiceAddonId,
   type ServiceAddonListResponse,
   type ServiceAddonResponse,
@@ -206,11 +208,15 @@ function draftFrom(command: ServiceAddonWriteRequest): ServiceAddonDraft {
       // GB as typed, to bytes, once, here (WP21).
       trafficBytes: command.trafficGb === null ? null : bytesOf(command.trafficGb),
       durationDays: command.durationDays,
+      // WP-A5: an extra-users rate's maximum; absent means null for the two packages.
+      maxQuantity: command.maxQuantity ?? null,
     },
     price:
       command.priceAmount === null || command.priceCurrency === null
         ? null
         : money(BigInt(command.priceAmount), command.priceCurrency),
+    panelId: (command.panelId ?? null) as PanelId | null,
+    productId: (command.productId ?? null) as ProductId | null,
   } satisfies ServiceAddonDraft & ServiceAddonEdit;
 }
 
@@ -232,6 +238,10 @@ function toSummary(record: ServiceAddonRecord): ServiceAddonSummaryResponse {
     // 2^53 within reach, and JSON has one number type.
     trafficBytes: record.specification.trafficBytes?.toString() ?? null,
     durationDays: record.specification.durationDays,
+    maxQuantity: record.specification.maxQuantity ?? null,
+    panelId: record.panelId,
+    productId: record.productId,
+    version: record.version,
     priceAmount: record.price === null ? null : record.price.amountMinor.toString(),
     priceCurrency: record.price === null ? null : record.price.currency,
     createdAt: record.createdAt.toISOString(),

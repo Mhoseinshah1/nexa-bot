@@ -199,6 +199,15 @@ import {
   type SystemReadinessResponse,
   type SystemDiagnosticsResponse,
   PANEL_ROUTES,
+  // WP-A8: advanced provider settings.
+  PANEL_ADVANCED_ROUTES,
+  panelAdvancedResponseSchema,
+  panelTechnicalResponseSchema,
+  updatePanelPolicyResponseSchema,
+  type PanelAdvancedResponse,
+  type PanelPolicy,
+  type PanelTechnicalResponse,
+  type UpdatePanelPolicyResponse,
   panelListResponseSchema,
   panelResponseSchema,
   providerListResponseSchema,
@@ -257,6 +266,20 @@ import {
   type CustomerResponse,
   type CustomerStatus,
   PAYMENT_ACCOUNT_ROUTES,
+  SERVICE_ADDON_ROUTES,
+  SERVICE_LOCATION_ROUTES,
+  serviceLocationDeleteResponseSchema,
+  serviceLocationListResponseSchema,
+  type ServiceLocationDeleteResponse,
+  serviceLocationResponseSchema,
+  type ServiceLocationListResponse,
+  type ServiceLocationResponse,
+  serviceAddonListResponseSchema,
+  serviceAddonResponseSchema,
+  type ServiceAddonListResponse,
+  type ServiceAddonResponse,
+  type ServiceAddonKind,
+  type ServiceAddonStatus,
   BOT_ROUTES,
   // WP-A4: the operations log group.
   OPS_GROUP_ROUTES,
@@ -288,6 +311,16 @@ import {
   type SupportFaqListResponse,
   type SupportFaqResponse,
   type SupportFaqStatus,
+  // WP-A10: client apps and connection guides.
+  CLIENT_APP_ROUTES,
+  clientAppDeletedSchema,
+  clientAppListSchema,
+  clientAppSchema,
+  type ClientAppDeletedResponse,
+  type ClientAppListResponse,
+  type ClientAppResponse,
+  type ClientAppStatus,
+  type CreateClientAppRequest,
   type PaymentGatewayListResponse,
   type PaymentGatewayResponse,
   type PaymentGatewayStatus,
@@ -302,6 +335,24 @@ import {
   type ServiceRefundRequestState,
   type RefundListResponse,
   type RefundResponse,
+  // WP-A7: support tickets.
+  TICKET_ROUTES,
+  ticketAssigneesResponseSchema,
+  ticketCategoryListResponseSchema,
+  ticketCategoryResponseSchema,
+  ticketDetailResponseSchema,
+  ticketListResponseSchema,
+  ticketMutationResponseSchema,
+  ticketReplyResponseSchema,
+  type TicketAssigneesResponse,
+  type TicketCategoryListResponse,
+  type TicketCategoryResponse,
+  type TicketDetailResponse,
+  type TicketListResponse,
+  type TicketMutationResponse,
+  type TicketPriority,
+  type TicketReplyResponse,
+  type TicketStatus,
 } from '@nexa/contracts';
 
 /**
@@ -1350,6 +1401,119 @@ export async function fetchPaymentReceiptBytes(
  * the figure at approval time is an operator able to approve a different payment from
  * the one the customer made.
  */
+// --- Service add-ons (WP-A5: the extra users / devices rate) -------------------
+
+/** One page of add-ons, optionally of one kind. The server authorizes on `catalog.view`. */
+export function fetchServiceAddons(
+  query: {
+    limit?: number;
+    cursor?: string;
+    kind?: ServiceAddonKind;
+    status?: ServiceAddonStatus;
+  } = {},
+): Promise<ServiceAddonListResponse> {
+  const params = new URLSearchParams();
+  if (query.limit !== undefined) params.set('limit', String(query.limit));
+  if (query.cursor !== undefined && query.cursor !== '') params.set('cursor', query.cursor);
+  if (query.kind !== undefined) params.set('kind', query.kind);
+  if (query.status !== undefined) params.set('status', query.status);
+  const suffix = params.toString();
+  return authedGet(
+    suffix ? `${SERVICE_ADDON_ROUTES.list}?${suffix}` : SERVICE_ADDON_ROUTES.list,
+    serviceAddonListResponseSchema,
+  );
+}
+
+/**
+ * The write body for create and edit. One shape, as for products: the kind is written on
+ * create and ignored by an edit, which checks the amount against the kind the row has.
+ */
+export interface ServiceAddonWriteInput {
+  kind: ServiceAddonKind;
+  title: string;
+  sortOrder: number;
+  trafficGb: string | null;
+  durationDays: number | null;
+  maxQuantity: number | null;
+  panelId: string | null;
+  productId: string | null;
+  priceAmount: string | null;
+  priceCurrency: CurrencyCode | null;
+  idempotencyKey: string;
+}
+
+export function createServiceAddon(input: ServiceAddonWriteInput): Promise<ServiceAddonResponse> {
+  return post(SERVICE_ADDON_ROUTES.create, input, serviceAddonResponseSchema);
+}
+
+export function updateServiceAddon(
+  input: ServiceAddonWriteInput & { id: string },
+): Promise<ServiceAddonResponse> {
+  const { id, ...body } = input;
+  return post(SERVICE_ADDON_ROUTES.update(id), body, serviceAddonResponseSchema);
+}
+
+/** Offers or withdraws one add-on. An unpriced one cannot be offered; the server says so. */
+export function setServiceAddonActive(input: {
+  id: string;
+  active: boolean;
+  idempotencyKey: string;
+}): Promise<ServiceAddonResponse> {
+  const route = input.active
+    ? SERVICE_ADDON_ROUTES.activate(input.id)
+    : SERVICE_ADDON_ROUTES.deactivate(input.id);
+  return post(route, { idempotencyKey: input.idempotencyKey }, serviceAddonResponseSchema);
+}
+
+// --- Service locations (WP-A6: the location change) --------------------------------
+
+/** Every configured location of the tenant. The server authorizes on `catalog.view`. */
+export function fetchServiceLocations(): Promise<ServiceLocationListResponse> {
+  return authedGet(SERVICE_LOCATION_ROUTES.list, serviceLocationListResponseSchema);
+}
+
+/** The write body for create and edit: one shape, every term stated. */
+export interface ServiceLocationWriteInput {
+  panelId: string;
+  productId: string | null;
+  locationKey: string;
+  label: string;
+  initial: boolean;
+  enabled: boolean;
+  priceAmount: string | null;
+  priceCurrency: CurrencyCode | null;
+  cooldownHours: number | null;
+  maxChanges: number | null;
+  periodDays: number | null;
+  sortOrder: number;
+  idempotencyKey: string;
+}
+
+export function createServiceLocation(
+  input: ServiceLocationWriteInput,
+): Promise<ServiceLocationResponse> {
+  return post(SERVICE_LOCATION_ROUTES.create, input, serviceLocationResponseSchema);
+}
+
+export function updateServiceLocation(
+  input: ServiceLocationWriteInput & { id: string },
+): Promise<ServiceLocationResponse> {
+  const { id, ...body } = input;
+  return post(SERVICE_LOCATION_ROUTES.update(id), body, serviceLocationResponseSchema);
+}
+
+/** Deletes a location nothing was quoted from; one in use is refused by the server. */
+export function deleteServiceLocation(input: {
+  id: string;
+  idempotencyKey: string;
+}): Promise<ServiceLocationDeleteResponse> {
+  return post(
+    SERVICE_LOCATION_ROUTES.remove(input.id),
+    { idempotencyKey: input.idempotencyKey },
+    serviceLocationDeleteResponseSchema,
+  );
+}
+
 /**
  * The manual-transfer destinations, all of them, with no cursor.
  *
@@ -1529,6 +1693,48 @@ export function setSupportFaqStatus(input: {
   return post(SUPPORT_FAQ_ROUTES.status(id), body, supportFaqSchema);
 }
 
+// --- WP-A10: client apps and connection guides ------------------------------------
+
+export function fetchClientApps(): Promise<ClientAppListResponse> {
+  return authedGet(CLIENT_APP_ROUTES.list, clientAppListSchema);
+}
+
+/** The fields an entry is written with; the server normalises the links and re-checks all of it. */
+export type ClientAppFields = Omit<CreateClientAppRequest, 'idempotencyKey'>;
+
+export function createClientApp(
+  input: ClientAppFields & { idempotencyKey: string },
+): Promise<ClientAppResponse> {
+  return post(CLIENT_APP_ROUTES.create, input, clientAppSchema);
+}
+
+/** `expectedVersion` is required; a row that moved comes back as `control.client_app_version_conflict`. */
+export function updateClientApp(
+  input: ClientAppFields & { id: string; idempotencyKey: string; expectedVersion: number },
+): Promise<ClientAppResponse> {
+  const { id, ...body } = input;
+  return post(CLIENT_APP_ROUTES.update(id), body, clientAppSchema);
+}
+
+export function setClientAppStatus(input: {
+  id: string;
+  idempotencyKey: string;
+  status: ClientAppStatus;
+  expectedVersion: number;
+}): Promise<ClientAppResponse> {
+  const { id, ...body } = input;
+  return post(CLIENT_APP_ROUTES.status(id), body, clientAppSchema);
+}
+
+export function deleteClientApp(input: {
+  id: string;
+  idempotencyKey: string;
+  expectedVersion: number;
+}): Promise<ClientAppDeletedResponse> {
+  const { id, ...body } = input;
+  return post(CLIENT_APP_ROUTES.remove(id), body, clientAppDeletedSchema);
+}
+
 export function fetchPanels(
   query: { limit?: number; cursor?: string; archived?: PanelListArchivedMode } = {},
 ): Promise<PanelListResponse> {
@@ -1587,6 +1793,33 @@ export function updatePanel(input: {
 }): Promise<PanelResponse> {
   const { id, ...body } = input;
   return post(PANEL_ROUTES.update(id), body, panelResponseSchema);
+}
+
+/**
+ * WP-A8: a panel's capability registry, operator policy, provider rules and
+ * diagnostics — all server-derived, so this client renders and never decides.
+ */
+export function fetchPanelAdvanced(id: string): Promise<PanelAdvancedResponse> {
+  return authedGet(PANEL_ADVANCED_ROUTES.advanced(id), panelAdvancedResponseSchema);
+}
+
+/**
+ * Replaces the panel's operator policy, whole, from the revision the form was shown.
+ * The server refuses a stale revision rather than overwriting a colleague's decision.
+ */
+export function updatePanelPolicy(input: {
+  id: string;
+  policy: PanelPolicy;
+  expectedRevision: number;
+  idempotencyKey: string;
+}): Promise<UpdatePanelPolicyResponse> {
+  const { id, ...body } = input;
+  return post(PANEL_ADVANCED_ROUTES.policy(id), body, updatePanelPolicyResponseSchema);
+}
+
+/** WP-A8: the Super Admin's read-only technical view (`panels.technical.view`). */
+export function fetchPanelTechnical(id: string): Promise<PanelTechnicalResponse> {
+  return authedGet(PANEL_ADVANCED_ROUTES.technical(id), panelTechnicalResponseSchema);
 }
 
 /**
@@ -2565,4 +2798,150 @@ export function testOpsGroup(idempotencyKey: string): Promise<OpsGroupTestRespon
 /** Put the preserved, unsent reports back in the queue. */
 export function requeueOpsGroup(idempotencyKey: string): Promise<OpsGroupRequeueResponse> {
   return post(OPS_GROUP_ROUTES.requeue, { idempotencyKey }, opsGroupRequeueResponseSchema);
+}
+
+// ---------------------------------------------------------------------------
+// WP-A7 — support tickets
+// ---------------------------------------------------------------------------
+
+/** The inbox's filters, as the page holds them; each is optional and sent only when set. */
+export interface TicketFilters {
+  readonly status?: TicketStatus;
+  readonly categoryId?: string;
+  /** A customer's id, numeric Telegram id or username — whatever the operator holds. */
+  readonly customer?: string;
+  /** An administrator's id, `me` or `none`. */
+  readonly assigned?: string;
+  /** Half-open `[from, to)` on the creation time, as ISO instants. */
+  readonly from?: string;
+  readonly to?: string;
+  readonly cursor?: { readonly at: string; readonly id: string };
+}
+
+export function fetchTickets(filters: TicketFilters = {}): Promise<TicketListResponse> {
+  const params = new URLSearchParams();
+  if (filters.status !== undefined) params.set('status', filters.status);
+  if (filters.categoryId !== undefined) params.set('categoryId', filters.categoryId);
+  if (filters.customer !== undefined) params.set('customer', filters.customer);
+  if (filters.assigned !== undefined) params.set('assigned', filters.assigned);
+  if (filters.from !== undefined) params.set('from', filters.from);
+  if (filters.to !== undefined) params.set('to', filters.to);
+  if (filters.cursor !== undefined) {
+    params.set('before', filters.cursor.at);
+    params.set('beforeId', filters.cursor.id);
+  }
+  const suffix = params.toString();
+  return authedGet(
+    suffix ? `${TICKET_ROUTES.list}?${suffix}` : TICKET_ROUTES.list,
+    ticketListResponseSchema,
+  );
+}
+
+export function fetchTicket(id: string): Promise<TicketDetailResponse> {
+  return authedGet(TICKET_ROUTES.detail(id), ticketDetailResponseSchema);
+}
+
+/** Who a ticket may be assigned to. `tickets.assign`. */
+export function fetchTicketAssignees(): Promise<TicketAssigneesResponse> {
+  return authedGet(TICKET_ROUTES.assignees, ticketAssigneesResponseSchema);
+}
+
+/**
+ * Support's reply. The key is minted per submission: a retry after a dropped response is
+ * the same reply, and the server refuses the key reused with other words.
+ */
+export function replyToTicket(input: {
+  ticketId: string;
+  idempotencyKey: string;
+  text: string;
+}): Promise<TicketReplyResponse> {
+  return post(
+    TICKET_ROUTES.reply(input.ticketId),
+    { idempotencyKey: input.idempotencyKey, text: input.text },
+    ticketReplyResponseSchema,
+  );
+}
+
+/** A target status: close, reopen or triage. `changed: false` when it was already there. */
+export function setTicketStatus(input: {
+  ticketId: string;
+  status: TicketStatus;
+}): Promise<TicketMutationResponse> {
+  return post(
+    TICKET_ROUTES.status(input.ticketId),
+    { status: input.status },
+    ticketMutationResponseSchema,
+  );
+}
+
+export function assignTicket(input: {
+  ticketId: string;
+  adminId: string | null;
+}): Promise<TicketMutationResponse> {
+  return post(
+    TICKET_ROUTES.assign(input.ticketId),
+    { adminId: input.adminId },
+    ticketMutationResponseSchema,
+  );
+}
+
+export function setTicketPriority(input: {
+  ticketId: string;
+  priority: TicketPriority;
+}): Promise<TicketMutationResponse> {
+  return post(
+    TICKET_ROUTES.priority(input.ticketId),
+    { priority: input.priority },
+    ticketMutationResponseSchema,
+  );
+}
+
+export function setTicketLinks(input: {
+  ticketId: string;
+  serviceId: string | null;
+  orderId: string | null;
+  paymentId: string | null;
+}): Promise<TicketMutationResponse> {
+  const { ticketId, ...body } = input;
+  return post(TICKET_ROUTES.links(ticketId), body, ticketMutationResponseSchema);
+}
+
+/**
+ * One attachment's bytes, as a Blob this tab owns — the receipts' rule: the API serves
+ * them as an octet-stream `attachment` with `nosniff`, and the page decides from the
+ * RECORD whether it may show the file as an image; a document stays a download.
+ */
+export async function fetchTicketAttachment(messageId: string): Promise<Blob> {
+  const response = await fetch(`${API_PREFIX}${TICKET_ROUTES.attachment(messageId)}`, {
+    credentials: 'same-origin',
+    headers: { accept: 'application/octet-stream' },
+  });
+  if (!response.ok) {
+    const payload: unknown = await response.json().catch(() => null);
+    throw toApiError(response.status, payload);
+  }
+  return response.blob();
+}
+
+export function fetchTicketCategories(): Promise<TicketCategoryListResponse> {
+  return authedGet(TICKET_ROUTES.categories, ticketCategoryListResponseSchema);
+}
+
+export function createTicketCategory(input: {
+  idempotencyKey: string;
+  title: string;
+  sortOrder: number;
+}): Promise<TicketCategoryResponse> {
+  return post(TICKET_ROUTES.categories, input, ticketCategoryResponseSchema);
+}
+
+/** Rename, reorder, hide or show. A category is never deleted: tickets name it. */
+export function updateTicketCategory(input: {
+  id: string;
+  title?: string;
+  sortOrder?: number;
+  isActive?: boolean;
+}): Promise<TicketCategoryResponse> {
+  const { id, ...body } = input;
+  return post(TICKET_ROUTES.category(id), body, ticketCategoryResponseSchema);
 }

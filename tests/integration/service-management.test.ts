@@ -1023,6 +1023,7 @@ describe('a customer manages the service they bought', () => {
       kind: 'RENEW' as const,
       purchasedTrafficBytes: 0n,
       purchasedDurationDays: 30,
+      purchasedDeviceCount: 0,
     };
 
     const verdict = await ctx.container.uow.run(tenantA, async (tx) =>

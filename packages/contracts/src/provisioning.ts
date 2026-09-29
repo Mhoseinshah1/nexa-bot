@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { StateMachineDefinition } from './state-machine.js';
 import type { ProviderFailureKind } from './provider.js';
+import { MAX_DEVICE_LIMIT } from './catalog.js';
 
 /**
  * Services and the operations that change them.
@@ -168,6 +169,19 @@ export const OPERATION_TYPES = [
   'SYNC_USAGE',
   'ROTATE_SUBSCRIPTION',
   'RECONCILE',
+  /*
+   * A paid raise of an existing account's device / connection limit (WP-A5), to an
+   * absolute target computed once at settlement. Executed only on a panel whose adapter
+   * declares `DEVICE_LIMIT_ADJUSTMENT` and has both device-limit methods.
+   */
+  'ADD_DEVICES',
+  /*
+   * A move of an existing account to another location its own panel serves (WP-A6), to
+   * an absolute location key chosen when the change was quoted. Executed only on a panel
+   * whose adapter declares `LOCATION_CHANGE` and has both location methods. Free or paid:
+   * a paid one names its order, a free one names none.
+   */
+  'CHANGE_LOCATION',
 ] as const;
 export type OperationType = (typeof OPERATION_TYPES)[number];
 export const operationTypeSchema = z.enum(OPERATION_TYPES);
@@ -190,6 +204,8 @@ export const OPERATION_REQUIRED_CAPABILITIES: Readonly<Record<OperationType, rea
   SYNC_USAGE: ['READ_USAGE'],
   ROTATE_SUBSCRIPTION: ['ROTATE_SUBSCRIPTION_LINK'],
   RECONCILE: [],
+  ADD_DEVICES: ['DEVICE_LIMIT_ADJUSTMENT'],
+  CHANGE_LOCATION: ['LOCATION_CHANGE'],
 };
 
 export const OPERATION_STATES = [
@@ -391,6 +407,23 @@ export function isMutatingOperation(type: OperationType): boolean {
  * — so the ambiguity is settled inside the attempt instead. Measured on a real panel for
  * RickPanel only: `docs/rickpanel-rotate-audit.md`.
  */
+/*
+ * ## `ADD_DEVICES` (WP-A5): idempotent by its target, and the adapter contract says so
+ *
+ * The same design decision as the three commercial types above, and the same evidence
+ * obligation moved to where it can be kept. The operation carries an ABSOLUTE limit,
+ * computed once at settlement; `ProviderAdapter.applyDeviceLimit` is specified as "make
+ * the limit read as this", never "add one". No adapter implements it in this release, and
+ * `DEVICE_LIMIT_ADJUSTMENT` is declared by none — so the property is a requirement on the
+ * first adapter to declare the capability, to be measured on a real panel (the same
+ * value sent twice changes nothing) in the commit that declares it, exactly as
+ * `scripts/marzban-allowance-check.sh` measured it for Marzban's allowance fields.
+ *
+ * Membership here means what it means for the three: a stranded write is not re-planned
+ * blind but verified by a READ (`drizzle-operation.repository.ts` keeps every targeted
+ * type out of the replayable set), and the verification compares the panel's limit with
+ * the stored target through `readDeviceLimit`.
+ */
 export const IDEMPOTENT_MUTATIONS = [
   'SUSPEND',
   'RESUME',
@@ -399,6 +432,16 @@ export const IDEMPOTENT_MUTATIONS = [
   'ADD_TRAFFIC',
   'ADD_TIME',
   'ROTATE_SUBSCRIPTION',
+  'ADD_DEVICES',
+  /*
+   * WP-A6, on the same terms as `ADD_DEVICES`: the operation carries an ABSOLUTE location
+   * key and `ProviderAdapter.applyLocation` is specified as "make the location read as
+   * this". No adapter implements it and none declares `LOCATION_CHANGE`, so the property
+   * is a requirement on the first one that does — the same key sent twice changes nothing
+   * — to be measured on a real panel in the commit that declares it. A stranded move is
+   * verified by `readLocation`, never re-sent blind.
+   */
+  'CHANGE_LOCATION',
 ] as const satisfies readonly OperationType[];
 
 export function isIdempotentMutation(type: OperationType): boolean {
@@ -621,6 +664,17 @@ export interface OperationTarget {
   readonly expiresAt: Date | null;
   /** The absolute TOTAL allowance, consumption included. Null: not bought here. */
   readonly trafficLimitBytes: bigint | null;
+  /**
+   * The absolute device / connection limit the account should then hold (WP-A5). Null:
+   * not bought here — every type but `ADD_DEVICES`, which carries it and nothing else.
+   */
+  readonly deviceLimit: number | null;
+  /**
+   * The adapter-defined location key the account should then sit in (WP-A6). Absent or
+   * null: not bought here — every type but `CHANGE_LOCATION`, which carries it and
+   * nothing else. Optional on the type so the targets that predate it read unchanged.
+   */
+  readonly locationKey?: string | null;
 }
 
 /**
@@ -633,6 +687,20 @@ export const TARGETED_OPERATION_TYPES = [
   'RENEW',
   'ADD_TRAFFIC',
   'ADD_TIME',
+  /*
+   * WP-A5. A commercial write like the three above, so it shares their serialisation
+   * (one open commercial action per service), their no-blind-replay rule after a crash
+   * mid-call, and their bounded verification READS — settled against `deviceLimit`
+   * through `readDeviceLimit` rather than against an allowance.
+   */
+  'ADD_DEVICES',
+  /*
+   * WP-A6. One open commercial action per service covers a location change too, and that
+   * is the rule the brief's "another change pending" and "a paid add-on or renewal
+   * racing" both need: a move and a renewal in flight together are two writes to one
+   * account nobody ordered. Verified by `readLocation` against `locationKey`.
+   */
+  'CHANGE_LOCATION',
 ] as const satisfies readonly OperationType[];
 
 export function operationTypeCarriesTarget(type: OperationType): boolean {
@@ -684,4 +752,20 @@ export function extendedExpiry(currentExpiry: Date | null, now: Date, days: numb
 export function extendedAllowance(currentLimitBytes: bigint, purchasedBytes: bigint): bigint {
   if (currentLimitBytes === 0n || purchasedBytes === 0n) return 0n;
   return currentLimitBytes + purchasedBytes;
+}
+
+/**
+ * The absolute device limit a bought quantity produces, from the limit in force (WP-A5).
+ *
+ * Strictly additive, and only from a KNOWN limit: a service with no recorded limit is
+ * either unlimited or untracked, and in neither case is there a number to add devices
+ * to — so the answer is null and the purchase is not offered. A quantity that would take
+ * the limit past `MAX_DEVICE_LIMIT` is refused rather than clamped, because a clamp would
+ * sell a customer devices and give them fewer.
+ */
+export function extendedDeviceLimit(currentLimit: number | null, quantity: number): number | null {
+  if (currentLimit === null || currentLimit <= 0) return null;
+  if (!Number.isSafeInteger(quantity) || quantity <= 0) return null;
+  const target = currentLimit + quantity;
+  return target > MAX_DEVICE_LIMIT ? null : target;
 }

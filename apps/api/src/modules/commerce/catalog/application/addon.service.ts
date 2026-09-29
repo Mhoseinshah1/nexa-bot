@@ -1,5 +1,6 @@
 import {
   COMMERCE_ERROR_CODES,
+  MAX_MONEY_AMOUNT_MINOR,
   SERVICE_ADDON_PAGE_DEFAULT,
   SERVICE_ADDON_PAGE_MAX,
   errors,
@@ -16,6 +17,7 @@ import {
   type ServiceAddonStatus,
   type TenantContext,
   type UnitOfWork,
+  serviceAddonAmountMatchesKind,
   trafficBytesAfterEdit,
 } from '@nexa/contracts';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
@@ -50,6 +52,15 @@ export interface ServiceAddonServiceDeps {
   readonly idempotency: IdempotencyStore;
   readonly scopeActivity: ScopeActivityReader;
   readonly settings: SettingsResolver;
+  /**
+   * Whether a panel / product an `ADD_DEVICES` rate is scoped to exists in THIS tenant
+   * (WP-A5). The composite foreign keys refuse another tenant's id anyway; this is what
+   * turns that refusal into a message naming the field rather than an integrity error.
+   */
+  readonly scopeTargets: {
+    panelExists(scope: TenantContext, panelId: string, tx: TransactionScope): Promise<boolean>;
+    productExists(scope: TenantContext, productId: string, tx: TransactionScope): Promise<boolean>;
+  };
   readonly clock: Clock;
   readonly ids: IdGenerator;
 }
@@ -141,6 +152,9 @@ export class ServiceAddonService {
       async (tx) => {
         await this.assertScopeActive(scope, tx);
         await this.assertPriceCurrency(scope, input.draft.price, tx);
+        this.assertAmountMatchesKind(input.draft.kind, input.draft);
+        this.assertMaximumIsPayable(input.draft.kind, input.draft);
+        await this.assertScopeTargets(scope, input.draft.kind, input.draft, tx);
 
         const created = await this.deps.repository.create(
           scope,
@@ -244,6 +258,8 @@ export class ServiceAddonService {
          * mis-wired route away.
          */
         this.assertAmountMatchesKind(before.kind, input.edit);
+        this.assertMaximumIsPayable(before.kind, input.edit);
+        await this.assertScopeTargets(scope, before.kind, input.edit, tx);
 
         const after = await this.deps.repository.update(
           scope,
@@ -408,15 +424,65 @@ export class ServiceAddonService {
   }
 
   private assertAmountMatchesKind(kind: ServiceAddonKind, edit: ServiceAddonEdit): void {
-    const ok =
-      kind === 'ADD_TRAFFIC'
-        ? edit.specification.trafficBytes !== null && edit.specification.durationDays === null
-        : edit.specification.durationDays !== null && edit.specification.trafficBytes === null;
+    /*
+     * The contract's one predicate, which knows all three kinds — an `ADD_DEVICES` rate
+     * carries a maximum and no amount, and the two packages carry an amount and no
+     * maximum (WP-A5).
+     */
+    const ok = serviceAddonAmountMatchesKind({ ...edit.specification, kind });
     if (!ok || edit.specification.kind !== kind) {
       throw errors.validation(
         COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
         'That amount is not the kind this add-on sells.',
       );
+    }
+  }
+
+  /**
+   * The largest purchase an `ADD_DEVICES` rate allows must be an amount this system can
+   * store (Codex review #2 on PR #97). The price bound alone admits any bigint, and the
+   * quote is price × count, so a rate priced near the ceiling with a maximum of two would
+   * write an order total PostgreSQL cannot hold — a 500 at the customer's tap instead of
+   * a refusal here, where the operator can change the figure.
+   */
+  private assertMaximumIsPayable(kind: ServiceAddonKind, edit: ServiceAddonEdit): void {
+    const maxQuantity = edit.specification.maxQuantity ?? null;
+    if (kind !== 'ADD_DEVICES' || edit.price === null || maxQuantity === null) return;
+    if (edit.price.amountMinor * BigInt(maxQuantity) > MAX_MONEY_AMOUNT_MINOR) {
+      throw errors.validation(
+        COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+        'That price for the maximum number of users is past the largest amount this system stores.',
+      );
+    }
+  }
+
+  /**
+   * An `ADD_DEVICES` rate may be scoped to a panel and / or a product of THIS tenant; the
+   * two packages may not be scoped at all (WP-A5). Refused with a message naming the
+   * field, before the composite foreign keys would refuse it as an integrity error.
+   */
+  private async assertScopeTargets(
+    scope: TenantContext,
+    kind: ServiceAddonKind,
+    edit: ServiceAddonEdit,
+    tx: TransactionScope,
+  ): Promise<void> {
+    const panelId = edit.panelId ?? null;
+    const productId = edit.productId ?? null;
+    if (kind !== 'ADD_DEVICES') {
+      if (panelId !== null || productId !== null) {
+        throw errors.validation(
+          COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+          'Only an extra-users add-on is scoped to a panel or a product.',
+        );
+      }
+      return;
+    }
+    if (panelId !== null && !(await this.deps.scopeTargets.panelExists(scope, panelId, tx))) {
+      throw errors.validation(COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID, 'Unknown panel.');
+    }
+    if (productId !== null && !(await this.deps.scopeTargets.productExists(scope, productId, tx))) {
+      throw errors.validation(COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID, 'Unknown product.');
     }
   }
 
@@ -518,6 +584,9 @@ function serialisableEdit(edit: ServiceAddonEdit): Record<string, unknown> {
     sortOrder: edit.sortOrder,
     trafficBytes: edit.specification.trafficBytes?.toString() ?? null,
     durationDays: edit.specification.durationDays,
+    maxQuantity: edit.specification.maxQuantity ?? null,
+    panelId: edit.panelId ?? null,
+    productId: edit.productId ?? null,
     priceAmount: edit.price === null ? null : edit.price.amountMinor.toString(),
     priceCurrency: edit.price === null ? null : edit.price.currency,
   };
@@ -536,6 +605,10 @@ function auditView(addon: ServiceAddonRecord): Record<string, unknown> {
     sortOrder: addon.sortOrder,
     trafficBytes: addon.specification.trafficBytes?.toString() ?? null,
     durationDays: addon.specification.durationDays,
+    maxQuantity: addon.specification.maxQuantity ?? null,
+    panelId: addon.panelId,
+    productId: addon.productId,
+    version: addon.version,
     priceAmount: addon.price === null ? null : addon.price.amountMinor.toString(),
     priceCurrency: addon.price === null ? null : addon.price.currency,
   };

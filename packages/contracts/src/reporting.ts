@@ -87,6 +87,8 @@ export function orderPurposeIsSale(purpose: OrderPurpose): boolean {
     case 'ADD_TRAFFIC':
     case 'ADD_TIME':
     case 'CUSTOM_SERVICE':
+    case 'ADD_DEVICES':
+    case 'CHANGE_LOCATION':
       return true;
     case 'TRIAL':
       return false;
@@ -188,7 +190,13 @@ export const REPORT_FAILED_PAYMENT_STATES = ['FAILED', 'CANCELLED', 'EXPIRED'] a
 export const REPORT_FAILED_OPERATION_STATES = ['FAILED', 'ABANDONED'] as const;
 
 /** The operation types that act on an existing service for money. */
-export const REPORT_COMMERCIAL_OPERATION_TYPES = ['RENEW', 'ADD_TRAFFIC', 'ADD_TIME'] as const;
+export const REPORT_COMMERCIAL_OPERATION_TYPES = [
+  'RENEW',
+  'ADD_TRAFFIC',
+  'ADD_TIME',
+  'ADD_DEVICES',
+  'CHANGE_LOCATION',
+] as const;
 
 // --- Bounds ---------------------------------------------------------------------
 

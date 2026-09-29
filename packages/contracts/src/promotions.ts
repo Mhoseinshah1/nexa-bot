@@ -130,6 +130,17 @@ export const DISCOUNTABLE_PURPOSES = [
   'ADD_TRAFFIC',
   'ADD_TIME',
   'CUSTOM_SERVICE',
+  /*
+   * WP-A5: extra users / devices follow the add-on commercial rules — a code, an automatic
+   * rule and cashback may name it, exactly as they may name extra traffic or time. Adding
+   * it widens nothing stored: no rule's `applies_to` names it until an operator says so.
+   */
+  'ADD_DEVICES',
+  /*
+   * WP-A6: a paid location change goes through the one pricing boundary like every other
+   * commercial action, so a rule may name it — and none does until an operator says so.
+   */
+  'CHANGE_LOCATION',
 ] as const;
 export type DiscountablePurpose = (typeof DISCOUNTABLE_PURPOSES)[number];
 export const discountablePurposeSchema = z.enum(DISCOUNTABLE_PURPOSES);
@@ -589,6 +600,13 @@ export const RESELLER_GRANTABLE_OPERATIONS = [
   'RENEW',
   'ADD_TRAFFIC',
   'ADD_TIME',
+  /*
+   * WP-A5. Grantable like the other add-ons, and deny-by-default like every operation: a
+   * reseller buys extra users only when their tier's grants name it.
+   */
+  'ADD_DEVICES',
+  // WP-A6. Deny-by-default: a reseller moves a service only when their tier grants it.
+  'CHANGE_LOCATION',
 ] as const satisfies readonly DiscountablePurpose[];
 
 /** The dimension an entitlement refusal names, for the audit row and the operator. */

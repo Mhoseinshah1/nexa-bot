@@ -11,6 +11,7 @@ import { TrialsController } from './surfaces/web/trials.controller.js';
 import { ProductsController } from './surfaces/web/products.controller.js';
 import { ProductCategoriesController } from './surfaces/web/product-categories.controller.js';
 import { ServiceAddonsController } from './surfaces/web/service-addons.controller.js';
+import { ServiceLocationsController } from './surfaces/web/service-locations.controller.js';
 import { PricingController } from './surfaces/web/pricing.controller.js';
 import { CustomServiceController } from './surfaces/web/custom-service.controller.js';
 import { ReferralsController } from './surfaces/web/referrals.controller.js';
@@ -25,6 +26,8 @@ import { BotsController } from './surfaces/web/bots.controller.js';
 import { OpsGroupController } from './surfaces/web/ops-group.controller.js';
 import { PaymentGatewaysController } from './surfaces/web/payment-gateways.controller.js';
 import { SupportFaqController } from './surfaces/web/support-faq.controller.js';
+import { ClientAppController } from './surfaces/web/client-app.controller.js';
+import { TicketsController } from './surfaces/web/tickets.controller.js';
 import { RefundsController } from './surfaces/web/refunds.controller.js';
 import { ServiceRefundRequestsController } from './surfaces/web/service-refund-requests.controller.js';
 import { ServicesController } from './surfaces/web/services.controller.js';
@@ -75,6 +78,8 @@ export class AppModule implements NestModule {
         ProductsController as never,
         ProductCategoriesController as never,
         ServiceAddonsController as never,
+        // WP-A6: the operator's service locations.
+        ServiceLocationsController as never,
         PricingController as never,
         CustomServiceController as never,
         ReferralsController as never,
@@ -89,6 +94,9 @@ export class AppModule implements NestModule {
         OpsGroupController as never,
         PaymentGatewaysController as never,
         SupportFaqController as never,
+        ClientAppController as never,
+        // WP-A7: support tickets.
+        TicketsController as never,
         RefundsController as never,
         ServiceRefundRequestsController as never,
         ServicesController as never,

@@ -1,13 +1,18 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
-import { PanelsPage, PanelDetailPage, NewPanelPage } from '../../apps/web/src/pages/panels';
+import {
+  PanelsPage,
+  PanelDetailPage,
+  NewPanelPage,
+  ProvidersPage,
+} from '../../apps/web/src/pages/panels';
 import {
   USERNAME_PREFIX_MAX_LENGTH,
   USERNAME_STRATEGIES,
   validateUsernamePolicy,
 } from '@nexa/contracts';
 import { t, type WebKey } from '../../apps/web/src/i18n/web.fa';
-import { panel, product, renderPage, stubApi } from './harness';
+import { capabilityRegistry, panel, product, renderPage, stubApi } from './harness';
 
 /** The panels list reads its archive filter from the URL, as `/system` does. */
 const LIVE_ROUTE = { path: '/panels', query: new URLSearchParams() };
@@ -291,6 +296,117 @@ describe('the panel detail', () => {
   const detail = (overrides: Record<string, unknown> = {}) => [
     { url: '/panels/', body: { panel: panel(overrides) } },
   ];
+
+  /*
+   * WP-A8: the advanced read a RickPanel-shaped panel returns — what the server derives,
+   * so the page is exercised on the real contract rather than a hand-made prop.
+   */
+  const SUPPORTED = [
+    'CREATE_SERVICE',
+    'RENEW',
+    'ADD_TRAFFIC',
+    'ADD_TIME',
+    'DISABLE_ENABLE',
+    'ROTATE_SUBSCRIPTION',
+    'SUBSCRIPTION_FILES',
+    'USAGE_READ',
+    'TERMINATE',
+  ];
+  const CUSTOMER_ROWS = [
+    'RENEW',
+    'ADD_TRAFFIC',
+    'ADD_TIME',
+    'EXTRA_DEVICES',
+    'DISABLE_ENABLE',
+    'ROTATE_SUBSCRIPTION',
+    'SUBSCRIPTION_FILES',
+    'USAGE_READ',
+  ];
+  const DIAGNOSTICS = {
+    overall: 'OK',
+    checks: [
+      'CONNECTIVITY',
+      'CREDENTIALS',
+      'AUTHENTICATION',
+      'PROVIDER_STATUS',
+      'CONFIGURATION',
+      'CONNECTION_TEST',
+      'FRESHNESS',
+      'REQUIRED_CAPABILITIES',
+    ].map((check) => ({ check, verdict: 'PASS' })),
+    failure: null,
+    httpStatus: 200,
+    providerVersion: null,
+    lastCheckedAt: '2026-09-06T08:00:00.000Z',
+    lastSuccessfulCheckAt: '2026-09-06T08:00:00.000Z',
+    stale: false,
+    requiredCapabilities: [
+      'HEALTH_CHECK',
+      'CREATE_USER',
+      'DELIVER_SUBSCRIPTION_LINK',
+      'READ_USAGE',
+    ].map((capability) => ({ capability, available: true })),
+    missingActivationFields: [],
+  };
+  const advancedBody = (overrides: Record<string, unknown> = {}) => ({
+    panelId: PANEL_ID,
+    providerType: 'rickpanel',
+    providerName: 'RickPanel',
+    status: 'ACTIVE',
+    health: 'HEALTHY',
+    registry: capabilityRegistry(SUPPORTED).map((entry) => ({
+      ...entry,
+      customer: CUSTOMER_ROWS.includes(entry.row)
+        ? entry.supported
+          ? { available: true, blocker: null }
+          : { available: false, blocker: 'UNSUPPORTED' }
+        : null,
+    })),
+    policy: {
+      policy: { delivery: { mode: 'CARD_WITH_QR' }, actions: {} },
+      readable: true,
+      revision: overrides['revision'] ?? 0,
+      updatedAt: null,
+    },
+    providerRules: {
+      trafficReset: 'NEVER',
+      protocols: 'PANEL_ASSIGNED',
+      inbounds: 'PANEL_ASSIGNED',
+      subscriptionLink: 'PANEL_ISSUED',
+      deviceLimitOnCreate: 'NOT_SENT',
+    },
+    diagnostics: DIAGNOSTICS,
+    ...Object.fromEntries(Object.entries(overrides).filter(([key]) => key !== 'revision')),
+  });
+  const advancedRoute = (overrides: Record<string, unknown> = {}) => ({
+    url: '/advanced',
+    body: advancedBody(overrides),
+  });
+  const TECHNICAL = {
+    panelId: PANEL_ID,
+    providerType: 'rickpanel',
+    descriptor: {
+      canonicalName: 'RickPanel',
+      credentialShape: 'USERNAME_PASSWORD',
+      capabilities: ['HEALTH_CHECK'],
+      requiredActivationFields: [],
+      maxRequestsPerProbe: 2,
+    },
+    registry: capabilityRegistry(SUPPORTED).map((entry) => ({ ...entry, declarations: [] })),
+    storedActivation: {},
+    storedPolicy: null,
+    policyRevision: 0,
+    health: {
+      storedState: 'HEALTHY',
+      failure: null,
+      statusCode: 200,
+      providerVersion: null,
+      checkedAt: '2026-09-06T08:00:00.000Z',
+      lastHealthyAt: '2026-09-06T08:00:00.000Z',
+      unusableStreak: 0,
+    },
+    credentialsSetAt: { username: '2026-01-01T00:00:00.000Z', password: null, apiToken: null },
+  };
 
   /**
    * The credential rule, asserted over the DOM.
@@ -620,57 +736,235 @@ describe('the panel detail', () => {
   });
 
   /**
-   * T33 — the ROW the panel actually holds, not a count of the others.
+   * T33, rewritten for WP-A8 — the ROW the panel actually holds, now in Persian.
    *
-   * "More than ten are planned" stays true if `held.has(row)` is removed or
-   * inverted: the one capability this build really implements would then read
-   * as planned too, and the count would still be above ten. The maturity of
-   * `HEALTH_CHECK` is the whole claim, so it is read off its own row.
+   * The tab used to list raw capability identifiers. It now renders the SERVER's
+   * registry row by row: a supported row must read supported off its own row, an
+   * unsupported one must say why, and no raw identifier may reach the screen. Removing
+   * the `supported` branch, or inverting it, fails the first assertions here.
    */
-  it('says the capability the panel HOLDS is available now', async () => {
-    stubApi(detail());
+  it('renders the registry in Persian, each row from what the server derived', async () => {
+    stubApi([...detail(), advancedRoute()]);
     const { container } = renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
     await screen.findByText('Frankfurt A');
     screen.getByRole('tab', { name: 'قابلیت‌ها' }).click();
-    await screen.findByText('HEALTH_CHECK');
+    // The card's title and the table's caption both carry it.
+    await screen.findAllByText(t('web.cap_registry_title'));
 
-    const rowFor = (capability: string): string => {
+    const rowFor = (label: string): string[] => {
       const row = Array.from(container.querySelectorAll('tbody tr')).find(
-        (candidate) => (candidate.querySelector('td')?.textContent ?? '').trim() === capability,
+        (candidate) => (candidate.querySelector('td')?.textContent ?? '').trim() === label,
       );
-      expect(row, `no row for ${capability}`).toBeDefined();
-      return (row?.querySelectorAll('td')[1]?.textContent ?? '').trim();
+      expect(row, `no row for ${label}`).toBeDefined();
+      return Array.from(row?.querySelectorAll('td') ?? []).map((cell) =>
+        (cell.textContent ?? '').trim(),
+      );
     };
-
-    // The fixture's `capabilities` is exactly ['HEALTH_CHECK'].
-    expect(rowFor('HEALTH_CHECK')).toBe('فعال');
+    expect(rowFor(t('web.cap_row_renew'))[1]).toBe(t('web.cap_supported'));
+    expect(rowFor(t('web.cap_row_renew'))[3]).toBe(t('web.cap_customer_available'));
+    expect(rowFor(t('web.cap_row_location_change'))[1]).toBe(t('web.cap_unsupported'));
+    expect(rowFor(t('web.cap_row_location_change'))[2]).toBe(t('web.cap_gap_not_supported'));
+    expect(rowFor(t('web.cap_row_extra_devices'))[3]).toBe(t('web.cap_blocker_unsupported'));
+    expect(rowFor(t('web.cap_row_terminate'))[3]).toBe(t('web.cap_customer_operator_only'));
+    // No internal identifier leaks into the operator's screen.
+    for (const raw of ['RENEW_USER', 'EXTRA_DEVICES', 'NOT_SUPPORTED', 'LOCATION_CHANGE']) {
+      expect(container.textContent ?? '', raw).not.toContain(raw);
+    }
   });
 
-  it('says every capability the panel does NOT hold is planned', async () => {
-    stubApi(detail());
-    const { container } = renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+  it('offers a policy control only for what the panel supports, and sends only what changed', async () => {
+    const api = stubApi([
+      ...detail(),
+      advancedRoute(),
+      {
+        url: `/${PANEL_ID}/policy`,
+        body: { advanced: advancedBody({ revision: 1 }), changed: true },
+      },
+    ]);
+    renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
     await screen.findByText('Frankfurt A');
     screen.getByRole('tab', { name: 'قابلیت‌ها' }).click();
-    await screen.findByText('HEALTH_CHECK');
+    await screen.findByText(t('web.policy_title'));
 
-    const rows = Array.from(container.querySelectorAll('tbody tr')).map((row) => {
-      const cells = row.querySelectorAll('td');
-      return {
-        capability: (cells[0]?.textContent ?? '').trim(),
-        maturity: (cells[1]?.textContent ?? '').trim(),
-      };
+    const enabledBox = (row: WebKey) =>
+      screen.queryByLabelText(`${t('web.policy_customer_enabled')} — ${t(row)}`);
+    // Supported customer actions have a control; unsupported and operator rows do not.
+    expect(enabledBox('web.cap_row_renew')).not.toBeNull();
+    expect(enabledBox('web.cap_row_extra_devices')).toBeNull();
+    expect(enabledBox('web.cap_row_terminate')).toBeNull();
+
+    fireEvent.click(enabledBox('web.cap_row_renew') as HTMLElement);
+    fireEvent.click(screen.getByRole('button', { name: t('web.save') }));
+    await waitFor(() => {
+      expect(api.calls.some((call) => call.method === 'POST')).toBe(true);
     });
+    const write = api.calls.find((call) => call.method === 'POST');
+    expect(write?.url).toContain(`/panels/${PANEL_ID}/policy`);
+    expect(write?.body).toMatchObject({
+      expectedRevision: 0,
+      policy: {
+        delivery: { mode: 'CARD_WITH_QR' },
+        actions: { RENEW: { customerEnabled: false } },
+      },
+    });
+    // Nothing the operator did not touch is sent — an untouched form is the default.
+    expect(Object.keys((write?.body as { policy: { actions: object } }).policy.actions)).toEqual([
+      'RENEW',
+    ]);
+  });
 
-    // Every row is one of the two, and the split is exactly the held set.
-    expect(rows.length).toBeGreaterThan(10);
-    for (const row of rows) {
-      expect(row.maturity, row.capability).toBe(
-        row.capability === 'HEALTH_CHECK' ? 'فعال' : 'برنامه‌ریزی‌شده',
-      );
+  it('refuses a cap that is not a whole number in the browser, and names the field', async () => {
+    const api = stubApi([...detail(), advancedRoute()]);
+    renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+    screen.getByRole('tab', { name: 'قابلیت‌ها' }).click();
+    const cap = await screen.findByLabelText(t('web.policy_max_traffic_gb'));
+    fireEvent.change(cap, { target: { value: 'ten' } });
+    fireEvent.click(screen.getByRole('button', { name: t('web.save') }));
+    expect(await screen.findByText(t('web.policy_invalid'))).toBeInTheDocument();
+    expect(screen.getByText('actions.ADD_TRAFFIC.maxTrafficGb')).toBeInTheDocument();
+    expect(api.calls.some((call) => call.method === 'POST')).toBe(false);
+  });
+
+  it('shows the policy read-only, with no save, without panels.edit', async () => {
+    stubApi([...detail(), advancedRoute()]);
+    renderPage(<PanelDetailPage id="p1" mayEdit={false} mayRotate={false} denied={false} />);
+    await screen.findByText('Frankfurt A');
+    screen.getByRole('tab', { name: 'قابلیت‌ها' }).click();
+    await screen.findByText(t('web.policy_read_only'));
+    expect(screen.queryByRole('button', { name: t('web.save') })).toBeNull();
+    expect(
+      screen.getByLabelText(`${t('web.policy_customer_enabled')} — ${t('web.cap_row_renew')}`),
+    ).toBeDisabled();
+  });
+
+  it('offers the technical view only with its own permission', async () => {
+    const api = stubApi([...detail(), advancedRoute(), { url: '/technical', body: TECHNICAL }]);
+    const { rerender } = renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+    screen.getByRole('tab', { name: 'قابلیت‌ها' }).click();
+    await screen.findByText(t('web.policy_title'));
+    expect(screen.queryByRole('button', { name: t('web.tech_show') })).toBeNull();
+    expect(api.calls.some((call) => call.url.includes('/technical'))).toBe(false);
+
+    rerender(<PanelDetailPage id="p1" mayEdit mayRotate mayViewTechnical denied={false} />);
+    fireEvent.click(await screen.findByRole('button', { name: t('web.tech_show') }));
+    expect(await screen.findByText(/"storedActivation"/)).toBeInTheDocument();
+    expect(api.calls.some((call) => call.url.includes('/technical'))).toBe(true);
+  });
+
+  /*
+   * Codex #1 on PR #102: a save must not drop a restriction stored for an action the
+   * adapter no longer supports. The form has no control for it, so it sends the stored
+   * entry back exactly as stored.
+   */
+  it('keeps a stored restriction for an action the panel no longer supports', async () => {
+    const orphan = { customerEnabled: false, maxDeviceLimit: null };
+    const stored = advancedBody();
+    const api = stubApi([
+      ...detail(),
+      {
+        url: '/advanced',
+        body: {
+          ...stored,
+          policy: {
+            ...stored.policy,
+            policy: { delivery: { mode: 'CARD_WITH_QR' }, actions: { EXTRA_DEVICES: orphan } },
+            revision: 3,
+          },
+        },
+      },
+      {
+        url: `/${PANEL_ID}/policy`,
+        body: { advanced: advancedBody({ revision: 4 }), changed: true },
+      },
+    ]);
+    renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+    screen.getByRole('tab', { name: 'قابلیت‌ها' }).click();
+    const renew = await screen.findByLabelText(
+      `${t('web.policy_customer_enabled')} — ${t('web.cap_row_renew')}`,
+    );
+    fireEvent.click(renew);
+    fireEvent.click(screen.getByRole('button', { name: t('web.save') }));
+    await waitFor(() => {
+      expect(api.calls.some((call) => call.method === 'POST')).toBe(true);
+    });
+    expect(api.calls.find((call) => call.method === 'POST')?.body).toMatchObject({
+      expectedRevision: 3,
+      policy: { actions: { EXTRA_DEVICES: orphan, RENEW: { customerEnabled: false } } },
+    });
+  });
+
+  /* Codex #1 on PR #102: an open technical view is re-read after a policy save. */
+  it('re-reads an open technical view after a policy save', async () => {
+    const api = stubApi([
+      ...detail(),
+      advancedRoute(),
+      { url: '/technical', body: TECHNICAL },
+      {
+        url: `/${PANEL_ID}/policy`,
+        body: { advanced: advancedBody({ revision: 1 }), changed: true },
+      },
+    ]);
+    renderPage(<PanelDetailPage id="p1" mayEdit mayRotate mayViewTechnical denied={false} />);
+    await screen.findByText('Frankfurt A');
+    screen.getByRole('tab', { name: 'قابلیت‌ها' }).click();
+    fireEvent.click(await screen.findByRole('button', { name: t('web.tech_show') }));
+    await screen.findByText(/"storedActivation"/);
+    const technicalReads = () => api.calls.filter((call) => call.url.includes('/technical')).length;
+    expect(technicalReads()).toBe(1);
+
+    fireEvent.click(
+      screen.getByLabelText(`${t('web.policy_customer_enabled')} — ${t('web.cap_row_renew')}`),
+    );
+    fireEvent.click(screen.getByRole('button', { name: t('web.save') }));
+    await waitFor(() => {
+      expect(technicalReads()).toBe(2);
+    });
+  });
+
+  /* Codex #1 on PR #102: the diagnostics poll on the panel read's own cadence. */
+  it('refreshes the diagnostics on the panel health cadence', async () => {
+    const api = stubApi([...detail(), advancedRoute()]);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+      await screen.findByText('Frankfurt A');
+      screen.getByRole('tab', { name: 'سلامت' }).click();
+      await screen.findByText(t('web.diag_overall_ok'));
+      const advancedReads = () => api.calls.filter((call) => call.url.includes('/advanced')).length;
+      const before = advancedReads();
+      await vi.advanceTimersByTimeAsync(95_000);
+      await waitFor(() => {
+        expect(advancedReads()).toBeGreaterThan(before);
+      });
+    } finally {
+      vi.useRealTimers();
     }
-    // Both labels really are present, so neither branch is vacuous.
-    expect(rows.filter((row) => row.maturity === 'فعال')).toHaveLength(1);
-    expect(rows.filter((row) => row.maturity === 'برنامه‌ریزی‌شده').length).toBeGreaterThan(10);
+  });
+
+  it('reads the diagnostics in Persian, with the remedy for the failure', async () => {
+    stubApi([
+      ...detail(),
+      advancedRoute({
+        diagnostics: {
+          ...DIAGNOSTICS,
+          overall: 'ERROR',
+          failure: 'AUTHENTICATION_FAILED',
+          checks: DIAGNOSTICS.checks.map((check) =>
+            check.check === 'AUTHENTICATION' ? { ...check, verdict: 'FAIL' } : check,
+          ),
+        },
+      }),
+    ]);
+    renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+    screen.getByRole('tab', { name: 'سلامت' }).click();
+    expect(await screen.findByText(t('web.diag_overall_error'))).toBeInTheDocument();
+    expect(screen.getByText(t('web.diag_failure_authentication_failed'))).toBeInTheDocument();
+    expect(screen.getByText(t('web.diag_check_authentication'))).toBeInTheDocument();
+    expect(screen.getByText(t('web.diag_verdict_fail'))).toBeInTheDocument();
   });
 
   it('states that health is latest-state-only rather than drawing a trend it does not have', async () => {
@@ -990,6 +1284,7 @@ describe('the panel detail', () => {
     expiresAt: '2026-12-01T00:00:00.000Z',
     trafficLimitBytes: '53687091200',
     trafficUsedBytes: '1073741824',
+    deviceLimit: null,
     usageSyncedAt: '2026-09-15T08:00:00.000Z',
     deliveryState: 'DELIVERED',
     deliveredAt: '2026-09-10T12:35:00.000Z',
@@ -2593,6 +2888,7 @@ describe('the new-panel form', () => {
         credentialShape: 'USERNAME_PASSWORD',
         capabilities: ['HEALTH_CHECK'],
         requiredActivationFields: [],
+        capabilityRegistry: capabilityRegistry(),
       },
       {
         key: 'sanaei',
@@ -2600,6 +2896,7 @@ describe('the new-panel form', () => {
         credentialShape: 'TOKEN_OR_USERNAME_PASSWORD',
         capabilities: ['HEALTH_CHECK'],
         requiredActivationFields: ['subscriptionDomain'],
+        capabilityRegistry: capabilityRegistry(),
       },
     ],
   };
@@ -2917,5 +3214,42 @@ describe('panel activation editing', () => {
     expect(screen.getByLabelText(t('web.panel_subscription_domain'))).toBeTruthy();
     expect(screen.getByLabelText(t('web.panel_inbound_id'))).toBeTruthy();
     expect(screen.queryByLabelText('vless')).toBeNull();
+  });
+});
+
+/**
+ * WP-A8: the provider catalogue in Persian. It printed the credential-shape enum, the
+ * raw provider key and every capability identifier; an operator now reads what each
+ * adapter can DO, from the registry the server derived.
+ */
+describe('the provider catalogue', () => {
+  it('names the credential shape and the supported actions in Persian, and no identifier', async () => {
+    stubApi([
+      {
+        url: '/providers',
+        body: {
+          providers: [
+            {
+              key: 'marzban',
+              canonicalName: 'Marzban',
+              credentialShape: 'USERNAME_PASSWORD',
+              capabilities: ['HEALTH_CHECK', 'CREATE_USER', 'RENEW_USER'],
+              requiredActivationFields: ['proxyProtocols', 'inboundTags'],
+              capabilityRegistry: capabilityRegistry(['CREATE_SERVICE', 'RENEW']),
+            },
+          ],
+        },
+      },
+    ]);
+    const { container } = renderPage(<ProvidersPage />);
+    expect(
+      await screen.findByText(t('web.credential_shape_username_password')),
+    ).toBeInTheDocument();
+    expect(screen.getByText(t('web.cap_row_renew'))).toBeInTheDocument();
+    expect(screen.queryByText(t('web.cap_row_terminate'))).toBeNull();
+    expect(container.textContent ?? '').toContain(t('web.panel_inbound_tags'));
+    for (const raw of ['USERNAME_PASSWORD', 'RENEW_USER', 'inboundTags', 'marzban']) {
+      expect(container.textContent ?? '', raw).not.toContain(raw);
+    }
   });
 });

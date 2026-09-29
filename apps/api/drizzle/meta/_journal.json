@@ -922,8 +922,43 @@
     {
       "idx": 131,
       "version": "7",
-      "when": 1790629149050,
-      "tag": "0131_wpa4_ops_log_group",
+      "when": 1790629106174,
+      "tag": "0131_wp_a10_client_apps",
+      "breakpoints": true
+    },
+    {
+      "idx": 132,
+      "version": "7",
+      "when": 1790646309603,
+      "tag": "0132_wpa5_extra_devices",
+      "breakpoints": true
+    },
+    {
+      "idx": 133,
+      "version": "7",
+      "when": 1790646633548,
+      "tag": "0133_wpa6_location_change",
+      "breakpoints": true
+    },
+    {
+      "idx": 134,
+      "version": "7",
+      "when": 1790647118749,
+      "tag": "0134_wpa8_panel_policies",
+      "breakpoints": true
+    },
+    {
+      "idx": 135,
+      "version": "7",
+      "when": 1790648033739,
+      "tag": "0135_wp_a7_support_tickets",
+      "breakpoints": true
+    },
+    {
+      "idx": 136,
+      "version": "7",
+      "when": 1790649013800,
+      "tag": "0136_wpa4_ops_log_group",
       "breakpoints": true
     }
   ]

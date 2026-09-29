@@ -37,6 +37,8 @@ export * from './metrics.js';
 export * from './state-machine.js';
 export * from './provider.js';
 export * from './panels.js';
+/** WP-A8: the capability registry, the per-panel policy and panel diagnostics. */
+export * from './panel-advanced.js';
 export * from './pricing.js';
 /**
  * Phase 4 vocabularies.
@@ -64,13 +66,18 @@ export * from './messaging-reliability.js';
 export * from './channel-membership.js';
 export * from './service-refund-requests.js';
 export * from './service-transfer.js';
+// WP-A7: the support ticket system.
+export * from './tickets.js';
 export * from './payment-receipts.js';
 export * from './provisioning.js';
 export * from './service-reminders.js';
 export * from './service-username.js';
 export * from './promotions.js';
 export * from './customer-ux.js';
+export * from './client-apps.js';
 export * from './custom-service.js';
+// WP-A6: moving an existing service between locations of its own panel.
+export * from './service-location.js';
 export * from './templates.js';
 export * from './settings.js';
 export * from './features.js';

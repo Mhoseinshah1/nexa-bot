@@ -232,6 +232,10 @@ export class DrizzleCustomerRepository implements CustomerRepository {
       const needle = search.usernamePrefix.toLowerCase().replace(/[\\%_]/g, '\\$&');
       conditions.push(sql`lower(${customers.username}) like ${`${needle}%`}`);
     }
+    if (search.username !== undefined) {
+      // Exact, on the same `lower(username)` expression the index is built over.
+      conditions.push(sql`lower(${customers.username}) = ${search.username.toLowerCase()}`);
+    }
     if (search.status !== undefined) {
       conditions.push(eq(customers.status, search.status));
     }

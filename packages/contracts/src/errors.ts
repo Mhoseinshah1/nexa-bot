@@ -446,6 +446,14 @@ export const CONTROL_ERROR_CODES = {
    * one that cannot succeed.
    */
   NOTIFICATION_RECORD_ORPHANED: 'control.notification_record_orphaned',
+
+  // --- WP-A10: client apps and connection guides ------------------------------------
+  /** No client app entry with this id in this tenant. Another tenant's is answered the same way. */
+  CLIENT_APP_NOT_FOUND: 'control.client_app_not_found',
+  /** The entry moved since the client read it. Carries the current version. */
+  CLIENT_APP_VERSION_CONFLICT: 'control.client_app_version_conflict',
+  /** The tenant already holds `CLIENT_APP_MAX_ENTRIES`. */
+  CLIENT_APP_LIMIT: 'control.client_app_limit',
 } as const;
 
 /**
@@ -529,6 +537,19 @@ export const PANEL_ERROR_CODES = {
    * the operator is asked to run the test again against what the panel is now.
    */
   PANEL_CONFIGURATION_CHANGED: 'panel.configuration_changed',
+  /**
+   * A panel policy names a customer action this panel's adapter cannot perform (WP-A8).
+   *
+   * Refused rather than stored: a policy may only restrict, and a setting over an action
+   * that does not exist is a control that changes nothing — the write-only-setting defect
+   * in a new place. The details name the actions.
+   */
+  PANEL_POLICY_CAPABILITY_UNSUPPORTED: 'panel.policy_capability_unsupported',
+  /**
+   * The policy changed since the operator read it (WP-A8). Their save would have replaced
+   * a colleague's decision they never saw; they are asked to reload it instead.
+   */
+  PANEL_POLICY_STALE: 'panel.policy_stale',
   /**
    * A username policy that leaves a customer no way to name their service.
    *
@@ -1358,6 +1379,27 @@ export const COMMERCE_ERROR_CODES = {
    * every reason. Nothing was written.
    */
   SERVICE_NOT_TRANSFERABLE: 'commerce.service_not_transferable',
+
+  // --- WP-A6: service location change ------------------------------------------------
+  /**
+   * The chosen target is the location the service is already in. Nothing was written, and
+   * nothing is charged for a move that would change nothing.
+   */
+  LOCATION_CHANGE_SAME_LOCATION: 'commerce.location_change_same_location',
+  /** The configured cooldown since this service's last change has not elapsed. */
+  LOCATION_CHANGE_COOLDOWN: 'commerce.location_change_cooldown',
+  /** This service already had the configured number of changes in the rolling period. */
+  LOCATION_CHANGE_LIMIT_REACHED: 'commerce.location_change_limit_reached',
+  /** No configured location with this id in this tenant. Another tenant's is answered the same way. */
+  SERVICE_LOCATION_NOT_FOUND: 'commerce.service_location_not_found',
+  /**
+   * The location cannot be written as asked: its panel or product is not this tenant's, its
+   * product is not on its panel, it would be a second initial location for the panel, it
+   * duplicates a key, its price is in a currency this installation does not sell in, the
+   * panel or the tenant already holds the most locations it may, or a change request still
+   * names it and it cannot be deleted. The `reason` detail says which.
+   */
+  SERVICE_LOCATION_INVALID: 'commerce.service_location_invalid',
 } as const;
 
 /*
@@ -1410,3 +1452,36 @@ export const BOT_ERROR_CODES = {
 } as const;
 
 export type CommerceErrorCode = (typeof COMMERCE_ERROR_CODES)[keyof typeof COMMERCE_ERROR_CODES];
+
+/**
+ * WP-A7 — support tickets (`docs/wp-a7-tickets-audit.md`). One remedy each; a ticket of
+ * another tenant, another customer's ticket and a ticket that does not exist are all
+ * `TICKET_NOT_FOUND`, so the answer is not an oracle for which ids exist.
+ */
+export const TICKET_ERROR_CODES = {
+  TICKET_NOT_FOUND: 'ticket.not_found',
+  /** A message to a CLOSED ticket. Support reopens it; a customer opens a new one. */
+  TICKET_CLOSED: 'ticket.closed',
+  /** The status change has no edge from where the ticket stands (`TICKET_MACHINE`). */
+  TICKET_TRANSITION_INVALID: 'ticket.transition_invalid',
+  /** The text is empty with nothing attached, or longer than `TICKET_MESSAGE_MAX_LENGTH`. */
+  TICKET_MESSAGE_INVALID: 'ticket.message_invalid',
+  /** The file is refused; the `refusal` detail is a `TICKET_ATTACHMENT_REFUSALS` member. */
+  TICKET_ATTACHMENT_REFUSED: 'ticket.attachment_refused',
+  /** The customer already has `TICKET_OPEN_MAX_PER_CUSTOMER` open tickets. */
+  TICKET_OPEN_LIMIT: 'ticket.open_limit',
+  /** The ticket already holds `TICKET_MESSAGES_MAX_PER_TICKET` messages. */
+  TICKET_MESSAGE_LIMIT: 'ticket.message_limit',
+  /** No ACTIVE category with that id in this tenant. */
+  TICKET_CATEGORY_NOT_FOUND: 'ticket.category_not_found',
+  /** The title is empty, longer than its bound, or already used by another category. */
+  TICKET_CATEGORY_INVALID: 'ticket.category_invalid',
+  /** The tenant already has `TICKET_CATEGORY_MAX` categories. */
+  TICKET_CATEGORY_LIMIT: 'ticket.category_limit',
+  /** The assignee is not an ACTIVE administrator of this tenant who may read tickets. */
+  TICKET_ASSIGNEE_INVALID: 'ticket.assignee_invalid',
+  /** A linked service, order or payment is not the ticket's customer's own. */
+  TICKET_LINK_INVALID: 'ticket.link_invalid',
+  /** The message has no attachment, or its file can no longer be fetched from Telegram. */
+  TICKET_ATTACHMENT_UNAVAILABLE: 'ticket.attachment_unavailable',
+} as const;

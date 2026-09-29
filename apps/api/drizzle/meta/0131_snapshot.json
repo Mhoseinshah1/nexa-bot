@@ -1,5 +1,5 @@
 {
-  "id": "6900f960-f0f8-403e-8194-cc91bfb5ca54",
+  "id": "122827e6-9ca7-48b0-b71e-582aef471961",
   "prevId": "4303c237-7f36-45b2-a198-823331d4ccea",
   "version": "7",
   "dialect": "postgresql",
@@ -2099,6 +2099,253 @@
         "cashback_rules_window_check": {
           "name": "cashback_rules_window_check",
           "value": "starts_at IS NULL OR ends_at IS NULL OR starts_at < ends_at"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.client_apps": {
+      "name": "client_apps",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "platform": {
+          "name": "platform",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "icon": {
+          "name": "icon",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "description": {
+          "name": "description",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "official_url": {
+          "name": "official_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "alternative_url": {
+          "name": "alternative_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "help_url": {
+          "name": "help_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "guide": {
+          "name": "guide",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "delivery_kinds": {
+          "name": "delivery_kinds",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::text[]"
+        },
+        "protocols": {
+          "name": "protocols",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::text[]"
+        },
+        "provider_types": {
+          "name": "provider_types",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::text[]"
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'ENABLED'"
+        },
+        "sort_order": {
+          "name": "sort_order",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "version": {
+          "name": "version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "client_apps_tenant_platform_idx": {
+          "name": "client_apps_tenant_platform_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "platform",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "sort_order",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "client_apps_tenant_id_tenants_id_fk": {
+          "name": "client_apps_tenant_id_tenants_id_fk",
+          "tableFrom": "client_apps",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "client_apps_tenant_id_key": {
+          "name": "client_apps_tenant_id_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "client_apps_platform_check": {
+          "name": "client_apps_platform_check",
+          "value": "platform IN ('ANDROID', 'IOS', 'WINDOWS', 'MACOS', 'LINUX', 'OTHER')"
+        },
+        "client_apps_status_check": {
+          "name": "client_apps_status_check",
+          "value": "status IN ('ENABLED', 'DISABLED')"
+        },
+        "client_apps_name_check": {
+          "name": "client_apps_name_check",
+          "value": "length(btrim(name)) BETWEEN 1 AND 64"
+        },
+        "client_apps_icon_check": {
+          "name": "client_apps_icon_check",
+          "value": "icon IS NULL OR length(btrim(icon)) BETWEEN 1 AND 16"
+        },
+        "client_apps_description_check": {
+          "name": "client_apps_description_check",
+          "value": "length(btrim(description)) BETWEEN 1 AND 300"
+        },
+        "client_apps_guide_check": {
+          "name": "client_apps_guide_check",
+          "value": "length(btrim(guide)) BETWEEN 1 AND 2500"
+        },
+        "client_apps_urls_check": {
+          "name": "client_apps_urls_check",
+          "value": "official_url LIKE 'https://%' AND length(official_url) <= 2048\n          AND (alternative_url IS NULL OR (alternative_url LIKE 'https://%' AND length(alternative_url) <= 2048))\n          AND (help_url IS NULL OR (help_url LIKE 'https://%' AND length(help_url) <= 2048))"
+        },
+        "client_apps_delivery_kinds_check": {
+          "name": "client_apps_delivery_kinds_check",
+          "value": "delivery_kinds <@ ARRAY['SUBSCRIPTION_LINK', 'CONNECTION_FILES']::text[]"
+        },
+        "client_apps_protocols_check": {
+          "name": "client_apps_protocols_check",
+          "value": "protocols <@ ARRAY['vless', 'vmess', 'trojan', 'shadowsocks']::text[]"
+        },
+        "client_apps_provider_types_check": {
+          "name": "client_apps_provider_types_check",
+          "value": "provider_types <@ ARRAY['marzban', 'rickpanel', 'sanaei']::text[]"
+        },
+        "client_apps_sort_order_check": {
+          "name": "client_apps_sort_order_check",
+          "value": "sort_order BETWEEN 0 AND 100000"
+        },
+        "client_apps_version_check": {
+          "name": "client_apps_version_check",
+          "value": "version >= 1"
         }
       },
       "isRLSEnabled": false
@@ -5018,553 +5265,6 @@
         "operational_events_resolution_check": {
           "name": "operational_events_resolution_check",
           "value": "resolved_by_event_id IS NULL OR resolved_at IS NOT NULL"
-        }
-      },
-      "isRLSEnabled": false
-    },
-    "public.ops_log_connect_codes": {
-      "name": "ops_log_connect_codes",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "tenant_id": {
-          "name": "tenant_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "bot_instance_id": {
-          "name": "bot_instance_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "code_hash": {
-          "name": "code_hash",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "issued_by_admin_id": {
-          "name": "issued_by_admin_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "issued_at": {
-          "name": "issued_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "expires_at": {
-          "name": "expires_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "consumed_at": {
-          "name": "consumed_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "consumed_chat_id": {
-          "name": "consumed_chat_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        }
-      },
-      "indexes": {
-        "ops_log_connect_codes_hash_key": {
-          "name": "ops_log_connect_codes_hash_key",
-          "columns": [
-            {
-              "expression": "code_hash",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "ops_log_connect_codes_tenant_issued_idx": {
-          "name": "ops_log_connect_codes_tenant_issued_idx",
-          "columns": [
-            {
-              "expression": "tenant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "issued_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "ops_log_connect_codes_tenant_id_tenants_id_fk": {
-          "name": "ops_log_connect_codes_tenant_id_tenants_id_fk",
-          "tableFrom": "ops_log_connect_codes",
-          "tableTo": "tenants",
-          "columnsFrom": [
-            "tenant_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "ops_log_connect_codes_bot_instance_id_bot_instances_id_fk": {
-          "name": "ops_log_connect_codes_bot_instance_id_bot_instances_id_fk",
-          "tableFrom": "ops_log_connect_codes",
-          "tableTo": "bot_instances",
-          "columnsFrom": [
-            "bot_instance_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "ops_log_connect_codes_admin_fk": {
-          "name": "ops_log_connect_codes_admin_fk",
-          "tableFrom": "ops_log_connect_codes",
-          "tableTo": "admins",
-          "columnsFrom": [
-            "tenant_id",
-            "issued_by_admin_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "ops_log_connect_codes_expiry_check": {
-          "name": "ops_log_connect_codes_expiry_check",
-          "value": "expires_at > issued_at"
-        },
-        "ops_log_connect_codes_consumed_check": {
-          "name": "ops_log_connect_codes_consumed_check",
-          "value": "(consumed_at IS NULL) = (consumed_chat_id IS NULL)"
-        }
-      },
-      "isRLSEnabled": false
-    },
-    "public.ops_log_groups": {
-      "name": "ops_log_groups",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "tenant_id": {
-          "name": "tenant_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "bot_instance_id": {
-          "name": "bot_instance_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "chat_id": {
-          "name": "chat_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "title": {
-          "name": "title",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "status": {
-          "name": "status",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "health": {
-          "name": "health",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'UNVERIFIED'"
-        },
-        "problems": {
-          "name": "problems",
-          "type": "text[]",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'{}'::text[]"
-        },
-        "bot_member_status": {
-          "name": "bot_member_status",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "checked_at": {
-          "name": "checked_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "last_delivered_at": {
-          "name": "last_delivered_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "connected_by_admin_id": {
-          "name": "connected_by_admin_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "connected_at": {
-          "name": "connected_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "disconnected_at": {
-          "name": "disconnected_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "ops_log_groups_tenant_key": {
-          "name": "ops_log_groups_tenant_key",
-          "columns": [
-            {
-              "expression": "tenant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "ops_log_groups_check_idx": {
-          "name": "ops_log_groups_check_idx",
-          "columns": [
-            {
-              "expression": "health",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "checked_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "where": "status = 'CONNECTED'",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "ops_log_groups_tenant_id_tenants_id_fk": {
-          "name": "ops_log_groups_tenant_id_tenants_id_fk",
-          "tableFrom": "ops_log_groups",
-          "tableTo": "tenants",
-          "columnsFrom": [
-            "tenant_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "ops_log_groups_bot_instance_id_bot_instances_id_fk": {
-          "name": "ops_log_groups_bot_instance_id_bot_instances_id_fk",
-          "tableFrom": "ops_log_groups",
-          "tableTo": "bot_instances",
-          "columnsFrom": [
-            "bot_instance_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "ops_log_groups_admin_fk": {
-          "name": "ops_log_groups_admin_fk",
-          "tableFrom": "ops_log_groups",
-          "tableTo": "admins",
-          "columnsFrom": [
-            "tenant_id",
-            "connected_by_admin_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "ops_log_groups_tenant_id_key": {
-          "name": "ops_log_groups_tenant_id_key",
-          "nullsNotDistinct": false,
-          "columns": [
-            "tenant_id",
-            "id"
-          ]
-        }
-      },
-      "policies": {},
-      "checkConstraints": {
-        "ops_log_groups_status_check": {
-          "name": "ops_log_groups_status_check",
-          "value": "status IN ('CONNECTED', 'DISCONNECTED')"
-        },
-        "ops_log_groups_health_check": {
-          "name": "ops_log_groups_health_check",
-          "value": "health IN ('UNVERIFIED', 'HEALTHY', 'PROBLEM')"
-        },
-        "ops_log_groups_problems_check": {
-          "name": "ops_log_groups_problems_check",
-          "value": "problems <@ ARRAY['NOT_FORUM', 'BOT_NOT_ADMIN', 'CANNOT_SEND', 'CANNOT_MANAGE_TOPICS', 'BOT_REMOVED', 'CHAT_UNREACHABLE', 'BOT_INACTIVE', 'TOPIC_CREATE_FAILED']::text[]"
-        },
-        "ops_log_groups_chat_check": {
-          "name": "ops_log_groups_chat_check",
-          "value": "chat_id ~ '^-?[0-9]{1,32}$'"
-        },
-        "ops_log_groups_disconnected_check": {
-          "name": "ops_log_groups_disconnected_check",
-          "value": "(status = 'DISCONNECTED') = (disconnected_at IS NOT NULL)"
-        }
-      },
-      "isRLSEnabled": false
-    },
-    "public.ops_log_topics": {
-      "name": "ops_log_topics",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "tenant_id": {
-          "name": "tenant_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "group_id": {
-          "name": "group_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "chat_id": {
-          "name": "chat_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "category": {
-          "name": "category",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "state": {
-          "name": "state",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'PENDING'"
-        },
-        "message_thread_id": {
-          "name": "message_thread_id",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "creation_claim_token": {
-          "name": "creation_claim_token",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "creation_claimed_until": {
-          "name": "creation_claimed_until",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "recreated_count": {
-          "name": "recreated_count",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "last_delivered_at": {
-          "name": "last_delivered_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "ops_log_topics_chat_category_key": {
-          "name": "ops_log_topics_chat_category_key",
-          "columns": [
-            {
-              "expression": "tenant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "chat_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "category",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "ops_log_topics_tenant_id_tenants_id_fk": {
-          "name": "ops_log_topics_tenant_id_tenants_id_fk",
-          "tableFrom": "ops_log_topics",
-          "tableTo": "tenants",
-          "columnsFrom": [
-            "tenant_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "ops_log_topics_group_fk": {
-          "name": "ops_log_topics_group_fk",
-          "tableFrom": "ops_log_topics",
-          "tableTo": "ops_log_groups",
-          "columnsFrom": [
-            "tenant_id",
-            "group_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "ops_log_topics_state_check": {
-          "name": "ops_log_topics_state_check",
-          "value": "state IN ('PENDING', 'READY', 'MISSING')"
-        },
-        "ops_log_topics_category_check": {
-          "name": "ops_log_topics_category_check",
-          "value": "category ~ '^[A-Z][A-Z0-9_]{0,31}$'"
-        },
-        "ops_log_topics_ready_check": {
-          "name": "ops_log_topics_ready_check",
-          "value": "state <> 'READY' OR message_thread_id IS NOT NULL"
-        },
-        "ops_log_topics_recreated_check": {
-          "name": "ops_log_topics_recreated_check",
-          "value": "recreated_count >= 0"
         }
       },
       "isRLSEnabled": false
