@@ -361,6 +361,8 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
    */
   'bot.admin.review_final':
     '{outcome}\n\nنوع عملیات: {operation}\nنام محصول: {order}\nحجم محصول: {trafficBytes}\nمدت محصول: {durationDays}\nنام کاربری سرویس: {serviceUsername}\n\nنام اکانت کاربر: {name}\nشناسه عددی کاربر: {customer}\nیوزرنیم تلگرام: {username}\n\nمبلغ پرداختی: {total}\nکد پیگیری پرداخت: {reference}\nمبلغ واریز شده به کیف پول: {creditedAmount}\nموجودی کیف پول پیش از واریز: {walletBefore}\nموجودی کیف پول پس از واریز: {walletAfter}',
+  'bot.admin.review_final_short':
+    '{outcome}\nکد پیگیری پرداخت: {reference}\n\nسابقهٔ کامل این تصمیم در پاسخ به همین پیام آمده است.',
   'bot.admin.review_repeat_approved': 'این پرداخت قبلاً تأیید شده است.',
   'bot.admin.review_repeat_rejected': 'این پرداخت قبلاً رد شده است.',
   'bot.admin.review_repeat_credited': 'مبلغ این پرداخت قبلاً به کیف پول واریز شده است.',
