@@ -8572,12 +8572,19 @@ export const TEMPLATES = [
   {
     key: 'bot.referral.invite_card',
     description:
-      'The forwardable invite: an introduction for a FRIEND and the customer’s personal ' +
+      'The forwardable invite: the program’s introduction and the customer’s personal ' +
       'link. Sent as the referral banner’s caption when there is a banner and it fits, ' +
       'else as text. Never carries a figure about the customer, because it is the ' +
-      'message they forward.',
+      'message they forward; the commission percent is the program’s term, not theirs.',
     format: 'PLAIN_TEXT',
     placeholders: [
+      {
+        token: 'commissionPercent',
+        type: 'NUMBER',
+        description: 'The purchase commission, whole percent — a term of the program.',
+        required: false,
+        repeatable: true,
+      },
       {
         token: 'referralLink',
         type: 'STRING',
