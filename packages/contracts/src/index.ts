@@ -70,6 +70,7 @@ export * from './service-reminders.js';
 export * from './service-username.js';
 export * from './promotions.js';
 export * from './customer-ux.js';
+export * from './client-apps.js';
 export * from './custom-service.js';
 // WP-A6: moving an existing service between locations of its own panel.
 export * from './service-location.js';

@@ -133,6 +133,8 @@ export async function resetDatabase(db: Database): Promise<void> {
        -- Customer UX completion. Named before the tables they reference.
        customer_text_captures, referral_signup_gifts, support_faqs, support_faq_seeds,
        tenant_media_assets,
+       -- WP-A10: client apps, before the tenants they belong to.
+       client_apps,
        wallet_entries, discount_redemptions, referrals, trial_grants, trial_resets,
        trial_limit_overrides, resellers,
        -- WP11A, before the payments they reference.

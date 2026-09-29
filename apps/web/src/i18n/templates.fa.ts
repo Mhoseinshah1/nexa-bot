@@ -91,6 +91,7 @@ export const TEMPLATE_GROUPS_FA: readonly TemplateGroupDefinition[] = [
       'bot.tutorial.',
     ],
   },
+  { id: 'apps', label: 'دانلود برنامه و آموزش اتصال', prefixes: ['bot.apps.'] },
   {
     id: 'reminders',
     label: 'یادآور انقضا و مصرف',
@@ -217,6 +218,7 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   adminId: 'شناسهٔ مدیر تصمیم‌گیرنده',
   amount: 'مبلغ',
   answer: 'پاسخ',
+  app: 'نام برنامه (با نماد، اگر تعیین شده باشد)',
   at: 'زمان',
   automatic: 'نشانهٔ روشن بودن انتخاب خودکار',
   availableAt: 'زمان مجاز بعدی',
@@ -237,7 +239,7 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   cooldownHours: 'فاصلهٔ مجاز (ساعت)',
   correlationId: 'شناسهٔ پیگیری',
   current: 'مقدار فعلی',
-  currentLimit: 'سقف فعلی تعداد کاربر / دستگاه',
+  currentLimit: 'تعداد کاربر / دستگاه مجاز فعلی',
   currentLocation: 'لوکیشن فعلی سرویس',
   custom: 'نشانهٔ روشن بودن انتخاب دلخواه',
   customBlock: 'بخش سرویس دلخواه',
@@ -246,8 +248,9 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   customerGroup: 'گروه کاربری',
   days: 'روزهای باقی‌مانده',
   delivery: 'وضعیت تحویل لینک',
+  description: 'توضیح کوتاه برنامه',
   destination: 'اطلاعات حساب مقصد',
-  devicesBlock: 'بخش افزایش تعداد کاربر / دستگاه',
+  devicesBlock: 'بخش افزایش کاربر / دستگاه',
   discount: 'مبلغ تخفیف',
   discountLine: 'خط تخفیف',
   displayName: 'نام نمایشی',
@@ -269,6 +272,7 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   fromLocation: 'لوکیشن مبدأ',
   gift: 'مبلغ هدیه',
   giftBlock: 'بخش هدیهٔ عضویت',
+  guide: 'متن آموزش اتصال برنامه',
   health: 'وضعیت سلامت',
   history: 'تعداد عملیات ثبت‌شده',
   id: 'شناسه',
@@ -364,7 +368,7 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   subscriptionUrl: 'لینک اشتراک',
   subtotal: 'قیمت پیش از تخفیف',
   syncedAt: 'زمان آخرین همگام‌سازی',
-  targetLimit: 'سقف تازهٔ تعداد کاربر / دستگاه',
+  targetLimit: 'تعداد مجاز پس از افزایش',
   telegram: 'اتصال تلگرام',
   telegramId: 'شناسهٔ عددی تلگرام',
   telegramIdRandom: 'نشانهٔ انتخاب شناسهٔ تلگرام + تصادفی',
@@ -377,7 +381,7 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   totalTrafficBytes: 'کل حجم',
   trafficBytes: 'حجم',
   trafficLimit: 'سقف حجم',
-  unitPrice: 'قیمت واحد',
+  unitPrice: 'قیمت هر واحد',
   usage: 'وضعیت یادآور مصرف',
   usagePercent: 'درصد مصرف',
   usedTraffic: 'حجم مصرف‌شده',
@@ -436,6 +440,12 @@ export const PLACEHOLDER_LABEL_OVERRIDES_FA: Partial<
   'bot.order.preinvoice_locations': { lines: 'فهرست لوکیشن‌ها' },
   'bot.order.preinvoice_features': { lines: 'فهرست ویژگی‌ها' },
   'bot.service.addon_option': { title: 'نام بسته' },
+  'bot.service.devices_choice': {
+    remaining: 'تعداد کاربر قابل افزودن',
+    unitPrice: 'قیمت هر کاربر اضافه',
+  },
+  'bot.service.devices_option': { quantity: 'تعداد کاربر', price: 'قیمت این تعداد' },
+  'bot.order.preinvoice_devices': { unitPrice: 'قیمت هر کاربر اضافه' },
   'bot.service.renew_option_button': { title: 'نام محصول' },
   'bot.service.list': { total: 'تعداد کل سرویس‌ها' },
   'bot.service.list_item_button': { username: 'نام کاربری سرویس' },
@@ -444,21 +454,8 @@ export const PLACEHOLDER_LABEL_OVERRIDES_FA: Partial<
   'bot.wallet.topup_method_button': { name: 'نام روش پرداخت' },
   'bot.wallet.topup_method_gift_button': { name: 'نام روش پرداخت', percent: 'درصد هدیهٔ شارژ' },
   'bot.referral.gift_block': { total: 'مجموع هدیه' },
-  'bot.service.devices_choice': {
-    remaining: 'تعداد قابل خرید باقی‌مانده',
-    unitPrice: 'قیمت هر کاربر / دستگاه',
-  },
-  'bot.service.devices_option': {
-    quantity: 'تعداد کاربر / دستگاه این دکمه',
-    price: 'قیمت این تعداد',
-  },
   'bot.service.location_option': { location: 'لوکیشن مقصد', price: 'قیمت انتقال' },
   'bot.service.location_option_free': { location: 'لوکیشن مقصد' },
-  'bot.order.preinvoice_devices': {
-    quantity: 'تعداد کاربر / دستگاه خریداری‌شده',
-    unitPrice: 'قیمت هر کاربر / دستگاه',
-    currentLimit: 'سقف پیش از خرید',
-  },
 };
 
 /**
@@ -517,6 +514,14 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'bot.menu.help': [
     'دکمهٔ پشتیبانی در منوی اصلی',
     'دکمهٔ منوی اصلی که بخش پشتیبانی و راهنما را باز می‌کند؛ همان کار دستور /help.',
+  ],
+  'bot.command.apps': [
+    'توضیح دستور /apps در فهرست دستورها',
+    'متن کوتاه کنار دستور /apps (دانلود برنامه و آموزش اتصال) در فهرست دستورهای تلگرام.',
+  ],
+  'bot.menu.apps': [
+    'دکمهٔ دانلود برنامه در منوی اصلی',
+    'دکمهٔ منوی اصلی که انتخاب سیستم‌عامل و برنامه‌های پیشنهادی را باز می‌کند؛ همان کار دستور /apps.',
   ],
   'bot.menu.main_button': [
     'دکمهٔ بازگشت به منوی اصلی',
@@ -674,6 +679,10 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
     'پیش‌فاکتور خرید',
     'پیش‌فاکتوری که مشتری از روی آن پرداخت می‌کند: نام کاربری، محصول، مدت، حجم، مبلغ و موجودی کیف پول.',
   ],
+  'bot.order.preinvoice_devices': [
+    'بخش افزایش کاربر / دستگاه در پیش‌فاکتور',
+    'تعداد خریده‌شده، قیمت هر کاربر و تعداد مجاز پیش و پس از افزایش؛ فقط برای خرید کاربر اضافه.',
+  ],
   'bot.order.preinvoice_custom': [
     'بخش سرویس دلخواه در پیش‌فاکتور',
     'لوکیشن، حجم و مدتی که مشتری وارد کرده، با قیمت واحد و قیمت هر کدام؛ فقط برای سرویس دلخواه.',
@@ -693,10 +702,6 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'bot.order.preinvoice_cashback_line': [
     'خط کش‌بک در پیش‌فاکتور',
     'کش‌بکی که پس از تحویل سرویس واریز می‌شود؛ فقط وقتی کش‌بک وعده داده شده است.',
-  ],
-  'bot.order.preinvoice_devices': [
-    'بخش افزایش کاربر / دستگاه در پیش‌فاکتور',
-    'تعداد خریداری‌شده، قیمت هر واحد و سقف پیش و پس از خرید؛ از روی سفارش خوانده می‌شود، نه تنظیمات امروز.',
   ],
   'bot.order.preinvoice_location_change': [
     'بخش تغییر لوکیشن در پیش‌فاکتور',
@@ -1375,6 +1380,18 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
     'دکمهٔ خرید زمان اضافه',
     'بسته‌های زمان اضافهٔ قابل خرید را نشان می‌دهد.',
   ],
+  'bot.service.add_devices_button': [
+    'دکمهٔ افزایش کاربر / دستگاه',
+    'پیشنهاد خرید کاربر یا دستگاه اضافه را باز می‌کند؛ فقط وقتی پنل سرویس این قابلیت را دارد و تعرفه‌ای فعال است نمایش داده می‌شود.',
+  ],
+  'bot.service.devices_choice': [
+    'انتخاب تعداد کاربر / دستگاه اضافه',
+    'تعداد مجاز فعلی، قیمت هر کاربر و تعدادی که هنوز قابل خرید است؛ تعدادها روی دکمه‌های زیر آن هستند.',
+  ],
+  'bot.service.devices_option': [
+    'دکمهٔ هر تعداد کاربر اضافه',
+    'یک تعداد و قیمت آن، پیش از هر تخفیف؛ مبلغ نهایی در پیش‌فاکتور می‌آید.',
+  ],
   'bot.service.addon_choice': [
     'عنوان انتخاب بستهٔ افزودنی',
     'عنوان بالای بسته‌های حجم یا زمان اضافه؛ مقدار و قیمت روی دکمه‌ها است.',
@@ -1451,26 +1468,69 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'bot.tutorial.windows_button': ['دکمهٔ آموزش ویندوز', 'دکمهٔ انتخاب راهنمای ویندوز.'],
   'bot.tutorial.macos_button': ['دکمهٔ آموزش مک', 'دکمهٔ انتخاب راهنمای مک.'],
   'bot.tutorial.linux_button': ['دکمهٔ آموزش لینوکس', 'دکمهٔ انتخاب راهنمای لینوکس.'],
+  'bot.tutorial.other_button': [
+    'دکمهٔ «سایر»',
+    'دکمهٔ انتخاب برنامه‌های بخش «سایر»؛ فقط وقتی نشان داده می‌شود که برنامهٔ فعالی در این بخش ثبت شده باشد.',
+  ],
   'bot.tutorial.android': [
     'آموزش اتصال در اندروید',
-    'راهنمای اتصال در اندروید؛ آن را با نام برنامه‌ها و لینک‌های خودتان بازنویسی کنید.',
+    'راهنمای کلی اتصال در اندروید؛ وقتی نشان داده می‌شود که برای این سیستم‌عامل هیچ برنامهٔ فعالی در بخش «برنامه‌ها و آموزش اتصال» ثبت نشده است.',
   ],
   'bot.tutorial.ios': [
     'آموزش اتصال در آیفون',
-    'راهنمای اتصال در آیفون (iOS)؛ آن را با نام برنامه‌ها و لینک‌های خودتان بازنویسی کنید.',
+    'راهنمای کلی اتصال در آیفون (iOS)؛ وقتی نشان داده می‌شود که برای این سیستم‌عامل هیچ برنامهٔ فعالی در بخش «برنامه‌ها و آموزش اتصال» ثبت نشده است.',
   ],
   'bot.tutorial.windows': [
     'آموزش اتصال در ویندوز',
-    'راهنمای اتصال در ویندوز؛ آن را با نام برنامه‌ها و لینک‌های خودتان بازنویسی کنید.',
+    'راهنمای کلی اتصال در ویندوز؛ وقتی نشان داده می‌شود که برای این سیستم‌عامل هیچ برنامهٔ فعالی در بخش «برنامه‌ها و آموزش اتصال» ثبت نشده است.',
   ],
   'bot.tutorial.macos': [
     'آموزش اتصال در مک',
-    'راهنمای اتصال در مک؛ آن را با نام برنامه‌ها و لینک‌های خودتان بازنویسی کنید.',
+    'راهنمای کلی اتصال در مک؛ وقتی نشان داده می‌شود که برای این سیستم‌عامل هیچ برنامهٔ فعالی در بخش «برنامه‌ها و آموزش اتصال» ثبت نشده است.',
   ],
   'bot.tutorial.linux': [
     'آموزش اتصال در لینوکس',
-    'راهنمای اتصال در لینوکس؛ آن را با نام برنامه‌ها و لینک‌های خودتان بازنویسی کنید.',
+    'راهنمای کلی اتصال در لینوکس؛ وقتی نشان داده می‌شود که برای این سیستم‌عامل هیچ برنامهٔ فعالی در بخش «برنامه‌ها و آموزش اتصال» ثبت نشده است.',
   ],
+
+  // --- App downloads and connection guides ------------------------------------------
+  'bot.apps.platform': [
+    'فهرست برنامه‌های یک سیستم‌عامل',
+    'بالای دکمه‌های برنامه‌های پیشنهادی یک سیستم‌عامل می‌آید؛ برنامه‌ها خودشان دکمه‌های زیر آن‌اند.',
+  ],
+  'bot.apps.platform_empty': [
+    'بخش بدون برنامه',
+    'وقتی مشتری «سایر» را باز می‌کند و هیچ برنامهٔ فعالی برای او در آن نمانده است.',
+  ],
+  'bot.apps.detail': [
+    'صفحهٔ یک برنامه',
+    'نام، توضیح و آموزش اتصال یک برنامه؛ دکمه‌های دانلود زیر آن می‌آیند.',
+  ],
+  'bot.apps.detail_files': [
+    'صفحهٔ برنامه با فایل‌های اتصال',
+    'همان صفحهٔ برنامه، برای برنامه‌ای که فایل اتصال هم می‌پذیرد و مشتری‌ای که سرویسش فایل دارد؛ جای دریافت فایل‌ها را هم می‌گوید.',
+  ],
+  'bot.apps.download_button': [
+    'دکمهٔ دانلود رسمی',
+    'دکمه‌ای که لینک دانلود رسمی برنامه را باز می‌کند.',
+  ],
+  'bot.apps.alternative_button': [
+    'دکمهٔ فروشگاه یا لینک جایگزین',
+    'دکمه‌ای که لینک فروشگاه یا لینک جایگزین برنامه را باز می‌کند؛ فقط وقتی چنین لینکی ثبت شده باشد.',
+  ],
+  'bot.apps.help_button': [
+    'دکمهٔ ویدیو و راهنما',
+    'دکمه‌ای که لینک ویدیو یا راهنمای بیشتر برنامه را باز می‌کند؛ فقط وقتی چنین لینکی ثبت شده باشد.',
+  ],
+  'bot.apps.back_button': [
+    'دکمهٔ بازگشت به فهرست برنامه‌ها',
+    'از صفحهٔ یک برنامه به فهرست برنامه‌های همان سیستم‌عامل برمی‌گرداند.',
+  ],
+  'bot.apps.platforms_button': [
+    'دکمهٔ انتخاب سیستم‌عامل دیگر',
+    'به صفحهٔ انتخاب سیستم‌عامل برمی‌گرداند.',
+  ],
+  'bot.apps.not_found': ['برنامهٔ ناموجود', 'پاسخ به دکمهٔ برنامه‌ای که حذف یا غیرفعال شده است.'],
 
   // --- Expiry and usage reminders ---------------------------------------------------
   'bot.service.expiry_first': [
@@ -1542,20 +1602,6 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'bot.service.transfer_unavailable': [
     'انتقال این سرویس ممکن نیست',
     'یک پیام برای همهٔ دلایل: وضعیت سرویس، لینک تحویل‌نشده، پرداخت یا درخواست در جریان، یا سرویس آزمایشی.',
-  ],
-
-  // --- Extra users / devices ----------------------------------------------------------
-  'bot.service.add_devices_button': [
-    'دکمهٔ افزایش کاربر / دستگاه',
-    'پیشنهاد خرید کاربر / دستگاه اضافه را باز می‌کند؛ فقط وقتی سرویس فعال است، پنل آن را پشتیبانی می‌کند و افزودنی قیمت‌دار با ظرفیت باقی‌مانده وجود دارد.',
-  ],
-  'bot.service.devices_choice': [
-    'انتخاب تعداد کاربر / دستگاه اضافه',
-    'سقف فعلی، قیمت هر واحد و تعدادی که هنوز می‌شود خرید؛ تعدادها روی دکمه‌های زیر آن است.',
-  ],
-  'bot.service.devices_option': [
-    'دکمهٔ یک تعداد کاربر / دستگاه',
-    'تعداد و قیمت فهرست آن تعداد؛ مبلغ نهایی پس از تخفیف در پیش‌فاکتور گفته می‌شود.',
   ],
 
   // --- Service location change --------------------------------------------------------
@@ -1806,7 +1852,7 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   ],
   'bot.admin.operation_add_devices': [
     'برچسب عملیات: افزایش کاربر / دستگاه',
-    'نوع عملیات در کارت رسید برای خرید کاربر / دستگاه اضافه روی سرویس موجود.',
+    'نوع عملیات در کارت رسید برای خرید کاربر یا دستگاه اضافه.',
   ],
   'bot.admin.operation_change_location': [
     'برچسب عملیات: تغییر لوکیشن',

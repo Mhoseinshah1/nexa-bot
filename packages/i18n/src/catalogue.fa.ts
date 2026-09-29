@@ -168,7 +168,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   // One list in `BOT_COMMANDS` feeds both, so a command cannot be registered and
   // undocumented, or documented and unregistered.
   'bot.help':
-    'دستورهای این ربات:\n/catalog — دیدن و خرید سرویس‌ها\n/services — سرویس‌های من و مدیریت آن‌ها\n/wallet — موجودی کیف پول\n/paysupport — پشتیبانی پرداخت\n/help — همین راهنما',
+    'دستورهای این ربات:\n/catalog — دیدن و خرید سرویس‌ها\n/services — سرویس‌های من و مدیریت آن‌ها\n/wallet — موجودی کیف پول\n/apps — دانلود برنامه و آموزش اتصال\n/paysupport — پشتیبانی پرداخت\n/help — همین راهنما',
   'bot.command.start': 'شروع',
   'bot.command.catalog': 'خرید سرویس',
   'bot.command.services': 'سرویس‌های من',
@@ -941,6 +941,25 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     '💻 اتصال در مک\n\n1. یک برنامهٔ سازگار با v2ray را نصب کنید.\n2. لینک اشتراک خود را کپی کنید و در برنامه آن را به‌عنوان اشتراک اضافه کنید.\n3. اشتراک را به‌روزرسانی کنید و یکی از سرورها را انتخاب و متصل شوید.\n\nاگر با مشکلی روبه‌رو شدید، از بخش «پشتیبانی» کمک بگیرید.',
   'bot.tutorial.linux':
     '🐧 اتصال در لینوکس\n\n1. یک کلاینت سازگار با v2ray را نصب کنید.\n2. لینک اشتراک خود را کپی کنید و در برنامه آن را به‌عنوان اشتراک اضافه کنید.\n3. اشتراک را به‌روزرسانی کنید و یکی از سرورها را انتخاب و متصل شوید.\n\nاگر با مشکلی روبه‌رو شدید، از بخش «پشتیبانی» کمک بگیرید.',
+  // WP-A10: app downloads and connection guides. No app, store or link is named: the
+  // entries are the operator's, and the defaults below say only what is true of all.
+  'bot.command.apps': 'دانلود برنامه و آموزش اتصال',
+  'bot.menu.apps': '📱 دانلود برنامه و آموزش اتصال',
+  'bot.tutorial.other_button': '🧩 سایر',
+  'bot.apps.platform':
+    '📲 برنامه‌های پیشنهادی برای این سیستم عامل:\n\nبرای دیدن لینک دانلود و آموزش اتصال، یکی از برنامه‌های زیر را انتخاب کنید.',
+  'bot.apps.platform_empty':
+    'برای این بخش فعلاً برنامه‌ای معرفی نشده است. سیستم عامل دیگری را انتخاب کنید یا از بخش «پشتیبانی» کمک بگیرید.',
+  'bot.apps.detail': '{app}\n\n{description}\n\n📖 آموزش اتصال:\n{guide}',
+  'bot.apps.detail_files':
+    '{app}\n\n{description}\n\n📖 آموزش اتصال:\n{guide}\n\n📁 این برنامه فایل‌های اتصال را هم می‌پذیرد. فایل‌ها را با دکمهٔ «📁 دریافت فایل‌های اتصال» در صفحهٔ سرویس خود دریافت کنید.',
+  'bot.apps.download_button': '⬇️ دانلود از سایت رسمی',
+  'bot.apps.alternative_button': '🏪 دانلود از فروشگاه یا لینک جایگزین',
+  'bot.apps.help_button': '🎬 ویدیو و راهنمای بیشتر',
+  'bot.apps.back_button': '🔙 بازگشت به فهرست برنامه‌ها',
+  'bot.apps.platforms_button': '🔙 انتخاب سیستم عامل دیگر',
+  'bot.apps.not_found':
+    'این برنامه دیگر در فهرست نیست. از فهرست برنامه‌ها یکی دیگر را انتخاب کنید.',
   'bot.menu.main_button': '🏠 بازگشت به منوی اصلی',
   'bot.faq.heading': '💡 سوالات متداول ⁉️',
   'bot.faq.item': '{number} {question}\n\n✅ {answer}',
