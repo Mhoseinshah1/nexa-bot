@@ -5155,7 +5155,9 @@ export const TEMPLATES = [
     key: 'bot.service.file_caption',
     description:
       "The caption on one connection file: the panel's own ready-made caption, cleaned and " +
-      "bounded. PLAIN_TEXT, so a panel's text is never parsed as markup.",
+      "bounded. PLAIN_TEXT, so a panel's text is never parsed as markup. No longer sent " +
+      'since R3: `bot.service.connection_file_caption` replaced it. Kept declared so a ' +
+      'stored override and a rollback to a release that still sends it stay valid.',
     format: 'PLAIN_TEXT',
     placeholders: [
       {
@@ -5166,6 +5168,69 @@ export const TEMPLATES = [
         repeatable: false,
       },
     ],
+  },
+  /*
+   * R3 (v0.3.5 real-test fixes, items 7–9): the connection file's own caption, the
+   * rotation's success message, and the refresh's failure toast.
+   */
+  {
+    key: 'bot.service.connection_file_caption',
+    description:
+      'The caption on each connection file: the service username and nothing else. ' +
+      "Replaces the panel's own caption, which carried Limit, Expires and raw markup a " +
+      'customer cannot use. PLAIN_TEXT.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'serviceUsername',
+        type: 'STRING',
+        description: 'The service’s username on the panel.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.link_rotated',
+    description:
+      'Sent when a customer’s link change has been applied on the SAME service: says the ' +
+      'link changed, that the previous link is no longer usable (the owner’s decision, R3 ' +
+      'item 9), and carries the new link. Never says a service was created. Followed by ' +
+      'the new connection files where the panel provides them. TELEGRAM_HTML so the link ' +
+      'is in <code> and copies on tap.',
+    format: 'TELEGRAM_HTML',
+    placeholders: [
+      {
+        token: 'serviceUsername',
+        type: 'STRING',
+        description: 'The service’s username on the panel.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'subscriptionUrl',
+        type: 'STRING',
+        description: 'The NEW subscription URL, read back from the panel after the change.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.back_to_card_button',
+    description:
+      'The button under the link-change question (and its refusals) that puts the service ' +
+      'card back in the same message.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.refresh_failed',
+    description:
+      'The short answer on the refresh button when the panel could not be read. Shown as ' +
+      'the button’s own notice; the service card is left exactly as it was.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
   },
   {
     key: 'bot.service.files_partial',

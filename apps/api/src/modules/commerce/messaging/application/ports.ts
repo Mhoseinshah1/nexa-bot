@@ -293,7 +293,25 @@ export interface CustomerSendResult {
  * and Telegram's answer to that is the same 400 as to a long one — so it is refused
  * whole, and the caller decides what to send instead.
  */
-export type CustomerSendRefusal = 'CAPTION_OVER_BOUND';
+export type CustomerSendRefusal = 'CAPTION_OVER_BOUND' | 'NOT_EDITABLE';
+
+/**
+ * R3: one message a customer already has, rewritten in place — the service card after a
+ * refresh, a disable or an enable.
+ *
+ * `messageId` is Telegram's id for the message in `chatId`, read from the callback that
+ * tapped it or stored with the request that will change it. The text is a template key
+ * and values, never text, for the reason `CustomerMessage` gives; `buttons` REPLACES the
+ * message's keyboard (an empty list removes it).
+ */
+export interface CustomerEditMessage {
+  readonly chatId: string;
+  readonly messageId: number;
+  readonly botInstanceId: BotInstanceId;
+  readonly templateKey: TemplateKey;
+  readonly values: TemplateValues;
+  readonly buttons: readonly CustomerButton[];
+}
 
 export interface CustomerMessenger {
   /**
@@ -333,8 +351,32 @@ export interface CustomerMessenger {
    */
   acknowledge(
     scope: TenantContext,
-    input: { readonly callbackQueryId: string; readonly botInstanceId: BotInstanceId },
+    input: {
+      readonly callbackQueryId: string;
+      readonly botInstanceId: BotInstanceId;
+      /**
+       * R3: a short notice Telegram shows over the chat, as a template key — the refresh
+       * button's failure, where the card must stay exactly as it was and a new message
+       * would be the "intermediate" message the owner asked to remove.
+       */
+      readonly toast?: { readonly templateKey: TemplateKey; readonly values: TemplateValues };
+    },
   ): Promise<void>;
+
+  /**
+   * R3: rewrites a message the customer already has (`editMessageText`). Never throws for
+   * a send failure, like `send`.
+   *
+   * `DELIVERED` also when Telegram answers that the message already says exactly this —
+   * a re-edit with the same content is the state asked for. `REFUSED` with
+   * `NOT_EDITABLE` is every definite refusal (deleted, too old, not a text message, over
+   * the bound): the caller's one fallback is to SEND the same content once as a new
+   * message. `UNKNOWN` and `RATE_LIMITED` keep their meaning from `send`.
+   *
+   * Optional, so a stand-in written before R3 still satisfies the port; a caller that
+   * finds it absent sends instead.
+   */
+  edit?(scope: TenantContext, message: CustomerEditMessage): Promise<CustomerSendResult>;
 }
 
 /**

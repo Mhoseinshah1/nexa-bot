@@ -106,6 +106,12 @@ export interface FakeMarzban {
    * name and says what it stands for.
    */
   forget(username: string): void;
+  /**
+   * R3: holds every answer to `GET /api/user/{name}` until the returned function is
+   * called — the request is received and counted at once, only its answer waits. Lets a
+   * test put a second customer tap in the window while a first read is in flight.
+   */
+  holdUserReads(): () => void;
   /** The subscription body a client would receive, as the real panel builds it. */
   subscriptionFor(username: string): string;
   reset(): void;
@@ -131,6 +137,7 @@ export async function startFakeMarzban(options: FakeMarzbanOptions = {}): Promis
   const panelInbounds = options.inbounds ?? DEFAULT_INBOUNDS;
   const users = new Map<string, FakeMarzbanUser>();
   const requests: FakeMarzbanRequest[] = [];
+  let readGate: Promise<void> | null = null;
   let behaviour: MarzbanBehaviour = options.behaviour ?? 'healthy';
   /** Every token this panel has minted. Real ones only; nothing else is accepted. */
   const tokens = new Set<string>();
@@ -147,6 +154,28 @@ export async function startFakeMarzban(options: FakeMarzbanOptions = {}): Promis
         if (typeof value === 'string') headers[key] = value;
       }
       requests.push({ method: request.method ?? 'GET', path: rawUrl, headers, body });
+      const gate = readGate;
+      if (
+        gate !== null &&
+        request.method === 'GET' &&
+        (rawUrl.split('?')[0] ?? '').startsWith('/api/user/')
+      ) {
+        // Deferred, not dropped: the answer is written exactly as it would have been.
+        const writeHead = response.writeHead.bind(response);
+        const end = response.end.bind(response);
+        let head: unknown[] = [];
+        response.writeHead = ((...args: unknown[]) => {
+          head = args;
+          return response;
+        }) as never;
+        response.end = ((...args: unknown[]) => {
+          void gate.then(() => {
+            (writeHead as (...a: unknown[]) => unknown)(...head);
+            (end as (...a: unknown[]) => unknown)(...args);
+          });
+          return response;
+        }) as never;
+      }
 
       const json = (status: number, value: unknown): void => {
         response.writeHead(status, { 'content-type': 'application/json' });
@@ -390,6 +419,16 @@ export async function startFakeMarzban(options: FakeMarzbanOptions = {}): Promis
     },
     forget(name) {
       users.delete(name);
+    },
+    holdUserReads() {
+      let open: () => void = () => undefined;
+      readGate = new Promise<void>((resolve) => {
+        open = resolve;
+      });
+      return () => {
+        readGate = null;
+        open();
+      };
     },
     subscriptionFor(name) {
       const user = users.get(name);

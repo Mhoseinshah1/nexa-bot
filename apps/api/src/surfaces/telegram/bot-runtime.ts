@@ -95,6 +95,7 @@ import { ADMIN_CAPTURE_REASON_MAX_LENGTH } from '@nexa/contracts';
 import type {
   CustomerButton,
   CustomerSendOutcome,
+  CustomerSendResult,
   CustomerMessenger,
   MainMenuVariant,
 } from '../../modules/commerce/messaging/application/ports.js';
@@ -134,6 +135,8 @@ import {
 import type { CustomerCaptureService } from '../../modules/commerce/customers/application/customer-capture.service.js';
 import type { CustomerCaptureRecord } from '../../modules/commerce/customers/application/customer-capture-ports.js';
 import type { SubscriptionFileService } from '../../modules/commerce/provisioning/application/subscription-file.service.js';
+import type { ServiceRefreshService } from '../../modules/commerce/provisioning/application/service-refresh.service.js';
+import type { CardMessageRef } from '../../modules/commerce/provisioning/application/operation-card.js';
 import type { ServiceTransferService } from '../../modules/commerce/provisioning/application/service-transfer.service.js';
 import type { CustomerCountersReader } from '../../modules/commerce/customers/application/customer-counters-ports.js';
 import type {
@@ -321,6 +324,8 @@ export const BOT_INTENTS = [
   'TOPUP_CLOSE',
   'SERVICES_SEARCH',
   'SERVICE_REFRESH',
+  /* R3: the service card again, drawn IN PLACE of the message tapped (the link-change ask's back). */
+  'SERVICE_CARD',
   'SERVICE_NOTE',
   'SERVICE_RENEW_QUOTE',
   'REFERRAL_GIFT',
@@ -1030,6 +1035,8 @@ export const SERVICES_SEARCH_CALLBACK_DATA = 'ss:';
 export const SERVICE_REFRESH_CALLBACK_PREFIX = 'rs:';
 /** `sf:<service id>` — the panel's connection files for that service (Package E). */
 export const SERVICE_FILES_CALLBACK_PREFIX = 'sf:';
+/** `sv:<service id>` — R3: the service card, edited into the message the tap came from. */
+export const SERVICE_CARD_CALLBACK_PREFIX = 'sv:';
 export const SERVICE_NOTE_CALLBACK_PREFIX = 'nt:';
 export const SERVICE_RENEW_QUOTE_CALLBACK_PREFIX = 'nr:';
 export const REFERRAL_GIFT_CALLBACK_DATA = 'rg:';
@@ -2493,6 +2500,9 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
     if (data.startsWith(SERVICE_NOTE_CALLBACK_PREFIX)) {
       return callbackCommand('SERVICE_NOTE', data.slice(SERVICE_NOTE_CALLBACK_PREFIX.length), id);
     }
+    if (data.startsWith(SERVICE_CARD_CALLBACK_PREFIX)) {
+      return callbackCommand('SERVICE_CARD', data.slice(SERVICE_CARD_CALLBACK_PREFIX.length), id);
+    }
     if (data.startsWith(SERVICE_RENEW_QUOTE_CALLBACK_PREFIX)) {
       return callbackCommand(
         'SERVICE_RENEW_QUOTE',
@@ -3594,6 +3604,12 @@ export interface BotRuntimeDeps {
    */
   readonly subscriptionFiles?: Pick<SubscriptionFileService, 'offered' | 'send'>;
   /**
+   * R3 item 7 — «♻️ بروزرسانی اطلاعات» as one bounded panel read that redraws the SAME
+   * card. Optional for the fixtures that build a runtime without it: then the tap queues
+   * the `SYNC_USAGE` operation it always did.
+   */
+  readonly serviceRefresh?: Pick<ServiceRefreshService, 'refresh'>;
+  /**
    * WP-A10 — the tenant's client apps, read for this customer's services. Optional for the
    * fixtures that build a runtime without it: then the guide is the five
    * `bot.tutorial.<platform>` texts it was before, and a stale `ca:` answers not-found.
@@ -4163,6 +4179,22 @@ export interface PendingReply {
    * is decorative and its failure costs the customer nothing but the picture.
    */
   readonly lead?: readonly LeadMessage[];
+  /**
+   * R3: EDIT the message the tapped button is on into this reply, rather than sending a
+   * new one — the service card redrawn after a refresh, the link-change question put in
+   * the card's place and the card put back after it.
+   *
+   * Only a callback carries a message to edit; any other turn sends as usual. When
+   * Telegram cannot edit it (deleted, too old, a photo with no text) the SAME reply is
+   * sent once as a new message — the smallest fallback, and the only one.
+   */
+  readonly edit?: boolean;
+  /**
+   * R3: a short notice on the tapped button (`answerCallbackQuery` text), from a template.
+   * Used with `key: null` where the answer must leave the card exactly as it is — a
+   * refresh that could not read the panel, a switch that is not available.
+   */
+  readonly toast?: { readonly key: TemplateKey; readonly values: TemplateValues };
 }
 
 export type LeadMessage =
@@ -4990,7 +5022,7 @@ export class BotRuntime {
      * SAME order, because the idempotency key is the update's.
      */
     if (reply.key === null || chatId === null) {
-      await this.stopSpinner(scope, command, input.botInstanceId);
+      await this.stopSpinner(scope, command, input.botInstanceId, reply.toast);
       return {
         intent,
         arrival,
@@ -5056,17 +5088,27 @@ export class BotRuntime {
         };
       }
     }
+    /*
+     * R3: a reply that edits the tapped message in place. The card-shaped replies only:
+     * no lead and no media, which an `editMessageText` could not carry.
+     */
+    const editTarget =
+      reply.edit === true && reply.media === undefined && (reply.lead ?? []).length === 0
+        ? cardMessageOf(input.update, input.botInstanceId)
+        : null;
     let sent =
-      reply.media === undefined
-        ? await asText()
-        : await this.deps.messenger.sendFile(scope, {
-            chatId,
-            botInstanceId: reply.media.botInstanceId,
-            kind: reply.media.kind,
-            source: { kind: 'FILE_ID', fileId: reply.media.fileId },
-            caption: { templateKey: reply.key, values: reply.values },
-            ...(reply.buttons.length === 0 ? {} : { buttons: reply.buttons }),
-          });
+      editTarget !== null
+        ? await this.editOrSend(scope, editTarget, reply, asText)
+        : reply.media === undefined
+          ? await asText()
+          : await this.deps.messenger.sendFile(scope, {
+              chatId,
+              botInstanceId: reply.media.botInstanceId,
+              kind: reply.media.kind,
+              source: { kind: 'FILE_ID', fileId: reply.media.fileId },
+              caption: { templateKey: reply.key, values: reply.values },
+              ...(reply.buttons.length === 0 ? {} : { buttons: reply.buttons }),
+            });
     if (reply.media !== undefined && sent.outcome === 'REFUSED') sent = await asText();
     for (const attachment of reply.attachments ?? []) {
       await this.deps.messenger.sendFile(scope, {
@@ -5137,7 +5179,7 @@ export class BotRuntime {
     // After the real answer, not before it. The spinner is cosmetic and its failure is
     // silent; putting it first would let a slow acknowledgement delay the message the
     // customer is actually waiting for.
-    await this.stopSpinner(scope, command, input.botInstanceId);
+    await this.stopSpinner(scope, command, input.botInstanceId, reply.toast);
 
     return {
       intent,
@@ -9234,6 +9276,12 @@ export class BotRuntime {
     if (command.intent === 'SERVICE_REFRESH' && command.targetId !== null) {
       return this.serviceRefresh(scope, actor, customer, command.targetId, input.idempotencyKey);
     }
+    if (command.intent === 'SERVICE_CARD' && command.targetId !== null) {
+      return {
+        ...(await this.serviceDetail(scope, actor, customer, command.targetId)),
+        edit: true,
+      };
+    }
     if (command.intent === 'SERVICE_NOTE' && command.targetId !== null) {
       return this.serviceNoteBegin(
         scope,
@@ -9457,6 +9505,7 @@ export class BotRuntime {
         command.targetId,
         'SUSPEND',
         input.idempotencyKey,
+        cardMessageOf(input.update, input.botInstanceId),
       );
     }
     if (command.intent === 'SERVICE_RESUME' && command.targetId !== null) {
@@ -9467,6 +9516,7 @@ export class BotRuntime {
         command.targetId,
         'RESUME',
         input.idempotencyKey,
+        cardMessageOf(input.update, input.botInstanceId),
       );
     }
     /*
@@ -9618,6 +9668,27 @@ export class BotRuntime {
   }
 
   /**
+   * R3 item 10: the customer's own service card, exactly as `serviceDetail` draws it, for
+   * the provisioner to edit into the card a disable or enable was asked from. Null when
+   * the service is not theirs to see any more (the same answer the tap would get), so
+   * nothing is drawn for somebody else's service.
+   */
+  async serviceCardFor(
+    scope: TenantContext,
+    actor: ActorContext,
+    customerId: UserId,
+    serviceId: string,
+  ): Promise<{
+    readonly key: TemplateKey;
+    readonly values: TemplateValues;
+    readonly buttons: readonly CustomerButton[];
+  } | null> {
+    const reply = await this.serviceDetail(scope, actor, { id: customerId }, serviceId);
+    if (reply.key === null || reply.key === 'bot.service.not_found') return null;
+    return { key: reply.key, values: reply.values, buttons: reply.buttons };
+  }
+
+  /**
    * One service, as its owner sees it.
    *
    * `getForCustomer` asks for the service by id AND owner in one query, so an id that is
@@ -9634,7 +9705,7 @@ export class BotRuntime {
   private async serviceDetail(
     scope: TenantContext,
     actor: ActorContext,
-    customer: CustomerRecord,
+    customer: Pick<CustomerRecord, 'id'>,
     serviceId: string,
   ): Promise<PendingReply> {
     const service = await this.ownedService(scope, customer, serviceId);
@@ -10269,15 +10340,19 @@ export class BotRuntime {
     serviceId: string,
     type: CustomerServiceOperation,
     idempotencyKey: string,
+    card: CardMessageRef | null,
   ): Promise<PendingReply> {
     try {
       await this.deps.services.requestFromCustomer(scope, actor, customer.id, serviceId, type, {
         idempotencyKey,
+        ...(card === null ? {} : { card }),
       });
     } catch (error) {
       const code = (error as { code?: unknown } | null)?.code;
       if (code === COMMERCE_ERROR_CODES.SERVICE_NOT_FOUND) {
-        return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };
+        return card === null
+          ? plainReply('bot.service.not_found')
+          : toastReply('bot.service.not_found');
       }
       const refusals: readonly unknown[] = [
         COMMERCE_ERROR_CODES.ORDER_STATE_INVALID,
@@ -10285,8 +10360,17 @@ export class BotRuntime {
         COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
       ];
       if (!refusals.includes(code)) throw error;
-      return { key: 'bot.service.capability_unsupported', values: {}, buttons: [], orderId: null };
+      return card === null
+        ? plainReply('bot.service.capability_unsupported')
+        : toastReply('bot.service.capability_unsupported');
     }
+    /*
+     * R3 item 10: nothing is sent now. The provisioner performs the disable or enable and
+     * then edits THIS card to the state it left (`OperationCardEditor`); a failure is told
+     * through the lane and the card stays as it is, because nothing changed. A tap with no
+     * card to edit (a client that sent no message) is answered as before.
+     */
+    if (card !== null) return { key: null, values: {}, buttons: [], orderId: null };
     return { key: 'bot.service.action_requested', values: {}, buttons: [], orderId: null };
   }
 
@@ -10311,6 +10395,11 @@ export class BotRuntime {
     if (!offer.offered) {
       return { key: 'bot.service.capability_unsupported', values: {}, buttons: [], orderId: null };
     }
+    /*
+     * R3 item 9: the question replaces the card in place, with a way back to it; the
+     * confirmation then puts the card back (`serviceRotate`), so the change of link is
+     * one message throughout rather than a new one per step.
+     */
     return {
       key: 'bot.service.rotate_ask',
       values: { cooldownHours: offer.cooldownHours },
@@ -10318,9 +10407,12 @@ export class BotRuntime {
         {
           label: { kind: 'TEMPLATE', key: 'bot.service.rotate_confirm_button' },
           data: `${SERVICE_ROTATE_CALLBACK_PREFIX}${service.id}`,
+          row: 0,
         },
+        { ...backToCardButton(service.id), row: 1 },
       ],
       orderId: null,
+      edit: true,
     };
   }
 
@@ -10357,8 +10449,9 @@ export class BotRuntime {
           return {
             key: 'bot.service.rotate_cooldown',
             values: { availableAt: new Date(at) },
-            buttons: [],
+            buttons: [backToCardButton(serviceId)],
             orderId: null,
+            edit: true,
           };
         }
         throw error;
@@ -10373,9 +10466,22 @@ export class BotRuntime {
         COMMERCE_ERROR_CODES.SERVICE_ACTION_NOT_ALLOWED,
       ];
       if (!refusals.includes(code)) throw error;
-      return { key: 'bot.service.capability_unsupported', values: {}, buttons: [], orderId: null };
+      return {
+        key: 'bot.service.capability_unsupported',
+        values: {},
+        buttons: [backToCardButton(serviceId)],
+        orderId: null,
+        edit: true,
+      };
     }
-    return { key: 'bot.service.action_requested', values: {}, buttons: [], orderId: null };
+    /*
+     * R3 item 9: no «request registered» message, and never «service created». The
+     * question is turned back into the card; when the panel has minted the new link the
+     * delivery lane sends «the link of service X changed; the previous link is no longer
+     * usable» with the new link, then the new connection files. A failure is told through
+     * the lane (`SERVICE_ACTION_FAILED`), and the old link stays the stored one.
+     */
+    return { ...(await this.serviceDetail(scope, actor, customer, serviceId)), edit: true };
   }
 
   /**
@@ -10647,6 +10753,17 @@ export class BotRuntime {
     serviceId: string,
     idempotencyKey: string,
   ): Promise<PendingReply> {
+    /*
+     * R3 item 7: read the panel now and redraw the SAME card, or leave it untouched with a
+     * short notice on the button. No «request registered», no «result later».
+     */
+    const refresh = this.deps.serviceRefresh;
+    if (refresh !== undefined) {
+      const result = await refresh.refresh(scope, actor, { customerId: customer.id, serviceId });
+      if (result.outcome === 'NOT_FOUND') return toastReply('bot.service.not_found');
+      if (result.outcome === 'FAILED') return toastReply('bot.service.refresh_failed');
+      return { ...(await this.serviceDetail(scope, actor, customer, serviceId)), edit: true };
+    }
     try {
       await this.deps.services.requestSyncFromCustomer(scope, actor, customer.id, serviceId, {
         idempotencyKey: `${idempotencyKey}:refresh`,
@@ -11733,7 +11850,7 @@ export class BotRuntime {
   /** One of the customer's own services, or null. Never anybody else's, never a throw. */
   private async ownedService(
     scope: TenantContext,
-    customer: CustomerRecord,
+    customer: Pick<CustomerRecord, 'id'>,
     serviceId: string,
   ): Promise<ServiceRecord | null> {
     try {
@@ -13607,12 +13724,39 @@ export class BotRuntime {
     scope: TenantContext,
     command: BotCommand,
     botInstanceId: BotInstanceId,
+    toast?: PendingReply['toast'],
   ): Promise<void> {
     if (command.callbackQueryId === null) return;
     await this.deps.messenger.acknowledge(scope, {
       callbackQueryId: command.callbackQueryId,
       botInstanceId,
+      ...(toast === undefined ? {} : { toast: { templateKey: toast.key, values: toast.values } }),
     });
+  }
+
+  /**
+   * R3: edits the tapped message into this reply; when Telegram cannot edit it (deleted,
+   * too old, a photo with no text to edit), sends the same reply once as a new message.
+   * `UNKNOWN` and `RATE_LIMITED` are not followed by a send: the edit may have landed, or
+   * a send would meet the same refusal.
+   */
+  private async editOrSend(
+    scope: TenantContext,
+    target: CardMessageRef,
+    reply: PendingReply,
+    asText: () => Promise<CustomerSendResult>,
+  ): Promise<CustomerSendResult> {
+    const edit = this.deps.messenger.edit;
+    if (edit === undefined || reply.key === null) return asText();
+    const edited = await edit.call(this.deps.messenger, scope, {
+      chatId: target.chatId,
+      messageId: target.messageId,
+      botInstanceId: target.botInstanceId,
+      templateKey: reply.key,
+      values: reply.values,
+      buttons: reply.buttons,
+    });
+    return edited.outcome === 'REFUSED' ? asText() : edited;
   }
 }
 
@@ -13950,6 +14094,42 @@ export function notificationButtons(
       data: `${SERVICE_CALLBACK_PREFIX}${subject.serviceId}`,
     },
   ];
+}
+
+/** R3: back to the service card, drawn IN PLACE (`sv:`). */
+function backToCardButton(serviceId: string): CustomerButton {
+  return {
+    label: { kind: 'TEMPLATE', key: 'bot.service.back_to_card_button' },
+    data: `${SERVICE_CARD_CALLBACK_PREFIX}${serviceId}`,
+  };
+}
+
+/** R3: an answer that is only a notice on the tapped button; nothing is sent or edited. */
+function toastReply(key: TemplateKey): PendingReply {
+  return { key: null, values: {}, buttons: [], orderId: null, toast: { key, values: {} } };
+}
+
+/** An ordinary one-line reply with no buttons. */
+function plainReply(key: TemplateKey): PendingReply {
+  return { key, values: {}, buttons: [], orderId: null };
+}
+
+/**
+ * R3: the service card a tap came from — the private chat, the message's own id, and the
+ * bot that drew it — or null when the update carries no such message.
+ */
+export function cardMessageOf(
+  update: unknown,
+  botInstanceId: BotInstanceId,
+): CardMessageRef | null {
+  const chatId = privateChatIdOf(update);
+  const messageId = (update as { callback_query?: { message?: { message_id?: unknown } } } | null)
+    ?.callback_query?.message?.message_id;
+  if (chatId === null || typeof messageId !== 'number' || !Number.isSafeInteger(messageId)) {
+    return null;
+  }
+  if (messageId <= 0) return null;
+  return { botInstanceId, chatId, messageId };
 }
 
 function backToServiceButton(serviceId: string): CustomerButton {

@@ -50,6 +50,7 @@ import type {
   PanelOperabilityReader,
 } from './ports.js';
 import type { ServiceUsernameRepository } from './username-ports.js';
+import type { CardMessageRef, OperationCardRepository } from './operation-card.js';
 import type { SettingsResolver } from '../../../control/settings/application/settings-resolver.js';
 import type { FeatureFlagResolver } from '../../../control/features/application/feature-flags.service.js';
 import type { CustomerRepository } from '../../customers/application/ports.js';
@@ -119,6 +120,12 @@ export interface ProvisioningServiceDeps {
    * system operations never consult it.
    */
   readonly panelPolicy: PanelPolicyGate;
+  /**
+   * R3 item 10: where a customer's disable or enable was asked from, recorded beside the
+   * operation in its planning transaction so the provisioner can show the result on that
+   * card. Optional: without it the request is planned exactly as before.
+   */
+  readonly cards?: Pick<OperationCardRepository, 'attach'>;
   /**
    * A paid location change's frozen target (WP-A6), read by the order it was quoted on.
    * The key the operation will ask the panel for is the one the customer was shown — the
@@ -1004,7 +1011,11 @@ export class ProvisioningService {
     customerId: UserId,
     serviceId: string,
     type: CustomerServiceOperation,
-    input: { readonly idempotencyKey: string },
+    input: {
+      readonly idempotencyKey: string;
+      /** R3: the service card the tap came from, whose result is shown on it. */
+      readonly card?: CardMessageRef;
+    },
   ): Promise<OperationRecord> {
     /*
      * Re-checked at run time, not only by the type (WP15 G1). A caller that is not
@@ -1021,6 +1032,7 @@ export class ProvisioningService {
     const service = await this.getForCustomer(scope, customerId, serviceId);
     return this.planRequestedOperation(scope, actor, service, type, input, {
       requestedBy: customerId,
+      ...(input.card === undefined ? {} : { card: input.card }),
       /*
        * The code this path has answered since 4E, kept.
        *
@@ -1236,6 +1248,8 @@ export class ProvisioningService {
     input: { readonly idempotencyKey: string },
     origin: {
       readonly requestedBy: 'OPERATOR' | UserId;
+      /** R3: the card a customer's request came from (`requestFromCustomer` only). */
+      readonly card?: CardMessageRef;
       /** One of exactly two codes, so a third caller cannot invent a third answer. */
       readonly stateRefusal?:
         | typeof COMMERCE_ERROR_CODES.ORDER_STATE_INVALID
@@ -1332,6 +1346,8 @@ export class ProvisioningService {
     input: { readonly idempotencyKey: string },
     origin: {
       readonly requestedBy: 'OPERATOR' | UserId;
+      /** R3: the card a customer's request came from (`requestFromCustomer` only). */
+      readonly card?: CardMessageRef;
       readonly admission?: {
         readonly serialize: (tx: TransactionScope) => Promise<void>;
         readonly admit: (tx: TransactionScope) => Promise<void>;
@@ -1478,6 +1494,14 @@ export class ProvisioningService {
       now,
       tx,
     );
+    /*
+     * R3: the card, beside the operation it answers, in the same transaction — so the
+     * provisioner can never see the operation without it. Only reached for a NEWLY
+     * planned operation: an open one and a replay returned above keep the first card.
+     */
+    if (origin.card !== undefined && origin.requestedBy !== 'OPERATOR') {
+      await this.deps.cards?.attach(scope, operation.id, origin.card, now, tx);
+    }
     /*
      * WHO asked, and when.
      *

@@ -796,6 +796,8 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.service.add_traffic_button',
       'bot.service.addon_choice',
       'bot.service.addon_option',
+      // R3 item 9: a button label; it puts the service card back in the same message.
+      'bot.service.back_to_card_button',
       'bot.service.back_to_list_button',
       'bot.service.back_to_menu_button',
       'bot.service.capability_unsupported',
@@ -839,6 +841,11 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.service.prev_page_button',
       'bot.service.provisioning',
       'bot.service.refresh_button',
+      /*
+       * R3 item 7: the notice on the refresh button when the panel could not be read. It
+       * claims nothing happened and asks only for a later retry of a READ.
+       */
+      'bot.service.refresh_failed',
       'bot.service.refresh_requested',
       'bot.service.refresh_too_soon',
       'bot.service.refund_request_ask',

@@ -46,6 +46,31 @@ export const CUSTOMER_REQUESTABLE_OPERATIONS: readonly OperationType[] = [
 ];
 
 /**
+ * R3 (v0.3.5 real-test fixes): the customer-requested SUCCESSES that are answered by
+ * something better than «درخواست شما با موفقیت روی سرور اعمال شد», and so are not also
+ * sent it. Only these two cases, each R3's; every other type is answered as before.
+ *
+ * - `ROTATE_SUBSCRIPTION` (item 9): the delivery lane announces the new link as a link
+ *   change — «the link of service X changed; the previous link is no longer usable» —
+ *   followed by the new connection files. A second sentence saying the request was
+ *   applied would be noise between them. Its FAILURE and ABANDONMENT are still told
+ *   here, which is why it stays in `CUSTOMER_REQUESTABLE_OPERATIONS`.
+ * - `SUSPEND` / `RESUME` asked from a service card (item 10): the card itself is edited
+ *   to the new state by `OperationCardEditor`. One asked with no card recorded — before
+ *   this release, or from a surface that has none — is still told by message.
+ */
+export function successAnsweredElsewhere(subject: {
+  readonly type: OperationType;
+  readonly answeredOnCard?: boolean;
+}): boolean {
+  if (subject.type === 'ROTATE_SUBSCRIPTION') return true;
+  if (subject.type === 'SUSPEND' || subject.type === 'RESUME') {
+    return subject.answeredOnCard === true;
+  }
+  return false;
+}
+
+/**
  * The operations whose ABANDONMENT is a delay the customer is waiting on.
  *
  * Neither is customer-initiated, which is why they are a separate list rather than
@@ -109,6 +134,11 @@ export interface OperationOutcomeReader {
      * FAILED row with a retry pending is not an outcome yet and is announced to nobody.
      */
     readonly nextAttemptAt: Date | null;
+    /**
+     * R3 item 10: the request was made from a service card, and its success is shown ON
+     * that card (`OperationCardEditor`). Absent is false.
+     */
+    readonly answeredOnCard?: boolean;
   } | null>;
 
   /**
@@ -313,6 +343,12 @@ export class OperationOutcomeAnnouncer {
         subject.requestedByCustomerId === null ||
         !CUSTOMER_REQUESTABLE_OPERATIONS.includes(subject.type)
       ) {
+        await stamp();
+        return;
+      }
+
+      /* R3: a success another channel answers is stamped here and told nothing twice. */
+      if (outcome === 'SUCCEEDED' && successAnsweredElsewhere(subject)) {
         await stamp();
         return;
       }
