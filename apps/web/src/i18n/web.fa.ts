@@ -56,7 +56,6 @@ export const WEB_FA = {
   // A list separator is punctuation, but it is still Persian text and it still
   // belongs in the catalogue rather than typed into a component.
   'web.list_separator': '، ',
-  'web.value': 'مقدار',
   'web.source': 'منبع',
   'web.source_default': 'پیش‌فرض',
   'web.source_tenant': 'تنظیم‌شده',
