@@ -185,6 +185,11 @@ export const WEB_FA = {
     'چند روز پیش از پایان اعتبار سرویس، یادآور هفتگی فرستاده شود؛ زودتر از یادآور اول. صفر یعنی این یادآور فرستاده نشود.',
   'web.setting_reminders_payment_pending_minutes_desc':
     'چند دقیقه پیش از پایان مهلت، یک بار به مشتری‌ای که هنوز کارت‌به‌کارت نکرده یا سفارشش را پرداخت نکرده یادآوری شود.',
+  // HF-A9: the quiet window's two boundaries.
+  'web.setting_reminders_quiet_hours_start_desc':
+    'از این ساعت (به وقت فروشگاه) یادآورها فرستاده نمی‌شوند و تا پایان ساعات سکوت نگه داشته می‌شوند. به شکل ساعت:دقیقه، مثلاً ۲۳:۰۰. فقط وقتی «ساعات سکوت یادآورها» روشن باشد اثر دارد.',
+  'web.setting_reminders_quiet_hours_end_desc':
+    'در این ساعت (به وقت فروشگاه) ساعات سکوت تمام می‌شود و یادآورهای نگه‌داشته فرستاده می‌شوند. اگر از ساعت شروع کوچک‌تر باشد، بازه از نیمه‌شب می‌گذرد؛ مثلاً ۲۳:۰۰ تا ۰۸:۰۰.',
   'web.setting_wallet_low_balance_threshold_desc':
     'وقتی موجودی کیف پول مشتری از این مبلغ کمتر شود، یک بار به او هشدار داده می‌شود. صفر یعنی هشداری فرستاده نشود. باید به واحد پول فروشگاه باشد.',
   'web.setting_trial_product_id_desc':
@@ -269,6 +274,10 @@ export const WEB_FA = {
     'کمی پیش از پایان مهلت پرداخت کارت‌به‌کارت یا سفارش پرداخت‌نشده، یک بار به مشتری یادآوری می‌شود.',
   'web.feature_payment_pending_reminders_off_effect':
     'مشتریان پیش از پایان مهلت پرداخت خود یادآوری دریافت نمی‌کنند.',
+  // HF-A9.
+  'web.feature_reminder_quiet_hours_title': 'ساعات سکوت یادآورها',
+  'web.feature_reminder_quiet_hours_summary':
+    'یادآورهایی که در ساعات سکوت موعدشان می‌رسد حذف نمی‌شوند؛ تا پایان ساعات سکوت نگه داشته و سپس فرستاده می‌شوند، مگر اینکه دیگر معتبر نباشند. پیام‌های پرداخت، سفارش و پاسخ‌ها نگه داشته نمی‌شوند.',
   'web.feature_trials_title': 'سرویس آزمایشی رایگان',
   'web.feature_trials_summary':
     'مشتریان می‌توانند یک سرویس آزمایشی رایگان دریافت کنند. برای کار کردن، محصول سرویس آزمایشی باید در تنظیمات انتخاب شده باشد.',
@@ -2464,6 +2473,10 @@ export const WEB_FA = {
   'web.flag_service_expiry_day_reminder': 'یادآور روز انقضای سرویس',
   'web.flag_wallet_low_balance_reminders': 'هشدار کمبود موجودی کیف پول',
   'web.flag_payment_pending_reminders': 'یادآور پرداخت در انتظار',
+  // HF-A9: quiet hours.
+  'web.setting_reminders_quiet_hours_start': 'شروع ساعات سکوت یادآورها',
+  'web.setting_reminders_quiet_hours_end': 'پایان ساعات سکوت یادآورها',
+  'web.flag_reminder_quiet_hours': 'ساعات سکوت یادآورها',
   // WP-A9: the reminders screen.
   'web.nav_reminders': 'یادآورها',
   'web.reminders_title': 'یادآورهای خودکار',
@@ -2513,6 +2526,18 @@ export const WEB_FA = {
   'web.reminders_pending_minutes': 'زمان یادآوری',
   'web.reminders_pending_minutes_hint':
     'چند دقیقه پیش از پایان مهلت، از ۵ تا ۳۰. پرداختی که کمتر از ۵ دقیقه از ایجادش گذشته یا کمتر از ۳ دقیقه به پایان مهلتش مانده یادآوری نمی‌شود.',
+  // HF-A9: the quiet-hours card.
+  'web.reminders_quiet_title': 'ساعات سکوت',
+  'web.reminders_quiet_hint':
+    'یادآوری که در این بازه موعدش برسد حذف نمی‌شود؛ تا پایان بازه نگه داشته می‌شود و بعد فقط یک بار فرستاده می‌شود. اگر تا آن زمان دیگر معتبر نباشد (مثلاً سرویس تمدید شده، پرداخت انجام یا منقضی شده یا کیف پول شارژ شده) فرستاده نمی‌شود. ساعت‌ها به وقت فروشگاه است. پیام‌های پرداخت، سفارش و پاسخ به مشتری هیچ‌وقت نگه داشته نمی‌شوند.',
+  'web.reminders_flag_quiet': 'فعال بودن ساعات سکوت',
+  'web.reminders_quiet_start': 'ساعت شروع',
+  'web.reminders_quiet_end': 'ساعت پایان',
+  'web.reminders_quiet_time_hint': 'ساعت و دقیقه، ۲۴ساعته.',
+  'web.reminders_quiet_overnight':
+    'ساعت پایان پیش از ساعت شروع است، پس بازه از نیمه‌شب می‌گذرد و تا ساعت پایانِ روز بعد ادامه دارد.',
+  'web.reminders_quiet_same':
+    'ساعت شروع و پایان یکسان است و ساعات سکوت اثری ندارد. یکی از آن دو را تغییر دهید.',
   'web.reminders_templates': 'متن پیام‌ها',
   'web.reminders_templates_hint':
     'متن هر پیام را می‌توانید همین‌جا ویرایش کنید؛ همان متنی است که در بخش «متن‌ها» هم دیده می‌شود.',

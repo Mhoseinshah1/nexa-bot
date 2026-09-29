@@ -64,7 +64,8 @@ export interface SelectOption {
  * - `integer`: a numeric field. Its range comes from the key's schema
  *   (`settingIntegerRange`), never from here. `optional` means an empty field is stored
  *   as null — the schema's own "not set".
- * - `text`: a plain left-to-right field, for the one free-form identifier left.
+ * - `text`: a plain left-to-right field, for the one free-form identifier left and the
+ *   quiet window's two `HH:MM` times (HF-A9), which the registry's schema validates.
  * - `select`: a closed set of values, each with a Persian label.
  * - the rest are the dedicated editors a structured value needs: a currency picker,
  *   money (amount and currency), a list of money, of Telegram handles and of channels,
@@ -242,6 +243,20 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
     description: 'web.setting_reminders_payment_pending_minutes_desc',
     group: 'reminders',
     control: { kind: 'integer', unit: 'web.unit_minutes' },
+  },
+  // HF-A9: the quiet window, as the HH:MM text the registry stores. The reminders page
+  // edits the same two keys with a time picker.
+  'reminders.quiet_hours_start': {
+    title: 'web.setting_reminders_quiet_hours_start',
+    description: 'web.setting_reminders_quiet_hours_start_desc',
+    group: 'reminders',
+    control: { kind: 'text' },
+  },
+  'reminders.quiet_hours_end': {
+    title: 'web.setting_reminders_quiet_hours_end',
+    description: 'web.setting_reminders_quiet_hours_end_desc',
+    group: 'reminders',
+    control: { kind: 'text' },
   },
   'wallet.low_balance.threshold': {
     title: 'web.setting_wallet_low_balance_threshold',

@@ -4,7 +4,9 @@ import {
   CONTROL_ERROR_CODES,
   PENDING_PAYMENT_REMINDER_MINUTES_MAX,
   PENDING_PAYMENT_REMINDER_MINUTES_MIN,
+  QUIET_HOURS_TIME_PATTERN,
   USAGE_REMINDER_PERCENT_MAX,
+  quietHoursMinuteOfDay,
   usageRemainingPercent,
   type FeatureFlagResponse,
   type MoneyWire,
@@ -43,8 +45,10 @@ import { ConfirmDialog, confirmDialogOpen } from '../ui/confirm-dialog';
  * verbatim. The only conversion is presentation: the three usage thresholds are STORED as
  * percent used and shown and typed as percent remaining, through `usageRemainingPercent`.
  *
- * Quiet hours are not offered: the customer notification lane has no send-window concept
- * to configure, and inventing one is outside this package.
+ * Quiet hours (HF-A9) are the last card: a switch and the window's start and end, in the
+ * tenant's own time. They hold every reminder on this page — never a reply or a payment
+ * outcome — and the server decides what they apply to; this card only edits the flag and
+ * its two settings, like every other card here.
  */
 export function RemindersPage({
   mayEdit,
@@ -212,6 +216,28 @@ export function RemindersPage({
                 mayEdit={mayEdit}
               />
               {templateBlock(['bot.payment.pending_reminder', 'bot.order.pending_reminder'])}
+            </Card>
+
+            <Card title={t('web.reminders_quiet_title')} hint={t('web.reminders_quiet_hint')}>
+              <FlagRow
+                flag={flagOf('reminder_quiet_hours')}
+                label={t('web.reminders_flag_quiet')}
+                mayEdit={mayEdit}
+              />
+              <TimeRow
+                setting={settingOf('reminders.quiet_hours_start')}
+                label={t('web.reminders_quiet_start')}
+                mayEdit={mayEdit}
+              />
+              <TimeRow
+                setting={settingOf('reminders.quiet_hours_end')}
+                label={t('web.reminders_quiet_end')}
+                mayEdit={mayEdit}
+              />
+              <QuietWindowNote
+                start={settingOf('reminders.quiet_hours_start')?.value}
+                end={settingOf('reminders.quiet_hours_end')?.value}
+              />
             </Card>
           </>
         )}
@@ -461,6 +487,100 @@ function NumberRow({
       )}
     </form>
   );
+}
+
+/**
+ * One quiet-hours boundary, as a 24-hour time (HF-A9).
+ *
+ * The browser's time field hands back `HH:MM`, which is exactly what the registry stores, so
+ * there is no conversion; a value the contract's own pattern refuses is not sent, and the
+ * server's schema and guard decide the rest — a start equal to the end comes back as the
+ * guard's Persian refusal, shown verbatim.
+ */
+function TimeRow({
+  setting,
+  label,
+  mayEdit,
+}: {
+  setting: ResolvedSettingResponse | undefined;
+  label: string;
+  mayEdit: boolean;
+}) {
+  const [draft, setDraft] = useState(typeof setting?.value === 'string' ? setting.value : '');
+  const { basis, adopt, followConflict } = useVersionBasis(setting?.version);
+  const refresh = useRefresh();
+  const submission = useSubmissionKey();
+  const save = useMutation({
+    mutationFn: (command: {
+      idempotencyKey: string;
+      value: string;
+      expectedVersion: number | null;
+    }) => saveSetting({ key: setting?.key ?? '', ...command }),
+    onSuccess: async (result) => {
+      submission.settle();
+      adopt(result.setting.version);
+      await refresh();
+    },
+    onError: (error: unknown) => {
+      submission.settleOn(error);
+      followConflict(error);
+      void refresh();
+    },
+  });
+  if (setting === undefined) return null;
+  const id = `reminder-${setting.key}`;
+  const valid = QUIET_HOURS_TIME_PATTERN.test(draft);
+
+  const onSubmit = (event: FormEvent) => {
+    event.preventDefault();
+    if (!valid) return;
+    const command = { value: draft, expectedVersion: basis };
+    save.mutate({ ...command, idempotencyKey: submission.current(command) });
+  };
+
+  return (
+    <form onSubmit={onSubmit}>
+      <Field label={label} hint={t('web.reminders_quiet_time_hint')} htmlFor={id}>
+        <div className="input-group">
+          <input
+            id={id}
+            className="input ltr mono"
+            type="time"
+            step={60}
+            value={draft}
+            disabled={!mayEdit}
+            onChange={(event) => setDraft(event.target.value)}
+          />
+          {mayEdit && (
+            <button type="submit" className="btn primary sm" disabled={!valid || save.isPending}>
+              {save.isPending ? t('web.saving') : t('web.save')}
+            </button>
+          )}
+        </div>
+      </Field>
+      {setting.storedValueInvalid && <Banner tone="danger">{t('web.stored_value_invalid')}</Banner>}
+      {save.isError && <ErrorReport error={save.error} />}
+      {save.isSuccess && (
+        <Banner tone={save.data.changed ? 'ok' : 'info'}>
+          {save.data.changed ? t('web.saved') : t('web.unchanged')}
+        </Banner>
+      )}
+    </form>
+  );
+}
+
+/**
+ * What the saved window means, in words: overnight when the end is earlier than the start,
+ * and inert when the two are the same (which the server refuses to store, so this appears
+ * only for a value that reached the database some other way).
+ */
+function QuietWindowNote({ start, end }: { start: unknown; end: unknown }) {
+  const from = typeof start === 'string' ? quietHoursMinuteOfDay(start) : null;
+  const to = typeof end === 'string' ? quietHoursMinuteOfDay(end) : null;
+  if (from === null || to === null) return null;
+  if (from === to) return <Banner tone="warn">{t('web.reminders_quiet_same')}</Banner>;
+  if (from > to) return <p className="muted small">{t('web.reminders_quiet_overnight')}</p>;
+  return null;
 }
 
 /**
