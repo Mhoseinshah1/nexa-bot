@@ -83,6 +83,7 @@ import {
   transferConfirmData,
   MAIN_MENU_CALLBACK_DATA,
   TUTORIAL_PLATFORM_CALLBACK_PREFIX,
+  CLIENT_APP_CALLBACK_PREFIX,
   TOPUP_ROUTE_CALLBACK_PREFIX,
   SERVICES_LIST_PAGE_CALLBACK_PREFIX,
   SERVICES_SEARCH_CALLBACK_DATA,
@@ -148,6 +149,9 @@ describe('a Telegram turn, decided before any I/O', () => {
     expect(intentOf({ message: { text: CATALOGUE_FA['bot.menu.help'] } }, menu)).toEqual(
       intentOf({ message: { text: '/help' } }),
     );
+    expect(intentOf({ message: { text: CATALOGUE_FA['bot.menu.apps'] } }, menu)).toEqual(
+      intentOf({ message: { text: '/apps' } }),
+    );
   });
 
   it('answers a menu label it was not given as ordinary text', () => {
@@ -186,6 +190,8 @@ describe('a Telegram turn, decided before any I/O', () => {
     expect(intentOf({ message: { text: '  Ali_2026  ' } }, menu).args).toEqual(['  Ali_2026  ']);
   });
 
+  // The title is cited by `docs/phase4j-falsification.md` (F4J-15) and kept as written;
+  // WP-A10's apps entry made the set five, which the assertions below pin.
   it('offers exactly the four top-level actions this release can perform', () => {
     /*
      * A keyboard is a PROMISE. The legacy system's menu described a product that did
@@ -199,12 +205,15 @@ describe('a Telegram turn, decided before any I/O', () => {
     expect(MAIN_MENU_ROWS.map((row) => row.map((button) => button.command))).toEqual([
       ['catalog', 'services'],
       ['wallet', 'help'],
+      // WP-A10: «📱 دانلود برنامه و آموزش اتصال», which `/apps` answers.
+      ['apps'],
     ]);
     expect(MAIN_MENU_BUTTONS.map((button) => button.label)).toEqual([
       'bot.menu.catalog',
       'bot.menu.services',
       'bot.menu.wallet',
       'bot.menu.help',
+      'bot.menu.apps',
     ]);
     // And every label renders. A key with no catalogue entry is a blank button.
     for (const button of MAIN_MENU_BUTTONS) {
@@ -644,6 +653,25 @@ describe('profile metadata, normalised before it is ever stored', () => {
      * reason stated there: this list is what a CUSTOMER can be sent.
      */
     expect([...sent].filter((key) => !key.startsWith('bot.admin.')).sort()).toEqual([
+      /*
+       * WP-A10's eleven, the app downloads and connection guides. Reviewed against the same
+       * rule: the platform heading and its empty answer, one app's detail (with and without
+       * the connection-files note), its three URL buttons, the two ways back and the answer
+       * to a tapped app that is gone. None names an app, a store or a link — those are the
+       * operator's data, carried as values and as the URL buttons' targets — and none
+       * carries a subscription link: the service actions on the detail are the existing
+       * `r:` and `sf:` taps.
+       */
+      'bot.apps.alternative_button',
+      'bot.apps.back_button',
+      'bot.apps.detail',
+      'bot.apps.detail_files',
+      'bot.apps.download_button',
+      'bot.apps.help_button',
+      'bot.apps.not_found',
+      'bot.apps.platform',
+      'bot.apps.platform_empty',
+      'bot.apps.platforms_button',
       'bot.blocked',
       /*
        * WP20: the one answer to the interaction that crosses the anti-spam threshold,
@@ -682,6 +710,8 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.faq.page',
       'bot.help',
       'bot.menu.main_button',
+      // WP-A10: an app's detail points a customer with several services at their list.
+      'bot.menu.services',
       'bot.order.awaiting_payment',
       'bot.order.cancel_button',
       'bot.order.cancel_confirm',
@@ -858,6 +888,8 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.tutorial.linux_button',
       'bot.tutorial.macos',
       'bot.tutorial.macos_button',
+      // WP-A10: «🧩 سایر», drawn only while an app the customer may see is filed there.
+      'bot.tutorial.other_button',
       'bot.tutorial.windows',
       'bot.tutorial.windows_button',
       'bot.unknown_command',
@@ -1461,6 +1493,8 @@ describe('a callback prefix decides what happens, so no prefix may shadow anothe
     SERVICE_RENEW_QUOTE: SERVICE_RENEW_QUOTE_CALLBACK_PREFIX,
     TOPUP_CLOSE: TOPUP_CLOSE_CALLBACK_PREFIX,
     SERVICE_CONNECTED: CONNECTED_CALLBACK_PREFIX,
+    // WP-A10: `ca:` begins with `c` like `c:`, `cg:` and `ck:`; the shadowing case proves it safe.
+    CLIENT_APP: CLIENT_APP_CALLBACK_PREFIX,
   };
 
   /*

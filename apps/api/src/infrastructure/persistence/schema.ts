@@ -147,6 +147,18 @@ import {
   TENANT_MEDIA_MIME_TYPES,
   TENANT_MEDIA_MAX_BYTES,
   PRODUCT_SERVICE_LOCATION_LABEL_MAX_LENGTH,
+  // WP-A10: client apps and connection guides.
+  CLIENT_APP_DELIVERY_KINDS,
+  CLIENT_APP_DESCRIPTION_MAX_LENGTH,
+  CLIENT_APP_GUIDE_MAX_LENGTH,
+  CLIENT_APP_ICON_MAX_LENGTH,
+  CLIENT_APP_NAME_MAX_LENGTH,
+  CLIENT_APP_PLATFORMS,
+  CLIENT_APP_PROTOCOLS,
+  CLIENT_APP_SORT_MAX,
+  CLIENT_APP_SORT_MIN,
+  CLIENT_APP_STATUSES,
+  CLIENT_APP_URL_MAX_LENGTH,
 } from '@nexa/contracts';
 
 /**
@@ -7897,5 +7909,127 @@ export const serviceOwnershipTransfers = pgTable(
     check('service_ownership_transfers_parties_check', sql`from_customer_id <> to_customer_id`),
     check('service_ownership_transfers_actor_type_check', enumCheck('actor_type', ACTOR_TYPES)),
     check('service_ownership_transfers_key_check', sql`length(idempotency_key) BETWEEN 1 AND 200`),
+  ],
+);
+
+// --- WP-A10: client apps and connection guides -------------------------------------------
+
+/**
+ * An array column holding a subset of an enum, EMPTY included — `enumSubsetCheck` refuses
+ * empty, and here empty is the meaning "any": an app that names no provider type is offered
+ * whatever panel a service is on. The same assertions and escaping as its sibling.
+ */
+function enumSubsetOrEmptyCheck(column: string, values: readonly string[]): SQL {
+  if (!/^[a-z_][a-z0-9_]*$/.test(column)) {
+    throw new Error(`enumSubsetOrEmptyCheck: "${column}" is not a plain column name.`);
+  }
+  const list = values
+    .map((value) => {
+      if (!ENUM_LITERAL.test(value)) {
+        throw new Error(`enumSubsetOrEmptyCheck: "${value}" is not a plain enum literal.`);
+      }
+      return `'${value.replace(/'/g, "''")}'`;
+    })
+    .join(', ');
+  return sql.raw(`${column} <@ ARRAY[${list}]::text[]`);
+}
+
+/**
+ * One client app a tenant recommends, on one platform (WP-A10).
+ *
+ * Tenant CONTENT, like `support_faqs`: an operator writes it in the Web Admin and the bot
+ * reads it on every tap, so a link or a guide changes without a deploy. No row is seeded.
+ *
+ * The three compatibility arrays are what context filtering reads, and empty means "any"
+ * for each. Their members are pinned to the contract here; `provider_types` too, so a
+ * provider type this release does not know cannot be stored against a row that a future
+ * release would then read as a real restriction.
+ *
+ * The links are stored NORMALISED by `normalizeClientAppUrl` and the constraint repeats
+ * the one property the database can check cheaply — the scheme — so a row written around
+ * the service still cannot hand Telegram a `javascript:` button.
+ */
+export const clientApps = pgTable(
+  'client_apps',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    platform: text('platform').notNull(),
+    name: text('name').notNull(),
+    icon: text('icon'),
+    description: text('description').notNull(),
+    officialUrl: text('official_url').notNull(),
+    alternativeUrl: text('alternative_url'),
+    helpUrl: text('help_url'),
+    guide: text('guide').notNull(),
+    deliveryKinds: text('delivery_kinds')
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+    protocols: text('protocols')
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+    providerTypes: text('provider_types')
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+    status: text('status').notNull().default('ENABLED'),
+    sortOrder: integer('sort_order').notNull().default(0),
+    version: integer('version').notNull().default(1),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    /** The customer's read: one platform's enabled rows, in the operator's order. */
+    index('client_apps_tenant_platform_idx').on(
+      table.tenantId,
+      table.platform,
+      table.status,
+      table.sortOrder,
+      table.createdAt,
+      table.id,
+    ),
+    unique('client_apps_tenant_id_key').on(table.tenantId, table.id),
+    check('client_apps_platform_check', enumCheck('platform', CLIENT_APP_PLATFORMS)),
+    check('client_apps_status_check', enumCheck('status', CLIENT_APP_STATUSES)),
+    check(
+      'client_apps_name_check',
+      sql`length(btrim(name)) BETWEEN 1 AND ${sql.raw(String(CLIENT_APP_NAME_MAX_LENGTH))}`,
+    ),
+    check(
+      'client_apps_icon_check',
+      sql`icon IS NULL OR length(btrim(icon)) BETWEEN 1 AND ${sql.raw(String(CLIENT_APP_ICON_MAX_LENGTH))}`,
+    ),
+    check(
+      'client_apps_description_check',
+      sql`length(btrim(description)) BETWEEN 1 AND ${sql.raw(String(CLIENT_APP_DESCRIPTION_MAX_LENGTH))}`,
+    ),
+    check(
+      'client_apps_guide_check',
+      sql`length(btrim(guide)) BETWEEN 1 AND ${sql.raw(String(CLIENT_APP_GUIDE_MAX_LENGTH))}`,
+    ),
+    check(
+      'client_apps_urls_check',
+      sql`official_url LIKE 'https://%' AND length(official_url) <= ${sql.raw(String(CLIENT_APP_URL_MAX_LENGTH))}
+          AND (alternative_url IS NULL OR (alternative_url LIKE 'https://%' AND length(alternative_url) <= ${sql.raw(String(CLIENT_APP_URL_MAX_LENGTH))}))
+          AND (help_url IS NULL OR (help_url LIKE 'https://%' AND length(help_url) <= ${sql.raw(String(CLIENT_APP_URL_MAX_LENGTH))}))`,
+    ),
+    check(
+      'client_apps_delivery_kinds_check',
+      enumSubsetOrEmptyCheck('delivery_kinds', CLIENT_APP_DELIVERY_KINDS),
+    ),
+    check('client_apps_protocols_check', enumSubsetOrEmptyCheck('protocols', CLIENT_APP_PROTOCOLS)),
+    check(
+      'client_apps_provider_types_check',
+      enumSubsetOrEmptyCheck('provider_types', PROVIDER_TYPES),
+    ),
+    check(
+      'client_apps_sort_order_check',
+      sql`sort_order BETWEEN ${sql.raw(String(CLIENT_APP_SORT_MIN))} AND ${sql.raw(String(CLIENT_APP_SORT_MAX))}`,
+    ),
+    check('client_apps_version_check', sql`version >= 1`),
   ],
 );

@@ -190,6 +190,10 @@ import { PaymentGatewayService } from './modules/commerce/payments/application/p
 import type { PaymentGatewayRepository } from './modules/commerce/payments/application/gateway-ports.js';
 import { DrizzleSupportFaqRepository } from './modules/control/support/infrastructure/drizzle-support-faq.repository.js';
 import { SupportFaqService } from './modules/control/support/application/support-faq.service.js';
+import { ClientAppService } from './modules/control/client-apps/application/client-app.service.js';
+import { ClientAppCatalog } from './modules/control/client-apps/application/client-app-catalog.js';
+import { ProvisionedServiceFacts } from './modules/control/client-apps/application/customer-service-facts.js';
+import { DrizzleClientAppRepository } from './modules/control/client-apps/infrastructure/drizzle-client-app.repository.js';
 import {
   SupportFaqSeeder,
   SupportScreenReader,
@@ -694,6 +698,10 @@ export interface Container {
   readonly supportFaqs: SupportFaqService;
   /** The customer's support screen: active FAQ in order, and the first support account's URL. */
   readonly supportScreen: SupportScreenReader;
+  /** WP-A10: the tenant's client apps as the operator maintains them. */
+  readonly clientApps: ClientAppService;
+  /** WP-A10: the customer's read of them, filtered by what their services are. */
+  readonly clientAppCatalog: ClientAppCatalog;
   /** Exposed for the tests that drive the resolver against a substituted catalogue. */
   readonly templateRepository: DrizzleTemplateRepository;
   readonly notifications: NotificationService;
@@ -3299,6 +3307,33 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     clock,
   });
 
+  /*
+   * WP-A10: client apps and connection guides. Built after Package E's service because
+   * the customer's read asks it — through its own `offered`, the check that draws the
+   * files button — whether a service can hand over connection files.
+   */
+  const clientAppRepository = new DrizzleClientAppRepository(database.db);
+  const clientAppService = new ClientAppService({
+    repository: clientAppRepository,
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    ids,
+    clock,
+  });
+  const clientAppCatalog = new ClientAppCatalog({
+    repository: clientAppRepository,
+    facts: new ProvisionedServiceFacts({
+      services: provisioningService,
+      panels: panelRepository,
+      subscriptionFiles: subscriptionFileService,
+    }),
+  });
+
   /**
    * How a customer learns that the thing they asked for happened.
    *
@@ -4072,6 +4107,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       trials: trialService,
       customService: customServiceFlowService,
       subscriptionFiles: subscriptionFileService,
+      // WP-A10: «📱 دانلود برنامه و آموزش اتصال», the tenant's apps for the customer's services.
+      clientApps: clientAppCatalog,
       serviceTransfers: serviceTransferService,
       orders: orderService,
       // The SAME messenger the delivery sweep uses, for the reason above it.
@@ -4139,6 +4176,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     templateResolver,
     supportFaqs: supportFaqService,
     supportScreen: supportScreenReader,
+    clientApps: clientAppService,
+    clientAppCatalog,
     templateRepository,
     notifications,
     notificationRepository,
