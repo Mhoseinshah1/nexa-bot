@@ -562,6 +562,42 @@ describe('quiet hours for customer reminders (HF-A9)', () => {
     }
   });
 
+  /** Queues one notification directly, as a producer's transaction would. */
+  const enqueueNow = (kind: CustomerNotificationKind, subjectId: string) =>
+    ctx.container.uow.run(tenantA, (tx) =>
+      ctx.container.customerNotifications.enqueue(
+        tenantA,
+        {
+          id: ctx.container.ids.uuid(),
+          customerId: customerA,
+          botInstanceId: BOT_A,
+          kind,
+          subjectId,
+        },
+        ctx.container.clock.now(),
+        tx,
+      ),
+    );
+
+  it('sends an immediate kind ahead of a released reminder backlog larger than the pass', async () => {
+    // Codex review of PR #107: at the window's end every held reminder is due at once, and
+    // a bounded oldest-first claim let that backlog fill the pass ahead of a payment outcome.
+    const end = await quietAroundNow();
+    for (let one = 0; one < 3; one += 1) await service(2.5 + one / 10);
+    expect(await servicePass()).toEqual({ expiry: 3, usage: 0 });
+    expect(await deliver()).toMatchObject({ quietHours: 3 });
+    // An outcome the customer is waiting on, queued LAST — the youngest row of all.
+    expect(await enqueueNow('ORDER_CANCELLED', await order('CANCELLED', null))).toBe(true);
+
+    // A pass bounded to two, at the window's end: four rows are due.
+    const pass = await dispatcher(at(end)).deliverDue(tenantA, 2);
+    expect(pass).toMatchObject({ claimed: 2, delivered: 2 });
+    expect(sends[0]?.templateKey).toBe('bot.order.cancelled');
+    // The backlog is not lost: the next pass takes the rest.
+    expect(await dispatcher(at(end)).deliverDue(tenantA, 2)).toMatchObject({ delivered: 2 });
+    expect(sends).toHaveLength(4);
+  });
+
   it('never holds a reply or an outcome, only reminders', async () => {
     await quietAroundNow();
     const cancelled = await order('CANCELLED', null);

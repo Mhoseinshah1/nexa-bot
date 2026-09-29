@@ -1,4 +1,5 @@
-import { and, asc, eq, isNull, lte, or, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull, lte, or, sql } from 'drizzle-orm';
+import { CUSTOMER_NOTIFICATION_KINDS, CUSTOMER_NOTIFICATION_QUIET_HOURS } from '@nexa/contracts';
 import type {
   BotInstanceId,
   CustomerNotificationKind,
@@ -19,6 +20,15 @@ import type {
 } from '../application/ports.js';
 
 type Row = typeof customerNotifications.$inferSelect;
+
+/**
+ * HF-A9: the kinds quiet hours hold — the reminders. Everything else is IMMEDIATE: a reply,
+ * a payment or order outcome, a ticket answer. See `claimDue`'s ordering.
+ */
+const QUIET_KINDS: readonly CustomerNotificationKind[] = CUSTOMER_NOTIFICATION_KINDS.filter(
+  (kind) => CUSTOMER_NOTIFICATION_QUIET_HOURS[kind],
+);
+const isQuietKind = (kind: string): boolean => (QUIET_KINDS as readonly string[]).includes(kind);
 
 function toRecord(row: Row): CustomerNotificationRecord {
   return {
@@ -150,7 +160,19 @@ export class DrizzleCustomerNotificationRepository implements CustomerNotificati
           ready,
         ),
       )
-      .orderBy(asc(customerNotifications.createdAt), asc(customerNotifications.id))
+      /*
+       * IMMEDIATE kinds first, then oldest first within each group (HF-A9, Codex review of
+       * PR #107). When a quiet window ends, every reminder it held becomes due at the same
+       * instant; oldest-first alone would let that backlog fill every slot of a bounded pass
+       * ahead of a payment outcome, an order result or a ticket reply queued after it. A
+       * reminder that waited all night can wait one more pass; the customer who just paid
+       * cannot. The expression sorts only the due set the partial index already bounds.
+       */
+      .orderBy(
+        sql`${inArray(customerNotifications.kind, [...QUIET_KINDS])}`,
+        asc(customerNotifications.createdAt),
+        asc(customerNotifications.id),
+      )
       .limit(limit);
 
     const rows = await this.exec(tx)
@@ -166,7 +188,15 @@ export class DrizzleCustomerNotificationRepository implements CustomerNotificati
         ),
       )
       .returning();
-    return rows.map(toRecord);
+    // RETURNING has no order; the pass sends in the claim's own order, immediate first.
+    return rows
+      .map(toRecord)
+      .sort(
+        (a, b) =>
+          Number(isQuietKind(a.kind)) - Number(isQuietKind(b.kind)) ||
+          a.createdAt.getTime() - b.createdAt.getTime() ||
+          a.id.localeCompare(b.id),
+      );
   }
 
   /** Stamps the send as in flight. `false` means somebody else moved the row first. */
