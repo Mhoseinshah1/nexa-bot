@@ -1,7 +1,10 @@
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { money } from '@nexa/contracts';
 import {
+  BOT_A,
   bindNewAdmin,
+  fileReceipt,
   customerStatus,
   keyboardOf,
   ledgerCount,
@@ -11,6 +14,7 @@ import {
   replayOf,
   rows,
   say,
+  systemActor,
   tapOn,
   TG,
   TENANT_A,
@@ -51,6 +55,19 @@ describe('the receipt-review message is edited into its decision, once', () => {
   const editOf = (sent: readonly Sent[], messageId: number) =>
     edits(sent).find((one) => one.body['message_id'] === messageId);
 
+  /** F1: the callback notice a tap was answered with, if any. */
+  const toastOf = (sent: readonly Sent[]) =>
+    sent.find((one) => one.method === 'answerCallbackQuery')?.body['text'];
+  const captionOf = (sent: readonly Sent[], messageId: number) =>
+    String(editOf(sent, messageId)?.body['caption'] ?? '');
+  async function referenceOf(payment: string): Promise<string> {
+    const found = await rows<{ reference: string }>(
+      f,
+      sql`SELECT reference FROM payments WHERE id = ${payment}`,
+    );
+    return found[0]?.reference ?? 'MISSING';
+  }
+
   async function notices(kind: string): Promise<number> {
     const found = await rows<{ n: number }>(
       f,
@@ -68,7 +85,21 @@ describe('the receipt-review message is edited into its decision, once', () => {
     expect(await paymentState(f, payment)).toBe('CONFIRMED');
     const edited = editOf(f.sent, 501);
     expect(edited?.method).toBe('editMessageCaption');
-    expect(edited?.body['caption']).toBe('✅ پرداخت تأیید شد');
+    /*
+     * F1 (round N): the COMPLETE final record — the owner's label first, then the facts the
+     * reviewer decided on — and no wallet lines: a purchase approval moved no wallet.
+     */
+    const record = captionOf(f.sent, 501);
+    expect(record.startsWith('✅ پرداخت تأیید شد\n')).toBe(true);
+    expect(record).toContain('نوع عملیات: خرید سرویس جدید');
+    expect(record).toContain('نام محصول: پلن پایه');
+    expect(record).toContain('مدت محصول: 30 روز');
+    expect(record).toContain(`شناسه عددی کاربر: ${TG.customer}`);
+    expect(record).toContain('یوزرنیم تلگرام: @zahra_pay');
+    expect(record).toContain('مبلغ پرداختی: 250,000');
+    expect(record).toContain(`کد پیگیری پرداخت: ${await referenceOf(payment)}`);
+    expect(record).not.toContain('کیف پول');
+    expect(record).not.toContain('—');
     // The decision buttons are gone: nothing on the message can ask again.
     expect(keyboardOf(edited?.body ?? {})).toEqual([]);
     expect(methods(f.sent).filter((m) => m === 'sendMessage')).toEqual([]);
@@ -79,6 +110,8 @@ describe('the receipt-review message is edited into its decision, once', () => {
     expect(again.replyKey).toBeNull();
     expect(again.sent).toBe('NOT_ATTEMPTED');
     expect(methods(f.sent)).toEqual(['answerCallbackQuery']);
+    // F1: answered truthfully, from the payment's recorded disposition.
+    expect(toastOf(f.sent)).toBe('این پرداخت قبلاً تأیید شده است.');
 
     // Telegram redelivering the FIRST update: the same, answered and nothing else.
     const redelivered = await replayOf(f, first.update);
@@ -96,6 +129,42 @@ describe('the receipt-review message is edited into its decision, once', () => {
     expect(orders.map((o) => o.state)).toEqual(['PAID']);
   });
 
+  it('F1: an approved TOP-UP records the wallet movement off the ledger, and no product lines', async () => {
+    const c = f.ctx.container;
+    const scope = { ...TENANT_A, botInstanceId: BOT_A };
+    const issued = await c.payments.requestWalletTopupTyped(
+      scope,
+      systemActor('f1-topup'),
+      f.customer,
+      { idempotencyKey: 'f1-topup', amount: money(80_000n, 'IRT'), provider: 'MANUAL_TRANSFER' },
+    );
+    const payment = issued.payment.id;
+    await c.payments.signalTransferSent(TENANT_A, systemActor('f1-topup-s'), f.customer, {
+      idempotencyKey: 'f1-topup-signal',
+      paymentId: payment,
+      botInstanceId: BOT_A,
+    });
+    await fileReceipt(f, 'f1-topup', 'file-f1-topup');
+
+    await tapOn(f, `D:${payment}`, TG.owner, { id: 506, photo: true }).result;
+    expect(await paymentState(f, payment)).toBe('CONFIRMED');
+    const record = captionOf(f.sent, 506);
+    expect(record.startsWith('✅ پرداخت تأیید شد\n')).toBe(true);
+    expect(record).toContain('نوع عملیات: افزایش موجودی کیف پول');
+    expect(record).not.toContain('نام محصول');
+    expect(record).not.toContain('نام کاربری سرویس');
+    expect(record).toContain('مبلغ پرداختی: 80,000');
+    expect(record).toContain('مبلغ واریز شده به کیف پول: 80,000');
+    expect(record).toContain('موجودی کیف پول پیش از واریز: 0');
+    expect(record).toContain('موجودی کیف پول پس از واریز: 80,000');
+
+    const ledger = await ledgerCount(f);
+    await tapOn(f, `D:${payment}`, TG.owner, { id: 506, photo: true }).result;
+    expect(methods(f.sent)).toEqual(['answerCallbackQuery']);
+    expect(toastOf(f.sent)).toBe('این پرداخت قبلاً تأیید شده است.');
+    expect(await ledgerCount(f)).toBe(ledger);
+  });
+
   it('reject: the confirmation becomes the result in place, the receipt «❌ پرداخت رد شد», and a repeat only answers', async () => {
     const payment = await pendingWithReceipt(f, 'r2-reject');
 
@@ -111,7 +180,8 @@ describe('the receipt-review message is edited into its decision, once', () => {
     const done = await tapOn(f, confirm ?? '', TG.owner, { id: PROMPT }).result;
     expect(done.replyKey).toBe('bot.admin.rejected');
     expect(await paymentState(f, payment)).toBe('FAILED');
-    expect(editOf(f.sent, 502)?.body['caption']).toBe('❌ پرداخت رد شد');
+    expect(captionOf(f.sent, 502).startsWith('❌ پرداخت رد شد\n')).toBe(true);
+    expect(captionOf(f.sent, 502)).toContain('مبلغ پرداختی: 250,000');
     expect(keyboardOf(editOf(f.sent, 502)?.body ?? {})).toEqual([]);
     expect(editOf(f.sent, PROMPT)?.method).toBe('editMessageText');
     expect(methods(f.sent).filter((m) => m === 'sendMessage')).toEqual([]);
@@ -119,9 +189,11 @@ describe('the receipt-review message is edited into its decision, once', () => {
     const again = await tapOn(f, confirm ?? '', TG.owner, { id: PROMPT }).result;
     expect(again.replyKey).toBeNull();
     expect(methods(f.sent)).toEqual(['answerCallbackQuery']);
+    expect(toastOf(f.sent)).toBe('این پرداخت قبلاً رد شده است.');
     // The receipt's own buttons, tapped late: answered, nothing more.
     await tapOn(f, `D:${payment}`, TG.owner, { id: 502, photo: true }).result;
     expect(methods(f.sent)).toEqual(['answerCallbackQuery']);
+    expect(toastOf(f.sent)).toBe('این پرداخت قبلاً رد شده است.');
 
     expect(await paymentState(f, payment)).toBe('FAILED');
     expect(await notices('PAYMENT_REJECTED')).toBe(1);
@@ -139,12 +211,27 @@ describe('the receipt-review message is edited into its decision, once', () => {
 
     const done = await tapOn(f, confirm ?? '', TG.owner, { id: PROMPT }).result;
     expect(done.replyKey).toBe('bot.admin.credited');
-    expect(editOf(f.sent, 503)?.body['caption']).toBe('💳 مبلغ به کیف پول واریز شد');
+    /*
+     * F1: the record carries the wallet movement, read off the ledger — the credited amount
+     * and the balance immediately before and after THIS payment's entry — for a reviewer
+     * holding `users.view` (the owner does).
+     */
+    const record = captionOf(f.sent, 503);
+    expect(record.startsWith('💳 مبلغ به کیف پول واریز شد\n')).toBe(true);
+    expect(record).toContain('مبلغ پرداختی: 250,000');
+    expect(record).toContain('مبلغ واریز شده به کیف پول: 120,000');
+    expect(record).toContain('موجودی کیف پول پیش از واریز: 0');
+    expect(record).toContain('موجودی کیف پول پس از واریز: 120,000');
     const ledger = await ledgerCount(f);
 
     const again = await tapOn(f, confirm ?? '', TG.owner, { id: PROMPT }).result;
     expect(again.replyKey).toBeNull();
     expect(methods(f.sent)).toEqual(['answerCallbackQuery']);
+    expect(toastOf(f.sent)).toBe('مبلغ این پرداخت قبلاً به کیف پول واریز شده است.');
+    // The receipt's own approve button, tapped late: answered, and still nothing moves.
+    await tapOn(f, `D:${payment}`, TG.owner, { id: 503, photo: true }).result;
+    expect(methods(f.sent)).toEqual(['answerCallbackQuery']);
+    expect(toastOf(f.sent)).toBe('مبلغ این پرداخت قبلاً به کیف پول واریز شده است.');
     expect(await ledgerCount(f)).toBe(ledger);
     const credits = await rows<{ n: number }>(
       f,
@@ -166,7 +253,8 @@ describe('the receipt-review message is edited into its decision, once', () => {
 
     const done = await tapOn(f, confirm ?? '', TG.owner, { id: PROMPT }).result;
     expect(done.replyKey).toBe('bot.admin.blocked_from_receipt');
-    expect(editOf(f.sent, 504)?.body['caption']).toBe('⛔ کاربر بلاک شد');
+    expect(captionOf(f.sent, 504).startsWith('⛔ کاربر بلاک شد\n')).toBe(true);
+    expect(captionOf(f.sent, 504)).toContain(`شناسه عددی کاربر: ${TG.customer}`);
     expect((await customerStatus(f, f.customer)).status).toBe('BLOCKED');
     // A block decides nothing about the payment: it is still in the review queue.
     expect(await paymentState(f, payment)).toBe('PENDING');
@@ -174,6 +262,7 @@ describe('the receipt-review message is edited into its decision, once', () => {
     const again = await tapOn(f, confirm ?? '', TG.owner, { id: PROMPT }).result;
     expect(again.replyKey).toBeNull();
     expect(methods(f.sent)).toEqual(['answerCallbackQuery']);
+    expect(toastOf(f.sent)).toBe('این کاربر قبلاً بلاک شده است.');
   });
 
   it('the receipt PUSHED to every reviewer becomes the result on each of their chats when one decides', async () => {
@@ -198,11 +287,52 @@ describe('the receipt-review message is edited into its decision, once', () => {
     expect(await paymentState(f, payment)).toBe('CONFIRMED');
     const onReviewer = edits(f.sent).find((one) => String(one.body['chat_id']) === TG.reviewer);
     expect(onReviewer?.method).toBe('editMessageCaption');
-    expect(onReviewer?.body['caption']).toBe('✅ پرداخت تأیید شد');
+    expect(String(onReviewer?.body['caption']).startsWith('✅ پرداخت تأیید شد\n')).toBe(true);
+    expect(String(onReviewer?.body['caption'])).toContain('نام محصول: پلن پایه');
 
     // The reviewer's copy was finalised with it: their late tap is answered and nothing else.
     await tapOn(f, `D:${payment}`, TG.reviewer, { id: 11, photo: true }).result;
     expect(methods(f.sent)).toEqual(['answerCallbackQuery']);
+  });
+
+  /*
+   * F1: the wallet lines are the DECIDING reviewer's (`users.view`). Another reviewer's copy
+   * is read by somebody whose permissions the deciding turn does not know, so their record
+   * carries every fact but the balance.
+   */
+  it('F1: a credit shows the wallet movement on the deciding reviewer’s message, and never on another reviewer’s copy', async () => {
+    await bindNewAdmin(f, 'f1-reviewer', TG.reviewer, [
+      'payments.view',
+      'receipts.view',
+      'receipts.review',
+    ]);
+    const payment = await pendingWithReceipt(f, 'f1-credit-copy');
+    // The other reviewer opens the receipt from the queue: their own recorded copy.
+    await tapOn(f, `C:${payment}`, TG.reviewer, { id: 900 }).result;
+    const copies = await rows<{ chat_id: string }>(
+      f,
+      sql`SELECT chat_id FROM telegram_review_messages WHERE payment_id = ${payment}`,
+    );
+    expect(copies.map((row) => row.chat_id)).toEqual([TG.reviewer]);
+
+    await tapOn(f, `wa:${payment}`, TG.owner, { id: 601, photo: true }).result;
+    await say(f, '90000', TG.owner);
+    const confirm = keyboardOf(f.sent.at(-1)?.body ?? {}).find((b) =>
+      (b.callback_data ?? '').startsWith('wb:'),
+    )?.callback_data;
+    await tapOn(f, confirm ?? '', TG.owner, { id: PROMPT }).result;
+
+    const byChat = (chat: string) =>
+      edits(f.sent)
+        .filter((one) => String(one.body['chat_id']) === chat)
+        .map((one) => String(one.body['caption'] ?? ''))
+        .find((caption) => caption.startsWith('💳'));
+    expect(byChat(TG.owner)).toContain('موجودی کیف پول پس از واریز: 90,000');
+    const theirs = byChat(TG.reviewer) ?? '';
+    expect(theirs.startsWith('💳 مبلغ به کیف پول واریز شد\n')).toBe(true);
+    expect(theirs).toContain('مبلغ پرداختی: 250,000');
+    expect(theirs).not.toContain('کیف پول:');
+    expect(theirs).not.toContain('موجودی');
   });
 
   it('a copy of the receipt decided elsewhere is finalised into the decision on its first tap, then only answers', async () => {
@@ -214,7 +344,7 @@ describe('the receipt-review message is edited into its decision, once', () => {
     // Another message of the same receipt (the push's copy), tapped after the decision.
     const stale = await tapOn(f, `E:${payment}`, TG.owner, { id: 777, photo: true }).result;
     expect(stale.replyKey).toBe('bot.admin.receipt_already_approved');
-    expect(editOf(f.sent, 777)?.body['caption']).toBe('✅ پرداخت تأیید شد');
+    expect(captionOf(f.sent, 777).startsWith('✅ پرداخت تأیید شد\n')).toBe(true);
 
     await tapOn(f, `D:${payment}`, TG.owner, { id: 777, photo: true }).result;
     expect(methods(f.sent)).toEqual(['answerCallbackQuery']);

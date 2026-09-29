@@ -13,6 +13,8 @@ import {
   type PaymentReceiptId,
   type PermissionKey,
   type ReceiptDisposition,
+  type TelegramReviewOutcome,
+  type TemplateKey,
   type TemplateValues,
   type TenantContext,
   type UnitOfWork,
@@ -478,6 +480,32 @@ export class ReceiptService {
     const customer = await this.deps.customers.findById(scope, payment.customerId);
     const caption = await this.deps.caption.valuesFor(scope, actor, payment, customer, receipts);
     return { payment, customer, receipts, caption };
+  }
+
+  /**
+   * F1 (round N): `bot.admin.review_final`'s values for THIS reviewer — the complete record
+   * the original review message becomes once `outcome` was decided on it. Read after the
+   * decision committed, in any state the payment is now in; the facts are the caption's own
+   * (`ReceiptReviewCaption.finalValuesFor`). Null for an unknown payment. It decides nothing.
+   */
+  async finalRecord(
+    scope: TenantContext,
+    actor: ActorContext,
+    paymentId: PaymentId,
+    outcome: TelegramReviewOutcome,
+    outcomeLabel: TemplateKey,
+    /** Whether the wallet lines may be shown at all: false for a copy another reviewer reads. */
+    wallet: boolean,
+  ): Promise<TemplateValues | null> {
+    await this.deps.guard.check(scope, actor, RECEIPT_VIEW_PERMISSION);
+    const payment = await this.deps.payments.findById(scope, paymentId);
+    if (payment === null) return null;
+    const customer = await this.deps.customers.findById(scope, payment.customerId);
+    return this.deps.caption.finalValuesFor(scope, actor, payment, customer, {
+      outcome,
+      outcomeLabel,
+      wallet,
+    });
   }
 
   /**

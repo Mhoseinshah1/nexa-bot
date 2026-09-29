@@ -3698,7 +3698,7 @@ export interface BotRuntimeDeps {
    */
   readonly receipts: Pick<
     ReceiptService,
-    'submit' | 'reviewQueue' | 'reviewItem' | 'dispositionOf'
+    'submit' | 'reviewQueue' | 'reviewItem' | 'dispositionOf' | 'finalRecord'
   >;
   /**
    * The reviewer's amount capture for the credit-to-wallet disposition (Payment File 02
@@ -5142,11 +5142,11 @@ export class BotRuntime {
      */
     const origin = callbackOriginOf(input.update);
     const state = this.deps.messageState;
-    const repeatedReview =
+    const reviewRecord =
       state !== undefined && origin !== null && REVIEW_TAP_INTENTS.has(command.intent)
-        ? ((await state.findReview(scope, this.refOf(input.botInstanceId, origin)))?.finalisedAt ??
-            null) !== null
-        : false;
+        ? await state.findReview(scope, this.refOf(input.botInstanceId, origin))
+        : null;
+    const repeatedReview = (reviewRecord?.finalisedAt ?? null) !== null;
     const gate = WIZARD_GATES.get(command.intent);
     let claim: TelegramWizardRecord | null = null;
     let staleWizard = false;
@@ -5161,11 +5161,19 @@ export class BotRuntime {
       if (claimed.outcome === 'CLAIMED') claim = claimed.wizard;
       else if (claimed.outcome === 'STALE') staleWizard = true;
     }
+    /*
+     * F1 (round N): a repeated review tap is still answered and nothing else — but with the
+     * truthful notice of what was decided (e.g. «این پرداخت قبلاً تأیید شده است.»).
+     */
+    const repeatToast =
+      repeatedReview && reviewRecord !== null
+        ? await this.repeatedReviewToast(scope, actor, input.telegramUserId, reviewRecord.paymentId)
+        : {};
     let answered: PendingReply;
     try {
       answered =
         repeatedReview || staleWizard
-          ? { key: null, values: {}, buttons: [], orderId: null }
+          ? { key: null, values: {}, buttons: [], orderId: null, ...repeatToast }
           : arrival === 'BLOCKED'
             ? (blockedAdminText ??
               (ADMIN_INTENTS.has(command.intent)
@@ -5249,7 +5257,14 @@ export class BotRuntime {
      * out as it always did.
      */
     if (state !== undefined && origin !== null && reply.review?.outcome !== undefined) {
-      const reviewed = await this.finaliseReview(scope, actor, reply, origin, input.botInstanceId);
+      const reviewed = await this.finaliseReview(
+        scope,
+        actor,
+        reply,
+        origin,
+        input.botInstanceId,
+        input.telegramUserId,
+      );
       if (reviewed !== null) {
         await this.stopSpinner(scope, command, input.botInstanceId);
         return {
@@ -14455,6 +14470,7 @@ export class BotRuntime {
     reply: PendingReply,
     origin: CallbackOrigin,
     botInstanceId: BotInstanceId,
+    telegramUserId: string,
   ): Promise<CustomerSendOutcome | 'NOT_ATTEMPTED' | null> {
     const state = this.deps.messageState;
     const directive = reply.review;
@@ -14486,6 +14502,31 @@ export class BotRuntime {
         await state.unfinaliseReview(scope, actor, id);
       }
     };
+    /*
+     * F1 (round N): a receipt becomes the COMPLETE final record — the outcome's label and the
+     * facts the reviewer decided on — read once, after the decision committed. The wallet
+     * lines go only on this reviewer's own chat: a copy pushed to another reviewer is read by
+     * somebody whose permissions this turn does not know, so theirs carries every fact but
+     * the balance. A record that cannot be read (no administrator behind the tap, a payment
+     * gone) falls back to the outcome's one line, which is still true.
+     */
+    const records = new Map<boolean, { key: TemplateKey; values: TemplateValues }>();
+    const recordFor = async (
+      own: boolean,
+    ): Promise<{ key: TemplateKey; values: TemplateValues }> => {
+      const cached = records.get(own);
+      if (cached !== undefined) return cached;
+      const record = await this.finalReviewRecord(
+        scope,
+        actor,
+        telegramUserId,
+        paymentId,
+        outcome,
+        own,
+      );
+      records.set(own, record);
+      return record;
+    };
     let answer: CustomerSendOutcome | 'NOT_ATTEMPTED' = 'NOT_ATTEMPTED';
     for (const row of stamped) {
       const message = {
@@ -14493,16 +14534,18 @@ export class BotRuntime {
         messageId: row.messageId,
         botInstanceId: row.botInstanceId,
       };
+      const ownChat = row.botInstanceId === ref.botInstanceId && row.chatId === ref.chatId;
       if (same(row)) {
-        // A receipt becomes the outcome's one line; a prompt becomes this reply's sentence.
+        // A receipt becomes the final record; a prompt becomes this reply's sentence.
         const receipt = row.role === 'REVIEW';
+        const record = receipt ? await recordFor(true) : null;
         const edited = await editSent(
           this.deps.messenger,
           scope,
           {
             ...message,
-            templateKey: receipt ? REVIEW_OUTCOME_KEYS[outcome] : reply.key,
-            values: receipt ? {} : reply.values,
+            templateKey: record?.key ?? reply.key,
+            values: record?.values ?? reply.values,
             buttons: receipt ? [] : reply.buttons,
           },
           origin.media,
@@ -14511,12 +14554,13 @@ export class BotRuntime {
         answer = edited.outcome;
         continue;
       }
+      const record = row.role === 'REVIEW' ? await recordFor(ownChat) : null;
       const other =
-        row.role === 'REVIEW'
+        record !== null
           ? await editSent(
               this.deps.messenger,
               scope,
-              { ...message, templateKey: REVIEW_OUTCOME_KEYS[outcome], values: {}, buttons: [] },
+              { ...message, templateKey: record.key, values: record.values, buttons: [] },
               row.hasMedia,
             )
           : this.deps.messenger.clearButtons === undefined
@@ -14525,6 +14569,91 @@ export class BotRuntime {
       await clearFailed(row.id, other);
     }
     return answer;
+  }
+
+  /**
+   * F1 (round N): the final record a receipt review message becomes — `bot.admin.review_final`
+   * with the facts the reviewer decided on, read as the administrator who tapped (the
+   * receipts read charges `receipts.view`, and the wallet lines `users.view`). `GONE`, or a
+   * record that cannot be read, is the outcome's own one line: still true, and never blank.
+   */
+  private async finalReviewRecord(
+    scope: TenantContext,
+    actor: ActorContext,
+    telegramUserId: string,
+    paymentId: string,
+    outcome: TelegramReviewOutcome | 'GONE',
+    wallet: boolean,
+  ): Promise<{ key: TemplateKey; values: TemplateValues }> {
+    const line = { key: REVIEW_OUTCOME_KEYS[outcome], values: {} };
+    if (outcome === 'GONE') return line;
+    try {
+      const reviewer = await this.reviewerActor(scope, actor, telegramUserId);
+      if (reviewer === null) return line;
+      const values = await this.deps.receipts.finalRecord(
+        scope,
+        reviewer,
+        paymentId as PaymentId,
+        outcome,
+        REVIEW_OUTCOME_KEYS[outcome],
+        wallet,
+      );
+      return values === null ? line : { key: 'bot.admin.review_final', values };
+    } catch {
+      // A refused read decides nothing; the one line still says what was decided.
+      return line;
+    }
+  }
+
+  /** The administrator behind a review tap, or null when there is none. */
+  private async reviewerActor(
+    scope: TenantContext,
+    actor: ActorContext,
+    telegramUserId: string,
+  ): Promise<ActorContext | null> {
+    const admins = this.deps.telegramAdmins;
+    if (admins === undefined) return null;
+    const identity = await admins.resolve(scope, telegramUserId, actor.correlationId);
+    return identity === null ? null : identity.actor;
+  }
+
+  /**
+   * F1 (round N): what a tap on a review message ALREADY finalised is answered with — the
+   * callback's own notice, and nothing else. The payment's recorded disposition decides the
+   * sentence; a payment still pending whose message was finalised was finalised by a BLOCK
+   * (the one decision that leaves it in the queue). Nothing is decided, credited, sent or
+   * edited here. A read that cannot be made answers without a notice, as before.
+   */
+  private async repeatedReviewToast(
+    scope: TenantContext,
+    actor: ActorContext,
+    telegramUserId: string,
+    paymentId: string,
+  ): Promise<Pick<PendingReply, 'toast'>> {
+    const toast = (key: TemplateKey): Pick<PendingReply, 'toast'> => ({
+      toast: { key, values: {} },
+    });
+    try {
+      const reviewer = await this.reviewerActor(scope, actor, telegramUserId);
+      if (reviewer === null) return {};
+      const found = await this.deps.receipts.dispositionOf(scope, reviewer, paymentId as PaymentId);
+      if (found !== null) {
+        switch (found.disposition) {
+          case 'APPROVED':
+            return toast('bot.admin.review_repeat_approved');
+          case 'REJECTED':
+            return toast('bot.admin.review_repeat_rejected');
+          case 'CREDITED_TO_WALLET':
+            return toast('bot.admin.review_repeat_credited');
+        }
+      }
+      const pending = await this.deps.receipts.reviewItem(scope, reviewer, paymentId as PaymentId);
+      return toast(
+        pending === null ? 'bot.admin.review_repeat_gone' : 'bot.admin.review_repeat_blocked',
+      );
+    } catch {
+      return {};
+    }
   }
 
   private async stopSpinner(

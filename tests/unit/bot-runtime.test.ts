@@ -1306,6 +1306,18 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.admin.reminder_usage_second_button',
       'bot.admin.reminders_button',
       'bot.admin.reminders_section',
+      /*
+       * F1 (round N): the receipt review message's complete final record, and the notice a
+       * tap on an already-finalised review message is answered with. Reviewed against the
+       * same rule: the record restates facts of a decision already committed, and each
+       * notice names the recorded disposition and offers nothing to do again.
+       */
+      'bot.admin.review_final',
+      'bot.admin.review_repeat_approved',
+      'bot.admin.review_repeat_blocked',
+      'bot.admin.review_repeat_credited',
+      'bot.admin.review_repeat_gone',
+      'bot.admin.review_repeat_rejected',
       'bot.admin.revoke_button',
       'bot.admin.revoked',
       'bot.admin.roles_set',
