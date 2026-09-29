@@ -1328,6 +1328,25 @@ While the release before it runs:
 
 Nothing needs doing before rolling back past HF-A9.
 
+### What a rollback changes back: the service card and connection files (R3)
+
+R3 adds one table, `operation_card_messages` (migration `0140_r3_operation_card_messages`):
+the chat and message a customer's disable or enable was tapped from. The release before it
+never reads it. While that release runs:
+
+- **A disable or enable planned by R3 and performed by the old release** is answered the
+  old way — the lane's «درخواست شما با موفقیت روی سرور اعمال شد» — and the card is not
+  edited. Its row stays unanswered; nothing reads it until the roll-forward, whose sweep
+  may then edit that card to the state it is in by then (the card shows the truth either
+  way).
+- **The refresh button queues a `SYNC_USAGE` again** and answers «request registered»,
+  and link changes and disables send their old intermediate messages.
+- **A purchase's connection files are no longer sent automatically**, and a link change
+  is announced with the purchase card again. The manual «📁 دریافت فایل‌های اتصال» still
+  works, with the panel's own caption.
+
+Nothing needs doing before rolling back past R3.
+
 ### How far back you can roll
 
 **One release**, safely. Migrations are expand-only within a release
