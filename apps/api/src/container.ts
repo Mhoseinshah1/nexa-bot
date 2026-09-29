@@ -1956,6 +1956,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     provisioning: provisioningService,
     resellers: resellerService,
     panels: panelOperability,
+    panelPolicy: panelPolicyReader,
     guard,
     audit,
     opsLog,
