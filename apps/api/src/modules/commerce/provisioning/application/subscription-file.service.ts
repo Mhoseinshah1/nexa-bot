@@ -27,7 +27,13 @@ import type { PanelPolicyGate } from '../../../platform/panels/application/panel
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { SafeHttpClient } from '../../../../infrastructure/net/safe-http.js';
 import { checkUrl, type UrlPolicyOptions } from '../../../../infrastructure/net/url-policy.js';
-import type { CustomerMessenger } from '../../messaging/application/ports.js';
+import type {
+  CustomerCaption,
+  CustomerMessenger,
+  CustomerSendResult,
+} from '../../messaging/application/ports.js';
+import { parseCaptionMarkup } from '../../messaging/application/caption-markup.js';
+import { planMediaBatches } from '../../messaging/application/media-group.js';
 import { decideOperability } from './panel-operability.js';
 import { providerRefFor } from './provision-executor.js';
 import type { ServiceRecord } from './ports.js';
@@ -55,7 +61,7 @@ export interface SubscriptionFileDeps {
   readonly http: Pick<SafeHttpClient, 'forBase'>;
   readonly urlPolicy: UrlPolicyOptions;
   readonly probeBudget: ProbeBudget;
-  readonly messenger: Pick<CustomerMessenger, 'sendFile'>;
+  readonly messenger: Pick<CustomerMessenger, 'sendFile' | 'sendMediaGroup'>;
   readonly guard: PermissionGuard;
   readonly uow: UnitOfWork<TransactionScope>;
   readonly clock: Clock;
@@ -247,34 +253,91 @@ export class SubscriptionFileService {
     }
     if (!fetched.found || fetched.files.length === 0) return { outcome: 'UNAVAILABLE' };
 
+    /*
+     * Round N (F2): the files as ALBUMS, in the panel's order, each with the panel's own
+     * caption. `planMediaBatches` cuts the list into the fewest consecutive albums Telegram
+     * accepts (every file here is a document, so one album class; at most 10 per album); a
+     * batch of one — the only thing that cannot be an album — goes by `sendFile`, in its
+     * place. The first batch Telegram does not certainly accept stops the delivery: nothing
+     * after it is sent and nothing is retried, exactly as the one-by-one loop did.
+     */
+    const files = fetched.files;
+    const kinds = files.map(() => 'DOCUMENT' as const);
     let sent = 0;
-    for (const file of fetched.files) {
-      const result = await this.deps.messenger.sendFile(scope, {
-        chatId,
-        botInstanceId,
-        kind: 'DOCUMENT',
-        source: {
-          kind: 'BYTES',
-          bytes: file.bytes,
-          fileName: file.fileName,
-          mimeType: file.mediaType,
-        },
-        /*
-         * R3 item 8: this installation's own caption — the service username — and never
-         * the panel's. The panel's caption carried «Limit», «Expires» and raw `<code>`
-         * markup, none of which helps a customer and all of which was sent verbatim.
-         * `file.caption` is still parsed and bounded by the adapter; it is simply not
-         * shown.
-         */
-        caption: {
-          templateKey: 'bot.service.connection_file_caption' as const,
-          values: { serviceUsername: service.providerUsername },
-        },
+    for (const batch of planMediaBatches(kinds)) {
+      const items = batch.map((index) => {
+        const file = files[index] as (typeof files)[number];
+        return {
+          kind: 'DOCUMENT' as const,
+          source: {
+            kind: 'BYTES' as const,
+            bytes: file.bytes,
+            fileName: file.fileName,
+            mimeType: file.mediaType,
+          },
+          caption: connectionFileCaption(file.caption, service.providerUsername),
+        };
       });
+      const sendMediaGroup = this.deps.messenger.sendMediaGroup;
+      const first = items[0];
+      let result: CustomerSendResult;
+      if (items.length > 1 && sendMediaGroup !== undefined) {
+        result = await sendMediaGroup.call(this.deps.messenger, scope, {
+          chatId,
+          botInstanceId,
+          items,
+        });
+      } else if (items.length === 1 && first !== undefined) {
+        result = await this.deps.messenger.sendFile(scope, { chatId, botInstanceId, ...first });
+      } else {
+        // A stand-in with no album method: the same files, one by one, in the same order.
+        result = { outcome: 'DELIVERED' };
+        for (const item of items) {
+          result = await this.deps.messenger.sendFile(scope, { chatId, botInstanceId, ...item });
+          if (result.outcome !== 'DELIVERED') break;
+          sent += 1;
+        }
+        if (result.outcome !== 'DELIVERED') return { outcome: 'STOPPED', sent };
+        continue;
+      }
       // Telegram declining, or answering nobody knows what: stop, and retry nothing.
       if (result.outcome !== 'DELIVERED') return { outcome: 'STOPPED', sent };
-      sent += 1;
+      sent += items.length;
     }
     return { outcome: 'SENT', sent, failed: fetched.failed };
   }
+}
+
+/**
+ * Round N (F2): one connection file's caption.
+ *
+ * The PANEL's caption is the source of truth (`bot.service.file_caption`, `{caption}`,
+ * PLAIN_TEXT): RickPanel builds one per file, and the owner decided it is what the customer
+ * reads — no longer replaced by this installation's username line (which R3 had done). Its
+ * markup is read by `parseCaptionMarkup` into text and entities, so `<code>` shows as code
+ * and never as a raw tag, and nothing the panel wrote is parsed by Telegram as HTML.
+ *
+ * A file the panel gave NO caption (or one that was only markup) is the one case this
+ * installation writes its own: `bot.service.connection_file_caption`, the service's username
+ * — the identifying line R3 introduced — rather than a bare file the customer cannot tell
+ * apart from another service's.
+ */
+export function connectionFileCaption(
+  providerCaption: string | null,
+  serviceUsername: string,
+): CustomerCaption {
+  const markup = providerCaption === null ? null : parseCaptionMarkup(providerCaption);
+  if (markup === null || markup.text.length === 0) {
+    return {
+      templateKey: 'bot.service.connection_file_caption',
+      values: { serviceUsername },
+    };
+  }
+  return {
+    templateKey: 'bot.service.file_caption',
+    values: { caption: markup.text },
+    ...(markup.entities.length === 0
+      ? {}
+      : { markup: { token: 'caption', entities: markup.entities } }),
+  };
 }
