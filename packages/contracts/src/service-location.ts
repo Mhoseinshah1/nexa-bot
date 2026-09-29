@@ -206,10 +206,21 @@ export const serviceLocationWriteSchema = z
     message: 'A price is an amount and a currency, or it is absent.',
     path: ['priceAmount'],
   })
-  .refine((a) => a.priceAmount === null || BigInt(a.priceAmount) <= MAX_MONEY_AMOUNT_MINOR, {
-    message: 'That price is larger than an amount this system can hold.',
-    path: ['priceAmount'],
-  })
+  /*
+   * Guarded by the field's own pattern: zod 4 runs object refinements after a continuable
+   * regex failure, and `BigInt('abc')` would THROW out of `safeParse` — a 500 where the
+   * pattern's issue is the 400 owed. A malformed amount is that issue's, not this one's.
+   */
+  .refine(
+    (a) =>
+      a.priceAmount === null ||
+      !/^\d{1,19}$/u.test(a.priceAmount) ||
+      BigInt(a.priceAmount) <= MAX_MONEY_AMOUNT_MINOR,
+    {
+      message: 'That price is larger than an amount this system can hold.',
+      path: ['priceAmount'],
+    },
+  )
   .refine((a) => !a.enabled || a.priceAmount !== null, {
     message: 'An enabled location needs a price. Zero is free; empty is not for sale.',
     path: ['priceAmount'],
