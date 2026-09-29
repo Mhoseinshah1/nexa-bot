@@ -325,7 +325,7 @@ describe('a customer manages the service they bought', () => {
   // Suspend and resume
   // =========================================================================
 
-  it('pauses the account on the panel, and says nothing on the tap before it is done', async () => {
+  it('pauses the account on the panel, and claims nothing on the tap', async () => {
     const service = await activeService('suspend-ok');
 
     const tapped = await runtime().handle(
