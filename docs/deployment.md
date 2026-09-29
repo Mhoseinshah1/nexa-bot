@@ -1335,6 +1335,25 @@ and the widened CHECK accepts everything either release writes. While it runs:
 
 Nothing needs doing before rolling back past R2.
 
+Three notes on R2 itself, for whoever operates or extends it:
+
+- **`SERVICE_RENEWED` carries no payload** (ADR 0030 §1). The announcer enqueues the kind and
+  the RENEW operation's id; `DrizzleRenewalFactsReader` reads the account name, the duration,
+  the new expiry and the tracking code at send time from that operation, its order, its
+  service and the confirmed payment — the shape `TICKET_REPLY` and `TICKET_REPLY_ATTACHMENT`
+  already use (`docs/wp-a7-tickets-audit.md` §2). A read that finds no succeeded renewal
+  sends nothing.
+- **`telegram_wizards` and `telegram_review_messages` are not pruned yet.** Each tracked
+  message keeps its row; a retention sweep is a known limitation, not yet built.
+- **The state writes take no idempotency key of their own.** Each is one conditional
+  statement naming what it moves from: a claim names the step, the lease and, for a
+  redelivery, the update's key; a landing names the claim's version; a review stamp names
+  an unstamped row. So a replayed update either passes the gate again by its own key and
+  repeats writes that are idempotent by that key, or matches nothing. That is safe because
+  the rows are presentation only: the order, payment and capture writes behind a tap keep
+  their own idempotency keys, and the worst a replay can do here is answer a tap as stale
+  or show the same screen again.
+
 ### What a rollback delays or drops: reminder quiet hours (HF-A9)
 
 HF-A9 holds a reminder that falls due inside the tenant's quiet window until the window
