@@ -769,15 +769,7 @@ export class DrizzleReportingRepository implements ReportingRepository {
       services: number;
       balance: string | null;
     }>(sql`
-      WITH sold AS (
-        SELECT t.reseller_customer_id, o.currency, count(*)::int AS n, sum(o.total_amount) AS amount
-          FROM order_reseller_terms t
-          JOIN orders o ON o.tenant_id = t.tenant_id AND o.id = t.order_id
-         WHERE t.tenant_id = ${t} AND o.state = 'PAID'
-           AND o.purpose = ANY(${purposes(SALE_ORDER_PURPOSES)})
-           AND ${within(sql`o.settled_at`, window)}
-         GROUP BY t.reseller_customer_id, o.currency
-      ), delivered AS (
+      WITH sold AS (${resellerSalesStatement(scope.tenantId, window)}), delivered AS (
         SELECT t.reseller_customer_id, count(*)::int AS n
           FROM order_reseller_terms t
           JOIN services s ON s.tenant_id = t.tenant_id AND s.order_id = t.order_id
@@ -814,6 +806,29 @@ export class DrizzleReportingRepository implements ReportingRepository {
       tierLimit: { currency: row.tier_limit_currency, amount: BigInt(row.tier_limit_amount) },
       balanceInSellingCurrency: BigInt(row.balance ?? '0'),
     }));
+  }
+
+  /**
+   * Round N R2: every reseller's sales in a window, per currency — `resellerSalesStatement`,
+   * the report's own definition, and nothing else. Keyed by the reseller's customer id.
+   */
+  async resellerSalesIn(
+    scope: TenantContext,
+    window: Window,
+  ): Promise<ReadonlyMap<string, ReadonlyMap<CurrencyCode, bigint>>> {
+    const rows = await this.rows<{
+      reseller_customer_id: string;
+      currency: CurrencyCode;
+      amount: string;
+    }>(sql`SELECT s.reseller_customer_id, s.currency, s.amount::text AS amount
+             FROM (${resellerSalesStatement(scope.tenantId, window)}) s`);
+    const out = new Map<string, Map<CurrencyCode, bigint>>();
+    for (const row of rows) {
+      const perCurrency = out.get(row.reseller_customer_id) ?? new Map<CurrencyCode, bigint>();
+      perCurrency.set(row.currency, BigInt(row.amount));
+      out.set(row.reseller_customer_id, perCurrency);
+    }
+    return out;
   }
 
   async failures(scope: TenantContext, window: Window): Promise<FailureTotals> {
@@ -1051,6 +1066,30 @@ export class DrizzleReportingRepository implements ReportingRepository {
 }
 
 // --- Fragments --------------------------------------------------------------------
+
+/**
+ * A reseller's SALES in a window (WP12 §5.7): the ONE statement of it, shared by the
+ * resellers report and the round N monthly minimum (`docs/round-n-reseller-audit.md` §3.2),
+ * so the two can never disagree about what a reseller sold.
+ *
+ * Orders with an `order_reseller_terms` row — written only when an ACTIVE reseller's order
+ * was confirmed (R9) — that are `PAID` (a fully refunded order is `REFUNDED` and is not a
+ * sale; a partial refund leaves it `PAID` and is not netted, WP12 §4), of a sale purpose,
+ * settled inside the half-open window; `orders.total_amount`, what the reseller was charged,
+ * summed per reseller and currency. Never `margin_amount` or `cost_amount`.
+ *
+ * Columns: `reseller_customer_id`, `currency`, `n` (int), `amount` (numeric).
+ */
+export function resellerSalesStatement(tenantId: string, window: Window): SQL {
+  return sql`
+        SELECT t.reseller_customer_id, o.currency, count(*)::int AS n, sum(o.total_amount) AS amount
+          FROM order_reseller_terms t
+          JOIN orders o ON o.tenant_id = t.tenant_id AND o.id = t.order_id
+         WHERE t.tenant_id = ${tenantId}::uuid AND o.state = 'PAID'
+           AND o.purpose = ANY(${purposes(SALE_ORDER_PURPOSES)})
+           AND ${within(sql`o.settled_at`, window)}
+         GROUP BY t.reseller_customer_id, o.currency`;
+}
 
 function tenant(scope: TenantContext): SQL {
   return sql`${scope.tenantId}::uuid`;

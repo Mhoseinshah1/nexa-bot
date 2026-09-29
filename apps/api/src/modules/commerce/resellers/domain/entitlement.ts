@@ -1,7 +1,8 @@
-import type {
-  DiscountablePurpose,
-  ResellerEntitlementDimension,
-  ResellerGrantKind,
+import {
+  RESELLER_GRANT_DIMENSION,
+  type DiscountablePurpose,
+  type ResellerEntitlementDimension,
+  type ResellerGrantKind,
 } from '@nexa/contracts';
 
 /** One grant as the evaluator reads it: a kind and a subject, `null` for "every one". */
@@ -63,6 +64,43 @@ export function decideEntitlement(
       : grants(all, 'BOT', subject.botInstanceId);
   if (!bot) return { allowed: false, dimension: 'BOT' };
   return { allowed: true };
+}
+
+/**
+ * A reseller's own entitlement override (round N R1): the dimensions it overrides, and its
+ * grants of them. A dimension listed with no grant of it overrides that dimension with
+ * NOTHING — deny by default, exactly as a tier with no row of a kind.
+ */
+export interface EntitlementOverride {
+  readonly dimensions: readonly ResellerEntitlementDimension[];
+  readonly grants: readonly EntitlementGrant[];
+}
+
+/**
+ * The grants a reseller is judged by: the tier's, with each dimension the reseller overrides
+ * REPLACED by the reseller's own grants of it (`docs/round-n-reseller-audit.md` §2.1).
+ *
+ * The existing precedence, stated per dimension: `USER_OVERRIDE` replaces `TIER_PRICE` (R3),
+ * so a reseller's own grants replace the tier's, never add to them — an override can narrow
+ * as well as widen. Per DIMENSION, not per kind: `PRODUCT` and `CATEGORY` are one dimension,
+ * so an override naming only products drops the tier's categories too.
+ *
+ * Deterministic and pure. The result is an ordinary grant set, which is the point:
+ * `decideEntitlement` and `catalogueScope` read it exactly as they read a tier's, so the one
+ * evaluator stays one and every caller — the catalogue courtesy and the authoritative
+ * confirmation alike — judges the same set. A grant of the override outside the dimensions
+ * it lists is ignored rather than trusted (the schema and a CHECK refuse writing one).
+ */
+export function effectiveGrants(
+  tierGrants: readonly EntitlementGrant[],
+  override: EntitlementOverride | null,
+): readonly EntitlementGrant[] {
+  if (override === null || override.dimensions.length === 0) return tierGrants;
+  const overridden = new Set(override.dimensions);
+  return [
+    ...tierGrants.filter((g) => !overridden.has(RESELLER_GRANT_DIMENSION[g.kind])),
+    ...override.grants.filter((g) => overridden.has(RESELLER_GRANT_DIMENSION[g.kind])),
+  ];
 }
 
 /**

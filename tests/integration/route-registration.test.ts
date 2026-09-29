@@ -188,6 +188,12 @@ describe('dynamic route registration', () => {
       ['GET', `resellers/${id}/credit`],
       ['GET', `resellers/${id}/purchases`],
       ['GET', `resellers/${id}/history`],
+      // Round N package D: plan controls and the monthly minimum.
+      ['POST', `reseller-tiers/${id}/monthly-minimum`],
+      ['POST', `resellers/${id}/monthly-minimum`],
+      ['POST', `resellers/${id}/grants`],
+      ['GET', `resellers/${id}/policy`],
+      ['GET', 'reseller-minimums'],
       ['GET', `services/${id}`],
       ['GET', `services/${id}/operations`],
       ['POST', `services/${id}/sync-usage`],

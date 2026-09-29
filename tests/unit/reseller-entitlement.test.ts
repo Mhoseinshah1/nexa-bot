@@ -12,7 +12,9 @@ import type { OrderTotalsRecord } from '../../apps/api/src/modules/commerce/orde
 import {
   catalogueScope,
   decideEntitlement,
+  effectiveGrants,
   type EntitlementGrant,
+  type EntitlementOverride,
   type EntitlementSubject,
 } from '../../apps/api/src/modules/commerce/resellers/domain/entitlement';
 import {
@@ -209,6 +211,146 @@ describe('catalogueScope agrees with decideEntitlement', () => {
       subject: 'RENEW',
     });
     expect(catalogueScope(grants, BOT).shows).toBe(false);
+  });
+});
+
+/*
+ * Round N R1: a reseller's own entitlement override, with the existing precedence — the
+ * override REPLACES the tier, per whole dimension (`docs/round-n-reseller-audit.md` §2.1).
+ */
+describe('effectiveGrants: the per-reseller override over the tier', () => {
+  const TIER: readonly EntitlementGrant[] = [
+    { kind: 'OPERATION', subject: null },
+    { kind: 'CATEGORY', subject: null },
+    { kind: 'PANEL', subject: PANEL },
+    { kind: 'BOT', subject: null },
+  ];
+
+  it('is the tier itself when there is no override', () => {
+    expect(effectiveGrants(TIER, null)).toBe(TIER);
+    expect(effectiveGrants(TIER, { dimensions: [], grants: [] })).toBe(TIER);
+  });
+
+  it('narrows the catalogue to the named product, dropping the tier’s categories with it', () => {
+    const override: EntitlementOverride = {
+      dimensions: ['CATALOGUE'],
+      grants: [{ kind: 'PRODUCT', subject: PRODUCT }],
+    };
+    const effective = effectiveGrants(TIER, override);
+    expect(decideEntitlement(effective, subject())).toEqual({ allowed: true });
+    // The tier grants every category; the override REPLACES the whole dimension, so another
+    // product in a granted category is refused. Per kind, it would still have been sold.
+    expect(decideEntitlement(effective, subject({ productId: OTHER_PRODUCT }))).toEqual({
+      allowed: false,
+      dimension: 'CATALOGUE',
+    });
+    // Every other dimension is inherited unchanged.
+    expect(decideEntitlement(effective, subject({ panelId: 'panel-2' }))).toEqual({
+      allowed: false,
+      dimension: 'PANEL',
+    });
+  });
+
+  it('widens what the tier refuses, only in the dimension it overrides', () => {
+    const override: EntitlementOverride = {
+      dimensions: ['PANEL'],
+      grants: [{ kind: 'PANEL', subject: null }],
+    };
+    const effective = effectiveGrants(TIER, override);
+    expect(decideEntitlement(TIER, subject({ panelId: 'panel-2' })).allowed).toBe(false);
+    expect(decideEntitlement(effective, subject({ panelId: 'panel-2' }))).toEqual({
+      allowed: true,
+    });
+  });
+
+  it('refuses a dimension overridden with nothing: deny by default, as for a tier', () => {
+    const effective = effectiveGrants(TIER, { dimensions: ['OPERATION'], grants: [] });
+    expect(decideEntitlement(effective, subject())).toEqual({
+      allowed: false,
+      dimension: 'OPERATION',
+    });
+  });
+
+  it('ignores an override grant outside the dimensions it lists', () => {
+    const effective = effectiveGrants(TIER, {
+      dimensions: ['BOT'],
+      grants: [
+        { kind: 'BOT', subject: BOT },
+        // Not in a listed dimension: never trusted, so the tier's panels still apply.
+        { kind: 'PANEL', subject: null },
+      ],
+    });
+    expect(decideEntitlement(effective, subject({ panelId: 'panel-2' }))).toEqual({
+      allowed: false,
+      dimension: 'PANEL',
+    });
+    expect(decideEntitlement(effective, subject({ botInstanceId: 'bot-2' }))).toEqual({
+      allowed: false,
+      dimension: 'BOT',
+    });
+  });
+
+  it('is deterministic: the same inputs in any order decide the same way', () => {
+    const override: EntitlementOverride = {
+      dimensions: ['CATALOGUE', 'BOT'],
+      grants: [
+        { kind: 'BOT', subject: BOT },
+        { kind: 'PRODUCT', subject: PRODUCT },
+      ],
+    };
+    const reversed: EntitlementOverride = {
+      dimensions: ['BOT', 'CATALOGUE'],
+      grants: [...override.grants].reverse(),
+    };
+    for (const s of [subject(), subject({ productId: OTHER_PRODUCT }), subject({ botInstanceId: 'bot-2' })]) {
+      expect(decideEntitlement(effectiveGrants([...TIER].reverse(), reversed), s)).toEqual(
+        decideEntitlement(effectiveGrants(TIER, override), s),
+      );
+    }
+  });
+});
+
+describe('catalogueScope agrees with decideEntitlement under every override shape', () => {
+  const DIMENSIONS = ['OPERATION', 'CATALOGUE', 'PANEL', 'BOT'] as const;
+  // What an override grants when it overrides: nothing, a narrow set, or everything.
+  const OVERRIDE_GRANTS: readonly (readonly EntitlementGrant[])[] = [
+    [],
+    [
+      { kind: 'OPERATION', subject: 'NEW_SERVICE' },
+      { kind: 'PRODUCT', subject: OTHER_PRODUCT },
+      { kind: 'PANEL', subject: 'panel-2' },
+      { kind: 'BOT', subject: 'bot-2' },
+    ],
+    EVERYTHING,
+  ];
+  const subjects: EntitlementSubject[] = [];
+  for (const productId of [PRODUCT, OTHER_PRODUCT])
+    for (const categoryId of [CATEGORY, null])
+      for (const panelId of [PANEL, 'panel-2'])
+        for (const botInstanceId of [BOT, 'bot-2', null])
+          subjects.push({ operation: 'NEW_SERVICE', productId, categoryId, panelId, botInstanceId });
+
+  it('over every tier grant subset × dimension subset × override grant set', () => {
+    let checked = 0;
+    for (let mask = 0; mask < 2 ** ALPHABET.length; mask += 1) {
+      const tier = ALPHABET.filter((_, i) => (mask & (1 << i)) !== 0);
+      for (let dims = 0; dims < 2 ** DIMENSIONS.length; dims += 1) {
+        const dimensions = DIMENSIONS.filter((_, i) => (dims & (1 << i)) !== 0);
+        for (const grants of OVERRIDE_GRANTS) {
+          const effective = effectiveGrants(tier, { dimensions, grants });
+          for (const s of subjects) {
+            const rule = decideEntitlement(effective, s).allowed;
+            if (rule !== catalogueShows(effective, s)) {
+              throw new Error(
+                `disagreement: tier=${JSON.stringify(tier)} override=${JSON.stringify({ dimensions, grants })} subject=${JSON.stringify(s)}`,
+              );
+            }
+            checked += 1;
+          }
+        }
+      }
+    }
+    expect(checked).toBe(2 ** ALPHABET.length * 16 * OVERRIDE_GRANTS.length * subjects.length);
   });
 });
 

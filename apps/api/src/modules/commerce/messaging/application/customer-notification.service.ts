@@ -187,6 +187,9 @@ const ACCOUNT_REMINDER_KINDS = new Set<string>([
   'WALLET_LOW_BALANCE',
   'PAYMENT_PENDING_REMINDER',
   'ORDER_PENDING_REMINDER',
+  // Round N R2: the reseller monthly minimum, read from its notice row the same way.
+  'RESELLER_MINIMUM_REMINDER',
+  'RESELLER_MINIMUM_ACHIEVED',
 ]);
 
 export interface CustomerNotificationDeps {
