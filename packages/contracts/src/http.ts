@@ -5425,9 +5425,11 @@ const trialLimitSchema = z.number().int().min(TRIAL_LIMIT_MIN).max(TRIAL_LIMIT_M
  *
  * `override` is the stored value, echoed, or null when the customer inherits the
  * global default — a screen that could not say which is ADR-0015's "write-only
- * setting". `featureEnabled` is here because an allowance on an installation whose
- * `trials` flag is off is a number nobody can use, and saying so is cheaper than an
- * operator discovering it from a customer.
+ * setting". `featureEnabled` is here because an allowance on an installation that offers
+ * no trial is a number nobody can use, and saying so is cheaper than an operator
+ * discovering it from a customer. Since F5 it means "at least one panel has its trial
+ * switched on" — the `trials` flag it used to echo is retired, and a panel's own trial is
+ * the switch. The name is kept so the shape does not change under a client.
  */
 export const trialAllowanceSchema = z.object({
   customerId: z.string(),
