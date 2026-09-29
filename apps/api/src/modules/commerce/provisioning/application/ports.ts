@@ -57,6 +57,14 @@ export interface ServiceRecord {
    * is recorded. Raised only by an `ADD_DEVICES` the panel applied.
    */
   readonly deviceLimit: number | null;
+  /**
+   * Where the account sits on its panel (WP-A6): the adapter-defined key and the name the
+   * customer was shown, both or neither. Null for a service that has never moved, which
+   * is in its panel's INITIAL location. Written only by a `CHANGE_LOCATION` the panel
+   * applied.
+   */
+  readonly locationKey: string | null;
+  readonly locationLabel: string | null;
   readonly usageSyncedAt: Date | null;
   readonly deliveryState: ServiceDeliveryState;
   readonly deliveryAttempts: number;
@@ -407,6 +415,43 @@ export interface ServiceRepository {
     now: Date,
     tx: TransactionScope,
   ): Promise<boolean>;
+
+  /**
+   * Records the location a `CHANGE_LOCATION` left the account in (WP-A6): the key from the
+   * operation's absolute target and the name from the change request's snapshot, together.
+   *
+   * Conditional on the service still being in one of `legalFrom` — the states that still
+   * have an account — so a service terminated while the move was on the wire keeps what
+   * the terminate wrote. Touches nothing else: not the state, not the allowance, not the
+   * delivery (a changed link is `recordRotation`'s, called beside this).
+   */
+  recordLocation(
+    scope: TenantContext,
+    id: string,
+    location: { readonly key: string; readonly label: string },
+    legalFrom: readonly ServiceState[],
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<boolean>;
+
+  /**
+   * Freezes a panel's OLD initial location onto every never-moved service on it (WP-A6),
+   * before an operator's write changes what "never moved" means there: a NULL location is
+   * read as the panel's initial location, so editing, unmarking, moving or deleting that
+   * row would otherwise silently relocate every such service. Every `legalFrom` state —
+   * the ones with an account that exists or may — and a `PENDING_PROVISION` one only when
+   * its create has STARTED (a stamped `PROVISION` still `IN_FLIGHT` or `UNKNOWN`), decided
+   * after the candidates' row locks are held, the lock that create's stamp takes. Only rows
+   * still NULL, so a move applied concurrently is never overwritten. Returns how many.
+   */
+  recordLocationForUnmoved(
+    scope: TenantContext,
+    panelId: string,
+    location: { readonly key: string; readonly label: string },
+    legalFrom: readonly ServiceState[],
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<number>;
 
   /**
    * Resolves sends whose sender died, so the automatic lane never repeats one.
@@ -787,6 +832,19 @@ export interface OperationRepository {
     type: OperationType,
     tx?: unknown,
   ): Promise<OperationRecord | null>;
+
+  /**
+   * Whether an operation of this type is open for a service in the WIDER sense — `PLANNED`,
+   * `IN_FLIGHT` or `UNKNOWN` (WP-A6): a write whose answer was lost is still being
+   * settled, and another write to the same account must wait for it. Asked under the
+   * service's lifecycle lock by the planners that exclude each other.
+   */
+  hasUnsettled(
+    scope: TenantContext,
+    serviceId: string,
+    type: OperationType,
+    tx?: unknown,
+  ): Promise<boolean>;
 
   /**
    * Any open `RENEW`, `ADD_TRAFFIC` or `ADD_TIME` for this service.

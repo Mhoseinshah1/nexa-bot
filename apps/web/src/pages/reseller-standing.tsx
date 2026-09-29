@@ -76,6 +76,7 @@ const PURCHASE_PURPOSE_LABELS: Readonly<Record<OrderPurpose, WebKey>> = {
   ADD_TRAFFIC: 'web.purpose_add_traffic',
   ADD_TIME: 'web.purpose_add_time',
   ADD_DEVICES: 'web.purpose_add_devices',
+  CHANGE_LOCATION: 'web.purpose_change_location',
   TRIAL: 'web.reseller_purchase_purpose_trial',
   CUSTOM_SERVICE: 'web.purpose_custom_service',
 };

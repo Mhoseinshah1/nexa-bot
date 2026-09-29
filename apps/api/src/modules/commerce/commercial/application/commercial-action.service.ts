@@ -14,6 +14,7 @@ import {
   nextState,
   serviceAddonIdSchema,
   serviceIdSchema,
+  serviceLocationIdSchema,
   type ActorContext,
   type AuditWriter,
   type Clock,
@@ -26,6 +27,7 @@ import {
   type PermissionKey,
   type SalesCurrencyCode,
   type ServiceAddonId,
+  type ServiceLocationId,
   type TenantContext,
   type UnitOfWork,
   type UserId,
@@ -66,8 +68,14 @@ import type {
 import {
   quoteAddon,
   quoteDeviceAddon,
+  quoteLocationChange,
   quoteProduct,
 } from '../../orders/application/order-pricing.js';
+import type {
+  LocationChangePolicy,
+  LocationOffer,
+} from '../../locations/application/location-change-policy.js';
+import type { LocationChangeRepository } from '../../locations/application/ports.js';
 import type { ResellerService } from '../../resellers/application/reseller.service.js';
 import type { PricingService } from '../../pricing/application/pricing.service.js';
 import type { ServiceRecord, ServiceRepository } from '../../provisioning/application/ports.js';
@@ -134,13 +142,25 @@ export type CommercialKind = Exclude<OrderPurpose, 'NEW_SERVICE' | 'TRIAL' | 'CU
  * A `Record`, so a commercial kind added later without a decision here does not compile:
  * a purchase no policy can switch off would be the one customer action an operator
  * cannot stop on a panel.
+ *
+ * `CHANGE_LOCATION` (WP-A6) is the one explicit null: the panel policy has no row for a
+ * move yet, and a move is decided by `LocationChangePolicy` and the panel's declared
+ * `LOCATION_CHANGE` capability, which no provider declares in this release. Giving it a
+ * per-panel switch is a contract change of its own.
  */
-const COMMERCIAL_POLICY_ROW: Readonly<Record<CommercialKind, PanelCustomerAction>> = {
+const COMMERCIAL_POLICY_ROW: Readonly<Record<CommercialKind, PanelCustomerAction | null>> = {
   RENEW: 'RENEW',
   ADD_TRAFFIC: 'ADD_TRAFFIC',
   ADD_TIME: 'ADD_TIME',
   ADD_DEVICES: 'EXTRA_DEVICES',
+  CHANGE_LOCATION: null,
 };
+
+/** The policy's verdict for one kind; a kind with no policy row is not restricted by it. */
+function commercialPolicyAllows(resolved: ResolvedPanelPolicy, kind: CommercialKind): boolean {
+  const row = COMMERCIAL_POLICY_ROW[kind];
+  return row === null || customerActionVerdict(resolved, row).allowed;
+}
 
 /**
  * Whether one package fits the panel's per-purchase cap (WP-A8). A cap only ever
@@ -172,6 +192,12 @@ export interface CommercialOffer {
   readonly addons: readonly ServiceAddonRecord[];
   /** WP-A5: the extra-users offer, when this is one; null for every other kind. */
   readonly devices: DeviceOffer | null;
+  /**
+   * WP-A6: where the service is and where it may be moved, when this is a location
+   * change; null for every other kind. Free targets are in it too — they are requested
+   * through `LocationChangeService`, not bought, but the customer chooses from one list.
+   */
+  readonly locations?: LocationOffer | null;
 }
 
 /**
@@ -225,6 +251,13 @@ export interface CommercialActionServiceDeps {
   readonly pricing: Pick<PricingService, 'price' | 'redeem'>;
   /** A buyer's reseller standing and entitlements (`docs/wp9-reseller-audit.md` R5, R6). */
   readonly resellers: Pick<ResellerService, 'standing' | 'assertEntitled'>;
+  /**
+   * WP-A6: the one evaluator of what a service may be moved to — its current location,
+   * the configured targets, the cooldown and the rolling limit — and the frozen change
+   * request a paid move writes beside its order.
+   */
+  readonly locations: Pick<LocationChangePolicy, 'offer' | 'decide'>;
+  readonly locationChanges: Pick<LocationChangeRepository, 'create' | 'findByOrderId'>;
   readonly clock: Clock;
   readonly ids: IdGenerator;
 }
@@ -294,6 +327,17 @@ export class CommercialActionService {
       return { kind, product: null, addons: [devices.addon], devices };
     }
 
+    if (kind === 'CHANGE_LOCATION') {
+      const locations = await this.deps.locations.offer(scope, service);
+      if (locations === null) {
+        throw errors.conflict(
+          COMMERCE_ERROR_CODES.SERVICE_ACTION_UNAVAILABLE,
+          'This service cannot be moved right now.',
+        );
+      }
+      return { kind, product: null, addons: [], devices: null, locations };
+    }
+
     const offerable = await this.offerableAddons(
       scope,
       service,
@@ -338,7 +382,7 @@ export class CommercialActionService {
       if (!OPERATION_LEGAL_FROM[kind].includes(service.state)) continue;
       const operable = await this.deps.panels.operability(scope, service.panelId, kind);
       if (!operable.ok) continue;
-      if (!customerActionVerdict(policy, COMMERCIAL_POLICY_ROW[kind]).allowed) continue;
+      if (!commercialPolicyAllows(policy, kind)) continue;
       if (kind === 'RENEW') {
         /*
          * The product must still be sellable, in the tenant's own currency.
@@ -370,6 +414,15 @@ export class CommercialActionService {
        */
       if (kind === 'ADD_DEVICES') {
         if ((await this.deviceOffer(scope, service, null)) !== null) available.push(kind);
+        continue;
+      }
+      /*
+       * WP-A6: a move is offered only with a known current location and at least one
+       * enabled, priced target other than it — `LocationChangePolicy.offer`, the same
+       * evaluator every write re-asks.
+       */
+      if (kind === 'CHANGE_LOCATION') {
+        if ((await this.deps.locations.offer(scope, service)) !== null) available.push(kind);
         continue;
       }
       // The same helper `offer` lists through, so the button is drawn exactly when its
@@ -406,12 +459,18 @@ export class CommercialActionService {
        * server by the rate's maximum and what the service was already sold; never a price.
        */
       readonly quantity?: number;
+      /**
+       * WP-A6, `CHANGE_LOCATION` only: the configured target the customer tapped. Its
+       * price, key and name come off the row, re-decided here; never off the callback.
+       */
+      readonly locationId?: string;
       readonly idempotencyKey: string;
     },
   ): Promise<{ readonly order: OrderRecord; readonly action: CommercialActionRecord }> {
     const serviceId = this.serviceId(input.serviceId);
     const addonId = input.addonId === undefined ? null : this.addonId(input.addonId);
     const quantity = input.quantity ?? null;
+    const locationId = input.locationId === undefined ? null : this.locationId(input.locationId);
     const requestHash = hashRequest({
       customerId,
       serviceId,
@@ -419,6 +478,8 @@ export class CommercialActionService {
       addonId,
       // Only an extra-users purchase names one, so every other kind hashes as before.
       ...(input.kind === 'ADD_DEVICES' ? { quantity } : {}),
+      // And only a location change names a location.
+      ...(input.kind === 'CHANGE_LOCATION' ? { locationId } : {}),
     });
     const denial = {
       action: `service.${input.kind.toLowerCase()}_draft`,
@@ -479,7 +540,9 @@ export class CommercialActionService {
             ? await this.quoteRenewal(scope, service, now, tx)
             : input.kind === 'ADD_DEVICES'
               ? await this.quoteDevices(scope, service, addonId, quantity, now, tx)
-              : await this.quoteAddon(scope, service, input.kind, addonId, now, tx);
+              : input.kind === 'CHANGE_LOCATION'
+                ? await this.quoteLocation(scope, service, locationId, now, tx)
+                : await this.quoteAddon(scope, service, input.kind, addonId, now, tx);
 
         /*
          * A reseller's tier must grant the action (`docs/wp9-reseller-audit.md` R5, R6):
@@ -527,6 +590,7 @@ export class CommercialActionService {
             purchasedDurationDays: priced.purchasedDurationDays,
             purchasedDeviceCount: priced.purchasedDeviceCount,
             addonVersion: priced.addonVersion,
+            locationId: priced.location?.target.id ?? null,
             amount: priced.totals.total,
             now,
           },
@@ -536,6 +600,36 @@ export class CommercialActionService {
         if (action === null) {
           throw new Error(
             `order ${order.id} was created with no commercial action; the unique index is missing`,
+          );
+        }
+
+        /*
+         * WP-A6: the move's snapshot, beside its order in the same transaction — where the
+         * service was, where it is going, which configured location and VERSION priced it,
+         * and the list price. The operation's target is read from THIS row at settlement,
+         * never from today's configuration.
+         */
+        if (priced.location !== null && created !== null) {
+          await this.deps.locationChanges.create(
+            scope,
+            {
+              id: this.deps.ids.uuid(),
+              serviceId,
+              customerId,
+              locationId: priced.location.target.id,
+              locationVersion: priced.location.target.version,
+              fromLocationKey: priced.location.current.key,
+              fromLocationLabel: priced.location.current.label,
+              toLocationKey: priced.location.target.locationKey,
+              toLocationLabel: priced.location.target.label,
+              price: priced.location.target.price,
+              // Frozen with the quote: confirmation decides the window against THESE.
+              limits: priced.location.target.limits,
+              orderId: order.id,
+              operationId: null,
+              now,
+            },
+            tx,
           );
         }
 
@@ -562,6 +656,15 @@ export class CommercialActionService {
               purchasedDeviceCount: priced.purchasedDeviceCount,
               addonVersion: priced.addonVersion,
               targetDeviceLimit: priced.line.specification.deviceLimit,
+              ...(priced.location === null
+                ? {}
+                : {
+                    locationId: priced.location.target.id,
+                    locationVersion: priced.location.target.version,
+                    fromLocationKey: priced.location.current.key,
+                    toLocationKey: priced.location.target.locationKey,
+                    listPriceMinor: priced.location.target.price.amountMinor.toString(),
+                  }),
               amountMinor: priced.totals.total.amountMinor.toString(),
               currency: priced.totals.currency,
             },
@@ -695,6 +798,9 @@ export class CommercialActionService {
         await this.assertStillOffered(scope, action, tx);
         await this.assertWithinPanelCap(scope, service, action, tx);
         if (action.kind === 'ADD_DEVICES') await this.assertDevicesStillFit(scope, action, tx);
+        if (action.kind === 'CHANGE_LOCATION') {
+          await this.assertLocationStillFits(scope, action, now, tx);
+        }
 
         // What the quote spent, redeemed under the rules' locks, before the transition
         // (WP8 P6) — the same call `OrderService.confirm` makes, for the same reasons.
@@ -762,6 +868,53 @@ export class CommercialActionService {
         return after;
       },
     );
+  }
+
+  /**
+   * One location a customer tapped, decided for them without committing to anything
+   * (WP-A6): where the service is, the target, and so whether it is free — or the refusal
+   * the move would get (not offered, already there, cooldown, limit, the panel cannot).
+   *
+   * A READ, which is what lets the surface show a free move's confirmation only when the
+   * confirmation would pass, and route a priced one into the ordinary quote. Nothing it
+   * says is trusted: the free request and the quote each decide again in their own
+   * transaction.
+   */
+  async locationTarget(
+    scope: TenantContext,
+    actor: ActorContext,
+    customerId: UserId,
+    serviceId: string,
+    locationId: string,
+  ): Promise<Awaited<ReturnType<LocationChangePolicy['decide']>>> {
+    await this.deps.guard.check(scope, actor, COMMERCIAL_ACTION_PERMISSION);
+    const service = await this.ownedService(scope, customerId, serviceId);
+    assertExtendable(service);
+    this.assertLifecycleAllows('CHANGE_LOCATION', service);
+    await this.assertPanelCanPerform(scope, service, 'CHANGE_LOCATION');
+    return this.deps.locations.decide(
+      scope,
+      service,
+      this.locationId(locationId),
+      this.deps.clock.now(),
+      null,
+    );
+  }
+
+  /**
+   * A paid location change's frozen from / to, for its pre-invoice (WP-A6). The order's
+   * owner only: another customer's order answers null, as an order with no change does.
+   */
+  async locationChangeFor(
+    scope: TenantContext,
+    actor: ActorContext,
+    customerId: UserId,
+    orderId: OrderId,
+  ): Promise<{ readonly fromLocation: string; readonly toLocation: string } | null> {
+    await this.deps.guard.check(scope, actor, COMMERCIAL_ACTION_PERMISSION);
+    const change = await this.deps.locationChanges.findByOrderId(scope, orderId);
+    if (change === null || change.customerId !== customerId) return null;
+    return { fromLocation: change.fromLocationLabel, toLocation: change.toLocationLabel };
   }
 
   /** This service's commercial history, newest first. A read the owner may take. */
@@ -845,6 +998,7 @@ export class CommercialActionService {
       purchasedDurationDays: product.specification.durationDays,
       purchasedDeviceCount: 0,
       addonVersion: null,
+      location: null,
       totals,
       line: {
         productId: product.id,
@@ -961,6 +1115,7 @@ export class CommercialActionService {
       purchasedDurationDays: durationDays,
       purchasedDeviceCount: 0,
       addonVersion: null,
+      location: null,
       totals,
       line: {
         /*
@@ -1065,6 +1220,7 @@ export class CommercialActionService {
       purchasedDurationDays: 0,
       purchasedDeviceCount: quantity,
       addonVersion: offer.addon.version,
+      location: null,
       totals,
       line: {
         // Navigation, as for a package: the SERVICE's product and panel.
@@ -1162,6 +1318,147 @@ export class CommercialActionService {
     }
   }
 
+  /**
+   * A paid location change (WP-A6): the configured target's price, through the one pricing
+   * boundary, for a target `LocationChangePolicy.decide` finds applies to this service —
+   * not where it already is, and inside its cooldown and rolling limit.
+   *
+   * A FREE target is refused here: nothing is bought, so there is no order to write, and
+   * the surface requests it through `LocationChangeService` instead. The price, the key
+   * and the names come off the row, never off the callback.
+   */
+  private async quoteLocation(
+    scope: TenantContext,
+    service: ServiceRecord,
+    locationId: ServiceLocationId | null,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<PricedAction> {
+    if (locationId === null) {
+      throw errors.validation(
+        COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+        'That action needs a location to move to.',
+      );
+    }
+    await this.assertNoRefundRequest(scope, service.id, tx);
+    const { current, target } = await this.deps.locations.decide(
+      scope,
+      service,
+      locationId,
+      now,
+      null,
+      tx,
+    );
+    if (target.price.amountMinor === 0n) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.SERVICE_ACTION_UNAVAILABLE,
+        'A free location change is requested, not bought.',
+      );
+    }
+    await this.assertSalesCurrency(scope, target.price, tx);
+    // Not a product: only a rule scoped to neither product nor category reaches it.
+    const { totals } = await this.deps.pricing.price(
+      scope,
+      {
+        base: quoteLocationChange(target, now),
+        purpose: 'CHANGE_LOCATION',
+        productId: null,
+        categoryId: null,
+        customerId: service.customerId,
+        now,
+      },
+      tx,
+    );
+    return {
+      productId: null,
+      addonId: null,
+      purchasedTrafficBytes: 0n,
+      purchasedDurationDays: 0,
+      purchasedDeviceCount: 0,
+      addonVersion: null,
+      location: { current, target },
+      totals,
+      line: {
+        // Navigation, as for a package: the SERVICE's product and panel — the same panel,
+        // because a move never leaves it.
+        productId: service.productId,
+        panelId: service.panelId,
+        title: target.label,
+        category: null,
+        // Nothing of these was bought: the zeros `orders_quantity_line_check` pins.
+        specification: { durationDays: 0, trafficBytes: 0n, deviceLimit: null },
+        unitPrice: target.price,
+        quantity: 1,
+      },
+    };
+  }
+
+  /**
+   * Confirmation re-decides what can make a location quote unfulfillable (WP-A6).
+   *
+   * Under the ORDER's lock and then the service's, the order settlement takes them in, so
+   * two confirmations for one service count each other's orders in the cooldown and the
+   * limit rather than both passing on one reading. The quote is honoured, never re-priced:
+   * what is re-decided is that the same configured location still applies, still names
+   * the key the customer was shown, is not where the service now is, and fits the window.
+   */
+  private async assertLocationStillFits(
+    scope: TenantContext,
+    action: CommercialActionRecord,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<void> {
+    await this.deps.orders.lock(scope, action.orderId, tx);
+    await this.deps.services.lockLifecycle(scope, action.serviceId, tx);
+    const service = await this.deps.services.findById(scope, action.serviceId, tx);
+    const change = await this.deps.locationChanges.findByOrderId(scope, action.orderId, tx);
+    if (service === null || change === null || action.locationId === null) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.SERVICE_ACTION_UNAVAILABLE,
+        'This location change can no longer be made.',
+      );
+    }
+    await this.assertNoRefundRequest(scope, service.id, tx);
+    const { target } = await this.deps.locations.decide(
+      scope,
+      service,
+      action.locationId,
+      now,
+      action.orderId,
+      tx,
+      // The cooldown and limit the customer was quoted under, not today's (Codex #1, PR #101).
+      change.limits,
+    );
+    if (target.locationKey !== change.toLocationKey) {
+      // The operator re-pointed the location since the quote: what was shown is gone.
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.SERVICE_ACTION_UNAVAILABLE,
+        'That location has changed since it was quoted.',
+      );
+    }
+  }
+
+  /**
+   * A move is not sold while the customer's refund request is open or being carried out
+   * (WP-A6): its approval deletes the service, so the move would be paid for and lost.
+   * Refused at the quote and at confirmation, before any money is asked for; settlement
+   * asks the same question again in `prepareCommercialAction`, which is the one that
+   * counts.
+   */
+  private async assertNoRefundRequest(
+    scope: TenantContext,
+    serviceId: string,
+    tx: TransactionScope,
+  ): Promise<void> {
+    if (await this.deps.services.hasActiveRefundRequest(scope, serviceId, tx)) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.SERVICE_ACTION_NOT_ALLOWED,
+        'This service has a refund request pending.',
+        { reason: 'REFUND_REQUESTED' },
+      );
+    }
+  }
+
   /* -------------------------------------------------------------- guards */
 
   /**
@@ -1227,10 +1524,13 @@ export class CommercialActionService {
      * is one — so a confirmation after an operator switched the action off on this
      * panel is refused before any money moves, whatever the button said.
      */
-    assertCustomerPolicyAllows(
-      await this.deps.panelPolicy.forPanel(scope, service.panelId, tx),
-      COMMERCIAL_POLICY_ROW[kind],
-    );
+    const row = COMMERCIAL_POLICY_ROW[kind];
+    if (row !== null) {
+      assertCustomerPolicyAllows(
+        await this.deps.panelPolicy.forPanel(scope, service.panelId, tx),
+        row,
+      );
+    }
   }
 
   /**
@@ -1421,6 +1721,17 @@ export class CommercialActionService {
     return parsed.data;
   }
 
+  private locationId(candidate: string): ServiceLocationId {
+    const parsed = serviceLocationIdSchema.safeParse(candidate);
+    if (!parsed.success) {
+      throw errors.validation(
+        COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+        'That is not a valid location identifier.',
+      );
+    }
+    return parsed.data;
+  }
+
   private orderId(candidate: string): OrderId {
     const parsed = serviceIdSchema.safeParse(candidate);
     if (!parsed.success) {
@@ -1440,6 +1751,11 @@ interface PricedAction {
   readonly purchasedDurationDays: number;
   readonly purchasedDeviceCount: number;
   readonly addonVersion: number | null;
+  /** WP-A6: where the move starts and the configured target it goes to; null otherwise. */
+  readonly location: {
+    readonly current: { readonly key: string; readonly label: string };
+    readonly target: Awaited<ReturnType<LocationChangePolicy['decide']>>['target'];
+  } | null;
   readonly totals: OrderTotalsRecord;
   readonly line: OrderRecord['line'];
 }

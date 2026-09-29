@@ -1595,6 +1595,86 @@ export const WEB_FA = {
   'web.support_faq_limit': 'سقف تعداد پرسش‌ها پر شده است. یکی را غیرفعال یا ویرایش کنید.',
   'web.support_faq_empty': 'هنوز پرسشی ثبت نشده است.',
   'web.support_faq_empty_hint': 'با «افزودن پرسش» نخستین پرسش را بسازید.',
+  // WP-A10: apps and connection guides.
+  'web.nav_client_apps': 'برنامه‌ها و آموزش اتصال',
+  'web.client_apps_title': 'برنامه‌ها و آموزش اتصال',
+  'web.client_apps_subtitle':
+    'برنامه‌هایی که ربات در بخش «📱 دانلود برنامه و آموزش اتصال» به مشتری پیشنهاد می‌دهد، با لینک دانلود و آموزش هر کدام. هر تغییر از همان لحظه در ربات دیده می‌شود.',
+  'web.client_apps_hint':
+    'مشتری فقط برنامه‌های فعال را می‌بیند، به ترتیب عدد ترتیب، و اگر سرویسی دارد فقط برنامه‌هایی که با سرویسش سازگارند. سیستم عاملی که برنامه‌ای ندارد همان آموزش کلی خودش را نشان می‌دهد.',
+  'web.client_apps_empty': 'هنوز برنامه‌ای ثبت نشده است.',
+  'web.client_apps_empty_hint':
+    'هیچ لینک پیش‌فرضی همراه نصب نیست. با «افزودن برنامه» برنامه‌هایی را که خودتان پیشنهاد می‌کنید ثبت کنید؛ تا آن زمان ربات آموزش کلی هر سیستم عامل را نشان می‌دهد.',
+  'web.client_apps_new': 'افزودن برنامه',
+  'web.client_apps_creating': 'برنامهٔ تازه',
+  'web.client_apps_editing': 'ویرایش برنامه',
+  'web.client_apps_form_hint':
+    'لینک‌ها باید با https:// شروع شوند و به یک نام دامنه اشاره کنند. HTML و لینک‌های javascript: یا data: پذیرفته نمی‌شوند.',
+  'web.client_apps_platform': 'سیستم عامل',
+  'web.client_apps_platform_android': 'اندروید',
+  'web.client_apps_platform_ios': 'آیفون (iOS)',
+  'web.client_apps_platform_windows': 'ویندوز',
+  'web.client_apps_platform_macos': 'مک',
+  'web.client_apps_platform_linux': 'لینوکس',
+  'web.client_apps_platform_other': 'سایر',
+  'web.client_apps_name': 'نام برنامه',
+  'web.client_apps_icon': 'نماد',
+  'web.client_apps_icon_hint':
+    'اختیاری؛ یک ایموجی یا نشانهٔ کوتاه که پیش از نام نمایش داده می‌شود.',
+  'web.client_apps_icon_invalid': 'نماد باید کوتاه و بدون فاصله باشد.',
+  'web.client_apps_description': 'توضیح کوتاه',
+  'web.client_apps_official_url': 'لینک دانلود رسمی',
+  'web.client_apps_url_hint': 'مثلاً نشانی صفحهٔ دانلود سازندهٔ برنامه، با https://',
+  'web.client_apps_alternative_url': 'لینک فروشگاه یا لینک جایگزین',
+  'web.client_apps_help_url': 'لینک ویدیو یا راهنمای بیشتر',
+  'web.client_apps_optional': 'اختیاری.',
+  'web.client_apps_url_invalid':
+    'لینک معتبر نیست. فقط https:// با نام دامنه پذیرفته می‌شود (بدون نشانی IP، فاصله یا نام کاربری در لینک).',
+  'web.client_apps_guide': 'آموزش اتصال',
+  'web.client_apps_guide_hint':
+    'متن ساده. خطی که با - شروع شود فهرست می‌شود، خطی که با عدد و نقطه شروع شود یک مرحله است، و [متن](https://…) یک پیوند. خط خالی پاراگراف‌ها را جدا می‌کند.',
+  'web.client_apps_delivery': 'نوع تحویل سرویس',
+  'web.client_apps_compat_hint':
+    'برای نمایش به همه چیزی را انتخاب نکنید. اگر انتخاب کنید، به مشتری‌ای که سرویسش با هیچ‌کدام سازگار نیست نشان داده نمی‌شود.',
+  'web.client_apps_delivery_link': 'لینک اشتراک',
+  'web.client_apps_delivery_files': 'فایل‌های اتصال',
+  'web.client_apps_protocols': 'پروتکل‌ها',
+  'web.client_apps_providers': 'نوع پنل',
+  'web.client_apps_compat': 'سازگاری',
+  'web.client_apps_compat_any': 'همه',
+  'web.client_apps_order': 'ترتیب',
+  'web.client_apps_sort_hint': 'عدد کوچک‌تر بالاتر نشان داده می‌شود.',
+  'web.client_apps_sort_invalid': 'ترتیب باید عددی صحیح از ۰ تا ۱۰۰٬۰۰۰ باشد.',
+  'web.client_apps_status': 'وضعیت',
+  'web.client_apps_enabled': 'فعال',
+  'web.client_apps_disabled': 'غیرفعال',
+  'web.client_apps_updated': 'آخرین تغییر',
+  'web.client_apps_actions': 'عملیات',
+  'web.client_apps_edit': 'ویرایش',
+  'web.client_apps_enable': 'فعال کردن',
+  'web.client_apps_disable': 'غیرفعال کردن',
+  'web.client_apps_delete': 'حذف',
+  'web.client_apps_delete_confirm':
+    'این برنامه برای همیشه حذف می‌شود و دیگر به مشتری نشان داده نمی‌شود. ادامه می‌دهید؟',
+  'web.client_apps_preview': 'پیش‌نمایش در ربات',
+  'web.client_apps_preview_hint':
+    'پیام همان‌طور که مشتری می‌بیند، با متن پیش‌فرض ربات. دکمه‌ها زیر پیام نمایش داده می‌شوند.',
+  'web.client_apps_save': 'ذخیره',
+  'web.client_apps_cancel': 'انصراف',
+  'web.client_apps_saved': 'برنامه ذخیره شد.',
+  'web.client_apps_status_done': 'وضعیت برنامه تغییر کرد.',
+  'web.client_apps_deleted': 'برنامه حذف شد.',
+  'web.client_apps_required': 'این بخش لازم است.',
+  'web.client_apps_one_line': 'باید در یک خط باشد.',
+  'web.client_apps_problem_control': 'نویسه‌های کنترلی پذیرفته نمی‌شوند.',
+  'web.client_apps_problem_markup': 'HTML پذیرفته نمی‌شود؛ متن ساده بنویسید.',
+  'web.client_apps_problem_scheme':
+    'لینک‌های javascript:، data:، vbscript: و file: پذیرفته نمی‌شوند.',
+  'web.client_apps_problem_link':
+    'هر لینک، چه به‌صورت [متن](لینک) و چه خود نشانی، باید با https:// و نام دامنه باشد؛ لینک http:// یا www. بدون https:// پذیرفته نمی‌شود.',
+  'web.client_apps_conflict':
+    'این برنامه از زمانی که باز کردید تغییر کرده است. نسخهٔ تازه را بارگذاری کنید و تغییر را دوباره اعمال کنید.',
+  'web.client_apps_limit': 'سقف تعداد برنامه‌ها پر شده است. یکی را حذف کنید.',
   'web.payment_resolution': 'نتیجهٔ بدون دریافت وجه',
   'web.payment_destination': 'مقصد واریز اعلام‌شده',
   'web.payment_destination_label': 'عنوان حساب',
@@ -1807,6 +1887,7 @@ export const WEB_FA = {
   // --- Product categories ---------------------------------------------------
   'web.nav_product_categories': 'دسته‌بندی‌ها',
   'web.nav_extra_devices': 'افزایش کاربر / دستگاه',
+  'web.nav_service_locations': 'تغییر لوکیشن',
   'web.categories_title': 'دسته‌بندی محصولات',
   'web.categories_subtitle': 'هر محصول فروختنی دقیقاً در یک دسته قرار می‌گیرد.',
   'web.categories_empty': 'هنوز دسته‌ای ساخته نشده است',
@@ -2249,6 +2330,7 @@ export const WEB_FA = {
   'web.operation_type_add_traffic': 'افزودن حجم',
   'web.operation_type_add_time': 'افزودن زمان',
   'web.operation_type_add_devices': 'افزایش کاربر / دستگاه',
+  'web.operation_type_change_location': 'تغییر لوکیشن',
   'web.operation_type_suspend': 'قطع موقت',
   'web.operation_type_resume': 'وصل دوباره',
   'web.operation_type_terminate': 'حذف',
@@ -2616,6 +2698,7 @@ export const WEB_FA = {
   'web.purpose_add_traffic': 'افزایش حجم',
   'web.purpose_add_time': 'افزایش زمان',
   'web.purpose_add_devices': 'افزایش کاربر / دستگاه',
+  'web.purpose_change_location': 'تغییر لوکیشن',
   // WP-A5: the extra users / devices rate — an `ADD_DEVICES` add-on, in operator words.
   'web.extra_devices_title': 'افزایش کاربر / دستگاه',
   'web.extra_devices_subtitle':
@@ -2663,6 +2746,81 @@ export const WEB_FA = {
   'web.extra_devices_save': 'ذخیره',
   'web.extra_devices_cancel_edit': 'انصراف از ویرایش',
   'web.extra_devices_saved': 'تعرفه ذخیره شد.',
+  // WP-A6: the service location change — a panel's locations and the price of moving there.
+  'web.service_locations_title': 'تغییر لوکیشن سرویس',
+  'web.service_locations_subtitle':
+    'لوکیشن‌های هر پنل، لوکیشنی که سرویس‌های جدید در آن ساخته می‌شوند، و هزینه و محدودیت انتقال سرویس فعلی مشتری به هر لوکیشن.',
+  'web.service_locations_no_capable_panel':
+    'در این نسخه هیچ‌یک از انواع پنل پشتیبانی‌شده امکان جابه‌جایی امن سرویس موجود بین لوکیشن‌ها را ندارد. تنظیماتی که اینجا ذخیره کنید تا وقتی پنلی با این قابلیت وصل نشود به هیچ مشتری‌ای نمایش داده نمی‌شود.',
+  'web.service_locations_capable_panels':
+    'دکمهٔ «🌍 تغییر لوکیشن» فقط برای سرویس‌هایی نمایش داده می‌شود که روی این نوع پنل‌ها هستند: {providers}',
+  'web.service_locations_list': 'لوکیشن‌ها',
+  'web.service_locations_empty': 'هنوز لوکیشنی تعریف نشده است',
+  'web.service_locations_empty_hint':
+    'بدون لوکیشن اولیه و دست‌کم یک لوکیشن مقصدِ فعال و قیمت‌دار، تغییر لوکیشن به مشتری پیشنهاد نمی‌شود. تنظیم‌نشده هرگز به معنای رایگان نیست.',
+  'web.service_locations_panel': 'پنل',
+  'web.service_locations_panel_unsupported': 'این پنل تغییر لوکیشن را پشتیبانی نمی‌کند',
+  'web.service_locations_panel_id_hint':
+    'فهرست پنل‌ها برای نقش شما خواندنی نیست؛ شناسهٔ پنل را وارد کنید.',
+  'web.service_locations_product_id_hint':
+    'فهرست محصولات برای نقش شما خواندنی نیست؛ برای همهٔ محصولات خالی بگذارید یا شناسهٔ محصول را وارد کنید.',
+  'web.service_locations_product': 'محصول',
+  'web.service_locations_all_products': 'همهٔ محصولات این پنل',
+  'web.service_locations_product_hint':
+    'اگر برای یک لوکیشن هم ردیف عمومی و هم ردیف مخصوص محصول باشد، ردیف مخصوص محصول برای سرویس‌های همان محصول اعمال می‌شود؛ حتی اگر غیرفعال باشد.',
+  'web.service_locations_key': 'شناسهٔ لوکیشن در پنل',
+  'web.service_locations_key_hint':
+    'همان شناسه‌ای که پنل برای این لوکیشن به کار می‌برد. به مشتری نمایش داده نمی‌شود.',
+  'web.service_locations_label': 'نام لوکیشن',
+  'web.service_locations_label_hint': 'نامی که مشتری در ربات می‌بیند؛ مثلاً «🇩🇪 آلمان».',
+  'web.service_locations_initial': 'لوکیشن اولیهٔ سرویس‌های جدید این پنل',
+  'web.service_locations_initial_hint':
+    'هر پنل یک لوکیشن اولیه دارد. بدون آن، معلوم نیست سرویسی که هنوز جابه‌جا نشده کجاست و تغییر لوکیشن برایش پیشنهاد نمی‌شود.',
+  'web.service_locations_enabled': 'به‌عنوان مقصد به مشتری عرضه شود',
+  'web.service_locations_price': 'هزینهٔ انتقال',
+  'web.service_locations_price_hint':
+    'برای انتقال رایگان صفر وارد کنید. خالی یعنی این لوکیشن مقصد فروش نیست.',
+  'web.service_locations_free': 'رایگان',
+  'web.service_locations_unpriced': 'بدون قیمت',
+  'web.service_locations_currency': 'واحد پول',
+  'web.service_locations_cooldown': 'فاصلهٔ لازم بین دو تغییر (ساعت)',
+  'web.service_locations_cooldown_hint': 'اختیاری. خالی یعنی بدون فاصلهٔ اجباری.',
+  'web.service_locations_max_changes': 'حداکثر تعداد تغییر',
+  'web.service_locations_period_days': 'در بازهٔ چند روز',
+  'web.service_locations_limit_hint':
+    'اختیاری و همراه هم؛ مثلاً ۲ تغییر در ۳۰ روز. خالی یعنی بدون سقف.',
+  'web.service_locations_limit_pair': 'حداکثر تعداد تغییر و بازهٔ روز را با هم وارد کنید.',
+  'web.service_locations_limits': 'محدودیت‌ها',
+  'web.service_locations_no_limits': 'بدون محدودیت',
+  'web.service_locations_cooldown_value': '{hours} ساعت فاصله',
+  'web.service_locations_limit_value': '{max} تغییر در {days} روز',
+  'web.service_locations_sort': 'ترتیب',
+  'web.service_locations_state': 'وضعیت',
+  'web.service_locations_target_on': 'مقصد فعال',
+  'web.service_locations_target_off': 'مقصد نیست',
+  'web.service_locations_initial_badge': 'اولیه',
+  'web.service_locations_updated': 'آخرین تغییر',
+  'web.service_locations_actions': 'عملیات',
+  'web.service_locations_edit': 'ویرایش',
+  'web.service_locations_delete': 'حذف',
+  'web.service_locations_new': 'لوکیشن جدید',
+  'web.service_locations_editing': 'ویرایش لوکیشن',
+  'web.service_locations_form_hint':
+    'تغییر قیمت یا محدودیت فقط روی درخواست‌های بعدی اثر دارد؛ هر درخواست نام، قیمت و نسخهٔ لوکیشنی را که با آن ثبت شده نگه می‌دارد. لینک یا اطلاعات اتصال مشتری ممکن است پس از جابه‌جایی تغییر کند؛ در این صورت اطلاعات جدید برایش فرستاده می‌شود.',
+  'web.service_locations_save': 'ذخیره',
+  'web.service_locations_cancel_edit': 'انصراف از ویرایش',
+  'web.service_locations_saved': 'لوکیشن ذخیره شد.',
+  'web.service_locations_unchanged': 'تغییری برای ذخیره نبود.',
+  'web.service_locations_deleted': 'لوکیشن حذف شد.',
+  'web.service_locations_error_in_use':
+    'درخواست تغییر لوکیشنی به این لوکیشن اشاره می‌کند و نمی‌توان آن را حذف کرد؛ به‌جای حذف، آن را از مقصدها خارج کنید.',
+  'web.service_locations_error_duplicate': 'این پنل برای همین محصول‌ها لوکیشنی با همین شناسه دارد.',
+  'web.service_locations_error_second_initial': 'این پنل از قبل یک لوکیشن اولیه دارد.',
+  'web.service_locations_error_currency': 'قیمت باید با واحد پول فروش این نصب باشد.',
+  'web.service_locations_error_product_panel': 'این محصول روی پنل انتخاب‌شده فروخته نمی‌شود.',
+  'web.service_locations_error_panel_full':
+    'این پنل به حداکثر تعداد لوکیشن رسیده است (۲۰ ردیف، همراه با ردیف‌های مخصوص محصول).',
+  'web.service_locations_error_count': 'به حداکثر تعداد لوکیشن‌های این نصب (۵۰۰) رسیده‌اید.',
 
   'web.preview_title': 'پیش‌نمایش قیمت',
   'web.preview_hint':

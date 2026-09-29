@@ -88,6 +88,7 @@ export function orderPurposeIsSale(purpose: OrderPurpose): boolean {
     case 'ADD_TIME':
     case 'CUSTOM_SERVICE':
     case 'ADD_DEVICES':
+    case 'CHANGE_LOCATION':
       return true;
     case 'TRIAL':
       return false;
@@ -194,6 +195,7 @@ export const REPORT_COMMERCIAL_OPERATION_TYPES = [
   'ADD_TRAFFIC',
   'ADD_TIME',
   'ADD_DEVICES',
+  'CHANGE_LOCATION',
 ] as const;
 
 // --- Bounds ---------------------------------------------------------------------

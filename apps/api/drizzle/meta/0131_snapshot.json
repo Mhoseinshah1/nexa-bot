@@ -1,5 +1,5 @@
 {
-  "id": "4e13b914-3526-4f90-b120-ffb09d154c0b",
+  "id": "122827e6-9ca7-48b0-b71e-582aef471961",
   "prevId": "4303c237-7f36-45b2-a198-823331d4ccea",
   "version": "7",
   "dialect": "postgresql",
@@ -2090,7 +2090,7 @@
         },
         "cashback_rules_applies_to_check": {
           "name": "cashback_rules_applies_to_check",
-          "value": "cardinality(applies_to) > 0 AND applies_to <@ ARRAY['NEW_SERVICE', 'RENEW', 'ADD_TRAFFIC', 'ADD_TIME', 'CUSTOM_SERVICE', 'ADD_DEVICES']::text[]"
+          "value": "cardinality(applies_to) > 0 AND applies_to <@ ARRAY['NEW_SERVICE', 'RENEW', 'ADD_TRAFFIC', 'ADD_TIME', 'CUSTOM_SERVICE']::text[]"
         },
         "cashback_rules_scope_check": {
           "name": "cashback_rules_scope_check",
@@ -2099,6 +2099,253 @@
         "cashback_rules_window_check": {
           "name": "cashback_rules_window_check",
           "value": "starts_at IS NULL OR ends_at IS NULL OR starts_at < ends_at"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.client_apps": {
+      "name": "client_apps",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "platform": {
+          "name": "platform",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "icon": {
+          "name": "icon",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "description": {
+          "name": "description",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "official_url": {
+          "name": "official_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "alternative_url": {
+          "name": "alternative_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "help_url": {
+          "name": "help_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "guide": {
+          "name": "guide",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "delivery_kinds": {
+          "name": "delivery_kinds",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::text[]"
+        },
+        "protocols": {
+          "name": "protocols",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::text[]"
+        },
+        "provider_types": {
+          "name": "provider_types",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::text[]"
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'ENABLED'"
+        },
+        "sort_order": {
+          "name": "sort_order",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "version": {
+          "name": "version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "client_apps_tenant_platform_idx": {
+          "name": "client_apps_tenant_platform_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "platform",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "sort_order",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "client_apps_tenant_id_tenants_id_fk": {
+          "name": "client_apps_tenant_id_tenants_id_fk",
+          "tableFrom": "client_apps",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "client_apps_tenant_id_key": {
+          "name": "client_apps_tenant_id_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "client_apps_platform_check": {
+          "name": "client_apps_platform_check",
+          "value": "platform IN ('ANDROID', 'IOS', 'WINDOWS', 'MACOS', 'LINUX', 'OTHER')"
+        },
+        "client_apps_status_check": {
+          "name": "client_apps_status_check",
+          "value": "status IN ('ENABLED', 'DISABLED')"
+        },
+        "client_apps_name_check": {
+          "name": "client_apps_name_check",
+          "value": "length(btrim(name)) BETWEEN 1 AND 64"
+        },
+        "client_apps_icon_check": {
+          "name": "client_apps_icon_check",
+          "value": "icon IS NULL OR length(btrim(icon)) BETWEEN 1 AND 16"
+        },
+        "client_apps_description_check": {
+          "name": "client_apps_description_check",
+          "value": "length(btrim(description)) BETWEEN 1 AND 300"
+        },
+        "client_apps_guide_check": {
+          "name": "client_apps_guide_check",
+          "value": "length(btrim(guide)) BETWEEN 1 AND 2500"
+        },
+        "client_apps_urls_check": {
+          "name": "client_apps_urls_check",
+          "value": "official_url LIKE 'https://%' AND length(official_url) <= 2048\n          AND (alternative_url IS NULL OR (alternative_url LIKE 'https://%' AND length(alternative_url) <= 2048))\n          AND (help_url IS NULL OR (help_url LIKE 'https://%' AND length(help_url) <= 2048))"
+        },
+        "client_apps_delivery_kinds_check": {
+          "name": "client_apps_delivery_kinds_check",
+          "value": "delivery_kinds <@ ARRAY['SUBSCRIPTION_LINK', 'CONNECTION_FILES']::text[]"
+        },
+        "client_apps_protocols_check": {
+          "name": "client_apps_protocols_check",
+          "value": "protocols <@ ARRAY['vless', 'vmess', 'trojan', 'shadowsocks']::text[]"
+        },
+        "client_apps_provider_types_check": {
+          "name": "client_apps_provider_types_check",
+          "value": "provider_types <@ ARRAY['marzban', 'rickpanel', 'sanaei']::text[]"
+        },
+        "client_apps_sort_order_check": {
+          "name": "client_apps_sort_order_check",
+          "value": "sort_order BETWEEN 0 AND 100000"
+        },
+        "client_apps_version_check": {
+          "name": "client_apps_version_check",
+          "value": "version >= 1"
         }
       },
       "isRLSEnabled": false
@@ -3777,7 +4024,7 @@
         },
         "discounts_applies_to_check": {
           "name": "discounts_applies_to_check",
-          "value": "cardinality(applies_to) > 0 AND applies_to <@ ARRAY['NEW_SERVICE', 'RENEW', 'ADD_TRAFFIC', 'ADD_TIME', 'CUSTOM_SERVICE', 'ADD_DEVICES']::text[]"
+          "value": "cardinality(applies_to) > 0 AND applies_to <@ ARRAY['NEW_SERVICE', 'RENEW', 'ADD_TRAFFIC', 'ADD_TIME', 'CUSTOM_SERVICE']::text[]"
         },
         "discounts_scope_check": {
           "name": "discounts_scope_check",
@@ -6407,7 +6654,7 @@
         },
         "orders_purpose_check": {
           "name": "orders_purpose_check",
-          "value": "purpose IN ('NEW_SERVICE', 'RENEW', 'ADD_TRAFFIC', 'ADD_TIME', 'TRIAL', 'CUSTOM_SERVICE', 'ADD_DEVICES')"
+          "value": "purpose IN ('NEW_SERVICE', 'RENEW', 'ADD_TRAFFIC', 'ADD_TIME', 'TRIAL', 'CUSTOM_SERVICE')"
         },
         "orders_trial_is_free_check": {
           "name": "orders_trial_is_free_check",
@@ -6423,7 +6670,7 @@
         },
         "orders_quantity_line_check": {
           "name": "orders_quantity_line_check",
-          "value": "purpose NOT IN ('ADD_TRAFFIC', 'ADD_TIME', 'ADD_DEVICES')\n          OR (purpose = 'ADD_TRAFFIC' AND line_traffic_bytes > 0 AND line_duration_days = 0)\n          OR (purpose = 'ADD_TIME' AND line_duration_days > 0 AND line_traffic_bytes = 0)\n          OR (purpose = 'ADD_DEVICES' AND line_traffic_bytes = 0 AND line_duration_days = 0\n              AND line_device_limit IS NOT NULL AND line_device_limit > line_quantity)"
+          "value": "purpose NOT IN ('ADD_TRAFFIC', 'ADD_TIME')\n          OR (purpose = 'ADD_TRAFFIC' AND line_traffic_bytes > 0 AND line_duration_days = 0)\n          OR (purpose = 'ADD_TIME' AND line_duration_days > 0 AND line_traffic_bytes = 0)"
         },
         "orders_amounts_check": {
           "name": "orders_amounts_check",
@@ -9845,12 +10092,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "target_device_limit": {
-          "name": "target_device_limit",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
         "provider_reference": {
           "name": "provider_reference",
           "type": "text",
@@ -10041,7 +10282,7 @@
             }
           ],
           "isUnique": true,
-          "where": "type IN ('RENEW', 'ADD_TRAFFIC', 'ADD_TIME', 'ADD_DEVICES') AND state IN ('PLANNED', 'IN_FLIGHT', 'UNKNOWN')",
+          "where": "type IN ('RENEW', 'ADD_TRAFFIC', 'ADD_TIME') AND state IN ('PLANNED', 'IN_FLIGHT', 'UNKNOWN')",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -10148,7 +10389,7 @@
         },
         "provisioning_operations_type_check": {
           "name": "provisioning_operations_type_check",
-          "value": "type IN ('PROVISION', 'RENEW', 'ADD_TRAFFIC', 'ADD_TIME', 'SUSPEND', 'RESUME', 'TERMINATE', 'SYNC_USAGE', 'ROTATE_SUBSCRIPTION', 'RECONCILE', 'ADD_DEVICES')"
+          "value": "type IN ('PROVISION', 'RENEW', 'ADD_TRAFFIC', 'ADD_TIME', 'SUSPEND', 'RESUME', 'TERMINATE', 'SYNC_USAGE', 'ROTATE_SUBSCRIPTION', 'RECONCILE')"
         },
         "provisioning_operations_failure_kind_check": {
           "name": "provisioning_operations_failure_kind_check",
@@ -10160,15 +10401,11 @@
         },
         "provisioning_operations_target_check": {
           "name": "provisioning_operations_target_check",
-          "value": "type IN ('RENEW', 'ADD_TRAFFIC', 'ADD_TIME', 'ADD_DEVICES')\n          OR (target_expires_at IS NULL AND target_traffic_limit_bytes IS NULL AND target_device_limit IS NULL)"
-        },
-        "provisioning_operations_target_device_check": {
-          "name": "provisioning_operations_target_device_check",
-          "value": "(type = 'ADD_DEVICES'\n           AND target_device_limit IS NOT NULL AND target_device_limit >= 1 AND target_device_limit <= 1000\n           AND target_expires_at IS NULL AND target_traffic_limit_bytes IS NULL)\n          OR (type <> 'ADD_DEVICES' AND target_device_limit IS NULL)"
+          "value": "type IN ('RENEW', 'ADD_TRAFFIC', 'ADD_TIME')\n          OR (target_expires_at IS NULL AND target_traffic_limit_bytes IS NULL)"
         },
         "provisioning_operations_target_present_check": {
           "name": "provisioning_operations_target_present_check",
-          "value": "type NOT IN ('RENEW', 'ADD_TRAFFIC', 'ADD_TIME', 'ADD_DEVICES')\n          OR target_expires_at IS NOT NULL\n          OR target_traffic_limit_bytes IS NOT NULL\n          OR target_device_limit IS NOT NULL"
+          "value": "type NOT IN ('RENEW', 'ADD_TRAFFIC', 'ADD_TIME')\n          OR target_expires_at IS NOT NULL\n          OR target_traffic_limit_bytes IS NOT NULL"
         },
         "provisioning_operations_target_traffic_check": {
           "name": "provisioning_operations_target_traffic_check",
@@ -12289,7 +12526,7 @@
         },
         "reseller_tier_grants_subject_check": {
           "name": "reseller_tier_grants_subject_check",
-          "value": "subject = '*' OR (kind = 'OPERATION' AND subject IN ('NEW_SERVICE', 'RENEW', 'ADD_TRAFFIC', 'ADD_TIME', 'ADD_DEVICES')) OR (kind <> 'OPERATION' AND subject ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')"
+          "value": "subject = '*' OR (kind = 'OPERATION' AND subject IN ('NEW_SERVICE', 'RENEW', 'ADD_TRAFFIC', 'ADD_TIME')) OR (kind <> 'OPERATION' AND subject ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')"
         }
       },
       "isRLSEnabled": false
@@ -12954,31 +13191,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "max_quantity": {
-          "name": "max_quantity",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "panel_id": {
-          "name": "panel_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "product_id": {
-          "name": "product_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "version": {
-          "name": "version",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 1
-        },
         "price_amount": {
           "name": "price_amount",
           "type": "bigint",
@@ -13081,36 +13293,6 @@
           ],
           "onDelete": "no action",
           "onUpdate": "no action"
-        },
-        "service_addons_panel_fk": {
-          "name": "service_addons_panel_fk",
-          "tableFrom": "service_addons",
-          "tableTo": "panels",
-          "columnsFrom": [
-            "tenant_id",
-            "panel_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "service_addons_product_fk": {
-          "name": "service_addons_product_fk",
-          "tableFrom": "service_addons",
-          "tableTo": "products",
-          "columnsFrom": [
-            "tenant_id",
-            "product_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -13128,7 +13310,7 @@
       "checkConstraints": {
         "service_addons_kind_check": {
           "name": "service_addons_kind_check",
-          "value": "kind IN ('ADD_TRAFFIC', 'ADD_TIME', 'ADD_DEVICES')"
+          "value": "kind IN ('ADD_TRAFFIC', 'ADD_TIME')"
         },
         "service_addons_status_check": {
           "name": "service_addons_status_check",
@@ -13148,15 +13330,7 @@
         },
         "service_addons_amount_matches_kind": {
           "name": "service_addons_amount_matches_kind",
-          "value": "(kind = 'ADD_TRAFFIC' AND traffic_bytes IS NOT NULL AND traffic_bytes > 0 AND duration_days IS NULL AND max_quantity IS NULL)\n          OR (kind = 'ADD_TIME' AND duration_days IS NOT NULL AND duration_days > 0 AND traffic_bytes IS NULL AND max_quantity IS NULL)\n          OR (kind = 'ADD_DEVICES' AND max_quantity IS NOT NULL AND max_quantity >= 1 AND max_quantity <= 20 AND traffic_bytes IS NULL AND duration_days IS NULL)"
-        },
-        "service_addons_scope_kind_check": {
-          "name": "service_addons_scope_kind_check",
-          "value": "kind = 'ADD_DEVICES' OR (panel_id IS NULL AND product_id IS NULL)"
-        },
-        "service_addons_version_check": {
-          "name": "service_addons_version_check",
-          "value": "version >= 1"
+          "value": "(kind = 'ADD_TRAFFIC' AND traffic_bytes IS NOT NULL AND traffic_bytes > 0 AND duration_days IS NULL)\n          OR (kind = 'ADD_TIME' AND duration_days IS NOT NULL AND duration_days > 0 AND traffic_bytes IS NULL)"
         },
         "service_addons_duration_bound_check": {
           "name": "service_addons_duration_bound_check",
@@ -13230,19 +13404,6 @@
           "primaryKey": false,
           "notNull": true,
           "default": 0
-        },
-        "purchased_device_count": {
-          "name": "purchased_device_count",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "addon_version": {
-          "name": "addon_version",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
         },
         "amount": {
           "name": "amount",
@@ -13448,7 +13609,7 @@
       "checkConstraints": {
         "service_commercial_actions_kind_check": {
           "name": "service_commercial_actions_kind_check",
-          "value": "kind IN ('RENEW', 'ADD_TRAFFIC', 'ADD_TIME', 'ADD_DEVICES')"
+          "value": "kind IN ('RENEW', 'ADD_TRAFFIC', 'ADD_TIME')"
         },
         "service_commercial_actions_currency_check": {
           "name": "service_commercial_actions_currency_check",
@@ -13464,11 +13625,7 @@
         },
         "service_commercial_actions_purchased_check": {
           "name": "service_commercial_actions_purchased_check",
-          "value": "(kind = 'RENEW' AND purchased_device_count = 0)\n          OR (kind = 'ADD_TRAFFIC' AND purchased_traffic_bytes > 0 AND purchased_duration_days = 0 AND purchased_device_count = 0)\n          OR (kind = 'ADD_TIME' AND purchased_duration_days > 0 AND purchased_traffic_bytes = 0 AND purchased_device_count = 0)\n          OR (kind = 'ADD_DEVICES' AND purchased_device_count > 0 AND purchased_traffic_bytes = 0 AND purchased_duration_days = 0\n              AND addon_id IS NOT NULL AND addon_version IS NOT NULL)"
-        },
-        "service_commercial_actions_addon_version_check": {
-          "name": "service_commercial_actions_addon_version_check",
-          "value": "addon_version IS NULL OR (kind = 'ADD_DEVICES' AND addon_version >= 1)"
+          "value": "(kind = 'RENEW')\n          OR (kind = 'ADD_TRAFFIC' AND purchased_traffic_bytes > 0 AND purchased_duration_days = 0)\n          OR (kind = 'ADD_TIME' AND purchased_duration_days > 0 AND purchased_traffic_bytes = 0)"
         }
       },
       "isRLSEnabled": false
@@ -14784,12 +14941,6 @@
           "notNull": true,
           "default": "0"
         },
-        "device_limit": {
-          "name": "device_limit",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
         "usage_synced_at": {
           "name": "usage_synced_at",
           "type": "timestamp with time zone",
@@ -15156,10 +15307,6 @@
         "services_traffic_check": {
           "name": "services_traffic_check",
           "value": "traffic_limit_bytes >= 0 AND traffic_used_bytes >= 0"
-        },
-        "services_device_limit_check": {
-          "name": "services_device_limit_check",
-          "value": "device_limit IS NULL OR (device_limit >= 1 AND device_limit <= 1000)"
         },
         "services_subscription_ref_check": {
           "name": "services_subscription_ref_check",

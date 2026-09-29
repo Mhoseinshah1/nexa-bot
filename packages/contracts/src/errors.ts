@@ -446,6 +446,14 @@ export const CONTROL_ERROR_CODES = {
    * one that cannot succeed.
    */
   NOTIFICATION_RECORD_ORPHANED: 'control.notification_record_orphaned',
+
+  // --- WP-A10: client apps and connection guides ------------------------------------
+  /** No client app entry with this id in this tenant. Another tenant's is answered the same way. */
+  CLIENT_APP_NOT_FOUND: 'control.client_app_not_found',
+  /** The entry moved since the client read it. Carries the current version. */
+  CLIENT_APP_VERSION_CONFLICT: 'control.client_app_version_conflict',
+  /** The tenant already holds `CLIENT_APP_MAX_ENTRIES`. */
+  CLIENT_APP_LIMIT: 'control.client_app_limit',
 } as const;
 
 /**
@@ -1371,6 +1379,27 @@ export const COMMERCE_ERROR_CODES = {
    * every reason. Nothing was written.
    */
   SERVICE_NOT_TRANSFERABLE: 'commerce.service_not_transferable',
+
+  // --- WP-A6: service location change ------------------------------------------------
+  /**
+   * The chosen target is the location the service is already in. Nothing was written, and
+   * nothing is charged for a move that would change nothing.
+   */
+  LOCATION_CHANGE_SAME_LOCATION: 'commerce.location_change_same_location',
+  /** The configured cooldown since this service's last change has not elapsed. */
+  LOCATION_CHANGE_COOLDOWN: 'commerce.location_change_cooldown',
+  /** This service already had the configured number of changes in the rolling period. */
+  LOCATION_CHANGE_LIMIT_REACHED: 'commerce.location_change_limit_reached',
+  /** No configured location with this id in this tenant. Another tenant's is answered the same way. */
+  SERVICE_LOCATION_NOT_FOUND: 'commerce.service_location_not_found',
+  /**
+   * The location cannot be written as asked: its panel or product is not this tenant's, its
+   * product is not on its panel, it would be a second initial location for the panel, it
+   * duplicates a key, its price is in a currency this installation does not sell in, the
+   * panel or the tenant already holds the most locations it may, or a change request still
+   * names it and it cannot be deleted. The `reason` detail says which.
+   */
+  SERVICE_LOCATION_INVALID: 'commerce.service_location_invalid',
 } as const;
 
 /*

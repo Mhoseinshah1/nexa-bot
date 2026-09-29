@@ -132,6 +132,12 @@ import {
   TRIAL_LIMIT_MIN,
   // Package D: the custom service.
   CUSTOM_SERVICE_LABEL_MAX_LENGTH,
+  // WP-A6: service location change.
+  SERVICE_LOCATION_KEY_MAX_LENGTH,
+  SERVICE_LOCATION_LABEL_MAX_LENGTH,
+  SERVICE_LOCATION_COOLDOWN_HOURS_MAX,
+  SERVICE_LOCATION_MAX_CHANGES_MAX,
+  SERVICE_LOCATION_PERIOD_DAYS_MAX,
   CUSTOM_SERVICE_RULE_DIMENSIONS,
   CUSTOM_SERVICE_RULE_LEVELS,
   // Customer UX completion.
@@ -147,6 +153,18 @@ import {
   TENANT_MEDIA_MIME_TYPES,
   TENANT_MEDIA_MAX_BYTES,
   PRODUCT_SERVICE_LOCATION_LABEL_MAX_LENGTH,
+  // WP-A10: client apps and connection guides.
+  CLIENT_APP_DELIVERY_KINDS,
+  CLIENT_APP_DESCRIPTION_MAX_LENGTH,
+  CLIENT_APP_GUIDE_MAX_LENGTH,
+  CLIENT_APP_ICON_MAX_LENGTH,
+  CLIENT_APP_NAME_MAX_LENGTH,
+  CLIENT_APP_PLATFORMS,
+  CLIENT_APP_PROTOCOLS,
+  CLIENT_APP_SORT_MAX,
+  CLIENT_APP_SORT_MIN,
+  CLIENT_APP_STATUSES,
+  CLIENT_APP_URL_MAX_LENGTH,
 } from '@nexa/contracts';
 
 /**
@@ -3283,17 +3301,23 @@ export const orders = pgTable(
           OR (line_traffic_bytes > 0 AND line_duration_days > 0 AND line_quantity = 1)`,
     ),
     /*
+     * `CHANGE_LOCATION` (WP-A6) buys neither bytes nor days nor devices — one move, at the
+     * configured target's price; the zeros are "nothing of this was bought", never the
+     * product snapshot's "unlimited".
+     *
      * `ADD_DEVICES` (WP-A5) buys neither bytes nor days: its line is `line_quantity`
      * devices at `line_unit_price_amount` each, and `line_device_limit` is the TARGET the
      * quote promised — the limit then in force plus the quantity, so always above it.
      */
     check(
       'orders_quantity_line_check',
-      sql`purpose NOT IN ('ADD_TRAFFIC', 'ADD_TIME', 'ADD_DEVICES')
+      sql`purpose NOT IN ('ADD_TRAFFIC', 'ADD_TIME', 'ADD_DEVICES', 'CHANGE_LOCATION')
           OR (purpose = 'ADD_TRAFFIC' AND line_traffic_bytes > 0 AND line_duration_days = 0)
           OR (purpose = 'ADD_TIME' AND line_duration_days > 0 AND line_traffic_bytes = 0)
           OR (purpose = 'ADD_DEVICES' AND line_traffic_bytes = 0 AND line_duration_days = 0
-              AND line_device_limit IS NOT NULL AND line_device_limit > line_quantity)`,
+              AND line_device_limit IS NOT NULL AND line_device_limit > line_quantity)
+          OR (purpose = 'CHANGE_LOCATION' AND line_traffic_bytes = 0 AND line_duration_days = 0
+              AND line_device_limit IS NULL AND line_quantity = 1)`,
     ),
     /**
      * A total is never negative, and the parts agree with the whole.
@@ -5141,6 +5165,19 @@ export const services = pgTable(
      * add devices to.
      */
     deviceLimit: integer('device_limit'),
+    /**
+     * Where the service's account sits on its panel, as the panel last reported it (WP-A6),
+     * or NULL for a service that has never moved — which is in its panel's INITIAL location,
+     * whatever that is configured as today.
+     *
+     * The adapter-defined key and the customer-facing name, written TOGETHER and only by a
+     * `CHANGE_LOCATION` the panel applied: the key from the operation's absolute target, the
+     * name from the change request's snapshot. The name is a snapshot for the reason every
+     * other one is — an operator renaming a location must not rewrite what a customer's
+     * card says their service moved to.
+     */
+    locationKey: text('location_key'),
+    locationLabel: text('location_label'),
     usageSyncedAt: timestamptz('usage_synced_at'),
     /**
      * Last connection, as a provider PROVED it (customer UX completion §H). `AT` with a
@@ -5240,6 +5277,8 @@ export const services = pgTable(
       'services_device_limit_check',
       sql`device_limit IS NULL OR (device_limit >= 1 AND device_limit <= 1000)`,
     ),
+    /** WP-A6: a location is a key AND a name, or neither. */
+    check('services_location_check', sql`(location_key IS NULL) = (location_label IS NULL)`),
     /** The format the panels accept, pinned so a bad generator fails at the write. */
     check('services_subscription_ref_check', sql`subscription_ref ~ '^[0-9a-f]{32}$'`),
     /**
@@ -5482,6 +5521,102 @@ export const serviceReminders = pgTable(
   ],
 );
 
+// --- WP-A6: the configured locations a service may be moved to -------------------------
+
+/**
+ * One location of one panel, as an operator configured it (WP-A6).
+ *
+ * A row is two things at once, because they are one thing to an operator: a NAME for a
+ * place the panel's own management domain can put an account (`location_key`, which only
+ * the adapter interprets), and — when enabled and priced — an OFFER to move a service
+ * there. No row, a disabled row or an unpriced row is unavailable; a price of zero is free
+ * and is the only free. There is no target-panel column: a move keeps the account on the
+ * panel it is on, so a cross-panel or cross-provider move cannot even be written.
+ *
+ * `initial` marks where the panel's new accounts are created. It is how a service that
+ * has never moved knows its current location, and therefore how "the target is where it
+ * already is" is refused; one per panel, and never product-scoped, because a panel places
+ * every new account the same way.
+ *
+ * `product_id` scopes an offer to one product's services — the most specific row for a
+ * key wins, exactly as a per-device rate's scope does. `version` is bumped by every edit,
+ * and a change request snapshots the version it was quoted from.
+ */
+export const serviceLocations = pgTable(
+  'service_locations',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    panelId: uuid('panel_id').notNull(),
+    productId: uuid('product_id'),
+    locationKey: text('location_key').notNull(),
+    label: text('label').notNull(),
+    isInitial: boolean('is_initial').notNull().default(false),
+    enabled: boolean('enabled').notNull().default(false),
+    /** Both halves or neither; null is "not for sale", never free. Zero is free. */
+    priceAmount: bigint('price_amount', { mode: 'bigint' }),
+    priceCurrency: text('price_currency'),
+    cooldownHours: integer('cooldown_hours'),
+    maxChanges: integer('max_changes'),
+    periodDays: integer('period_days'),
+    sortOrder: integer('sort_order').notNull().default(0),
+    version: integer('version').notNull().default(1),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    unique('service_locations_tenant_id_key').on(table.tenantId, table.id),
+    /** One row per key per scope: a panel-wide one, and at most one per product. */
+    unique('service_locations_key')
+      .on(table.tenantId, table.panelId, table.locationKey, table.productId)
+      .nullsNotDistinct(),
+    /** One initial location per panel. */
+    uniqueIndex('service_locations_initial_key')
+      .on(table.tenantId, table.panelId)
+      .where(sql`is_initial`),
+    index('service_locations_panel_idx').on(table.tenantId, table.panelId, table.sortOrder),
+    foreignKey({
+      columns: [table.tenantId, table.panelId],
+      foreignColumns: [panels.tenantId, panels.id],
+      name: 'service_locations_panel_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.productId],
+      foreignColumns: [products.tenantId, products.id],
+      name: 'service_locations_product_fk',
+    }),
+    check(
+      'service_locations_key_check',
+      sql`length(location_key) BETWEEN 1 AND ${sql.raw(String(SERVICE_LOCATION_KEY_MAX_LENGTH))}`,
+    ),
+    check(
+      'service_locations_label_check',
+      sql`length(btrim(label)) BETWEEN 1 AND ${sql.raw(String(SERVICE_LOCATION_LABEL_MAX_LENGTH))}`,
+    ),
+    check(
+      'service_locations_price_check',
+      sql`(price_amount IS NULL) = (price_currency IS NULL) AND (price_amount IS NULL OR price_amount >= 0)`,
+    ),
+    check('service_locations_currency_check', nullableEnumCheck('price_currency', CURRENCY_CODES)),
+    /** An enabled target is a priced one: enabled and unpriced would be "free" by omission. */
+    check('service_locations_enabled_priced_check', sql`NOT enabled OR price_amount IS NOT NULL`),
+    check('service_locations_initial_scope_check', sql`NOT is_initial OR product_id IS NULL`),
+    check(
+      'service_locations_cooldown_check',
+      sql`cooldown_hours IS NULL OR (cooldown_hours >= 1 AND cooldown_hours <= ${sql.raw(String(SERVICE_LOCATION_COOLDOWN_HOURS_MAX))})`,
+    ),
+    check(
+      'service_locations_limit_check',
+      sql`(max_changes IS NULL) = (period_days IS NULL)
+          AND (max_changes IS NULL OR (max_changes >= 1 AND max_changes <= ${sql.raw(String(SERVICE_LOCATION_MAX_CHANGES_MAX))}))
+          AND (period_days IS NULL OR (period_days >= 1 AND period_days <= ${sql.raw(String(SERVICE_LOCATION_PERIOD_DAYS_MAX))}))`,
+    ),
+    check('service_locations_version_check', sql`version >= 1`),
+  ],
+);
+
 /**
  * One commercial action bought against a service that already exists.
  *
@@ -5551,6 +5686,12 @@ export const serviceCommercialActions = pgTable(
      * for `ADD_DEVICES`, whose rate is edited in place; null for every other kind.
      */
     addonVersion: integer('addon_version'),
+    /**
+     * WP-A6: the configured target a `CHANGE_LOCATION` was priced from, the third place a
+     * price may come from. Its VERSION and the names are on the change request, which is
+     * the snapshot; this is navigation, like `product_id` and `addon_id`.
+     */
+    locationId: uuid('location_id'),
     /** What was paid, with its currency. Never an amount without one. */
     amount: bigint('amount', { mode: 'bigint' }).notNull(),
     currency: text('currency').notNull(),
@@ -5589,6 +5730,11 @@ export const serviceCommercialActions = pgTable(
       foreignColumns: [serviceAddons.tenantId, serviceAddons.id],
       name: 'service_commercial_actions_addon_fk',
     }),
+    foreignKey({
+      columns: [table.tenantId, table.locationId],
+      foreignColumns: [serviceLocations.tenantId, serviceLocations.id],
+      name: 'service_commercial_actions_location_fk',
+    }),
     /**
      * ONE action per order, as a constraint rather than as worker discipline.
      *
@@ -5615,9 +5761,16 @@ export const serviceCommercialActions = pgTable(
      * answer it at all — which is the legacy defect where a deleted product collapses a
      * historical line to «محصول حذف‌شده».
      */
+    /*
+     * WP-A6 made it three places, and still exactly one: a location change names its
+     * configured target and neither a product nor an add-on.
+     */
     check(
       'service_commercial_actions_source_check',
-      sql`(product_id IS NULL) <> (addon_id IS NULL)`,
+      sql`(CASE WHEN product_id IS NULL THEN 0 ELSE 1 END
+           + CASE WHEN addon_id IS NULL THEN 0 ELSE 1 END
+           + CASE WHEN location_id IS NULL THEN 0 ELSE 1 END) = 1
+          AND (location_id IS NULL) = (kind <> 'CHANGE_LOCATION')`,
     ),
     /**
      * What each kind may have bought, pinned so the amounts cannot be swapped.
@@ -5633,7 +5786,9 @@ export const serviceCommercialActions = pgTable(
           OR (kind = 'ADD_TRAFFIC' AND purchased_traffic_bytes > 0 AND purchased_duration_days = 0 AND purchased_device_count = 0)
           OR (kind = 'ADD_TIME' AND purchased_duration_days > 0 AND purchased_traffic_bytes = 0 AND purchased_device_count = 0)
           OR (kind = 'ADD_DEVICES' AND purchased_device_count > 0 AND purchased_traffic_bytes = 0 AND purchased_duration_days = 0
-              AND addon_id IS NOT NULL AND addon_version IS NOT NULL)`,
+              AND addon_id IS NOT NULL AND addon_version IS NOT NULL)
+          OR (kind = 'CHANGE_LOCATION' AND purchased_traffic_bytes = 0 AND purchased_duration_days = 0
+              AND purchased_device_count = 0)`,
     ),
     check(
       'service_commercial_actions_addon_version_check',
@@ -5738,6 +5893,12 @@ export const provisioningOperations = pgTable(
      * no expiry and no allowance, and nothing else carries a device limit.
      */
     targetDeviceLimit: integer('target_device_limit'),
+    /**
+     * WP-A6: the adapter-defined location key a `CHANGE_LOCATION` should leave the account
+     * in. Set for that type and only that type, and alone — a move buys no time, no
+     * allowance and no devices, and nothing else moves an account.
+     */
+    targetLocationKey: text('target_location_key'),
     /** The provider's own reference for the effect, when it gave one. */
     providerReference: text('provider_reference'),
     /** A kind from the EXISTING provider taxonomy. Never a new vocabulary. */
@@ -5887,7 +6048,7 @@ export const provisioningOperations = pgTable(
     uniqueIndex('provisioning_operations_open_commercial_key')
       .on(table.tenantId, table.serviceId)
       .where(
-        sql`type IN ('RENEW', 'ADD_TRAFFIC', 'ADD_TIME', 'ADD_DEVICES') AND state IN ('PLANNED', 'IN_FLIGHT', 'UNKNOWN')`,
+        sql`type IN ('RENEW', 'ADD_TRAFFIC', 'ADD_TIME', 'ADD_DEVICES', 'CHANGE_LOCATION') AND state IN ('PLANNED', 'IN_FLIGHT', 'UNKNOWN')`,
       ),
     index('provisioning_operations_unknown_idx')
       .on(table.tenantId, table.createdAt)
@@ -5909,8 +6070,9 @@ export const provisioningOperations = pgTable(
      */
     check(
       'provisioning_operations_target_check',
-      sql`type IN ('RENEW', 'ADD_TRAFFIC', 'ADD_TIME', 'ADD_DEVICES')
-          OR (target_expires_at IS NULL AND target_traffic_limit_bytes IS NULL AND target_device_limit IS NULL)`,
+      sql`type IN ('RENEW', 'ADD_TRAFFIC', 'ADD_TIME', 'ADD_DEVICES', 'CHANGE_LOCATION')
+          OR (target_expires_at IS NULL AND target_traffic_limit_bytes IS NULL AND target_device_limit IS NULL
+              AND target_location_key IS NULL)`,
     ),
     /**
      * WP-A5: a device limit is an `ADD_DEVICES` target and only one, and an `ADD_DEVICES`
@@ -5925,15 +6087,29 @@ export const provisioningOperations = pgTable(
           OR (type <> 'ADD_DEVICES' AND target_device_limit IS NULL)`,
     ),
     /**
+     * WP-A6: a location key is a `CHANGE_LOCATION` target and only one, and a
+     * `CHANGE_LOCATION` carries nothing else — a move can never be read as a renewal, nor a
+     * renewal made to move an account.
+     */
+    check(
+      'provisioning_operations_target_location_check',
+      sql`(type = 'CHANGE_LOCATION'
+           AND target_location_key IS NOT NULL
+           AND length(target_location_key) BETWEEN 1 AND ${sql.raw(String(SERVICE_LOCATION_KEY_MAX_LENGTH))}
+           AND target_expires_at IS NULL AND target_traffic_limit_bytes IS NULL AND target_device_limit IS NULL)
+          OR (type <> 'CHANGE_LOCATION' AND target_location_key IS NULL)`,
+    ),
+    /**
      * And a commercial operation must carry at least one, or it asks the panel for
      * nothing while an order records that a customer paid for something.
      */
     check(
       'provisioning_operations_target_present_check',
-      sql`type NOT IN ('RENEW', 'ADD_TRAFFIC', 'ADD_TIME', 'ADD_DEVICES')
+      sql`type NOT IN ('RENEW', 'ADD_TRAFFIC', 'ADD_TIME', 'ADD_DEVICES', 'CHANGE_LOCATION')
           OR target_expires_at IS NOT NULL
           OR target_traffic_limit_bytes IS NOT NULL
-          OR target_device_limit IS NOT NULL`,
+          OR target_device_limit IS NOT NULL
+          OR target_location_key IS NOT NULL`,
     ),
     check(
       'provisioning_operations_target_traffic_check',
@@ -7936,5 +8112,235 @@ export const serviceOwnershipTransfers = pgTable(
     check('service_ownership_transfers_parties_check', sql`from_customer_id <> to_customer_id`),
     check('service_ownership_transfers_actor_type_check', enumCheck('actor_type', ACTOR_TYPES)),
     check('service_ownership_transfers_key_check', sql`length(idempotency_key) BETWEEN 1 AND 200`),
+  ],
+);
+
+// --- WP-A6: service location change ----------------------------------------------------
+
+/**
+ * One requested location change of one service (WP-A6): the snapshot of what was quoted,
+ * written once and never edited.
+ *
+ * It is the history the brief's audit needs and the evidence every later decision reads:
+ * where the service was (key and name), where it was going (key and name), which
+ * configured target and VERSION priced it, the list price — zero for free — and either
+ * the ORDER that paid for it or, for a free change, the OPERATION that carries it out.
+ * Its outcome is not stored: it is the operation's state, and for a paid change the
+ * order's, read at the time — so there is no second answer to "did it happen".
+ *
+ * The cooldown and the rolling limit count these rows at decision time, never a counter:
+ * a row counts while its order is awaiting payment or paid, or — free — while its
+ * operation has not failed.
+ */
+export const serviceLocationChanges = pgTable(
+  'service_location_changes',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    serviceId: uuid('service_id').notNull(),
+    /** The owner who asked, when they asked. */
+    customerId: uuid('customer_id').notNull(),
+    locationId: uuid('location_id').notNull(),
+    locationVersion: integer('location_version').notNull(),
+    /** Where it was: its recorded location, or its panel's initial one. Always known. */
+    fromLocationKey: text('from_location_key').notNull(),
+    fromLocationLabel: text('from_location_label').notNull(),
+    toLocationKey: text('to_location_key').notNull(),
+    toLocationLabel: text('to_location_label').notNull(),
+    /** The configured list price at quote time. The CHARGED total is the order's. */
+    priceAmount: bigint('price_amount', { mode: 'bigint' }).notNull(),
+    priceCurrency: text('price_currency').notNull(),
+    /**
+     * The cooldown and rolling limit the change was quoted under, frozen with it (Codex
+     * review #1 on PR #101): a paid move's confirmation decides its window against THESE,
+     * never against terms an operator wrote after the customer was shown the quote.
+     */
+    cooldownHours: integer('cooldown_hours'),
+    maxChanges: integer('max_changes'),
+    periodDays: integer('period_days'),
+    /** A paid change's order. Exactly one of this and `operation_id` is set. */
+    orderId: uuid('order_id'),
+    /** A free change's operation, planned in the same transaction as this row. */
+    operationId: uuid('operation_id'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+  },
+  (table) => [
+    unique('service_location_changes_tenant_id_key').on(table.tenantId, table.id),
+    uniqueIndex('service_location_changes_order_key').on(table.tenantId, table.orderId),
+    uniqueIndex('service_location_changes_operation_key').on(table.tenantId, table.operationId),
+    /** The cooldown and limit read: one service's changes, newest first. */
+    index('service_location_changes_service_idx').on(
+      table.tenantId,
+      table.serviceId,
+      table.createdAt,
+    ),
+    foreignKey({
+      columns: [table.tenantId, table.serviceId],
+      foreignColumns: [services.tenantId, services.id],
+      name: 'service_location_changes_service_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+      name: 'service_location_changes_customer_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.locationId],
+      foreignColumns: [serviceLocations.tenantId, serviceLocations.id],
+      name: 'service_location_changes_location_fk',
+    }),
+    /** With the order's customer too, so the money and the move cannot name two people. */
+    foreignKey({
+      columns: [table.tenantId, table.orderId, table.customerId],
+      foreignColumns: [orders.tenantId, orders.id, orders.customerId],
+      name: 'service_location_changes_order_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.operationId],
+      foreignColumns: [provisioningOperations.tenantId, provisioningOperations.id],
+      name: 'service_location_changes_operation_fk',
+    }),
+    check(
+      'service_location_changes_source_check',
+      sql`(order_id IS NULL) <> (operation_id IS NULL)`,
+    ),
+    /** Free is exactly "no order": a paid change has one, and nothing free is ever paid. */
+    check(
+      'service_location_changes_price_check',
+      sql`price_amount >= 0 AND (price_amount = 0) = (order_id IS NULL)`,
+    ),
+    check('service_location_changes_currency_check', enumCheck('price_currency', CURRENCY_CODES)),
+    check('service_location_changes_moves_check', sql`from_location_key <> to_location_key`),
+    check('service_location_changes_version_check', sql`location_version >= 1`),
+    check(
+      'service_location_changes_limits_check',
+      sql`(cooldown_hours IS NULL OR cooldown_hours >= 1)
+          AND (max_changes IS NULL) = (period_days IS NULL)
+          AND (max_changes IS NULL OR (max_changes >= 1 AND period_days >= 1))`,
+    ),
+  ],
+);
+
+// --- WP-A10: client apps and connection guides -------------------------------------------
+
+/**
+ * An array column holding a subset of an enum, EMPTY included — `enumSubsetCheck` refuses
+ * empty, and here empty is the meaning "any": an app that names no provider type is offered
+ * whatever panel a service is on. The same assertions and escaping as its sibling.
+ */
+function enumSubsetOrEmptyCheck(column: string, values: readonly string[]): SQL {
+  if (!/^[a-z_][a-z0-9_]*$/.test(column)) {
+    throw new Error(`enumSubsetOrEmptyCheck: "${column}" is not a plain column name.`);
+  }
+  const list = values
+    .map((value) => {
+      if (!ENUM_LITERAL.test(value)) {
+        throw new Error(`enumSubsetOrEmptyCheck: "${value}" is not a plain enum literal.`);
+      }
+      return `'${value.replace(/'/g, "''")}'`;
+    })
+    .join(', ');
+  return sql.raw(`${column} <@ ARRAY[${list}]::text[]`);
+}
+
+/**
+ * One client app a tenant recommends, on one platform (WP-A10).
+ *
+ * Tenant CONTENT, like `support_faqs`: an operator writes it in the Web Admin and the bot
+ * reads it on every tap, so a link or a guide changes without a deploy. No row is seeded.
+ *
+ * The three compatibility arrays are what context filtering reads, and empty means "any"
+ * for each. Their members are pinned to the contract here; `provider_types` too, so a
+ * provider type this release does not know cannot be stored against a row that a future
+ * release would then read as a real restriction.
+ *
+ * The links are stored NORMALISED by `normalizeClientAppUrl` and the constraint repeats
+ * the one property the database can check cheaply — the scheme — so a row written around
+ * the service still cannot hand Telegram a `javascript:` button.
+ */
+export const clientApps = pgTable(
+  'client_apps',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    platform: text('platform').notNull(),
+    name: text('name').notNull(),
+    icon: text('icon'),
+    description: text('description').notNull(),
+    officialUrl: text('official_url').notNull(),
+    alternativeUrl: text('alternative_url'),
+    helpUrl: text('help_url'),
+    guide: text('guide').notNull(),
+    deliveryKinds: text('delivery_kinds')
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+    protocols: text('protocols')
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+    providerTypes: text('provider_types')
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+    status: text('status').notNull().default('ENABLED'),
+    sortOrder: integer('sort_order').notNull().default(0),
+    version: integer('version').notNull().default(1),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    /** The customer's read: one platform's enabled rows, in the operator's order. */
+    index('client_apps_tenant_platform_idx').on(
+      table.tenantId,
+      table.platform,
+      table.status,
+      table.sortOrder,
+      table.createdAt,
+      table.id,
+    ),
+    unique('client_apps_tenant_id_key').on(table.tenantId, table.id),
+    check('client_apps_platform_check', enumCheck('platform', CLIENT_APP_PLATFORMS)),
+    check('client_apps_status_check', enumCheck('status', CLIENT_APP_STATUSES)),
+    check(
+      'client_apps_name_check',
+      sql`length(btrim(name)) BETWEEN 1 AND ${sql.raw(String(CLIENT_APP_NAME_MAX_LENGTH))}`,
+    ),
+    check(
+      'client_apps_icon_check',
+      sql`icon IS NULL OR length(btrim(icon)) BETWEEN 1 AND ${sql.raw(String(CLIENT_APP_ICON_MAX_LENGTH))}`,
+    ),
+    check(
+      'client_apps_description_check',
+      sql`length(btrim(description)) BETWEEN 1 AND ${sql.raw(String(CLIENT_APP_DESCRIPTION_MAX_LENGTH))}`,
+    ),
+    check(
+      'client_apps_guide_check',
+      sql`length(btrim(guide)) BETWEEN 1 AND ${sql.raw(String(CLIENT_APP_GUIDE_MAX_LENGTH))}`,
+    ),
+    check(
+      'client_apps_urls_check',
+      sql`official_url LIKE 'https://%' AND length(official_url) <= ${sql.raw(String(CLIENT_APP_URL_MAX_LENGTH))}
+          AND (alternative_url IS NULL OR (alternative_url LIKE 'https://%' AND length(alternative_url) <= ${sql.raw(String(CLIENT_APP_URL_MAX_LENGTH))}))
+          AND (help_url IS NULL OR (help_url LIKE 'https://%' AND length(help_url) <= ${sql.raw(String(CLIENT_APP_URL_MAX_LENGTH))}))`,
+    ),
+    check(
+      'client_apps_delivery_kinds_check',
+      enumSubsetOrEmptyCheck('delivery_kinds', CLIENT_APP_DELIVERY_KINDS),
+    ),
+    check('client_apps_protocols_check', enumSubsetOrEmptyCheck('protocols', CLIENT_APP_PROTOCOLS)),
+    check(
+      'client_apps_provider_types_check',
+      enumSubsetOrEmptyCheck('provider_types', PROVIDER_TYPES),
+    ),
+    check(
+      'client_apps_sort_order_check',
+      sql`sort_order BETWEEN ${sql.raw(String(CLIENT_APP_SORT_MIN))} AND ${sql.raw(String(CLIENT_APP_SORT_MAX))}`,
+    ),
+    check('client_apps_version_check', sql`version >= 1`),
   ],
 );

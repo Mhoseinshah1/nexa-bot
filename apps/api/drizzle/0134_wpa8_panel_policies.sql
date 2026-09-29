@@ -7,8 +7,8 @@
 -- role_permissions      backfills `panels.technical.view` (the Super Admin's read-only
 --                       technical view) into the existing `owner` roles, below.
 --
--- Numbered 0133 on purpose: 0131 is WP-A5 and 0132 is reserved for WP-A6, which is built
--- in parallel on the same base.
+-- Numbered 0134: 0131 is WP-A10, 0132 WP-A5 and 0133 WP-A6, merged before it. First
+-- written as 0133 on WP-A5's base and regenerated here with the same DDL.
 CREATE TABLE "panel_policies" (
 	"tenant_id" uuid NOT NULL,
 	"panel_id" uuid NOT NULL,

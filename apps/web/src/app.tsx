@@ -23,9 +23,11 @@ import { PaymentAccountsPage } from './pages/payment-accounts';
 import { BotsPage } from './pages/bots';
 import { PaymentGatewaysPage } from './pages/payment-gateways';
 import { SupportPage } from './pages/support';
+import { ClientAppsPage } from './pages/client-apps';
 import { ProductDetailPage, ProductsPage } from './pages/products';
 import { ProductCategoriesPage } from './pages/product-categories';
 import { ExtraDevicesPage } from './pages/extra-devices';
+import { ServiceLocationsPage } from './pages/service-locations';
 import { OrderDetailPage, OrdersPage } from './pages/orders';
 import { ServiceDetailPage, ServicesPage } from './pages/services';
 import { UsersPage, UserDetailPage } from './pages/users';
@@ -259,6 +261,16 @@ export const NAV: readonly NavEntry[] = [
     group: 'web.navgroup_sales',
   },
   {
+    // WP-A6: a panel's locations and the price of moving a service there, under the
+    // catalogue's own pair, for the reason the entry above gives.
+    id: 'service-locations',
+    path: '/service-locations',
+    label: 'web.nav_service_locations',
+    icon: 'products',
+    permission: ['catalog.view', 'catalog.edit'],
+    group: 'web.navgroup_sales',
+  },
+  {
     id: 'payments',
     path: '/payments',
     label: 'web.nav_payments',
@@ -464,6 +476,16 @@ export const NAV: readonly NavEntry[] = [
     group: 'web.navgroup_config',
   },
   {
+    // WP-A10: the client apps and connection guides the bot recommends. Its own pair,
+    // `client_apps.*`: the list charges the view and every write the edit.
+    id: 'client-apps',
+    path: '/client-apps',
+    label: 'web.nav_client_apps',
+    icon: 'link',
+    permission: 'client_apps.view',
+    group: 'web.navgroup_config',
+  },
+  {
     id: 'features',
     path: '/features',
     label: 'web.nav_features',
@@ -638,6 +660,20 @@ export function resolve(
       ),
       crumbs: [{ label: t('web.products_title') }],
       title: t('web.products_title'),
+    };
+  }
+
+  if (route.path === '/service-locations') {
+    return {
+      element: (
+        <ServiceLocationsPage
+          mayEdit={may('catalog.edit')}
+          denied={!may('catalog.view')}
+          mayReadPanels={may('panels.view')}
+        />
+      ),
+      crumbs: [{ label: t('web.service_locations_title') }],
+      title: t('web.service_locations_title'),
     };
   }
 
@@ -1045,6 +1081,16 @@ export function resolve(
       element: <SupportPage mayEdit={may('settings.edit')} denied={!may('settings.view')} />,
       crumbs: [{ label: t('web.nav_support') }],
       title: t('web.nav_support'),
+    };
+  }
+
+  if (route.path === '/client-apps') {
+    return {
+      element: (
+        <ClientAppsPage mayEdit={may('client_apps.edit')} denied={!may('client_apps.view')} />
+      ),
+      crumbs: [{ label: t('web.nav_client_apps') }],
+      title: t('web.nav_client_apps'),
     };
   }
 

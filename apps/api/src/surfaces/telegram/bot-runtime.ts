@@ -19,13 +19,14 @@ import {
   serviceTransferRecipientRefusalSchema,
   uuidV7Schema,
   DEVICE_ADDON_MAX_QUANTITY,
+  SERVICE_LOCATIONS_PER_PANEL_MAX,
   USAGE_REMINDER_PERCENT_MAX,
   USAGE_REMINDER_PERCENT_MIN,
   CONNECTION_GUIDE_PLATFORMS,
   SERVICE_NOTE_CLEAR_TOKEN,
   SERVICE_NOTE_MAX_LENGTH,
   SERVICE_SEARCH_MAX_LENGTH,
-  connectionGuidePlatformSchema,
+  clientAppPlatformSchema,
   paymentGatewayProviderSchema,
   telegramChannelJoinUrl,
   PAYMENT_GATEWAY_DESCRIPTORS,
@@ -33,6 +34,7 @@ import {
 import type { AntiSpamService } from '../../modules/commerce/customers/application/anti-spam.service.js';
 import type { ChannelMembershipService } from '../../modules/commerce/customers/application/channel-membership.service.js';
 import type {
+  ClientAppPlatform,
   ConnectionGuidePlatform,
   PaymentGatewayProvider,
   PaymentPurpose,
@@ -107,6 +109,7 @@ import type {
   ProductRecord,
 } from '../../modules/commerce/catalog/application/ports.js';
 import type { CommercialActionService } from '../../modules/commerce/commercial/application/commercial-action.service.js';
+import type { LocationChangeService } from '../../modules/commerce/locations/application/location-change.service.js';
 import type { TrialService } from '../../modules/commerce/trials/application/trial.service.js';
 import type { OrderService } from '../../modules/commerce/orders/application/order.service.js';
 import type { OrderRecord } from '../../modules/commerce/orders/application/ports.js';
@@ -148,6 +151,7 @@ import type {
 import { decodeKeysetToken, encodeKeysetToken, type KeysetToken } from './keyset-token.js';
 import type { PanelService } from '../../modules/platform/panels/application/panel.service.js';
 import type { ReferralProgram } from '../../modules/commerce/referrals/application/referral-program.js';
+import type { ClientAppCatalog } from '../../modules/control/client-apps/application/client-app-catalog.js';
 
 import { readHealth } from '../../modules/platform/panels/application/panel-health-view.js';
 
@@ -256,6 +260,13 @@ export const BOT_INTENTS = [
   /* WP-A5: open the extra-users offer (`dv:`), and buy a chosen quantity (`dq:`). */
   'SERVICE_ADD_DEVICES',
   'SERVICE_BUY_DEVICES',
+  /*
+   * WP-A6: open the location change (`lc:`), choose a target (`lt:`), and confirm a FREE
+   * move (`lf:`). A priced target goes on to the ordinary pre-invoice and `q:`.
+   */
+  'SERVICE_CHANGE_LOCATION',
+  'SERVICE_LOCATION_TARGET',
+  'SERVICE_LOCATION_CONFIRM',
   'SERVICE_ACTION_CONFIRM',
   /*
    * The three the username step needs (Deliverable A).
@@ -285,6 +296,12 @@ export const BOT_INTENTS = [
   'MAIN_MENU',
   'TUTORIAL',
   'TUTORIAL_PLATFORM',
+  /*
+   * WP-A10: one of the tenant's client apps, opened from a platform's list. Carries the
+   * entry's id; the screen re-reads the entry, and a disabled or removed one is "gone".
+   * `TUTORIAL` itself is also what `/apps` and «📱 دانلود برنامه و آموزش اتصال» open.
+   */
+  'CLIENT_APP',
   'SERVICE_CONNECTED',
   'SUPPORT',
   'TOPUP_ROUTE',
@@ -904,6 +921,37 @@ export function decodeDeviceQuantity(
 }
 
 /**
+ * Service location change (WP-A6). `lc:<service id>` opens the choice and buys nothing;
+ * `lt:<service id + location id, as a pair>` chooses a target; `lf:<the same pair>`
+ * confirms a FREE move. Two characters each, none begun by `l:` or another prefix.
+ */
+export const SERVICE_CHANGE_LOCATION_CALLBACK_PREFIX = 'lc:';
+export const SERVICE_LOCATION_TARGET_CALLBACK_PREFIX = 'lt:';
+export const SERVICE_LOCATION_CONFIRM_CALLBACK_PREFIX = 'lf:';
+
+/**
+ * How many targets one choice screen draws: every one a panel may hold. The admin refuses a
+ * panel's 21st location (`SERVICE_LOCATIONS_PER_PANEL_MAX`), so no configured target is
+ * ever cut off this screen; the slice is the bound restated, not a second quota.
+ */
+export const LOCATION_TARGETS_SHOWN = SERVICE_LOCATIONS_PER_PANEL_MAX;
+
+/**
+ * The service and location of an `lt:` or `lf:` tap, or null. Both halves through the
+ * validation every id-carrying callback uses, so a malformed tap is UNSUPPORTED.
+ */
+function decodeServiceLocationPair(
+  encoded: string,
+): { readonly serviceId: string; readonly locationId: string } | null {
+  const pair = decodeIdPair(encoded);
+  if (pair === null) return null;
+  const service = uuidV7Schema.safeParse(pair.first);
+  const location = uuidV7Schema.safeParse(pair.second);
+  if (!service.success || !location.success) return null;
+  return { serviceId: service.data, locationId: location.data };
+}
+
+/**
  * The two username-mode buttons.
  *
  * Both carry the ORDER, not the mode-plus-order: the mode is which button was tapped,
@@ -932,6 +980,8 @@ export const MAIN_MENU_CALLBACK_DATA = 'mm:';
 /** Package B: the membership check button's callback data. */
 export const MEMBERSHIP_CHECK_CALLBACK_DATA = 'mc:';
 export const TUTORIAL_PLATFORM_CALLBACK_PREFIX = 'to:';
+/** WP-A10: `ca:<entry uuid>` — one of the tenant's client apps. Begins with `c` like `c:`, `cg:`, `ck:`. */
+export const CLIENT_APP_CALLBACK_PREFIX = 'ca:';
 /** `tp:<capture uuid>.<provider>` — a capture the customer owns and a member of a closed enum. */
 export const TOPUP_ROUTE_CALLBACK_PREFIX = 'tp:';
 export const TOPUP_CLOSE_CALLBACK_PREFIX = 'tx:';
@@ -2347,11 +2397,16 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
       return { intent: 'TUTORIAL', targetId: null, callbackQueryId: id };
     }
     if (data.startsWith(TUTORIAL_PLATFORM_CALLBACK_PREFIX)) {
-      const platform = connectionGuidePlatformSchema.safeParse(
+      // WP-A10 widened the vocabulary by `OTHER` and kept the first five in order, so a
+      // `to:<platform>` already sitting in a customer's chat parses exactly as it did.
+      const platform = clientAppPlatformSchema.safeParse(
         data.slice(TUTORIAL_PLATFORM_CALLBACK_PREFIX.length),
       );
       if (!platform.success) return { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
       return { intent: 'TUTORIAL_PLATFORM', targetId: platform.data, callbackQueryId: id };
+    }
+    if (data.startsWith(CLIENT_APP_CALLBACK_PREFIX)) {
+      return callbackCommand('CLIENT_APP', data.slice(CLIENT_APP_CALLBACK_PREFIX.length), id);
     }
     if (data.startsWith(CONNECTED_CALLBACK_PREFIX)) {
       return callbackCommand('SERVICE_CONNECTED', data.slice(CONNECTED_CALLBACK_PREFIX.length), id);
@@ -2629,6 +2684,28 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
         data.slice(SERVICE_ADD_DEVICES_CALLBACK_PREFIX.length),
         id,
       );
+    }
+    if (data.startsWith(SERVICE_CHANGE_LOCATION_CALLBACK_PREFIX)) {
+      return callbackCommand(
+        'SERVICE_CHANGE_LOCATION',
+        data.slice(SERVICE_CHANGE_LOCATION_CALLBACK_PREFIX.length),
+        id,
+      );
+    }
+    if (
+      data.startsWith(SERVICE_LOCATION_TARGET_CALLBACK_PREFIX) ||
+      data.startsWith(SERVICE_LOCATION_CONFIRM_CALLBACK_PREFIX)
+    ) {
+      const chosen = decodeServiceLocationPair(data.slice(3));
+      if (chosen === null) return { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
+      return {
+        intent: data.startsWith(SERVICE_LOCATION_TARGET_CALLBACK_PREFIX)
+          ? 'SERVICE_LOCATION_TARGET'
+          : 'SERVICE_LOCATION_CONFIRM',
+        targetId: chosen.serviceId,
+        secondaryId: chosen.locationId,
+        callbackQueryId: id,
+      };
     }
     if (data.startsWith(SERVICE_BUY_DEVICES_CALLBACK_PREFIX)) {
       const chosen = decodeDeviceQuantity(data);
@@ -3002,6 +3079,12 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
   if (command === '/paysupport') {
     return { intent: 'SUPPORT', targetId: null, callbackQueryId: null };
   }
+  /*
+   * `/apps` and «📱 دانلود برنامه و آموزش اتصال» (WP-A10) open the connection guide's
+   * platform choice — the same `TUTORIAL` the delivery card's «📚 مشاهده آموزش استفاده»
+   * (`tu:`) opens, so there is one guide and three ways into it.
+   */
+  if (command === '/apps') return { intent: 'TUTORIAL', targetId: null, callbackQueryId: null };
   /*
    * The management panel's three text entries (Phase 5T).
    *
@@ -3419,6 +3502,12 @@ export interface BotRuntimeDeps {
   readonly products: ProductService;
   readonly commercial: CommercialActionService;
   /**
+   * WP-A6 — a customer's FREE location change. Optional for the fixtures that build a
+   * runtime without it: then a free target's confirmation answers the unavailable
+   * sentence rather than being requested.
+   */
+  readonly locationChanges?: Pick<LocationChangeService, 'requestFree'>;
+  /**
    * The free trial (WP6-A). Optional only so the customer-side unit fixtures need not
    * build it; the composition root always supplies it, and without it the catalogue
    * simply offers no trial — which is also what a tenant with the flag off sees.
@@ -3435,6 +3524,12 @@ export interface BotRuntimeDeps {
    * as an unknown service.
    */
   readonly subscriptionFiles?: Pick<SubscriptionFileService, 'offered' | 'send'>;
+  /**
+   * WP-A10 — the tenant's client apps, read for this customer's services. Optional for the
+   * fixtures that build a runtime without it: then the guide is the five
+   * `bot.tutorial.<platform>` texts it was before, and a stale `ca:` answers not-found.
+   */
+  readonly clientApps?: Pick<ClientAppCatalog, 'platformsFor' | 'appsFor' | 'appFor'>;
   /** The referral program (WP9): its terms, for the wallet button, and the invite. */
   readonly referrals?: Pick<ReferralProgram, 'terms' | 'invite'>;
   readonly orders: OrderService;
@@ -4288,6 +4383,13 @@ export const REFUSAL_REPLIES: Readonly<Record<string, TemplateKey>> = {
   [COMMERCE_ERROR_CODES.ADDON_NOT_PURCHASABLE]: 'bot.service.action_unavailable',
   [COMMERCE_ERROR_CODES.PANEL_NOT_OPERABLE]: 'bot.service.capability_unsupported',
   [COMMERCE_ERROR_CODES.SERVICE_ACTION_IN_PROGRESS]: 'bot.service.action_in_progress',
+  /*
+   * WP-A6: the three location-change refusals a customer can act on, each its own
+   * sentence — already there, moved too recently, no changes left in the period.
+   */
+  [COMMERCE_ERROR_CODES.LOCATION_CHANGE_SAME_LOCATION]: 'bot.service.location_same',
+  [COMMERCE_ERROR_CODES.LOCATION_CHANGE_COOLDOWN]: 'bot.service.location_cooldown',
+  [COMMERCE_ERROR_CODES.LOCATION_CHANGE_LIMIT_REACHED]: 'bot.service.location_limit',
   /*
    * A renewal priced in a unit this store has stopped selling.
    *
@@ -8977,9 +9079,12 @@ export class BotRuntime {
         keyboard: (await this.isAdmin(scope, actor, input)) ? 'MAIN_MENU_ADMIN' : 'MAIN_MENU',
       };
     }
-    if (command.intent === 'TUTORIAL') return tutorialChoice();
+    if (command.intent === 'TUTORIAL') return this.tutorialChoice(scope, customer);
     if (command.intent === 'TUTORIAL_PLATFORM' && command.targetId !== null) {
-      return tutorialFor(command.targetId as ConnectionGuidePlatform);
+      return this.tutorialPlatform(scope, customer, command.targetId as ClientAppPlatform);
+    }
+    if (command.intent === 'CLIENT_APP' && command.targetId !== null) {
+      return this.clientApp(scope, customer, command.targetId);
     }
     if (command.intent === 'SERVICE_CONNECTED' && command.targetId !== null) {
       // Acknowledged, and NOTHING is written: the customer told us a fact about their
@@ -9181,6 +9286,37 @@ export class BotRuntime {
         command.secondaryId,
         input,
         command.quantity,
+      );
+    }
+    if (command.intent === 'SERVICE_CHANGE_LOCATION' && command.targetId !== null) {
+      return this.locationChoice(scope, actor, customer, command.targetId);
+    }
+    if (
+      command.intent === 'SERVICE_LOCATION_TARGET' &&
+      command.targetId !== null &&
+      command.secondaryId != null
+    ) {
+      return this.locationTarget(
+        scope,
+        actor,
+        customer,
+        command.targetId,
+        command.secondaryId,
+        input,
+      );
+    }
+    if (
+      command.intent === 'SERVICE_LOCATION_CONFIRM' &&
+      command.targetId !== null &&
+      command.secondaryId != null
+    ) {
+      return this.locationRequest(
+        scope,
+        actor,
+        customer,
+        command.targetId,
+        command.secondaryId,
+        input,
       );
     }
     if (command.intent === 'SERVICE_ACTION_CONFIRM' && command.targetId !== null) {
@@ -9472,6 +9608,19 @@ export class BotRuntime {
         row: 7,
       });
     }
+    /*
+     * WP-A6: «🌍 تغییر لوکیشن», on a row of its own, only where `availableFor` found every
+     * condition true — an ACTIVE service, a panel whose adapter declares and implements
+     * LOCATION_CHANGE, a known current location, and a configured target other than it.
+     * The capability decides; no provider is named.
+     */
+    if (commercial.includes('CHANGE_LOCATION')) {
+      buttons.push({
+        label: { kind: 'TEMPLATE', key: 'bot.service.change_location_button' },
+        data: `${SERVICE_CHANGE_LOCATION_CALLBACK_PREFIX}${service.id}`,
+        row: 8,
+      });
+    }
     const actions = await this.deps.services.customerActionsFor(scope, service);
     if (actions.includes('SUSPEND')) {
       buttons.push({
@@ -9514,7 +9663,8 @@ export class BotRuntime {
     const card = await this.deps.screens.serviceCard(scope, {
       state: service.state,
       serviceUsername: service.providerUsername,
-      serviceLocation: display?.serviceLocationLabel ?? null,
+      // WP-A6: where the service has moved to, when it has; the product's label otherwise.
+      serviceLocation: service.locationLabel ?? display?.serviceLocationLabel ?? null,
       productName: title,
       trafficLimitBytes: service.trafficLimitBytes,
       trafficUsedBytes: service.trafficUsedBytes,
@@ -9661,6 +9811,154 @@ export class BotRuntime {
   }
 
   /**
+   * Where the service is and where it may be moved (WP-A6), as one button per target.
+   *
+   * A read and nothing else. The current location, the targets and their list prices all
+   * come from `CommercialActionService.offer`, which refuses for every reason a move
+   * would; each button carries the service and the configured location, never a price.
+   */
+  private async locationChoice(
+    scope: TenantContext,
+    actor: ActorContext,
+    customer: CustomerRecord,
+    serviceId: string,
+  ): Promise<PendingReply> {
+    let offer;
+    try {
+      offer = await this.deps.commercial.offer(
+        scope,
+        actor,
+        customer.id,
+        serviceId,
+        'CHANGE_LOCATION',
+      );
+    } catch (error) {
+      return refusal(error);
+    }
+    const locations = offer.locations ?? null;
+    if (locations === null) {
+      return { key: 'bot.service.action_unavailable', values: {}, buttons: [], orderId: null };
+    }
+    const shown = locations.targets.slice(0, LOCATION_TARGETS_SHOWN);
+    const buttons: CustomerButton[] = shown.map((target, index) => ({
+      label:
+        target.price.amountMinor === 0n
+          ? {
+              kind: 'TEMPLATE' as const,
+              key: 'bot.service.location_option_free' as const,
+              values: { location: target.label },
+            }
+          : {
+              kind: 'TEMPLATE' as const,
+              key: 'bot.service.location_option' as const,
+              values: { location: target.label, price: target.price },
+            },
+      data: `${SERVICE_LOCATION_TARGET_CALLBACK_PREFIX}${encodeIdPair(serviceId, target.id)}`,
+      row: index,
+    }));
+    buttons.push({ ...backToServiceButton(serviceId), row: shown.length });
+    return {
+      key: 'bot.service.location_choice',
+      values: { currentLocation: locations.current.label },
+      buttons,
+      orderId: null,
+    };
+  }
+
+  /**
+   * A target tapped (WP-A6): its impact and price, and the way to confirm.
+   *
+   * Decided on the server first — not offered, already there, cooldown, limit and the
+   * panel are each refused with their own sentence before anything is shown. A FREE move
+   * then asks for an explicit confirmation (`lf:`) and writes nothing yet; a PRICED one
+   * becomes the ordinary quote — the pre-invoice with its from / to block and the same
+   * confirmation and payment buttons every commercial order uses.
+   */
+  private async locationTarget(
+    scope: TenantContext,
+    actor: ActorContext,
+    customer: CustomerRecord,
+    serviceId: string,
+    locationId: string,
+    input: { readonly idempotencyKey: string },
+  ): Promise<PendingReply> {
+    let decided;
+    try {
+      decided = await this.deps.commercial.locationTarget(
+        scope,
+        actor,
+        customer.id,
+        serviceId,
+        locationId,
+      );
+    } catch (error) {
+      return refusal(error);
+    }
+    if (decided.target.price.amountMinor !== 0n) {
+      return this.commercialQuote(
+        scope,
+        actor,
+        customer,
+        serviceId,
+        'CHANGE_LOCATION',
+        null,
+        input,
+        undefined,
+        locationId,
+      );
+    }
+    return {
+      key: 'bot.service.location_confirm_free',
+      values: { fromLocation: decided.current.label, toLocation: decided.target.label },
+      buttons: [
+        {
+          label: { kind: 'TEMPLATE', key: 'bot.service.location_confirm_button' },
+          data: `${SERVICE_LOCATION_CONFIRM_CALLBACK_PREFIX}${encodeIdPair(serviceId, locationId)}`,
+          row: 0,
+        },
+        { ...backToServiceButton(serviceId), row: 1 },
+      ],
+      orderId: null,
+    };
+  }
+
+  /**
+   * A free move, confirmed (WP-A6). `LocationChangeService.requestFree` decides everything
+   * again in its own transaction and plans the operation; the customer is told it was
+   * recorded, and its outcome later through the notification lane.
+   *
+   * `idempotencyKey` is the update's, so Telegram redelivering the tap requests it once.
+   */
+  private async locationRequest(
+    scope: TenantContext,
+    actor: ActorContext,
+    customer: CustomerRecord,
+    serviceId: string,
+    locationId: string,
+    input: { readonly idempotencyKey: string },
+  ): Promise<PendingReply> {
+    const changes = this.deps.locationChanges;
+    if (changes === undefined) {
+      return { key: 'bot.service.action_unavailable', values: {}, buttons: [], orderId: null };
+    }
+    try {
+      await changes.requestFree(scope, actor, customer.id, {
+        serviceId,
+        locationId,
+        idempotencyKey: `${input.idempotencyKey}:change_location`,
+      });
+    } catch (error) {
+      return refusal(error);
+    }
+    return {
+      key: 'bot.service.location_requested',
+      values: {},
+      buttons: [backToServiceButton(serviceId)],
+      orderId: null,
+    };
+  }
+
+  /**
    * The quote a customer answers: what this action buys, and what it costs.
    *
    * It writes a DRAFT order and its invoice line — both in one transaction — and
@@ -9676,11 +9974,13 @@ export class BotRuntime {
     actor: ActorContext,
     customer: CustomerRecord,
     serviceId: string,
-    kind: 'RENEW' | 'ADD_TRAFFIC' | 'ADD_TIME' | 'ADD_DEVICES',
+    kind: 'RENEW' | 'ADD_TRAFFIC' | 'ADD_TIME' | 'ADD_DEVICES' | 'CHANGE_LOCATION',
     addonId: string | null,
     input: { readonly idempotencyKey: string },
     /** WP-A5: the extra-users count a `dq:` tap chose; absent for every other kind. */
     quantity?: number,
+    /** WP-A6: the configured location an `lt:` tap chose; absent for every other kind. */
+    locationId?: string,
   ): Promise<PendingReply> {
     try {
       const service = await this.ownedService(scope, customer, serviceId);
@@ -9692,6 +9992,7 @@ export class BotRuntime {
         kind,
         ...(addonId === null ? {} : { addonId }),
         ...(quantity === undefined ? {} : { quantity }),
+        ...(locationId === undefined ? {} : { locationId }),
         idempotencyKey: `${input.idempotencyKey}:${kind.toLowerCase()}`,
       });
       // The same pre-invoice and the same payment buttons as a new purchase (§H5, §H6):
@@ -10774,6 +11075,53 @@ export class BotRuntime {
     };
   }
 
+  /**
+   * The connection guide's first screen: the platforms (WP-A10).
+   *
+   * The five with a guide of their own always, and «🧩 سایر» only while the tenant files
+   * an app there that this customer may see — decided by the catalogue, per tap.
+   */
+  private async tutorialChoice(
+    scope: TenantContext,
+    customer: CustomerRecord,
+  ): Promise<PendingReply> {
+    const platforms =
+      this.deps.clientApps === undefined
+        ? CONNECTION_GUIDE_PLATFORMS
+        : await this.deps.clientApps.platformsFor(scope, customer.id);
+    return tutorialChoice(platforms);
+  }
+
+  /**
+   * One platform: its recommended apps as buttons, or — when the tenant configured none
+   * this customer may see — the platform's own `bot.tutorial.<platform>` guide, which is
+   * exactly the screen a `to:<platform>` button opened before WP-A10.
+   */
+  private async tutorialPlatform(
+    scope: TenantContext,
+    customer: CustomerRecord,
+    platform: ClientAppPlatform,
+  ): Promise<PendingReply> {
+    const apps =
+      this.deps.clientApps === undefined
+        ? []
+        : await this.deps.clientApps.appsFor(scope, customer.id, platform);
+    return clientAppPlatformScreen(platform, apps);
+  }
+
+  /** One app: its guide, its download links, and the customer's own service actions. */
+  private async clientApp(
+    scope: TenantContext,
+    customer: CustomerRecord,
+    appId: string,
+  ): Promise<PendingReply> {
+    const detail =
+      this.deps.clientApps === undefined
+        ? null
+        : await this.deps.clientApps.appFor(scope, customer.id, appId);
+    return clientAppScreen(detail);
+  }
+
   /** One of the customer's own services, or null. Never anybody else's, never a throw. */
   private async ownedService(
     scope: TenantContext,
@@ -11131,9 +11479,15 @@ export class BotRuntime {
     const display =
       order.purpose === 'ADD_TRAFFIC' ||
       order.purpose === 'ADD_TIME' ||
-      order.purpose === 'ADD_DEVICES'
+      order.purpose === 'ADD_DEVICES' ||
+      order.purpose === 'CHANGE_LOCATION'
         ? null
         : await this.deps.productDisplay.displayFor(scope, order.line.productId);
+    // WP-A6: a paid move states from where and to where, from its frozen change request.
+    const locationChange =
+      order.purpose === 'CHANGE_LOCATION'
+        ? await this.deps.commercial.locationChangeFor(scope, actor, customer.id, order.id)
+        : null;
     /*
      * WP-A5: an extra-users order states what it bought from its own frozen line — the
      * count, the price of one, and the limit before and after, the target being what
@@ -11169,10 +11523,13 @@ export class BotRuntime {
               timePrice: custom.timePrice,
             },
       devices,
+      locationChange,
       serviceUsername: username,
       productName: order.line.title,
       durationDays:
-        order.purpose === 'ADD_TRAFFIC' || order.purpose === 'ADD_DEVICES'
+        order.purpose === 'ADD_TRAFFIC' ||
+        order.purpose === 'ADD_DEVICES' ||
+        order.purpose === 'CHANGE_LOCATION'
           ? null
           : order.line.specification.durationDays,
       total: order.totals.total,
@@ -12999,24 +13356,36 @@ function displayNameOf(customer: CustomerRecord): string {
   return customer.telegramUserId;
 }
 
-const TUTORIAL_KEYS: Readonly<
-  Record<ConnectionGuidePlatform, { button: TemplateKey; body: TemplateKey }>
-> = {
-  ANDROID: { button: 'bot.tutorial.android_button', body: 'bot.tutorial.android' },
-  IOS: { button: 'bot.tutorial.ios_button', body: 'bot.tutorial.ios' },
-  WINDOWS: { button: 'bot.tutorial.windows_button', body: 'bot.tutorial.windows' },
-  MACOS: { button: 'bot.tutorial.macos_button', body: 'bot.tutorial.macos' },
-  LINUX: { button: 'bot.tutorial.linux_button', body: 'bot.tutorial.linux' },
+/** Each platform's button on the choice screen. `OTHER` has a button and no guide of its own. */
+const PLATFORM_BUTTON_KEYS: Readonly<Record<ClientAppPlatform, TemplateKey>> = {
+  ANDROID: 'bot.tutorial.android_button',
+  IOS: 'bot.tutorial.ios_button',
+  WINDOWS: 'bot.tutorial.windows_button',
+  MACOS: 'bot.tutorial.macos_button',
+  LINUX: 'bot.tutorial.linux_button',
+  OTHER: 'bot.tutorial.other_button',
 };
 
-/** The connection guide's first screen: the platform choice. Needs no id; the guides are tenant text. */
-function tutorialChoice(): PendingReply {
+/** The guide a platform shows when no client app is configured for it — the pre-WP-A10 screen. */
+const TUTORIAL_BODY_KEYS: Readonly<Record<ConnectionGuidePlatform, TemplateKey>> = {
+  ANDROID: 'bot.tutorial.android',
+  IOS: 'bot.tutorial.ios',
+  WINDOWS: 'bot.tutorial.windows',
+  MACOS: 'bot.tutorial.macos',
+  LINUX: 'bot.tutorial.linux',
+};
+
+/**
+ * The connection guide's first screen: the platform choice, two to a row. The platforms
+ * are decided by the caller — the catalogue adds `OTHER` only when it holds something.
+ */
+export function tutorialChoice(platforms: readonly ClientAppPlatform[]): PendingReply {
   return {
     key: 'bot.tutorial.choose',
     values: {},
     buttons: [
-      ...CONNECTION_GUIDE_PLATFORMS.map((platform, index) => ({
-        label: { kind: 'TEMPLATE' as const, key: TUTORIAL_KEYS[platform].button },
+      ...platforms.map((platform, index) => ({
+        label: { kind: 'TEMPLATE' as const, key: PLATFORM_BUTTON_KEYS[platform] },
         data: `${TUTORIAL_PLATFORM_CALLBACK_PREFIX}${platform}`,
         row: Math.floor(index / 2),
       })),
@@ -13026,18 +13395,131 @@ function tutorialChoice(): PendingReply {
   };
 }
 
-function tutorialFor(platform: ConnectionGuidePlatform): PendingReply {
+/**
+ * One platform's screen (WP-A10).
+ *
+ * The apps are BUTTONS whose labels are the operator's own data, for the reason the
+ * catalogue gives: a template is not a list renderer. With none to show, a platform that
+ * has a guide of its own answers it with EXACTLY the pre-WP-A10 screen — same key, same two
+ * buttons — so an installation that configures nothing sees no change at all; `OTHER`,
+ * which has no guide, says there is nothing here yet.
+ */
+export function clientAppPlatformScreen(
+  platform: ClientAppPlatform,
+  apps: readonly { readonly id: string; readonly label: string }[],
+): PendingReply {
+  if (apps.length === 0) {
+    if (platform === 'OTHER') {
+      return {
+        key: 'bot.apps.platform_empty',
+        values: {},
+        buttons: [platformsButton(), mainMenuButton()],
+        orderId: null,
+      };
+    }
+    return {
+      key: TUTORIAL_BODY_KEYS[platform],
+      values: {},
+      buttons: [
+        {
+          label: { kind: 'TEMPLATE', key: 'bot.service.tutorial_button' },
+          data: TUTORIAL_CALLBACK_DATA,
+        },
+        mainMenuButton(),
+      ],
+      orderId: null,
+    };
+  }
   return {
-    key: TUTORIAL_KEYS[platform].body,
+    key: 'bot.apps.platform',
     values: {},
     buttons: [
-      {
-        label: { kind: 'TEMPLATE', key: 'bot.service.tutorial_button' },
-        data: TUTORIAL_CALLBACK_DATA,
-      },
+      ...apps.map((app) => ({
+        label: { kind: 'TEXT' as const, text: app.label },
+        data: `${CLIENT_APP_CALLBACK_PREFIX}${app.id}`,
+      })),
+      platformsButton(),
       mainMenuButton(),
     ],
     orderId: null,
+  };
+}
+
+/**
+ * One app's screen (WP-A10): the operator's description and rendered guide, a URL button
+ * per link, and the customer's own service actions where they are safe.
+ *
+ * The service actions are the EXISTING flows, reached by their existing callbacks —
+ * `r:<service>` re-sends the delivery card through the redelivery path, `sf:<service>`
+ * opens Package E's files — so each is re-decided on its own tap exactly as it is from the
+ * service card, and this screen never carries a subscription URL itself. With more than
+ * one live service the customer is sent to «سرویس‌های من» to pick one.
+ */
+export function clientAppScreen(
+  detail: Awaited<ReturnType<ClientAppCatalog['appFor']>>,
+): PendingReply {
+  if (detail === null) {
+    return {
+      key: 'bot.apps.not_found',
+      values: {},
+      buttons: [platformsButton(), mainMenuButton()],
+      orderId: null,
+    };
+  }
+  const buttons: CustomerButton[] = [];
+  if (detail.officialUrl !== null) {
+    buttons.push({
+      label: { kind: 'TEMPLATE', key: 'bot.apps.download_button' },
+      url: detail.officialUrl,
+    });
+  }
+  if (detail.alternativeUrl !== null) {
+    buttons.push({
+      label: { kind: 'TEMPLATE', key: 'bot.apps.alternative_button' },
+      url: detail.alternativeUrl,
+    });
+  }
+  if (detail.helpUrl !== null) {
+    buttons.push({ label: { kind: 'TEMPLATE', key: 'bot.apps.help_button' }, url: detail.helpUrl });
+  }
+  if (detail.service !== null) {
+    if (detail.service.link) {
+      buttons.push({
+        label: { kind: 'TEMPLATE', key: 'bot.service.link_button' },
+        data: `${SERVICE_RESEND_CALLBACK_PREFIX}${detail.service.id}`,
+      });
+    }
+    if (detail.service.files) {
+      buttons.push({
+        label: { kind: 'TEMPLATE', key: 'bot.service.files_button' },
+        data: `${SERVICE_FILES_CALLBACK_PREFIX}${detail.service.id}`,
+      });
+    }
+  } else if (detail.manyServices) {
+    buttons.push({
+      label: { kind: 'TEMPLATE', key: 'bot.menu.services' },
+      data: `${SERVICES_LIST_PAGE_CALLBACK_PREFIX}1`,
+    });
+  }
+  buttons.push(
+    {
+      label: { kind: 'TEMPLATE', key: 'bot.apps.back_button' },
+      data: `${TUTORIAL_PLATFORM_CALLBACK_PREFIX}${detail.platform}`,
+    },
+    mainMenuButton(),
+  );
+  return {
+    key: detail.filesNote ? 'bot.apps.detail_files' : 'bot.apps.detail',
+    values: { app: detail.title, description: detail.description, guide: detail.guide },
+    buttons,
+    orderId: null,
+  };
+}
+
+function platformsButton(): CustomerButton {
+  return {
+    label: { kind: 'TEMPLATE', key: 'bot.apps.platforms_button' },
+    data: TUTORIAL_CALLBACK_DATA,
   };
 }
 

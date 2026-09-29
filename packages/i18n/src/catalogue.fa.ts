@@ -168,7 +168,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   // One list in `BOT_COMMANDS` feeds both, so a command cannot be registered and
   // undocumented, or documented and unregistered.
   'bot.help':
-    'دستورهای این ربات:\n/catalog — دیدن و خرید سرویس‌ها\n/services — سرویس‌های من و مدیریت آن‌ها\n/wallet — موجودی کیف پول\n/paysupport — پشتیبانی پرداخت\n/help — همین راهنما',
+    'دستورهای این ربات:\n/catalog — دیدن و خرید سرویس‌ها\n/services — سرویس‌های من و مدیریت آن‌ها\n/wallet — موجودی کیف پول\n/apps — دانلود برنامه و آموزش اتصال\n/paysupport — پشتیبانی پرداخت\n/help — همین راهنما',
   'bot.command.start': 'شروع',
   'bot.command.catalog': 'خرید سرویس',
   'bot.command.services': 'سرویس‌های من',
@@ -319,6 +319,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.admin.operation_add_traffic': 'افزایش حجم سرویس',
   'bot.admin.operation_add_time': 'افزایش زمان سرویس',
   'bot.admin.operation_add_devices': 'افزایش کاربر / دستگاه سرویس',
+  'bot.admin.operation_change_location': 'تغییر لوکیشن سرویس',
   'bot.admin.operation_topup': 'افزایش موجودی کیف پول',
   'bot.admin.receipt_already_approved':
     'این رسید قبلاً تأیید شده است. اقدام دیگری روی آن ممکن نیست و چیزی جابه‌جا نشد.',
@@ -819,6 +820,21 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.service.devices_choice':
     '👥 تعداد کاربر / دستگاه مجاز فعلی این سرویس: {currentLimit}\n💵 قیمت هر کاربر اضافه: {unitPrice}\n➕ تا {remaining} کاربر دیگر قابل افزودن است.\n\nتعداد مورد نظر را انتخاب کنید:',
   'bot.service.devices_option': '➕ {quantity} کاربر — {price}',
+  // WP-A6: location change, shown only where the panel can really move the account.
+  'bot.service.change_location_button': '🌍 تغییر لوکیشن',
+  'bot.service.location_choice':
+    '🌍 تغییر لوکیشن سرویس\n\n📍 لوکیشن فعلی: {currentLocation}\n\nلوکیشن مقصد را انتخاب کنید:',
+  'bot.service.location_option': '📍 {location} — {price}',
+  'bot.service.location_option_free': '📍 {location} — رایگان',
+  'bot.service.location_confirm_free':
+    '🌍 تغییر لوکیشن سرویس\n\n📍 لوکیشن فعلی: {fromLocation}\n📍 لوکیشن جدید: {toLocation}\n💵 هزینه: رایگان\n\nℹ️ ممکن است پس از تغییر لوکیشن، لینک یا اطلاعات اتصال سرویس تغییر کند. در این صورت اطلاعات جدید برای شما ارسال می‌شود.\n\nبرای انجام تغییر، دکمهٔ تأیید را بزنید.',
+  'bot.service.location_confirm_button': '✅ تأیید تغییر لوکیشن',
+  'bot.service.location_requested':
+    '✅ درخواست تغییر لوکیشن ثبت شد و روی سرور انجام می‌شود.\nنتیجه از طریق همین ربات به شما اطلاع داده می‌شود.',
+  'bot.service.location_same': 'سرویس شما همین حالا در این لوکیشن است. تغییری انجام نشد.',
+  'bot.service.location_cooldown':
+    'لوکیشن این سرویس به‌تازگی تغییر کرده است. لطفاً بعداً دوباره تلاش کنید.',
+  'bot.service.location_limit': 'تعداد مجاز تغییر لوکیشن این سرویس در این بازه به پایان رسیده است.',
   // ONE message for "no package is configured", "the plan behind this renewal was
   // withdrawn" and "this panel cannot do it". The customer's next step is the same for
   // all three, and naming which would tell them about an operator's configuration;
@@ -925,6 +941,25 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     '💻 اتصال در مک\n\n1. یک برنامهٔ سازگار با v2ray را نصب کنید.\n2. لینک اشتراک خود را کپی کنید و در برنامه آن را به‌عنوان اشتراک اضافه کنید.\n3. اشتراک را به‌روزرسانی کنید و یکی از سرورها را انتخاب و متصل شوید.\n\nاگر با مشکلی روبه‌رو شدید، از بخش «پشتیبانی» کمک بگیرید.',
   'bot.tutorial.linux':
     '🐧 اتصال در لینوکس\n\n1. یک کلاینت سازگار با v2ray را نصب کنید.\n2. لینک اشتراک خود را کپی کنید و در برنامه آن را به‌عنوان اشتراک اضافه کنید.\n3. اشتراک را به‌روزرسانی کنید و یکی از سرورها را انتخاب و متصل شوید.\n\nاگر با مشکلی روبه‌رو شدید، از بخش «پشتیبانی» کمک بگیرید.',
+  // WP-A10: app downloads and connection guides. No app, store or link is named: the
+  // entries are the operator's, and the defaults below say only what is true of all.
+  'bot.command.apps': 'دانلود برنامه و آموزش اتصال',
+  'bot.menu.apps': '📱 دانلود برنامه و آموزش اتصال',
+  'bot.tutorial.other_button': '🧩 سایر',
+  'bot.apps.platform':
+    '📲 برنامه‌های پیشنهادی برای این سیستم عامل:\n\nبرای دیدن لینک دانلود و آموزش اتصال، یکی از برنامه‌های زیر را انتخاب کنید.',
+  'bot.apps.platform_empty':
+    'برای این بخش فعلاً برنامه‌ای معرفی نشده است. سیستم عامل دیگری را انتخاب کنید یا از بخش «پشتیبانی» کمک بگیرید.',
+  'bot.apps.detail': '{app}\n\n{description}\n\n📖 آموزش اتصال:\n{guide}',
+  'bot.apps.detail_files':
+    '{app}\n\n{description}\n\n📖 آموزش اتصال:\n{guide}\n\n📁 این برنامه فایل‌های اتصال را هم می‌پذیرد. فایل‌ها را با دکمهٔ «📁 دریافت فایل‌های اتصال» در صفحهٔ سرویس خود دریافت کنید.',
+  'bot.apps.download_button': '⬇️ دانلود از سایت رسمی',
+  'bot.apps.alternative_button': '🏪 دانلود از فروشگاه یا لینک جایگزین',
+  'bot.apps.help_button': '🎬 ویدیو و راهنمای بیشتر',
+  'bot.apps.back_button': '🔙 بازگشت به فهرست برنامه‌ها',
+  'bot.apps.platforms_button': '🔙 انتخاب سیستم عامل دیگر',
+  'bot.apps.not_found':
+    'این برنامه دیگر در فهرست نیست. از فهرست برنامه‌ها یکی دیگر را انتخاب کنید.',
   'bot.menu.main_button': '🏠 بازگشت به منوی اصلی',
   'bot.faq.heading': '💡 سوالات متداول ⁉️',
   'bot.faq.item': '{number} {question}\n\n✅ {answer}',
@@ -958,11 +993,13 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.support.contact': 'برای ارتباط با پشتیبانی روی دکمهٔ زیر بزنید.',
   'bot.support.unconfigured': 'در حال حاضر راه ارتباطی با پشتیبانی تنظیم نشده است.',
   'bot.order.preinvoice':
-    '🧾 پیش فاکتور شما:\n\n👤 نام کاربر: {serviceUsername}\n🔐 نام سرویس: {productName}\n📆 مدت اعتبار: {durationDays}\n💵 قیمت: {total}\n👥 حجم اکانت: {trafficBytes}\n➕ حجم افزوده: {addedTrafficBytes}\n{customBlock}\n{devicesBlock}\n{discountLine}\n{cashbackLine}\n\n{locationsBlock}\n\n{featuresBlock}\n\n💰 موجودی کیف پول شما: {walletBalance}\n\n💰 سفارش شما آماده پرداخت است',
+    '🧾 پیش فاکتور شما:\n\n👤 نام کاربر: {serviceUsername}\n🔐 نام سرویس: {productName}\n📆 مدت اعتبار: {durationDays}\n💵 قیمت: {total}\n👥 حجم اکانت: {trafficBytes}\n➕ حجم افزوده: {addedTrafficBytes}\n{customBlock}\n{devicesBlock}\n{locationChangeBlock}\n{discountLine}\n{cashbackLine}\n\n{locationsBlock}\n\n{featuresBlock}\n\n💰 موجودی کیف پول شما: {walletBalance}\n\n💰 سفارش شما آماده پرداخت است',
   'bot.order.preinvoice_custom':
     '🛠 سرویس دلخواه\n📍 لوکیشن: {location}\n📦 حجم: {volumeBytes} × {pricePerGb} = {volumePrice}\n⏳ مدت: {durationDays} × {pricePerDay} = {timePrice}',
   'bot.order.preinvoice_devices':
     '👥 افزایش کاربر / دستگاه: {quantity} × {unitPrice}\n🔢 تعداد مجاز: {currentLimit} ← {targetLimit}',
+  'bot.order.preinvoice_location_change':
+    '🌍 تغییر لوکیشن: {fromLocation} ← {toLocation}\nℹ️ ممکن است پس از تغییر لوکیشن، لینک یا اطلاعات اتصال سرویس تغییر کند. در این صورت اطلاعات جدید برای شما ارسال می‌شود.',
   'bot.order.preinvoice_locations': '🌍 لوکیشن‌های محصول:\n{lines}',
   'bot.order.preinvoice_features': '{lines}',
   'bot.order.preinvoice_discount_line': '🏷 تخفیف: {discount} (قیمت پیش از تخفیف: {subtotal})',

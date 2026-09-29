@@ -1,6 +1,6 @@
 {
-  "id": "3d859041-5278-4c2b-a7c1-585db5d44ae1",
-  "prevId": "4e13b914-3526-4f90-b120-ffb09d154c0b",
+  "id": "a1d19595-8ec1-42e6-9ba4-b0850e372e65",
+  "prevId": "bb4bc9f0-96e1-4f67-99e3-b4a3835c9ceb",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -2090,7 +2090,7 @@
         },
         "cashback_rules_applies_to_check": {
           "name": "cashback_rules_applies_to_check",
-          "value": "cardinality(applies_to) > 0 AND applies_to <@ ARRAY['NEW_SERVICE', 'RENEW', 'ADD_TRAFFIC', 'ADD_TIME', 'CUSTOM_SERVICE', 'ADD_DEVICES']::text[]"
+          "value": "cardinality(applies_to) > 0 AND applies_to <@ ARRAY['NEW_SERVICE', 'RENEW', 'ADD_TRAFFIC', 'ADD_TIME', 'CUSTOM_SERVICE', 'ADD_DEVICES', 'CHANGE_LOCATION']::text[]"
         },
         "cashback_rules_scope_check": {
           "name": "cashback_rules_scope_check",
@@ -2099,6 +2099,253 @@
         "cashback_rules_window_check": {
           "name": "cashback_rules_window_check",
           "value": "starts_at IS NULL OR ends_at IS NULL OR starts_at < ends_at"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.client_apps": {
+      "name": "client_apps",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "platform": {
+          "name": "platform",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "icon": {
+          "name": "icon",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "description": {
+          "name": "description",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "official_url": {
+          "name": "official_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "alternative_url": {
+          "name": "alternative_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "help_url": {
+          "name": "help_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "guide": {
+          "name": "guide",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "delivery_kinds": {
+          "name": "delivery_kinds",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::text[]"
+        },
+        "protocols": {
+          "name": "protocols",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::text[]"
+        },
+        "provider_types": {
+          "name": "provider_types",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::text[]"
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'ENABLED'"
+        },
+        "sort_order": {
+          "name": "sort_order",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "version": {
+          "name": "version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "client_apps_tenant_platform_idx": {
+          "name": "client_apps_tenant_platform_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "platform",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "sort_order",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "client_apps_tenant_id_tenants_id_fk": {
+          "name": "client_apps_tenant_id_tenants_id_fk",
+          "tableFrom": "client_apps",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "client_apps_tenant_id_key": {
+          "name": "client_apps_tenant_id_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "client_apps_platform_check": {
+          "name": "client_apps_platform_check",
+          "value": "platform IN ('ANDROID', 'IOS', 'WINDOWS', 'MACOS', 'LINUX', 'OTHER')"
+        },
+        "client_apps_status_check": {
+          "name": "client_apps_status_check",
+          "value": "status IN ('ENABLED', 'DISABLED')"
+        },
+        "client_apps_name_check": {
+          "name": "client_apps_name_check",
+          "value": "length(btrim(name)) BETWEEN 1 AND 64"
+        },
+        "client_apps_icon_check": {
+          "name": "client_apps_icon_check",
+          "value": "icon IS NULL OR length(btrim(icon)) BETWEEN 1 AND 16"
+        },
+        "client_apps_description_check": {
+          "name": "client_apps_description_check",
+          "value": "length(btrim(description)) BETWEEN 1 AND 300"
+        },
+        "client_apps_guide_check": {
+          "name": "client_apps_guide_check",
+          "value": "length(btrim(guide)) BETWEEN 1 AND 2500"
+        },
+        "client_apps_urls_check": {
+          "name": "client_apps_urls_check",
+          "value": "official_url LIKE 'https://%' AND length(official_url) <= 2048\n          AND (alternative_url IS NULL OR (alternative_url LIKE 'https://%' AND length(alternative_url) <= 2048))\n          AND (help_url IS NULL OR (help_url LIKE 'https://%' AND length(help_url) <= 2048))"
+        },
+        "client_apps_delivery_kinds_check": {
+          "name": "client_apps_delivery_kinds_check",
+          "value": "delivery_kinds <@ ARRAY['SUBSCRIPTION_LINK', 'CONNECTION_FILES']::text[]"
+        },
+        "client_apps_protocols_check": {
+          "name": "client_apps_protocols_check",
+          "value": "protocols <@ ARRAY['vless', 'vmess', 'trojan', 'shadowsocks']::text[]"
+        },
+        "client_apps_provider_types_check": {
+          "name": "client_apps_provider_types_check",
+          "value": "provider_types <@ ARRAY['marzban', 'rickpanel', 'sanaei']::text[]"
+        },
+        "client_apps_sort_order_check": {
+          "name": "client_apps_sort_order_check",
+          "value": "sort_order BETWEEN 0 AND 100000"
+        },
+        "client_apps_version_check": {
+          "name": "client_apps_version_check",
+          "value": "version >= 1"
         }
       },
       "isRLSEnabled": false
@@ -3777,7 +4024,7 @@
         },
         "discounts_applies_to_check": {
           "name": "discounts_applies_to_check",
-          "value": "cardinality(applies_to) > 0 AND applies_to <@ ARRAY['NEW_SERVICE', 'RENEW', 'ADD_TRAFFIC', 'ADD_TIME', 'CUSTOM_SERVICE', 'ADD_DEVICES']::text[]"
+          "value": "cardinality(applies_to) > 0 AND applies_to <@ ARRAY['NEW_SERVICE', 'RENEW', 'ADD_TRAFFIC', 'ADD_TIME', 'CUSTOM_SERVICE', 'ADD_DEVICES', 'CHANGE_LOCATION']::text[]"
         },
         "discounts_scope_check": {
           "name": "discounts_scope_check",
@@ -6407,7 +6654,7 @@
         },
         "orders_purpose_check": {
           "name": "orders_purpose_check",
-          "value": "purpose IN ('NEW_SERVICE', 'RENEW', 'ADD_TRAFFIC', 'ADD_TIME', 'TRIAL', 'CUSTOM_SERVICE', 'ADD_DEVICES')"
+          "value": "purpose IN ('NEW_SERVICE', 'RENEW', 'ADD_TRAFFIC', 'ADD_TIME', 'TRIAL', 'CUSTOM_SERVICE', 'ADD_DEVICES', 'CHANGE_LOCATION')"
         },
         "orders_trial_is_free_check": {
           "name": "orders_trial_is_free_check",
@@ -6423,7 +6670,7 @@
         },
         "orders_quantity_line_check": {
           "name": "orders_quantity_line_check",
-          "value": "purpose NOT IN ('ADD_TRAFFIC', 'ADD_TIME', 'ADD_DEVICES')\n          OR (purpose = 'ADD_TRAFFIC' AND line_traffic_bytes > 0 AND line_duration_days = 0)\n          OR (purpose = 'ADD_TIME' AND line_duration_days > 0 AND line_traffic_bytes = 0)\n          OR (purpose = 'ADD_DEVICES' AND line_traffic_bytes = 0 AND line_duration_days = 0\n              AND line_device_limit IS NOT NULL AND line_device_limit > line_quantity)"
+          "value": "purpose NOT IN ('ADD_TRAFFIC', 'ADD_TIME', 'ADD_DEVICES', 'CHANGE_LOCATION')\n          OR (purpose = 'ADD_TRAFFIC' AND line_traffic_bytes > 0 AND line_duration_days = 0)\n          OR (purpose = 'ADD_TIME' AND line_duration_days > 0 AND line_traffic_bytes = 0)\n          OR (purpose = 'ADD_DEVICES' AND line_traffic_bytes = 0 AND line_duration_days = 0\n              AND line_device_limit IS NOT NULL AND line_device_limit > line_quantity)\n          OR (purpose = 'CHANGE_LOCATION' AND line_traffic_bytes = 0 AND line_duration_days = 0\n              AND line_device_limit IS NULL AND line_quantity = 1)"
         },
         "orders_amounts_check": {
           "name": "orders_amounts_check",
@@ -7303,104 +7550,6 @@
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.panel_policies": {
-      "name": "panel_policies",
-      "schema": "",
-      "columns": {
-        "tenant_id": {
-          "name": "tenant_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "panel_id": {
-          "name": "panel_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "policy": {
-          "name": "policy",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "revision": {
-          "name": "revision",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 1
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "panel_policies_tenant_id_tenants_id_fk": {
-          "name": "panel_policies_tenant_id_tenants_id_fk",
-          "tableFrom": "panel_policies",
-          "tableTo": "tenants",
-          "columnsFrom": [
-            "tenant_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "panel_policies_panel_fk": {
-          "name": "panel_policies_panel_fk",
-          "tableFrom": "panel_policies",
-          "tableTo": "panels",
-          "columnsFrom": [
-            "tenant_id",
-            "panel_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {
-        "panel_policies_pk": {
-          "name": "panel_policies_pk",
-          "columns": [
-            "tenant_id",
-            "panel_id"
-          ]
-        }
-      },
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "panel_policies_revision_check": {
-          "name": "panel_policies_revision_check",
-          "value": "revision >= 1"
-        },
-        "panel_policies_policy_check": {
-          "name": "panel_policies_policy_check",
-          "value": "jsonb_typeof(policy) = 'object'"
-        }
-      },
       "isRLSEnabled": false
     },
     "public.panel_probe_budgets": {
@@ -9949,6 +10098,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "target_location_key": {
+          "name": "target_location_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "provider_reference": {
           "name": "provider_reference",
           "type": "text",
@@ -10139,7 +10294,7 @@
             }
           ],
           "isUnique": true,
-          "where": "type IN ('RENEW', 'ADD_TRAFFIC', 'ADD_TIME', 'ADD_DEVICES') AND state IN ('PLANNED', 'IN_FLIGHT', 'UNKNOWN')",
+          "where": "type IN ('RENEW', 'ADD_TRAFFIC', 'ADD_TIME', 'ADD_DEVICES', 'CHANGE_LOCATION') AND state IN ('PLANNED', 'IN_FLIGHT', 'UNKNOWN')",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -10246,7 +10401,7 @@
         },
         "provisioning_operations_type_check": {
           "name": "provisioning_operations_type_check",
-          "value": "type IN ('PROVISION', 'RENEW', 'ADD_TRAFFIC', 'ADD_TIME', 'SUSPEND', 'RESUME', 'TERMINATE', 'SYNC_USAGE', 'ROTATE_SUBSCRIPTION', 'RECONCILE', 'ADD_DEVICES')"
+          "value": "type IN ('PROVISION', 'RENEW', 'ADD_TRAFFIC', 'ADD_TIME', 'SUSPEND', 'RESUME', 'TERMINATE', 'SYNC_USAGE', 'ROTATE_SUBSCRIPTION', 'RECONCILE', 'ADD_DEVICES', 'CHANGE_LOCATION')"
         },
         "provisioning_operations_failure_kind_check": {
           "name": "provisioning_operations_failure_kind_check",
@@ -10258,15 +10413,19 @@
         },
         "provisioning_operations_target_check": {
           "name": "provisioning_operations_target_check",
-          "value": "type IN ('RENEW', 'ADD_TRAFFIC', 'ADD_TIME', 'ADD_DEVICES')\n          OR (target_expires_at IS NULL AND target_traffic_limit_bytes IS NULL AND target_device_limit IS NULL)"
+          "value": "type IN ('RENEW', 'ADD_TRAFFIC', 'ADD_TIME', 'ADD_DEVICES', 'CHANGE_LOCATION')\n          OR (target_expires_at IS NULL AND target_traffic_limit_bytes IS NULL AND target_device_limit IS NULL\n              AND target_location_key IS NULL)"
         },
         "provisioning_operations_target_device_check": {
           "name": "provisioning_operations_target_device_check",
           "value": "(type = 'ADD_DEVICES'\n           AND target_device_limit IS NOT NULL AND target_device_limit >= 1 AND target_device_limit <= 1000\n           AND target_expires_at IS NULL AND target_traffic_limit_bytes IS NULL)\n          OR (type <> 'ADD_DEVICES' AND target_device_limit IS NULL)"
         },
+        "provisioning_operations_target_location_check": {
+          "name": "provisioning_operations_target_location_check",
+          "value": "(type = 'CHANGE_LOCATION'\n           AND target_location_key IS NOT NULL\n           AND length(target_location_key) BETWEEN 1 AND 120\n           AND target_expires_at IS NULL AND target_traffic_limit_bytes IS NULL AND target_device_limit IS NULL)\n          OR (type <> 'CHANGE_LOCATION' AND target_location_key IS NULL)"
+        },
         "provisioning_operations_target_present_check": {
           "name": "provisioning_operations_target_present_check",
-          "value": "type NOT IN ('RENEW', 'ADD_TRAFFIC', 'ADD_TIME', 'ADD_DEVICES')\n          OR target_expires_at IS NOT NULL\n          OR target_traffic_limit_bytes IS NOT NULL\n          OR target_device_limit IS NOT NULL"
+          "value": "type NOT IN ('RENEW', 'ADD_TRAFFIC', 'ADD_TIME', 'ADD_DEVICES', 'CHANGE_LOCATION')\n          OR target_expires_at IS NOT NULL\n          OR target_traffic_limit_bytes IS NOT NULL\n          OR target_device_limit IS NOT NULL\n          OR target_location_key IS NOT NULL"
         },
         "provisioning_operations_target_traffic_check": {
           "name": "provisioning_operations_target_traffic_check",
@@ -12387,7 +12546,7 @@
         },
         "reseller_tier_grants_subject_check": {
           "name": "reseller_tier_grants_subject_check",
-          "value": "subject = '*' OR (kind = 'OPERATION' AND subject IN ('NEW_SERVICE', 'RENEW', 'ADD_TRAFFIC', 'ADD_TIME', 'ADD_DEVICES')) OR (kind <> 'OPERATION' AND subject ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')"
+          "value": "subject = '*' OR (kind = 'OPERATION' AND subject IN ('NEW_SERVICE', 'RENEW', 'ADD_TRAFFIC', 'ADD_TIME', 'ADD_DEVICES', 'CHANGE_LOCATION')) OR (kind <> 'OPERATION' AND subject ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')"
         }
       },
       "isRLSEnabled": false
@@ -13342,6 +13501,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "location_id": {
+          "name": "location_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
         "amount": {
           "name": "amount",
           "type": "bigint",
@@ -13529,6 +13694,21 @@
           ],
           "onDelete": "no action",
           "onUpdate": "no action"
+        },
+        "service_commercial_actions_location_fk": {
+          "name": "service_commercial_actions_location_fk",
+          "tableFrom": "service_commercial_actions",
+          "tableTo": "service_locations",
+          "columnsFrom": [
+            "tenant_id",
+            "location_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -13546,7 +13726,7 @@
       "checkConstraints": {
         "service_commercial_actions_kind_check": {
           "name": "service_commercial_actions_kind_check",
-          "value": "kind IN ('RENEW', 'ADD_TRAFFIC', 'ADD_TIME', 'ADD_DEVICES')"
+          "value": "kind IN ('RENEW', 'ADD_TRAFFIC', 'ADD_TIME', 'ADD_DEVICES', 'CHANGE_LOCATION')"
         },
         "service_commercial_actions_currency_check": {
           "name": "service_commercial_actions_currency_check",
@@ -13558,15 +13738,603 @@
         },
         "service_commercial_actions_source_check": {
           "name": "service_commercial_actions_source_check",
-          "value": "(product_id IS NULL) <> (addon_id IS NULL)"
+          "value": "(CASE WHEN product_id IS NULL THEN 0 ELSE 1 END\n           + CASE WHEN addon_id IS NULL THEN 0 ELSE 1 END\n           + CASE WHEN location_id IS NULL THEN 0 ELSE 1 END) = 1\n          AND (location_id IS NULL) = (kind <> 'CHANGE_LOCATION')"
         },
         "service_commercial_actions_purchased_check": {
           "name": "service_commercial_actions_purchased_check",
-          "value": "(kind = 'RENEW' AND purchased_device_count = 0)\n          OR (kind = 'ADD_TRAFFIC' AND purchased_traffic_bytes > 0 AND purchased_duration_days = 0 AND purchased_device_count = 0)\n          OR (kind = 'ADD_TIME' AND purchased_duration_days > 0 AND purchased_traffic_bytes = 0 AND purchased_device_count = 0)\n          OR (kind = 'ADD_DEVICES' AND purchased_device_count > 0 AND purchased_traffic_bytes = 0 AND purchased_duration_days = 0\n              AND addon_id IS NOT NULL AND addon_version IS NOT NULL)"
+          "value": "(kind = 'RENEW' AND purchased_device_count = 0)\n          OR (kind = 'ADD_TRAFFIC' AND purchased_traffic_bytes > 0 AND purchased_duration_days = 0 AND purchased_device_count = 0)\n          OR (kind = 'ADD_TIME' AND purchased_duration_days > 0 AND purchased_traffic_bytes = 0 AND purchased_device_count = 0)\n          OR (kind = 'ADD_DEVICES' AND purchased_device_count > 0 AND purchased_traffic_bytes = 0 AND purchased_duration_days = 0\n              AND addon_id IS NOT NULL AND addon_version IS NOT NULL)\n          OR (kind = 'CHANGE_LOCATION' AND purchased_traffic_bytes = 0 AND purchased_duration_days = 0\n              AND purchased_device_count = 0)"
         },
         "service_commercial_actions_addon_version_check": {
           "name": "service_commercial_actions_addon_version_check",
           "value": "addon_version IS NULL OR (kind = 'ADD_DEVICES' AND addon_version >= 1)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.service_location_changes": {
+      "name": "service_location_changes",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "service_id": {
+          "name": "service_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "customer_id": {
+          "name": "customer_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "location_id": {
+          "name": "location_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "location_version": {
+          "name": "location_version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "from_location_key": {
+          "name": "from_location_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "from_location_label": {
+          "name": "from_location_label",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "to_location_key": {
+          "name": "to_location_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "to_location_label": {
+          "name": "to_location_label",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "price_amount": {
+          "name": "price_amount",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "price_currency": {
+          "name": "price_currency",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "cooldown_hours": {
+          "name": "cooldown_hours",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "max_changes": {
+          "name": "max_changes",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "period_days": {
+          "name": "period_days",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "order_id": {
+          "name": "order_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "operation_id": {
+          "name": "operation_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "service_location_changes_order_key": {
+          "name": "service_location_changes_order_key",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "order_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "service_location_changes_operation_key": {
+          "name": "service_location_changes_operation_key",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "operation_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "service_location_changes_service_idx": {
+          "name": "service_location_changes_service_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "service_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "service_location_changes_tenant_id_tenants_id_fk": {
+          "name": "service_location_changes_tenant_id_tenants_id_fk",
+          "tableFrom": "service_location_changes",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "service_location_changes_service_fk": {
+          "name": "service_location_changes_service_fk",
+          "tableFrom": "service_location_changes",
+          "tableTo": "services",
+          "columnsFrom": [
+            "tenant_id",
+            "service_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "service_location_changes_customer_fk": {
+          "name": "service_location_changes_customer_fk",
+          "tableFrom": "service_location_changes",
+          "tableTo": "customers",
+          "columnsFrom": [
+            "tenant_id",
+            "customer_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "service_location_changes_location_fk": {
+          "name": "service_location_changes_location_fk",
+          "tableFrom": "service_location_changes",
+          "tableTo": "service_locations",
+          "columnsFrom": [
+            "tenant_id",
+            "location_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "service_location_changes_order_fk": {
+          "name": "service_location_changes_order_fk",
+          "tableFrom": "service_location_changes",
+          "tableTo": "orders",
+          "columnsFrom": [
+            "tenant_id",
+            "order_id",
+            "customer_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id",
+            "customer_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "service_location_changes_operation_fk": {
+          "name": "service_location_changes_operation_fk",
+          "tableFrom": "service_location_changes",
+          "tableTo": "provisioning_operations",
+          "columnsFrom": [
+            "tenant_id",
+            "operation_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "service_location_changes_tenant_id_key": {
+          "name": "service_location_changes_tenant_id_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "service_location_changes_source_check": {
+          "name": "service_location_changes_source_check",
+          "value": "(order_id IS NULL) <> (operation_id IS NULL)"
+        },
+        "service_location_changes_price_check": {
+          "name": "service_location_changes_price_check",
+          "value": "price_amount >= 0 AND (price_amount = 0) = (order_id IS NULL)"
+        },
+        "service_location_changes_currency_check": {
+          "name": "service_location_changes_currency_check",
+          "value": "price_currency IN ('IRT', 'IRR', 'USD', 'EUR', 'USDT')"
+        },
+        "service_location_changes_moves_check": {
+          "name": "service_location_changes_moves_check",
+          "value": "from_location_key <> to_location_key"
+        },
+        "service_location_changes_version_check": {
+          "name": "service_location_changes_version_check",
+          "value": "location_version >= 1"
+        },
+        "service_location_changes_limits_check": {
+          "name": "service_location_changes_limits_check",
+          "value": "(cooldown_hours IS NULL OR cooldown_hours >= 1)\n          AND (max_changes IS NULL) = (period_days IS NULL)\n          AND (max_changes IS NULL OR (max_changes >= 1 AND period_days >= 1))"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.service_locations": {
+      "name": "service_locations",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "panel_id": {
+          "name": "panel_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "product_id": {
+          "name": "product_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "location_key": {
+          "name": "location_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "label": {
+          "name": "label",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "is_initial": {
+          "name": "is_initial",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "enabled": {
+          "name": "enabled",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "price_amount": {
+          "name": "price_amount",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "price_currency": {
+          "name": "price_currency",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "cooldown_hours": {
+          "name": "cooldown_hours",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "max_changes": {
+          "name": "max_changes",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "period_days": {
+          "name": "period_days",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "sort_order": {
+          "name": "sort_order",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "version": {
+          "name": "version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "service_locations_initial_key": {
+          "name": "service_locations_initial_key",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "panel_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "is_initial",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "service_locations_panel_idx": {
+          "name": "service_locations_panel_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "panel_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "sort_order",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "service_locations_tenant_id_tenants_id_fk": {
+          "name": "service_locations_tenant_id_tenants_id_fk",
+          "tableFrom": "service_locations",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "service_locations_panel_fk": {
+          "name": "service_locations_panel_fk",
+          "tableFrom": "service_locations",
+          "tableTo": "panels",
+          "columnsFrom": [
+            "tenant_id",
+            "panel_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "service_locations_product_fk": {
+          "name": "service_locations_product_fk",
+          "tableFrom": "service_locations",
+          "tableTo": "products",
+          "columnsFrom": [
+            "tenant_id",
+            "product_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "service_locations_tenant_id_key": {
+          "name": "service_locations_tenant_id_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "id"
+          ]
+        },
+        "service_locations_key": {
+          "name": "service_locations_key",
+          "nullsNotDistinct": true,
+          "columns": [
+            "tenant_id",
+            "panel_id",
+            "location_key",
+            "product_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "service_locations_key_check": {
+          "name": "service_locations_key_check",
+          "value": "length(location_key) BETWEEN 1 AND 120"
+        },
+        "service_locations_label_check": {
+          "name": "service_locations_label_check",
+          "value": "length(btrim(label)) BETWEEN 1 AND 60"
+        },
+        "service_locations_price_check": {
+          "name": "service_locations_price_check",
+          "value": "(price_amount IS NULL) = (price_currency IS NULL) AND (price_amount IS NULL OR price_amount >= 0)"
+        },
+        "service_locations_currency_check": {
+          "name": "service_locations_currency_check",
+          "value": "price_currency IS NULL OR price_currency IN ('IRT', 'IRR', 'USD', 'EUR', 'USDT')"
+        },
+        "service_locations_enabled_priced_check": {
+          "name": "service_locations_enabled_priced_check",
+          "value": "NOT enabled OR price_amount IS NOT NULL"
+        },
+        "service_locations_initial_scope_check": {
+          "name": "service_locations_initial_scope_check",
+          "value": "NOT is_initial OR product_id IS NULL"
+        },
+        "service_locations_cooldown_check": {
+          "name": "service_locations_cooldown_check",
+          "value": "cooldown_hours IS NULL OR (cooldown_hours >= 1 AND cooldown_hours <= 8760)"
+        },
+        "service_locations_limit_check": {
+          "name": "service_locations_limit_check",
+          "value": "(max_changes IS NULL) = (period_days IS NULL)\n          AND (max_changes IS NULL OR (max_changes >= 1 AND max_changes <= 100))\n          AND (period_days IS NULL OR (period_days >= 1 AND period_days <= 365))"
+        },
+        "service_locations_version_check": {
+          "name": "service_locations_version_check",
+          "value": "version >= 1"
         }
       },
       "isRLSEnabled": false
@@ -14888,6 +15656,18 @@
           "primaryKey": false,
           "notNull": false
         },
+        "location_key": {
+          "name": "location_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "location_label": {
+          "name": "location_label",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "usage_synced_at": {
           "name": "usage_synced_at",
           "type": "timestamp with time zone",
@@ -15258,6 +16038,10 @@
         "services_device_limit_check": {
           "name": "services_device_limit_check",
           "value": "device_limit IS NULL OR (device_limit >= 1 AND device_limit <= 1000)"
+        },
+        "services_location_check": {
+          "name": "services_location_check",
+          "value": "(location_key IS NULL) = (location_label IS NULL)"
         },
         "services_subscription_ref_check": {
           "name": "services_subscription_ref_check",

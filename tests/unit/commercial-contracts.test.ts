@@ -48,7 +48,7 @@ describe('order purpose', () => {
    */
   it('treats exactly the purposes that act on an existing service as commercial', () => {
     expect([...COMMERCIAL_ORDER_PURPOSES].sort()).toEqual(
-      ['ADD_DEVICES', 'ADD_TIME', 'ADD_TRAFFIC', 'RENEW'].sort(),
+      ['ADD_DEVICES', 'ADD_TIME', 'ADD_TRAFFIC', 'CHANGE_LOCATION', 'RENEW'].sort(),
     );
     for (const purpose of COMMERCIAL_ORDER_PURPOSES) {
       expect(orderPurposeTargetsExistingService(purpose)).toBe(true);
@@ -196,6 +196,8 @@ describe('the operation target', () => {
       'ADD_DEVICES',
       'ADD_TIME',
       'ADD_TRAFFIC',
+      // WP-A6: a move carries an absolute location key, and nothing else does.
+      'CHANGE_LOCATION',
       'RENEW',
     ]);
   });
@@ -330,6 +332,8 @@ describe('availableFor separates an outage from a refusal', () => {
       products: { findById },
       addons: { listOfferable: async () => ({ items: [], hasMore: false }) },
       settings: { valueOf: async () => 'IRT' },
+      // WP-A6: no configured location, so a move is not offered.
+      locations: { offer: async () => null },
     } as never);
   }
 

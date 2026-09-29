@@ -4,6 +4,7 @@ import type {
   OrderPurpose,
   ProductId,
   ServiceAddonId,
+  ServiceLocationId,
   TenantContext,
   UserId,
 } from '@nexa/contracts';
@@ -38,6 +39,8 @@ export interface CommercialActionRecord {
   readonly purchasedDeviceCount: number;
   /** WP-A5: the add-on version an `ADD_DEVICES` purchase was priced from; null otherwise. */
   readonly addonVersion: number | null;
+  /** WP-A6: the configured location a `CHANGE_LOCATION` was priced from; null otherwise. */
+  readonly locationId: ServiceLocationId | null;
   /** What was paid, with its currency. Never an amount without one. */
   readonly amount: Money;
   readonly createdAt: Date;
@@ -55,6 +58,8 @@ export interface CommercialActionDraft {
   readonly purchasedDurationDays: number;
   readonly purchasedDeviceCount: number;
   readonly addonVersion: number | null;
+  /** WP-A6, `CHANGE_LOCATION` only. */
+  readonly locationId: ServiceLocationId | null;
   readonly amount: Money;
   readonly now: Date;
 }

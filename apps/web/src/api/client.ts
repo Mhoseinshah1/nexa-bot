@@ -267,6 +267,13 @@ import {
   type CustomerStatus,
   PAYMENT_ACCOUNT_ROUTES,
   SERVICE_ADDON_ROUTES,
+  SERVICE_LOCATION_ROUTES,
+  serviceLocationDeleteResponseSchema,
+  serviceLocationListResponseSchema,
+  type ServiceLocationDeleteResponse,
+  serviceLocationResponseSchema,
+  type ServiceLocationListResponse,
+  type ServiceLocationResponse,
   serviceAddonListResponseSchema,
   serviceAddonResponseSchema,
   type ServiceAddonListResponse,
@@ -294,6 +301,16 @@ import {
   type SupportFaqListResponse,
   type SupportFaqResponse,
   type SupportFaqStatus,
+  // WP-A10: client apps and connection guides.
+  CLIENT_APP_ROUTES,
+  clientAppDeletedSchema,
+  clientAppListSchema,
+  clientAppSchema,
+  type ClientAppDeletedResponse,
+  type ClientAppListResponse,
+  type ClientAppResponse,
+  type ClientAppStatus,
+  type CreateClientAppRequest,
   type PaymentGatewayListResponse,
   type PaymentGatewayResponse,
   type PaymentGatewayStatus,
@@ -1420,6 +1437,55 @@ export function setServiceAddonActive(input: {
   return post(route, { idempotencyKey: input.idempotencyKey }, serviceAddonResponseSchema);
 }
 
+// --- Service locations (WP-A6: the location change) --------------------------------
+
+/** Every configured location of the tenant. The server authorizes on `catalog.view`. */
+export function fetchServiceLocations(): Promise<ServiceLocationListResponse> {
+  return authedGet(SERVICE_LOCATION_ROUTES.list, serviceLocationListResponseSchema);
+}
+
+/** The write body for create and edit: one shape, every term stated. */
+export interface ServiceLocationWriteInput {
+  panelId: string;
+  productId: string | null;
+  locationKey: string;
+  label: string;
+  initial: boolean;
+  enabled: boolean;
+  priceAmount: string | null;
+  priceCurrency: CurrencyCode | null;
+  cooldownHours: number | null;
+  maxChanges: number | null;
+  periodDays: number | null;
+  sortOrder: number;
+  idempotencyKey: string;
+}
+
+export function createServiceLocation(
+  input: ServiceLocationWriteInput,
+): Promise<ServiceLocationResponse> {
+  return post(SERVICE_LOCATION_ROUTES.create, input, serviceLocationResponseSchema);
+}
+
+export function updateServiceLocation(
+  input: ServiceLocationWriteInput & { id: string },
+): Promise<ServiceLocationResponse> {
+  const { id, ...body } = input;
+  return post(SERVICE_LOCATION_ROUTES.update(id), body, serviceLocationResponseSchema);
+}
+
+/** Deletes a location nothing was quoted from; one in use is refused by the server. */
+export function deleteServiceLocation(input: {
+  id: string;
+  idempotencyKey: string;
+}): Promise<ServiceLocationDeleteResponse> {
+  return post(
+    SERVICE_LOCATION_ROUTES.remove(input.id),
+    { idempotencyKey: input.idempotencyKey },
+    serviceLocationDeleteResponseSchema,
+  );
+}
+
 /**
  * The manual-transfer destinations, all of them, with no cursor.
  *
@@ -1597,6 +1663,48 @@ export function setSupportFaqStatus(input: {
 }): Promise<SupportFaqResponse> {
   const { id, ...body } = input;
   return post(SUPPORT_FAQ_ROUTES.status(id), body, supportFaqSchema);
+}
+
+// --- WP-A10: client apps and connection guides ------------------------------------
+
+export function fetchClientApps(): Promise<ClientAppListResponse> {
+  return authedGet(CLIENT_APP_ROUTES.list, clientAppListSchema);
+}
+
+/** The fields an entry is written with; the server normalises the links and re-checks all of it. */
+export type ClientAppFields = Omit<CreateClientAppRequest, 'idempotencyKey'>;
+
+export function createClientApp(
+  input: ClientAppFields & { idempotencyKey: string },
+): Promise<ClientAppResponse> {
+  return post(CLIENT_APP_ROUTES.create, input, clientAppSchema);
+}
+
+/** `expectedVersion` is required; a row that moved comes back as `control.client_app_version_conflict`. */
+export function updateClientApp(
+  input: ClientAppFields & { id: string; idempotencyKey: string; expectedVersion: number },
+): Promise<ClientAppResponse> {
+  const { id, ...body } = input;
+  return post(CLIENT_APP_ROUTES.update(id), body, clientAppSchema);
+}
+
+export function setClientAppStatus(input: {
+  id: string;
+  idempotencyKey: string;
+  status: ClientAppStatus;
+  expectedVersion: number;
+}): Promise<ClientAppResponse> {
+  const { id, ...body } = input;
+  return post(CLIENT_APP_ROUTES.status(id), body, clientAppSchema);
+}
+
+export function deleteClientApp(input: {
+  id: string;
+  idempotencyKey: string;
+  expectedVersion: number;
+}): Promise<ClientAppDeletedResponse> {
+  const { id, ...body } = input;
+  return post(CLIENT_APP_ROUTES.remove(id), body, clientAppDeletedSchema);
 }
 
 export function fetchPanels(
