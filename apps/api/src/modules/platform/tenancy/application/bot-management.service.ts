@@ -294,7 +294,8 @@ export class BotManagementService {
    * touched"). Whether Telegram keeps a registration across a BotFather revocation was
    * never established (`OQ-WP13-02`), and the owner's staging bot answered it the hard
    * way: the token was accepted and the bot stayed silent. `botctl telegram register`
-   * could not repair it either — it trusts the ROW's marker, which still said registered.
+   * could not repair it either before R4 — its rerun trusted the ROW's marker, which still
+   * said registered (`BotBootstrapService.telegramStillHolds` now asks Telegram).
    *
    * The order is the point. Nothing is stored until Telegram has been shown to deliver to
    * this installation, and every step exists so the next one never has to run:
