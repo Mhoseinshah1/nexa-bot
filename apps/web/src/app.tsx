@@ -37,6 +37,7 @@ import { ServiceDetailPage, ServicesPage } from './pages/services';
 import { UsersPage, UserDetailPage } from './pages/users';
 import { TrialsPage } from './pages/trials';
 import { DiscountsPage } from './pages/discounts';
+import { CampaignDetailPage, CampaignNewPage, CampaignsPage } from './pages/campaigns';
 import { CustomServicePage } from './pages/custom-service';
 import { ReferralsPage } from './pages/referrals';
 import { ReportsPage } from './pages/business';
@@ -365,6 +366,19 @@ export const NAV: readonly NavEntry[] = [
      * not keep.
      */
     permission: 'catalog.view',
+    group: 'web.navgroup_sales',
+  },
+  {
+    id: 'campaigns',
+    path: '/campaigns',
+    label: 'web.nav_campaigns',
+    icon: 'zap',
+    /*
+     * Round N, C1. `campaigns.view`, and only that: the list, the detail and the results all
+     * charge it (`CampaignService`), and every write opens from them. The writes ALSO charge
+     * each composed action's own key on the server.
+     */
+    permission: 'campaigns.view',
     group: 'web.navgroup_sales',
   },
   {
@@ -911,6 +925,45 @@ export function resolve(
       ),
       crumbs: [{ label: t('web.discounts_title') }],
       title: t('web.discounts_title'),
+    };
+  }
+
+  // Round N, C1: campaigns — the list, a new draft, and one campaign.
+  if (route.path === '/campaigns') {
+    return {
+      element: (
+        <CampaignsPage
+          route={route}
+          denied={!may('campaigns.view')}
+          mayManage={may('campaigns.manage')}
+        />
+      ),
+      crumbs: [{ label: t('web.campaigns_title') }],
+      title: t('web.campaigns_title'),
+    };
+  }
+  if (route.path === '/campaigns/new') {
+    return {
+      element: (
+        <CampaignNewPage denied={!may('campaigns.view')} mayManage={may('campaigns.manage')} />
+      ),
+      crumbs: [nav('campaigns'), { label: t('web.campaign_new') }],
+      title: t('web.campaign_new'),
+    };
+  }
+  const campaign = match('/campaigns/:id', route.path);
+  if (campaign !== null) {
+    return {
+      element: (
+        <CampaignDetailPage
+          key={campaign['id'] ?? ''}
+          id={campaign['id'] ?? ''}
+          denied={!may('campaigns.view')}
+          mayManage={may('campaigns.manage')}
+        />
+      ),
+      crumbs: [nav('campaigns'), { label: t('web.campaigns_title') }],
+      title: t('web.campaigns_title'),
     };
   }
 
