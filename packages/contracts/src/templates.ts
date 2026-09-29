@@ -6412,7 +6412,8 @@ export const TEMPLATES = [
       {
         token: 'minimum',
         type: 'MONEY',
-        description: 'The reseller\u2019s monthly minimum, as recorded when the reminder was raised.',
+        description:
+          'The reseller\u2019s monthly minimum, as recorded when the reminder was raised.',
         required: false,
         repeatable: true,
       },
