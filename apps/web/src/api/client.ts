@@ -1,4 +1,30 @@
 import {
+  // Round N: the shared audience, broadcast and mass operations.
+  AUDIENCE_ROUTES,
+  BROADCAST_ROUTES,
+  BULK_OPERATION_ROUTES,
+  audienceOptionsResponseSchema,
+  audiencePreviewResponseSchema,
+  broadcastListResponseSchema,
+  broadcastRecipientListResponseSchema,
+  broadcastResponseSchema,
+  broadcastTestResponseSchema,
+  bulkItemListResponseSchema,
+  bulkOperationListResponseSchema,
+  bulkOperationResponseSchema,
+  bulkPreviewResponseSchema,
+  type AudienceOptionsResponse,
+  type AudiencePreviewResponse,
+  type BroadcastContentKind,
+  type BroadcastListResponse,
+  type BroadcastRecipientListResponse,
+  type BroadcastResponse,
+  type BroadcastTestResponse,
+  type BulkGrant,
+  type BulkItemListResponse,
+  type BulkOperationListResponse,
+  type BulkOperationResponse,
+  type BulkPreviewResponse,
   REPORT_ROUTES,
   reportFailuresResponseSchema,
   reportInfrastructureResponseSchema,
@@ -3014,4 +3040,153 @@ export function updateTicketCategory(input: {
 }): Promise<TicketCategoryResponse> {
   const { id, ...body } = input;
   return post(TICKET_ROUTES.category(id), body, ticketCategoryResponseSchema);
+}
+
+// --- Round N: the shared audience, broadcast and mass operations --------------------------
+
+export function fetchAudienceOptions(): Promise<AudienceOptionsResponse> {
+  return authedGet(AUDIENCE_ROUTES.options, audienceOptionsResponseSchema);
+}
+
+/** A live count of an audience definition while it is being built. Writes nothing. */
+export function previewAudience(definition: unknown): Promise<AudiencePreviewResponse> {
+  return post(AUDIENCE_ROUTES.preview, { definition }, audiencePreviewResponseSchema);
+}
+
+function paged(base: string, query: Record<string, string | number | undefined>): string {
+  const params = new URLSearchParams();
+  for (const [name, value] of Object.entries(query)) {
+    if (value !== undefined && value !== '') params.set(name, String(value));
+  }
+  const suffix = params.toString();
+  return suffix ? `${base}?${suffix}` : base;
+}
+
+export function fetchBroadcasts(query: { cursor?: string } = {}): Promise<BroadcastListResponse> {
+  return authedGet(paged(BROADCAST_ROUTES.list, query), broadcastListResponseSchema);
+}
+
+export function fetchBroadcast(id: string): Promise<BroadcastResponse> {
+  return authedGet(BROADCAST_ROUTES.one(id), broadcastResponseSchema);
+}
+
+export function fetchBroadcastRecipients(
+  id: string,
+  query: { state?: string; cursor?: string } = {},
+): Promise<BroadcastRecipientListResponse> {
+  return authedGet(
+    paged(BROADCAST_ROUTES.recipients(id), query),
+    broadcastRecipientListResponseSchema,
+  );
+}
+
+export interface BroadcastContentWire {
+  title: string;
+  contentKind: BroadcastContentKind;
+  body: string;
+  buttons: { label: string; url: string }[];
+  audience: unknown;
+}
+
+export function createBroadcast(
+  input: BroadcastContentWire & { idempotencyKey: string },
+): Promise<BroadcastResponse> {
+  return post(BROADCAST_ROUTES.create, input, broadcastResponseSchema);
+}
+
+export function updateBroadcast(
+  id: string,
+  input: BroadcastContentWire & { expectedVersion: number },
+): Promise<BroadcastResponse> {
+  return post(BROADCAST_ROUTES.update(id), input, broadcastResponseSchema);
+}
+
+export function uploadBroadcastMedia(
+  id: string,
+  input: { mimeType: string; fileName: string; contentBase64: string },
+): Promise<BroadcastResponse> {
+  return post(BROADCAST_ROUTES.media(id), input, broadcastResponseSchema);
+}
+
+export function removeBroadcastMedia(id: string): Promise<BroadcastResponse> {
+  return post(BROADCAST_ROUTES.removeMedia(id), {}, broadcastResponseSchema);
+}
+
+export function previewBroadcast(id: string): Promise<AudiencePreviewResponse> {
+  return post(BROADCAST_ROUTES.preview(id), {}, audiencePreviewResponseSchema);
+}
+
+export function testBroadcast(id: string): Promise<BroadcastTestResponse> {
+  return post(BROADCAST_ROUTES.test(id), {}, broadcastTestResponseSchema);
+}
+
+export function launchBroadcast(
+  id: string,
+  input: {
+    idempotencyKey: string;
+    mode: 'NOW' | 'SCHEDULE';
+    scheduledAt: string | null;
+    expectedVersion: number;
+    expectedDefinitionHash: string;
+    expectedRecipients: number;
+    expectedFingerprint: string;
+    typedCount: number | null;
+  },
+): Promise<BroadcastResponse> {
+  return post(BROADCAST_ROUTES.launch(id), { ...input, confirmed: true }, broadcastResponseSchema);
+}
+
+export function steerBroadcast(
+  id: string,
+  action: 'pause' | 'resume' | 'cancel' | 'retryFailed',
+): Promise<BroadcastResponse> {
+  return post(BROADCAST_ROUTES[action](id), {}, broadcastResponseSchema);
+}
+
+export function fetchBulkOperations(
+  query: { cursor?: string } = {},
+): Promise<BulkOperationListResponse> {
+  return authedGet(paged(BULK_OPERATION_ROUTES.list, query), bulkOperationListResponseSchema);
+}
+
+export function fetchBulkOperation(id: string): Promise<BulkOperationResponse> {
+  return authedGet(BULK_OPERATION_ROUTES.one(id), bulkOperationResponseSchema);
+}
+
+export function fetchBulkItems(
+  id: string,
+  query: { state?: string; cursor?: string } = {},
+): Promise<BulkItemListResponse> {
+  return authedGet(paged(BULK_OPERATION_ROUTES.items(id), query), bulkItemListResponseSchema);
+}
+
+export function previewBulkOperation(input: {
+  grant: BulkGrant;
+  definition: unknown;
+}): Promise<BulkPreviewResponse> {
+  return post(BULK_OPERATION_ROUTES.preview, input, bulkPreviewResponseSchema);
+}
+
+export function createBulkOperation(input: {
+  idempotencyKey: string;
+  grant: BulkGrant;
+  definition: unknown;
+  notify: boolean;
+  note: string;
+  expectedDefinitionHash: string;
+  expectedCount: number;
+  expectedFingerprint: string;
+  expectedTotalMinor: string | null;
+  typedCount: number | null;
+  notBefore: string | null;
+}): Promise<BulkOperationResponse> {
+  return post(
+    BULK_OPERATION_ROUTES.create,
+    { ...input, confirmed: true },
+    bulkOperationResponseSchema,
+  );
+}
+
+export function cancelBulkOperation(id: string): Promise<BulkOperationResponse> {
+  return post(BULK_OPERATION_ROUTES.cancel(id), {}, bulkOperationResponseSchema);
 }
