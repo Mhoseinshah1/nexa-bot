@@ -569,6 +569,19 @@ describe('a free trial', () => {
     return product.id;
   }
 
+  it('refuses a trial product id that is not a product of this tenant', async () => {
+    // The retired key keeps its guard: a stored value is still a product of this tenant.
+    await expect(
+      ctx.container.settingsService.set(tenantA, owner, {
+        key: 'trial.product_id',
+        value: ctx.container.ids.uuid(),
+        expectedVersion: null,
+        idempotencyKey: randomUUID(),
+      }),
+    ).rejects.toThrow();
+    await trialProduct(1);
+  });
+
   it('issues nothing from the retired product setting', async () => {
     // A tenant that still has `trial.product_id` stored and no panel configured has no
     // trial: nothing reads the key since R1.
@@ -935,7 +948,7 @@ describe('a free trial', () => {
     expect(await grants()).toBe(0);
   });
 
-  it('draws the catalogue’s trial button only when the customer can take one', async () => {
+  it('draws the trial button only when the customer can take one, and issues it on the tap', async () => {
     const runtime = ctx.container.botRuntime;
     await runtime.handle(tenantA, systemActor('tg'), tap('cg:0', '950950'));
     expect(lastMessage()).not.toContain('"tr:"');

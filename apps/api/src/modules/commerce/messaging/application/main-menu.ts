@@ -84,13 +84,19 @@ export class MainMenuLayout {
 
   /** Every declared button's CURRENT label, and the slash command it stands for. */
   async routesFor(scope: ScopeContext): Promise<ReadonlyMap<string, string>> {
+    // Rendered together: one round of lookups for the whole table, not eight in a row.
+    const labels = await Promise.all(
+      MAIN_MENU_BUTTONS.map(async (button) =>
+        (await this.deps.templates.render(scope, button.label, {})).trim(),
+      ),
+    );
     const routes = new Map<string, string>();
-    for (const button of MAIN_MENU_BUTTONS) {
-      const label = (await this.deps.templates.render(scope, button.label, {})).trim();
+    MAIN_MENU_BUTTONS.forEach((button, index) => {
+      const label = labels[index] ?? '';
       // The first button to claim a label keeps it: two buttons an operator gave one name
       // cannot both be reached by it, and the earlier-declared one is the stable answer.
       if (label !== '' && !routes.has(label)) routes.set(label, `/${button.command}`);
-    }
+    });
     return routes;
   }
 }
