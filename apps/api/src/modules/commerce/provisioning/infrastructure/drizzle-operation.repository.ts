@@ -295,6 +295,33 @@ export class DrizzleOperationRepository implements OperationRepository {
    * to arbitrate. A lease here would be machinery protecting against something
    * that is already safe.
    */
+  /**
+   * R3 item 9: whether an operation of this type ever SUCCEEDED on this service — the
+   * delivery lane asks it of `ROTATE_SUBSCRIPTION` to tell a changed link from a new
+   * service. A read of one indexed row, never a count.
+   */
+  async hasSucceeded(
+    scope: TenantContext,
+    serviceId: string,
+    type: OperationType,
+    tx?: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select({ id: provisioningOperations.id })
+      .from(provisioningOperations)
+      .where(
+        and(
+          eq(provisioningOperations.tenantId, tenantId),
+          eq(provisioningOperations.serviceId, serviceId),
+          eq(provisioningOperations.type, type),
+          eq(provisioningOperations.state, 'SUCCEEDED'),
+        ),
+      )
+      .limit(1);
+    return rows.length > 0;
+  }
+
   async dueForAnnouncement(
     scope: TenantContext,
     before: Date,

@@ -1,6 +1,7 @@
 import type {
   BotCommandMenuState,
   BotInstanceStatus,
+  BotLiveProblem,
   BotReadinessCause,
   BotReadinessState,
   BotWebhookSecretState,
@@ -105,4 +106,67 @@ export function readinessOf(input: BotReadinessInput): {
 export function claimedBotId(token: string): string | null {
   const match = /^([1-9][0-9]{0,19}):([A-Za-z0-9_-]{20,200})$/u.exec(token);
   return match?.[1] ?? null;
+}
+
+/**
+ * R4 — what a LIVE look at Telegram says about this bot receiving updates, together with
+ * the recorded facts only this installation knows. Pure.
+ *
+ * `readyToReceive` is the conjunction the Web Admin shows after a token replacement and on
+ * a live check: the route is served, the tenant and the bot are active, Telegram accepted
+ * the token as THIS bot, it delivers to EXACTLY the URL this installation registers for
+ * this bot, it would deliver every update type the bot handles, and the registration is
+ * recorded as made with the secret held now. Telegram never reports a webhook's secret, so
+ * the last is the recorded fingerprint and nothing stronger — and it is written only by a
+ * registration Telegram accepted.
+ *
+ * Every problem that applies, in the order an operator can act on them, as `readinessOf`
+ * lists its causes.
+ */
+export function liveProblems(input: {
+  readonly webhookRouteEnabled: boolean;
+  readonly tenantActive: boolean;
+  readonly botStatus: BotInstanceStatus;
+  readonly secret: BotWebhookSecretState;
+  /** `getMe` identified a bot, and whether it is the recorded one (null: none recorded). */
+  readonly identified: boolean;
+  /**
+   * `User.is_bot` from that answer. The Bot API always sends `true` for a token; anything
+   * else did not come from Telegram's Bot API, so the token is not counted as accepted.
+   */
+  readonly isBot: boolean | null;
+  readonly sameBot: boolean | null;
+  /** Telegram's webhook, when it could be read; null when it could not (or was skipped). */
+  readonly webhook: {
+    readonly url: string | null;
+    readonly narrowed: boolean;
+  } | null;
+  readonly expectedUrl: string | null;
+}): BotLiveProblem[] {
+  const problems: BotLiveProblem[] = [];
+  if (!input.webhookRouteEnabled || input.secret === 'NOT_CONFIGURED') {
+    problems.push('WEBHOOK_ROUTE_DISABLED');
+  }
+  if (!input.tenantActive) problems.push('TENANT_INACTIVE');
+  if (input.botStatus !== 'ACTIVE') problems.push('BOT_NOT_ACTIVE');
+  if (!input.identified || input.isBot !== true) {
+    problems.push('TOKEN_NOT_ACCEPTED');
+  } else if (input.sameBot === false) {
+    problems.push('DIFFERENT_BOT');
+  }
+  if (input.webhook === null) {
+    problems.push('WEBHOOK_UNREADABLE');
+  } else {
+    if (input.expectedUrl === null) problems.push('WEBHOOK_EXPECTED_UNKNOWN');
+    if (input.webhook.url === null) {
+      problems.push('WEBHOOK_NOT_SET');
+    } else if (input.expectedUrl !== null && input.webhook.url !== input.expectedUrl) {
+      problems.push('WEBHOOK_ELSEWHERE');
+    }
+    if (input.webhook.narrowed) problems.push('WEBHOOK_UPDATES_NARROWED');
+  }
+  if (input.secret === 'DIFFERS' || input.secret === 'UNKNOWN') {
+    problems.push('WEBHOOK_SECRET_NOT_CURRENT');
+  }
+  return problems;
 }

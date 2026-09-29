@@ -1,0 +1,388 @@
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+
+/**
+ * A stand-in for the Telegram Bot API's bot-identity and webhook methods, over real HTTP
+ * (R4, item 12). The app is pointed at it through `TELEGRAM_API_BASE_URL`, so the call
+ * core, the gateway and the service all run unchanged — the same pattern as the Stars and
+ * ops-group suites' recording fakes.
+ *
+ * FAITHFUL TO THE DOCUMENTED BOT API, and that is the point of it
+ * (https://core.telegram.org/bots/api — `getMe`, `setWebhook`, `getWebhookInfo`,
+ * `deleteWebhook`; CLAUDE.md: a fake this repository wrote can only prove it agrees with
+ * an adapter this repository wrote, so it copies the documented shapes, not the adapter):
+ *
+ *  - every call is `POST /bot<token>/<method>`, answered `{ ok, result }` or
+ *    `{ ok: false, error_code, description }`; an unknown or revoked token is HTTP 401
+ *    `Unauthorized`, an unknown method 404 `Not Found`;
+ *  - `getMe` answers a `User` with `is_bot: true`;
+ *  - `setWebhook` REPLACES the registration, keeps `allowed_updates` when the field is
+ *    omitted, treats an empty list as the default set, refuses a non-https URL with
+ *    `Bad Request: bad webhook: An HTTPS URL must be provided for webhook`, and discards
+ *    the queue only on `drop_pending_updates: true`;
+ *  - `getWebhookInfo` answers `url: ""` when no webhook is set, and carries
+ *    `max_connections`, `last_error_*` and `allowed_updates` only when they apply. It
+ *    never reports the `secret_token` — Telegram does not — so the fake keeps it where
+ *    only a test can read it (`registration`);
+ *  - `deleteWebhook` answers `result: true` whether or not one was set.
+ *
+ * What the Bot API does NOT document is not decided here. Whether a BotFather revocation
+ * keeps the bot's webhook (`OQ-WP13-02`) is a parameter every caller of `revoke` must
+ * state, never a default.
+ */
+
+interface BotState {
+  readonly id: number;
+  username: string;
+  token: string;
+  webhook: {
+    url: string;
+    secretToken: string | null;
+    allowedUpdates: string[] | null;
+    maxConnections: number;
+  } | null;
+  pendingUpdateCount: number;
+  lastError: { readonly date: number; readonly message: string } | null;
+}
+
+export interface FakeTelegramCall {
+  readonly method: string;
+  /** Which bot the token named, or null for an unknown one. Never the token itself. */
+  readonly botId: number | null;
+  readonly body: Record<string, unknown>;
+}
+
+/**
+ * What the next call of a method does instead of its documented answer.
+ *
+ *  - `server_error` — HTTP 500, nothing applied (Telegram's own outage);
+ *  - `drop` — the connection is destroyed before any answer, nothing applied;
+ *  - `apply_then_drop` — the change IS applied and the answer is lost: the ambiguous
+ *    outcome a timeout produces;
+ *  - `refuse` — HTTP 400 with the given description, nothing applied;
+ *  - `ok_without_applying` — `{ ok: true }` and nothing applied (a registration that
+ *    something else replaced the instant after).
+ */
+export type FakeTelegramFault =
+  | { readonly kind: 'server_error' }
+  | { readonly kind: 'drop' }
+  | { readonly kind: 'apply_then_drop' }
+  | { readonly kind: 'refuse'; readonly description: string }
+  | { readonly kind: 'ok_without_applying' };
+
+export interface FakeTelegramBotApi {
+  readonly url: string;
+  readonly calls: FakeTelegramCall[];
+  /** A bot BotFather created; answers its (only) valid token. */
+  createBot(input: { readonly id: number; readonly username: string }): string;
+  /**
+   * BotFather `/revoke`: a new token, and the old one answers 401 from now on. Whether the
+   * webhook survives is the CALLER's statement (`OQ-WP13-02`).
+   */
+  revoke(botId: number, options: { readonly keepWebhook: boolean }): string;
+  /** A registration made outside this installation (another system, a legacy install). */
+  setWebhookDirectly(
+    botId: number,
+    webhook: { readonly url: string; readonly allowedUpdates?: string[] } | null,
+  ): void;
+  /** What Telegram holds, INCLUDING the secret it never reports. For assertions only. */
+  registration(botId: number): BotState['webhook'];
+  setPending(botId: number, pending: number, lastError?: string): void;
+  /** The next call of `method` misbehaves once. */
+  failNext(method: string, fault: FakeTelegramFault): void;
+  /** Every call of `method` waits until the returned function is called. */
+  hold(method: string): { readonly release: () => void; readonly reached: Promise<void> };
+  /** A hook run before the next call of `method` is answered (and before it applies). */
+  beforeNext(method: string, hook: () => Promise<void> | void): void;
+  close(): Promise<void>;
+}
+
+const DOCUMENTED_WEBHOOK_MAX_CONNECTIONS = 40;
+
+export async function startFakeTelegramBotApi(): Promise<FakeTelegramBotApi> {
+  const bots = new Map<number, BotState>();
+  const calls: FakeTelegramCall[] = [];
+  const faults = new Map<string, FakeTelegramFault[]>();
+  const holds = new Map<string, { readonly gate: Promise<void>; readonly arrived: () => void }>();
+  const hooks = new Map<string, Array<() => Promise<void> | void>>();
+  let serial = 0;
+
+  const mint = (id: number): string => {
+    serial += 1;
+    return `${String(id)}:FAKE${String(serial).padStart(4, '0')}${'x'.repeat(31)}`;
+  };
+  const byToken = (token: string): BotState | null => {
+    for (const bot of bots.values()) if (bot.token === token) return bot;
+    return null;
+  };
+  const require = (botId: number): BotState => {
+    const bot = bots.get(botId);
+    if (bot === undefined) throw new Error(`no fake bot ${String(botId)}`);
+    return bot;
+  };
+
+  const send = (response: ServerResponse, status: number, payload: unknown) => {
+    response.writeHead(status, { 'content-type': 'application/json' });
+    response.end(JSON.stringify(payload));
+  };
+  const ok = (response: ServerResponse, result: unknown, description?: string) =>
+    send(response, 200, { ok: true, result, ...(description ? { description } : {}) });
+  const fail = (response: ServerResponse, code: number, description: string) =>
+    send(response, code, { ok: false, error_code: code, description });
+
+  /** Applies a documented method to a bot, and answers what the Bot API answers. */
+  const apply = (
+    bot: BotState,
+    method: string,
+    body: Record<string, unknown>,
+  ): { status: number; payload: unknown } => {
+    switch (method) {
+      case 'getMe':
+        return {
+          status: 200,
+          payload: {
+            ok: true,
+            result: {
+              id: bot.id,
+              is_bot: true,
+              first_name: bot.username,
+              username: bot.username,
+              can_join_groups: true,
+              can_read_all_group_messages: false,
+              supports_inline_queries: false,
+              can_connect_to_business: false,
+              has_main_web_app: false,
+            },
+          },
+        };
+      case 'setWebhook': {
+        const url = typeof body.url === 'string' ? body.url : '';
+        if (url === '') {
+          // The documented way to remove one: an empty url.
+          bot.webhook = null;
+          return {
+            status: 200,
+            payload: { ok: true, result: true, description: 'Webhook was deleted' },
+          };
+        }
+        if (!url.startsWith('https://')) {
+          return {
+            status: 400,
+            payload: {
+              ok: false,
+              error_code: 400,
+              description: 'Bad Request: bad webhook: An HTTPS URL must be provided for webhook',
+            },
+          };
+        }
+        const allowed = Array.isArray(body.allowed_updates)
+          ? (body.allowed_updates as unknown[]).filter((v): v is string => typeof v === 'string')
+          : undefined;
+        const previous = bot.webhook;
+        bot.webhook = {
+          url,
+          secretToken: typeof body.secret_token === 'string' ? body.secret_token : null,
+          // Omitted: the previous list stays. Empty: the default set.
+          allowedUpdates:
+            allowed === undefined
+              ? (previous?.allowedUpdates ?? null)
+              : allowed.length === 0
+                ? null
+                : allowed,
+          maxConnections:
+            typeof body.max_connections === 'number'
+              ? body.max_connections
+              : DOCUMENTED_WEBHOOK_MAX_CONNECTIONS,
+        };
+        if (body.drop_pending_updates === true) bot.pendingUpdateCount = 0;
+        return {
+          status: 200,
+          payload: {
+            ok: true,
+            result: true,
+            description: previous?.url === url ? 'Webhook is already set' : 'Webhook was set',
+          },
+        };
+      }
+      case 'deleteWebhook': {
+        const had = bot.webhook !== null;
+        bot.webhook = null;
+        if (body.drop_pending_updates === true) bot.pendingUpdateCount = 0;
+        return {
+          status: 200,
+          payload: {
+            ok: true,
+            result: true,
+            description: had ? 'Webhook was deleted' : 'Webhook is already deleted',
+          },
+        };
+      }
+      case 'getWebhookInfo': {
+        const hook = bot.webhook;
+        return {
+          status: 200,
+          payload: {
+            ok: true,
+            result: {
+              url: hook?.url ?? '',
+              has_custom_certificate: false,
+              pending_update_count: bot.pendingUpdateCount,
+              ...(hook === null
+                ? {}
+                : {
+                    ip_address: '203.0.113.10',
+                    max_connections: hook.maxConnections,
+                    ...(hook.allowedUpdates === null
+                      ? {}
+                      : { allowed_updates: hook.allowedUpdates }),
+                  }),
+              ...(bot.lastError === null
+                ? {}
+                : {
+                    last_error_date: bot.lastError.date,
+                    last_error_message: bot.lastError.message,
+                  }),
+            },
+          },
+        };
+      }
+      default:
+        return { status: 404, payload: { ok: false, error_code: 404, description: 'Not Found' } };
+    }
+  };
+
+  const server: Server = createServer((request: IncomingMessage, response: ServerResponse) => {
+    const chunks: Buffer[] = [];
+    request.on('data', (chunk: Buffer) => chunks.push(chunk));
+    request.on('end', () => {
+      void (async () => {
+        const [, tokenPart = '', method = ''] = (request.url ?? '').split('/');
+        const token = tokenPart.replace(/^bot/u, '');
+        let body: Record<string, unknown>;
+        try {
+          body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}') as Record<
+            string,
+            unknown
+          >;
+        } catch {
+          body = {};
+        }
+        const bot = byToken(token);
+        calls.push({ method, botId: bot?.id ?? null, body });
+
+        const hook = hooks.get(method)?.shift();
+        if (hook !== undefined) await hook();
+        const held = holds.get(method);
+        if (held !== undefined) {
+          held.arrived();
+          await held.gate;
+        }
+
+        if (bot === null) {
+          fail(response, 401, 'Unauthorized');
+          return;
+        }
+        const fault = faults.get(method)?.shift();
+        if (fault !== undefined) {
+          switch (fault.kind) {
+            case 'server_error':
+              fail(response, 500, 'Internal Server Error');
+              return;
+            case 'drop':
+              request.socket.destroy();
+              return;
+            case 'apply_then_drop':
+              apply(bot, method, body);
+              request.socket.destroy();
+              return;
+            case 'refuse':
+              fail(response, 400, fault.description);
+              return;
+            case 'ok_without_applying':
+              ok(response, true, 'Webhook was set');
+              return;
+          }
+        }
+        const answer = apply(bot, method, body);
+        send(response, answer.status, answer.payload);
+      })();
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  if (address === null || typeof address === 'string') throw new Error('no address');
+
+  return {
+    url: `http://127.0.0.1:${String(address.port)}`,
+    calls,
+    createBot({ id, username }) {
+      const token = mint(id);
+      bots.set(id, {
+        id,
+        username,
+        token,
+        webhook: null,
+        pendingUpdateCount: 0,
+        lastError: null,
+      });
+      return token;
+    },
+    revoke(botId, { keepWebhook }) {
+      const bot = require(botId);
+      bot.token = mint(botId);
+      if (!keepWebhook) bot.webhook = null;
+      return bot.token;
+    },
+    setWebhookDirectly(botId, webhook) {
+      const bot = require(botId);
+      bot.webhook =
+        webhook === null
+          ? null
+          : {
+              url: webhook.url,
+              secretToken: 'someone-elses-secret',
+              allowedUpdates: webhook.allowedUpdates ?? null,
+              maxConnections: DOCUMENTED_WEBHOOK_MAX_CONNECTIONS,
+            };
+    },
+    registration(botId) {
+      const hook = require(botId).webhook;
+      return hook === null ? null : { ...hook };
+    },
+    setPending(botId, pending, lastError) {
+      const bot = require(botId);
+      bot.pendingUpdateCount = pending;
+      bot.lastError = lastError === undefined ? null : { date: 1_790_000_000, message: lastError };
+    },
+    failNext(method, fault) {
+      const list = faults.get(method) ?? [];
+      list.push(fault);
+      faults.set(method, list);
+    },
+    hold(method) {
+      let release: () => void = () => undefined;
+      let arrived: () => void = () => undefined;
+      // Resolves when the first held call ARRIVES, so a test can act while it waits.
+      const reached = new Promise<void>((resolve) => {
+        arrived = resolve;
+      });
+      const gate = new Promise<void>((resolve) => {
+        release = () => {
+          holds.delete(method);
+          resolve();
+        };
+      });
+      holds.set(method, { gate, arrived });
+      return { release, reached };
+    },
+    beforeNext(method, hook) {
+      const list = hooks.get(method) ?? [];
+      list.push(hook);
+      hooks.set(method, list);
+    },
+    close: () =>
+      new Promise<void>((resolve) => {
+        server.closeAllConnections();
+        server.close(() => resolve());
+      }),
+  };
+}

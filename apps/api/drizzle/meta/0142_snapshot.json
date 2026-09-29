@@ -1,6 +1,6 @@
 {
-  "id": "a39d6fa8-b4c9-477d-a49e-be53ef7f48b4",
-  "prevId": "d79360b9-2242-491f-9961-9ab8c14a7aa2",
+  "id": "a6fd61fb-0a86-4db4-86b9-1f0eaba23846",
+  "prevId": "943bb58e-7d61-4df6-a1b5-b3c83b52412f",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -5155,6 +5155,137 @@
       },
       "isRLSEnabled": false
     },
+    "public.operation_card_messages": {
+      "name": "operation_card_messages",
+      "schema": "",
+      "columns": {
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "operation_id": {
+          "name": "operation_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "bot_instance_id": {
+          "name": "bot_instance_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "chat_id": {
+          "name": "chat_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "message_id": {
+          "name": "message_id",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "answered_at": {
+          "name": "answered_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "next_attempt_at": {
+          "name": "next_attempt_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "operation_card_messages_unanswered_idx": {
+          "name": "operation_card_messages_unanswered_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "answered_at IS NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "operation_card_messages_tenant_id_tenants_id_fk": {
+          "name": "operation_card_messages_tenant_id_tenants_id_fk",
+          "tableFrom": "operation_card_messages",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "operation_card_messages_operation_fk": {
+          "name": "operation_card_messages_operation_fk",
+          "tableFrom": "operation_card_messages",
+          "tableTo": "provisioning_operations",
+          "columnsFrom": [
+            "tenant_id",
+            "operation_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "operation_card_messages_pkey": {
+          "name": "operation_card_messages_pkey",
+          "columns": [
+            "tenant_id",
+            "operation_id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "operation_card_messages_message_id_check": {
+          "name": "operation_card_messages_message_id_check",
+          "value": "message_id > 0"
+        },
+        "operation_card_messages_chat_id_check": {
+          "name": "operation_card_messages_chat_id_check",
+          "value": "chat_id ~ '^-?[0-9]{1,20}$'"
+        }
+      },
+      "isRLSEnabled": false
+    },
     "public.operational_events": {
       "name": "operational_events",
       "schema": "",
@@ -6968,6 +7099,12 @@
           "primaryKey": false,
           "notNull": true
         },
+        "line_duration_hours": {
+          "name": "line_duration_hours",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
         "line_traffic_bytes": {
           "name": "line_traffic_bytes",
           "type": "bigint",
@@ -7271,7 +7408,11 @@
         },
         "orders_product_purpose_check": {
           "name": "orders_product_purpose_check",
-          "value": "(product_id IS NULL) = (purpose = 'CUSTOM_SERVICE')"
+          "value": "purpose = 'TRIAL' OR (product_id IS NULL) = (purpose = 'CUSTOM_SERVICE')"
+        },
+        "orders_trial_hours_check": {
+          "name": "orders_trial_hours_check",
+          "value": "line_duration_hours IS NULL OR (purpose = 'TRIAL' AND line_duration_hours BETWEEN 1 AND 720)"
         },
         "orders_custom_service_line_check": {
           "name": "orders_custom_service_line_check",
@@ -8402,6 +8543,148 @@
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.panel_trial_configs": {
+      "name": "panel_trial_configs",
+      "schema": "",
+      "columns": {
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "panel_id": {
+          "name": "panel_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "enabled": {
+          "name": "enabled",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "traffic_bytes": {
+          "name": "traffic_bytes",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "duration_hours": {
+          "name": "duration_hours",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "label": {
+          "name": "label",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "revision": {
+          "name": "revision",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "panel_trial_configs_enabled_idx": {
+          "name": "panel_trial_configs_enabled_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "enabled",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "panel_trial_configs_tenant_id_tenants_id_fk": {
+          "name": "panel_trial_configs_tenant_id_tenants_id_fk",
+          "tableFrom": "panel_trial_configs",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "panel_trial_configs_panel_fk": {
+          "name": "panel_trial_configs_panel_fk",
+          "tableFrom": "panel_trial_configs",
+          "tableTo": "panels",
+          "columnsFrom": [
+            "tenant_id",
+            "panel_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "panel_trial_configs_pk": {
+          "name": "panel_trial_configs_pk",
+          "columns": [
+            "tenant_id",
+            "panel_id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "panel_trial_configs_traffic_check": {
+          "name": "panel_trial_configs_traffic_check",
+          "value": "traffic_bytes > 0 AND traffic_bytes <= 107374182400"
+        },
+        "panel_trial_configs_hours_check": {
+          "name": "panel_trial_configs_hours_check",
+          "value": "duration_hours >= 1 AND duration_hours <= 720"
+        },
+        "panel_trial_configs_label_check": {
+          "name": "panel_trial_configs_label_check",
+          "value": "label IS NULL OR length(btrim(label)) BETWEEN 1 AND 64"
+        },
+        "panel_trial_configs_revision_check": {
+          "name": "panel_trial_configs_revision_check",
+          "value": "revision >= 1"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.panels": {
@@ -16299,6 +16582,13 @@
           "primaryKey": false,
           "notNull": false
         },
+        "is_trial": {
+          "name": "is_trial",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
         "state": {
           "name": "state",
           "type": "text",
@@ -16377,6 +16667,12 @@
         },
         "usage_synced_at": {
           "name": "usage_synced_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "usage_refresh_started_at": {
+          "name": "usage_refresh_started_at",
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
@@ -18736,7 +19032,7 @@
           "name": "product_id",
           "type": "uuid",
           "primaryKey": false,
-          "notNull": true
+          "notNull": false
         },
         "service_id": {
           "name": "service_id",

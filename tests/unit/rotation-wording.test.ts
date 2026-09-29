@@ -24,8 +24,22 @@ const CLAIMS = [
   /دیگران/u,
 ];
 
+/**
+ * The ONE sentence allowed to say the previous link stops working: the success message
+ * of a customer's link change, `bot.service.link_rotated`. The owner decided its meaning
+ * in the v0.3.5 real-test brief (R3, item 9) — «لینک قبلی دیگر قابل استفاده نیست» — so it
+ * is the product's statement, made only once the panel has minted and returned a new
+ * link. Every OTHER rotation sentence (the hint on the card, the question before the
+ * change, the operator's copy) still claims nothing, and this list may not grow without
+ * the same kind of decision: `OQ-RP-07` records that no real panel has yet been observed
+ * refusing the old link, and the acceptance that would prove it.
+ */
+const OWNER_DECIDED_OLD_LINK_SENTENCES = new Set(['bot.service.link_rotated']);
+
 const rotationKeys = (catalogue: Readonly<Record<string, string>>) =>
-  Object.entries(catalogue).filter(([key]) => /rotat/u.test(key));
+  Object.entries(catalogue).filter(
+    ([key]) => /rotat/u.test(key) && !OWNER_DECIDED_OLD_LINK_SENTENCES.has(key),
+  );
 
 describe('rotation wording claims nothing about the old link', () => {
   it('finds the rotation keys it guards, so an empty scan cannot pass', () => {
@@ -33,6 +47,11 @@ describe('rotation wording claims nothing about the old link', () => {
       expect.arrayContaining(['bot.service.rotate_hint', 'bot.service.rotate_ask']),
     );
     expect(rotationKeys(WEB_FA).length).toBeGreaterThan(0);
+  });
+
+  it('the owner-decided exemption is exactly the link-change success message', () => {
+    expect([...OWNER_DECIDED_OLD_LINK_SENTENCES]).toEqual(['bot.service.link_rotated']);
+    expect(CATALOGUE_FA['bot.service.link_rotated']).toMatch(/لینک\s*قبلی/u);
   });
 
   for (const [name, catalogue] of [

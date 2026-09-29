@@ -362,6 +362,12 @@ import { DrizzleUsernameCaptureRepository } from './modules/commerce/provisionin
 import { DrizzleOperationRepository } from './modules/commerce/provisioning/infrastructure/drizzle-operation.repository.js';
 import { ProvisioningService } from './modules/commerce/provisioning/application/provisioning.service.js';
 import { SubscriptionFileService } from './modules/commerce/provisioning/application/subscription-file.service.js';
+import { ServiceRefreshService } from './modules/commerce/provisioning/application/service-refresh.service.js';
+import {
+  OperationCardEditor,
+  type ServiceCardRenderer,
+} from './modules/commerce/provisioning/application/operation-card.js';
+import { DrizzleOperationCardRepository } from './modules/commerce/provisioning/infrastructure/drizzle-operation-card.repository.js';
 import { ServiceTransferService } from './modules/commerce/provisioning/application/service-transfer.service.js';
 import { DrizzleServiceTransferRepository } from './modules/commerce/provisioning/infrastructure/drizzle-service-transfer.repository.js';
 import { ServiceAdminService } from './modules/commerce/provisioning/application/service-admin.service.js';
@@ -1092,6 +1098,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     telegram: telegramBotGateway,
     webhookSecret: () => config.TELEGRAM_WEBHOOK_SECRET,
     webhookEnabled: () => config.TELEGRAM_WEBHOOK_ENABLED,
+    telegramCallTimeoutMs: config.NOTIFICATION_SEND_TIMEOUT_MS,
   });
 
   /*
@@ -1111,8 +1118,10 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     scopeActivity: tenants,
     outbox,
     clock,
+    ids,
     webhookSecret: () => config.TELEGRAM_WEBHOOK_SECRET,
     webhookEnabled: () => config.TELEGRAM_WEBHOOK_ENABLED,
+    telegramCallTimeoutMs: config.NOTIFICATION_SEND_TIMEOUT_MS,
   });
 
   let installationTenantId: TenantId | null = null;
@@ -1829,6 +1838,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    */
   const serviceRepository = new DrizzleServiceRepository(database.db);
   const operationRepository = new DrizzleOperationRepository(database.db);
+  // R3 item 10: the service card a customer's disable or enable was asked from.
+  const operationCardRepository = new DrizzleOperationCardRepository(database.db);
   /**
    * A narrow closure, not the panel repository, and ONE of it.
    *
@@ -1917,6 +1928,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     settings: settingsResolver,
     customers: customerRepository,
     panelPolicy: panelPolicyReader,
+    cards: operationCardRepository,
     // WP-A6: a paid move's frozen target, read at settlement by its order.
     locationChanges: locationChangeRepository,
   });
@@ -3609,6 +3621,25 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     clock,
     guard,
     panelPolicy: panelPolicyReader,
+    /*
+     * R3 item 6: every connection file, right after a delivered link, for any purchase
+     * kind. `subscriptionFileService` is built further down (it needs the provisioning
+     * service); this closure is only called by the sweep, long after the container is.
+     */
+    files: {
+      afterDelivery: (scope, service, contact) =>
+        subscriptionFileService.sendAfterDelivery(
+          scope,
+          systemJobActor('delivery-files', newCorrelationId(ids.uuid())),
+          service,
+          contact,
+        ),
+    },
+    // R3 item 9: a pending link after a SUCCEEDED rotation is a changed link, not a new service.
+    rotations: {
+      hasRotated: (scope, serviceId) =>
+        operationRepository.hasSucceeded(scope, serviceId, 'ROTATE_SUBSCRIPTION'),
+    },
   });
 
   /**
@@ -3745,6 +3776,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
           customerId: service.customerId,
           requestedByCustomerId: operation.requestedByCustomerId,
           nextAttemptAt: operation.nextAttemptAt,
+          // R3 item 10: asked from a service card, whose own edit is the answer.
+          answeredOnCard: await operationCardRepository.hasCard(scope, operationId, tx),
         };
       },
       /*
@@ -3773,7 +3806,29 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     clock,
   });
 
+  /*
+   * R3 item 10: the card a disable or enable was asked from, edited to the result in the
+   * provisioner's own tick. The card is drawn by the bot runtime itself — the same
+   * `serviceDetail` the customer's tap draws — which the container builds last, so the
+   * renderer is bound once the container exists (`serviceCardRenderer.current`, below).
+   */
+  const serviceCardRenderer: { current: ServiceCardRenderer | null } = { current: null };
+  const operationCardEditor = new OperationCardEditor({
+    cards: operationCardRepository,
+    renderer: {
+      cardFor: async (scope, customerId, serviceId) =>
+        serviceCardRenderer.current === null
+          ? null
+          : serviceCardRenderer.current.cardFor(scope, customerId, serviceId),
+    },
+    messenger: customerMessenger,
+    scopeActivity: tenants,
+    uow,
+    clock,
+  });
+
   const provisionerLoop = new ProvisionerLoop(provisioner, deliveryService, outcomeAnnouncer, {
+    cards: operationCardEditor,
     cashback: cashbackService,
     referrals: referralCommissionService,
     serviceRefunds: serviceRefundRequests,
@@ -4340,7 +4395,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     },
   };
 
-  return {
+  const container: Container = {
     config,
     logger,
     clock,
@@ -4573,6 +4628,29 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       trials: trialService,
       customService: customServiceFlowService,
       subscriptionFiles: subscriptionFileService,
+      /*
+       * R3 item 7: «♻️ بروزرسانی اطلاعات» as one bounded read on the tap, under the same
+       * bounds as the files above — the panel budget, SafeHttpClient and the URL policy.
+       */
+      serviceRefresh: new ServiceRefreshService({
+        services: provisioningService,
+        rows: serviceRepository,
+        panels: panelRepository,
+        credentials: panelCredentials,
+        adapters: providerServiceAdapter,
+        implementedProviderTypes: SERVICE_PROVIDER_TYPES,
+        http: panelHttp,
+        urlPolicy,
+        probeBudget: probeCore.probeBudget,
+        guard,
+        scopeActivity: tenants,
+        panelPolicy: panelPolicyReader,
+        uow,
+        clock,
+        // A read is a log-in and a look-up, each bounded by the client's timeout; three
+        // of them plus a margin is comfortably longer than any read that is still alive.
+        inFlightMs: 3 * config.PANEL_HTTP_TIMEOUT_MS + 30_000,
+      }),
       // WP-A10: «📱 دانلود برنامه و آموزش اتصال», the tenant's apps for the customer's services.
       clientApps: clientAppCatalog,
       serviceTransfers: serviceTransferService,
@@ -4713,6 +4791,17 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       await database.close();
     },
   };
+  // R3 item 10: the card renderer the provisioner's card editor draws with (above).
+  serviceCardRenderer.current = {
+    cardFor: (scope, customerId, serviceId) =>
+      container.botRuntime.serviceCardFor(
+        scope,
+        systemJobActor('service-card', newCorrelationId(ids.uuid())),
+        customerId,
+        serviceId,
+      ),
+  };
+  return container;
 }
 
 export const CONTAINER = Symbol('CONTAINER');

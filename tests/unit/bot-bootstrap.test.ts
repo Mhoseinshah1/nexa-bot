@@ -16,6 +16,7 @@ import type {
   BotIdentityProbe,
   WebhookRegistration,
 } from '../../apps/api/src/modules/platform/tenancy/application/ports';
+import type { BotWebhookRead } from '../../apps/api/src/modules/platform/tenancy/application/bot-management-ports';
 import {
   currentTransactionLabel,
   withinTransaction,
@@ -130,11 +131,40 @@ class FakeBots implements BotBootstrapRepository {
     });
   }
 
+  /**
+   * R4 — the token-replacement claim, as the conditional UPDATEs keep it: free, or held
+   * by one id until an instant. `claimCalls` counts every attempt to take it.
+   */
+  claim: { id: string; until: Date } | null = null;
+  claimCalls = 0;
+
+  async claimTokenReplacement(
+    _scope: unknown,
+    _id: string,
+    claim: { readonly id: string; readonly now: Date; readonly until: Date },
+  ): Promise<boolean> {
+    this.claimCalls += 1;
+    if (this.claim !== null && this.claim.until > claim.now) return false;
+    this.claim = { id: claim.id, until: claim.until };
+    return true;
+  }
+
+  async releaseTokenReplacement(_scope: unknown, _id: string, claimId: string): Promise<void> {
+    if (this.claim?.id === claimId) this.claim = null;
+  }
+
   async markWebhookRegistered(
     _scope: unknown,
     id: string,
-    input: { readonly url: string; readonly secretFingerprint: string; readonly now: Date },
-  ): Promise<void> {
+    input: {
+      readonly url: string;
+      readonly secretFingerprint: string;
+      readonly now: Date;
+      readonly claimId: string;
+    },
+  ): Promise<boolean> {
+    // Written only while the registration still holds the claim, as the SQL requires.
+    if (this.claim?.id !== input.claimId) return false;
     this.webhookMarks.push({ id, url: input.url });
     const row = this.rows.find((candidate) => candidate.id === id);
     if (row) {
@@ -142,6 +172,7 @@ class FakeBots implements BotBootstrapRepository {
       row.webhookUrl = input.url;
       row.webhookSecretFingerprint = input.secretFingerprint;
     }
+    return true;
   }
 
   async recordTelegramIdentity(
@@ -174,6 +205,7 @@ class FakeTelegram implements BotBootstrapTelegram {
     url: string;
     secretToken: string;
     dropPendingUpdates: boolean;
+    resetAllowedUpdates?: boolean;
   }[] = [];
   probe: BotIdentityProbe = { outcome: 'IDENTIFIED', botId: '8123456789', username: 'acme_bot' };
   registration: WebhookRegistration = { outcome: 'REGISTERED' };
@@ -211,11 +243,25 @@ class FakeTelegram implements BotBootstrapTelegram {
     readonly url: string;
     readonly secretToken: string;
     readonly dropPendingUpdates: boolean;
+    readonly resetAllowedUpdates?: boolean;
   }): Promise<WebhookRegistration> {
     expect(currentTransactionLabel()).toBeUndefined();
     this.webhookCalls.push({ ...input });
     if (this.crashOnWebhook !== null) throw this.crashOnWebhook;
     return this.registration;
+  }
+
+  /**
+   * What `getWebhookInfo` answers (R4). UNREACHABLE by default, which a rerun reads as
+   * "no evidence against the marker" — the behaviour every case above was written for.
+   */
+  held: BotWebhookRead = { outcome: 'UNREACHABLE' };
+  readWebhookCalls = 0;
+
+  async readWebhook(): Promise<BotWebhookRead> {
+    expect(currentTransactionLabel()).toBeUndefined();
+    this.readWebhookCalls += 1;
+    return this.held;
   }
 }
 
@@ -306,6 +352,7 @@ function build(overrides: Partial<BotBootstrapDeps> = {}): {
     telegram,
     webhookSecret: () => SECRET,
     webhookEnabled: () => true,
+    telegramCallTimeoutMs: 10_000,
   };
 
   const composed = { ...deps, ...overrides };
@@ -698,6 +745,130 @@ describe('bot bootstrap — a rerun reconciles and never rotates', () => {
     expect(telegram.webhookCalls).toHaveLength(before);
     expect(bots.webhookMarks).toHaveLength(1);
     expect(bots.rows).toHaveLength(1);
+  });
+
+  /*
+   * R4. The marker is this installation's record of what it registered; it cannot see a
+   * registration Telegram dropped on its side. The owner's staging bot went silent that
+   * way while this command answered ALREADY_COMPLETE, so a rerun now asks.
+   */
+  it('asks Telegram, and keeps ALREADY_COMPLETE only when Telegram holds exactly this URL', async () => {
+    const { service, telegram } = await installed();
+    const url = telegram.webhookCalls[0]?.url ?? '';
+    const before = telegram.webhookCalls.length;
+    telegram.held = {
+      outcome: 'READ',
+      url,
+      pendingUpdateCount: 0,
+      lastErrorAt: null,
+      lastErrorMessage: null,
+      maxConnections: 40,
+      allowedUpdates: null,
+    };
+
+    const result = await service.execute(scope, { token: null, publicBaseUrl: ORIGIN });
+    expect(result.kind).toBe('ALREADY_COMPLETE');
+    expect(telegram.readWebhookCalls).toBe(1);
+    expect(telegram.webhookCalls).toHaveLength(before);
+  });
+
+  it('re-registers, keeping the queue, when Telegram no longer holds what the marker says', async () => {
+    const held = (url: string | null, allowedUpdates: string[] | null): BotWebhookRead => ({
+      outcome: 'READ',
+      url,
+      pendingUpdateCount: 5,
+      lastErrorAt: null,
+      lastErrorMessage: null,
+      maxConnections: 40,
+      allowedUpdates,
+    });
+    for (const [label, answer] of [
+      ['dropped', () => held(null, null)],
+      ['elsewhere', () => held('https://elsewhere.example.test/hook', null)],
+      ['narrowed', (url: string) => held(url, ['message'])],
+    ] as const) {
+      const { service, telegram } = await installed();
+      const url = telegram.webhookCalls[0]?.url ?? '';
+      telegram.held = answer(url);
+
+      const result = await service.execute(scope, { token: null, publicBaseUrl: ORIGIN });
+      expect(result.kind, label).toBe('RECONCILED');
+      expect(telegram.webhookCalls, label).toHaveLength(2);
+      // A running installation: whatever Telegram queued is customers' messages.
+      expect(telegram.webhookCalls[1], label).toMatchObject({ url, dropPendingUpdates: false });
+    }
+  });
+
+  /*
+   * R4 lead review. The Bot API keeps the previous `allowed_updates` when the field is
+   * omitted, so a re-registration sent here because the list was NARROWED must reset it,
+   * or every rerun re-registers and leaves the fault in place. A fresh install resets
+   * too: the empty list is Telegram's default set, the one this installation relies on.
+   */
+  it('resets allowed_updates on every registration, create and reconcile alike', async () => {
+    const { service, telegram } = await installed();
+    expect(telegram.webhookCalls[0]).toMatchObject({
+      dropPendingUpdates: true,
+      resetAllowedUpdates: true,
+    });
+    const url = telegram.webhookCalls[0]?.url ?? '';
+    telegram.held = {
+      outcome: 'READ',
+      url,
+      pendingUpdateCount: 0,
+      lastErrorAt: null,
+      lastErrorMessage: null,
+      maxConnections: 40,
+      allowedUpdates: ['message'],
+    };
+
+    await service.execute(scope, { token: null, publicBaseUrl: ORIGIN });
+    expect(telegram.webhookCalls[1]).toMatchObject({
+      url,
+      dropPendingUpdates: false,
+      resetAllowedUpdates: true,
+    });
+  });
+
+  // Codex F5: a REJECTED read is Telegram's answer, not a flake; only UNREACHABLE keeps
+  // the marker's word. The rerun re-registers, and a rejected token fails there.
+  it('re-registers when Telegram REJECTS the webhook read, rather than trusting the marker', async () => {
+    const { service, telegram } = await installed();
+    telegram.held = { outcome: 'REJECTED' };
+    const result = await service.execute(scope, { token: null, publicBaseUrl: ORIGIN });
+    expect(result.kind).toBe('RECONCILED');
+    expect(telegram.webhookCalls).toHaveLength(2);
+
+    // UNREACHABLE is still no evidence either way.
+    const quiet = await installed();
+    quiet.telegram.held = { outcome: 'UNREACHABLE' };
+    expect((await quiet.service.execute(scope, { token: null, publicBaseUrl: ORIGIN })).kind).toBe(
+      'ALREADY_COMPLETE',
+    );
+  });
+
+  // Codex F6: the registration takes the same claim a Web Admin replacement holds.
+  it('refuses to register while a token replacement holds the claim, and registers after', async () => {
+    const { service, bots, telegram } = build();
+    bots.claim = { id: 'web-admin-replacement', until: new Date('2999-01-01T00:00:00Z') };
+
+    const error = await service
+      .execute(scope, { token: TOKEN, publicBaseUrl: ORIGIN })
+      .then(() => null)
+      .catch((caught: unknown) => caught);
+    expect(isNexaError(error) && error.kind).toBe('CONFLICT');
+    expect(isNexaError(error) && error.message).toContain('in progress in the Web Admin');
+    expect(telegram.webhookCalls).toHaveLength(0);
+    expect(bots.webhookMarks).toHaveLength(0);
+    expect(bots.claim?.id).toBe('web-admin-replacement');
+
+    bots.claim = null;
+    const done = await service.execute(scope, { token: null, publicBaseUrl: ORIGIN });
+    expect(done.kind).toBe('RECONCILED');
+    expect(telegram.webhookCalls).toHaveLength(1);
+    expect(bots.webhookMarks).toHaveLength(1);
+    // Released after the marker, whatever happened.
+    expect(bots.claim).toBeNull();
   });
 
   it('still asks Telegram whether the stored token works', async () => {

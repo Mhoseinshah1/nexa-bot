@@ -87,6 +87,10 @@ Inside the response, after decoding:
 - **The caption** has control characters except newline removed, and is capped at 900
   characters. It is sent through a PLAIN_TEXT template (`bot.service.file_caption`,
   `{caption}`), so a panel's text is never parsed as HTML. With no caption, the file goes bare.
+  **Superseded by R3 (item 8):** the panel's caption is still parsed and bounded but no
+  longer shown; every file carries `bot.service.connection_file_caption` —
+  «👤 نام کاربری: {serviceUsername}» — because the panel's carried Limit, Expires and raw
+  `<code>` markup.
 
 ## 4. Security (E3)
 
@@ -119,7 +123,10 @@ Inside the response, after decoding:
   - the service is `ACTIVE`, `SUSPENDED` or `EXPIRED`, the states in which a subscription
     link is re-sent;
   - its panel's adapter can fetch files.
-- The files are **on demand only**. Nothing sends them after a purchase.
+- The files were **on demand only** in Package E. Since R3 (item 6) they are also sent
+  once, automatically, right after a delivered link — a purchase, a trial or a link
+  change — by the delivery lane (`docs/r3-service-card-audit.md`). The button stays, for
+  a re-download.
 - A tap:
   1. re-checks ownership, the private chat and the state;
   2. reads the files;

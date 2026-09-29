@@ -278,6 +278,8 @@ describe('a customer rotating their own subscription link', () => {
   };
   const lastMessage = () =>
     JSON.stringify(sent.filter((one) => one.url.includes('/sendMessage')).at(-1) ?? {});
+  const lastEdit = () =>
+    JSON.stringify(sent.filter((one) => one.url.includes('/editMessageText')).at(-1) ?? {});
 
   // =========================================================================
   // The flag
@@ -309,40 +311,81 @@ describe('a customer rotating their own subscription link', () => {
     await tap(`s:${service.id}`);
     expect(lastMessage()).toContain(`rc:${service.id}`);
 
+    // R3 item 9: the question replaces the card IN PLACE, with a way back to it.
+    sent = [];
     const asked = await tap(`rc:${service.id}`);
     expect(asked.intent).toBe('SERVICE_ROTATE_ASK');
     expect(asked.replyKey).toBe('bot.service.rotate_ask');
-    expect(lastMessage(), 'the one place the confirming callback is produced').toContain(
+    expect(sent.filter((one) => one.url.endsWith('/sendMessage'))).toHaveLength(0);
+    expect(lastEdit(), 'the one place the confirming callback is produced').toContain(
       `rd:${service.id}`,
     );
+    expect(lastEdit()).toContain(`sv:${service.id}`);
     expect(await rotations(service.id), 'the question alone plans nothing').toHaveLength(0);
 
+    // The confirmation puts the card back and sends nothing: no «request registered».
+    sent = [];
     const confirmed = await tap(`rd:${service.id}`);
     expect(confirmed.intent).toBe('SERVICE_ROTATE');
-    expect(confirmed.replyKey).toBe('bot.service.action_requested');
+    expect(confirmed.replyKey).toBe('bot.service.card');
+    expect(sent.filter((one) => one.url.endsWith('/sendMessage'))).toHaveLength(0);
+    expect(lastEdit()).toContain(service.providerUsername);
 
+    // RickPanel reads files once a minute per user; the purchase's own read was just now.
+    panel.forgetFileReads();
+    sent = [];
     await ctx.container.provisionerLoop.tick();
     const after = await reload(service.id);
+    expect(after.id, 'the SAME service').toBe(service.id);
     expect(after.subscriptionUrl).not.toBe(oldUrl);
     expect(after.deliveryState).toBe('DELIVERED');
     expect(panel.revokeCalls()).toBe(1);
     const [operation] = await rotations(service.id);
     expect(operation?.state).toBe('SUCCEEDED');
     expect(operation?.requestedByCustomerId, 'the row says a customer asked').toBe(customerId);
-    // The customer is answered: the new link was sent, and the outcome is enqueued.
-    expect(
-      sent.some((one) =>
-        String(one.body['text'] ?? one.body['unparseable'] ?? '').includes(
-          after.subscriptionUrl ?? '-',
-        ),
-      ),
-    ).toBe(true);
+
+    // The customer is answered with the link-change message and the new link…
+    const textOf = (one: (typeof sent)[number]) =>
+      String(one.body['text'] ?? one.body['caption'] ?? one.body['unparseable'] ?? '');
+    const announcement = sent.find((one) => textOf(one).includes(after.subscriptionUrl ?? '-'));
+    expect(announcement, 'the new link was sent').toBeDefined();
+    expect(textOf(announcement!)).toContain(
+      `لینک اشتراک سرویس ${service.providerUsername} با موفقیت تغییر کرد`,
+    );
+    expect(textOf(announcement!)).toContain('لینک قبلی دیگر قابل استفاده نیست');
+    // …then the new connection files, after it.
+    const announcedAt = sent.indexOf(announcement!);
+    const documents = sent
+      .map((one, index) => ({ one, index }))
+      .filter(({ one }) => one.url.endsWith('/sendDocument'));
+    expect(documents.length).toBeGreaterThan(0);
+    expect(documents.every(({ index }) => index > announcedAt)).toBe(true);
+    // Never «service created», never «request applied».
+    for (const one of sent) {
+      expect(textOf(one)).not.toContain('سرویس با موفقیت ایجاد شد');
+      expect(textOf(one)).not.toContain('درخواست شما ثبت شد');
+    }
     expect(
       await count(
         sql`SELECT count(*)::int AS n FROM customer_notifications
              WHERE kind = 'SERVICE_ACTION_SUCCEEDED' AND subject_id = ${operation?.id ?? ''}`,
       ),
-    ).toBe(1);
+      'the link-change message is the answer; no second «applied» sentence is queued',
+    ).toBe(0);
+    const [announced] = (
+      (await ctx.container.database.db.execute(
+        sql`SELECT announced_at FROM provisioning_operations WHERE id = ${operation?.id ?? ''}`,
+      )) as unknown as { rows: { announced_at: Date | null }[] }
+    ).rows;
+    expect(
+      announced?.announced_at,
+      'still answered, so the sweep does not re-read it',
+    ).not.toBeNull();
+
+    // Told once: the next tick sends neither the link nor the files again.
+    sent = [];
+    await ctx.container.provisionerLoop.tick();
+    expect(sent.filter((one) => one.url.endsWith('/sendDocument'))).toHaveLength(0);
   });
 
   // =========================================================================

@@ -243,7 +243,12 @@ describe('a RickPanel NEW_SERVICE', () => {
     // Delivered in the same tick, and the message carries the link — and none of the
     // credentials the panel generated behind it.
     expect(service?.deliveryState).toBe('DELIVERED');
-    expect(sent).toHaveLength(1);
+    // The card, then (R3 item 6) the panel's connection files, one document each.
+    expect(sent.map((one) => one.url.split('/').at(-1))).toEqual([
+      'sendPhoto',
+      'sendDocument',
+      'sendDocument',
+    ]);
     // The card is a photo: the link is in its caption, inside the raw multipart body.
     const text = String(sent[0]?.body['text'] ?? sent[0]?.body['unparseable']);
     expect(text).toContain(service?.subscriptionUrl ?? 'no-url');

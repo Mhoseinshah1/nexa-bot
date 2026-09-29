@@ -593,13 +593,13 @@ describe('a free trial', () => {
 
   it('carries a configured trial product forward onto its panel, once', async () => {
     /*
-     * The upgrade: migration 0140's own INSERT, replayed on a tenant that had configured a
+     * The upgrade: migration 0142's own INSERT, replayed on a tenant that had configured a
      * trial product before R1. The product's panel gets its traffic and its duration in
      * hours; a replay changes nothing.
      */
     await trialProduct(2);
     const migration = readFileSync(
-      'apps/api/drizzle/0140_r1_trial_per_panel_and_main_menu.sql',
+      'apps/api/drizzle/0142_r1_trial_per_panel_and_main_menu.sql',
       'utf8',
     );
     const carry = migration.slice(migration.indexOf('INSERT INTO panel_trial_configs'));
@@ -791,7 +791,7 @@ describe('a free trial', () => {
   });
 
   it('keeps a carried-forward byte count when the traffic figure is saved as shown (Codex, PR #111)', async () => {
-    // 10^9 bytes, as migration 0140 may carry a product's traffic forward; shown as 953.67 MB.
+    // 10^9 bytes, as migration 0142 may carry a product's traffic forward; shown as 953.67 MB.
     await configurePanel(panelId);
     await ctx.container.database.db.execute(
       sql`UPDATE panel_trial_configs SET traffic_bytes = 1000000000 WHERE panel_id = ${panelId}` as never,

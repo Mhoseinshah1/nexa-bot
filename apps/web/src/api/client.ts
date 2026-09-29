@@ -294,9 +294,11 @@ import {
   botDiagnosticResponseSchema,
   botListResponseSchema,
   botMutationResponseSchema,
+  botTokenReplacementResponseSchema,
   type BotDiagnosticResponse,
   type BotListResponse,
   type BotMutationResponse,
+  type BotTokenReplacementResponse,
   type BotOperatorStatus,
   paymentAccountListResponseSchema,
   paymentAccountResponseSchema,
@@ -2812,14 +2814,17 @@ export function setBotStatus(input: {
 /**
  * Replace the token of the SAME bot. The token goes in the body and nowhere else: not
  * the URL, not a query key, not the submission key (the page keys this by bot id alone).
+ *
+ * R4: the answer carries the verification the replacement made — the webhook as Telegram
+ * reported it after registering it — so the page shows it without a separate live check.
  */
 export function replaceBotToken(input: {
   id: string;
   idempotencyKey: string;
   token: string;
-}): Promise<BotMutationResponse> {
+}): Promise<BotTokenReplacementResponse> {
   const { id, ...body } = input;
-  return post(BOT_ROUTES.token(id), body, botMutationResponseSchema);
+  return post(BOT_ROUTES.token(id), body, botTokenReplacementResponseSchema);
 }
 
 /** Ask Telegram what it holds for this bot. A read; nothing is stored. */

@@ -145,6 +145,12 @@ export interface FakeRickpanel {
   filesWindowMs: number;
   /** How many content reads of `/files` reached the panel, limited or not. */
   filesCalls(): number;
+  /**
+   * R3: forgets every `/files` read so far — the rate window and the count — as a minute
+   * passing would. Since R3 the delivery lane reads the files right after provisioning,
+   * so a test that exercises the customer's own tap starts from here.
+   */
+  forgetFileReads(): void;
   close(): Promise<void>;
 }
 
@@ -198,6 +204,7 @@ export async function startFakeRickpanel(
   let filesBody: string | null = null;
   let filesWindowMs = 60_000;
   const filesReadAt = new Map<string, number>();
+  let filesCallsForgotten = 0;
   let omitUsedTraffic = false;
   let rotationCounter = 0;
 
@@ -475,7 +482,14 @@ export async function startFakeRickpanel(
       filesWindowMs = next;
     },
     filesCalls: () =>
-      requests.filter((one) => one.method === 'GET' && /\/files(\?|$)/.test(one.path)).length,
+      requests.filter((one) => one.method === 'GET' && /\/files(\?|$)/.test(one.path)).length -
+      filesCallsForgotten,
+    forgetFileReads: () => {
+      filesReadAt.clear();
+      filesCallsForgotten = requests.filter(
+        (one) => one.method === 'GET' && /\/files(\?|$)/.test(one.path),
+      ).length;
+    },
     requests,
     users,
     createCalls: () =>

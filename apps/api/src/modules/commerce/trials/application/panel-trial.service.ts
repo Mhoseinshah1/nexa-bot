@@ -310,7 +310,7 @@ export class PanelTrialService {
  * The stored bytes when the operator left the traffic figure as the form showed it — the
  * product editor's rule (`trafficBytesAfterEdit`, WP21) for a figure typed in GB or MB.
  *
- * A trial carried forward by migration 0140 holds whatever its product held, and 10^9
+ * A trial carried forward by migration 0142 holds whatever its product held, and 10^9
  * bytes is shown as 953.67 MB; saving an unrelated field would otherwise rewrite it to
  * 953.67 MiB. The figure is the SAME text `trafficInputOf` produces for the form, so
  * "unchanged" means exactly "what the operator was shown".

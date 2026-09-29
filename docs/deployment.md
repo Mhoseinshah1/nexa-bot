@@ -1328,12 +1328,33 @@ While the release before it runs:
 
 Nothing needs doing before rolling back past HF-A9.
 
+### What a rollback changes back: the service card and connection files (R3)
+
+R3's migration `0141_r3_operation_card_messages` adds one table, `operation_card_messages`
+(the chat and message a customer's disable or enable was tapped from, and a 429's wait),
+and one nullable column, `services.usage_refresh_started_at` (the refresh button's
+reservation). The release before it reads neither: a reservation left set by a rollback
+mid-read is taken over as dead after three panel timeouts. While that release runs:
+
+- **A disable or enable planned by R3 and performed by the old release** is answered the
+  old way — the lane's «درخواست شما با موفقیت روی سرور اعمال شد» — and the card is not
+  edited. Its row stays unanswered; nothing reads it until the roll-forward, whose sweep
+  may then edit that card to the state it is in by then (the card shows the truth either
+  way).
+- **The refresh button queues a `SYNC_USAGE` again** and answers «request registered»,
+  and link changes and disables send their old intermediate messages.
+- **A purchase's connection files are no longer sent automatically**, and a link change
+  is announced with the purchase card again. The manual «📁 دریافت فایل‌های اتصال» still
+  works, with the panel's own caption.
+
+Nothing needs doing before rolling back past R3.
+
 ### What a rollback changes: per-panel trials and the bot's buttons (R1)
 
 R1 configures the free trial per panel (`panel_trial_configs`) and issues it from no
 product; it marks trial services `is_trial`; and it lets an operator arrange and relabel
 the main-menu keyboard on «دکمه‌های ربات» (`bot.main_menu` and the `bot.menu.*` texts).
-Migration 0140 only adds: a table, two nullable columns, a widened CHECK, a
+Migration `0142_r1_trial_per_panel_and_main_menu` only adds: a table, two nullable columns, a widened CHECK, a
 `trial_grants.product_id` that may be null, and trigger bodies that accept everything
 the previous release writes. While the release before R1 runs:
 

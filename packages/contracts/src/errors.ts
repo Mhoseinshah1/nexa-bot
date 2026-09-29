@@ -1458,6 +1458,44 @@ export const BOT_ERROR_CODES = {
   BOT_TELEGRAM_UNREACHABLE: 'bot.telegram_unreachable',
   /** The configured Telegram API base answered with something that is not a bot. */
   BOT_TELEGRAM_API_INVALID: 'bot.telegram_api_invalid',
+  /*
+   * R4 (item 12) — a token replacement registers and verifies the webhook before the new
+   * token is stored. Each code below is a different remedy, and the four after the first
+   * two are reached only AFTER Telegram was asked to change something, so each carries
+   * what was done to put it back (`BotReplacementFailureDetails`).
+   */
+  /**
+   * The webhook route is not served by this installation (`TELEGRAM_WEBHOOK_ENABLED` or
+   * `TELEGRAM_WEBHOOK_SECRET`), so no webhook could be registered that would work. Nothing
+   * was sent to Telegram.
+   */
+  BOT_WEBHOOK_ROUTE_UNAVAILABLE: 'bot.webhook_route_unavailable',
+  /**
+   * This installation has never recorded the public origin it serves the webhook on — the
+   * installer's registration is where it comes from — so the API cannot build the one URL
+   * it would have to register. `botctl telegram register` records it. Nothing was sent.
+   */
+  BOT_WEBHOOK_ORIGIN_UNKNOWN: 'bot.webhook_origin_unknown',
+  /** Another replacement of this bot's token is running. Nothing was sent by this one. */
+  BOT_TOKEN_REPLACEMENT_IN_PROGRESS: 'bot.token_replacement_in_progress',
+  /** Telegram looked at the webhook URL and refused it. The token was not stored. */
+  BOT_WEBHOOK_REFUSED: 'bot.webhook_refused',
+  /**
+   * `setWebhook` could not be confirmed (no answer, a 5xx, a rate limit). It may or may not
+   * have taken effect; the token was not stored and the prior state was put back.
+   */
+  BOT_WEBHOOK_SETUP_FAILED: 'bot.webhook_setup_failed',
+  /**
+   * Telegram accepted `setWebhook`, and reading the registration back did not show exactly
+   * this installation's URL. The token was not stored and the prior state was put back.
+   */
+  BOT_WEBHOOK_VERIFICATION_FAILED: 'bot.webhook_verification_failed',
+  /**
+   * The webhook was registered and verified, and storing the new token did not complete.
+   * The prior Telegram state was put back where that is possible; submitting the same
+   * token again is the remedy.
+   */
+  BOT_TOKEN_ACTIVATION_FAILED: 'bot.token_activation_failed',
 } as const;
 
 export type CommerceErrorCode = (typeof COMMERCE_ERROR_CODES)[keyof typeof COMMERCE_ERROR_CODES];
