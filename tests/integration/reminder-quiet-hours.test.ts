@@ -13,7 +13,10 @@ import {
   CustomerNotificationService,
   type QuietHoursReader,
 } from '../../apps/api/src/modules/commerce/messaging/application/customer-notification.service';
-import type { CustomerMessage } from '../../apps/api/src/modules/commerce/messaging/application/ports';
+import type {
+  CustomerMessage,
+  CustomerSendResult,
+} from '../../apps/api/src/modules/commerce/messaging/application/ports';
 import { DrizzleCustomerRepository } from '../../apps/api/src/modules/commerce/customers/infrastructure/drizzle-customer.repository';
 import { DrizzlePaymentRepository } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-payment.repository';
 import { DrizzleWalletRepository } from '../../apps/api/src/modules/commerce/wallet/infrastructure/drizzle-wallet.repository';
@@ -96,6 +99,8 @@ describe('quiet hours for customer reminders (HF-A9)', () => {
   let n = 0;
   const key = (): string => `hfa9-quiet-${(n += 1)}`;
   let sends: CustomerMessage[] = [];
+  /** What the next sends answer; DELIVERED once empty. */
+  let outcomes: CustomerSendResult[] = [];
 
   beforeAll(async () => {
     ctx = await createTestContext();
@@ -108,6 +113,7 @@ describe('quiet hours for customer reminders (HF-A9)', () => {
   beforeEach(async () => {
     await ctx.reset();
     sends = [];
+    outcomes = [];
     owner = adminActorFor(
       await createAdmin(ctx.container, tenantA, { username: 'owner-hfa9', roleKeys: ['owner'] }),
     );
@@ -281,7 +287,7 @@ describe('quiet hours for customer reminders (HF-A9)', () => {
       messenger: {
         send: async (_scope, message) => {
           sends.push(message);
-          return { outcome: 'DELIVERED' };
+          return outcomes.shift() ?? { outcome: 'DELIVERED' };
         },
         acknowledge: async () => undefined,
         sendFile: async () => ({ outcome: 'REFUSED' }),
@@ -351,6 +357,62 @@ describe('quiet hours for customer reminders (HF-A9)', () => {
     expect((await notifications())[0]).toMatchObject({ state: 'DELIVERED', attempts: 1 });
     expect(await deliver(at(new Date(end.getTime() + MINUTE_MS)))).toMatchObject({ claimed: 0 });
     expect(sends).toHaveLength(1);
+  });
+
+  /*
+   * Codex review of PR #107: a hold stores the window's end as it was. Shortening the window
+   * or switching quiet hours off must release the held rows by the new schedule — and must
+   * never pull forward a row waiting for any other reason.
+   */
+  it('sends a held reminder at the NEW end when the window is shortened', async () => {
+    const oldEnd = await quietAroundNow(-60, 120);
+    await service(2.5);
+    await servicePass();
+    expect(await deliver()).toMatchObject({ quietHours: 1 });
+    expect((await notifications())[0]?.nextAttemptAt?.toISOString()).toBe(oldEnd.toISOString());
+
+    // The operator moves the end an hour earlier (08:00 -> 07:00, say, while it is 06:00).
+    const local = localMinute(ctx.container.clock.now(), TEHRAN);
+    expect(await setSetting('reminders.quiet_hours_end', hhmm(local + 60))).toBeNull();
+    const newEnd = new Date(oldEnd.getTime() - 60 * MINUTE_MS);
+
+    // The next pass re-holds it to the new end, and does not send it early.
+    expect(await deliver()).toMatchObject({ quietReleased: 1, claimed: 0 });
+    expect((await notifications())[0]?.nextAttemptAt?.toISOString()).toBe(newEnd.toISOString());
+    expect(await deliver(at(new Date(newEnd.getTime() - 1_000)))).toMatchObject({ claimed: 0 });
+    expect(await deliver(at(newEnd))).toMatchObject({ claimed: 1, delivered: 1 });
+    expect(sends).toHaveLength(1);
+  });
+
+  it('sends held reminders on the next pass once quiet hours are switched off', async () => {
+    await quietAroundNow();
+    await service(2.5);
+    await service(2.6);
+    await servicePass();
+    expect(await deliver()).toMatchObject({ quietHours: 2 });
+
+    await setFlag('reminder_quiet_hours', false);
+    expect(await deliver()).toMatchObject({ quietReleased: 2, claimed: 2, delivered: 2 });
+    expect(sends).toHaveLength(2);
+    expect((await notifications()).every((row) => row.state === 'DELIVERED')).toBe(true);
+  });
+
+  it('never pulls forward a reminder waiting on a retry backoff or a rate limit', async () => {
+    // Quiet hours off: every pass asks the lane to release holds to NOW, the strongest pull.
+    await service(2.5);
+    await service(2.6);
+    await servicePass();
+    outcomes = [{ outcome: 'REFUSED' }, { outcome: 'RATE_LIMITED', retryAfterMs: 3_600_000 }];
+    expect(await deliver()).toMatchObject({ pending: 1, rateLimited: 1 });
+    const before = await notifications();
+    expect(before.every((row) => (row.nextAttemptAt?.getTime() ?? 0) > Date.now())).toBe(true);
+
+    expect(await deliver()).toMatchObject({ quietReleased: 0, claimed: 0 });
+    const after = await notifications();
+    expect(after.map((row) => [row.id, row.nextAttemptAt?.toISOString(), row.attempts])).toEqual(
+      before.map((row) => [row.id, row.nextAttemptAt?.toISOString(), row.attempts]),
+    );
+    expect(sends).toHaveLength(2);
   });
 
   it('creates no duplicate while a reminder is held, however often the sweeps run', async () => {
@@ -509,7 +571,7 @@ describe('quiet hours for customer reminders (HF-A9)', () => {
     try {
       // Local 20:00; quiet from 19:00 to 22:00. A deadline 23 hours out is tomorrow.
       const zone = await pinLocalHour(20);
-      const end = await quietAroundNow(-60, 120, zone);
+      await quietAroundNow(-60, 120, zone);
       await service(23 / 24);
       expect(await servicePass()).toEqual({ expiry: 1, usage: 0 });
       expect(
@@ -517,19 +579,14 @@ describe('quiet hours for customer reminders (HF-A9)', () => {
       ).toMatchObject({ quietHours: 1 });
 
       // The tenant's clock reaches the deadline's own date: "expires today" is raised, and
-      // outside this zone's window it is sent at once.
+      // outside this zone's window it is sent at once. The move also takes the held "expires
+      // tomorrow" out of the window, so the same pass releases it — and, now false, it is
+      // superseded rather than sent beside "expires today".
       await pinLocalHour(0);
       expect(await servicePass()).toEqual({ expiry: 1, usage: 0 });
       expect(
         await dispatcher(ctx.container.clock, freshReader()).deliverDue(tenantA, 200),
-      ).toMatchObject({ delivered: 1, quietHours: 0 });
-
-      // The held "expires tomorrow" is now false, and is superseded rather than sent late.
-      expect(await dispatcher(at(end), freshReader()).deliverDue(tenantA, 200)).toMatchObject({
-        claimed: 1,
-        superseded: 1,
-        delivered: 0,
-      });
+      ).toMatchObject({ quietReleased: 1, claimed: 2, delivered: 1, superseded: 1, quietHours: 0 });
       expect(sends.map((one) => one.templateKey)).toEqual(['bot.service.expiry_day']);
     } finally {
       await ctx.container.database.db.execute(

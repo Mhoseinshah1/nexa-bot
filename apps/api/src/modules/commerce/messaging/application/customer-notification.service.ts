@@ -1,6 +1,7 @@
 import type { Money } from '@nexa/contracts';
 import {
   CUSTOMER_NOTIFICATION_BACKOFF_MS,
+  CUSTOMER_NOTIFICATION_KINDS,
   CUSTOMER_NOTIFICATION_MAX_ATTEMPTS,
   CUSTOMER_NOTIFICATION_PRECONDITIONS,
   CUSTOMER_NOTIFICATION_QUIET_HOURS,
@@ -116,6 +117,11 @@ export interface NotificationSweepReport {
    * the window ends. No attempt spent, nothing sent, no row written — the same row waits.
    */
   readonly quietHours: number;
+  /**
+   * HF-A9: reminders an earlier pass held that the CURRENT schedule releases sooner — the
+   * window was shortened or quiet hours were switched off. Brought forward before the claim.
+   */
+  readonly quietReleased: number;
   /** The send threw. The lease stands and the row comes back later. */
   readonly errored: number;
   /**
@@ -159,6 +165,11 @@ export const PAYMENT_CREDIT_FIGURES: Readonly<
  */
 const REMINDER_NOTIFICATION_KINDS = new Set<string>(
   Object.values(SERVICE_REMINDER_NOTIFICATION_KINDS),
+);
+
+/** HF-A9: the kinds quiet hours hold, from the contract's own table. */
+const QUIET_KINDS: readonly CustomerNotificationKind[] = CUSTOMER_NOTIFICATION_KINDS.filter(
+  (kind) => CUSTOMER_NOTIFICATION_QUIET_HOURS[kind],
 );
 
 /** WP-A9: the reminders whose values come from `reminderFacts` rather than a snapshot. */
@@ -341,6 +352,7 @@ export class CustomerNotificationService {
       blocked: 0,
       unreachable: 0,
       quietHours: 0,
+      quietReleased: 0,
       errored: 0,
       lost: 0,
     };
@@ -366,10 +378,28 @@ export class CustomerNotificationService {
     const quiet =
       this.deps.quietHours === undefined ? null : await this.deps.quietHours.scheduleFor(scope);
 
+    /*
+     * Holds an earlier pass made, brought forward to what the schedule says NOW (Codex
+     * review of PR #107). A hold stores the window's end as it was then; an operator who
+     * shortens the window at 01:00, or switches quiet hours off, must not leave reminders
+     * waiting for the old end. `null` — off, or now outside the window — makes them due at
+     * once; inside a shorter window they are re-held to its end. Only rows `holdUntil`
+     * marked are touched: a retry backoff, a 429's wait or a blocked customer's pause is
+     * never pulled forward. Only when the lane knows quiet hours at all — a build without
+     * the reader has nothing it could have held.
+     */
+    let quietReleased = 0;
+    if (this.deps.quietHours !== undefined) {
+      const releaseAt = quiet === null ? null : quiet.quietUntil(now);
+      quietReleased = await this.deps.uow.run(scope, async (tx) =>
+        this.deps.notifications.releaseQuietHolds(scope, QUIET_KINDS, releaseAt, now, tx),
+      );
+    }
+
     const leaseUntil = new Date(now.getTime() + NOTIFICATION_LEASE_MS);
     const claimed = await this.deps.notifications.claimDue(scope, now, leaseUntil, limit);
 
-    const report = { ...empty, claimed: claimed.length };
+    const report = { ...empty, claimed: claimed.length, quietReleased };
     const counts: Record<string, number> = {};
     for (const row of claimed) {
       const outcome = await this.deliverOne(scope, row, quiet);
@@ -620,8 +650,10 @@ export class CustomerNotificationService {
        * BEFORE the window that only becomes due inside it — held back by a rate limit, a
        * retry backoff or a stopped worker — which a producer-side check could not see.
        *
-       * Held by `deferUntil`, the lane's own "back on the queue, no attempt spent": the same
-       * row, still `PENDING`, with `next_attempt_at` at the window's end. Nothing is
+       * Held by `holdUntil` — the lane's own "back on the queue, no attempt spent", plus the
+       * mark that lets a later pass release it early if the window is shortened or switched
+       * off (`releaseQuietHolds`, above): the same row, still `PENDING`, with
+       * `next_attempt_at` at the window's end. Nothing is
        * inserted, so `customer_notifications_subject_key` still names exactly one row per
        * fact; the producers' own keys (`service_reminders`, `wallet_threshold_alerts`, the
        * subject key on a payment or order) are untouched, so a later sweep inside the window
@@ -639,7 +671,7 @@ export class CustomerNotificationService {
         const until = quiet.quietUntil(at);
         if (until !== null) {
           await this.deps.uow.run(scope, async (tx) =>
-            this.deps.notifications.deferUntil(scope, row.id, until, at, tx),
+            this.deps.notifications.holdUntil(scope, row.id, until, tx),
           );
           return 'quietHours';
         }

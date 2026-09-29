@@ -303,6 +303,64 @@ export class DrizzleCustomerNotificationRepository implements CustomerNotificati
     return rows.length > 0;
   }
 
+  /** See the port: `deferUntil` plus the quiet-hours mark, `updated_at = next_attempt_at`. */
+  async holdUntil(
+    scope: TenantContext,
+    id: string,
+    until: Date,
+    tx: TransactionScope,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .update(customerNotifications)
+      .set({ nextAttemptAt: until, sendStartedAt: null, updatedAt: until })
+      .where(
+        and(
+          eq(customerNotifications.tenantId, tenantId),
+          eq(customerNotifications.id, id),
+          eq(customerNotifications.state, 'PENDING'),
+        ),
+      )
+      .returning({ id: customerNotifications.id });
+    return rows.length > 0;
+  }
+
+  /**
+   * See the port. A conditional UPDATE naming every predicate that makes a row a quiet-hours
+   * hold, so a replica claiming the row at the same moment (which rewrites both columns)
+   * leaves it out when this statement re-checks it behind the row lock.
+   */
+  async releaseQuietHolds(
+    scope: TenantContext,
+    kinds: readonly CustomerNotificationKind[],
+    releaseAt: Date | null,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<number> {
+    if (kinds.length === 0) return 0;
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .update(customerNotifications)
+      .set(
+        releaseAt === null
+          ? { nextAttemptAt: null, updatedAt: now }
+          : { nextAttemptAt: releaseAt, updatedAt: releaseAt },
+      )
+      .where(
+        and(
+          eq(customerNotifications.tenantId, tenantId),
+          eq(customerNotifications.state, 'PENDING'),
+          isNull(customerNotifications.sendStartedAt),
+          inArray(customerNotifications.kind, [...kinds]),
+          // The mark: only `holdUntil` leaves these two equal on a waiting row.
+          sql`${customerNotifications.updatedAt} = ${customerNotifications.nextAttemptAt}`,
+          sql`${customerNotifications.nextAttemptAt} > ${releaseAt ?? now}`,
+        ),
+      )
+      .returning({ id: customerNotifications.id });
+    return rows.length;
+  }
+
   /**
    * Resolves stranded sends to `UNCONFIRMED`, spending no attempt.
    *
