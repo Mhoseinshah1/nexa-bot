@@ -482,6 +482,42 @@ export interface CustomerNotificationRepository {
   ): Promise<boolean>;
 
   /**
+   * HF-A9: holds a claimed REMINDER until its quiet window ends — `deferUntil`'s effect, no
+   * attempt spent, plus the one mark that says WHY: `updated_at` is written equal to
+   * `next_attempt_at`.
+   *
+   * No other write in this repository can leave the two equal with the row still waiting:
+   * a claim, a stamp, a recorded outcome and every other put-back write `updated_at` as the
+   * moment they ran and `next_attempt_at` as a later one (a lease, a backoff, a 429's
+   * `retry_after`) or null. So the mark identifies a quiet-hours hold exactly, without a
+   * column, and `releaseQuietHolds` touches nothing else.
+   */
+  holdUntil(scope: TenantContext, id: string, until: Date, tx: TransactionScope): Promise<boolean>;
+
+  /**
+   * HF-A9: brings quiet-hours holds forward to what the tenant's schedule says NOW.
+   *
+   * `holdUntil` stored the window's end as it was. An operator who shortens the window or
+   * switches quiet hours off must not leave those rows waiting for the old end. Only rows
+   * carrying `holdUntil`'s mark, of the given kinds, still `PENDING` and unstamped, and held
+   * LATER than `releaseAt`:
+   *
+   * - `releaseAt` null (quiet hours off, or now outside the window): made due at once —
+   *   `next_attempt_at` null, the mark cleared;
+   * - otherwise (still inside a shorter window): re-held to `releaseAt`, the mark kept.
+   *
+   * A retry backoff, a 429's `retry_after`, a blocked customer's pause and an unsupported
+   * kind's put-back carry no mark and are never touched. Returns how many rows moved.
+   */
+  releaseQuietHolds(
+    scope: TenantContext,
+    kinds: readonly CustomerNotificationKind[],
+    releaseAt: Date | null,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<number>;
+
+  /**
    * Resolves sends handed to Telegram by a process that then died, to `UNCONFIRMED`.
    *
    * `ServiceRepository.reapStrandedSends` for this lane. No attempt is spent either

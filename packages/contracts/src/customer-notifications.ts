@@ -428,6 +428,73 @@ export const CUSTOMER_NOTIFICATION_PRECONDITIONS: Readonly<
 };
 
 /**
+ * Whether a kind is a REMINDER that the tenant's quiet hours hold back (HF-A9).
+ *
+ * A reminder is something the product decided on its own clock to tell a customer — a
+ * deadline approaching, an allowance running down, a balance gone low, an unpaid invoice.
+ * The owner's rule is that one falling due inside the quiet window is not sent at night:
+ * the dispatcher moves the queued row's `next_attempt_at` to the window's end, spends no
+ * attempt and writes nothing else, so it is neither dropped nor duplicated.
+ *
+ * `false` is everything else, and on purpose: a reply to something the customer just did
+ * (a recorded transfer, a cancelled order, a ticket reply) is expected NOW, and an outcome
+ * about their money or their order (rejected, refunded, credited, delivered, failed) is a
+ * fact they are waiting on. Holding either until morning would make the product look
+ * broken to a customer who is awake and acting.
+ *
+ * A Record over every kind, like `CUSTOMER_NOTIFICATION_PRECONDITIONS`, so a kind added
+ * later has to decide. And every `true` here MUST also be `true` there: a held reminder is
+ * sent hours after it was raised, and it may only be sent if what it reminds about still
+ * holds — the owner's "not sent without reason once it has expired or become invalid".
+ * `tests/unit/reminder-quiet-hours.test.ts` pins that implication.
+ */
+export const CUSTOMER_NOTIFICATION_QUIET_HOURS: Readonly<
+  Record<CustomerNotificationKind, boolean>
+> = {
+  PAYMENT_REJECTED: false,
+  PAYMENT_EXPIRED: false,
+  ORDER_EXPIRED: false,
+  SERVICE_ACTION_SUCCEEDED: false,
+  SERVICE_ACTION_FAILED: false,
+  SERVICE_PROVISION_DELAYED: false,
+  PAYMENT_TRANSFER_RECORDED: false,
+  ORDER_CANCELLED: false,
+  WALLET_TOPUP_CREDITED: false,
+  ORDER_REFUNDED_TO_WALLET: false,
+  // The service reminders: every slot of both families, including the after-the-fact notice.
+  SERVICE_EXPIRY_FIRST: true,
+  SERVICE_EXPIRY_SECOND: true,
+  SERVICE_EXPIRED: true,
+  SERVICE_USAGE_FIRST: true,
+  SERVICE_USAGE_SECOND: true,
+  SERVICE_USAGE_FINAL: true,
+  TRIAL_NOT_DELIVERED: false,
+  RECEIPT_CREDITED_TO_WALLET: false,
+  WALLET_TOPUP_GIFT_CREDITED: false,
+  REFUND_COMPLETED: false,
+  GATEWAY_PAYMENT_FAILED: false,
+  SERVICE_REFUND_REQUEST_REGISTERED: false,
+  SERVICE_REFUND_REQUEST_APPROVED: false,
+  SERVICE_REFUND_REQUEST_REJECTED: false,
+  SERVICE_TRANSFER_RECEIVED: false,
+  TICKET_REPLY: false,
+  SERVICE_EXPIRY_EARLY: true,
+  SERVICE_EXPIRY_DAY: true,
+  WALLET_LOW_BALANCE: true,
+  /*
+   * Both reminders, so both are held. A pending attempt's window is at most an hour, so a
+   * reminder held past its deadline is SUPERSEDED at the window's end by its own
+   * precondition — the attempt has lapsed, and the expiry sweep tells the customer that
+   * instead. That is the owner's rule applied as written: held, not dropped, and not sent
+   * once it has stopped being true.
+   */
+  PAYMENT_PENDING_REMINDER: true,
+  ORDER_PENDING_REMINDER: true,
+  // HF-A7: support's file on a ticket reply is part of the reply, sent with its text — never held.
+  TICKET_REPLY_ATTACHMENT: false,
+};
+
+/**
  * The one template each kind renders as.
  *
  * Frozen here rather than chosen by the producer, and that is the whole reason the kinds

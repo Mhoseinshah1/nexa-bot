@@ -294,6 +294,9 @@ describe('the feature flag registry', () => {
       // WP9. Off by default; attribution at /start and the commission lane it switches on
       // are reachable, and it does nothing until referral.commission_percent is chosen.
       'referrals',
+      // HF-A9. Off by default; the dispatcher holds reminder kinds inside the window it
+      // switches on, and its two settings are the window's boundaries.
+      'reminder_quiet_hours',
       // The three reminder switches. `service_expired_notice` is a flag rather than a
       // sixth threshold because it is not a number: it fires at zero days and what an
       // operator decides about it is whether it is sent at all.

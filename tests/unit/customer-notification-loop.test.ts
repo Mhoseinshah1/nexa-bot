@@ -31,6 +31,8 @@ describe('the customer notification loop', () => {
     unsupported: 0,
     blocked: 0,
     unreachable: 0,
+    quietHours: 0,
+    quietReleased: 0,
     errored: 0,
     lost: 0,
   };

@@ -1,4 +1,5 @@
 import { and, asc, eq, inArray, isNull, lte, or, sql } from 'drizzle-orm';
+import { CUSTOMER_NOTIFICATION_KINDS, CUSTOMER_NOTIFICATION_QUIET_HOURS } from '@nexa/contracts';
 import type {
   BotInstanceId,
   CustomerNotificationKind,
@@ -19,6 +20,14 @@ import type {
 } from '../application/ports.js';
 
 type Row = typeof customerNotifications.$inferSelect;
+
+/**
+ * HF-A9: the kinds quiet hours hold — the reminders. Everything else is IMMEDIATE: a reply,
+ * a payment or order outcome, a ticket answer. See `claimDue`'s ordering.
+ */
+const QUIET_KINDS: readonly CustomerNotificationKind[] = CUSTOMER_NOTIFICATION_KINDS.filter(
+  (kind) => CUSTOMER_NOTIFICATION_QUIET_HOURS[kind],
+);
 
 function toRecord(row: Row): CustomerNotificationRecord {
   return {
@@ -150,7 +159,19 @@ export class DrizzleCustomerNotificationRepository implements CustomerNotificati
           ready,
         ),
       )
-      .orderBy(asc(customerNotifications.createdAt), asc(customerNotifications.id))
+      /*
+       * IMMEDIATE kinds first, then oldest first within each group (HF-A9, Codex review of
+       * PR #107). When a quiet window ends, every reminder it held becomes due at the same
+       * instant; oldest-first alone would let that backlog fill every slot of a bounded pass
+       * ahead of a payment outcome, an order result or a ticket reply queued after it. A
+       * reminder that waited all night can wait one more pass; the customer who just paid
+       * cannot. The expression sorts only the due set the partial index already bounds.
+       */
+      .orderBy(
+        sql`${inArray(customerNotifications.kind, [...QUIET_KINDS])}`,
+        asc(customerNotifications.createdAt),
+        asc(customerNotifications.id),
+      )
       .limit(limit);
 
     /*
@@ -178,6 +199,8 @@ export class DrizzleCustomerNotificationRepository implements CustomerNotificati
         ),
       )
       .returning();
+    // RETURNING has no order: hand the batch back in the SELECT's — immediate kinds first,
+    // then oldest, then id — so a reply's text still precedes its file.
     const position = new Map(selected.map((row, index) => [String(row.id), index]));
     return rows
       .sort((a, b) => (position.get(String(a.id)) ?? 0) - (position.get(String(b.id)) ?? 0))
@@ -286,6 +309,64 @@ export class DrizzleCustomerNotificationRepository implements CustomerNotificati
       )
       .returning({ id: customerNotifications.id });
     return rows.length > 0;
+  }
+
+  /** See the port: `deferUntil` plus the quiet-hours mark, `updated_at = next_attempt_at`. */
+  async holdUntil(
+    scope: TenantContext,
+    id: string,
+    until: Date,
+    tx: TransactionScope,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .update(customerNotifications)
+      .set({ nextAttemptAt: until, sendStartedAt: null, updatedAt: until })
+      .where(
+        and(
+          eq(customerNotifications.tenantId, tenantId),
+          eq(customerNotifications.id, id),
+          eq(customerNotifications.state, 'PENDING'),
+        ),
+      )
+      .returning({ id: customerNotifications.id });
+    return rows.length > 0;
+  }
+
+  /**
+   * See the port. A conditional UPDATE naming every predicate that makes a row a quiet-hours
+   * hold, so a replica claiming the row at the same moment (which rewrites both columns)
+   * leaves it out when this statement re-checks it behind the row lock.
+   */
+  async releaseQuietHolds(
+    scope: TenantContext,
+    kinds: readonly CustomerNotificationKind[],
+    releaseAt: Date | null,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<number> {
+    if (kinds.length === 0) return 0;
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .update(customerNotifications)
+      .set(
+        releaseAt === null
+          ? { nextAttemptAt: null, updatedAt: now }
+          : { nextAttemptAt: releaseAt, updatedAt: releaseAt },
+      )
+      .where(
+        and(
+          eq(customerNotifications.tenantId, tenantId),
+          eq(customerNotifications.state, 'PENDING'),
+          isNull(customerNotifications.sendStartedAt),
+          inArray(customerNotifications.kind, [...kinds]),
+          // The mark: only `holdUntil` leaves these two equal on a waiting row.
+          sql`${customerNotifications.updatedAt} = ${customerNotifications.nextAttemptAt}`,
+          sql`${customerNotifications.nextAttemptAt} > ${releaseAt ?? now}`,
+        ),
+      )
+      .returning({ id: customerNotifications.id });
+    return rows.length;
   }
 
   /**

@@ -189,6 +189,26 @@ export const FEATURE_FLAGS = [
     blastRadius: 'TENANT_WIDE',
     configuredBy: ['reminders.payment_pending_minutes'],
   },
+  /*
+   * HF-A9: quiet hours for reminders. A switch whose parameters are the window's two
+   * boundaries — the flag/settings split this registry exists to keep.
+   */
+  {
+    key: 'reminder_quiet_hours',
+    description:
+      'Hold customer reminders that fall due inside the quiet window ' +
+      '(reminders.quiet_hours_start to reminders.quiet_hours_end, in the tenant\u2019s ' +
+      'display timezone) until the window ends, instead of sending them at night. Nothing is ' +
+      'dropped and nothing is duplicated: the queued message waits, and is re-checked when ' +
+      'it is sent, so a reminder about a service renewed, a payment settled or a wallet ' +
+      'topped up in the meantime is not sent. Applies to reminders only \u2014 never to a ' +
+      'reply to something the customer did, nor to a payment or order outcome. OFF by ' +
+      'default, so an upgrade changes no tenant\u2019s sending times until it chooses to.',
+    defaultEnabled: false,
+    // Every reminder to every customer of the tenant moves at once.
+    blastRadius: 'TENANT_WIDE',
+    configuredBy: ['reminders.quiet_hours_start', 'reminders.quiet_hours_end'],
+  },
   {
     key: 'trials',
     description:

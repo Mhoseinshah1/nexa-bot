@@ -84,6 +84,12 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
     summary: 'web.feature_payment_pending_reminders_summary',
     disableEffect: 'web.feature_payment_pending_reminders_off_effect',
   },
+  // HF-A9. Off loses nothing: a held reminder is simply sent at its next claim.
+  reminder_quiet_hours: {
+    title: 'web.feature_reminder_quiet_hours_title',
+    summary: 'web.feature_reminder_quiet_hours_summary',
+    disableEffect: null,
+  },
   // Off withdraws the offer and touches no trial already issued.
   trials: {
     title: 'web.feature_trials_title',

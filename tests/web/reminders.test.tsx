@@ -46,6 +46,18 @@ function rows(overrides: Record<string, unknown> = {}) {
       configures: 'wallet_low_balance_reminders',
     }),
     setting({ key: 'sales.currency', value: 'IRR', configures: null }),
+    // HF-A9: the quiet window, crossing midnight by default.
+    setting({
+      key: 'reminders.quiet_hours_start',
+      value: '23:00',
+      version: 2,
+      configures: 'reminder_quiet_hours',
+    }),
+    setting({
+      key: 'reminders.quiet_hours_end',
+      value: '08:00',
+      configures: 'reminder_quiet_hours',
+    }),
   ].map((row) => ({ ...row, ...(overrides[row['key'] as string] as object | undefined) }));
 }
 
@@ -56,6 +68,7 @@ const flags = () => [
   flag('service_usage_reminders', true),
   flag('wallet_low_balance_reminders', false),
   flag('payment_pending_reminders', true),
+  flag('reminder_quiet_hours', false),
 ];
 
 function api(overrides: Record<string, unknown> = {}) {
@@ -77,6 +90,17 @@ function api(overrides: Record<string, unknown> = {}) {
         }),
         changed: true,
       },
+    },
+    {
+      url: '/settings/reminders.quiet_hours_start',
+      body: {
+        setting: setting({ key: 'reminders.quiet_hours_start', value: '22:30', version: 3 }),
+        changed: true,
+      },
+    },
+    {
+      url: '/features/reminder_quiet_hours',
+      body: { flag: flag('reminder_quiet_hours', true, { version: 1 }), changed: true },
     },
     {
       url: '/features/service_usage_reminders',
@@ -260,6 +284,75 @@ describe('the reminders screen', () => {
     page();
 
     expect(await screen.findByText(t('web.reminders_early_inert'))).toBeInTheDocument();
+  });
+
+  /*
+   * HF-A9: quiet hours — on/off, a start and an end, in Persian, on this page.
+   */
+  it('shows quiet hours as a switch and two 24-hour times, and says when they cross midnight', async () => {
+    api();
+    page();
+
+    expect(await screen.findByText(t('web.reminders_quiet_title'))).toBeInTheDocument();
+    expect(screen.getByText(t('web.reminders_quiet_hint'))).toBeInTheDocument();
+    const toggle = screen.getByRole('switch', { name: t('web.reminders_flag_quiet') });
+    expect(toggle).toHaveAttribute('aria-checked', 'false');
+    const start = screen.getByLabelText(t('web.reminders_quiet_start'));
+    const end = screen.getByLabelText(t('web.reminders_quiet_end'));
+    expect(start).toHaveAttribute('type', 'time');
+    expect(start).toHaveValue('23:00');
+    expect(end).toHaveValue('08:00');
+    // 23:00 to 08:00 crosses midnight, and the page says so in words.
+    expect(screen.getByText(t('web.reminders_quiet_overnight'))).toBeInTheDocument();
+  });
+
+  it('says nothing about midnight or equality for a window inside one day', async () => {
+    api({ 'reminders.quiet_hours_start': { value: '01:00' } });
+    page();
+    await screen.findByText(t('web.reminders_quiet_title'));
+    expect(screen.queryByText(t('web.reminders_quiet_overnight'))).toBeNull();
+    expect(screen.queryByText(t('web.reminders_quiet_same'))).toBeNull();
+  });
+
+  it('warns when a stored start equals the end', async () => {
+    api({ 'reminders.quiet_hours_start': { value: '08:00' } });
+    page();
+    expect(await screen.findByText(t('web.reminders_quiet_same'))).toBeInTheDocument();
+  });
+
+  it('saves a quiet-hours time as HH:MM at the version it read', async () => {
+    const calls = api();
+    page();
+
+    const field = await screen.findByLabelText(t('web.reminders_quiet_start'));
+    fireEvent.change(field, { target: { value: '22:30' } });
+    fireEvent.click(field.closest('form')!.querySelector('button[type="submit"]')!);
+
+    await waitFor(() =>
+      expect(
+        calls.calls.some((call) => call.url.endsWith('/settings/reminders.quiet_hours_start')),
+      ).toBe(true),
+    );
+    const sent = calls.calls.find((call) =>
+      call.url.endsWith('/settings/reminders.quiet_hours_start'),
+    );
+    expect(sent?.body).toMatchObject({ value: '22:30', expectedVersion: 2 });
+    expect(await screen.findByText(t('web.saved'))).toBeInTheDocument();
+  });
+
+  it('turns quiet hours on without a question', async () => {
+    const calls = api();
+    page();
+
+    fireEvent.click(await screen.findByRole('switch', { name: t('web.reminders_flag_quiet') }));
+    await waitFor(() =>
+      expect(calls.calls.some((call) => call.url.endsWith('/features/reminder_quiet_hours'))).toBe(
+        true,
+      ),
+    );
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    const sent = calls.calls.find((call) => call.url.endsWith('/features/reminder_quiet_hours'));
+    expect(sent?.body).toMatchObject({ enabled: true, expectedVersion: null });
   });
 
   it('says so, rather than hiding the section, when templates cannot be read', async () => {
