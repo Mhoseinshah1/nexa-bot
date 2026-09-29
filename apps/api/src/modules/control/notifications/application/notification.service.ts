@@ -144,9 +144,13 @@ export class NotificationService {
       return { intent: null, created: false };
     }
 
+    // No group connected and no manual chat is NOT a reason to drop an operations-log
+    // message (HF-A4): it is queued, routed to its topic, and sent once a group exists.
+    const category = input.opsTopic ?? 'SYSTEM';
     const destination =
-      input.destination ?? (await this.destination(scope, input.opsTopic ?? 'SYSTEM', tx));
-    if (destination === null) return { intent: null, created: false };
+      input.destination ??
+      (await this.destination(scope, category, tx)) ??
+      awaitingOpsGroup(category);
 
     const maxAttempts = await this.settings.valueOf<number>(
       scope,
@@ -484,7 +488,7 @@ export class NotificationService {
   }
 
   /**
-   * Where the financial log goes (WP18), or null when it goes nowhere.
+   * Where the financial log goes (WP18), or null when the log is switched off.
    *
    * The operations chat, in the payments topic when one is configured and the operations
    * topic otherwise — one log group, no second bot, no hardcoded id. Gated by the same
@@ -498,7 +502,9 @@ export class NotificationService {
     tx?: unknown,
   ): Promise<NotificationDestination | null> {
     if (!(await this.features.isEnabled(scope, 'ops_notifications', tx))) return null;
-    return this.paymentsDestination(scope, tx);
+    // With the log switched on and nowhere to send it yet, the entry is still queued
+    // (HF-A4): routed to the payments topic, sent once a group is connected.
+    return (await this.paymentsDestination(scope, tx)) ?? awaitingOpsGroup('PAYMENTS');
   }
 
   /**
@@ -563,6 +569,19 @@ export class NotificationService {
     );
     return { transport: 'TELEGRAM', chatId, topicId };
   }
+}
+
+/**
+ * An operations-log message with no chat to snapshot yet (HF-A4).
+ *
+ * Neither a connected group nor a manual chat id exists, and the owner's rule is that an
+ * event routed to the operations log is never dropped for that reason. Routed by topic,
+ * like every message to the group: the dispatcher resolves the group's current chat at send
+ * time, and until one is connected each attempt is a retryable `ops_group.not_connected`,
+ * after which the message is preserved and requeued once a group is connected and verified.
+ */
+function awaitingOpsGroup(category: OpsLogTopicCategory): NotificationDestination {
+  return { transport: 'TELEGRAM', chatId: null, topicId: null, opsTopic: category };
 }
 
 /** A destination as it may appear in an audit row. Carries no credential. */

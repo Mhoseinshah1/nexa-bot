@@ -216,11 +216,20 @@ export interface NotificationRepository {
    * `leaseMs` is a safety margin, not decoration: a row whose lease merely
    * expired may still be mid-send, and marking that FAILED would file a
    * delivered message as failed.
+   *
+   * `onOperationalSwept` (HF-A4) is told, after the sweep commits, which tenants had an
+   * `OPERATIONAL_EVENT` intent among the swept rows — each once — so the dispatcher can ask
+   * for their operations group to be checked again, as it does when an attempt exhausts
+   * an intent. Not called when none was swept.
    */
   failExhausted(
     now: Date,
     limit: number,
-    options: { readonly leaseMs: number; readonly transport: NotificationTransportKind },
+    options: {
+      readonly leaseMs: number;
+      readonly transport: NotificationTransportKind;
+      readonly onOperationalSwept?: (tenantIds: readonly string[]) => void;
+    },
   ): Promise<number>;
 
   /**
@@ -257,6 +266,12 @@ export interface NotificationRepository {
     readonly retryAfterMs: number | null;
     readonly nextStatus: NotificationStatus;
     readonly nextAttemptAt: Date;
+    /**
+     * HF-A4: raise `max_attempts` by one in the same write, so this attempt is not counted
+     * against the allowance. Only for a 429 — throughput, never a failure of the message —
+     * and only when the intent moved: a superseded claim's outcome changes nothing.
+     */
+    readonly extendAllowance?: boolean;
   }): Promise<{ readonly moved: boolean }>;
 
   /**
@@ -373,6 +388,12 @@ export interface OpsTopicRouter {
   ): Promise<void>;
   /** Telegram refused the CHAT, not the message: the panel should say why. */
   problem(tenantId: string, chatId: string, problem: OpsLogGroupProblem): Promise<void>;
+  /**
+   * HF-A4: a message routed to the group spent its whole allowance on failures that were
+   * not about the message. A group recorded HEALTHY is marked for a fresh check; the check
+   * that finds it healthy requeues what was preserved. Best-effort bookkeeping.
+   */
+  exhausted(tenantId: string): Promise<void>;
 }
 
 export type TransportResult =
@@ -383,6 +404,12 @@ export type TransportResult =
       readonly errorMessage: string;
       /** What the transport asked us to wait, when it said anything. */
       readonly retryAfterMs?: number;
+      /**
+       * HF-A4: the provider refused for RATE (Telegram's 429), not for this message. The
+       * dispatcher does not count the attempt against the allowance and holds every send
+       * until the wait is over. Never set for a timeout, whose outcome is unknown.
+       */
+      readonly rateLimited?: boolean;
     } & TransportFailureSignals)
   | ({
       readonly outcome: 'FAILED_PERMANENT';

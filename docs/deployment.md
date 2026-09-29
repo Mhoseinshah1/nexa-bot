@@ -1268,6 +1268,26 @@ the CHECK accepts. While it runs:
 Nothing needs doing before rolling back past HF-A10. After the roll-forward, every
 picture that was not deleted with its entry is sent again.
 
+### What a rollback keeps waiting: the durable operations log (HF-A4)
+
+HF-A4 makes every event routed to the operations log durable: it is queued even while no
+group is connected (with no chat on its destination, only its topic), a refusal that is
+about the group rather than the message is retried rather than failed, a Telegram 429 is
+not counted against the ten attempts, and a message that spends its attempts against a
+healthy group asks for the group to be checked again, which requeues it once the check
+passes. There is no migration. The release before it, while it runs:
+
+- **Drops what is raised while no group and no manual chat exist**, as it did before, and
+  counts every 429 as a failed attempt.
+- **Files a queued message with no chat as FAILED** on its first claim ("The stored
+  destination is not valid"), without sending anything. That keeps it: nothing deletes a
+  notification. After the roll-forward, the next check that finds the group healthy, or
+  «ارسال مجدد گزارش‌های ارسال‌نشده», queues it again.
+- **Reads a raised `max_attempts`** on a message that met 429s as an ordinary larger
+  allowance, which it honours.
+
+Nothing needs doing before rolling back past HF-A4.
+
 ### How far back you can roll
 
 **One release**, safely. Migrations are expand-only within a release

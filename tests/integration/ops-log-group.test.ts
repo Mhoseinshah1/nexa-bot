@@ -97,9 +97,19 @@ class FakeOpsTelegram implements OpsGroupTelegram {
   async botMembership() {
     return { outcome: 'OK' as const, ...this.member };
   }
+  /** Refuses `createForumTopic`, as Telegram does for a bot without the right. */
+  createRefused = false;
   async createTopic(_token: string, chatId: string, name: string) {
     if (this.createDelayMs > 0)
       await new Promise((resolve) => setTimeout(resolve, this.createDelayMs));
+    if (this.createRefused) {
+      return {
+        outcome: 'FAILED' as const,
+        retryable: false,
+        errorCode: 'telegram.rejected.400',
+        errorMessage: 'Bad Request: not enough rights to create a topic',
+      };
+    }
     this.nextThread += 1;
     this.created.push({ chatId, name, threadId: this.nextThread });
     return { outcome: 'OK' as const, threadId: this.nextThread };
@@ -711,19 +721,36 @@ describe('the operations log group (WP-A4)', () => {
       expect((await service.view(tenantA, owner)).queue).toEqual({ pending: 1, preserved: 0 });
     });
 
-    it('queues nothing to a disconnected group, and delivers again after a reconnect', async () => {
+    it('keeps what is raised while the group is disconnected, and delivers it once after a reconnect', async () => {
       await connectHealthy();
       await service.disconnect(tenantA, owner, { idempotencyKey: key('disconnect') });
       await raise('while-disconnected');
-      // Disconnected on purpose: nothing is queued to it (the operational event row is
-      // still the record), exactly as with the feature switched off.
-      const queuedWhileDown = await ctx.container.notifications.list(tenantA, owner);
-      expect(queuedWhileDown).toHaveLength(0);
+      // HF-A4 (the owner's rule): a disconnected group is not a reason to drop an event.
+      // It is queued, still routed to the group, and waits.
+      const [queued] = await ctx.container.notifications.list(tenantA, owner);
+      expect(queued?.status).toBe('PENDING');
+      expect(await dispatcher.tick()).toMatchObject({ claimed: 1, sent: 0, failed: 1 });
+      expect(transport.messages).toHaveLength(0);
+      const waiting = await ctx.container.notifications.get(tenantA, owner, queued!.id);
+      expect(waiting.intent.status).toBe('PENDING');
+      expect(waiting.attempts[0]).toMatchObject({
+        outcome: 'FAILED_RETRYABLE',
+        errorCode: 'ops_group.not_connected',
+      });
 
       await service.reconnect(tenantA, owner, { idempotencyKey: key('reconnect') });
       expect((await service.view(tenantA, owner)).connection).toBe('CONNECTED');
       await raise('after-reconnect');
-      expect((await dispatcher.tick()).sent).toBe(1);
+      await makeDue();
+      expect(await dispatcher.tick()).toMatchObject({ claimed: 2, sent: 2 });
+      // Each event once, and nothing left to send again.
+      expect(transport.messages).toHaveLength(2);
+      await makeDue();
+      expect((await dispatcher.tick()).claimed).toBe(0);
+      const statuses = (await ctx.container.notifications.list(tenantA, owner)).map(
+        (n) => n.status,
+      );
+      expect(statuses).toEqual(['SENT', 'SENT']);
     });
   });
 
@@ -1163,6 +1190,369 @@ describe('the operations log group (WP-A4)', () => {
       expect(tested.results.every((result) => result.outcome === 'SENT')).toBe(true);
       expect(tested.opsGroup.connection).toBe('DISCONNECTED');
       expect(tested.opsGroup.queue).toEqual({ pending: 0, preserved: 1 });
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // HF-A4: every event routed to the operations log is durable
+  // -------------------------------------------------------------------------
+
+  describe('HF-A4: nothing routed to the operations log is dropped', () => {
+    const tooMany = {
+      outcome: 'FAILED_RETRYABLE',
+      errorCode: 'telegram.rate_limited',
+      errorMessage: 'Too Many Requests: retry after 1',
+      retryAfterMs: 1_000,
+      rateLimited: true,
+    } as const;
+
+    const raiseNamed = (n: number) =>
+      ctx.container.opsLog.record(tenantA, {
+        code: 'panel.health.unreachable',
+        severity: 'ERROR',
+        message: `event ${n}`,
+        dedupeKey: `named-${n}`,
+      });
+    const namesSent = () =>
+      transport.messages.map((message) => /event (\d)/.exec(message.text)?.[1]);
+
+    /** Ticks until the allowance is spent: ten attempts, each made due at once. */
+    async function spendAllowance(): Promise<void> {
+      for (let attempt = 1; attempt <= 10; attempt += 1) {
+        await dispatcher.tick();
+        await makeDue();
+      }
+    }
+
+    async function onlyIntent() {
+      const [intent] = await ctx.container.notifications.list(tenantA, owner);
+      return ctx.container.notifications.get(tenantA, owner, intent!.id);
+    }
+
+    /** Whatever runs next — a requeue, a worker pass, a tick — sends nothing again. */
+    async function expectNothingSentAgain(): Promise<void> {
+      const before = transport.messages.length;
+      const requeued = await service.requeue(tenantA, owner, { idempotencyKey: key('again') });
+      expect(requeued.requeued).toBe(0);
+      expect(await service.maintain(tenantA, system())).not.toBe('REQUEUED');
+      await makeDue();
+      expect((await dispatcher.tick()).claimed).toBe(0);
+      expect(transport.messages).toHaveLength(before);
+    }
+
+    it('queues an event raised before any group exists, keeps it, and delivers it once the group is connected', async () => {
+      await raise('before-any-group');
+      // Recorded before any send is attempted: committed with the event, routed to its
+      // topic, and with no chat to snapshot.
+      const [queued] = await ctx.container.notifications.list(tenantA, owner);
+      expect(queued).toMatchObject({ status: 'PENDING', attemptCount: 0, maxAttempts: 10 });
+      expect(queued?.destination).toEqual({
+        transport: 'TELEGRAM',
+        chatId: null,
+        topicId: null,
+        opsTopic: 'SYSTEM',
+      });
+
+      await spendAllowance();
+      const preserved = await onlyIntent();
+      expect(preserved.intent.status).toBe('FAILED');
+      expect(preserved.attempts).toHaveLength(10);
+      expect(
+        preserved.attempts.every(
+          (attempt) =>
+            attempt.outcome === 'FAILED_RETRYABLE' &&
+            attempt.errorCode === 'ops_group.not_connected',
+        ),
+      ).toBe(true);
+      expect(transport.messages).toHaveLength(0);
+      expect((await service.view(tenantA, owner)).queue).toEqual({ pending: 0, preserved: 1 });
+
+      // Connecting the group, and the check that finds it healthy, requeues it.
+      await connectHealthy();
+      expect((await service.view(tenantA, owner)).queue).toEqual({ pending: 1, preserved: 0 });
+      expect(await dispatcher.tick()).toMatchObject({ claimed: 1, sent: 1 });
+      const systemThread = (await repository.listTopics(tenantA, GROUP_CHAT)).find(
+        (topic) => topic.category === 'SYSTEM',
+      )?.messageThreadId;
+      expect(transport.messages).toHaveLength(1);
+      expect(transport.messages[0]!.destination).toMatchObject({
+        chatId: GROUP_CHAT,
+        topicId: systemThread,
+      });
+      expect((await onlyIntent()).intent.status).toBe('SENT');
+      await expectNothingSentAgain();
+    });
+
+    it('never hands the transport a message with no chat, when nothing can route it', async () => {
+      await raise('no-router');
+      const c = ctx.container;
+      const unrouted = new NotificationDispatcher(
+        c.notificationRepository,
+        transport,
+        c.templateResolver,
+        c.settingsResolver,
+        c.clock,
+        c.ids,
+        c.logger,
+        c.opsLogWriter,
+        {
+          pollIntervalMs: 1_000,
+          batchSize: 10,
+          leaseMs: 60_000,
+          baseBackoffMs: 1_000,
+          maxBackoffMs: 5_000,
+        },
+      );
+      expect(await unrouted.tick()).toMatchObject({ claimed: 1, sent: 0, failed: 1 });
+      expect(transport.messages).toHaveLength(0);
+      const waiting = await onlyIntent();
+      expect(waiting.intent.status).toBe('PENDING');
+      expect(waiting.attempts[0]).toMatchObject({
+        outcome: 'FAILED_RETRYABLE',
+        errorCode: 'ops_group.not_connected',
+      });
+    });
+
+    it('addresses the financial log to the payments topic before any group exists', async () => {
+      expect(await ctx.container.notifications.financialDestination(tenantA)).toEqual({
+        transport: 'TELEGRAM',
+        chatId: null,
+        topicId: null,
+        opsTopic: 'PAYMENTS',
+      });
+    });
+
+    it.each([
+      [
+        'the bot was removed',
+        'telegram.rejected.403',
+        'Forbidden: bot was kicked from the supergroup chat',
+        'BOT_REMOVED',
+      ],
+      [
+        'the bot lost the right to post',
+        'telegram.rejected.400',
+        'Bad Request: not enough rights to send text messages to the chat',
+        'CANNOT_SEND',
+      ],
+    ] as const)(
+      'keeps an event when %s, and delivers it once after the repair',
+      async (_case, errorCode, errorMessage, chatProblem) => {
+        await connectHealthy();
+        transport.always = { outcome: 'FAILED_PERMANENT', errorCode, errorMessage, chatProblem };
+        await raise('chat-refused');
+
+        await dispatcher.tick();
+        // Not failed on the first refusal: the problem is the group's, and a group is
+        // repaired. The panel names it.
+        const first = await onlyIntent();
+        expect(first.intent.status).toBe('PENDING');
+        expect(first.attempts[0]).toMatchObject({ outcome: 'FAILED_RETRYABLE', errorCode });
+        expect((await service.view(tenantA, owner)).problems).toContain(chatProblem);
+
+        await makeDue();
+        await spendAllowance();
+        const preserved = await onlyIntent();
+        expect(preserved.intent.status).toBe('FAILED');
+        expect(preserved.attempts).toHaveLength(10);
+        expect(preserved.attempts.some((attempt) => attempt.outcome === 'SUCCEEDED')).toBe(false);
+
+        // The operator fixes it; Telegram reports the membership change; the worker checks.
+        transport.always = null;
+        await service.membershipChanged(botScope(tenantA, SEED_IDS.botA1), system(), {
+          idempotencyKey: key('member'),
+          botInstanceId: SEED_IDS.botA1,
+          chatId: GROUP_CHAT,
+          status: 'administrator',
+        });
+        expect(await service.maintain(tenantA, system())).toBe('CHECKED');
+        expect(await dispatcher.tick()).toMatchObject({ claimed: 1, sent: 1 });
+        expect((await onlyIntent()).intent.status).toBe('SENT');
+        await expectNothingSentAgain();
+      },
+    );
+
+    it('keeps an event through a Telegram outage, and requeues it by itself once Telegram answers', async () => {
+      await connectHealthy();
+      // A timeout is an unknown outcome and IS counted: retried, never dropped.
+      transport.always = {
+        outcome: 'FAILED_RETRYABLE',
+        errorCode: 'telegram.unreachable',
+        errorMessage: 'The operation was aborted due to timeout',
+      };
+      await raise('outage');
+      await spendAllowance();
+      expect((await onlyIntent()).intent.status).toBe('FAILED');
+      // Exhausted against a group recorded healthy: that record is no longer evidence.
+      expect((await service.view(tenantA, owner)).health).toBe('UNVERIFIED');
+
+      transport.always = null;
+      expect(await service.maintain(tenantA, system())).toBe('CHECKED');
+      expect((await service.view(tenantA, owner)).queue).toEqual({ pending: 1, preserved: 0 });
+      expect(await dispatcher.tick()).toMatchObject({ claimed: 1, sent: 1 });
+      const delivered = await onlyIntent();
+      expect(delivered.intent.status).toBe('SENT');
+      expect(delivered.attempts.map((attempt) => attempt.outcome)).toEqual([
+        ...Array.from({ length: 10 }, () => 'FAILED_RETRYABLE'),
+        'SUCCEEDED',
+      ]);
+      await expectNothingSentAgain();
+    });
+
+    it('rechecks the group for an event the sweep ends, and requeues it (Codex review of PR #106)', async () => {
+      await connectHealthy();
+      await raise('swept');
+      // Its last claim's outcome was never recorded: every attempt spent, the lease long
+      // expired — the row `failExhausted` ends, which no attempt path sees.
+      await ctx.container.database.db.execute(
+        `UPDATE notifications
+            SET attempt_count = max_attempts, next_attempt_at = now() - interval '1 hour'` as never,
+      );
+      expect((await dispatcher.tick()).exhausted).toBe(1);
+      expect((await onlyIntent()).intent.status).toBe('FAILED');
+      // Preserved, and the group recorded healthy is checked again.
+      expect((await service.view(tenantA, owner)).health).toBe('UNVERIFIED');
+
+      expect(await service.maintain(tenantA, system())).toBe('CHECKED');
+      expect((await service.view(tenantA, owner)).queue).toEqual({ pending: 1, preserved: 0 });
+      expect(await dispatcher.tick()).toMatchObject({ claimed: 1, sent: 1 });
+      expect((await onlyIntent()).intent.status).toBe('SENT');
+      await expectNothingSentAgain();
+    });
+
+    it('keeps an event whose deleted topic cannot be recreated, and delivers it once the topic is back', async () => {
+      await connectHealthy();
+      const deleted = (await repository.listTopics(tenantA, GROUP_CHAT)).find(
+        (topic) => topic.category === 'SYSTEM',
+      );
+      transport.deletedThreads.add(deleted!.messageThreadId!);
+      telegram.createRefused = true;
+      await raise('topic-gone');
+      await spendAllowance();
+      expect((await onlyIntent()).intent.status).toBe('FAILED');
+      expect((await service.view(tenantA, owner)).health).toBe('UNVERIFIED');
+
+      // The right is restored; the worker's check recreates the topic and requeues.
+      telegram.createRefused = false;
+      expect(await service.maintain(tenantA, system())).toBe('CHECKED');
+      const recreated = (await repository.listTopics(tenantA, GROUP_CHAT)).find(
+        (topic) => topic.category === 'SYSTEM',
+      );
+      expect(recreated).toMatchObject({ state: 'READY', recreatedCount: 1 });
+      expect(await dispatcher.tick()).toMatchObject({ claimed: 1, sent: 1 });
+      expect(transport.messages.at(-1)!.destination).toMatchObject({
+        topicId: recreated!.messageThreadId,
+      });
+      await expectNothingSentAgain();
+    });
+
+    it('never counts a 429 against the allowance: more 429s than attempts, then delivered once', async () => {
+      await connectHealthy();
+      await raise('rate-limited');
+      transport.script = Array.from({ length: 12 }, () => ({ ...tooMany }));
+      for (let answer = 1; answer <= 12; answer += 1) {
+        dispatcher.resetRateWindow();
+        await makeDue();
+        expect(await dispatcher.tick()).toMatchObject({ claimed: 1, failed: 1, abandoned: 0 });
+      }
+      const waiting = await onlyIntent();
+      expect(waiting.intent.status).toBe('PENDING');
+      expect(waiting.intent.maxAttempts).toBe(22);
+      expect(waiting.attempts).toHaveLength(12);
+      expect(
+        waiting.attempts.every(
+          (attempt) =>
+            attempt.errorCode === 'telegram.rate_limited' && attempt.retryAfterMs === 1_000,
+        ),
+      ).toBe(true);
+      // Telegram's wait is honoured before the next attempt.
+      expect(waiting.intent.nextAttemptAt.getTime()).toBeGreaterThanOrEqual(
+        waiting.attempts.at(-1)!.finishedAt.getTime() + 1_000,
+      );
+
+      dispatcher.resetRateWindow();
+      await makeDue();
+      expect(await dispatcher.tick()).toMatchObject({ claimed: 1, sent: 1 });
+      expect((await onlyIntent()).intent.status).toBe('SENT');
+    });
+
+    it('holds every send behind a 429 until the wait is over, spending nothing for the rest', async () => {
+      await connectHealthy();
+      await raiseNamed(1);
+      await raiseNamed(2);
+      await raiseNamed(3);
+      transport.script = [{ ...tooMany, retryAfterMs: 60_000 }];
+      expect(await dispatcher.tick()).toMatchObject({
+        claimed: 3,
+        sent: 0,
+        failed: 1,
+        deferred: 2,
+      });
+      expect(transport.messages).toHaveLength(1);
+      // Paused: nothing is claimed while Telegram's wait lasts.
+      await makeDue();
+      expect((await dispatcher.tick()).claimed).toBe(0);
+
+      // The two behind it were handed back unsent: no attempt, their claims returned.
+      const details = await Promise.all(
+        (await ctx.container.notifications.list(tenantA, owner)).map((intent) =>
+          ctx.container.notifications.get(tenantA, owner, intent.id),
+        ),
+      );
+      expect(details.map((detail) => detail.attempts.length).sort()).toEqual([0, 0, 1]);
+      expect(details.filter((detail) => detail.releasedClaims.length === 1)).toHaveLength(2);
+
+      dispatcher.resetRateWindow();
+      await makeDue();
+      expect(await dispatcher.tick()).toMatchObject({ claimed: 3, sent: 3 });
+    });
+
+    it('drains a reconnect backlog within the per-minute ceiling, oldest first and each once', async () => {
+      await connectHealthy();
+      await service.disconnect(tenantA, owner, { idempotencyKey: key('disconnect') });
+      for (const n of [1, 2, 3, 4, 5]) await raiseNamed(n);
+      await spendAllowance();
+      expect((await service.view(tenantA, owner)).queue).toEqual({ pending: 0, preserved: 5 });
+      expect(transport.messages).toHaveLength(0);
+
+      await ctx.container.settingsService.set(tenantA, owner, {
+        key: 'ops.notifications.max_per_minute',
+        value: 2,
+        expectedVersion: null,
+        idempotencyKey: key('rate'),
+      });
+      // The reconnect's check requeues one batch; the worker drains the rest.
+      await service.reconnect(tenantA, owner, { idempotencyKey: key('reconnect') });
+      expect(await service.maintain(tenantA, system())).toBe('REQUEUED');
+      expect(await service.maintain(tenantA, system())).toBe('REQUEUED');
+      expect((await service.view(tenantA, owner)).queue).toEqual({ pending: 5, preserved: 0 });
+
+      // Two a minute, however large the backlog: no flood.
+      const sentPerTick: number[] = [];
+      for (let window = 1; window <= 3; window += 1) {
+        dispatcher.resetRateWindow();
+        sentPerTick.push((await dispatcher.tick()).sent);
+        sentPerTick.push((await dispatcher.tick()).sent);
+      }
+      expect(sentPerTick).toEqual([2, 0, 2, 0, 1, 0]);
+      expect(namesSent()).toEqual(['1', '2', '3', '4', '5']);
+      await expectNothingSentAgain();
+    });
+
+    it('sends events that are due together oldest first', async () => {
+      await connectHealthy();
+      for (const n of [1, 2, 3, 4, 5]) await raiseNamed(n);
+      // A requeue makes a backlog due at one instant. Rewritten newest first, so the rows'
+      // physical order is the reverse of the order they were raised in.
+      const newestFirst = await ctx.container.notifications.list(tenantA, owner);
+      for (const intent of newestFirst) {
+        await ctx.container.database.db.execute(
+          `UPDATE notifications SET next_attempt_at = TIMESTAMPTZ '2020-01-01T00:00:00Z'
+            WHERE id = '${intent.id}'` as never,
+        );
+      }
+      expect(await dispatcher.tick()).toMatchObject({ claimed: 5, sent: 5 });
+      expect(namesSent()).toEqual(['1', '2', '3', '4', '5']);
     });
   });
 });
