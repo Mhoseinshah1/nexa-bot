@@ -227,6 +227,7 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   cooldownHours: 'فاصلهٔ مجاز (ساعت)',
   correlationId: 'شناسهٔ پیگیری',
   current: 'مقدار فعلی',
+  currentLimit: 'تعداد کاربر / دستگاه مجاز فعلی',
   custom: 'نشانهٔ روشن بودن انتخاب دلخواه',
   customBlock: 'بخش سرویس دلخواه',
   customTemplate: 'نشانهٔ انتخاب الگوی سفارشی',
@@ -235,6 +236,7 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   days: 'روزهای باقی‌مانده',
   delivery: 'وضعیت تحویل لینک',
   destination: 'اطلاعات حساب مقصد',
+  devicesBlock: 'بخش افزایش کاربر / دستگاه',
   discount: 'مبلغ تخفیف',
   discountLine: 'خط تخفیف',
   displayName: 'نام نمایشی',
@@ -301,6 +303,7 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   provider: 'نوع پنل',
   providerFinalAmount: 'مبلغ نهایی گزارش‌شده توسط درگاه',
   providerInvoiceId: 'شناسهٔ فاکتور درگاه',
+  quantity: 'تعداد',
   query: 'عبارت جست‌وجو',
   question: 'پرسش',
   random: 'نشانهٔ انتخاب تصادفی',
@@ -348,6 +351,7 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   subscriptionUrl: 'لینک اشتراک',
   subtotal: 'قیمت پیش از تخفیف',
   syncedAt: 'زمان آخرین همگام‌سازی',
+  targetLimit: 'تعداد کاربر / دستگاه مجاز پس از خرید',
   telegram: 'اتصال تلگرام',
   telegramId: 'شناسهٔ عددی تلگرام',
   telegramIdRandom: 'نشانهٔ انتخاب شناسهٔ تلگرام + تصادفی',
@@ -359,6 +363,7 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   totalTrafficBytes: 'کل حجم',
   trafficBytes: 'حجم',
   trafficLimit: 'سقف حجم',
+  unitPrice: 'قیمت هر واحد',
   usage: 'وضعیت یادآور مصرف',
   usagePercent: 'درصد مصرف',
   usedTraffic: 'حجم مصرف‌شده',
@@ -417,6 +422,8 @@ export const PLACEHOLDER_LABEL_OVERRIDES_FA: Partial<
   'bot.order.preinvoice_locations': { lines: 'فهرست لوکیشن‌ها' },
   'bot.order.preinvoice_features': { lines: 'فهرست ویژگی‌ها' },
   'bot.service.addon_option': { title: 'نام بسته' },
+  // WP-A5's keys, registered here so this branch's registry test holds (WP-A8 stack merge).
+  'bot.service.devices_choice': { remaining: 'تعداد کاربر قابل افزودن' },
   'bot.service.renew_option_button': { title: 'نام محصول' },
   'bot.service.list': { total: 'تعداد کل سرویس‌ها' },
   'bot.service.list_item_button': { username: 'نام کاربری سرویس' },
@@ -659,6 +666,10 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'bot.order.preinvoice_cashback_line': [
     'خط کش‌بک در پیش‌فاکتور',
     'کش‌بکی که پس از تحویل سرویس واریز می‌شود؛ فقط وقتی کش‌بک وعده داده شده است.',
+  ],
+  'bot.order.preinvoice_devices': [
+    'بخش افزایش کاربر / دستگاه در پیش‌فاکتور',
+    'تعداد کاربر اضافه، قیمت هر کاربر و تعداد مجاز پیش و پس از خرید؛ فقط در سفارش افزایش کاربر.',
   ],
 
   // --- Service username -------------------------------------------------------------
@@ -1255,6 +1266,18 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
     'دکمهٔ تغییر لینک اشتراک',
     'دکمهٔ درخواست لینک اشتراک جدید؛ فقط وقتی تغییر لینک فعال است و پنل آن را پشتیبانی می‌کند.',
   ],
+  'bot.service.add_devices_button': [
+    'دکمهٔ افزایش کاربر / دستگاه',
+    'دکمهٔ خرید کاربر یا دستگاه اضافه برای سرویس؛ فقط وقتی پنل آن را پشتیبانی می‌کند و تعرفه‌ای تنظیم شده است.',
+  ],
+  'bot.service.devices_choice': [
+    'انتخاب تعداد کاربر اضافه',
+    'محدودیت فعلی، قیمت هر کاربر و سقف باقی‌مانده را می‌گوید و تعداد را می‌پرسد.',
+  ],
+  'bot.service.devices_option': [
+    'گزینهٔ تعداد کاربر اضافه',
+    'دکمهٔ یک تعداد کاربر اضافه همراه با قیمت کل آن.',
+  ],
   'bot.service.rotate_ask': [
     'پرسش تأیید تغییر لینک',
     'پیش از تغییر لینک می‌گوید لینک تازه باید در برنامه‌ها وارد شود و تا چه مدت نمی‌توان دوباره درخواست داد.',
@@ -1705,6 +1728,10 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'bot.admin.operation_add_time': [
     'برچسب عملیات: افزایش زمان',
     'نوع عملیات در کارت رسید برای خرید زمان اضافه.',
+  ],
+  'bot.admin.operation_add_devices': [
+    'برچسب عملیات: افزایش کاربر / دستگاه',
+    'نوع عملیات در کارت رسید برای خرید کاربر یا دستگاه اضافه.',
   ],
   'bot.admin.operation_topup': [
     'برچسب عملیات: شارژ کیف پول',
