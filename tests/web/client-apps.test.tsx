@@ -3,6 +3,7 @@ import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { NAV, navPermitted } from '../../apps/web/src/app';
 import { ClientAppsPage, formProblems } from '../../apps/web/src/pages/client-apps';
 import { t } from '../../apps/web/src/i18n/web.fa';
+import { formatNumber } from '../../apps/web/src/format';
 import { renderPage, stubApi } from './harness';
 
 /**
@@ -32,6 +33,7 @@ function app(overrides: Record<string, unknown> = {}): Record<string, unknown> {
     version: 2,
     createdAt: '2026-09-01T08:00:00.000Z',
     updatedAt: '2026-09-10T12:30:00.000Z',
+    image: null,
     ...overrides,
   };
 }
@@ -293,5 +295,190 @@ describe('the apps page', () => {
     const api = stubApi([listAndRow([app()], app())]);
     renderPage(<ClientAppsPage denied mayEdit={false} />);
     expect(api.calls).toHaveLength(0);
+  });
+});
+
+// ============================================================================
+// HF-A10 — an entry's picture
+// ============================================================================
+
+const SHA = 'ab'.repeat(32);
+
+function pngFile(width: number, height: number, name = 'icon.png', type = 'image/png'): File {
+  const bytes = new Uint8Array(64);
+  bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52]);
+  new DataView(bytes.buffer).setUint32(16, width);
+  new DataView(bytes.buffer).setUint32(20, height);
+  return new File([bytes], name, { type });
+}
+
+const pick = (file: File) =>
+  fireEvent.change(screen.getByLabelText(t('web.client_apps_image_file')), {
+    target: { files: [file] },
+  });
+
+describe('an entry’s picture', () => {
+  it('asks for the entry to be saved first when there is no entry yet', async () => {
+    stubApi([listAndRow([], app())]);
+    renderPage(<ClientAppsPage denied={false} mayEdit />);
+    fireEvent.click(await screen.findByRole('button', { name: t('web.client_apps_new') }));
+    expect(screen.getByText(t('web.client_apps_image_save_first'))).toBeInTheDocument();
+    expect(screen.queryByLabelText(t('web.client_apps_image_file'))).toBeNull();
+  });
+
+  it('shows the stored copy, served from the API on this origin, with its size', async () => {
+    const stored = app({
+      image: {
+        mimeType: 'image/png',
+        byteLength: 2048,
+        width: 256,
+        height: 128,
+        sha256: SHA,
+        updatedAt: '2026-09-10T12:30:00.000Z',
+      },
+    });
+    stubApi([listAndRow([stored], stored)]);
+    renderPage(<ClientAppsPage denied={false} mayEdit />);
+    fireEvent.click(await screen.findByRole('button', { name: t('web.client_apps_edit') }));
+
+    const image = screen.getByTestId('client-app-image-stored');
+    expect(image.getAttribute('src')).toBe(`/api/admin/v1/client-apps/${APP_ID}/image?v=${SHA}`);
+    expect(screen.getByText('PNG')).toBeInTheDocument();
+    expect(screen.getByText(`${formatNumber(256)}×${formatNumber(128)}`)).toBeInTheDocument();
+    // The bot preview shows it too, ahead of the text, as the customer receives it.
+    expect(screen.getAllByAltText(t('web.client_apps_image_alt'))).toHaveLength(2);
+    expect(screen.getByRole('button', { name: t('web.client_apps_image_clear') })).toBeEnabled();
+  });
+
+  it('refuses an SVG, a file that is not a PNG inside, and a wrong size — before any request', async () => {
+    const api = stubApi([listAndRow([app()], app())]);
+    renderPage(<ClientAppsPage denied={false} mayEdit />);
+    fireEvent.click(await screen.findByRole('button', { name: t('web.client_apps_edit') }));
+    expect(screen.getByText(t('web.client_apps_image_none'))).toBeInTheDocument();
+    const upload = () => screen.getByRole('button', { name: t('web.client_apps_image_upload') });
+
+    pick(
+      new File(['<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"/>'], 'x.svg', {
+        type: 'image/svg+xml',
+      }),
+    );
+    expect(await screen.findByText(t('web.client_apps_image_invalid_type'))).toBeInTheDocument();
+    expect(upload()).toBeDisabled();
+
+    // Declared PNG, SVG inside: the magic number decides.
+    pick(new File(['<svg xmlns="http://www.w3.org/2000/svg"/>'], 'x.png', { type: 'image/png' }));
+    expect(await screen.findByText(t('web.client_apps_image_mismatch'))).toBeInTheDocument();
+
+    pick(pngFile(8, 8));
+    expect(await screen.findByText(t('web.client_apps_image_bad_dimensions'))).toBeInTheDocument();
+    expect(upload()).toBeDisabled();
+    expect(screen.queryByTestId('client-app-image-picked')).toBeNull();
+    expect(api.calls.some((call) => call.method === 'POST')).toBe(false);
+  });
+
+  it('previews the picked file and uploads it with the version it read', async () => {
+    const after = app({
+      version: 3,
+      image: {
+        mimeType: 'image/png',
+        byteLength: 64,
+        width: 64,
+        height: 32,
+        sha256: SHA,
+        updatedAt: '2026-09-10T12:31:00.000Z',
+      },
+    });
+    const api = stubApi([
+      listAndRow([app()], app()),
+      { url: `/client-apps/${APP_ID}/image`, body: after },
+    ]);
+    /*
+     * After the upload the list is not fetched again in time: the refetch never answers.
+     * Only the page's own patch of the cached list, from the row the write returned, keeps
+     * the editor from reading its own write as a colleague's.
+     */
+    const stubbed = globalThis.fetch;
+    let uploaded = false;
+    vi.stubGlobal('fetch', (input: unknown, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/image') && init?.method === 'POST') uploaded = true;
+      else if (uploaded && url.endsWith('/client-apps') && (init?.method ?? 'GET') === 'GET') {
+        return new Promise<Response>(() => undefined);
+      }
+      return stubbed(input as RequestInfo, init);
+    });
+    renderPage(<ClientAppsPage denied={false} mayEdit />);
+    fireEvent.click(await screen.findByRole('button', { name: t('web.client_apps_edit') }));
+
+    pick(pngFile(64, 32));
+    const picked = await screen.findByTestId('client-app-image-picked');
+    expect(picked.getAttribute('src')?.startsWith('data:image/png;base64,')).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: t('web.client_apps_image_upload') }));
+
+    await waitFor(() => {
+      expect(api.calls.some((call) => call.url.endsWith('/image'))).toBe(true);
+    });
+    const posted = api.calls.find((call) => call.url.endsWith('/image'));
+    expect(posted?.method).toBe('POST');
+    expect(posted?.body).toMatchObject({
+      expectedVersion: 2,
+      mimeType: 'image/png',
+      contentBase64: expect.stringMatching(/^iVBORw0KGgo/u) as unknown,
+    });
+    expect(await screen.findByTestId('client-app-image-stored')).toBeInTheDocument();
+    // The operator's own write is not mistaken for a colleague's.
+    expect(screen.queryByText(t('web.changed_elsewhere'), { exact: false })).toBeNull();
+  });
+
+  it('names the server’s reason when it refuses the file', async () => {
+    stubApi([
+      listAndRow([app()], app()),
+      {
+        url: `/client-apps/${APP_ID}/image`,
+        status: 400,
+        body: {
+          error: {
+            kind: 'validation',
+            code: 'commerce.media_invalid',
+            message: 'The image is not acceptable.',
+            correlationId: 'test',
+            details: { reason: 'UNREADABLE' },
+          },
+        },
+      },
+    ]);
+    renderPage(<ClientAppsPage denied={false} mayEdit />);
+    fireEvent.click(await screen.findByRole('button', { name: t('web.client_apps_edit') }));
+    pick(pngFile(64, 64));
+    await screen.findByTestId('client-app-image-picked');
+    fireEvent.click(screen.getByRole('button', { name: t('web.client_apps_image_upload') }));
+    expect(await screen.findByText(t('web.client_apps_image_unreadable'))).toBeInTheDocument();
+  });
+
+  it('clears the picture with the version it read', async () => {
+    const stored = app({
+      image: {
+        mimeType: 'image/jpeg',
+        byteLength: 4096,
+        width: 64,
+        height: 64,
+        sha256: SHA,
+        updatedAt: '2026-09-10T12:30:00.000Z',
+      },
+    });
+    const api = stubApi([
+      listAndRow([stored], stored),
+      { url: `/client-apps/${APP_ID}/image/clear`, body: app({ version: 3 }) },
+    ]);
+    renderPage(<ClientAppsPage denied={false} mayEdit />);
+    fireEvent.click(await screen.findByRole('button', { name: t('web.client_apps_edit') }));
+    fireEvent.click(screen.getByRole('button', { name: t('web.client_apps_image_clear') }));
+    await waitFor(() => {
+      expect(api.calls.some((call) => call.url.endsWith('/image/clear'))).toBe(true);
+    });
+    expect(api.calls.find((call) => call.url.endsWith('/image/clear'))?.body).toMatchObject({
+      expectedVersion: 2,
+    });
+    expect(await screen.findByText(t('web.client_apps_image_none'))).toBeInTheDocument();
   });
 });

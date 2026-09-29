@@ -1,21 +1,26 @@
-import { useState, type FormEvent } from 'react';
+import { useState, type ChangeEvent, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   CLIENT_APP_DELIVERY_KINDS,
   CLIENT_APP_DESCRIPTION_MAX_LENGTH,
   CLIENT_APP_GUIDE_MAX_LENGTH,
   CLIENT_APP_ICON_MAX_LENGTH,
+  CLIENT_APP_IMAGE_MAX_BYTES,
+  CLIENT_APP_IMAGE_MIME_TYPES,
   CLIENT_APP_NAME_MAX_LENGTH,
   CLIENT_APP_PLATFORMS,
   CLIENT_APP_PROTOCOLS,
   CLIENT_APP_URL_MAX_LENGTH,
   PROVIDER_DESCRIPTORS,
   clientAppTextProblem,
+  inspectClientAppImage,
   neutralizeClientAppBareLinks,
   normalizeClientAppUrl,
   renderClientAppGuide,
   templateDefinition,
   type ClientAppDeliveryKind,
+  type ClientAppImageMimeType,
+  type ClientAppImageProblem,
   type ClientAppPlatform,
   type ClientAppProtocol,
   type ClientAppResponse,
@@ -26,14 +31,17 @@ import {
 import { CATALOGUE_FA, renderTemplateBody } from '@nexa/i18n';
 import {
   ApiError,
+  clearClientAppImage,
+  clientAppImageUrl,
   createClientApp,
   deleteClientApp,
   fetchClientApps,
   setClientAppStatus,
   updateClientApp,
+  uploadClientAppImage,
   type ClientAppFields,
 } from '../api/client';
-import { formatTimestamp } from '../format';
+import { formatNumber, formatTimestamp, splitBytes } from '../format';
 import { useSubmissionKey } from '../submission-key';
 import { queryState } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
@@ -240,6 +248,265 @@ function toggled<T>(list: readonly T[], member: T, on: boolean): T[] {
   return on
     ? [...list.filter((one) => one !== member), member]
     : list.filter((one) => one !== member);
+}
+
+// ---------------------------------------------------------------------------
+// HF-A10 — an entry's optional picture
+// ---------------------------------------------------------------------------
+
+const IMAGE_MIME_LABELS: Readonly<Record<ClientAppImageMimeType, string>> = {
+  'image/png': 'PNG',
+  'image/jpeg': 'JPEG',
+};
+
+const IMAGE_PROBLEM_LABELS: Readonly<Record<ClientAppImageProblem, WebKey>> = {
+  EMPTY: 'web.client_apps_image_empty',
+  TOO_LARGE: 'web.client_apps_image_too_large',
+  TYPE_MISMATCH: 'web.client_apps_image_mismatch',
+  UNREADABLE: 'web.client_apps_image_unreadable',
+  DIMENSIONS: 'web.client_apps_image_bad_dimensions',
+};
+
+const MEDIA_INVALID = 'commerce.media_invalid';
+
+/** A file read into the shape the upload route takes, or the reason it was not. */
+export type PickedImage =
+  | { readonly kind: 'NONE' }
+  | { readonly kind: 'INVALID'; readonly reason: WebKey }
+  | {
+      readonly kind: 'READY';
+      readonly name: string;
+      readonly mimeType: ClientAppImageMimeType;
+      readonly byteLength: number;
+      readonly contentBase64: string;
+      /** A `data:` URL of the file, for the preview before it is sent. */
+      readonly dataUrl: string;
+      readonly width: number;
+      readonly height: number;
+    };
+
+type ReadyImage = Extract<PickedImage, { readonly kind: 'READY' }>;
+
+function isImageMimeType(value: string): value is ClientAppImageMimeType {
+  return (CLIENT_APP_IMAGE_MIME_TYPES as readonly string[]).includes(value);
+}
+
+/**
+ * Reads the chosen file and runs `inspectClientAppImage` on its bytes — the function the
+ * service runs — so a file the server would refuse is refused here, in Persian, before a
+ * request is spent. The type and size are checked first, before anything is read. An SVG
+ * fails the very first check: its type is not one of the two.
+ */
+export function readPickedImage(file: File): Promise<PickedImage> {
+  if (!isImageMimeType(file.type)) {
+    return Promise.resolve({ kind: 'INVALID', reason: 'web.client_apps_image_invalid_type' });
+  }
+  if (file.size > CLIENT_APP_IMAGE_MAX_BYTES) {
+    return Promise.resolve({ kind: 'INVALID', reason: 'web.client_apps_image_too_large' });
+  }
+  const mimeType = file.type;
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onerror = () => resolve({ kind: 'INVALID', reason: 'web.client_apps_image_unreadable' });
+    reader.onload = () => {
+      const dataUrl = typeof reader.result === 'string' ? reader.result : '';
+      const comma = dataUrl.indexOf(',');
+      if (comma < 0) {
+        resolve({ kind: 'INVALID', reason: 'web.client_apps_image_unreadable' });
+        return;
+      }
+      const contentBase64 = dataUrl.slice(comma + 1);
+      const bytes = Uint8Array.from(atob(contentBase64), (char) => char.charCodeAt(0));
+      const inspected = inspectClientAppImage(mimeType, bytes);
+      if (!inspected.ok) {
+        resolve({ kind: 'INVALID', reason: IMAGE_PROBLEM_LABELS[inspected.problem] });
+        return;
+      }
+      resolve({
+        kind: 'READY',
+        name: file.name,
+        mimeType,
+        byteLength: bytes.byteLength,
+        contentBase64,
+        dataUrl,
+        width: inspected.width,
+        height: inspected.height,
+      });
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+/** The server's refusal of a picture, named by its reason where it gave one. */
+function imageFaultOf(error: unknown): string {
+  if (error instanceof ApiError && error.code === MEDIA_INVALID) {
+    const reason = error.details?.reason;
+    return typeof reason === 'string' && reason in IMAGE_PROBLEM_LABELS
+      ? t(IMAGE_PROBLEM_LABELS[reason as ClientAppImageProblem])
+      : t('web.client_apps_image_invalid_type');
+  }
+  return faultOf(error);
+}
+
+/**
+ * The picture of the entry being edited: what is stored (served back from the stored copy,
+ * never from what was picked), a file input, and the two writes.
+ *
+ * Only for an entry that exists — the writes name its id and version. Each answers with the
+ * row at its new version, handed to `onChanged` so the editor's basis follows it and the
+ * text form, still open, saves against the version it now holds.
+ */
+function ImageCard({
+  entry,
+  onChanged,
+}: {
+  entry: ClientAppResponse | null;
+  onChanged: (row: ClientAppResponse) => void;
+}) {
+  const notify = useToast();
+  const submission = useSubmissionKey();
+  const [picked, setPicked] = useState<PickedImage>({ kind: 'NONE' });
+
+  const upload = useMutation({
+    // The file and the row travel as the VARIABLE, the banner card's reason.
+    mutationFn: (input: { file: ReadyImage; row: ClientAppResponse }) =>
+      uploadClientAppImage({
+        id: input.row.id,
+        expectedVersion: input.row.version,
+        mimeType: input.file.mimeType,
+        contentBase64: input.file.contentBase64,
+        idempotencyKey: submission.current({
+          image: input.row.id,
+          version: input.row.version,
+          name: input.file.name,
+          size: input.file.byteLength,
+        }),
+      }),
+    onSuccess: (row) => {
+      submission.settle();
+      notify({ tone: 'ok', message: t('web.client_apps_image_uploaded') });
+      setPicked({ kind: 'NONE' });
+      onChanged(row);
+    },
+    onError: (error) => submission.settleOn(error),
+  });
+
+  const clear = useMutation({
+    mutationFn: (row: ClientAppResponse) =>
+      clearClientAppImage({
+        id: row.id,
+        expectedVersion: row.version,
+        idempotencyKey: submission.current({ clearImage: row.id, version: row.version }),
+      }),
+    onSuccess: (row) => {
+      submission.settle();
+      notify({ tone: 'ok', message: t('web.client_apps_image_cleared') });
+      onChanged(row);
+    },
+    onError: (error) => submission.settleOn(error),
+  });
+
+  if (entry === null) {
+    return (
+      <Card title={t('web.client_apps_image_title')} hint={t('web.client_apps_image_hint')}>
+        <p className="muted">{t('web.client_apps_image_save_first')}</p>
+      </Card>
+    );
+  }
+
+  const onPick = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file === undefined) {
+      setPicked({ kind: 'NONE' });
+      return;
+    }
+    void readPickedImage(file).then(setPicked);
+  };
+
+  const busy = upload.isPending || clear.isPending;
+  const failure = upload.error ?? clear.error;
+  const stored = entry.image;
+  const size = stored === null ? null : splitBytes(BigInt(stored.byteLength));
+
+  return (
+    <Card title={t('web.client_apps_image_title')} hint={t('web.client_apps_image_hint')}>
+      {stored === null ? (
+        <p className="muted">{t('web.client_apps_image_none')}</p>
+      ) : (
+        <>
+          <img
+            className="client-app-image"
+            src={clientAppImageUrl(entry.id, stored.sha256)}
+            alt={t('web.client_apps_image_alt')}
+            data-testid="client-app-image-stored"
+          />
+          <dl className="kv">
+            <dt>{t('web.client_apps_image_type')}</dt>
+            <dd>{IMAGE_MIME_LABELS[stored.mimeType]}</dd>
+            <dt>{t('web.client_apps_image_size')}</dt>
+            <dd>{size === null ? null : `${size.value} ${t(size.unit)}`}</dd>
+            <dt>{t('web.client_apps_image_dimensions')}</dt>
+            <dd>
+              <bdi>{`${formatNumber(stored.width)}×${formatNumber(stored.height)}`}</bdi>
+            </dd>
+          </dl>
+        </>
+      )}
+
+      <form
+        className="form"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (picked.kind === 'READY' && !busy) upload.mutate({ file: picked, row: entry });
+        }}
+      >
+        <Field
+          label={t('web.client_apps_image_file')}
+          hint={t('web.client_apps_image_file_hint')}
+          htmlFor="app-image-file"
+          {...(picked.kind === 'INVALID' ? { error: t(picked.reason) } : {})}
+        >
+          <input
+            id="app-image-file"
+            type="file"
+            accept={CLIENT_APP_IMAGE_MIME_TYPES.join(',')}
+            onChange={onPick}
+            disabled={busy}
+          />
+        </Field>
+        {picked.kind === 'READY' && (
+          <img
+            className="client-app-image"
+            src={picked.dataUrl}
+            alt={t('web.client_apps_image_picked_alt')}
+            data-testid="client-app-image-picked"
+          />
+        )}
+        <div className="toolbar">
+          <button
+            type="submit"
+            className="btn primary sm"
+            disabled={busy || picked.kind !== 'READY'}
+          >
+            {upload.isPending
+              ? t('web.client_apps_image_uploading')
+              : t('web.client_apps_image_upload')}
+          </button>
+          {stored !== null && (
+            <button
+              type="button"
+              className="btn sm"
+              disabled={busy}
+              onClick={() => clear.mutate(entry)}
+            >
+              {t('web.client_apps_image_clear')}
+            </button>
+          )}
+        </div>
+        {failure != null && <Banner tone="danger">{imageFaultOf(failure)}</Banner>}
+      </form>
+    </Card>
+  );
 }
 
 export function ClientAppsPage({ denied, mayEdit }: { denied: boolean; mayEdit: boolean }) {
@@ -688,6 +955,14 @@ export function ClientAppsPage({ denied, mayEdit }: { denied: boolean; mayEdit: 
             </Field>
 
             <Card title={t('web.client_apps_preview')} hint={t('web.client_apps_preview_hint')}>
+              {/* HF-A10: the picture goes out first, as its own message, when there is one. */}
+              {editor.kind === 'edit' && editor.basis.image !== null && (
+                <img
+                  className="client-app-image"
+                  src={clientAppImageUrl(editor.basis.id, editor.basis.image.sha256)}
+                  alt={t('web.client_apps_image_alt')}
+                />
+              )}
               <div className="bot-preview" data-testid="client-app-preview" dir="auto">
                 {preview}
               </div>
@@ -734,6 +1009,26 @@ export function ClientAppsPage({ denied, mayEdit }: { denied: boolean; mayEdit: 
             {save.error != null && <Banner tone="danger">{faultOf(save.error)}</Banner>}
           </form>
         </Card>
+      )}
+
+      {mayEdit && editor.kind !== 'closed' && (
+        <ImageCard
+          entry={editor.kind === 'edit' ? editor.basis : null}
+          onChanged={(row) => {
+            /*
+             * The picture's writes bump the entry's version. The list is patched with the
+             * returned row BEFORE the editor's basis moves to it, so the two never
+             * disagree and «changed elsewhere» is not raised for the operator's own write.
+             */
+            queries.setQueryData<{ items: ClientAppResponse[] }>(['client-apps'], (old) =>
+              old === undefined
+                ? old
+                : { ...old, items: old.items.map((one) => (one.id === row.id ? row : one)) },
+            );
+            setEditor({ kind: 'edit', basis: row });
+            refresh();
+          }}
+        />
       )}
 
       {toggle.error != null && <Banner tone="danger">{faultOf(toggle.error)}</Banner>}

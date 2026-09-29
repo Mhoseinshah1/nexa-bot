@@ -1698,6 +1698,32 @@ export const WEB_FA = {
   'web.client_apps_conflict':
     'این برنامه از زمانی که باز کردید تغییر کرده است. نسخهٔ تازه را بارگذاری کنید و تغییر را دوباره اعمال کنید.',
   'web.client_apps_limit': 'سقف تعداد برنامه‌ها پر شده است. یکی را حذف کنید.',
+  // HF-A10 — an entry's optional picture.
+  'web.client_apps_image_title': 'تصویر برنامه',
+  'web.client_apps_image_hint':
+    'اختیاری. ربات این تصویر را پیش از صفحهٔ برنامه می‌فرستد. اگر تصویری نباشد یا تلگرام آن را نپذیرد، همان صفحهٔ متنی با نماد (ایموجی) فرستاده می‌شود. دکمه‌های فهرست برنامه‌ها همیشه فقط نماد و نام را نشان می‌دهند.',
+  'web.client_apps_image_none': 'تصویری تنظیم نشده است؛ ربات نماد و متن را نشان می‌دهد.',
+  'web.client_apps_image_save_first': 'برای افزودن تصویر، ابتدا برنامه را ذخیره کنید.',
+  'web.client_apps_image_file': 'فایل تصویر',
+  'web.client_apps_image_file_hint':
+    'PNG یا JPEG، حداکثر ۵۱۲ کیلوبایت، هر ضلع بین ۱۶ تا ۲۰۴۸ پیکسل. SVG پذیرفته نمی‌شود.',
+  'web.client_apps_image_upload': 'بارگذاری تصویر',
+  'web.client_apps_image_uploading': 'در حال بارگذاری…',
+  'web.client_apps_image_clear': 'حذف تصویر',
+  'web.client_apps_image_uploaded': 'تصویر برنامه ذخیره شد.',
+  'web.client_apps_image_cleared': 'تصویر برنامه حذف شد.',
+  'web.client_apps_image_alt': 'تصویر ذخیره‌شدهٔ برنامه',
+  'web.client_apps_image_picked_alt': 'پیش‌نمایش فایل انتخاب‌شده',
+  'web.client_apps_image_type': 'نوع فایل',
+  'web.client_apps_image_size': 'اندازه',
+  'web.client_apps_image_dimensions': 'ابعاد (پیکسل)',
+  'web.client_apps_image_invalid_type': 'فقط فایل PNG یا JPEG پذیرفته می‌شود.',
+  'web.client_apps_image_empty': 'فایل خالی است.',
+  'web.client_apps_image_too_large': 'اندازهٔ فایل بیش از ۵۱۲ کیلوبایت است.',
+  'web.client_apps_image_mismatch': 'محتوای فایل با نوع اعلام‌شده‌اش هم‌خوانی ندارد.',
+  'web.client_apps_image_unreadable': 'ابعاد تصویر خوانده نشد؛ فایل ناقص یا خراب است.',
+  'web.client_apps_image_bad_dimensions':
+    'هر ضلع تصویر باید بین ۱۶ تا ۲۰۴۸ پیکسل باشد و ضلع بلندتر بیش از ۲۰ برابر ضلع کوتاه‌تر نباشد.',
   'web.payment_resolution': 'نتیجهٔ بدون دریافت وجه',
   'web.payment_destination': 'مقصد واریز اعلام‌شده',
   'web.payment_destination_label': 'عنوان حساب',
