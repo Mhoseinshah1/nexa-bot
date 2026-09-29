@@ -422,6 +422,28 @@ describe('quiet hours for customer reminders (HF-A9)', () => {
     expect(states.get('WALLET_LOW_BALANCE')).toBe('SUPERSEDED');
   });
 
+  it('releases one low-balance alert, not two, for a wallet that fell twice while held', async () => {
+    const end = await quietAroundNow();
+    await setFlag('wallet_low_balance_reminders', true);
+    expect(
+      await setSetting('wallet.low_balance.threshold', { amountMinor: '50000', currency: 'IRT' }),
+    ).toBeNull();
+    await ledger('CREDIT', 100_000n);
+    await ledger('DEBIT', 60_000n); // 40,000: below
+    expect(await walletPass()).toEqual({ alerts: 1 });
+    expect(await deliver()).toMatchObject({ quietHours: 1 });
+
+    await ledger('CREDIT', 20_000n); // 60,000: recovered
+    expect(await walletPass()).toEqual({ alerts: 0 });
+    await ledger('DEBIT', 30_000n); // 30,000: a second fall, its own alert, also held
+    expect(await walletPass()).toEqual({ alerts: 1 });
+    expect(await deliver()).toMatchObject({ quietHours: 1 });
+
+    expect(await deliver(at(end))).toMatchObject({ claimed: 2, delivered: 1, superseded: 1 });
+    expect(sends).toHaveLength(1);
+    expect(sends[0]?.values).toMatchObject({ balance: { amountMinor: 30_000n, currency: 'IRT' } });
+  });
+
   it('holds a window that crosses midnight until its end tomorrow', async () => {
     // From an hour ago until ninety minutes ago: a window that holds now and ends almost a
     // day later, so for all but half an hour of the day its start is later than its end.

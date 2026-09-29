@@ -95,7 +95,7 @@ export class DrizzleNotificationSubjectReader implements NotificationSubjectRead
 
     const reminder = REMINDER_KIND_OF.get(kind);
     if (reminder !== undefined) return this.reminderHolds(tenantId, reminder, subjectId, now);
-    if (kind === 'WALLET_LOW_BALANCE') return this.walletStillLow(tenantId, subjectId);
+    if (kind === 'WALLET_LOW_BALANCE') return this.walletStillLow(tenantId, subjectId, now);
     if (kind === 'PAYMENT_PENDING_REMINDER')
       return this.paymentStillPending(tenantId, subjectId, now);
     if (kind === 'ORDER_PENDING_REMINDER') return this.orderStillPending(tenantId, subjectId, now);
@@ -233,8 +233,13 @@ export class DrizzleNotificationSubjectReader implements NotificationSubjectRead
    * alert's currency — and compared with the threshold the alert recorded rather than
    * today's setting, so an operator moving the threshold afterwards changes nothing about
    * a message already owed. A top-up that landed before the send supersedes it.
+   *
+   * HF-A9: so does a LATER crossing of the same wallet raised by now. A wallet that
+   * recovered and fell again while the first alert was held by quiet hours has two alerts
+   * queued, and releasing both at the window's end would tell the customer the same thing
+   * twice; the later one is the one that describes the wallet now.
    */
-  private async walletStillLow(tenantId: string, subjectId: string): Promise<boolean> {
+  private async walletStillLow(tenantId: string, subjectId: string, now: Date): Promise<boolean> {
     const result = await this.db.execute(sql`
       SELECT 1
       FROM wallet_threshold_alerts a
@@ -247,6 +252,14 @@ export class DrizzleNotificationSubjectReader implements NotificationSubjectRead
             AND e.customer_id = a.customer_id
             AND e.currency = a.currency
         ) < a.threshold_amount
+        AND NOT EXISTS (
+          SELECT 1 FROM wallet_threshold_alerts later
+          WHERE later.tenant_id = a.tenant_id
+            AND later.customer_id = a.customer_id
+            AND later.currency = a.currency
+            AND (later.crossed_at, later.crossing_entry_id) > (a.crossed_at, a.crossing_entry_id)
+            AND later.raised_at <= ${now}
+        )
       LIMIT 1
     `);
     return result.rows.length > 0;
