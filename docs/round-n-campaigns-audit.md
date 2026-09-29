@@ -368,6 +368,10 @@ Falsification, run on this branch (revert the rule, watch the named test fail, r
   itself" fails.
 - `complete` without its `ends_at <= now` condition → the same test fails.
 - `cancel` without withdrawing the rules → "cancel stops future work…" fails.
+- `schedule` without comparing the audience's hash, count and fingerprint → "refuses a
+  confirmation whose audience moved since the preview…" fails.
+- A gift's typed-count check removed → "refuses a confirmation whose liability or typed
+  count is not what the preview showed" fails.
 
 ### What the package set out to test
 

@@ -859,6 +859,34 @@ describe('campaigns', () => {
       expect(await count(sql`SELECT count(*)::int AS n FROM bulk_operations`)).toBe(0);
     });
 
+    it('refuses a time gift that reaches no service, before anything is written', async () => {
+      const id = await draftCampaign([
+        { kind: 'DISCOUNT', terms: TWENTY_PERCENT },
+        { kind: 'TIME_GIFT', terms: { durationDays: 3, notify: false } },
+      ]);
+      const preview = await service.preview(tenantA, owner, id);
+      const time = preview.gifts.TIME_GIFT;
+      expect(time?.count).toBe(0);
+      expect(
+        await refusal(
+          service.schedule(tenantA, owner, {
+            idempotencyKey: key(),
+            campaignId: id,
+            expectedDefinitionHash: preview.audience.definitionHash,
+            expectedRecipients: preview.audience.customers,
+            expectedFingerprint: preview.audience.fingerprint,
+            timeGift: {
+              count: 0,
+              fingerprint: time?.fingerprint as string,
+              typedCount: null,
+            },
+          }),
+        ),
+      ).toBe('audience.empty');
+      expect(await stateOf(id)).toBe('DRAFT');
+      expect(await count(sql`SELECT count(*)::int AS n FROM discounts`)).toBe(0);
+    });
+
     it('charges the mass-credit permission: a campaign is no way round it', async () => {
       const sales = adminActorFor(
         await createAdmin(ctx.container, tenantA, { username: 'sales-g', roleKeys: ['sales'] }),

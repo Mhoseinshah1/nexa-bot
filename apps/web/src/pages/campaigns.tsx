@@ -1921,7 +1921,7 @@ function CommandsCard({ campaign }: { campaign: CampaignDetail }) {
   });
   const pendingLaunch = campaign.actions.some((a) => a.state === 'PENDING' || a.state === 'FAILED');
   const live = ['SCHEDULED', 'ACTIVE', 'PAUSED'].includes(campaign.state);
-  const cancellable = campaign.state !== 'COMPLETED';
+  const cancellable = campaign.state !== 'COMPLETED' && campaign.state !== 'CANCELLED';
   return (
     <Card title={t('web.campaign_section_commands')} hint={t('web.campaign_cancel_hint')}>
       <div className="btn-group">
