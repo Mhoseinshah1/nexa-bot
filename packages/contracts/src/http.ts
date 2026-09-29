@@ -3423,20 +3423,29 @@ export const resellerPolicySchema = z.object({
    * The existing Products (one page), each with `decideEntitlement`'s answer for a NEW
    * purchase through the bot named by `botBasis`: any bot when every bot is granted, the
    * first granted bot otherwise, none when no bot is granted (every answer is then `BOT`).
+   *
+   * NULL when the caller does not hold `catalog.view`: product titles, statuses and ids
+   * are the catalogue's, and `resellers.view` alone must not read them around
+   * `ProductService.list`'s gate (Codex review of PR #115). The rest of the policy stands.
    */
   botBasis: z.enum(['ANY_BOT', 'GRANTED_BOT', 'NO_BOT']),
-  products: z.array(
-    z.object({
-      productId: z.string(),
-      title: z.string(),
-      status: z.enum(PRODUCT_STATUSES),
-      categoryId: z.string().nullable(),
-      panelId: z.string().nullable(),
-      allowed: z.boolean(),
-      refusedDimension: z.enum(RESELLER_ENTITLEMENT_DIMENSIONS).nullable(),
-    }),
-  ),
-  /** False when there are more Products than one page; the list is then the first page. */
+  products: z
+    .array(
+      z.object({
+        productId: z.string(),
+        title: z.string(),
+        status: z.enum(PRODUCT_STATUSES),
+        categoryId: z.string().nullable(),
+        panelId: z.string().nullable(),
+        allowed: z.boolean(),
+        refusedDimension: z.enum(RESELLER_ENTITLEMENT_DIMENSIONS).nullable(),
+      }),
+    )
+    .nullable(),
+  /**
+   * False when there are more Products than one page; the list is then the first page.
+   * Also false when `products` is null.
+   */
   productsComplete: z.boolean(),
 });
 export type ResellerPolicy = z.infer<typeof resellerPolicySchema>;
