@@ -433,8 +433,6 @@ export const CONTROL_ERROR_CODES = {
   TEMPLATE_INVALID: 'control.template_invalid',
   /** A revert with nothing to revert: this tenant has no override of the key. */
   TEMPLATE_NOT_OVERRIDDEN: 'control.template_not_overridden',
-  /** A TENANT_WIDE flag toggled without the confirmation the protocol requires. */
-  CONFIRMATION_REQUIRED: 'control.confirmation_required',
   /** A notification asked for with no destination configured. */
   DESTINATION_NOT_CONFIGURED: 'control.destination_not_configured',
   NOTIFICATION_NOT_FOUND: 'control.notification_not_found',

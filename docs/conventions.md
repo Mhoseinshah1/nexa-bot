@@ -204,6 +204,16 @@ body that uses an undeclared token, drops a required one, or repeats a
 single-use one; the web editor, the service and the tests all call that one
 function, so they cannot disagree about what is valid.
 
+**What an operator reads about a template.** The Web Admin titles each template
+with a Persian name and one sentence on where the bot uses it, and explains each
+`{token}` with a Persian label, from `apps/web/src/i18n/templates.fa.ts`. That is
+admin chrome, not contract: the catalogue's English descriptions stay as they are,
+and a token is never renamed — `{amount}` is shown with «مبلغ» beside it. An entry
+is optional at the type level, so a key without one degrades to its raw key and
+catalogue description rather than breaking the screen, and
+`tests/unit/template-copy.test.ts` fails on every key, token or section left
+without one — so a package that adds a template key adds its Persian name too.
+
 ---
 
 ## Settings are readable
@@ -222,6 +232,12 @@ gateway setting was overwritten by an ordinary chat message.
 that declaration. Asserted over HTTP in `tests/integration/control-plane-http`.
 There is no write-to-read path anywhere in the module.
 
+The Web Admin's settings page (WP-A1) is an operator's page: it shows the value in
+force above every control, says what an empty or zero value does in the setting's own
+Persian description where that is something an operator acts on, and keeps the machine
+key and the resolved source in a closed technical disclosure. The API still returns all
+three for every read.
+
 ---
 
 ## Destructive and bulk operations
@@ -237,11 +253,13 @@ count, no dry run, no undo and no record of prior runs. The whole-bot kill
 switch is rendered identically to the dice toggle.
 
 **Enforced by.** Partially, and only where something destructive exists yet. A
-feature flag declares its blast radius, and a `TENANT_WIDE` one is refused
-unless the caller types the flag's own key and gives a reason — which the audit
-row then carries. The web admin draws such a flag differently from a local one,
-because the legacy capability screen renders the whole-bot kill switch
-identically to the dice toggle.
+feature flag declares its blast radius. Until WP-A2 a `TENANT_WIDE` one was
+refused unless the caller typed the flag's own key and gave a reason. The owner
+removed both: an operator never types an internal key, and the audit row records
+actor, time and action without a reason. What remains is a plain yes/cancel
+question before the Web Admin switches off a feature whose switch-off loses
+something (ADR-0019, "Amended by WP-A2"). This is because the legacy capability
+screen renders the whole-bot kill switch identically to the dice toggle.
 
 No bulk operation exists yet, so the dry-run and counted-preview steps have
 nothing to apply to. See `docs/adr/0010-destructive-operations.md`.
