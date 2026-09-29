@@ -6395,6 +6395,73 @@ export const TEMPLATES = [
       },
     ],
   },
+  /*
+   * Round N, package D: the reseller monthly minimum (`docs/round-n-reseller-audit.md` §3.4).
+   * Sent by the customer notification lane only; values read at send time from the
+   * `reseller_minimum_notices` row the notification names and the month's sales.
+   */
+  {
+    key: 'bot.reseller.minimum_reminder',
+    description:
+      'Sent once a month to an active reseller whose sales this month are still below their ' +
+      'monthly minimum, reminders.reseller_minimum_days local days before the month ends. ' +
+      'Behind reseller_minimum_reminders. Informational: nothing happens to a reseller below ' +
+      'the minimum.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'minimum',
+        type: 'MONEY',
+        description: 'The reseller\u2019s monthly minimum, as recorded when the reminder was raised.',
+        required: false,
+        repeatable: true,
+      },
+      {
+        token: 'achievedSales',
+        type: 'MONEY',
+        description: 'The reseller\u2019s sales this month when the message is sent.',
+        required: false,
+        repeatable: true,
+      },
+      {
+        token: 'remainingSales',
+        type: 'MONEY',
+        description: 'How much is still needed to reach the minimum when the message is sent.',
+        required: false,
+        repeatable: true,
+      },
+      {
+        token: 'days',
+        type: 'NUMBER',
+        description: 'How many days of the month are left, today included.',
+        required: false,
+        repeatable: true,
+      },
+    ],
+  },
+  {
+    key: 'bot.reseller.minimum_achieved',
+    description:
+      'Sent once a month to an active reseller whose sales this month reached their monthly ' +
+      'minimum. Behind reseller_minimum_achieved_notices, off by default.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'minimum',
+        type: 'MONEY',
+        description: 'The reseller\u2019s monthly minimum.',
+        required: false,
+        repeatable: true,
+      },
+      {
+        token: 'achievedSales',
+        type: 'MONEY',
+        description: 'The reseller\u2019s sales this month when the minimum was reached.',
+        required: false,
+        repeatable: true,
+      },
+    ],
+  },
   {
     key: 'bot.service.renewed_details_button',
     description:

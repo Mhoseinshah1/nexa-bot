@@ -24,6 +24,9 @@ import { uuidV7Schema } from './ids.js';
 import {
   REFERRAL_COMMISSION_PERCENT_MAX,
   REFERRAL_COMMISSION_PERCENT_MIN,
+  RESELLER_MINIMUM_REMINDER_DAYS_DEFAULT,
+  RESELLER_MINIMUM_REMINDER_DAYS_MAX,
+  RESELLER_MINIMUM_REMINDER_DAYS_MIN,
   TRIAL_LIMIT_MAX,
   TRIAL_LIMIT_MIN,
   referralCommissionScopeSchema,
@@ -788,6 +791,26 @@ export const SETTINGS = [
     defaultValue: { amountMinor: '0', currency: 'IRT' },
     configures: 'wallet_low_balance_reminders',
     zeroMeaning: 'DISABLES',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  // Round N, package D: when the reseller monthly-minimum reminder goes out.
+  {
+    key: 'reminders.reseller_minimum_days',
+    description:
+      'How many local days before the calendar month ends (tenant timezone and calendar) an ' +
+      'active reseller still below their monthly minimum is reminded, once. Three by default, ' +
+      'Mirza\u2019s value; one to ten. Inert while reseller_minimum_reminders is off or no ' +
+      'minimum is set.',
+    schema: z
+      .number()
+      .int()
+      .min(RESELLER_MINIMUM_REMINDER_DAYS_MIN)
+      .max(RESELLER_MINIMUM_REMINDER_DAYS_MAX),
+    defaultValue: RESELLER_MINIMUM_REMINDER_DAYS_DEFAULT,
+    configures: 'reseller_minimum_reminders',
+    zeroMeaning: 'NOT_APPLICABLE',
     mutability: 'RUNTIME',
     classification: 'PUBLIC',
     consumer: 'ACTIVE',
