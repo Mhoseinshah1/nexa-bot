@@ -2427,6 +2427,37 @@ export const TEMPLATES = [
     ],
   },
   /*
+   * F1 (round N, Codex review of #113): the caption a receipt FILE's review message becomes
+   * when the complete record would not fit Telegram's 1,024-character caption. The caption is
+   * never cut into a record that silently loses its last lines: it states the decision and the
+   * tracking code and says the full record is in the reply — which is then sent as a reply to
+   * this very message, whole. Bounded on purpose: two facts and one sentence.
+   */
+  {
+    key: 'bot.admin.review_final_short',
+    description:
+      'F1: the receipt review message\u2019s caption when its complete final record is longer ' +
+      'than a Telegram caption can hold: the decision and the tracking code, and a pointer to ' +
+      'the full record, which is sent whole as a reply to this message.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'outcome',
+        type: 'STRING',
+        description: 'The decision, rendered from its own label key.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'reference',
+        type: 'STRING',
+        description: 'The payment tracking code the customer quoted.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  /*
    * F1: the answer to a tap on a review message ALREADY finalised — the callback's own short
    * notice, and nothing else: no decision is asked for again, and no message is sent or
    * edited. Decided from the payment's recorded disposition at the time of the tap.
