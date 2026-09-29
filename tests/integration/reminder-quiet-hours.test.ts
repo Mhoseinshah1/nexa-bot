@@ -158,7 +158,7 @@ describe('quiet hours for customer reminders (HF-A9)', () => {
     return id;
   }
 
-  async function service(expiresInDays: number): Promise<string> {
+  async function service(expiresInDays: number, usedBytes = 0n): Promise<string> {
     const orderId = await order('PAID');
     const id = ctx.container.ids.uuid();
     await ctx.container.database.db.execute(sql`
@@ -169,8 +169,8 @@ describe('quiet hours for customer reminders (HF-A9)', () => {
       VALUES (${id}, ${tenantA.tenantId}, ${customerA}, ${orderId}, ${panelA}, ${productA},
               ${'u' + Math.random().toString(16).slice(2, 12)},
               ${Math.random().toString(16).slice(2).padEnd(32, '0').slice(0, 32)},
-              ${ctx.container.ids.uuid()}, ${ALLOWANCE}, 0, now(), 'ACTIVE', now(), NULL,
-              now() + make_interval(secs => ${expiresInDays * DAY}))`);
+              ${ctx.container.ids.uuid()}, ${ALLOWANCE}, ${usedBytes}, now(), 'ACTIVE', now(),
+              NULL, now() + make_interval(secs => ${expiresInDays * DAY}))`);
     return id;
   }
 
@@ -230,9 +230,13 @@ describe('quiet hours for customer reminders (HF-A9)', () => {
    * the window ends, computed independently of the code under test (Tehran has no daylight
    * saving, so a wall-clock minute is a fixed offset from UTC).
    */
-  async function quietAroundNow(startOffset = -60, endOffset = 120): Promise<Date> {
+  async function quietAroundNow(
+    startOffset = -60,
+    endOffset = 120,
+    timezone = TEHRAN,
+  ): Promise<Date> {
     const now = ctx.container.clock.now();
-    const local = localMinute(now, TEHRAN);
+    const local = localMinute(now, timezone);
     expect(await setSetting('reminders.quiet_hours_start', hhmm(local + startOffset))).toBeNull();
     expect(await setSetting('reminders.quiet_hours_end', hhmm(local + endOffset))).toBeNull();
     await setFlag('reminder_quiet_hours', true);
@@ -431,6 +435,82 @@ describe('quiet hours for customer reminders (HF-A9)', () => {
     expect(await deliver()).toMatchObject({ quietHours: 1 });
     expect((await notifications())[0]?.nextAttemptAt?.toISOString()).toBe(end.toISOString());
     expect(await deliver(at(end))).toMatchObject({ delivered: 1 });
+  });
+
+  /** A reader with a fresh presentation cache, for a case that moves the tenant's zone. */
+  const freshReader = () =>
+    new SettingsQuietHoursReader({
+      settings: ctx.container.settingsResolver,
+      features: ctx.container.featureFlagResolver,
+      presentation: new CachedTenantPresentationReader(ctx.container.tenants, ctx.container.clock),
+    });
+
+  /** Moves tenant A to a whole-hour zone whose wall clock reads about `hour` now. */
+  async function pinLocalHour(hour: number): Promise<string> {
+    let offset = hour - ctx.container.clock.now().getUTCHours();
+    while (offset > 14) offset -= 24;
+    while (offset < -12) offset += 24;
+    const zone =
+      offset === 0 ? 'Etc/UTC' : `Etc/GMT${offset > 0 ? '-' : '+'}${String(Math.abs(offset))}`;
+    await ctx.container.database.db.execute(
+      sql`UPDATE tenants SET display_timezone = ${zone} WHERE id = ${tenantA.tenantId}`,
+    );
+    return zone;
+  }
+
+  it('does not release a held usage warning once a more urgent one was raised for the period', async () => {
+    const end = await quietAroundNow();
+    const id = await service(30, (ALLOWANCE * 85n) / 100n);
+    expect(await servicePass()).toEqual({ expiry: 0, usage: 1 });
+    expect(await deliver()).toMatchObject({ quietHours: 1 });
+
+    // Overnight the customer uses almost everything: the final warning is raised, and held.
+    await ctx.container.database.db.execute(
+      sql`UPDATE services SET traffic_used_bytes = ${(ALLOWANCE * 97n) / 100n} WHERE id = ${id}`,
+    );
+    expect(await servicePass()).toEqual({ expiry: 0, usage: 1 });
+    expect(await deliver()).toMatchObject({ quietHours: 1 });
+
+    // At the window's end the customer is told how things stand NOW — 5% left — and not,
+    // in the same breath, the stale "20% left" that was queued first.
+    expect(await deliver(at(end))).toMatchObject({ claimed: 2, delivered: 1, superseded: 1 });
+    expect(sends.map((one) => one.templateKey)).toEqual(['bot.service.usage_final']);
+    const states = new Map((await notifications()).map((row) => [row.kind, row.state]));
+    expect(states.get('SERVICE_USAGE_FIRST')).toBe('SUPERSEDED');
+    expect(states.get('SERVICE_USAGE_FINAL')).toBe('DELIVERED');
+  });
+
+  it('does not release "expires tomorrow" once "expires today" has been raised', async () => {
+    try {
+      // Local 20:00; quiet from 19:00 to 22:00. A deadline 23 hours out is tomorrow.
+      const zone = await pinLocalHour(20);
+      const end = await quietAroundNow(-60, 120, zone);
+      await service(23 / 24);
+      expect(await servicePass()).toEqual({ expiry: 1, usage: 0 });
+      expect(
+        await dispatcher(ctx.container.clock, freshReader()).deliverDue(tenantA, 200),
+      ).toMatchObject({ quietHours: 1 });
+
+      // The tenant's clock reaches the deadline's own date: "expires today" is raised, and
+      // outside this zone's window it is sent at once.
+      await pinLocalHour(0);
+      expect(await servicePass()).toEqual({ expiry: 1, usage: 0 });
+      expect(
+        await dispatcher(ctx.container.clock, freshReader()).deliverDue(tenantA, 200),
+      ).toMatchObject({ delivered: 1, quietHours: 0 });
+
+      // The held "expires tomorrow" is now false, and is superseded rather than sent late.
+      expect(await dispatcher(at(end), freshReader()).deliverDue(tenantA, 200)).toMatchObject({
+        claimed: 1,
+        superseded: 1,
+        delivered: 0,
+      });
+      expect(sends.map((one) => one.templateKey)).toEqual(['bot.service.expiry_day']);
+    } finally {
+      await ctx.container.database.db.execute(
+        sql`UPDATE tenants SET display_timezone = ${TEHRAN} WHERE id = ${tenantA.tenantId}`,
+      );
+    }
   });
 
   it('follows the tenant’s own timezone', async () => {

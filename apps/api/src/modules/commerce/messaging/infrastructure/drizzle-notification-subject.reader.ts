@@ -6,6 +6,7 @@ import {
   EXPIRY_REMINDER_STATES,
   SERVICE_REMINDER_NOTIFICATION_KINDS,
   SERVICE_UNRESOLVED_PROVISION_STATES,
+  USAGE_REMINDER_KINDS,
   USAGE_REMINDER_STATES,
 } from '@nexa/contracts';
 import type { Database } from '../../../../infrastructure/persistence/database.js';
@@ -172,6 +173,15 @@ export class DrizzleNotificationSubjectReader implements NotificationSubjectRead
    *     service is told nothing; and every ADVANCE warning needs its deadline still ahead,
    *     because "one day left" delivered after the deadline is false. `EXPIRED` needs no
    *     such test: its basis IS a deadline in the past.
+   *   - HF-A9: no MORE URGENT slot of the same family has been raised for the same period
+   *     since. The sweep already refuses to raise a less urgent slot after a more urgent one
+   *     (it records the prefix); this is the same rule for a message still QUEUED when the
+   *     more urgent one was raised. Quiet hours make that the ordinary case — "expires
+   *     tomorrow" raised at 23:30 and held, then "expires today" raised at local midnight
+   *     and held — and releasing both at the window's end would tell the customer something
+   *     already false beside something true. The older one is superseded; the more urgent
+   *     one is what they are told. "Raised" by the dispatcher's own clock: `raised_at` is
+   *     the sweep's `Clock`, so only news that exists at the moment of sending counts.
    *
    * A reminder row that is gone is `false`: nothing is announced about a subject that does
    * not exist.
@@ -185,6 +195,9 @@ export class DrizzleNotificationSubjectReader implements NotificationSubjectRead
     const expiry = (EXPIRY_REMINDER_KINDS as readonly string[]).includes(reminder);
     const states = expiry ? EXPIRY_REMINDER_STATES : USAGE_REMINDER_STATES;
     const advance = expiry && reminder !== 'EXPIRED';
+    // Both families are listed least urgent first; the slots after this one are the later news.
+    const family: readonly string[] = expiry ? EXPIRY_REMINDER_KINDS : USAGE_REMINDER_KINDS;
+    const moreUrgent = family.slice(family.indexOf(reminder) + 1);
     const result = await this.db.execute(sql`
       SELECT 1
       FROM service_reminders r
@@ -195,6 +208,19 @@ export class DrizzleNotificationSubjectReader implements NotificationSubjectRead
         AND s.state = ANY(${sql.param([...states])}::text[])
         ${expiry ? sql`` : sql`AND r.basis_traffic_limit_bytes = s.traffic_limit_bytes`}
         ${advance ? sql`AND s.expires_at > ${now}` : sql``}
+        ${
+          moreUrgent.length === 0
+            ? sql``
+            : sql`AND NOT EXISTS (
+                SELECT 1 FROM service_reminders later
+                WHERE later.tenant_id = r.tenant_id
+                  AND later.service_id = r.service_id
+                  AND later.kind = ANY(${sql.param(moreUrgent)}::text[])
+                  AND later.basis_expires_at IS NOT DISTINCT FROM r.basis_expires_at
+                  AND later.raised_at <= ${now}
+                  ${expiry ? sql`` : sql`AND later.basis_traffic_limit_bytes = r.basis_traffic_limit_bytes`}
+              )`
+        }
       LIMIT 1
     `);
     return result.rows.length > 0;

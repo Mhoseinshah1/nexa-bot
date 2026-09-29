@@ -3270,14 +3270,6 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    * through, and inventing an answer is worse than using the only recorded one. Carried
    * as `OQ-PROV-02` in `docs/open-questions.md` with the column that would close it.
    */
-  /**
-   * The customer notification lane: repository, dispatcher and timer.
-   *
-   * Built after `customerMessenger` because it shares it — one messenger for every
-   * customer-facing send in the process, so the bot-token resolution, the template
-   * rendering and the 429 classification cannot diverge between the reply path and the
-   * background one.
-   */
   /*
    * HF-A9: the quiet window, from the flag, its two settings and the tenant's display
    * timezone. Readers only — the reason `serviceReminderSweep` gives — and the same cached
@@ -3290,6 +3282,14 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     features: featureFlagResolver,
     presentation: templatePresentation,
   });
+  /**
+   * The customer notification lane: repository, dispatcher and timer.
+   *
+   * Built after `customerMessenger` because it shares it — one messenger for every
+   * customer-facing send in the process, so the bot-token resolution, the template
+   * rendering and the 429 classification cannot diverge between the reply path and the
+   * background one.
+   */
   const customerNotificationLoop = new CustomerNotificationLoop(
     new CustomerNotificationService({
       notifications: customerNotificationRepository,
