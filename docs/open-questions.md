@@ -2550,3 +2550,20 @@ the join screen, and the support screen's contact button still works. Whether th
 wants the whole ticket flow (taps and the typed message) exempt is a product decision.
 
 UNRESOLVED. The desk follows the guard.
+
+## OQ-N-FILES — RickPanel's caption markup, and albums of its files, on real Telegram
+
+Round N (F2, `docs/n-service-ux-audit.md`) shows the caption RickPanel returns for each
+file (`caption`, the field the owner's `rickpanel-openapi.json` names) as the source of
+truth again. The only evidence of its content is the R3 real-panel observation: «Limit»,
+«Expires» and raw `<code>` markup. So the caption is read as Telegram's HTML subset — the
+attribute-free formatting tags become `caption_entities`, every other character is text —
+and never handed to Telegram's HTML parser. What is not known:
+
+- the full tag vocabulary a real panel writes (a tag outside Telegram's set is shown as the
+  text it is, not interpreted); whether it ever sends `<a href>` (dropped, text kept);
+- whether a real panel ever omits `caption` (then the username line is sent, as R3 did);
+- that Telegram accepts an album of these documents (`sendMediaGroup`) with these names and
+  types — only a stand-in for the Bot API has answered it.
+
+UNRESOLVED until a real RickPanel's `/files` answer and a real bot are observed together.
