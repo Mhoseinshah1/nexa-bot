@@ -329,7 +329,7 @@ describe('a free trial', () => {
     expect(await offered()).toEqual([panelId]);
 
     const issued = await claim(customerId, 'first');
-    if (issued.outcome !== 'ISSUED') throw new Error(`refused: ${issued.reason}`);
+    if (issued.outcome !== 'ISSUED') throw new Error(`refused: ${JSON.stringify(issued)}`);
     expect(issued.replayed).toBe(false);
 
     // The order: a zero-total TRIAL that reached PAID through GRANT, naming no product,
@@ -401,7 +401,7 @@ describe('a free trial', () => {
   it('keeps what was granted when the panel’s trial is edited afterwards', async () => {
     await configureTrial();
     const issued = await claim(customerId, 'snap');
-    if (issued.outcome !== 'ISSUED') throw new Error(`refused: ${issued.reason}`);
+    if (issued.outcome !== 'ISSUED') throw new Error(`refused: ${JSON.stringify(issued)}`);
 
     await configurePanel(panelId, { amount: '5', unit: 'GB', hours: 240, label: 'بزرگ' });
 
@@ -492,7 +492,7 @@ describe('a free trial', () => {
     await configureTrial();
     panel.behaviour = 'refuses-rule';
     const issued = await claim(customerId, 'fails');
-    if (issued.outcome !== 'ISSUED') throw new Error(`refused: ${issued.reason}`);
+    if (issued.outcome !== 'ISSUED') throw new Error(`refused: ${JSON.stringify(issued)}`);
 
     await ctx.container.provisionerLoop.tick();
 
@@ -527,7 +527,7 @@ describe('a free trial', () => {
   it('keeps the trial counted while its create is still being retried', async () => {
     await configureTrial();
     const issued = await claim(customerId, 'retrying');
-    if (issued.outcome !== 'ISSUED') throw new Error(`refused: ${issued.reason}`);
+    if (issued.outcome !== 'ISSUED') throw new Error(`refused: ${JSON.stringify(issued)}`);
     await panel.close();
 
     await ctx.container.provisionerLoop.tick();
@@ -744,7 +744,7 @@ describe('a free trial', () => {
     await configureTrial({ limit: 2 });
     const strand = async (key: string) => {
       const issued = await claim(customerId, key);
-      if (issued.outcome !== 'ISSUED') throw new Error(`refused: ${issued.reason}`);
+      if (issued.outcome !== 'ISSUED') throw new Error(`refused: ${JSON.stringify(issued)}`);
       await ctx.container.database.db.execute(
         sql`UPDATE provisioning_operations
                SET state = 'FAILED', completed_at = now(), claimed_by = NULL, lease_until = NULL
@@ -773,6 +773,57 @@ describe('a free trial', () => {
     expect((await orderRow(refused.orderId))?.state).toBe('REFUNDED');
     expect((await grantRow(refused.orderId))?.released_at).not.toBeNull();
     expect(await moneyRows()).toEqual({ wallet: 0, payments: 0, refunds: 0 });
+  });
+
+  it('offers no panel in the operator’s overview while the trials switch is off (Codex, PR #111)', async () => {
+    await configureTrial();
+    expect(
+      (await ctx.container.panelTrials.overview(tenantA, owner)).panels.map(
+        (row) => row.offeredNow,
+      ),
+    ).toEqual([true]);
+    await setFlag(false);
+    expect(
+      (await ctx.container.panelTrials.overview(tenantA, owner)).panels.map(
+        (row) => row.offeredNow,
+      ),
+    ).toEqual([false]);
+  });
+
+  it('keeps a carried-forward byte count when the traffic figure is saved as shown (Codex, PR #111)', async () => {
+    // 10^9 bytes, as migration 0140 may carry a product's traffic forward; shown as 953.67 MB.
+    await configurePanel(panelId);
+    await ctx.container.database.db.execute(
+      sql`UPDATE panel_trial_configs SET traffic_bytes = 1000000000 WHERE panel_id = ${panelId}` as never,
+    );
+    const current = await ctx.container.panelTrials.get(tenantA, owner, panelId);
+    await ctx.container.panelTrials.update(tenantA, owner, panelId, {
+      idempotencyKey: randomUUID(),
+      expectedRevision: current.revision,
+      enabled: true,
+      trafficAmount: '953.67',
+      trafficUnit: 'MB',
+      durationHours: 48,
+      label: null,
+    });
+    expect(await ctx.container.panelTrials.get(tenantA, owner, panelId)).toMatchObject({
+      trafficBytes: '1000000000',
+      durationHours: 48,
+    });
+    // A figure the operator DID change is what they typed.
+    const edited = await ctx.container.panelTrials.get(tenantA, owner, panelId);
+    await ctx.container.panelTrials.update(tenantA, owner, panelId, {
+      idempotencyKey: randomUUID(),
+      expectedRevision: edited.revision,
+      enabled: true,
+      trafficAmount: '900',
+      trafficUnit: 'MB',
+      durationHours: 48,
+      label: null,
+    });
+    expect((await ctx.container.panelTrials.get(tenantA, owner, panelId)).trafficBytes).toBe(
+      String(900n * MB),
+    );
   });
 
   it('refuses a stale configuration write, and says when a save changed nothing', async () => {
@@ -888,6 +939,40 @@ describe('a free trial', () => {
     );
     expect(typedCommand.replyKey).toBe('bot.trial.unavailable');
     expect(await grants()).toBe(1);
+  });
+
+  it('answers a redelivered menu tap with the trial it already issued (Codex, PR #111)', async () => {
+    const runtime = ctx.container.botRuntime;
+    await configureTrial();
+    const update = typed(CATALOGUE_FA['bot.menu.trial'], '950950');
+    const first = await runtime.handle(tenantA, systemActor('tg'), update);
+    // Telegram redelivers the SAME update: the allowance is spent now, and the answer is
+    // still the one the first delivery gave.
+    const again = await runtime.handle(tenantA, systemActor('tg'), update);
+    expect(first.replyKey).toBe('bot.trial.issued');
+    expect(again.replyKey).toBe('bot.trial.issued');
+    expect(await grants()).toBe(1);
+  });
+
+  it('answers a redelivered menu tap with the refusal it already gave, even once a panel offers a trial (Codex, PR #111)', async () => {
+    const runtime = ctx.container.botRuntime;
+    await setFlag(true);
+    const update = typed(CATALOGUE_FA['bot.menu.trial'], '950950');
+    expect((await runtime.handle(tenantA, systemActor('tg'), update)).replyKey).toBe(
+      'bot.trial.unavailable',
+    );
+    await configurePanel(panelId);
+    expect((await runtime.handle(tenantA, systemActor('tg'), update)).replyKey).toBe(
+      'bot.trial.unavailable',
+    );
+    expect(await grants()).toBe(0);
+    // A NEW tap is a new question, and is served.
+    const fresh = await runtime.handle(
+      tenantA,
+      systemActor('tg'),
+      typed(CATALOGUE_FA['bot.menu.trial'], '950950'),
+    );
+    expect(fresh.replyKey).toBe('bot.trial.issued');
   });
 
   it('shows the panel choice when several offer a trial, and issues one trial for a double tap', async () => {

@@ -51,6 +51,7 @@ import {
   GATEWAY_CHECK_CALLBACK_PREFIX,
   GATEWAY_PAY_CALLBACK_PREFIX,
   intentOf,
+  startPayloadOf,
   MANUAL_PAY_CALLBACK_PREFIX,
   ORDER_CALLBACK_PREFIX,
   privateChatIdOf,
@@ -166,6 +167,18 @@ describe('a Telegram turn, decided before any I/O', () => {
       callbackQueryId: null,
     });
     expect(intentOf({ message: { text: '/referral' } }).intent).toBe('REFERRAL_INVITE');
+  });
+
+  it('never lets a menu label shadow a slash command (Codex, PR #111)', () => {
+    // A tenant labelled a button `/start`: the command, and its referral deep link, still
+    // mean /start — not whatever that button stands for.
+    const menu = new Map([
+      ['/start', '/wallet'],
+      ['/start ref-ABCDEFGH', '/wallet'],
+    ]);
+    expect(intentOf({ message: { text: '/start' } }, menu).intent).toBe('START');
+    expect(intentOf({ message: { text: '/start ref-ABCDEFGH' } }, menu).intent).toBe('START');
+    expect(startPayloadOf({ message: { text: '/start ref-ABCDEFGH' } })).toBe('ref-ABCDEFGH');
   });
 
   it('reads a trial panel choice, and VALIDATES the panel id it carries', () => {

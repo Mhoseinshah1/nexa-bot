@@ -5,6 +5,7 @@ import {
   PLATFORM_ERROR_CODES,
   errors,
   parseTrafficInput,
+  trafficInputOf,
   updatePanelTrialRequestSchema,
   uuidV7Schema,
   type ActorContext,
@@ -15,6 +16,7 @@ import {
   type PanelTrialOverviewResponse,
   type PanelTrialResponseBody,
   type PermissionKey,
+  type TrafficInputUnit,
   type TenantContext,
   type UnitOfWork,
   type UpdatePanelTrialResponse,
@@ -44,6 +46,8 @@ export const PANEL_TRIAL_EDIT_PERMISSION: PermissionKey = 'panels.edit';
 export interface PanelTrialServiceDeps extends TrialOfferDeps {
   readonly configs: PanelTrialConfigRepository;
   readonly panels: Pick<PanelRepository, 'find' | 'findMany' | 'lockPanel'>;
+  /** The `trials` switch: while it is off no panel is offered, as the bot answers. */
+  readonly features: { isEnabled(scope: TenantContext, key: 'trials'): Promise<boolean> };
   readonly guard: PermissionGuard;
   readonly audit: AuditWriter;
   readonly opsLog: OperationalEventRecorder;
@@ -88,6 +92,8 @@ export class PanelTrialService {
   async overview(scope: TenantContext, actor: ActorContext): Promise<PanelTrialOverviewResponse> {
     await this.deps.guard.check(scope, actor, PANEL_TRIAL_VIEW_PERMISSION);
     const verdicts = await trialPanelVerdicts(this.deps, scope);
+    // The same switch the claim reads first: with it off, nothing is offered anywhere.
+    const on = await this.deps.features.isEnabled(scope, 'trials');
     return {
       panels: verdicts
         .filter((verdict) => verdict.panelName !== null)
@@ -95,7 +101,7 @@ export class PanelTrialService {
           panelId: verdict.config.panelId,
           panelName: verdict.panelName ?? '',
           trial: toResponse(verdict.config.panelId, verdict.config),
-          offeredNow: verdict.offered,
+          offeredNow: on && verdict.offered,
         })),
     };
   }
@@ -143,7 +149,7 @@ export class PanelTrialService {
       throw errors.validation(COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID, 'Bad traffic.');
     }
     const label = command.label === null || command.label === '' ? null : command.label;
-    const write: PanelTrialConfigWrite = {
+    const submitted: PanelTrialConfigWrite = {
       enabled: command.enabled,
       trafficBytes,
       durationHours: command.durationHours,
@@ -154,10 +160,13 @@ export class PanelTrialService {
         JSON.stringify({
           panelId: id,
           expectedRevision: command.expectedRevision,
-          enabled: write.enabled,
-          trafficBytes: write.trafficBytes.toString(),
-          durationHours: write.durationHours,
-          label: write.label,
+          enabled: submitted.enabled,
+          // The figure as TYPED: whether it keeps the stored bytes is decided against the
+          // row, inside the transaction (`trafficAfterEdit`).
+          trafficAmount: command.trafficAmount,
+          trafficUnit: command.trafficUnit,
+          durationHours: submitted.durationHours,
+          label: submitted.label,
         }),
       )
       .digest('hex');
@@ -204,6 +213,15 @@ export class PanelTrialService {
           );
         }
         const stored = await this.deps.configs.find(scope, id, tx);
+        const write: PanelTrialConfigWrite = {
+          ...submitted,
+          trafficBytes: trafficAfterEdit(
+            stored,
+            command.trafficAmount,
+            command.trafficUnit,
+            trafficBytes,
+          ),
+        };
         const revision = stored?.revision ?? 0;
         if (command.expectedRevision !== revision) {
           throw errors.conflict(
@@ -286,6 +304,26 @@ export class PanelTrialService {
       clock: this.deps.clock,
     };
   }
+}
+
+/**
+ * The stored bytes when the operator left the traffic figure as the form showed it — the
+ * product editor's rule (`trafficBytesAfterEdit`, WP21) for a figure typed in GB or MB.
+ *
+ * A trial carried forward by migration 0140 holds whatever its product held, and 10^9
+ * bytes is shown as 953.67 MB; saving an unrelated field would otherwise rewrite it to
+ * 953.67 MiB. The figure is the SAME text `trafficInputOf` produces for the form, so
+ * "unchanged" means exactly "what the operator was shown".
+ */
+function trafficAfterEdit(
+  stored: PanelTrialConfigRecord | null,
+  amount: string,
+  unit: TrafficInputUnit,
+  submitted: bigint,
+): bigint {
+  if (stored === null) return submitted;
+  const shown = trafficInputOf(stored.trafficBytes);
+  return shown.amount === amount.trim() && shown.unit === unit ? stored.trafficBytes : submitted;
 }
 
 function sameConfig(stored: PanelTrialConfigRecord, write: PanelTrialConfigWrite): boolean {

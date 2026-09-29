@@ -401,7 +401,11 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
      * the receipt review's note was sized around. The caller decides the arrangement —
      * typically the file bare and the text as its own message, which `send` will split.
      */
-    if (caption !== undefined && html && caption.length > TELEGRAM_CAPTION_MAX) {
+    if (
+      caption !== undefined &&
+      (html || message.captionWhole === true) &&
+      caption.length > TELEGRAM_CAPTION_MAX
+    ) {
       return { outcome: 'REFUSED', reason: 'CAPTION_OVER_BOUND' };
     }
     const buttons = await this.labelButtons(scope, message.buttons ?? []);

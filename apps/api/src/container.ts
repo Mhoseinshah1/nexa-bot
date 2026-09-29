@@ -2815,6 +2815,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   const panelTrials = new PanelTrialService({
     configs: panelTrialConfigRepository,
     panels: panelRepository,
+    features: featureFlagResolver,
     panelSales: panelSalesGate,
     usernames: usernameLane,
     guard,

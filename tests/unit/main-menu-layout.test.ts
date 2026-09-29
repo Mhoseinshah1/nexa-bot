@@ -146,6 +146,13 @@ describe('MainMenuLayout — the keyboard and the route table from one object', 
     expect(routes.get(CATALOGUE_FA['bot.menu.catalog'])).toBe('/catalog');
   });
 
+  it('routes no label that reads as a slash command (Codex, PR #111)', async () => {
+    const layout = layoutWith({ labels: { 'bot.menu.wallet': '/start' } });
+    const routes = await layout.routesFor(scope);
+    expect(routes.has('/start')).toBe(false);
+    expect([...routes.values()]).not.toContain('/wallet');
+  });
+
   it('gives a label two buttons share to the first declared one', async () => {
     const layout = layoutWith({ labels: { 'bot.menu.wallet': CATALOGUE_FA['bot.menu.catalog'] } });
     expect((await layout.routesFor(scope)).get(CATALOGUE_FA['bot.menu.catalog'])).toBe('/catalog');

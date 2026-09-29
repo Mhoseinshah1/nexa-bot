@@ -110,6 +110,15 @@ export type TrialClaimResult =
       readonly reason: TrialRejection;
       /** Present when this call answered from the idempotency record. */
       readonly replayed?: true;
+    }
+  | {
+      /**
+       * R1: a claim that named no panel found SEVERAL offering a trial. Nothing was
+       * written and nothing is remembered: the customer chooses, and the choice is its own
+       * claim, naming its panel, under its own update's key.
+       */
+      readonly outcome: 'CHOOSE';
+      readonly offers: readonly TrialOffer[];
     };
 
 /**
@@ -221,11 +230,21 @@ export class TrialService {
     customerId: UserId,
     input: {
       readonly idempotencyKey: string;
-      /** The panel whose trial the customer chose — or the only one offered. */
-      readonly panelId: string;
+      /**
+       * The panel whose trial the customer chose. Absent for the main menu's button and
+       * `/trial` (R1): the panels on offer are then decided HERE, inside the transaction
+       * and under the idempotency record, so a redelivered update is answered exactly as
+       * the first delivery was — issued, or refused — whatever changed in between. Exactly
+       * one offer is claimed; several come back as `CHOOSE`; none is a remembered refusal.
+       */
+      readonly panelId?: string;
     },
   ): Promise<TrialClaimResult> {
-    const requestHash = hashRequest({ customerId, kind: 'TRIAL', panelId: input.panelId });
+    const requestHash = hashRequest(
+      input.panelId === undefined
+        ? { customerId, kind: 'TRIAL' }
+        : { customerId, kind: 'TRIAL', panelId: input.panelId },
+    );
     const denial = { action: 'trial.claim', entityType: 'Customer', entityId: customerId };
     await this.authorize(scope, actor, denial);
 
@@ -272,7 +291,20 @@ export class TrialService {
            * written. Whether the panel may take the account is decided below, under its
            * lock, by the evaluator settlement uses.
            */
-          const config = await this.configFor(scope, input.panelId, tx);
+          let panelId = input.panelId;
+          if (panelId === undefined) {
+            const offers = await trialOffersFor(this.deps, scope, tx);
+            const [only, ...more] = offers;
+            if (only === undefined) {
+              const configured = (await this.deps.configs.list(scope, tx)).some(
+                (config) => config.enabled,
+              );
+              throw new TrialRefused(configured ? 'PRODUCT_UNAVAILABLE' : 'UNCONFIGURED');
+            }
+            if (more.length > 0) return { outcome: 'CHOOSE', offers } as const;
+            panelId = only.panelId;
+          }
+          const config = await this.configFor(scope, panelId, tx);
           if (config === null) throw new TrialRefused('PRODUCT_UNAVAILABLE');
           const panel = await this.deps.panels.find(scope, config.panelId, tx);
           if (panel === null) throw new TrialRefused('PRODUCT_UNAVAILABLE');

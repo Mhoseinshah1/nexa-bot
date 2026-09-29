@@ -238,6 +238,44 @@ describe('the panel’s «سرویس تست» tab', () => {
     });
   });
 
+  it('sends a carried-forward figure back exactly as shown when only the hours change (Codex, PR #111)', async () => {
+    // 1,000,000,000 bytes is shown as 953.67 MB; the server keeps the stored bytes for a
+    // figure submitted as shown (`trafficAfterEdit`), so the form must not re-round it.
+    const calls = stubApi([
+      {
+        url: `/panels/${PANEL}/trial`,
+        body: {
+          trial: {
+            panelId: PANEL,
+            enabled: true,
+            trafficBytes: '1000000000',
+            durationHours: 72,
+            label: null,
+            revision: 3,
+            updatedAt: '2026-09-29T10:00:00.000Z',
+          },
+        },
+      },
+    ]);
+    renderPage(<PanelTrialTab panelId={PANEL} mayEdit />);
+    await waitFor(() =>
+      expect((screen.getByLabelText(t('web.panel_trial_traffic')) as HTMLInputElement).value).toBe(
+        '953.67',
+      ),
+    );
+    fireEvent.change(screen.getByLabelText(t('web.panel_trial_hours')), {
+      target: { value: '48' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: t('web.save') }));
+    await waitFor(() => expect(calls.calls.some((call) => call.method === 'POST')).toBe(true));
+    expect(calls.calls.find((call) => call.method === 'POST')?.body).toMatchObject({
+      expectedRevision: 3,
+      trafficAmount: '953.67',
+      trafficUnit: 'MB',
+      durationHours: 48,
+    });
+  });
+
   it('refuses a figure the server would refuse, without spending a request on it', async () => {
     const calls = stubApi([
       {

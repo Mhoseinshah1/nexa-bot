@@ -211,6 +211,12 @@ export interface CustomerFileMessage {
    * what every further receipt of the same payment is.
    */
   readonly caption?: { readonly templateKey: TemplateKey; readonly values: TemplateValues };
+  /**
+   * R1: refuse a plain-text caption over Telegram's bound (`CAPTION_OVER_BOUND`) instead of
+   * cutting it — for a caption that must arrive whole, like the referral invite whose link
+   * is at its end. Absent keeps the cut every other caption is sized around.
+   */
+  readonly captionWhole?: true;
   /** An inline keyboard on the file, with `CustomerMessage.buttons`' rules. */
   readonly buttons?: readonly CustomerButton[];
 }

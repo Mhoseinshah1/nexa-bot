@@ -674,6 +674,67 @@ describe('a customer pays through the approved screens', () => {
   // §I — the referral screen behind its banner
   // =========================================================================
   describe('the referral screen', () => {
+    it('sends a tenant’s invite too long for a caption whole, link included, after the bare banner (Codex, PR #111)', async () => {
+      await setSetting('referral.commission_percent', 10);
+      const flag = (await ctx.container.featureFlags.list(tenantA, owner)).find(
+        (row) => row.key === 'referrals',
+      );
+      await ctx.container.featureFlags.set(tenantA, owner, {
+        idempotencyKey: 'flag-referrals-on-long',
+        key: 'referrals',
+        enabled: true,
+        expectedVersion: flag?.version ?? null,
+        confirmKey: 'referrals',
+        reason: 'test',
+      });
+      const bytes = Buffer.alloc(64, 0x11);
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(bytes);
+      await ctx.container.tenantMedia.upload(tenantA, owner, 'REFERRAL_BANNER', {
+        mimeType: 'image/png',
+        contentBase64: bytes.toString('base64'),
+        idempotencyKey: 'banner-long-invite',
+      });
+      // Longer than Telegram's 1,024-character caption, with the link at the very end.
+      const body = `${'🌟 معرفی کامل برنامه. '.repeat(60)}\n{referralLink}`;
+      await ctx.container.templatesService.set(tenantA, owner, {
+        key: 'bot.referral.invite_card',
+        body,
+        expectedVersion: null,
+        expectedRevision: null,
+        idempotencyKey: 'long-invite',
+      });
+      reply = (request, response) => {
+        if (String(request.url).includes('/getMe')) {
+          response.writeHead(200, { 'content-type': 'application/json' });
+          response.end(
+            JSON.stringify({
+              ok: true,
+              result: { id: 999999, is_bot: true, first_name: 'Nexa', username: 'acme_store_bot' },
+            }),
+          );
+          return;
+        }
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ ok: true, result: { message_id: 11 } }));
+      };
+
+      const from = sent.length;
+      const result = await handle(tap('rf:'));
+      expect(result.replyKey).toBe('bot.referral.dashboard');
+      const photos = sent.slice(from).filter((one) => one.url.includes('/sendPhoto'));
+      expect(photos).toHaveLength(1);
+      // The banner went BARE: nothing of the invite was cut into a caption.
+      expect(photos[0]?.raw).not.toContain('name="caption"');
+      const texts = sent
+        .slice(from)
+        .filter((one) => one.url.includes('/sendMessage'))
+        .map((one) => String(one.body['text'] ?? ''));
+      expect(texts).toHaveLength(2);
+      expect(texts[0]?.length).toBeGreaterThan(1024);
+      expect(texts[0]).toMatch(/https:\/\/t\.me\/acme_store_bot\?start=ref-[A-Za-z0-9]+$/u);
+      expect(texts[1]).toContain('📊 آمار شما');
+    });
+
     it('still arrives when the banner ahead of it is refused', async () => {
       /*
        * The banner is decorative: an image an operator uploaded, which Telegram can

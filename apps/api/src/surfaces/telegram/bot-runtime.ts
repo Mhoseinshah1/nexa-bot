@@ -3112,7 +3112,12 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
    * the command literally the same path rather than two that agree today.
    */
   const trimmed = text.trim();
-  const asCommand = menu.get(trimmed) ?? trimmed;
+  /*
+   * A slash command is never a menu label (Codex, PR #111). Since R1 a tenant names its
+   * buttons, and a button labelled `/start` would otherwise turn every `/start` — the
+   * referral deep link's included — into whatever that button stands for.
+   */
+  const asCommand = trimmed.startsWith('/') ? trimmed : (menu.get(trimmed) ?? trimmed);
   const first = asCommand.split(/\s+/)[0]?.toLowerCase();
   // `/start@somebot` is what Telegram sends in a group. Stripped, because the bot it
   // names is the bot that received it.
@@ -5098,7 +5103,11 @@ export class BotRuntime {
                 mimeType: lead.mimeType,
               },
               ...(lead.kind === 'PHOTO_BYTES' && lead.caption !== undefined
-                ? { caption: { templateKey: lead.caption.key, values: lead.caption.values } }
+                ? {
+                    caption: { templateKey: lead.caption.key, values: lead.caption.values },
+                    // Whole or not at all: a cut invite loses the link at its end.
+                    captionWhole: true as const,
+                  }
                 : {}),
             });
       /*
@@ -5108,6 +5117,26 @@ export class BotRuntime {
        * and a second copy of the invite would be the duplicate the lane exists to avoid.
        */
       if (lead.kind === 'PHOTO_BYTES' && lead.caption !== undefined) {
+        /*
+         * Too long to be a caption (a tenant's longer invite; Codex, PR #111): the banner
+         * goes bare and the invite follows as its own text, whole, link included. Two
+         * messages rather than one cut one — the text is what a customer forwards, and a
+         * forwarded invite without its link invites nobody. The bare banner is decorative
+         * again, so its own failure is ignored.
+         */
+        if (led.outcome === 'REFUSED' && led.reason === 'CAPTION_OVER_BOUND') {
+          await this.deps.messenger.sendFile(scope, {
+            chatId,
+            botInstanceId: input.botInstanceId,
+            kind: 'PHOTO',
+            source: {
+              kind: 'BYTES',
+              bytes: lead.bytes,
+              fileName: lead.fileName,
+              mimeType: lead.mimeType,
+            },
+          });
+        }
         if (led.outcome === 'REFUSED') {
           led = await this.deps.messenger.send(scope, {
             chatId,
@@ -12063,8 +12092,9 @@ export class BotRuntime {
    * A customer asked for a trial — the main menu's «🧪 دریافت سرویس تست», `/trial`, or the
    * catalogue's trial button (R1).
    *
-   * Which panels offer one is `TrialService.availabilityFor`'s answer — enabled, eligible
-   * by the one evaluator, able to name the account — and never this surface's. Exactly
+   * Which panels offer one is `TrialService.claim`'s answer, decided with no panel named —
+   * enabled, eligible by the one evaluator, able to name the account — and never this
+   * surface's. Exactly
    * one: the trial is taken on it at once. Several: the customer chooses, from buttons
    * carrying only the panel's id. None, or a customer who may not take one: the one
    * unavailable sentence. Every refusal says the same thing; the reason is the service's.
@@ -12080,18 +12110,25 @@ export class BotRuntime {
     idempotencyKey: string,
   ): Promise<PendingReply> {
     if (this.deps.trials === undefined) return trialUnavailable();
-    const availability = await this.deps.trials.availabilityFor(scope, actor, customer.id);
-    if (!availability.available) return trialUnavailable();
-    const [only, ...others] = availability.offers;
-    if (only === undefined) return trialUnavailable();
-    if (others.length === 0) {
-      return this.claimTrial(scope, actor, customer, only.panelId, idempotencyKey);
+    /*
+     * The claim decides — not an availability read ahead of it. It answers a redelivered
+     * update from the record the first delivery left, BEFORE it looks at what is offered
+     * now: a trial already issued for this update is issued again (not "unavailable"
+     * because the allowance is now spent), and a refusal stays a refusal even if a panel
+     * came on in between. Codex, PR #111.
+     */
+    const result = await this.deps.trials.claim(scope, actor, customer.id, {
+      idempotencyKey: `${idempotencyKey}:trial`,
+    });
+    if (result.outcome === 'ISSUED') {
+      return { key: 'bot.trial.issued', values: {}, buttons: [], orderId: null };
     }
+    if (result.outcome === 'REFUSED') return trialUnavailable();
     return {
       key: 'bot.trial.choose_panel',
       values: {},
       buttons: [
-        ...availability.offers.map((offer) => ({
+        ...result.offers.map((offer) => ({
           label: {
             kind: 'TEMPLATE' as const,
             key: 'bot.trial.panel_button' as const,

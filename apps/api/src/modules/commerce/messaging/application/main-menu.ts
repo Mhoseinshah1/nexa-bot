@@ -95,7 +95,10 @@ export class MainMenuLayout {
       const label = labels[index] ?? '';
       // The first button to claim a label keeps it: two buttons an operator gave one name
       // cannot both be reached by it, and the earlier-declared one is the stable answer.
-      if (label !== '' && !routes.has(label)) routes.set(label, `/${button.command}`);
+      // A label that reads as a slash command routes nothing: `intentOf` parses it as
+      // the command it spells, and a button must not take `/start` away from `/start`.
+      if (label === '' || label.startsWith('/')) return;
+      if (!routes.has(label)) routes.set(label, `/${button.command}`);
     });
     return routes;
   }

@@ -713,7 +713,10 @@ export function PanelDetailPage({
                   submission={credentialSubmission}
                 />
               )}
-              {tab === 'trial' && <PanelTrialTab panelId={data.id} mayEdit={mayEdit} />}
+              {tab === 'trial' && (
+                // Read-only on an ARCHIVED panel: the server refuses the write there.
+                <PanelTrialTab panelId={data.id} mayEdit={mayEdit && data.status !== 'ARCHIVED'} />
+              )}
               {tab === 'capabilities' && (
                 <CapabilitiesTab
                   panel={data}
