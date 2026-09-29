@@ -592,7 +592,7 @@ describe('what the template card tells the operator', () => {
 
 describe('the settings editor', () => {
   const NUMBER_KEY = 'ops.notifications.max_attempts';
-  const field = () => document.getElementById(`value-${NUMBER_KEY}`) as HTMLInputElement;
+  const field = () => document.getElementById(`setting-${NUMBER_KEY}`) as HTMLInputElement;
 
   it('sends the version the DRAFT was based on', async () => {
     // Same correction as the template editor's: nothing REFETCHES between
@@ -615,7 +615,7 @@ describe('the settings editor', () => {
       },
     ]);
     renderPage(<SettingsPage mayEdit denied={false} />);
-    await screen.findAllByText(NUMBER_KEY);
+    await screen.findByRole('heading', { name: t('web.setting_ops_max_attempts') });
 
     fireEvent.change(field(), { target: { value: '9' } });
     route.body = { settings: [setting({ value: 4, source: 'TENANT', version: 6 })] };
@@ -668,7 +668,7 @@ describe('the settings editor', () => {
     );
 
     renderPage(<SettingsPage mayEdit denied={false} />);
-    await screen.findAllByText(NUMBER_KEY);
+    await screen.findByRole('heading', { name: t('web.setting_ops_max_attempts') });
     fireEvent.change(field(), { target: { value: '9' } });
     fireEvent.click(screen.getAllByRole('button', { name: t('web.save') })[0] as HTMLElement);
 
@@ -704,7 +704,7 @@ describe('the settings editor', () => {
       },
     ]);
     renderPage(<SettingsPage mayEdit denied={false} />);
-    await screen.findAllByText(NUMBER_KEY);
+    await screen.findByRole('heading', { name: t('web.setting_ops_max_attempts') });
 
     fireEvent.change(field(), { target: { value: '9' } });
     expect(field().value).toBe('9');

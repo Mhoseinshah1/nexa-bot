@@ -255,8 +255,9 @@ export function Card({
   foot,
   className,
 }: {
-  title?: string;
-  hint?: string;
+  /** A node rather than a string, so a title can isolate a Latin run inside Persian. */
+  title?: ReactNode;
+  hint?: ReactNode;
   actions?: ReactNode;
   children: ReactNode;
   foot?: ReactNode;
