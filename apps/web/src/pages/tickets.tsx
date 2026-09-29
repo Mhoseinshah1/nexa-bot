@@ -1,4 +1,11 @@
-import { useEffect, useState, type ChangeEvent, type FormEvent, type ReactNode } from 'react';
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type FormEvent,
+  type ReactNode,
+} from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   TICKET_CATEGORY_TITLE_MAX_LENGTH,
@@ -186,6 +193,8 @@ export function ticketFault(error: unknown): string {
 /** Support's chosen file, read and judged in the browser, or the reason it cannot be sent. */
 export type PickedReplyFile =
   | { readonly kind: 'NONE' }
+  /** A chosen file still being read: nothing may be sent until it is judged. */
+  | { readonly kind: 'READING' }
   | { readonly kind: 'INVALID'; readonly reason: WebKey }
   | {
       readonly kind: 'READY';
@@ -1270,11 +1279,36 @@ function TicketReplyCard({ ticket }: { ticket: TicketSummary }) {
   const [picked, setPicked] = useState<PickedReplyFile>({ kind: 'NONE' });
   // Remounts the file input, the one way to clear what a file input shows.
   const [fileInput, setFileInput] = useState(0);
+  /*
+   * The latest selection (Codex review of #108, the `client-apps.tsx` ticket). A read that
+   * completes after a newer file was picked, or after the file was removed, is discarded,
+   * so what is sent is always the file the input shows — never an earlier pick's bytes.
+   */
+  const selection = useRef(0);
   const body = normalizeTicketText(text);
-  const valid = body !== null && isTicketTextWithinBound(body) && picked.kind !== 'INVALID';
+  // Nothing is sendable while a chosen file is being read, or when it was refused.
+  const valid =
+    body !== null &&
+    isTicketTextWithinBound(body) &&
+    picked.kind !== 'INVALID' &&
+    picked.kind !== 'READING';
   const clearFile = () => {
+    selection.current += 1;
     setPicked({ kind: 'NONE' });
     setFileInput((value) => value + 1);
+  };
+  const onPick = (file: File | undefined) => {
+    selection.current += 1;
+    const ticketOfPick = selection.current;
+    // The previous pick is gone the moment a new one is made, ready or not.
+    if (file === undefined) {
+      setPicked({ kind: 'NONE' });
+      return;
+    }
+    setPicked({ kind: 'READING' });
+    void readReplyFile(file).then((result) => {
+      if (selection.current === ticketOfPick) setPicked(result);
+    });
   };
   const reply = useMutation({
     // The file travels as the mutation's VARIABLE, for the reason the referral banner states.
@@ -1285,9 +1319,20 @@ function TicketReplyCard({ ticket }: { ticket: TicketSummary }) {
         idempotencyKey: submission.current({
           ticket: ticket.id,
           text: value.text,
+          /*
+           * The CONTENT is part of the fingerprint, not only the name and size (Codex review
+           * of #108, #104's rule): a key held across an ambiguous failure must not be reused
+           * for a different file sharing both, which the server refuses as a payload
+           * mismatch. The base64 itself, not a Web Crypto digest — `crypto.subtle` exists
+           * only in a secure context.
+           */
           file:
             value.file.kind === 'READY'
-              ? { name: value.file.attachment.fileName, size: value.file.byteLength }
+              ? {
+                  name: value.file.attachment.fileName,
+                  size: value.file.byteLength,
+                  content: value.file.attachment.contentBase64,
+                }
               : null,
         }),
         text: value.text,
@@ -1349,14 +1394,7 @@ function TicketReplyCard({ ticket }: { ticket: TicketSummary }) {
               ),
             ].join(',')}
             disabled={reply.isPending}
-            onChange={(event: ChangeEvent<HTMLInputElement>) => {
-              const file = event.target.files?.[0];
-              if (file === undefined) {
-                setPicked({ kind: 'NONE' });
-                return;
-              }
-              void readReplyFile(file).then(setPicked);
-            }}
+            onChange={(event: ChangeEvent<HTMLInputElement>) => onPick(event.target.files?.[0])}
           />
         </Field>
         <div className="btn-group">

@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import {
   TicketDetailPage,
   TicketsPage,
@@ -404,9 +404,8 @@ describe('one ticket', () => {
     });
     await pick(new File([PNG], 'screen.png', { type: 'image/png' }));
     const send = screen.getByRole('button', { name: t('web.ticket_reply_send') });
-    await waitFor(() =>
-      expect(screen.getByRole('button', { name: t('web.ticket_reply_file_clear') })).toBeTruthy(),
-    );
+    // Sendable only once the file has been read and judged.
+    await waitFor(() => expect(send).toBeEnabled());
     fireEvent.click(send);
     await waitFor(() =>
       expect(api.calls.some((call) => call.url.endsWith('/messages'))).toBe(true),
@@ -460,6 +459,117 @@ describe('one ticket', () => {
     );
     const posted = api.calls.find((call) => call.url.endsWith('/messages'))!;
     expect(Object.keys(posted.body as object).sort()).toEqual(['idempotencyKey', 'text']);
+  });
+
+  it('sends the file the input shows when an earlier read finishes last, and nothing while one is read (Codex #108)', async () => {
+    // A FileReader whose reads finish when the test says so, in the order it says.
+    const original = globalThis.FileReader;
+    const pending: DeferredReader[] = [];
+    class DeferredReader {
+      result: ArrayBuffer | null = null;
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      private file: File | null = null;
+      readAsArrayBuffer(file: File) {
+        this.file = file;
+        pending.push(this);
+      }
+      /** The real reader's answer, delivered now. */
+      async finish() {
+        const file = this.file as File;
+        this.result = await new Promise<ArrayBuffer>((resolve) => {
+          const real = new original();
+          real.onload = () => resolve(real.result as ArrayBuffer);
+          real.readAsArrayBuffer(file);
+        });
+        this.onload?.();
+      }
+    }
+    vi.stubGlobal('FileReader', DeferredReader);
+    try {
+      const api = replyPage();
+      fireEvent.change(await screen.findByLabelText(t('web.ticket_reply_text')), {
+        target: { value: 'کدام فایل؟' },
+      });
+      const send = screen.getByRole('button', { name: t('web.ticket_reply_send') });
+      const FIRST = new Uint8Array([...PNG, 0x01]);
+      const SECOND = new Uint8Array([...PNG, 0x02]);
+      await pick(new File([FIRST], 'first.png', { type: 'image/png' }));
+      await pick(new File([SECOND], 'second.png', { type: 'image/png' }));
+      expect(pending).toHaveLength(2);
+      // The FIRST file's read finishes while the second is still being read: nothing is sent.
+      await act(async () => {
+        await (pending[0] as DeferredReader).finish();
+      });
+      expect(send).toBeDisabled();
+      fireEvent.click(send);
+      expect(api.calls.some((call) => call.url.endsWith('/messages'))).toBe(false);
+      // The second finishes: it, and only it, is what goes.
+      await act(async () => {
+        await (pending[1] as DeferredReader).finish();
+      });
+      await waitFor(() => expect(send).toBeEnabled());
+      fireEvent.click(send);
+      await waitFor(() =>
+        expect(api.calls.some((call) => call.url.endsWith('/messages'))).toBe(true),
+      );
+      const posted = api.calls.find((call) => call.url.endsWith('/messages'))!.body as {
+        attachment: { fileName: string; contentBase64: string };
+      };
+      expect(posted.attachment.fileName).toBe('second.png');
+      expect(posted.attachment.contentBase64).toBe(Buffer.from(SECOND).toString('base64'));
+    } finally {
+      vi.stubGlobal('FileReader', original);
+    }
+  });
+
+  it('gives a different file a new key after an ambiguous failure, even with the same name and size (Codex #108)', async () => {
+    const api = stubApi([
+      { url: `/tickets/${TICKET_ID}`, body: detail() },
+      {
+        url: `/tickets/${TICKET_ID}/messages`,
+        status: 503,
+        body: {
+          error: {
+            kind: 'unavailable',
+            code: 'platform.unavailable',
+            message: 'try again',
+            correlationId: 'test',
+          },
+        },
+      },
+    ]);
+    renderPage(
+      <TicketDetailPage
+        id={TICKET_ID}
+        denied={false}
+        mayReply
+        mayAssign={false}
+        mayClose={false}
+      />,
+    );
+    fireEvent.change(await screen.findByLabelText(t('web.ticket_reply_text')), {
+      target: { value: 'پیوست' },
+    });
+    const posts = () => api.calls.filter((call) => call.url.endsWith('/messages'));
+    const sendWith = async (bytes: Uint8Array, count: number) => {
+      await pick(new File([bytes], 'screen.png', { type: 'image/png' }));
+      const send = screen.getByRole('button', { name: t('web.ticket_reply_send') });
+      await waitFor(() => expect(send).toBeEnabled());
+      fireEvent.click(send);
+      await waitFor(() => expect(posts()).toHaveLength(count));
+      await waitFor(() => expect(send).toBeEnabled());
+    };
+    const keyOf = (index: number) =>
+      (posts()[index]?.body as { idempotencyKey: string }).idempotencyKey;
+
+    await sendWith(new Uint8Array([...PNG, 0x01]), 1);
+    // The same file again is a retry of the same question: the held key.
+    await sendWith(new Uint8Array([...PNG, 0x01]), 2);
+    expect(keyOf(1)).toBe(keyOf(0));
+    // A different file with the same name and the same size is a new command.
+    await sendWith(new Uint8Array([...PNG, 0x02]), 3);
+    expect(keyOf(2)).not.toBe(keyOf(0));
   });
 
   it('names the server’s own refusal of a file, and a full staging area, in Persian', () => {
