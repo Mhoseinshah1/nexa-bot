@@ -243,6 +243,41 @@ export function localInstant(
   return new Date(Math.max(...candidates));
 }
 
+/**
+ * EVERY instant a zone's wall clock reads `hour:minute` on a civil date, earliest first
+ * (HF-A9, Codex review of PR #107).
+ *
+ * One instant on an ordinary day; TWO on a fall-back day whose repeated hour holds the wall
+ * time (01:30 in New York on 1 November 2026 is 05:30Z and again 06:30Z); NONE for a wall
+ * time a spring-forward gap swallows. `localInstant` answers with the first of these, which
+ * is right for the start of a period and wrong for "the next time the clock reads 01:30"
+ * when the clock already read it once tonight.
+ *
+ * The offsets asked are the zone's a day before, at, and a day after the naive guess: a
+ * transition lies between the first and the last, and no zone changes offset twice in two
+ * days, so both readings of a repeated hour are among the candidates.
+ */
+export function localInstants(
+  date: CivilDate,
+  hour: number,
+  presentation: ReportPresentation,
+  minute = 0,
+): Date[] {
+  const naive = utcDayOf(date, presentation.calendar) * DAY_MS + hour * 3_600_000 + minute * 60_000;
+  const wallAt = (at: number): number => {
+    const wall = partsOf(new Date(at), 'gregorian', presentation.timezone, true);
+    return Date.UTC(wall.year, wall.month - 1, wall.day, wall.hour, wall.minute, wall.second);
+  };
+  const offsetAt = (at: number): number => wallAt(at) - Math.floor(at / 1000) * 1000;
+  const candidates = new Set(
+    [naive - DAY_MS, naive, naive + DAY_MS].map((guess) => naive - offsetAt(guess)),
+  );
+  return [...candidates]
+    .filter((at) => wallAt(at) === naive)
+    .sort((a, b) => a - b)
+    .map((at) => new Date(at));
+}
+
 function midnight(date: CivilDate, presentation: ReportPresentation): Date {
   return localInstant(date, 0, presentation);
 }

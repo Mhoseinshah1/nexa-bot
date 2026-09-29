@@ -128,6 +128,41 @@ describe('quietHoursEnd — the window in the tenant’s timezone', () => {
     expect(quietHoursEnd(new Date('2026-09-30T08:30:00.000Z'), early)).toBeNull();
   });
 
+  /*
+   * Codex review of PR #107: on a fall-back night the end time can occur twice. Inside the
+   * repeated hour the clock has already read it once, so the end is the SECOND reading —
+   * never the first, which is in the past and would send inside a quiet minute.
+   */
+  it('ends at the second 01:30 when New York falls back inside the window', () => {
+    const newYork = window('00:00', '01:30', 'America/New_York');
+    // 06:15Z on 1 November 2026 is the SECOND 01:15 (EST); 01:30 EST is 06:30Z.
+    expect(quietHoursEnd(new Date('2026-11-01T06:15:00.000Z'), newYork)?.toISOString()).toBe(
+      '2026-11-01T06:30:00.000Z',
+    );
+    // During the FIRST 01:15 (EDT, 05:15Z) the first 01:30 is still ahead: 05:30Z.
+    expect(quietHoursEnd(new Date('2026-11-01T05:15:00.000Z'), newYork)?.toISOString()).toBe(
+      '2026-11-01T05:30:00.000Z',
+    );
+  });
+
+  it('ends at the second 02:30 when Berlin falls back inside the window', () => {
+    const berlin = window('01:00', '02:30', 'Europe/Berlin');
+    // 01:10Z on 25 October 2026 is the SECOND 02:10 (CET); 02:30 CET is 01:30Z.
+    expect(quietHoursEnd(new Date('2026-10-25T01:10:00.000Z'), berlin)?.toISOString()).toBe(
+      '2026-10-25T01:30:00.000Z',
+    );
+  });
+
+  it('keeps resolving a wall time the spring-forward gap swallows as the report calendar does', () => {
+    // 02:30 does not exist in Berlin on 29 March 2026 (02:00 CET jumps to 03:00 CEST). It
+    // resolves as `localInstant` resolves it — 02:30 read at the pre-change offset, 01:30Z,
+    // which is 03:30 CEST — unchanged by the fall-back fix.
+    const berlin = window('01:00', '02:30', 'Europe/Berlin');
+    expect(quietHoursEnd(new Date('2026-03-29T00:45:00.000Z'), berlin)?.toISOString()).toBe(
+      '2026-03-29T01:30:00.000Z',
+    );
+  });
+
   it('ends at the local wall time across a daylight-saving change', () => {
     // Berlin leaves summer time at 03:00 CEST on 25 October 2026 (to 02:00 CET). At
     // midnight CEST (22:00Z on the 24th) the window ends at 08:00 CET, which is 07:00Z —
