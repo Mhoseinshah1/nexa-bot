@@ -194,15 +194,54 @@ function transportReason(error: unknown, aborted: boolean): string {
     : 'network';
 }
 
-/** The first field a zod parse refused, as a bounded machine path. */
+/**
+ * The fields of the two request bodies this adapter SENDS — `createInvoice`'s and
+ * `inquire`'s, nothing else. The only names a provider's validation answer may put into a
+ * code (Codex review of #113): its `loc` is the provider's content, and a code built from it
+ * reaches `creation_error_code`, the operational log and the worker's log line, where only
+ * a closed vocabulary belongs.
+ */
+const REQUEST_FIELDS: ReadonlySet<string> = new Set([
+  'amount',
+  'order_id',
+  'callback_url',
+  'buyer_chat_id',
+  'invoice_id',
+]);
+
+/**
+ * The response fields the three schemas below declare. A zod issue's path is built from
+ * the SCHEMA's keys (these objects are not strict, so a key the provider added is stripped,
+ * never reported) and from array indexes (none of these schemas has an array), so it
+ * cannot carry response content today. It is checked against this set anyway, so a later
+ * schema that does — a record, an array of provider objects — cannot turn a code into a
+ * channel for the provider's text.
+ */
+const RESPONSE_FIELDS: ReadonlySet<string> = new Set([
+  'invoice_id',
+  'order_id',
+  'request_amount',
+  'final_amount',
+  'status',
+  'paid',
+  'invoice_url',
+  'web_invoice_url',
+  'delivery_id',
+  'credit_amount',
+]);
+
+/** The first field a zod parse refused, from `RESPONSE_FIELDS` or `unknown`. */
 function firstIssuePath(error: z.ZodError): string {
   const path = error.issues[0]?.path ?? [];
-  return path.length === 0 ? 'root' : path.map(String).join('.');
+  if (path.length === 0) return 'root';
+  const field = path[0];
+  return typeof field === 'string' && RESPONSE_FIELDS.has(field) ? field : 'unknown';
 }
 
 /**
- * The field a framework validation answer (`{ detail: [{ loc: [..., field], ... }] }`) names,
- * or null when the body is not one. The provider's MESSAGE is never read.
+ * The request field a framework validation answer (`{ detail: [{ loc: [..., field] }] }`)
+ * names — one of `REQUEST_FIELDS`, else `unknown` — or null when the body is not one. The
+ * provider's `loc`, `msg` and `type` are never copied into anything.
  */
 function validationFieldOf(body: unknown): string | null {
   const detail = (body as { detail?: unknown } | null)?.detail;
@@ -210,7 +249,7 @@ function validationFieldOf(body: unknown): string | null {
   const loc = (detail[0] as { loc?: unknown } | null)?.loc;
   if (!Array.isArray(loc) || loc.length === 0) return 'unknown';
   const last: unknown = loc[loc.length - 1];
-  return typeof last === 'string' || typeof last === 'number' ? String(last) : 'unknown';
+  return typeof last === 'string' && REQUEST_FIELDS.has(last) ? last : 'unknown';
 }
 
 function unreadableCode(raw: { readonly status: number; readonly shape: UnreadableShape }): string {
