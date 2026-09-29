@@ -479,6 +479,8 @@ export const PLACEHOLDER_LABEL_OVERRIDES_FA: Partial<
   'bot.service.devices_option': { quantity: 'تعداد کاربر', price: 'قیمت این تعداد' },
   'bot.order.preinvoice_devices': { unitPrice: 'قیمت هر کاربر اضافه' },
   'bot.service.renew_option_button': { title: 'نام محصول' },
+  // R2: the renewal result names the renewed account, not the customer's Telegram username.
+  'bot.service.renewed': { username: 'نام کاربری سرویس' },
   'bot.service.list': { total: 'تعداد کل سرویس‌ها' },
   'bot.service.list_item_button': { username: 'نام کاربری سرویس' },
   'bot.service.card': { lastSeen: 'آخرین اتصال', status: 'وضعیت سرویس' },
@@ -1155,7 +1157,7 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   ],
   'bot.payment.gateway_preparing': [
     'فاکتور درگاه در حال ساخت',
-    'وقتی فاکتور درگاه هنوز ساخته نشده؛ از مشتری می‌خواهد چند ثانیه بعد دکمهٔ بررسی را بزند.',
+    'وقتی فاکتور درگاه هنوز ساخته نشده؛ همین پیام به‌محض آماده شدن فاکتور خودکار به فاکتور و دکمهٔ پرداخت تبدیل می‌شود.',
   ],
   'bot.payment.gateway_invoice': [
     'فاکتور پرداخت آنلاین',
@@ -1482,6 +1484,18 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'bot.service.action_failed': [
     'درخواست سرویس انجام نشد',
     'درخواست مشتری انجام نمی‌شود؛ می‌تواند دوباره تلاش کند یا با پشتیبانی تماس بگیرد.',
+  ],
+  'bot.service.renewed': [
+    'نتیجهٔ تمدید سرویس',
+    'پیام جداگانه‌ای که پس از تمدید موفق روی پنل برای مشتری فرستاده می‌شود، با نام کاربری، مدت تمدید، تاریخ انقضای جدید و کد پیگیری.',
+  ],
+  'bot.service.renewed_details_button': [
+    'دکمهٔ «مشخصات سرویس» در نتیجهٔ تمدید',
+    'زیر پیام نتیجهٔ تمدید می‌آید و کارت همان سرویس تمدیدشده را باز می‌کند.',
+  ],
+  'bot.service.renew_paid': [
+    'بستن پیام پرداخت تمدید',
+    'پیام پرداخت تمدید پس از پرداخت از کیف پول به این متن تبدیل می‌شود و دکمه‌هایش حذف می‌شود؛ نتیجهٔ تمدید جداگانه می‌آید.',
   ],
   'bot.service.capability_unsupported': [
     'قابلیت برای این سرویس پشتیبانی نمی‌شود',
@@ -2123,6 +2137,22 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'bot.admin.rejected': [
     'پرداخت رد شد (پیام به مدیر)',
     'به مدیر اعلام می‌کند تصمیم رد ثبت شد و مشتری از طریق اعلان‌ها باخبر می‌شود.',
+  ],
+  'bot.admin.review_approved': [
+    'نتیجهٔ بررسی رسید: تأیید',
+    'پیام اصلی بررسی رسید پس از تأیید پرداخت به این متن تبدیل می‌شود و دکمه‌هایش حذف می‌شود.',
+  ],
+  'bot.admin.review_rejected': [
+    'نتیجهٔ بررسی رسید: رد',
+    'پیام اصلی بررسی رسید پس از رد پرداخت به این متن تبدیل می‌شود و دکمه‌هایش حذف می‌شود.',
+  ],
+  'bot.admin.review_blocked': [
+    'نتیجهٔ بررسی رسید: بلاک کاربر',
+    'پیام اصلی بررسی رسید پس از بلاک کردن مشتری به این متن تبدیل می‌شود؛ خود رسید همچنان در صف بررسی می‌ماند.',
+  ],
+  'bot.admin.review_credited': [
+    'نتیجهٔ بررسی رسید: واریز به کیف پول',
+    'پیام اصلی بررسی رسید پس از واریز مبلغ به کیف پول مشتری به این متن تبدیل می‌شود و دکمه‌هایش حذف می‌شود.',
   ],
   'bot.admin.reject_reason_prompt': [
     'درخواست دلیل رد پرداخت',

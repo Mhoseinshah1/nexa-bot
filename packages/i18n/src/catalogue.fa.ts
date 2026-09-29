@@ -347,6 +347,11 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.admin.reject_button': '❌ رد پرداخت',
   'bot.admin.approved': 'پرداخت تأیید شد و نتیجه برای مشتری ثبت گردید.',
   'bot.admin.rejected': 'پرداخت رد شد و نتیجه برای مشتری ثبت گردید.',
+  // R2 (item 3): the ORIGINAL review message, edited in place into the decision taken on it.
+  'bot.admin.review_approved': '✅ پرداخت تأیید شد',
+  'bot.admin.review_rejected': '❌ پرداخت رد شد',
+  'bot.admin.review_blocked': '⛔ کاربر بلاک شد',
+  'bot.admin.review_credited': '💳 مبلغ به کیف پول واریز شد',
   /*
    * Payment File 02 §12 — the third disposition, in Telegram. The capture reads ONE
    * message from ONE administrator about ONE payment, for five minutes, and nothing moves
@@ -897,6 +902,12 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.service.action_succeeded': 'درخواست شما با موفقیت روی سرور اعمال شد.',
   'bot.service.action_failed':
     'درخواست شما اعمال نشد. لطفاً دوباره تلاش کنید یا با پشتیبانی تماس بگیرید.',
+  // R2 (item 11): the dedicated renewal result, and what the paid renewal's message becomes.
+  'bot.service.renewed':
+    '✅ سرویس شما با موفقیت تمدید شد\n\n👤 نام کاربری: {username}\n⏳ مدت تمدید: {durationDays}\n📅 تاریخ انقضای جدید: {expiresAt}\n🧾 کد پیگیری: {reference}',
+  'bot.service.renewed_details_button': '📊 مشخصات سرویس',
+  'bot.service.renew_paid':
+    '✅ پرداخت تمدید انجام شد. نتیجهٔ تمدید سرویس در پیام جداگانه برای شما ارسال می‌شود.',
   'bot.service.capability_unsupported': 'این قابلیت برای سرویس شما در دسترس نیست.',
 
   'bot.discount.applied': 'کد تخفیف {code} اعمال شد. مبلغ تخفیف: {amount}',
@@ -1062,7 +1073,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.payment.stars_precheckout_refused':
     'این فاکتور دیگر قابل پرداخت نیست. لطفاً از داخل ربات دوباره پرداخت را آغاز کنید.',
   'bot.payment.gateway_preparing':
-    '⏳ فاکتور پرداخت آنلاین شما در حال ساخت است.\n\nچند ثانیه دیگر دکمهٔ «بررسی وضعیت پرداخت» را بزنید تا لینک پرداخت نمایش داده شود.',
+    '⏳ فاکتور پرداخت آنلاین شما در حال ساخت است.\n\nچند لحظه صبر کنید؛ لینک پرداخت به‌محض آماده شدن در همین پیام نمایش داده می‌شود.',
   'bot.payment.gateway_invoice':
     '🧾 فاکتور پرداخت آنلاین\n\n💰 مبلغ: {total}\n⏳ مهلت پرداخت: {expiresAt}\n\nبا دکمهٔ زیر پرداخت را انجام دهید. پرداخت شما فقط پس از تأیید درگاه ثبت می‌شود؛ پس از پرداخت، دکمهٔ «بررسی وضعیت پرداخت» را بزنید.',
   'bot.payment.gateway_invoice_order_fee':
