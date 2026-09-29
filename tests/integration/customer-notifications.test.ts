@@ -218,6 +218,34 @@ describe('the customer notification lane', () => {
     expect(await rows(tenantA)).toHaveLength(2);
   });
 
+  it('hands a claimed batch back in the order it was selected, not the order UPDATE returns it (Codex #108)', async () => {
+    // Three rows inserted — so in heap and id order — A, B, C; their `created_at` makes the
+    // oldest-first selection C, A, B. The dispatcher sends a batch in the order it is handed.
+    const id = await customer(tenantA, '5090');
+    const [a, b, c] = [
+      ctx.container.ids.uuid(),
+      ctx.container.ids.uuid(),
+      ctx.container.ids.uuid(),
+    ];
+    for (const row of [a, b, c]) {
+      await enqueue(tenantA, id, 'PAYMENT_REJECTED', ctx.container.ids.uuid(), row);
+    }
+    for (const [row, minutes] of [
+      [c, 30],
+      [a, 20],
+      [b, 10],
+    ] as const) {
+      await ctx.container.database.db.execute(
+        sql`UPDATE customer_notifications
+               SET created_at = now() - make_interval(mins => ${minutes})
+             WHERE id = ${row}`,
+      );
+    }
+    const now = ctx.container.clock.now();
+    const claimed = await repo.claimDue(tenantA, now, new Date(now.getTime() + 60_000), 10);
+    expect(claimed.map((row) => row.id)).toEqual([c, a, b]);
+  });
+
   it('delivers a queued notification and resolves it exactly once', async () => {
     const id = await customer(tenantA, '5003');
     await enqueue(tenantA, id, 'PAYMENT_REJECTED', ctx.container.ids.uuid());

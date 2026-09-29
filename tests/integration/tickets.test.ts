@@ -2011,6 +2011,36 @@ describe('WP-A7 — support tickets', () => {
     expect((await fileRow(reply.message.id))?.telegram_file_id).toBe('sent-file-1');
   });
 
+  it('hands the dispatcher a reply’s text before its file when both are due in one pass (Codex #108)', async () => {
+    const ticketId = await openThroughBot('ترتیب ارسال');
+    const web = await webAs(owner);
+    const reply = await web.controller.reply(web.request, ticketId, {
+      idempotencyKey: 'order-text-first-01',
+      text: 'اول متن، بعد فایل',
+      attachment: fileOf('screen.png', 'image/png', PNG),
+    });
+    const [text, file] = await rows<{ created_at: Date; id: string; kind: string }>(
+      sql`SELECT created_at, id, kind FROM customer_notifications
+           WHERE subject_id = ${reply.message.id} ORDER BY id`,
+    );
+    // Enqueued at one instant, the text with the earlier id.
+    expect([text?.kind, file?.kind]).toEqual(['TICKET_REPLY', 'TICKET_REPLY_ATTACHMENT']);
+    expect(new Date(text!.created_at).getTime()).toBe(new Date(file!.created_at).getTime());
+    // Both due in the same pass. The claim hands them over oldest first, `created_at` then
+    // `id`, and returns them in that order (`claimDue`), so the text leaves first.
+    await ctx.container.database.db.execute(
+      sql`UPDATE customer_notifications SET next_attempt_at = now() - interval '1 second'
+           WHERE state = 'PENDING'`,
+    );
+    sent = [];
+    await ctx.container.customerNotificationLoop.tick();
+    const toCustomer = sent.filter((one) => one.raw.includes(Buffer.from(CUSTOMER_TG)));
+    expect(toCustomer.map((one) => one.url.split('/').at(-1))).toEqual([
+      'sendMessage',
+      'sendPhoto',
+    ]);
+  });
+
   it('answers a malformed category id with not-found, never a database error', async () => {
     const web = await webAs(owner);
     for (const id of ['not-a-uuid', '1', "' OR 1=1 --"]) {

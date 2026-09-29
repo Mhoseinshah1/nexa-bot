@@ -702,13 +702,19 @@ export class TicketService {
          * bot the TICKET was opened on, not the customer's first bot: that is the conversation
          * the customer is holding it in, and the reply's buttons only make sense there.
          */
+        /*
+         * One instant for both lane rows (Codex review of #108): the lane claims oldest
+         * first, `created_at` then `id`, so with equal times the text — enqueued first, with
+         * the earlier UUIDv7 — is handed to the dispatcher before the file.
+         */
+        const enqueuedAt = this.deps.clock.now();
         await this.deps.notifier.notifyThrough(
           scope,
           ticket.customerId,
           ticket.botInstanceId,
           'TICKET_REPLY',
           posted.message.id,
-          this.deps.clock.now(),
+          enqueuedAt,
           tx,
         );
         /*
@@ -739,7 +745,7 @@ export class TicketService {
             ticket.botInstanceId,
             'TICKET_REPLY_ATTACHMENT',
             posted.message.id,
-            this.deps.clock.now(),
+            enqueuedAt,
             tx,
           );
         }

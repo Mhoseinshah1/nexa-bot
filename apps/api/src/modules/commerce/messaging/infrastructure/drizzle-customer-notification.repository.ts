@@ -1,4 +1,4 @@
-import { and, asc, eq, isNull, lte, or, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import type {
   BotInstanceId,
   CustomerNotificationKind,
@@ -153,20 +153,35 @@ export class DrizzleCustomerNotificationRepository implements CustomerNotificati
       .orderBy(asc(customerNotifications.createdAt), asc(customerNotifications.id))
       .limit(limit);
 
+    /*
+     * Selected first, in the ORDER BY's order, and claimed by id (Codex review of #108):
+     * `UPDATE ... RETURNING` promises no order, and the dispatcher sends a batch in the
+     * order it is handed — so a reply's file could leave before the reply's own text,
+     * enqueued a moment earlier. The UPDATE repeats every predicate, so a row another
+     * replica claimed in between is still not claimed twice.
+     */
+    const selected = await due;
+    if (selected.length === 0) return [];
     const rows = await this.exec(tx)
       .update(customerNotifications)
       .set({ nextAttemptAt: leaseUntil, updatedAt: now })
       .where(
         and(
           eq(customerNotifications.tenantId, tenantId),
-          sql`${customerNotifications.id} IN ${due}`,
+          inArray(
+            customerNotifications.id,
+            selected.map((row) => row.id),
+          ),
           eq(customerNotifications.state, 'PENDING'),
           isNull(customerNotifications.sendStartedAt),
           ready,
         ),
       )
       .returning();
-    return rows.map(toRecord);
+    const position = new Map(selected.map((row, index) => [String(row.id), index]));
+    return rows
+      .sort((a, b) => (position.get(String(a.id)) ?? 0) - (position.get(String(b.id)) ?? 0))
+      .map(toRecord);
   }
 
   /** Stamps the send as in flight. `false` means somebody else moved the row first. */
