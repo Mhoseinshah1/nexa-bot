@@ -128,9 +128,10 @@ that one reason.
 The operator enters the start and end as a civil date in the tenant's calendar
 (`YYYY-MM-DD`, Jalali for a Jalali tenant) and a wall time `HH:MM` in the tenant's
 `display_timezone`. The server resolves both with `localInstant`, stores UTC `timestamptz`,
-and the window is half-open `[starts_at, ends_at)`. Responses carry the instant and the
-tenant's zone and calendar, and the Web Admin renders with `formatInstantIn`, never the
-browser's zone.
+and the window is half-open `[starts_at, ends_at)`. Responses carry the instant, the same
+moment written back in the tenant's calendar and zone (`startLocal`, `endLocal`, resolved by
+the server), and the tenant's zone and calendar; the Web Admin shows the server's local
+moments and never converts in the browser's zone.
 
 The end is required: a campaign is bounded by definition, and a discount or cashback rule
 that the campaign created must stop on its own even if nothing else runs.
@@ -190,7 +191,8 @@ The preview is a read (writes nothing, holds no lock):
 
 - the audience count, from E's shared audience query over the SAME definition that will
   be frozen;
-- the discount and cashback terms, in words, and the products/categories they reach;
+- the discount and cashback terms, in words, and their scope (every product, one product
+  or one category) and purposes;
 - for a wallet gift, the exact count × amount = total liability (from E's engine);
 - for traffic/time, the affected-service count (from E's engine);
 - the schedule in the tenant's calendar;
@@ -248,8 +250,13 @@ pins that the analytics response has no field that is not one of these persisted
 - `campaigns.manage` (HIGH): create, edit a draft, schedule, pause, resume, cancel.
 - AND the permission of every action the campaign composes, checked through the guard on
   schedule, pause, resume and cancel: `catalog.discounts.edit` for a discount,
-  `catalog.pricing.edit` for cashback, and E's permissions for Broadcast and mass actions.
-  A campaign is never a way to do what the operator could not do directly.
+  `catalog.pricing.edit` for cashback, `users.wallet.mass` for a wallet gift,
+  `services.mass.grant` for a traffic or time gift and `broadcasts.send` for the
+  announcement — and each engine charges its key again when it takes the work. A campaign
+  is never a way to do what the operator could not do directly.
+- The preview also charges the audience engine's own read key (`users.view`), because it
+  names a sample of customers, and each gift's engine key, because it is that engine's
+  preview.
 - The worker's transitions charge `maintenance.run` as `SYSTEM_JOB`, like every other lane,
   and never gain a pricing or wallet permission: the scheduled edges write nothing
   financial (D4, D5), and direct grants are launched per §5.
@@ -258,11 +265,16 @@ pins that the analytics response has no field that is not one of these persisted
 
 `CampaignScheduleLoop` in the worker role, health-checked in `main.worker.ts`. Each tick:
 
-1. `SCHEDULED → ACTIVE` for every campaign with `starts_at ≤ now`, bounded, id order, each
-   a conditional UPDATE; then the launch of each direct-grant action (§5), each keyed
-   deterministically by `(campaign, action)` so a crash between the two is resumed by the
-   next tick without a second launch.
+1. `SCHEDULED → ACTIVE` for every campaign with `starts_at ≤ now`, bounded, in start order,
+   each its own short transaction and a conditional UPDATE naming the time too.
 2. `ACTIVE|PAUSED → COMPLETED` for every campaign with `ends_at ≤ now`.
+
+The lane launches nothing and writes nothing financial: the standing rules carry their own
+window, and the gifts and the announcement were handed to their engines at the
+confirmation with the campaign's start as their own start (§5). So the worker needs only
+`maintenance.run`, and a late or stopped worker delays the campaign's displayed status,
+never a price, a credit or a send. A stopped installation starts nothing new; a closed
+window is still recorded as COMPLETED.
 
 Two replicas running the same tick is the ordinary case: the UPDATE decides which one
 moved the row, and the other's is a no-op.
