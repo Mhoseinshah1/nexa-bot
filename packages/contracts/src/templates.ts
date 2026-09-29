@@ -5217,6 +5217,14 @@ export const TEMPLATES = [
     ],
   },
   {
+    key: 'bot.service.back_to_card_button',
+    description:
+      'The button under the link-change question (and its refusals) that puts the service ' +
+      'card back in the same message.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
     key: 'bot.service.refresh_failed',
     description:
       'The short answer on the refresh button when the panel could not be read. Shown as ' +

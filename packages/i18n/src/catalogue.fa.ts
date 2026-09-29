@@ -792,6 +792,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.service.connection_file_caption': '👤 نام کاربری: {serviceUsername}',
   'bot.service.link_rotated':
     '✅ لینک اشتراک سرویس {serviceUsername} با موفقیت تغییر کرد.\nلینک قبلی دیگر قابل استفاده نیست. لطفاً لینک و فایل‌های جدید را در برنامه خود جایگزین کنید.\n\n🔗 لینک جدید:\n<code>{subscriptionUrl}</code>',
+  'bot.service.back_to_card_button': '🔙 بازگشت به مشخصات سرویس',
   'bot.service.refresh_failed':
     'خواندن اطلاعات از سرور ممکن نشد. لطفاً کمی بعد دوباره امتحان کنید.',
   'bot.service.files_partial':
