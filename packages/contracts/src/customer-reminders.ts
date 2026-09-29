@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 /**
  * WP-A9: the two automated customer reminders that are not about a service.
  *
@@ -89,4 +91,78 @@ export function pendingReminderDue(
  */
 export function minutesLeft(expiresAt: Date, now: Date): number {
   return Math.max(1, Math.ceil((expiresAt.getTime() - now.getTime()) / 60_000));
+}
+
+/*
+ * ## Quiet hours (HF-A9)
+ *
+ * The owner's instruction: a reminder that falls due inside the tenant's quiet window is
+ * NOT dropped — it is held until the window ends, in the tenant's own timezone, and it is
+ * not sent then if what it reminds about has stopped being true in the meantime. No
+ * duplicate is created by holding it.
+ *
+ * The window is two wall-clock times, `HH:MM`, read in `tenants.display_timezone` — the
+ * same zone the day-of expiry rung and every rendered date use, so "quiet from 23:00" and
+ * "expires today" agree about what a local day is. The switch is the feature flag
+ * `reminder_quiet_hours` and the two times are its settings: a flag is a boolean and its
+ * parameters are settings, and neither registry grows a field that belongs to the other.
+ *
+ * WHERE it applies is `CUSTOMER_NOTIFICATION_QUIET_HOURS` in `customer-notifications.ts`:
+ * reminders only, never a transactional reply or a payment outcome. HOW it is held is the
+ * lane's own deferral — the notification row's `next_attempt_at` moves to the window's
+ * end — so the row, its subject and `customer_notifications_subject_key` are untouched and
+ * nothing new is written.
+ */
+
+/** `HH:MM`, 24-hour, `00:00` to `23:59`. Two digits each, so the text sorts as the time. */
+export const QUIET_HOURS_TIME_PATTERN = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
+
+/** A quiet-hours boundary as the registry stores it. */
+export const quietHoursTimeSchema = z
+  .string()
+  .regex(
+    QUIET_HOURS_TIME_PATTERN,
+    'A quiet-hours time is HH:MM on a 24-hour clock, 00:00 to 23:59.',
+  );
+
+/**
+ * The minute of the day a boundary names, `0` to `1439`, or `null` for a text that is not
+ * one. The ONE parser, so the dispatcher and the Web Admin cannot read `8:00` differently:
+ * both refuse it, because the schema does.
+ */
+export function quietHoursMinuteOfDay(text: string): number | null {
+  if (!QUIET_HOURS_TIME_PATTERN.test(text)) return null;
+  return Number(text.slice(0, 2)) * 60 + Number(text.slice(3, 5));
+}
+
+/**
+ * Whether a local minute of the day falls inside the window `[start, end)`.
+ *
+ * HALF-OPEN, like every interval in this product: at `start` it is quiet, at `end` it is
+ * not — the minute the window ends is the minute a held reminder is sent.
+ *
+ * A window whose start is LATER than its end crosses midnight (`23:00`–`08:00` is quiet
+ * from 23:00 to midnight and from midnight to 08:00). A window whose start EQUALS its end
+ * is empty, never "all day": the write guard refuses it (`refuseQuietHours`), and a value
+ * that reached a reader anyway must not hold every reminder for ever.
+ */
+export function quietHoursContains(minuteOfDay: number, start: number, end: number): boolean {
+  if (start === end) return false;
+  if (start < end) return minuteOfDay >= start && minuteOfDay < end;
+  return minuteOfDay >= start || minuteOfDay < end;
+}
+
+/**
+ * Why a proposed pair of boundaries is refused, or `null` if it is sound.
+ *
+ * Only equality is refused: it would be a window of no length, which an operator who typed
+ * it almost certainly did not mean — and "all day" is not a quiet window, it is the flag
+ * switched off with reminders piling up behind it. Persian, because it reaches an operator
+ * verbatim, like `refuseReminderThresholds`.
+ */
+export function refuseQuietHours(start: string, end: string): string | null {
+  if (start === end) {
+    return 'ساعت شروع و پایان ساعات سکوت نمی‌توانند یکسان باشند.';
+  }
+  return null;
 }

@@ -17,6 +17,7 @@ import {
 import {
   PENDING_PAYMENT_REMINDER_MINUTES_MAX,
   PENDING_PAYMENT_REMINDER_MINUTES_MIN,
+  quietHoursTimeSchema,
 } from './customer-reminders.js';
 import { moneySchema, salesCurrencyCodeSchema } from './money.js';
 import { uuidV7Schema } from './ids.js';
@@ -786,6 +787,47 @@ export const SETTINGS = [
     defaultValue: { amountMinor: '0', currency: 'IRT' },
     configures: 'wallet_low_balance_reminders',
     zeroMeaning: 'DISABLES',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  /*
+   * HF-A9: the quiet window's two boundaries, the parameters of `reminder_quiet_hours`.
+   *
+   * Wall-clock `HH:MM` in the tenant's display timezone, not instants and not offsets: an
+   * operator says "from eleven at night until eight in the morning", and a daylight-saving
+   * change must not move that. Two keys rather than one range value, so each is shown,
+   * edited and audited as the quantity an operator typed; the one rule that joins them —
+   * they may not be equal — is `refuseQuietHours`, run by a guard inside the write.
+   */
+  {
+    key: 'reminders.quiet_hours_start',
+    description:
+      'When the quiet window begins each day, HH:MM on a 24-hour clock in the tenant\u2019s ' +
+      'display timezone. A reminder that falls due inside the window is held, not dropped, ' +
+      'and sent when the window ends \u2014 unless what it reminds about has stopped being ' +
+      'true by then. A start later than the end crosses midnight (23:00 to 08:00 by ' +
+      'default). Must differ from reminders.quiet_hours_end. Applies only to reminders, ' +
+      'never to replies or payment outcomes. Inert while the reminder_quiet_hours flag is off.',
+    schema: quietHoursTimeSchema,
+    defaultValue: '23:00',
+    configures: 'reminder_quiet_hours',
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  {
+    key: 'reminders.quiet_hours_end',
+    description:
+      'When the quiet window ends each day, HH:MM on a 24-hour clock in the tenant\u2019s ' +
+      'display timezone; the window is quiet up to but not including this minute, and held ' +
+      'reminders are sent from it. 08:00 by default. Must differ from ' +
+      'reminders.quiet_hours_start. Inert while the reminder_quiet_hours flag is off.',
+    schema: quietHoursTimeSchema,
+    defaultValue: '08:00',
+    configures: 'reminder_quiet_hours',
+    zeroMeaning: 'NOT_APPLICABLE',
     mutability: 'RUNTIME',
     classification: 'PUBLIC',
     consumer: 'ACTIVE',
