@@ -29,6 +29,12 @@ export const BOT_COMMANDS = [
    * (Package A). It is the existing support screen, not a second channel.
    */
   { command: 'paysupport', description: 'bot.command.paysupport' },
+  /*
+   * WP-A10: «📱 دانلود برنامه و آموزش اتصال». The connection guide that was reachable only
+   * from the delivery card's «📚 مشاهده آموزش استفاده», now with the tenant's recommended
+   * apps and their download links — the same screen, not a second guide.
+   */
+  { command: 'apps', description: 'bot.command.apps' },
 ] as const;
 
 export type BotCommandName = (typeof BOT_COMMANDS)[number]['command'];
@@ -77,6 +83,8 @@ export const MAIN_MENU_ROWS: readonly (readonly BotMenuButton[])[] = [
     { label: 'bot.menu.wallet', command: 'wallet' },
     { label: 'bot.menu.help', command: 'help' },
   ],
+  // WP-A10: a row of its own — the label is long, and it is a place, like the four above.
+  [{ label: 'bot.menu.apps', command: 'apps' }],
 ];
 
 /** Every menu button, flattened. The rows are layout; this is the set. */

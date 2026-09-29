@@ -215,6 +215,19 @@ export const PERMISSIONS = [
   p('templates.view', 'View message templates and their overrides', 'LOW'),
   p('templates.edit', 'Change or revert a message template', 'HIGH'),
 
+  /*
+   * Client apps and connection guides (WP-A10), as their own pair rather than
+   * `templates.*` or `settings.*`.
+   *
+   * What an entry holds is a DOWNLOAD LINK every customer of the tenant is told to open,
+   * which is neither a setting about how the installation behaves nor the wording of a
+   * message: a wrong one sends customers to somebody else's binary. EDIT is HIGH for that
+   * reason, level with `templates.edit` — the same audience, and a worse worst case than a
+   * typo. VIEW is LOW and read-only.
+   */
+  p('client_apps.view', 'View the client apps and connection guides offered to customers', 'LOW'),
+  p('client_apps.edit', 'Add, edit, enable, disable or remove a client app entry', 'HIGH'),
+
   // Administration
   p('admins.view', 'View administrators', 'LOW'),
   p('admins.edit', 'Create, suspend or revoke administrators', 'CRITICAL'),
@@ -319,6 +332,10 @@ export const ROLE_SEEDS: readonly RoleSeed[] = [
       'settings.view',
       'templates.view',
       'templates.edit',
+      // WP-A10: the apps and guides customers are sent to are content the operator
+      // already maintains beside the message templates.
+      'client_apps.view',
+      'client_apps.edit',
       // Read only, and that is a narrowing rather than a grant. Until Phase 5 an
       // operator COULD change the card number, by editing the template body it was
       // typed into; the destination is data now, and `templates.edit` no longer
@@ -388,6 +405,8 @@ export const ROLE_SEEDS: readonly RoleSeed[] = [
       'services.edit',
       'receipts.view',
       'reports.view',
+      // WP-A10: "which app, and where do I get it" is the question support answers most.
+      'client_apps.view',
     ],
   },
   {

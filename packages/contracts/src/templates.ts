@@ -6101,7 +6101,7 @@ export const TEMPLATES = [
   {
     key: 'bot.tutorial.android',
     description:
-      'The connection guide for Android. A raw template the operator rewrites for their own apps and links; the default is deliberately short and names nothing this installation does not offer.',
+      'The connection guide for Android, shown when no enabled client app is configured for the platform (WP-A10). A raw template the operator rewrites for their own apps and links; the default is deliberately short and names nothing this installation does not offer.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
@@ -6126,6 +6126,138 @@ export const TEMPLATES = [
   {
     key: 'bot.tutorial.linux',
     description: 'The connection guide for Linux. See `bot.tutorial.android`.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  // --- WP-A10: app downloads and connection guides -------------------------------------
+  {
+    key: 'bot.command.apps',
+    description: 'The one-line description Telegram shows beside /apps in its command menu.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.menu.apps',
+    description:
+      'The main-menu button for app downloads and connection guides. A ROUTE as well as a label: the shared catalogue text is what a tap is matched against.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.tutorial.other_button',
+    description:
+      'Platform button for apps filed under "Other". Drawn only while at least one enabled entry the customer may see is filed there.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.apps.platform',
+    description:
+      'Heading over one platform’s recommended apps. The apps are the buttons below it, one per enabled entry the customer may see, in the operator’s order.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.apps.platform_empty',
+    description:
+      'A platform with no guide of its own ("Other") and no app the customer may see — a stale button, or every entry since disabled.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.apps.detail',
+    description:
+      'One app: its name, the operator’s short description and connection guide, rendered as plain text. The download links are the buttons below it.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'app',
+        type: 'STRING',
+        description: 'The app’s name, with its icon when the operator set one.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'description',
+        type: 'STRING',
+        description: 'The operator’s one-line description of the app.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'guide',
+        type: 'STRING',
+        description:
+          'The operator’s connection guide, already rendered from its Markdown-like subset.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.apps.detail_files',
+    description:
+      '`bot.apps.detail` for an app that also reads connection files, sent to a customer whose service can hand them over. Adds where the files are fetched.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'app',
+        type: 'STRING',
+        description: 'The app’s name, with its icon when the operator set one.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'description',
+        type: 'STRING',
+        description: 'The operator’s one-line description of the app.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'guide',
+        type: 'STRING',
+        description:
+          'The operator’s connection guide, already rendered from its Markdown-like subset.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.apps.download_button',
+    description: 'URL button to the app’s official download link.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.apps.alternative_button',
+    description: 'URL button to the app’s store listing or alternative link, when one is set.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.apps.help_button',
+    description: 'URL button to the app’s video or help page, when one is set.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.apps.back_button',
+    description: 'From one app back to its platform’s list.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.apps.platforms_button',
+    description: 'Back to the platform choice.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.apps.not_found',
+    description:
+      'A tapped app that is no longer offered: removed, disabled, or never this tenant’s. One sentence for all three.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },

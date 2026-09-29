@@ -23,6 +23,7 @@ import { PaymentAccountsPage } from './pages/payment-accounts';
 import { BotsPage } from './pages/bots';
 import { PaymentGatewaysPage } from './pages/payment-gateways';
 import { SupportPage } from './pages/support';
+import { ClientAppsPage } from './pages/client-apps';
 import { ProductDetailPage, ProductsPage } from './pages/products';
 import { ProductCategoriesPage } from './pages/product-categories';
 import { OrderDetailPage, OrdersPage } from './pages/orders';
@@ -450,6 +451,16 @@ export const NAV: readonly NavEntry[] = [
      * support DESTINATION is a setting on that page.
      */
     permission: 'settings.view',
+    group: 'web.navgroup_config',
+  },
+  {
+    // WP-A10: the client apps and connection guides the bot recommends. Its own pair,
+    // `client_apps.*`: the list charges the view and every write the edit.
+    id: 'client-apps',
+    path: '/client-apps',
+    label: 'web.nav_client_apps',
+    icon: 'link',
+    permission: 'client_apps.view',
     group: 'web.navgroup_config',
   },
   {
@@ -1018,6 +1029,16 @@ export function resolve(
       element: <SupportPage mayEdit={may('settings.edit')} denied={!may('settings.view')} />,
       crumbs: [{ label: t('web.nav_support') }],
       title: t('web.nav_support'),
+    };
+  }
+
+  if (route.path === '/client-apps') {
+    return {
+      element: (
+        <ClientAppsPage mayEdit={may('client_apps.edit')} denied={!may('client_apps.view')} />
+      ),
+      crumbs: [{ label: t('web.nav_client_apps') }],
+      title: t('web.nav_client_apps'),
     };
   }
 
