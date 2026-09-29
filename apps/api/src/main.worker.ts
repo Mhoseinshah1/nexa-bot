@@ -105,6 +105,11 @@ async function main(): Promise<void> {
         // sweep reads its own flag inside its transaction and does nothing when it is off —
         // so a stalled loop is visible whatever an operator has switched on.
         ['customer-reminders', true, () => container.customerReminderLoop.isFresh(now)],
+        // Round N, C1: the lane that starts and completes campaigns on their window. No flag:
+        // a campaign that never reads ACTIVE or COMPLETED is an operator told the wrong
+        // thing, and silence is what a stalled lane looks like. Its prices do not depend on
+        // it (the rules carry their own window), which is why it is watched, not trusted.
+        ['campaign-schedule', true, () => container.campaignScheduleLoop.isFresh(now)],
         // The lane that tells a customer something they did not ask for. No flag, for
         // the same reason as the line above: before Phase 4H an operator's rejection and
         // the expiry sweep both happened while the customer was not looking and nothing
@@ -194,6 +199,8 @@ async function main(): Promise<void> {
   // WP-A9: and the reminders that are not about a service — a payment about to lapse, a
   // wallet below its threshold. Both only enqueue; the lane below sends.
   container.customerReminderLoop.start();
+  // Round N, C1: and the campaign lane, which moves a campaign along its own window.
+  container.campaignScheduleLoop.start();
   // And the customer notification lane. `docs/phase4h-audit.md` §1 measured what it
   // replaces: exactly one thing could be said to a customer who was not looking.
   container.customerNotificationLoop.start();
