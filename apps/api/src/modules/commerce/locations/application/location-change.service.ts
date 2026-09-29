@@ -93,8 +93,9 @@ export interface LocationChangeServiceDeps {
  * the same `LocationChangePolicy` decision (not where it already is, within the cooldown
  * and the rolling limit), the same panel-policy switch (`LOCATION_CHANGE`), the same
  * `prepareCommercialAction` refusals (owner, state, panel capability, another commercial
- * action open, a deletion or refund request pending), the same one-open-commercial-action index, the same `CHANGE_LOCATION`
- * operation to an absolute key, the same provisioner, verification and announcement.
+ * action open, a deletion or refund request pending), the same one-open-commercial-action
+ * index, the same `CHANGE_LOCATION` operation to an absolute key, the same provisioner,
+ * verification and announcement.
  *
  * One transaction: the lifecycle lock, the decision, the operation, the frozen change
  * request, the audit row and the idempotency record. A replayed tap returns the first
