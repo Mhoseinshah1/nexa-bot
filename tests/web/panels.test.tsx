@@ -1368,6 +1368,7 @@ describe('the panel detail', () => {
     providerUsername: 'nx-7f3a91',
     providerUserId: '4821',
     hasSubscription: true,
+    isTrial: false,
     expiresAt: '2026-12-01T00:00:00.000Z',
     trafficLimitBytes: '53687091200',
     trafficUsedBytes: '1073741824',

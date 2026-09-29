@@ -728,14 +728,24 @@ describe('a customer pays through the approved screens', () => {
         response.end(JSON.stringify({ ok: true, result: { message_id: 11 } }));
       };
 
+      const from = sent.length;
       const result = await handle(tap('rf:'));
-      expect(result.replyKey).toBe('bot.referral.screen');
+      // R1: two messages — the invite, then the customer's own dashboard.
+      expect(result.replyKey).toBe('bot.referral.dashboard');
       expect(
-        sent.some((one) => one.url.includes('/sendPhoto')),
-        'the banner was tried',
+        sent.slice(from).some((one) => one.url.includes('/sendPhoto')),
+        'the banner, with the invite as its caption, was tried',
       ).toBe(true);
-      expect(lastText().startsWith('💼 زیرمجموعه‌گیری و هدیه خوش‌آمد')).toBe(true);
-      expect(lastText()).toContain('🔗 https://t.me/');
+      // Refused, the invite's words went out as text, so the link still arrived.
+      const texts = sent
+        .slice(from)
+        .filter((one) => one.url.includes('/sendMessage'))
+        .map((one) => String(one.body['text'] ?? ''));
+      expect(texts).toHaveLength(2);
+      expect(texts[0]?.startsWith('💼 زیرمجموعه‌گیری و هدیه خوش‌آمد')).toBe(true);
+      expect(texts[0]).toContain('🔗 https://t.me/');
+      expect(texts[0]).not.toContain('📊');
+      expect(lastText()).toContain('📊 آمار شما');
     });
   });
 });

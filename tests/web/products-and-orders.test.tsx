@@ -723,6 +723,7 @@ describe('the order detail', () => {
     // The production shape: a name was reserved, the create never landed.
     providerUserId: null,
     hasSubscription: false,
+    isTrial: false,
     expiresAt: null,
     trafficLimitBytes: '53687091200',
     trafficUsedBytes: '0',

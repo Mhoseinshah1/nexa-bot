@@ -1912,7 +1912,21 @@ describe('the referral surfaces: HTTP for the operator, Telegram for the custome
       ).toEqual([]);
     });
 
-    it('answers the rf: tap with bot.referral.screen — link and referred count — and with unconfigured while inactive', async () => {
+    /*
+     * R1: the referral program in EXACTLY two messages. Message 1 is the one a customer
+     * forwards — the introduction and their link, no figure about them. Message 2 is theirs
+     * alone — the figures and the buttons.
+     */
+    const messagesSince = (from: number) =>
+      sent.slice(from).filter((one) => one.url.includes('/sendMessage'));
+    const buttonsOf = (message: (typeof sent)[number] | undefined) => {
+      const markup = message?.body['reply_markup'] as
+        | { inline_keyboard?: { text: string; callback_data?: string; url?: string }[][] }
+        | undefined;
+      return (markup?.inline_keyboard ?? []).flat();
+    };
+
+    it('answers the rf: tap with the invite and then the dashboard — and with unconfigured while inactive', async () => {
       await command('/start', REFERRER_TELEGRAM_ID);
       const referrer = await customerIdOf(REFERRER_TELEGRAM_ID);
 
@@ -1923,24 +1937,108 @@ describe('the referral surfaces: HTTP for the operator, Telegram for the custome
 
       await f.program();
       const code = referralCodeFor(referrer);
-      const link = `🔗 https://t.me/${BOT_A_USERNAME}?start=ref-${code}`;
-      const screen = (referredCount: number) => {
-        const text = String(lastMessage()?.body['text']);
-        expect(text.startsWith(CATALOGUE_FA['bot.referral.screen'].slice(0, 30))).toBe(true);
-        expect(text).toContain(link);
-        expect(text).toContain(`• زیرمجموعه‌ها: ${String(referredCount)} نفر`);
-        // The gift block is a whole paragraph and goes with the flag: no literal token.
-        expect(text).not.toContain('{');
+      const link = `https://t.me/${BOT_A_USERNAME}?start=ref-${code}`;
+      const twoMessages = (referredCount: number) => {
+        const [invite, dashboard, ...rest] = messagesSince(0);
+        expect(rest, 'exactly two messages').toEqual([]);
+        const inviteText = String(invite?.body['text']);
+        const dashboardText = String(dashboard?.body['text']);
+        // 1. The forwardable invite: the introduction, the program's rate and the link —
+        //    and NO statistics of any kind, and no buttons to forward along with it.
+        expect(inviteText.startsWith('💼 زیرمجموعه‌گیری و هدیه خوش‌آمد')).toBe(true);
+        expect(inviteText).toContain(`🔗 ${link}`);
+        expect(inviteText).toContain('10 درصد پورسانت');
+        expect(inviteText).not.toContain('📊');
+        expect(inviteText).not.toContain('زیرمجموعه‌ها:');
+        expect(inviteText).not.toContain('پورسانت دریافتی');
+        expect(invite?.body['reply_markup']).toBeUndefined();
+        // 2. The dashboard: the figures, the commission and the buttons — never the link.
+        expect(dashboardText).toContain(`• زیرمجموعه‌ها: ${String(referredCount)} نفر`);
+        expect(dashboardText).toContain('• خریدها: 0 عدد');
+        expect(dashboardText).toContain('• مجموع خرید: 0 تومان');
+        expect(dashboardText).toContain('• پورسانت دریافتی: 0 تومان');
+        expect(dashboardText).toContain('10 درصد از مبلغ خرید زیرمجموعه');
+        expect(dashboardText).toContain(CATALOGUE_FA['bot.referral.scope_first_order']);
+        expect(dashboardText).not.toContain(link);
+        // The gift is off: no gift block, and no claim button.
+        expect(dashboardText).not.toContain('هدیه عضویت');
+        expect(dashboardText).not.toContain('{');
+        const buttons = buttonsOf(dashboard);
+        expect(buttons.map((button) => button.text)).toEqual([
+          CATALOGUE_FA['bot.referral.share_button'],
+          CATALOGUE_FA['bot.menu.main_button'],
+        ]);
+        expect(buttons[0]?.url).toBe(`https://t.me/share/url?url=${encodeURIComponent(link)}`);
       };
 
       sent = [];
       await tap('rf:', REFERRER_TELEGRAM_ID);
-      screen(0);
+      twoMessages(0);
 
       await command(`/start ref-${code}`, REFEREE_TELEGRAM_ID);
       sent = [];
       await tap('rf:', REFERRER_TELEGRAM_ID);
-      screen(1);
+      twoMessages(1);
+    });
+
+    it('opens the same two messages from the main menu’s «👥 زیرمجموعه‌گیری» and /referral', async () => {
+      await f.program();
+      await command('/start', REFERRER_TELEGRAM_ID);
+      for (const text of [CATALOGUE_FA['bot.menu.referral'], '/referral']) {
+        sent = [];
+        await command(text, REFERRER_TELEGRAM_ID);
+        const [invite, dashboard, ...rest] = messagesSince(0);
+        expect(rest).toEqual([]);
+        expect(String(invite?.body['text'])).toContain('?start=ref-');
+        expect(String(dashboard?.body['text'])).toContain('📊 آمار شما');
+      }
+    });
+
+    it('draws the claim-gift button only while something is claimable', async () => {
+      await f.program();
+      await command('/start', REFERRER_TELEGRAM_ID);
+      const referrer = await customerIdOf(REFERRER_TELEGRAM_ID);
+      const giftOn = async () => {
+        const setGift = async (settingKey: string, value: unknown) =>
+          f.setSetting(settingKey, value, tenantA, owner);
+        await setGift('referral.signup_gift.total', { amountMinor: '100000', currency: 'IRT' });
+        await setGift('referral.signup_gift.referrer_percent', 50);
+        await setGift('referral.signup_gift.referred_percent', 50);
+        const flag = (await api.container.featureFlags.list(tenantA, owner)).find(
+          (row) => row.key === 'referral_signup_gift',
+        );
+        await api.container.featureFlags.set(tenantA, owner, {
+          idempotencyKey: f.key(),
+          key: 'referral_signup_gift',
+          enabled: true,
+          expectedVersion: flag?.version ?? null,
+          confirmKey: 'referral_signup_gift',
+          reason: 'test',
+        });
+      };
+      await giftOn();
+      const giftButton = () =>
+        buttonsOf(messagesSince(0).at(-1)).filter((button) => button.callback_data === 'rg:');
+
+      // On, but nobody has joined through this customer: nothing to claim, no button.
+      sent = [];
+      await tap('rf:', REFERRER_TELEGRAM_ID);
+      expect(String(messagesSince(0).at(-1)?.body['text'])).toContain('هدیه عضویت');
+      expect(giftButton()).toEqual([]);
+
+      // Somebody joined: the referrer's share is claimable, and the button is drawn.
+      await command(`/start ref-${referralCodeFor(referrer)}`, REFEREE_TELEGRAM_ID);
+      sent = [];
+      await tap('rf:', REFERRER_TELEGRAM_ID);
+      expect(giftButton()).toEqual([
+        { text: CATALOGUE_FA['bot.referral.gift_button'], callback_data: 'rg:' },
+      ]);
+
+      // Claimed: nothing is owed any more, and the button is gone again.
+      await tap('rg:', REFERRER_TELEGRAM_ID);
+      sent = [];
+      await tap('rf:', REFERRER_TELEGRAM_ID);
+      expect(giftButton()).toEqual([]);
     });
   });
 });

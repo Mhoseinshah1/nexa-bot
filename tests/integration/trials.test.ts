@@ -1,5 +1,6 @@
 import { createServer, type Server } from 'node:http';
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { sql } from 'drizzle-orm';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
@@ -12,6 +13,7 @@ import {
   type ProductId,
   type UserId,
 } from '@nexa/contracts';
+import { CATALOGUE_FA } from '@nexa/i18n';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
 import { DrizzleServiceRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-service.repository';
 import { startFakeRickpanel, type FakeRickpanel } from '../support/fake-rickpanel';
@@ -27,20 +29,24 @@ import {
 } from './harness';
 
 /**
- * The free trial, end to end (WP6-A, plan §7.1, `docs/wp6-audit.md` §2).
+ * The free trial, end to end (WP6-A, plan §7.1, `docs/wp6-audit.md` §2; R1).
  *
- * Through the shipped container — `TrialService`, the real provisioning path, the real
- * provisioner, the real `RickpanelAdapter` over `SafeHttpClient`, the real delivery lane
- * and a Telegram stand-in on a socket — against `tests/support/fake-rickpanel.ts`.
+ * Since R1 a trial is configured PER PANEL — enabled, traffic, hours — and is issued from
+ * NO product. Through the shipped container — `TrialService`, the real provisioning path,
+ * the real provisioner, the real `RickpanelAdapter` over `SafeHttpClient`, the real
+ * delivery lane and a Telegram stand-in on a socket — against
+ * `tests/support/fake-rickpanel.ts`.
  *
- * What each case holds, in the plan's words: tenant-scoped; disabled by default;
- * explicit configuration required; the paid-product values snapshotted; idempotent;
- * the customer's identity, not a name; a failed create does not consume eligibility;
- * no wallet debit, payment, cashback, referral or reseller margin; the panel decided
- * again before anything is written.
+ * What each case holds: tenant-scoped; disabled by default; explicit configuration
+ * required; the configuration snapshotted on the order; no product anywhere; idempotent;
+ * a failed create does not consume eligibility; one trial per customer under a double tap
+ * and a replayed update; only valid, enabled panels offered; no wallet debit, payment,
+ * cashback, referral or reseller margin; the panel decided again before anything is
+ * written.
  */
 
 const BOT_A = SEED_IDS.botA1 as BotInstanceId;
+const MB = 1_048_576n;
 
 const systemActor = (correlationId: string): ActorContext => ({
   type: 'SYSTEM_JOB',
@@ -55,12 +61,11 @@ describe('a free trial', () => {
   let telegram: Server;
   let sent: { url: string; body: Record<string, unknown> }[];
   let panel: FakeRickpanel;
-  let products: DrizzleProductRepository;
+  let others: FakeRickpanel[] = [];
   let services: DrizzleServiceRepository;
   let panelId: string;
   let customerId: UserId;
   let owner: ActorContext;
-  let trialProductId: ProductId;
 
   beforeAll(async () => {
     telegram = createServer((request, response) => {
@@ -98,12 +103,13 @@ describe('a free trial', () => {
 
   afterEach(async () => {
     await panel?.close();
+    for (const other of others) await other.close();
+    others = [];
   });
 
   beforeEach(async () => {
     await ctx.reset();
     ctx.container.setInstallationTenant(tenantA.tenantId);
-    products = new DrizzleProductRepository(ctx.container.database.db);
     services = new DrizzleServiceRepository(ctx.container.database.db);
     sent = [];
 
@@ -111,38 +117,29 @@ describe('a free trial', () => {
     owner = adminActorFor(
       await createAdmin(ctx.container, tenantA, { username: 'owner-trial', roleKeys: ['owner'] }),
     );
-    const created = await ctx.container.panels.create(tenantA, owner, {
-      name: 'Rick',
-      providerType: 'rickpanel',
-      baseUrl: panel.baseUrl,
-      credentials: { username: panel.username, password: panel.password },
-      activation: {},
-      idempotencyKey: 'panel-trial-create',
-    });
-    panelId = created.view.panel.id;
-    await validatePanelConnection(ctx.container, tenantA, panelId);
-
+    panelId = await newPanel('Rick', panel);
     customerId = await customer('950950');
-
-    // A trial product has NO price: that is what keeps it out of the catalogue.
-    const product = await products.create(tenantA, {
-      id: ctx.container.ids.uuid() as ProductId,
-      draft: {
-        title: 'تست یک‌روزه',
-        description: null,
-        audience: 'HIDDEN',
-        sortOrder: 90,
-        panelId: panelId as PanelId,
-        categoryId: SEED_IDS.categoryA as ProductCategoryId,
-        specification: { durationDays: 1, trafficBytes: 1_073_741_824n, deviceLimit: null },
-        price: null,
-        display: EMPTY_PRODUCT_DISPLAY,
-      },
-      now: ctx.container.clock.now(),
-    });
-    await products.setStatus(tenantA, product.id, 'INACTIVE', 'ACTIVE', ctx.container.clock.now());
-    trialProductId = product.id;
   });
+
+  async function newPanel(name: string, fake: FakeRickpanel): Promise<string> {
+    const created = await ctx.container.panels.create(tenantA, owner, {
+      name,
+      providerType: 'rickpanel',
+      baseUrl: fake.baseUrl,
+      credentials: { username: fake.username, password: fake.password },
+      activation: {},
+      idempotencyKey: `panel-${name}`,
+    });
+    await validatePanelConnection(ctx.container, tenantA, created.view.panel.id);
+    return created.view.panel.id;
+  }
+
+  /** Another fake panel on its own loopback address, closed after the test. */
+  async function extraFake(host: string): Promise<FakeRickpanel> {
+    const fake = await startFakeRickpanel({ host });
+    others.push(fake);
+    return fake;
+  }
 
   async function customer(telegramId: string): Promise<UserId> {
     const resolved = await ctx.container.customers.resolveFromUpdate(
@@ -158,48 +155,81 @@ describe('a free trial', () => {
     return resolved.customer.id;
   }
 
-  const setSetting = (key: string, value: unknown) =>
-    ctx.container.settingsService.set(tenantA, owner, {
-      key,
-      value,
-      expectedVersion: null,
+  async function setFlag(enabled: boolean): Promise<void> {
+    const current = (await ctx.container.featureFlags.list(tenantA, owner)).find(
+      (flag) => flag.key === 'trials',
+    );
+    if (current?.enabled === enabled) return;
+    await ctx.container.featureFlags.set(tenantA, owner, {
+      key: 'trials',
+      enabled,
+      expectedVersion: current?.version ?? null,
+      confirmKey: 'trials',
+      reason: 'offer a trial',
       idempotencyKey: randomUUID(),
     });
-
-  async function configureTrial(input: {
-    readonly enabled?: boolean;
-    readonly product?: boolean;
-    readonly limit?: number;
-  }): Promise<void> {
-    if (input.enabled ?? true) {
-      await ctx.container.featureFlags.set(tenantA, owner, {
-        key: 'trials',
-        enabled: true,
-        expectedVersion: null,
-        // TENANT_WIDE: the flag names itself and says why (ADR-0010).
-        confirmKey: 'trials',
-        reason: 'offer a trial',
-        idempotencyKey: randomUUID(),
-      });
-    }
-    if (input.product ?? true) await setSetting('trial.product_id', trialProductId);
-    if (input.limit !== undefined) {
-      const current = await ctx.container.settingsService.get(
-        tenantA,
-        owner,
-        'trial.limit_per_customer',
-      );
-      await ctx.container.settingsService.set(tenantA, owner, {
-        key: 'trial.limit_per_customer',
-        value: input.limit,
-        expectedVersion: current.version,
-        idempotencyKey: randomUUID(),
-      });
-    }
   }
 
-  const claim = (who: UserId, key: string) =>
-    ctx.container.trials.claim(tenantA, systemActor(key), who, { idempotencyKey: key });
+  async function setLimit(limit: number): Promise<void> {
+    const current = await ctx.container.settingsService.get(
+      tenantA,
+      owner,
+      'trial.limit_per_customer',
+    );
+    await ctx.container.settingsService.set(tenantA, owner, {
+      key: 'trial.limit_per_customer',
+      value: limit,
+      expectedVersion: current.version,
+      idempotencyKey: randomUUID(),
+    });
+  }
+
+  /** A panel's trial, through the operator's own write path. */
+  async function configurePanel(
+    id: string,
+    input: {
+      readonly enabled?: boolean;
+      readonly amount?: string;
+      readonly unit?: 'GB' | 'MB';
+      readonly hours?: number;
+      readonly label?: string | null;
+    } = {},
+  ): Promise<void> {
+    const current = await ctx.container.panelTrials.get(tenantA, owner, id);
+    await ctx.container.panelTrials.update(tenantA, owner, id, {
+      idempotencyKey: randomUUID(),
+      expectedRevision: current.revision,
+      enabled: input.enabled ?? true,
+      trafficAmount: input.amount ?? '100',
+      trafficUnit: input.unit ?? 'MB',
+      durationHours: input.hours ?? 72,
+      label: input.label ?? null,
+    });
+  }
+
+  /** The flag on and the main panel offering 100 MB for 72 hours — the owner's example. */
+  async function configureTrial(input: { readonly limit?: number } = {}): Promise<void> {
+    await setFlag(true);
+    await configurePanel(panelId);
+    if (input.limit !== undefined) await setLimit(input.limit);
+  }
+
+  const claim = (who: UserId, key: string, on: string = panelId) =>
+    ctx.container.trials.claim(tenantA, systemActor(key), who, {
+      idempotencyKey: key,
+      panelId: on,
+    });
+
+  const offered = async (who: UserId = customerId) => {
+    const availability = await ctx.container.trials.availabilityFor(
+      tenantA,
+      systemActor('offer'),
+      who,
+    );
+    return availability.available
+      ? availability.offers.map((offer) => offer.panelId)
+      : availability.reason;
+  };
 
   const count = async (query: ReturnType<typeof sql>): Promise<number> => {
     const rows = (await ctx.container.database.db.execute(query as never)) as unknown as {
@@ -215,15 +245,20 @@ describe('a free trial', () => {
   const orderRow = async (id: string) =>
     (
       (await ctx.container.database.db.execute(
-        sql`SELECT state, purpose, total_amount::text AS total, line_duration_days AS days,
+        sql`SELECT state, purpose, product_id, panel_id, total_amount::text AS total,
+                   line_duration_days AS days, line_duration_hours AS hours, line_title AS title,
                    line_traffic_bytes::text AS traffic, confirmed_at, settled_at, refunded_at
               FROM orders WHERE id = ${id}` as never,
       )) as unknown as {
         rows: {
           state: string;
           purpose: string;
+          product_id: string | null;
+          panel_id: string;
           total: string;
           days: number;
+          hours: number | null;
+          title: string;
           traffic: string;
           confirmed_at: Date | null;
           settled_at: Date | null;
@@ -234,9 +269,15 @@ describe('a free trial', () => {
   const grantRow = async (orderId: string) =>
     (
       (await ctx.container.database.db.execute(
-        sql`SELECT customer_id, service_id, released_at FROM trial_grants WHERE order_id = ${orderId}` as never,
+        sql`SELECT customer_id, product_id, service_id, released_at FROM trial_grants
+             WHERE order_id = ${orderId}` as never,
       )) as unknown as {
-        rows: { customer_id: string; service_id: string | null; released_at: Date | null }[];
+        rows: {
+          customer_id: string;
+          product_id: string | null;
+          service_id: string | null;
+          released_at: Date | null;
+        }[];
       }
     ).rows[0];
 
@@ -257,108 +298,138 @@ describe('a free trial', () => {
   }
 
   it('is off by default, and says so without writing anything', async () => {
-    expect(
-      await ctx.container.trials.availabilityFor(tenantA, systemActor('a'), customerId),
-    ).toEqual({ available: false, reason: 'UNCONFIGURED' });
+    expect(await offered()).toBe('UNCONFIGURED');
     expect(await claim(customerId, 'off')).toEqual({ outcome: 'REFUSED', reason: 'UNCONFIGURED' });
-    // A product configured while the flag is off is still no trial: the flag is the
-    // switch, and a configuration is inert until it is on.
-    await configureTrial({ enabled: false });
-    expect(await claim(customerId, 'product-only')).toEqual({
+    // A panel configured while the flag is off is still no trial: the flag is the switch.
+    await configurePanel(panelId);
+    expect(await claim(customerId, 'config-only')).toEqual({
       outcome: 'REFUSED',
       reason: 'UNCONFIGURED',
     });
-    // The flag on with no product is still unconfigured: the flag alone is not enough.
-    const configured = await ctx.container.settingsService.get(tenantA, owner, 'trial.product_id');
-    await ctx.container.settingsService.set(tenantA, owner, {
-      key: 'trial.product_id',
-      value: null,
-      expectedVersion: configured.version,
-      idempotencyKey: randomUUID(),
-    });
-    await configureTrial({ product: false });
-    expect(await claim(customerId, 'no-product')).toEqual({
+    // The flag on with no panel offering one is still no trial.
+    await configurePanel(panelId, { enabled: false });
+    await setFlag(true);
+    expect(await offered()).toBe('UNCONFIGURED');
+    expect(await claim(customerId, 'no-panel')).toEqual({
       outcome: 'REFUSED',
-      reason: 'UNCONFIGURED',
+      reason: 'PRODUCT_UNAVAILABLE',
     });
     expect(await count(sql`SELECT count(*)::int AS n FROM orders`)).toBe(0);
     expect(await count(sql`SELECT count(*)::int AS n FROM trial_grants`)).toBe(0);
   });
 
-  it('issues a trial through the purchase path, delivers its link, and moves no money', async () => {
-    await configureTrial({});
-    expect(
-      await ctx.container.trials.availabilityFor(tenantA, systemActor('a'), customerId),
-    ).toEqual({ available: true });
+  it('does not require a product: the order, the grant and the service name none', async () => {
+    /*
+     * R1, the owner's first required regression. The tenant has NO product at all — not a
+     * hidden one, not an unpriced one — and the trial is issued, provisioned and delivered
+     * from the panel's own configuration.
+     */
+    await ctx.container.database.db.execute(sql`DELETE FROM products` as never);
+    await configureTrial();
+    expect(await offered()).toEqual([panelId]);
 
     const issued = await claim(customerId, 'first');
     if (issued.outcome !== 'ISSUED') throw new Error(`refused: ${issued.reason}`);
     expect(issued.replayed).toBe(false);
 
-    // The order: a zero-total TRIAL that reached PAID through GRANT, confirmed and
-    // settled in the same instant, carrying the trial product's specification.
+    // The order: a zero-total TRIAL that reached PAID through GRANT, naming no product,
+    // carrying the panel's hours and traffic — and the days rounded up for day-only readers.
     const order = await orderRow(issued.orderId);
-    expect(order).toMatchObject({ state: 'PAID', purpose: 'TRIAL', total: '0', days: 1 });
-    expect(order?.traffic).toBe('1073741824');
+    expect(order).toMatchObject({
+      state: 'PAID',
+      purpose: 'TRIAL',
+      product_id: null,
+      panel_id: panelId,
+      total: '0',
+      days: 3,
+      hours: 72,
+      title: 'Rick',
+    });
+    expect(order?.traffic).toBe(String(100n * MB));
     expect(order?.confirmed_at).not.toBeNull();
     expect(order?.settled_at).not.toBeNull();
 
-    // The grant counts, and names the service.
     const grant = await grantRow(issued.orderId);
-    expect(grant?.customer_id).toBe(customerId);
-    expect(grant?.service_id).toBe(issued.serviceId);
-    expect(grant?.released_at).toBeNull();
+    expect(grant).toMatchObject({
+      customer_id: customerId,
+      product_id: null,
+      service_id: issued.serviceId,
+      released_at: null,
+    });
 
     // The provisioner creates it on the panel, and the ordinary lane sends the link.
+    const before = ctx.container.clock.now().getTime();
     await ctx.container.provisionerLoop.tick();
     const service = await services.findById(tenantA, issued.serviceId as never);
     expect(service?.state).toBe('ACTIVE');
-    expect(service?.trafficLimitBytes).toBe(1_073_741_824n);
+    expect(service?.productId).toBeNull();
+    // The database marks it a trial, from the order — the application never wrote it.
+    expect(service?.isTrial).toBe(true);
+    expect(service?.trafficLimitBytes).toBe(100n * MB);
+    // Seventy-two HOURS from the create.
+    const left = (service?.expiresAt?.getTime() ?? 0) - before;
+    expect(left).toBeGreaterThanOrEqual(72 * 3_600_000 - 60_000);
+    expect(left).toBeLessThanOrEqual(72 * 3_600_000 + 60_000);
     expect(panel.users.get(service?.providerUsername ?? '')).toBeDefined();
     expect(service?.deliveryState).toBe('DELIVERED');
     expect(sent.some((one) => one.url.endsWith('/sendPhoto'))).toBe(true);
 
-    // No wallet entry, no payment, no refund: a trial is free and touches no ledger.
+    // No product was created to fit the old model, and no money moved.
+    expect(await count(sql`SELECT count(*)::int AS n FROM products`)).toBe(0);
     expect(await moneyRows()).toEqual({ wallet: 0, payments: 0, refunds: 0 });
     expect(
       await count(
-        sql`SELECT count(*)::int AS n FROM outbox_messages WHERE event_type = 'TrialIssued'`,
+        sql`SELECT count(*)::int AS n FROM outbox_messages
+             WHERE event_type = 'TrialIssued' AND payload->>'panelId' = ${panelId}
+               AND payload->'productId' = 'null'::jsonb`,
       ),
     ).toBe(1);
   });
 
-  it('keeps what was granted when the trial product is edited afterwards', async () => {
-    await configureTrial({});
+  it('marks is_trial in the database, and never lets it change', async () => {
+    await configureTrial();
+    const issued = await claim(customerId, 'mark');
+    if (issued.outcome !== 'ISSUED') throw new Error('refused');
+    await expect(
+      ctx.container.database.db.execute(
+        sql`UPDATE services SET is_trial = false WHERE id = ${issued.serviceId}` as never,
+      ),
+    ).rejects.toThrow();
+    expect((await services.findById(tenantA, issued.serviceId as never))?.isTrial).toBe(true);
+  });
+
+  it('keeps what was granted when the panel’s trial is edited afterwards', async () => {
+    await configureTrial();
     const issued = await claim(customerId, 'snap');
     if (issued.outcome !== 'ISSUED') throw new Error(`refused: ${issued.reason}`);
 
-    await products.update(
-      tenantA,
-      trialProductId,
-      {
-        title: 'تست بزرگ',
-        description: null,
-        audience: 'HIDDEN',
-        sortOrder: 90,
-        panelId: panelId as PanelId,
-        categoryId: SEED_IDS.categoryA as ProductCategoryId,
-        specification: { durationDays: 30, trafficBytes: 107_374_182_400n, deviceLimit: null },
-        price: null,
-        display: EMPTY_PRODUCT_DISPLAY,
-      },
-      ctx.container.clock.now(),
-    );
+    await configurePanel(panelId, { amount: '5', unit: 'GB', hours: 240, label: 'بزرگ' });
 
     await ctx.container.provisionerLoop.tick();
     const order = await orderRow(issued.orderId);
-    expect(order?.days).toBe(1);
-    expect(order?.traffic).toBe('1073741824');
+    expect(order).toMatchObject({ hours: 72, days: 3, title: 'Rick' });
+    expect(order?.traffic).toBe(String(100n * MB));
     const service = await services.findById(tenantA, issued.serviceId as never);
-    expect(service?.trafficLimitBytes).toBe(1_073_741_824n);
+    expect(service?.trafficLimitBytes).toBe(100n * MB);
+  });
+
+  it('computes a short trial’s expiry from its hours, not from whole days', async () => {
+    await setFlag(true);
+    await configurePanel(panelId, { hours: 12, amount: '0.5', unit: 'GB' });
+    const issued = await claim(customerId, 'short');
+    if (issued.outcome !== 'ISSUED') throw new Error('refused');
+    expect(await orderRow(issued.orderId)).toMatchObject({ hours: 12, days: 1 });
+    const before = ctx.container.clock.now().getTime();
+    await ctx.container.provisionerLoop.tick();
+    const service = await services.findById(tenantA, issued.serviceId as never);
+    expect(service?.trafficLimitBytes).toBe(512n * MB);
+    const left = (service?.expiresAt?.getTime() ?? 0) - before;
+    expect(left).toBeGreaterThanOrEqual(12 * 3_600_000 - 60_000);
+    expect(left).toBeLessThanOrEqual(12 * 3_600_000 + 60_000);
   });
 
   it('answers a replayed claim with the same trial, and writes it once', async () => {
-    await configureTrial({});
+    await configureTrial();
     const first = await claim(customerId, 'same-key');
     const second = await claim(customerId, 'same-key');
     if (first.outcome !== 'ISSUED' || second.outcome !== 'ISSUED') throw new Error('refused');
@@ -373,24 +444,24 @@ describe('a free trial', () => {
     expect((await claim(customerId, 'l-1')).outcome).toBe('ISSUED');
     expect((await claim(customerId, 'l-2')).outcome).toBe('ISSUED');
     expect(await claim(customerId, 'l-3')).toEqual({ outcome: 'REFUSED', reason: 'LIMIT_REACHED' });
+    expect(await offered()).toBe('LIMIT_REACHED');
 
     // A second customer has their own allowance: the limit is per customer.
     const other = await customer('950951');
     expect((await claim(other, 'o-1')).outcome).toBe('ISSUED');
 
-    await configureTrial({ enabled: false, product: false, limit: 0 });
+    await setLimit(0);
     const third = await customer('950952');
     expect(await claim(third, 'z-1')).toEqual({ outcome: 'REFUSED', reason: 'LIMIT_REACHED' });
   });
 
   it('serialises two claims on the customer lock, so the second counts the first', async () => {
     /*
-     * The barrier is the customer row itself. An outside transaction holds it; both
-     * claims are started and PROVEN to be waiting on it before it is released — so the
-     * two genuinely race for the same decision, rather than one finishing before the
-     * other begins, which is all `Promise.all` alone would show.
+     * One trial per customer under a double tap: two different updates, each its own key,
+     * racing for the same decision. The barrier is the customer row itself — both claims
+     * are PROVEN to be waiting on it before it is released.
      */
-    await configureTrial({});
+    await configureTrial();
     let release!: () => void;
     const gate = new Promise<void>((resolve) => (release = resolve));
     let locked!: () => void;
@@ -418,7 +489,7 @@ describe('a free trial', () => {
   });
 
   it('gives the trial back when its service definitively cannot be created', async () => {
-    await configureTrial({});
+    await configureTrial();
     panel.behaviour = 'refuses-rule';
     const issued = await claim(customerId, 'fails');
     if (issued.outcome !== 'ISSUED') throw new Error(`refused: ${issued.reason}`);
@@ -435,8 +506,7 @@ describe('a free trial', () => {
     expect((await grantRow(issued.orderId))?.released_at).not.toBeNull();
     expect(await moneyRows()).toEqual({ wallet: 0, payments: 0, refunds: 0 });
 
-    // The customer is told the truth, by the trial's own sentence — not "refunded to
-    // your wallet", which would be false.
+    // The customer is told the truth, by the trial's own sentence.
     expect(
       await count(
         sql`SELECT count(*)::int AS n FROM customer_notifications
@@ -455,14 +525,7 @@ describe('a free trial', () => {
   });
 
   it('keeps the trial counted while its create is still being retried', async () => {
-    /*
-     * Only a DEFINITIVE failure gives a trial back. A panel that cannot be reached is
-     * retried, and while it is the customer's grant still counts — otherwise a second
-     * claim during the outage would hand them two trials the moment it recovers.
-     * (`server-error` is not this case: the adapter reads back after a 500, proves the
-     * account absent, and that IS definitive — the case above.)
-     */
-    await configureTrial({});
+    await configureTrial();
     const issued = await claim(customerId, 'retrying');
     if (issued.outcome !== 'ISSUED') throw new Error(`refused: ${issued.reason}`);
     await panel.close();
@@ -479,13 +542,66 @@ describe('a free trial', () => {
     });
   });
 
-  it('refuses a trial product id that is not a product of this tenant', async () => {
-    await expect(setSetting('trial.product_id', ctx.container.ids.uuid())).rejects.toThrow();
-    await setSetting('trial.product_id', trialProductId);
+  async function trialProduct(durationDays: number): Promise<ProductId> {
+    const products = new DrizzleProductRepository(ctx.container.database.db);
+    const product = await products.create(tenantA, {
+      id: ctx.container.ids.uuid() as ProductId,
+      draft: {
+        title: 'تست',
+        description: null,
+        audience: 'HIDDEN',
+        sortOrder: 90,
+        panelId: panelId as PanelId,
+        categoryId: SEED_IDS.categoryA as ProductCategoryId,
+        specification: { durationDays, trafficBytes: 1_073_741_824n, deviceLimit: null },
+        price: null,
+        display: EMPTY_PRODUCT_DISPLAY,
+      },
+      now: ctx.container.clock.now(),
+    });
+    await products.setStatus(tenantA, product.id, 'INACTIVE', 'ACTIVE', ctx.container.clock.now());
+    await ctx.container.settingsService.set(tenantA, owner, {
+      key: 'trial.product_id',
+      value: product.id,
+      expectedVersion: null,
+      idempotencyKey: randomUUID(),
+    });
+    return product.id;
+  }
+
+  it('issues nothing from the retired product setting', async () => {
+    // A tenant that still has `trial.product_id` stored and no panel configured has no
+    // trial: nothing reads the key since R1.
+    await trialProduct(1);
+    await setFlag(true);
+    expect(await offered()).toBe('UNCONFIGURED');
+    expect(await count(sql`SELECT count(*)::int AS n FROM orders`)).toBe(0);
+  });
+
+  it('carries a configured trial product forward onto its panel, once', async () => {
+    /*
+     * The upgrade: migration 0140's own INSERT, replayed on a tenant that had configured a
+     * trial product before R1. The product's panel gets its traffic and its duration in
+     * hours; a replay changes nothing.
+     */
+    await trialProduct(2);
+    const migration = readFileSync(
+      'apps/api/drizzle/0140_r1_trial_per_panel_and_main_menu.sql',
+      'utf8',
+    );
+    const carry = migration.slice(migration.indexOf('INSERT INTO panel_trial_configs'));
+    await ctx.container.database.db.execute(sql.raw(carry));
+    await ctx.container.database.db.execute(sql.raw(carry));
+    expect(await ctx.container.panelTrials.get(tenantA, owner, panelId)).toMatchObject({
+      enabled: true,
+      trafficBytes: '1073741824',
+      durationHours: 48,
+      revision: 1,
+    });
   });
 
   it('refuses a blocked customer, and a panel that cannot take a new account, without writing', async () => {
-    await configureTrial({});
+    await configureTrial();
     await ctx.container.panels.setStatus(tenantA, owner, panelId, {
       status: 'DISABLED',
       idempotencyKey: 'trial-panel-off',
@@ -508,46 +624,66 @@ describe('a free trial', () => {
     });
   });
 
-  it('does not offer a trial its panel could not deliver', async () => {
-    /*
-     * Codex, PR #64: the offer checked only that the product had a panel, so a panel
-     * that was disabled, full, unhealthy or would not choose a name for the customer
-     * still drew the button — for a tap that could only be refused. The offer now asks
-     * the catalogue's own eligibility evaluator and the username lane, read-only.
-     */
-    await configureTrial({});
-    const offered = () =>
-      ctx.container.trials.availabilityFor(tenantA, systemActor('offer'), customerId);
-    expect(await offered()).toEqual({ available: true });
+  it('refuses a panel whose trial is switched off, or was never configured', async () => {
+    await configureTrial();
+    const bare = await newPanel('Bare', await extraFake('127.0.0.3'));
+    expect(await claim(customerId, 'unconfigured-panel', bare)).toEqual({
+      outcome: 'REFUSED',
+      reason: 'PRODUCT_UNAVAILABLE',
+    });
+    await configurePanel(panelId, { enabled: false });
+    expect(await claim(customerId, 'switched-off')).toEqual({
+      outcome: 'REFUSED',
+      reason: 'PRODUCT_UNAVAILABLE',
+    });
+    expect(await count(sql`SELECT count(*)::int AS n FROM orders`)).toBe(0);
+  });
 
+  it('offers only panels with a valid, enabled trial', async () => {
+    /*
+     * R1, the owner's second required regression. Four panels: one offering a trial; one
+     * whose trial is switched off; one whose trial is on but which the operator DISABLED;
+     * one whose trial is on but whose username policy will not let the installation choose
+     * a name. Only the first is offered — the one eligibility evaluator decides the panel,
+     * the configuration decides the trial.
+     */
+    await configureTrial();
+    const switchedOff = await newPanel('SwitchedOff', await extraFake('127.0.0.3'));
+    const disabled = await newPanel('Disabled', await extraFake('127.0.0.4'));
+    const namedOnly = await newPanel('NamedOnly', await extraFake('127.0.0.5'));
+    await configurePanel(switchedOff, { enabled: false });
+    await configurePanel(disabled);
+    await configurePanel(namedOnly);
+    await ctx.container.panels.setStatus(tenantA, owner, disabled, {
+      status: 'DISABLED',
+      idempotencyKey: 'trial-disabled-panel',
+    });
     await ctx.container.database.db.execute(
       sql`UPDATE panels SET allow_custom_username = true, allow_automatic_username = false
-           WHERE id = ${panelId}` as never,
+           WHERE id = ${namedOnly}` as never,
     );
-    expect(await offered()).toEqual({ available: false, reason: 'PRODUCT_UNAVAILABLE' });
-    await ctx.container.database.db.execute(
-      sql`UPDATE panels SET allow_automatic_username = true WHERE id = ${panelId}` as never,
-    );
-    expect(await offered()).toEqual({ available: true });
+    expect(await offered()).toEqual([panelId]);
 
-    await ctx.container.panels.setStatus(tenantA, owner, panelId, {
-      status: 'DISABLED',
-      idempotencyKey: 'trial-offer-panel-off',
-    });
-    expect(await offered()).toEqual({ available: false, reason: 'PRODUCT_UNAVAILABLE' });
+    // The operator's overview asks the same evaluator.
+    const overview = await ctx.container.panelTrials.overview(tenantA, owner);
+    expect(
+      Object.fromEntries(overview.panels.map((row) => [row.panelName, row.offeredNow])),
+    ).toEqual({ Rick: true, SwitchedOff: false, Disabled: false, NamedOnly: false });
+
+    // Switching a second valid panel on offers both, by their customer-facing names.
+    await configurePanel(switchedOff, { enabled: true, label: 'Alpha' });
+    expect(await offered()).toEqual([switchedOff, panelId]);
     // A courtesy writes nothing.
     expect(await count(sql`SELECT count(*)::int AS n FROM orders`)).toBe(0);
   });
 
   it('answers a redelivered update with the refusal it already gave', async () => {
-    // Codex, PR #64: a refusal is an answer, and a replay of the same update gets the
-    // same one even after the configuration that produced it changes.
     await configureTrial({ limit: 0 });
     expect(await claim(customerId, 'once')).toEqual({
       outcome: 'REFUSED',
       reason: 'LIMIT_REACHED',
     });
-    await configureTrial({ enabled: false, product: false, limit: 1 });
+    await setLimit(1);
     expect(await claim(customerId, 'once')).toEqual({
       outcome: 'REFUSED',
       reason: 'LIMIT_REACHED',
@@ -559,13 +695,7 @@ describe('a free trial', () => {
   });
 
   it('answers two concurrent deliveries of one update with one trial', async () => {
-    /*
-     * Codex, PR #64: both deliveries miss the idempotency lookup, the first issues, and
-     * the second — which found the limit spent under the lock — said "unavailable" to
-     * the tap the first had just served. The barrier is the customer row: both claims
-     * are PROVEN to be waiting on it before it is released.
-     */
-    await configureTrial({});
+    await configureTrial();
     let release!: () => void;
     const gate = new Promise<void>((resolve) => (release = resolve));
     let locked!: () => void;
@@ -598,21 +728,10 @@ describe('a free trial', () => {
   });
 
   it('recovers a trial the previous release stranded, through the operator retry', async () => {
-    /*
-     * Codex, PR #64 (P1). A rollback to the release before WP6-A can claim a trial's
-     * PROVISION and, on a definitive failure, cannot settle it: its PURCHASED_AS has no
-     * TRIAL, so it fails the operation and leaves the order PAID, the service pending
-     * and the grant counted. That release cannot be changed, and `FAILED` alone cannot
-     * tell its leftovers apart from `retireExhausted`'s (an unknown outcome, which must
-     * keep the grant) — so nothing sweeps it automatically. What this release owes is
-     * that the shape is RECOVERABLE through the operator's retry, which is the remedy
-     * `retireExhausted`'s stalled trials already rely on. Both outcomes of the retry:
-     */
     await configureTrial({ limit: 2 });
     const strand = async (key: string) => {
       const issued = await claim(customerId, key);
       if (issued.outcome !== 'ISSUED') throw new Error(`refused: ${issued.reason}`);
-      // The old release's leftovers, written as it leaves them.
       await ctx.container.database.db.execute(
         sql`UPDATE provisioning_operations
                SET state = 'FAILED', completed_at = now(), claimed_by = NULL, lease_until = NULL
@@ -621,7 +740,6 @@ describe('a free trial', () => {
       return issued;
     };
 
-    // A retry that succeeds delivers the trial, and the grant keeps counting.
     const delivered = await strand('stranded-ok');
     await ctx.container.provisioning.retryProvisioning(tenantA, owner, delivered.serviceId, {
       idempotencyKey: 'retry-ok',
@@ -630,7 +748,6 @@ describe('a free trial', () => {
     expect((await services.findById(tenantA, delivered.serviceId as never))?.state).toBe('ACTIVE');
     expect((await grantRow(delivered.orderId))?.released_at).toBeNull();
 
-    // A retry that is definitively refused gives the trial back, as a fresh claim would.
     const refused = await strand('stranded-no');
     panel.behaviour = 'refuses-rule';
     await ctx.container.provisioning.retryProvisioning(tenantA, owner, refused.serviceId, {
@@ -645,8 +762,45 @@ describe('a free trial', () => {
     expect(await moneyRows()).toEqual({ wallet: 0, payments: 0, refunds: 0 });
   });
 
+  it('refuses a stale configuration write, and says when a save changed nothing', async () => {
+    await configurePanel(panelId);
+    expect(await ctx.container.panelTrials.get(tenantA, owner, panelId)).toMatchObject({
+      enabled: true,
+      trafficBytes: String(100n * MB),
+      durationHours: 72,
+      revision: 1,
+    });
+    await expect(
+      ctx.container.panelTrials.update(tenantA, owner, panelId, {
+        idempotencyKey: randomUUID(),
+        expectedRevision: 0,
+        enabled: false,
+        trafficAmount: '1',
+        trafficUnit: 'GB',
+        durationHours: 1,
+        label: null,
+      }),
+    ).rejects.toMatchObject({ code: 'commerce.trial_config_stale' });
+    const saved = await ctx.container.panelTrials.update(tenantA, owner, panelId, {
+      idempotencyKey: randomUUID(),
+      expectedRevision: 1,
+      enabled: true,
+      trafficAmount: '100',
+      trafficUnit: 'MB',
+      durationHours: 72,
+      label: null,
+    });
+    expect(saved.changed).toBe(false);
+    expect(
+      await count(
+        sql`SELECT count(*)::int AS n FROM audit_logs
+             WHERE action = 'panel.trial_update' AND result = 'SUCCESS'`,
+      ),
+    ).toBe(1);
+  });
+
   // =========================================================================
-  // The Telegram surface: an offer only when it can be taken, decided again on tap
+  // The Telegram surface: the main-menu button, the choice, and a double tap
   // =========================================================================
 
   let updateSeq = 0;
@@ -673,37 +827,129 @@ describe('a free trial', () => {
       from: { id: Number(telegramUserId), first_name: 'سارا' },
     };
   };
+  const typed = (text: string, telegramUserId: string) => {
+    updateSeq += 1;
+    return {
+      idempotencyKey: `trial-update-${String(updateSeq)}`,
+      botInstanceId: BOT_A,
+      update: {
+        update_id: updateSeq,
+        message: {
+          message_id: updateSeq,
+          date: 0,
+          text,
+          chat: { id: Number(telegramUserId), type: 'private' },
+          from: { id: Number(telegramUserId), is_bot: false, first_name: 'سارا' },
+        },
+      },
+      telegramUserId,
+      from: { id: Number(telegramUserId), first_name: 'سارا' },
+    };
+  };
   const lastMessage = () =>
     JSON.stringify(sent.filter((one) => one.url.includes('/sendMessage')).at(-1) ?? {});
+  const grants = () => count(sql`SELECT count(*)::int AS n FROM trial_grants`);
 
-  it('draws the trial button only when the customer can take one, and issues it on the tap', async () => {
+  it('takes the trial straight from the main-menu button when one panel offers it', async () => {
     const runtime = ctx.container.botRuntime;
+    const button = CATALOGUE_FA['bot.menu.trial'];
 
-    // Off: the catalogue offers no trial, and a crafted tap is refused by the server.
+    // Off: the tap is answered with the one sentence, and nothing is written.
+    const off = await runtime.handle(tenantA, systemActor('tg'), typed(button, '950950'));
+    expect(off.replyKey).toBe('bot.trial.unavailable');
+    expect(await grants()).toBe(0);
+
+    await configureTrial();
+    const taken = await runtime.handle(tenantA, systemActor('tg'), typed(button, '950950'));
+    expect(taken.replyKey).toBe('bot.trial.issued');
+    expect(await grants()).toBe(1);
+
+    // Used up: a second tap is refused, in the same words, and issues nothing.
+    const again = await runtime.handle(tenantA, systemActor('tg'), typed(button, '950950'));
+    expect(again.replyKey).toBe('bot.trial.unavailable');
+    // `/trial` is the same path.
+    const typedCommand = await runtime.handle(
+      tenantA,
+      systemActor('tg'),
+      typed('/trial', '950950'),
+    );
+    expect(typedCommand.replyKey).toBe('bot.trial.unavailable');
+    expect(await grants()).toBe(1);
+  });
+
+  it('shows the panel choice when several offer a trial, and issues one trial for a double tap', async () => {
+    const runtime = ctx.container.botRuntime;
+    await configureTrial();
+    const second = await newPanel('Second', await extraFake('127.0.0.3'));
+    await configurePanel(second, { label: 'آلمان', amount: '1', unit: 'GB', hours: 24 });
+
+    const choice = await runtime.handle(
+      tenantA,
+      systemActor('tg'),
+      typed(CATALOGUE_FA['bot.menu.trial'], '950950'),
+    );
+    expect(choice.replyKey).toBe('bot.trial.choose_panel');
+    const drawn = lastMessage();
+    expect(drawn).toContain(`"tq:${panelId}"`);
+    expect(drawn).toContain(`"tq:${second}"`);
+    expect(await count(sql`SELECT count(*)::int AS n FROM orders`)).toBe(0);
+
+    // A double tap: two updates for one button. One trial; the second is told no.
+    const first = await runtime.handle(tenantA, systemActor('tg'), tap(`tq:${second}`, '950950'));
+    const duplicate = await runtime.handle(
+      tenantA,
+      systemActor('tg'),
+      tap(`tq:${second}`, '950950'),
+    );
+    expect(first.replyKey).toBe('bot.trial.issued');
+    expect(duplicate.replyKey).toBe('bot.trial.unavailable');
+    expect(await grants()).toBe(1);
+
+    // A REPLAYED callback — Telegram redelivering the same update — is answered as it was.
+    await customer('950951');
+    const replayed = tap(`tq:${panelId}`, '950951');
+    const once = await runtime.handle(tenantA, systemActor('tg'), replayed);
+    const twice = await runtime.handle(tenantA, systemActor('tg'), replayed);
+    expect(once.replyKey).toBe('bot.trial.issued');
+    expect(twice.replyKey).toBe('bot.trial.issued');
+    expect(await grants()).toBe(2);
+    expect(
+      await count(
+        sql`SELECT count(*)::int AS n FROM orders o JOIN services s ON s.order_id = o.id
+             WHERE o.purpose = 'TRIAL' AND s.is_trial AND o.product_id IS NULL`,
+      ),
+    ).toBe(2);
+  });
+
+  it('refuses a crafted choice for a panel that offers no trial', async () => {
+    const runtime = ctx.container.botRuntime;
+    await setFlag(true);
+    const crafted = await runtime.handle(
+      tenantA,
+      systemActor('tg'),
+      tap(`tq:${panelId}`, '950950'),
+    );
+    expect(crafted.replyKey).toBe('bot.trial.unavailable');
+    const malformed = await runtime.handle(tenantA, systemActor('tg'), tap('tq:nope', '950950'));
+    expect(malformed.replyKey).not.toBe('bot.trial.issued');
+    expect(await grants()).toBe(0);
+  });
+
+  it('draws the catalogue’s trial button only when the customer can take one', async () => {
+    const runtime = ctx.container.botRuntime;
     await runtime.handle(tenantA, systemActor('tg'), tap('cg:0', '950950'));
     expect(lastMessage()).not.toContain('"tr:"');
-    const crafted = await runtime.handle(tenantA, systemActor('tg'), tap('tr:', '950950'));
-    expect(crafted.replyKey).toBe('bot.trial.unavailable');
-    expect(await count(sql`SELECT count(*)::int AS n FROM trial_grants`)).toBe(0);
-
-    // On: offered, and the tap issues it.
-    await configureTrial({});
+    await configureTrial();
     await runtime.handle(tenantA, systemActor('tg'), tap('cg:0', '950950'));
     expect(lastMessage()).toContain('"tr:"');
     const taken = await runtime.handle(tenantA, systemActor('tg'), tap('tr:', '950950'));
     expect(taken.replyKey).toBe('bot.trial.issued');
-    expect(await count(sql`SELECT count(*)::int AS n FROM trial_grants`)).toBe(1);
-
-    // Used up: no longer offered, and a second tap is refused.
     await runtime.handle(tenantA, systemActor('tg'), tap('cg:0', '950950'));
     expect(lastMessage()).not.toContain('"tr:"');
-    const again = await runtime.handle(tenantA, systemActor('tg'), tap('tr:', '950950'));
-    expect(again.replyKey).toBe('bot.trial.unavailable');
-    expect(await count(sql`SELECT count(*)::int AS n FROM trial_grants`)).toBe(1);
   });
 
   it('is scoped to its tenant: another tenant sees no trial', async () => {
-    await configureTrial({});
+    await configureTrial();
     expect(
       await ctx.container.trials.availabilityFor(tenantB, systemActor('b'), customerId),
     ).toEqual({ available: false, reason: 'UNCONFIGURED' });
