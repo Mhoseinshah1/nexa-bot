@@ -291,28 +291,7 @@ export interface CustomerSendResult {
   readonly messageId?: number;
 }
 
-/**
- * R2 (v0.3.5 real-test items 3–5): one message this bot already sent, changed in place.
- *
- * The same template-key rule as `CustomerMessage` — never text — and the same keyboard rule,
- * except that NO buttons means the keyboard is removed: a message edited into a result keeps
- * nothing that could ask for the decision again.
- */
-export interface CustomerEditMessage {
-  readonly chatId: string;
-  readonly messageId: number;
-  readonly botInstanceId: BotInstanceId;
-  readonly templateKey: TemplateKey;
-  readonly values: TemplateValues;
-  readonly buttons?: readonly CustomerButton[];
-  /**
-   * The message is a FILE whose caption carries the text (a reviewer's receipt), so its
-   * caption is what changes. Telegram cannot turn a photo into a text message.
-   */
-  readonly caption?: boolean;
-}
-
-/** A message this bot sent, named for a keyboard removal or a deletion. */
+/** R2: a message this bot sent, named for a keyboard removal or a deletion. */
 export interface CustomerMessageRef {
   readonly chatId: string;
   readonly messageId: number;
@@ -327,7 +306,25 @@ export interface CustomerMessageRef {
  * and Telegram's answer to that is the same 400 as to a long one — so it is refused
  * whole, and the caller decides what to send instead.
  */
-export type CustomerSendRefusal = 'CAPTION_OVER_BOUND';
+export type CustomerSendRefusal = 'CAPTION_OVER_BOUND' | 'NOT_EDITABLE';
+
+/**
+ * R3: one message a customer already has, rewritten in place — the service card after a
+ * refresh, a disable or an enable.
+ *
+ * `messageId` is Telegram's id for the message in `chatId`, read from the callback that
+ * tapped it or stored with the request that will change it. The text is a template key
+ * and values, never text, for the reason `CustomerMessage` gives; `buttons` REPLACES the
+ * message's keyboard (an empty list removes it).
+ */
+export interface CustomerEditMessage {
+  readonly chatId: string;
+  readonly messageId: number;
+  readonly botInstanceId: BotInstanceId;
+  readonly templateKey: TemplateKey;
+  readonly values: TemplateValues;
+  readonly buttons: readonly CustomerButton[];
+}
 
 export interface CustomerMessenger {
   /**
@@ -356,6 +353,23 @@ export interface CustomerMessenger {
   sendFile(scope: TenantContext, message: CustomerFileMessage): Promise<CustomerSendResult>;
 
   /**
+   * R2 (v0.3.5 real-test items 3–5), beside R3's `edit` and on its rules: the receipt a
+   * reviewer was sent is a FILE, whose CAPTION is what an edit changes (`editMessageCaption`)
+   * — Telegram cannot turn a photo into a text message. Same outcomes as `edit`: DELIVERED
+   * for "not modified", REFUSED `NOT_EDITABLE` for every definite refusal.
+   */
+  editCaption?(scope: TenantContext, message: CustomerEditMessage): Promise<CustomerSendResult>;
+
+  /** R2: takes every button off a message this bot sent; its text stays. */
+  clearButtons?(scope: TenantContext, message: CustomerMessageRef): Promise<CustomerSendResult>;
+
+  /**
+   * R2: deletes a message in a private chat — the customer's own typed answer to a wizard
+   * step. Best effort: Telegram refuses a message older than 48 hours.
+   */
+  remove?(scope: TenantContext, message: CustomerMessageRef): Promise<CustomerSendResult>;
+
+  /**
    * Stops the spinner on a tapped button. Best effort, and the outcome is not returned.
    *
    * Telegram spins the button until the bot answers the callback query, so NOT calling
@@ -367,26 +381,32 @@ export interface CustomerMessenger {
    */
   acknowledge(
     scope: TenantContext,
-    input: { readonly callbackQueryId: string; readonly botInstanceId: BotInstanceId },
+    input: {
+      readonly callbackQueryId: string;
+      readonly botInstanceId: BotInstanceId;
+      /**
+       * R3: a short notice Telegram shows over the chat, as a template key — the refresh
+       * button's failure, where the card must stay exactly as it was and a new message
+       * would be the "intermediate" message the owner asked to remove.
+       */
+      readonly toast?: { readonly templateKey: TemplateKey; readonly values: TemplateValues };
+    },
   ): Promise<void>;
 
   /**
-   * R2: edits a message this bot sent — its text, or its caption — into a template, with the
-   * given keyboard or none. Never throws for a send failure, like `send`. A refusal because
-   * the message already says exactly this is DELIVERED: it is in the state asked for. A text
-   * over Telegram's bound is REFUSED without a request, and the caller sends instead (a send
-   * can split; an edit cannot).
+   * R3: rewrites a message the customer already has (`editMessageText`). Never throws for
+   * a send failure, like `send`.
+   *
+   * `DELIVERED` also when Telegram answers that the message already says exactly this —
+   * a re-edit with the same content is the state asked for. `REFUSED` with
+   * `NOT_EDITABLE` is every definite refusal (deleted, too old, not a text message, over
+   * the bound): the caller's one fallback is to SEND the same content once as a new
+   * message. `UNKNOWN` and `RATE_LIMITED` keep their meaning from `send`.
+   *
+   * Optional, so a stand-in written before R3 still satisfies the port; a caller that
+   * finds it absent sends instead.
    */
-  edit(scope: TenantContext, message: CustomerEditMessage): Promise<CustomerSendResult>;
-
-  /** R2: takes every button off a message this bot sent; its text stays. */
-  clearButtons(scope: TenantContext, message: CustomerMessageRef): Promise<CustomerSendResult>;
-
-  /**
-   * R2: deletes a message in a private chat — one this bot sent, or the customer's own typed
-   * answer to a wizard step. Best effort: Telegram refuses a message older than 48 hours.
-   */
-  remove(scope: TenantContext, message: CustomerMessageRef): Promise<CustomerSendResult>;
+  edit?(scope: TenantContext, message: CustomerEditMessage): Promise<CustomerSendResult>;
 }
 
 /**

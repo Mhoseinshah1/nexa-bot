@@ -289,99 +289,77 @@ describe('a file with a caption', () => {
 });
 
 /*
- * R2 (v0.3.5 real-test items 3–5): a message this bot already sent, changed in place.
+ * R2 (v0.3.5 real-test items 3–5): the three edits beside R3's `edit` — a file's caption, a
+ * keyboard taken off, and a deletion — on `edit`'s rules.
  */
-describe('an edit in place', () => {
-  it('edits a text message by its id, with the new keyboard', async () => {
-    const { messenger, calls, respondWith } = harness({ [PLAIN_KEY]: 'next step' });
-    respondWith([OK]);
-    const result = await messenger.edit(scope, {
-      chatId: '42',
-      messageId: 77,
-      botInstanceId,
-      templateKey: PLAIN_KEY,
-      values: {},
-      buttons: [{ label: { kind: 'TEXT', text: 'go' }, data: 'g:1' }],
-    });
-    expect(result).toEqual({ outcome: 'DELIVERED', messageId: 77 });
-    expect(calls[0]?.url).toContain('/editMessageText');
-    expect(calls[0]?.body).toMatchObject({
-      chat_id: '42',
-      message_id: 77,
-      text: 'next step',
-      reply_markup: { inline_keyboard: [[{ text: 'go', callback_data: 'g:1' }]] },
-    });
-  });
-
-  it('edits a file message by its CAPTION, and with no buttons removes the keyboard', async () => {
+describe('a sent message changed in place (R2)', () => {
+  it('edits a FILE by its caption, and an empty keyboard removes the buttons', async () => {
     const { messenger, calls, respondWith } = harness({ [PLAIN_KEY]: '✅ پرداخت تأیید شد' });
     respondWith([OK]);
-    await messenger.edit(scope, {
+    const result = await messenger.editCaption(scope, {
       chatId: '42',
       messageId: 78,
       botInstanceId,
       templateKey: PLAIN_KEY,
       values: {},
-      caption: true,
+      buttons: [],
     });
+    expect(result).toEqual({ outcome: 'DELIVERED' });
     expect(calls[0]?.url).toContain('/editMessageCaption');
     expect(calls[0]?.body).toEqual({
       chat_id: '42',
       message_id: 78,
       caption: '✅ پرداخت تأیید شد',
+      reply_markup: { inline_keyboard: [] },
     });
   });
 
-  it('reads "message is not modified" as delivered: the message already says it', async () => {
-    const { messenger, respondWith } = harness({ [PLAIN_KEY]: 'same' });
-    respondWith([
+  it('reads "message is not modified" as delivered, and any other refusal as NOT_EDITABLE', async () => {
+    const same = harness({ [PLAIN_KEY]: 'same' });
+    same.respondWith([
       {
         status: 400,
-        body: {
-          ok: false,
-          error_code: 400,
-          description: 'Bad Request: message is not modified: specified new message content',
-        },
+        body: { ok: false, error_code: 400, description: 'Bad Request: message is not modified' },
       },
     ]);
-    const result = await messenger.edit(scope, {
+    const edit = {
       chatId: '42',
       messageId: 79,
       botInstanceId,
       templateKey: PLAIN_KEY,
       values: {},
+      buttons: [],
+    } as const;
+    expect((await same.messenger.editCaption(scope, edit)).outcome).toBe('DELIVERED');
+
+    const gone = harness({ [PLAIN_KEY]: 'x' });
+    gone.respondWith([
+      {
+        status: 400,
+        body: { ok: false, error_code: 400, description: 'message to edit not found' },
+      },
+    ]);
+    expect(await gone.messenger.editCaption(scope, edit)).toEqual({
+      outcome: 'REFUSED',
+      reason: 'NOT_EDITABLE',
     });
-    expect(result.outcome).toBe('DELIVERED');
   });
 
-  it('refuses any other 400, and a text an edit cannot hold without asking Telegram', async () => {
-    const refused = harness({ [PLAIN_KEY]: 'x' });
-    refused.respondWith([
-      { status: 400, body: { ok: false, error_code: 400, description: "message can't be edited" } },
-    ]);
-    expect(
-      (
-        await refused.messenger.edit(scope, {
-          chatId: '42',
-          messageId: 80,
-          botInstanceId,
-          templateKey: PLAIN_KEY,
-          values: {},
-        })
-      ).outcome,
-    ).toBe('REFUSED');
-
-    const long = harness({ [PLAIN_KEY]: 'y'.repeat(TELEGRAM_MESSAGE_MAX + 1) });
-    long.respondWith([OK]);
-    const result = await long.messenger.edit(scope, {
-      chatId: '42',
-      messageId: 81,
-      botInstanceId,
-      templateKey: PLAIN_KEY,
-      values: {},
+  it('refuses an HTML caption over the bound without asking Telegram', async () => {
+    const { messenger, calls, respondWith } = harness({
+      [HTML_KEY]: 'y'.repeat(TELEGRAM_CAPTION_MAX + 1),
     });
-    expect(result.outcome).toBe('REFUSED');
-    expect(long.calls).toHaveLength(0);
+    respondWith([OK]);
+    const result = await messenger.editCaption(scope, {
+      chatId: '42',
+      messageId: 80,
+      botInstanceId,
+      templateKey: HTML_KEY,
+      values: {},
+      buttons: [],
+    });
+    expect(result).toEqual({ outcome: 'REFUSED', reason: 'NOT_EDITABLE' });
+    expect(calls).toHaveLength(0);
   });
 
   it('takes every button off, and deletes a message, by its id', async () => {

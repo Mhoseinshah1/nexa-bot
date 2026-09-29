@@ -10,12 +10,13 @@ import { ADMIN_MENU_BUTTON, MAIN_MENU_ROWS, errors, templateDefinition } from '@
 import { CATALOGUE_FA, formatMoney } from '@nexa/i18n';
 import {
   callbackAnswerBody,
+  editMessageBody,
+  isMessageNotModified,
+  // R2: the caption edit, the keyboard removal and the deletion.
   clearKeyboardBody,
   deleteMessageBody,
   editCaptionBody,
-  editTextBody,
   fileMessageBody,
-  isMessageNotModified,
   fileUploadBody,
   telegramSend,
   textMessageBody,
@@ -35,8 +36,8 @@ import type {
   CustomerButtonRow,
   CustomerEditMessage,
   CustomerFileMessage,
-  CustomerMessageRef,
   CustomerMessage,
+  CustomerMessageRef,
   CustomerMessenger,
   CustomerSendConditionReader,
   CustomerSendResult,
@@ -452,55 +453,40 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
   }
 
   /**
-   * R2: one message this bot sent, edited in place — its text, or its caption.
-   *
-   * Rendered exactly as `send` renders (the tenant's template, the key's own format, the
-   * same labels), and classified by the same `classify`. Two answers are decided here and
-   * not by Telegram: a text over the message bound is REFUSED without a request, because an
-   * edit cannot be split and the caller's fallback — a send — can; and "message is not
-   * modified" is DELIVERED, because the message already shows what was asked for.
-   *
-   * Like `sendFile`, nothing here opens the "this bot is not replying" condition: an edit
-   * that fails leaves the old screen in place, and every caller has a send to fall back on.
+   * R2: a FILE message's caption, edited in place — a reviewer's receipt turned into the
+   * decision taken on it. R3's `edit` rules: the tenant's template in the key's own format,
+   * the keyboard always sent (an empty one removes the buttons), "not modified" is
+   * DELIVERED, and every definite refusal is REFUSED `NOT_EDITABLE`. An HTML caption over
+   * the bound is refused without a request; a plain one is cut, as `sendFile` cuts it.
    */
-  async edit(scope: TenantContext, message: CustomerEditMessage): Promise<CustomerSendResult> {
+  async editCaption(
+    scope: TenantContext,
+    message: CustomerEditMessage,
+  ): Promise<CustomerSendResult> {
     const token = await this.bots.tokenForBotInstance(scope, message.botInstanceId);
     if (token === null) return { outcome: 'REFUSED' };
-    const text = await this.templates.render(scope, message.templateKey, message.values);
+    const caption = await this.templates.render(scope, message.templateKey, message.values);
     const html = templateDefinition(message.templateKey).format === 'TELEGRAM_HTML';
-    if (message.caption === true && html && text.length > TELEGRAM_CAPTION_MAX) {
-      return { outcome: 'REFUSED', reason: 'CAPTION_OVER_BOUND' };
+    if (caption.length === 0 || (html && caption.length > TELEGRAM_CAPTION_MAX)) {
+      return { outcome: 'REFUSED', reason: 'NOT_EDITABLE' };
     }
-    if (message.caption !== true && text.length > TELEGRAM_MESSAGE_MAX) {
-      return { outcome: 'REFUSED' };
-    }
-    const buttons = await this.labelButtons(scope, message.buttons ?? []);
+    const buttons = await this.labelButtons(scope, message.buttons);
     const outcome = await telegramSend({
       token,
       apiBaseUrl: this.apiBaseUrl,
       timeoutMs: this.timeoutMs,
-      method: message.caption === true ? 'editMessageCaption' : 'editMessageText',
-      body:
-        message.caption === true
-          ? editCaptionBody({
-              chatId: message.chatId,
-              messageId: message.messageId,
-              caption: text,
-              html,
-              buttons,
-            })
-          : editTextBody({
-              chatId: message.chatId,
-              messageId: message.messageId,
-              text,
-              html,
-              buttons,
-            }),
+      method: 'editMessageCaption',
+      body: editCaptionBody({
+        chatId: message.chatId,
+        messageId: message.messageId,
+        caption,
+        html,
+        buttons,
+      }),
     });
-    if (isMessageNotModified(outcome))
-      return { outcome: 'DELIVERED', messageId: message.messageId };
+    if (isMessageNotModified(outcome)) return { outcome: 'DELIVERED' };
     const sent = this.classify(outcome).sent;
-    return sent.outcome === 'DELIVERED' ? { ...sent, messageId: message.messageId } : sent;
+    return sent.outcome === 'REFUSED' ? { outcome: 'REFUSED', reason: 'NOT_EDITABLE' } : sent;
   }
 
   /** R2: every button off a message this bot sent; its text stays. */
@@ -567,17 +553,67 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
    */
   async acknowledge(
     scope: TenantContext,
-    input: { readonly callbackQueryId: string; readonly botInstanceId: BotInstanceId },
+    input: {
+      readonly callbackQueryId: string;
+      readonly botInstanceId: BotInstanceId;
+      readonly toast?: { readonly templateKey: TemplateKey; readonly values: TemplateValues };
+    },
   ): Promise<void> {
     const token = await this.bots.tokenForBotInstance(scope, input.botInstanceId);
     if (token === null) return;
+    // R3: the notice is a rendered template like every other customer string.
+    const text =
+      input.toast === undefined
+        ? undefined
+        : await this.templates.render(scope, input.toast.templateKey, input.toast.values);
     await telegramSend({
       token,
       apiBaseUrl: this.apiBaseUrl,
       timeoutMs: this.timeoutMs,
       method: 'answerCallbackQuery',
-      body: callbackAnswerBody({ callbackQueryId: input.callbackQueryId }),
+      body: callbackAnswerBody({
+        callbackQueryId: input.callbackQueryId,
+        ...(text === undefined ? {} : { text }),
+      }),
     });
+  }
+
+  /**
+   * R3: rewrites the customer's own message in place — the service card.
+   *
+   * One request, never split: a card that no longer fits one message cannot be edited
+   * into place, and is refused `NOT_EDITABLE` without a request so the caller sends it
+   * (which `send` splits). "Message is not modified" is success — the message already
+   * says this. Every other definite refusal — the message was deleted, is too old, or is
+   * a photo with no text to edit — is `NOT_EDITABLE`, the caller's cue for its one
+   * fallback. Like `sendFile`, nothing here opens the send-failure condition: an edit
+   * that could not land is followed by a send that records its own outcome.
+   */
+  async edit(scope: TenantContext, message: CustomerEditMessage): Promise<CustomerSendResult> {
+    const token = await this.bots.tokenForBotInstance(scope, message.botInstanceId);
+    if (token === null) return { outcome: 'REFUSED' };
+    const text = await this.templates.render(scope, message.templateKey, message.values);
+    if (text.length === 0 || text.length > TELEGRAM_MESSAGE_MAX) {
+      return { outcome: 'REFUSED', reason: 'NOT_EDITABLE' };
+    }
+    const html = templateDefinition(message.templateKey).format === 'TELEGRAM_HTML';
+    const buttons = await this.labelButtons(scope, message.buttons);
+    const outcome = await telegramSend({
+      token,
+      apiBaseUrl: this.apiBaseUrl,
+      timeoutMs: this.timeoutMs,
+      method: 'editMessageText',
+      body: editMessageBody({
+        chatId: message.chatId,
+        messageId: message.messageId,
+        text,
+        html,
+        buttons,
+      }),
+    });
+    if (isMessageNotModified(outcome)) return { outcome: 'DELIVERED' };
+    const sent = this.classify(outcome).sent;
+    return sent.outcome === 'REFUSED' ? { outcome: 'REFUSED', reason: 'NOT_EDITABLE' } : sent;
   }
 
   /**

@@ -96,6 +96,7 @@ import type {
   CustomerButton,
   CustomerSendOutcome,
   CustomerSendResult,
+  CustomerEditMessage,
   CustomerMessenger,
   MainMenuVariant,
 } from '../../modules/commerce/messaging/application/ports.js';
@@ -4764,6 +4765,28 @@ export function blockedReply(
     return { key: 'bot.blocked', values: {}, buttons: [], orderId: null };
   }
   return { key: 'bot.blocked_with_reason', values: { reason }, buttons: [], orderId: null };
+}
+
+/**
+ * R2: one message this bot sent, edited in place through R3's `edit` port — its text — or,
+ * for a file whose caption carries the text (a reviewer's receipt), `editCaption`. A
+ * messenger without the method answers REFUSED `NOT_EDITABLE`, which every caller already
+ * treats as "send it instead" (R3's one fallback).
+ */
+export async function editSent(
+  messenger: CustomerMessenger,
+  scope: TenantContext,
+  message: CustomerEditMessage,
+  caption: boolean,
+): Promise<CustomerSendResult> {
+  if (caption) {
+    return messenger.editCaption === undefined
+      ? { outcome: 'REFUSED', reason: 'NOT_EDITABLE' }
+      : messenger.editCaption(scope, message);
+  }
+  return messenger.edit === undefined
+    ? { outcome: 'REFUSED', reason: 'NOT_EDITABLE' }
+    : messenger.edit(scope, message);
 }
 
 /** R2: a reply, with what it does to the receipt-review messages of its payment. */
@@ -13990,15 +14013,19 @@ export class BotRuntime {
       updateKey: input.idempotencyKey,
     });
     if (!landed) return 'NOT_ATTEMPTED';
-    let edited = await this.deps.messenger.edit(scope, {
-      chatId: target.chatId,
-      messageId: target.messageId,
-      botInstanceId: target.botInstanceId,
-      templateKey: reply.key,
-      values: reply.values,
-      buttons: reply.buttons,
-      caption: !typed && origin !== null && origin.media,
-    });
+    let edited = await editSent(
+      this.deps.messenger,
+      scope,
+      {
+        chatId: target.chatId,
+        messageId: target.messageId,
+        botInstanceId: target.botInstanceId,
+        templateKey: reply.key,
+        values: reply.values,
+        buttons: reply.buttons,
+      },
+      !typed && origin !== null && origin.media,
+    );
     if (edited.outcome === 'REFUSED') {
       edited = await this.deps.messenger.send(scope, {
         chatId: target.chatId,
@@ -14013,7 +14040,7 @@ export class BotRuntime {
     }
     if (typed && edited.outcome === 'DELIVERED') {
       const own = typedMessageOf(input.update);
-      if (own !== null) {
+      if (own !== null && this.deps.messenger.remove !== undefined) {
         await this.deps.messenger.remove(scope, {
           chatId: own.chatId,
           messageId: own.messageId,
@@ -14101,26 +14128,32 @@ export class BotRuntime {
       if (same(row)) {
         // A receipt becomes the outcome's one line; a prompt becomes this reply's sentence.
         const receipt = row.role === 'REVIEW';
-        const edited = await this.deps.messenger.edit(scope, {
-          ...message,
-          templateKey: receipt ? REVIEW_OUTCOME_KEYS[outcome] : reply.key,
-          values: receipt ? {} : reply.values,
-          buttons: receipt ? [] : reply.buttons,
-          caption: origin.media,
-        });
+        const edited = await editSent(
+          this.deps.messenger,
+          scope,
+          {
+            ...message,
+            templateKey: receipt ? REVIEW_OUTCOME_KEYS[outcome] : reply.key,
+            values: receipt ? {} : reply.values,
+            buttons: receipt ? [] : reply.buttons,
+          },
+          origin.media,
+        );
         await clearFailed(row.id, edited);
         answer = edited.outcome;
         continue;
       }
       const other =
         row.role === 'REVIEW'
-          ? await this.deps.messenger.edit(scope, {
-              ...message,
-              templateKey: REVIEW_OUTCOME_KEYS[outcome],
-              values: {},
-              caption: row.hasMedia,
-            })
-          : await this.deps.messenger.clearButtons(scope, message);
+          ? await editSent(
+              this.deps.messenger,
+              scope,
+              { ...message, templateKey: REVIEW_OUTCOME_KEYS[outcome], values: {}, buttons: [] },
+              row.hasMedia,
+            )
+          : this.deps.messenger.clearButtons === undefined
+            ? ({ outcome: 'REFUSED' } as const)
+            : await this.deps.messenger.clearButtons(scope, message);
       await clearFailed(row.id, other);
     }
     return answer;

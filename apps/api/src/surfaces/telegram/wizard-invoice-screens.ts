@@ -9,7 +9,7 @@ import type { CustomerMessenger } from '../../modules/commerce/messaging/applica
 import type { TelegramMessageStateService } from '../../modules/commerce/messaging/application/telegram-message-state.js';
 import type { GatewayInvoiceRecord } from '../../modules/commerce/payments/application/gateway-invoice-ports.js';
 import type { PaymentRecord } from '../../modules/commerce/payments/application/ports.js';
-import { gatewayAttemptScreen } from './bot-runtime.js';
+import { editSent, gatewayAttemptScreen } from './bot-runtime.js';
 import type { InvoiceScreensPort } from './wizard-state.js';
 
 /**
@@ -46,7 +46,7 @@ export class WizardInvoiceScreens implements InvoiceScreensPort {
           paymentId: PaymentId,
         ): Promise<GatewayInvoiceRecord | null>;
       };
-      readonly messenger: Pick<CustomerMessenger, 'edit' | 'clearButtons'>;
+      readonly messenger: CustomerMessenger;
       readonly clock: Clock;
       /** `SYSTEM_JOB`: this is background presentation work on the customer's behalf. */
       readonly actor: () => ActorContext;
@@ -81,14 +81,19 @@ export class WizardInvoiceScreens implements InvoiceScreensPort {
       step,
     );
     for (const wizard of moved) {
-      await this.deps.messenger.edit(scope, {
-        chatId: wizard.chatId,
-        messageId: wizard.messageId,
-        botInstanceId: wizard.botInstanceId,
-        templateKey: screen.key,
-        values: screen.values,
-        buttons: screen.buttons,
-      });
+      await editSent(
+        this.deps.messenger,
+        scope,
+        {
+          chatId: wizard.chatId,
+          messageId: wizard.messageId,
+          botInstanceId: wizard.botInstanceId,
+          templateKey: screen.key,
+          values: screen.values,
+          buttons: screen.buttons,
+        },
+        false,
+      );
     }
   }
 
@@ -107,8 +112,10 @@ export class WizardInvoiceScreens implements InvoiceScreensPort {
       OPEN_ORDER_STEPS,
       'CLOSED',
     );
+    const clear = this.deps.messenger.clearButtons;
+    if (clear === undefined) return;
     for (const wizard of moved) {
-      await this.deps.messenger.clearButtons(scope, {
+      await clear.call(this.deps.messenger, scope, {
         chatId: wizard.chatId,
         messageId: wizard.messageId,
         botInstanceId: wizard.botInstanceId,

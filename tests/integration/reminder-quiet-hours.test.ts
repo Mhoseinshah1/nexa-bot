@@ -291,10 +291,6 @@ describe('quiet hours for customer reminders (HF-A9)', () => {
         },
         acknowledge: async () => undefined,
         sendFile: async () => ({ outcome: 'REFUSED' }),
-        // R2: this lane never edits a message; the port has the methods since it can.
-        edit: async () => ({ outcome: 'REFUSED' }),
-        clearButtons: async () => ({ outcome: 'REFUSED' }),
-        remove: async () => ({ outcome: 'REFUSED' }),
       },
       quietHours,
       uow: ctx.container.uow,

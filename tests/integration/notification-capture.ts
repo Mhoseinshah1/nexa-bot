@@ -43,10 +43,6 @@ export function capturingLane(ctx: TestContext) {
       },
       acknowledge: async () => undefined,
       sendFile: async () => ({ outcome: 'REFUSED' }),
-      // R2: this lane never edits a message; the port has the methods since it can.
-      edit: async () => ({ outcome: 'REFUSED' }),
-      clearButtons: async () => ({ outcome: 'REFUSED' }),
-      remove: async () => ({ outcome: 'REFUSED' }),
     },
     uow: ctx.container.uow,
     clock: ctx.container.clock,

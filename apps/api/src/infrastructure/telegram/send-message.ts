@@ -442,6 +442,52 @@ function captionAndKeyboardFields(input: {
 }
 
 /**
+ * R2 (v0.3.5 real-test items 3–5), beside R3's `editMessageBody` and on its rules: the
+ * other three ways this bot changes a message it ALREADY SENT. `editMessageCaption` for a
+ * file whose caption carries the text (a reviewer's receipt), `editMessageReplyMarkup` to
+ * take a keyboard off a message whose text stays, and `deleteMessage`.
+ *
+ * The keyboard is always sent, even empty, for the reason `editMessageBody` gives: a
+ * message edited into a result must keep no button that could ask for the decision again.
+ */
+export function editCaptionBody(input: {
+  readonly chatId: string;
+  readonly messageId: number;
+  readonly caption: string;
+  readonly html: boolean;
+  readonly buttons: readonly TelegramButton[];
+}): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    chat_id: input.chatId,
+    message_id: input.messageId,
+    caption: input.html ? input.caption : boundCaption(input.caption),
+    reply_markup: { inline_keyboard: telegramButtonMarkup(input.buttons) },
+  };
+  if (input.html) body.parse_mode = 'HTML';
+  return body;
+}
+
+/** `editMessageReplyMarkup` with an EMPTY keyboard: the text stays, every button goes. */
+export function clearKeyboardBody(input: {
+  readonly chatId: string;
+  readonly messageId: number;
+}): Record<string, unknown> {
+  return {
+    chat_id: input.chatId,
+    message_id: input.messageId,
+    reply_markup: { inline_keyboard: [] },
+  };
+}
+
+/** `deleteMessage`. */
+export function deleteMessageBody(input: {
+  readonly chatId: string;
+  readonly messageId: number;
+}): Record<string, unknown> {
+  return { chat_id: input.chatId, message_id: input.messageId };
+}
+
+/**
  * The upload of a `sendPhoto` or `sendDocument` from BYTES this installation holds — a
  * subscription QR code it has just rendered — with the same caption and keyboard rules
  * as `fileMessageBody`.
@@ -477,99 +523,68 @@ export function fileUploadBody(input: {
 }
 
 /**
- * R2 (v0.3.5 real-test items 3–5): the bodies that change a message this bot ALREADY SENT,
- * rather than sending another. `editMessageText` for a text message, `editMessageCaption`
- * for a file whose caption carries the text (a reviewer's receipt), `editMessageReplyMarkup`
- * to take a keyboard off a message whose text stays, and `deleteMessage`.
+ * The body of an `answerCallbackQuery` call.
  *
- * The keyboard rules are `textMessageBody`'s, with one difference that is the point of an
- * edit: NO buttons means the keyboard is REMOVED, so a message edited into a result keeps
- * no button that could ask for the decision again. Telegram removes an inline keyboard from
- * an edited message whose `reply_markup` is omitted; an explicit empty one says the same
- * thing where the method would otherwise leave the keyboard alone.
+ * `text` is shown by Telegram as a short notice over the chat (R3: the refresh button's
+ * failure). It is only ever a RENDERED TEMPLATE — the messenger renders the key before it
+ * reaches here — so a toast is never a customer-facing string without a key and a tenant
+ * override. Telegram caps it at 200 characters; a longer rendering is cut with a visible
+ * ellipsis rather than refused, because the notice is advisory and the call's first job
+ * is still to stop the button spinning.
  */
-export function editTextBody(input: {
+export const TELEGRAM_CALLBACK_TEXT_MAX = 200;
+
+export function callbackAnswerBody(input: {
+  readonly callbackQueryId: string;
+  readonly text?: string;
+}): Record<string, unknown> {
+  if (input.text === undefined || input.text.length === 0) {
+    return { callback_query_id: input.callbackQueryId };
+  }
+  const text =
+    input.text.length <= TELEGRAM_CALLBACK_TEXT_MAX
+      ? input.text
+      : `${input.text.slice(0, TELEGRAM_CALLBACK_TEXT_MAX - 1)}\u2026`;
+  return { callback_query_id: input.callbackQueryId, text };
+}
+
+/**
+ * The body of an `editMessageText` call (R3): the SAME message a customer tapped, given a
+ * new text and keyboard — the service card after a refresh, a disable or an enable.
+ *
+ * Same shape rules as `textMessageBody`: the text is the rendered template, HTML only when
+ * the key's format says so, and link previews off. The inline keyboard is always sent,
+ * even empty, because leaving `reply_markup` out keeps the OLD buttons, and an old
+ * «disable» under a card that now reads «inactive» is the lie the edit exists to remove.
+ */
+export function editMessageBody(input: {
   readonly chatId: string;
   readonly messageId: number;
   readonly text: string;
   readonly html: boolean;
-  readonly buttons?: readonly TelegramButton[];
+  readonly buttons: readonly TelegramButton[];
 }): Record<string, unknown> {
   const body: Record<string, unknown> = {
     chat_id: input.chatId,
     message_id: input.messageId,
     text: input.text,
     link_preview_options: { is_disabled: true },
+    reply_markup: { inline_keyboard: telegramButtonMarkup(input.buttons) },
   };
   if (input.html) body.parse_mode = 'HTML';
-  if (input.buttons !== undefined && input.buttons.length > 0) {
-    body.reply_markup = { inline_keyboard: telegramButtonMarkup(input.buttons) };
-  }
   return body;
 }
 
-/** `editMessageCaption`: the same caption rules as `fileMessageBody`. */
-export function editCaptionBody(input: {
-  readonly chatId: string;
-  readonly messageId: number;
-  readonly caption: string;
-  readonly html: boolean;
-  readonly buttons?: readonly TelegramButton[];
-}): Record<string, unknown> {
-  return {
-    chat_id: input.chatId,
-    message_id: input.messageId,
-    ...captionAndKeyboardFields(input),
-  };
-}
-
-/** `editMessageReplyMarkup` with an EMPTY keyboard: the text stays, every button goes. */
-export function clearKeyboardBody(input: {
-  readonly chatId: string;
-  readonly messageId: number;
-}): Record<string, unknown> {
-  return {
-    chat_id: input.chatId,
-    message_id: input.messageId,
-    reply_markup: { inline_keyboard: [] },
-  };
-}
-
-/** `deleteMessage`. */
-export function deleteMessageBody(input: {
-  readonly chatId: string;
-  readonly messageId: number;
-}): Record<string, unknown> {
-  return { chat_id: input.chatId, message_id: input.messageId };
-}
-
 /**
- * Whether Telegram refused an edit ONLY because the message already says exactly this.
+ * Whether Telegram refused an edit only because the message already says exactly this.
  *
- * `400 Bad Request: message is not modified` is the answer to an edit whose text and
- * keyboard are what the message already shows — a redelivered update, or the worker and the
- * turn racing to the same invoice. The message is in the state the caller wanted, so the
- * messenger reports it as delivered rather than as a refusal somebody would act on.
+ * `400 Bad Request: message is not modified`. The desired state IS the current state, so
+ * for an idempotent re-edit — a repeated tap, a card already refreshed — it is success.
  */
 export function isMessageNotModified(outcome: TelegramSendOutcome): boolean {
   return (
-    outcome.outcome === 'FAILED_PERMANENT' &&
-    outcome.errorMessage.toLowerCase().includes('message is not modified')
+    outcome.outcome === 'FAILED_PERMANENT' && /message is not modified/iu.test(outcome.errorMessage)
   );
-}
-
-/**
- * The body of an `answerCallbackQuery` call.
- *
- * No `text`, deliberately. Telegram would show it as a toast, and every message this
- * installation shows a customer comes from the template catalogue — a toast written
- * here would be the one customer-facing string with no key and no tenant override.
- * Its whole job is to stop the button spinning.
- */
-export function callbackAnswerBody(input: {
-  readonly callbackQueryId: string;
-}): Record<string, unknown> {
-  return { callback_query_id: input.callbackQueryId };
 }
 
 // ---------------------------------------------------------------------------

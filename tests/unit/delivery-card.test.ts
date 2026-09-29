@@ -97,10 +97,6 @@ function harness(script: Script, mode: PanelDeliveryMode = 'CARD_WITH_QR') {
         return script.files.shift() ?? { outcome: 'DELIVERED' };
       },
       acknowledge: async () => undefined,
-      // R2: delivery never edits a message; the port has the methods since it can.
-      edit: async () => ({ outcome: 'REFUSED' }),
-      clearButtons: async () => ({ outcome: 'REFUSED' }),
-      remove: async () => ({ outcome: 'REFUSED' }),
     },
     qr: {
       encode: (text) => {

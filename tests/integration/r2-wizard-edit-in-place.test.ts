@@ -294,7 +294,7 @@ describe('the wizard is one message, edited in place', () => {
     // The wizard closes in place with no buttons; what follows is a NEW message.
     expect(edited(wizard)[0]?.body['text']).toBe(CATALOGUE_FA['bot.order.settled']);
     expect(buttonsOf(edited(wizard)[0])).toEqual([]);
-    expect(edited(wizard)[0]?.body['reply_markup']).toBeUndefined();
+    expect(edited(wizard)[0]?.body['reply_markup']).toEqual({ inline_keyboard: [] });
     const after = calls.filter((call) => call.method === 'sendMessage');
     expect(after.map((call) => call.body['text'])).toEqual([
       CATALOGUE_FA['bot.service.provisioning'],
