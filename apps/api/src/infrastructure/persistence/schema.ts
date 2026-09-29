@@ -5222,6 +5222,16 @@ export const services = pgTable(
     locationLabel: text('location_label'),
     usageSyncedAt: timestamptz('usage_synced_at'),
     /**
+     * R3 item 7: a customer's on-tap usage read is in flight, since when — or NULL.
+     *
+     * The reservation that serialises the refresh button: set by a conditional UPDATE
+     * (not in flight, or in flight longer than the read can take; and not read within the
+     * minimum interval) in the transaction that takes the panel budget, BEFORE the panel
+     * is dialled, and cleared when the read ends. Two taps, or a redelivered update, find
+     * one of them holding it and the other redraws the card without dialling.
+     */
+    usageRefreshStartedAt: timestamptz('usage_refresh_started_at'),
+    /**
      * Last connection, as a provider PROVED it (customer UX completion §H). `AT` with a
      * time, or `NEVER`; NULL is "no provider has said" — which is every row today, since
      * every adapter answers UNSUPPORTED and UNSUPPORTED is never stored. The card renders
@@ -6289,6 +6299,11 @@ export const operationCardMessages = pgTable(
     chatId: text('chat_id').notNull(),
     messageId: bigint('message_id', { mode: 'number' }).notNull(),
     answeredAt: timestamptz('answered_at'),
+    /**
+     * The earliest the card may be claimed again, after Telegram answered 429 — its own
+     * `retry_after`, bounded, or a floor when it gave none. NULL means now.
+     */
+    nextAttemptAt: timestamptz('next_attempt_at'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
   },
   (table) => [

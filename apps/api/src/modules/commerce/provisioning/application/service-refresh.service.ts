@@ -46,9 +46,44 @@ export type ServiceRefreshResult =
   | { readonly outcome: 'REFRESHED' | 'RECENT' | 'NOT_READ' | 'FAILED' }
   | { readonly outcome: 'NOT_FOUND' };
 
+/**
+ * The one-at-a-time rule for the refresh button, as the database holds it
+ * (`services.usage_refresh_started_at`). Both are conditional UPDATEs; neither is a setter.
+ */
+export interface UsageRefreshReservations {
+  /**
+   * Marks a read in flight, at `now`, only when none is (or the one there started before
+   * `inFlightBefore`, and so is dead) AND usage was not read after `syncedBefore`, and the
+   * service is ACTIVE. `false` means another tap holds it, or the figure is fresh: either
+   * way nothing is dialled.
+   */
+  reserveUsageRefresh(
+    scope: TenantContext,
+    id: string,
+    at: { readonly now: Date; readonly syncedBefore: Date; readonly inFlightBefore: Date },
+    tx: TransactionScope,
+  ): Promise<boolean>;
+  /** Clears THIS reservation (the one started at `startedAt`), and no later one. */
+  endUsageRefresh(
+    scope: TenantContext,
+    id: string,
+    startedAt: Date,
+    tx: TransactionScope,
+  ): Promise<void>;
+}
+
+/** Thrown inside the admission transaction to roll the reservation back with it. */
+class RefreshBudgetRefused extends Error {}
+
 export interface ServiceRefreshDeps {
   readonly services: Pick<ProvisioningService, 'getForCustomer'>;
-  readonly rows: Pick<ServiceRepository, 'recordUsage'>;
+  readonly rows: Pick<ServiceRepository, 'recordUsage'> & UsageRefreshReservations;
+  /**
+   * How long an on-tap read may be in flight before its reservation is presumed dead
+   * (the process that held it crashed): longer than the read can take — the panel client's
+   * timeout for each request the read makes, plus a margin.
+   */
+  readonly inFlightMs: number;
   readonly panels: Pick<PanelRepository, 'find' | 'takeProbeBudget'>;
   readonly credentials: Pick<PanelCredentialStore, 'read'>;
   readonly adapters: (type: ProviderType) => ProviderAdapter;
@@ -161,39 +196,78 @@ export class ServiceRefreshService {
     const credentials = toProviderCredentials(stored, adapter.descriptor.credentialShape);
     if (credentials === null) return { outcome: 'FAILED' };
 
-    // The tenant gate and the budget, in one transaction, before anything leaves.
-    const admitted = await this.deps.uow.run(scope, async (tx) => {
-      if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) return false;
-      const budget = await this.deps.panels.takeProbeBudget(
-        scope,
-        this.deps.probeBudget,
-        this.deps.clock.now(),
-        tx,
-        0,
-      );
-      return budget.permitted;
-    });
-    if (!admitted) return { outcome: 'FAILED' };
+    /*
+     * The tenant gate, the reservation and the budget, in ONE transaction, before anything
+     * leaves. The interval check above read a row that two taps (or a redelivered update)
+     * can both have read; this conditional UPDATE is the check that holds, because the
+     * second waits on the first's row lock and then finds the reservation taken. A budget
+     * refused throws, so the reservation rolls back with it and the next tap may try.
+     */
+    const startedAt = this.deps.clock.now();
+    let admission: 'ADMITTED' | 'INACTIVE' | 'HELD';
+    try {
+      admission = await this.deps.uow.run(scope, async (tx) => {
+        if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) return 'INACTIVE' as const;
+        const reserved = await this.deps.rows.reserveUsageRefresh(
+          scope,
+          service.id,
+          {
+            now: startedAt,
+            syncedBefore: new Date(startedAt.getTime() - interval),
+            inFlightBefore: new Date(startedAt.getTime() - this.deps.inFlightMs),
+          },
+          tx,
+        );
+        if (!reserved) return 'HELD' as const;
+        const budget = await this.deps.panels.takeProbeBudget(
+          scope,
+          this.deps.probeBudget,
+          startedAt,
+          tx,
+          0,
+        );
+        if (!budget.permitted) throw new RefreshBudgetRefused();
+        return 'ADMITTED' as const;
+      });
+    } catch (error) {
+      if (error instanceof RefreshBudgetRefused) return { outcome: 'FAILED' };
+      throw error;
+    }
+    if (admission === 'INACTIVE') return { outcome: 'FAILED' };
+    // Another tap is reading, or has just read: the card is redrawn from what is stored.
+    if (admission === 'HELD') return { outcome: 'RECENT' };
 
-    const read = await usageSyncCall(
-      adapter,
-      { baseUrl: operable.baseUrl, credentials, activation: operable.activation },
-      this.deps.http.forBase(operable.baseUrl),
-      providerRefFor(service),
-    );
-    if (!read.ok) return { outcome: 'FAILED' };
-
-    const now = this.deps.clock.now();
-    const written = await this.deps.uow.run(scope, async (tx) => {
-      if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) return false;
-      await this.deps.rows.recordUsage(
-        scope,
-        service.id,
-        { usedBytes: read.usage.usedBytes, syncedAt: now, lastSeen: read.usage.lastSeen },
-        tx,
+    let ended = false;
+    try {
+      const read = await usageSyncCall(
+        adapter,
+        { baseUrl: operable.baseUrl, credentials, activation: operable.activation },
+        this.deps.http.forBase(operable.baseUrl),
+        providerRefFor(service),
       );
-      return true;
-    });
-    return { outcome: written ? 'REFRESHED' : 'FAILED' };
+      if (!read.ok) return { outcome: 'FAILED' };
+
+      const now = this.deps.clock.now();
+      const written = await this.deps.uow.run(scope, async (tx) => {
+        await this.deps.rows.endUsageRefresh(scope, service.id, startedAt, tx);
+        if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) return false;
+        await this.deps.rows.recordUsage(
+          scope,
+          service.id,
+          { usedBytes: read.usage.usedBytes, syncedAt: now, lastSeen: read.usage.lastSeen },
+          tx,
+        );
+        return true;
+      });
+      ended = true;
+      return { outcome: written ? 'REFRESHED' : 'FAILED' };
+    } finally {
+      // A read that failed or threw gives the reservation back, so the next tap may try.
+      if (!ended) {
+        await this.deps.uow.run(scope, async (tx) =>
+          this.deps.rows.endUsageRefresh(scope, service.id, startedAt, tx),
+        );
+      }
+    }
   }
 }

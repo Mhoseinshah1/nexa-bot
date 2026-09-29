@@ -16,6 +16,7 @@ import {
 } from '@nexa/contracts';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
 import { DrizzleServiceRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-service.repository';
+import { DrizzleOperationCardRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-operation-card.repository';
 import type { ServiceRecord } from '../../apps/api/src/modules/commerce/provisioning/application/ports';
 import { startFakeRickpanel, type FakeRickpanel } from '../support/fake-rickpanel';
 import {
@@ -489,6 +490,83 @@ describe('R3 — service delivery, connection files and the service card', () =>
           sql`SELECT count(*)::int AS n FROM customer_notifications WHERE kind = 'SERVICE_ACTION_SUCCEEDED'`,
         ),
       ).toBe(1);
+    });
+
+    /*
+     * Codex review of #110, P1: a 429 on the card gave the claim back with no wait, so the
+     * next tick asked the rate-limited bot again. Now the card is held until Telegram's
+     * `retry_after` has passed. The repository is asked at chosen instants — the clock
+     * the rule is written against — before and after that wait.
+     */
+    async function heldCard(service: ServiceRecord, retryAfterSeconds: number) {
+      const cards = new DrizzleOperationCardRepository(ctx.container.database.db);
+      const [row] = (
+        (await ctx.container.database.db.execute(
+          sql`SELECT c.operation_id, c.answered_at, c.next_attempt_at
+                FROM operation_card_messages c
+                JOIN provisioning_operations o ON o.id = c.operation_id
+               WHERE o.service_id = ${service.id}`,
+        )) as unknown as {
+          rows: { operation_id: string; answered_at: Date | null; next_attempt_at: Date | null }[];
+        }
+      ).rows;
+      if (row === undefined) throw new Error('no card');
+      expect(row.answered_at, 'the claim was given back').toBeNull();
+      expect(row.next_attempt_at, 'with a wait').not.toBeNull();
+      const retryAt = new Date(row.next_attempt_at as Date);
+      const waited = retryAt.getTime() - Date.now();
+      expect(waited).toBeGreaterThan((retryAfterSeconds - 5) * 1000);
+      expect(waited).toBeLessThanOrEqual(retryAfterSeconds * 1000);
+      const later = new Date(Date.now() + 3_600_000);
+      const due = (at: Date) =>
+        ctx.container.uow.run(tenantA, async (tx) =>
+          cards.dueForAnswer(tenantA, later, at, 10, tx),
+        );
+      const claim = (at: Date) =>
+        ctx.container.uow.run(tenantA, async (tx) =>
+          cards.claim(tenantA, row.operation_id, at, tx),
+        );
+      const justBefore = new Date(retryAt.getTime() - 1_000);
+      expect(await due(justBefore), 'not due before retry_after').toEqual([]);
+      expect(await claim(justBefore), 'not claimable before retry_after').toBeNull();
+      expect(await due(retryAt), 'due once it has passed').toEqual([row.operation_id]);
+      expect((await claim(retryAt))?.messageId, 'and claimable').toBe(CARD);
+    }
+
+    it("a 429 on the edit holds the card until Telegram's retry_after", async () => {
+      const service = await paidService('switch-429-edit');
+      answers['editMessageText'] = {
+        status: 429,
+        body: { ok: false, error_code: 429, parameters: { retry_after: 30 } },
+      };
+      await tap(`u:${service.id}`, CARD);
+      sent = [];
+      await ctx.container.provisionerLoop.tick();
+      expect(of('editMessageText')).toHaveLength(1);
+      expect(of('sendMessage'), 'a 429 is not a reason to send instead').toHaveLength(0);
+      // The very next tick asks nothing of the rate-limited bot.
+      sent = [];
+      await ctx.container.provisionerLoop.tick();
+      expect(of('editMessageText')).toHaveLength(0);
+      await heldCard(service, 30);
+    });
+
+    it("a 429 on the fallback send holds the card until Telegram's retry_after", async () => {
+      const service = await paidService('switch-429-send');
+      answers['editMessageText'] = {
+        status: 400,
+        body: { ok: false, error_code: 400, description: 'Bad Request: message to edit not found' },
+      };
+      answers['sendMessage'] = {
+        status: 429,
+        body: { ok: false, error_code: 429, parameters: { retry_after: 20 } },
+      };
+      await tap(`u:${service.id}`, CARD);
+      sent = [];
+      await ctx.container.provisionerLoop.tick();
+      expect(of('editMessageText')).toHaveLength(1);
+      expect(of('sendMessage')).toHaveLength(1);
+      await heldCard(service, 20);
     });
   });
 });

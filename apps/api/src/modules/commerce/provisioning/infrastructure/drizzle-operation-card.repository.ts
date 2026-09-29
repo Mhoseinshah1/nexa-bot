@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNotNull, isNull, lt } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNotNull, isNull, lt, lte, or } from 'drizzle-orm';
 import type { BotInstanceId, TenantContext, UserId } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import {
@@ -19,7 +19,7 @@ import {
 /**
  * `operation_card_messages` (R3 item 10). Every write is conditional: `attach` is an
  * insert that loses to an existing row, `claim` an UPDATE from `answered_at IS NULL`, and
- * `release` an UPDATE back to it — so two provisioner replicas are safe by construction.
+ * `release` an UPDATE back to it with a 429's wait — so two provisioner replicas are safe by construction.
  */
 export class DrizzleOperationCardRepository implements OperationCardRepository {
   constructor(private readonly db: Database) {}
@@ -94,12 +94,17 @@ export class DrizzleOperationCardRepository implements OperationCardRepository {
       );
     const rows = await this.exec(tx)
       .update(operationCardMessages)
-      .set({ answeredAt: now })
+      .set({ answeredAt: now, nextAttemptAt: null })
       .where(
         and(
           eq(operationCardMessages.tenantId, tenantId),
           eq(operationCardMessages.operationId, operationId),
           isNull(operationCardMessages.answeredAt),
+          // A 429's wait: not claimable before it has passed.
+          or(
+            isNull(operationCardMessages.nextAttemptAt),
+            lte(operationCardMessages.nextAttemptAt, now),
+          ),
           inArray(operationCardMessages.operationId, answerable),
         ),
       )
@@ -138,11 +143,16 @@ export class DrizzleOperationCardRepository implements OperationCardRepository {
     };
   }
 
-  async release(scope: TenantContext, operationId: string, tx: TransactionScope): Promise<void> {
+  async release(
+    scope: TenantContext,
+    operationId: string,
+    retryAt: Date,
+    tx: TransactionScope,
+  ): Promise<void> {
     const tenantId = requireTenantId(scope);
     await this.exec(tx)
       .update(operationCardMessages)
-      .set({ answeredAt: null })
+      .set({ answeredAt: null, nextAttemptAt: retryAt })
       .where(
         and(
           eq(operationCardMessages.tenantId, tenantId),
@@ -155,6 +165,7 @@ export class DrizzleOperationCardRepository implements OperationCardRepository {
   async dueForAnswer(
     scope: TenantContext,
     before: Date,
+    now: Date,
     limit: number,
     tx: TransactionScope,
   ): Promise<readonly string[]> {
@@ -173,6 +184,10 @@ export class DrizzleOperationCardRepository implements OperationCardRepository {
         and(
           eq(operationCardMessages.tenantId, tenantId),
           isNull(operationCardMessages.answeredAt),
+          or(
+            isNull(operationCardMessages.nextAttemptAt),
+            lte(operationCardMessages.nextAttemptAt, now),
+          ),
           eq(provisioningOperations.state, 'SUCCEEDED'),
           lt(provisioningOperations.completedAt, before),
         ),

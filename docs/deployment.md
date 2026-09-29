@@ -1330,9 +1330,11 @@ Nothing needs doing before rolling back past HF-A9.
 
 ### What a rollback changes back: the service card and connection files (R3)
 
-R3 adds one table, `operation_card_messages` (migration `0140_r3_operation_card_messages`):
-the chat and message a customer's disable or enable was tapped from. The release before it
-never reads it. While that release runs:
+R3's migration `0140_r3_operation_card_messages` adds one table, `operation_card_messages`
+(the chat and message a customer's disable or enable was tapped from, and a 429's wait),
+and one nullable column, `services.usage_refresh_started_at` (the refresh button's
+reservation). The release before it reads neither: a reservation left set by a rollback
+mid-read is taken over as dead after three panel timeouts. While that release runs:
 
 - **A disable or enable planned by R3 and performed by the old release** is answered the
   old way — the lane's «درخواست شما با موفقیت روی سرور اعمال شد» — and the card is not

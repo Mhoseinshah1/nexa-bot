@@ -7,7 +7,11 @@ import {
   TELEGRAM_CALLBACK_TEXT_MAX,
 } from '../../apps/api/src/infrastructure/telegram/send-message';
 import {
+  CARD_RETRY_CEILING_MS,
+  CARD_RETRY_DEFAULT_MS,
+  CARD_RETRY_FLOOR_MS,
   OperationCardEditor,
+  cardRetryDelayMs,
   type ClaimedCard,
   type OperationCardRepository,
 } from '../../apps/api/src/modules/commerce/provisioning/application/operation-card';
@@ -150,7 +154,7 @@ describe('the card editor', () => {
         log.push('claim');
         return options.claim === undefined ? claimed : options.claim;
       },
-      release: async () => void log.push('release'),
+      release: async (_scope, _id, retryAt) => void log.push(`release@${retryAt.toISOString()}`),
       dueForAnswer: async () => ['op-1'],
     };
     const editor = new OperationCardEditor({
@@ -199,15 +203,32 @@ describe('the card editor', () => {
   });
 
   it('gives the claim back only for a rate limit', async () => {
-    const limited = editorWith({ edit: { outcome: 'RATE_LIMITED', retryAfterMs: 1000 } });
+    // Held for Telegram's own wait (30 s past the editor's clock), never re-asked sooner.
+    const limited = editorWith({ edit: { outcome: 'RATE_LIMITED', retryAfterMs: 30_000 } });
     expect(await limited.editor.answer(scope, 'op-1')).toBe('RETRY');
-    expect(limited.log).toEqual(['claim', 'release']);
+    expect(limited.log).toEqual(['claim', 'release@2026-09-29T00:00:30.000Z']);
     expect(limited.sends).toEqual([]);
+
+    // The fallback send's 429 holds it the same way.
+    const sendLimited = editorWith({
+      edit: { outcome: 'REFUSED', reason: 'NOT_EDITABLE' },
+      send: { outcome: 'RATE_LIMITED', retryAfterMs: 20_000 },
+    });
+    expect(await sendLimited.editor.answer(scope, 'op-1')).toBe('RETRY');
+    expect(sendLimited.log).toEqual(['claim', 'release@2026-09-29T00:00:20.000Z']);
 
     const unknown = editorWith({ edit: { outcome: 'UNKNOWN' } });
     expect(await unknown.editor.answer(scope, 'op-1')).toBe('UNKNOWN');
     expect(unknown.log).toEqual(['claim']);
     expect(unknown.sends, 'an edit that may have landed is not followed by a send').toEqual([]);
+  });
+
+  it("bounds Telegram's wait: a floor, a default when none is named, a ceiling", () => {
+    expect(cardRetryDelayMs(30_000)).toBe(30_000);
+    expect(cardRetryDelayMs(0)).toBe(CARD_RETRY_FLOOR_MS);
+    expect(cardRetryDelayMs(undefined)).toBe(CARD_RETRY_DEFAULT_MS);
+    expect(cardRetryDelayMs(Number.NaN)).toBe(CARD_RETRY_DEFAULT_MS);
+    expect(cardRetryDelayMs(10 * CARD_RETRY_CEILING_MS)).toBe(CARD_RETRY_CEILING_MS);
   });
 
   it('claims nothing for a stopped tenant, and draws nothing for a service no longer theirs', async () => {

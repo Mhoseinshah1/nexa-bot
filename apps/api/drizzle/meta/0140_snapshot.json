@@ -1,5 +1,5 @@
 {
-  "id": "e7459906-5c0c-4bad-bd9c-506202018ac2",
+  "id": "e0805b8a-f442-4be6-86b0-dec07082a53a",
   "prevId": "d79360b9-2242-491f-9961-9ab8c14a7aa2",
   "version": "7",
   "dialect": "postgresql",
@@ -5175,6 +5175,12 @@
         },
         "answered_at": {
           "name": "answered_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "next_attempt_at": {
+          "name": "next_attempt_at",
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
@@ -16486,6 +16492,12 @@
         },
         "usage_synced_at": {
           "name": "usage_synced_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "usage_refresh_started_at": {
+          "name": "usage_refresh_started_at",
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false

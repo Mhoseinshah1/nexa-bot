@@ -4600,6 +4600,9 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
         panelPolicy: panelPolicyReader,
         uow,
         clock,
+        // A read is a log-in and a look-up, each bounded by the client's timeout; three
+        // of them plus a margin is comfortably longer than any read that is still alive.
+        inFlightMs: 3 * config.PANEL_HTTP_TIMEOUT_MS + 30_000,
       }),
       // WP-A10: «📱 دانلود برنامه و آموزش اتصال», the tenant's apps for the customer's services.
       clientApps: clientAppCatalog,

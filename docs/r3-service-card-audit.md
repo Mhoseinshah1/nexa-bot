@@ -66,6 +66,13 @@ minimum interval (inside it the stored figure is shown without a read), and the 
 conditional `recordUsage` the `SYNC_USAGE` executor writes. The scheduled `SYNC_USAGE` is
 unchanged.
 
+The interval is not only read, it is RESERVED (Codex review of #110): a conditional UPDATE
+of `services.usage_refresh_started_at` (no read in flight, or one older than three panel
+timeouts plus a margin and so presumed dead; and usage not read within the interval) runs
+in the transaction that takes the budget, before the panel is dialled. Two taps or a
+redelivered update therefore make one read; the other redraws the card from what is
+stored. A refused budget rolls the reservation back; the read's end clears it.
+
 ### Item 8 — captions
 
 Every file carries `bot.service.connection_file_caption`: «👤 نام کاربری: {serviceUsername}».
@@ -98,7 +105,9 @@ misreport. A sweep after a 60 s grace answers cards a crash left behind.
 
 When Telegram cannot edit the card (deleted, too old, not a text message) the same card is
 sent ONCE as a new message. The claim is committed before the edit, so two replicas cannot
-both fall back. A 429 gives the claim back for the sweep; an `UNKNOWN` edit is not retried.
+both fall back. A 429 gives the claim back and holds the card until Telegram's `retry_after` has
+passed (`next_attempt_at`, bounded to 10 s – 1 h, 60 s when none is named), so neither the
+loop nor the sweep asks a rate-limited bot again sooner; an `UNKNOWN` edit is not retried.
 The same rule applies to the in-turn edits (refresh, the link-change ask).
 
 ## 3. Rollback

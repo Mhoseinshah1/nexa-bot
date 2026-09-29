@@ -618,6 +618,98 @@ describe('a customer looks after the services they bought', () => {
       ).toHaveLength(0);
     });
 
+    it('two concurrent refreshes of one service make exactly ONE panel read', async () => {
+      /*
+       * Codex review of #110, P1: both taps read the same stale `usage_synced_at` and both
+       * passed the interval check. The reservation is a conditional UPDATE in the
+       * admission transaction, so the second tap waits on the first's row lock, finds the
+       * read taken, and redraws the card from what is stored.
+       */
+      const service = await activeService('refresh-race');
+      await ctx.container.database.db.execute(
+        sql`UPDATE services SET usage_synced_at = now() - interval '10 minutes' WHERE id = ${service.id}`,
+      );
+      const before = reads(service.username);
+      sent = [];
+      /*
+       * The panel's answer is held, so the first read is in flight — its own row not yet
+       * written — while the second tap arrives. Released once the second tap has either
+       * finished without the panel or reached it too.
+       */
+      const release = panel.holdUserReads();
+      let settled = 0;
+      const taps = [handle(tap(`rs:${service.id}`)), handle(tap(`rs:${service.id}`))].map((turn) =>
+        turn.finally(() => void (settled += 1)),
+      );
+      const deadline = Date.now() + 10_000;
+      while (settled === 0 && reads(service.username) - before < 2 && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      release();
+      const results = await Promise.all(taps);
+      expect(reads(service.username) - before, 'one read of the panel, not two').toBe(1);
+      expect(results.map((one) => one.replyKey)).toEqual(['bot.service.card', 'bot.service.card']);
+      const [marker] = (
+        await ctx.container.database.db.execute(
+          sql`SELECT usage_refresh_started_at FROM services WHERE id = ${service.id}`,
+        )
+      ).rows as { usage_refresh_started_at: Date | null }[];
+      expect(marker?.usage_refresh_started_at, 'the reservation is given back').toBeNull();
+    });
+
+    it('reserves a read only when none is in flight and the figure is not fresh', async () => {
+      /*
+       * The reservation's three conditions, each at a chosen instant: the second tap that
+       * waited on the first's row lock is judged by exactly these, whichever of them the
+       * first tap's commit made true.
+       */
+      const service = await activeService('refresh-reserve');
+      const now = new Date();
+      const minutes = (n: number) => new Date(now.getTime() - n * 60_000);
+      const reserve = (syncedBefore: Date, inFlightBefore: Date) =>
+        ctx.container.uow.run(tenantA, async (tx) =>
+          services.reserveUsageRefresh(
+            tenantA,
+            service.id,
+            { now, syncedBefore, inFlightBefore },
+            tx,
+          ),
+        );
+      const set = (synced: Date | null, started: Date | null) =>
+        ctx.container.database.db.execute(
+          sql`UPDATE services SET usage_synced_at = ${synced?.toISOString() ?? null},
+                                  usage_refresh_started_at = ${started?.toISOString() ?? null}
+               WHERE id = ${service.id}`,
+        );
+      // Read a minute ago, the interval is five: fresh, nothing is dialled.
+      await set(minutes(1), null);
+      expect(await reserve(minutes(5), minutes(3))).toBe(false);
+      // Read ten minutes ago, nothing in flight: reserved.
+      await set(minutes(10), null);
+      expect(await reserve(minutes(5), minutes(3))).toBe(true);
+      // Now in flight since `now`: a second reservation is refused.
+      expect(await reserve(minutes(5), minutes(3))).toBe(false);
+      // In flight for longer than a read can take: presumed dead, and taken over.
+      await set(minutes(10), minutes(4));
+      expect(await reserve(minutes(5), minutes(3))).toBe(true);
+    });
+
+    it('a failed read gives the reservation back, so the next tap may try again', async () => {
+      const service = await activeService('refresh-retry');
+      await ctx.container.database.db.execute(
+        sql`UPDATE services SET usage_synced_at = now() - interval '10 minutes' WHERE id = ${service.id}`,
+      );
+      const user = panel.users.get(service.username);
+      if (user === undefined) throw new Error('no panel user');
+      panel.forget(service.username);
+      expect((await handle(tap(`rs:${service.id}`))).replyKey).toBeNull();
+      // The account is back; the very next tap reads it rather than finding a stale hold.
+      (panel.users as Map<string, typeof user>).set(service.username, user);
+      const before = reads(service.username);
+      expect((await handle(tap(`rs:${service.id}`))).replyKey).toBe('bot.service.card');
+      expect(reads(service.username) - before).toBe(1);
+    });
+
     it('cannot be asked for another customer’s service', async () => {
       const theirs = await activeService('refresh-theirs', reza);
       const before = reads(theirs.username);

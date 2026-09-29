@@ -71,8 +71,9 @@ export interface OperationCardRepository {
 
   /**
    * Takes the card's one answer: a conditional UPDATE of `answered_at` from NULL, only
-   * for a SUCCEEDED `CARD_ANSWERED_OPERATIONS` operation a customer requested. Null when
-   * there is nothing to answer, or another replica took it first.
+   * for a SUCCEEDED `CARD_ANSWERED_OPERATIONS` operation a customer requested, and only
+   * once `next_attempt_at` (a 429's wait) has passed at `now`. Null when there is nothing
+   * to answer, it is not due yet, or another replica took it first.
    */
   claim(
     scope: TenantContext,
@@ -81,13 +82,25 @@ export interface OperationCardRepository {
     tx: TransactionScope,
   ): Promise<ClaimedCard | null>;
 
-  /** Gives a claim back — ONLY after Telegram declined to look at the edit (429). */
-  release(scope: TenantContext, operationId: string, tx: TransactionScope): Promise<void>;
+  /**
+   * Gives a claim back — ONLY after Telegram declined to look at the edit (429) — and
+   * holds it until `retryAt`, so neither the loop nor the sweep asks again sooner.
+   */
+  release(
+    scope: TenantContext,
+    operationId: string,
+    retryAt: Date,
+    tx: TransactionScope,
+  ): Promise<void>;
 
-  /** Cards of SUCCEEDED operations nobody answered, completed before `before`. */
+  /**
+   * Cards of SUCCEEDED operations nobody answered, completed before `before`, whose
+   * `next_attempt_at` is not after `now`.
+   */
   dueForAnswer(
     scope: TenantContext,
     before: Date,
+    now: Date,
     limit: number,
     tx: TransactionScope,
   ): Promise<readonly string[]>;
@@ -116,6 +129,24 @@ export type CardAnswer =
  * operation's transaction and that call, like `ANNOUNCE_GRACE_MS`.
  */
 export const CARD_ANSWER_GRACE_MS = 60_000;
+
+/**
+ * How long a card waits after Telegram answered 429: its own `retry_after`, never less
+ * than the floor (so a zero or tiny value cannot become a loop on the next tick), never
+ * more than the ceiling (so a hostile or garbled value cannot park a card for days), and
+ * the default when Telegram named no wait at all.
+ */
+export const CARD_RETRY_FLOOR_MS = 10_000;
+export const CARD_RETRY_DEFAULT_MS = 60_000;
+export const CARD_RETRY_CEILING_MS = 60 * 60_000;
+
+export function cardRetryDelayMs(retryAfterMs: number | undefined): number {
+  const asked =
+    retryAfterMs === undefined || !Number.isFinite(retryAfterMs)
+      ? CARD_RETRY_DEFAULT_MS
+      : retryAfterMs;
+  return Math.min(CARD_RETRY_CEILING_MS, Math.max(CARD_RETRY_FLOOR_MS, asked));
+}
 
 export interface OperationCardEditorDeps {
   readonly cards: OperationCardRepository;
@@ -185,7 +216,7 @@ export class OperationCardEditor {
     if (edited !== null && edited.outcome === 'DELIVERED') return 'EDITED';
     if (edited !== null && edited.outcome === 'UNKNOWN') return 'UNKNOWN';
     if (edited !== null && edited.outcome === 'RATE_LIMITED') {
-      await this.deps.uow.run(scope, async (tx) => this.deps.cards.release(scope, operationId, tx));
+      await this.holdAfterRateLimit(scope, operationId, edited.retryAfterMs);
       return 'RETRY';
     }
     /*
@@ -200,7 +231,7 @@ export class OperationCardEditor {
       ...(card.buttons.length === 0 ? {} : { buttons: card.buttons }),
     });
     if (sent.outcome === 'RATE_LIMITED') {
-      await this.deps.uow.run(scope, async (tx) => this.deps.cards.release(scope, operationId, tx));
+      await this.holdAfterRateLimit(scope, operationId, sent.retryAfterMs);
       return 'RETRY';
     }
     return sent.outcome === 'DELIVERED'
@@ -211,13 +242,30 @@ export class OperationCardEditor {
   }
 
   /**
+   * A 429 is Telegram declining to look, so the claim is given back — with the wait it
+   * asked for, bounded (`cardRetryDelayMs`). Without the wait the sweep would re-select
+   * the card on the next tick, seconds later, and ask a rate-limited bot again.
+   */
+  private async holdAfterRateLimit(
+    scope: TenantContext,
+    operationId: string,
+    retryAfterMs: number | undefined,
+  ): Promise<void> {
+    const retryAt = new Date(this.deps.clock.now().getTime() + cardRetryDelayMs(retryAfterMs));
+    await this.deps.uow.run(scope, async (tx) =>
+      this.deps.cards.release(scope, operationId, retryAt, tx),
+    );
+  }
+
+  /**
    * The cards a crash left unanswered. Bounded, one transaction each through `answer`,
    * and one failure does not end the batch — `announceDue`'s shape, for its reasons.
    */
   async answerDue(scope: TenantContext, limit: number): Promise<number> {
-    const before = new Date(this.deps.clock.now().getTime() - CARD_ANSWER_GRACE_MS);
+    const now = this.deps.clock.now();
+    const before = new Date(now.getTime() - CARD_ANSWER_GRACE_MS);
     const due = await this.deps.uow.run(scope, async (tx) =>
-      this.deps.cards.dueForAnswer(scope, before, limit, tx),
+      this.deps.cards.dueForAnswer(scope, before, now, limit, tx),
     );
     let failure: unknown = null;
     let answered = 0;
