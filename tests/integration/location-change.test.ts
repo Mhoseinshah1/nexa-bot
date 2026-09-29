@@ -23,6 +23,7 @@ import { MarzbanAdapter } from '../../apps/api/src/modules/platform/providers/in
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
 import { DrizzleServiceRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-service.repository';
 import { DrizzleOperationRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-operation.repository';
+import { SERVICE_LOCATION_WRITE_LOCK_CLASS } from '../../apps/api/src/modules/commerce/locations/infrastructure/drizzle-service-location.repository';
 import type { ServiceLocationInput } from '../../apps/api/src/modules/commerce/locations/application/service-location-admin.service';
 import { startFakeMarzban, type FakeMarzban } from '../support/fake-marzban';
 import {
@@ -895,6 +896,18 @@ describe('service location change (WP-A6)', () => {
       await ctx.container.provisionerLoop.tick();
       expect((await services.findById(tenantA, service.id))?.locationKey).toBe('fi');
 
+      // Every target is inside its cooldown now, so nothing is advertised: no button, no
+      // choice screen, rather than a tap that is then refused (Codex #1 on PR #101).
+      expect(
+        await ctx.container.commercialActions.availableFor(
+          tenantA,
+          systemActor('window-offer'),
+          (await services.findById(tenantA, service.id))!,
+        ),
+      ).not.toContain('CHANGE_LOCATION');
+      await runtime().handle(tenantA, systemActor('bot'), tapUpdate(`s:${service.id}`));
+      expect(drawnCallbacks().some((data) => data.startsWith('lc:'))).toBe(false);
+
       await expect(draftMove(service.id, nl, 'window-2')).rejects.toMatchObject({
         code: COMMERCE_ERROR_CODES.LOCATION_CHANGE_COOLDOWN,
       });
@@ -992,6 +1005,113 @@ describe('service location change (WP-A6)', () => {
       expect(tapped.replyKey).toBe('bot.service.action_unavailable');
     });
 
+    it("freezes where a never-moved service is before its panel's initial location changes", async () => {
+      const service = await activeService('frozen-origin');
+      const { de } = await standardLocations();
+      expect((await services.findById(tenantA, service.id))?.locationKey).toBeNull();
+
+      // The operator re-points the panel's initial location: new accounts start elsewhere.
+      await ctx.container.serviceLocations.update(tenantA, owner, {
+        idempotencyKey: 'loc-frozen-edit',
+        locationId: de,
+        location: location({
+          locationKey: 'de-2',
+          label: 'آلمان ۲',
+          initial: true,
+          enabled: false,
+          price: null,
+        }),
+      });
+      // The old service is still where it was, recorded on it rather than inferred.
+      expect(await services.findById(tenantA, service.id)).toMatchObject({
+        locationKey: 'de',
+        locationLabel: 'آلمان',
+      });
+      const offer = await ctx.container.commercialActions.offer(
+        tenantA,
+        systemActor('frozen'),
+        customerA,
+        service.id,
+        'CHANGE_LOCATION',
+      );
+      expect(offer.locations?.current).toEqual({ key: 'de', label: 'آلمان' });
+      const audited = await ctx.container.database.db.execute<{ after: Record<string, unknown> }>(
+        sql`SELECT after FROM audit_logs WHERE action = 'service_location.update'`,
+      );
+      expect(audited.rows[0]?.after).toMatchObject({ unmovedServicesFrozen: 1 });
+    });
+
+    it('confirms a paid move under the limits it was quoted with, not ones written since', async () => {
+      const service = await activeService('frozen-limits');
+      const { nl, fi } = await standardLocations();
+      await fund('frozen-limits');
+      await requestFree(service.id, fi, 'frozen-limits-free');
+      await ctx.container.provisionerLoop.tick();
+      expect((await services.findById(tenantA, service.id))?.locationKey).toBe('fi');
+
+      const { order } = await draftMove(service.id, nl, 'frozen-limits');
+      // After the quote, the operator allows one change in thirty days — already used.
+      await ctx.container.serviceLocations.update(tenantA, owner, {
+        idempotencyKey: 'loc-frozen-limits-edit',
+        locationId: nl,
+        location: location({ limits: { cooldownHours: null, maxChanges: 1, periodDays: 30 } }),
+      });
+      await confirmMove(order.id, 'frozen-limits');
+      expect(await orderState(order.id)).toBe('AWAITING_PAYMENT');
+      const frozen = await ctx.container.database.db.execute<{ max_changes: number | null }>(
+        sql`SELECT max_changes FROM service_location_changes WHERE order_id = ${order.id}`,
+      );
+      expect(frozen.rows[0]?.max_changes).toBeNull();
+    });
+
+    it("checks a reseller's tier for a FREE move too, deny by default", async () => {
+      const service = await activeService('reseller-free');
+      const { fi } = await standardLocations();
+      const tier = await ctx.container.resellersAdmin.createTier(tenantA, owner, {
+        idempotencyKey: 'loc-reseller-tier',
+        write: {
+          name: 'Tier L',
+          pricingMode: 'LIST_PRICE',
+          discountPercentage: null,
+          creditLimit: money(0n, 'IRT'),
+        },
+      });
+      const grants = [
+        { kind: 'OPERATION' as const, subject: 'RENEW' },
+        { kind: 'PRODUCT' as const, subject: null },
+        { kind: 'PANEL' as const, subject: null },
+        { kind: 'BOT' as const, subject: null },
+      ];
+      await ctx.container.resellersAdmin.replaceGrants(tenantA, owner, {
+        idempotencyKey: 'loc-reseller-grants-1',
+        tierId: tier.id,
+        grants,
+      });
+      await ctx.container.resellersAdmin.register(tenantA, owner, {
+        idempotencyKey: 'loc-reseller-register',
+        customerId: customerA,
+        write: {
+          tierId: tier.id,
+          pricingMode: 'TIER',
+          discountPercentage: null,
+          creditLimit: null,
+        },
+      });
+
+      await expect(requestFree(service.id, fi, 'reseller-free-1')).rejects.toMatchObject({
+        code: COMMERCE_ERROR_CODES.RESELLER_NOT_ENTITLED,
+      });
+      expect(await count('service_location_changes')).toBe(0);
+
+      await ctx.container.resellersAdmin.replaceGrants(tenantA, owner, {
+        idempotencyKey: 'loc-reseller-grants-2',
+        tierId: tier.id,
+        grants: [...grants, { kind: 'OPERATION' as const, subject: 'CHANGE_LOCATION' }],
+      });
+      await requestFree(service.id, fi, 'reseller-free-2');
+      expect(await count('service_location_changes')).toBe(1);
+    });
+
     it("keeps one tenant's service and locations out of another's reach", async () => {
       const service = await activeService('iso');
       const { nl, fi } = await standardLocations();
@@ -1048,6 +1168,100 @@ describe('service location change (WP-A6)', () => {
   // =========================================================================
 
   describe('the configured locations', () => {
+    async function secondPanel(): Promise<string> {
+      const created = await ctx.container.panels.create(tenantA, owner, {
+        name: 'Marzban B',
+        providerType: 'marzban',
+        baseUrl: 'http://127.0.0.9:8000',
+        credentials: { username: 'admin', password: 'secret-password' },
+        activation: { proxyProtocols: ['vless'], inboundTags: { vless: ['VLESS TCP'] } },
+        idempotencyKey: 'panel-locations-create-b',
+      });
+      return created.view.panel.id;
+    }
+
+    it('refuses a product scope from another panel, and a panel past its location cap', async () => {
+      const other = await secondPanel();
+      const product = await products.create(tenantA, {
+        id: ctx.container.ids.uuid() as ProductId,
+        draft: {
+          title: 'پلن پنل دیگر',
+          description: null,
+          audience: 'EVERYONE',
+          sortOrder: 0,
+          panelId: other as PanelId,
+          categoryId: SEED_IDS.categoryA as ProductCategoryId,
+          specification: { durationDays: 30, trafficBytes: 1_073_741_824n, deviceLimit: null },
+          price: money(10_000n, 'IRT'),
+          display: EMPTY_PRODUCT_DISPLAY,
+        },
+        now: ctx.container.clock.now(),
+      });
+      await expect(configure(location({ productId: product.id }))).rejects.toMatchObject({
+        code: COMMERCE_ERROR_CODES.SERVICE_LOCATION_INVALID,
+        details: { reason: 'PRODUCT_PANEL' },
+      });
+      // On its own panel the same scope is accepted.
+      await configure(location({ panelId: other, productId: product.id }));
+
+      for (let n = 0; n < 20; n += 1) await configure(location({ locationKey: `k-${String(n)}` }));
+      await expect(configure(location({ locationKey: 'k-20' }))).rejects.toMatchObject({
+        code: COMMERCE_ERROR_CODES.SERVICE_LOCATION_INVALID,
+        details: { reason: 'PANEL_FULL' },
+      });
+    });
+
+    it('holds the tenant cap under two concurrent creates: exactly one takes the last place', async () => {
+      const other = await secondPanel();
+      // 499 rows, written past the service so the per-panel cap is not what is measured.
+      await ctx.container.database.db.execute(sql`
+        INSERT INTO service_locations (id, tenant_id, panel_id, location_key, label)
+        SELECT gen_random_uuid(), ${tenantA.tenantId}::uuid, ${other}::uuid, 'bulk-' || n, 'x'
+          FROM generate_series(1, 499) AS n`);
+      /*
+       * The interleaving made deterministic: the FIRST writer takes the tenant's location
+       * lock, adds the 500th row and holds its transaction open while the second create
+       * starts. With the lock, the second waits and then counts 500; without it, it counts
+       * 499 past the uncommitted row and both land — which two creates racing on their own
+       * rarely manage to show inside a test.
+       */
+      let second: Promise<unknown> | undefined;
+      await ctx.container.database.db.transaction(async (tx) => {
+        await tx.execute(
+          sql`SELECT pg_advisory_xact_lock(${SERVICE_LOCATION_WRITE_LOCK_CLASS}, hashtext(${tenantA.tenantId}))`,
+        );
+        await tx.execute(sql`
+          INSERT INTO service_locations (id, tenant_id, panel_id, location_key, label)
+          VALUES (gen_random_uuid(), ${tenantA.tenantId}::uuid, ${panelId}::uuid, 'first', 'x')`);
+        second = ctx.container.serviceLocations
+          .create(tenantA, owner, {
+            idempotencyKey: 'loc-race-b',
+            location: location({ locationKey: 'race-b' }),
+          })
+          .then(
+            () => ({ ok: true }),
+            (error: unknown) => ({ ok: false, error }),
+          );
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      });
+      expect(await second).toMatchObject({
+        ok: false,
+        error: {
+          code: COMMERCE_ERROR_CODES.SERVICE_LOCATION_INVALID,
+          details: { reason: 'COUNT' },
+        },
+      });
+      expect(
+        Number(
+          (
+            await ctx.container.database.db.execute<{ n: string }>(
+              sql`SELECT count(*)::text AS n FROM service_locations`,
+            )
+          ).rows[0]?.n,
+        ),
+      ).toBe(500);
+    });
+
     it('versions every edit, says when nothing changed, and keeps quoted history', async () => {
       const first = await ctx.container.serviceLocations.create(tenantA, owner, {
         idempotencyKey: 'loc-admin-create',

@@ -156,6 +156,15 @@ describe('the operator write shape', () => {
     ).toBe(false);
   });
 
+  it('refuses a price past the largest amount this system holds (Codex #1, PR #101)', () => {
+    expect(
+      serviceLocationWriteSchema.safeParse({ ...base, priceAmount: '9223372036854775807' }).success,
+    ).toBe(true);
+    expect(
+      serviceLocationWriteSchema.safeParse({ ...base, priceAmount: '9223372036854775808' }).success,
+    ).toBe(false);
+  });
+
   it('takes a limit as a pair, and keeps the initial location panel-wide', () => {
     expect(serviceLocationWriteSchema.safeParse({ ...base, maxChanges: 2 }).success).toBe(false);
     expect(

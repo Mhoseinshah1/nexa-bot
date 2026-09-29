@@ -130,6 +130,25 @@ describe('the service location screen', () => {
     cleanup();
   });
 
+  it("offers only the chosen panel's products as a scope", async () => {
+    const elsewhere = product({
+      id: '019220ab-cdef-7012-8345-6789abcdef02',
+      title: 'پلن پنل دیگر',
+      panelId: '01a05e35-c9ad-7e93-bef3-1ed9b55292d9',
+    });
+    stubApi([
+      { url: '/service-locations', body: { locations: [] } },
+      { url: '/panels', body: { panels: [panel()], nextCursor: null } },
+      { url: '/products', body: { products: [product(), elsewhere], nextCursor: null } },
+    ]);
+    renderPage(<ServiceLocationsPage denied={false} mayEdit />);
+    await screen.findByText(/این پنل تغییر لوکیشن را پشتیبانی نمی‌کند/u);
+    fireEvent.change(screen.getByLabelText('پنل'), { target: { value: String(panel()['id']) } });
+    await screen.findByText('پلن یک‌ماهه');
+    expect(screen.queryByText('پلن پنل دیگر')).toBeNull();
+    cleanup();
+  });
+
   it('is routed at /service-locations, under the catalogue permissions', () => {
     const route = { path: '/service-locations', query: new URLSearchParams() };
     expect(resolve(route, ['catalog.view']).title).toBe('تغییر لوکیشن سرویس');
