@@ -253,11 +253,13 @@ count, no dry run, no undo and no record of prior runs. The whole-bot kill
 switch is rendered identically to the dice toggle.
 
 **Enforced by.** Partially, and only where something destructive exists yet. A
-feature flag declares its blast radius, and a `TENANT_WIDE` one is refused
-unless the caller types the flag's own key and gives a reason — which the audit
-row then carries. The web admin draws such a flag differently from a local one,
-because the legacy capability screen renders the whole-bot kill switch
-identically to the dice toggle.
+feature flag declares its blast radius. Until WP-A2 a `TENANT_WIDE` one was
+refused unless the caller typed the flag's own key and gave a reason. The owner
+removed both: an operator never types an internal key, and the audit row records
+actor, time and action without a reason. What remains is a plain yes/cancel
+question before the Web Admin switches off a feature whose switch-off loses
+something (ADR-0019, "Amended by WP-A2"). This is because the legacy capability
+screen renders the whole-bot kill switch identically to the dice toggle.
 
 No bulk operation exists yet, so the dry-run and counted-preview steps have
 nothing to apply to. See `docs/adr/0010-destructive-operations.md`.
