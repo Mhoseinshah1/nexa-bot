@@ -31,6 +31,8 @@ describe('a Telegram bot belongs to one tenant', () => {
   let ctx: TestContext;
 
   const SAME_BOT = '8123456789';
+  /** R4: run while `setWebhook` is in flight, to take the claim over mid-registration. */
+  let onRegister: (() => Promise<void>) | null = null;
 
   /** The service with Telegram faked and everything below it real. */
   const bootstrap = (username: string): BotBootstrapService => bootstrapFor(SAME_BOT, username);
@@ -72,7 +74,13 @@ describe('a Telegram bot belongs to one tenant', () => {
         // `identify` answers with the SAME numeric id and a DIFFERENT username —
         // the post-rename state, which is what slips past the username index.
         identify: async () => ({ outcome: 'IDENTIFIED', botId, username }) as never,
-        registerWebhook: async () => ({ outcome: 'REGISTERED' }) as never,
+        registerWebhook: async () => {
+          if (onRegister !== null) await onRegister();
+          return { outcome: 'REGISTERED' } as never;
+        },
+        // R4: a rerun asks whether Telegram still holds the registration. Unreadable here,
+        // which leaves the marker's answer standing — nothing in this file is about it.
+        readWebhook: async () => ({ outcome: 'UNREACHABLE' }) as never,
         // The command menu. Answering `true` is the ordinary case; the bootstrap
         // service's own unit test covers a refusal, which must not fail an install.
         registerCommands: async () => true,
@@ -84,9 +92,11 @@ describe('a Telegram bot belongs to one tenant', () => {
       // config does not set one, and the service refuses a short secret on purpose.
       webhookSecret: () => 'integration-webhook-secret-not-a-real-one',
       webhookEnabled: () => true,
+      telegramCallTimeoutMs: 10_000,
     });
 
   beforeEach(async () => {
+    onRegister = null;
     ctx ??= await createTestContext();
     await ctx.reset();
     // The seed gives both tenants a bot instance already, and this is about the
@@ -317,5 +327,84 @@ describe('a Telegram bot belongs to one tenant', () => {
       publicBaseUrl: 'https://bot.example.com',
     });
     expect(again.kind).toBe('ALREADY_COMPLETE');
+  });
+
+  /*
+   * Codex F6. `botctl telegram register` and a Web Admin token replacement both call
+   * setWebhook and write the marker; they share one claim so they cannot interleave.
+   */
+  describe('the registration takes the token-replacement claim', () => {
+    const first = tenantA as TenantContext;
+    const WEB_ADMIN_CLAIM = '01900000-0000-7000-8000-00000000c1a1';
+    const db = () => ctx.container.database.db;
+
+    async function installedButUnregistered(): Promise<void> {
+      await bootstrap('acme_bot').execute(first, {
+        token: `${SAME_BOT}:AAH-first`,
+        publicBaseUrl: 'https://bot.example.com',
+      });
+      // A rerun must reach the registration: the marker says it never happened.
+      await db()
+        .update(botInstances)
+        .set({ webhookRegisteredAt: null, webhookUrl: null, webhookSecretFingerprint: null });
+    }
+    const marker = async () =>
+      (await db().select().from(botInstances).where(eq(botInstances.telegramBotId, SAME_BOT)))[0];
+
+    it('refuses while a Web Admin replacement holds a live claim, and registers once it is free', async () => {
+      await installedButUnregistered();
+      await db()
+        .update(botInstances)
+        .set({
+          tokenReplacementClaim: WEB_ADMIN_CLAIM,
+          tokenReplacementClaimedUntil: new Date(Date.now() + 60 * 60_000),
+        });
+      const refused = bootstrap('acme_bot').execute(first, {
+        token: null,
+        publicBaseUrl: 'https://bot.example.com',
+      });
+      await expect(refused).rejects.toSatisfy(
+        (error: unknown) =>
+          isNexaError(error) &&
+          error.kind === 'CONFLICT' &&
+          error.code === PLATFORM_ERROR_CODES.TELEGRAM_BOOTSTRAP_WEBHOOK_FAILED,
+      );
+      await expect(refused).rejects.toThrowError(/token replacement for this bot is in progress/);
+      expect((await marker())?.webhookRegisteredAt).toBeNull();
+      // Not taken over, not released: still the Web Admin's.
+      expect((await marker())?.tokenReplacementClaim).toBe(WEB_ADMIN_CLAIM);
+
+      await db()
+        .update(botInstances)
+        .set({ tokenReplacementClaim: null, tokenReplacementClaimedUntil: null });
+      const done = await bootstrap('acme_bot').execute(first, {
+        token: null,
+        publicBaseUrl: 'https://bot.example.com',
+      });
+      expect(done.kind).toBe('RECONCILED');
+      expect((await marker())?.webhookRegisteredAt).not.toBeNull();
+      // Released after the marker.
+      expect((await marker())?.tokenReplacementClaim).toBeNull();
+    });
+
+    it('writes no marker when its claim was taken over while setWebhook was in flight', async () => {
+      await installedButUnregistered();
+      onRegister = async () => {
+        await db()
+          .update(botInstances)
+          .set({
+            tokenReplacementClaim: WEB_ADMIN_CLAIM,
+            tokenReplacementClaimedUntil: new Date(Date.now() + 60 * 60_000),
+          });
+      };
+      await expect(
+        bootstrap('acme_bot').execute(first, {
+          token: null,
+          publicBaseUrl: 'https://bot.example.com',
+        }),
+      ).rejects.toThrowError(/token replacement for this bot is in progress/);
+      expect((await marker())?.webhookRegisteredAt).toBeNull();
+      expect((await marker())?.tokenReplacementClaim).toBe(WEB_ADMIN_CLAIM);
+    });
   });
 });

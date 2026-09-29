@@ -1330,7 +1330,7 @@ Nothing needs doing before rolling back past HF-A9.
 
 ### What a rollback changes back: the service card and connection files (R3)
 
-R3's migration `0140_r3_operation_card_messages` adds one table, `operation_card_messages`
+R3's migration `0141_r3_operation_card_messages` adds one table, `operation_card_messages`
 (the chat and message a customer's disable or enable was tapped from, and a 429's wait),
 and one nullable column, `services.usage_refresh_started_at` (the refresh button's
 reservation). The release before it reads neither: a reservation left set by a rollback

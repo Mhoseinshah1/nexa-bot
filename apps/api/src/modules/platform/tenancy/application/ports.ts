@@ -7,6 +7,7 @@ import type {
   TenantId,
   TenantStatus,
 } from '@nexa/contracts';
+import type { BotWebhookRead } from './bot-management-ports.js';
 
 /**
  * Ports owned by the tenancy module.
@@ -43,6 +44,34 @@ export interface BotInstanceRepository {
   findByUsername(scope: ScopeContext, username: string): Promise<BotInstance | null>;
   /** Resolves the bot token for outbound calls. Decrypts; never returned to a surface. */
   resolveToken(scope: ScopeContext, id: BotInstance['id']): Promise<string>;
+  /**
+   * R4 — whether a token replacement holds a LIVE claim on this bot at `now` (claimed and
+   * not lapsed). Unscoped like `findById`, for the same reason: the webhook route asks it
+   * before it has a tenant. Selects the two claim columns and nothing else.
+   */
+  tokenReplacementHeld(id: BotInstance['id'], now: Date): Promise<boolean>;
+}
+
+/**
+ * R4 — the per-bot token-replacement claim (`bot_instances.token_replacement_claim`), the
+ * one lease both writers of a bot's webhook take: the Web Admin's token replacement and
+ * the installer's registration. One implementation, in `DrizzleBotInstanceRepository`.
+ */
+export interface TokenReplacementClaims {
+  /** A conditional UPDATE: succeeds when no claim is held or the one held has lapsed. */
+  claimTokenReplacement(
+    scope: ScopeContext,
+    id: BotInstanceId,
+    claim: { readonly id: string; readonly now: Date; readonly until: Date },
+    tx: unknown,
+  ): Promise<boolean>;
+  /** Drops the claim WHERE it is still `claimId`; a claim taken over since is left alone. */
+  releaseTokenReplacement(
+    scope: ScopeContext,
+    id: BotInstanceId,
+    claimId: string,
+    tx: unknown,
+  ): Promise<void>;
 }
 
 /**
@@ -139,12 +168,22 @@ export interface BotBootstrapRepository {
     tx: unknown,
   ): Promise<void>;
 
+  /**
+   * Writes the marker. R4: WHERE the row still holds `claimId` — the installer's claim on
+   * the bot — so a registration whose claim lapsed and was taken over by a Web Admin
+   * replacement records nothing. False when the predicate missed.
+   */
   markWebhookRegistered(
     scope: ScopeContext,
     id: BotInstanceId,
-    input: { readonly url: string; readonly secretFingerprint: string; readonly now: Date },
+    input: {
+      readonly url: string;
+      readonly secretFingerprint: string;
+      readonly now: Date;
+      readonly claimId: string;
+    },
     tx: unknown,
-  ): Promise<void>;
+  ): Promise<boolean>;
   /**
    * Records the identity `getMe` reported for a row that predates the column.
    *
@@ -171,7 +210,17 @@ export interface BotBootstrapRepository {
  * question about a bot and gets an answer about a bot.
  */
 export type BotIdentityProbe =
-  | { readonly outcome: 'IDENTIFIED'; readonly botId: string; readonly username: string }
+  | {
+      readonly outcome: 'IDENTIFIED';
+      readonly botId: string;
+      readonly username: string;
+      /**
+       * `User.is_bot`, or null when Telegram's answer omitted it. Optional in the type so
+       * the bootstrap's stand-ins need not state it; the token replacement (R4) requires
+       * `true`, because the real Bot API always sends it for `getMe`.
+       */
+      readonly isBot?: boolean | null;
+    }
   /** Telegram answered, and its answer was no. A new token is the remedy. */
   | { readonly outcome: 'REJECTED'; readonly detail: string }
   /**
@@ -204,6 +253,11 @@ export type WebhookRegistration =
  */
 export interface BotBootstrapTelegram {
   identify(token: string): Promise<BotIdentityProbe>;
+  /**
+   * R4 — what Telegram holds as the webhook, so a rerun that finds its own marker current
+   * can tell whether Telegram still agrees. A read; the bot-management port's own method.
+   */
+  readWebhook(token: string): Promise<BotWebhookRead>;
   registerWebhook(input: {
     readonly token: string;
     readonly url: string;
@@ -217,6 +271,11 @@ export interface BotBootstrapTelegram {
      * action with no count and no confirmation.
      */
     readonly dropPendingUpdates: boolean;
+    /**
+     * R4 — send `allowed_updates: []`, the Bot API's reset to its default set. Omitted,
+     * Telegram keeps whatever list the previous registration had.
+     */
+    readonly resetAllowedUpdates?: boolean;
   }): Promise<WebhookRegistration>;
 
   /**

@@ -2389,7 +2389,7 @@ on its meaning.
 
 ## OQ-WP13-02 — does a BotFather token revocation keep the bot's webhook registration?
 
-WP13's token replacement stores a new token for the same bot and touches neither the
+WP13's token replacement stored a new token for the same bot and touched neither the
 webhook nor the command menu. Whether Telegram keeps a bot's webhook across a token
 revocation is not established in this repository, and is not guessed. The live check
 reads the registration with the new token and reports what Telegram holds; if the
@@ -2397,6 +2397,15 @@ registration is gone, `botctl telegram register` restores it.
 
 **Trigger to resolve:** the first real token replacement on a running installation, whose
 live check answers it.
+
+**R4 (v0.3.5 real test):** the owner's staging bot stayed silent after a replacement, which
+is consistent with Telegram dropping the registration and does not establish it — the
+evidence was the symptom, not a `getWebhookInfo` read. It is no longer decisive either way:
+a replacement now registers the webhook with the new token and reads it back before storing
+it, and a `botctl telegram register` rerun asks Telegram rather than trusting its own
+marker (`docs/wp13-bots-management-audit.md` §7). The question stays open as a fact about
+Telegram; the fake in `tests/support/fake-telegram-bot-api.ts` makes every caller of its
+`revoke` state the answer rather than assume one.
 
 ## OQ-WP14-01 — should the server require an acknowledgement before suspending a reseller who owes?
 

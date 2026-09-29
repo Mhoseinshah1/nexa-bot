@@ -45,7 +45,7 @@ export class DrizzleBotManagementRepository implements BotManagementRepository {
     private readonly cipher: SecretCipher,
     private readonly bots: Pick<
       DrizzleBotInstanceRepository,
-      'resolveToken' | 'tokenForBotInstance'
+      'resolveToken' | 'tokenForBotInstance' | 'claimTokenReplacement' | 'releaseTokenReplacement'
     >,
   ) {}
 
@@ -123,25 +123,67 @@ export class DrizzleBotManagementRepository implements BotManagementRepository {
     return updated.length === 1;
   }
 
-  async replaceToken(
+  /** The one claim implementation, shared with the installer (`TokenReplacementClaims`). */
+  claimTokenReplacement(
     scope: ScopeContext,
     id: BotInstanceId,
-    input: { readonly token: string; readonly telegramBotId: string; readonly now: Date },
+    claim: { readonly id: string; readonly now: Date; readonly until: Date },
+    tx: unknown,
+  ): Promise<boolean> {
+    return this.bots.claimTokenReplacement(scope, id, claim, tx);
+  }
+
+  releaseTokenReplacement(
+    scope: ScopeContext,
+    id: BotInstanceId,
+    claimId: string,
+    tx: unknown,
+  ): Promise<void> {
+    return this.bots.releaseTokenReplacement(scope, id, claimId, tx);
+  }
+
+  async activateTokenReplacement(
+    scope: ScopeContext,
+    id: BotInstanceId,
+    input: {
+      readonly claimId: string;
+      readonly token: string | null;
+      readonly telegramBotId: string;
+      readonly username: string;
+      readonly webhookUrl: string;
+      readonly webhookSecretFingerprint: string;
+      readonly now: Date;
+    },
     tx: unknown,
   ): Promise<boolean> {
     const tenantId = requireTenantId(scope);
     // Encrypted HERE, bound to this row and tenant — the same context the bootstrap's
     // `createFromBootstrap` binds, so every reader decrypts it exactly as before.
-    const secret = this.cipher.encrypt(input.token, {
-      purpose: 'bot_instance.token',
-      tenantId,
-      entityId: id,
-    });
+    const secret =
+      input.token === null
+        ? null
+        : this.cipher.encrypt(input.token, {
+            purpose: 'bot_instance.token',
+            tenantId,
+            entityId: id,
+          });
     const updated = await executorOf(this.db, tx)
       .update(botInstances)
       .set({
-        tokenCiphertext: secret.ciphertext,
-        tokenKeyId: secret.keyId,
+        ...(secret === null
+          ? {}
+          : { tokenCiphertext: secret.ciphertext, tokenKeyId: secret.keyId }),
+        // The name Telegram reported, unless another row holds it: the column is unique
+        // installation-wide, and a stale copy elsewhere must not fail a verified change.
+        username: sql`CASE WHEN EXISTS (
+            SELECT 1 FROM ${botInstances} AS other
+             WHERE other.username = ${input.username} AND other.id <> ${id}
+          ) THEN ${botInstances.username} ELSE ${input.username} END`,
+        webhookRegisteredAt: input.now,
+        webhookUrl: input.webhookUrl,
+        webhookSecretFingerprint: input.webhookSecretFingerprint,
+        tokenReplacementClaim: null,
+        tokenReplacementClaimedUntil: null,
         updatedAt: input.now,
       })
       .where(
@@ -151,6 +193,8 @@ export class DrizzleBotManagementRepository implements BotManagementRepository {
           // The identity getMe proved. A row that names another bot is not replaced —
           // a replacement never repoints (ADR-0029).
           eq(botInstances.telegramBotId, input.telegramBotId),
+          // Still THIS attempt's claim: one that lapsed and was taken over activates nothing.
+          eq(botInstances.tokenReplacementClaim, input.claimId),
         ),
       )
       .returning({ id: botInstances.id });

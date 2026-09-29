@@ -460,6 +460,22 @@ export const botInstances = pgTable(
     /** Envelope-encrypted. Never returned by any API, never logged. */
     tokenCiphertext: text('token_ciphertext').notNull(),
     tokenKeyId: text('token_key_id').notNull(),
+    /**
+     * R4 (item 12) — the claim a Web Admin token replacement holds while it talks to
+     * Telegram, and when that claim lapses.
+     *
+     * A replacement registers the webhook and reads it back BEFORE it stores the token,
+     * and those calls cannot run inside a transaction — so no row lock can keep a second
+     * replacement (another tab, a double-click under a new key, another api replica) from
+     * interleaving its `setWebhook` with this one's. This conditional claim does, and it is
+     * a lease rather than a flag so a process that dies mid-replacement blocks the next
+     * attempt for minutes, not for ever. Activation is conditional on the claim still being
+     * this attempt's, so a replacement whose claim lapsed and was taken over stores nothing.
+     *
+     * Both NULL, or both set: the CHECK below.
+     */
+    tokenReplacementClaim: uuid('token_replacement_claim'),
+    tokenReplacementClaimedUntil: timestamptz('token_replacement_claimed_until'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
@@ -492,6 +508,10 @@ export const botInstances = pgTable(
       .where(sql`telegram_bot_id IS NOT NULL`),
     index('bot_instances_tenant_idx').on(table.tenantId),
     check('bot_instances_status_check', enumCheck('status', BOT_INSTANCE_STATUSES)),
+    check(
+      'bot_instances_token_replacement_claim_check',
+      sql`(token_replacement_claim IS NULL) = (token_replacement_claimed_until IS NULL)`,
+    ),
   ],
 );
 

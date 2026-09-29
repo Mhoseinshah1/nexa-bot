@@ -19,7 +19,10 @@ describe('the Telegram webhook and Stars payment updates', () => {
       config: { TELEGRAM_WEBHOOK_SECRET: SECRET },
       botInstances: {
         findById: async () => ({ id: BOT, tenantId: 'tenant-a', status: 'ACTIVE' }),
+        // R4: no token replacement in flight, so no update is held back.
+        tokenReplacementHeld: async () => false,
       },
+      clock: { now: () => new Date('2026-09-29T10:00:00Z') },
       tenants: { findById: async () => ({ id: 'tenant-a', status: 'ACTIVE' }) },
       ids: { uuid: () => '01900000-0000-7000-8000-000000000999' },
       starsPayments: {

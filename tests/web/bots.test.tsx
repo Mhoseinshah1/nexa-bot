@@ -37,6 +37,33 @@ const bot = (overrides: Record<string, unknown> = {}) => ({
 
 const installation = { webhookRouteEnabled: true, webhookSecretConfigured: true };
 
+const EXPECTED_URL = `https://bot.example.test/telegram/webhook/${BOT_ID}`;
+
+/** What a successful replacement verified with Telegram (R4). */
+const verified = {
+  botInstanceId: BOT_ID,
+  checkedAt: '2026-09-29T10:00:00.000Z',
+  identity: {
+    outcome: 'IDENTIFIED',
+    telegramBotId: '7000000001',
+    username: 'acme_store_bot',
+    idMatches: true,
+    usernameMatches: true,
+  },
+  webhook: {
+    outcome: 'READ',
+    url: EXPECTED_URL,
+    urlMatchesRecorded: true,
+    pendingUpdateCount: 4,
+    lastErrorAt: null,
+    lastErrorMessage: null,
+    maxConnections: 40,
+    expectedUrl: EXPECTED_URL,
+    matchesExpected: true,
+  },
+  verdict: { readyToReceive: true, problems: [] },
+};
+
 const listRoute = (rows: unknown[] = [bot()]) => ({
   url: '/bots',
   body: { bots: rows, installation },
@@ -99,7 +126,10 @@ describe('the Bots page', () => {
     const token = `7000000001:${'A'.repeat(35)}`;
     const api = stubApi([
       listRoute(),
-      { url: `/bots/${BOT_ID}/token`, body: { bot: bot(), installation, changed: true } },
+      {
+        url: `/bots/${BOT_ID}/token`,
+        body: { bot: bot(), installation, changed: true, verification: verified },
+      },
     ]);
     const { container, rerender } = renderPage(page({ mayOperate: true }));
     await screen.findByText('@acme_store_bot');
@@ -178,7 +208,10 @@ describe('the Bots page', () => {
               lastErrorAt: null,
               lastErrorMessage: null,
               maxConnections: 40,
+              expectedUrl: 'https://bot.example.test/telegram/webhook/a1',
+              matchesExpected: false,
             },
+            verdict: { readyToReceive: false, problems: ['WEBHOOK_ELSEWHERE'] },
           },
         },
       },
@@ -189,8 +222,53 @@ describe('the Bots page', () => {
     const result = await screen.findByTestId('bot-diagnostic');
     expect(within(result).getByText('تلگرام توکن را پذیرفت.')).toBeInTheDocument();
     expect(within(result).getByText('https://elsewhere.example.test/hook')).toBeInTheDocument();
-    expect(within(result).getByText('با نشانی ثبت‌شده در این نصب یکی نیست')).toBeInTheDocument();
+    // R4: expected beside actual, compared exactly, and the verdict with its remedy.
+    expect(
+      within(result).getByText('https://bot.example.test/telegram/webhook/a1'),
+    ).toBeInTheDocument();
+    expect(within(result).getByText('با نشانی این نصب یکی نیست')).toBeInTheDocument();
+    expect(within(result).getByText('ربات هنوز آمادهٔ دریافت پیام نیست:')).toBeInTheDocument();
+    expect(result.textContent).toContain('تلگرام پیام‌ها را به نشانی دیگری می‌فرستد');
     expect(result.textContent).toContain('12');
+  });
+
+  it('falls back to the recorded comparison when the installation has no expected URL', async () => {
+    stubApi([
+      listRoute(),
+      {
+        url: `/bots/${BOT_ID}/diagnostics`,
+        body: {
+          diagnostic: {
+            botInstanceId: BOT_ID,
+            checkedAt: '2026-09-25T10:00:00.000Z',
+            identity: {
+              outcome: 'IDENTIFIED',
+              telegramBotId: '7000000001',
+              username: 'acme_store_bot',
+              idMatches: true,
+              usernameMatches: true,
+            },
+            webhook: {
+              outcome: 'READ',
+              url: 'https://elsewhere.example.test/…',
+              urlMatchesRecorded: false,
+              pendingUpdateCount: 0,
+              lastErrorAt: null,
+              lastErrorMessage: null,
+              maxConnections: 40,
+              expectedUrl: null,
+              matchesExpected: null,
+            },
+            verdict: { readyToReceive: false, problems: ['WEBHOOK_EXPECTED_UNKNOWN'] },
+          },
+        },
+      },
+    ]);
+    renderPage(page({ mayOperate: true }));
+    fireEvent.click(await screen.findByRole('button', { name: 'بررسی زنده با تلگرام' }));
+    const result = await screen.findByTestId('bot-diagnostic');
+    expect(within(result).getByText('با نشانی ثبت‌شده در این نصب یکی نیست')).toBeInTheDocument();
+    expect(result.textContent).toContain('این نصب هنوز نشانی عمومی خود را ثبت نکرده است');
   });
 
   it('clears a live check once the token it was taken with is replaced', async () => {
@@ -215,6 +293,12 @@ describe('the Bots page', () => {
             lastErrorAt: null,
             lastErrorMessage: null,
             maxConnections: null,
+            expectedUrl: null,
+            matchesExpected: null,
+          },
+          verdict: {
+            readyToReceive: false,
+            problems: ['TOKEN_NOT_ACCEPTED', 'WEBHOOK_UNREADABLE'],
           },
         },
       },
@@ -222,7 +306,10 @@ describe('the Bots page', () => {
     stubApi([
       listRoute(),
       diagnosticRoute,
-      { url: `/bots/${BOT_ID}/token`, body: { bot: bot(), installation, changed: true } },
+      {
+        url: `/bots/${BOT_ID}/token`,
+        body: { bot: bot(), installation, changed: true, verification: verified },
+      },
     ]);
     const { container } = renderPage(page({ mayOperate: true, mayReplaceToken: true }));
     fireEvent.click(await screen.findByRole('button', { name: 'بررسی زنده با تلگرام' }));
@@ -232,7 +319,115 @@ describe('the Bots page', () => {
     fireEvent.change(input, { target: { value: `7000000001:${'C'.repeat(35)}` } });
     fireEvent.click(screen.getByRole('button', { name: 'جایگزینی توکن' }));
     // The rejection was about the OLD credential; it must not stand beside the new one.
-    await waitFor(() => expect(screen.queryByTestId('bot-diagnostic')).toBeNull());
+    // What stands instead is the verification the replacement made (R4).
+    await waitFor(() =>
+      expect(
+        screen.queryByText('تلگرام توکن ذخیره‌شده را رد کرد؛ توکن را جایگزین کنید.'),
+      ).toBeNull(),
+    );
+    expect(
+      within(screen.getByTestId('bot-diagnostic')).getByText('ربات آمادهٔ دریافت پیام است.'),
+    ).toBeInTheDocument();
+  });
+
+  it('shows what a replacement verified with Telegram at once, without a live check', async () => {
+    const api = stubApi([
+      listRoute(),
+      {
+        url: `/bots/${BOT_ID}/token`,
+        body: { bot: bot(), installation, changed: true, verification: verified },
+      },
+    ]);
+    const { container } = renderPage(page({ mayReplaceToken: true }));
+    await screen.findByText('@acme_store_bot');
+    const input = container.querySelector('input[type="password"]') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: `7000000001:${'D'.repeat(35)}` } });
+    fireEvent.click(screen.getByRole('button', { name: 'جایگزینی توکن' }));
+
+    const result = await screen.findByTestId('bot-diagnostic');
+    expect(within(result).getByText('ربات آمادهٔ دریافت پیام است.')).toBeInTheDocument();
+    expect(within(result).getByText('دقیقاً همان نشانی این نصب است')).toBeInTheDocument();
+    expect(within(result).getAllByText(EXPECTED_URL)).toHaveLength(2);
+    // The toast says the webhook was verified, not "run a live check to be sure".
+    expect(
+      await screen.findByText(/وب‌هوک این نصب با توکن جدید ثبت و از تلگرام بازخوانی و تأیید شد/u),
+    ).toBeInTheDocument();
+    expect(api.calls.some((call) => call.url.endsWith('/diagnostics'))).toBe(false);
+  });
+
+  it('never reports a replacement whose webhook failed, and says what was put back', async () => {
+    stubApi([
+      listRoute(),
+      {
+        url: `/bots/${BOT_ID}/token`,
+        status: 409,
+        body: {
+          error: {
+            kind: 'CONFLICT',
+            code: 'bot.webhook_verification_failed',
+            message: 'not exact',
+            correlationId: 'test',
+            details: {
+              stage: 'VERIFY_WEBHOOK',
+              compensation: 'RESTORED',
+              expectedUrl: EXPECTED_URL,
+              actualUrl: 'https://elsewhere.example.test/…',
+              telegramReason: null,
+              cause: null,
+            },
+          },
+        },
+      },
+    ]);
+    const { container } = renderPage(page({ mayReplaceToken: true }));
+    await screen.findByText('@acme_store_bot');
+    const input = container.querySelector('input[type="password"]') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: `7000000001:${'E'.repeat(35)}` } });
+    fireEvent.click(screen.getByRole('button', { name: 'جایگزینی توکن' }));
+
+    const failure = await screen.findByTestId('bot-replacement-failure');
+    expect(screen.getByText(/بازخوانی آن دقیقاً نشانی این نصب را نشان نداد/u)).toBeInTheDocument();
+    expect(within(failure).getByText(EXPECTED_URL)).toBeInTheDocument();
+    expect(within(failure).getByText('https://elsewhere.example.test/…')).toBeInTheDocument();
+    expect(failure.textContent).toContain('به حالت قبل');
+    expect(screen.queryByText(/توکن جایگزین شد/u)).toBeNull();
+    expect(input.value).toBe('');
+  });
+
+  it("shows Telegram's own reason when it refuses the webhook", async () => {
+    stubApi([
+      listRoute(),
+      {
+        url: `/bots/${BOT_ID}/token`,
+        status: 412,
+        body: {
+          error: {
+            kind: 'PRECONDITION_FAILED',
+            code: 'bot.webhook_refused',
+            message: 'refused',
+            correlationId: 'test',
+            details: {
+              stage: 'SET_WEBHOOK',
+              compensation: 'NOT_NEEDED',
+              expectedUrl: EXPECTED_URL,
+              actualUrl: null,
+              telegramReason: 'Bad Request: bad webhook: Failed to resolve host',
+              cause: null,
+            },
+          },
+        },
+      },
+    ]);
+    const { container } = renderPage(page({ mayReplaceToken: true }));
+    await screen.findByText('@acme_store_bot');
+    const input = container.querySelector('input[type="password"]') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: `7000000001:${'F'.repeat(35)}` } });
+    fireEvent.click(screen.getByRole('button', { name: 'جایگزینی توکن' }));
+    const failure = await screen.findByTestId('bot-replacement-failure');
+    expect(
+      within(failure).getByText('Bad Request: bad webhook: Failed to resolve host'),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/تلگرام ثبت وب‌هوک این نصب را نپذیرفت/u)).toBeInTheDocument();
   });
 
   it('clears a live check once the bot is stopped', async () => {
@@ -259,6 +454,12 @@ describe('the Bots page', () => {
               lastErrorAt: null,
               lastErrorMessage: null,
               maxConnections: null,
+              expectedUrl: null,
+              matchesExpected: null,
+            },
+            verdict: {
+              readyToReceive: false,
+              problems: ['TOKEN_NOT_ACCEPTED', 'WEBHOOK_UNREADABLE'],
             },
           },
         },
