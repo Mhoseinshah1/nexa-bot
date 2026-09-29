@@ -637,7 +637,9 @@ describe('a customer pays through the approved screens', () => {
         body.endsWith('💡 در صورتی که جواب سوالتون رو نگرفتید میتونید به «پشتیبانی» مراجعه کنید.'),
       ).toBe(true);
       expect(lastMarkup()).toContain('"url":"https://t.me/nexa_support"');
+      // WP-A7: the support screen also leads into the ticket desk.
       expect(labelsOf(lastMarkup())).toEqual([
+        '🎫 تیکت\u200cهای پشتیبانی',
         '📨 ارسال پیام به پشتیبانی',
         '🏠 بازگشت به منوی اصلی',
       ]);
@@ -650,7 +652,10 @@ describe('a customer pays through the approved screens', () => {
     it('draws no contact button when no support account is configured', async () => {
       await handle(text('/help'));
       expect(lastMarkup()).not.toContain('"url"');
-      expect(labelsOf(lastMarkup())).toEqual(['🏠 بازگشت به منوی اصلی']);
+      expect(labelsOf(lastMarkup())).toEqual([
+        '🎫 تیکت\u200cهای پشتیبانی',
+        '🏠 بازگشت به منوی اصلی',
+      ]);
     });
 
     it('shows the contact action alone when every FAQ is inactive', async () => {

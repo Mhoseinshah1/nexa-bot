@@ -145,6 +145,13 @@ export const EVENT_TYPES = [
   'ReferralRewarded',
   'ReferralCommissionReversed',
   'TrialIssued',
+  // WP-A7, a support ticket: opened, a message posted to it, its status changed and its
+  // assignee changed. Ids and closed vocabularies only — never a message's text, which is
+  // on its row. The administrators' notification is a consumer of the first two.
+  'TicketOpened',
+  'TicketMessagePosted',
+  'TicketStatusChanged',
+  'TicketAssigned',
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
@@ -175,6 +182,8 @@ export const AGGREGATE_TYPES = [
   'Discount',
   'Referral',
   'Trial',
+  // WP-A7.
+  'Ticket',
 ] as const;
 export type AggregateType = (typeof AGGREGATE_TYPES)[number];
 
@@ -474,6 +483,31 @@ export const EVENT_PAYLOAD_SCHEMAS = {
     customerId: z.string(),
     productId: z.string(),
     serviceId: z.string(),
+  }),
+  /*
+   * WP-A7. Aggregate is the TICKET. Ids and closed vocabularies only: the text of a
+   * message is the customer's or an administrator's words, and it is on its row.
+   */
+  TicketOpened: z.object({
+    ticketId: z.string(),
+    customerId: z.string(),
+    categoryId: z.string(),
+    messageId: z.string(),
+  }),
+  TicketMessagePosted: z.object({
+    ticketId: z.string(),
+    messageId: z.string(),
+    senderType: z.enum(['CUSTOMER', 'ADMIN']),
+  }),
+  TicketStatusChanged: z.object({
+    ticketId: z.string(),
+    from: z.string(),
+    to: z.string(),
+  }),
+  TicketAssigned: z.object({
+    ticketId: z.string(),
+    from: z.string().nullable(),
+    to: z.string().nullable(),
   }),
 } as const satisfies Record<EventType, z.ZodType>;
 

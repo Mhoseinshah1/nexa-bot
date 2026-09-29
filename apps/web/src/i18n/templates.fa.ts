@@ -115,6 +115,7 @@ export const TEMPLATE_GROUPS_FA: readonly TemplateGroupDefinition[] = [
   },
   { id: 'referral', label: 'معرفی دوستان و هدیهٔ عضویت', prefixes: ['bot.referral.'] },
   { id: 'support', label: 'پشتیبانی و پرسش‌های متداول', prefixes: ['bot.faq.', 'bot.support.'] },
+  { id: 'tickets', label: 'تیکت‌های پشتیبانی (مشتری)', prefixes: ['bot.ticket.'] },
   {
     id: 'admin',
     label: 'مدیریت در تلگرام — عمومی',
@@ -185,6 +186,11 @@ export const TEMPLATE_GROUPS_FA: readonly TemplateGroupDefinition[] = [
     label: 'گزارش‌های مالی گروه لاگ',
     prefixes: ['ops.financial.'],
   },
+  {
+    id: 'ops_support',
+    label: 'اعلان تیکت‌ها به پشتیبانی',
+    prefixes: ['ops.support.'],
+  },
 ];
 
 /** Where a key no group claims is shown. Nothing registered today lands here. */
@@ -236,8 +242,10 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   commissionPercent: 'درصد پورسانت',
   commissionReceivedTotal: 'مجموع پورسانت دریافتی',
   content: 'محتوای این بخش',
+  conversation: 'آخرین پیام‌های گفتگو',
   cooldownHours: 'فاصلهٔ مجاز (ساعت)',
   correlationId: 'شناسهٔ پیگیری',
+  count: 'تعداد',
   current: 'مقدار فعلی',
   currentLimit: 'تعداد کاربر / دستگاه مجاز فعلی',
   currentLocation: 'لوکیشن فعلی سرویس',
@@ -283,6 +291,7 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   locationChangeBlock: 'بخش تغییر لوکیشن',
   locationsBlock: 'بخش لوکیشن‌ها',
   max: 'حداکثر تعداد نویسه',
+  maxBytes: 'حداکثر حجم فایل',
   maximum: 'حداکثر مبلغ',
   message: 'متن رخداد',
   method: 'روش پرداخت',
@@ -294,6 +303,7 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   note: 'یادداشت',
   number: 'شماره',
   occurrences: 'تعداد تکرار',
+  olderLine: 'خط پیام‌های قدیمی‌تر',
   operation: 'نوع عملیات',
   order: 'سفارش',
   orderId: 'شناسهٔ سفارش',
@@ -373,6 +383,7 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   telegramId: 'شناسهٔ عددی تلگرام',
   telegramIdRandom: 'نشانهٔ انتخاب شناسهٔ تلگرام + تصادفی',
   template: 'الگو',
+  text: 'متن پیام',
   timePrice: 'قیمت زمان',
   toLocation: 'لوکیشن مقصد',
   title: 'عنوان',
@@ -456,6 +467,19 @@ export const PLACEHOLDER_LABEL_OVERRIDES_FA: Partial<
   'bot.referral.gift_block': { total: 'مجموع هدیه' },
   'bot.service.location_option': { location: 'لوکیشن مقصد', price: 'قیمت انتقال' },
   'bot.service.location_option_free': { location: 'لوکیشن مقصد' },
+  'bot.ticket.list_item_button': {
+    status: 'وضعیت تیکت',
+    number: 'شمارهٔ تیکت',
+    category: 'موضوع تیکت',
+  },
+  'bot.ticket.view': { status: 'وضعیت تیکت', number: 'شمارهٔ تیکت', category: 'موضوع تیکت' },
+  'bot.ticket.view_older': { count: 'تعداد پیام‌های قدیمی‌تر' },
+  'bot.ticket.open_limit': { max: 'حداکثر تیکت باز' },
+  'bot.ticket.category_button': { title: 'نام دسته' },
+  'bot.ticket.message_prompt': { category: 'موضوع تیکت' },
+  'bot.ticket.support_replied': { text: 'متن پاسخ پشتیبانی', category: 'موضوع تیکت' },
+  'ops.support.ticket_opened': { number: 'شمارهٔ تیکت', category: 'موضوع تیکت' },
+  'ops.support.customer_replied': { number: 'شمارهٔ تیکت', category: 'موضوع تیکت' },
 };
 
 /**
@@ -498,6 +522,14 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'bot.command.paysupport': [
     'توضیح دستور /paysupport در فهرست دستورها',
     'متن کوتاه کنار دستور /paysupport برای پشتیبانی پرداخت؛ تلگرام آن را از ربات‌هایی که با استارز می‌فروشند می‌خواهد.',
+  ],
+  'bot.command.tickets': [
+    'توضیح دستور /tickets در فهرست دستورها',
+    'متن کوتاه کنار دستور /tickets (تیکت‌های پشتیبانی) در فهرست دستورهای تلگرام.',
+  ],
+  'bot.menu.tickets': [
+    'دکمهٔ تیکت‌ها در منوی اصلی',
+    'دکمهٔ منوی اصلی که فهرست تیکت‌های پشتیبانی مشتری را باز می‌کند؛ همان کار دستور /tickets.',
   ],
   'bot.menu.catalog': [
     'دکمهٔ خرید در منوی اصلی',
@@ -1795,6 +1827,157 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
     'پشتیبانی تنظیم نشده',
     'هیچ حساب پشتیبانی تنظیم نشده است و این را صریح می‌گوید.',
   ],
+  'bot.support.tickets_button': [
+    'دکمهٔ تیکت‌ها در صفحهٔ پشتیبانی',
+    'در صفحهٔ پشتیبانی و پاسخ /paysupport، فهرست تیکت‌های مشتری را باز می‌کند.',
+  ],
+
+  // --- Support tickets --------------------------------------------------------------
+  'bot.ticket.list': [
+    'فهرست تیکت‌های مشتری',
+    'سرتیتر فهرست تیکت‌های مشتری؛ برای هر تیکت یک دکمه و سپس دکمهٔ تیکت جدید می‌آید.',
+  ],
+  'bot.ticket.list_empty': [
+    'فهرست خالی تیکت‌ها',
+    'وقتی مشتری هنوز تیکتی ثبت نکرده است؛ فقط دکمهٔ تیکت جدید دارد.',
+  ],
+  'bot.ticket.list_item_button': [
+    'دکمهٔ یک تیکت در فهرست',
+    'هر تیکت در فهرست: وضعیت، شماره و موضوع آن.',
+  ],
+  'bot.ticket.new_button': ['دکمهٔ تیکت جدید', 'ثبت تیکت تازه را با انتخاب موضوع شروع می‌کند.'],
+  'bot.ticket.back_button': ['دکمهٔ بازگشت به تیکت‌ها', 'مشتری را به فهرست تیکت‌هایش برمی‌گرداند.'],
+  'bot.ticket.choose_category': [
+    'انتخاب موضوع تیکت',
+    'از مشتری می‌خواهد موضوع تیکت تازه را انتخاب کند؛ برای هر دستهٔ فعال یک دکمه می‌آید.',
+  ],
+  'bot.ticket.category_button': [
+    'دکمهٔ یک موضوع تیکت',
+    'یک دستهٔ تیکت، با همان نامی که مدیر در پنل گذاشته است.',
+  ],
+  'bot.ticket.no_categories': [
+    'ثبت تیکت فعلاً ممکن نیست',
+    'هیچ دستهٔ فعالی وجود ندارد، پس تیکت تازه‌ای ثبت نمی‌شود.',
+  ],
+  'bot.ticket.message_prompt': [
+    'درخواست نخستین پیام تیکت',
+    'پس از انتخاب موضوع، نخستین پیام تیکت را می‌خواهد؛ متن یا عکس و فایل همراه با توضیح.',
+  ],
+  'bot.ticket.reply_prompt': [
+    'درخواست پاسخ مشتری به تیکت',
+    'پاسخ مشتری به یک تیکت را می‌خواهد؛ متن یا عکس و فایل.',
+  ],
+  'bot.ticket.message_invalid': [
+    'پیام تیکت نامعتبر',
+    'پیام خالی یا بلندتر از حد مجاز بود؛ مشتری می‌تواند دوباره بفرستد.',
+  ],
+  'bot.ticket.attachment_too_large': [
+    'فایل تیکت بیش از حد بزرگ',
+    'حجم فایل پیوست بیش از حد مجاز است؛ چیزی ذخیره نشد و مشتری می‌تواند دوباره بفرستد.',
+  ],
+  'bot.ticket.attachment_type_refused': [
+    'نوع فایل تیکت پذیرفته نیست',
+    'نوع فایل پیوست پذیرفته نمی‌شود؛ چیزی ذخیره نشد و مشتری می‌تواند دوباره بفرستد.',
+  ],
+  'bot.ticket.created': [
+    'تیکت ثبت شد',
+    'تیکت تازه ثبت شده است و پاسخ پشتیبانی در همین ربات می‌رسد.',
+  ],
+  'bot.ticket.reply_sent': ['پیام مشتری به تیکت افزوده شد', 'پاسخ مشتری به تیکت ثبت شد.'],
+  'bot.ticket.open_limit': [
+    'سقف تیکت‌های باز',
+    'مشتری بیشترین تعداد تیکت باز مجاز را دارد و تیکت تازه ثبت نمی‌شود.',
+  ],
+  'bot.ticket.message_limit': [
+    'سقف پیام‌های تیکت',
+    'این تیکت به بیشترین تعداد پیام مجاز رسیده است؛ مشتری باید تیکت تازه ثبت کند.',
+  ],
+  'bot.ticket.view': [
+    'گفتگوی یک تیکت',
+    'سرتیتر تیکت (شماره، موضوع، وضعیت) و آخرین پیام‌های گفتگو در ربات.',
+  ],
+  'bot.ticket.view_older': [
+    'خط پیام‌های قدیمی‌تر تیکت',
+    'می‌گوید چند پیام قدیمی‌تر در نمای ربات نیامده و در پنل پشتیبانی نگه داشته شده است.',
+  ],
+  'bot.ticket.line_customer': [
+    'پیام مشتری در گفتگوی تیکت',
+    'یک پیام خود مشتری در نمای گفتگوی تیکت.',
+  ],
+  'bot.ticket.line_support': [
+    'پیام پشتیبانی در گفتگوی تیکت',
+    'یک پیام پشتیبانی در نمای گفتگوی تیکت.',
+  ],
+  'bot.ticket.line_closed_by_customer': [
+    'خط بستن تیکت توسط مشتری',
+    'در گفتگو ثبت می‌کند که مشتری تیکت را بسته است.',
+  ],
+  'bot.ticket.line_closed_by_support': [
+    'خط بستن تیکت توسط پشتیبانی',
+    'در گفتگو ثبت می‌کند که پشتیبانی تیکت را بسته است.',
+  ],
+  'bot.ticket.line_reopened': [
+    'خط بازگشایی تیکت',
+    'در گفتگو ثبت می‌کند که پشتیبانی تیکت را دوباره باز کرده است.',
+  ],
+  'bot.ticket.attachment_marker': [
+    'نشانهٔ پیوست در گفتگو',
+    'کنار پیامی می‌آید که فایل یا عکس پیوست دارد.',
+  ],
+  'bot.ticket.reply_button': [
+    'دکمهٔ ارسال پاسخ به تیکت',
+    'پنجرهٔ پاسخ مشتری به تیکت را باز می‌کند.',
+  ],
+  'bot.ticket.close_button': [
+    'دکمهٔ بستن تیکت',
+    'می‌پرسد آیا مشتری تیکت را می‌بندد؛ هنوز چیزی ثبت نمی‌شود.',
+  ],
+  'bot.ticket.close_ask': ['پرسش پیش از بستن تیکت', 'پیش از بستن تیکت توسط مشتری، تأیید می‌خواهد.'],
+  'bot.ticket.close_confirm_button': ['دکمهٔ تأیید بستن تیکت', 'تیکت را می‌بندد.'],
+  'bot.ticket.closed': ['تیکت بسته شد', 'مشتری تیکت خود را بسته است.'],
+  'bot.ticket.already_closed': [
+    'تیکت از قبل بسته است',
+    'پیام یا درخواست بستن برای تیکتی که بسته شده است؛ مشتری باید تیکت تازه ثبت کند.',
+  ],
+  'bot.ticket.not_found': [
+    'تیکت پیدا نشد',
+    'تیکت وجود ندارد یا متعلق به این مشتری یا این ربات نیست.',
+  ],
+  'bot.ticket.status_open': ['برچسب وضعیت: باز', 'برچسب تیکتی که هنوز پاسخی نگرفته است.'],
+  'bot.ticket.status_waiting_for_customer': [
+    'برچسب وضعیت: منتظر پاسخ مشتری',
+    'برچسب تیکتی که پشتیبانی به آن پاسخ داده و منتظر مشتری است.',
+  ],
+  'bot.ticket.status_waiting_for_support': [
+    'برچسب وضعیت: در انتظار پشتیبانی',
+    'برچسب تیکتی که مشتری در آن نوشته و منتظر پشتیبانی است.',
+  ],
+  'bot.ticket.status_closed': ['برچسب وضعیت: بسته‌شده', 'برچسب تیکت بسته‌شده.'],
+  'bot.ticket.support_replied': [
+    'پاسخ پشتیبانی به تیکت (اعلان به مشتری)',
+    'وقتی پشتیبانی در پنل پاسخ می‌دهد برای مشتری فرستاده می‌شود؛ متن پاسخ هنگام ارسال از خود تیکت خوانده می‌شود.',
+  ],
+  'bot.ticket.view_button': ['دکمهٔ مشاهدهٔ تیکت', 'در اعلان پاسخ پشتیبانی، تیکت را باز می‌کند.'],
+  'bot.ticket.category_default_1': [
+    'دستهٔ پیش‌فرض تیکت ۱',
+    'دستهٔ نمونهٔ ۱ که نخستین بار در دسته‌های تیکت هر مجموعه کپی می‌شود.',
+  ],
+  'bot.ticket.category_default_2': [
+    'دستهٔ پیش‌فرض تیکت ۲',
+    'دستهٔ نمونهٔ ۲ که نخستین بار در دسته‌های تیکت هر مجموعه کپی می‌شود.',
+  ],
+  'bot.ticket.category_default_3': [
+    'دستهٔ پیش‌فرض تیکت ۳',
+    'دستهٔ نمونهٔ ۳ که نخستین بار در دسته‌های تیکت هر مجموعه کپی می‌شود.',
+  ],
+  'bot.ticket.category_default_4': [
+    'دستهٔ پیش‌فرض تیکت ۴',
+    'دستهٔ نمونهٔ ۴ که نخستین بار در دسته‌های تیکت هر مجموعه کپی می‌شود.',
+  ],
+  'bot.ticket.category_default_5': [
+    'دستهٔ پیش‌فرض تیکت ۵',
+    'دستهٔ نمونهٔ ۵ که نخستین بار در دسته‌های تیکت هر مجموعه کپی می‌شود.',
+  ],
 
   // --- Telegram admin: general ------------------------------------------------------
   'bot.menu.admin': [
@@ -2608,5 +2791,15 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'ops.financial.service_refund_request': [
     'گزارش مالی: نتیجهٔ درخواست بازگشت وجه سرویس',
     'وقتی درخواست بازگشت وجه یک سرویس به نتیجهٔ نهایی می‌رسد: انجام‌شده، ردشده یا ناموفق.',
+  ],
+
+  // --- Support tickets, to support ---------------------------------------------------
+  'ops.support.ticket_opened': [
+    'اعلان تیکت تازه به پشتیبانی',
+    'وقتی مشتری تیکت تازه ثبت می‌کند به مدیران پشتیبانی فرستاده می‌شود؛ شماره، موضوع و مشتری را می‌گوید و متن مشتری را هرگز.',
+  ],
+  'ops.support.customer_replied': [
+    'اعلان پیام تازهٔ مشتری در تیکت',
+    'وقتی مشتری در تیکتی موجود می‌نویسد به مدیران پشتیبانی فرستاده می‌شود؛ متن مشتری را هرگز.',
   ],
 };

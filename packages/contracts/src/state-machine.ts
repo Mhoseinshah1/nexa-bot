@@ -3,6 +3,7 @@ import { ORDER_MACHINE } from './commerce.js';
 import { PAYMENT_MACHINE } from './payment.js';
 import { SERVICE_MACHINE, OPERATION_MACHINE } from './provisioning.js';
 import { CUSTOMER_NOTIFICATION_MACHINE } from './customer-notifications.js';
+import { TICKET_MACHINE } from './tickets.js';
 
 /**
  * State machines as data.
@@ -163,4 +164,6 @@ export const STATE_MACHINES: readonly StateMachineDefinition<string, string>[] =
    * failure the validator looks for and the one a reader would not notice.
    */
   CUSTOMER_NOTIFICATION_MACHINE as StateMachineDefinition<string, string>,
+  // WP-A7: a support ticket. No terminal state — CLOSED is left by REOPEN.
+  TICKET_MACHINE as StateMachineDefinition<string, string>,
 ];

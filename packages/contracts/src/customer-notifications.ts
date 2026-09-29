@@ -225,6 +225,25 @@ export const CUSTOMER_NOTIFICATION_KINDS = [
    * payload (ADR 0030 §1).
    */
   'SERVICE_TRANSFER_RECEIVED',
+  /**
+   * WP-A7. Support replied in one of the customer's tickets. `ticket_messages.id` is the
+   * subject — ONE row per reply, so three replies are three facts, each told once.
+   *
+   * ## Why a reply's text is not a payload
+   *
+   * The text is variable, and ADR 0030 §1 refuses a producer-supplied payload: the lane must
+   * not become "send this customer some text". It does not. The producer passes a kind and a
+   * message id and nothing else, in the transaction that wrote the message; the dispatcher
+   * reads the ticket's number, its category and the message's text from the MESSAGE ROW at
+   * send time — the `SERVICE_REFUND_REQUEST_REJECTED` shape, whose reason is read from the
+   * request row. The text a customer is sent is therefore exactly the text stored in their
+   * ticket, and no caller can put anything else in front of them. Its one button —
+   * «مشاهده تیکت» — is derived from the subject by kind, never stored.
+   *
+   * The message row is the source of truth, so a failed or lost send loses nothing: the
+   * reply is in the ticket, which the customer opens from the bot.
+   */
+  'TICKET_REPLY',
 ] as const;
 export type CustomerNotificationKind = (typeof CUSTOMER_NOTIFICATION_KINDS)[number];
 export const customerNotificationKindSchema = z.enum(CUSTOMER_NOTIFICATION_KINDS);
@@ -341,6 +360,12 @@ export const CUSTOMER_NOTIFICATION_PRECONDITIONS: Readonly<
    * transfer's recipient, and SUPERSEDES the message when it is not.
    */
   SERVICE_TRANSFER_RECEIVED: true,
+  /*
+   * `false`: a reply that was written stays written — messages are append-only. A ticket
+   * closed after the reply does not make the reply untrue, and a late copy is still the
+   * answer the customer is waiting for.
+   */
+  TICKET_REPLY: false,
 };
 
 /**
@@ -399,6 +424,7 @@ export const CUSTOMER_NOTIFICATION_TEMPLATES: Readonly<
   SERVICE_REFUND_REQUEST_APPROVED: 'bot.service.refund_request_approved',
   SERVICE_REFUND_REQUEST_REJECTED: 'bot.service.refund_request_rejected',
   SERVICE_TRANSFER_RECEIVED: 'bot.service.transfer_received',
+  TICKET_REPLY: 'bot.ticket.support_replied',
 };
 
 /**

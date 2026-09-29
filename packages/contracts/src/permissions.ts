@@ -247,6 +247,19 @@ export const PERMISSIONS = [
   // Broadcasts
   p('broadcasts.send', 'Send a broadcast to customers', 'HIGH'),
 
+  /*
+   * Support tickets (WP-A7, `docs/wp-a7-tickets-audit.md`). Five keys, because reading a
+   * conversation, speaking in it, deciding who owns it, closing it and editing the
+   * categories customers choose from are five different authorities. Each action requires
+   * `tickets.view` (`PERMISSION_REQUIRES`): acting on a ticket nobody can open is unusable.
+   * MEDIUM, none higher: nothing here moves money or touches a provider.
+   */
+  p('tickets.view', 'View support tickets and their conversations', 'LOW'),
+  p('tickets.reply', 'Reply to a support ticket'),
+  p('tickets.assign', 'Assign a support ticket, set its priority and link its context'),
+  p('tickets.close', "Change a support ticket's status: close, reopen or mark it waiting"),
+  p('tickets.categories.edit', 'Create or edit support ticket categories'),
+
   // Reporting and logs
   p('reports.view', 'View reports', 'LOW'),
   p('reports.pii.view', 'View personal data inside reports', 'HIGH'),
@@ -366,6 +379,12 @@ export const ROLE_SEEDS: readonly RoleSeed[] = [
       // question, and an operator who cannot see the answer is an operator who
       // finds out during a disaster. Viewing is LOW; nothing else here is.
       'backup.view',
+      // WP-A7: the whole ticket desk, categories included.
+      'tickets.view',
+      'tickets.reply',
+      'tickets.assign',
+      'tickets.close',
+      'tickets.categories.edit',
     ],
   },
   {
@@ -418,6 +437,11 @@ export const ROLE_SEEDS: readonly RoleSeed[] = [
       'reports.view',
       // WP-A10: "which app, and where do I get it" is the question support answers most.
       'client_apps.view',
+      // WP-A7: answering tickets is this role's job. The categories are configuration.
+      'tickets.view',
+      'tickets.reply',
+      'tickets.assign',
+      'tickets.close',
     ],
   },
   {
@@ -567,6 +591,15 @@ export const PERMISSION_REQUIRES: Readonly<Record<string, PermissionKey>> = {
    * Holding the write without the read would be a second way to read it.
    */
   'users.trial.edit': 'users.view' as PermissionKey,
+  /*
+   * WP-A7. Every ticket action is taken FROM a ticket (or, for categories, from the
+   * inbox that lists them), which `tickets.view` reads. Holding the action alone would be
+   * a button on a page the holder cannot open.
+   */
+  'tickets.reply': 'tickets.view' as PermissionKey,
+  'tickets.assign': 'tickets.view' as PermissionKey,
+  'tickets.close': 'tickets.view' as PermissionKey,
+  'tickets.categories.edit': 'tickets.view' as PermissionKey,
 };
 
 /**

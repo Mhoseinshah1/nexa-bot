@@ -253,6 +253,8 @@ describe('the customer Telegram turn', () => {
       [CATALOGUE_FA['bot.menu.wallet'], CATALOGUE_FA['bot.menu.help']],
       // WP-A10: app downloads and connection guides, on a row of its own.
       [CATALOGUE_FA['bot.menu.apps']],
+      // WP-A7: «🎫 پشتیبانی / تیکت‌ها», on a row of its own.
+      [CATALOGUE_FA['bot.menu.tickets']],
     ]);
     // A REPLY keyboard, not an inline one: it carries no `callback_data`, which is why
     // it grants no authority and why a tap arrives as ordinary text.
@@ -263,9 +265,9 @@ describe('the customer Telegram turn', () => {
     // command-driven, which is the thing staging acceptance objected to.
     expect(markup?.one_time_keyboard).toBe(false);
 
-    // Exactly the five this release can perform. A Phase 7 button here would be a
-    // promise the product cannot keep.
-    expect(MAIN_MENU_BUTTONS).toHaveLength(5);
+    // Exactly the six this release can perform (WP-A10's apps and WP-A7's tickets
+    // included). A Phase 7 button here would be a promise the product cannot keep.
+    expect(MAIN_MENU_BUTTONS).toHaveLength(6);
   });
 
   it('still opens the management panel for a BLOCKED customer who is an administrator', async () => {

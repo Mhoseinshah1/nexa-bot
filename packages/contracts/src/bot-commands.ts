@@ -35,6 +35,11 @@ export const BOT_COMMANDS = [
    * apps and their download links — the same screen, not a second guide.
    */
   { command: 'apps', description: 'bot.command.apps' },
+  /*
+   * WP-A7: the customer's support tickets. `/paysupport` stays the support screen Telegram
+   * requires, and that screen links here.
+   */
+  { command: 'tickets', description: 'bot.command.tickets' },
 ] as const;
 
 export type BotCommandName = (typeof BOT_COMMANDS)[number]['command'];
@@ -85,6 +90,8 @@ export const MAIN_MENU_ROWS: readonly (readonly BotMenuButton[])[] = [
   ],
   // WP-A10: a row of its own — the label is long, and it is a place, like the four above.
   [{ label: 'bot.menu.apps', command: 'apps' }],
+  // WP-A7: the ticket desk, on a row of its own.
+  [{ label: 'bot.menu.tickets', command: 'tickets' }],
 ];
 
 /** Every menu button, flattened. The rows are layout; this is the set. */

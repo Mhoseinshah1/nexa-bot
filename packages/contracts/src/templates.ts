@@ -8884,6 +8884,639 @@ export const TEMPLATES = [
       },
     ],
   },
+  /*
+   * WP-A7 — the support ticket system (`docs/wp-a7-tickets-audit.md`). The customer's
+   * flow in the bot, the reply notification the lane renders from the message row, the
+   * five default categories, and the two notifications support receives.
+   */
+  {
+    key: 'bot.command.tickets',
+    description:
+      'WP-A7: the one-line description Telegram shows beside /tickets in its command menu.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.menu.tickets',
+    description:
+      "WP-A7: the main-menu button that opens the customer's support tickets. Routes exactly as /tickets.",
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.support.tickets_button',
+    description:
+      "WP-A7: the support screen's button (also /paysupport's) that opens the customer's tickets.",
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.ticket.list',
+    description: "WP-A7: the heading of the customer's ticket list; one button per ticket follows.",
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.ticket.list_empty',
+    description: "WP-A7: the customer's ticket list when they have none.",
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.ticket.list_item_button',
+    description: "WP-A7: one ticket in the customer's list: its status, number and category.",
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'status',
+        type: 'STRING',
+        description: 'The ticket status label (one of the bot.ticket.status_* texts).',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'number',
+        type: 'NUMBER',
+        description: 'The ticket number.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'category',
+        type: 'STRING',
+        description: "The ticket's category title.",
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.ticket.new_button',
+    description: 'WP-A7: the button that starts a new ticket.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.ticket.back_button',
+    description: "WP-A7: the button back to the customer's ticket list.",
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.ticket.choose_category',
+    description:
+      "WP-A7: asks the customer to choose a new ticket's category; one button per active category follows.",
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.ticket.category_button',
+    description: 'WP-A7: one category button, as the operator named it.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'title',
+        type: 'STRING',
+        description: "The category's title.",
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.ticket.no_categories',
+    description: 'WP-A7: no active category exists, so no ticket can be opened now.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.ticket.message_prompt',
+    description:
+      "WP-A7: opens the window that reads a new ticket's first message (text, or a photo or document with a caption).",
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'category',
+        type: 'STRING',
+        description: "The chosen category's title.",
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'max',
+        type: 'NUMBER',
+        description: 'The longest message, in characters.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.ticket.reply_prompt',
+    description: "WP-A7: opens the window that reads the customer's reply to one ticket.",
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'number',
+        type: 'NUMBER',
+        description: 'The ticket number.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'max',
+        type: 'NUMBER',
+        description: 'The longest message, in characters.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.ticket.message_invalid',
+    description: 'WP-A7: the message was empty or too long; the window stays open for another try.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'max',
+        type: 'NUMBER',
+        description: 'The longest message, in characters.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.ticket.attachment_too_large',
+    description:
+      'WP-A7: the attached file is over the size limit; nothing was saved and the window stays open.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'maxBytes',
+        type: 'BYTES',
+        description: 'The largest accepted file.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.ticket.attachment_type_refused',
+    description:
+      "WP-A7: the attached file's type is not accepted; nothing was saved and the window stays open.",
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.ticket.created',
+    description: 'WP-A7: the new ticket was recorded.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'number',
+        type: 'NUMBER',
+        description: 'The ticket number.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.ticket.reply_sent',
+    description: "WP-A7: the customer's reply was added to the ticket.",
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'number',
+        type: 'NUMBER',
+        description: 'The ticket number.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.ticket.open_limit',
+    description: 'WP-A7: the customer already has the most open tickets allowed.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'max',
+        type: 'NUMBER',
+        description: 'How many open tickets a customer may have.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.ticket.message_limit',
+    description: 'WP-A7: the ticket holds the most messages allowed.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.ticket.view',
+    description:
+      "WP-A7: one ticket's conversation in the bot: its heading and its latest messages, each rendered from a bot.ticket.line_* text.",
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'number',
+        type: 'NUMBER',
+        description: 'The ticket number.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'category',
+        type: 'STRING',
+        description: "The ticket's category title.",
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'status',
+        type: 'STRING',
+        description: 'The ticket status label.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'olderLine',
+        type: 'STRING',
+        description: 'How many older messages are not shown. Absent when none.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'conversation',
+        type: 'STRING',
+        description: 'The latest messages, oldest first.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.ticket.view_older',
+    description: 'WP-A7: the line saying how many older messages the conversation view leaves out.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'count',
+        type: 'NUMBER',
+        description: 'How many older messages are not shown.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.ticket.line_customer',
+    description: "WP-A7: one of the customer's own messages in the conversation view.",
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'at',
+        type: 'DATETIME',
+        description: 'When it was sent.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'text',
+        type: 'STRING',
+        description:
+          'The message, possibly shortened, with an attachment marker when it carries a file.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.ticket.line_support',
+    description: "WP-A7: one of support's messages in the conversation view.",
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'at',
+        type: 'DATETIME',
+        description: 'When it was sent.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'text',
+        type: 'STRING',
+        description: 'The message, possibly shortened.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.ticket.line_closed_by_customer',
+    description: 'WP-A7: the conversation records that the customer closed the ticket.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'at',
+        type: 'DATETIME',
+        description: 'When it was closed.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.ticket.line_closed_by_support',
+    description: 'WP-A7: the conversation records that support closed the ticket.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'at',
+        type: 'DATETIME',
+        description: 'When it was closed.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.ticket.line_reopened',
+    description: 'WP-A7: the conversation records that support reopened the ticket.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'at',
+        type: 'DATETIME',
+        description: 'When it was reopened.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.ticket.attachment_marker',
+    description: 'WP-A7: marks a message in the conversation view that carries a file.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.ticket.reply_button',
+    description: 'WP-A7: the button that opens the reply window for a ticket.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.ticket.close_button',
+    description: 'WP-A7: the button that asks whether to close a ticket.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.ticket.close_ask',
+    description:
+      'WP-A7: the question before a customer closes their ticket; nothing is written yet.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'number',
+        type: 'NUMBER',
+        description: 'The ticket number.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.ticket.close_confirm_button',
+    description: 'WP-A7: the one button that closes the ticket.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.ticket.closed',
+    description: 'WP-A7: the customer closed their ticket.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'number',
+        type: 'NUMBER',
+        description: 'The ticket number.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.ticket.already_closed',
+    description: 'WP-A7: a message or close for a ticket that is already closed.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.ticket.not_found',
+    description: "WP-A7: the ticket is not the customer's own, or does not exist.",
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.ticket.status_open',
+    description: 'WP-A7: the label of an OPEN ticket.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.ticket.status_waiting_for_customer',
+    description: 'WP-A7: the label of a ticket waiting for the customer.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.ticket.status_waiting_for_support',
+    description: 'WP-A7: the label of a ticket waiting for support.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.ticket.status_closed',
+    description: 'WP-A7: the label of a CLOSED ticket.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.ticket.support_replied',
+    description:
+      "WP-A7: the customer notification for support's reply (TICKET_REPLY). Every value is read at send time from the ticket message the notification names; the one button opens the ticket.",
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'number',
+        type: 'NUMBER',
+        description: 'The ticket number.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'category',
+        type: 'STRING',
+        description: "The ticket's category title.",
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'text',
+        type: 'STRING',
+        description: "Support's reply, exactly as stored in the ticket.",
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.ticket.view_button',
+    description: "WP-A7: the notification's button that opens the ticket.",
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.ticket.category_default_1',
+    description:
+      "WP-A7: default ticket category 1, copied into a tenant's categories the first time they are read. An override here is the tenant's default.",
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.ticket.category_default_2',
+    description:
+      "WP-A7: default ticket category 2, copied into a tenant's categories the first time they are read. An override here is the tenant's default.",
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.ticket.category_default_3',
+    description:
+      "WP-A7: default ticket category 3, copied into a tenant's categories the first time they are read. An override here is the tenant's default.",
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.ticket.category_default_4',
+    description:
+      "WP-A7: default ticket category 4, copied into a tenant's categories the first time they are read. An override here is the tenant's default.",
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.ticket.category_default_5',
+    description:
+      "WP-A7: default ticket category 5, copied into a tenant's categories the first time they are read. An override here is the tenant's default.",
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'ops.support.ticket_opened',
+    description:
+      "WP-A7: to support — a customer opened a ticket. Names the ticket and the customer; never the customer's words, which are read in the Web Admin.",
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'number',
+        type: 'NUMBER',
+        description: 'The ticket number.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'category',
+        type: 'STRING',
+        description: "The ticket's category title.",
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'telegramId',
+        type: 'STRING',
+        description: "The customer's numeric Telegram id.",
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'username',
+        type: 'STRING',
+        description: "The customer's Telegram username, or a dash.",
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'displayName',
+        type: 'STRING',
+        description: "The customer's display name, or a dash.",
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'at',
+        type: 'DATETIME',
+        description: 'When the message was written.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'ops.support.customer_replied',
+    description:
+      "WP-A7: to support — a customer wrote in an existing ticket. Names the ticket and the customer; never the customer's words.",
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'number',
+        type: 'NUMBER',
+        description: 'The ticket number.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'category',
+        type: 'STRING',
+        description: "The ticket's category title.",
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'telegramId',
+        type: 'STRING',
+        description: "The customer's numeric Telegram id.",
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'username',
+        type: 'STRING',
+        description: "The customer's Telegram username, or a dash.",
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'displayName',
+        type: 'STRING',
+        description: "The customer's display name, or a dash.",
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'at',
+        type: 'DATETIME',
+        description: 'When the message was written.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
 ] as const satisfies readonly TemplateDefinition[];
 
 export type TemplateKey = (typeof TEMPLATES)[number]['key'];

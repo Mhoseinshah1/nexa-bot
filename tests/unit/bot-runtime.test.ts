@@ -191,7 +191,8 @@ describe('a Telegram turn, decided before any I/O', () => {
   });
 
   // The title is cited by `docs/phase4j-falsification.md` (F4J-15) and kept as written;
-  // WP-A10's apps entry made the set five, which the assertions below pin.
+  // WP-A10's apps entry and WP-A7's tickets entry made the set six, which the assertions
+  // below pin.
   it('offers exactly the four top-level actions this release can perform', () => {
     /*
      * A keyboard is a PROMISE. The legacy system's menu described a product that did
@@ -207,6 +208,8 @@ describe('a Telegram turn, decided before any I/O', () => {
       ['wallet', 'help'],
       // WP-A10: «📱 دانلود برنامه و آموزش اتصال», which `/apps` answers.
       ['apps'],
+      // WP-A7: the ticket desk, on a row of its own.
+      ['tickets'],
     ]);
     expect(MAIN_MENU_BUTTONS.map((button) => button.label)).toEqual([
       'bot.menu.catalog',
@@ -214,6 +217,7 @@ describe('a Telegram turn, decided before any I/O', () => {
       'bot.menu.wallet',
       'bot.menu.help',
       'bot.menu.apps',
+      'bot.menu.tickets',
     ]);
     // And every label renders. A key with no catalogue entry is a blank button.
     for (const button of MAIN_MENU_BUTTONS) {
@@ -892,7 +896,39 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.start.welcome_back',
       'bot.support.contact',
       'bot.support.contact_button',
+      /*
+       * WP-A7: the ticket desk. The list, the chooser, the two prompts and their
+       * refusals, the conversation view, the close question, and the reply's buttons —
+       * every one reached by a button or a window this head draws.
+       */
+      'bot.support.tickets_button',
       'bot.support.unconfigured',
+      'bot.ticket.already_closed',
+      'bot.ticket.attachment_too_large',
+      'bot.ticket.attachment_type_refused',
+      'bot.ticket.back_button',
+      'bot.ticket.category_button',
+      'bot.ticket.choose_category',
+      'bot.ticket.close_ask',
+      'bot.ticket.close_button',
+      'bot.ticket.close_confirm_button',
+      'bot.ticket.closed',
+      'bot.ticket.created',
+      'bot.ticket.list',
+      'bot.ticket.list_empty',
+      'bot.ticket.list_item_button',
+      'bot.ticket.message_invalid',
+      'bot.ticket.message_limit',
+      'bot.ticket.message_prompt',
+      'bot.ticket.new_button',
+      'bot.ticket.no_categories',
+      'bot.ticket.not_found',
+      'bot.ticket.open_limit',
+      'bot.ticket.reply_button',
+      'bot.ticket.reply_prompt',
+      'bot.ticket.reply_sent',
+      'bot.ticket.view',
+      'bot.ticket.view_button',
       'bot.trial.button',
       'bot.trial.issued',
       'bot.trial.unavailable',

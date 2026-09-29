@@ -420,6 +420,7 @@ export class CustomerService {
     const search = query.search ?? {};
     const searching =
       search.telegramUserId !== undefined ||
+      search.username !== undefined ||
       (search.usernamePrefix !== undefined && search.usernamePrefix !== '');
     if (searching) {
       await this.deps.guard.check(scope, actor, CUSTOMER_SEARCH_PERMISSION);

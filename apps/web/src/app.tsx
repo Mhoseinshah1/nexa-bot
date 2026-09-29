@@ -24,6 +24,7 @@ import { BotsPage } from './pages/bots';
 import { PaymentGatewaysPage } from './pages/payment-gateways';
 import { SupportPage } from './pages/support';
 import { ClientAppsPage } from './pages/client-apps';
+import { TicketDetailPage, TicketsPage } from './pages/tickets';
 import { ProductDetailPage, ProductsPage } from './pages/products';
 import { ProductCategoriesPage } from './pages/product-categories';
 import { ExtraDevicesPage } from './pages/extra-devices';
@@ -215,6 +216,18 @@ export const NAV: readonly NavEntry[] = [
     // ANY of the two: the page is the services list AND the customers' refund-request queue
     // (WP19), and a finance reviewer may hold `refunds.view` alone (Codex review of #83).
     permission: ['services.view', 'refunds.view'],
+    group: 'web.navgroup_sales',
+  },
+  {
+    /*
+     * WP-A7: the support ticket inbox. `tickets.view`, and only that — every write on the
+     * page (reply, assign, status, categories) opens from a row the view key lists.
+     */
+    id: 'tickets',
+    path: '/tickets',
+    label: 'web.nav_tickets',
+    icon: 'message',
+    permission: 'tickets.view',
     group: 'web.navgroup_sales',
   },
   {
@@ -765,6 +778,41 @@ export function resolve(
       ),
       crumbs: [nav('services'), { label: t('web.service_detail') }],
       title: t('web.service_detail'),
+    };
+  }
+
+  // WP-A7: the ticket inbox and one conversation.
+  if (route.path === '/tickets') {
+    return {
+      element: (
+        <TicketsPage
+          route={route}
+          denied={!may('tickets.view')}
+          mayAssign={may('tickets.assign')}
+          mayEditCategories={may('tickets.categories.edit')}
+        />
+      ),
+      crumbs: [{ label: t('web.tickets_title') }],
+      title: t('web.tickets_title'),
+    };
+  }
+
+  const ticket = match('/tickets/:id', route.path);
+  if (ticket !== null) {
+    return {
+      element: (
+        // Keyed by the ticket id, for the reason the service detail gives.
+        <TicketDetailPage
+          key={ticket['id'] ?? ''}
+          id={ticket['id'] ?? ''}
+          denied={!may('tickets.view')}
+          mayReply={may('tickets.reply')}
+          mayAssign={may('tickets.assign')}
+          mayClose={may('tickets.close')}
+        />
+      ),
+      crumbs: [nav('tickets'), { label: t('web.ticket_detail') }],
+      title: t('web.ticket_detail'),
     };
   }
 
