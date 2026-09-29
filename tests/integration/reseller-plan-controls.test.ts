@@ -354,7 +354,7 @@ describe('reseller plan controls and the monthly minimum (round N, package D)', 
         effectiveGrants: [{ kind: 'PANEL', subject: null }],
       });
       expect(policy.botBasis).toBe('ANY_BOT');
-      const decisions = new Map(policy.products.map((p) => [p.productId, p.decision]));
+      const decisions = new Map((policy.products ?? []).map((p) => [p.productId, p.decision]));
       expect(decisions.get(granted)).toEqual({ allowed: true });
       expect(decisions.get(other)).toEqual({ allowed: false, dimension: 'CATALOGUE' });
       expect(policy.pricing).toEqual({
@@ -414,6 +414,28 @@ describe('reseller plan controls and the monthly minimum (round N, package D)', 
           { dimension: 'PANEL', grants: [{ kind: 'PRODUCT', subject: granted }] },
         ]),
       ).rejects.toEqual(refusal(COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID));
+    });
+
+    /*
+     * Codex review of PR #115, finding 1: product titles, statuses and ids are the
+     * catalogue's, gated by catalog.view in ProductService.list. A caller holding
+     * resellers.view without it (the built-in finance role) reads the rest of the policy
+     * and no product.
+     */
+    it('omits the product preview for a caller without catalog.view, and keeps the rest', async () => {
+      await product(100_000n);
+      await register(resellerOne, await tier());
+      const finance = adminActorFor(
+        await createAdmin(ctx.container, tenantA, { username: 'finance-p', roleKeys: ['finance'] }),
+      );
+      const seen = await ctx.container.resellersAdmin.policy(tenantA, finance, resellerOne);
+      expect(seen.products).toBeNull();
+      expect(seen.productsComplete).toBe(false);
+      expect(seen.dimensions).toHaveLength(4);
+      expect(seen.tier.id).toBeDefined();
+      // The owner, who holds catalog.view, sees the section.
+      const full = await ctx.container.resellersAdmin.policy(tenantA, owner, resellerOne);
+      expect(full.products).toHaveLength(1);
     });
 
     it('keeps another tenant out of the override and the preview', async () => {
@@ -565,7 +587,17 @@ describe('reseller plan controls and the monthly minimum (round N, package D)', 
           creditLimit: current.creditLimit,
         },
       });
-      expect((await progress()).rows[0]).toMatchObject({ state: 'NOT_ACTIVE', remaining: null });
+      /*
+       * Codex review of PR #115, finding 3: no minimum applies to a suspended reseller, so
+       * none is reported — null and NONE, not the tier's figure beside NOT_ACTIVE.
+       */
+      expect((await progress()).rows[0]).toMatchObject({
+        state: 'NOT_ACTIVE',
+        minimum: null,
+        source: 'NONE',
+        remaining: null,
+        progressBasisPoints: null,
+      });
     });
 
     it('charges resellers.view AND orders.view for the progress read', async () => {
@@ -610,13 +642,23 @@ describe('reseller plan controls and the monthly minimum (round N, package D)', 
     const at = (ms: number): Clock => ({ now: () => new Date(ms) });
 
     /** The sweep with the test's clock, flags and reminder days; everything else production. */
-    function sweep(clock: Clock, flags: Partial<Record<FeatureFlagKey, boolean>>, days = 3) {
-      const db = ctx.container.database.db;
+    function sweep(
+      clock: Clock,
+      flags: Partial<Record<FeatureFlagKey, boolean>>,
+      days = 3,
+      options: {
+        readonly context?: TestContext;
+        readonly bounds?: { readonly pageSize: number; readonly noticesPerPass: number };
+      } = {},
+    ) {
+      const c = options.context ?? ctx;
+      const db = c.container.database.db;
       return new ResellerMinimumService({
         resellers: new DrizzleResellerRepository(db),
         sales: new DrizzleReportingRepository(db),
         periods,
-        presentation: new CachedTenantPresentationReader(ctx.container.tenants, clock),
+        presentation: new CachedTenantPresentationReader(c.container.tenants, clock),
+        ...(options.bounds === undefined ? {} : { sweepBounds: options.bounds }),
         settings: {
           valueOf: async <T>(_scope: unknown, settingKey: SettingKey) =>
             (settingKey === 'reminders.reseller_minimum_days'
@@ -629,13 +671,13 @@ describe('reseller plan controls and the monthly minimum (round N, package D)', 
         notifier: new CustomerNotifier({
           notifications: new DrizzleCustomerNotificationRepository(db),
           bots: { botFor: async () => BOT_A },
-          ids: ctx.container.ids,
+          ids: c.container.ids,
         }),
-        guard: ctx.container.guard,
-        scopeActivity: ctx.container.tenants,
-        uow: ctx.container.uow,
+        guard: c.container.guard,
+        scopeActivity: c.container.tenants,
+        uow: c.container.uow,
         clock,
-        ids: ctx.container.ids,
+        ids: c.container.ids,
       }).runOnce(tenantA);
     }
 
@@ -819,6 +861,56 @@ describe('reseller plan controls and the monthly minimum (round N, package D)', 
         { kind: 'RESELLER_MINIMUM_REMINDER', customer_id: resellerOne, state: 'SUPERSEDED' },
       ]);
     });
+
+    /*
+     * Codex review of PR #115, finding 2: the sweep walks every active reseller in keyset
+     * pages and bounds the notices of one pass, so a reseller late in creation order is
+     * never starved behind the oldest prefix, and a capped pass still makes progress.
+     */
+    it('reaches every reseller across keyset pages, a bounded number of notices per pass', async () => {
+      const tierId = await tier();
+      await setTierMinimum(tierId, 100_000n);
+      const everyone = [resellerOne, resellerTwo];
+      for (const telegram of ['960011', '960012', '960013'])
+        everyone.push(await customer(telegram));
+      for (const one of everyone) await register(one, tierId);
+      const window = await inReminderWindow();
+      const bounds = { pageSize: 2, noticesPerPass: 3 };
+      const flags = { reseller_minimum_reminders: true };
+
+      expect(await sweep(at(window), flags, 3, { bounds })).toBe(3);
+      expect(await sweep(at(window), flags, 3, { bounds })).toBe(2);
+      expect(await sweep(at(window), flags, 3, { bounds })).toBe(0);
+      expect((await noticeRows()).map((r) => r.customer_id).sort()).toEqual([...everyone].sort());
+    });
+
+    /*
+     * Codex review of PR #115, finding 4: the sweep holds one pool connection for its whole
+     * transaction, so every read it makes — the tenant's presentation, the sales aggregate —
+     * must go through that transaction. With `DATABASE_POOL_MAX=1` (the config schema's
+     * minimum) a second pool read would wait for ever; this raced timeout is the failure.
+     */
+    it('completes on a one-connection pool: no read leaves the sweep’s own transaction', async () => {
+      await belowAndAchieved();
+      const window = await inReminderWindow();
+      const one = await createTestContext({ DATABASE_POOL_MAX: '1' });
+      try {
+        const passed = await Promise.race([
+          sweep(
+            at(window),
+            { reseller_minimum_reminders: true, reseller_minimum_achieved_notices: true },
+            3,
+            { context: one },
+          ),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('the sweep starved its own pool')), 8_000),
+          ),
+        ]);
+        expect(passed).toBe(2);
+      } finally {
+        await one.close();
+      }
+    }, 20_000);
 
     it('supersedes a waiting reminder whose minimum an operator changed, or whose reseller was suspended', async () => {
       await belowAndAchieved();

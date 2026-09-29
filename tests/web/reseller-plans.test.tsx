@@ -280,6 +280,30 @@ describe('the reseller plans page', () => {
     expect(text).not.toContain('CATALOGUE');
   });
 
+  /*
+   * Codex review of PR #115, finding 1: without catalog.view the server omits the product
+   * section (null). The card says a permission is missing — never "no products".
+   */
+  it('states a missing catalog.view when the server omits the product preview', async () => {
+    stubApi([
+      ...routes().filter((route) => !route.url.endsWith('/policy')),
+      {
+        url: `/resellers/${CUSTOMER_ID}/policy`,
+        body: { policy: policy({ products: null, productsComplete: false }) },
+      },
+    ]);
+    render();
+    fireEvent.click(await screen.findByRole('button', { name: 'سیاست مؤثر' }));
+    const card =
+      (await screen.findByText('سیاست مؤثر نماینده')).closest('section') ?? document.body;
+    await within(card as HTMLElement).findByText(/catalog\.view/u);
+    const text = card.textContent ?? '';
+    expect(text).not.toContain('هنوز محصولی ساخته نشده است');
+    expect(text).not.toContain('فقط نخستین صفحهٔ محصولات');
+    // The rest of the policy is still drawn.
+    expect(text).toContain('نرخ سطح');
+  });
+
   it('sends only the dimensions marked own, and never an inherited one', async () => {
     const api = stubApi(routes());
     render();

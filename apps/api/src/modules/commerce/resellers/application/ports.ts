@@ -1,4 +1,5 @@
 import type {
+  Calendar,
   CurrencyCode,
   Money,
   OrderPurpose,
@@ -290,6 +291,26 @@ export interface ResellerRepository {
     limit: number,
     tx?: unknown,
   ): Promise<readonly ResellerListing[]>;
+
+  /**
+   * ACTIVE resellers, oldest first, one keyset page at a time on `(created_at, id)` — the
+   * notice sweep walks every page, so no reseller is starved behind a fixed prefix.
+   */
+  pageActive(
+    scope: TenantContext,
+    after: ResellerCursor | null,
+    limit: number,
+    tx: unknown,
+  ): Promise<{ readonly items: readonly ResellerListing[]; readonly next: ResellerCursor | null }>;
+
+  /**
+   * The tenant's display timezone and calendar, read THROUGH the caller's transaction, so a
+   * sweep holding a pool connection never asks the pool for a second one.
+   */
+  presentationOf(
+    scope: TenantContext,
+    tx: unknown,
+  ): Promise<{ readonly timezone: string; readonly calendar: Calendar }>;
 
   /** The notices already raised for a month, as `${customerId}:${kind}`. */
   noticesIn(scope: TenantContext, periodStart: Date, tx: unknown): Promise<ReadonlySet<string>>;

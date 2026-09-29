@@ -27,21 +27,36 @@ import type { TemplatePresentation } from '../../../control/templates/applicatio
 import type { CustomerNotifier } from '../../messaging/application/customer-notifier.js';
 import { ORDER_VIEW_PERMISSION } from '../../orders/application/order.service.js';
 import { effectiveMonthlyMinimum, minimumStanding } from '../domain/monthly-minimum.js';
-import type { ResellerRepository } from './ports.js';
+import type { ResellerCursor, ResellerRepository } from './ports.js';
 import { RESELLERS_VIEW_PERMISSION } from './reseller-admin.service.js';
 
-/** The sweep's bound on resellers per pass: every one of a realistic tenant, and no more. */
-const SWEEP_LIMIT = 2_000;
+/**
+ * The sweep's bounds (Codex review of PR #115). It walks EVERY active reseller one keyset
+ * page at a time, so no reseller waits behind a fixed prefix; and it raises at most
+ * `noticesPerPass` notices in one pass so one transaction stays bounded. A capped pass still
+ * makes progress: what it raised is skipped by the next pass, which raises the next batch.
+ */
+export const RESELLER_MINIMUM_SWEEP_PAGE = 500;
+export const RESELLER_MINIMUM_SWEEP_NOTICES_PER_PASS = 500;
 
 export interface ResellerMinimumServiceDeps {
-  readonly resellers: Pick<ResellerRepository, 'listAll' | 'noticesIn' | 'raiseNotice'>;
-  /** WP12's reseller sales, by the one shared statement (`resellerSalesStatement`). */
+  readonly resellers: Pick<
+    ResellerRepository,
+    'listAll' | 'pageActive' | 'presentationOf' | 'noticesIn' | 'raiseNotice'
+  >;
+  /**
+   * WP12's reseller sales, by the one shared statement (`resellerSalesStatement`). The sweep
+   * passes its transaction, so the aggregate runs on the connection it already holds.
+   */
   readonly sales: {
     resellerSalesIn(
       scope: TenantContext,
       window: { readonly from: Date; readonly to: Date },
+      tx?: unknown,
     ): Promise<ReadonlyMap<string, ReadonlyMap<CurrencyCode, bigint>>>;
   };
+  /** Overridable in tests only; the defaults are the constants above. */
+  readonly sweepBounds?: { readonly pageSize: number; readonly noticesPerPass: number };
   /** The reports' own month boundaries, in the tenant's calendar (`TenantMonthlyPeriods`). */
   readonly periods: {
     month(
@@ -51,8 +66,13 @@ export interface ResellerMinimumServiceDeps {
     ): MonthlyPeriod;
     reminderStart(now: Date, days: number, presentation: TemplatePresentation): Date;
   };
+  /**
+   * The operator's read (`progress`) only, outside any transaction. The sweep reads the
+   * tenant's presentation through its own transaction (`resellers.presentationOf`): the
+   * cached reader ignores `tx` and reads on the pool.
+   */
   readonly presentation: {
-    presentationFor(scope: ScopeContext, tx?: unknown): Promise<TemplatePresentation>;
+    presentationFor(scope: ScopeContext): Promise<TemplatePresentation>;
   };
   /** Readers only: a background loop that can write a setting could turn itself on. */
   readonly settings: {
@@ -134,10 +154,15 @@ export class ResellerMinimumService {
     });
 
     const rows = listings.slice(0, RESELLER_MINIMUM_PROGRESS_MAX).map((listing) => {
-      const { minimum, source } = effectiveMonthlyMinimum(
-        listing.tier.monthlyMinimum,
-        listing.monthlyMinimum,
-      );
+      /*
+       * A SUSPENDED reseller is an ordinary customer (R1): no minimum applies, so none is
+       * reported — `minimum: null`, `source: NONE` — whatever the tier or row still stores
+       * (Codex review of PR #115). The contract says the minimum is null when none applies.
+       */
+      const { minimum, source } =
+        listing.status === 'ACTIVE'
+          ? effectiveMonthlyMinimum(listing.tier.monthlyMinimum, listing.monthlyMinimum)
+          : { minimum: null, source: 'NONE' as const };
       // Only sales in the minimum's own currency count toward it (R8's rule, for credit).
       const currency = minimum?.currency ?? selling;
       const achieved = sales.get(listing.customerId)?.get(currency) ?? 0n;
@@ -200,7 +225,8 @@ export class ResellerMinimumService {
       );
       if (!remind && !achieve) return 0;
 
-      const presentation = await this.deps.presentation.presentationFor(scope, tx);
+      // Through THIS transaction: never a second pool connection while holding one.
+      const presentation = await this.deps.resellers.presentationOf(scope, tx);
       const period = this.deps.periods.month('THIS_MONTH', now, presentation);
       const days = await this.deps.settings.valueOf<number>(
         scope,
@@ -212,61 +238,67 @@ export class ResellerMinimumService {
         now.getTime() >= this.deps.periods.reminderStart(now, days, presentation).getTime();
       if (!reminderDue && !achieve) return 0;
 
-      const candidates = (
-        await this.deps.resellers.listAll(scope, { activeOnly: true }, SWEEP_LIMIT, tx)
-      ).flatMap((listing) => {
-        const { minimum } = effectiveMonthlyMinimum(
-          listing.tier.monthlyMinimum,
-          listing.monthlyMinimum,
-        );
-        return minimum === null ? [] : [{ customerId: listing.customerId, minimum }];
-      });
-      if (candidates.length === 0) return 0;
-
+      const pageSize = this.deps.sweepBounds?.pageSize ?? RESELLER_MINIMUM_SWEEP_PAGE;
+      const cap = this.deps.sweepBounds?.noticesPerPass ?? RESELLER_MINIMUM_SWEEP_NOTICES_PER_PASS;
       const told = await this.deps.resellers.noticesIn(scope, period.start, tx);
-      const sales = await this.deps.sales.resellerSalesIn(scope, {
-        from: period.start,
-        to: period.end,
-      });
+      const sales = await this.deps.sales.resellerSalesIn(
+        scope,
+        { from: period.start, to: period.end },
+        tx,
+      );
 
       let queued = 0;
-      for (const { customerId, minimum } of candidates) {
-        const achieved = sales.get(customerId)?.get(minimum.currency) ?? 0n;
-        const kind: ResellerMinimumNoticeKind | null =
-          achieved >= minimum.amountMinor
-            ? achieve
-              ? 'ACHIEVED'
-              : null
-            : reminderDue
-              ? 'REMINDER'
-              : null;
-        if (kind === null || told.has(`${customerId}:${kind}`)) continue;
-        const id = this.deps.ids.uuid();
-        const written = await this.deps.resellers.raiseNotice(
-          scope,
-          {
-            id,
-            customerId,
-            kind,
-            periodStart: period.start,
-            periodEnd: period.end,
-            minimum,
-            achieved,
-          },
-          now,
-          tx,
-        );
-        if (!written) continue;
-        const notification =
-          kind === 'REMINDER' ? 'RESELLER_MINIMUM_REMINDER' : 'RESELLER_MINIMUM_ACHIEVED';
-        // The notice is written whether or not the reseller can be reached, so a reseller
-        // with no bot link is not re-derived every pass; `notify` answers false for them.
-        if (
-          await this.deps.notifier.notify(scope, customerId as UserId, notification, id, now, tx)
-        ) {
-          queued += 1;
+      let raised = 0;
+      let cursor: ResellerCursor | null = null;
+      do {
+        const page = await this.deps.resellers.pageActive(scope, cursor, pageSize, tx);
+        cursor = page.next;
+        for (const listing of page.items) {
+          if (raised >= cap) return queued;
+          const { minimum } = effectiveMonthlyMinimum(
+            listing.tier.monthlyMinimum,
+            listing.monthlyMinimum,
+          );
+          if (minimum === null) continue;
+          const customerId = listing.customerId;
+          const achieved = sales.get(customerId)?.get(minimum.currency) ?? 0n;
+          const kind: ResellerMinimumNoticeKind | null =
+            achieved >= minimum.amountMinor
+              ? achieve
+                ? 'ACHIEVED'
+                : null
+              : reminderDue
+                ? 'REMINDER'
+                : null;
+          if (kind === null || told.has(`${customerId}:${kind}`)) continue;
+          const id = this.deps.ids.uuid();
+          const written = await this.deps.resellers.raiseNotice(
+            scope,
+            {
+              id,
+              customerId,
+              kind,
+              periodStart: period.start,
+              periodEnd: period.end,
+              minimum,
+              achieved,
+            },
+            now,
+            tx,
+          );
+          if (!written) continue;
+          raised += 1;
+          const notification =
+            kind === 'REMINDER' ? 'RESELLER_MINIMUM_REMINDER' : 'RESELLER_MINIMUM_ACHIEVED';
+          // The notice is written whether or not the reseller can be reached, so a reseller
+          // with no bot link is not re-derived every pass; `notify` answers false for them.
+          if (
+            await this.deps.notifier.notify(scope, customerId as UserId, notification, id, now, tx)
+          ) {
+            queued += 1;
+          }
         }
-      }
+      } while (cursor !== null);
       return queued;
     });
   }

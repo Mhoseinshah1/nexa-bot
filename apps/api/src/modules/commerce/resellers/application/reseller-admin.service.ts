@@ -61,6 +61,7 @@ import {
   type AuditHistoryRecord,
 } from '../../../platform/audit/application/ports.js';
 import { ORDER_VIEW_PERMISSION } from '../../orders/application/order.service.js';
+import { PRODUCT_VIEW_PERMISSION } from '../../catalog/application/product.service.js';
 import type { WalletRepository } from '../../wallet/application/ports.js';
 import { WALLET_VIEW_PERMISSION } from '../../wallet/application/wallet.service.js';
 import {
@@ -167,14 +168,17 @@ export interface ResellerPolicyRecord {
     readonly source: ResellerMinimumSource;
   };
   readonly botBasis: 'ANY_BOT' | 'GRANTED_BOT' | 'NO_BOT';
-  readonly products: readonly {
-    readonly productId: string;
-    readonly title: string;
-    readonly status: ProductStatus;
-    readonly categoryId: string | null;
-    readonly panelId: string | null;
-    readonly decision: EntitlementDecision;
-  }[];
+  /** Null when the caller does not hold `catalog.view` (the catalogue's own gate). */
+  readonly products:
+    | readonly {
+        readonly productId: string;
+        readonly title: string;
+        readonly status: ProductStatus;
+        readonly categoryId: string | null;
+        readonly panelId: string | null;
+        readonly decision: EntitlementDecision;
+      }[]
+    | null;
   readonly productsComplete: boolean;
 }
 
@@ -712,7 +716,9 @@ export class ResellerAdminService {
       input.idempotencyKey,
       requestHash,
     );
-    if (replay !== null) return this.policyOf(scope, replay.customerId);
+    if (replay !== null) {
+      return this.policyOf(scope, replay.customerId, await this.mayViewCatalog(scope, actor));
+    }
 
     const now = this.deps.clock.now();
     await runAuthorizedMutation(
@@ -745,7 +751,7 @@ export class ResellerAdminService {
         await this.remember(scope, input.idempotencyKey, requestHash, { customerId }, tx);
       },
     );
-    return this.policyOf(scope, customerId);
+    return this.policyOf(scope, customerId, await this.mayViewCatalog(scope, actor));
   }
 
   /**
@@ -759,10 +765,28 @@ export class ResellerAdminService {
     rawCustomerId: string,
   ): Promise<ResellerPolicyRecord> {
     await this.deps.guard.check(scope, actor, RESELLERS_VIEW_PERMISSION);
-    return this.policyOf(scope, this.id(rawCustomerId, 'customer'));
+    return this.policyOf(
+      scope,
+      this.id(rawCustomerId, 'customer'),
+      await this.mayViewCatalog(scope, actor),
+    );
   }
 
-  private async policyOf(scope: TenantContext, customerId: string): Promise<ResellerPolicyRecord> {
+  /**
+   * Whether the product section may be shown: `catalog.view`, the key `ProductService.list`
+   * charges for the same titles, statuses and ids (Codex review of PR #115). Asked with
+   * `has`, not `check`: without it the preview OMITS the section — the rest of the policy is
+   * the caller's to read — rather than refusing the whole read or recording a denial.
+   */
+  private mayViewCatalog(scope: TenantContext, actor: ActorContext): Promise<boolean> {
+    return this.deps.guard.has(scope, actor, PRODUCT_VIEW_PERMISSION);
+  }
+
+  private async policyOf(
+    scope: TenantContext,
+    customerId: string,
+    includeProducts: boolean,
+  ): Promise<ResellerPolicyRecord> {
     const listing = await this.resellerListing(scope, customerId);
     const tierGrants = await this.deps.resellers.grantsOf(scope, listing.tier.id);
     const override = await this.deps.resellers.overridesOf(scope, customerId);
@@ -778,7 +802,9 @@ export class ResellerAdminService {
     const botBasis = everyBot ? 'ANY_BOT' : firstBot !== null ? 'GRANTED_BOT' : 'NO_BOT';
     const botInstanceId = everyBot ? null : firstBot;
 
-    const page = await this.deps.products.list(scope, {}, PRODUCT_PAGE_MAX, null);
+    const page = includeProducts
+      ? await this.deps.products.list(scope, {}, PRODUCT_PAGE_MAX, null)
+      : null;
     const layer = resellerPriceLayer(
       { mode: listing.tier.pricingMode, percent: listing.tier.discountPercentage },
       { mode: listing.pricingMode, percent: listing.discountPercentage },
@@ -813,23 +839,26 @@ export class ResellerAdminService {
         source: minimum.source,
       },
       botBasis,
-      products: page.items.map((product) => ({
-        productId: product.id,
-        title: product.title,
-        status: product.status,
-        categoryId: product.categoryId,
-        panelId: product.panelId,
-        decision: decideEntitlement(effective, {
-          operation: 'NEW_SERVICE',
-          productId: product.id,
-          categoryId: product.categoryId,
-          // A product with no panel yet is unsellable anyway; the preview answers only
-          // whether the reseller's grants would allow it, and no grant names an empty id.
-          panelId: product.panelId ?? '',
-          botInstanceId,
-        }),
-      })),
-      productsComplete: page.nextCursor === null,
+      products:
+        page === null
+          ? null
+          : page.items.map((product) => ({
+              productId: product.id,
+              title: product.title,
+              status: product.status,
+              categoryId: product.categoryId,
+              panelId: product.panelId,
+              decision: decideEntitlement(effective, {
+                operation: 'NEW_SERVICE',
+                productId: product.id,
+                categoryId: product.categoryId,
+                // A product with no panel yet is unsellable anyway; the preview answers only
+                // whether the reseller's grants would allow it, and no grant names an empty id.
+                panelId: product.panelId ?? '',
+                botInstanceId,
+              }),
+            })),
+      productsComplete: page !== null && page.nextCursor === null,
     };
   }
 

@@ -3574,6 +3574,8 @@ export const WEB_FA = {
   'web.reseller_policy_products': 'محصولاتی که این نماینده می‌تواند بفروشد',
   'web.reseller_policy_products_partial': 'فقط نخستین صفحهٔ محصولات نشان داده شده است.',
   'web.reseller_policy_products_empty': 'هنوز محصولی ساخته نشده است.',
+  'web.reseller_policy_products_denied':
+    'برای دیدن فهرست محصولات و اینکه کدام‌یک برای این نماینده مجاز است، دسترسی catalog.view لازم است.',
   'web.reseller_policy_can_sell': 'خرید سرویس تازه',
   'web.reseller_policy_allowed': 'مجاز',
   'web.reseller_policy_refused': 'مجاز نیست',

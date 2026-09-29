@@ -461,15 +461,18 @@ function toPolicy(policy: ResellerPolicyRecord): ResellerPolicyResponse['policy'
       source: policy.monthlyMinimum.source,
     },
     botBasis: policy.botBasis,
-    products: policy.products.map((p) => ({
-      productId: p.productId,
-      title: p.title,
-      status: p.status,
-      categoryId: p.categoryId,
-      panelId: p.panelId,
-      allowed: p.decision.allowed,
-      refusedDimension: p.decision.allowed ? null : p.decision.dimension,
-    })),
+    products:
+      policy.products === null
+        ? null
+        : policy.products.map((p) => ({
+            productId: p.productId,
+            title: p.title,
+            status: p.status,
+            categoryId: p.categoryId,
+            panelId: p.panelId,
+            allowed: p.decision.allowed,
+            refusedDimension: p.decision.allowed ? null : p.decision.dimension,
+          })),
     productsComplete: policy.productsComplete,
   };
 }

@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, ilike, or, sql, type SQL } from 'drizzle-orm';
 import { RESELLER_GRANT_DIMENSION, money } from '@nexa/contracts';
 import type {
+  Calendar,
   CurrencyCode,
   Money,
   OrderPurpose,
@@ -28,6 +29,7 @@ import {
   resellerTierGrants,
   resellerTiers,
   resellers,
+  tenants,
 } from '../../../../infrastructure/persistence/schema.js';
 import type {
   OrderResellerTermsRecord,
@@ -663,6 +665,67 @@ export class DrizzleResellerRepository implements ResellerRepository {
       .orderBy(asc(resellers.createdAt), asc(resellers.id))
       .limit(limit);
     return rows.map((row) => this.toListing(row));
+  }
+
+  async pageActive(
+    scope: TenantContext,
+    after: ResellerCursor | null,
+    limit: number,
+    tx: unknown,
+  ): Promise<{ readonly items: readonly ResellerListing[]; readonly next: ResellerCursor | null }> {
+    const tenantId = requireTenantId(scope);
+    const rows = await exec(this.db, tx)
+      .select({
+        reseller: resellers,
+        createdAtText: sql<string>`to_char(${resellers.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
+        tier: resellerTiers,
+        telegramUserId: customers.telegramUserId,
+        firstName: customers.firstName,
+        lastName: customers.lastName,
+        username: customers.username,
+      })
+      .from(resellers)
+      .innerJoin(
+        resellerTiers,
+        and(eq(resellerTiers.tenantId, resellers.tenantId), eq(resellerTiers.id, resellers.tierId)),
+      )
+      .innerJoin(
+        customers,
+        and(eq(customers.tenantId, resellers.tenantId), eq(customers.id, resellers.customerId)),
+      )
+      .where(
+        and(
+          eq(resellers.tenantId, tenantId),
+          eq(resellers.status, 'ACTIVE'),
+          after === null
+            ? undefined
+            : sql`(${resellers.createdAt}, ${resellers.id}) > (${after.createdAt}::timestamptz, ${after.id}::uuid)`,
+        ),
+      )
+      .orderBy(asc(resellers.createdAt), asc(resellers.id))
+      .limit(limit + 1);
+    const page = rows.slice(0, limit);
+    const last = page[page.length - 1];
+    return {
+      items: page.map((row) => this.toListing(row)),
+      next:
+        rows.length > limit && last !== undefined
+          ? { createdAt: last.createdAtText, id: last.reseller.id }
+          : null,
+    };
+  }
+
+  async presentationOf(
+    scope: TenantContext,
+    tx: unknown,
+  ): Promise<{ readonly timezone: string; readonly calendar: Calendar }> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await exec(this.db, tx)
+      .select({ timezone: tenants.displayTimezone, calendar: tenants.calendar })
+      .from(tenants)
+      .where(eq(tenants.id, tenantId));
+    if (row === undefined) throw new Error(`tenant ${tenantId} not found`);
+    return { timezone: row.timezone, calendar: row.calendar as Calendar };
   }
 
   async noticesIn(

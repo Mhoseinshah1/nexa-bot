@@ -937,11 +937,19 @@ export function ResellerPolicyCard({
             />
 
             <h4>{t('web.reseller_policy_products')}</h4>
-            <p className="muted small">{t(BOT_BASIS_LABELS[data.botBasis])}</p>
-            {!data.productsComplete && (
+            {/*
+              Null: the server omitted the section because this operator does not hold
+              `catalog.view`. Said as a missing permission, never drawn as "no products".
+            */}
+            {data.products === null ? (
+              <Banner tone="info">{t('web.reseller_policy_products_denied')}</Banner>
+            ) : (
+              <p className="muted small">{t(BOT_BASIS_LABELS[data.botBasis])}</p>
+            )}
+            {data.products !== null && !data.productsComplete && (
               <Banner tone="info">{t('web.reseller_policy_products_partial')}</Banner>
             )}
-            {data.products.length === 0 ? (
+            {data.products === null ? null : data.products.length === 0 ? (
               <Empty title={t('web.reseller_policy_products_empty')} icon="inbox" />
             ) : (
               <DataTable

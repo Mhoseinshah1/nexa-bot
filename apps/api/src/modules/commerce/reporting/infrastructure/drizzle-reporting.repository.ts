@@ -27,6 +27,7 @@ import {
   type TenantContext,
 } from '@nexa/contracts';
 import type { Database } from '../../../../infrastructure/persistence/database.js';
+import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type {
   CountedAmount,
   CurrencyAmount,
@@ -815,13 +816,21 @@ export class DrizzleReportingRepository implements ReportingRepository {
   async resellerSalesIn(
     scope: TenantContext,
     window: Window,
+    tx?: unknown,
   ): Promise<ReadonlyMap<string, ReadonlyMap<CurrencyCode, bigint>>> {
-    const rows = await this.rows<{
+    const query = sql`SELECT s.reseller_customer_id, s.currency, s.amount::text AS amount
+             FROM (${resellerSalesStatement(scope.tenantId, window)}) s`;
+    /*
+     * THROUGH the caller's transaction when there is one: the notice sweep holds a pool
+     * connection for its whole pass, and a second one from the same pool deadlocks at
+     * `DATABASE_POOL_MAX=1` and starves under a saturated pool (Codex review of PR #115).
+     */
+    const executor = (tx as TransactionScope | undefined)?.tx ?? this.db;
+    const rows = (await executor.execute(query)).rows as {
       reseller_customer_id: string;
       currency: CurrencyCode;
       amount: string;
-    }>(sql`SELECT s.reseller_customer_id, s.currency, s.amount::text AS amount
-             FROM (${resellerSalesStatement(scope.tenantId, window)}) s`);
+    }[];
     const out = new Map<string, Map<CurrencyCode, bigint>>();
     for (const row of rows) {
       const perCurrency = out.get(row.reseller_customer_id) ?? new Map<CurrencyCode, bigint>();
