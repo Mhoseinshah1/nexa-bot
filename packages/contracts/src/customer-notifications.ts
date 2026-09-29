@@ -294,9 +294,10 @@ export const CUSTOMER_NOTIFICATION_KINDS = [
   'SERVICE_RENEWED',
   /*
    * Round N (B2): a mass wallet credit, told to the customer when the operator chose to
-   * notify. The subject is the `MASS_CREDIT` wallet entry; the amount is read from it at send
-   * time — a reader, not a payload (ADR 0030 §1). Enqueued in the transaction that writes the
-   * entry, so a credit that did not happen is never announced.
+   * notify. The subject is the bulk item; the amount is read at send time from the
+   * `MASS_CREDIT` wallet entry the item names — a reader, not a payload (ADR 0030 §1).
+   * Enqueued in the transaction that writes the entry, so a credit that did not happen is
+   * never announced.
    */
   'WALLET_MASS_CREDITED',
   /*

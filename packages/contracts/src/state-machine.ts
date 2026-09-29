@@ -4,6 +4,7 @@ import { PAYMENT_MACHINE } from './payment.js';
 import { SERVICE_MACHINE, OPERATION_MACHINE } from './provisioning.js';
 import { CUSTOMER_NOTIFICATION_MACHINE } from './customer-notifications.js';
 import { TICKET_MACHINE } from './tickets.js';
+import { BROADCAST_MACHINE } from './broadcasts.js';
 
 /**
  * State machines as data.
@@ -166,4 +167,6 @@ export const STATE_MACHINES: readonly StateMachineDefinition<string, string>[] =
   CUSTOMER_NOTIFICATION_MACHINE as StateMachineDefinition<string, string>,
   // WP-A7: a support ticket. No terminal state — CLOSED is left by REOPEN.
   TICKET_MACHINE as StateMachineDefinition<string, string>,
+  // Round N: a broadcast. COMPLETED is left only by re-queuing FAILED recipients (RETRY).
+  BROADCAST_MACHINE as StateMachineDefinition<string, string>,
 ];

@@ -56,7 +56,8 @@ export const BROADCAST_STATES = [
 ] as const;
 export type BroadcastState = (typeof BROADCAST_STATES)[number];
 
-export type BroadcastEvent = 'SCHEDULE' | 'START' | 'PAUSE' | 'RESUME' | 'COMPLETE' | 'CANCEL';
+export type BroadcastEvent =
+  'SCHEDULE' | 'START' | 'PAUSE' | 'RESUME' | 'COMPLETE' | 'CANCEL' | 'RETRY';
 
 /**
  * The machine. Every change is a conditional UPDATE naming its `from` states, so a replay, a
@@ -67,7 +68,12 @@ export const BROADCAST_MACHINE: StateMachineDefinition<BroadcastState, Broadcast
   name: 'Broadcast',
   initial: 'DRAFT',
   states: BROADCAST_STATES,
-  terminal: ['COMPLETED', 'CANCELLED'],
+  /*
+   * CANCELLED alone is terminal. A COMPLETED broadcast re-opens on exactly one event: an
+   * operator re-queuing the recipients Telegram REFUSED (`FAILED`) — never an UNCONFIRMED or
+   * UNREACHABLE one, and never a delivered one.
+   */
+  terminal: ['CANCELLED'],
   transitions: [
     { from: 'DRAFT', to: 'SCHEDULED', on: 'SCHEDULE' },
     { from: 'DRAFT', to: 'SENDING', on: 'START' },
@@ -78,6 +84,7 @@ export const BROADCAST_MACHINE: StateMachineDefinition<BroadcastState, Broadcast
     { from: 'SENDING', to: 'COMPLETED', on: 'COMPLETE' },
     { from: 'SENDING', to: 'CANCELLED', on: 'CANCEL' },
     { from: 'PAUSED', to: 'CANCELLED', on: 'CANCEL' },
+    { from: 'COMPLETED', to: 'SENDING', on: 'RETRY' },
   ],
 };
 
@@ -415,6 +422,19 @@ export type BroadcastListResponse = z.infer<typeof broadcastListResponseSchema>;
 
 export const BROADCAST_PAGE_DEFAULT = 25;
 export const BROADCAST_PAGE_MAX = 100;
+
+/** `GET /broadcasts`: newest first, keyset-paged. */
+export const broadcastListQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(BROADCAST_PAGE_MAX).optional(),
+  cursor: z.string().min(1).max(200).optional(),
+});
+
+/** `GET /broadcasts/:id/recipients`: by customer id, optionally one state. */
+export const broadcastRecipientListQuerySchema = z.object({
+  state: z.enum(BROADCAST_RECIPIENT_STATES).optional(),
+  limit: z.coerce.number().int().min(1).max(BROADCAST_PAGE_MAX).optional(),
+  cursor: z.string().min(1).max(200).optional(),
+});
 
 /**
  * One recipient's outcome. `errorCode` is the transport's code — `telegram.rejected.403`,
