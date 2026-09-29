@@ -7906,6 +7906,20 @@ export const TEMPLATES = [
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
+  /*
+   * F3 (round N): the gateway answered that it created the invoice, but returned no link a
+   * customer can open (none, or none over https). Distinct from `gateway_unknown`, whose
+   * answer was never received: this one WAS received, and saying otherwise is untrue.
+   */
+  {
+    key: 'bot.payment.gateway_no_link',
+    description:
+      'The gateway reported the invoice created but returned no payment link that can be ' +
+      'opened, so it cannot be paid from here. Nothing is recorded as paid; the customer may ' +
+      'start again, which opens a new attempt rather than handing this one back.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
   {
     key: 'bot.payment.gateway_closed',
     description:
