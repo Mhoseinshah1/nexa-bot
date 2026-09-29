@@ -123,8 +123,9 @@ export interface WizardDirective {
  *   prompt, a confirmation that restates the typed reason.
  * - `outcome` is a decision taken (or one found already taken): the tapped message is edited
  *   in place into this reply, and every other recorded message of the payment is edited into
- *   the outcome's one line (a receipt) or loses its buttons (a prompt) — once: a message
- *   already finalised is never edited again, and a tap on one is answered and nothing else.
+ *   the decision's final record (a receipt, `bot.admin.review_final` since F1) or loses its
+ *   buttons (a prompt) — once: a message already finalised is never edited again, and a tap
+ *   on one is answered with its disposition's notice and nothing else.
  */
 export interface ReviewDirective {
   /** Null when the payment is read from the tapped message's own record. */
@@ -134,7 +135,10 @@ export interface ReviewDirective {
   readonly outcome?: TelegramReviewOutcome | 'GONE';
 }
 
-/** The one line a receipt message becomes, per outcome. */
+/**
+ * The label a receipt message's final record leads with, per outcome (F1: the owner's four
+ * exact labels) — and, alone, what it becomes when the record cannot be read, or for `GONE`.
+ */
 export const REVIEW_OUTCOME_KEYS: Readonly<Record<TelegramReviewOutcome | 'GONE', TemplateKey>> = {
   APPROVED: 'bot.admin.review_approved',
   REJECTED: 'bot.admin.review_rejected',
