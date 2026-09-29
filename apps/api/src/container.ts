@@ -3083,37 +3083,6 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   // same way and share one cache.
   const templatePresentation = new CachedTenantPresentationReader(tenants, clock);
 
-  // Round N, C1: campaigns. A composition over the pricing rules' own repositories and the
-  // rules pages' own reference checks; it prices, credits, sends and dials nothing itself.
-  const campaignRepository = new DrizzleCampaignRepository(database.db);
-  const campaignService = new CampaignService({
-    campaigns: campaignRepository,
-    discounts: discountRepository,
-    cashbackRules: cashbackRuleRepository,
-    discountAdmin: discountAdminService,
-    cashbackAdmin: cashbackRuleAdminService,
-    calendar: new IntlCampaignCalendar(templatePresentation),
-    audience: audienceService,
-    guard,
-    uow,
-    audit,
-    opsLog,
-    sessions,
-    idempotency,
-    scopeActivity: tenants,
-    clock,
-    ids,
-  });
-  const campaignScheduleLoop = new CampaignScheduleLoop(campaignService, campaignRepository, {
-    scope: () =>
-      installationTenantId === null
-        ? null
-        : { tenantId: installationTenantId, botInstanceId: null },
-    intervalMs: CAMPAIGN_SCHEDULE_INTERVAL_MS,
-    now: () => clock.now(),
-    ids,
-    logger,
-  });
   const reportingService = new ReportingService({
     access: new ReportAccess(guard, admins, opsLog),
     repository: new DrizzleReportingRepository(database.db),
@@ -3693,6 +3662,40 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
         : { tenantId: installationTenantId, botInstanceId: null },
     intervalMs: BROADCAST_INTERVAL_MS,
     now: () => clock.now().getTime(),
+    logger,
+  });
+
+  // Round N, C1: campaigns. A composition over the pricing rules' own repositories and the
+  // rules pages' own reference checks; it prices, credits, sends and dials nothing itself.
+  const campaignRepository = new DrizzleCampaignRepository(database.db);
+  const campaignService = new CampaignService({
+    campaigns: campaignRepository,
+    discounts: discountRepository,
+    cashbackRules: cashbackRuleRepository,
+    discountAdmin: discountAdminService,
+    cashbackAdmin: cashbackRuleAdminService,
+    calendar: new IntlCampaignCalendar(templatePresentation),
+    audience: audienceService,
+    broadcasts: broadcastService,
+    massActions: bulkOperationService,
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    clock,
+    ids,
+  });
+  const campaignScheduleLoop = new CampaignScheduleLoop(campaignService, campaignRepository, {
+    scope: () =>
+      installationTenantId === null
+        ? null
+        : { tenantId: installationTenantId, botInstanceId: null },
+    intervalMs: CAMPAIGN_SCHEDULE_INTERVAL_MS,
+    now: () => clock.now(),
+    ids,
     logger,
   });
 

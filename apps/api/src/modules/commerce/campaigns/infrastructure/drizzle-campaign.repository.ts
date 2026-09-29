@@ -10,7 +10,14 @@ import type {
   DiscountablePurpose,
   TenantContext,
 } from '@nexa/contracts';
-import { CAMPAIGN_CANCELLABLE_STATES, CAMPAIGN_RUNNING_STATES } from '@nexa/contracts';
+import {
+  CAMPAIGN_CANCELLABLE_STATES,
+  CAMPAIGN_RUNNING_STATES,
+  campaignAnnouncementTermsSchema,
+  campaignTimeGiftTermsSchema,
+  campaignTrafficGiftTermsSchema,
+  campaignWalletGiftTermsSchema,
+} from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import {
   requireTenantId,
@@ -27,6 +34,7 @@ import {
 import type {
   CampaignActionConfig,
   CampaignActionRecord,
+  CampaignLaunchBindingRecord,
   CampaignCursor,
   CampaignDraftWrite,
   CampaignPage,
@@ -195,6 +203,9 @@ export class DrizzleCampaignRepository implements CampaignRepository {
       config: configFromJson(row.kind as CampaignActionKind, row.config),
       discountId: row.discountId,
       cashbackRuleId: row.cashbackRuleId,
+      broadcastId: row.broadcastId,
+      bulkOperationId: row.bulkOperationId,
+      binding: (row.binding as CampaignLaunchBindingRecord | null) ?? null,
       failureCode: row.failureCode,
       launchedAt: row.launchedAt,
     }));
@@ -389,6 +400,80 @@ export class DrizzleCampaignRepository implements CampaignRepository {
     return rows.map((row) => row.id);
   }
 
+  async bindAction(
+    scope: TenantContext,
+    input: { readonly actionId: string; readonly binding: CampaignLaunchBindingRecord },
+    tx: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .update(campaignActions)
+      .set({ binding: input.binding })
+      .where(
+        and(
+          eq(campaignActions.tenantId, tenantId),
+          eq(campaignActions.id, input.actionId),
+          eq(campaignActions.state, 'PENDING'),
+          sql`${campaignActions.binding} IS NULL`,
+        ),
+      )
+      .returning({ id: campaignActions.id });
+    return rows.length === 1;
+  }
+
+  async linkEngine(
+    scope: TenantContext,
+    input: {
+      readonly actionId: string;
+      readonly broadcastId?: string;
+      readonly bulkOperationId?: string;
+      readonly now: Date;
+    },
+    tx?: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .update(campaignActions)
+      .set({
+        ...(input.broadcastId === undefined ? {} : { broadcastId: input.broadcastId }),
+        ...(input.bulkOperationId === undefined ? {} : { bulkOperationId: input.bulkOperationId }),
+        state: 'LAUNCHED',
+        failureCode: null,
+        launchedAt: input.now,
+        updatedAt: input.now,
+      })
+      .where(
+        and(
+          eq(campaignActions.tenantId, tenantId),
+          eq(campaignActions.id, input.actionId),
+          // FAILED too: a retried hand-over the engine then accepted (or replayed) is launched.
+          inArray(campaignActions.state, ['PENDING', 'FAILED']),
+        ),
+      )
+      .returning({ id: campaignActions.id });
+    return rows.length === 1;
+  }
+
+  async failAction(
+    scope: TenantContext,
+    input: { readonly actionId: string; readonly code: string; readonly now: Date },
+    tx?: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .update(campaignActions)
+      .set({ state: 'FAILED', failureCode: input.code.slice(0, 120), updatedAt: input.now })
+      .where(
+        and(
+          eq(campaignActions.tenantId, tenantId),
+          eq(campaignActions.id, input.actionId),
+          inArray(campaignActions.state, ['PENDING', 'FAILED']),
+        ),
+      )
+      .returning({ id: campaignActions.id });
+    return rows.length === 1;
+  }
+
   async linkRule(
     scope: TenantContext,
     input: {
@@ -429,12 +514,12 @@ export class DrizzleCampaignRepository implements CampaignRepository {
     const tenantId = requireTenantId(scope);
     const rows = await this.exec(tx)
       .update(campaignActions)
-      .set({ state: 'CANCELLED', updatedAt: now })
+      .set({ state: 'CANCELLED', failureCode: null, updatedAt: now })
       .where(
         and(
           eq(campaignActions.tenantId, tenantId),
           eq(campaignActions.campaignId, campaignId),
-          eq(campaignActions.state, 'PENDING'),
+          inArray(campaignActions.state, ['PENDING', 'FAILED']),
         ),
       )
       .returning({ id: campaignActions.id });
@@ -575,6 +660,12 @@ function configToJson(action: CampaignActionConfig): Record<string, unknown> {
     }
     case 'CASHBACK':
       return { ...action.terms, appliesTo: [...action.terms.appliesTo] };
+    case 'ANNOUNCEMENT':
+      return { body: action.terms.body, buttons: action.terms.buttons.map((b) => ({ ...b })) };
+    case 'WALLET_GIFT':
+    case 'TRAFFIC_GIFT':
+    case 'TIME_GIFT':
+      return { ...action.terms };
   }
 }
 
@@ -614,7 +705,13 @@ function configFromJson(kind: CampaignActionKind, raw: unknown): CampaignActionC
           categoryId: (json['categoryId'] as string | null) ?? null,
         },
       };
-    default:
-      throw new Error(`campaign action kind ${kind} has no configuration reader`);
+    case 'WALLET_GIFT':
+      return { kind, terms: campaignWalletGiftTermsSchema.parse(json) };
+    case 'TRAFFIC_GIFT':
+      return { kind, terms: campaignTrafficGiftTermsSchema.parse(json) };
+    case 'TIME_GIFT':
+      return { kind, terms: campaignTimeGiftTermsSchema.parse(json) };
+    case 'ANNOUNCEMENT':
+      return { kind, terms: campaignAnnouncementTermsSchema.parse(json) };
   }
 }

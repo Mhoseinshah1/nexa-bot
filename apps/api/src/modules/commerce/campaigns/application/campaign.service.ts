@@ -1,15 +1,27 @@
 import {
   AUDIENCE_ERROR_CODES,
+  BROADCAST_BODY_DEFINITION,
+  BROADCAST_ERROR_CODES,
+  BROADCAST_LARGE_AUDIENCE,
+  BULK_ERROR_CODES,
+  BULK_LARGE_OPERATION,
   CAMPAIGN_ERROR_CODES,
+  CAMPAIGN_LAUNCHED_ACTION_KINDS,
   CAMPAIGN_PAGE_DEFAULT,
   CAMPAIGN_PAGE_MAX,
   COMMERCE_ERROR_CODES,
   errors,
+  isNexaError,
   normaliseDiscountCode,
   uuidV7Schema,
+  validateTemplateBody,
   type ActorContext,
   type AudiencePreview,
   type AuditWriter,
+  type BroadcastCounts,
+  type BulkGrant,
+  type BulkCounts,
+  type BulkPreview,
   type CampaignActionKind,
   type Clock,
   type CurrencyCode,
@@ -30,6 +42,8 @@ import { hashRequest } from '../../../platform/idempotency/infrastructure/drizzl
 import type { SessionRepository } from '../../../platform/identity/application/ports.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
+import type { BroadcastService } from '../../broadcasts/application/broadcast.service.js';
+import type { BulkOperationService } from '../../bulk-operations/application/bulk-operation.service.js';
 import {
   AUDIENCE_PREVIEW_PERMISSION,
   freezeAudience,
@@ -57,10 +71,11 @@ import type {
 import type {
   CampaignActionConfig,
   CampaignActionRecord,
+  CampaignGiftConfig,
+  CampaignLaunchBindingRecord,
   CampaignCalendar,
   CampaignCursor,
   CampaignDraftWrite,
-  CampaignPage,
   CampaignRecord,
   CampaignRepository,
   CashbackOutcome,
@@ -79,7 +94,22 @@ export const CAMPAIGN_ACTION_PERMISSIONS: Readonly<
 > = {
   DISCOUNT: DISCOUNT_EDIT_PERMISSION,
   CASHBACK: CASHBACK_RULE_EDIT_PERMISSION,
+  // The shared engines' own keys (round N, B1/B2), charged again by those engines.
+  WALLET_GIFT: 'users.wallet.mass',
+  TRAFFIC_GIFT: 'services.mass.grant',
+  TIME_GIFT: 'services.mass.grant',
+  ANNOUNCEMENT: 'broadcasts.send',
 };
+
+/** The kinds handed to a shared engine to perform, rather than standing as a rule. */
+const LAUNCHED_KINDS: ReadonlySet<CampaignActionKind> = new Set(CAMPAIGN_LAUNCHED_ACTION_KINDS);
+
+/** A gift's binding as the confirmation sends it. */
+export interface CampaignGiftBindingInput {
+  readonly count: number;
+  readonly fingerprint: string;
+  readonly typedCount: number | null;
+}
 
 /** What an operator submits for a draft: the window in the tenant's own calendar. */
 export interface CampaignDraftInput {
@@ -100,6 +130,17 @@ export interface CampaignDetail {
   readonly discount: DiscountRuleRecord | null;
   readonly cashbackRule: CashbackRuleRecord | null;
   readonly presentation: { readonly timezone: string; readonly calendar: 'jalali' | 'gregorian' };
+  /** The window as the tenant's own calendar and clock read it. */
+  readonly startLocal: { readonly date: string; readonly time: string };
+  readonly endLocal: { readonly date: string; readonly time: string };
+}
+
+/** One row of the campaign list. */
+export interface CampaignListItem {
+  readonly campaign: CampaignRecord;
+  readonly actionKinds: readonly CampaignActionKind[];
+  readonly startLocal: { readonly date: string; readonly time: string };
+  readonly endLocal: { readonly date: string; readonly time: string };
 }
 
 /**
@@ -107,8 +148,21 @@ export interface CampaignDetail {
  * field and no conversion rate: nothing persists that a purchase was CAUSED by a campaign.
  */
 export interface CampaignResults {
+  /** The audience count the operator confirmed; null before the confirmation. */
+  readonly targeted: number | null;
   readonly discount: DiscountOutcome | null;
   readonly cashback: CashbackOutcome | null;
+  /** The engines' own records, read through — never a copy the campaign keeps. */
+  readonly announcement: BroadcastCounts | null;
+  readonly walletGift: CampaignGiftOutcome | null;
+  readonly trafficGift: CampaignGiftOutcome | null;
+  readonly timeGift: CampaignGiftOutcome | null;
+}
+
+/** A gift's own engine counts, read through, and what the ledger holds for a wallet gift. */
+export interface CampaignGiftOutcome {
+  readonly counts: BulkCounts;
+  readonly credited: { readonly amountMinor: bigint; readonly currency: CurrencyCode } | null;
 }
 
 /** What a confirmation binds to, and the liability that is determinable before it. */
@@ -118,6 +172,15 @@ export interface CampaignPreview {
     readonly amountMinor: bigint;
     readonly currency: CurrencyCode;
   } | null;
+  /** Each gift's own preview, from the mass-action engine: count, set and liability. */
+  readonly gifts: Partial<Record<'WALLET_GIFT' | 'TRAFFIC_GIFT' | 'TIME_GIFT', BulkPreview>>;
+  /** Which counts the confirmation must type back. */
+  readonly typedCountRequired: {
+    readonly audience: boolean;
+    readonly walletGift: boolean;
+    readonly trafficGift: boolean;
+    readonly timeGift: boolean;
+  };
 }
 
 export interface CampaignServiceDeps {
@@ -129,6 +192,16 @@ export interface CampaignServiceDeps {
   readonly calendar: CampaignCalendar;
   /** The SHARED audience engine (round N, B1): the same query Broadcast and the mass actions use. */
   readonly audience: Pick<AudienceService, 'evaluate' | 'sampleOf'>;
+  /** The SHARED mass-action engine (round N, B2): wallet, traffic and time gifts. */
+  readonly massActions: Pick<
+    BulkOperationService,
+    'preview' | 'create' | 'cancel' | 'get' | 'progress'
+  >;
+  /** The SHARED Broadcast lane (round N, B1): the announcement. */
+  readonly broadcasts: Pick<
+    BroadcastService,
+    'create' | 'launch' | 'pause' | 'resume' | 'cancel' | 'get' | 'counts'
+  >;
   readonly guard: PermissionGuard;
   readonly uow: UnitOfWork<TransactionScope>;
   readonly audit: AuditWriter;
@@ -166,7 +239,11 @@ export class CampaignService {
       readonly cursor?: CampaignCursor;
       readonly state?: CampaignRecord['state'];
     },
-  ): Promise<CampaignPage & { presentation: CampaignDetail['presentation'] }> {
+  ): Promise<{
+    readonly items: readonly CampaignListItem[];
+    readonly nextCursor: CampaignCursor | null;
+    readonly presentation: CampaignDetail['presentation'];
+  }> {
     await this.deps.guard.check(scope, actor, CAMPAIGN_VIEW_PERMISSION);
     const limit = Math.min(Math.max(query.limit ?? CAMPAIGN_PAGE_DEFAULT, 1), CAMPAIGN_PAGE_MAX);
     const page = await this.deps.campaigns.list(
@@ -175,7 +252,18 @@ export class CampaignService {
       limit,
       query.cursor ?? null,
     );
-    return { ...page, presentation: await this.deps.calendar.presentationFor(scope) };
+    const presentation = await this.deps.calendar.presentationFor(scope);
+    const items: CampaignListItem[] = [];
+    for (const campaign of page.items) {
+      const actions = await this.deps.campaigns.actionsOf(scope, campaign.id);
+      items.push({
+        campaign,
+        actionKinds: actions.map((a) => a.kind),
+        startLocal: this.deps.calendar.localOf(campaign.startsAt, presentation),
+        endLocal: this.deps.calendar.localOf(campaign.endsAt, presentation),
+      });
+    }
+    return { items, nextCursor: page.nextCursor, presentation };
   }
 
   async get(scope: TenantContext, actor: ActorContext, id: string): Promise<CampaignDetail> {
@@ -192,13 +280,48 @@ export class CampaignService {
     const actions = await this.deps.campaigns.actionsOf(scope, campaignId);
     const discountId = actions.find((a) => a.kind === 'DISCOUNT')?.discountId ?? null;
     const cashbackRuleId = actions.find((a) => a.kind === 'CASHBACK')?.cashbackRuleId ?? null;
+    const bulkOf = async (kind: CampaignActionKind): Promise<CampaignGiftOutcome | null> => {
+      const operationId = actions.find((a) => a.kind === kind)?.bulkOperationId ?? null;
+      if (operationId === null) return null;
+      const read = await readableOrNull(
+        Promise.all([
+          this.deps.massActions.get(scope, actor, operationId),
+          this.deps.massActions.progress(scope, actor, [operationId]),
+        ]),
+      );
+      if (read === null) return null;
+      const [operation, progress] = read;
+      const counts = progress.counts.get(operationId);
+      if (counts === undefined) return null;
+      return {
+        counts,
+        credited:
+          operation.currency === null
+            ? null
+            : {
+                amountMinor: progress.credited.get(operationId) ?? 0n,
+                currency: operation.currency,
+              },
+      };
+    };
+    const broadcastId = actions.find((a) => a.kind === 'ANNOUNCEMENT')?.broadcastId ?? null;
     return {
+      targeted: campaign.audienceConfirmedCount,
       discount:
         discountId === null ? null : await this.deps.campaigns.discountOutcome(scope, discountId),
       cashback:
         cashbackRuleId === null
           ? null
           : await this.deps.campaigns.cashbackOutcome(scope, cashbackRuleId),
+      announcement:
+        broadcastId === null
+          ? null
+          : ((await readableOrNull(this.deps.broadcasts.counts(scope, actor, [broadcastId])))?.get(
+              broadcastId,
+            ) ?? null),
+      walletGift: await bulkOf('WALLET_GIFT'),
+      trafficGift: await bulkOf('TRAFFIC_GIFT'),
+      timeGift: await bulkOf('TIME_GIFT'),
     };
   }
 
@@ -228,7 +351,34 @@ export class CampaignService {
       evaluation.asOf,
     );
     const discount = actions.find((a) => a.config.kind === 'DISCOUNT')?.config;
+    const gifts: Partial<Record<'WALLET_GIFT' | 'TRAFFIC_GIFT' | 'TIME_GIFT', BulkPreview>> = {};
+    for (const action of actions) {
+      const config = action.config;
+      if (
+        config.kind === 'WALLET_GIFT' ||
+        config.kind === 'TRAFFIC_GIFT' ||
+        config.kind === 'TIME_GIFT'
+      ) {
+        gifts[config.kind] = await this.deps.massActions.preview(scope, actor, {
+          grant: grantOf(config),
+          definition: campaign.audience,
+        });
+      }
+    }
+    const has = (kind: CampaignActionKind) => actions.some((a) => a.kind === kind);
     return {
+      gifts,
+      typedCountRequired: {
+        audience:
+          has('ANNOUNCEMENT') && typedCountRequiredFor('ANNOUNCEMENT', evaluation.customers),
+        walletGift: gifts.WALLET_GIFT !== undefined,
+        trafficGift:
+          gifts.TRAFFIC_GIFT !== undefined &&
+          typedCountRequiredFor('TRAFFIC_GIFT', gifts.TRAFFIC_GIFT.count),
+        timeGift:
+          gifts.TIME_GIFT !== undefined &&
+          typedCountRequiredFor('TIME_GIFT', gifts.TIME_GIFT.count),
+      },
       audience: toPreview(evaluation, sample),
       discountMaxLiability:
         discount?.kind === 'DISCOUNT' &&
@@ -409,6 +559,12 @@ export class CampaignService {
       readonly expectedDefinitionHash: string;
       readonly expectedRecipients: number;
       readonly expectedFingerprint: string;
+      /** The audience count typed back, where the announcement's size asks for it. */
+      readonly typedCount?: number | null;
+      /** Each gift's own binding, from its engine's preview. A wallet gift adds its total. */
+      readonly walletGift?: (CampaignGiftBindingInput & { readonly totalMinor: string }) | null;
+      readonly trafficGift?: CampaignGiftBindingInput | null;
+      readonly timeGift?: CampaignGiftBindingInput | null;
     },
   ): Promise<CampaignDetail> {
     const campaignId = this.campaignId(input.campaignId);
@@ -417,6 +573,10 @@ export class CampaignService {
       expectedDefinitionHash: input.expectedDefinitionHash,
       expectedRecipients: input.expectedRecipients,
       expectedFingerprint: input.expectedFingerprint,
+      typedCount: input.typedCount ?? null,
+      walletGift: input.walletGift ?? null,
+      trafficGift: input.trafficGift ?? null,
+      timeGift: input.timeGift ?? null,
     });
     const denial = { action: 'campaign.schedule', entityType: 'Campaign', entityId: campaignId };
     await this.authorize(scope, actor, denial);
@@ -427,7 +587,21 @@ export class CampaignService {
       input.idempotencyKey,
       requestHash,
     );
-    if (replay !== null) return this.detailOf(scope, campaignId);
+    if (replay !== null) {
+      // A replay also finishes a hand-over the first attempt could not (same keys, same
+      // bindings: an engine that already took it replays rather than doing it twice).
+      await this.launchPending(scope, actor, campaignId);
+      return this.detailOf(scope, campaignId);
+    }
+
+    // Each gift's binding is checked against its engine's own preview BEFORE anything is
+    // written, so a stale gift preview refuses the whole confirmation rather than leaving a
+    // scheduled campaign whose gift failed. The engine checks the same binding again when
+    // it takes the work.
+    const draft = await this.deps.campaigns.findById(scope, campaignId);
+    if (draft === null) throw notFound();
+    const draftActions = await this.deps.campaigns.actionsOf(scope, campaignId);
+    const bindings = await this.verifiedGiftBindings(scope, actor, draft, draftActions, input);
 
     const now = this.deps.clock.now();
 
@@ -442,6 +616,13 @@ export class CampaignService {
         const campaign = await this.deps.campaigns.lockById(scope, campaignId, tx);
         if (campaign === null) throw notFound();
         if (campaign.state !== 'DRAFT') throw transitionInvalid();
+        if (campaign.updatedAt.getTime() !== draft.updatedAt.getTime()) {
+          // Edited between the gift check above and this lock: preview again.
+          throw errors.conflict(
+            AUDIENCE_ERROR_CODES.CHANGED,
+            'The campaign changed since the preview. Preview again before confirming.',
+          );
+        }
         if (campaign.endsAt.getTime() <= now.getTime()) {
           throw errors.validation(
             CAMPAIGN_ERROR_CODES.CAMPAIGN_WINDOW_INVALID,
@@ -461,6 +642,16 @@ export class CampaignService {
           actions.map((a) => a.config),
           tx,
         );
+        if (
+          actions.some((a) => LAUNCHED_KINDS.has(a.kind)) &&
+          campaign.startsAt.getTime() > now.getTime() + LAUNCH_MAX_LEAD_MS
+        ) {
+          // Broadcast and the mass-action engine each take work at most sixty days ahead.
+          throw errors.validation(
+            CAMPAIGN_ERROR_CODES.CAMPAIGN_WINDOW_INVALID,
+            'A campaign with a gift or an announcement starts within sixty days.',
+          );
+        }
 
         // The confirmation binds to what the preview showed: the definition, the count and
         // the fingerprint of the set, re-evaluated here, inside this transaction, by the
@@ -480,6 +671,15 @@ export class CampaignService {
         const audienceCount = audience.customers;
 
         for (const action of actions) {
+          if (LAUNCHED_KINDS.has(action.kind)) {
+            const binding =
+              action.kind === 'ANNOUNCEMENT'
+                ? this.announcementBinding(audience, input.typedCount ?? null)
+                : bindings.get(action.kind);
+            if (binding === undefined) throw bindingInvalid(action.kind);
+            await this.deps.campaigns.bindAction(scope, { actionId: action.id, binding }, tx);
+            continue;
+          }
           await this.createStandingRule(scope, actor, campaign, action, now, tx);
         }
 
@@ -526,7 +726,206 @@ export class CampaignService {
         );
       },
     );
+    // AFTER the commit, never inside it: each engine runs its own transaction, and a
+    // campaign must never hold its lock across another module's work.
+    await this.launchPending(scope, actor, campaignId);
     return this.detailOf(scope, campaignId);
+  }
+
+  /**
+   * Hands every confirmed-but-not-yet-launched action to its engine, under the operator's
+   * own actor, with a key derived from the campaign and the action and the binding frozen by
+   * the schedule. An engine that already took the work replays; one that refuses on the
+   * merits leaves the action FAILED with its code; anything else (the database, a crash)
+   * leaves it PENDING for the next attempt — never a guess either way.
+   *
+   * Callable again (`CAMPAIGN_ROUTES.launch`) while the campaign is SCHEDULED, ACTIVE or
+   * PAUSED; a no-op for anything already launched.
+   */
+  async launchPending(
+    scope: TenantContext,
+    actor: ActorContext,
+    campaignId: string,
+  ): Promise<CampaignDetail> {
+    await this.deps.guard.check(scope, actor, CAMPAIGN_MANAGE_PERMISSION);
+    const id = this.campaignId(campaignId);
+    const campaign = await this.deps.campaigns.findById(scope, id);
+    if (campaign === null) throw notFound();
+    if (!['SCHEDULED', 'ACTIVE', 'PAUSED'].includes(campaign.state))
+      return this.detailOf(scope, id);
+    const actions = await this.deps.campaigns.actionsOf(scope, id);
+    for (const action of actions) {
+      if (!LAUNCHED_KINDS.has(action.kind) || action.binding === null) continue;
+      if (action.state !== 'PENDING' && action.state !== 'FAILED') continue;
+      try {
+        const launched = await this.handOver(scope, actor, campaign, action, action.binding);
+        await this.deps.campaigns.linkEngine(scope, {
+          actionId: action.id,
+          ...launched,
+          now: this.deps.clock.now(),
+        });
+      } catch (error) {
+        if (!isNexaError(error) || !REFUSAL_KINDS.has(error.kind)) throw error;
+        await this.deps.campaigns.failAction(scope, {
+          actionId: action.id,
+          code: error.code,
+          now: this.deps.clock.now(),
+        });
+      }
+    }
+    return this.detailOf(scope, id);
+  }
+
+  /** One action to its engine. Returns the engine record's id. */
+  private async handOver(
+    scope: TenantContext,
+    actor: ActorContext,
+    campaign: CampaignRecord,
+    action: CampaignActionRecord,
+    binding: CampaignLaunchBindingRecord,
+  ): Promise<{ broadcastId?: string; bulkOperationId?: string }> {
+    const config = action.config;
+    const key = `campaign:${campaign.id}:${action.kind.toLowerCase()}`;
+    if (config.kind === 'ANNOUNCEMENT') {
+      const draft = await this.deps.broadcasts.create(scope, actor, {
+        idempotencyKey: key,
+        title: campaign.name,
+        contentKind: 'TEXT',
+        body: config.terms.body,
+        buttons: config.terms.buttons,
+        audience: campaign.audience,
+      });
+      // A retry after a launch that committed: the broadcast is already past DRAFT.
+      if (draft.state !== 'DRAFT') return { broadcastId: draft.id };
+      // Broadcast schedules at least a minute ahead; a start nearer than that sends now.
+      const later =
+        campaign.startsAt.getTime() >= this.deps.clock.now().getTime() + ANNOUNCEMENT_MIN_LEAD_MS;
+      await this.deps.broadcasts.launch(scope, actor, draft.id, {
+        idempotencyKey: `${key}:launch`,
+        mode: later ? 'SCHEDULE' : 'NOW',
+        scheduledAt: later ? campaign.startsAt : null,
+        expectedVersion: draft.version,
+        expectedDefinitionHash: campaign.audienceHash,
+        expectedRecipients: binding.count,
+        expectedFingerprint: binding.fingerprint,
+        typedCount: binding.typedCount,
+      });
+      return { broadcastId: draft.id };
+    }
+    if (config.kind === 'CASHBACK' || config.kind === 'DISCOUNT') return {};
+    const created = await this.deps.massActions.create(scope, actor, {
+      idempotencyKey: key,
+      grant: grantOf(config),
+      definition: campaign.audience,
+      notify: config.terms.notify,
+      note: campaign.name,
+      expectedDefinitionHash: campaign.audienceHash,
+      expectedCount: binding.count,
+      expectedFingerprint: binding.fingerprint,
+      expectedTotalMinor: binding.totalMinor,
+      typedCount: binding.typedCount,
+      // Frozen and confirmed now; processed from the campaign's start (never before).
+      notBefore: campaign.startsAt,
+    });
+    return { bulkOperationId: created.id };
+  }
+
+  /**
+   * Each gift's binding, checked against its engine's own preview of the stored definition.
+   * The count must be typed back where the engine asks for it: a wallet credit always, a
+   * grant from `BULK_LARGE_OPERATION` services.
+   */
+  private async verifiedGiftBindings(
+    scope: TenantContext,
+    actor: ActorContext,
+    campaign: CampaignRecord,
+    actions: readonly CampaignActionRecord[],
+    input: {
+      readonly walletGift?: (CampaignGiftBindingInput & { readonly totalMinor: string }) | null;
+      readonly trafficGift?: CampaignGiftBindingInput | null;
+      readonly timeGift?: CampaignGiftBindingInput | null;
+    },
+  ): Promise<Map<CampaignActionKind, CampaignLaunchBindingRecord>> {
+    const out = new Map<CampaignActionKind, CampaignLaunchBindingRecord>();
+    for (const action of actions) {
+      const config = action.config;
+      if (
+        config.kind !== 'WALLET_GIFT' &&
+        config.kind !== 'TRAFFIC_GIFT' &&
+        config.kind !== 'TIME_GIFT'
+      ) {
+        continue;
+      }
+      const given =
+        config.kind === 'WALLET_GIFT'
+          ? input.walletGift
+          : config.kind === 'TRAFFIC_GIFT'
+            ? input.trafficGift
+            : input.timeGift;
+      if (given === null || given === undefined) throw bindingInvalid(config.kind);
+      const preview = await this.deps.massActions.preview(scope, actor, {
+        grant: grantOf(config),
+        definition: campaign.audience,
+      });
+      const totalMinor =
+        config.kind === 'WALLET_GIFT' ? (preview.totalLiability?.amountMinor ?? null) : null;
+      if (
+        preview.count !== given.count ||
+        preview.fingerprint !== given.fingerprint ||
+        (config.kind === 'WALLET_GIFT' && (input.walletGift?.totalMinor ?? null) !== totalMinor)
+      ) {
+        throw errors.conflict(
+          AUDIENCE_ERROR_CODES.CHANGED,
+          'What this gift reaches changed since the preview. Preview again before confirming.',
+          { kind: config.kind, previewed: given.count, now: preview.count },
+        );
+      }
+      if (preview.count === 0) {
+        throw errors.validation(AUDIENCE_ERROR_CODES.EMPTY, 'This gift reaches nobody.', {
+          kind: config.kind,
+        });
+      }
+      if (typedCountRequiredFor(config.kind, preview.count) && given.typedCount !== preview.count) {
+        throw errors.validation(
+          CAMPAIGN_ERROR_CODES.CAMPAIGN_CONFIRMATION_REQUIRED,
+          'Type the number of items this gift reaches to confirm it.',
+          { kind: config.kind },
+        );
+      }
+      out.set(config.kind, {
+        count: preview.count,
+        fingerprint: preview.fingerprint,
+        typedCount: given.typedCount,
+        totalMinor,
+      });
+    }
+    return out;
+  }
+
+  /** The announcement's binding is the campaign audience's own, confirmed above. */
+  private announcementBinding(
+    audience: { readonly customers: number; readonly fingerprint: string },
+    typedCount: number | null,
+  ): CampaignLaunchBindingRecord {
+    if (audience.customers === 0) {
+      throw errors.validation(AUDIENCE_ERROR_CODES.EMPTY, 'The announcement reaches nobody.');
+    }
+    if (
+      typedCountRequiredFor('ANNOUNCEMENT', audience.customers) &&
+      typedCount !== audience.customers
+    ) {
+      throw errors.validation(
+        CAMPAIGN_ERROR_CODES.CAMPAIGN_CONFIRMATION_REQUIRED,
+        'Type the number of recipients to confirm the announcement.',
+        { kind: 'ANNOUNCEMENT' },
+      );
+    }
+    return {
+      count: audience.customers,
+      fingerprint: audience.fingerprint,
+      typedCount,
+      totalMinor: null,
+    };
   }
 
   /** ACTIVE → PAUSED: withdraws the standing rules until resumed. */
@@ -546,6 +945,9 @@ export class CampaignService {
         }
         return this.setRules(scope, actor, actions, 'INACTIVE', now, tx);
       },
+      // The announcement pauses with it where Broadcast can (a SENDING broadcast). A mass
+      // gift has no pause in its engine: one already running finishes its frozen items.
+      (actions) => this.forEachBroadcast(scope, actor, actions, 'SENDING', 'pause'),
     );
   }
 
@@ -566,6 +968,7 @@ export class CampaignService {
         }
         return this.setRules(scope, actor, actions, 'ACTIVE', now, tx);
       },
+      (actions) => this.forEachBroadcast(scope, actor, actions, 'PAUSED', 'resume'),
     );
   }
 
@@ -586,6 +989,9 @@ export class CampaignService {
       input,
       'campaign.cancel',
       async (campaign, actions, now, tx) => {
+        // Cancelling a CANCELLED campaign again changes nothing here and re-asks the engines
+        // below, so an engine cancel that failed the first time can be retried.
+        if (campaign.state === 'CANCELLED') return { alreadyCancelled: true };
         const moved = await this.deps.campaigns.cancel(
           scope,
           { id: campaign.id, adminId: adminIdOf(actor), now },
@@ -601,7 +1007,38 @@ export class CampaignService {
         );
         return { ...withdrawn, pendingCancelled };
       },
+      // AFTER the commit: each engine cancels what it has not done yet, in its own
+      // transaction. A credit written, a grant applied or a message sent stays as it is.
+      async (actions) => {
+        for (const action of actions) {
+          if (action.bulkOperationId !== null) {
+            // A repeated cancel is answered, not refused, by the engine itself.
+            await ignoringStateConflict(
+              this.deps.massActions.cancel(scope, actor, action.bulkOperationId),
+            );
+          }
+        }
+        await this.forEachBroadcast(scope, actor, actions, null, 'cancel');
+      },
     );
+  }
+
+  /** Pause, resume or cancel the announcement's broadcast, where it stands in `from`. */
+  private async forEachBroadcast(
+    scope: TenantContext,
+    actor: ActorContext,
+    actions: readonly CampaignActionRecord[],
+    from: 'SENDING' | 'PAUSED' | null,
+    command: 'pause' | 'resume' | 'cancel',
+  ): Promise<void> {
+    for (const action of actions) {
+      if (action.broadcastId === null) continue;
+      if (from !== null) {
+        const current = await this.deps.broadcasts.get(scope, actor, action.broadcastId);
+        if (current.state !== from) continue;
+      }
+      await ignoringStateConflict(this.deps.broadcasts[command](scope, actor, action.broadcastId));
+    }
   }
 
   // -------------------------------------------------------------------------------------
@@ -690,6 +1127,8 @@ export class CampaignService {
       now: Date,
       tx: TransactionScope,
     ) => Promise<Record<string, unknown>>,
+    /** What the shared engines are then asked, after the commit, in their own transactions. */
+    afterCommit: (actions: readonly CampaignActionRecord[]) => Promise<void>,
   ): Promise<CampaignDetail> {
     const campaignId = this.campaignId(input.campaignId);
     const requestHash = hashRequest({ campaignId, action });
@@ -743,6 +1182,7 @@ export class CampaignService {
         );
       },
     );
+    await afterCommit(await this.deps.campaigns.actionsOf(scope, campaignId));
     return this.detailOf(scope, campaignId);
   }
 
@@ -969,6 +1409,18 @@ export class CampaignService {
           }
         }
       }
+      if (action.kind === 'ANNOUNCEMENT') {
+        // The broadcast placeholder catalogue, by the one validator Broadcast itself uses, so
+        // a draft is told about `{wallet}` now rather than at its start.
+        const issues = validateTemplateBody(BROADCAST_BODY_DEFINITION, action.terms.body);
+        if (issues.length > 0) {
+          throw errors.validation(
+            BROADCAST_ERROR_CODES.BODY_INVALID,
+            'The announcement uses a placeholder Broadcast does not offer.',
+            { issues: issues.map((issue) => issue.kind) },
+          );
+        }
+      }
       if (action.kind === 'CASHBACK') {
         await this.deps.cashbackAdmin.assertReferences(
           scope,
@@ -1019,6 +1471,7 @@ export class CampaignService {
     const actions = await this.deps.campaigns.actionsOf(scope, campaignId);
     const discountId = actions.find((a) => a.kind === 'DISCOUNT')?.discountId ?? null;
     const cashbackRuleId = actions.find((a) => a.kind === 'CASHBACK')?.cashbackRuleId ?? null;
+    const presentation = await this.deps.calendar.presentationFor(scope);
     return {
       campaign,
       actions,
@@ -1027,7 +1480,9 @@ export class CampaignService {
         cashbackRuleId === null
           ? null
           : await this.deps.cashbackRules.findById(scope, cashbackRuleId),
-      presentation: await this.deps.calendar.presentationFor(scope),
+      presentation,
+      startLocal: this.deps.calendar.localOf(campaign.startsAt, presentation),
+      endLocal: this.deps.calendar.localOf(campaign.endsAt, presentation),
     };
   }
 
@@ -1152,7 +1607,14 @@ function serialisableAction(action: CampaignActionConfig): Record<string, unknow
       },
     };
   }
-  return { kind: action.kind, terms: { ...action.terms, appliesTo: [...action.terms.appliesTo] } };
+  if (action.kind === 'CASHBACK') {
+    return {
+      kind: action.kind,
+      terms: { ...action.terms, appliesTo: [...action.terms.appliesTo] },
+    };
+  }
+  // Every other kind's terms are already plain JSON: strings, numbers, booleans.
+  return { kind: action.kind, terms: JSON.parse(JSON.stringify(action.terms)) as unknown };
 }
 
 function serialisableDraft(draft: CampaignDraftInput): Record<string, unknown> {
@@ -1172,4 +1634,101 @@ function campaignAuditView(
     audience: campaign.audience,
     actions: actions.map(serialisableAction),
   };
+}
+
+/**
+ * The error kinds that are an engine's REFUSAL on the merits — the action is FAILED with the
+ * code. Anything else (the database, a timeout, a crash) leaves the action PENDING.
+ */
+/**
+ * Broadcast schedules only at least a minute ahead (`broadcast.service.ts`); an announcement
+ * whose campaign starts sooner than this is sent at once, which is what the start means.
+ */
+const ANNOUNCEMENT_MIN_LEAD_MS = 90_000;
+/**
+ * Broadcast and the mass-action engine each take work at most sixty days ahead; a campaign
+ * that hands them any starts within that (a day's margin for the time the preview takes).
+ */
+const LAUNCH_MAX_LEAD_MS = 59 * 86_400_000;
+
+const REFUSAL_KINDS: ReadonlySet<string> = new Set([
+  'VALIDATION',
+  'NOT_FOUND',
+  'CONFLICT',
+  'PRECONDITION_FAILED',
+]);
+
+function bindingInvalid(kind: CampaignActionKind) {
+  return errors.validation(
+    CAMPAIGN_ERROR_CODES.CAMPAIGN_BINDING_INVALID,
+    'Confirm each gift with the figures its preview showed.',
+    { kind },
+  );
+}
+
+/**
+ * Whether the engine behind `kind` asks for the count typed back at `count` — the engines'
+ * own thresholds, so the campaign asks exactly when they will.
+ */
+export function typedCountRequiredFor(kind: CampaignActionKind, count: number): boolean {
+  switch (kind) {
+    case 'WALLET_GIFT':
+      return true;
+    case 'TRAFFIC_GIFT':
+    case 'TIME_GIFT':
+      return count >= BULK_LARGE_OPERATION;
+    case 'ANNOUNCEMENT':
+      return count >= BROADCAST_LARGE_AUDIENCE;
+    default:
+      return false;
+  }
+}
+
+/** A gift's terms as the mass-action engine's grant. */
+function grantOf(config: CampaignGiftConfig): BulkGrant {
+  switch (config.kind) {
+    case 'WALLET_GIFT':
+      return {
+        kind: 'WALLET_CREDIT',
+        amountMinor: config.terms.amountMinor,
+        currency: config.terms.currency,
+      };
+    case 'TRAFFIC_GIFT':
+      return { kind: 'SERVICE_TRAFFIC', trafficGb: config.terms.trafficGb };
+    case 'TIME_GIFT':
+      return { kind: 'SERVICE_TIME', durationDays: config.terms.durationDays };
+  }
+}
+
+/**
+ * An engine answering that its record is already past the state a command needs — a
+ * broadcast that finished, an operation that completed — is the outcome, not a failure:
+ * there is nothing left for the command to stop.
+ */
+async function ignoringStateConflict(work: Promise<unknown>): Promise<void> {
+  try {
+    await work;
+  } catch (error) {
+    if (
+      isNexaError(error) &&
+      (error.code === BROADCAST_ERROR_CODES.STATE_CONFLICT ||
+        error.code === BULK_ERROR_CODES.STATE_CONFLICT)
+    ) {
+      return;
+    }
+    throw error;
+  }
+}
+
+/**
+ * An engine record the viewer may not read (its own view key) is shown as absent rather than
+ * failing the whole results page; the campaign page says which key it takes.
+ */
+async function readableOrNull<T>(work: Promise<T>): Promise<T | null> {
+  try {
+    return await work;
+  } catch (error) {
+    if (isNexaError(error) && error.kind === 'PERMISSION_DENIED') return null;
+    throw error;
+  }
 }

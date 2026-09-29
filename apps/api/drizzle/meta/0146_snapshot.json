@@ -1,5 +1,5 @@
 {
-  "id": "810eadbd-7bb8-4378-bdf6-fd74201bc577",
+  "id": "8573afc6-c3b4-459f-8c96-d7d307e3eecf",
   "prevId": "8373a5bd-9885-4978-bb0f-24f6798c25dd",
   "version": "7",
   "dialect": "postgresql",
@@ -3293,6 +3293,24 @@
           "primaryKey": false,
           "notNull": false
         },
+        "binding": {
+          "name": "binding",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "broadcast_id": {
+          "name": "broadcast_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "bulk_operation_id": {
+          "name": "bulk_operation_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
         "failure_code": {
           "name": "failure_code",
           "type": "text",
@@ -3391,6 +3409,50 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "campaign_actions_broadcast_key": {
+          "name": "campaign_actions_broadcast_key",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "broadcast_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "broadcast_id IS NOT NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "campaign_actions_bulk_operation_key": {
+          "name": "campaign_actions_bulk_operation_key",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "bulk_operation_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "bulk_operation_id IS NOT NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
@@ -3451,12 +3513,50 @@
           ],
           "onDelete": "no action",
           "onUpdate": "no action"
+        },
+        "campaign_actions_broadcast_fk": {
+          "name": "campaign_actions_broadcast_fk",
+          "tableFrom": "campaign_actions",
+          "tableTo": "broadcasts",
+          "columnsFrom": [
+            "tenant_id",
+            "broadcast_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "campaign_actions_bulk_operation_fk": {
+          "name": "campaign_actions_bulk_operation_fk",
+          "tableFrom": "campaign_actions",
+          "tableTo": "bulk_operations",
+          "columnsFrom": [
+            "tenant_id",
+            "bulk_operation_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {
+        "campaign_actions_broadcast_kind_check": {
+          "name": "campaign_actions_broadcast_kind_check",
+          "value": "broadcast_id IS NULL OR kind = 'ANNOUNCEMENT'"
+        },
+        "campaign_actions_bulk_kind_check": {
+          "name": "campaign_actions_bulk_kind_check",
+          "value": "bulk_operation_id IS NULL OR kind IN ('WALLET_GIFT', 'TRAFFIC_GIFT', 'TIME_GIFT')"
+        },
         "campaign_actions_kind_check": {
           "name": "campaign_actions_kind_check",
           "value": "kind IN ('DISCOUNT', 'CASHBACK', 'WALLET_GIFT', 'TRAFFIC_GIFT', 'TIME_GIFT', 'ANNOUNCEMENT')"

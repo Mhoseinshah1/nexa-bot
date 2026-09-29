@@ -1,7 +1,9 @@
 import { sql, type SQL } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  AUDIENCE_ERROR_CODES,
   EMPTY_PRODUCT_DISPLAY,
+  errors,
   isNexaError,
   money,
   systemJobActor,
@@ -108,6 +110,29 @@ describe('campaigns', () => {
   let n = 0;
   const key = (): string => `campaign-key-${(n += 1)}`;
 
+  /** The service's dependencies: the container's own, with the test's clock. */
+  const deps = (): ConstructorParameters<typeof CampaignService>[0] => ({
+    campaigns: repository,
+    discounts: new DrizzleDiscountRepository(ctx.container.database.db),
+    cashbackRules: new DrizzleCashbackRuleRepository(ctx.container.database.db),
+    discountAdmin: ctx.container.discounts,
+    cashbackAdmin: ctx.container.cashbackRules,
+    calendar: calendar,
+    // The SHARED engine, the one Broadcast and the mass actions use: no stand-in.
+    audience: ctx.container.audience,
+    broadcasts: ctx.container.broadcasts,
+    massActions: ctx.container.bulkOperations,
+    guard: ctx.container.guard,
+    uow: ctx.container.uow,
+    audit: ctx.container.audit,
+    opsLog: ctx.container.opsLogWriter,
+    sessions: ctx.container.sessions,
+    idempotency: ctx.container.idempotency,
+    scopeActivity: ctx.container.tenants,
+    clock,
+    ids: ctx.container.ids,
+  });
+
   beforeAll(async () => {
     ctx = await createTestContext();
   }, 120_000);
@@ -121,27 +146,8 @@ describe('campaigns', () => {
     const c = ctx.container;
     clock = new TestClock();
     repository = new DrizzleCampaignRepository(c.database.db);
-    service = new CampaignService({
-      campaigns: repository,
-      discounts: new DrizzleDiscountRepository(c.database.db),
-      cashbackRules: new DrizzleCashbackRuleRepository(c.database.db),
-      discountAdmin: c.discounts,
-      cashbackAdmin: c.cashbackRules,
-      calendar: (calendar = new IntlCampaignCalendar(
-        new CachedTenantPresentationReader(c.tenants, clock),
-      )),
-      // The SHARED engine, the one Broadcast and the mass actions use: no stand-in.
-      audience: c.audience,
-      guard: c.guard,
-      uow: c.uow,
-      audit: c.audit,
-      opsLog: c.opsLogWriter,
-      sessions: c.sessions,
-      idempotency: c.idempotency,
-      scopeActivity: c.tenants,
-      clock,
-      ids: c.ids,
-    });
+    calendar = new IntlCampaignCalendar(new CachedTenantPresentationReader(c.tenants, clock));
+    service = new CampaignService(deps());
     loop = new CampaignScheduleLoop(service, repository, {
       scope: () => tenantA,
       intervalMs: 60_000,
@@ -662,7 +668,23 @@ describe('campaigns', () => {
 
       const results = await service.results(tenantA, owner, id);
       // No field beyond what a row persists: no revenue caused, no conversion.
-      expect(Object.keys(results).sort()).toEqual(['cashback', 'discount']);
+      expect(Object.keys(results).sort()).toEqual([
+        'announcement',
+        'cashback',
+        'discount',
+        'targeted',
+        'timeGift',
+        'trafficGift',
+        'walletGift',
+      ]);
+      expect(results.targeted).toBe(1);
+      // A campaign with no gift and no announcement reports none: nothing is invented.
+      expect([
+        results.announcement,
+        results.walletGift,
+        results.trafficGift,
+        results.timeGift,
+      ]).toEqual([null, null, null, null]);
       expect(results.discount?.byOrderState).toEqual([
         { state: 'AWAITING_PAYMENT', count: 1, amount: 20_000n, currency: 'IRT' },
         { state: 'PAID', count: 1, amount: 20_000n, currency: 'IRT' },
@@ -673,6 +695,194 @@ describe('campaigns', () => {
       ]);
       expect(results.cashback?.earned).toBe(8_000n);
       expect(before.totals.discount.amountMinor).toBe(0n);
+    });
+  });
+
+  describe('the announcement is a broadcast of the shared lane', () => {
+    const ANNOUNCE = {
+      kind: 'ANNOUNCEMENT' as const,
+      terms: { body: 'سلام {firstName}، جشنواره شروع شد', buttons: [] },
+    };
+
+    const broadcastOf = async (campaignId: string) =>
+      (
+        await rows<{ id: string; state: string; recipient_count: number | null }>(sql`
+          SELECT b.id, b.state, b.recipient_count
+            FROM campaign_actions a JOIN broadcasts b ON b.id = a.broadcast_id
+           WHERE a.campaign_id = ${campaignId} AND a.kind = 'ANNOUNCEMENT'`)
+      )[0];
+
+    it('launches it at the confirmation, scheduled for the start, to the frozen audience', async () => {
+      const id = await draftCampaign([{ kind: 'DISCOUNT', terms: TWENTY_PERCENT }, ANNOUNCE], {
+        fromMs: 2 * HOUR,
+        toMs: DAY,
+      });
+      const detail = await schedule(id);
+      const action = detail.actions.find((a) => a.kind === 'ANNOUNCEMENT');
+      expect(action?.state).toBe('LAUNCHED');
+      const broadcast = await broadcastOf(id);
+      expect(broadcast?.state).toBe('SCHEDULED');
+      expect(broadcast?.recipient_count).toBe(1);
+      const scheduled = await rows<{ scheduled_at: Date }>(
+        sql`SELECT scheduled_at FROM broadcasts WHERE id = ${broadcast?.id}`,
+      );
+      expect(new Date(scheduled[0]?.scheduled_at as Date).getTime()).toBe(
+        detail.campaign.startsAt.getTime(),
+      );
+
+      // A replayed launch hands nothing over twice.
+      await service.launchPending(tenantA, owner, id);
+      expect(await count(sql`SELECT count(*)::int AS n FROM broadcasts`)).toBe(1);
+
+      // Cancelling before the start cancels the broadcast: nobody is messaged.
+      await service.cancel(tenantA, owner, { idempotencyKey: key(), campaignId: id });
+      expect((await broadcastOf(id))?.state).toBe('CANCELLED');
+    });
+
+    it('a failed announcement rolls back no financial action', async () => {
+      const failing = new CampaignService({
+        ...deps(),
+        broadcasts: {
+          ...ctx.container.broadcasts,
+          create: ctx.container.broadcasts.create.bind(ctx.container.broadcasts),
+          get: ctx.container.broadcasts.get.bind(ctx.container.broadcasts),
+          // Broadcast refuses the hand-over on its merits.
+          launch: () =>
+            Promise.reject(errors.conflict(AUDIENCE_ERROR_CODES.CHANGED, 'refused for the test')),
+        } as never,
+      });
+      const id = await draftCampaign([{ kind: 'DISCOUNT', terms: TWENTY_PERCENT }, ANNOUNCE]);
+      const { audience } = await failing.preview(tenantA, owner, id);
+      const detail = await failing.schedule(tenantA, owner, {
+        idempotencyKey: key(),
+        campaignId: id,
+        expectedDefinitionHash: audience.definitionHash,
+        expectedRecipients: audience.customers,
+        expectedFingerprint: audience.fingerprint,
+      });
+      expect(detail.campaign.state).toBe('SCHEDULED');
+      expect(detail.actions.find((a) => a.kind === 'ANNOUNCEMENT')?.state).toBe('FAILED');
+      // The discount stands: the message and the money are separate records.
+      expect(detail.discount?.status).toBe('ACTIVE');
+      expect((await orderDraft()).totals.total.amountMinor).toBe(80_000n);
+    });
+  });
+
+  describe('gifts are mass operations of the shared engine', () => {
+    const GIFT = {
+      kind: 'WALLET_GIFT' as const,
+      terms: { amountMinor: '5000', currency: 'IRT' as const, notify: false },
+    };
+
+    /** The confirmation exactly as the operator's page sends it, from the preview. */
+    async function confirmGift(
+      id: string,
+      tamper: { totalMinor?: string; typedCount?: number | null } = {},
+    ) {
+      const preview = await service.preview(tenantA, owner, id);
+      const wallet = preview.gifts.WALLET_GIFT;
+      if (wallet === undefined) throw new Error('no wallet gift preview');
+      return service.schedule(tenantA, owner, {
+        idempotencyKey: key(),
+        campaignId: id,
+        expectedDefinitionHash: preview.audience.definitionHash,
+        expectedRecipients: preview.audience.customers,
+        expectedFingerprint: preview.audience.fingerprint,
+        walletGift: {
+          count: wallet.count,
+          fingerprint: wallet.fingerprint,
+          typedCount: tamper.typedCount === undefined ? wallet.count : tamper.typedCount,
+          totalMinor: tamper.totalMinor ?? wallet.totalLiability?.amountMinor ?? '0',
+        },
+      });
+    }
+
+    const massCredits = () =>
+      rows<{ customer_id: string; amount: string }>(
+        sql`SELECT customer_id, amount::text AS amount FROM wallet_entries WHERE reason = 'MASS_CREDIT'`,
+      );
+
+    it('shows the exact liability, then credits each customer exactly once from the start', async () => {
+      const id = await draftCampaign([GIFT]);
+      const preview = await service.preview(tenantA, owner, id);
+      expect(preview.gifts.WALLET_GIFT?.count).toBe(1);
+      expect(preview.gifts.WALLET_GIFT?.totalLiability).toEqual({
+        amountMinor: '5000',
+        currency: 'IRT',
+      });
+      expect(preview.typedCountRequired.walletGift).toBe(true);
+
+      const detail = await confirmGift(id);
+      const action = detail.actions.find((a) => a.kind === 'WALLET_GIFT');
+      expect(action?.state).toBe('LAUNCHED');
+      const op = await rows<{ not_before: Date }>(
+        sql`SELECT not_before FROM bulk_operations WHERE id = ${action?.bulkOperationId}`,
+      );
+      expect(new Date(op[0]?.not_before as Date).getTime()).toBe(
+        detail.campaign.startsAt.getTime(),
+      );
+
+      await ctx.container.bulkOperationProcessor.pass(tenantA);
+      await ctx.container.bulkOperationProcessor.pass(tenantA);
+      await service.launchPending(tenantA, owner, id);
+      expect(await massCredits()).toEqual([{ customer_id: customerA, amount: '5000' }]);
+
+      // Cancelling afterwards stops what is left and takes nothing back.
+      await service.cancel(tenantA, owner, { idempotencyKey: key(), campaignId: id });
+      expect(await massCredits()).toHaveLength(1);
+      const results = await service.results(tenantA, owner, id);
+      expect(results.walletGift?.credited).toEqual({ amountMinor: 5000n, currency: 'IRT' });
+      expect(results.walletGift?.counts.credited).toBe(1);
+    });
+
+    it('credits nothing before the start, and a cancel before it credits nothing at all', async () => {
+      const id = await draftCampaign([GIFT], { fromMs: 2 * HOUR, toMs: DAY });
+      await confirmGift(id);
+      await ctx.container.bulkOperationProcessor.pass(tenantA);
+      expect(await massCredits()).toHaveLength(0);
+
+      await service.cancel(tenantA, owner, { idempotencyKey: key(), campaignId: id });
+      await ctx.container.bulkOperationProcessor.pass(tenantA);
+      expect(await massCredits()).toHaveLength(0);
+      expect(await rows<{ state: string }>(sql`SELECT state FROM bulk_operation_items`)).toEqual([
+        { state: 'CANCELLED' },
+      ]);
+    });
+
+    it('refuses a confirmation whose liability or typed count is not what the preview showed', async () => {
+      const id = await draftCampaign([GIFT]);
+      expect(await refusal(confirmGift(id, { totalMinor: '4000' }))).toBe('audience.changed');
+      expect(await refusal(confirmGift(id, { typedCount: null }))).toBe(
+        'campaign.confirmation_required',
+      );
+      expect(await stateOf(id)).toBe('DRAFT');
+      expect(await count(sql`SELECT count(*)::int AS n FROM bulk_operations`)).toBe(0);
+    });
+
+    it('charges the mass-credit permission: a campaign is no way round it', async () => {
+      const sales = adminActorFor(
+        await createAdmin(ctx.container, tenantA, { username: 'sales-g', roleKeys: ['sales'] }),
+      );
+      const id = await draftCampaign([GIFT], { actor: sales });
+      expect(await refusal(service.preview(tenantA, sales, id))).toBe('platform.permission_denied');
+      expect(
+        await refusal(
+          service.schedule(tenantA, sales, {
+            idempotencyKey: key(),
+            campaignId: id,
+            expectedDefinitionHash: 'a'.repeat(64),
+            expectedRecipients: 1,
+            expectedFingerprint: 'b'.repeat(32),
+            walletGift: {
+              count: 1,
+              fingerprint: 'b'.repeat(32),
+              typedCount: 1,
+              totalMinor: '5000',
+            },
+          }),
+        ),
+      ).toBe('platform.permission_denied');
+      expect(await count(sql`SELECT count(*)::int AS n FROM bulk_operations`)).toBe(0);
     });
   });
 });

@@ -1,5 +1,9 @@
 import type {
   AudienceDefinition,
+  CampaignAnnouncementTerms,
+  CampaignTimeGiftTerms,
+  CampaignTrafficGiftTerms,
+  CampaignWalletGiftTerms,
   Calendar,
   CampaignActionKind,
   CampaignActionState,
@@ -50,7 +54,30 @@ export interface CampaignCashbackTerms {
 /** An action's frozen configuration, by kind. */
 export type CampaignActionConfig =
   | { readonly kind: 'DISCOUNT'; readonly terms: CampaignDiscountTerms }
-  | { readonly kind: 'CASHBACK'; readonly terms: CampaignCashbackTerms };
+  | { readonly kind: 'CASHBACK'; readonly terms: CampaignCashbackTerms }
+  | { readonly kind: 'WALLET_GIFT'; readonly terms: CampaignWalletGiftTerms }
+  | { readonly kind: 'TRAFFIC_GIFT'; readonly terms: CampaignTrafficGiftTerms }
+  | { readonly kind: 'TIME_GIFT'; readonly terms: CampaignTimeGiftTerms }
+  | { readonly kind: 'ANNOUNCEMENT'; readonly terms: CampaignAnnouncementTerms };
+
+/** The kinds the shared mass-action engine runs. */
+export type CampaignGiftConfig = Extract<
+  CampaignActionConfig,
+  { kind: 'WALLET_GIFT' | 'TRAFFIC_GIFT' | 'TIME_GIFT' }
+>;
+
+/**
+ * A launched action's frozen confirmation binding: exactly what the operator confirmed for
+ * its engine, kept so an interrupted hand-over is retried with the same request under the
+ * same key (the engine then replays, never creates a second operation).
+ */
+export interface CampaignLaunchBindingRecord {
+  readonly count: number;
+  readonly fingerprint: string;
+  readonly typedCount: number | null;
+  /** Wallet gift only: amount × count, minor units, in the gift's currency. */
+  readonly totalMinor: string | null;
+}
 
 export interface CampaignRecord {
   readonly id: string;
@@ -85,6 +112,9 @@ export interface CampaignActionRecord {
   readonly config: CampaignActionConfig;
   readonly discountId: string | null;
   readonly cashbackRuleId: string | null;
+  readonly broadcastId: string | null;
+  readonly bulkOperationId: string | null;
+  readonly binding: CampaignLaunchBindingRecord | null;
   readonly failureCode: string | null;
   readonly launchedAt: Date | null;
 }
@@ -217,6 +247,32 @@ export interface CampaignRepository {
 
   /** Campaign ids whose end has passed while ACTIVE or PAUSED, oldest first, bounded. */
   dueToComplete(scope: TenantContext, now: Date, limit: number): Promise<readonly string[]>;
+
+  /** Freezes each launched action's binding, at the schedule. Conditional on PENDING. */
+  bindAction(
+    scope: TenantContext,
+    input: { readonly actionId: string; readonly binding: CampaignLaunchBindingRecord },
+    tx: unknown,
+  ): Promise<boolean>;
+
+  /** Names the engine record a launched action became, and marks it LAUNCHED. */
+  linkEngine(
+    scope: TenantContext,
+    input: {
+      readonly actionId: string;
+      readonly broadcastId?: string;
+      readonly bulkOperationId?: string;
+      readonly now: Date;
+    },
+    tx?: unknown,
+  ): Promise<boolean>;
+
+  /** PENDING → FAILED with the engine's refusal code. */
+  failAction(
+    scope: TenantContext,
+    input: { readonly actionId: string; readonly code: string; readonly now: Date },
+    tx?: unknown,
+  ): Promise<boolean>;
 
   /** Names the rule an action created, and marks it LAUNCHED. Conditional on PENDING. */
   linkRule(

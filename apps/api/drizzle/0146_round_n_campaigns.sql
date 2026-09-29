@@ -7,10 +7,15 @@ CREATE TABLE "campaign_actions" (
 	"config" jsonb NOT NULL,
 	"discount_id" uuid,
 	"cashback_rule_id" uuid,
+	"binding" jsonb,
+	"broadcast_id" uuid,
+	"bulk_operation_id" uuid,
 	"failure_code" text,
 	"launched_at" timestamp with time zone,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "campaign_actions_broadcast_kind_check" CHECK (broadcast_id IS NULL OR kind = 'ANNOUNCEMENT'),
+	CONSTRAINT "campaign_actions_bulk_kind_check" CHECK (bulk_operation_id IS NULL OR kind IN ('WALLET_GIFT', 'TRAFFIC_GIFT', 'TIME_GIFT')),
 	CONSTRAINT "campaign_actions_kind_check" CHECK (kind IN ('DISCOUNT', 'CASHBACK', 'WALLET_GIFT', 'TRAFFIC_GIFT', 'TIME_GIFT', 'ANNOUNCEMENT')),
 	CONSTRAINT "campaign_actions_state_check" CHECK (state IN ('PENDING', 'LAUNCHED', 'CANCELLED', 'FAILED')),
 	CONSTRAINT "campaign_actions_discount_kind_check" CHECK (discount_id IS NULL OR kind = 'DISCOUNT'),
@@ -62,6 +67,8 @@ ALTER TABLE "campaign_actions" ADD CONSTRAINT "campaign_actions_tenant_id_tenant
 ALTER TABLE "campaign_actions" ADD CONSTRAINT "campaign_actions_campaign_fk" FOREIGN KEY ("tenant_id","campaign_id") REFERENCES "public"."campaigns"("tenant_id","id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "campaign_actions" ADD CONSTRAINT "campaign_actions_discount_fk" FOREIGN KEY ("tenant_id","discount_id") REFERENCES "public"."discounts"("tenant_id","id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "campaign_actions" ADD CONSTRAINT "campaign_actions_cashback_rule_fk" FOREIGN KEY ("tenant_id","cashback_rule_id") REFERENCES "public"."cashback_rules"("tenant_id","id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "campaign_actions" ADD CONSTRAINT "campaign_actions_broadcast_fk" FOREIGN KEY ("tenant_id","broadcast_id") REFERENCES "public"."broadcasts"("tenant_id","id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "campaign_actions" ADD CONSTRAINT "campaign_actions_bulk_operation_fk" FOREIGN KEY ("tenant_id","bulk_operation_id") REFERENCES "public"."bulk_operations"("tenant_id","id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "campaigns" ADD CONSTRAINT "campaigns_tenant_id_tenants_id_fk" FOREIGN KEY ("tenant_id") REFERENCES "public"."tenants"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "campaigns" ADD CONSTRAINT "campaigns_created_by_fk" FOREIGN KEY ("tenant_id","created_by_admin_id") REFERENCES "public"."admins"("tenant_id","id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "campaigns" ADD CONSTRAINT "campaigns_scheduled_by_fk" FOREIGN KEY ("tenant_id","scheduled_by_admin_id") REFERENCES "public"."admins"("tenant_id","id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
@@ -69,6 +76,8 @@ ALTER TABLE "campaigns" ADD CONSTRAINT "campaigns_cancelled_by_fk" FOREIGN KEY (
 CREATE UNIQUE INDEX "campaign_actions_campaign_kind_key" ON "campaign_actions" USING btree ("tenant_id","campaign_id","kind");--> statement-breakpoint
 CREATE UNIQUE INDEX "campaign_actions_discount_key" ON "campaign_actions" USING btree ("tenant_id","discount_id") WHERE discount_id IS NOT NULL;--> statement-breakpoint
 CREATE UNIQUE INDEX "campaign_actions_cashback_rule_key" ON "campaign_actions" USING btree ("tenant_id","cashback_rule_id") WHERE cashback_rule_id IS NOT NULL;--> statement-breakpoint
+CREATE UNIQUE INDEX "campaign_actions_broadcast_key" ON "campaign_actions" USING btree ("tenant_id","broadcast_id") WHERE broadcast_id IS NOT NULL;--> statement-breakpoint
+CREATE UNIQUE INDEX "campaign_actions_bulk_operation_key" ON "campaign_actions" USING btree ("tenant_id","bulk_operation_id") WHERE bulk_operation_id IS NOT NULL;--> statement-breakpoint
 CREATE INDEX "campaigns_tenant_created_idx" ON "campaigns" USING btree ("tenant_id","created_at","id");--> statement-breakpoint
 CREATE INDEX "campaigns_due_start_idx" ON "campaigns" USING btree ("tenant_id","starts_at","id") WHERE state = 'SCHEDULED';--> statement-breakpoint
 CREATE INDEX "campaigns_due_end_idx" ON "campaigns" USING btree ("tenant_id","ends_at","id") WHERE state IN ('ACTIVE', 'PAUSED');
