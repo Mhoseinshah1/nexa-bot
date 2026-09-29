@@ -314,6 +314,25 @@ export class DrizzleOpsGroupRepository implements OpsGroupRepository {
     return rows.length > 0;
   }
 
+  async markHealthyForRecheck(
+    scope: ScopeContext,
+    input: { readonly now: Date },
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.db
+      .update(opsLogGroups)
+      .set({ health: 'UNVERIFIED', updatedAt: input.now })
+      .where(
+        and(
+          eq(opsLogGroups.tenantId, tenantId),
+          eq(opsLogGroups.status, 'CONNECTED'),
+          eq(opsLogGroups.health, 'HEALTHY'),
+        ),
+      )
+      .returning({ id: opsLogGroups.id });
+    return rows.length > 0;
+  }
+
   async noteDelivered(
     scope: ScopeContext,
     input: { readonly chatId: string; readonly category: string; readonly at: Date },

@@ -68,6 +68,17 @@ export class TelegramNotificationTransport implements NotificationTransport {
       };
     }
 
+    // HF-A4: a message queued before any operations group existed is addressed by the
+    // dispatcher's router, never here. Retryable, so it is kept rather than failed.
+    const chatId = message.destination.chatId;
+    if (chatId === null) {
+      return {
+        outcome: 'FAILED_RETRYABLE',
+        errorCode: 'ops_group.not_connected',
+        errorMessage: 'No operations log group is connected to send this to.',
+      };
+    }
+
     const scope: ScopeContext = {
       tenantId: asId<'TenantId'>(message.tenantId) as TenantId,
       botInstanceId: null,
@@ -110,7 +121,7 @@ export class TelegramNotificationTransport implements NotificationTransport {
     // renderer's HTML contract is unstated and contradictory, and we do not have one
     // global answer either.
     const body = textMessageBody({
-      chatId: message.destination.chatId,
+      chatId,
       text: message.text,
       html: message.html,
     });
@@ -128,6 +139,12 @@ export class TelegramNotificationTransport implements NotificationTransport {
     // rather than widened: a notification's identity is its row, and an operations
     // message nobody replies to has no use for Telegram's id.
     if (result.outcome === 'SUCCEEDED') return { outcome: 'SUCCEEDED' };
+    // HF-A4: a 429 says RATE, and the dispatcher treats it as throughput rather than a
+    // failure of the message. Only the 429 itself: a timeout or an unreadable answer is an
+    // unknown outcome and stays an ordinary, counted retry.
+    if (result.outcome === 'FAILED_RETRYABLE' && result.errorCode === 'telegram.rate_limited') {
+      return { ...result, rateLimited: true };
+    }
     // WP-A4: say WHY in flags, so the dispatcher never parses Telegram's sentence. A
     // missing topic is only meaningful when a topic was addressed.
     if (message.destination.topicId !== null && isMissingForumTopicError(result.errorMessage)) {

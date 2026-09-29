@@ -2505,6 +2505,11 @@ A second open point: whether a provider can GUARANTEE the subscription link surv
 move. Until one does, the customer is never promised it; the confirmation says the
 connection details may change and are sent again if they do.
 
+HF-A6A8 re-audited every adapter for this capability and for `DEVICE_LIMIT_ADJUSTMENT`, and
+added the per-panel «تغییر لوکیشن سرویس» policy switch, which is accepted only once a
+provider declares the capability. Neither verdict changed:
+`docs/provider-capability-audit.md` has the table, with the exact blocker for each provider.
+
 ## OQ-WPA7-01 — attachments on support's replies
 
 WP-A7 lets a CUSTOMER attach a photo or a document to a ticket; the file stays at Telegram

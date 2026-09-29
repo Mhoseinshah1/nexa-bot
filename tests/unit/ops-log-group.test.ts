@@ -130,6 +130,24 @@ describe('routing, not severity', () => {
     ).toBe(false);
   });
 
+  it('accepts a chat-less destination only when it is routed to an operations topic (HF-A4)', () => {
+    // Queued while no group was connected: nothing to snapshot, still routed to the group.
+    const waiting = { transport: 'TELEGRAM', chatId: null, topicId: null, opsTopic: 'PAYMENTS' };
+    expect(notificationDestinationSchema.parse(waiting)).toEqual(waiting);
+    // Without a route there would be nowhere to send it, ever: refused.
+    expect(
+      notificationDestinationSchema.safeParse({
+        transport: 'TELEGRAM',
+        chatId: null,
+        topicId: null,
+      }).success,
+    ).toBe(false);
+    expect(
+      notificationDestinationSchema.safeParse({ ...waiting, chatId: '' }).success,
+      'an empty chat is not "no chat"',
+    ).toBe(false);
+  });
+
   it('retires min_severity without breaking a stored value, and makes ten attempts the default', () => {
     const severity = settingDefinition('ops.notifications.min_severity' as SettingKey);
     expect(severity.consumer).toBe('PLANNED');

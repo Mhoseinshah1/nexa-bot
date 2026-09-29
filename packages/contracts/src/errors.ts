@@ -1311,7 +1311,11 @@ export const COMMERCE_ERROR_CODES = {
   SUPPORT_FAQ_VERSION_CONFLICT: 'commerce.support_faq_version_conflict',
   /** The tenant already holds `SUPPORT_FAQ_MAX_ENTRIES`. */
   SUPPORT_FAQ_LIMIT: 'commerce.support_faq_limit',
-  /** The uploaded banner is not a PNG/JPEG under the size bound, or is not what it claims. */
+  /**
+   * The uploaded banner is not a PNG/JPEG under the size bound, or is not what it claims.
+   * HF-A10: also a client app's image, whose `details.reason` adds `UNREADABLE` and
+   * `DIMENSIONS` to the banner's `EMPTY`, `TOO_LARGE` and `TYPE_MISMATCH`.
+   */
   MEDIA_INVALID: 'commerce.media_invalid',
   /** The gift shares do not total 100 while the flag is (or is being turned) on. */
   REFERRAL_GIFT_TERMS_INVALID: 'commerce.referral_gift_terms_invalid',

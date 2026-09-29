@@ -1,6 +1,6 @@
 {
-  "id": "28e7a7c1-58f5-48ee-857f-2a89eee2b588",
-  "prevId": "39348c19-c133-475e-a284-5a6d4fe95cf4",
+  "id": "d79360b9-2242-491f-9961-9ab8c14a7aa2",
+  "prevId": "28e7a7c1-58f5-48ee-857f-2a89eee2b588",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -2874,7 +2874,7 @@
       "checkConstraints": {
         "customer_notifications_kind_check": {
           "name": "customer_notifications_kind_check",
-          "value": "kind IN ('PAYMENT_REJECTED', 'PAYMENT_EXPIRED', 'ORDER_EXPIRED', 'SERVICE_ACTION_SUCCEEDED', 'SERVICE_ACTION_FAILED', 'SERVICE_PROVISION_DELAYED', 'PAYMENT_TRANSFER_RECORDED', 'ORDER_CANCELLED', 'WALLET_TOPUP_CREDITED', 'ORDER_REFUNDED_TO_WALLET', 'SERVICE_EXPIRY_FIRST', 'SERVICE_EXPIRY_SECOND', 'SERVICE_EXPIRED', 'SERVICE_USAGE_FIRST', 'SERVICE_USAGE_SECOND', 'SERVICE_USAGE_FINAL', 'TRIAL_NOT_DELIVERED', 'RECEIPT_CREDITED_TO_WALLET', 'WALLET_TOPUP_GIFT_CREDITED', 'REFUND_COMPLETED', 'GATEWAY_PAYMENT_FAILED', 'SERVICE_REFUND_REQUEST_REGISTERED', 'SERVICE_REFUND_REQUEST_APPROVED', 'SERVICE_REFUND_REQUEST_REJECTED', 'SERVICE_TRANSFER_RECEIVED', 'TICKET_REPLY', 'SERVICE_EXPIRY_EARLY', 'SERVICE_EXPIRY_DAY', 'WALLET_LOW_BALANCE', 'PAYMENT_PENDING_REMINDER', 'ORDER_PENDING_REMINDER')"
+          "value": "kind IN ('PAYMENT_REJECTED', 'PAYMENT_EXPIRED', 'ORDER_EXPIRED', 'SERVICE_ACTION_SUCCEEDED', 'SERVICE_ACTION_FAILED', 'SERVICE_PROVISION_DELAYED', 'PAYMENT_TRANSFER_RECORDED', 'ORDER_CANCELLED', 'WALLET_TOPUP_CREDITED', 'ORDER_REFUNDED_TO_WALLET', 'SERVICE_EXPIRY_FIRST', 'SERVICE_EXPIRY_SECOND', 'SERVICE_EXPIRED', 'SERVICE_USAGE_FIRST', 'SERVICE_USAGE_SECOND', 'SERVICE_USAGE_FINAL', 'TRIAL_NOT_DELIVERED', 'RECEIPT_CREDITED_TO_WALLET', 'WALLET_TOPUP_GIFT_CREDITED', 'REFUND_COMPLETED', 'GATEWAY_PAYMENT_FAILED', 'SERVICE_REFUND_REQUEST_REGISTERED', 'SERVICE_REFUND_REQUEST_APPROVED', 'SERVICE_REFUND_REQUEST_REJECTED', 'SERVICE_TRANSFER_RECEIVED', 'TICKET_REPLY', 'SERVICE_EXPIRY_EARLY', 'SERVICE_EXPIRY_DAY', 'WALLET_LOW_BALANCE', 'PAYMENT_PENDING_REMINDER', 'ORDER_PENDING_REMINDER', 'TICKET_REPLY_ATTACHMENT')"
         },
         "customer_notifications_state_check": {
           "name": "customer_notifications_state_check",
@@ -18052,6 +18052,233 @@
         "ticket_messages_key_check": {
           "name": "ticket_messages_key_check",
           "value": "(idempotency_key IS NULL) = (request_hash IS NULL)\n          AND (idempotency_key IS NULL OR length(idempotency_key) BETWEEN 1 AND 300)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.ticket_reply_files": {
+      "name": "ticket_reply_files",
+      "schema": "",
+      "columns": {
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "message_id": {
+          "name": "message_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "ticket_id": {
+          "name": "ticket_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "bot_instance_id": {
+          "name": "bot_instance_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "mime_type": {
+          "name": "mime_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "file_name": {
+          "name": "file_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "byte_length": {
+          "name": "byte_length",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "sha256": {
+          "name": "sha256",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "content": {
+          "name": "content",
+          "type": "bytea",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "purged_at": {
+          "name": "purged_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "telegram_file_id": {
+          "name": "telegram_file_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "telegram_file_unique_id": {
+          "name": "telegram_file_unique_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "ticket_reply_files_staged_idx": {
+          "name": "ticket_reply_files_staged_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "content IS NOT NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "ticket_reply_files_retention_idx": {
+          "name": "ticket_reply_files_retention_idx",
+          "columns": [
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "content IS NOT NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "ticket_reply_files_tenant_id_tenants_id_fk": {
+          "name": "ticket_reply_files_tenant_id_tenants_id_fk",
+          "tableFrom": "ticket_reply_files",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "ticket_reply_files_bot_instance_id_bot_instances_id_fk": {
+          "name": "ticket_reply_files_bot_instance_id_bot_instances_id_fk",
+          "tableFrom": "ticket_reply_files",
+          "tableTo": "bot_instances",
+          "columnsFrom": [
+            "bot_instance_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "ticket_reply_files_message_fk": {
+          "name": "ticket_reply_files_message_fk",
+          "tableFrom": "ticket_reply_files",
+          "tableTo": "ticket_messages",
+          "columnsFrom": [
+            "tenant_id",
+            "message_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "ticket_reply_files_ticket_fk": {
+          "name": "ticket_reply_files_ticket_fk",
+          "tableFrom": "ticket_reply_files",
+          "tableTo": "tickets",
+          "columnsFrom": [
+            "tenant_id",
+            "ticket_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "ticket_reply_files_pk": {
+          "name": "ticket_reply_files_pk",
+          "columns": [
+            "tenant_id",
+            "message_id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "ticket_reply_files_kind_check": {
+          "name": "ticket_reply_files_kind_check",
+          "value": "kind IN ('PHOTO', 'DOCUMENT')"
+        },
+        "ticket_reply_files_type_check": {
+          "name": "ticket_reply_files_type_check",
+          "value": "CASE mime_type WHEN 'image/jpeg' THEN kind = 'PHOTO' AND byte_length BETWEEN 1 AND 5242880 WHEN 'image/png' THEN kind = 'PHOTO' AND byte_length BETWEEN 1 AND 5242880 WHEN 'application/pdf' THEN kind = 'DOCUMENT' AND byte_length BETWEEN 1 AND 10485760 WHEN 'text/plain' THEN kind = 'DOCUMENT' AND byte_length BETWEEN 1 AND 1048576 ELSE false END"
+        },
+        "ticket_reply_files_content_check": {
+          "name": "ticket_reply_files_content_check",
+          "value": "(content IS NULL) = (purged_at IS NOT NULL)\n          AND (content IS NULL OR octet_length(content) = byte_length)"
+        },
+        "ticket_reply_files_telegram_check": {
+          "name": "ticket_reply_files_telegram_check",
+          "value": "(telegram_file_id IS NULL) = (telegram_file_unique_id IS NULL)"
+        },
+        "ticket_reply_files_sha256_check": {
+          "name": "ticket_reply_files_sha256_check",
+          "value": "sha256 ~ '^[0-9a-f]{64}$'"
+        },
+        "ticket_reply_files_name_check": {
+          "name": "ticket_reply_files_name_check",
+          "value": "length(file_name) BETWEEN 1 AND 200"
         }
       },
       "isRLSEnabled": false

@@ -255,6 +255,18 @@ const KNOBS: Readonly<
   },
 };
 
+/**
+ * Customer actions whose switch is DRAWN even on a panel that cannot perform them —
+ * disabled, with the server's reason beside it — rather than left out (HF-A6A8).
+ *
+ * «تغییر لوکیشن سرویس» is the one the owner asked to see on every panel: no provider
+ * declares `LOCATION_CHANGE` in this release, and an operator looking for the switch
+ * should learn that the panel cannot move an account rather than wonder where it went.
+ * A disabled control is never a promise: it sends nothing (`policyFrom` sends a stored
+ * entry back unchanged, which is all the server accepts for an unsupported action).
+ */
+const SHOWN_WHEN_UNSUPPORTED: readonly PanelCustomerAction[] = ['LOCATION_CHANGE'];
+
 interface ActionDraft {
   readonly customerEnabled: boolean;
   /** The knob, as TEXT: '' is "no extra limit", which the API spells null. */
@@ -418,6 +430,11 @@ function PolicyCard({ advanced, mayEdit }: { advanced: PanelAdvancedResponse; ma
   const actions = PANEL_CUSTOMER_ACTIONS.filter((action) =>
     advanced.registry.some((entry) => entry.row === action && entry.supported),
   );
+  // Shown, disabled, with the registry's own reason (the gap), never enabled here.
+  const unsupportedShown = SHOWN_WHEN_UNSUPPORTED.flatMap((action) => {
+    const entry = advanced.registry.find((candidate) => candidate.row === action);
+    return entry === undefined || entry.supported ? [] : [{ action, gap: entry.gap }];
+  });
   const [mode, setMode] = useState<PanelDeliveryMode>(advanced.policy.policy.delivery.mode);
   const [draft, setDraft] = useState(() => draftFrom(advanced.policy.policy, actions));
   const [invalid, setInvalid] = useState<readonly string[]>([]);
@@ -520,6 +537,24 @@ function PolicyCard({ advanced, mayEdit }: { advanced: PanelAdvancedResponse; ma
             </div>
           );
         })}
+        {unsupportedShown.map(({ action, gap }) => (
+          <div key={action}>
+            <p className="field-group-head">{t(REGISTRY_ROW_LABELS[action])}</p>
+            <label className="check">
+              <input
+                type="checkbox"
+                disabled
+                checked={false}
+                readOnly
+                aria-label={`${t('web.policy_customer_enabled')} — ${t(REGISTRY_ROW_LABELS[action])}`}
+              />
+              {t('web.policy_customer_enabled')}
+            </label>
+            <p className="faint small">
+              {t('web.policy_action_unsupported')} {t(GAP_LABELS[gap ?? 'NOT_SUPPORTED'])}
+            </p>
+          </div>
+        ))}
         <Field label={t('web.policy_delivery')} hint={t('web.policy_delivery_hint')}>
           <div className="stack-sm">
             {PANEL_DELIVERY_MODES.map((candidate) => (

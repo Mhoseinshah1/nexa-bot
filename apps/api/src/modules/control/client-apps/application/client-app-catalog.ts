@@ -10,6 +10,7 @@ import {
 } from '@nexa/contracts';
 import { isClientAppRelevant } from '../domain/relevance.js';
 import type {
+  ClientAppImageContent,
   ClientAppRecord,
   ClientAppRepository,
   CustomerServiceFact,
@@ -54,10 +55,16 @@ export interface ClientAppDetail {
     readonly files: boolean;
   } | null;
   readonly manyServices: boolean;
+  /**
+   * HF-A10. The entry's picture, sent ahead of the screen; null when it has none, which
+   * is the emoji-and-text screen exactly as before. Decorative: the surface drops it if
+   * Telegram will not take it and sends the screen regardless.
+   */
+  readonly image: ClientAppImageContent | null;
 }
 
 export interface ClientAppCatalogDeps {
-  readonly repository: Pick<ClientAppRepository, 'list' | 'find'>;
+  readonly repository: Pick<ClientAppRepository, 'list' | 'find' | 'imageContent'>;
   readonly facts: CustomerServiceFactsSource;
 }
 
@@ -124,6 +131,9 @@ export class ClientAppCatalog {
     const readsLinks =
       row.deliveryKinds.length === 0 || row.deliveryKinds.includes('SUBSCRIPTION_LINK');
     const only = facts.length === 1 ? (facts[0] as CustomerServiceFact) : null;
+    // The bytes only when the row says there are some: most entries have none.
+    const image =
+      row.image === null ? null : await this.deps.repository.imageContent(scope, row.id);
 
     return {
       id: row.id,
@@ -144,6 +154,7 @@ export class ClientAppCatalog {
               files: readsFiles && only.filesOffered,
             },
       manyServices: facts.length > 1,
+      image,
     };
   }
 }
