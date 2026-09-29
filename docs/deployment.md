@@ -1228,6 +1228,23 @@ While it runs:
 Nothing needs doing before rolling back past WP-A9. After the roll-forward, a wallet that
 fell below its threshold during the rollback is told on the first low-balance pass, once.
 
+### What a rollback hides: client app pictures (HF-A10)
+
+HF-A10 lets an operator attach a PNG or JPEG picture to a client app entry. The bot
+sends it ahead of that app's screen. The migration adds seven nullable `image_*`
+columns and one CHECK to `client_apps`. The release before HF-A10 names its columns
+explicitly and never reads or writes these, and its inserts leave them NULL, which
+the CHECK accepts. While it runs:
+
+- **No picture is sent.** Every app screen is the emoji-and-text screen it was
+  before HF-A10.
+- **The old Web Admin cannot show, upload or remove a picture.** An edit, a switch
+  on or off, or a delete there leaves a stored picture as it was. A delete removes
+  the picture with its row, as it does on either release.
+
+Nothing needs doing before rolling back past HF-A10. After the roll-forward, every
+picture that was not deleted with its entry is sent again.
+
 ### How far back you can roll
 
 **One release**, safely. Migrations are expand-only within a release
