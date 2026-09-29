@@ -131,6 +131,8 @@ export async function resetDatabase(db: Database): Promise<void> {
        ticket_messages, tickets, ticket_categories, ticket_category_seeds,
        -- Package D: the custom service, before the orders, panels and customers it names.
        order_custom_service_terms, custom_service_price_rules, custom_service_locations,
+       -- WP-A4: the operations log group, its topics and its connection codes.
+       ops_log_topics, ops_log_connect_codes, ops_log_groups,
        -- WP-A6: the change requests, then the locations they and the commercial actions name.
        service_location_changes, service_locations,
        -- Customer UX completion. Named before the tables they reference.

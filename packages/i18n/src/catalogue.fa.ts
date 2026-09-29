@@ -35,7 +35,18 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   // installation read Persian too, and a mixed-language operations channel is
   // how a message stops being read at all.
   'ops.notification.operational_event':
-    '{severity} — <code>{code}</code>\n{message}\nتعداد رخداد: {occurrences}\nنخستین بار: {firstSeenAt}',
+    '{severity} — <code>{code}</code>\n{message}\n\n{details}\n🏢 مستأجر: <code>{tenantId}</code>\n🤖 ربات: <code>{botInstanceId}</code>\n🔗 شناسه پیگیری: <code>{correlationId}</code>\n🔁 تعداد رخداد: {occurrences}\n🕒 نخستین بار: {firstSeenAt}\n🕒 این بار: {lastSeenAt}',
+  // WP-A4 — the operations log group Nexa manages.
+  'ops.group.topic_name.system': '⚙️ سیستم و خطاها',
+  'ops.group.topic_name.payments': '💳 پرداخت‌ها',
+  'ops.group.connected':
+    '✅ این گروه به‌عنوان «گروه گزارش‌های مدیریتی» Nexa متصل شد.\nNexa اکنون دسترسی‌های ربات را بررسی می‌کند و تاپیک‌های خود را می‌سازد. نتیجه را در پنل مدیریت، بخش «گروه گزارش‌های مدیریتی» ببینید.',
+  'ops.group.connect_refused':
+    'این کد اتصال پذیرفته نشد: نامعتبر است، منقضی شده یا قبلاً استفاده شده است. از پنل مدیریت، بخش «گروه گزارش‌های مدیریتی»، یک کد تازه بگیرید.',
+  'ops.group.connect_not_forum':
+    'این گروه هنوز تاپیک‌دار نیست. در تنظیمات گروه گزینهٔ «Topics» را روشن کنید و سپس همین دستور را دوباره بفرستید؛ کد اتصال هنوز معتبر است.',
+  'ops.group.test':
+    '🧪 پیام آزمایشی گروه گزارش‌های مدیریتی\nتاپیک: {topic}\nدرخواست‌کننده: {requestedBy}\nزمان: {at}',
   'ops.financial.order_paid':
     '✅ پرداخت سفارش تأیید شد\n\n💠 روش: {method} ({route})\n👤 کاربر: {displayName} | {username} | {telegramId}\n🔖 مرجع پرداخت: {reference}\n🆔 شناسه پرداخت: {paymentId}\n📦 سفارش: {orderId}\n💰 مبلغ اصل: {principal}\n💳 کارمزد درگاه: {fee}\n💵 مبلغ قابل پرداخت: {payable}\n🧾 شناسه فاکتور درگاه: {providerInvoiceId}\n📊 مبلغ نهایی گزارش‌شدهٔ درگاه (فقط برای بررسی): {providerFinalAmount}\n🔎 منبع تأیید: {evidence}\n🕒 زمان: {at}',
   'ops.financial.topup_credited':

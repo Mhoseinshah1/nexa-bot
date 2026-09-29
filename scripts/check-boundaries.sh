@@ -304,7 +304,9 @@ fi
 # argument the check previously made only about the DISPATCHER's name, while
 # the repository methods themselves were one `container.notificationRepository`
 # away from a controller.
-RESOLVER_LEAK=$(grep -rnE "settingsResolver|featureFlagResolver|templateResolver|notifications\.queue\(|notificationDispatcher|NotificationDispatcher|failExhausted|claimDue|activeTenants|releaseClaim|opsLogWriter|panelMonitor|PanelMonitorService|claimTenants|dueForTenants|refreshTenantBounds" \
+# WP-A4 adds the ops group's dispatcher and worker entry points: `route` creates topics
+# as SYSTEM_JOB, and the requeue repository methods move notifications cross-module.
+RESOLVER_LEAK=$(grep -rnE "settingsResolver|featureFlagResolver|templateResolver|notifications\.queue\(|notificationDispatcher|NotificationDispatcher|failExhausted|claimDue|activeTenants|releaseClaim|opsLogWriter|panelMonitor|PanelMonitorService|claimTenants|dueForTenants|refreshTenantBounds|opsGroups\.(route|noteDelivered|noteProblem|currentDestination|maintain)\b|opsGroupMaintainer|OpsGroupRouter|requeuePreserved" \
   apps/api/src/surfaces 2>/dev/null || true)
 if [ -n "$RESOLVER_LEAK" ]; then
   fail "A surface reaches an unguarded resolver, the notification queue, the dispatcher, or cross-tenant housekeeping" \

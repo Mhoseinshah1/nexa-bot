@@ -330,6 +330,116 @@ export const TEMPLATES = [
         required: false,
         repeatable: false,
       },
+      // WP-A4: the detail an operator needs to investigate, all optional so an override
+      // written before them still validates and renders.
+      {
+        token: 'lastSeenAt',
+        type: 'DATETIME',
+        description: 'When this occurrence was recorded.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'tenantId',
+        type: 'STRING',
+        description: 'The tenant the event belongs to.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'botInstanceId',
+        type: 'STRING',
+        description: 'The bot instance the event concerns, when it concerns one.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'details',
+        type: 'STRING',
+        description:
+          'Safe structured detail, one `name: value` per line: ids (user, service, order, ' +
+          'payment, panel, operation), the state transition and the reason or error code. ' +
+          'Drawn from an allow-list and redacted: never a token, a secret, a subscription ' +
+          'link or a provider payload.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'correlationId',
+        type: 'STRING',
+        description: 'The correlation id of the transaction that recorded the event.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  // WP-A4 — the Nexa-managed operations log group.
+  {
+    key: 'ops.group.topic_name.system',
+    description:
+      'The name Nexa gives the forum topic it creates for system events and errors in the ' +
+      'operations log group. Read when the topic is created or recreated.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'ops.group.topic_name.payments',
+    description:
+      'The name Nexa gives the forum topic it creates for the payments log in the operations ' +
+      'log group. Read when the topic is created or recreated.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'ops.group.connected',
+    description:
+      'Posted in a group after a valid connection code bound it as the operations log group.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'ops.group.connect_refused',
+    description:
+      'Posted in a group whose connection code was not accepted. One sentence for every ' +
+      'reason — unknown, expired, used or for another bot — so the reply is not an oracle ' +
+      'for which codes exist.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'ops.group.connect_not_forum',
+    description:
+      'Posted in a group that sent a connection code but is not a forum supergroup. The code ' +
+      'is left unused, so the same one works once topics are switched on.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'ops.group.test',
+    description: 'A test message an operator sent into one topic of the operations log group.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'topic',
+        type: 'STRING',
+        description: 'The topic’s name.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'requestedBy',
+        type: 'STRING',
+        description: 'Display name of the administrator who asked for the test.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'at',
+        type: 'DATETIME',
+        description: 'When the test was requested.',
+        required: true,
+        repeatable: false,
+      },
     ],
   },
   {

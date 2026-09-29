@@ -1157,6 +1157,48 @@ cost the customer one message, answered with the sentence above. Nothing was wri
 wrongly in either release. Replies still waiting are delivered by the release that knows
 their kind.
 
+### What a rollback stops: the operations log group (WP-A4)
+
+WP-A4 connects the operations log group by a one-time code, keeps the group and the
+topics Nexa created in `ops_log_groups` and `ops_log_topics`, and routes every
+operational event to a topic instead of filtering by severity. The release before WP-A4
+has none of this. The migration stays and its tables are untouched; the old release never
+reads them. While it runs:
+
+- **New reports stop unless the manual chat id is set.** The old lane finds its
+  destination in `ops.notifications.telegram_chat_id` only. On an installation that
+  connected a group and never set that key, nothing new is queued. The operational events
+  are still recorded, and the Web Admin's alerts page still shows them.
+- **Severity filtering returns.** The old projector reads `ops.notifications.min_severity`
+  again (default `ERROR`), so INFO and WARN events are no longer queued.
+- **Reports already queued go to where the group was when they were queued.** The old
+  dispatcher ignores the stored `opsTopic` and posts to the chat and topic snapshot on the
+  row, from the tenant's active bot. A topic deleted since, or a group whose bot is not the
+  tenant's first active bot, fails the message permanently. Nothing is deleted: after the
+  roll-forward, «ارسال مجدد گزارش‌های ارسال‌نشده» on the ops group page queues it again.
+- **The group cannot be connected or checked.** The old bot treats `/start ops-…` in a
+  group as an ordinary contact and `/connect_ops` as an unknown command, and it ignores
+  `my_chat_member`. A code issued before the rollback may expire unused; issue a new one
+  after the roll-forward.
+- **The old Web Admin shows the manual keys again** on the settings page, and has no ops
+  group page. An `OpsLogGroupChanged` event still in the outbox has no consumer there and
+  is marked published.
+
+**Before rolling back past WP-A4**, if reports must keep reaching the group, put its chat
+id in the manual setting. The chat id is not shown in the Web Admin; read it from the
+database:
+
+```bash
+docker compose --env-file /etc/nexa/deploy.env -f /opt/nexa/deploy/compose.yml \
+  exec -T postgres psql -U nexa -d nexa -c \
+  "SELECT chat_id FROM ops_log_groups WHERE status = 'CONNECTED'"
+```
+
+Then save that value as the group's chat id under «پیشرفته: مقصد دستی» on the ops group
+page. It is used only while no group is connected, so leaving it set after the
+roll-forward changes nothing. Topics are not carried over: the manual destination posts
+to the group itself unless you also set a topic id.
+
 ### How far back you can roll
 
 **One release**, safely. Migrations are expand-only within a release

@@ -84,14 +84,25 @@ describe('notification delivery', () => {
       expect(queued[0]?.kind).toBe('OPERATIONAL_EVENT');
     });
 
-    it('queues nothing below the configured severity', async () => {
+    it('queues an event whatever its severity, and never reads the retired min_severity', async () => {
+      // WP-A4: routing decides WHERE an event goes, never WHETHER. A stored threshold from
+      // before the change stays valid and is ignored — here it would have suppressed this
+      // INFO event, which is exactly the silent suppression the owner removed.
+      await ctx.container.settingsService.set(tenantA, owner, {
+        key: 'ops.notifications.min_severity',
+        value: 'CRITICAL',
+        expectedVersion: null,
+        idempotencyKey: `severity-${Date.now()}`,
+      });
       await ctx.container.opsLog.record(tenantA, {
         code: 'system.ping',
         severity: 'INFO',
         message: 'ping',
         dedupeKey: 'ping:1',
       });
-      expect(await ctx.container.notifications.list(tenantA, owner)).toHaveLength(0);
+      const queued = await ctx.container.notifications.list(tenantA, owner);
+      expect(queued).toHaveLength(1);
+      expect(queued[0]?.kind).toBe('OPERATIONAL_EVENT');
     });
 
     it('queues nothing while the feature is off', async () => {
@@ -118,10 +129,11 @@ describe('notification delivery', () => {
       });
       await raiseError();
 
-      // Two intents: the original failure and its return. A rule that notified
-      // only on new rows would miss the second, which is the one an operator
-      // most needs.
-      expect(await ctx.container.notifications.list(tenantA, owner)).toHaveLength(2);
+      // Three intents: the failure, its recovery, and its return. A rule that
+      // notified only on new rows would miss the third, which is the one an
+      // operator most needs; since WP-A4 the INFO recovery is announced too,
+      // because no severity threshold suppresses it any more.
+      expect(await ctx.container.notifications.list(tenantA, owner)).toHaveLength(3);
     });
   });
 

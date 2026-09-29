@@ -143,7 +143,7 @@ export const WEB_FA = {
     'برای ارسال هر گزارش حداکثر این تعداد بار تلاش می‌شود؛ پس از آن ارسال ناموفق ثبت می‌شود.',
   'web.setting_ops_max_per_minute': 'سقف ارسال گزارش در هر دقیقه',
   'web.setting_ops_max_per_minute_desc':
-    'بیشترین تعداد گزارش مدیریتی که در یک دقیقه به تلگرام فرستاده می‌شود.',
+    'بیشترین تعداد گزارش مدیریتی که در یک دقیقه به تلگرام فرستاده می‌شود. گزارش‌های بیشتر حذف نمی‌شوند؛ در صف می‌مانند و در دقیقه‌های بعد فرستاده می‌شوند.',
   'web.setting_sales_currency_desc':
     'واحد پولی که قیمت محصولات و مبالغ تازه با آن تعیین می‌شود. تغییر آن قیمت‌های ثبت‌شده را تبدیل نمی‌کند.',
   'web.setting_sales_currency_refused':
@@ -3564,6 +3564,93 @@ export const WEB_FA = {
   'web.order_custom_service_hint':
     'همان‌طور که هنگام ثبت سفارش ثبت شد؛ ویرایش یا حذف قاعده‌ها این ارقام را تغییر نمی‌دهد.',
   'web.order_custom_service_none': 'برای این سفارش شرایط سرویس دلخواهی ثبت نشده است.',
+  // WP-A4 — «گروه گزارش‌های مدیریتی».
+  'web.nav_ops_group': 'گروه گزارش‌ها',
+  'web.opsgroup_title': 'گروه گزارش‌های مدیریتی',
+  'web.opsgroup_subtitle':
+    'گروه تلگرامی که Nexa گزارش‌های سیستم، خطاها و پرداخت‌ها را در تاپیک‌های خودش در آن ارسال می‌کند.',
+  'web.opsgroup_lane_off':
+    'ارسال گزارش‌ها خاموش است؛ تا روشن نشود هیچ گزارشی به گروه فرستاده نمی‌شود. از صفحهٔ «قابلیت‌ها»، قابلیت «اعلان‌های مدیریتی» را روشن کنید.',
+  'web.opsgroup_connection': 'وضعیت اتصال',
+  'web.opsgroup_connected': 'متصل',
+  'web.opsgroup_disconnected': 'قطع',
+  'web.opsgroup_group_name': 'نام گروه',
+  'web.opsgroup_bot': 'ربات',
+  'web.opsgroup_health': 'دسترسی‌ها',
+  'web.opsgroup_health_unverified': 'در انتظار بررسی',
+  'web.opsgroup_health_healthy': 'سالم',
+  'web.opsgroup_health_problem': 'مشکل دسترسی',
+  'web.opsgroup_checked_at': 'آخرین بررسی:',
+  'web.opsgroup_last_delivery': 'آخرین ارسال موفق:',
+  'web.opsgroup_none': '—',
+  'web.opsgroup_problems_title': 'برای رفع مشکل:',
+  'web.opsgroup_problem_not_forum':
+    'تاپیک‌های گروه خاموش است. در تنظیمات گروه در تلگرام گزینهٔ «Topics» را روشن کنید و سپس «بررسی دسترسی‌ها» را بزنید.',
+  'web.opsgroup_problem_bot_not_admin':
+    'ربات مدیر گروه نیست. در تلگرام ربات را مدیر (Admin) گروه کنید و سپس «بررسی دسترسی‌ها» را بزنید.',
+  'web.opsgroup_problem_cannot_send':
+    'ربات اجازهٔ ارسال پیام در گروه را ندارد. در تنظیمات مدیر ربات، اجازهٔ ارسال پیام را بدهید.',
+  'web.opsgroup_problem_cannot_manage_topics':
+    'ربات مدیر است ولی اجازهٔ «مدیریت تاپیک‌ها» (Manage Topics) را ندارد. این اجازه را در تنظیمات مدیر ربات روشن کنید.',
+  'web.opsgroup_problem_bot_removed':
+    'ربات از گروه حذف شده یا مسدود شده است. ربات را دوباره به گروه اضافه و مدیر کنید و سپس «اتصال مجدد» را بزنید.',
+  'web.opsgroup_problem_chat_unreachable':
+    'تلگرام این گروه را پیدا نمی‌کند (ممکن است حذف یا تبدیل شده باشد). با «اتصال گروه تلگرام» گروه را دوباره وصل کنید.',
+  'web.opsgroup_problem_bot_inactive':
+    'رباتی که به گروه وصل است خاموش است یا توکن آن در دسترس نیست. از صفحهٔ «ربات‌ها» آن را روشن کنید.',
+  'web.opsgroup_problem_topic_create_failed':
+    'ساخت یکی از تاپیک‌ها ناموفق بود. اجازهٔ «مدیریت تاپیک‌ها» را بررسی کنید و «بررسی دسترسی‌ها» را دوباره بزنید.',
+  'web.opsgroup_verify': 'بررسی دسترسی‌ها',
+  'web.opsgroup_test': 'ارسال پیام آزمایشی',
+  'web.opsgroup_reconnect': 'اتصال مجدد',
+  'web.opsgroup_disconnect': 'قطع اتصال',
+  'web.opsgroup_connect': 'اتصال گروه تلگرام',
+  'web.opsgroup_disconnect_confirm_title': 'اتصال گروه قطع شود؟',
+  'web.opsgroup_disconnect_confirm_body':
+    'پس از قطع اتصال، Nexa دیگر در این گروه گزارشی نمی‌فرستد. گروه و تاپیک‌ها حذف نمی‌شوند و با «اتصال مجدد» برمی‌گردند.',
+  'web.opsgroup_verified_done': 'دسترسی‌ها بررسی شد.',
+  'web.opsgroup_reconnected_done': 'گروه دوباره متصل و بررسی شد.',
+  'web.opsgroup_disconnected_done': 'اتصال گروه قطع شد.',
+  'web.opsgroup_test_sent': 'ارسال شد',
+  'web.opsgroup_test_failed': 'ارسال نشد',
+  'web.opsgroup_topics': 'تاپیک‌ها',
+  'web.opsgroup_topics_hint':
+    'Nexa این تاپیک‌ها را خودش می‌سازد و نگه می‌دارد؛ اگر یکی حذف شود، دوباره ساخته می‌شود.',
+  'web.opsgroup_topic_system': '⚙️ سیستم و خطاها',
+  'web.opsgroup_topic_payments': '💳 پرداخت‌ها',
+  'web.opsgroup_topic_pending': 'هنوز ساخته نشده',
+  'web.opsgroup_topic_ready': 'آماده',
+  'web.opsgroup_topic_missing': 'حذف شده — دوباره ساخته می‌شود',
+  'web.opsgroup_queue': 'صف گزارش‌ها',
+  'web.opsgroup_queue_pending': 'در انتظار ارسال',
+  'web.opsgroup_queue_preserved': 'ارسال‌نشده (نگه‌داشته‌شده)',
+  'web.opsgroup_queue_hint':
+    'گزارشی که پس از چند بار تلاش ارسال نشود حذف نمی‌شود و اینجا می‌ماند. پس از رفع مشکل، دوباره ارسال می‌شود.',
+  'web.opsgroup_requeue': 'ارسال مجدد گزارش‌های ارسال‌نشده',
+  'web.opsgroup_requeued_done': 'تعداد گزارش‌هایی که دوباره در صف ارسال قرار گرفت:',
+  'web.opsgroup_connect_title': 'اتصال گروه تلگرام',
+  'web.opsgroup_connect_hint': 'بدون نیاز به شناسهٔ گروه یا شناسهٔ تاپیک.',
+  'web.opsgroup_step_group':
+    'در تلگرام یک سوپرگروه بسازید (یا یکی را انتخاب کنید) و گزینهٔ «Topics» را در تنظیمات آن روشن کنید.',
+  'web.opsgroup_step_admin':
+    'ربات را به گروه اضافه کنید و مدیر کنید، با اجازه‌های «ارسال پیام» و «مدیریت تاپیک‌ها».',
+  'web.opsgroup_step_code':
+    'دکمهٔ زیر را بزنید و پیوند را باز کنید، یا دستور نمایش‌داده‌شده را در همان گروه بفرستید.',
+  'web.opsgroup_no_bot': 'هیچ ربات فعالی نیست. ابتدا از صفحهٔ «ربات‌ها» یک ربات را روشن کنید.',
+  'web.opsgroup_open_link': 'افزودن ربات به گروه و اتصال',
+  'web.opsgroup_or_command': 'یا این دستور را در گروه بفرستید:',
+  'web.opsgroup_code_expires': 'این کد یک‌بار مصرف است و تا این زمان معتبر است:',
+  'web.opsgroup_error_not_connected':
+    'هنوز گروهی متصل نیست. ابتدا «اتصال گروه تلگرام» را انجام دهید.',
+  'web.opsgroup_error_bot': 'این ربات فعال نیست. ربات دیگری انتخاب کنید.',
+  'web.opsgroup_advanced': 'پیشرفته: مقصد دستی',
+  'web.opsgroup_advanced_hint':
+    'فقط اگر نمی‌توانید گروه را با روش بالا وصل کنید. این مقدارها تنها وقتی به کار می‌روند که هیچ گروهی متصل نباشد.',
+  'web.opsgroup_manual_in_use': 'اکنون گزارش‌ها به همین مقصد دستی فرستاده می‌شوند.',
+  'web.opsgroup_manual_chat': 'شناسهٔ عددی گروه',
+  'web.opsgroup_manual_topic': 'شناسهٔ تاپیک گزارش‌های سیستم',
+  'web.opsgroup_manual_payments_topic': 'شناسهٔ تاپیک پرداخت‌ها',
+  'web.opsgroup_manual_saved': 'ذخیره شد.',
   // --- Advanced provider settings (WP-A8) ----------------------------------
   // The capability registry: one row per thing a person does with a service.
   'web.cap_registry_title': 'قابلیت‌های این پنل',

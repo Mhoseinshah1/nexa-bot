@@ -19,6 +19,7 @@ import {
   type TemplateKey,
   type TemplateValues,
   type UnitOfWork,
+  type OpsLogTopicCategory,
   NOTIFICATION_PAGE_DEFAULT,
 } from '@nexa/contracts';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
@@ -36,6 +37,7 @@ import type {
   DeliveryAttemptRecord,
   NotificationIntent,
   NotificationRepository,
+  OpsGroupDestinationReader,
   ReleasedClaimRecord,
 } from './ports.js';
 
@@ -74,6 +76,11 @@ export class NotificationService {
     private readonly opsLog: OperationalEventRecorder,
     /** For the mutation-time session-revocation check. */
     private readonly sessions: SessionRepository,
+    /**
+     * WP-A4: the connected operations log group, preferred over the manual chat id.
+     * Null only where a caller has no group to offer (a unit test's container).
+     */
+    private readonly opsGroups: OpsGroupDestinationReader | null = null,
   ) {}
 
   /**
@@ -109,6 +116,11 @@ export class NotificationService {
        * revoked in April.
        */
       readonly destination?: NotificationDestination;
+      /**
+       * WP-A4: which topic of the operations log group, when the destination is the
+       * operations lane's. Defaults to the system topic.
+       */
+      readonly opsTopic?: OpsLogTopicCategory;
     },
     tx?: unknown,
   ): Promise<{ readonly intent: NotificationIntent | null; readonly created: boolean }> {
@@ -132,7 +144,8 @@ export class NotificationService {
       return { intent: null, created: false };
     }
 
-    const destination = input.destination ?? (await this.destination(scope, tx));
+    const destination =
+      input.destination ?? (await this.destination(scope, input.opsTopic ?? 'SYSTEM', tx));
     if (destination === null) return { intent: null, created: false };
 
     const maxAttempts = await this.settings.valueOf<number>(
@@ -381,7 +394,7 @@ export class NotificationService {
     const destination =
       command.target === 'PAYMENTS'
         ? await this.paymentsDestination(scope)
-        : await this.destination(scope);
+        : await this.destination(scope, 'SYSTEM');
     if (destination === null) {
       throw errors.validation(
         CONTROL_ERROR_CODES.DESTINATION_NOT_CONFIGURED,
@@ -497,8 +510,12 @@ export class NotificationService {
     scope: ScopeContext,
     tx?: unknown,
   ): Promise<NotificationDestination | null> {
-    const base = await this.destination(scope, tx);
-    if (base === null || base.transport !== 'TELEGRAM') return base;
+    const base = await this.destination(scope, 'PAYMENTS', tx);
+    // The connected group has its own payments topic; only the manual fallback reads
+    // the payments topic id setting.
+    if (base === null || base.transport !== 'TELEGRAM' || base.opsTopic !== undefined) {
+      return base;
+    }
     const paymentsTopic = await this.settings.valueOf<number | null>(
       scope,
       'ops.notifications.payments_topic_id' as SettingKey,
@@ -507,11 +524,29 @@ export class NotificationService {
     return paymentsTopic === null ? base : { ...base, topicId: paymentsTopic };
   }
 
-  /** The configured destination, or null when there is none. */
+  /**
+   * The configured destination, or null when there is none.
+   *
+   * The CONNECTED operations log group first (WP-A4): its chat and the topic the category
+   * routes to, with `opsTopic` set so the dispatcher resolves the group's current thread
+   * at send time. The manual chat id setting only when no group is connected — the
+   * advanced fallback for an installation that never connected one.
+   */
   private async destination(
     scope: ScopeContext,
+    category: OpsLogTopicCategory,
     tx?: unknown,
   ): Promise<NotificationDestination | null> {
+    const group =
+      this.opsGroups === null ? null : await this.opsGroups.current(scope, category, tx);
+    if (group !== null) {
+      return {
+        transport: 'TELEGRAM',
+        chatId: group.chatId,
+        topicId: group.topicId,
+        opsTopic: category,
+      };
+    }
     const chatId = await this.settings.valueOf<string>(
       scope,
       'ops.notifications.telegram_chat_id' as SettingKey,
@@ -533,7 +568,12 @@ export class NotificationService {
 /** A destination as it may appear in an audit row. Carries no credential. */
 function describeDestination(destination: NotificationDestination): Record<string, unknown> {
   return destination.transport === 'TELEGRAM'
-    ? { transport: 'TELEGRAM', chatId: destination.chatId, topicId: destination.topicId }
+    ? {
+        transport: 'TELEGRAM',
+        chatId: destination.chatId,
+        topicId: destination.topicId,
+        ...(destination.opsTopic !== undefined ? { opsTopic: destination.opsTopic } : {}),
+      }
     : { transport: destination.transport };
 }
 

@@ -186,6 +186,12 @@ export const TEMPLATE_GROUPS_FA: readonly TemplateGroupDefinition[] = [
     label: 'گزارش‌های مالی گروه لاگ',
     prefixes: ['ops.financial.'],
   },
+  // WP-A4: what Nexa itself says in the operations log group it manages.
+  {
+    id: 'ops_group',
+    label: 'گروه گزارش‌های مدیریتی — اتصال و تاپیک‌ها',
+    prefixes: ['ops.group.'],
+  },
   {
     id: 'ops_support',
     label: 'اعلان تیکت‌ها به پشتیبانی',
@@ -229,6 +235,7 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   automatic: 'نشانهٔ روشن بودن انتخاب خودکار',
   availableAt: 'زمان مجاز بعدی',
   balance: 'موجودی کیف پول',
+  botInstanceId: 'شناسهٔ ربات',
   bytes: 'مقدار حجم',
   cap: 'سقف ظرفیت پنل',
   caption: 'توضیح فایل',
@@ -258,6 +265,7 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   delivery: 'وضعیت تحویل لینک',
   description: 'توضیح کوتاه برنامه',
   destination: 'اطلاعات حساب مقصد',
+  details: 'جزئیات رخداد',
   devicesBlock: 'بخش افزایش کاربر / دستگاه',
   discount: 'مبلغ تخفیف',
   discountLine: 'خط تخفیف',
@@ -285,6 +293,7 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   history: 'تعداد عملیات ثبت‌شده',
   id: 'شناسه',
   lastSeen: 'آخرین فعالیت',
+  lastSeenAt: 'زمان این رخداد',
   limit: 'سقف تعداد',
   lines: 'فهرست خط‌به‌خط',
   location: 'لوکیشن',
@@ -383,10 +392,12 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   telegramId: 'شناسهٔ عددی تلگرام',
   telegramIdRandom: 'نشانهٔ انتخاب شناسهٔ تلگرام + تصادفی',
   template: 'الگو',
+  tenantId: 'شناسهٔ مستأجر',
   text: 'متن پیام',
   timePrice: 'قیمت زمان',
   toLocation: 'لوکیشن مقصد',
   title: 'عنوان',
+  topic: 'نام تاپیک',
   total: 'مبلغ کل',
   totalTraffic: 'کل حجم',
   totalTrafficBytes: 'کل حجم',
@@ -2761,6 +2772,32 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'ops.notification.test': [
     'پیام آزمایشی گروه عملیات',
     'هنگام آزمایش مقصد اعلان‌های عملیاتی فرستاده می‌شود تا درستی تنظیمات مشخص شود.',
+  ],
+
+  // --- The operations log group Nexa manages (WP-A4) ---------------------------------
+  'ops.group.topic_name.system': [
+    'نام تاپیک سیستم و خطاها',
+    'نامی که Nexa هنگام ساختن (یا ساختن دوبارهٔ) تاپیک گزارش‌های سیستم و خطاها در گروه به آن می‌دهد.',
+  ],
+  'ops.group.topic_name.payments': [
+    'نام تاپیک پرداخت‌ها',
+    'نامی که Nexa هنگام ساختن (یا ساختن دوبارهٔ) تاپیک گزارش‌های پرداخت در گروه به آن می‌دهد.',
+  ],
+  'ops.group.connected': [
+    'پیام اتصال موفق گروه',
+    'پس از پذیرفته شدن کد اتصال، در همان گروه فرستاده می‌شود.',
+  ],
+  'ops.group.connect_refused': [
+    'پیام رد کد اتصال',
+    'وقتی کد اتصالِ فرستاده‌شده در گروه پذیرفته نشود؛ برای هر علتی یک متن.',
+  ],
+  'ops.group.connect_not_forum': [
+    'پیام گروه بدون تاپیک',
+    'وقتی کد اتصال در گروهی فرستاده شود که تاپیک‌های آن روشن نیست؛ کد مصرف نمی‌شود.',
+  ],
+  'ops.group.test': [
+    'پیام آزمایشی گروه گزارش‌ها',
+    'با «ارسال پیام آزمایشی» در پنل، در هر تاپیک گروه فرستاده می‌شود.',
   ],
 
   // --- Financial log group ----------------------------------------------------------

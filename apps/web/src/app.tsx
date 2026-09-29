@@ -14,6 +14,7 @@ import { SettingsPage } from './pages/settings';
 import { FeaturesPage } from './pages/features';
 import { ContentPage } from './pages/content';
 import { AlertsPage, NotificationsPage } from './pages/alerts';
+import { OpsGroupPage } from './pages/ops-group';
 import { SystemPage } from './pages/system';
 import { RecoveryPage } from './pages/recovery';
 import { PlannedPage, PLANNED_SURFACES, type PlannedKey } from './pages/planned';
@@ -521,6 +522,16 @@ export const NAV: readonly NavEntry[] = [
     icon: 'send',
     // EITHER capability. See `NavEntry.permission`.
     permission: ['opslog.view', 'settings.edit'],
+    group: 'web.navgroup_system',
+  },
+  {
+    // WP-A4: «گروه گزارش‌های مدیریتی». Read with `settings.view`, acted on with
+    // `settings.edit`, which the page gates itself.
+    id: 'ops-group',
+    path: '/ops-group',
+    label: 'web.nav_ops_group',
+    icon: 'message',
+    permission: 'settings.view',
     group: 'web.navgroup_system',
   },
   {
@@ -1171,6 +1182,14 @@ export function resolve(
       element: <NotificationsPage mayTest={may('settings.edit')} denied={!may('opslog.view')} />,
       crumbs: [{ label: t('web.nav_notifications') }],
       title: t('web.nav_notifications'),
+    };
+  }
+
+  if (route.path === '/ops-group') {
+    return {
+      element: <OpsGroupPage denied={!may('settings.view')} mayManage={may('settings.edit')} />,
+      crumbs: [{ label: t('web.nav_ops_group') }],
+      title: t('web.opsgroup_title'),
     };
   }
 

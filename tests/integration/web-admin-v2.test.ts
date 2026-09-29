@@ -743,7 +743,15 @@ describe('the Web Admin V2 surface', () => {
        * list with Package B: `ChannelMembershipService` reads it and the bot's central
        * guard enforces every REQUIRED channel in it.
        */
-      expect(body.settings.filter((setting) => setting.consumer === 'PLANNED')).toEqual([]);
+      /*
+       * One exception, and it is a RETIREMENT, not a plan: `ops.notifications.min_severity`
+       * stopped being read in WP-A4, when the Telegram ops stream moved to explicit
+       * event-to-topic routing. It stays declared so a stored value keeps parsing, and
+       * `PLANNED` is the registry's only word for "stored and unread".
+       */
+      expect(
+        body.settings.filter((setting) => setting.consumer === 'PLANNED').map((s) => s.key),
+      ).toEqual(['ops.notifications.min_severity']);
       /*
        * `support.accounts` left that list with the customer UX completion: the support
        * screen's contact button is its first handle, so it is read.

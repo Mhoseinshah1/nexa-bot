@@ -84,6 +84,9 @@ export const EVENT_TYPES = [
   'TemplateOverrideChanged',
   'TemplateOverrideReverted',
   'FeatureFlagChanged',
+  // WP-A4: the operations log group was connected, disconnected or reconnected. The
+  // group's chat title is operator-chosen text and is not carried; the row has it.
+  'OpsLogGroupChanged',
 
   // Commerce and provisioning — Phase 4. Deliberately NOT one event per Telegram
   // packet: a customer's arrival is a row, and an event for every update would make
@@ -182,6 +185,8 @@ export const AGGREGATE_TYPES = [
   'Discount',
   'Referral',
   'Trial',
+  // WP-A4: the tenant's operations log group.
+  'OpsLogGroup',
   // WP-A7.
   'Ticket',
 ] as const;
@@ -231,6 +236,10 @@ export const EVENT_PAYLOAD_SCHEMAS = {
     revision: z.number().int().positive(),
   }),
   FeatureFlagChanged: z.object({ key: z.string(), from: z.boolean(), to: z.boolean() }),
+  OpsLogGroupChanged: z.object({
+    change: z.enum(['CONNECTED', 'RECONNECTED', 'DISCONNECTED']),
+    botInstanceId: z.string(),
+  }),
 
   /*
    * Phase 4.

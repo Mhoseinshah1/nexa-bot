@@ -346,13 +346,13 @@ export function capabilityRegistry(
 
 export function setting(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
-    key: 'ops.notifications.max_attempts',
+    key: 'ops.notifications.max_per_minute',
     value: 5,
     source: 'DEFAULT',
     version: null,
     updatedAt: null,
     updatedByAdminId: null,
-    description: 'How many times one notification may be attempted.',
+    description: 'The ceiling on outbound operational notifications per minute.',
     zeroMeaning: 'NOT_APPLICABLE',
     mutability: 'RUNTIME',
     classification: 'PUBLIC',

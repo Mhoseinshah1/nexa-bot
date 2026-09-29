@@ -281,6 +281,16 @@ import {
   type ServiceAddonKind,
   type ServiceAddonStatus,
   BOT_ROUTES,
+  // WP-A4: the operations log group.
+  OPS_GROUP_ROUTES,
+  opsConnectCodeResponseSchema,
+  opsGroupRequeueResponseSchema,
+  opsGroupTestResponseSchema,
+  opsLogGroupResponseSchema,
+  type OpsConnectCodeResponse,
+  type OpsGroupRequeueResponse,
+  type OpsGroupTestResponse,
+  type OpsLogGroupResponse,
   botDiagnosticResponseSchema,
   botListResponseSchema,
   botMutationResponseSchema,
@@ -2756,6 +2766,38 @@ export function replaceBotToken(input: {
 /** Ask Telegram what it holds for this bot. A read; nothing is stored. */
 export function checkBot(id: string): Promise<BotDiagnosticResponse> {
   return post(BOT_ROUTES.diagnostics(id), {}, botDiagnosticResponseSchema);
+}
+
+// --- The operations log group (WP-A4) -----------------------------------------
+
+/** The operations log group panel: its connection, health, topics and queue. */
+export function fetchOpsGroup(): Promise<OpsLogGroupResponse> {
+  return authedGet(OPS_GROUP_ROUTES.status, opsLogGroupResponseSchema);
+}
+
+/** A one-time connection code for one bot. Shown once; the server keeps only a hash. */
+export function issueOpsConnectCode(input: {
+  idempotencyKey: string;
+  botInstanceId: string;
+}): Promise<OpsConnectCodeResponse> {
+  return post(OPS_GROUP_ROUTES.connectCode, input, opsConnectCodeResponseSchema);
+}
+
+/** The four actions that take only a key, and answer with the panel's state. */
+export function opsGroupAction(
+  action: 'verify' | 'reconnect' | 'disconnect',
+  idempotencyKey: string,
+): Promise<OpsLogGroupResponse> {
+  return post(OPS_GROUP_ROUTES[action], { idempotencyKey }, opsLogGroupResponseSchema);
+}
+
+export function testOpsGroup(idempotencyKey: string): Promise<OpsGroupTestResponse> {
+  return post(OPS_GROUP_ROUTES.test, { idempotencyKey }, opsGroupTestResponseSchema);
+}
+
+/** Put the preserved, unsent reports back in the queue. */
+export function requeueOpsGroup(idempotencyKey: string): Promise<OpsGroupRequeueResponse> {
+  return post(OPS_GROUP_ROUTES.requeue, { idempotencyKey }, opsGroupRequeueResponseSchema);
 }
 
 // ---------------------------------------------------------------------------
