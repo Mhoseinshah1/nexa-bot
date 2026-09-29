@@ -643,7 +643,13 @@ export function resolve(
 
   if (route.path === '/extra-devices') {
     return {
-      element: <ExtraDevicesPage mayEdit={may('catalog.edit')} denied={!may('catalog.view')} />,
+      element: (
+        <ExtraDevicesPage
+          mayEdit={may('catalog.edit')}
+          mayViewPanels={may('panels.view')}
+          denied={!may('catalog.view')}
+        />
+      ),
       crumbs: [{ label: t('web.extra_devices_title') }],
       title: t('web.extra_devices_title'),
     };
