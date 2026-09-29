@@ -2327,14 +2327,16 @@ export const TEMPLATES = [
       {
         token: 'outcome',
         type: 'STRING',
-        description: 'The decision, rendered from its own label key (approved, rejected, blocked, credited).',
+        description:
+          'The decision, rendered from its own label key (approved, rejected, blocked, credited).',
         required: true,
         repeatable: false,
       },
       {
         token: 'operation',
         type: 'STRING',
-        description: 'What the payment was for: a new service, a renewal, added traffic or time, a wallet top-up.',
+        description:
+          'What the payment was for: a new service, a renewal, added traffic or time, a wallet top-up.',
         required: false,
         repeatable: false,
       },
