@@ -200,6 +200,8 @@ describe('WP-A7 — support tickets', () => {
     sent = [];
     mode = 'OK';
     fileMode = 'OK';
+    // Each test's first accepted upload is `sent-file-1`, whatever ran before it.
+    uploadSeq = 0;
     owner = await createAdmin(ctx.container, tenantA, {
       username: 'owner-tickets',
       roleKeys: ['owner'],
