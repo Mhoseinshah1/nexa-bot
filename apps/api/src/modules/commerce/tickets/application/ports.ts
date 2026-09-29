@@ -314,8 +314,9 @@ export interface TicketRepository {
   /** The staged bytes, or null once they were cleared. The ONE read that returns them. */
   replyFileContent(scope: TenantContext, messageId: string): Promise<Uint8Array | null>;
   /**
-   * Telegram accepted the file: stamp its handle and clear the bytes, conditionally on the
-   * bytes still being here. False when there was nothing left to clear.
+   * Telegram accepted the file: stamp its handle and clear the bytes, conditionally on no
+   * handle being stamped yet — whether or not the retention sweep already cleared the bytes.
+   * False when the row is missing or already carries a handle.
    */
   markReplyFileDelivered(
     scope: TenantContext,

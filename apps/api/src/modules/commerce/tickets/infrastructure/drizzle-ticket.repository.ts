@@ -734,19 +734,26 @@ export class DrizzleTicketRepository implements TicketRepository {
     tx: unknown,
   ): Promise<boolean> {
     const tenantId = requireTenantId(scope);
+    /*
+     * Conditional on NO handle yet, not on the bytes still being here (Codex review of #108):
+     * the retention sweep may clear the bytes between the dispatcher's read and Telegram's
+     * answer, and a stamp that required them would leave a delivered file with neither bytes
+     * nor a handle. An existing handle is never overwritten. `purged_at` keeps the sweep's
+     * time when the bytes were already gone, so both CHECKs hold either way.
+     */
     const rows = await this.exec(tx)
       .update(ticketReplyFiles)
       .set({
         telegramFileId: file.fileId,
         telegramFileUniqueId: file.fileUniqueId,
         content: null,
-        purgedAt: at,
+        purgedAt: sql`coalesce(${ticketReplyFiles.purgedAt}, ${at})`,
       })
       .where(
         and(
           eq(ticketReplyFiles.tenantId, tenantId),
           eq(ticketReplyFiles.messageId, messageId),
-          isNotNull(ticketReplyFiles.content),
+          isNull(ticketReplyFiles.telegramFileId),
         ),
       )
       .returning({ messageId: ticketReplyFiles.messageId });

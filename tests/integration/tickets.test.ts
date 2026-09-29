@@ -1946,6 +1946,71 @@ describe('WP-A7 — support tickets', () => {
     expect(after.message.attachmentDelivery).toBe('PENDING');
   });
 
+  it('stamps Telegram’s handle on a delivered file whose bytes the retention sweep cleared mid-send (Codex #108)', async () => {
+    const ticketId = await openThroughBot('پاک‌سازی هم‌زمان');
+    const web = await webAs(owner);
+    const reply = await web.controller.reply(web.request, ticketId, {
+      idempotencyKey: 'race-purge-01',
+      text: 'پیوست در راه است',
+      attachment: fileOf('guide.pdf', 'application/pdf', PDF),
+    });
+    // The sweep lands after the dispatcher read the bytes and before Telegram answers.
+    const service = ctx.container.tickets;
+    const original = service.attachmentFacts.bind(service);
+    const sweptAt = new Date('2026-09-01T00:00:00.000Z');
+    service.attachmentFacts = async (scope, messageId) => {
+      const facts = await original(scope, messageId);
+      await ctx.container.database.db.execute(
+        sql`UPDATE ticket_reply_files SET content = NULL, purged_at = ${sweptAt.toISOString()}::timestamptz
+             WHERE message_id = ${messageId}`,
+      );
+      return facts;
+    };
+    try {
+      sent = [];
+      await deliver();
+    } finally {
+      service.attachmentFacts = original;
+    }
+    expect(uploads()).toHaveLength(1);
+    const [row] = await rows<{
+      staged: boolean;
+      telegram_file_id: string | null;
+      telegram_file_unique_id: string | null;
+      purged_at: Date;
+    }>(
+      sql`SELECT content IS NOT NULL AS staged, telegram_file_id, telegram_file_unique_id, purged_at
+            FROM ticket_reply_files WHERE message_id = ${reply.message.id}`,
+    );
+    // Stamped although the bytes were already gone; the sweep's time is kept.
+    expect(row).toMatchObject({ staged: false, telegram_file_id: 'sent-file-1' });
+    expect(row?.telegram_file_unique_id).toBe('u-sent-file-1');
+    expect(new Date(row!.purged_at).toISOString()).toBe(sweptAt.toISOString());
+    expect(
+      (await web.controller.detail(web.request, ticketId)).messages.at(-1)?.attachmentDelivery,
+    ).toBe('DELIVERED');
+    // Support reads it back from Telegram, with the handle the delivery stamped.
+    sent = [];
+    const fetched = await download(web, reply.message.id);
+    expect(String(fetched.body)).toBe('%PDF-1.4 ticket');
+    expect(sent.find((one) => one.url.endsWith('/getFile'))?.body).toEqual({
+      file_id: 'sent-file-1',
+    });
+    // A second stamp never overwrites the handle already there.
+    expect(
+      await ctx.container.uow.run(tenantA, async (tx) =>
+        ctx.container.tickets.attachmentDelivered(
+          tenantA,
+          reply.message.id,
+          { fileId: 'other', fileUniqueId: 'u-other' },
+          new Date(),
+          tx,
+        ),
+      ),
+    ).toBe(false);
+    expect((await fileRow(reply.message.id))?.telegram_file_id).toBe('sent-file-1');
+  });
+
   it('answers a malformed category id with not-found, never a database error', async () => {
     const web = await webAs(owner);
     for (const id of ['not-a-uuid', '1', "' OR 1=1 --"]) {
