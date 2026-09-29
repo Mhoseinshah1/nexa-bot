@@ -346,6 +346,12 @@ export const audienceOptionsResponseSchema = z.object({
 });
 export type AudienceOptionsResponse = z.infer<typeof audienceOptionsResponseSchema>;
 
+/** Paths under `API_PREFIX`. */
+export const AUDIENCE_ROUTES = {
+  preview: '/audience/preview',
+  options: '/audience/options',
+} as const;
+
 export const AUDIENCE_ERROR_CODES = {
   /** The definition does not match its schema. */
   DEFINITION_INVALID: 'audience.definition_invalid',

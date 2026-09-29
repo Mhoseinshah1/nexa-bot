@@ -444,6 +444,24 @@ export const broadcastTestResponseSchema = z.object({
 });
 export type BroadcastTestResponse = z.infer<typeof broadcastTestResponseSchema>;
 
+/** Paths under `API_PREFIX`. */
+export const BROADCAST_ROUTES = {
+  list: '/broadcasts',
+  create: '/broadcasts',
+  one: (id: string) => `/broadcasts/${id}`,
+  update: (id: string) => `/broadcasts/${id}/draft`,
+  media: (id: string) => `/broadcasts/${id}/media`,
+  removeMedia: (id: string) => `/broadcasts/${id}/media/remove`,
+  preview: (id: string) => `/broadcasts/${id}/preview`,
+  test: (id: string) => `/broadcasts/${id}/test`,
+  launch: (id: string) => `/broadcasts/${id}/launch`,
+  pause: (id: string) => `/broadcasts/${id}/pause`,
+  resume: (id: string) => `/broadcasts/${id}/resume`,
+  cancel: (id: string) => `/broadcasts/${id}/cancel`,
+  retryFailed: (id: string) => `/broadcasts/${id}/retry-failed`,
+  recipients: (id: string) => `/broadcasts/${id}/recipients`,
+} as const;
+
 export const BROADCAST_ERROR_CODES = {
   NOT_FOUND: 'broadcast.not_found',
   /** The request is not valid for the broadcast's current state. */

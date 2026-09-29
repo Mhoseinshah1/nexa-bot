@@ -249,6 +249,16 @@ export const bulkItemListResponseSchema = z.object({
 });
 export type BulkItemListResponse = z.infer<typeof bulkItemListResponseSchema>;
 
+/** Paths under `API_PREFIX`. */
+export const BULK_OPERATION_ROUTES = {
+  list: '/bulk-operations',
+  create: '/bulk-operations',
+  preview: '/bulk-operations/preview',
+  one: (id: string) => `/bulk-operations/${id}`,
+  items: (id: string) => `/bulk-operations/${id}/items`,
+  cancel: (id: string) => `/bulk-operations/${id}/cancel`,
+} as const;
+
 export const BULK_ERROR_CODES = {
   NOT_FOUND: 'bulk.not_found',
   STATE_CONFLICT: 'bulk.state_conflict',
