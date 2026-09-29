@@ -1312,22 +1312,6 @@ widened notification CHECK accepts everything either release writes. While it ru
 
 Nothing needs doing before rolling back past HF-A7.
 
-### What a rollback delays or drops: reminder quiet hours (HF-A9)
-
-HF-A9 holds a reminder that falls due inside the tenant's quiet window until the window
-ends, by moving its queued row's `next_attempt_at` there. It has no migration: the flag
-and the two settings are ordinary rows, and a held reminder is an ordinary `PENDING` row.
-While the release before it runs:
-
-- **A reminder already held still waits for the window's end.** The old dispatcher claims
-  nothing before `next_attempt_at`, so it sends the held row then, re-checked as it always
-  is — once, not early.
-- **A reminder that falls due during the rollback is not held**: the old release has no
-  quiet hours, so it is sent when it is due, night or not.
-- **The flag and the two times are kept but ignored**, and come back with the roll-forward.
-
-Nothing needs doing before rolling back past HF-A9.
-
 ### What a rollback delays or loses: edit-in-place wizards and the renewal result (R2)
 
 R2 edits the customer's purchase and top-up wizard in place, edits an administrator's
@@ -1350,6 +1334,22 @@ and the widened CHECK accepts everything either release writes. While it runs:
   decision itself is unchanged. The rows the new release recorded are kept and ignored.
 
 Nothing needs doing before rolling back past R2.
+
+### What a rollback delays or drops: reminder quiet hours (HF-A9)
+
+HF-A9 holds a reminder that falls due inside the tenant's quiet window until the window
+ends, by moving its queued row's `next_attempt_at` there. It has no migration: the flag
+and the two settings are ordinary rows, and a held reminder is an ordinary `PENDING` row.
+While the release before it runs:
+
+- **A reminder already held still waits for the window's end.** The old dispatcher claims
+  nothing before `next_attempt_at`, so it sends the held row then, re-checked as it always
+  is — once, not early.
+- **A reminder that falls due during the rollback is not held**: the old release has no
+  quiet hours, so it is sent when it is due, night or not.
+- **The flag and the two times are kept but ignored**, and come back with the roll-forward.
+
+Nothing needs doing before rolling back past HF-A9.
 
 ### How far back you can roll
 

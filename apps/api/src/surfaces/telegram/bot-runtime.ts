@@ -96,9 +96,9 @@ import type {
   CustomerButton,
   CustomerSendOutcome,
   CustomerSendResult,
-  CustomerEditMessage,
   CustomerMessenger,
   MainMenuVariant,
+  CustomerEditMessage,
 } from '../../modules/commerce/messaging/application/ports.js';
 import type { CustomerRecord } from '../../modules/commerce/customers/application/ports.js';
 import type { ProductService } from '../../modules/commerce/catalog/application/product.service.js';
@@ -4131,6 +4131,14 @@ export interface PendingReply {
   readonly buttons: readonly CustomerButton[];
   readonly orderId: string | null;
   /**
+   * R2 (item 5): the wizard screen this reply shows. A reply answering a wizard tap is
+   * EDITED into the tapped message; one answering a typed step is edited into the wizard
+   * message that asked for it; one sent as a new message becomes that message's wizard.
+   */
+  readonly wizard?: WizardDirective;
+  /** R2 (item 3): what this reply does to the receipt-review messages of one payment. */
+  readonly review?: ReviewDirective;
+  /**
    * A SECOND message, sent after the first, about a different fact.
    *
    * One handler, two sentences, because they are two facts and merging them would make
@@ -4209,14 +4217,6 @@ export interface PendingReply {
    * is decorative and its failure costs the customer nothing but the picture.
    */
   readonly lead?: readonly LeadMessage[];
-  /**
-   * R2 (item 5): the wizard screen this reply shows. A reply answering a wizard tap is
-   * EDITED into the tapped message; one answering a typed step is edited into the wizard
-   * message that asked for it; one sent as a new message becomes that message's wizard.
-   */
-  readonly wizard?: WizardDirective;
-  /** R2 (item 3): what this reply does to the receipt-review messages of one payment. */
-  readonly review?: ReviewDirective;
 }
 
 export type LeadMessage =
@@ -5092,6 +5092,10 @@ export class BotRuntime {
         : answered;
 
     const chatId = privateChatIdOf(input.update);
+    // R2: a reply that sends nothing gives its wizard claim back unchanged.
+    if (state !== undefined && claim !== null && (reply.key === null || chatId === null)) {
+      await state.release(scope, actor, claim);
+    }
 
     /*
      * 3. The reply, after the commit, and only into a private chat.
@@ -5116,7 +5120,6 @@ export class BotRuntime {
      * SAME order, because the idempotency key is the update's.
      */
     if (reply.key === null || chatId === null) {
-      if (state !== undefined && claim !== null) await state.release(scope, actor, claim);
       await this.stopSpinner(scope, command, input.botInstanceId);
       return {
         intent,
@@ -5199,8 +5202,11 @@ export class BotRuntime {
       });
     }
 
-    const asText = () =>
-      this.deps.messenger.send(scope, {
+    // R2: whether the reply went out as text, so a file's text fallback is recorded as text.
+    let wentAsText = false;
+    const asText = () => {
+      wentAsText = true;
+      return this.deps.messenger.send(scope, {
         chatId,
         templateKey: reply.key as TemplateKey,
         values: reply.values,
@@ -5208,6 +5214,7 @@ export class BotRuntime {
         ...(reply.buttons.length === 0 ? {} : { buttons: reply.buttons }),
         ...(reply.keyboard === undefined ? {} : { keyboard: reply.keyboard }),
       });
+    };
     /*
      * A reply that IS a file (§10's single review message) goes as the file with this
      * reply as its caption, and falls back to text only on a definite refusal — see
@@ -5265,12 +5272,12 @@ export class BotRuntime {
             caption: { templateKey: reply.key, values: reply.values },
             ...(reply.buttons.length === 0 ? {} : { buttons: reply.buttons }),
           });
-    const sentAsFile = reply.media !== undefined && sent.outcome !== 'REFUSED';
     if (reply.media !== undefined && sent.outcome === 'REFUSED') sent = await asText();
     /*
      * R2: a new message that IS a wizard screen or a review message is recorded against its
      * Telegram id, so the next tap on it — or the decision taken on it — edits it in place.
      */
+    const sentAsFile = reply.media !== undefined && !wentAsText;
     if (state !== undefined && sent.outcome === 'DELIVERED' && sent.messageId !== undefined) {
       const ref = {
         // A receipt goes out from the bot that RECEIVED it, and its taps come back there.

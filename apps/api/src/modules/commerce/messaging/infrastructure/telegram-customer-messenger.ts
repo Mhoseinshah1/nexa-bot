@@ -12,14 +12,14 @@ import {
   callbackAnswerBody,
   editMessageBody,
   isMessageNotModified,
-  // R2: the caption edit, the keyboard removal and the deletion.
-  clearKeyboardBody,
-  deleteMessageBody,
-  editCaptionBody,
   fileMessageBody,
   fileUploadBody,
   telegramSend,
   textMessageBody,
+  // R2: the caption edit, the keyboard removal and the deletion.
+  clearKeyboardBody,
+  deleteMessageBody,
+  editCaptionBody,
   type TelegramButton,
   type TelegramRequest,
   type TelegramSendOutcome,
