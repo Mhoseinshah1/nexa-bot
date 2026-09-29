@@ -22,6 +22,9 @@ import { DrizzleCustomerReminderFactsReader } from '../../apps/api/src/modules/c
 import { DrizzleServiceReminderSnapshotReader } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-service-reminder.repository';
 import { SettingsQuietHoursReader } from '../../apps/api/src/modules/commerce/messaging/infrastructure/settings-quiet-hours.reader';
 import { CachedTenantPresentationReader } from '../../apps/api/src/modules/control/templates/infrastructure/cached-tenant-presentation.reader';
+import { QuietHoursGuard } from '../../apps/api/src/modules/control/settings/application/quiet-hours.guard';
+import { DrizzleQuietHoursLock } from '../../apps/api/src/modules/control/settings/infrastructure/drizzle-quiet-hours.lock';
+import { DrizzleSettingRepository } from '../../apps/api/src/modules/control/settings/infrastructure/drizzle-settings.repository';
 import {
   adminActorFor,
   createAdmin,
@@ -648,6 +651,74 @@ describe('quiet hours for customer reminders (HF-A9)', () => {
     await servicePass();
     expect(await deliver()).toMatchObject({ delivered: 1, quietHours: 0 });
     expect(sends).toHaveLength(2);
+  });
+
+  it('refuses the second of two concurrent writes that would make start equal end', async () => {
+    // Codex review of PR #107: under READ COMMITTED each write read the OTHER boundary's
+    // old value, so both passed and an equal pair was committed. Deterministic here: the
+    // first write holds its transaction open after its guard ran and its row was written.
+    const settings = ctx.container.settingsResolver;
+    const lock = new DrizzleQuietHoursLock();
+    const startGuard = new QuietHoursGuard('reminders.quiet_hours_start', settings, lock);
+    const endGuard = new QuietHoursGuard('reminders.quiet_hours_end', settings, lock);
+    const rows = new DrizzleSettingRepository(ctx.container.database.db);
+
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let firstReady: () => void = () => {};
+    const ready = new Promise<void>((resolve) => {
+      firstReady = resolve;
+    });
+    // First: the start moves onto 07:00 (the end is still 08:00, so it passes) and waits.
+    const first = ctx.container.uow.run(tenantA, async (tx) => {
+      const refusal = await startGuard.refuseChange(tenantA, { from: '23:00', to: '07:00' }, tx);
+      await rows.upsert(
+        tenantA,
+        {
+          id: ctx.container.ids.uuid(),
+          key: 'reminders.quiet_hours_start',
+          value: '07:00',
+          expectedVersion: null,
+          now: ctx.container.clock.now(),
+          adminId: null,
+        },
+        tx,
+      );
+      firstReady();
+      await gate;
+      return refusal;
+    });
+    await ready;
+    // Second, concurrently: the end moves onto 07:00. It must wait for the first to commit.
+    let secondDone = false;
+    const second = ctx.container.uow
+      .run(tenantA, (tx) => endGuard.refuseChange(tenantA, { from: '08:00', to: '07:00' }, tx))
+      .finally(() => {
+        secondDone = true;
+      });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const waited = !secondDone;
+    // Released whatever was observed, so a failure here cannot leave a transaction open.
+    release();
+
+    expect(await first).toBeNull();
+    expect(await second).toMatch(/یکسان/);
+    expect(waited, 'the second guard waited for the first write').toBe(true);
+  });
+
+  it('commits exactly one of two concurrent writes that would make start equal end', async () => {
+    const [start, end] = await Promise.all([
+      setSetting('reminders.quiet_hours_start', '07:00'),
+      setSetting('reminders.quiet_hours_end', '07:00'),
+    ]);
+    expect([start, end].filter((refusal) => refusal === null)).toHaveLength(1);
+    expect([start, end].find((refusal) => refusal !== null)).toMatch(/یکسان/);
+    const settings = ctx.container.settingsResolver;
+    expect(await settings.valueOf(tenantA, 'reminders.quiet_hours_start')).not.toBe(
+      await settings.valueOf(tenantA, 'reminders.quiet_hours_end'),
+    );
   });
 
   it('refuses a window whose start and end are the same, in Persian', async () => {

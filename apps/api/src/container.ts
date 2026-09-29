@@ -143,6 +143,7 @@ import { SettingsResolver } from './modules/control/settings/application/setting
 import { SettingsService } from './modules/control/settings/application/settings.service.js';
 import { ReminderThresholdsGuard } from './modules/control/settings/application/reminder-thresholds.guard.js';
 import { QuietHoursGuard } from './modules/control/settings/application/quiet-hours.guard.js';
+import { DrizzleQuietHoursLock } from './modules/control/settings/infrastructure/drizzle-quiet-hours.lock.js';
 import { SignupGiftTermsGuard } from './modules/control/settings/application/signup-gift-terms.guard.js';
 import { SignupGiftActivationGuard } from './modules/control/features/application/signup-gift-activation.guard.js';
 import { TenantMediaService } from './modules/control/media/application/tenant-media.service.js';
@@ -2739,7 +2740,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       // WP-A9: plus the week-out slot's own guard, asked only when that key is written.
       ...ReminderThresholdsGuard.withEarly(settingsResolver),
       // HF-A9: the quiet window's start and end may not be equal.
-      ...QuietHoursGuard.all(settingsResolver),
+      ...QuietHoursGuard.all(settingsResolver, new DrizzleQuietHoursLock()),
       // The signup gift's three terms have to make a whole while the gift is on.
       ...SignupGiftTermsGuard.all(settingsResolver, featureFlagResolver),
     ],
