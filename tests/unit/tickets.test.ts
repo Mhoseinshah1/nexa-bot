@@ -2,13 +2,18 @@ import { describe, expect, it } from 'vitest';
 import {
   TICKET_ATTACHMENT_MAX_BYTES,
   TICKET_MACHINE,
+  TICKET_REPLY_FILE_MAX_BYTES,
+  TICKET_REPLY_FILE_TYPES,
   TICKET_STATUSES,
   normalizeTicketCategoryTitle,
   normalizeTicketText,
   ticketAttachmentRefusal,
   ticketManualEvent,
+  ticketReplyFileNameOf,
+  ticketReplyFileRefusal,
   ticketStatusAfterMessage,
   ticketSubjectOf,
+  sniffTicketReplyFile,
   validateStateMachine,
   type TicketStatus,
 } from '@nexa/contracts';
@@ -137,6 +142,103 @@ describe('the attachment rule', () => {
     expect(ticketAttachmentRefusal(document('a.pdf', 'application/pdf', null))).toBe(
       'TYPE_NOT_ALLOWED',
     );
+  });
+});
+
+describe("support's file rule (HF-A7)", () => {
+  const JPEG = Uint8Array.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46]);
+  const PNG = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]);
+  const PDF = new TextEncoder().encode('%PDF-1.7\n1 0 obj\n');
+  const TEXT = new TextEncoder().encode('سلام\r\nتنظیمات اتصال:\tپورت ۴۴۳\n');
+  const EXE = Uint8Array.from([0x4d, 0x5a, 0x90, 0x00, 0x03, 0x00, 0x00, 0x00]);
+  const ELF = Uint8Array.from([0x7f, 0x45, 0x4c, 0x46, 0x02, 0x01, 0x01, 0x00]);
+  const ZIP = Uint8Array.from([0x50, 0x4b, 0x03, 0x04, 0x14, 0x00, 0x00, 0x00]);
+  const SHELL = new TextEncoder().encode('#!/bin/sh\nrm -rf ~\n');
+  const HTML = new TextEncoder().encode('  <script>alert(1)</script>');
+  const refusal = (fileName: string, mimeType: string, bytes: Uint8Array) =>
+    ticketReplyFileRefusal({ fileName, mimeType, bytes });
+
+  it('takes each allowed type when its declared type, its extension and its bytes agree', () => {
+    expect(refusal('screen.jpg', 'image/jpeg', JPEG)).toBeNull();
+    expect(refusal('screen.JPEG', 'IMAGE/JPEG', JPEG)).toBeNull();
+    expect(refusal('screen.png', 'image/png', PNG)).toBeNull();
+    expect(refusal('guide.pdf', 'application/pdf', PDF)).toBeNull();
+    expect(refusal('config.txt', 'text/plain', TEXT)).toBeNull();
+  });
+
+  it('refuses an executable, an archive or a script whatever it is renamed to', () => {
+    // The spoofed extension: a Windows program, an ELF, a ZIP (so a JAR or an APK).
+    expect(refusal('guide.pdf', 'application/pdf', EXE)).toBe('CONTENT_MISMATCH');
+    expect(refusal('photo.jpg', 'image/jpeg', ELF)).toBe('CONTENT_MISMATCH');
+    expect(refusal('notes.txt', 'text/plain', EXE)).toBe('CONTENT_MISMATCH');
+    expect(refusal('notes.txt', 'text/plain', ZIP)).toBe('CONTENT_MISMATCH');
+    // A script is text, and still refused: an interpreter line, or markup, first.
+    expect(refusal('notes.txt', 'text/plain', SHELL)).toBe('CONTENT_MISMATCH');
+    expect(refusal('notes.txt', 'text/plain', HTML)).toBe('CONTENT_MISMATCH');
+    // Declared honestly, each is not on the list at all.
+    for (const [name, type] of [
+      ['setup.exe', 'application/x-msdownload'],
+      ['setup.msi', 'application/x-msi'],
+      ['run.bat', 'application/x-bat'],
+      ['run.sh', 'application/x-sh'],
+      ['app.js', 'text/javascript'],
+      ['app.apk', 'application/vnd.android.package-archive'],
+      ['lib.jar', 'application/java-archive'],
+      ['page.html', 'text/html'],
+      ['logo.svg', 'image/svg+xml'],
+      ['bundle.zip', 'application/zip'],
+    ] as const) {
+      expect(refusal(name, type, EXE)).toBe('TYPE_NOT_ALLOWED');
+    }
+    // A type on the list with a name that is not: the extension must be the type's own.
+    expect(refusal('setup.exe', 'application/pdf', PDF)).toBe('TYPE_NOT_ALLOWED');
+    expect(refusal('guide.pdf.exe', 'application/pdf', PDF)).toBe('TYPE_NOT_ALLOWED');
+    expect(refusal('guide', 'application/pdf', PDF)).toBe('TYPE_NOT_ALLOWED');
+    // An executable's extension earlier in the name is refused rather than trusted to the dot.
+    expect(refusal('invoice.exe.pdf', 'application/pdf', PDF)).toBe('NAME_NOT_ALLOWED');
+    expect(refusal('photo.js.png', 'image/png', PNG)).toBe('NAME_NOT_ALLOWED');
+    // A PNG declared as a JPEG is not a JPEG.
+    expect(refusal('screen.jpg', 'image/jpeg', PNG)).toBe('CONTENT_MISMATCH');
+  });
+
+  it('holds each type to its own size bound, and refuses an empty file', () => {
+    const over = (type: (typeof TICKET_REPLY_FILE_TYPES)[number], head: Uint8Array) => {
+      const bytes = new Uint8Array(type.maxBytes + 1).fill(0x41);
+      bytes.set(head);
+      return bytes;
+    };
+    const [jpeg, png, pdf, text] = TICKET_REPLY_FILE_TYPES;
+    expect(refusal('a.jpg', 'image/jpeg', over(jpeg, JPEG))).toBe('TOO_LARGE');
+    expect(refusal('a.png', 'image/png', over(png, PNG))).toBe('TOO_LARGE');
+    expect(refusal('a.pdf', 'application/pdf', over(pdf, PDF))).toBe('TOO_LARGE');
+    expect(refusal('a.txt', 'text/plain', over(text, TEXT))).toBe('TOO_LARGE');
+    const atBound = new Uint8Array(pdf.maxBytes).fill(0x41);
+    atBound.set(PDF);
+    expect(refusal('a.pdf', 'application/pdf', atBound)).toBeNull();
+    expect(TICKET_REPLY_FILE_MAX_BYTES).toBe(pdf.maxBytes);
+    expect(refusal('a.pdf', 'application/pdf', new Uint8Array(0))).toBe('EMPTY');
+  });
+
+  it('reads the type from the bytes alone, and calls invalid UTF-8 or a control character not text', () => {
+    expect(sniffTicketReplyFile(JPEG)).toBe('image/jpeg');
+    expect(sniffTicketReplyFile(PNG)).toBe('image/png');
+    expect(sniffTicketReplyFile(PDF)).toBe('application/pdf');
+    expect(sniffTicketReplyFile(TEXT)).toBe('text/plain');
+    expect(sniffTicketReplyFile(EXE)).toBeNull();
+    expect(sniffTicketReplyFile(Uint8Array.from([0x61, 0xc3]))).toBeNull(); // cut UTF-8
+    expect(sniffTicketReplyFile(Uint8Array.from([0xc0, 0x80]))).toBeNull(); // overlong NUL
+    expect(sniffTicketReplyFile(Uint8Array.from([0x61, 0x00, 0x62]))).toBeNull(); // NUL
+    expect(sniffTicketReplyFile(Uint8Array.from([0x61, 0x1b, 0x62]))).toBeNull(); // ESC
+    expect(sniffTicketReplyFile(Uint8Array.from([0x20, 0x0a]))).toBeNull(); // nothing visible
+  });
+
+  it('sends the file under a clean name ending in the type it was verified to be', () => {
+    const [jpeg, , pdf] = TICKET_REPLY_FILE_TYPES;
+    expect(ticketReplyFileNameOf('راهنما.PDF', pdf)).toBe('راهنما.pdf');
+    expect(ticketReplyFileNameOf('C:\\Users\\x\\shot.jpeg', jpeg)).toBe('shot.jpg');
+    expect(ticketReplyFileNameOf('../../"a"\n.pdf', pdf)).toBe('_a_.pdf');
+    expect(ticketReplyFileNameOf('.pdf', pdf)).toBe('file.pdf');
+    expect(Array.from(ticketReplyFileNameOf(`${'ب'.repeat(400)}.pdf`, pdf))).toHaveLength(200);
   });
 });
 
