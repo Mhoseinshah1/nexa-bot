@@ -320,7 +320,13 @@ export const PRODUCT_SORT_MAX = 100_000;
  * product catalogue, which is what the legacy system does too (`TBR-008`: the renewal
  * entry point offers the current plan at its current price, or the full picker).
  */
-export const SERVICE_ADDON_KINDS = ['ADD_TRAFFIC', 'ADD_TIME'] as const;
+/*
+ * `ADD_DEVICES` (WP-A5) is the one kind that is a RATE rather than a package: its price is
+ * per extra user / device and the customer chooses how many, up to `maxQuantity`. The
+ * quantity still never arrives as typed text — it is one of the bounded buttons the bot
+ * draws from this row, re-checked against the row on the server when the tap arrives.
+ */
+export const SERVICE_ADDON_KINDS = ['ADD_TRAFFIC', 'ADD_TIME', 'ADD_DEVICES'] as const;
 export type ServiceAddonKind = (typeof SERVICE_ADDON_KINDS)[number];
 export const serviceAddonKindSchema = z.enum(SERVICE_ADDON_KINDS);
 
@@ -359,15 +365,30 @@ export interface ServiceAddonSpecification {
   readonly trafficBytes: bigint | null;
   /** Days to add to the window. Set for `ADD_TIME`, null otherwise. */
   readonly durationDays: number | null;
+  /**
+   * The most extra users / devices one SERVICE may be sold through this add-on, in total
+   * (WP-A5). Set for `ADD_DEVICES`, null — or absent — otherwise. Counted from the
+   * service's live purchases at read time, never from a counter.
+   */
+  readonly maxQuantity?: number | null | undefined;
 }
 
 export const SERVICE_ADDON_TITLE_MAX_LENGTH = 120;
 
+/** The largest `maxQuantity` an `ADD_DEVICES` add-on may carry (WP-A5). */
+export const DEVICE_ADDON_MAX_QUANTITY = 20;
+
 /** Whether the amount a specification carries is the one its kind can use. */
 export function serviceAddonAmountMatchesKind(spec: ServiceAddonSpecification): boolean {
-  return spec.kind === 'ADD_TRAFFIC'
-    ? spec.trafficBytes !== null && spec.durationDays === null
-    : spec.durationDays !== null && spec.trafficBytes === null;
+  const maxQuantity = spec.maxQuantity ?? null;
+  switch (spec.kind) {
+    case 'ADD_TRAFFIC':
+      return spec.trafficBytes !== null && spec.durationDays === null && maxQuantity === null;
+    case 'ADD_TIME':
+      return spec.durationDays !== null && spec.trafficBytes === null && maxQuantity === null;
+    case 'ADD_DEVICES':
+      return maxQuantity !== null && spec.trafficBytes === null && spec.durationDays === null;
+  }
 }
 
 export const serviceAddonSpecificationSchema = z
@@ -375,6 +396,7 @@ export const serviceAddonSpecificationSchema = z
     kind: serviceAddonKindSchema,
     trafficBytes: z.coerce.bigint().min(1n).max(MAX_TRAFFIC_BYTES).nullable(),
     durationDays: z.number().int().min(1).max(MAX_DURATION_DAYS).nullable(),
+    maxQuantity: z.number().int().min(1).max(DEVICE_ADDON_MAX_QUANTITY).nullable().optional(),
   })
   .refine(serviceAddonAmountMatchesKind, {
     message: 'an add-on carries exactly the amount its kind can use',
@@ -392,6 +414,8 @@ export function isAddonPurchasable(status: ServiceAddonStatus): boolean {
  * chose and the operation type is what a panel is asked to do, and the day they stop
  * matching is the day a customer's extra traffic is executed as extra time.
  */
-export function operationTypeForAddonKind(kind: ServiceAddonKind): 'ADD_TRAFFIC' | 'ADD_TIME' {
+export function operationTypeForAddonKind(
+  kind: ServiceAddonKind,
+): 'ADD_TRAFFIC' | 'ADD_TIME' | 'ADD_DEVICES' {
   return kind;
 }

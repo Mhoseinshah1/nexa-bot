@@ -1,6 +1,7 @@
 import {
   money,
   notificationDestinationSchema,
+  opsLogTopicCategoryOf,
   templateDefinition,
   type Clock,
   type CorrelationId,
@@ -20,7 +21,14 @@ import { asId } from '@nexa/contracts';
 import type { SettingsResolver } from '../../settings/application/settings-resolver.js';
 import type { TemplateResolver } from '../../templates/application/template-resolver.js';
 import { DEFAULT_TEMPLATE_LOCALE } from '../../templates/application/template-resolver.js';
-import type { NotificationIntent, NotificationRepository, NotificationTransport } from './ports.js';
+import type {
+  NotificationIntent,
+  NotificationRepository,
+  NotificationTransport,
+  OpsTopicRoute,
+  OpsTopicRouter,
+  TransportResult,
+} from './ports.js';
 import { LoopProgress } from '../../../../infrastructure/lifecycle/loop-progress.js';
 
 export interface DispatcherOptions {
@@ -119,6 +127,11 @@ export interface DispatchTickResult {
    * count. A non-zero value here is a durable loss of capacity, not a delay.
    */
   readonly unreleased: number;
+  /**
+   * Claims handed back unsent because the minute's ceiling was spent by intents ahead
+   * of them in the batch (WP-A4). Queued, not failed: they go out in the next window.
+   */
+  readonly deferred: number;
 }
 
 /**
@@ -210,6 +223,12 @@ export class NotificationDispatcher {
      */
     private readonly opsLog: OperationalEventRecorder,
     private readonly options: DispatcherOptions,
+    /**
+     * WP-A4: resolves an intent routed to the operations log group to where the group is
+     * NOW, and recreates a topic an operator deleted. Null sends every intent to its
+     * snapshot, which is what a dispatcher built before the group existed did.
+     */
+    private readonly opsRouter: OpsTopicRouter | null = null,
   ) {
     this.progress = new LoopProgress(options.pollIntervalMs);
   }
@@ -230,7 +249,10 @@ export class NotificationDispatcher {
    * second call site this runs inside the hand-back's own catch, where a throw
    * would be counted as a hand-back that never happened.
    */
-  private async announceRestore(intent: NotificationIntent): Promise<void> {
+  private async announceRestore(
+    intent: NotificationIntent,
+    reason: string = 'tenant.not_active',
+  ): Promise<void> {
     try {
       await this.opsLog.record(
         {
@@ -245,7 +267,7 @@ export class NotificationDispatcher {
           context: {
             notificationId: intent.id,
             attemptNumber: intent.attemptCount,
-            reason: 'tenant.not_active',
+            reason,
           },
           // One row per WITHDRAWAL, not per intent: the same intent can be
           // swept and withdrawn again later, and collapsing those would hide
@@ -372,6 +394,7 @@ export class NotificationDispatcher {
         released: 0,
         restored: 0,
         unreleased: 0,
+        deferred: 0,
       };
     }
 
@@ -389,6 +412,7 @@ export class NotificationDispatcher {
     let released = 0;
     let restored = 0;
     let unreleased = 0;
+    let deferred = 0;
 
     for (const intent of claimed) {
       // `claimDue` already refused an inactive tenant, but it answered ONCE for
@@ -397,6 +421,20 @@ export class NotificationDispatcher {
       // intent behind it, so the kill switch governed whichever message
       // happened to be first in the batch and nothing else. `deliver` asks
       // again, on the line before its send.
+      // The ceiling is re-read before EVERY claimed intent, not once for the batch (Codex
+      // review #2 of PR #99): an intent ahead of this one may have spent more than its
+      // one slot — a deleted topic costs the refused send and the resend — and the batch
+      // was claimed on the budget before that. A claim with no slot left is handed back
+      // UNSENT, which returns its attempt: nothing reached the transport for it.
+      if ((await this.budgetOr(1)) <= 0) {
+        const handBack = await this.handBack(intent, 'rate.window_full');
+        // Counted apart from `released`, whose warning says the TENANT stopped.
+        restored += handBack.restored;
+        unreleased += handBack.unreleased;
+        deferred += 1;
+        continue;
+      }
+
       let delivery: DeliveryOutcomeReport;
       try {
         delivery = await this.deliver(intent);
@@ -465,72 +503,10 @@ export class NotificationDispatcher {
         // it and nothing between here and there re-reads the counter — but it
         // is an argument about this loop, not a check, and passing a stale
         // number here would return capacity for a claim somebody else holds.
-        try {
-          const handBack = await this.notifications.releaseClaim({
-            tenantId: intent.tenantId,
-            notificationId: intent.id,
-            attemptNumber: intent.attemptCount,
-            now: this.clock.now(),
-            reason: 'tenant.not_active',
-          });
-          if (handBack.released) released += 1;
-          if (handBack.restored) {
-            restored += 1;
-            await this.announceRestore(intent);
-          }
-        } catch (error) {
-          // ONE retry, and it is safe for a reason rather than by hope.
-          //
-          // A release is keyed by the attempt number it releases, so repeating
-          // it is a no-op against the primary key whether or not the first
-          // call committed. Mechanism, not hope: that is what makes retrying
-          // correct here when retrying a decrement would have been a guess.
-          //
-          // The retry may report `restored` where the first call already did
-          // the restoring, which would double-count. It cannot: the restore is
-          // an UPDATE whose predicate requires the intent to be FAILED, and the
-          // first call left it PENDING, so a second pass matches nothing.
-          //
-          // Retried HERE because nothing else can. A claim that recorded
-          // neither an attempt row nor a release is indistinguishable, in the
-          // database, from one whose sender died after a successful send — and
-          // at-least-once says that one must count as spent. So a later pass
-          // cannot safely repair this; the only moment we know no transport
-          // call happened is now.
-          try {
-            const handBack = await this.notifications.releaseClaim({
-              tenantId: intent.tenantId,
-              notificationId: intent.id,
-              attemptNumber: intent.attemptCount,
-              now: this.clock.now(),
-              reason: 'tenant.not_active',
-            });
-            if (handBack.released) released += 1;
-            if (handBack.restored) {
-              restored += 1;
-              await this.announceRestore(intent);
-            }
-            continue;
-          } catch {
-            // Both attempts failed. Said plainly: this attempt of the
-            // allowance is now SPENT, not deferred — an earlier version of
-            // this comment claimed the cost was recoverable on the next claim,
-            // and no code path recovered it.
-            //
-            // No delivery outcome is invented either. No transport call
-            // happened, so there is nothing to file as sent or failed; the
-            // intent keeps its lease and is met again with one fewer attempt.
-            this.logger.error(
-              {
-                err: error instanceof Error ? error.message : String(error),
-                notificationId: intent.id,
-                attemptNumber: intent.attemptCount,
-              },
-              'Could not record a notification hand-back; the attempt is spent',
-            );
-            unreleased += 1;
-          }
-        }
+        const handBack = await this.handBack(intent, 'tenant.not_active');
+        released += handBack.released;
+        restored += handBack.restored;
+        unreleased += handBack.unreleased;
         continue;
       }
 
@@ -604,7 +580,106 @@ export class NotificationDispatcher {
       released,
       restored,
       unreleased,
+      deferred,
     };
+  }
+
+  /**
+   * The minute's remaining budget, or `fallback` when it cannot be read. Never throws: the
+   * per-intent check sits OUTSIDE the batch's per-intent guard, where a throw would strand
+   * every claim behind it. Falling back to 1 there sends as the batch's own claim already
+   * allowed; falling back to 0 for a resend defers it, which is always safe.
+   */
+  private async budgetOr(fallback: number): Promise<number> {
+    try {
+      return await this.remainingBudget(this.clock.now());
+    } catch (error) {
+      this.logger.warn(
+        { err: error instanceof Error ? error.message : String(error) },
+        'Could not read the notification rate ceiling',
+      );
+      return fallback;
+    }
+  }
+
+  /**
+   * Hands one claim back, unsent: the RELEASED branch's mechanism, shared with the
+   * rate-window deferral (Codex review #2 of PR #99). Only ever for a claim that did NOT
+   * reach the transport in this tick — the database refuses the release of an attempt
+   * that did, and nothing here asks it to.
+   */
+  private async handBack(
+    intent: NotificationIntent,
+    reason: string,
+  ): Promise<{ released: number; restored: number; unreleased: number }> {
+    const counts = { released: 0, restored: 0, unreleased: 0 };
+    try {
+      const handBack = await this.notifications.releaseClaim({
+        tenantId: intent.tenantId,
+        notificationId: intent.id,
+        attemptNumber: intent.attemptCount,
+        now: this.clock.now(),
+        reason,
+      });
+      if (handBack.released) counts.released += 1;
+      if (handBack.restored) {
+        counts.restored += 1;
+        await this.announceRestore(intent, reason);
+      }
+    } catch (error) {
+      // ONE retry, and it is safe for a reason rather than by hope.
+      //
+      // A release is keyed by the attempt number it releases, so repeating
+      // it is a no-op against the primary key whether or not the first
+      // call committed. Mechanism, not hope: that is what makes retrying
+      // correct here when retrying a decrement would have been a guess.
+      //
+      // The retry may report `restored` where the first call already did
+      // the restoring, which would double-count. It cannot: the restore is
+      // an UPDATE whose predicate requires the intent to be FAILED, and the
+      // first call left it PENDING, so a second pass matches nothing.
+      //
+      // Retried HERE because nothing else can. A claim that recorded
+      // neither an attempt row nor a release is indistinguishable, in the
+      // database, from one whose sender died after a successful send — and
+      // at-least-once says that one must count as spent. So a later pass
+      // cannot safely repair this; the only moment we know no transport
+      // call happened is now.
+      try {
+        const handBack = await this.notifications.releaseClaim({
+          tenantId: intent.tenantId,
+          notificationId: intent.id,
+          attemptNumber: intent.attemptCount,
+          now: this.clock.now(),
+          reason,
+        });
+        if (handBack.released) counts.released += 1;
+        if (handBack.restored) {
+          counts.restored += 1;
+          await this.announceRestore(intent, reason);
+        }
+        return counts;
+      } catch {
+        // Both attempts failed. Said plainly: this attempt of the
+        // allowance is now SPENT, not deferred — an earlier version of
+        // this comment claimed the cost was recoverable on the next claim,
+        // and no code path recovered it.
+        //
+        // No delivery outcome is invented either. No transport call
+        // happened, so there is nothing to file as sent or failed; the
+        // intent keeps its lease and is met again with one fewer attempt.
+        this.logger.error(
+          {
+            err: error instanceof Error ? error.message : String(error),
+            notificationId: intent.id,
+            attemptNumber: intent.attemptCount,
+          },
+          'Could not record a notification hand-back; the attempt is spent',
+        );
+        counts.unreleased += 1;
+      }
+    }
+    return counts;
   }
 
   /** One intent: render, send outside any transaction, record what happened. */
@@ -701,28 +776,107 @@ export class NotificationDispatcher {
       return { result: 'RELEASED', reachedTransport: false };
     }
 
-    // A transport that THROWS is a transport failure, not an unknown one.
-    //
-    // Left to propagate, it reached the batch's catch, which could only guess
-    // at what had happened and guessed permanently-failed — ending an intent on
-    // one refused connection, `maxAttempts` notwithstanding. Handled here, it is
-    // an ordinary retryable outcome with a reason in its attempt row, and the
-    // attempt ceiling decides when to stop, exactly as it does for a transport
-    // that returns a failure instead of raising one.
-    let result: Awaited<ReturnType<NotificationTransport['send']>>;
-    try {
-      result = await this.transport.send({
-        destination,
-        text,
-        html: definition.format === 'TELEGRAM_HTML',
-        tenantId: intent.tenantId,
-      });
-    } catch (error) {
-      result = {
-        outcome: 'FAILED_RETRYABLE',
-        errorCode: 'notification.transport_threw',
-        errorMessage: error instanceof Error ? error.message : String(error),
-      };
+    // WP-A4: an intent routed to the operations log group goes to where the group is
+    // NOW — its current chat and the category's current thread — not to the snapshot it
+    // was queued with. The snapshot stays on the row as history.
+    const category =
+      this.opsRouter !== null &&
+      destination.transport === 'TELEGRAM' &&
+      destination.opsTopic !== undefined
+        ? opsLogTopicCategoryOf(destination.opsTopic)
+        : null;
+    let botInstanceId: string | undefined;
+    if (category !== null && this.opsRouter !== null && destination.transport === 'TELEGRAM') {
+      const route = await this.routeOrUnavailable(() =>
+        (this.opsRouter as OpsTopicRouter).resolve(intent.tenantId, category),
+      );
+      if (route.kind === 'UNAVAILABLE') {
+        // RETRYABLE, never permanent: a group that is disconnected or mid-setup is a
+        // problem somebody fixes, and the message is preserved when the allowance runs
+        // out rather than lost. Nothing left the process.
+        const recorded = await this.record(
+          intent,
+          {
+            outcome: 'FAILED_RETRYABLE',
+            errorCode: route.errorCode,
+            errorMessage: route.errorMessage,
+          },
+          startedAt,
+        );
+        return { result: recorded, reachedTransport: false };
+      }
+      destination = { ...destination, chatId: route.chatId, topicId: route.topicId };
+      botInstanceId = route.botInstanceId;
+    }
+
+    const html = definition.format === 'TELEGRAM_HTML';
+    let result = await this.sendOnce(intent, destination, text, html, botInstanceId);
+
+    if (category !== null && this.opsRouter !== null && result.outcome !== 'SUCCEEDED') {
+      const router = this.opsRouter;
+      if (
+        result.topicMissing === true &&
+        destination.transport === 'TELEGRAM' &&
+        destination.topicId !== null
+      ) {
+        // The topic was deleted. Recreate it ONCE for this stale thread id — a second
+        // sender that met the same missing thread finds it already recreated — and
+        // resend ONCE. If that does not deliver, this attempt is a retryable failure and
+        // the allowance decides when to stop: never a loop, never a lost event.
+        const staleTopicId = destination.topicId;
+        const recovered = await this.routeOrUnavailable(() =>
+          router.recover(intent.tenantId, category, staleTopicId),
+        );
+        // The resend is a second call to Telegram and pays the per-minute ceiling like any
+        // other (Codex review #1 of PR #99). The refused first send is charged by the batch
+        // loop once this returns, so it is counted here as already spent. With nothing left
+        // in the window the resend is DEFERRED: a retryable failure that waits for the next
+        // window. The attempt it costs is honest — a send did reach Telegram — and the
+        // next claim is routed to the recreated topic, which is now the registered one.
+        const left = recovered.kind === 'ROUTED' ? (await this.budgetOr(0)) - 1 : 0;
+        if (recovered.kind === 'ROUTED' && left <= 0) {
+          result = {
+            outcome: 'FAILED_RETRYABLE',
+            errorCode: 'ops_group.resend_deferred',
+            errorMessage: 'The topic was recreated; the resend waits for the next rate window.',
+            retryAfterMs: Math.max(this.windowStartedAt + 60_000 - this.clock.now().getTime(), 0),
+          };
+        } else if (recovered.kind === 'ROUTED') {
+          destination = { ...destination, chatId: recovered.chatId, topicId: recovered.topicId };
+          // The first send reached Telegram as well; the ceiling is a courtesy to it.
+          this.sentInWindow += 1;
+          result = await this.sendOnce(intent, destination, text, html, recovered.botInstanceId);
+        } else {
+          result = {
+            outcome: 'FAILED_RETRYABLE',
+            errorCode: recovered.errorCode,
+            errorMessage: recovered.errorMessage,
+          };
+        }
+        if (result.outcome !== 'SUCCEEDED' && result.topicMissing === true) {
+          result = {
+            outcome: 'FAILED_RETRYABLE',
+            errorCode: 'ops_group.topic_missing',
+            errorMessage: 'The recreated topic was missing again; retrying on the next attempt.',
+          };
+        }
+      }
+      // Telegram refused the CHAT — the bot was removed, lost its rights, or the group
+      // is gone. The status panel says so, and the worker checks the group again.
+      const problem = result.outcome !== 'SUCCEEDED' ? result.chatProblem : undefined;
+      if (problem !== undefined && destination.transport === 'TELEGRAM') {
+        const chatId = destination.chatId;
+        await this.bestEffort('record an ops group problem', () =>
+          router.problem(intent.tenantId, chatId, problem),
+        );
+      }
+    }
+    if (category !== null && this.opsRouter !== null && result.outcome === 'SUCCEEDED') {
+      const router = this.opsRouter;
+      const chatId = destination.transport === 'TELEGRAM' ? destination.chatId : '';
+      await this.bestEffort('record an ops group delivery', () =>
+        router.delivered(intent.tenantId, category, chatId, this.clock.now()),
+      );
     }
 
     const recorded = await this.record(intent, result, startedAt);
@@ -731,6 +885,66 @@ export class NotificationDispatcher {
       reachedTransport: true,
       alreadyTrue: recorded === 'SUPERSEDED' && result.outcome === 'SUCCEEDED',
     };
+  }
+
+  /**
+   * One transport call. A transport that THROWS is a transport failure, not an unknown
+   * one.
+   *
+   * Left to propagate, it reached the batch's catch, which could only guess at what had
+   * happened and guessed permanently-failed — ending an intent on one refused
+   * connection, `maxAttempts` notwithstanding. Handled here, it is an ordinary retryable
+   * outcome with a reason in its attempt row, and the attempt ceiling decides when to
+   * stop, exactly as it does for a transport that returns a failure instead of raising
+   * one.
+   */
+  private async sendOnce(
+    intent: NotificationIntent,
+    destination: NotificationDestination,
+    text: string,
+    html: boolean,
+    botInstanceId: string | undefined,
+  ): Promise<TransportResult> {
+    try {
+      return await this.transport.send({
+        destination,
+        text,
+        html,
+        tenantId: intent.tenantId,
+        ...(botInstanceId !== undefined ? { botInstanceId } : {}),
+      });
+    } catch (error) {
+      return {
+        outcome: 'FAILED_RETRYABLE',
+        errorCode: 'notification.transport_threw',
+        errorMessage: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
+  /** A router answer, with a throw turned into a retryable unavailability. */
+  private async routeOrUnavailable(ask: () => Promise<OpsTopicRoute>): Promise<OpsTopicRoute> {
+    try {
+      return await ask();
+    } catch (error) {
+      return {
+        kind: 'UNAVAILABLE',
+        errorCode: 'ops_group.route_failed',
+        errorMessage: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
+  /** Bookkeeping that must never cost a delivery its outcome. Logged, never rethrown. */
+  private async bestEffort(what: string, work: () => Promise<void>): Promise<void> {
+    try {
+      await work();
+    } catch (error) {
+      this.logger.warn(
+        { err: error instanceof Error ? error.message : String(error) },
+        `Could not ${what}`,
+      );
+    }
   }
 
   private async record(

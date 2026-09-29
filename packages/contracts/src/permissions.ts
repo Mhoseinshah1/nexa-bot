@@ -179,6 +179,17 @@ export const PERMISSIONS = [
   p('panels.view', 'View provider panels', 'LOW'),
   p('panels.edit', 'Create or edit provider panels', 'HIGH'),
   p('panels.credentials.rotate', 'Rotate panel credentials', 'CRITICAL'),
+  /*
+   * WP-A8: the read-only technical view of one panel — raw capability keys, the credential
+   * shape, the stored activation and policy exactly as stored. For the owner debugging an
+   * integration; normal operators read the same facts in Persian through `panels.view`.
+   * HIGH because it is the one panel read that shows internal identifiers rather than
+   * their meaning. No credential is reachable through it: the credential fields are
+   * set-at timestamps, as on every other panel read. ADDITIVE to `panels.view`: the view
+   * is a detail of a panel, so the endpoint charges both, and this key alone reaches
+   * nothing.
+   */
+  p('panels.technical.view', "View a panel's raw technical configuration", 'HIGH'),
 
   // Referral (WP9). Read-only: there is no administrative write to an attribution or a
   // commission, because either would change who is owed money (`docs/wp9-referral-audit.md`
@@ -215,6 +226,19 @@ export const PERMISSIONS = [
   p('templates.view', 'View message templates and their overrides', 'LOW'),
   p('templates.edit', 'Change or revert a message template', 'HIGH'),
 
+  /*
+   * Client apps and connection guides (WP-A10), as their own pair rather than
+   * `templates.*` or `settings.*`.
+   *
+   * What an entry holds is a DOWNLOAD LINK every customer of the tenant is told to open,
+   * which is neither a setting about how the installation behaves nor the wording of a
+   * message: a wrong one sends customers to somebody else's binary. EDIT is HIGH for that
+   * reason, level with `templates.edit` — the same audience, and a worse worst case than a
+   * typo. VIEW is LOW and read-only.
+   */
+  p('client_apps.view', 'View the client apps and connection guides offered to customers', 'LOW'),
+  p('client_apps.edit', 'Add, edit, enable, disable or remove a client app entry', 'HIGH'),
+
   // Administration
   p('admins.view', 'View administrators', 'LOW'),
   p('admins.edit', 'Create, suspend or revoke administrators', 'CRITICAL'),
@@ -222,6 +246,19 @@ export const PERMISSIONS = [
 
   // Broadcasts
   p('broadcasts.send', 'Send a broadcast to customers', 'HIGH'),
+
+  /*
+   * Support tickets (WP-A7, `docs/wp-a7-tickets-audit.md`). Five keys, because reading a
+   * conversation, speaking in it, deciding who owns it, closing it and editing the
+   * categories customers choose from are five different authorities. Each action requires
+   * `tickets.view` (`PERMISSION_REQUIRES`): acting on a ticket nobody can open is unusable.
+   * MEDIUM, none higher: nothing here moves money or touches a provider.
+   */
+  p('tickets.view', 'View support tickets and their conversations', 'LOW'),
+  p('tickets.reply', 'Reply to a support ticket'),
+  p('tickets.assign', 'Assign a support ticket, set its priority and link its context'),
+  p('tickets.close', "Change a support ticket's status: close, reopen or mark it waiting"),
+  p('tickets.categories.edit', 'Create or edit support ticket categories'),
 
   // Reporting and logs
   p('reports.view', 'View reports', 'LOW'),
@@ -319,6 +356,10 @@ export const ROLE_SEEDS: readonly RoleSeed[] = [
       'settings.view',
       'templates.view',
       'templates.edit',
+      // WP-A10: the apps and guides customers are sent to are content the operator
+      // already maintains beside the message templates.
+      'client_apps.view',
+      'client_apps.edit',
       // Read only, and that is a narrowing rather than a grant. Until Phase 5 an
       // operator COULD change the card number, by editing the template body it was
       // typed into; the destination is data now, and `templates.edit` no longer
@@ -338,6 +379,12 @@ export const ROLE_SEEDS: readonly RoleSeed[] = [
       // question, and an operator who cannot see the answer is an operator who
       // finds out during a disaster. Viewing is LOW; nothing else here is.
       'backup.view',
+      // WP-A7: the whole ticket desk, categories included.
+      'tickets.view',
+      'tickets.reply',
+      'tickets.assign',
+      'tickets.close',
+      'tickets.categories.edit',
     ],
   },
   {
@@ -388,6 +435,13 @@ export const ROLE_SEEDS: readonly RoleSeed[] = [
       'services.edit',
       'receipts.view',
       'reports.view',
+      // WP-A10: "which app, and where do I get it" is the question support answers most.
+      'client_apps.view',
+      // WP-A7: answering tickets is this role's job. The categories are configuration.
+      'tickets.view',
+      'tickets.reply',
+      'tickets.assign',
+      'tickets.close',
     ],
   },
   {
@@ -537,6 +591,15 @@ export const PERMISSION_REQUIRES: Readonly<Record<string, PermissionKey>> = {
    * Holding the write without the read would be a second way to read it.
    */
   'users.trial.edit': 'users.view' as PermissionKey,
+  /*
+   * WP-A7. Every ticket action is taken FROM a ticket (or, for categories, from the
+   * inbox that lists them), which `tickets.view` reads. Holding the action alone would be
+   * a button on a page the holder cannot open.
+   */
+  'tickets.reply': 'tickets.view' as PermissionKey,
+  'tickets.assign': 'tickets.view' as PermissionKey,
+  'tickets.close': 'tickets.view' as PermissionKey,
+  'tickets.categories.edit': 'tickets.view' as PermissionKey,
 };
 
 /**

@@ -410,6 +410,15 @@ export class PanelService {
   }
 
   /**
+   * WP-A8: one panel with its capacity and sellability, for a caller that has ALREADY
+   * charged its own permission — the policy write answers with the panel it wrote, as
+   * `update` does, under `panels.edit`. Never a surface's entry point: it checks nothing.
+   */
+  async readAuthorized(scope: TenantContext, panelId: string): Promise<PanelWithCapacity> {
+    return this.oneWithCapacity(scope, await this.require(scope, panelId));
+  }
+
+  /**
    * Attaches occupancy to a page of panels in ONE query, never one per row.
    *
    * The list is the place an N+1 would actually hurt: a fifty-panel page would

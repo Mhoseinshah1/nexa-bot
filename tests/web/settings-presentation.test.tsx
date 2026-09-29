@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
-import { SETTINGS, SETTING_KEYS, settingDefinition, settingIntegerRange } from '@nexa/contracts';
+import {
+  OPS_GROUP_MANAGED_SETTING_KEYS,
+  SETTINGS,
+  SETTING_KEYS,
+  settingDefinition,
+  settingIntegerRange,
+} from '@nexa/contracts';
 import { SettingsPage } from '../../apps/web/src/pages/settings';
+import { OpsGroupPage } from '../../apps/web/src/pages/ops-group';
 import {
   SETTING_GROUP_TITLES,
   SETTING_PRESENTATION,
@@ -33,6 +40,39 @@ const EVERY_SETTING = SETTINGS.map((definition) =>
     classification: definition.classification,
   }),
 );
+
+/**
+ * The keys the Settings page draws. WP-A4 moved the ops group's chat and topic ids to the
+ * ops group panel's advanced section and hid the retired severity cutoff and the internal
+ * attempt ceiling; they keep their presentation entries, which stay total over the registry.
+ */
+const VISIBLE_KEYS = SETTING_KEYS.filter(
+  (key) => !(OPS_GROUP_MANAGED_SETTING_KEYS as readonly string[]).includes(key),
+);
+
+/** A connected, healthy ops group, for the page that now edits the manual topic id. */
+const OPS_GROUP_VIEW = {
+  connection: 'CONNECTED',
+  group: {
+    title: 'Nexa Ops',
+    bot: { id: '01900000-0000-7000-8000-00000000a001', username: 'acme_store_bot' },
+    connectedAt: '2026-09-01T10:00:00.000Z',
+    disconnectedAt: null,
+  },
+  health: 'HEALTHY',
+  problems: [],
+  checkedAt: null,
+  lastDeliveredAt: null,
+  topics: [
+    { category: 'SYSTEM', state: 'READY', lastDeliveredAt: null, recreatedCount: 0 },
+    { category: 'PAYMENTS', state: 'READY', lastDeliveredAt: null, recreatedCount: 0 },
+  ],
+  queue: { pending: 0, preserved: 0 },
+  laneEnabled: true,
+  pendingCodeExpiresAt: null,
+  bots: [],
+  manual: { configured: false, inUse: false },
+};
 
 const ROUTES = [
   { url: '/settings', body: { settings: EVERY_SETTING } },
@@ -91,7 +131,7 @@ describe('the settings page', () => {
   it('shows the operator header and no developer metadata', async () => {
     stubApi(ROUTES);
     const { container } = renderPage(<SettingsPage mayEdit denied={false} />);
-    await screen.findByRole('heading', { name: t('web.setting_ops_max_attempts') });
+    await screen.findByRole('heading', { name: t('web.setting_ops_max_per_minute') });
 
     expect(screen.getByText('تنظیمات موردنظر را تغییر دهید و ذخیره کنید.')).toBeInTheDocument();
 
@@ -112,9 +152,9 @@ describe('the settings page', () => {
   it('draws every setting with its Persian title, description, value in force and save button', async () => {
     stubApi(ROUTES);
     renderPage(<SettingsPage mayEdit denied={false} />);
-    await screen.findByRole('heading', { name: t('web.setting_ops_max_attempts') });
+    await screen.findByRole('heading', { name: t('web.setting_ops_max_per_minute') });
 
-    for (const key of SETTING_KEYS) {
+    for (const key of VISIBLE_KEYS) {
       const presentation = SETTING_PRESENTATION[key];
       const heading = screen.getByRole('heading', { name: t(presentation.title) });
       const card = heading.closest('section.card') as HTMLElement;
@@ -125,24 +165,35 @@ describe('the settings page', () => {
       expect(within(card).getByRole('button', { name: t('web.save') })).toBeInTheDocument();
     }
     // One save button per setting: each is saved on its own.
-    expect(screen.getAllByRole('button', { name: t('web.save') })).toHaveLength(SETTINGS.length);
+    expect(screen.getAllByRole('button', { name: t('web.save') })).toHaveLength(
+      VISIBLE_KEYS.length,
+    );
+    // WP-A4: the keys the ops group panel owns are not drawn here at all.
+    for (const key of OPS_GROUP_MANAGED_SETTING_KEYS) {
+      expect(
+        screen.queryByRole('heading', { name: t(SETTING_PRESENTATION[key].title) }),
+        key,
+      ).toBeNull();
+    }
   });
 
   it('keeps the machine key in a closed technical disclosure', async () => {
     stubApi(ROUTES);
     renderPage(<SettingsPage mayEdit denied={false} />);
-    const heading = await screen.findByRole('heading', { name: t('web.setting_ops_max_attempts') });
+    const heading = await screen.findByRole('heading', {
+      name: t('web.setting_ops_max_per_minute'),
+    });
     const card = heading.closest('section.card') as HTMLElement;
     const details = card.querySelector('details') as HTMLDetailsElement;
     expect(details.open).toBe(false);
     expect(within(details).getByText(t('web.settings_technical'))).toBeInTheDocument();
-    expect(within(details).getByText('ops.notifications.max_attempts')).toBeInTheDocument();
+    expect(within(details).getByText('ops.notifications.max_per_minute')).toBeInTheDocument();
   });
 
   it('groups the settings under Persian headings', async () => {
     stubApi(ROUTES);
     renderPage(<SettingsPage mayEdit denied={false} />);
-    await screen.findByRole('heading', { name: t('web.setting_ops_max_attempts') });
+    await screen.findByRole('heading', { name: t('web.setting_ops_max_per_minute') });
     for (const title of Object.values(SETTING_GROUP_TITLES)) {
       expect(screen.getByRole('heading', { name: t(title) })).toBeInTheDocument();
     }
@@ -257,19 +308,17 @@ describe('the settings page', () => {
     });
   });
 
-  it('labels the severity options in Persian, not by their enum names', async () => {
-    stubApi([
-      {
-        url: '/settings',
-        body: { settings: [setting({ key: 'ops.notifications.min_severity', value: 'ERROR' })] },
-      },
-    ]);
-    renderPage(<SettingsPage mayEdit denied={false} />);
-    const select = (await screen.findByLabelText(
-      t('web.setting_ops_min_severity'),
-    )) as HTMLSelectElement;
-    expect(select.value).toBe('ERROR');
-    for (const option of select.options) expect(LATIN.test(option.text), option.text).toBe(false);
+  /*
+   * The severity select is no longer drawn: WP-A4 retired `min_severity` and the page hides
+   * it. Its presentation entry stays (the registry is total), so its options are still held
+   * to Persian labels here, at the registry.
+   */
+  it('labels the severity options in Persian, not by their enum names', () => {
+    const { control } = SETTING_PRESENTATION['ops.notifications.min_severity'];
+    expect(control.kind).toBe('select');
+    const options = control.kind === 'select' ? control.options : [];
+    expect(options.map((option) => option.value)).toContain('ERROR');
+    for (const option of options) expect(LATIN.test(t(option.label)), option.value).toBe(false);
   });
 
   it('edits every money setting as an amount and a currency, not as JSON', async () => {
@@ -337,9 +386,15 @@ describe('the settings page', () => {
     });
   });
 
-  /** F2: any safe integer is a number; a digit cap sent a valid 16-digit id as a string. */
+  /**
+   * F2: any safe integer is a number; a digit cap sent a valid 16-digit id as a string.
+   *
+   * WP-A4 moved the topic id to the ops group panel's advanced manual fallback, so the rule
+   * is held where the key is now edited.
+   */
   it('sends a 16-digit topic id as a number', async () => {
     const api = stubApi([
+      { url: '/ops-group', body: { opsGroup: OPS_GROUP_VIEW } },
       {
         url: '/settings',
         body: {
@@ -351,10 +406,18 @@ describe('the settings page', () => {
         body: { setting: setting({ key: 'ops.notifications.telegram_topic_id' }), changed: true },
       },
     ]);
-    renderPage(<SettingsPage mayEdit denied={false} />);
-    const field = await screen.findByLabelText(t('web.setting_ops_topic_id'));
+    const { container } = renderPage(<OpsGroupPage mayManage denied={false} />);
+    await screen.findByText(t('web.opsgroup_advanced'));
+    const details = container.querySelector('details') as HTMLDetailsElement;
+    details.open = true;
+    fireEvent(details, new Event('toggle'));
+    const field = await screen.findByLabelText(t('web.opsgroup_manual_topic'));
     fireEvent.change(field, { target: { value: '1234567890123456' } });
-    fireEvent.click(screen.getByRole('button', { name: t('web.save') }));
+    fireEvent.click(
+      within(field.closest('.field-row') as HTMLElement).getByRole('button', {
+        name: t('web.save'),
+      }),
+    );
     await waitFor(() => {
       const write = api.calls.find((call) => call.method === 'POST');
       expect(write?.body).toMatchObject({ value: 1234567890123456 });
@@ -462,21 +525,25 @@ describe('the settings page', () => {
     stubApi([
       { url: '/settings', body: { settings: [setting()] } },
       {
-        url: '/settings/ops.notifications.max_attempts',
+        url: '/settings/ops.notifications.max_per_minute',
         status: 422,
         body: {
           error: {
             kind: 'validation',
             code: 'control.invalid_value',
-            message: 'The value for ops.notifications.max_attempts does not match its declaration.',
+            message:
+              'The value for ops.notifications.max_per_minute does not match its declaration.',
             correlationId: 'test',
-            details: { key: 'ops.notifications.max_attempts', issues: ['Too big: expected <=10'] },
+            details: {
+              key: 'ops.notifications.max_per_minute',
+              issues: ['Too big: expected <=60'],
+            },
           },
         },
       },
     ]);
     const { container } = renderPage(<SettingsPage mayEdit denied={false} />);
-    const field = await screen.findByLabelText(t('web.setting_ops_max_attempts'));
+    const field = await screen.findByLabelText(t('web.setting_ops_max_per_minute'));
     fireEvent.change(field, { target: { value: '99' } });
     fireEvent.click(screen.getByRole('button', { name: t('web.save') }));
 

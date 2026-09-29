@@ -183,6 +183,25 @@ export class CustomerCaptureService {
       readonly text: string;
       /** The message's own Telegram `update_id`, when known. */
       readonly updateId?: bigint;
+      /**
+       * WP-A7: read only a window with one of these purposes. A photo or a document is an
+       * answer to a ticket window and to nothing else, so a file must never close a note or
+       * a search window as though it were their text; any other window answers NO_WINDOW
+       * and is left exactly as it was.
+       */
+      readonly onlyPurposes?: readonly CustomerCapturePurpose[];
+      /**
+       * WP-A7: a window in ANOTHER table that answers the same message, read inside this
+       * read's transaction AFTER this table's lock — the caller takes that table's own lock
+       * in it and returns the competing window's `openedAt`, or null when none is open. When
+       * the competitor is at least as new, this window is not the answer: NO_WINDOW, and the
+       * window stays open. The choice and the consumption are then one decision under both
+       * locks, so neither window can open between them (Codex review of #96).
+       *
+       * Lock order: this table's lock, then the competitor's. Nothing takes them the other
+       * way round, which is what keeps the pair deadlock-free.
+       */
+      readonly yieldTo?: (tx: TransactionScope) => Promise<Date | null>;
     },
   ): Promise<CaptureReadResult> {
     const requestHash = hashRequest({
@@ -190,6 +209,8 @@ export class CustomerCaptureService {
       customerId: input.customerId,
       text: input.text,
       read: true,
+      ...(input.onlyPurposes === undefined ? {} : { only: [...input.onlyPurposes] }),
+      ...(input.yieldTo === undefined ? {} : { yields: true }),
     });
     const replayed = await this.deps.idempotency.find<{ captureId: string }>(
       scope,
@@ -207,6 +228,9 @@ export class CustomerCaptureService {
 
     const open = await this.deps.captures.findOpen(scope, input.botInstanceId, input.customerId);
     if (open === null) return { outcome: 'NO_WINDOW' };
+    if (input.onlyPurposes !== undefined && !input.onlyPurposes.includes(open.purpose)) {
+      return { outcome: 'NO_WINDOW' };
+    }
 
     const denial = {
       action: 'customer.capture.read',
@@ -222,6 +246,9 @@ export class CustomerCaptureService {
         tx,
       );
       if (capture === null) return { outcome: 'NO_WINDOW' } as const;
+      if (input.onlyPurposes !== undefined && !input.onlyPurposes.includes(capture.purpose)) {
+        return { outcome: 'NO_WINDOW' } as const;
+      }
       const now = this.deps.clock.now();
       if (now.getTime() >= capture.expiresAt.getTime()) {
         await this.deps.captures.close(scope, capture.id, 'EXPIRED', now, tx);
@@ -239,6 +266,12 @@ export class CustomerCaptureService {
         input.updateId <= capture.openedUpdateId
       ) {
         return { outcome: 'NO_WINDOW' } as const;
+      }
+      if (input.yieldTo !== undefined) {
+        const competing = await input.yieldTo(tx);
+        if (competing !== null && competing.getTime() >= capture.openedAt.getTime()) {
+          return { outcome: 'NO_WINDOW' } as const;
+        }
       }
       // An amount window that already holds its figure is waiting for a ROUTE, not for
       // text; a second figure typed under the buttons is not an answer to anything.

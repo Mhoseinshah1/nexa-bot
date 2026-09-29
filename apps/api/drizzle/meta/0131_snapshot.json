@@ -1,5 +1,5 @@
 {
-  "id": "00fd013f-ef27-4672-9bfd-c4ad3d6a2ac9",
+  "id": "122827e6-9ca7-48b0-b71e-582aef471961",
   "prevId": "4303c237-7f36-45b2-a198-823331d4ccea",
   "version": "7",
   "dialect": "postgresql",
@@ -2103,6 +2103,253 @@
       },
       "isRLSEnabled": false
     },
+    "public.client_apps": {
+      "name": "client_apps",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "platform": {
+          "name": "platform",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "icon": {
+          "name": "icon",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "description": {
+          "name": "description",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "official_url": {
+          "name": "official_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "alternative_url": {
+          "name": "alternative_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "help_url": {
+          "name": "help_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "guide": {
+          "name": "guide",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "delivery_kinds": {
+          "name": "delivery_kinds",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::text[]"
+        },
+        "protocols": {
+          "name": "protocols",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::text[]"
+        },
+        "provider_types": {
+          "name": "provider_types",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::text[]"
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'ENABLED'"
+        },
+        "sort_order": {
+          "name": "sort_order",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "version": {
+          "name": "version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "client_apps_tenant_platform_idx": {
+          "name": "client_apps_tenant_platform_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "platform",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "sort_order",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "client_apps_tenant_id_tenants_id_fk": {
+          "name": "client_apps_tenant_id_tenants_id_fk",
+          "tableFrom": "client_apps",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "client_apps_tenant_id_key": {
+          "name": "client_apps_tenant_id_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "client_apps_platform_check": {
+          "name": "client_apps_platform_check",
+          "value": "platform IN ('ANDROID', 'IOS', 'WINDOWS', 'MACOS', 'LINUX', 'OTHER')"
+        },
+        "client_apps_status_check": {
+          "name": "client_apps_status_check",
+          "value": "status IN ('ENABLED', 'DISABLED')"
+        },
+        "client_apps_name_check": {
+          "name": "client_apps_name_check",
+          "value": "length(btrim(name)) BETWEEN 1 AND 64"
+        },
+        "client_apps_icon_check": {
+          "name": "client_apps_icon_check",
+          "value": "icon IS NULL OR length(btrim(icon)) BETWEEN 1 AND 16"
+        },
+        "client_apps_description_check": {
+          "name": "client_apps_description_check",
+          "value": "length(btrim(description)) BETWEEN 1 AND 300"
+        },
+        "client_apps_guide_check": {
+          "name": "client_apps_guide_check",
+          "value": "length(btrim(guide)) BETWEEN 1 AND 2500"
+        },
+        "client_apps_urls_check": {
+          "name": "client_apps_urls_check",
+          "value": "official_url LIKE 'https://%' AND length(official_url) <= 2048\n          AND (alternative_url IS NULL OR (alternative_url LIKE 'https://%' AND length(alternative_url) <= 2048))\n          AND (help_url IS NULL OR (help_url LIKE 'https://%' AND length(help_url) <= 2048))"
+        },
+        "client_apps_delivery_kinds_check": {
+          "name": "client_apps_delivery_kinds_check",
+          "value": "delivery_kinds <@ ARRAY['SUBSCRIPTION_LINK', 'CONNECTION_FILES']::text[]"
+        },
+        "client_apps_protocols_check": {
+          "name": "client_apps_protocols_check",
+          "value": "protocols <@ ARRAY['vless', 'vmess', 'trojan', 'shadowsocks']::text[]"
+        },
+        "client_apps_provider_types_check": {
+          "name": "client_apps_provider_types_check",
+          "value": "provider_types <@ ARRAY['marzban', 'rickpanel', 'sanaei']::text[]"
+        },
+        "client_apps_sort_order_check": {
+          "name": "client_apps_sort_order_check",
+          "value": "sort_order BETWEEN 0 AND 100000"
+        },
+        "client_apps_version_check": {
+          "name": "client_apps_version_check",
+          "value": "version >= 1"
+        }
+      },
+      "isRLSEnabled": false
+    },
     "public.custom_service_locations": {
       "name": "custom_service_locations",
       "schema": "",
@@ -2581,7 +2828,7 @@
       "checkConstraints": {
         "customer_notifications_kind_check": {
           "name": "customer_notifications_kind_check",
-          "value": "kind IN ('PAYMENT_REJECTED', 'PAYMENT_EXPIRED', 'ORDER_EXPIRED', 'SERVICE_ACTION_SUCCEEDED', 'SERVICE_ACTION_FAILED', 'SERVICE_PROVISION_DELAYED', 'PAYMENT_TRANSFER_RECORDED', 'ORDER_CANCELLED', 'WALLET_TOPUP_CREDITED', 'ORDER_REFUNDED_TO_WALLET', 'SERVICE_EXPIRY_FIRST', 'SERVICE_EXPIRY_SECOND', 'SERVICE_EXPIRED', 'SERVICE_USAGE_FIRST', 'SERVICE_USAGE_SECOND', 'SERVICE_USAGE_FINAL', 'TRIAL_NOT_DELIVERED', 'RECEIPT_CREDITED_TO_WALLET', 'WALLET_TOPUP_GIFT_CREDITED', 'REFUND_COMPLETED', 'GATEWAY_PAYMENT_FAILED', 'SERVICE_REFUND_REQUEST_REGISTERED', 'SERVICE_REFUND_REQUEST_APPROVED', 'SERVICE_REFUND_REQUEST_REJECTED', 'SERVICE_TRANSFER_RECEIVED', 'SERVICE_EXPIRY_EARLY', 'SERVICE_EXPIRY_DAY', 'WALLET_LOW_BALANCE', 'PAYMENT_PENDING_REMINDER', 'ORDER_PENDING_REMINDER')"
+          "value": "kind IN ('PAYMENT_REJECTED', 'PAYMENT_EXPIRED', 'ORDER_EXPIRED', 'SERVICE_ACTION_SUCCEEDED', 'SERVICE_ACTION_FAILED', 'SERVICE_PROVISION_DELAYED', 'PAYMENT_TRANSFER_RECORDED', 'ORDER_CANCELLED', 'WALLET_TOPUP_CREDITED', 'ORDER_REFUNDED_TO_WALLET', 'SERVICE_EXPIRY_FIRST', 'SERVICE_EXPIRY_SECOND', 'SERVICE_EXPIRED', 'SERVICE_USAGE_FIRST', 'SERVICE_USAGE_SECOND', 'SERVICE_USAGE_FINAL', 'TRIAL_NOT_DELIVERED', 'RECEIPT_CREDITED_TO_WALLET', 'WALLET_TOPUP_GIFT_CREDITED', 'REFUND_COMPLETED', 'GATEWAY_PAYMENT_FAILED', 'SERVICE_REFUND_REQUEST_REGISTERED', 'SERVICE_REFUND_REQUEST_APPROVED', 'SERVICE_REFUND_REQUEST_REJECTED', 'SERVICE_TRANSFER_RECEIVED')"
         },
         "customer_notifications_state_check": {
           "name": "customer_notifications_state_check",
@@ -14394,7 +14641,7 @@
       "checkConstraints": {
         "service_reminders_kind_check": {
           "name": "service_reminders_kind_check",
-          "value": "kind IN ('EXPIRY_FIRST', 'EXPIRY_SECOND', 'EXPIRED', 'USAGE_FIRST', 'USAGE_SECOND', 'USAGE_FINAL', 'EXPIRY_EARLY', 'EXPIRY_DAY')"
+          "value": "kind IN ('EXPIRY_FIRST', 'EXPIRY_SECOND', 'EXPIRED', 'USAGE_FIRST', 'USAGE_SECOND', 'USAGE_FINAL')"
         },
         "service_reminders_basis_check": {
           "name": "service_reminders_basis_check",
@@ -16967,164 +17214,6 @@
         "wallet_entries_topup_gateway_payment_check": {
           "name": "wallet_entries_topup_gateway_payment_check",
           "value": "reason <> 'TOPUP_GATEWAY' OR payment_id IS NOT NULL"
-        }
-      },
-      "isRLSEnabled": false
-    },
-    "public.wallet_threshold_alerts": {
-      "name": "wallet_threshold_alerts",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "tenant_id": {
-          "name": "tenant_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "customer_id": {
-          "name": "customer_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "currency": {
-          "name": "currency",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "threshold_amount": {
-          "name": "threshold_amount",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "crossing_entry_id": {
-          "name": "crossing_entry_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "crossed_at": {
-          "name": "crossed_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "raised_at": {
-          "name": "raised_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "wallet_threshold_alerts_wallet_idx": {
-          "name": "wallet_threshold_alerts_wallet_idx",
-          "columns": [
-            {
-              "expression": "tenant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "customer_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "currency",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "crossed_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "wallet_threshold_alerts_tenant_id_tenants_id_fk": {
-          "name": "wallet_threshold_alerts_tenant_id_tenants_id_fk",
-          "tableFrom": "wallet_threshold_alerts",
-          "tableTo": "tenants",
-          "columnsFrom": [
-            "tenant_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "wallet_threshold_alerts_customer_fk": {
-          "name": "wallet_threshold_alerts_customer_fk",
-          "tableFrom": "wallet_threshold_alerts",
-          "tableTo": "customers",
-          "columnsFrom": [
-            "tenant_id",
-            "customer_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "wallet_threshold_alerts_crossing_entry_fk": {
-          "name": "wallet_threshold_alerts_crossing_entry_fk",
-          "tableFrom": "wallet_threshold_alerts",
-          "tableTo": "wallet_entries",
-          "columnsFrom": [
-            "tenant_id",
-            "crossing_entry_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "wallet_threshold_alerts_crossing_key": {
-          "name": "wallet_threshold_alerts_crossing_key",
-          "nullsNotDistinct": false,
-          "columns": [
-            "tenant_id",
-            "crossing_entry_id"
-          ]
-        }
-      },
-      "policies": {},
-      "checkConstraints": {
-        "wallet_threshold_alerts_currency_check": {
-          "name": "wallet_threshold_alerts_currency_check",
-          "value": "currency IN ('IRT', 'IRR', 'USD', 'EUR', 'USDT')"
-        },
-        "wallet_threshold_alerts_threshold_check": {
-          "name": "wallet_threshold_alerts_threshold_check",
-          "value": "threshold_amount > 0"
         }
       },
       "isRLSEnabled": false

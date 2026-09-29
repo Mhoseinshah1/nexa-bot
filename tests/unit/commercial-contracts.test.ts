@@ -21,6 +21,7 @@ import {
   serviceAddonSpecificationSchema,
   TARGETED_OPERATION_TYPES,
   UNLIMITED_TRAFFIC_BYTES,
+  DEFAULT_PANEL_POLICY,
   type OrderPurpose,
 } from '@nexa/contracts';
 
@@ -47,7 +48,7 @@ describe('order purpose', () => {
    */
   it('treats exactly the purposes that act on an existing service as commercial', () => {
     expect([...COMMERCIAL_ORDER_PURPOSES].sort()).toEqual(
-      ['ADD_TIME', 'ADD_TRAFFIC', 'RENEW'].sort(),
+      ['ADD_DEVICES', 'ADD_TIME', 'ADD_TRAFFIC', 'CHANGE_LOCATION', 'RENEW'].sort(),
     );
     for (const purpose of COMMERCIAL_ORDER_PURPOSES) {
       expect(orderPurposeTargetsExistingService(purpose)).toBe(true);
@@ -183,13 +184,22 @@ describe('the operation target', () => {
    * guess at. The schema carries this as a CHECK; this is the same rule in the shape the
    * application reads it.
    */
+  // WP-A5 made it four — `ADD_DEVICES` buys a limit — and the title is kept because the
+  // falsification ledgers cite this test by name.
   it('is legal on exactly the three types that buy an allowance', () => {
     for (const type of OPERATION_TYPES) {
       expect(operationTypeCarriesTarget(type)).toBe(
         (TARGETED_OPERATION_TYPES as readonly string[]).includes(type),
       );
     }
-    expect([...TARGETED_OPERATION_TYPES].sort()).toEqual(['ADD_TIME', 'ADD_TRAFFIC', 'RENEW']);
+    expect([...TARGETED_OPERATION_TYPES].sort()).toEqual([
+      'ADD_DEVICES',
+      'ADD_TIME',
+      'ADD_TRAFFIC',
+      // WP-A6: a move carries an absolute location key, and nothing else does.
+      'CHANGE_LOCATION',
+      'RENEW',
+    ]);
   });
 
   /*
@@ -309,15 +319,21 @@ describe('availableFor separates an outage from a refusal', () => {
     state: 'ACTIVE',
     expiresAt: null,
     trafficLimitBytes: 0n,
+    // WP-A5: no recorded device limit, so extra users are not offered and nothing is read.
+    deviceLimit: null,
   } as never;
 
   function serviceWith(findById: () => Promise<unknown>): CommercialActionService {
     return new CommercialActionService({
       guard: { check: async () => undefined },
       panels: { operability: async () => ({ ok: true, reason: null }) },
+      // WP-A8: no stored panel policy — the default, which restricts nothing.
+      panelPolicy: { forPanel: async () => ({ readable: true, policy: DEFAULT_PANEL_POLICY }) },
       products: { findById },
       addons: { listOfferable: async () => ({ items: [], hasMore: false }) },
       settings: { valueOf: async () => 'IRT' },
+      // WP-A6: no configured location, so a move is not offered.
+      locations: { offer: async () => null },
     } as never);
   }
 

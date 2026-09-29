@@ -2469,3 +2469,60 @@ Building an extension needs these decisions, and each one changes what a custome
   catalogue's add-on prices?
 - **Records.** Does a renewal write its own `order_custom_service_terms`, and does it
   carry the location label frozen at purchase or the one written today?
+
+## OQ-WPA6-01 — which panel can move a live account between locations, and how
+
+WP-A6 built the whole service location change — the Web Admin's «تغییر لوکیشن» page, the
+customer's «🌍 تغییر لوکیشن» flow, paid and free moves, the cooldown and rolling limit,
+the absolute-target move, the verification read and the refund — behind the
+`LOCATION_CHANGE` capability. **No provider declares it**, so no customer is offered a move
+on any panel this release knows, and the flow is proven only against a scripted provider
+in `tests/integration/location-change.test.ts`.
+
+What each provider is missing, measured against its own source or documentation:
+
+- **Marzban v0.8.4.** An account's inbound set is writable — `UserModify.inbounds` on
+  `PUT /api/user/{username}`, which `crud.update_user` turns into `excluded_inbounds` —
+  and that is the closest a Marzban panel has to a per-account location (a `Node` serves
+  every inbound). Unanswered: which inbound set is a "location" for an operator; what the
+  account's subscription link and configs are after a re-point; whether
+  re-sending the same `inbounds` changes nothing; and how to READ an account's inbounds back
+  (the adapter's `lookupUser` reads usage only). Each needs a real panel.
+- **RickPanel.** Its API documentation says `inbounds` and a partial `proxies` are accepted
+  but ignored: every user gets every inbound. There is no per-account location to move.
+- **3X-UI v3.7.0.** A client carries `inboundIds`, and `POST panel/api/clients/update/:email`
+  might re-point one, but that route's handling of `inboundIds` is unread and unmeasured,
+  and the owner's freeze forbids new mutable scope on 3X-UI regardless.
+
+Declaring the capability for one of them is: implement `readLocation` and `applyLocation`
+in its adapter to the contract in `packages/contracts/src/provider.ts` (the SAME account,
+an absolute key, the key and link read off the panel), prove on a real panel that the move
+lands, that a replay changes nothing and what the link does, correct the fake to match,
+and only then add `LOCATION_CHANGE` to its descriptor — editing the registry test that
+pins "no provider declares it" in the same commit.
+
+A second open point: whether a provider can GUARANTEE the subscription link survives a
+move. Until one does, the customer is never promised it; the confirmation says the
+connection details may change and are sent again if they do.
+
+## OQ-WPA7-01 — attachments on support's replies
+
+WP-A7 lets a CUSTOMER attach a photo or a document to a ticket; the file stays at Telegram
+and the ticket row holds its binding, the receipts' pattern. Support's replies from the Web
+Admin are text only. Sending a file the other way needs an upload path from the browser, a
+place to keep the bytes until Telegram has them (this deployment has no blob store), the
+same type and size rules, and a notification that carries a file — which the customer lane
+does not do today (`docs/wp-a7-tickets-audit.md` §8).
+
+UNRESOLVED. Nothing is built.
+
+## OQ-WPA7-02 — whether the ticket desk is exempt from the channel-membership guard
+
+Package B exempts support and help from the mandatory-channel guard, so `/paysupport` and
+the support screen always answer. The WP-A7 ticket desk is NOT exempt: the typed message
+that files a ticket is ordinary text, and exempting the desk's taps but not the text would
+open a window whose answer the guard then withholds. A customer who has not joined sees
+the join screen, and the support screen's contact button still works. Whether the owner
+wants the whole ticket flow (taps and the typed message) exempt is a product decision.
+
+UNRESOLVED. The desk follows the guard.

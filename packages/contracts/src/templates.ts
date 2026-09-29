@@ -330,6 +330,116 @@ export const TEMPLATES = [
         required: false,
         repeatable: false,
       },
+      // WP-A4: the detail an operator needs to investigate, all optional so an override
+      // written before them still validates and renders.
+      {
+        token: 'lastSeenAt',
+        type: 'DATETIME',
+        description: 'When this occurrence was recorded.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'tenantId',
+        type: 'STRING',
+        description: 'The tenant the event belongs to.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'botInstanceId',
+        type: 'STRING',
+        description: 'The bot instance the event concerns, when it concerns one.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'details',
+        type: 'STRING',
+        description:
+          'Safe structured detail, one `name: value` per line: ids (user, service, order, ' +
+          'payment, panel, operation), the state transition and the reason or error code. ' +
+          'Drawn from an allow-list and redacted: never a token, a secret, a subscription ' +
+          'link or a provider payload.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'correlationId',
+        type: 'STRING',
+        description: 'The correlation id of the transaction that recorded the event.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  // WP-A4 — the Nexa-managed operations log group.
+  {
+    key: 'ops.group.topic_name.system',
+    description:
+      'The name Nexa gives the forum topic it creates for system events and errors in the ' +
+      'operations log group. Read when the topic is created or recreated.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'ops.group.topic_name.payments',
+    description:
+      'The name Nexa gives the forum topic it creates for the payments log in the operations ' +
+      'log group. Read when the topic is created or recreated.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'ops.group.connected',
+    description:
+      'Posted in a group after a valid connection code bound it as the operations log group.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'ops.group.connect_refused',
+    description:
+      'Posted in a group whose connection code was not accepted. One sentence for every ' +
+      'reason — unknown, expired, used or for another bot — so the reply is not an oracle ' +
+      'for which codes exist.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'ops.group.connect_not_forum',
+    description:
+      'Posted in a group that sent a connection code but is not a forum supergroup. The code ' +
+      'is left unused, so the same one works once topics are switched on.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'ops.group.test',
+    description: 'A test message an operator sent into one topic of the operations log group.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'topic',
+        type: 'STRING',
+        description: 'The topic’s name.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'requestedBy',
+        type: 'STRING',
+        description: 'Display name of the administrator who asked for the test.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'at',
+        type: 'DATETIME',
+        description: 'When the test was requested.',
+        required: true,
+        repeatable: false,
+      },
     ],
   },
   {
@@ -2040,6 +2150,22 @@ export const TEMPLATES = [
     key: 'bot.admin.operation_add_time',
     description:
       'The operation label inside `bot.admin.receipt` for extra time on an existing service.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.operation_add_devices',
+    description:
+      'The operation label inside `bot.admin.receipt` for extra users / devices on an ' +
+      'existing service (WP-A5).',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.operation_change_location',
+    description:
+      'The operation label inside `bot.admin.receipt` for a paid location change of an ' +
+      'existing service (WP-A6).',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
@@ -5708,6 +5834,216 @@ export const TEMPLATES = [
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
+  /*
+   * WP-A5 — extra users / devices. Four keys: the button, the choice screen, one
+   * quantity button, and the pre-invoice block that states what the order bought.
+   */
+  {
+    key: 'bot.service.add_devices_button',
+    description:
+      'The button that opens the extra users / devices offer for a service. Drawn only ' +
+      'when the service is ACTIVE, its device limit is recorded, the panel’s adapter ' +
+      'declares DEVICE_LIMIT_ADJUSTMENT and implements it, and a priced extra-users ' +
+      'add-on applies to this service with room left under its maximum. Not drawing it ' +
+      'is never the control: every condition is re-checked on the tap, at confirmation ' +
+      'and when the money moves.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.devices_choice',
+    description:
+      'The extra users / devices screen: how many the service allows now, the price of ' +
+      'one more, and how many more can still be bought. The quantities are on the ' +
+      'BUTTONS below it, each bounded by the server from the configured maximum.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'currentLimit',
+        type: 'NUMBER',
+        description: 'The device limit the service holds now, from its own record.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'unitPrice',
+        type: 'MONEY',
+        description: 'The price of ONE extra user / device, with its currency.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'remaining',
+        type: 'NUMBER',
+        description: 'How many more may still be bought for this service.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.devices_option',
+    description:
+      'One quantity button on the extra users / devices screen: how many, and the list ' +
+      'price of that many. The quote screen the customer answers is where the final ' +
+      'figure — after any discount — is stated.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'quantity',
+        type: 'NUMBER',
+        description: 'How many extra users / devices this button buys.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'price',
+        type: 'MONEY',
+        description: 'The list price of that many, with its currency.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  /*
+   * WP-A6 — service location change. The button, the choice screen and its two target
+   * buttons, the free change's confirmation and its button, the answer to a free
+   * request, and three refusals. A paid change is answered by the ordinary pre-invoice,
+   * with `bot.order.preinvoice_location_change` as its block.
+   */
+  {
+    key: 'bot.service.change_location_button',
+    description:
+      'The button that opens the location change for a service. Drawn only when the ' +
+      'service is ACTIVE, the panel’s adapter declares LOCATION_CHANGE and implements it, ' +
+      'the service’s current location is known, and at least one enabled, priced target ' +
+      'other than it is configured for this service. Not drawing it is never the control: ' +
+      'every condition is re-checked on the tap, at confirmation and when the money moves.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.location_choice',
+    description:
+      'The location change screen: where the service is now. The targets are on the ' +
+      'BUTTONS below it, each one a location the operator configured for this service, ' +
+      'with its price or «free».',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'currentLocation',
+        type: 'STRING',
+        description: 'The name of the location the service is in now, as the operator wrote it.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.location_option',
+    description:
+      'One target button on the location change screen: the location’s name and the list ' +
+      'price of moving there. The pre-invoice the tap produces states the final figure, ' +
+      'after any discount.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'location',
+        type: 'STRING',
+        description: 'The target location’s name, as the operator wrote it.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'price',
+        type: 'MONEY',
+        description: 'The list price of the move, with its currency.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.location_option_free',
+    description:
+      'One target button on the location change screen for a move the operator made free ' +
+      '(a configured price of zero — never an unconfigured one).',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'location',
+        type: 'STRING',
+        description: 'The target location’s name, as the operator wrote it.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.location_confirm_free',
+    description:
+      'The confirmation a FREE location change asks for: from where, to where, that it ' +
+      'costs nothing, and that the connection details may change — never a promise that ' +
+      'the link survives, because no panel in this release guarantees it. Nothing is ' +
+      'changed until the customer confirms.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'fromLocation',
+        type: 'STRING',
+        description: 'The location the service is in now.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'toLocation',
+        type: 'STRING',
+        description: 'The location it would be moved to.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.location_confirm_button',
+    description: 'The button that confirms a free location change.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.location_requested',
+    description:
+      'The answer to a confirmed free location change: it was recorded and will be carried ' +
+      'out on the panel, and the customer will be told the outcome — through the ' +
+      'notification lane, as for every service action. New connection details, if the ' +
+      'move produced any, are sent the same way a new link always is.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.location_same',
+    description:
+      'A location change refused because the chosen target is where the service already ' +
+      'is. Nothing was changed or charged.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.location_cooldown',
+    description:
+      'A location change refused because the service was moved too recently: the ' +
+      'operator configured a wait between two changes. Nothing was changed or charged.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.location_limit',
+    description:
+      'A location change refused because the service already had as many changes as the ' +
+      'operator allows in the rolling period. Nothing was changed or charged.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
   {
     key: 'bot.service.action_unavailable',
     description:
@@ -6287,7 +6623,7 @@ export const TEMPLATES = [
   {
     key: 'bot.tutorial.android',
     description:
-      'The connection guide for Android. A raw template the operator rewrites for their own apps and links; the default is deliberately short and names nothing this installation does not offer.',
+      'The connection guide for Android, shown when no enabled client app is configured for the platform (WP-A10). A raw template the operator rewrites for their own apps and links; the default is deliberately short and names nothing this installation does not offer.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
@@ -6312,6 +6648,138 @@ export const TEMPLATES = [
   {
     key: 'bot.tutorial.linux',
     description: 'The connection guide for Linux. See `bot.tutorial.android`.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  // --- WP-A10: app downloads and connection guides -------------------------------------
+  {
+    key: 'bot.command.apps',
+    description: 'The one-line description Telegram shows beside /apps in its command menu.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.menu.apps',
+    description:
+      'The main-menu button for app downloads and connection guides. A ROUTE as well as a label: the shared catalogue text is what a tap is matched against.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.tutorial.other_button',
+    description:
+      'Platform button for apps filed under "Other". Drawn only while at least one enabled entry the customer may see is filed there.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.apps.platform',
+    description:
+      'Heading over one platform’s recommended apps. The apps are the buttons below it, one per enabled entry the customer may see, in the operator’s order.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.apps.platform_empty',
+    description:
+      'A platform with no guide of its own ("Other") and no app the customer may see — a stale button, or every entry since disabled.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.apps.detail',
+    description:
+      'One app: its name, the operator’s short description and connection guide, rendered as plain text. The download links are the buttons below it.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'app',
+        type: 'STRING',
+        description: 'The app’s name, with its icon when the operator set one.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'description',
+        type: 'STRING',
+        description: 'The operator’s one-line description of the app.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'guide',
+        type: 'STRING',
+        description:
+          'The operator’s connection guide, already rendered from its Markdown-like subset.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.apps.detail_files',
+    description:
+      '`bot.apps.detail` for an app that also reads connection files, sent to a customer whose service can hand them over. Adds where the files are fetched.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'app',
+        type: 'STRING',
+        description: 'The app’s name, with its icon when the operator set one.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'description',
+        type: 'STRING',
+        description: 'The operator’s one-line description of the app.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'guide',
+        type: 'STRING',
+        description:
+          'The operator’s connection guide, already rendered from its Markdown-like subset.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.apps.download_button',
+    description: 'URL button to the app’s official download link.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.apps.alternative_button',
+    description: 'URL button to the app’s store listing or alternative link, when one is set.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.apps.help_button',
+    description: 'URL button to the app’s video or help page, when one is set.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.apps.back_button',
+    description: 'From one app back to its platform’s list.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.apps.platforms_button',
+    description: 'Back to the platform choice.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.apps.not_found',
+    description:
+      'A tapped app that is no longer offered: removed, disabled, or never this tenant’s. One sentence for all three.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
@@ -6603,9 +7071,91 @@ export const TEMPLATES = [
         repeatable: false,
       },
       {
+        token: 'devicesBlock',
+        type: 'STRING',
+        description:
+          'Rendered `bot.order.preinvoice_devices`, for an extra users / devices purchase only ' +
+          '(WP-A5): how many, the price of one, and the limit before and after.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'locationChangeBlock',
+        type: 'STRING',
+        description:
+          'Rendered `bot.order.preinvoice_location_change`, for a paid location change only ' +
+          '(WP-A6): from where, to where, and that the connection details may change.',
+        required: false,
+        repeatable: false,
+      },
+      {
         token: 'walletBalance',
         type: 'MONEY',
         description: 'The customer’s balance in the order’s currency, read at render time.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.order.preinvoice_location_change',
+    description:
+      'The location change block of the pre-invoice (WP-A6): from where, to where, and that ' +
+      'the connection details may change — never a promise that the link survives, because ' +
+      'no panel in this release guarantees it. Read from the change request’s own ' +
+      'snapshot, so it states what the quote was built from even after the operator edits ' +
+      'the location.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'fromLocation',
+        type: 'STRING',
+        description: 'The location the service was in when the change was quoted.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'toLocation',
+        type: 'STRING',
+        description: 'The location it will be moved to.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.order.preinvoice_devices',
+    description:
+      'The extra users / devices block of the pre-invoice (WP-A5): how many were bought, ' +
+      'the price of one, and the limit before and after. Read from the order’s own ' +
+      'snapshot, so it states what the quote was built from even after the add-on changes.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'quantity',
+        type: 'NUMBER',
+        description: 'How many extra users / devices were bought.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'unitPrice',
+        type: 'MONEY',
+        description: 'The price of one, as quoted.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'currentLimit',
+        type: 'NUMBER',
+        description: 'The limit the service held when the order was quoted.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'targetLimit',
+        type: 'NUMBER',
+        description: 'The limit the service will hold once the panel applies it.',
         required: true,
         repeatable: false,
       },
@@ -8625,6 +9175,639 @@ export const TEMPLATES = [
         token: 'at',
         type: 'DATETIME',
         description: 'When the outcome was recorded.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  /*
+   * WP-A7 — the support ticket system (`docs/wp-a7-tickets-audit.md`). The customer's
+   * flow in the bot, the reply notification the lane renders from the message row, the
+   * five default categories, and the two notifications support receives.
+   */
+  {
+    key: 'bot.command.tickets',
+    description:
+      'WP-A7: the one-line description Telegram shows beside /tickets in its command menu.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.menu.tickets',
+    description:
+      "WP-A7: the main-menu button that opens the customer's support tickets. Routes exactly as /tickets.",
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.support.tickets_button',
+    description:
+      "WP-A7: the support screen's button (also /paysupport's) that opens the customer's tickets.",
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.ticket.list',
+    description: "WP-A7: the heading of the customer's ticket list; one button per ticket follows.",
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.ticket.list_empty',
+    description: "WP-A7: the customer's ticket list when they have none.",
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.ticket.list_item_button',
+    description: "WP-A7: one ticket in the customer's list: its status, number and category.",
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'status',
+        type: 'STRING',
+        description: 'The ticket status label (one of the bot.ticket.status_* texts).',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'number',
+        type: 'NUMBER',
+        description: 'The ticket number.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'category',
+        type: 'STRING',
+        description: "The ticket's category title.",
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.ticket.new_button',
+    description: 'WP-A7: the button that starts a new ticket.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.ticket.back_button',
+    description: "WP-A7: the button back to the customer's ticket list.",
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.ticket.choose_category',
+    description:
+      "WP-A7: asks the customer to choose a new ticket's category; one button per active category follows.",
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.ticket.category_button',
+    description: 'WP-A7: one category button, as the operator named it.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'title',
+        type: 'STRING',
+        description: "The category's title.",
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.ticket.no_categories',
+    description: 'WP-A7: no active category exists, so no ticket can be opened now.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.ticket.message_prompt',
+    description:
+      "WP-A7: opens the window that reads a new ticket's first message (text, or a photo or document with a caption).",
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'category',
+        type: 'STRING',
+        description: "The chosen category's title.",
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'max',
+        type: 'NUMBER',
+        description: 'The longest message, in characters.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.ticket.reply_prompt',
+    description: "WP-A7: opens the window that reads the customer's reply to one ticket.",
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'number',
+        type: 'NUMBER',
+        description: 'The ticket number.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'max',
+        type: 'NUMBER',
+        description: 'The longest message, in characters.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.ticket.message_invalid',
+    description: 'WP-A7: the message was empty or too long; the window stays open for another try.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'max',
+        type: 'NUMBER',
+        description: 'The longest message, in characters.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.ticket.attachment_too_large',
+    description:
+      'WP-A7: the attached file is over the size limit; nothing was saved and the window stays open.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'maxBytes',
+        type: 'BYTES',
+        description: 'The largest accepted file.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.ticket.attachment_type_refused',
+    description:
+      "WP-A7: the attached file's type is not accepted; nothing was saved and the window stays open.",
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.ticket.created',
+    description: 'WP-A7: the new ticket was recorded.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'number',
+        type: 'NUMBER',
+        description: 'The ticket number.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.ticket.reply_sent',
+    description: "WP-A7: the customer's reply was added to the ticket.",
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'number',
+        type: 'NUMBER',
+        description: 'The ticket number.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.ticket.open_limit',
+    description: 'WP-A7: the customer already has the most open tickets allowed.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'max',
+        type: 'NUMBER',
+        description: 'How many open tickets a customer may have.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.ticket.message_limit',
+    description: 'WP-A7: the ticket holds the most messages allowed.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.ticket.view',
+    description:
+      "WP-A7: one ticket's conversation in the bot: its heading and its latest messages, each rendered from a bot.ticket.line_* text.",
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'number',
+        type: 'NUMBER',
+        description: 'The ticket number.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'category',
+        type: 'STRING',
+        description: "The ticket's category title.",
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'status',
+        type: 'STRING',
+        description: 'The ticket status label.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'olderLine',
+        type: 'STRING',
+        description: 'How many older messages are not shown. Absent when none.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'conversation',
+        type: 'STRING',
+        description: 'The latest messages, oldest first.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.ticket.view_older',
+    description: 'WP-A7: the line saying how many older messages the conversation view leaves out.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'count',
+        type: 'NUMBER',
+        description: 'How many older messages are not shown.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.ticket.line_customer',
+    description: "WP-A7: one of the customer's own messages in the conversation view.",
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'at',
+        type: 'DATETIME',
+        description: 'When it was sent.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'text',
+        type: 'STRING',
+        description:
+          'The message, possibly shortened, with an attachment marker when it carries a file.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.ticket.line_support',
+    description: "WP-A7: one of support's messages in the conversation view.",
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'at',
+        type: 'DATETIME',
+        description: 'When it was sent.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'text',
+        type: 'STRING',
+        description: 'The message, possibly shortened.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.ticket.line_closed_by_customer',
+    description: 'WP-A7: the conversation records that the customer closed the ticket.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'at',
+        type: 'DATETIME',
+        description: 'When it was closed.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.ticket.line_closed_by_support',
+    description: 'WP-A7: the conversation records that support closed the ticket.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'at',
+        type: 'DATETIME',
+        description: 'When it was closed.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.ticket.line_reopened',
+    description: 'WP-A7: the conversation records that support reopened the ticket.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'at',
+        type: 'DATETIME',
+        description: 'When it was reopened.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.ticket.attachment_marker',
+    description: 'WP-A7: marks a message in the conversation view that carries a file.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.ticket.reply_button',
+    description: 'WP-A7: the button that opens the reply window for a ticket.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.ticket.close_button',
+    description: 'WP-A7: the button that asks whether to close a ticket.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.ticket.close_ask',
+    description:
+      'WP-A7: the question before a customer closes their ticket; nothing is written yet.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'number',
+        type: 'NUMBER',
+        description: 'The ticket number.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.ticket.close_confirm_button',
+    description: 'WP-A7: the one button that closes the ticket.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.ticket.closed',
+    description: 'WP-A7: the customer closed their ticket.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'number',
+        type: 'NUMBER',
+        description: 'The ticket number.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.ticket.already_closed',
+    description: 'WP-A7: a message or close for a ticket that is already closed.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.ticket.not_found',
+    description: "WP-A7: the ticket is not the customer's own, or does not exist.",
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.ticket.status_open',
+    description: 'WP-A7: the label of an OPEN ticket.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.ticket.status_waiting_for_customer',
+    description: 'WP-A7: the label of a ticket waiting for the customer.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.ticket.status_waiting_for_support',
+    description: 'WP-A7: the label of a ticket waiting for support.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.ticket.status_closed',
+    description: 'WP-A7: the label of a CLOSED ticket.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.ticket.support_replied',
+    description:
+      "WP-A7: the customer notification for support's reply (TICKET_REPLY). Every value is read at send time from the ticket message the notification names; the one button opens the ticket.",
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'number',
+        type: 'NUMBER',
+        description: 'The ticket number.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'category',
+        type: 'STRING',
+        description: "The ticket's category title.",
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'text',
+        type: 'STRING',
+        description: "Support's reply, exactly as stored in the ticket.",
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.ticket.view_button',
+    description: "WP-A7: the notification's button that opens the ticket.",
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.ticket.category_default_1',
+    description:
+      "WP-A7: default ticket category 1, copied into a tenant's categories the first time they are read. An override here is the tenant's default.",
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.ticket.category_default_2',
+    description:
+      "WP-A7: default ticket category 2, copied into a tenant's categories the first time they are read. An override here is the tenant's default.",
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.ticket.category_default_3',
+    description:
+      "WP-A7: default ticket category 3, copied into a tenant's categories the first time they are read. An override here is the tenant's default.",
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.ticket.category_default_4',
+    description:
+      "WP-A7: default ticket category 4, copied into a tenant's categories the first time they are read. An override here is the tenant's default.",
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.ticket.category_default_5',
+    description:
+      "WP-A7: default ticket category 5, copied into a tenant's categories the first time they are read. An override here is the tenant's default.",
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'ops.support.ticket_opened',
+    description:
+      "WP-A7: to support — a customer opened a ticket. Names the ticket and the customer; never the customer's words, which are read in the Web Admin.",
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'number',
+        type: 'NUMBER',
+        description: 'The ticket number.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'category',
+        type: 'STRING',
+        description: "The ticket's category title.",
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'telegramId',
+        type: 'STRING',
+        description: "The customer's numeric Telegram id.",
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'username',
+        type: 'STRING',
+        description: "The customer's Telegram username, or a dash.",
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'displayName',
+        type: 'STRING',
+        description: "The customer's display name, or a dash.",
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'at',
+        type: 'DATETIME',
+        description: 'When the message was written.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'ops.support.customer_replied',
+    description:
+      "WP-A7: to support — a customer wrote in an existing ticket. Names the ticket and the customer; never the customer's words.",
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'number',
+        type: 'NUMBER',
+        description: 'The ticket number.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'category',
+        type: 'STRING',
+        description: "The ticket's category title.",
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'telegramId',
+        type: 'STRING',
+        description: "The customer's numeric Telegram id.",
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'username',
+        type: 'STRING',
+        description: "The customer's Telegram username, or a dash.",
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'displayName',
+        type: 'STRING',
+        description: "The customer's display name, or a dash.",
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'at',
+        type: 'DATETIME',
+        description: 'When the message was written.',
         required: true,
         repeatable: false,
       },

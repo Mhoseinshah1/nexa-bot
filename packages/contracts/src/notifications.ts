@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { OPS_LOG_TOPIC_CATEGORY_PATTERN } from './ops-log-group.js';
 
 /**
  * Notifications.
@@ -102,6 +103,19 @@ export const notificationDestinationSchema = z.discriminatedUnion('transport', [
     chatId: z.string().min(1),
     /** The forum topic, when the destination group uses them (UNK-GS-002). */
     topicId: z.number().int().positive().nullable(),
+    /**
+     * WP-A4: the Nexa-owned topic this message is routed to in the connected ops group.
+     *
+     * When present, `chatId` and `topicId` are the SNAPSHOT of where the group and topic
+     * stood when the intent was queued — history — and the dispatcher resolves the group's
+     * CURRENT chat and thread at send time, so a topic an operator deleted is recreated and
+     * a preserved message retried after a reconnect reaches the group as it is now.
+     *
+     * Optional and a plain pattern rather than an enum, both for a release that does not
+     * know it: an older reader strips the key and posts to the snapshot, and a newer
+     * category is routed to the system topic rather than failing (`opsLogTopicCategoryOf`).
+     */
+    opsTopic: z.string().regex(OPS_LOG_TOPIC_CATEGORY_PATTERN).optional(),
   }),
   z.object({
     transport: z.literal('RECORDING'),

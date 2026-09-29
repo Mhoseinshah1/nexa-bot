@@ -117,8 +117,15 @@ export class DrizzleReceiptReviewFactsReader implements ReceiptReviewFactsReader
     return {
       purpose,
       productTitle: order.title,
-      durationDays: purpose === 'ADD_TRAFFIC' ? null : order.durationDays,
-      trafficBytes: purpose === 'ADD_TIME' ? null : order.trafficBytes,
+      // WP-A5 / WP-A6: an extra-users line and a location change buy neither: both dashes.
+      durationDays:
+        purpose === 'ADD_TRAFFIC' || purpose === 'ADD_DEVICES' || purpose === 'CHANGE_LOCATION'
+          ? null
+          : order.durationDays,
+      trafficBytes:
+        purpose === 'ADD_TIME' || purpose === 'ADD_DEVICES' || purpose === 'CHANGE_LOCATION'
+          ? null
+          : order.trafficBytes,
       serviceUsername,
     };
   }

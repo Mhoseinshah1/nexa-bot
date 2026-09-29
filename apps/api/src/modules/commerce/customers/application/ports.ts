@@ -99,6 +99,12 @@ export interface CustomerPage {
 export interface CustomerSearch {
   readonly telegramUserId?: string;
   readonly usernamePrefix?: string;
+  /**
+   * An EXACT, case-insensitive username (WP-A7): the ticket inbox's customer filter names
+   * one customer, and the first page of a prefix search is not that customer when more
+   * than a page of usernames share the prefix (Codex review of #96).
+   */
+  readonly username?: string;
   readonly status?: CustomerStatus;
 }
 

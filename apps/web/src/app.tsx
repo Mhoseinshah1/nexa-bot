@@ -15,6 +15,7 @@ import { FeaturesPage } from './pages/features';
 import { ContentPage } from './pages/content';
 import { RemindersPage } from './pages/reminders';
 import { AlertsPage, NotificationsPage } from './pages/alerts';
+import { OpsGroupPage } from './pages/ops-group';
 import { SystemPage } from './pages/system';
 import { RecoveryPage } from './pages/recovery';
 import { PlannedPage, PLANNED_SURFACES, type PlannedKey } from './pages/planned';
@@ -24,8 +25,12 @@ import { PaymentAccountsPage } from './pages/payment-accounts';
 import { BotsPage } from './pages/bots';
 import { PaymentGatewaysPage } from './pages/payment-gateways';
 import { SupportPage } from './pages/support';
+import { ClientAppsPage } from './pages/client-apps';
+import { TicketDetailPage, TicketsPage } from './pages/tickets';
 import { ProductDetailPage, ProductsPage } from './pages/products';
 import { ProductCategoriesPage } from './pages/product-categories';
+import { ExtraDevicesPage } from './pages/extra-devices';
+import { ServiceLocationsPage } from './pages/service-locations';
 import { OrderDetailPage, OrdersPage } from './pages/orders';
 import { ServiceDetailPage, ServicesPage } from './pages/services';
 import { UsersPage, UserDetailPage } from './pages/users';
@@ -216,6 +221,18 @@ export const NAV: readonly NavEntry[] = [
     group: 'web.navgroup_sales',
   },
   {
+    /*
+     * WP-A7: the support ticket inbox. `tickets.view`, and only that — every write on the
+     * page (reply, assign, status, categories) opens from a row the view key lists.
+     */
+    id: 'tickets',
+    path: '/tickets',
+    label: 'web.nav_tickets',
+    icon: 'message',
+    permission: 'tickets.view',
+    group: 'web.navgroup_sales',
+  },
+  {
     id: 'orders',
     path: '/orders',
     label: 'web.nav_orders',
@@ -245,6 +262,26 @@ export const NAV: readonly NavEntry[] = [
     // EITHER, for the reason `/products` above gives in full: the route renders the
     // create form on `catalog.edit` whether or not `catalog.view` is held, and the
     // server authorizes every write on `catalog.edit` alone.
+    permission: ['catalog.view', 'catalog.edit'],
+    group: 'web.navgroup_sales',
+  },
+  {
+    // WP-A5: the extra users / devices rate — an `ADD_DEVICES` add-on, under the catalogue's
+    // own pair and for the reason `/products` gives: the create form needs only edit.
+    id: 'extra-devices',
+    path: '/extra-devices',
+    label: 'web.nav_extra_devices',
+    icon: 'products',
+    permission: ['catalog.view', 'catalog.edit'],
+    group: 'web.navgroup_sales',
+  },
+  {
+    // WP-A6: a panel's locations and the price of moving a service there, under the
+    // catalogue's own pair, for the reason the entry above gives.
+    id: 'service-locations',
+    path: '/service-locations',
+    label: 'web.nav_service_locations',
+    icon: 'products',
     permission: ['catalog.view', 'catalog.edit'],
     group: 'web.navgroup_sales',
   },
@@ -454,6 +491,16 @@ export const NAV: readonly NavEntry[] = [
     group: 'web.navgroup_config',
   },
   {
+    // WP-A10: the client apps and connection guides the bot recommends. Its own pair,
+    // `client_apps.*`: the list charges the view and every write the edit.
+    id: 'client-apps',
+    path: '/client-apps',
+    label: 'web.nav_client_apps',
+    icon: 'link',
+    permission: 'client_apps.view',
+    group: 'web.navgroup_config',
+  },
+  {
     id: 'features',
     path: '/features',
     label: 'web.nav_features',
@@ -485,6 +532,16 @@ export const NAV: readonly NavEntry[] = [
     icon: 'send',
     // EITHER capability. See `NavEntry.permission`.
     permission: ['opslog.view', 'settings.edit'],
+    group: 'web.navgroup_system',
+  },
+  {
+    // WP-A4: «گروه گزارش‌های مدیریتی». Read with `settings.view`, acted on with
+    // `settings.edit`, which the page gates itself.
+    id: 'ops-group',
+    path: '/ops-group',
+    label: 'web.nav_ops_group',
+    icon: 'message',
+    permission: 'settings.view',
     group: 'web.navgroup_system',
   },
   {
@@ -640,6 +697,34 @@ export function resolve(
     };
   }
 
+  if (route.path === '/service-locations') {
+    return {
+      element: (
+        <ServiceLocationsPage
+          mayEdit={may('catalog.edit')}
+          denied={!may('catalog.view')}
+          mayReadPanels={may('panels.view')}
+        />
+      ),
+      crumbs: [{ label: t('web.service_locations_title') }],
+      title: t('web.service_locations_title'),
+    };
+  }
+
+  if (route.path === '/extra-devices') {
+    return {
+      element: (
+        <ExtraDevicesPage
+          mayEdit={may('catalog.edit')}
+          mayViewPanels={may('panels.view')}
+          denied={!may('catalog.view')}
+        />
+      ),
+      crumbs: [{ label: t('web.extra_devices_title') }],
+      title: t('web.extra_devices_title'),
+    };
+  }
+
   if (route.path === '/product-categories') {
     return {
       element: (
@@ -714,6 +799,41 @@ export function resolve(
       ),
       crumbs: [nav('services'), { label: t('web.service_detail') }],
       title: t('web.service_detail'),
+    };
+  }
+
+  // WP-A7: the ticket inbox and one conversation.
+  if (route.path === '/tickets') {
+    return {
+      element: (
+        <TicketsPage
+          route={route}
+          denied={!may('tickets.view')}
+          mayAssign={may('tickets.assign')}
+          mayEditCategories={may('tickets.categories.edit')}
+        />
+      ),
+      crumbs: [{ label: t('web.tickets_title') }],
+      title: t('web.tickets_title'),
+    };
+  }
+
+  const ticket = match('/tickets/:id', route.path);
+  if (ticket !== null) {
+    return {
+      element: (
+        // Keyed by the ticket id, for the reason the service detail gives.
+        <TicketDetailPage
+          key={ticket['id'] ?? ''}
+          id={ticket['id'] ?? ''}
+          denied={!may('tickets.view')}
+          mayReply={may('tickets.reply')}
+          mayAssign={may('tickets.assign')}
+          mayClose={may('tickets.close')}
+        />
+      ),
+      crumbs: [nav('tickets'), { label: t('web.ticket_detail') }],
+      title: t('web.ticket_detail'),
     };
   }
 
@@ -999,6 +1119,8 @@ export function resolve(
           id={panel['id'] ?? ''}
           mayEdit={may('panels.edit')}
           mayRotate={may('panels.credentials.rotate')}
+          // WP-A8: the Super Admin's read-only technical view.
+          mayViewTechnical={may('panels.technical.view')}
           denied={!may('panels.view')}
         />
       ),
@@ -1028,6 +1150,16 @@ export function resolve(
       element: <SupportPage mayEdit={may('settings.edit')} denied={!may('settings.view')} />,
       crumbs: [{ label: t('web.nav_support') }],
       title: t('web.nav_support'),
+    };
+  }
+
+  if (route.path === '/client-apps') {
+    return {
+      element: (
+        <ClientAppsPage mayEdit={may('client_apps.edit')} denied={!may('client_apps.view')} />
+      ),
+      crumbs: [{ label: t('web.nav_client_apps') }],
+      title: t('web.nav_client_apps'),
     };
   }
 
@@ -1075,6 +1207,14 @@ export function resolve(
       element: <NotificationsPage mayTest={may('settings.edit')} denied={!may('opslog.view')} />,
       crumbs: [{ label: t('web.nav_notifications') }],
       title: t('web.nav_notifications'),
+    };
+  }
+
+  if (route.path === '/ops-group') {
+    return {
+      element: <OpsGroupPage denied={!may('settings.view')} mayManage={may('settings.edit')} />,
+      crumbs: [{ label: t('web.nav_ops_group') }],
+      title: t('web.opsgroup_title'),
     };
   }
 

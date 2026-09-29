@@ -114,6 +114,10 @@ async function main(): Promise<void> {
         // reason: a receipt nobody is told about is a customer waiting on a reviewer who
         // does not know, and silence is exactly what a stalled lane looks like.
         ['receipt-review-push', true, () => container.receiptReviewPushLoop.isFresh(now)],
+        // WP-A4: the operations log group's checks and topics. No flag, for the reason the
+        // dispatcher below is watched: a group nobody checks is a group that silently stops
+        // receiving the reports, and the symptom is silence.
+        ['ops-group', true, () => container.opsGroupMaintainer.isFresh(now)],
         [
           'notification-dispatcher',
           config.NOTIFICATION_DISPATCH_ENABLED,
@@ -191,6 +195,9 @@ async function main(): Promise<void> {
   // And the administrators' receipt push: a new card-to-card receipt, to every Telegram
   // administrator who may decide it (WP10 follow-up §3, ADR-0031).
   container.receiptReviewPushLoop.start();
+  // And the operations log group: checks a newly connected or broken group, creates the
+  // topics Nexa owns in it, and retries the preserved reports once it is healthy (WP-A4).
+  container.opsGroupMaintainer.start();
 
   // Notification delivery. A poller rather than an outbox consumer, because the
   // relay runs its consumers inside the claim transaction and a send must not

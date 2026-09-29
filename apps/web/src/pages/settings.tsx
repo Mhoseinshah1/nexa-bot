@@ -4,6 +4,7 @@ import {
   COMMERCE_ERROR_CODES,
   CONTROL_ERROR_CODES,
   CURRENCY_CODES,
+  OPS_GROUP_MANAGED_SETTING_KEYS,
   PRODUCT_PAGE_MAX,
   SALES_CURRENCY_CODES,
 } from '@nexa/contracts';
@@ -57,8 +58,13 @@ import {
  */
 export function SettingsPage({ mayEdit, denied }: { mayEdit: boolean; denied: boolean }) {
   const settings = useQuery({ queryKey: ['settings'], queryFn: fetchSettings, enabled: !denied });
-  const rows = settings.data?.settings ?? [];
-  const salesCurrency = sellingCurrencyOf(rows);
+  const all = settings.data?.settings ?? [];
+  const salesCurrency = sellingCurrencyOf(all);
+  // WP-A4: the ops group panel owns these — the manual chat and topic ids under its
+  // advanced section, the retired severity cutoff and the internal attempt ceiling nowhere.
+  const rows = all.filter(
+    (setting) => !(OPS_GROUP_MANAGED_SETTING_KEYS as readonly string[]).includes(setting.key),
+  );
 
   return (
     <>

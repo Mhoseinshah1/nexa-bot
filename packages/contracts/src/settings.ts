@@ -254,7 +254,8 @@ export const SETTINGS = [
     key: 'ops.notifications.telegram_chat_id',
     description:
       'The Telegram chat that receives operational notifications. Empty means no destination is ' +
-      'configured and nothing is sent.',
+      'configured and nothing is sent. Since WP-A4 this is the ADVANCED manual fallback: a ' +
+      'connected operations log group is used instead whenever there is one.',
     schema: telegramChatIdSchema,
     defaultValue: '',
     zeroMeaning: 'DISABLES',
@@ -303,25 +304,31 @@ export const SETTINGS = [
   {
     key: 'ops.notifications.min_severity',
     description:
-      'Operational events at or above this severity are projected to the operations destination. ' +
-      'Severity routes; a topic does not. The legacy log group routes by topic and has no ' +
-      'severity at all (LGR-BR-081).',
+      'RETIRED (WP-A4). This used to suppress operational events below a severity before they ' +
+      'reached the operations group. The Telegram ops stream now follows explicit event-to-topic ' +
+      'routing (`OPS_LOG_TOPIC_ROUTES`), and every meaningful event is eligible for delivery, so ' +
+      'nothing reads this value. It stays declared so a stored value keeps parsing, and it is not ' +
+      'shown on the normal settings page.',
     schema: z.enum(OPERATIONAL_SEVERITIES),
     defaultValue: 'ERROR',
     zeroMeaning: 'NOT_APPLICABLE',
     mutability: 'RUNTIME',
     classification: 'PUBLIC',
-    configures: 'ops_notifications',
-    consumer: 'ACTIVE',
+    // It configures nothing now; saying otherwise would draw it beside the feature.
+    configures: null,
+    // Nothing reads it. `PLANNED` is the registry's only word for "stored and unread".
+    consumer: 'PLANNED',
   },
   {
     key: 'ops.notifications.max_attempts',
     description:
-      'How many times one notification may be attempted before it is abandoned as failed. ' +
+      'How many times one notification may be attempted before it is preserved as unsent. ' +
       'Bounded on purpose: a permanently wrong destination retried forever is a slow version of ' +
-      'the legacy log group posting the same error sixty times in a day (BUG-LGR-028).',
+      'the legacy log group posting the same error sixty times in a day (BUG-LGR-028). An ' +
+      'internal default (WP-A4: ten), not shown on the normal settings page; a preserved message ' +
+      'is never deleted and is retried from the ops group panel once the problem is fixed.',
     schema: z.number().int().min(1).max(10),
-    defaultValue: 5,
+    defaultValue: 10,
     zeroMeaning: 'NOT_APPLICABLE',
     mutability: 'RUNTIME',
     classification: 'PUBLIC',

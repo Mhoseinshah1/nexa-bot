@@ -23,6 +23,7 @@ import {
   normaliseDiscountCode,
   templateDefinition,
   COMMERCE_ERROR_CODES,
+  DEVICE_ADDON_MAX_QUANTITY,
   NexaError,
 } from '@nexa/contracts';
 import {
@@ -67,6 +68,10 @@ import {
   SERVICE_ADD_TIME_CALLBACK_PREFIX,
   SERVICE_BUY_TRAFFIC_CALLBACK_PREFIX,
   SERVICE_BUY_TIME_CALLBACK_PREFIX,
+  SERVICE_ADD_DEVICES_CALLBACK_PREFIX,
+  SERVICE_BUY_DEVICES_CALLBACK_PREFIX,
+  decodeDeviceQuantity,
+  encodeDeviceQuantity,
   SERVICE_ACTION_CONFIRM_CALLBACK_PREFIX,
   SERVICE_REFRESH_CALLBACK_PREFIX,
   SERVICE_FILES_CALLBACK_PREFIX,
@@ -78,6 +83,7 @@ import {
   transferConfirmData,
   MAIN_MENU_CALLBACK_DATA,
   TUTORIAL_PLATFORM_CALLBACK_PREFIX,
+  CLIENT_APP_CALLBACK_PREFIX,
   TOPUP_ROUTE_CALLBACK_PREFIX,
   SERVICES_LIST_PAGE_CALLBACK_PREFIX,
   SERVICES_SEARCH_CALLBACK_DATA,
@@ -143,6 +149,9 @@ describe('a Telegram turn, decided before any I/O', () => {
     expect(intentOf({ message: { text: CATALOGUE_FA['bot.menu.help'] } }, menu)).toEqual(
       intentOf({ message: { text: '/help' } }),
     );
+    expect(intentOf({ message: { text: CATALOGUE_FA['bot.menu.apps'] } }, menu)).toEqual(
+      intentOf({ message: { text: '/apps' } }),
+    );
   });
 
   it('answers a menu label it was not given as ordinary text', () => {
@@ -181,6 +190,9 @@ describe('a Telegram turn, decided before any I/O', () => {
     expect(intentOf({ message: { text: '  Ali_2026  ' } }, menu).args).toEqual(['  Ali_2026  ']);
   });
 
+  // The title is cited by `docs/phase4j-falsification.md` (F4J-15) and kept as written;
+  // WP-A10's apps entry and WP-A7's tickets entry made the set six, which the assertions
+  // below pin.
   it('offers exactly the four top-level actions this release can perform', () => {
     /*
      * A keyboard is a PROMISE. The legacy system's menu described a product that did
@@ -194,12 +206,18 @@ describe('a Telegram turn, decided before any I/O', () => {
     expect(MAIN_MENU_ROWS.map((row) => row.map((button) => button.command))).toEqual([
       ['catalog', 'services'],
       ['wallet', 'help'],
+      // WP-A10: «📱 دانلود برنامه و آموزش اتصال», which `/apps` answers.
+      ['apps'],
+      // WP-A7: the ticket desk, on a row of its own.
+      ['tickets'],
     ]);
     expect(MAIN_MENU_BUTTONS.map((button) => button.label)).toEqual([
       'bot.menu.catalog',
       'bot.menu.services',
       'bot.menu.wallet',
       'bot.menu.help',
+      'bot.menu.apps',
+      'bot.menu.tickets',
     ]);
     // And every label renders. A key with no catalogue entry is a blank button.
     for (const button of MAIN_MENU_BUTTONS) {
@@ -570,6 +588,13 @@ describe('profile metadata, normalised before it is ever stored', () => {
      *   `bot.service.addon_option`     one package: what it adds, what it costs. The
      *                                  price is a MONEY value, so a customer never
      *                                  reads a bare number whose currency is implied.
+     *   `bot.service.add_devices_button`
+     *   `bot.service.devices_choice`
+     *   `bot.service.devices_option`   WP-A5's extra users: drawn only where the
+     *                                  panel's adapter declares and implements
+     *                                  DEVICE_LIMIT_ADJUSTMENT and a priced rate has
+     *                                  room left; the count on each button is bounded
+     *                                  by the server and its price is a MONEY value.
      *   `bot.service.action_quote`     the offer being answered. The number is the one
      *                                  the order was written with and is never re-taken,
      *                                  so nobody is charged a price they did not see.
@@ -632,6 +657,25 @@ describe('profile metadata, normalised before it is ever stored', () => {
      * reason stated there: this list is what a CUSTOMER can be sent.
      */
     expect([...sent].filter((key) => !key.startsWith('bot.admin.')).sort()).toEqual([
+      /*
+       * WP-A10's eleven, the app downloads and connection guides. Reviewed against the same
+       * rule: the platform heading and its empty answer, one app's detail (with and without
+       * the connection-files note), its three URL buttons, the two ways back and the answer
+       * to a tapped app that is gone. None names an app, a store or a link — those are the
+       * operator's data, carried as values and as the URL buttons' targets — and none
+       * carries a subscription link: the service actions on the detail are the existing
+       * `r:` and `sf:` taps.
+       */
+      'bot.apps.alternative_button',
+      'bot.apps.back_button',
+      'bot.apps.detail',
+      'bot.apps.detail_files',
+      'bot.apps.download_button',
+      'bot.apps.help_button',
+      'bot.apps.not_found',
+      'bot.apps.platform',
+      'bot.apps.platform_empty',
+      'bot.apps.platforms_button',
       'bot.blocked',
       /*
        * WP20: the one answer to the interaction that crosses the anti-spam threshold,
@@ -670,6 +714,8 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.faq.page',
       'bot.help',
       'bot.menu.main_button',
+      // WP-A10: an app's detail points a customer with several services at their list.
+      'bot.menu.services',
       'bot.order.awaiting_payment',
       'bot.order.cancel_button',
       'bot.order.cancel_confirm',
@@ -746,13 +792,24 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.service.action_not_allowed',
       'bot.service.action_requested',
       'bot.service.action_unavailable',
+      'bot.service.add_devices_button',
       'bot.service.add_traffic_button',
       'bot.service.addon_choice',
       'bot.service.addon_option',
       'bot.service.back_to_list_button',
       'bot.service.back_to_menu_button',
       'bot.service.capability_unsupported',
+      /*
+       * WP-A6: the location change. Its copy was reviewed against this case's rule: the
+       * request's answer promises an outcome message, which the notification lane sends for
+       * every customer-requested operation, and the confirmation promises new connection
+       * details only IF they change — which the delivery lane sends when a move rotates the
+       * link. Neither promises the link survives.
+       */
+      'bot.service.change_location_button',
       'bot.service.connected_ack',
+      'bot.service.devices_choice',
+      'bot.service.devices_option',
       // Package E: the connection-files button and its three answers.
       'bot.service.files_button',
       'bot.service.files_partial',
@@ -762,6 +819,15 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.service.list',
       'bot.service.list_empty',
       'bot.service.list_item_button',
+      'bot.service.location_choice',
+      'bot.service.location_confirm_button',
+      'bot.service.location_confirm_free',
+      'bot.service.location_cooldown',
+      'bot.service.location_limit',
+      'bot.service.location_option',
+      'bot.service.location_option_free',
+      'bot.service.location_requested',
+      'bot.service.location_same',
       'bot.service.next_page_button',
       'bot.service.not_found',
       'bot.service.note_button',
@@ -830,7 +896,39 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.start.welcome_back',
       'bot.support.contact',
       'bot.support.contact_button',
+      /*
+       * WP-A7: the ticket desk. The list, the chooser, the two prompts and their
+       * refusals, the conversation view, the close question, and the reply's buttons —
+       * every one reached by a button or a window this head draws.
+       */
+      'bot.support.tickets_button',
       'bot.support.unconfigured',
+      'bot.ticket.already_closed',
+      'bot.ticket.attachment_too_large',
+      'bot.ticket.attachment_type_refused',
+      'bot.ticket.back_button',
+      'bot.ticket.category_button',
+      'bot.ticket.choose_category',
+      'bot.ticket.close_ask',
+      'bot.ticket.close_button',
+      'bot.ticket.close_confirm_button',
+      'bot.ticket.closed',
+      'bot.ticket.created',
+      'bot.ticket.list',
+      'bot.ticket.list_empty',
+      'bot.ticket.list_item_button',
+      'bot.ticket.message_invalid',
+      'bot.ticket.message_limit',
+      'bot.ticket.message_prompt',
+      'bot.ticket.new_button',
+      'bot.ticket.no_categories',
+      'bot.ticket.not_found',
+      'bot.ticket.open_limit',
+      'bot.ticket.reply_button',
+      'bot.ticket.reply_prompt',
+      'bot.ticket.reply_sent',
+      'bot.ticket.view',
+      'bot.ticket.view_button',
       'bot.trial.button',
       'bot.trial.issued',
       'bot.trial.unavailable',
@@ -843,6 +941,8 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.tutorial.linux_button',
       'bot.tutorial.macos',
       'bot.tutorial.macos_button',
+      // WP-A10: «🧩 سایر», drawn only while an app the customer may see is filed there.
+      'bot.tutorial.other_button',
       'bot.tutorial.windows',
       'bot.tutorial.windows_button',
       'bot.unknown_command',
@@ -1434,6 +1534,8 @@ describe('a callback prefix decides what happens, so no prefix may shadow anothe
     SERVICE_RENEW: SERVICE_RENEW_CALLBACK_PREFIX,
     SERVICE_ADD_TRAFFIC: SERVICE_ADD_TRAFFIC_CALLBACK_PREFIX,
     SERVICE_ADD_TIME: SERVICE_ADD_TIME_CALLBACK_PREFIX,
+    // WP-A5: `dv:` begins with `d` like `d:`, `dc:` and `dx:`; the shadowing case proves it safe.
+    SERVICE_ADD_DEVICES: SERVICE_ADD_DEVICES_CALLBACK_PREFIX,
     SERVICE_ACTION_CONFIRM: SERVICE_ACTION_CONFIRM_CALLBACK_PREFIX,
     // The customer UX completion's id-carrying routes.
     SERVICE_REFRESH: SERVICE_REFRESH_CALLBACK_PREFIX,
@@ -1444,6 +1546,8 @@ describe('a callback prefix decides what happens, so no prefix may shadow anothe
     SERVICE_RENEW_QUOTE: SERVICE_RENEW_QUOTE_CALLBACK_PREFIX,
     TOPUP_CLOSE: TOPUP_CLOSE_CALLBACK_PREFIX,
     SERVICE_CONNECTED: CONNECTED_CALLBACK_PREFIX,
+    // WP-A10: `ca:` begins with `c` like `c:`, `cg:` and `ck:`; the shadowing case proves it safe.
+    CLIENT_APP: CLIENT_APP_CALLBACK_PREFIX,
   };
 
   /*
@@ -1489,6 +1593,8 @@ describe('a callback prefix decides what happens, so no prefix may shadow anothe
     REFERRAL_GIFT: REFERRAL_GIFT_CALLBACK_DATA,
     // Package F: a service and a recipient's numeric id, not a uuid alone.
     SERVICE_TRANSFER_CONFIRM: SERVICE_TRANSFER_CONFIRM_CALLBACK_PREFIX,
+    // WP-A5: a service-and-rate pair and a bounded count.
+    SERVICE_BUY_DEVICES: SERVICE_BUY_DEVICES_CALLBACK_PREFIX,
   };
 
   const ALL_PREFIXES: Readonly<Record<string, string>> = {
@@ -1624,6 +1730,38 @@ describe('a callback prefix decides what happens, so no prefix may shadow anothe
         ).toBe('UNSUPPORTED');
       }
     }
+  });
+
+  describe('the extra-users quantity (WP-A5)', () => {
+    const service = '0191f4a0-2d3c-7c2b-9a41-6f2b0c7e51aa';
+    const addon = '0191f4a0-9e77-7d18-8c03-2b9d4e5a1f60';
+    const tap = (data: string) => intentOf({ callback_query: { id: 'cbq', data } });
+
+    it('carries the service, the rate and the count, inside 64 bytes', () => {
+      const data = encodeDeviceQuantity(service, addon, DEVICE_ADDON_MAX_QUANTITY);
+      expect(Buffer.byteLength(data, 'utf8')).toBeLessThanOrEqual(64);
+      const command = tap(data);
+      expect(command.intent).toBe('SERVICE_BUY_DEVICES');
+      expect(command.targetId).toBe(service);
+      expect(command.secondaryId).toBe(addon);
+      expect(command.quantity).toBe(DEVICE_ADDON_MAX_QUANTITY);
+    });
+
+    /*
+     * The count is a CHOICE the server bounds again, and the boundary still refuses every
+     * shape a modified client could send in its place: zero, a sign, a leading zero, a
+     * fraction, a count past the add-on maximum, a second dot, or no count at all.
+     */
+    it('refuses every count that is not a bounded whole number', () => {
+      const pair = encodeDeviceQuantity(service, addon, 1).slice(0, -2);
+      for (const count of ['0', '-1', '+1', '01', '1.5', '1e1', '', 'x', '999']) {
+        expect(tap(`${pair}.${count}`).intent, count).toBe('UNSUPPORTED');
+      }
+      expect(tap(`${pair}.${String(DEVICE_ADDON_MAX_QUANTITY + 1)}`).intent).toBe('UNSUPPORTED');
+      expect(tap(`${pair}.1.2`).intent).toBe('UNSUPPORTED');
+      expect(tap(pair).intent).toBe('UNSUPPORTED');
+      expect(decodeDeviceQuantity(`${SERVICE_BUY_DEVICES_CALLBACK_PREFIX}short.1`)).toBeNull();
+    });
   });
 
   describe('the transfer confirmation (Package F)', () => {

@@ -6,6 +6,8 @@ import {
   MAIN_MENU_BUTTONS,
   MAX_REQUESTS_PER_PROBE,
   OPERATION_LEASE_SECONDS_MIN,
+  canAdjustDeviceLimit,
+  canChangeLocation,
   faqNumberMarker,
   systemJobActor,
 } from '@nexa/contracts';
@@ -27,6 +29,7 @@ import type {
   OperationType,
   BotInstanceId,
   PaymentGatewayProvider,
+  ProductId,
   TenantContext,
   Translator,
 } from '@nexa/contracts';
@@ -52,10 +55,16 @@ import { PanelService } from './modules/platform/panels/application/panel.servic
 import { PanelMonitorService } from './modules/platform/panels/application/panel-monitor.service.js';
 import type { ProbeCoreDeps } from './modules/platform/panels/application/probe-core.js';
 import {
+  IMPLEMENTED_PROVIDER_TYPES,
   SERVICE_PROVIDER_TYPES,
   providerAdapter,
   providerServiceAdapter,
 } from './modules/platform/providers/infrastructure/adapter-registry.js';
+// WP-A8: advanced provider settings.
+import { PanelAdvancedService } from './modules/platform/panels/application/panel-advanced.service.js';
+import { PanelPolicyReader } from './modules/platform/panels/application/panel-policy.js';
+import { DrizzlePanelPolicyRepository } from './modules/platform/panels/infrastructure/drizzle-panel-policy.repository.js';
+import { PROVIDER_RULES } from './modules/platform/providers/infrastructure/provider-rules.js';
 import { SystemClock } from './infrastructure/clock.js';
 import { Uuidv7IdGenerator } from './infrastructure/ids.js';
 import { AesGcmSecretCipher } from './infrastructure/crypto/secret-cipher.js';
@@ -161,6 +170,13 @@ import { DrizzleTrialOverrideRepository } from './modules/commerce/trials/infras
 import { DrizzleTrialResetRepository } from './modules/commerce/trials/infrastructure/drizzle-trial-reset.repository.js';
 import { TrialAdminService } from './modules/commerce/trials/application/trial-admin.service.js';
 import { DrizzleCommercialActionRepository } from './modules/commerce/commercial/infrastructure/drizzle-commercial-action.repository.js';
+import { LocationChangePolicy } from './modules/commerce/locations/application/location-change-policy.js';
+import { LocationChangeService } from './modules/commerce/locations/application/location-change.service.js';
+import { ServiceLocationAdminService } from './modules/commerce/locations/application/service-location-admin.service.js';
+import {
+  DrizzleLocationChangeRepository,
+  DrizzleServiceLocationRepository,
+} from './modules/commerce/locations/infrastructure/drizzle-service-location.repository.js';
 import { DrizzleServiceAddonRepository } from './modules/commerce/catalog/infrastructure/drizzle-addon.repository.js';
 import {
   DrizzlePanelDirectory,
@@ -188,6 +204,10 @@ import { PaymentGatewayService } from './modules/commerce/payments/application/p
 import type { PaymentGatewayRepository } from './modules/commerce/payments/application/gateway-ports.js';
 import { DrizzleSupportFaqRepository } from './modules/control/support/infrastructure/drizzle-support-faq.repository.js';
 import { SupportFaqService } from './modules/control/support/application/support-faq.service.js';
+import { ClientAppService } from './modules/control/client-apps/application/client-app.service.js';
+import { ClientAppCatalog } from './modules/control/client-apps/application/client-app-catalog.js';
+import { ProvisionedServiceFacts } from './modules/control/client-apps/application/customer-service-facts.js';
+import { DrizzleClientAppRepository } from './modules/control/client-apps/infrastructure/drizzle-client-app.repository.js';
 import {
   SupportFaqSeeder,
   SupportScreenReader,
@@ -224,6 +244,14 @@ import {
 } from './modules/commerce/payments/application/receipt-review-push-loop.js';
 import { DrizzleReceiptReviewPushRepository } from './modules/commerce/payments/infrastructure/drizzle-receipt-review-push.repository.js';
 import { DrizzleReceiptReviewFactsReader } from './modules/commerce/payments/infrastructure/drizzle-receipt-review-facts.reader.js';
+// WP-A7: the support ticket system.
+import { TicketService } from './modules/commerce/tickets/application/ticket.service.js';
+import { TicketCategoryService } from './modules/commerce/tickets/application/ticket-category.service.js';
+import { TicketScreenComposer } from './modules/commerce/tickets/application/ticket-screens.js';
+import { TicketSupportNotifyConsumer } from './modules/commerce/tickets/application/ticket-support-notify.consumer.js';
+import { DrizzleTicketRepository } from './modules/commerce/tickets/infrastructure/drizzle-ticket.repository.js';
+import { DrizzleTicketCategoryRepository } from './modules/commerce/tickets/infrastructure/drizzle-ticket-category.repository.js';
+import { DrizzleTicketContextReader } from './modules/commerce/tickets/infrastructure/drizzle-ticket-context.reader.js';
 import {
   notificationButtons,
   receiptReviewButtons,
@@ -365,6 +393,21 @@ import { NotificationService } from './modules/control/notifications/application
 import { UndeliverableOrderRefunder } from './modules/commerce/orders/application/undeliverable-order-refunder.js';
 import { NotificationDispatcher } from './modules/control/notifications/application/notification-dispatcher.js';
 import { NotifyingOperationalEventRecorder } from './modules/control/notifications/application/operational-event-projector.js';
+// WP-A4: the Telegram operations log group.
+import {
+  OpsGroupRouter,
+  OpsGroupService,
+} from './modules/control/ops-group/application/ops-group.service.js';
+import {
+  OPS_GROUP_MAINTAIN_INTERVAL_MS,
+  OpsGroupMaintainer,
+} from './modules/control/ops-group/application/ops-group-maintainer.js';
+import { OpsTopicProvisioner } from './modules/control/ops-group/application/topic-provisioner.js';
+import { DrizzleOpsGroupRepository } from './modules/control/ops-group/infrastructure/drizzle-ops-group.repository.js';
+import {
+  OpsGroupBotSource,
+  TelegramOpsGroup,
+} from './modules/control/ops-group/infrastructure/telegram-ops-group.js';
 import { TelegramNotificationTransport } from './modules/control/notifications/infrastructure/telegram-transport.js';
 import { RecordingTransport } from './modules/control/notifications/infrastructure/recording-transport.js';
 import type { NotificationTransport } from './modules/control/notifications/application/ports.js';
@@ -574,6 +617,10 @@ export interface Container {
   readonly subscriptionFiles: SubscriptionFileService;
   /** Package F: a customer hands one of their services to another customer. */
   readonly serviceTransfers: ServiceTransferService;
+  /** WP-A7: support tickets, for the bot and the Web Admin alike. */
+  readonly tickets: TicketService;
+  /** WP-A7: the categories a customer files a ticket under. */
+  readonly ticketCategories: TicketCategoryService;
   /** The operator's price preview and an order's pricing detail (WP8). */
   readonly pricingRead: PricingReadService;
   /** Cashback from promise to credit to reversal (WP8 P9); driven by the provisioner loop. */
@@ -593,6 +640,9 @@ export interface Container {
   /** WP9-B: reseller tiers, grants and resellers, as an operator manages them. */
   readonly resellersAdmin: ResellerAdminService;
   readonly commercialActions: CommercialActionService;
+  /** WP-A6: the operator's configured locations, and a customer's free location change. */
+  readonly serviceLocations: ServiceLocationAdminService;
+  readonly locationChanges: LocationChangeService;
   /** A customer's free trial (WP6-A): issued through the purchase path, costs nothing. */
   readonly trials: TrialService;
   /** The operator's trial overrides, global reset and view (WP6-B). */
@@ -666,6 +716,8 @@ export interface Container {
 
   // Control plane — Phase 2
   readonly panels: PanelService;
+  /** WP-A8: a panel's capability registry, operator policy and diagnostics. */
+  readonly panelAdvanced: PanelAdvancedService;
   /** The Telegram admin section's reminder seam. See the construction site. */
   readonly reminderConfig: BotRuntimeDeps['reminderConfig'];
   /**
@@ -709,6 +761,10 @@ export interface Container {
   readonly supportFaqs: SupportFaqService;
   /** The customer's support screen: active FAQ in order, and the first support account's URL. */
   readonly supportScreen: SupportScreenReader;
+  /** WP-A10: the tenant's client apps as the operator maintains them. */
+  readonly clientApps: ClientAppService;
+  /** WP-A10: the customer's read of them, filtered by what their services are. */
+  readonly clientAppCatalog: ClientAppCatalog;
   /** Exposed for the tests that drive the resolver against a substituted catalogue. */
   readonly templateRepository: DrizzleTemplateRepository;
   readonly notifications: NotificationService;
@@ -722,6 +778,9 @@ export interface Container {
   readonly notificationRepository: DrizzleNotificationRepository;
   readonly notificationDispatcher: NotificationDispatcher;
   readonly notificationTransport: NotificationTransport;
+  /** WP-A4: the Nexa-managed operations log group, and the worker pass that keeps it. */
+  readonly opsGroups: OpsGroupService;
+  readonly opsGroupMaintainer: OpsGroupMaintainer;
   readonly opsLogService: OpsLogService;
   /**
    * What the background monitor is configured to do, and what that
@@ -1091,6 +1150,18 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
         wallet: new DrizzleWalletRepository(database.db),
         refundRequests: new DrizzleServiceRefundRequestRepository(database.db),
       }),
+      /*
+       * WP-A7: a new ticket or a customer's reply → a support notification in the operator
+       * notification lane: the operations destination, and each Telegram-bound administrator
+       * who may reply. A consumer, so nothing about it can reach the customer's message. The
+       * lane is resolved lazily, as the financial log's is.
+       */
+      new TicketSupportNotifyConsumer({
+        lane: { queue: (scope, input, tx) => notifications.queue(scope, input, tx) },
+        tickets: new DrizzleTicketRepository(database.db),
+        customers: new DrizzleCustomerRepository(database.db),
+        reviewers: telegramAdmins,
+      }),
     ],
     clock,
     logger,
@@ -1286,6 +1357,13 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    */
   const panelRepository = new DrizzlePanelRepository(database.db);
   const panelCapacity = new DrizzlePanelCapacityRepository(database.db);
+  /*
+   * WP-A8: a panel's operator policy. ONE reader, handed to every customer-action
+   * decision — commercial actions, customer operations, subscription files, delivery —
+   * so the question "may a customer do this on this panel" has one answer.
+   */
+  const panelPolicyRepository = new DrizzlePanelPolicyRepository(database.db);
+  const panelPolicyReader = new PanelPolicyReader(panelPolicyRepository);
   const panelSalesGate = new PanelSalesGate({
     panels: panelRepository,
     capacity: panelCapacity,
@@ -1384,6 +1462,13 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     repository: serviceAddonRepository,
     /* `sales.currency`. An add-on is priced in what the tenant sells in, or refused. */
     settings: settingsResolver,
+    // WP-A5: an extra-users rate's panel / product scope, checked against THIS tenant.
+    scopeTargets: {
+      panelExists: async (scope, panelId, tx) =>
+        (await panelRepository.find(scope, panelId, tx)) !== null,
+      productExists: async (scope, productId, tx) =>
+        (await productRepository.findById(scope, productId as ProductId, tx)) !== null,
+    },
     guard,
     audit,
     opsLog,
@@ -1403,6 +1488,51 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    * `customerRepository` is built here rather than inline.
    */
   const commercialActionRepository = new DrizzleCommercialActionRepository(database.db);
+
+  /**
+   * WP-A6: the operator's configured locations and the customers' frozen change requests,
+   * and the ONE evaluator of what a service may be moved to. One instance of each, shared
+   * by the admin surface, the quote, the confirmation, the free request, settlement and
+   * the provisioner, so none of them can read a different answer.
+   */
+  const serviceLocationRepository = new DrizzleServiceLocationRepository(database.db);
+  const locationChangeRepository = new DrizzleLocationChangeRepository(database.db);
+  const locationChangePolicy = new LocationChangePolicy({
+    locations: serviceLocationRepository,
+    changes: locationChangeRepository,
+    settings: settingsResolver,
+    clock,
+  });
+  const serviceLocationAdminService = new ServiceLocationAdminService({
+    repository: serviceLocationRepository,
+    targets: {
+      panelExists: async (scope, panelId, tx) =>
+        (await panelRepository.find(scope, panelId, tx)) !== null,
+      productPanel: async (scope, productId, tx) => {
+        const product = await productRepository.findById(scope, productId as ProductId, tx);
+        return product === null ? undefined : product.panelId;
+      },
+    },
+    /*
+     * Where a panel's never-moved services are frozen before its initial location changes.
+     * A closure, because the service repository is built further down: it is read when a
+     * write runs, never at construction.
+     */
+    services: {
+      recordLocationForUnmoved: (scope, panelId, location, legalFrom, now, tx) =>
+        serviceRepository.recordLocationForUnmoved(scope, panelId, location, legalFrom, now, tx),
+    },
+    settings: settingsResolver,
+    guard,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    uow,
+    clock,
+    ids,
+  });
 
   /**
    * The wallet, under the FROZEN `users.wallet.*` permissions.
@@ -1703,7 +1833,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       tx?: unknown,
     ) => {
       const view = await panelRepository.find(scope, panelId, tx as never);
-      return decideOperability({
+      const decided = decideOperability({
         panel:
           view === null
             ? null
@@ -1722,6 +1852,32 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
         serviceAdapterExists:
           view !== null && SERVICE_PROVIDER_TYPES.includes(view.panel.providerType),
       });
+      /*
+       * WP-A5: extra users are offered, drafted, confirmed and settled only where the
+       * adapter has BOTH device-limit methods as well as the declaration the descriptor
+       * check above just read — the same three-question guard the executor applies — so a
+       * declaration that outran its methods can never draw a button or take money.
+       */
+      if (
+        decided.ok &&
+        type === 'ADD_DEVICES' &&
+        !canAdjustDeviceLimit(providerServiceAdapter(decided.providerType))
+      ) {
+        return { ok: false as const, reason: 'CAPABILITY_UNSUPPORTED' as const };
+      }
+      /*
+       * WP-A6: the same three-question guard for a move — the read, the write and the
+       * declaration — so a declaration that outran its methods can never draw «🌍 تغییر
+       * لوکیشن», quote a price or plan an operation.
+       */
+      if (
+        decided.ok &&
+        type === 'CHANGE_LOCATION' &&
+        !canChangeLocation(providerServiceAdapter(decided.providerType))
+      ) {
+        return { ok: false as const, reason: 'CAPABILITY_UNSUPPORTED' as const };
+      }
+      return decided;
     },
   };
 
@@ -1745,6 +1901,9 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     features: featureFlagResolver,
     settings: settingsResolver,
     customers: customerRepository,
+    panelPolicy: panelPolicyReader,
+    // WP-A6: a paid move's frozen target, read at settlement by its order.
+    locationChanges: locationChangeRepository,
   });
 
   /**
@@ -1768,7 +1927,11 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     orders: orderRepository,
     actions: commercialActionRepository,
     panels: panelOperability,
+    panelPolicy: panelPolicyReader,
     settings: settingsResolver,
+    // WP-A6: the paid location change's evaluator and its frozen change request.
+    locations: locationChangePolicy,
+    locationChanges: locationChangeRepository,
     guard,
     audit,
     opsLog,
@@ -1777,6 +1940,25 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     uow,
     idempotency,
     outbox,
+    clock,
+    ids,
+  });
+
+  /** WP-A6: a customer's FREE location change — asked for, not bought. */
+  const locationChangeService = new LocationChangeService({
+    services: serviceRepository,
+    policy: locationChangePolicy,
+    changes: locationChangeRepository,
+    provisioning: provisioningService,
+    resellers: resellerService,
+    panels: panelOperability,
+    guard,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    uow,
     clock,
     ids,
   });
@@ -2447,6 +2629,32 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     cadence: probeCore.cadence,
   });
 
+  /*
+   * WP-A8: the registry, the policy write and the diagnostics over the panel service
+   * above — its read, so the diagnostics and the sellability card cannot disagree.
+   */
+  const panelAdvanced = new PanelAdvancedService({
+    panels: panelService,
+    repository: panelRepository,
+    policies: panelPolicyRepository,
+    adapters: (providerType) =>
+      IMPLEMENTED_PROVIDER_TYPES.includes(
+        providerType as (typeof IMPLEMENTED_PROVIDER_TYPES)[number],
+      )
+        ? providerAdapter(providerType)
+        : null,
+    providerRules: (providerType) => PROVIDER_RULES[providerType],
+    features: featureFlagResolver,
+    guard,
+    audit,
+    opsLog,
+    sessions,
+    uow,
+    idempotency,
+    scopeActivity: tenants,
+    clock,
+  });
+
   const monitorBudgetReserve = monitorBudgetReserveFor(
     config.PANEL_PROBE_TENANT_LIMIT,
     config.PANEL_MONITOR_BUDGET_RESERVE_PERCENT,
@@ -2815,6 +3023,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
      * its order's frozen terms recorded — the one location that order was sold for.
      */
     locationOf: async (scope, service) => {
+      // WP-A6: a service that has moved is where it moved to, whatever its product says.
+      if (service.locationLabel !== null) return service.locationLabel;
       if (service.productId === null) {
         const terms = await orderCustomServiceTermsRepository.findByOrder(scope, service.orderId);
         return terms?.locationLabel ?? null;
@@ -2833,6 +3043,45 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     clock,
     ids,
   });
+  /*
+   * WP-A7 — support tickets. ONE service for the bot and the Web Admin. An administrator's
+   * reply enqueues `TICKET_REPLY` on the customer lane in the transaction that writes it,
+   * through the same notifier every other producer uses.
+   */
+  const ticketRepository = new DrizzleTicketRepository(database.db);
+  const ticketCategoryRepository = new DrizzleTicketCategoryRepository(database.db);
+  const ticketCategoryService = new TicketCategoryService({
+    categories: ticketCategoryRepository,
+    templates: templateResolver,
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    clock,
+    ids,
+  });
+  const ticketService = new TicketService({
+    tickets: ticketRepository,
+    categories: ticketCategoryRepository,
+    customers: customerRepository,
+    context: new DrizzleTicketContextReader(database.db),
+    admins,
+    permissions: permissionResolver,
+    notifier: customerNotifier,
+    outbox,
+    audit,
+    opsLog,
+    guard,
+    sessions,
+    uow,
+    scopeActivity: tenants,
+    clock,
+    ids,
+  });
+  const ticketScreens = new TicketScreenComposer(templateResolver);
   const customerCounters = new DrizzleCustomerCountersReader(database.db);
   /**
    * The FAQ screen, rendered into message parts HERE — application code holds the
@@ -3033,6 +3282,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
        * — derived from the subject by the surface that owns the callback vocabulary.
        */
       serviceTransfers: serviceTransferService,
+      // WP-A7: support's reply, read from the ticket message the notification names.
+      tickets: ticketService,
       buttonsFor: notificationButtons,
       /*
        * The ledger reader the refund sentence renders from. The wallet repository
@@ -3255,7 +3506,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
             : await productRepository.findById(scope, service.productId);
         return {
           productName: order.line.title,
-          serviceLocation: product?.display.serviceLocationLabel ?? null,
+          // WP-A6: where the service has moved to, when it has; the product's label otherwise.
+          serviceLocation: service.locationLabel ?? product?.display.serviceLocationLabel ?? null,
           durationDays: order.line.specification.durationDays,
           trafficBytes: order.line.specification.trafficBytes,
         };
@@ -3266,6 +3518,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     uow,
     clock,
     guard,
+    panelPolicy: panelPolicyReader,
   });
 
   /**
@@ -3325,6 +3578,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     settings: settingsResolver,
     workerId: `${role}:${ids.uuid()}`,
     leaseMs: OPERATION_LEASE_SECONDS_MIN * 1000,
+    // WP-A6: the frozen change request a move carries out, for the name it records.
+    locationChanges: locationChangeRepository,
   });
 
   /*
@@ -3345,6 +3600,34 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     guard,
     uow,
     clock,
+    panelPolicy: panelPolicyReader,
+  });
+
+  /*
+   * WP-A10: client apps and connection guides. Built after Package E's service because
+   * the customer's read asks it — through its own `offered`, the check that draws the
+   * files button — whether a service can hand over connection files.
+   */
+  const clientAppRepository = new DrizzleClientAppRepository(database.db);
+  const clientAppService = new ClientAppService({
+    repository: clientAppRepository,
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    ids,
+    clock,
+  });
+  const clientAppCatalog = new ClientAppCatalog({
+    repository: clientAppRepository,
+    facts: new ProvisionedServiceFacts({
+      services: provisioningService,
+      panels: panelRepository,
+      subscriptionFiles: subscriptionFileService,
+    }),
   });
 
   /**
@@ -3431,6 +3714,58 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
 
   const notificationRepository = new DrizzleNotificationRepository(database.db, ids);
 
+  // WP-A4: the operations log group. Built before the notification lane, which prefers
+  // the connected group over the manual chat id setting, and before the dispatcher, which
+  // resolves an intent routed to the group to where the group is at send time.
+  const opsGroupRepository = new DrizzleOpsGroupRepository(database.db);
+  const opsGroupTelegram = new TelegramOpsGroup(
+    config.TELEGRAM_API_BASE_URL,
+    config.NOTIFICATION_SEND_TIMEOUT_MS,
+  );
+  const opsGroups = new OpsGroupService({
+    repository: opsGroupRepository,
+    telegram: opsGroupTelegram,
+    bots: new OpsGroupBotSource(botInstances),
+    provisioner: new OpsTopicProvisioner({
+      repository: opsGroupRepository,
+      telegram: opsGroupTelegram,
+      templates: templateResolver,
+      audit,
+      // The RAW recorder: a topic event is not projected back into the group it is about.
+      opsLog: opsLogWriter,
+      clock,
+      ids,
+      logger,
+    }),
+    notifications: notificationRepository,
+    templates: templateResolver,
+    features: featureFlagResolver,
+    settings: settingsResolver,
+    guard,
+    uow,
+    audit,
+    opsLog: opsLogWriter,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    outbox,
+    clock,
+    ids,
+    logger,
+  });
+  const opsGroupSystemActor = () => systemJobActor('ops-group', newCorrelationId(ids.uuid()));
+  const opsGroupRouter = new OpsGroupRouter(opsGroups, opsGroupSystemActor);
+  const opsGroupMaintainer = new OpsGroupMaintainer(opsGroups, {
+    scope: () =>
+      installationTenantId === null
+        ? null
+        : { tenantId: installationTenantId, botInstanceId: null },
+    actor: opsGroupSystemActor,
+    intervalMs: OPS_GROUP_MAINTAIN_INTERVAL_MS,
+    now: () => clock.now().getTime(),
+    logger,
+  });
+
   // A second resolver, wired to the RAW recorder rather than to the façade.
   //
   // `SettingsResolver` records an operational event when a stored value no
@@ -3455,6 +3790,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     opsLogWriter,
     // For the mutation-time session-revocation check.
     sessions,
+    // WP-A4: the connected group first, the manual chat id only without one.
+    opsGroupRouter,
   );
 
   // And the stranded-order reporter's lane, for the same reason and in the same
@@ -3467,7 +3804,6 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   opsLogRef.current = new NotifyingOperationalEventRecorder(
     opsLogWriter,
     notifications,
-    projectionSettings,
     uow,
     logger,
   );
@@ -3501,6 +3837,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       baseBackoffMs: config.NOTIFICATION_BACKOFF_BASE_MS,
       maxBackoffMs: config.NOTIFICATION_BACKOFF_MAX_MS,
     },
+    // WP-A4: an intent routed to the group goes where the group is NOW.
+    opsGroupRouter,
   );
 
   const opsLogService = new OpsLogService(guard, new DrizzleOperationalEventReader(database.db));
@@ -3992,6 +4330,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     customerCaptures: customerCaptureService,
     subscriptionFiles: subscriptionFileService,
     serviceTransfers: serviceTransferService,
+    tickets: ticketService,
+    ticketCategories: ticketCategoryService,
     pricingRead: pricingReadService,
     cashback: cashbackService,
     referrals: referralProgram,
@@ -4003,6 +4343,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     resellers: resellerService,
     resellersAdmin: resellerAdminService,
     commercialActions: commercialActionService,
+    serviceLocations: serviceLocationAdminService,
+    locationChanges: locationChangeService,
     trials: trialService,
     trialAdmin: trialAdminService,
     wallet: walletService,
@@ -4128,10 +4470,38 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       // mechanism that stops a redelivery becoming a second order.
       products: productService,
       commercial: commercialActionService,
+      // WP-A6: a customer's free location change.
+      locationChanges: locationChangeService,
       trials: trialService,
       customService: customServiceFlowService,
       subscriptionFiles: subscriptionFileService,
+      // WP-A10: «📱 دانلود برنامه و آموزش اتصال», the tenant's apps for the customer's services.
+      clientApps: clientAppCatalog,
       serviceTransfers: serviceTransferService,
+      /*
+       * WP-A7: the ticket desk. A file answers a ticket window only when that window is open
+       * and newer than any open receipt window — the prompt the customer saw last — and the
+       * receipt window is read here under ITS lock, inside the capture read's transaction
+       * (which already holds the capture lock), so the choice cannot go stale before the read.
+       */
+      tickets: {
+        service: ticketService,
+        categories: ticketCategoryService,
+        screens: ticketScreens,
+        receiptWindowOpenedAt: async (scope, botInstanceId, customerId, tx) => {
+          await receiptCaptureRepository.lockForCustomer(scope, botInstanceId, customerId, tx);
+          const receipt = await receiptCaptureRepository.findOpen(
+            scope,
+            botInstanceId,
+            customerId,
+            tx,
+          );
+          if (receipt === null || receipt.expiresAt.getTime() <= clock.now().getTime()) {
+            return null;
+          }
+          return receipt.openedAt;
+        },
+      },
       orders: orderService,
       // The SAME messenger the delivery sweep uses, for the reason above it.
       messenger: customerMessenger,
@@ -4184,6 +4554,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       },
     }),
     panels: panelService,
+    panelAdvanced,
     /*
      * The bot's own reminder-configuration seam, exposed so a test can read the path
      * the SURFACE uses rather than a copy of it. Nothing else holds it: the HTTP
@@ -4198,11 +4569,15 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     templateResolver,
     supportFaqs: supportFaqService,
     supportScreen: supportScreenReader,
+    clientApps: clientAppService,
+    clientAppCatalog,
     templateRepository,
     notifications,
     notificationRepository,
     notificationDispatcher,
     notificationTransport,
+    opsGroups,
+    opsGroupMaintainer,
     opsLogService,
     monitorProfileService,
     diagnostics,
@@ -4233,6 +4608,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       await customerReminderLoop.stop();
       await customerNotificationLoop.stop();
       await receiptReviewPushLoop.stop();
+      await opsGroupMaintainer.stop();
       await interactionCounter.close();
       await redis.close();
       await database.close();

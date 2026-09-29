@@ -5,6 +5,10 @@ import {
   API_PREFIX,
   PANEL_ROUTES,
   providerDescriptor,
+  deriveCapabilityRegistry,
+  type PanelAdvancedResponse,
+  type PanelTechnicalResponse,
+  type UpdatePanelPolicyResponse,
   type PanelHealthResponse,
   type PanelListResponse,
   type PanelResponse,
@@ -67,13 +71,19 @@ export class PanelsController {
     // with PROVIDER_TYPE_UNSUPPORTED, which is the legacy bot's "your panel was
     // added successfully" failure wearing better manners.
     return {
-      providers: implementedDescriptors().map((descriptor) => ({
-        key: descriptor.key,
-        canonicalName: descriptor.canonicalName,
-        credentialShape: descriptor.credentialShape,
-        capabilities: [...descriptor.capabilities],
-        requiredActivationFields: [...descriptor.requiredActivationFields],
-      })),
+      providers: IMPLEMENTED_PROVIDER_TYPES.map((type) => {
+        const adapter = providerAdapter(type);
+        const descriptor = adapter.descriptor;
+        return {
+          key: descriptor.key,
+          canonicalName: descriptor.canonicalName,
+          credentialShape: descriptor.credentialShape,
+          capabilities: [...descriptor.capabilities],
+          requiredActivationFields: [...descriptor.requiredActivationFields],
+          // WP-A8: derived from the adapter's methods AND declarations, never stored.
+          capabilityRegistry: [...deriveCapabilityRegistry(adapter)],
+        };
+      }),
     };
   }
 
@@ -111,6 +121,43 @@ export class PanelsController {
   async detail(@Req() request: FastifyRequest, @Param('id') id: string): Promise<PanelResponse> {
     const { scope, actor } = await this.authenticate(request);
     return { panel: this.toSummary(await this.container.panels.get(scope, actor, id)) };
+  }
+
+  /**
+   * WP-A8: the panel's capability registry, operator policy, provider rules and
+   * diagnostics. `panels.view`, charged by the service.
+   */
+  @Get('panels/:id/advanced')
+  async advanced(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+  ): Promise<PanelAdvancedResponse> {
+    const { scope, actor } = await this.authenticate(request);
+    return this.container.panelAdvanced.advanced(scope, actor, id);
+  }
+
+  /** WP-A8: replace the panel's operator policy. `panels.edit`, charged by the service. */
+  @Post('panels/:id/policy')
+  async policy(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ): Promise<UpdatePanelPolicyResponse> {
+    const { scope, actor } = await this.authenticate(request, { write: true });
+    return this.container.panelAdvanced.updatePolicy(scope, actor, id, body);
+  }
+
+  /**
+   * WP-A8: the Super Admin's read-only technical view. `panels.technical.view`, charged
+   * by the service; no credential is reachable through it.
+   */
+  @Get('panels/:id/technical')
+  async technical(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+  ): Promise<PanelTechnicalResponse> {
+    const { scope, actor } = await this.authenticate(request);
+    return this.container.panelAdvanced.technical(scope, actor, id);
   }
 
   @Post(PANEL_ROUTES.create)
@@ -302,14 +349,4 @@ function toActivation(activation: unknown): Record<string, unknown> | null {
 
 function state(setAt: Date | null): { configured: boolean; lastReplacedAt: string | null } {
   return { configured: setAt !== null, lastReplacedAt: setAt?.toISOString() ?? null };
-}
-
-/**
- * The descriptors of provider types this release can actually operate.
- *
- * Resolved through the registry rather than filtered by name, so the list
- * cannot drift from the adapters that exist: a type here has been constructed.
- */
-function implementedDescriptors() {
-  return IMPLEMENTED_PROVIDER_TYPES.map((type) => providerAdapter(type).descriptor);
 }

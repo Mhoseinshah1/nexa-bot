@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import type { BotInstanceId, TenantContext } from '@nexa/contracts';
+import {
+  resolvePanelPolicy,
+  type BotInstanceId,
+  type PanelDeliveryMode,
+  type TenantContext,
+} from '@nexa/contracts';
 import {
   DeliveryService,
   deliveryCardButtons,
@@ -61,7 +66,7 @@ interface Script {
   readonly texts: CustomerSendResult[];
 }
 
-function harness(script: Script) {
+function harness(script: Script, mode: PanelDeliveryMode = 'CARD_WITH_QR') {
   const encoded: string[] = [];
   const files: CustomerFileMessage[] = [];
   const texts: CustomerMessage[] = [];
@@ -111,6 +116,10 @@ function harness(script: Script) {
     uow: { run: async (_s: unknown, fn: (tx: never) => unknown) => fn({} as never) } as never,
     clock: new FixedClock(new Date('2026-09-24T18:30:00Z')),
     guard: { check: async () => undefined } as never,
+    // WP-A8: the panel's delivery mode, as a stored policy would resolve.
+    panelPolicy: {
+      forPanel: async () => resolvePanelPolicy({ delivery: { mode }, actions: {} }),
+    },
   };
   return { delivery: new DeliveryService(deps), encoded, files, texts, recorded };
 }
@@ -186,6 +195,23 @@ describe('the delivery card', () => {
     });
     await h.delivery.deliver(scope, service(), '5150', BOT);
     expect(h.texts).toHaveLength(0);
+  });
+
+  /*
+   * WP-A8: a panel whose policy delivers the card as text sends the SAME approved card —
+   * text, values and buttons — with no QR encoded and no photo. Reverting the mode check
+   * in `sendCard` makes this send a photo and fails it.
+   */
+  it('sends the card as text, with no QR and no photo, on a CARD_TEXT panel', async () => {
+    const h = harness({ files: [], texts: [{ outcome: 'DELIVERED' }] }, 'CARD_TEXT');
+    await h.delivery.deliver(scope, service(), '5150', BOT);
+    expect(h.encoded).toEqual([]);
+    expect(h.files).toHaveLength(0);
+    expect(h.texts).toHaveLength(1);
+    expect(h.texts[0]?.templateKey).toBe('bot.service.delivered');
+    expect(h.texts[0]?.values['subscriptionUrl']).toBe(URL);
+    expect(h.texts[0]?.buttons).toEqual(deliveryCardButtons('service-1'));
+    expect(h.recorded).toEqual([{ from: 'PENDING', to: 'DELIVERED', sentUrl: URL }]);
   });
 
   it('sends the plain link message when the card facts cannot be read', async () => {

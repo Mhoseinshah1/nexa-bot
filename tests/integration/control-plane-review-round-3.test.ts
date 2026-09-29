@@ -94,13 +94,14 @@ describe('control plane, third review round', () => {
       // VALUES. A record that means something after the row changes again is
       // the difference between this and `/admin/logs`, whose free-text Persian
       // sentence carries neither a before nor an after.
-      expect(audit?.before).toMatchObject({ value: 5, source: 'DEFAULT' });
+      // The default is ten since WP-A4.
+      expect(audit?.before).toMatchObject({ value: 10, source: 'DEFAULT' });
       expect(audit?.after).toMatchObject({ value: 3, source: 'TENANT' });
 
       const [event] = await eventsOfType('SettingChanged');
       expect(event?.aggregateType).toBe('Setting');
       expect(event?.aggregateId).toBe('ops.notifications.max_attempts');
-      expect(event?.payload).toMatchObject({ from: 5, to: 3 });
+      expect(event?.payload).toMatchObject({ from: 10, to: 3 });
     });
 
     it('records a template set and a template revert', async () => {
@@ -276,7 +277,7 @@ describe('control plane, third review round', () => {
         owner,
         'ops.notifications.max_attempts',
       );
-      expect(resolved.value).toBe(5); // the default
+      expect(resolved.value).toBe(10); // the default (WP-A4)
       expect(resolved.source).toBe('DEFAULT');
       expect(resolved.storedValueInvalid).toBe(true);
       // The row's own version, which is what a repair has to state.

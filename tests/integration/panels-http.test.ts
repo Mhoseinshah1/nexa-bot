@@ -11,6 +11,10 @@ import {
   providerListResponseSchema,
   SESSION_COOKIE_NAME,
   testPanelResponseSchema,
+  PANEL_ADVANCED_ROUTES,
+  panelAdvancedResponseSchema,
+  panelTechnicalResponseSchema,
+  updatePanelPolicyResponseSchema,
 } from '@nexa/contracts';
 import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
@@ -1840,5 +1844,83 @@ describe('panel HTTP surface', () => {
     expect(response.json()).toMatchObject({ error: { code: 'panel.url_invalid' } });
     // And the refusal does not echo the credential back.
     expect(response.body).not.toContain('hunter2');
+  });
+
+  /*
+   * WP-A8 over the wire: the three routes are registered, each charges its own
+   * permission through the service, the write needs an allowed origin, and nothing
+   * any of them answers carries a credential.
+   */
+  describe('advanced provider settings', () => {
+    async function marzbanPanel(): Promise<string> {
+      const created = await createPanel(ownerCookie, {
+        credentials: { username: USERNAME, password: PASSWORD },
+        activation: { proxyProtocols: ['vless'], inboundTags: { vless: ['VLESS_TCP'] } },
+      });
+      expect(created.statusCode).toBe(201);
+      return panelResponseSchema.parse(created.json()).panel.id;
+    }
+
+    it('reads the registry, writes a policy and shows the owner a technical view, with no secret', async () => {
+      const id = await marzbanPanel();
+
+      const read = await get(PANEL_ADVANCED_ROUTES.advanced(id), technicalCookie);
+      expect(read.statusCode).toBe(200);
+      const advanced = panelAdvancedResponseSchema.parse(read.json());
+      expect(advanced.registry.find((row) => row.row === 'RENEW')?.supported).toBe(true);
+      expect(advanced.registry.find((row) => row.row === 'SUBSCRIPTION_FILES')?.supported).toBe(
+        false,
+      );
+
+      const written = await post(PANEL_ADVANCED_ROUTES.policy(id), technicalCookie, {
+        policy: { delivery: { mode: 'CARD_TEXT' }, actions: { RENEW: { customerEnabled: false } } },
+        expectedRevision: 0,
+        idempotencyKey: idempotencyKey(),
+      });
+      // A POST, answered as every panel write here is.
+      expect(written.statusCode).toBe(201);
+      const saved = updatePanelPolicyResponseSchema.parse(written.json());
+      expect(saved.changed).toBe(true);
+      expect(saved.advanced.policy.revision).toBe(1);
+
+      // The technical role edits panels and still does not see the raw view.
+      expect((await get(PANEL_ADVANCED_ROUTES.technical(id), technicalCookie)).statusCode).toBe(
+        403,
+      );
+      const technical = await get(PANEL_ADVANCED_ROUTES.technical(id), ownerCookie);
+      expect(technical.statusCode).toBe(200);
+      panelTechnicalResponseSchema.parse(technical.json());
+
+      for (const response of [read, written, technical]) {
+        expect(response.body).not.toContain(PASSWORD);
+        expect(response.body).not.toContain(USERNAME);
+      }
+    });
+
+    it('refuses a policy write from a role without panels.edit, and one with no allowed origin', async () => {
+      const id = await marzbanPanel();
+      const body = {
+        policy: {
+          delivery: { mode: 'CARD_WITH_QR' },
+          actions: { RENEW: { customerEnabled: false } },
+        },
+        expectedRevision: 0,
+        idempotencyKey: idempotencyKey(),
+      };
+      expect((await post(PANEL_ADVANCED_ROUTES.policy(id), supportCookie, body)).statusCode).toBe(
+        403,
+      );
+      const foreign = await inject({
+        method: 'POST',
+        url: `${API_PREFIX}${PANEL_ADVANCED_ROUTES.policy(id)}`,
+        headers: { cookie: ownerCookie, origin: 'https://attacker.example' },
+        payload: body,
+      });
+      expect(foreign.statusCode).toBe(403);
+      const after = panelAdvancedResponseSchema.parse(
+        (await get(PANEL_ADVANCED_ROUTES.advanced(id), ownerCookie)).json(),
+      );
+      expect(after.policy.revision).toBe(0);
+    });
   });
 });

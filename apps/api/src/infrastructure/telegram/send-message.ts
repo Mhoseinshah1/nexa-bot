@@ -665,6 +665,13 @@ export interface TelegramChatMember {
   readonly status: string;
   /** Present only for `restricted`: whether the user is still in the chat. */
   readonly isMember: boolean | null;
+  /**
+   * WP-A4: an administrator's "manage topics" right; null where Telegram does not state
+   * it (every status but `administrator`, and a creator, who holds every right).
+   */
+  readonly canManageTopics: boolean | null;
+  /** A `restricted` member's send right; null where Telegram does not state it. */
+  readonly canSendMessages: boolean | null;
 }
 
 export type TelegramChatMemberOutcome =
@@ -707,11 +714,154 @@ export async function telegramGetChatMember(
       errorMessage: 'getChatMember answered without a ChatMember status.',
     };
   }
-  const isMember = (result as Record<string, unknown>).is_member;
+  const fields = result as Record<string, unknown>;
+  const flag = (value: unknown): boolean | null => (typeof value === 'boolean' ? value : null);
   return {
     outcome: 'SUCCEEDED',
-    member: { status, isMember: typeof isMember === 'boolean' ? isMember : null },
+    member: {
+      status,
+      isMember: flag(fields.is_member),
+      canManageTopics: flag(fields.can_manage_topics),
+      canSendMessages: flag(fields.can_send_messages),
+    },
   };
+}
+
+// ---------------------------------------------------------------------------
+// The operations log group (WP-A4)
+// ---------------------------------------------------------------------------
+
+/** What `getChat` says about the operations group: enough to decide it is usable. */
+export interface TelegramChatDescription {
+  readonly type: string;
+  readonly title: string | null;
+  /** True only for a supergroup with topics switched on. */
+  readonly isForum: boolean;
+}
+
+export type TelegramChatDescriptionOutcome =
+  | { readonly outcome: 'SUCCEEDED'; readonly chat: TelegramChatDescription }
+  | Exclude<TelegramSendOutcome, { outcome: 'SUCCEEDED' }>;
+
+/**
+ * Describe one chat (`getChat`). A READ: the operations group panel asks it before the
+ * group is declared healthy, because a group whose topics were switched off cannot hold
+ * the topics Nexa owns.
+ */
+export async function telegramGetChat(
+  request: Omit<TelegramSendRequest, 'body' | 'method'> & { readonly chatId: string },
+): Promise<TelegramChatDescriptionOutcome> {
+  assertOutsideTransaction('A Telegram getChat');
+
+  const { chatId, ...rest } = request;
+  const call = await telegramCall({ ...rest, method: 'getChat', body: { chat_id: chatId } });
+  if (call.outcome !== 'SUCCEEDED') return call;
+
+  const result = call.result;
+  if (result === null || typeof result !== 'object' || Array.isArray(result)) {
+    return {
+      outcome: 'FAILED_PERMANENT',
+      errorCode: 'telegram.rejected.chat_shape',
+      errorMessage: 'getChat answered without a Chat object.',
+    };
+  }
+  const fields = result as Record<string, unknown>;
+  if (typeof fields.type !== 'string') {
+    return {
+      outcome: 'FAILED_PERMANENT',
+      errorCode: 'telegram.rejected.chat_shape',
+      errorMessage: 'getChat answered without a chat type.',
+    };
+  }
+  return {
+    outcome: 'SUCCEEDED',
+    chat: {
+      type: fields.type,
+      title: typeof fields.title === 'string' ? fields.title : null,
+      isForum: fields.is_forum === true,
+    },
+  };
+}
+
+export type TelegramForumTopicOutcome =
+  | { readonly outcome: 'SUCCEEDED'; readonly messageThreadId: number }
+  | Exclude<TelegramSendOutcome, { outcome: 'SUCCEEDED' }>;
+
+/**
+ * Create one forum topic (`createForumTopic`) and return its `message_thread_id`.
+ *
+ * NOT idempotent at Telegram: two calls make two topics. The caller holds a claim on the
+ * topic's registry row before calling, which is what makes a repeated setup create one.
+ * A 2xx without a usable thread id is refused, like `getMe`'s, rather than stored as a
+ * topic nobody can post to.
+ */
+export async function telegramCreateForumTopic(
+  request: Omit<TelegramSendRequest, 'body' | 'method'> & {
+    readonly chatId: string;
+    readonly name: string;
+  },
+): Promise<TelegramForumTopicOutcome> {
+  assertOutsideTransaction('A Telegram createForumTopic');
+
+  const { chatId, name, ...rest } = request;
+  const call = await telegramCall({
+    ...rest,
+    method: 'createForumTopic',
+    // Telegram bounds a topic name at 128 characters.
+    body: { chat_id: chatId, name: name.slice(0, 128) },
+  });
+  if (call.outcome !== 'SUCCEEDED') return call;
+
+  const result = call.result;
+  const threadId =
+    result !== null && typeof result === 'object' && !Array.isArray(result)
+      ? (result as Record<string, unknown>).message_thread_id
+      : undefined;
+  if (typeof threadId !== 'number' || !Number.isSafeInteger(threadId) || threadId <= 0) {
+    return {
+      outcome: 'FAILED_PERMANENT',
+      errorCode: 'telegram.rejected.forum_topic_shape',
+      errorMessage: 'createForumTopic answered without a message_thread_id.',
+    };
+  }
+  return { outcome: 'SUCCEEDED', messageThreadId: threadId };
+}
+
+/**
+ * Whether a refusal says the forum topic it was addressed to no longer exists.
+ *
+ * Telegram answers a post into a deleted topic with a 400 whose description is
+ * "message thread not found" (older servers: `TOPIC_DELETED`, `TOPIC_ID_INVALID`). It is
+ * the one signal a deleted topic gives — there is no service message for a deletion — so
+ * it is matched here, in one place, rather than by every caller.
+ */
+export function isMissingForumTopicError(errorMessage: string): boolean {
+  return /message thread not found|TOPIC_DELETED|TOPIC_ID_INVALID/i.test(errorMessage);
+}
+
+/**
+ * Whether a refusal says the bot cannot use the CHAT at all — removed, banned, not a
+ * member, or without the right to post — as opposed to one message being wrong.
+ */
+export function chatAccessProblemOf(
+  errorMessage: string,
+): 'BOT_REMOVED' | 'CHAT_UNREACHABLE' | 'CANNOT_SEND' | null {
+  if (
+    /bot was kicked|bot is not a member|user is deactivated|bot was blocked/i.test(errorMessage)
+  ) {
+    return 'BOT_REMOVED';
+  }
+  if (/chat not found|group chat was upgraded|chat was deleted/i.test(errorMessage)) {
+    return 'CHAT_UNREACHABLE';
+  }
+  if (
+    /not enough rights|have no rights|CHAT_WRITE_FORBIDDEN|need administrator rights/i.test(
+      errorMessage,
+    )
+  ) {
+    return 'CANNOT_SEND';
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------

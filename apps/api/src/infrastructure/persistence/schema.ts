@@ -132,6 +132,12 @@ import {
   TRIAL_LIMIT_MIN,
   // Package D: the custom service.
   CUSTOM_SERVICE_LABEL_MAX_LENGTH,
+  // WP-A6: service location change.
+  SERVICE_LOCATION_KEY_MAX_LENGTH,
+  SERVICE_LOCATION_LABEL_MAX_LENGTH,
+  SERVICE_LOCATION_COOLDOWN_HOURS_MAX,
+  SERVICE_LOCATION_MAX_CHANGES_MAX,
+  SERVICE_LOCATION_PERIOD_DAYS_MAX,
   CUSTOM_SERVICE_RULE_DIMENSIONS,
   CUSTOM_SERVICE_RULE_LEVELS,
   // Customer UX completion.
@@ -147,6 +153,35 @@ import {
   TENANT_MEDIA_MIME_TYPES,
   TENANT_MEDIA_MAX_BYTES,
   PRODUCT_SERVICE_LOCATION_LABEL_MAX_LENGTH,
+  // WP-A10: client apps and connection guides.
+  CLIENT_APP_DELIVERY_KINDS,
+  CLIENT_APP_DESCRIPTION_MAX_LENGTH,
+  CLIENT_APP_GUIDE_MAX_LENGTH,
+  CLIENT_APP_ICON_MAX_LENGTH,
+  CLIENT_APP_NAME_MAX_LENGTH,
+  CLIENT_APP_PLATFORMS,
+  CLIENT_APP_PROTOCOLS,
+  CLIENT_APP_SORT_MAX,
+  CLIENT_APP_SORT_MIN,
+  CLIENT_APP_STATUSES,
+  CLIENT_APP_URL_MAX_LENGTH,
+  // WP-A7: support tickets.
+  TICKET_ATTACHMENT_FILE_NAME_MAX_LENGTH,
+  TICKET_ATTACHMENT_KINDS,
+  TICKET_ATTACHMENT_MAX_BYTES,
+  TICKET_CATEGORY_SORT_MAX,
+  TICKET_CATEGORY_TITLE_MAX_LENGTH,
+  TICKET_MESSAGE_MAX_LENGTH,
+  TICKET_MESSAGE_SENDERS,
+  TICKET_PRIORITIES,
+  TICKET_STATUSES,
+  TICKET_SUBJECT_MAX_LENGTH,
+  TICKET_SYSTEM_EVENTS,
+  // WP-A4: the operations log group.
+  OPS_LOG_GROUP_HEALTH,
+  OPS_LOG_GROUP_PROBLEMS,
+  OPS_LOG_GROUP_STATUSES,
+  OPS_LOG_TOPIC_STATES,
 } from '@nexa/contracts';
 
 /**
@@ -234,6 +269,26 @@ export function nullableEnumCheck(column: string, values: readonly string[]): SQ
     })
     .join(', ');
   return sql.raw(`${column} IS NULL OR ${column} IN (${list})`);
+}
+
+/**
+ * A text-array column holding any subset of an enum, the empty set included (WP-A4:
+ * `ops_log_groups.problems`, where no problem is the normal case). `enumSubsetCheck`'s
+ * assertions and escaping, without its non-empty rule.
+ */
+export function enumArrayCheck(column: string, values: readonly string[]): SQL {
+  if (!/^[a-z_][a-z0-9_]*$/.test(column)) {
+    throw new Error(`enumArrayCheck: "${column}" is not a plain column name.`);
+  }
+  const list = values
+    .map((value) => {
+      if (!ENUM_LITERAL.test(value)) {
+        throw new Error(`enumArrayCheck: "${value}" is not a plain enum literal.`);
+      }
+      return `'${value.replace(/'/g, "''")}'`;
+    })
+    .join(', ');
+  return sql.raw(`${column} <@ ARRAY[${list}]::text[]`);
 }
 
 /**
@@ -1715,6 +1770,45 @@ export const panelHealth = pgTable(
 );
 
 /**
+ * WP-A8: one panel's operator policy — which customer actions it offers, the extra
+ * cooldowns and per-purchase caps it adds, and how its services are delivered.
+ *
+ * One row per panel and NO row for a panel nobody has configured, which reads as
+ * `DEFAULT_PANEL_POLICY`: everything the adapter supports, no extra limit. The policy
+ * is validated against `panelPolicySchema` at the application boundary, for the reason
+ * `panels.activation` is — a CHECK constraint cannot hold a per-action shape — and a
+ * row that does not parse is read as refusing every customer action on the panel,
+ * never as allowing them.
+ *
+ * `revision` is what a write must name: the conditional UPDATE is `revision = expected`,
+ * so two operators editing one panel's policy cannot overwrite each other unseen.
+ */
+export const panelPolicies = pgTable(
+  'panel_policies',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    panelId: uuid('panel_id').notNull(),
+    policy: jsonb('policy').notNull(),
+    revision: integer('revision').notNull().default(1),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.tenantId, table.panelId], name: 'panel_policies_pk' }),
+    /** The pair, for the reason `panel_health_tenant_panel_fk` gives. */
+    foreignKey({
+      columns: [table.tenantId, table.panelId],
+      foreignColumns: [panels.tenantId, panels.id],
+      name: 'panel_policies_panel_fk',
+    }),
+    check('panel_policies_revision_check', sql`revision >= 1`),
+    check('panel_policies_policy_check', sql`jsonb_typeof(policy) = 'object'`),
+  ],
+);
+
+/**
  * A slot on a panel, held for one order while the customer decides whether to pay.
  *
  * Phase 6B. The alternative — counting services and comparing against the cap —
@@ -2992,12 +3086,41 @@ export const serviceAddons = pgTable(
     trafficBytes: bigint('traffic_bytes', { mode: 'bigint' }),
     /** Days added to the window. Set for `ADD_TIME`, NULL otherwise. */
     durationDays: integer('duration_days'),
+    /**
+     * WP-A5, `ADD_DEVICES` only: the most extra users / devices ONE service may be sold
+     * through this add-on in total, counted from its live purchases at read time. For that
+     * kind `price_amount` is the price of ONE, and the customer chooses how many.
+     */
+    maxQuantity: integer('max_quantity'),
+    /**
+     * WP-A5, `ADD_DEVICES` only: the panel and / or product the rate applies to. NULL is
+     * "every", never "none"; the most specific ACTIVE row wins for a service. Both are
+     * forbidden on the two package kinds, which apply tenant-wide.
+     */
+    panelId: uuid('panel_id'),
+    productId: uuid('product_id'),
+    /**
+     * Bumped on every edit. A purchase copies the version it was priced from onto its
+     * commercial action, so "which rule, as it read then" is answerable after the row
+     * has been re-priced — the rule id AND version the brief requires on the snapshot.
+     */
+    version: integer('version').notNull().default(1),
     priceAmount: bigint('price_amount', { mode: 'bigint' }),
     priceCurrency: text('price_currency'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
   (table) => [
+    foreignKey({
+      columns: [table.tenantId, table.panelId],
+      foreignColumns: [panels.tenantId, panels.id],
+      name: 'service_addons_panel_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.productId],
+      foreignColumns: [products.tenantId, products.id],
+      name: 'service_addons_product_fk',
+    }),
     index('service_addons_tenant_status_idx').on(table.tenantId, table.status),
     /** The operator's list, and its keyset: kind, then sort, then created, then id. */
     index('service_addons_tenant_sort_idx').on(
@@ -3030,9 +3153,16 @@ export const serviceAddons = pgTable(
      */
     check(
       'service_addons_amount_matches_kind',
-      sql`(kind = 'ADD_TRAFFIC' AND traffic_bytes IS NOT NULL AND traffic_bytes > 0 AND duration_days IS NULL)
-          OR (kind = 'ADD_TIME' AND duration_days IS NOT NULL AND duration_days > 0 AND traffic_bytes IS NULL)`,
+      sql`(kind = 'ADD_TRAFFIC' AND traffic_bytes IS NOT NULL AND traffic_bytes > 0 AND duration_days IS NULL AND max_quantity IS NULL)
+          OR (kind = 'ADD_TIME' AND duration_days IS NOT NULL AND duration_days > 0 AND traffic_bytes IS NULL AND max_quantity IS NULL)
+          OR (kind = 'ADD_DEVICES' AND max_quantity IS NOT NULL AND max_quantity >= 1 AND max_quantity <= 20 AND traffic_bytes IS NULL AND duration_days IS NULL)`,
     ),
+    /** Only the per-device rate is scoped; the two packages apply tenant-wide (WP-A5). */
+    check(
+      'service_addons_scope_kind_check',
+      sql`kind = 'ADD_DEVICES' OR (panel_id IS NULL AND product_id IS NULL)`,
+    ),
+    check('service_addons_version_check', sql`version >= 1`),
     check(
       'service_addons_duration_bound_check',
       sql`duration_days IS NULL OR duration_days <= 3650`,
@@ -3207,11 +3337,24 @@ export const orders = pgTable(
       sql`purpose <> 'CUSTOM_SERVICE'
           OR (line_traffic_bytes > 0 AND line_duration_days > 0 AND line_quantity = 1)`,
     ),
+    /*
+     * `CHANGE_LOCATION` (WP-A6) buys neither bytes nor days nor devices — one move, at the
+     * configured target's price; the zeros are "nothing of this was bought", never the
+     * product snapshot's "unlimited".
+     *
+     * `ADD_DEVICES` (WP-A5) buys neither bytes nor days: its line is `line_quantity`
+     * devices at `line_unit_price_amount` each, and `line_device_limit` is the TARGET the
+     * quote promised — the limit then in force plus the quantity, so always above it.
+     */
     check(
       'orders_quantity_line_check',
-      sql`purpose NOT IN ('ADD_TRAFFIC', 'ADD_TIME')
+      sql`purpose NOT IN ('ADD_TRAFFIC', 'ADD_TIME', 'ADD_DEVICES', 'CHANGE_LOCATION')
           OR (purpose = 'ADD_TRAFFIC' AND line_traffic_bytes > 0 AND line_duration_days = 0)
-          OR (purpose = 'ADD_TIME' AND line_duration_days > 0 AND line_traffic_bytes = 0)`,
+          OR (purpose = 'ADD_TIME' AND line_duration_days > 0 AND line_traffic_bytes = 0)
+          OR (purpose = 'ADD_DEVICES' AND line_traffic_bytes = 0 AND line_duration_days = 0
+              AND line_device_limit IS NOT NULL AND line_device_limit > line_quantity)
+          OR (purpose = 'CHANGE_LOCATION' AND line_traffic_bytes = 0 AND line_duration_days = 0
+              AND line_device_limit IS NULL AND line_quantity = 1)`,
     ),
     /**
      * A total is never negative, and the parts agree with the whole.
@@ -5048,6 +5191,30 @@ export const services = pgTable(
     trafficUsedBytes: bigint('traffic_used_bytes', { mode: 'bigint' })
       .notNull()
       .default(sql`0`),
+    /**
+     * The device / connection limit this service is entitled to (WP-A5), or NULL when none
+     * is recorded — unlimited, or a plan that set none.
+     *
+     * Seeded from the order's frozen `line_device_limit` when the service is made, and
+     * raised ONLY by an `ADD_DEVICES` operation the panel applied, written from the absolute
+     * target that operation persisted. It is what the next extra-users purchase is computed
+     * from, which is why a purchase is never offered against a NULL: there is no number to
+     * add devices to.
+     */
+    deviceLimit: integer('device_limit'),
+    /**
+     * Where the service's account sits on its panel, as the panel last reported it (WP-A6),
+     * or NULL for a service that has never moved — which is in its panel's INITIAL location,
+     * whatever that is configured as today.
+     *
+     * The adapter-defined key and the customer-facing name, written TOGETHER and only by a
+     * `CHANGE_LOCATION` the panel applied: the key from the operation's absolute target, the
+     * name from the change request's snapshot. The name is a snapshot for the reason every
+     * other one is — an operator renaming a location must not rewrite what a customer's
+     * card says their service moved to.
+     */
+    locationKey: text('location_key'),
+    locationLabel: text('location_label'),
     usageSyncedAt: timestamptz('usage_synced_at'),
     /**
      * Last connection, as a provider PROVED it (customer UX completion §H). `AT` with a
@@ -5143,6 +5310,12 @@ export const services = pgTable(
       .where(sql`state = 'UNRECONCILED'`),
     check('services_state_check', enumCheck('state', SERVICE_STATES)),
     check('services_traffic_check', sql`traffic_limit_bytes >= 0 AND traffic_used_bytes >= 0`),
+    check(
+      'services_device_limit_check',
+      sql`device_limit IS NULL OR (device_limit >= 1 AND device_limit <= 1000)`,
+    ),
+    /** WP-A6: a location is a key AND a name, or neither. */
+    check('services_location_check', sql`(location_key IS NULL) = (location_label IS NULL)`),
     /** The format the panels accept, pinned so a bad generator fails at the write. */
     check('services_subscription_ref_check', sql`subscription_ref ~ '^[0-9a-f]{32}$'`),
     /**
@@ -5385,6 +5558,102 @@ export const serviceReminders = pgTable(
   ],
 );
 
+// --- WP-A6: the configured locations a service may be moved to -------------------------
+
+/**
+ * One location of one panel, as an operator configured it (WP-A6).
+ *
+ * A row is two things at once, because they are one thing to an operator: a NAME for a
+ * place the panel's own management domain can put an account (`location_key`, which only
+ * the adapter interprets), and — when enabled and priced — an OFFER to move a service
+ * there. No row, a disabled row or an unpriced row is unavailable; a price of zero is free
+ * and is the only free. There is no target-panel column: a move keeps the account on the
+ * panel it is on, so a cross-panel or cross-provider move cannot even be written.
+ *
+ * `initial` marks where the panel's new accounts are created. It is how a service that
+ * has never moved knows its current location, and therefore how "the target is where it
+ * already is" is refused; one per panel, and never product-scoped, because a panel places
+ * every new account the same way.
+ *
+ * `product_id` scopes an offer to one product's services — the most specific row for a
+ * key wins, exactly as a per-device rate's scope does. `version` is bumped by every edit,
+ * and a change request snapshots the version it was quoted from.
+ */
+export const serviceLocations = pgTable(
+  'service_locations',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    panelId: uuid('panel_id').notNull(),
+    productId: uuid('product_id'),
+    locationKey: text('location_key').notNull(),
+    label: text('label').notNull(),
+    isInitial: boolean('is_initial').notNull().default(false),
+    enabled: boolean('enabled').notNull().default(false),
+    /** Both halves or neither; null is "not for sale", never free. Zero is free. */
+    priceAmount: bigint('price_amount', { mode: 'bigint' }),
+    priceCurrency: text('price_currency'),
+    cooldownHours: integer('cooldown_hours'),
+    maxChanges: integer('max_changes'),
+    periodDays: integer('period_days'),
+    sortOrder: integer('sort_order').notNull().default(0),
+    version: integer('version').notNull().default(1),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    unique('service_locations_tenant_id_key').on(table.tenantId, table.id),
+    /** One row per key per scope: a panel-wide one, and at most one per product. */
+    unique('service_locations_key')
+      .on(table.tenantId, table.panelId, table.locationKey, table.productId)
+      .nullsNotDistinct(),
+    /** One initial location per panel. */
+    uniqueIndex('service_locations_initial_key')
+      .on(table.tenantId, table.panelId)
+      .where(sql`is_initial`),
+    index('service_locations_panel_idx').on(table.tenantId, table.panelId, table.sortOrder),
+    foreignKey({
+      columns: [table.tenantId, table.panelId],
+      foreignColumns: [panels.tenantId, panels.id],
+      name: 'service_locations_panel_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.productId],
+      foreignColumns: [products.tenantId, products.id],
+      name: 'service_locations_product_fk',
+    }),
+    check(
+      'service_locations_key_check',
+      sql`length(location_key) BETWEEN 1 AND ${sql.raw(String(SERVICE_LOCATION_KEY_MAX_LENGTH))}`,
+    ),
+    check(
+      'service_locations_label_check',
+      sql`length(btrim(label)) BETWEEN 1 AND ${sql.raw(String(SERVICE_LOCATION_LABEL_MAX_LENGTH))}`,
+    ),
+    check(
+      'service_locations_price_check',
+      sql`(price_amount IS NULL) = (price_currency IS NULL) AND (price_amount IS NULL OR price_amount >= 0)`,
+    ),
+    check('service_locations_currency_check', nullableEnumCheck('price_currency', CURRENCY_CODES)),
+    /** An enabled target is a priced one: enabled and unpriced would be "free" by omission. */
+    check('service_locations_enabled_priced_check', sql`NOT enabled OR price_amount IS NOT NULL`),
+    check('service_locations_initial_scope_check', sql`NOT is_initial OR product_id IS NULL`),
+    check(
+      'service_locations_cooldown_check',
+      sql`cooldown_hours IS NULL OR (cooldown_hours >= 1 AND cooldown_hours <= ${sql.raw(String(SERVICE_LOCATION_COOLDOWN_HOURS_MAX))})`,
+    ),
+    check(
+      'service_locations_limit_check',
+      sql`(max_changes IS NULL) = (period_days IS NULL)
+          AND (max_changes IS NULL OR (max_changes >= 1 AND max_changes <= ${sql.raw(String(SERVICE_LOCATION_MAX_CHANGES_MAX))}))
+          AND (period_days IS NULL OR (period_days >= 1 AND period_days <= ${sql.raw(String(SERVICE_LOCATION_PERIOD_DAYS_MAX))}))`,
+    ),
+    check('service_locations_version_check', sql`version >= 1`),
+  ],
+);
+
 /**
  * WP-A9: one row per time a customer's wallet fell below the tenant's low-balance
  * threshold — "we told them their balance was low, about THIS fall".
@@ -5525,6 +5794,19 @@ export const serviceCommercialActions = pgTable(
       .notNull()
       .default(sql`0`),
     purchasedDurationDays: integer('purchased_duration_days').notNull().default(0),
+    /** WP-A5: extra users / devices bought. Positive for `ADD_DEVICES`, zero otherwise. */
+    purchasedDeviceCount: integer('purchased_device_count').notNull().default(0),
+    /**
+     * WP-A5: the add-on VERSION the purchase was priced from, beside `addon_id`. Required
+     * for `ADD_DEVICES`, whose rate is edited in place; null for every other kind.
+     */
+    addonVersion: integer('addon_version'),
+    /**
+     * WP-A6: the configured target a `CHANGE_LOCATION` was priced from, the third place a
+     * price may come from. Its VERSION and the names are on the change request, which is
+     * the snapshot; this is navigation, like `product_id` and `addon_id`.
+     */
+    locationId: uuid('location_id'),
     /** What was paid, with its currency. Never an amount without one. */
     amount: bigint('amount', { mode: 'bigint' }).notNull(),
     currency: text('currency').notNull(),
@@ -5563,6 +5845,11 @@ export const serviceCommercialActions = pgTable(
       foreignColumns: [serviceAddons.tenantId, serviceAddons.id],
       name: 'service_commercial_actions_addon_fk',
     }),
+    foreignKey({
+      columns: [table.tenantId, table.locationId],
+      foreignColumns: [serviceLocations.tenantId, serviceLocations.id],
+      name: 'service_commercial_actions_location_fk',
+    }),
     /**
      * ONE action per order, as a constraint rather than as worker discipline.
      *
@@ -5589,9 +5876,16 @@ export const serviceCommercialActions = pgTable(
      * answer it at all — which is the legacy defect where a deleted product collapses a
      * historical line to «محصول حذف‌شده».
      */
+    /*
+     * WP-A6 made it three places, and still exactly one: a location change names its
+     * configured target and neither a product nor an add-on.
+     */
     check(
       'service_commercial_actions_source_check',
-      sql`(product_id IS NULL) <> (addon_id IS NULL)`,
+      sql`(CASE WHEN product_id IS NULL THEN 0 ELSE 1 END
+           + CASE WHEN addon_id IS NULL THEN 0 ELSE 1 END
+           + CASE WHEN location_id IS NULL THEN 0 ELSE 1 END) = 1
+          AND (location_id IS NULL) = (kind <> 'CHANGE_LOCATION')`,
     ),
     /**
      * What each kind may have bought, pinned so the amounts cannot be swapped.
@@ -5603,9 +5897,17 @@ export const serviceCommercialActions = pgTable(
      */
     check(
       'service_commercial_actions_purchased_check',
-      sql`(kind = 'RENEW')
-          OR (kind = 'ADD_TRAFFIC' AND purchased_traffic_bytes > 0 AND purchased_duration_days = 0)
-          OR (kind = 'ADD_TIME' AND purchased_duration_days > 0 AND purchased_traffic_bytes = 0)`,
+      sql`(kind = 'RENEW' AND purchased_device_count = 0)
+          OR (kind = 'ADD_TRAFFIC' AND purchased_traffic_bytes > 0 AND purchased_duration_days = 0 AND purchased_device_count = 0)
+          OR (kind = 'ADD_TIME' AND purchased_duration_days > 0 AND purchased_traffic_bytes = 0 AND purchased_device_count = 0)
+          OR (kind = 'ADD_DEVICES' AND purchased_device_count > 0 AND purchased_traffic_bytes = 0 AND purchased_duration_days = 0
+              AND addon_id IS NOT NULL AND addon_version IS NOT NULL)
+          OR (kind = 'CHANGE_LOCATION' AND purchased_traffic_bytes = 0 AND purchased_duration_days = 0
+              AND purchased_device_count = 0)`,
+    ),
+    check(
+      'service_commercial_actions_addon_version_check',
+      sql`addon_version IS NULL OR (kind = 'ADD_DEVICES' AND addon_version >= 1)`,
     ),
     unique('service_commercial_actions_tenant_id_key').on(table.tenantId, table.id),
   ],
@@ -5700,6 +6002,18 @@ export const provisioningOperations = pgTable(
      */
     targetExpiresAt: timestamptz('target_expires_at'),
     targetTrafficLimitBytes: bigint('target_traffic_limit_bytes', { mode: 'bigint' }),
+    /**
+     * WP-A5: the absolute device / connection limit an `ADD_DEVICES` should leave the
+     * account at. Set for that type and only that type, and alone: an `ADD_DEVICES` carries
+     * no expiry and no allowance, and nothing else carries a device limit.
+     */
+    targetDeviceLimit: integer('target_device_limit'),
+    /**
+     * WP-A6: the adapter-defined location key a `CHANGE_LOCATION` should leave the account
+     * in. Set for that type and only that type, and alone — a move buys no time, no
+     * allowance and no devices, and nothing else moves an account.
+     */
+    targetLocationKey: text('target_location_key'),
     /** The provider's own reference for the effect, when it gave one. */
     providerReference: text('provider_reference'),
     /** A kind from the EXISTING provider taxonomy. Never a new vocabulary. */
@@ -5849,7 +6163,7 @@ export const provisioningOperations = pgTable(
     uniqueIndex('provisioning_operations_open_commercial_key')
       .on(table.tenantId, table.serviceId)
       .where(
-        sql`type IN ('RENEW', 'ADD_TRAFFIC', 'ADD_TIME') AND state IN ('PLANNED', 'IN_FLIGHT', 'UNKNOWN')`,
+        sql`type IN ('RENEW', 'ADD_TRAFFIC', 'ADD_TIME', 'ADD_DEVICES', 'CHANGE_LOCATION') AND state IN ('PLANNED', 'IN_FLIGHT', 'UNKNOWN')`,
       ),
     index('provisioning_operations_unknown_idx')
       .on(table.tenantId, table.createdAt)
@@ -5871,8 +6185,34 @@ export const provisioningOperations = pgTable(
      */
     check(
       'provisioning_operations_target_check',
-      sql`type IN ('RENEW', 'ADD_TRAFFIC', 'ADD_TIME')
-          OR (target_expires_at IS NULL AND target_traffic_limit_bytes IS NULL)`,
+      sql`type IN ('RENEW', 'ADD_TRAFFIC', 'ADD_TIME', 'ADD_DEVICES', 'CHANGE_LOCATION')
+          OR (target_expires_at IS NULL AND target_traffic_limit_bytes IS NULL AND target_device_limit IS NULL
+              AND target_location_key IS NULL)`,
+    ),
+    /**
+     * WP-A5: a device limit is an `ADD_DEVICES` target and only one, and an `ADD_DEVICES`
+     * carries nothing else — so a raise can never be read as a renewal, nor a renewal be
+     * made to change how many devices an account allows.
+     */
+    check(
+      'provisioning_operations_target_device_check',
+      sql`(type = 'ADD_DEVICES'
+           AND target_device_limit IS NOT NULL AND target_device_limit >= 1 AND target_device_limit <= 1000
+           AND target_expires_at IS NULL AND target_traffic_limit_bytes IS NULL)
+          OR (type <> 'ADD_DEVICES' AND target_device_limit IS NULL)`,
+    ),
+    /**
+     * WP-A6: a location key is a `CHANGE_LOCATION` target and only one, and a
+     * `CHANGE_LOCATION` carries nothing else — a move can never be read as a renewal, nor a
+     * renewal made to move an account.
+     */
+    check(
+      'provisioning_operations_target_location_check',
+      sql`(type = 'CHANGE_LOCATION'
+           AND target_location_key IS NOT NULL
+           AND length(target_location_key) BETWEEN 1 AND ${sql.raw(String(SERVICE_LOCATION_KEY_MAX_LENGTH))}
+           AND target_expires_at IS NULL AND target_traffic_limit_bytes IS NULL AND target_device_limit IS NULL)
+          OR (type <> 'CHANGE_LOCATION' AND target_location_key IS NULL)`,
     ),
     /**
      * And a commercial operation must carry at least one, or it asks the panel for
@@ -5880,9 +6220,11 @@ export const provisioningOperations = pgTable(
      */
     check(
       'provisioning_operations_target_present_check',
-      sql`type NOT IN ('RENEW', 'ADD_TRAFFIC', 'ADD_TIME')
+      sql`type NOT IN ('RENEW', 'ADD_TRAFFIC', 'ADD_TIME', 'ADD_DEVICES', 'CHANGE_LOCATION')
           OR target_expires_at IS NOT NULL
-          OR target_traffic_limit_bytes IS NOT NULL`,
+          OR target_traffic_limit_bytes IS NOT NULL
+          OR target_device_limit IS NOT NULL
+          OR target_location_key IS NOT NULL`,
     ),
     check(
       'provisioning_operations_target_traffic_check',
@@ -7235,12 +7577,12 @@ export const customerTextCaptures = pgTable(
     ),
     /**
      * A note, a refund reason (WP19) and a transfer's recipient (Package F) name their
-     * service, and the two custom-service windows (Package D) their panel; the other
-     * purposes name nothing.
+     * service, the two custom-service windows (Package D) their panel, and the two ticket
+     * windows (WP-A7) their category or their ticket; the other purposes name nothing.
      */
     check(
       'customer_text_captures_subject_check',
-      sql`(purpose IN ('SERVICE_NOTE', 'SERVICE_REFUND_REASON', 'CUSTOM_SERVICE_VOLUME', 'CUSTOM_SERVICE_DAYS', 'SERVICE_TRANSFER_RECIPIENT')) = (subject_id IS NOT NULL)`,
+      sql`(purpose IN ('SERVICE_NOTE', 'SERVICE_REFUND_REASON', 'CUSTOM_SERVICE_VOLUME', 'CUSTOM_SERVICE_DAYS', 'SERVICE_TRANSFER_RECIPIENT', 'TICKET_NEW_MESSAGE', 'TICKET_REPLY')) = (subject_id IS NOT NULL)`,
     ),
     /** Only the days window carries a volume, and it always does (Package D). */
     check(
@@ -7885,5 +8227,661 @@ export const serviceOwnershipTransfers = pgTable(
     check('service_ownership_transfers_parties_check', sql`from_customer_id <> to_customer_id`),
     check('service_ownership_transfers_actor_type_check', enumCheck('actor_type', ACTOR_TYPES)),
     check('service_ownership_transfers_key_check', sql`length(idempotency_key) BETWEEN 1 AND 200`),
+  ],
+);
+
+// --- WP-A6: service location change ----------------------------------------------------
+
+/**
+ * One requested location change of one service (WP-A6): the snapshot of what was quoted,
+ * written once and never edited.
+ *
+ * It is the history the brief's audit needs and the evidence every later decision reads:
+ * where the service was (key and name), where it was going (key and name), which
+ * configured target and VERSION priced it, the list price — zero for free — and either
+ * the ORDER that paid for it or, for a free change, the OPERATION that carries it out.
+ * Its outcome is not stored: it is the operation's state, and for a paid change the
+ * order's, read at the time — so there is no second answer to "did it happen".
+ *
+ * The cooldown and the rolling limit count these rows at decision time, never a counter:
+ * a row counts while its order is awaiting payment or paid, or — free — while its
+ * operation has not failed.
+ */
+export const serviceLocationChanges = pgTable(
+  'service_location_changes',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    serviceId: uuid('service_id').notNull(),
+    /** The owner who asked, when they asked. */
+    customerId: uuid('customer_id').notNull(),
+    locationId: uuid('location_id').notNull(),
+    locationVersion: integer('location_version').notNull(),
+    /** Where it was: its recorded location, or its panel's initial one. Always known. */
+    fromLocationKey: text('from_location_key').notNull(),
+    fromLocationLabel: text('from_location_label').notNull(),
+    toLocationKey: text('to_location_key').notNull(),
+    toLocationLabel: text('to_location_label').notNull(),
+    /** The configured list price at quote time. The CHARGED total is the order's. */
+    priceAmount: bigint('price_amount', { mode: 'bigint' }).notNull(),
+    priceCurrency: text('price_currency').notNull(),
+    /**
+     * The cooldown and rolling limit the change was quoted under, frozen with it (Codex
+     * review #1 on PR #101): a paid move's confirmation decides its window against THESE,
+     * never against terms an operator wrote after the customer was shown the quote.
+     */
+    cooldownHours: integer('cooldown_hours'),
+    maxChanges: integer('max_changes'),
+    periodDays: integer('period_days'),
+    /** A paid change's order. Exactly one of this and `operation_id` is set. */
+    orderId: uuid('order_id'),
+    /** A free change's operation, planned in the same transaction as this row. */
+    operationId: uuid('operation_id'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+  },
+  (table) => [
+    unique('service_location_changes_tenant_id_key').on(table.tenantId, table.id),
+    uniqueIndex('service_location_changes_order_key').on(table.tenantId, table.orderId),
+    uniqueIndex('service_location_changes_operation_key').on(table.tenantId, table.operationId),
+    /** The cooldown and limit read: one service's changes, newest first. */
+    index('service_location_changes_service_idx').on(
+      table.tenantId,
+      table.serviceId,
+      table.createdAt,
+    ),
+    foreignKey({
+      columns: [table.tenantId, table.serviceId],
+      foreignColumns: [services.tenantId, services.id],
+      name: 'service_location_changes_service_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+      name: 'service_location_changes_customer_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.locationId],
+      foreignColumns: [serviceLocations.tenantId, serviceLocations.id],
+      name: 'service_location_changes_location_fk',
+    }),
+    /** With the order's customer too, so the money and the move cannot name two people. */
+    foreignKey({
+      columns: [table.tenantId, table.orderId, table.customerId],
+      foreignColumns: [orders.tenantId, orders.id, orders.customerId],
+      name: 'service_location_changes_order_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.operationId],
+      foreignColumns: [provisioningOperations.tenantId, provisioningOperations.id],
+      name: 'service_location_changes_operation_fk',
+    }),
+    check(
+      'service_location_changes_source_check',
+      sql`(order_id IS NULL) <> (operation_id IS NULL)`,
+    ),
+    /** Free is exactly "no order": a paid change has one, and nothing free is ever paid. */
+    check(
+      'service_location_changes_price_check',
+      sql`price_amount >= 0 AND (price_amount = 0) = (order_id IS NULL)`,
+    ),
+    check('service_location_changes_currency_check', enumCheck('price_currency', CURRENCY_CODES)),
+    check('service_location_changes_moves_check', sql`from_location_key <> to_location_key`),
+    check('service_location_changes_version_check', sql`location_version >= 1`),
+    check(
+      'service_location_changes_limits_check',
+      sql`(cooldown_hours IS NULL OR cooldown_hours >= 1)
+          AND (max_changes IS NULL) = (period_days IS NULL)
+          AND (max_changes IS NULL OR (max_changes >= 1 AND period_days >= 1))`,
+    ),
+  ],
+);
+
+// --- WP-A10: client apps and connection guides -------------------------------------------
+
+/**
+ * An array column holding a subset of an enum, EMPTY included — `enumSubsetCheck` refuses
+ * empty, and here empty is the meaning "any": an app that names no provider type is offered
+ * whatever panel a service is on. The same assertions and escaping as its sibling.
+ */
+function enumSubsetOrEmptyCheck(column: string, values: readonly string[]): SQL {
+  if (!/^[a-z_][a-z0-9_]*$/.test(column)) {
+    throw new Error(`enumSubsetOrEmptyCheck: "${column}" is not a plain column name.`);
+  }
+  const list = values
+    .map((value) => {
+      if (!ENUM_LITERAL.test(value)) {
+        throw new Error(`enumSubsetOrEmptyCheck: "${value}" is not a plain enum literal.`);
+      }
+      return `'${value.replace(/'/g, "''")}'`;
+    })
+    .join(', ');
+  return sql.raw(`${column} <@ ARRAY[${list}]::text[]`);
+}
+
+/**
+ * One client app a tenant recommends, on one platform (WP-A10).
+ *
+ * Tenant CONTENT, like `support_faqs`: an operator writes it in the Web Admin and the bot
+ * reads it on every tap, so a link or a guide changes without a deploy. No row is seeded.
+ *
+ * The three compatibility arrays are what context filtering reads, and empty means "any"
+ * for each. Their members are pinned to the contract here; `provider_types` too, so a
+ * provider type this release does not know cannot be stored against a row that a future
+ * release would then read as a real restriction.
+ *
+ * The links are stored NORMALISED by `normalizeClientAppUrl` and the constraint repeats
+ * the one property the database can check cheaply — the scheme — so a row written around
+ * the service still cannot hand Telegram a `javascript:` button.
+ */
+export const clientApps = pgTable(
+  'client_apps',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    platform: text('platform').notNull(),
+    name: text('name').notNull(),
+    icon: text('icon'),
+    description: text('description').notNull(),
+    officialUrl: text('official_url').notNull(),
+    alternativeUrl: text('alternative_url'),
+    helpUrl: text('help_url'),
+    guide: text('guide').notNull(),
+    deliveryKinds: text('delivery_kinds')
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+    protocols: text('protocols')
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+    providerTypes: text('provider_types')
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+    status: text('status').notNull().default('ENABLED'),
+    sortOrder: integer('sort_order').notNull().default(0),
+    version: integer('version').notNull().default(1),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    /** The customer's read: one platform's enabled rows, in the operator's order. */
+    index('client_apps_tenant_platform_idx').on(
+      table.tenantId,
+      table.platform,
+      table.status,
+      table.sortOrder,
+      table.createdAt,
+      table.id,
+    ),
+    unique('client_apps_tenant_id_key').on(table.tenantId, table.id),
+    check('client_apps_platform_check', enumCheck('platform', CLIENT_APP_PLATFORMS)),
+    check('client_apps_status_check', enumCheck('status', CLIENT_APP_STATUSES)),
+    check(
+      'client_apps_name_check',
+      sql`length(btrim(name)) BETWEEN 1 AND ${sql.raw(String(CLIENT_APP_NAME_MAX_LENGTH))}`,
+    ),
+    check(
+      'client_apps_icon_check',
+      sql`icon IS NULL OR length(btrim(icon)) BETWEEN 1 AND ${sql.raw(String(CLIENT_APP_ICON_MAX_LENGTH))}`,
+    ),
+    check(
+      'client_apps_description_check',
+      sql`length(btrim(description)) BETWEEN 1 AND ${sql.raw(String(CLIENT_APP_DESCRIPTION_MAX_LENGTH))}`,
+    ),
+    check(
+      'client_apps_guide_check',
+      sql`length(btrim(guide)) BETWEEN 1 AND ${sql.raw(String(CLIENT_APP_GUIDE_MAX_LENGTH))}`,
+    ),
+    check(
+      'client_apps_urls_check',
+      sql`official_url LIKE 'https://%' AND length(official_url) <= ${sql.raw(String(CLIENT_APP_URL_MAX_LENGTH))}
+          AND (alternative_url IS NULL OR (alternative_url LIKE 'https://%' AND length(alternative_url) <= ${sql.raw(String(CLIENT_APP_URL_MAX_LENGTH))}))
+          AND (help_url IS NULL OR (help_url LIKE 'https://%' AND length(help_url) <= ${sql.raw(String(CLIENT_APP_URL_MAX_LENGTH))}))`,
+    ),
+    check(
+      'client_apps_delivery_kinds_check',
+      enumSubsetOrEmptyCheck('delivery_kinds', CLIENT_APP_DELIVERY_KINDS),
+    ),
+    check('client_apps_protocols_check', enumSubsetOrEmptyCheck('protocols', CLIENT_APP_PROTOCOLS)),
+    check(
+      'client_apps_provider_types_check',
+      enumSubsetOrEmptyCheck('provider_types', PROVIDER_TYPES),
+    ),
+    check(
+      'client_apps_sort_order_check',
+      sql`sort_order BETWEEN ${sql.raw(String(CLIENT_APP_SORT_MIN))} AND ${sql.raw(String(CLIENT_APP_SORT_MAX))}`,
+    ),
+    check('client_apps_version_check', sql`version >= 1`),
+  ],
+);
+
+// --- WP-A7: support tickets (docs/wp-a7-tickets-audit.md) --------------------------------
+
+/**
+ * The subjects a customer files a ticket under, as the tenant's operators maintain them.
+ *
+ * Never deleted: a category is deactivated, because tickets name it and a deleted one would
+ * leave history pointing at nothing. The five defaults are copied in from the catalogue the
+ * first time a tenant's categories are read (`ticket_category_seeds`), the FAQ's pattern.
+ */
+export const ticketCategories = pgTable(
+  'ticket_categories',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    title: text('title').notNull(),
+    sortOrder: integer('sort_order').notNull().default(0),
+    isActive: boolean('is_active').notNull().default(true),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    unique('ticket_categories_tenant_id_key').on(table.tenantId, table.id),
+    /** Two categories with one title would be two buttons a customer cannot tell apart. */
+    unique('ticket_categories_title_key').on(table.tenantId, table.title),
+    index('ticket_categories_tenant_sort_idx').on(table.tenantId, table.sortOrder, table.id),
+    check(
+      'ticket_categories_title_check',
+      sql`length(btrim(title)) BETWEEN 1 AND ${sql.raw(String(TICKET_CATEGORY_TITLE_MAX_LENGTH))}`,
+    ),
+    check(
+      'ticket_categories_sort_order_check',
+      sql`sort_order BETWEEN 0 AND ${sql.raw(String(TICKET_CATEGORY_SORT_MAX))}`,
+    ),
+  ],
+);
+
+/**
+ * That a tenant's default categories were seeded, once. A tenant that then deactivates
+ * every one is NOT re-seeded — that is a decision the operator made.
+ */
+export const ticketCategorySeeds = pgTable('ticket_category_seeds', {
+  tenantId: uuid('tenant_id')
+    .primaryKey()
+    .references(() => tenants.id),
+  seededAt: timestamptz('seeded_at').notNull().defaultNow(),
+});
+
+/**
+ * One support ticket: a customer's conversation with support about one subject.
+ *
+ * The status moves only by a conditional UPDATE naming the status it leaves
+ * (`TICKET_MACHINE`); `closed_at` is set exactly while it is CLOSED. The category's title is
+ * SNAPSHOTTED beside its id, so renaming a category does not rewrite what a customer filed
+ * under. The service, order and payment are optional context an operator links; each must be
+ * the ticket's customer's own, which the service checks at link time.
+ */
+export const tickets = pgTable(
+  'tickets',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    /**
+     * The number a customer and an operator quote («تیکت #۱۲۳»). An identity, so it is
+     * unique and increasing without a counter row to contend on.
+     */
+    number: bigint('number', { mode: 'bigint' }).generatedAlwaysAsIdentity().notNull(),
+    customerId: uuid('customer_id').notNull(),
+    /** The bot the customer opened it through. */
+    botInstanceId: uuid('bot_instance_id')
+      .notNull()
+      .references(() => botInstances.id),
+    categoryId: uuid('category_id').notNull(),
+    categoryTitle: text('category_title').notNull(),
+    subject: text('subject'),
+    status: text('status').notNull().default('OPEN'),
+    priority: text('priority').notNull().default('NORMAL'),
+    assignedAdminId: uuid('assigned_admin_id'),
+    serviceId: uuid('service_id'),
+    orderId: uuid('order_id'),
+    paymentId: uuid('payment_id'),
+    /**
+     * The key of the update that opened it. Unique for ever, so a redelivered update
+     * answers with this ticket and never opens a second.
+     */
+    openingKey: text('opening_key').notNull(),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+    lastMessageAt: timestamptz('last_message_at').notNull().defaultNow(),
+    closedAt: timestamptz('closed_at'),
+  },
+  (table) => [
+    unique('tickets_tenant_id_key').on(table.tenantId, table.id),
+    unique('tickets_opening_key').on(table.tenantId, table.openingKey),
+    /** The inbox: newest first, under a keyset on the immutable `(created_at, id)`. */
+    index('tickets_tenant_created_idx').on(table.tenantId, table.createdAt, table.id),
+    index('tickets_tenant_status_idx').on(table.tenantId, table.status, table.createdAt),
+    /** A customer's own list in the bot, and the open-ticket rail. */
+    index('tickets_tenant_customer_idx').on(table.tenantId, table.customerId, table.status),
+    index('tickets_tenant_assignee_idx').on(table.tenantId, table.assignedAdminId),
+    foreignKey({
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+      name: 'tickets_customer_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.categoryId],
+      foreignColumns: [ticketCategories.tenantId, ticketCategories.id],
+      name: 'tickets_category_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.assignedAdminId],
+      foreignColumns: [admins.tenantId, admins.id],
+      name: 'tickets_assignee_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.serviceId],
+      foreignColumns: [services.tenantId, services.id],
+      name: 'tickets_service_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.orderId],
+      foreignColumns: [orders.tenantId, orders.id],
+      name: 'tickets_order_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.paymentId],
+      foreignColumns: [payments.tenantId, payments.id],
+      name: 'tickets_payment_fk',
+    }),
+    check('tickets_status_check', enumCheck('status', TICKET_STATUSES)),
+    check('tickets_priority_check', enumCheck('priority', TICKET_PRIORITIES)),
+    /** An equality, the `customer_notifications_resolved_check` shape: closed iff stamped. */
+    check('tickets_closed_check', sql`(status = 'CLOSED') = (closed_at IS NOT NULL)`),
+    check(
+      'tickets_subject_check',
+      sql`subject IS NULL OR length(subject) BETWEEN 1 AND ${sql.raw(String(TICKET_SUBJECT_MAX_LENGTH))}`,
+    ),
+    check(
+      'tickets_category_title_check',
+      sql`length(category_title) BETWEEN 1 AND ${sql.raw(String(TICKET_CATEGORY_TITLE_MAX_LENGTH))}`,
+    ),
+    check('tickets_opening_key_check', sql`length(opening_key) BETWEEN 1 AND 300`),
+  ],
+);
+
+/**
+ * One message in a ticket — the conversation's source of truth.
+ *
+ * Append-only: `nexa_reject_mutation` refuses an UPDATE or a DELETE, so a message sent is a
+ * message kept, whatever happened to the Telegram send that carried it. An administrator's
+ * reply is pushed to the customer by a `TICKET_REPLY` row on the customer notification lane
+ * whose subject is THIS row; its delivery state is read from that row, never copied here.
+ *
+ * An attachment is a BINDING, the receipts' pattern: which bot received it and Telegram's two
+ * ids, with the declared type, name and size. The bytes stay at Telegram and are fetched
+ * through the API, which holds the token.
+ */
+export const ticketMessages = pgTable(
+  'ticket_messages',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    ticketId: uuid('ticket_id').notNull(),
+    /** The conversation's order, independent of any clock. */
+    seq: bigint('seq', { mode: 'bigint' }).generatedAlwaysAsIdentity().notNull(),
+    senderType: text('sender_type').notNull(),
+    /** Who wrote an ADMIN message; null otherwise. */
+    authorAdminId: uuid('author_admin_id'),
+    body: text('body'),
+    systemEvent: text('system_event'),
+    attachmentKind: text('attachment_kind'),
+    attachmentBotInstanceId: uuid('attachment_bot_instance_id').references(() => botInstances.id),
+    /** What `getFile` takes. Bot-scoped, and never returned to a browser. */
+    attachmentFileId: text('attachment_file_id'),
+    attachmentFileUniqueId: text('attachment_file_unique_id'),
+    attachmentMimeType: text('attachment_mime_type'),
+    attachmentFileName: text('attachment_file_name'),
+    attachmentFileSize: bigint('attachment_file_size', { mode: 'bigint' }),
+    /**
+     * The command's key — the Telegram update that carried a customer's message, or a Web
+     * request's key for an administrator's — so a redelivery answers with this row and
+     * never writes a second. Null for a SYSTEM fact, which its status change makes once.
+     */
+    idempotencyKey: text('idempotency_key'),
+    /** What the key was first used for, so the same key with different words is refused. */
+    requestHash: text('request_hash'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+  },
+  (table) => [
+    unique('ticket_messages_tenant_id_key').on(table.tenantId, table.id),
+    unique('ticket_messages_key').on(table.tenantId, table.idempotencyKey),
+    index('ticket_messages_ticket_idx').on(table.tenantId, table.ticketId, table.seq),
+    foreignKey({
+      columns: [table.tenantId, table.ticketId],
+      foreignColumns: [tickets.tenantId, tickets.id],
+      name: 'ticket_messages_ticket_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.authorAdminId],
+      foreignColumns: [admins.tenantId, admins.id],
+      name: 'ticket_messages_author_fk',
+    }),
+    check('ticket_messages_sender_check', enumCheck('sender_type', TICKET_MESSAGE_SENDERS)),
+    check(
+      'ticket_messages_system_event_check',
+      nullableEnumCheck('system_event', TICKET_SYSTEM_EVENTS),
+    ),
+    check(
+      'ticket_messages_attachment_kind_check',
+      nullableEnumCheck('attachment_kind', TICKET_ATTACHMENT_KINDS),
+    ),
+    check(
+      'ticket_messages_body_check',
+      sql`body IS NULL OR length(body) BETWEEN 1 AND ${sql.raw(String(TICKET_MESSAGE_MAX_LENGTH))}`,
+    ),
+    /** An attachment is all of its binding or none of it. */
+    check(
+      'ticket_messages_attachment_check',
+      sql`(attachment_kind IS NULL) = (attachment_file_id IS NULL)
+          AND (attachment_kind IS NULL) = (attachment_file_unique_id IS NULL)
+          AND (attachment_kind IS NULL) = (attachment_bot_instance_id IS NULL)
+          AND (attachment_kind IS NOT NULL OR (attachment_mime_type IS NULL AND attachment_file_name IS NULL AND attachment_file_size IS NULL))`,
+    ),
+    check(
+      'ticket_messages_attachment_size_check',
+      sql`attachment_file_size IS NULL OR attachment_file_size BETWEEN 1 AND ${sql.raw(String(TICKET_ATTACHMENT_MAX_BYTES))}`,
+    ),
+    check(
+      'ticket_messages_attachment_name_check',
+      sql`attachment_file_name IS NULL OR length(attachment_file_name) BETWEEN 1 AND ${sql.raw(String(TICKET_ATTACHMENT_FILE_NAME_MAX_LENGTH))}`,
+    ),
+    /**
+     * Each sender's shape: a customer writes text or a file; an administrator writes text,
+     * signed; the system records one fact from its closed set and nothing else.
+     */
+    check(
+      'ticket_messages_shape_check',
+      sql`CASE sender_type
+            WHEN 'CUSTOMER' THEN author_admin_id IS NULL AND system_event IS NULL
+                 AND (body IS NOT NULL OR attachment_kind IS NOT NULL) AND idempotency_key IS NOT NULL
+            WHEN 'ADMIN' THEN author_admin_id IS NOT NULL AND system_event IS NULL
+                 AND body IS NOT NULL AND attachment_kind IS NULL AND idempotency_key IS NOT NULL
+            WHEN 'SYSTEM' THEN author_admin_id IS NULL AND system_event IS NOT NULL
+                 AND body IS NULL AND attachment_kind IS NULL
+            ELSE false
+          END`,
+    ),
+    check(
+      'ticket_messages_key_check',
+      sql`(idempotency_key IS NULL) = (request_hash IS NULL)
+          AND (idempotency_key IS NULL OR length(idempotency_key) BETWEEN 1 AND 300)`,
+    ),
+  ],
+);
+
+// --- WP-A4: the Telegram operations log group and the topics Nexa owns in it ----------
+
+/**
+ * The tenant's operations log group: ONE row per tenant, kept through a disconnect.
+ *
+ * The chat id is DISCOVERED, never typed: it is read from the authenticated webhook update
+ * that carried a valid one-time connection code (`ops_log_connect_codes`), so nobody
+ * copies a number and nobody can bind a group to another tenant. Reconnecting a different
+ * group replaces the chat on this row; its topics are keyed by chat, so the new group
+ * gets new topics and the old group's thread ids are never posted to again.
+ *
+ * `health` is what the last permission check found. It is never HEALTHY without
+ * `getChat` and `getChatMember` having answered — a bound row starts UNVERIFIED and the
+ * worker checks it — and `problems` says what is wrong in the Web Admin's words.
+ */
+export const opsLogGroups = pgTable(
+  'ops_log_groups',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    botInstanceId: uuid('bot_instance_id')
+      .notNull()
+      .references(() => botInstances.id),
+    /** Telegram's numeric chat id, as text (`-100…`). */
+    chatId: text('chat_id').notNull(),
+    /** The group's title as Telegram last reported it. Operator-chosen text. */
+    title: text('title').notNull(),
+    status: text('status').notNull(),
+    health: text('health').notNull().default('UNVERIFIED'),
+    problems: text('problems')
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
+    /** The bot's own ChatMember status in the group, as last read. */
+    botMemberStatus: text('bot_member_status'),
+    checkedAt: timestamptz('checked_at'),
+    lastDeliveredAt: timestamptz('last_delivered_at'),
+    /** The administrator whose connection code bound the group. */
+    connectedByAdminId: uuid('connected_by_admin_id'),
+    connectedAt: timestamptz('connected_at').notNull(),
+    disconnectedAt: timestamptz('disconnected_at'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    unique('ops_log_groups_tenant_id_key').on(table.tenantId, table.id),
+    /** One binding per tenant: reconnecting another group rewrites this row. */
+    uniqueIndex('ops_log_groups_tenant_key').on(table.tenantId),
+    /** The worker's read: groups whose permissions need checking. */
+    index('ops_log_groups_check_idx')
+      .on(table.health, table.checkedAt)
+      .where(sql`status = 'CONNECTED'`),
+    foreignKey({
+      columns: [table.tenantId, table.connectedByAdminId],
+      foreignColumns: [admins.tenantId, admins.id],
+      name: 'ops_log_groups_admin_fk',
+    }),
+    check('ops_log_groups_status_check', enumCheck('status', OPS_LOG_GROUP_STATUSES)),
+    check('ops_log_groups_health_check', enumCheck('health', OPS_LOG_GROUP_HEALTH)),
+    check('ops_log_groups_problems_check', enumArrayCheck('problems', OPS_LOG_GROUP_PROBLEMS)),
+    check('ops_log_groups_chat_check', sql`chat_id ~ '^-?[0-9]{1,32}$'`),
+    // A disconnected row says when; a connected one has no such instant.
+    check(
+      'ops_log_groups_disconnected_check',
+      sql`(status = 'DISCONNECTED') = (disconnected_at IS NOT NULL)`,
+    ),
+  ],
+);
+
+/**
+ * The topic registry: one row per (group chat, category), holding the thread id Nexa
+ * created and posts to.
+ *
+ * A CATEGORY KEY column, not one column per topic, so a third topic is a row and never a
+ * migration; the CHECK pins the key's shape only. The unique key is what makes topic
+ * creation idempotent under concurrency: there is exactly one row to claim, and only the
+ * holder of `creation_claim_token` (a conditional UPDATE with a lease) calls
+ * `createForumTopic`. A second worker, a double-click and a redelivered update all find
+ * the row claimed or READY and create nothing.
+ */
+export const opsLogTopics = pgTable(
+  'ops_log_topics',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    groupId: uuid('group_id').notNull(),
+    /** The chat the thread lives in: a thread id means nothing in any other chat. */
+    chatId: text('chat_id').notNull(),
+    category: text('category').notNull(),
+    state: text('state').notNull().default('PENDING'),
+    messageThreadId: bigint('message_thread_id', { mode: 'number' }),
+    /** Who is creating the topic right now, and until when that claim holds. */
+    creationClaimToken: uuid('creation_claim_token'),
+    creationClaimedUntil: timestamptz('creation_claimed_until'),
+    recreatedCount: integer('recreated_count').notNull().default(0),
+    lastDeliveredAt: timestamptz('last_delivered_at'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('ops_log_topics_chat_category_key').on(
+      table.tenantId,
+      table.chatId,
+      table.category,
+    ),
+    foreignKey({
+      columns: [table.tenantId, table.groupId],
+      foreignColumns: [opsLogGroups.tenantId, opsLogGroups.id],
+      name: 'ops_log_topics_group_fk',
+    }),
+    check('ops_log_topics_state_check', enumCheck('state', OPS_LOG_TOPIC_STATES)),
+    check('ops_log_topics_category_check', sql`category ~ '^[A-Z][A-Z0-9_]{0,31}$'`),
+    // READY means a thread to post to; nothing else claims one.
+    check('ops_log_topics_ready_check', sql`state <> 'READY' OR message_thread_id IS NOT NULL`),
+    check('ops_log_topics_recreated_check', sql`recreated_count >= 0`),
+  ],
+);
+
+/**
+ * One-time connection codes, stored as a SHA-256 hash only.
+ *
+ * Issued by the Web Admin to one administrator for one of the tenant's bots, accepted
+ * once, for ten minutes, and only from an update that bot's own webhook delivered — the
+ * webhook route names the bot, and the lookup is keyed by tenant AND bot, so a code for
+ * one bot or tenant is simply not found through another. Consumption is a conditional
+ * UPDATE (`consumed_at IS NULL AND expires_at > now`), so a replayed update and two
+ * groups racing for one code consume it exactly once.
+ */
+export const opsLogConnectCodes = pgTable(
+  'ops_log_connect_codes',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    botInstanceId: uuid('bot_instance_id')
+      .notNull()
+      .references(() => botInstances.id),
+    codeHash: text('code_hash').notNull(),
+    issuedByAdminId: uuid('issued_by_admin_id').notNull(),
+    issuedAt: timestamptz('issued_at').notNull(),
+    expiresAt: timestamptz('expires_at').notNull(),
+    consumedAt: timestamptz('consumed_at'),
+    consumedChatId: text('consumed_chat_id'),
+  },
+  (table) => [
+    uniqueIndex('ops_log_connect_codes_hash_key').on(table.codeHash),
+    index('ops_log_connect_codes_tenant_issued_idx').on(table.tenantId, table.issuedAt),
+    foreignKey({
+      columns: [table.tenantId, table.issuedByAdminId],
+      foreignColumns: [admins.tenantId, admins.id],
+      name: 'ops_log_connect_codes_admin_fk',
+    }),
+    check('ops_log_connect_codes_expiry_check', sql`expires_at > issued_at`),
+    check(
+      'ops_log_connect_codes_consumed_check',
+      sql`(consumed_at IS NULL) = (consumed_chat_id IS NULL)`,
+    ),
   ],
 );

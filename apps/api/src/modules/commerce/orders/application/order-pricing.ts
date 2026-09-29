@@ -160,6 +160,110 @@ export function quoteAddon(price: Money, quotedAt: Date): OrderTotalsRecord {
 }
 
 /**
+ * The rule label an extra-users quote carries (WP-A5). Constant for the reason the others
+ * are; the rule's own id and version are on the step and on the commercial action.
+ */
+export const DEVICE_ADDON_PRICE_RULE_LABEL = 'The per-user list price';
+
+/**
+ * An extra-users quote (WP-A5): `quantity` × the rate's price per user, as ONE base step.
+ *
+ * The step names the RULE — `ruleId` is the add-on's id — because a per-unit rate is edited
+ * in place and "which price was this" must stay answerable after it is. The version it was
+ * read at is snapshotted beside it on `service_commercial_actions.addon_version`. Every
+ * promotion `PricingService.price` applies comes on top of this, exactly as for a package.
+ */
+export function quoteDeviceAddon(
+  addon: { readonly id: string; readonly price: Money },
+  quantity: number,
+  quotedAt: Date,
+): OrderTotalsRecord {
+  const basePrecedence = PRICING_PRECEDENCE[0];
+  if (basePrecedence === undefined || basePrecedence.step !== 'BASE_PRICE') {
+    throw new Error('PRICING_PRECEDENCE no longer begins with BASE_PRICE.');
+  }
+  if (!Number.isSafeInteger(quantity) || quantity < 1) {
+    throw new Error('an extra-users quote needs a positive whole quantity');
+  }
+  const currency = addon.price.currency;
+  const subtotal = money(addon.price.amountMinor * BigInt(quantity), currency);
+  const discountMinor = clampDiscount(subtotal.amountMinor, 0n);
+  const total = money(subtotal.amountMinor - discountMinor, currency);
+  const step: PriceQuoteStep = {
+    step: 'BASE_PRICE',
+    effect: basePrecedence.effect,
+    ruleId: addon.id,
+    ruleLabel: DEVICE_ADDON_PRICE_RULE_LABEL,
+    amountBefore: zero(currency),
+    amountAfter: subtotal,
+  };
+  return {
+    subtotal,
+    discount: money(discountMinor, currency),
+    total,
+    currency,
+    quote: {
+      productId: null,
+      quotedAt: quotedAt.toISOString(),
+      currency,
+      finalAmount: total,
+      trace: [step],
+    },
+  };
+}
+
+/**
+ * The rule label a location change's quote carries (WP-A6). Constant for the reason the
+ * others are; the configured location's id is the step's `ruleId`, and its version is on
+ * the change request.
+ */
+export const LOCATION_CHANGE_PRICE_RULE_LABEL = "The location's move price";
+
+/**
+ * A paid location change's quote (WP-A6): the configured target's price, as ONE base step
+ * naming the location it came from. Every promotion `PricingService.price` applies comes
+ * on top of this, exactly as for an add-on. A free target never reaches here — a free move
+ * is requested, not bought.
+ */
+export function quoteLocationChange(
+  location: { readonly id: string; readonly price: Money },
+  quotedAt: Date,
+): OrderTotalsRecord {
+  const basePrecedence = PRICING_PRECEDENCE[0];
+  if (basePrecedence === undefined || basePrecedence.step !== 'BASE_PRICE') {
+    throw new Error('PRICING_PRECEDENCE no longer begins with BASE_PRICE.');
+  }
+  if (location.price.amountMinor <= 0n) {
+    throw new Error('a location change is quoted only for a priced target');
+  }
+  const currency = location.price.currency;
+  const subtotal = money(location.price.amountMinor, currency);
+  const discountMinor = clampDiscount(subtotal.amountMinor, 0n);
+  const total = money(subtotal.amountMinor - discountMinor, currency);
+  const step: PriceQuoteStep = {
+    step: 'BASE_PRICE',
+    effect: basePrecedence.effect,
+    ruleId: location.id,
+    ruleLabel: LOCATION_CHANGE_PRICE_RULE_LABEL,
+    amountBefore: zero(currency),
+    amountAfter: subtotal,
+  };
+  return {
+    subtotal,
+    discount: money(discountMinor, currency),
+    total,
+    currency,
+    quote: {
+      productId: null,
+      quotedAt: quotedAt.toISOString(),
+      currency,
+      finalAmount: total,
+      trace: [step],
+    },
+  };
+}
+
+/**
  * The rule label a trial's quote carries. Constant for the reason
  * `BASE_PRICE_RULE_LABEL` is: it is read back by a support conversation.
  */

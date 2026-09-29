@@ -21,7 +21,11 @@ import type {
   OrderRepository,
   OrderTotalsRecord,
 } from '../../orders/application/ports.js';
-import { quoteAddon, quoteProduct } from '../../orders/application/order-pricing.js';
+import {
+  quoteAddon,
+  quoteDeviceAddon,
+  quoteProduct,
+} from '../../orders/application/order-pricing.js';
 import { ORDER_VIEW_PERMISSION } from '../../orders/application/order.service.js';
 import type { PricingResult } from '../domain/pricing-engine.js';
 import type { PricingService } from './pricing.service.js';
@@ -148,7 +152,11 @@ export class PricingReadService {
       }
       // An add-on has no product and no category, exactly as `quoteAddon` prices it at
       // checkout: a product- or category-scoped rule is refused on scope.
-      base = quoteAddon(addon.price, now);
+      // WP-A5: a per-user rate is previewed for ONE user, under the trace checkout uses.
+      base =
+        addon.kind === 'ADD_DEVICES'
+          ? quoteDeviceAddon({ id: addon.id, price: addon.price }, 1, now)
+          : quoteAddon(addon.price, now);
     }
 
     const result = await this.deps.pricing.price(scope, {

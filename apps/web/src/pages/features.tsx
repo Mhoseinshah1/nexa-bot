@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { FeatureFlagResponse } from '@nexa/contracts';
+import { OPS_GROUP_MANAGED_SETTING_KEYS, type FeatureFlagResponse } from '@nexa/contracts';
 import { fetchFeatureFlags, saveFeatureFlag } from '../api/client';
 import { formatTimestamp } from '../format';
 import { useSubmissionKey } from '../submission-key';
@@ -197,12 +197,16 @@ function FlagCard({ flag, mayEdit }: { flag: FeatureFlagResponse; mayEdit: boole
  */
 function RelatedSettings({ flag }: { flag: FeatureFlagResponse }) {
   const inert = !flag.enabled;
+  // WP-A4: the ops group panel owns these; they are not shown on the normal pages.
+  const shown = flag.configuration.filter(
+    (setting) => !(OPS_GROUP_MANAGED_SETTING_KEYS as readonly string[]).includes(setting.key),
+  );
   return (
     <section className="feature-settings" aria-label={t('web.feature_related_settings')}>
       <h3 className="small">{t('web.feature_related_settings')}</h3>
       {inert && <p className="muted small">{t('web.inert')}</p>}
       <dl className={inert ? 'inert' : undefined}>
-        {flag.configuration.map((setting) => {
+        {shown.map((setting) => {
           const label = registryLabel(setting.key);
           return (
             <div key={setting.key}>
