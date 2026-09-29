@@ -331,6 +331,13 @@ engine replay rather than create a second operation. An engine's refusal on the 
 (`VALIDATION`, `NOT_FOUND`, `CONFLICT`, `PRECONDITION_FAILED`) leaves the action `FAILED`
 with the code; anything else (the database, a crash) leaves it `PENDING` — never a guess.
 
+A cancel can commit in the instant between the confirmation's commit and the hand-over:
+it then finds no engine record to stop, and the engine makes one a moment later. The
+hand-over's link is conditional on the action still being PENDING/FAILED, so it does not
+move a CANCELLED action; when it does not, the campaign cancels the record it has just been
+given (before the start, that credits, grants and sends nothing). Every hand-over outcome is
+audited (`campaign.action_launched` / `campaign.action_failed`) with the engine's ids.
+
 ### 5.4 Pause, resume, cancel
 
 - Pause/resume move the standing rules and steer the announcement (Broadcast pauses a
@@ -372,6 +379,9 @@ Falsification, run on this branch (revert the rule, watch the named test fail, r
   confirmation whose audience moved since the preview…" fails.
 - A gift's typed-count check removed → "refuses a confirmation whose liability or typed
   count is not what the preview showed" fails.
+- The compensation after a hand-over that lost the race with a cancel removed → "stops a
+  gift the engine took after the campaign was cancelled mid hand-over" fails (the gift would
+  credit at its start although its campaign is cancelled).
 
 ### What the package set out to test
 

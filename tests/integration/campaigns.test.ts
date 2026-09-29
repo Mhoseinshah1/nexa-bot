@@ -859,6 +859,48 @@ describe('campaigns', () => {
       expect(await count(sql`SELECT count(*)::int AS n FROM bulk_operations`)).toBe(0);
     });
 
+    it('stops a gift the engine took after the campaign was cancelled mid hand-over', async () => {
+      const id = await draftCampaign([GIFT]);
+      // The operator cancels in the instant between the confirmation's commit and the
+      // hand-over: the cancel finds no engine record to stop, and the engine then makes one.
+      const racing = new CampaignService({
+        ...deps(),
+        massActions: {
+          ...ctx.container.bulkOperations,
+          preview: ctx.container.bulkOperations.preview.bind(ctx.container.bulkOperations),
+          get: ctx.container.bulkOperations.get.bind(ctx.container.bulkOperations),
+          progress: ctx.container.bulkOperations.progress.bind(ctx.container.bulkOperations),
+          cancel: ctx.container.bulkOperations.cancel.bind(ctx.container.bulkOperations),
+          create: async (...args: Parameters<typeof ctx.container.bulkOperations.create>) => {
+            await service.cancel(tenantA, owner, { idempotencyKey: key(), campaignId: id });
+            return ctx.container.bulkOperations.create(...args);
+          },
+        } as never,
+      });
+      const preview = await racing.preview(tenantA, owner, id);
+      const wallet = preview.gifts.WALLET_GIFT;
+      await racing.schedule(tenantA, owner, {
+        idempotencyKey: key(),
+        campaignId: id,
+        expectedDefinitionHash: preview.audience.definitionHash,
+        expectedRecipients: preview.audience.customers,
+        expectedFingerprint: preview.audience.fingerprint,
+        walletGift: {
+          count: wallet?.count ?? 0,
+          fingerprint: wallet?.fingerprint ?? '',
+          typedCount: wallet?.count ?? 0,
+          totalMinor: wallet?.totalLiability?.amountMinor ?? '0',
+        },
+      });
+      expect(await stateOf(id)).toBe('CANCELLED');
+      // The start has passed, so an operation left running would credit on the next pass.
+      await ctx.container.bulkOperationProcessor.pass(tenantA);
+      expect(await massCredits()).toHaveLength(0);
+      expect(await rows<{ state: string }>(sql`SELECT state FROM bulk_operations`)).toEqual([
+        { state: 'CANCELLED' },
+      ]);
+    });
+
     it('refuses a time gift that reaches no service, before anything is written', async () => {
       const id = await draftCampaign([
         { kind: 'DISCOUNT', terms: TWENTY_PERCENT },

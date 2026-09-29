@@ -757,23 +757,91 @@ export class CampaignService {
     for (const action of actions) {
       if (!LAUNCHED_KINDS.has(action.kind) || action.binding === null) continue;
       if (action.state !== 'PENDING' && action.state !== 'FAILED') continue;
+      let launched: { broadcastId?: string; bulkOperationId?: string };
       try {
-        const launched = await this.handOver(scope, actor, campaign, action, action.binding);
-        await this.deps.campaigns.linkEngine(scope, {
-          actionId: action.id,
-          ...launched,
-          now: this.deps.clock.now(),
-        });
+        launched = await this.handOver(scope, actor, campaign, action, action.binding);
       } catch (error) {
         if (!isNexaError(error) || !REFUSAL_KINDS.has(error.kind)) throw error;
-        await this.deps.campaigns.failAction(scope, {
-          actionId: action.id,
-          code: error.code,
-          now: this.deps.clock.now(),
-        });
+        await this.recordHandOver(scope, actor, action, { failedCode: error.code });
+        continue;
       }
+      const linked = await this.recordHandOver(scope, actor, action, { launched });
+      if (!linked) await this.compensate(scope, actor, action, launched);
     }
     return this.detailOf(scope, id);
+  }
+
+  /**
+   * Records what an engine answered, with its audit row, in one transaction. True when the
+   * action moved. Not gated on scope activity: it records work the engine already accepted
+   * or refused, and the engine itself decided that under its own activity check.
+   */
+  private async recordHandOver(
+    scope: TenantContext,
+    actor: ActorContext,
+    action: CampaignActionRecord,
+    outcome:
+      | { readonly launched: { broadcastId?: string; bulkOperationId?: string } }
+      | { readonly failedCode: string },
+  ): Promise<boolean> {
+    return this.deps.uow.run(scope, async (tx) => {
+      const now = this.deps.clock.now();
+      const moved =
+        'launched' in outcome
+          ? await this.deps.campaigns.linkEngine(
+              scope,
+              { actionId: action.id, ...outcome.launched, now },
+              tx,
+            )
+          : await this.deps.campaigns.failAction(
+              scope,
+              { actionId: action.id, code: outcome.failedCode, now },
+              tx,
+            );
+      await this.deps.audit.record(
+        scope,
+        actor,
+        {
+          action: 'launched' in outcome ? 'campaign.action_launched' : 'campaign.action_failed',
+          entityType: 'Campaign',
+          entityId: action.campaignId,
+          before: { kind: action.kind, state: action.state },
+          after:
+            'launched' in outcome
+              ? { kind: action.kind, moved, ...outcome.launched }
+              : { kind: action.kind, moved, code: outcome.failedCode },
+          result: 'SUCCESS',
+        },
+        tx,
+      );
+      return moved;
+    });
+  }
+
+  /**
+   * The campaign was cancelled while its action was being handed over: the cancel found no
+   * engine record to stop, and the engine has just made one. Stop it now — before the start
+   * a cancel credits, grants and sends nothing. An action that is LAUNCHED already (a
+   * concurrent hand-over linked it) needs nothing.
+   */
+  private async compensate(
+    scope: TenantContext,
+    actor: ActorContext,
+    action: CampaignActionRecord,
+    launched: { broadcastId?: string; bulkOperationId?: string },
+  ): Promise<void> {
+    const current = (await this.deps.campaigns.actionsOf(scope, action.campaignId)).find(
+      (a) => a.id === action.id,
+    );
+    if (current?.state !== 'CANCELLED') return;
+    if (launched.bulkOperationId !== undefined) {
+      await ignoringStateConflict(
+        this.deps.massActions.cancel(scope, actor, launched.bulkOperationId),
+      );
+    }
+    if (launched.broadcastId !== undefined) {
+      await ignoringStateConflict(this.deps.broadcasts.cancel(scope, actor, launched.broadcastId));
+    }
   }
 
   /** One action to its engine. Returns the engine record's id. */
