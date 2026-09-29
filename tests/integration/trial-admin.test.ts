@@ -101,17 +101,8 @@ describe('trial overrides and the global reset', () => {
       durationHours: 24,
       label: null,
     });
+    // F5: the panel's own trial is the one switch; there is no `trials` flag to turn on.
     trialPanelId = panelId;
-
-    await ctx.container.featureFlags.set(tenantA, owner, {
-      key: 'trials',
-      enabled: true,
-      expectedVersion: null,
-      // TENANT_WIDE: the flag names itself and says why (ADR-0010).
-      confirmKey: 'trials',
-      reason: 'offer a trial',
-      idempotencyKey: randomUUID(),
-    });
 
     alice = await customer(tenantA, '960001', BOT_A);
     bob = await customer(tenantA, '960002', BOT_A);
