@@ -1228,6 +1228,22 @@ While it runs:
 Nothing needs doing before rolling back past WP-A9. After the roll-forward, a wallet that
 fell below its threshold during the rollback is told on the first low-balance pass, once.
 
+### What a rollback delays or drops: reminder quiet hours (HF-A9)
+
+HF-A9 holds a reminder that falls due inside the tenant's quiet window until the window
+ends, by moving its queued row's `next_attempt_at` there. It has no migration: the flag
+and the two settings are ordinary rows, and a held reminder is an ordinary `PENDING` row.
+While the release before it runs:
+
+- **A reminder already held still waits for the window's end.** The old dispatcher claims
+  nothing before `next_attempt_at`, so it sends the held row then, re-checked as it always
+  is — once, not early.
+- **A reminder that falls due during the rollback is not held**: the old release has no
+  quiet hours, so it is sent when it is due, night or not.
+- **The flag and the two times are kept but ignored**, and come back with the roll-forward.
+
+Nothing needs doing before rolling back past HF-A9.
+
 ### How far back you can roll
 
 **One release**, safely. Migrations are expand-only within a release
