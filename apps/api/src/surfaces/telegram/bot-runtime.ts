@@ -14012,12 +14012,15 @@ export class BotRuntime {
       await state.release(scope, actor, target);
       return null;
     }
+    const loading = directive?.invoicePending === true && directive.paymentId != null;
     const landed = await state.land(scope, actor, target, {
       kind: directive?.kind ?? target.kind,
       step: directive?.step ?? 'NOTICE',
       subjectId: directive?.subjectId !== undefined ? directive.subjectId : target.subjectId,
       paymentId: directive?.paymentId !== undefined ? directive.paymentId : target.paymentId,
       updateKey: input.idempotencyKey,
+      // The loading screen is landed at INVOICE_LOADING and HELD until it is marked below.
+      ...(loading ? { hold: true } : {}),
     });
     if (!landed) return 'NOT_ATTEMPTED';
     let edited = await editSent(
@@ -14056,18 +14059,20 @@ export class BotRuntime {
       }
     }
     /*
-     * R2 (item 4): the invoice is still being created in the worker. Only NOW that the
-     * loading screen has been asked for is the message marked as waiting for it, and the
-     * invoice read again: whichever of this turn and the worker moves the mark first edits
-     * the message into the invoice, so a ready invoice never waits for a status-check tap —
-     * and the loading screen can never land on top of it.
+     * R2 (item 4): the invoice is still being created in the worker. The loading screen was
+     * landed at `INVOICE_LOADING`, a step the worker never moves from — so an outcome the
+     * worker committed while this turn was editing cannot be edited in and then buried under
+     * the loading screen. Only NOW that the loading edit has been asked for is THIS wizard
+     * marked `INVOICE_PENDING` (which clears the hold), and the attempt read again: whichever
+     * of this turn and the worker moves the mark first edits the message into the invoice or
+     * the attempt's end, so neither waits for a status-check tap.
      */
-    if (directive?.invoicePending === true && directive.paymentId != null) {
+    if (loading && directive.paymentId != null) {
       await state.moveAll(
         scope,
         actor,
-        { paymentId: directive.paymentId },
-        ['INVOICE'],
+        { paymentId: directive.paymentId, id: target.id },
+        ['INVOICE_LOADING'],
         'INVOICE_PENDING',
       );
       await this.deps.invoiceScreens?.refresh(scope, directive.paymentId);
@@ -14452,9 +14457,14 @@ export function gatewayAttemptScreen(
       wizard: { kind, step: 'INVOICE', paymentId: payment.id },
     };
   }
-  // The loading screen: the worker edits this very message into the invoice once it exists.
+  /*
+   * The loading screen: the worker edits this very message into the invoice once it exists.
+   * Landed at `INVOICE_LOADING` and marked `INVOICE_PENDING` by the turn once its edit has
+   * been asked for (`editWizard`). It carries the check button, gated from both, so a
+   * worker edit that did not land is one tap from the current attempt.
+   */
   if (invoice.creationState === 'CREATING') {
-    return screen('bot.payment.gateway_preparing', [check], 'INVOICE', true);
+    return screen('bot.payment.gateway_preparing', [check], 'INVOICE_LOADING', true);
   }
   const link = invoice.webInvoiceUrl ?? invoice.invoiceUrl;
   if (invoice.creationState !== 'CREATED' || link === null) {

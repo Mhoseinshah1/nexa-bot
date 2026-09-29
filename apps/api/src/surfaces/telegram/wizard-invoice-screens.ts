@@ -23,11 +23,26 @@ import type { InvoiceScreensPort } from './wizard-state.js';
  * message only through ONE conditional move (`moveAll`): exactly one caller wins each
  * message, and only the winner edits it. That is the whole race argument:
  *
- *   - the worker finishing BEFORE the turn marked the message finds nothing waiting, and
- *     the turn's own read after marking it sees the invoice and edits it;
+ *   - the turn lands its loading screen at `INVOICE_LOADING`, which no move here names, and
+ *     only once its loading edit has been asked for does it mark the message
+ *     `INVOICE_PENDING` and call this. So a worker finishing BEFORE the mark — whether
+ *     before the turn landed or between its landing and its edit — finds nothing to edit,
+ *     and the turn's own call after the mark sees the committed outcome and edits it;
  *   - the worker finishing AFTER the mark wins the move and edits it — after the loading
- *     screen, because the turn marks only once its loading edit has been asked for;
+ *     screen, because the mark follows the loading edit;
  *   - both at once: one move wins, the other moves nothing.
+ *
+ * A READY invoice replaces only the loading screen (`INVOICE_PENDING`); an END (confirmed,
+ * failed, closed, unknown) replaces a showing invoice (`INVOICE`) too, so a message still
+ * offering the pay button for an attempt that is over says so.
+ *
+ * An edit Telegram answers with a 429 was definitely NOT applied: the message still shows
+ * the screen it was moved from. That one wizard is moved BACK — conditionally, on the version
+ * this move left, so anything that touched it since wins — to the step it came from, whose
+ * buttons are what the message still carries. The loading screen and the invoice both carry
+ * «🔄 بررسی وضعیت پرداخت», gated from either step, and that tap renders the committed attempt
+ * in place: the customer's next tap finishes what the rate limit stopped. Nothing here
+ * retries on a timer. An UNKNOWN edit is left moved: Telegram may have applied it.
  *
  * It decides nothing about money and calls no provider. A payment is CONFIRMED only by the
  * inquiry, under the payment's lock, in `PaymentService.confirmGatewayPayment`; this only
@@ -36,7 +51,7 @@ import type { InvoiceScreensPort } from './wizard-state.js';
 export class WizardInvoiceScreens implements InvoiceScreensPort {
   constructor(
     private readonly deps: {
-      readonly state: Pick<TelegramMessageStateService, 'moveAll'>;
+      readonly state: Pick<TelegramMessageStateService, 'moveAll' | 'moveBack'>;
       readonly payments: {
         findById(scope: TenantContext, id: PaymentId): Promise<PaymentRecord | null>;
       };
@@ -66,34 +81,35 @@ export class WizardInvoiceScreens implements InvoiceScreensPort {
     // Still being created: the loading screen stays, and this is called again when it is not.
     if (screen.wizard?.invoicePending === true || screen.key === null) return;
     const step = screen.wizard?.step ?? 'NOTICE';
-    /*
-     * A READY invoice replaces only a loading screen; an END (confirmed, failed, closed,
-     * unknown) replaces the invoice too, so a message still offering the pay button for an
-     * attempt that is over says so.
-     */
-    const from: readonly TelegramWizardStep[] =
+    const origins: readonly TelegramWizardStep[] =
       step === 'INVOICE' ? ['INVOICE_PENDING'] : ['INVOICE_PENDING', 'INVOICE'];
-    const moved = await this.deps.state.moveAll(
-      scope,
-      this.deps.actor(),
-      { paymentId: payment.id },
-      from,
-      step,
-    );
-    for (const wizard of moved) {
-      await editSent(
-        this.deps.messenger,
+    // One move per origin, so a 429 knows which step to put its one wizard back on.
+    for (const origin of origins) {
+      const moved = await this.deps.state.moveAll(
         scope,
-        {
-          chatId: wizard.chatId,
-          messageId: wizard.messageId,
-          botInstanceId: wizard.botInstanceId,
-          templateKey: screen.key,
-          values: screen.values,
-          buttons: screen.buttons,
-        },
-        false,
+        this.deps.actor(),
+        { paymentId: payment.id },
+        [origin],
+        step,
       );
+      for (const wizard of moved) {
+        const edited = await editSent(
+          this.deps.messenger,
+          scope,
+          {
+            chatId: wizard.chatId,
+            messageId: wizard.messageId,
+            botInstanceId: wizard.botInstanceId,
+            templateKey: screen.key,
+            values: screen.values,
+            buttons: screen.buttons,
+          },
+          false,
+        );
+        if (edited.outcome === 'RATE_LIMITED') {
+          await this.deps.state.moveBack(scope, this.deps.actor(), wizard, origin);
+        }
+      }
     }
   }
 
@@ -131,6 +147,7 @@ const OPEN_ORDER_STEPS: readonly TelegramWizardStep[] = [
   'PREINVOICE',
   'AWAITING_PAYMENT',
   'METHODS',
+  'INVOICE_LOADING',
   'INVOICE_PENDING',
   'INVOICE',
   'NOTICE',

@@ -106,9 +106,10 @@ export interface WizardDirective {
     readonly subjectId?: string | null;
   };
   /**
-   * The invoice this screen shows is still being created by the gateway worker: once the
-   * loading screen is on the message, it is marked `INVOICE_PENDING` and re-read, so exactly
-   * one of this turn and the worker edits it into the invoice.
+   * The invoice this screen shows is still being created by the gateway worker. The loading
+   * screen is landed at `INVOICE_LOADING` — held, and never moved by the worker — and once
+   * its edit has been asked for it is marked `INVOICE_PENDING` and re-read, so exactly one
+   * of this turn and the worker edits it into the invoice or the attempt's end.
    */
   readonly invoicePending?: boolean;
 }
@@ -209,8 +210,19 @@ export const WIZARD_GATES: ReadonlyMap<string, WizardGate> = new Map<string, Wiz
   ['TOPUP_PICK', TOPUP('AMOUNT')],
   ['TOPUP_ROUTE', TOPUP('METHODS')],
   ['TOPUP_CLOSE', TOPUP('AMOUNT', 'METHODS')],
-  // Both kinds' invoice carries the check button.
-  ['GATEWAY_CHECK', { kind: null, adoptAs: 'ORDER', from: ['INVOICE_PENDING', 'INVOICE'] }],
+  /*
+   * Both kinds' invoice carries the check button, and so does the loading screen. A loading
+   * screen still `INVOICE_LOADING` is held by the turn that landed it until that turn marks
+   * it; once the hold lapses (the turn died in between) the check tap is what recovers it.
+   */
+  [
+    'GATEWAY_CHECK',
+    {
+      kind: null,
+      adoptAs: 'ORDER',
+      from: ['INVOICE_PENDING', 'INVOICE', 'INVOICE_LOADING'],
+    },
+  ],
 ]);
 
 /**

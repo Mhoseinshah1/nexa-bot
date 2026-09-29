@@ -111,10 +111,19 @@ describe('the gateway invoice screen', () => {
       'data' in button ? button.data : 'url' in button ? `url:${button.url}` : 'copy',
     );
 
-  it('is a loading screen, marked pending, while the worker creates the invoice', () => {
+  it('is a loading screen, landed at INVOICE_LOADING and marked pending, while the worker creates the invoice', () => {
     const screen = gatewayAttemptScreen({ payment: payment(), invoice: invoice() }, null, at);
     expect(screen.key).toBe('bot.payment.gateway_preparing');
-    expect(screen.wizard).toMatchObject({ step: 'INVOICE', invoicePending: true });
+    /*
+     * NOT `INVOICE`: the worker's end-of-attempt move names `INVOICE`, and a loading screen
+     * landed there could be claimed by the worker between the landing and the loading edit.
+     */
+    expect(screen.wizard).toMatchObject({ step: 'INVOICE_LOADING', invoicePending: true });
+    // Its check button is the customer's way past a worker edit that did not land.
+    expect(data(screen)).toEqual(['gc:01900000-0000-7000-8000-00000000aaaa', 'mm:']);
+    expect(WIZARD_GATES.get('GATEWAY_CHECK')?.from).toEqual(
+      expect.arrayContaining(['INVOICE_LOADING', 'INVOICE_PENDING', 'INVOICE']),
+    );
   });
 
   it('is the invoice — amount, deadline, the pay link, status check, main menu — once created', () => {

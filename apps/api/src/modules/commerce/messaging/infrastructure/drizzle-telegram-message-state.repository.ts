@@ -21,6 +21,7 @@ import type {
   TelegramReviewMessageRecord,
   TelegramWizardLanding,
   TelegramWizardRecord,
+  WizardSelector,
 } from '../application/telegram-message-state.js';
 
 type WizardRow = typeof telegramWizards.$inferSelect;
@@ -187,6 +188,7 @@ export class DrizzleTelegramMessageStateRepository implements TelegramMessageSta
     version: number,
     landing: TelegramWizardLanding,
     now: Date,
+    busyUntil: Date | null,
     tx: TransactionScope,
   ): Promise<boolean> {
     const rows = await this.exec(tx)
@@ -198,7 +200,7 @@ export class DrizzleTelegramMessageStateRepository implements TelegramMessageSta
         paymentId: landing.paymentId,
         ...(landing.updateKey === undefined ? {} : { lastUpdateKey: landing.updateKey }),
         version: sql`${telegramWizards.version} + 1`,
-        busyUntil: null,
+        busyUntil,
         updatedAt: now,
       })
       .where(
@@ -307,13 +309,16 @@ export class DrizzleTelegramMessageStateRepository implements TelegramMessageSta
 
   async moveWizards(
     scope: TenantContext,
-    where: { readonly paymentId?: string; readonly subjectId?: string },
+    where: WizardSelector,
     from: readonly TelegramWizardStep[],
     to: TelegramWizardStep,
     now: Date,
     tx: TransactionScope,
   ): Promise<readonly TelegramWizardRecord[]> {
-    if (from.length === 0 || (where.paymentId === undefined && where.subjectId === undefined)) {
+    if (
+      from.length === 0 ||
+      (where.paymentId === undefined && where.subjectId === undefined && where.id === undefined)
+    ) {
       return [];
     }
     /*
@@ -339,6 +344,7 @@ export class DrizzleTelegramMessageStateRepository implements TelegramMessageSta
           where.subjectId === undefined
             ? undefined
             : eq(telegramWizards.subjectId, where.subjectId),
+          where.id === undefined ? undefined : eq(telegramWizards.id, where.id),
           inArray(telegramWizards.step, [...from]),
         ),
       )

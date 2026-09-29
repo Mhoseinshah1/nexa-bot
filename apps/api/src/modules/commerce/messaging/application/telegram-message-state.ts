@@ -63,6 +63,20 @@ export interface TelegramWizardLanding {
   readonly paymentId: string | null;
   /** The update whose turn lands it — what lets that update's redelivery replay. */
   readonly updateKey?: string | null;
+  /**
+   * Keep the lease: the landing turn still has work to do on this message before another
+   * turn may take it — the loading screen it has landed (`INVOICE_LOADING`) and will mark
+   * once its edit has been asked for. A turn that dies in between frees it when the lease
+   * runs out, so a tap on the loading screen's check button can finish the job.
+   */
+  readonly hold?: boolean;
+}
+
+/** Which wizards a move names: every one showing a payment or an order, or one by id. */
+export interface WizardSelector {
+  readonly paymentId?: string;
+  readonly subjectId?: string;
+  readonly id?: string;
 }
 
 /**
@@ -113,13 +127,17 @@ export interface TelegramMessageStateRepository {
     tx: TransactionScope,
   ): Promise<TelegramWizardRecord | null>;
 
-  /** Lands a claim: the new screen, the lease cleared. False when the claim was overtaken. */
+  /**
+   * Lands a claim: the new screen, and the lease set to `busyUntil` (null clears it). False
+   * when the claim was overtaken — `version` is no longer the one the claim took.
+   */
   landWizard(
     scope: TenantContext,
     id: string,
     version: number,
     landing: TelegramWizardLanding,
     now: Date,
+    busyUntil: Date | null,
     tx: TransactionScope,
   ): Promise<boolean>;
 
@@ -156,12 +174,13 @@ export interface TelegramMessageStateRepository {
   ): Promise<TelegramWizardRecord | null>;
 
   /**
-   * Moves every wizard showing `paymentId` (or naming `subjectId`) at one of `from` to `to`,
-   * bumping each version, and returns the rows it moved — the ones THIS caller now edits.
+   * Moves every wizard showing `paymentId` (or naming `subjectId`, or the one `id`) at one of
+   * `from` to `to`, bumping each version and clearing its lease, and returns the rows it
+   * moved — the ones THIS caller now edits.
    */
   moveWizards(
     scope: TenantContext,
-    where: { readonly paymentId?: string; readonly subjectId?: string },
+    where: WizardSelector,
     from: readonly TelegramWizardStep[],
     to: TelegramWizardStep,
     now: Date,
@@ -377,7 +396,41 @@ export class TelegramMessageStateService {
     landing: TelegramWizardLanding,
   ): Promise<boolean> {
     return this.write(scope, actor, claim.id, false, (tx, now) =>
-      this.deps.repository.landWizard(scope, claim.id, claim.version, landing, now, tx),
+      this.deps.repository.landWizard(
+        scope,
+        claim.id,
+        claim.version,
+        landing,
+        now,
+        landing.hold === true ? new Date(now.getTime() + WIZARD_CLAIM_LEASE_MS) : null,
+        tx,
+      ),
+    );
+  }
+
+  /**
+   * Undoes a `moveAll` whose edit Telegram definitely did not apply (a 429): the wizard goes
+   * back to `to`, the step it was moved from, so the screen it still shows keeps its buttons
+   * honoured and a later refresh or tap can finish the edit. The same conditional write as a
+   * landing — on the version the move left — so a wizard anybody touched since stays where
+   * that write put it. False when it did.
+   */
+  moveBack(
+    scope: TenantContext,
+    actor: ActorContext,
+    moved: TelegramWizardRecord,
+    to: TelegramWizardStep,
+  ): Promise<boolean> {
+    return this.write(scope, actor, moved.id, false, (tx, now) =>
+      this.deps.repository.landWizard(
+        scope,
+        moved.id,
+        moved.version,
+        { kind: moved.kind, step: to, subjectId: moved.subjectId, paymentId: moved.paymentId },
+        now,
+        null,
+        tx,
+      ),
     );
   }
 
@@ -440,11 +493,12 @@ export class TelegramMessageStateService {
   moveAll(
     scope: TenantContext,
     actor: ActorContext,
-    where: { readonly paymentId?: string; readonly subjectId?: string },
+    where: WizardSelector,
     from: readonly TelegramWizardStep[],
     to: TelegramWizardStep,
   ): Promise<readonly TelegramWizardRecord[]> {
-    return this.write(scope, actor, where.paymentId ?? where.subjectId ?? null, [], (tx, now) =>
+    const entity = where.id ?? where.paymentId ?? where.subjectId ?? null;
+    return this.write(scope, actor, entity, [], (tx, now) =>
       this.deps.repository.moveWizards(scope, where, from, to, now, tx),
     );
   }
