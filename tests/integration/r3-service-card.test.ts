@@ -194,19 +194,10 @@ describe('R3 — service delivery, connection files and the service card', () =>
     return service;
   }
 
-  const setSetting = (key: string, value: unknown) =>
-    ctx.container.settingsService.set(tenantA, owner, {
-      key,
-      value,
-      expectedVersion: null,
-      idempotencyKey: randomUUID(),
-    });
-
   /*
-   * A trial, through the path this base has: an order of purpose TRIAL, provisioned by the
-   * ordinary provisioner and announced by the ordinary delivery lane. (R1 routes the new
-   * per-panel trial through the same provisioning path; this proves the delivery half
-   * does not care which.)
+   * A trial, the way R1 issues one: configured on the panel (100 MB for 72 hours), claimed
+   * for that panel with no product, provisioned by the ordinary provisioner and announced
+   * by the ordinary delivery lane — so the files follow it exactly as they follow a purchase.
    */
   async function trialService(): Promise<ServiceRecord> {
     await ctx.container.featureFlags.set(tenantA, owner, {
@@ -217,14 +208,25 @@ describe('R3 — service delivery, connection files and the service card', () =>
       reason: 'offer a trial',
       idempotencyKey: randomUUID(),
     });
-    await setSetting('trial.product_id', await product('trial', null));
+    const current = await ctx.container.panelTrials.get(tenantA, owner, panelId);
+    await ctx.container.panelTrials.update(tenantA, owner, panelId, {
+      idempotencyKey: randomUUID(),
+      expectedRevision: current.revision,
+      enabled: true,
+      trafficAmount: '100',
+      trafficUnit: 'MB',
+      durationHours: 72,
+      label: null,
+    });
     const claimed = await ctx.container.trials.claim(tenantA, systemActor('trial'), customerId, {
       idempotencyKey: 'r3-trial',
+      panelId,
     });
     if (claimed.outcome !== 'ISSUED') throw new Error(`trial refused: ${JSON.stringify(claimed)}`);
     await ctx.container.provisionerLoop.tick();
     const service = await services.findByOrderId(tenantA, claimed.orderId);
     if (service === null || service.state !== 'ACTIVE') throw new Error('trial not provisioned');
+    if (!service.isTrial) throw new Error('the trial service is not marked as a trial');
     return service;
   }
 
