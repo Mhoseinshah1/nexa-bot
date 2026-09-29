@@ -1399,6 +1399,27 @@ describe('the operations log group (WP-A4)', () => {
       await expectNothingSentAgain();
     });
 
+    it('rechecks the group for an event the sweep ends, and requeues it (Codex review of PR #106)', async () => {
+      await connectHealthy();
+      await raise('swept');
+      // Its last claim's outcome was never recorded: every attempt spent, the lease long
+      // expired — the row `failExhausted` ends, which no attempt path sees.
+      await ctx.container.database.db.execute(
+        `UPDATE notifications
+            SET attempt_count = max_attempts, next_attempt_at = now() - interval '1 hour'` as never,
+      );
+      expect((await dispatcher.tick()).exhausted).toBe(1);
+      expect((await onlyIntent()).intent.status).toBe('FAILED');
+      // Preserved, and the group recorded healthy is checked again.
+      expect((await service.view(tenantA, owner)).health).toBe('UNVERIFIED');
+
+      expect(await service.maintain(tenantA, system())).toBe('CHECKED');
+      expect((await service.view(tenantA, owner)).queue).toEqual({ pending: 1, preserved: 0 });
+      expect(await dispatcher.tick()).toMatchObject({ claimed: 1, sent: 1 });
+      expect((await onlyIntent()).intent.status).toBe('SENT');
+      await expectNothingSentAgain();
+    });
+
     it('keeps an event whose deleted topic cannot be recreated, and delivers it once the topic is back', async () => {
       await connectHealthy();
       const deleted = (await repository.listTopics(tenantA, GROUP_CHAT)).find(

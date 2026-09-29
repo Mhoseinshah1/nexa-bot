@@ -387,10 +387,19 @@ export class NotificationDispatcher {
     // Before anything else, and regardless of budget: an intent that has spent
     // its attempts is never claimed again, so if nothing sweeps it, it stays
     // PENDING for ever and no screen ever reports it as failed.
+    let sweptOperational: readonly string[] = [];
     const exhausted = await this.notifications.failExhausted(now, this.options.batchSize, {
       leaseMs: this.options.leaseMs,
       transport: this.transport.kind,
+      onOperationalSwept: (tenantIds) => {
+        sweptOperational = tenantIds;
+      },
     });
+    // HF-A4 (Codex review of PR #106): an operations-log intent the sweep ends — its last
+    // outcome never recorded — is preserved exactly like one an attempt exhausted, so its
+    // group is asked to be checked again the same way. Without this a group still recorded
+    // HEALTHY is never rechecked, and the automatic requeue never reaches the row.
+    for (const tenantId of sweptOperational) await this.noteExhaustedFor(tenantId);
 
     const budget = await this.remainingBudget(now);
     if (budget <= 0) {
@@ -943,10 +952,14 @@ export class NotificationDispatcher {
    * never costs the delivery its recorded outcome.
    */
   private async noteExhausted(intent: NotificationIntent): Promise<void> {
+    await this.noteExhaustedFor(intent.tenantId);
+  }
+
+  private async noteExhaustedFor(tenantId: string): Promise<void> {
     const router = this.opsRouter;
     if (router === null) return;
     await this.bestEffort('ask for the ops group to be checked again', () =>
-      router.exhausted(intent.tenantId),
+      router.exhausted(tenantId),
     );
   }
 

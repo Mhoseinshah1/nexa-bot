@@ -757,11 +757,16 @@ export class DrizzleNotificationRepository implements NotificationRepository {
   async failExhausted(
     now: Date,
     limit: number,
-    options: { readonly leaseMs: number; readonly transport: NotificationTransportKind },
+    options: {
+      readonly leaseMs: number;
+      readonly transport: NotificationTransportKind;
+      readonly onOperationalSwept?: (tenantIds: readonly string[]) => void;
+    },
   ): Promise<number> {
     const deadline = new Date(now.getTime() - options.leaseMs);
 
-    return this.db.transaction(async (tx) => {
+    const operational = new Set<string>();
+    const count = await this.db.transaction(async (tx) => {
       const swept = await tx
         .update(notifications)
         .set({ status: 'FAILED', completedAt: now, nextAttemptAt: now })
@@ -791,9 +796,13 @@ export class DrizzleNotificationRepository implements NotificationRepository {
           id: notifications.id,
           tenantId: notifications.tenantId,
           attemptCount: notifications.attemptCount,
+          kind: notifications.kind,
         });
 
       if (swept.length === 0) return 0;
+      for (const row of swept) {
+        if (row.kind === 'OPERATIONAL_EVENT') operational.add(String(row.tenantId));
+      }
 
       // `onConflictDoNothing`, because the alternative failure is catastrophic
       // and the insurance is one clause.
@@ -851,6 +860,9 @@ export class DrizzleNotificationRepository implements NotificationRepository {
 
       return swept.length;
     });
+    // After the commit: a sweep that rolled back preserved nothing to recheck for.
+    if (operational.size > 0) options.onOperationalSwept?.([...operational]);
+    return count;
   }
 
   async recordAttempt(input: {
@@ -1069,6 +1081,23 @@ export class DrizzleNotificationRepository implements NotificationRepository {
         byCategory.set(category, ids);
       }
 
+      /*
+       * HF-A4 (found by the Codex review of PR #106): a row `failExhausted` ended carries its
+       * bookkeeping attempt at `attempt_count + 1`, the number the next claim is handed. Put
+       * back in the queue as it was, that claim's `recordAttempt` died on the unique index —
+       * sent, and unrecordable. So the counter is advanced past every attempt row, as
+       * `releaseClaim`'s restore does, and the allowance is raised by the same step so the
+       * row still gets exactly `allowance` further attempts. A row with no such attempt
+       * (the ordinary case) is untouched by both terms.
+       */
+      const highestAttempt = sql`(
+        SELECT coalesce(max(${notificationDeliveryAttempts.attemptNumber}), 0)
+          FROM ${notificationDeliveryAttempts}
+         WHERE ${notificationDeliveryAttempts.tenantId} = ${notifications.tenantId}
+           AND ${notificationDeliveryAttempts.notificationId} = ${notifications.id}
+      )`;
+      const pastEveryAttempt = sql`greatest(${notifications.attemptCount}, ${highestAttempt})`;
+
       let moved = 0;
       for (const [category, ids] of byCategory) {
         const updated = await executor
@@ -1077,7 +1106,9 @@ export class DrizzleNotificationRepository implements NotificationRepository {
             status: 'PENDING',
             completedAt: null,
             nextAttemptAt: input.now,
-            maxAttempts: sql`${spentAttempts} + ${input.allowance}`,
+            attemptCount: pastEveryAttempt,
+            // Every expression here reads the row as it was, so the raise is spelled out.
+            maxAttempts: sql`${spentAttempts} + ${input.allowance} + (${pastEveryAttempt} - ${notifications.attemptCount})`,
             // Keeps the snapshot and adds the route, so a row queued before the group
             // existed reaches the connected group's topic.
             destination: sql`${notifications.destination} || jsonb_build_object('opsTopic', ${category}::text)`,

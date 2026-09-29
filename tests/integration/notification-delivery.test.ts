@@ -208,6 +208,33 @@ describe('notification delivery', () => {
     });
   });
 
+  describe('HF-A4: the projection alone is retried (Codex review of PR #106)', () => {
+    it('queues the notification when only its first insert fails, inside a committed event', async () => {
+      // The combined transaction does NOT fail here — the savepoint catches the queue's
+      // failure — so the whole-transaction retry never runs. The projection's own second
+      // attempt is what keeps the message.
+      const real = ctx.container.notifications.queue.bind(ctx.container.notifications);
+      let refused = 0;
+      ctx.container.notifications.queue = ((...args: Parameters<typeof real>) => {
+        if (refused === 0) {
+          refused += 1;
+          return Promise.reject(new Error('canceling statement due to statement timeout'));
+        }
+        return real(...args);
+      }) as typeof real;
+      try {
+        expect((await raiseError('projection-retried')).isNew).toBe(true);
+      } finally {
+        ctx.container.notifications.queue = real;
+      }
+
+      expect(refused).toBe(1);
+      const queued = await ctx.container.notifications.list(tenantA, owner);
+      expect(queued).toHaveLength(1);
+      expect(queued[0]?.kind).toBe('OPERATIONAL_EVENT');
+    });
+  });
+
   describe('the dispatcher', () => {
     it('sends a pending intent and records the attempt', async () => {
       await raiseError();

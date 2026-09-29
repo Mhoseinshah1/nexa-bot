@@ -216,11 +216,20 @@ export interface NotificationRepository {
    * `leaseMs` is a safety margin, not decoration: a row whose lease merely
    * expired may still be mid-send, and marking that FAILED would file a
    * delivered message as failed.
+   *
+   * `onOperationalSwept` (HF-A4) is told, after the sweep commits, which tenants had an
+   * `OPERATIONAL_EVENT` intent among the swept rows — each once — so the dispatcher can ask
+   * for their operations group to be checked again, as it does when an attempt exhausts
+   * an intent. Not called when none was swept.
    */
   failExhausted(
     now: Date,
     limit: number,
-    options: { readonly leaseMs: number; readonly transport: NotificationTransportKind },
+    options: {
+      readonly leaseMs: number;
+      readonly transport: NotificationTransportKind;
+      readonly onOperationalSwept?: (tenantIds: readonly string[]) => void;
+    },
   ): Promise<number>;
 
   /**

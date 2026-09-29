@@ -152,72 +152,94 @@ export class NotifyingOperationalEventRecorder implements OperationalEventRecord
     const recorded = await this.inner.record(scope, event, tx);
     if (!recorded.isNew && !recorded.reopened) return recorded;
 
-    try {
-      // Inside a SAVEPOINT, so a failure here rolls back the projection and
-      // nothing else.
-      //
-      // The first version simply caught the error, which keeps nothing: in
-      // Postgres the failed statement has already aborted the transaction, so
-      // every later statement fails with `current transaction is aborted` and
-      // the caller's own write is lost — while this catch block reports that it
-      // kept it. That is the failure mode this whole subsystem exists to make
-      // hard, written into its own error handling.
-      await this.uow.runNested(scope, tx, async (nested) => {
-        // No severity threshold (WP-A4): routing decides WHERE, never whether.
-        const details = operationalEventDetails(event.context);
-        const botInstanceId = scope.botInstanceId ?? contextBotInstanceId(event.context);
-        await this.notifications.queue(
-          scope,
-          {
-            kind: 'OPERATIONAL_EVENT',
-            // The occurrence count is part of the identity so that a condition
-            // which resolves and recurs is announced again, while the same open
-            // condition firing repeatedly is not.
-            dedupeKey: `opslog:${recorded.id}:${recorded.occurrenceCount}`,
-            templateKey: 'ops.notification.operational_event',
-            values: {
-              severity: recorded.severity,
-              code: recorded.code,
-              // Bounded, like the detail, so the whole message fits Telegram's 4096.
-              message: boundedForTelegram(recorded.message, OPERATIONAL_MESSAGE_BUDGET),
-              occurrences: recorded.occurrenceCount,
-              firstSeenAt: recorded.firstSeenAt,
-              lastSeenAt: recorded.lastSeenAt,
-              tenantId: String(scope.tenantId),
-              ...(botInstanceId ? { botInstanceId: String(botInstanceId) } : {}),
-              ...(details ? { details } : {}),
-              ...(event.correlationId
-                ? {
-                    correlationId: boundedForTelegram(
-                      String(event.correlationId),
-                      OPERATIONAL_ID_MAX,
-                    ),
-                  }
-                : {}),
-            },
-            ...(event.correlationId ? { correlationId: event.correlationId } : {}),
-            opsTopic: opsLogTopicForCode(recorded.code),
-          },
-          nested,
-        );
-      });
-    } catch (error) {
-      // Not rethrown, and not silent.
-      //
-      // Rethrowing would roll back the event write along with the projection,
-      // and the event is the half worth keeping. Swallowing without saying so
-      // would leave a condition unannounced with nothing anywhere recording
-      // that it should have been.
-      this.logger.error(
-        {
-          err: error instanceof Error ? error.message : String(error),
-          code: recorded.code,
-          eventId: recorded.id,
-        },
-        'Recorded an operational event but could not queue its notification',
-      );
+    // HF-A4 (Codex review of PR #106): the projection gets a second attempt of its OWN. A
+    // failure inside the savepoint is caught below and never reaches `record`'s retry of
+    // the whole transaction — that one only sees a transaction that failed — so without
+    // this a transient failure of the notification insert alone (a statement timeout, a
+    // lost lock race) committed the event and gave its message up on the first try. The
+    // savepoint's rollback leaves the transaction usable, so the second attempt runs in
+    // it, and the event's write is never at risk from either.
+    let lastError: unknown = null;
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      try {
+        await this.projectOnce(scope, event, recorded, tx);
+        return recorded;
+      } catch (error) {
+        lastError = error;
+      }
     }
 
+    // Not rethrown, and not silent.
+    //
+    // Rethrowing would roll back the event write along with the projection,
+    // and the event is the half worth keeping. Swallowing without saying so
+    // would leave a condition unannounced with nothing anywhere recording
+    // that it should have been.
+    this.logger.error(
+      {
+        err: lastError instanceof Error ? lastError.message : String(lastError),
+        code: recorded.code,
+        eventId: recorded.id,
+      },
+      'Recorded an operational event but could not queue its notification',
+    );
     return recorded;
+  }
+
+  /** One attempt at queueing the event's notification, in a savepoint of `tx`. */
+  private async projectOnce(
+    scope: TenantContext,
+    event: OperationalEventInput,
+    recorded: RecordedOperationalEvent,
+    tx: TransactionScope,
+  ): Promise<void> {
+    // Inside a SAVEPOINT, so a failure here rolls back the projection and
+    // nothing else.
+    //
+    // The first version simply caught the error, which keeps nothing: in
+    // Postgres the failed statement has already aborted the transaction, so
+    // every later statement fails with `current transaction is aborted` and
+    // the caller's own write is lost — while this catch block reports that it
+    // kept it. That is the failure mode this whole subsystem exists to make
+    // hard, written into its own error handling.
+    await this.uow.runNested(scope, tx, async (nested) => {
+      // No severity threshold (WP-A4): routing decides WHERE, never whether.
+      const details = operationalEventDetails(event.context);
+      const botInstanceId = scope.botInstanceId ?? contextBotInstanceId(event.context);
+      await this.notifications.queue(
+        scope,
+        {
+          kind: 'OPERATIONAL_EVENT',
+          // The occurrence count is part of the identity so that a condition
+          // which resolves and recurs is announced again, while the same open
+          // condition firing repeatedly is not.
+          dedupeKey: `opslog:${recorded.id}:${recorded.occurrenceCount}`,
+          templateKey: 'ops.notification.operational_event',
+          values: {
+            severity: recorded.severity,
+            code: recorded.code,
+            // Bounded, like the detail, so the whole message fits Telegram's 4096.
+            message: boundedForTelegram(recorded.message, OPERATIONAL_MESSAGE_BUDGET),
+            occurrences: recorded.occurrenceCount,
+            firstSeenAt: recorded.firstSeenAt,
+            lastSeenAt: recorded.lastSeenAt,
+            tenantId: String(scope.tenantId),
+            ...(botInstanceId ? { botInstanceId: String(botInstanceId) } : {}),
+            ...(details ? { details } : {}),
+            ...(event.correlationId
+              ? {
+                  correlationId: boundedForTelegram(
+                    String(event.correlationId),
+                    OPERATIONAL_ID_MAX,
+                  ),
+                }
+              : {}),
+          },
+          ...(event.correlationId ? { correlationId: event.correlationId } : {}),
+          opsTopic: opsLogTopicForCode(recorded.code),
+        },
+        nested,
+      );
+    });
   }
 }
