@@ -223,6 +223,26 @@ describe('a customer is warned before their service runs out', () => {
       UPDATE services SET traffic_used_bytes = ${used}, usage_synced_at = now()
        WHERE id = ${serviceId}`);
 
+  /**
+   * WP-A9: pins tenant A's display timezone so its wall clock reads about `hour` now.
+   *
+   * "The day of expiry" is a calendar day in the tenant's zone, so a case whose deadline
+   * is half a day away would otherwise be "today" or "tomorrow" depending on when the
+   * suite ran. A fixed-offset `Etc/GMT` zone makes the local hour a function of the UTC
+   * hour, which is what makes the case deterministic.
+   */
+  async function pinLocalHour(hour: number): Promise<void> {
+    let offset = hour - ctx.container.clock.now().getUTCHours();
+    while (offset > 14) offset -= 24;
+    while (offset < -12) offset += 24;
+    // `Etc/GMT-3` is UTC+3: the POSIX sign is inverted.
+    const zone =
+      offset === 0 ? 'Etc/UTC' : `Etc/GMT${offset > 0 ? '-' : '+'}${String(Math.abs(offset))}`;
+    await ctx.container.database.db.execute(
+      sql`UPDATE tenants SET display_timezone = ${zone} WHERE id = ${tenantA.tenantId}`,
+    );
+  }
+
   // -------------------------------------------------------------------------
   // The three that are about the clock
   // -------------------------------------------------------------------------
@@ -246,9 +266,10 @@ describe('a customer is warned before their service runs out', () => {
      * silently — which is exactly how the defect would have shipped.
      */
     const rows = await ctx.container.database.db.execute(sql`
-      SELECT id FROM service_reminders WHERE service_id = ${id}`);
+      SELECT id FROM service_reminders WHERE service_id = ${id} AND kind = 'EXPIRY_FIRST'`);
     expect(sent[0]?.subjectId).toBe((rows.rows[0] as { id: string }).id);
-    expect(await reminderKinds(id)).toEqual(['EXPIRY_FIRST']);
+    // WP-A9: the week-out slot it passed through is recorded, not sent.
+    expect(await reminderKinds(id)).toEqual(['EXPIRY_EARLY', 'EXPIRY_FIRST']);
   });
 
   it('says nothing on the second pass, or the third', async () => {
@@ -297,11 +318,12 @@ describe('a customer is warned before their service runs out', () => {
             now,
             secondAt: new Date(now.getTime() + 86_400_000),
             firstAt: new Date(now.getTime() + 3 * 86_400_000),
+            windowAt: new Date(now.getTime() + 7 * 86_400_000),
           },
           200,
           tx,
         ),
-        reminders.listUsageCandidates(tenantA, { lowest: 80, high: 95, full: 100 }, 200, tx),
+        reminders.listUsageCandidates(tenantA, { lowest: 80, high: 90, full: 95 }, 200, tx),
       ]),
     );
 
@@ -309,6 +331,7 @@ describe('a customer is warned before their service runs out', () => {
     expect(stillDue[1].map((one) => one.serviceId)).toEqual([]);
     // And the fixture could have appeared: it did, on the pass that warned.
     expect(await reminderKinds(id)).toEqual([
+      'EXPIRY_EARLY',
       'EXPIRY_FIRST',
       'USAGE_FINAL',
       'USAGE_FIRST',
@@ -323,6 +346,8 @@ describe('a customer is warned before their service runs out', () => {
      * later would be the lane contradicting itself, so only the urgent one is sent
      * and the other is recorded so it can never fire afterwards.
      */
+    // Local evening, so half a day from now is TOMORROW morning and not "today".
+    await pinLocalHour(20);
     const id = await service({
       scope: tenantA,
       panelId: panelA,
@@ -332,7 +357,7 @@ describe('a customer is warned before their service runs out', () => {
 
     expect(await runPass()).toEqual({ expiry: 1, usage: 0 });
     expect((await notifications()).map((one) => one.kind)).toEqual(['SERVICE_EXPIRY_SECOND']);
-    expect(await reminderKinds(id)).toEqual(['EXPIRY_FIRST', 'EXPIRY_SECOND']);
+    expect(await reminderKinds(id)).toEqual(['EXPIRY_EARLY', 'EXPIRY_FIRST', 'EXPIRY_SECOND']);
 
     // And the skipped one stays skipped.
     expect(await runPass()).toEqual({ expiry: 0, usage: 0 });
@@ -350,7 +375,13 @@ describe('a customer is warned before their service runs out', () => {
 
     expect(await runPass()).toEqual({ expiry: 1, usage: 0 });
     expect((await notifications()).map((one) => one.kind)).toEqual(['SERVICE_EXPIRED']);
-    expect(await reminderKinds(id)).toEqual(['EXPIRED', 'EXPIRY_FIRST', 'EXPIRY_SECOND']);
+    expect(await reminderKinds(id)).toEqual([
+      'EXPIRED',
+      'EXPIRY_DAY',
+      'EXPIRY_EARLY',
+      'EXPIRY_FIRST',
+      'EXPIRY_SECOND',
+    ]);
   });
 
   it('never warns a service with no deadline', async () => {
@@ -411,7 +442,12 @@ describe('a customer is warned before their service runs out', () => {
      * suite, which is the failure this file exists to make loud.
      */
     expect(sent[0]?.subjectId).not.toBe(sent[1]?.subjectId);
-    expect(await reminderKinds(id)).toEqual(['EXPIRY_FIRST', 'EXPIRY_FIRST']);
+    expect(await reminderKinds(id)).toEqual([
+      'EXPIRY_EARLY',
+      'EXPIRY_EARLY',
+      'EXPIRY_FIRST',
+      'EXPIRY_FIRST',
+    ]);
   });
 
   it('warns again about usage after a renewal that reset the counter', async () => {
@@ -554,6 +590,7 @@ describe('a customer is warned before their service runs out', () => {
 
     expect(await runPass()).toEqual({ expiry: 1, usage: 1 });
     expect(await reminderKinds(id)).toEqual([
+      'EXPIRY_EARLY',
       'EXPIRY_FIRST',
       'USAGE_FINAL',
       'USAGE_FIRST',
@@ -581,7 +618,13 @@ describe('a customer is warned before their service runs out', () => {
     });
 
     expect(await runPass()).toEqual({ expiry: 1, usage: 0 });
-    expect(await reminderKinds(id)).toEqual(['EXPIRED', 'EXPIRY_FIRST', 'EXPIRY_SECOND']);
+    expect(await reminderKinds(id)).toEqual([
+      'EXPIRED',
+      'EXPIRY_DAY',
+      'EXPIRY_EARLY',
+      'EXPIRY_FIRST',
+      'EXPIRY_SECOND',
+    ]);
   });
 
   // -------------------------------------------------------------------------
@@ -621,7 +664,7 @@ describe('a customer is warned before their service runs out', () => {
 
     expect(first.expiry + second.expiry).toBe(1);
     expect(await notifications()).toHaveLength(1);
-    expect(await reminderKinds(id)).toEqual(['EXPIRY_FIRST']);
+    expect(await reminderKinds(id)).toEqual(['EXPIRY_EARLY', 'EXPIRY_FIRST']);
   });
 
   it('does nothing for a tenant that has stopped accepting work', async () => {

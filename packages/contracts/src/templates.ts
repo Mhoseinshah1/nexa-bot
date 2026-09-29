@@ -5416,7 +5416,8 @@ export const TEMPLATES = [
   {
     key: 'bot.service.usage_first',
     description:
-      'The tenant\u2019s first usage threshold, eighty percent by default. The figures are ' +
+      'The tenant\u2019s first usage threshold: 20% of the traffic remaining (80% used) by ' +
+      'default. The figures are ' +
       'PLACEHOLDERS and they are a SNAPSHOT: `service_reminders` recorded what the panel ' +
       'had last reported when the reminder was raised, so the sentence says what was true ' +
       'then rather than a number re-read at send time that would disagree with it.',
@@ -5461,11 +5462,21 @@ export const TEMPLATES = [
         required: false,
         repeatable: true,
       },
+      {
+        // WP-A9: the thresholds are presented as traffic REMAINING, and so is the sentence.
+        token: 'remainingPercent',
+        type: 'NUMBER',
+        description:
+          'The whole percent of the allowance still left when the reminder was raised: ' +
+          'a hundred minus usagePercent, never below zero.',
+        required: false,
+        repeatable: true,
+      },
     ],
   },
   {
     key: 'bot.service.usage_second',
-    description: 'The second usage threshold, ninety-five percent by default.',
+    description: 'The second usage threshold: 10% of the traffic remaining (90% used) by default.',
     format: 'PLAIN_TEXT',
     placeholders: [
       {
@@ -5504,6 +5515,16 @@ export const TEMPLATES = [
         token: 'usagePercent',
         type: 'NUMBER',
         description: 'The whole-percent figure the two above work out to.',
+        required: false,
+        repeatable: true,
+      },
+      {
+        // WP-A9: the thresholds are presented as traffic REMAINING, and so is the sentence.
+        token: 'remainingPercent',
+        type: 'NUMBER',
+        description:
+          'The whole percent of the allowance still left when the reminder was raised: ' +
+          'a hundred minus usagePercent, never below zero.',
         required: false,
         repeatable: true,
       },
@@ -5512,10 +5533,11 @@ export const TEMPLATES = [
   {
     key: 'bot.service.usage_final',
     description:
-      'The final usage threshold, a hundred percent by default. Says the traffic ran out ' +
-      'and offers more; it does NOT say the service stopped, because whether a panel cuts ' +
-      'a customer off at the limit is the provider\u2019s behaviour and not a fact this ' +
-      'installation observed.',
+      'The final usage threshold: 5% of the traffic remaining (95% used) by default since ' +
+      'WP-A9, a hundred percent before it \u2014 a tenant that stored 100 keeps it. Says how ' +
+      'little is left and offers more; it does NOT say the service stopped, because whether ' +
+      'a panel cuts a customer off at the limit is the provider\u2019s behaviour and not a ' +
+      'fact this installation observed.',
     format: 'PLAIN_TEXT',
     placeholders: [
       {
@@ -5554,6 +5576,170 @@ export const TEMPLATES = [
         token: 'usagePercent',
         type: 'NUMBER',
         description: 'The whole-percent figure the two above work out to.',
+        required: false,
+        repeatable: true,
+      },
+      {
+        // WP-A9: the thresholds are presented as traffic REMAINING, and so is the sentence.
+        token: 'remainingPercent',
+        type: 'NUMBER',
+        description:
+          'The whole percent of the allowance still left when the reminder was raised: ' +
+          'a hundred minus usagePercent, never below zero.',
+        required: false,
+        repeatable: true,
+      },
+    ],
+  },
+  /*
+   * WP-A9: the two new expiry slots. The same placeholders as their siblings, read from the
+   * same `service_reminders` snapshot.
+   */
+  {
+    key: 'bot.service.expiry_early',
+    description:
+      'The week-out expiry warning: sent when a service has reminders.expiry_early_days ' +
+      '(seven by default) or fewer days left, before the first warning. Zero days in that ' +
+      'setting turns this one warning off.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'service',
+        type: 'STRING',
+        description: 'The account name on the panel, which is what the customer sees.',
+        required: true,
+        repeatable: true,
+      },
+      {
+        token: 'days',
+        type: 'NUMBER',
+        description:
+          'Whole days left when the reminder was raised, from the snapshot on the ' +
+          'service_reminders row rather than re-read at send time.',
+        required: false,
+        repeatable: true,
+      },
+      {
+        token: 'expiresAt',
+        type: 'DATETIME',
+        description: 'The deadline the reminder was raised against.',
+        required: false,
+        repeatable: true,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.expiry_day',
+    description:
+      'Sent on the day a service expires, once that calendar day has begun in the ' +
+      'tenant\u2019s display timezone and before the deadline itself \u2014 or, for a ' +
+      'deadline just after local midnight, up to twenty minutes before it. Says the ' +
+      'service expires SOON and exactly when, and invites a renewal; it does not say ' +
+      '\u201ctoday\u201d, which that second case would make false.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'service',
+        type: 'STRING',
+        description: 'The account name on the panel, which is what the customer sees.',
+        required: true,
+        repeatable: true,
+      },
+      {
+        token: 'expiresAt',
+        type: 'DATETIME',
+        description: 'The deadline the reminder was raised against.',
+        required: false,
+        repeatable: true,
+      },
+    ],
+  },
+  /*
+   * WP-A9: the wallet low-balance alert and the two pending-payment reminders. Their values
+   * are read at send time from the subject (a reader, not a payload \u2014 ADR 0030 \u00a71).
+   */
+  {
+    key: 'bot.wallet.low_balance',
+    description:
+      'Sent once when a customer\u2019s wallet balance falls below the tenant\u2019s ' +
+      'wallet.low_balance.threshold, and again only after it has recovered to the ' +
+      'threshold and fallen once more. Off until an operator turns on ' +
+      'wallet_low_balance_reminders.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'balance',
+        type: 'MONEY',
+        description: 'The wallet balance when the message is sent, derived from the ledger.',
+        required: false,
+        repeatable: true,
+      },
+      {
+        token: 'threshold',
+        type: 'MONEY',
+        description: 'The threshold the balance fell below.',
+        required: false,
+        repeatable: true,
+      },
+    ],
+  },
+  {
+    key: 'bot.payment.pending_reminder',
+    description:
+      'Sent once, reminders.payment_pending_minutes before a card-to-card payment\u2019s ' +
+      'deadline, while the customer has neither sent a receipt nor said they paid. Never ' +
+      'sent for a payment that is settled, cancelled or expired \u2014 re-checked at send time.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'reference',
+        type: 'STRING',
+        description: 'The invoice reference the customer was given with the instructions.',
+        required: false,
+        repeatable: true,
+      },
+      {
+        token: 'minutes',
+        type: 'NUMBER',
+        description: 'Whole minutes left before the deadline, at send time; at least one.',
+        required: false,
+        repeatable: true,
+      },
+      {
+        token: 'expiresAt',
+        type: 'DATETIME',
+        description: 'The payment\u2019s deadline.',
+        required: false,
+        repeatable: true,
+      },
+    ],
+  },
+  {
+    key: 'bot.order.pending_reminder',
+    description:
+      'Sent once, reminders.payment_pending_minutes before an unpaid order\u2019s own ' +
+      'deadline, when no payment for it is under way. Never sent for an order that is ' +
+      'paid, cancelled or expired \u2014 re-checked at send time.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'total',
+        type: 'MONEY',
+        description: 'The order\u2019s total, as quoted.',
+        required: false,
+        repeatable: true,
+      },
+      {
+        token: 'minutes',
+        type: 'NUMBER',
+        description: 'Whole minutes left before the deadline, at send time; at least one.',
+        required: false,
+        repeatable: true,
+      },
+      {
+        token: 'expiresAt',
+        type: 'DATETIME',
+        description: 'The order\u2019s deadline.',
         required: false,
         repeatable: true,
       },

@@ -36,6 +36,12 @@ export interface NotificationSubjectReader {
     scope: TenantContext,
     kind: CustomerNotificationKind,
     subjectId: string,
+    /**
+     * The dispatcher's clock, for the kinds whose fact is about a deadline (WP-A9): "one
+     * day left" stops holding once the deadline passes, and "pay within ten minutes" once
+     * the payment window closes. From the `Clock` port, never the database's own `now()`.
+     */
+    now: Date,
   ): Promise<boolean>;
 }
 
@@ -129,6 +135,13 @@ const REMINDER_NOTIFICATION_KINDS = new Set<string>(
   Object.values(SERVICE_REMINDER_NOTIFICATION_KINDS),
 );
 
+/** WP-A9: the reminders whose values come from `reminderFacts` rather than a snapshot. */
+const ACCOUNT_REMINDER_KINDS = new Set<string>([
+  'WALLET_LOW_BALANCE',
+  'PAYMENT_PENDING_REMINDER',
+  'ORDER_PENDING_REMINDER',
+]);
+
 export interface CustomerNotificationDeps {
   readonly notifications: CustomerNotificationRepository;
   readonly contacts: {
@@ -206,6 +219,20 @@ export interface CustomerNotificationDeps {
    * and the service that transfer moved. A reader, not a payload (ADR 0030 §1). Null when
    * the row or the service cannot be read.
    */
+  /**
+   * WP-A9: what the wallet low-balance alert and the two pending-payment reminders render —
+   * read at send time from the alert, the payment or the order the notification names. A
+   * reader, not a payload (ADR 0030 §1). `null` means the subject is gone, and nothing is
+   * sent. Absent, those three kinds render nothing and are not sent.
+   */
+  readonly reminderFacts?: {
+    valuesFor(
+      scope: TenantContext,
+      kind: CustomerNotificationKind,
+      subjectId: string,
+      now: Date,
+    ): Promise<TemplateValues | null>;
+  };
   readonly serviceTransfers?: {
     notificationFacts(
       scope: TenantContext,
@@ -433,6 +460,15 @@ export class CustomerNotificationService {
       );
       return amount === null ? null : { amount };
     }
+    if (ACCOUNT_REMINDER_KINDS.has(row.kind)) {
+      if (this.deps.reminderFacts === undefined) return null;
+      return this.deps.reminderFacts.valuesFor(
+        scope,
+        row.kind,
+        row.subjectId,
+        this.deps.clock.now(),
+      );
+    }
     if (!REMINDER_NOTIFICATION_KINDS.has(row.kind)) return {};
     const snapshot = await this.deps.reminderSnapshots.snapshotOf(scope, row.subjectId);
     if (snapshot === null) return null;
@@ -451,6 +487,13 @@ export class CustomerNotificationService {
        * division guard and not a business rule.
        */
       usagePercent: limit <= 0n ? 0 : Number((snapshot.usedBytes * 100n) / limit),
+      /*
+       * WP-A9: the same figure from the other side, because the thresholds are now
+       * presented as traffic REMAINING. Floored like the one above, and never below zero:
+       * a panel that reports more than the allowance has left nothing, not a negative.
+       */
+      remainingPercent:
+        limit <= 0n ? 0 : Math.max(0, Number(((limit - snapshot.usedBytes) * 100n) / limit)),
     };
   }
 
@@ -499,7 +542,12 @@ export class CustomerNotificationService {
        * was sent and nothing went wrong.
        */
       if (CUSTOMER_NOTIFICATION_PRECONDITIONS[row.kind]) {
-        const holds = await this.deps.subjects.stillHolds(scope, row.kind, row.subjectId);
+        const holds = await this.deps.subjects.stillHolds(
+          scope,
+          row.kind,
+          row.subjectId,
+          this.deps.clock.now(),
+        );
         if (!holds) {
           const at = this.deps.clock.now();
           await this.deps.uow.run(scope, async (tx) =>

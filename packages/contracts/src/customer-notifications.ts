@@ -244,6 +244,28 @@ export const CUSTOMER_NOTIFICATION_KINDS = [
    * reply is in the ticket, which the customer opens from the bot.
    */
   'TICKET_REPLY',
+  /*
+   * ## WP-A9: reminders (`customer-reminders.ts`, `service-reminders.ts`)
+   *
+   * Two more service reminder SLOTS, whose subject is a `service_reminders` row exactly
+   * like the six above; a wallet low-balance alert, whose subject is its crossing row; and
+   * one reminder each for a pending payment and a pending order, whose subject is the
+   * payment or the order — told at most once each, by `customer_notifications_subject_key`.
+   */
+  /** The tenant's week-out expiry threshold. `service_reminders.id` is the subject. */
+  'SERVICE_EXPIRY_EARLY',
+  /** The expiry's own calendar day has begun. `service_reminders.id` is the subject. */
+  'SERVICE_EXPIRY_DAY',
+  /**
+   * The wallet fell below the tenant's threshold. `wallet_threshold_alerts.id` is the
+   * subject — one row per crossing, so a wallet that recovers and falls again is a second
+   * fact, told once.
+   */
+  'WALLET_LOW_BALANCE',
+  /** A manual transfer's window is about to close unpaid. `payments.id` is the subject. */
+  'PAYMENT_PENDING_REMINDER',
+  /** An order's own window is about to close unpaid. `orders.id` is the subject. */
+  'ORDER_PENDING_REMINDER',
 ] as const;
 export type CustomerNotificationKind = (typeof CUSTOMER_NOTIFICATION_KINDS)[number];
 export const customerNotificationKindSchema = z.enum(CUSTOMER_NOTIFICATION_KINDS);
@@ -301,27 +323,29 @@ export const CUSTOMER_NOTIFICATION_PRECONDITIONS: Readonly<
    */
   ORDER_REFUNDED_TO_WALLET: false,
   /*
-   * All six `false`, and the reason is the reminder ROW rather than the service.
+   * All six `true` since WP-A9, and the reader answers them from the reminder ROW.
    *
-   * The tempting answer is `true` — surely a "three days left" that arrives after the
-   * customer renewed is stale? But the fact this row asserts is not "the service has
-   * three days left NOW". It is "at the moment this was raised, the period ending at T
-   * had three days left", and the row records that T. A renewal does not make that
-   * untrue; it produces a NEW period, a new row and a new reminder.
+   * They were `false`, on the argument that the row asserts "the period ending at T had
+   * three days left" and a renewal does not make that untrue. It does make it USELESS: a
+   * "your service expires tomorrow" that leaves the queue after the customer renewed —
+   * held back by a rate limit, a retry backoff or a stopped worker — tells them their
+   * money did nothing. The owner's rule is that it must not be sent.
    *
-   * Declaring them `true` would also be unanswerable in practice.
-   * `DrizzleNotificationSubjectReader.stillHolds` reads `services` and nothing else, so
-   * a `true` here would look up a reminder id in `services`, find no row, and SUPERSEDE
-   * the message — the customer never told, silently. That is the exact failure the two
-   * refusals in that reader were written to stop, and the same trap
-   * `PAYMENT_TRANSFER_RECORDED` documents above.
+   * So the reader reads the `service_reminders` row BY ITS OWN ID and the service it
+   * names, never `services` by the subject id (which would find nothing and supersede
+   * every reminder — the trap `PAYMENT_TRANSFER_RECORDED` documents above). A reminder
+   * holds while the service still has the period it was raised against — the same
+   * deadline, and for the usage kinds the same allowance — and is still in a state the
+   * family speaks about; an advance expiry warning also needs the deadline still ahead.
+   * A renewal, a top-up of traffic or a termination supersedes it; the next period's
+   * reminder is a new row and a new subject.
    */
-  SERVICE_EXPIRY_FIRST: false,
-  SERVICE_EXPIRY_SECOND: false,
-  SERVICE_EXPIRED: false,
-  SERVICE_USAGE_FIRST: false,
-  SERVICE_USAGE_SECOND: false,
-  SERVICE_USAGE_FINAL: false,
+  SERVICE_EXPIRY_FIRST: true,
+  SERVICE_EXPIRY_SECOND: true,
+  SERVICE_EXPIRED: true,
+  SERVICE_USAGE_FIRST: true,
+  SERVICE_USAGE_SECOND: true,
+  SERVICE_USAGE_FINAL: true,
   /*
    * `false`: the order is terminal and the grant is released in the same transaction
    * that enqueues this. Nothing makes an undelivered trial delivered after the fact —
@@ -366,6 +390,23 @@ export const CUSTOMER_NOTIFICATION_PRECONDITIONS: Readonly<
    * answer the customer is waiting for.
    */
   TICKET_REPLY: false,
+  /* WP-A9. The two new service reminder slots, answered like the six above. */
+  SERVICE_EXPIRY_EARLY: true,
+  SERVICE_EXPIRY_DAY: true,
+  /*
+   * `true`: "your balance is low" is a claim about the wallet NOW. A top-up that lands
+   * before the message leaves makes it false, and the reader re-derives the balance from
+   * the ledger and compares it with the threshold the crossing was recorded against.
+   */
+  WALLET_LOW_BALANCE: true,
+  /*
+   * Both `true`, and they are the reason these kinds exist at all: a reminder to pay is
+   * worse than silence once the attempt is settled, cancelled or expired. The reader
+   * requires the payment still PENDING, before its deadline, with no receipt filed and no
+   * "I have paid" signal; and the order still AWAITING_PAYMENT before its own deadline.
+   */
+  PAYMENT_PENDING_REMINDER: true,
+  ORDER_PENDING_REMINDER: true,
 };
 
 /**
@@ -425,6 +466,11 @@ export const CUSTOMER_NOTIFICATION_TEMPLATES: Readonly<
   SERVICE_REFUND_REQUEST_REJECTED: 'bot.service.refund_request_rejected',
   SERVICE_TRANSFER_RECEIVED: 'bot.service.transfer_received',
   TICKET_REPLY: 'bot.ticket.support_replied',
+  SERVICE_EXPIRY_EARLY: 'bot.service.expiry_early',
+  SERVICE_EXPIRY_DAY: 'bot.service.expiry_day',
+  WALLET_LOW_BALANCE: 'bot.wallet.low_balance',
+  PAYMENT_PENDING_REMINDER: 'bot.payment.pending_reminder',
+  ORDER_PENDING_REMINDER: 'bot.order.pending_reminder',
 };
 
 /**

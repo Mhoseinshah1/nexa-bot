@@ -227,8 +227,10 @@ export function ContentPage({ mayEdit, denied }: { mayEdit: boolean; denied: boo
  * every card: without it each keystroke re-rendered all of them. The row objects come
  * from the query cache, which shares structure across refetches, so an unchanged row
  * is the same object and its card is skipped.
+ *
+ * Exported for the reminders screen (WP-A9), which edits its own templates in place.
  */
-const TemplateCard = memo(function TemplateCard({
+export const TemplateCard = memo(function TemplateCard({
   template,
   mayEdit,
 }: {

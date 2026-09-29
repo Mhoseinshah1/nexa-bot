@@ -184,10 +184,13 @@ describe('the renderer owns the unit', () => {
     const reminder = render('bot.service.usage_first', {
       service: 'zahra01',
       usagePercent: 80,
+      remainingPercent: 20,
       usedTraffic: 40n * GIB,
       totalTraffic: 53_687_091_200n,
     });
-    expect(reminder).toContain('(40 گیگابایت از 50 گیگابایت)');
+    // WP-A9: the sentence speaks in traffic remaining, with the used figure in units beside it.
+    expect(reminder).toContain('(40 گیگابایت از 50 گیگابایت مصرف شده)');
+    expect(reminder).toContain('20 درصد');
   });
 
   it('leaves a value that is not a whole number exactly as given rather than guessing', () => {

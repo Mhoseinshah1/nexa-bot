@@ -171,6 +171,10 @@ const FLAG_LABELS: Readonly<Record<string, WebKey>> = {
   service_expiry_reminders: 'web.flag_service_expiry_reminders',
   service_expired_notice: 'web.flag_service_expired_notice',
   service_usage_reminders: 'web.flag_service_usage_reminders',
+  // WP-A9.
+  service_expiry_day_reminder: 'web.flag_service_expiry_day_reminder',
+  wallet_low_balance_reminders: 'web.flag_wallet_low_balance_reminders',
+  payment_pending_reminders: 'web.flag_payment_pending_reminders',
   trials: 'web.flag_trials',
   customer_link_rotation: 'web.flag_customer_link_rotation',
   referral_signup_gift: 'web.flag_referral_signup_gift',

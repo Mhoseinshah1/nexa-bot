@@ -140,6 +140,8 @@ export async function resetDatabase(db: Database): Promise<void> {
        tenant_media_assets,
        -- WP-A10: client apps, before the tenants they belong to.
        client_apps,
+       -- WP-A9: the low-balance alerts, before the ledger entries they name.
+       wallet_threshold_alerts,
        wallet_entries, discount_redemptions, referrals, trial_grants, trial_resets,
        trial_limit_overrides, resellers,
        -- WP11A, before the payments they reference.

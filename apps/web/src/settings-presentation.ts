@@ -230,6 +230,25 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
     group: 'reminders',
     control: { kind: 'integer', unit: 'web.unit_percent' },
   },
+  // WP-A9.
+  'reminders.expiry_early_days': {
+    title: 'web.setting_reminders_expiry_early_days',
+    description: 'web.setting_reminders_expiry_early_days_desc',
+    group: 'reminders',
+    control: { kind: 'integer', unit: 'web.unit_days' },
+  },
+  'reminders.payment_pending_minutes': {
+    title: 'web.setting_reminders_payment_pending_minutes',
+    description: 'web.setting_reminders_payment_pending_minutes_desc',
+    group: 'reminders',
+    control: { kind: 'integer', unit: 'web.unit_minutes' },
+  },
+  'wallet.low_balance.threshold': {
+    title: 'web.setting_wallet_low_balance_threshold',
+    description: 'web.setting_wallet_low_balance_threshold_desc',
+    group: 'wallet',
+    control: { kind: 'money' },
+  },
   'trial.product_id': {
     title: 'web.setting_trial_product_id',
     description: 'web.setting_trial_product_id_desc',

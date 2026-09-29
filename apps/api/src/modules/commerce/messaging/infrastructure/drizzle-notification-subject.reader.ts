@@ -1,8 +1,12 @@
-import { and, eq } from 'drizzle-orm';
-import type { CustomerNotificationKind, TenantContext } from '@nexa/contracts';
+import { and, eq, sql } from 'drizzle-orm';
+import type { CustomerNotificationKind, ServiceReminderKind, TenantContext } from '@nexa/contracts';
 import {
   CUSTOMER_NOTIFICATION_PRECONDITIONS,
+  EXPIRY_REMINDER_KINDS,
+  EXPIRY_REMINDER_STATES,
+  SERVICE_REMINDER_NOTIFICATION_KINDS,
   SERVICE_UNRESOLVED_PROVISION_STATES,
+  USAGE_REMINDER_STATES,
 } from '@nexa/contracts';
 import type { Database } from '../../../../infrastructure/persistence/database.js';
 import { requireTenantId } from '../../../../infrastructure/persistence/unit-of-work.js';
@@ -12,10 +16,28 @@ import {
 } from '../../../../infrastructure/persistence/schema.js';
 import type { NotificationSubjectReader } from '../application/customer-notification.service.js';
 
+/**
+ * WP-A9: which service reminder a notification kind carries, inverted from the contract's
+ * own map so a kind added there is answerable here the moment it is.
+ */
+const REMINDER_KIND_OF: ReadonlyMap<CustomerNotificationKind, ServiceReminderKind> = new Map(
+  (
+    Object.entries(SERVICE_REMINDER_NOTIFICATION_KINDS) as [
+      ServiceReminderKind,
+      CustomerNotificationKind,
+    ][]
+  ).map(([reminder, notification]) => [notification, reminder]),
+);
+
 /** The kinds this reader has a branch for. Naming them is the second guard below. */
 const ANSWERABLE_KINDS: readonly CustomerNotificationKind[] = [
   'SERVICE_PROVISION_DELAYED',
   'SERVICE_TRANSFER_RECEIVED',
+  // WP-A9: every service reminder, the wallet alert and the two pending reminders.
+  ...REMINDER_KIND_OF.keys(),
+  'WALLET_LOW_BALANCE',
+  'PAYMENT_PENDING_REMINDER',
+  'ORDER_PENDING_REMINDER',
 ];
 
 /**
@@ -36,7 +58,9 @@ const ANSWERABLE_KINDS: readonly CustomerNotificationKind[] = [
  * that a refusal instead, and `tests/integration/customer-notifications.test.ts`
  * requires every kind declaring a precondition to appear here.
  *
- * Today that is two kinds. `SERVICE_TRANSFER_RECEIVED` (Package F) has its own branch
+ * WP-A9 added the eight service reminder kinds, the wallet low-balance alert and the two
+ * pending-payment reminders, each with its own branch over its own subject table (below).
+ * Before it there were two. `SERVICE_TRANSFER_RECEIVED` (Package F) has its own branch
  * below, over the transfer row. `SERVICE_PROVISION_DELAYED` says "your service is taking
  * longer than expected", which stops being true the moment the service is `ACTIVE` —
  * and arriving a second after the subscription link would be worse than not arriving at
@@ -52,6 +76,7 @@ export class DrizzleNotificationSubjectReader implements NotificationSubjectRead
     scope: TenantContext,
     kind: CustomerNotificationKind,
     subjectId: string,
+    now: Date,
   ): Promise<boolean> {
     if (!CUSTOMER_NOTIFICATION_PRECONDITIONS[kind]) {
       throw new Error(
@@ -66,6 +91,13 @@ export class DrizzleNotificationSubjectReader implements NotificationSubjectRead
     }
 
     const tenantId = requireTenantId(scope);
+
+    const reminder = REMINDER_KIND_OF.get(kind);
+    if (reminder !== undefined) return this.reminderHolds(tenantId, reminder, subjectId, now);
+    if (kind === 'WALLET_LOW_BALANCE') return this.walletStillLow(tenantId, subjectId);
+    if (kind === 'PAYMENT_PENDING_REMINDER')
+      return this.paymentStillPending(tenantId, subjectId, now);
+    if (kind === 'ORDER_PENDING_REMINDER') return this.orderStillPending(tenantId, subjectId, now);
 
     /*
      * Package F: "a service was given to you" holds while the transfer's recipient still
@@ -120,5 +152,138 @@ export class DrizzleNotificationSubjectReader implements NotificationSubjectRead
      * are the same mistake one state over. Found by the Codex review of PR #30.
      */
     return (SERVICE_UNRESOLVED_PROVISION_STATES as readonly string[]).includes(row.state);
+  }
+
+  /**
+   * WP-A9: a service reminder holds while the service still has the PERIOD it was raised
+   * against, in a state its family speaks about.
+   *
+   * Read by the REMINDER's id and joined to the service it names — never `services` by the
+   * subject id, which would find nothing and supersede every reminder in silence. The
+   * period comparison is `IS NOT DISTINCT FROM` in SQL, for the microsecond reason
+   * `ServiceReminderBasis` gives: a deadline read into a `Date` and compared in JavaScript
+   * would differ from the column it came from, and every reminder would be superseded.
+   *
+   *   - Every kind: the deadline is the one the reminder was raised against. A RENEW or an
+   *     ADD_TIME moves it, and "expires in one day" about the old deadline is superseded.
+   *   - The usage kinds: the allowance too — an ADD_TRAFFIC re-arms them — and the service
+   *     still ACTIVE or SUSPENDED.
+   *   - The expiry kinds: the service still in `EXPIRY_REMINDER_STATES`, so a terminated
+   *     service is told nothing; and every ADVANCE warning needs its deadline still ahead,
+   *     because "one day left" delivered after the deadline is false. `EXPIRED` needs no
+   *     such test: its basis IS a deadline in the past.
+   *
+   * A reminder row that is gone is `false`: nothing is announced about a subject that does
+   * not exist.
+   */
+  private async reminderHolds(
+    tenantId: string,
+    reminder: ServiceReminderKind,
+    subjectId: string,
+    now: Date,
+  ): Promise<boolean> {
+    const expiry = (EXPIRY_REMINDER_KINDS as readonly string[]).includes(reminder);
+    const states = expiry ? EXPIRY_REMINDER_STATES : USAGE_REMINDER_STATES;
+    const advance = expiry && reminder !== 'EXPIRED';
+    const result = await this.db.execute(sql`
+      SELECT 1
+      FROM service_reminders r
+      JOIN services s ON s.tenant_id = r.tenant_id AND s.id = r.service_id
+      WHERE r.tenant_id = ${tenantId}
+        AND r.id = ${subjectId}
+        AND r.basis_expires_at IS NOT DISTINCT FROM s.expires_at
+        AND s.state = ANY(${sql.param([...states])}::text[])
+        ${expiry ? sql`` : sql`AND r.basis_traffic_limit_bytes = s.traffic_limit_bytes`}
+        ${advance ? sql`AND s.expires_at > ${now}` : sql``}
+      LIMIT 1
+    `);
+    return result.rows.length > 0;
+  }
+
+  /**
+   * WP-A9: "your balance is low" holds while the ledger still says so.
+   *
+   * The balance is DERIVED, here as everywhere — the sum of the wallet's entries in the
+   * alert's currency — and compared with the threshold the alert recorded rather than
+   * today's setting, so an operator moving the threshold afterwards changes nothing about
+   * a message already owed. A top-up that landed before the send supersedes it.
+   */
+  private async walletStillLow(tenantId: string, subjectId: string): Promise<boolean> {
+    const result = await this.db.execute(sql`
+      SELECT 1
+      FROM wallet_threshold_alerts a
+      WHERE a.tenant_id = ${tenantId}
+        AND a.id = ${subjectId}
+        AND (
+          SELECT COALESCE(SUM(CASE WHEN e.direction = 'CREDIT' THEN e.amount ELSE -e.amount END), 0)
+          FROM wallet_entries e
+          WHERE e.tenant_id = a.tenant_id
+            AND e.customer_id = a.customer_id
+            AND e.currency = a.currency
+        ) < a.threshold_amount
+      LIMIT 1
+    `);
+    return result.rows.length > 0;
+  }
+
+  /**
+   * WP-A9: a pending-payment reminder holds while the payment can still be completed and
+   * the customer has not already acted on it.
+   *
+   * PENDING, a manual transfer, before its deadline, with no "I have paid" signal and no
+   * receipt filed. Anything else — confirmed, rejected, cancelled, expired, a receipt
+   * under review — and a reminder to pay would be wrong, so it is SUPERSEDED.
+   */
+  private async paymentStillPending(
+    tenantId: string,
+    subjectId: string,
+    now: Date,
+  ): Promise<boolean> {
+    const result = await this.db.execute(sql`
+      SELECT 1
+      FROM payments p
+      WHERE p.tenant_id = ${tenantId}
+        AND p.id = ${subjectId}
+        AND p.state = 'PENDING'
+        AND p.method = 'MANUAL_TRANSFER'
+        AND p.expires_at IS NOT NULL
+        AND p.expires_at > ${now}
+        AND p.customer_signalled_at IS NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM payment_receipts pr
+          WHERE pr.tenant_id = p.tenant_id AND pr.payment_id = p.id
+        )
+      LIMIT 1
+    `);
+    return result.rows.length > 0;
+  }
+
+  /**
+   * WP-A9: an unpaid-order reminder holds while the order is still awaiting payment before
+   * its deadline and no payment for it is under way or unresolved — a PENDING transfer has
+   * its own reminder, and one whose outcome is UNKNOWN must never be chased.
+   */
+  private async orderStillPending(
+    tenantId: string,
+    subjectId: string,
+    now: Date,
+  ): Promise<boolean> {
+    const result = await this.db.execute(sql`
+      SELECT 1
+      FROM orders o
+      WHERE o.tenant_id = ${tenantId}
+        AND o.id = ${subjectId}
+        AND o.state = 'AWAITING_PAYMENT'
+        AND o.expires_at IS NOT NULL
+        AND o.expires_at > ${now}
+        AND NOT EXISTS (
+          SELECT 1 FROM payments p
+          WHERE p.tenant_id = o.tenant_id
+            AND p.order_id = o.id
+            AND p.state IN ('PENDING', 'CONFIRMED', 'UNKNOWN')
+        )
+      LIMIT 1
+    `);
+    return result.rows.length > 0;
   }
 }

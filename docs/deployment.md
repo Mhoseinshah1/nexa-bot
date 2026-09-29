@@ -1199,6 +1199,35 @@ page. It is used only while no group is connected, so leaving it set after the
 roll-forward changes nothing. Topics are not carried over: the manual destination posts
 to the group itself unless you also set a topic id.
 
+### What a rollback delays or drops: reminders (WP-A9)
+
+WP-A9 adds two expiry reminder slots (the week-out warning and the day of expiry), a
+wallet low-balance alert, one reminder before a card-to-card payment or an unpaid order
+lapses, and a send-time re-check of every reminder. The release before WP-A9 has none of
+this. The migration stays: its new table (`wallet_threshold_alerts`) is never read by the
+old release, and the widened CHECK constraints accept everything either release writes.
+While it runs:
+
+- **The five new kinds wait.** A `SERVICE_EXPIRY_EARLY`, `SERVICE_EXPIRY_DAY`,
+  `WALLET_LOW_BALANCE`, `PAYMENT_PENDING_REMINDER` or `ORDER_PENDING_REMINDER` row still
+  `PENDING` has no template in the old dispatcher, which defers it without spending an
+  attempt. After the roll-forward it is re-checked before it is sent, so a payment that
+  closed or a wallet that was topped up in the meantime is superseded, not announced late.
+- **No new reminder of those kinds is raised**, and the reminders page is gone from the
+  Web Admin. The old release's own expiry and usage reminders keep running.
+- **The old defaults return** for a tenant that never stored a value: usage warnings at
+  80/95/100 percent used instead of 80/90/95. A service already warned at 95 percent by
+  WP-A9 has its final slot recorded for that period, so it is not told again at 100.
+- **The old dispatcher does not re-check the six older reminder kinds**, so a reminder
+  queued before a renewal can be sent after it, as it could before WP-A9.
+- **The new settings and flags are kept but ignored.** The old release resolves only the
+  keys it declares, so `reminders.expiry_early_days`, `reminders.payment_pending_minutes`,
+  `wallet.low_balance.threshold` and the three new flags are untouched and come back with
+  the roll-forward.
+
+Nothing needs doing before rolling back past WP-A9. After the roll-forward, a wallet that
+fell below its threshold during the rollback is told on the first low-balance pass, once.
+
 ### How far back you can roll
 
 **One release**, safely. Migrations are expand-only within a release

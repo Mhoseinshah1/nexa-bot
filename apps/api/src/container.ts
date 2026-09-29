@@ -333,6 +333,15 @@ import {
   DrizzleServiceReminderSnapshotReader,
 } from './modules/commerce/provisioning/infrastructure/drizzle-service-reminder.repository.js';
 import { ServiceReminderService } from './modules/commerce/provisioning/application/service-reminder.service.js';
+import { PendingPaymentReminderService } from './modules/commerce/payments/application/pending-payment-reminder.service.js';
+import { DrizzlePendingPaymentReminderRepository } from './modules/commerce/payments/infrastructure/drizzle-pending-payment-reminder.repository.js';
+import { WalletLowBalanceService } from './modules/commerce/wallet/application/wallet-low-balance.service.js';
+import { DrizzleWalletThresholdAlertRepository } from './modules/commerce/wallet/infrastructure/drizzle-wallet-threshold-alert.repository.js';
+import {
+  CUSTOMER_REMINDER_INTERVAL_MS,
+  CustomerReminderLoop,
+} from './modules/commerce/messaging/application/customer-reminder-loop.js';
+import { DrizzleCustomerReminderFactsReader } from './modules/commerce/messaging/infrastructure/drizzle-customer-reminder-facts.reader.js';
 import {
   ServiceReminderLoop,
   SERVICE_REMINDER_INTERVAL_MS,
@@ -521,6 +530,14 @@ export interface Container {
   readonly serviceReminderLoop: ServiceReminderLoop;
   /** The sweep itself, so a test runs one pass instead of starting a timer. */
   readonly serviceReminderSweep: ServiceReminderService;
+  /**
+   * WP-A9: the timer for the pending-payment and wallet low-balance reminders. Started by
+   * the WORKER only, like the service reminder loop, and for the same reason.
+   */
+  readonly customerReminderLoop: CustomerReminderLoop;
+  /** WP-A9: the two sweeps it drives, so a test runs one pass instead of a timer. */
+  readonly pendingPaymentReminderSweep: PendingPaymentReminderService;
+  readonly walletLowBalanceSweep: WalletLowBalanceService;
   /**
    * The customer notification lane's timer.
    *
@@ -2714,7 +2731,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       new TrialProductGuard(productRepository),
       // One per reminder threshold. The five have to agree with one another, and no
       // per-key schema can say so — see `ReminderThresholdsGuard`.
-      ...ReminderThresholdsGuard.all(settingsResolver),
+      // WP-A9: plus the week-out slot's own guard, asked only when that key is written.
+      ...ReminderThresholdsGuard.withEarly(settingsResolver),
       // The signup gift's three terms have to make a whole while the gift is on.
       ...SignupGiftTermsGuard.all(settingsResolver, featureFlagResolver),
     ],
@@ -2817,6 +2835,57 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     now: () => clock.now().getTime(),
     logger,
   });
+
+  /*
+   * WP-A9: the two reminders that are not about a service. Readers, not services, for the
+   * settings and flags — the reason `serviceReminderSweep` gives above.
+   */
+  const pendingPaymentReminderSweep = new PendingPaymentReminderService({
+    reminders: new DrizzlePendingPaymentReminderRepository(database.db),
+    settings: settingsResolver,
+    features: featureFlagResolver,
+    notifier: customerNotifier,
+    scopeActivity: tenants,
+    uow,
+    clock,
+  });
+  const walletLowBalanceSweep = new WalletLowBalanceService({
+    alerts: new DrizzleWalletThresholdAlertRepository(database.db),
+    settings: settingsResolver,
+    features: featureFlagResolver,
+    notifier: customerNotifier,
+    scopeActivity: tenants,
+    uow,
+    clock,
+    ids,
+  });
+  const customerReminderLoop = new CustomerReminderLoop(
+    [
+      {
+        name: 'pending-payments',
+        everyMs: 0,
+        runOnce: async (scope) => {
+          const report = await pendingPaymentReminderSweep.runOnce(scope);
+          return report.payments + report.orders;
+        },
+      },
+      {
+        name: 'wallet-low-balance',
+        // The service reminder cadence: a fall below a threshold is not a deadline.
+        everyMs: SERVICE_REMINDER_INTERVAL_MS,
+        runOnce: async (scope) => (await walletLowBalanceSweep.runOnce(scope)).alerts,
+      },
+    ],
+    {
+      scope: () =>
+        installationTenantId === null
+          ? null
+          : { tenantId: installationTenantId, botInstanceId: null },
+      intervalMs: CUSTOMER_REMINDER_INTERVAL_MS,
+      now: () => clock.now().getTime(),
+      logger,
+    },
+  );
 
   const templateRepository = new DrizzleTemplateRepository(database.db);
   const templateCatalogue = new I18nTemplateCatalogue();
@@ -3253,6 +3322,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       // healthy pass that did nothing, never a throw — see `deliverDue`.
       scopeIsActive: (scope) => uow.run(scope, async (tx) => tenants.scopeIsActive(scope, tx)),
       reminderSnapshots: new DrizzleServiceReminderSnapshotReader(database.db),
+      // WP-A9: the wallet alert's and the two pending reminders' send-time values.
+      reminderFacts: new DrizzleCustomerReminderFactsReader(database.db),
       logger,
     }),
     {
@@ -4119,7 +4190,15 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
           'service_expired_notice',
           SERVICE_REMINDER_DEFAULTS.expiredNoticeEnabled,
         ),
+        expiryDayEnabled: on(
+          'service_expiry_day_reminder',
+          SERVICE_REMINDER_DEFAULTS.expiryDayEnabled,
+        ),
         usageEnabled: on('service_usage_reminders', SERVICE_REMINDER_DEFAULTS.usageEnabled),
+        expiryEarlyDays: number(
+          'reminders.expiry_early_days',
+          SERVICE_REMINDER_DEFAULTS.expiryEarlyDays,
+        ),
         expiryFirstDays: number(
           'reminders.expiry_first_days',
           SERVICE_REMINDER_DEFAULTS.expiryFirstDays,
@@ -4206,6 +4285,9 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     usernameNamespace: serviceUsernameRepository,
     serviceReminderLoop,
     serviceReminderSweep,
+    customerReminderLoop,
+    pendingPaymentReminderSweep,
+    walletLowBalanceSweep,
     customerNotificationLoop,
     customerNotifications: customerNotificationRepository,
     audit,
@@ -4523,6 +4605,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       await paymentExpiryLoop.stop();
       await gatewayPaymentLoop.stop();
       await serviceReminderLoop.stop();
+      await customerReminderLoop.stop();
       await customerNotificationLoop.stop();
       await receiptReviewPushLoop.stop();
       await opsGroupMaintainer.stop();

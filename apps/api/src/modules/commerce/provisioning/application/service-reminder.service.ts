@@ -93,10 +93,19 @@ export interface ServiceReminderServiceDeps {
  * product working, not a condition an operator must act on. That is the distinction
  * that keeps the operations log from becoming `/admin/logs`.
  *
- * **No settings.** The three days and the three percentages are constants, for the
- * reason `EXPIRY_REMINDER_DAYS` records: a threshold an operator can move is a
- * threshold whose already-raised rows were decided under a rule that no longer exists,
- * and `service_reminders` has no column saying which rule produced a row.
+ * **Thresholds are the tenant's settings** (the owner's correction to Phase 6C), read
+ * per pass. A row is keyed on the PERIOD, not on the number that produced it, so moving a
+ * threshold never re-sends a reminder already raised for the period.
+ *
+ * ## WP-A9
+ *
+ * Five expiry slots (7, 3 and 1 days before, the day itself, and after), three usage
+ * slots at 20%, 10% and 5% remaining by default. "The day itself" is the expiry's
+ * calendar day in the TENANT'S display timezone, derived by the candidate query from
+ * `tenants.display_timezone` and handed to `expiryReminderDue` with the row, so the
+ * filter and the decision use one boundary. And every reminder is re-checked at SEND
+ * time by the notification lane's subject reader: a renewal, a traffic top-up or a
+ * termination between the raise and the send supersedes the message.
  */
 export class ServiceReminderService {
   constructor(private readonly deps: ServiceReminderServiceDeps) {}
@@ -150,7 +159,9 @@ export class ServiceReminderService {
     const [
       expiryEnabled,
       expiredNoticeEnabled,
+      expiryDayEnabled,
       usageEnabled,
+      expiryEarlyDays,
       expiryFirstDays,
       expirySecondDays,
       usageFirstPercent,
@@ -159,7 +170,9 @@ export class ServiceReminderService {
     ] = await Promise.all([
       this.deps.features.isEnabled(scope, 'service_expiry_reminders', tx),
       this.deps.features.isEnabled(scope, 'service_expired_notice', tx),
+      this.deps.features.isEnabled(scope, 'service_expiry_day_reminder', tx),
       this.deps.features.isEnabled(scope, 'service_usage_reminders', tx),
+      this.deps.settings.valueOf<number>(scope, 'reminders.expiry_early_days', tx),
       this.deps.settings.valueOf<number>(scope, 'reminders.expiry_first_days', tx),
       this.deps.settings.valueOf<number>(scope, 'reminders.expiry_second_days', tx),
       this.deps.settings.valueOf<number>(scope, 'reminders.usage_first_percent', tx),
@@ -169,7 +182,9 @@ export class ServiceReminderService {
     return {
       expiryEnabled,
       expiredNoticeEnabled,
+      expiryDayEnabled,
       usageEnabled,
+      expiryEarlyDays,
       expiryFirstDays,
       expirySecondDays,
       usageFirstPercent,
@@ -194,8 +209,14 @@ export class ServiceReminderService {
     thresholds: ServiceReminderThresholds,
     tx: TransactionScope,
   ): Promise<number> {
-    /* Both switches off: no query, no candidates, nothing to be made stale. */
-    if (!thresholds.expiryEnabled && !thresholds.expiredNoticeEnabled) return 0;
+    /* Every switch off: no query, no candidates, nothing to be made stale. */
+    if (
+      !thresholds.expiryEnabled &&
+      !thresholds.expiredNoticeEnabled &&
+      !thresholds.expiryDayEnabled
+    ) {
+      return 0;
+    }
     /*
      * The window NARROWS when advance warnings are off.
      *
@@ -203,14 +224,28 @@ export class ServiceReminderService {
      * three days out is not a candidate for anything, and asking for it would hand the
      * pass two hundred rows it must then skip — every fifteen minutes, in front of the
      * services that do need something. `now` is the whole window in that case.
+     *
+     * WP-A9: the window is the furthest ENABLED moment. With advance warnings on it is the
+     * week-out slot when that one is live (non-zero and further out than FIRST), else
+     * FIRST. With them off but "expires today" on, it is the second threshold — at least a
+     * day, which contains every expiry whose calendar day has begun.
      */
-    const firstDays = thresholds.expiryEnabled ? thresholds.expiryFirstDays : 0;
+    const earlyLive =
+      thresholds.expiryEarlyDays > 0 && thresholds.expiryEarlyDays > thresholds.expiryFirstDays;
+    const windowDays = thresholds.expiryEnabled
+      ? earlyLive
+        ? thresholds.expiryEarlyDays
+        : thresholds.expiryFirstDays
+      : thresholds.expiryDayEnabled
+        ? thresholds.expirySecondDays
+        : 0;
     const candidates = await this.deps.reminders.listExpiryCandidates(
       scope,
       {
         now,
         secondAt: new Date(now.getTime() + thresholds.expirySecondDays * DAY_MS),
-        firstAt: new Date(now.getTime() + firstDays * DAY_MS),
+        firstAt: new Date(now.getTime() + thresholds.expiryFirstDays * DAY_MS),
+        windowAt: new Date(now.getTime() + windowDays * DAY_MS),
       },
       SERVICE_REMINDER_SWEEP_LIMIT,
       tx,
@@ -218,7 +253,12 @@ export class ServiceReminderService {
 
     let sent = 0;
     for (const candidate of candidates) {
-      const due = expiryReminderDue(candidate.expiresAt, now, thresholds);
+      const due = expiryReminderDue(
+        candidate.expiresAt,
+        now,
+        thresholds,
+        candidate.expiryDayStartsAt,
+      );
       if (due === null) continue;
       /*
        * Everything from the least urgent up to and including the due kind.
@@ -240,7 +280,11 @@ export class ServiceReminderService {
        * was off.
        */
       const announce =
-        due === 'EXPIRED' ? thresholds.expiredNoticeEnabled : thresholds.expiryEnabled;
+        due === 'EXPIRED'
+          ? thresholds.expiredNoticeEnabled
+          : due === 'EXPIRY_DAY'
+            ? thresholds.expiryDayEnabled
+            : thresholds.expiryEnabled;
       if (await this.raise(scope, candidate, upTo, announce ? due : null, now, tx)) sent += 1;
     }
     return sent;

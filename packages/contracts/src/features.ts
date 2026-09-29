@@ -106,8 +106,9 @@ export const FEATURE_FLAGS = [
   {
     key: 'service_expiry_reminders',
     description:
-      'Warn a customer before their service reaches its deadline, at the two advance ' +
-      'thresholds reminders.expiry_first_days and reminders.expiry_second_days. On by ' +
+      'Warn a customer before their service reaches its deadline, at the advance ' +
+      'thresholds reminders.expiry_early_days, reminders.expiry_first_days and ' +
+      'reminders.expiry_second_days (7, 3 and 1 days by default). On by ' +
       'default: the alternative to warning them is their configuration stopping without ' +
       'notice, which is what this installation did before Phase 6C. A flag PLUS its ' +
       'configuration, which is the shape CBR-003 and CBR-011 found behind Mirza\u2019s ' +
@@ -117,7 +118,12 @@ export const FEATURE_FLAGS = [
     defaultEnabled: true,
     // Every customer with a dated service stops being warned. Worth saying out loud.
     blastRadius: 'TENANT_WIDE',
-    configuredBy: ['reminders.expiry_first_days', 'reminders.expiry_second_days'],
+    configuredBy: [
+      'reminders.expiry_first_days',
+      'reminders.expiry_second_days',
+      // WP-A9: the week-out slot is a third advance warning of the same family.
+      'reminders.expiry_early_days',
+    ],
   },
   {
     key: 'service_expired_notice',
@@ -146,6 +152,42 @@ export const FEATURE_FLAGS = [
       'reminders.usage_second_percent',
       'reminders.usage_final_percent',
     ],
+  },
+  /*
+   * WP-A9: three more reminder switches. Each is on its own row for the reason
+   * `service_expired_notice` is: what an operator decides about it is whether it is sent.
+   */
+  {
+    key: 'service_expiry_day_reminder',
+    description:
+      'Tell a customer on the day their service expires, once that calendar day has begun in ' +
+      'the tenant\u2019s display timezone and before the deadline itself. On by default, as ' +
+      'the owner\u2019s schedule of 7, 3 and 1 days before and the day of expiry asks. ' +
+      'Independent of service_expiry_reminders and of service_expired_notice.',
+    defaultEnabled: true,
+    blastRadius: 'TENANT_WIDE',
+    configuredBy: [],
+  },
+  {
+    key: 'wallet_low_balance_reminders',
+    description:
+      'Tell a customer, once, when their wallet balance falls below ' +
+      'wallet.low_balance.threshold, and again only after it has been back at or above it. ' +
+      'OFF by default: a threshold is a tenant\u2019s own number and there is no sensible ' +
+      'one to invent for every installation.',
+    defaultEnabled: false,
+    blastRadius: 'TENANT_WIDE',
+    configuredBy: ['wallet.low_balance.threshold'],
+  },
+  {
+    key: 'payment_pending_reminders',
+    description:
+      'Remind a customer, once, shortly before an unpaid card-to-card payment or an unpaid ' +
+      'order lapses, while it can still be completed. On by default. A payment that is ' +
+      'settled, cancelled, expired or already carries a receipt is never reminded about.',
+    defaultEnabled: true,
+    blastRadius: 'TENANT_WIDE',
+    configuredBy: ['reminders.payment_pending_minutes'],
   },
   {
     key: 'trials',

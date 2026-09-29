@@ -405,11 +405,15 @@ describe('the feature presentation catalogue', () => {
       .sort();
     expect(asking).toEqual([
       'ops_notifications',
+      // WP-A9: a reminder the customer relies on stops silently, like the families below.
+      'payment_pending_reminders',
       'referrals',
       'service_expired_notice',
+      'service_expiry_day_reminder',
       'service_expiry_reminders',
       'service_usage_reminders',
       'template_overrides',
+      'wallet_low_balance_reminders',
     ]);
   });
 });

@@ -2,7 +2,8 @@ import { z } from 'zod';
 import type { CustomerNotificationKind } from './customer-notifications.js';
 
 /**
- * The six moments a customer is told something about a service they already own.
+ * The eight moments a customer is told something about a service they already own
+ * (six since Phase 6C, two more since WP-A9).
  *
  * A reminder is unlike everything else the customer notification lane carries, and the
  * difference decides the whole design. Every other kind is a fact that happens ONCE per
@@ -22,12 +23,31 @@ export const SERVICE_REMINDER_KINDS = [
   'USAGE_FIRST',
   'USAGE_SECOND',
   'USAGE_FINAL',
+  /*
+   * WP-A9: two more expiry SLOTS, appended so every stored row keeps its meaning.
+   *
+   * The brief's schedule is 7, 3 and 1 days before and the day of expiry. The two slots
+   * that already existed keep exactly the meaning a tenant's stored values give them —
+   * `EXPIRY_FIRST` is `reminders.expiry_first_days` (3 by default) and `EXPIRY_SECOND` is
+   * `_second_days` (1) — and the two new ones sit on either side of them:
+   *
+   *   - `EXPIRY_EARLY`, the week-out warning, further out than FIRST
+   *     (`reminders.expiry_early_days`, 7 by default, 0 turns it off);
+   *   - `EXPIRY_DAY`, "your service expires today", once the expiry's own calendar day has
+   *     begun in the tenant's display timezone and before the deadline itself.
+   *
+   * Added rather than renamed or re-slotted, because a kind is a CHECK-pinned value in two
+   * tables: re-meaning `EXPIRY_FIRST` as "seven days" would re-label every occurrence
+   * already stored under it.
+   */
+  'EXPIRY_EARLY',
+  'EXPIRY_DAY',
 ] as const;
 export type ServiceReminderKind = (typeof SERVICE_REMINDER_KINDS)[number];
 export const serviceReminderKindSchema = z.enum(SERVICE_REMINDER_KINDS);
 
 /**
- * The three that are about the clock, LEAST URGENT FIRST.
+ * The five that are about the clock, LEAST URGENT FIRST (three before WP-A9).
  *
  * The order is read by the sweep, which writes the whole prefix up to the kind it is
  * sending, so that a lane which was down for two days cannot say "expires tomorrow"
@@ -41,7 +61,14 @@ export const serviceReminderKindSchema = z.enum(SERVICE_REMINDER_KINDS);
  * make an operator changing three days to five either rewrite history or produce a
  * kind the database refuses.
  */
-export const EXPIRY_REMINDER_KINDS = ['EXPIRY_FIRST', 'EXPIRY_SECOND', 'EXPIRED'] as const;
+export const EXPIRY_REMINDER_KINDS = [
+  'EXPIRY_EARLY',
+  'EXPIRY_FIRST',
+  'EXPIRY_SECOND',
+  'EXPIRY_DAY',
+  'EXPIRED',
+] as const;
+export type ExpiryReminderKind = (typeof EXPIRY_REMINDER_KINDS)[number];
 /** The three that are about the traffic allowance, lowest first. Slots, as above. */
 export const USAGE_REMINDER_KINDS = ['USAGE_FIRST', 'USAGE_SECOND', 'USAGE_FINAL'] as const;
 
@@ -54,6 +81,42 @@ export const USAGE_REMINDER_KINDS = ['USAGE_FIRST', 'USAGE_SECOND', 'USAGE_FINAL
  */
 export const EXPIRY_REMINDER_DAYS_MIN = 1;
 export const EXPIRY_REMINDER_DAYS_MAX = 30;
+
+/**
+ * The week-out slot's floor, which is ZERO: zero turns that one warning off (WP-A9).
+ *
+ * The two older slots cannot be switched off one at a time — their family flag is the
+ * switch — and a tenant that had configured three and one days had no fourth warning to
+ * lose. The new slot must not impose one on them unasked for ever, so it alone has an
+ * "off" value. Its ceiling is the shared one.
+ */
+export const EXPIRY_EARLY_REMINDER_DAYS_MIN = 0;
+
+/**
+ * How long before the deadline the day-of rung begins AT THE LATEST, in milliseconds.
+ *
+ * The rung normally begins at local midnight of the expiry's date. A service expiring a
+ * few minutes after that midnight would then have a rung shorter than the fifteen-minute
+ * sweep: one pass returns `EXPIRY_SECOND`, the next finds the deadline passed and returns
+ * `EXPIRED`, and the enabled day-of reminder is recorded as passed without ever being sent
+ * (Codex review #1 of PR #100, C2). So the rung begins at the EARLIER of local midnight and
+ * `expiresAt - EXPIRY_DAY_MIN_NOTICE_MS` — twenty minutes: one sweep interval, one delivery
+ * poll and slack, so a sweep running on time always lands in the rung with at least five
+ * minutes left, and the send-time re-check (deadline still ahead) passes.
+ * `tests/unit/wp-a9-reminders.test.ts` pins the relation to both loop intervals.
+ *
+ * What is still deliberate: a worker that is DOWN for the whole rung reaches the deadline
+ * first, and then "expires today" is never sent — it would be false. The prefix records
+ * the rung as passed and the expired notice is what the customer receives.
+ */
+export const EXPIRY_DAY_MIN_NOTICE_MS = 20 * 60_000;
+
+/** Where the day-of rung begins: see `EXPIRY_DAY_MIN_NOTICE_MS`. */
+export function expiryDayRungStart(localDayStart: Date, expiresAt: Date): Date {
+  return new Date(
+    Math.min(localDayStart.getTime(), expiresAt.getTime() - EXPIRY_DAY_MIN_NOTICE_MS),
+  );
+}
 
 /** The bounds a configured usage threshold is checked against, in percent. */
 export const USAGE_REMINDER_PERCENT_MIN = 1;
@@ -75,6 +138,10 @@ export const USAGE_REMINDER_PERCENT_MAX = 100;
 export interface ServiceReminderThresholds {
   readonly expiryEnabled: boolean;
   readonly expiredNoticeEnabled: boolean;
+  /** WP-A9: whether "your service expires today" is sent (`service_expiry_day_reminder`). */
+  readonly expiryDayEnabled: boolean;
+  /** WP-A9: the week-out slot, in days. Zero is off. */
+  readonly expiryEarlyDays: number;
   readonly expiryFirstDays: number;
   readonly expirySecondDays: number;
   readonly usageEnabled: boolean;
@@ -87,13 +154,38 @@ export interface ServiceReminderThresholds {
 export const SERVICE_REMINDER_DEFAULTS: ServiceReminderThresholds = {
   expiryEnabled: true,
   expiredNoticeEnabled: true,
+  expiryDayEnabled: true,
+  /*
+   * WP-A9: 7, 3, 1 and the day itself — the owner's schedule. The two middle numbers are
+   * unchanged, so a tenant that stored either keeps the warning it configured.
+   */
+  expiryEarlyDays: 7,
   expiryFirstDays: 3,
   expirySecondDays: 1,
   usageEnabled: true,
+  /*
+   * WP-A9: 20%, 10% and 5% REMAINING, which is 80, 90 and 95 percent USED.
+   *
+   * The three keys have always stored the percentage USED, and they still do: a tenant
+   * that stored 80, 95 or 100 keeps exactly the moment it chose, because nothing reads a
+   * stored value any differently. What moved is the DEFAULT, from 80/95/100 to 80/90/95,
+   * and the operator-facing presentation, which now speaks in "remaining"
+   * (`usageRemainingPercent`) — see `reminders.usage_first_percent`.
+   */
   usageFirstPercent: 80,
-  usageSecondPercent: 95,
-  usageFinalPercent: 100,
+  usageSecondPercent: 90,
+  usageFinalPercent: 95,
 };
+
+/**
+ * A usage threshold as the operator reads it: the percentage REMAINING (WP-A9).
+ *
+ * The inverse is the same subtraction, so the Web Admin converts both ways with this one
+ * function and the stored "used" value is never shown or typed as such.
+ */
+export function usageRemainingPercent(usedPercent: number): number {
+  return USAGE_REMINDER_PERCENT_MAX - usedPercent;
+}
 
 /**
  * Why a proposed combination of thresholds is refused, or `null` if it is sound.
@@ -123,7 +215,30 @@ export function refuseReminderThresholds(
   }
   const { usageFirstPercent, usageSecondPercent, usageFinalPercent } = thresholds;
   if (usageSecondPercent <= usageFirstPercent || usageFinalPercent <= usageSecondPercent) {
-    return 'آستانه‌های مصرف باید به‌ترتیب صعودی و بدون تکرار باشند.';
+    /*
+     * Both framings in one sentence (WP-A9): the stored numbers are percent USED and
+     * ascend, and the Web Admin shows percent REMAINING, which descends. An operator on
+     * either surface must be able to read which way the three have to go.
+     */
+    return 'آستانه‌های مصرف حجم باید به‌ترتیب صعودی و بدون تکرار باشند؛ یعنی هر هشدار با حجم باقی‌ماندهٔ کمتری از هشدار قبلی ارسال شود.';
+  }
+  return null;
+}
+
+/**
+ * Why a proposed week-out threshold is refused, or `null` if it is sound (WP-A9).
+ *
+ * Asked ONLY when `reminders.expiry_early_days` itself is written, never when one of the
+ * five older keys is — and that asymmetry is the backward compatibility. A tenant that
+ * stored ten and five days before this slot existed has an early default of seven that
+ * sits inside its first warning; refusing every later edit of the five older keys until
+ * somebody visited the new one would make a tenant's own stored configuration
+ * uneditable on upgrade. Instead such a slot is simply never due on its own: the sweep
+ * reaches FIRST before it, records it as passed, and the Web Admin says so beside it.
+ */
+export function refuseEarlyReminderDays(earlyDays: number, firstDays: number): string | null {
+  if (earlyDays !== 0 && earlyDays <= firstDays) {
+    return 'یادآور هفتگی باید زودتر از یادآور اول باشد (روز بیشتری داشته باشد)، یا برای خاموش کردن آن صفر بگذارید.';
   }
   return null;
 }
@@ -136,11 +251,17 @@ export function refuseReminderThresholds(
  * whether it is sent at all.
  */
 export function expiryReminderDays(
-  thresholds: Pick<ServiceReminderThresholds, 'expiryFirstDays' | 'expirySecondDays'>,
-): Readonly<Record<(typeof EXPIRY_REMINDER_KINDS)[number], number>> {
+  thresholds: Pick<
+    ServiceReminderThresholds,
+    'expiryEarlyDays' | 'expiryFirstDays' | 'expirySecondDays'
+  >,
+): Readonly<Record<ExpiryReminderKind, number>> {
   return {
+    EXPIRY_EARLY: thresholds.expiryEarlyDays,
     EXPIRY_FIRST: thresholds.expiryFirstDays,
     EXPIRY_SECOND: thresholds.expirySecondDays,
+    // The day of expiry is a CALENDAR day, not a count; see `expiryReminderDue`.
+    EXPIRY_DAY: 0,
     EXPIRED: 0,
   };
 }
@@ -214,14 +335,38 @@ export function usageRemindersReached(
 export function expiryReminderDue(
   expiresAt: Date | null,
   now: Date,
-  thresholds: Pick<ServiceReminderThresholds, 'expiryFirstDays' | 'expirySecondDays'>,
-): (typeof EXPIRY_REMINDER_KINDS)[number] | null {
+  thresholds: Pick<
+    ServiceReminderThresholds,
+    'expiryEarlyDays' | 'expiryFirstDays' | 'expirySecondDays'
+  >,
+  /**
+   * WP-A9: the instant the day-of rung begins — local midnight of the expiry date in the
+   * tenant's display timezone, or `EXPIRY_DAY_MIN_NOTICE_MS` before the deadline when that
+   * is earlier (`expiryDayRungStart`). `null` for a service with no deadline.
+   *
+   * A PARAMETER rather than computed here, because the candidate query computes it too
+   * (`date_trunc('day', … AT TIME ZONE tz)`), and two computations of one boundary are
+   * two answers the day a daylight-saving change lands between them. The repository
+   * selects it beside the row and this function uses that value, so the filter and the
+   * decision cannot disagree. A calendar changes nothing here: a Jalali day and a
+   * Gregorian day begin at the same local midnight.
+   */
+  dayStartsAt: Date | null = null,
+): ExpiryReminderKind | null {
   if (expiresAt === null) return null;
   const msLeft = expiresAt.getTime() - now.getTime();
   if (msLeft <= 0) return 'EXPIRED';
+  if (dayStartsAt !== null && dayStartsAt.getTime() <= now.getTime()) return 'EXPIRY_DAY';
   const daysLeft = msLeft / 86_400_000;
   if (daysLeft <= thresholds.expirySecondDays) return 'EXPIRY_SECOND';
   if (daysLeft <= thresholds.expiryFirstDays) return 'EXPIRY_FIRST';
+  /*
+   * Zero is OFF, and a week-out slot that is not further out than FIRST is never due on
+   * its own: FIRST is reached first and records it as passed. See `refuseEarlyReminderDays`.
+   */
+  if (thresholds.expiryEarlyDays > 0 && daysLeft <= thresholds.expiryEarlyDays) {
+    return 'EXPIRY_EARLY';
+  }
   return null;
 }
 
@@ -253,6 +398,8 @@ export const SERVICE_REMINDER_NOTIFICATION_KINDS: Readonly<
   USAGE_FIRST: 'SERVICE_USAGE_FIRST',
   USAGE_SECOND: 'SERVICE_USAGE_SECOND',
   USAGE_FINAL: 'SERVICE_USAGE_FINAL',
+  EXPIRY_EARLY: 'SERVICE_EXPIRY_EARLY',
+  EXPIRY_DAY: 'SERVICE_EXPIRY_DAY',
 };
 
 /**

@@ -94,8 +94,16 @@ export const TEMPLATE_GROUPS_FA: readonly TemplateGroupDefinition[] = [
   { id: 'apps', label: 'دانلود برنامه و آموزش اتصال', prefixes: ['bot.apps.'] },
   {
     id: 'reminders',
-    label: 'یادآور انقضا و مصرف',
-    prefixes: ['bot.service.expiry_', 'bot.service.expired', 'bot.service.usage_'],
+    label: 'یادآورهای خودکار: انقضا، حجم، موجودی و پرداخت',
+    prefixes: [
+      'bot.service.expiry_',
+      'bot.service.expired',
+      'bot.service.usage_',
+      // WP-A9: the other automated reminders, beside the ones they are configured with.
+      'bot.wallet.low_balance',
+      'bot.payment.pending_reminder',
+      'bot.order.pending_reminder',
+    ],
   },
   { id: 'transfer', label: 'انتقال سرویس', prefixes: ['bot.service.transfer_'] },
   {
@@ -359,6 +367,7 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   refundId: 'شناسهٔ بازگشت وجه',
   registeredAt: 'زمان عضویت',
   remaining: 'مبلغ قابل بازگشت باقی‌مانده',
+  remainingPercent: 'درصد حجم باقی‌مانده',
   remainingDays: 'روزهای باقی‌مانده',
   remainingTraffic: 'حجم باقی‌مانده',
   requestId: 'شناسهٔ درخواست',
@@ -394,6 +403,7 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   template: 'الگو',
   tenantId: 'شناسهٔ مستأجر',
   text: 'متن پیام',
+  threshold: 'مبلغ آستانه',
   timePrice: 'قیمت زمان',
   toLocation: 'لوکیشن مقصد',
   title: 'عنوان',
@@ -1590,15 +1600,36 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   ],
   'bot.service.usage_first': [
     'یادآور اول مصرف حجم',
-    'وقتی مصرف به نخستین آستانه (پیش‌فرض ۸۰ درصد) می‌رسد.',
+    'وقتی از حجم سرویس به نخستین آستانه (پیش‌فرض ۲۰ درصد) باقی مانده باشد.',
   ],
   'bot.service.usage_second': [
     'یادآور دوم مصرف حجم',
-    'وقتی مصرف به آستانهٔ دوم (پیش‌فرض ۹۵ درصد) می‌رسد.',
+    'وقتی از حجم سرویس به آستانهٔ دوم (پیش‌فرض ۱۰ درصد) باقی مانده باشد.',
   ],
   'bot.service.usage_final': [
-    'اعلان اتمام حجم سرویس',
-    'وقتی مصرف به آستانهٔ پایانی (پیش‌فرض ۱۰۰ درصد) می‌رسد؛ خرید حجم اضافه را پیشنهاد می‌کند.',
+    'یادآور پایانی مصرف حجم',
+    'وقتی از حجم سرویس به آستانهٔ پایانی (پیش‌فرض ۵ درصد) باقی مانده باشد؛ خرید حجم اضافه را پیشنهاد می‌کند.',
+  ],
+  // WP-A9: the week-out and day-of expiry reminders, and the non-service reminders.
+  'bot.service.expiry_early': [
+    'یادآور هفتگی انقضای سرویس',
+    'زودترین یادآور انقضا (پیش‌فرض هفت روز مانده)؛ پیش از یادآور اول فرستاده می‌شود.',
+  ],
+  'bot.service.expiry_day': [
+    'یادآور روز انقضای سرویس',
+    'در روز پایان اعتبار و پیش از پایان آن فرستاده می‌شود و زمان دقیق انقضا را می‌گوید.',
+  ],
+  'bot.wallet.low_balance': [
+    'هشدار کمبود موجودی کیف پول',
+    'وقتی موجودی کیف پول از آستانهٔ تعیین‌شده کمتر شود، یک بار فرستاده می‌شود.',
+  ],
+  'bot.payment.pending_reminder': [
+    'یادآور مهلت پرداخت کارت‌به‌کارت',
+    'کمی پیش از پایان مهلت پرداخت، اگر مشتری هنوز واریز نکرده و رسیدی نفرستاده باشد.',
+  ],
+  'bot.order.pending_reminder': [
+    'یادآور سفارش پرداخت‌نشده',
+    'کمی پیش از پایان مهلت سفارشی که هنوز پرداختی برایش شروع نشده است.',
   ],
 
   // --- Service transfer -------------------------------------------------------------

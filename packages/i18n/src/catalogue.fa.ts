@@ -250,6 +250,10 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     'قیمت این سفارش تغییر کرده است. هیچ مبلغی کسر نشده است. لطفاً سفارش را دوباره شروع کنید.',
   'bot.order.expired': 'مهلت این سفارش به پایان رسیده است. لطفاً دوباره سفارش دهید.',
   'bot.order.not_awaiting_payment': 'این سفارش دیگر در انتظار پرداخت نیست.',
+  /* WP-A9: one reminder before an unpaid order's own window closes. */
+  'bot.order.pending_reminder':
+    '⏳ سفارش شما به مبلغ {total} هنوز پرداخت نشده و تنها {minutes} دقیقه تا پایان مهلت آن باقی مانده است (تا {expiresAt}).\n' +
+    'برای نهایی کردن خرید، پیش از پایان مهلت پرداخت کنید.',
   'bot.order.awaiting_payment':
     'سفارش ثبت شد و در انتظار پرداخت است.\nمبلغ: {total}\nاعتبار تا: {expiresAt}',
   /*
@@ -644,6 +648,10 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.wallet.topup_credited':
     '✅ مبلغ {amount} به کیف پول شما اضافه شد. موجودی را با /wallet ببینید.',
   'bot.wallet.topup_gift_credited': '🎁 مبلغ {amount} نیز بابت هدیهٔ شارژ به کیف پول شما واریز شد.',
+  /* WP-A9: sent once per fall below the tenant's threshold. */
+  'bot.wallet.low_balance':
+    'موجودی کیف پول شما به {balance} رسیده و کمتر از {threshold} است.\n' +
+    'برای خرید و تمدید بدون وقفه، کیف پول خود را از بخش /wallet شارژ کنید.',
   /*
    * Payment File 02 §12: a reviewer credited the receipt to the wallet instead of taking
    * it as payment. The order, if any, is still unpaid — the sentence says so, because a
@@ -748,6 +756,10 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.payment.rejected':
     'پرداخت شما بررسی شد و تأیید نشد.\nدلیل: {reason}\nاگر سفارشی در انتظار پرداخت دارید، تا پایان مهلت آن می‌توانید دوباره پرداخت کنید.',
   'bot.payment.expired': 'مهلت پرداخت شما به پایان رسید و این پرداخت بسته شد.',
+  /* WP-A9: one reminder before the window closes, while it can still be paid. */
+  'bot.payment.pending_reminder':
+    '⏳ تنها {minutes} دقیقه تا پایان مهلت پرداخت فاکتور {reference} باقی مانده است (تا {expiresAt}).\n' +
+    'اگر هنوز واریز نکرده‌اید، پیش از پایان مهلت واریز کنید و رسید را ارسال کنید.',
   /*
    * P2. Paying from the wallet while a transfer the customer vouched for is waiting: the
    * review decides this order, and nothing was taken from the wallet.
@@ -812,15 +824,28 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.service.expired':
     'اعتبار سرویس «{service}» در {expiresAt} به پایان رسید.\n' +
     'از بخش «سرویس‌های من» می‌توانید آن را تمدید کنید.',
+  /*
+   * WP-A9: the usage sentences speak in traffic REMAINING, as the thresholds now do, and
+   * the final one no longer says the traffic ran out — its default is 5% remaining. At a
+   * stored 100% it reads «۰ درصد باقی مانده», which is the same fact.
+   */
   'bot.service.usage_first':
-    '{usagePercent} درصد از حجم سرویس «{service}» مصرف شده است ({usedTraffic} از {totalTraffic}).\n' +
+    'تنها {remainingPercent} درصد از حجم سرویس «{service}» باقی مانده است ({usedTraffic} از {totalTraffic} مصرف شده).\n' +
     'در صورت نیاز می‌توانید از بخش «سرویس‌های من» حجم اضافه کنید.',
   'bot.service.usage_second':
-    '{usagePercent} درصد از حجم سرویس «{service}» مصرف شده است ({usedTraffic} از {totalTraffic}).\n' +
+    'تنها {remainingPercent} درصد از حجم سرویس «{service}» باقی مانده است ({usedTraffic} از {totalTraffic} مصرف شده).\n' +
     'برای جلوگیری از قطع شدن، از بخش «سرویس‌های من» حجم اضافه کنید.',
   'bot.service.usage_final':
-    'حجم سرویس «{service}» به پایان رسید ({usedTraffic} از {totalTraffic}).\n' +
+    'حجم سرویس «{service}» رو به پایان است: {remainingPercent} درصد باقی مانده ({usedTraffic} از {totalTraffic} مصرف شده).\n' +
     'از بخش «سرویس‌های من» می‌توانید حجم اضافه کنید.',
+  /* WP-A9: the week-out warning and the day of expiry. */
+  'bot.service.expiry_early':
+    'سرویس «{service}» تا {days} روز دیگر به پایان اعتبار می‌رسد (تاریخ: {expiresAt}).\n' +
+    'می‌توانید از بخش «سرویس‌های من» آن را تمدید کنید.',
+  // Not «امروز»: for a deadline just after local midnight this is sent before midnight.
+  'bot.service.expiry_day':
+    'اعتبار سرویس «{service}» به‌زودی، در {expiresAt}، به پایان می‌رسد.\n' +
+    'برای جلوگیری از قطع شدن، همین حالا از بخش «سرویس‌های من» تمدید کنید.',
   'bot.service.provision_delayed':
     'ساخت سرویس کامل نشد و موضوع به پشتیبانی اطلاع داده شد. لطفاً منتظر پیگیری بمانید.',
   'bot.service.renew_button': '💊 تمدید سرویس',

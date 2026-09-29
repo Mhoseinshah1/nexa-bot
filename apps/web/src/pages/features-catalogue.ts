@@ -67,6 +67,23 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
     summary: 'web.feature_service_usage_reminders_summary',
     disableEffect: 'web.feature_service_usage_reminders_off_effect',
   },
+  // WP-A9: the three reminder switches it added. Off, like the families above, customers
+  // silently stop being told something they did not ask for and rely on.
+  service_expiry_day_reminder: {
+    title: 'web.feature_service_expiry_day_reminder_title',
+    summary: 'web.feature_service_expiry_day_reminder_summary',
+    disableEffect: 'web.feature_service_expiry_day_reminder_off_effect',
+  },
+  wallet_low_balance_reminders: {
+    title: 'web.feature_wallet_low_balance_reminders_title',
+    summary: 'web.feature_wallet_low_balance_reminders_summary',
+    disableEffect: 'web.feature_wallet_low_balance_reminders_off_effect',
+  },
+  payment_pending_reminders: {
+    title: 'web.feature_payment_pending_reminders_title',
+    summary: 'web.feature_payment_pending_reminders_summary',
+    disableEffect: 'web.feature_payment_pending_reminders_off_effect',
+  },
   // Off withdraws the offer and touches no trial already issued.
   trials: {
     title: 'web.feature_trials_title',

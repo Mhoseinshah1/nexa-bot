@@ -1,4 +1,9 @@
-import { refuseReminderThresholds, type ScopeContext, type SettingKey } from '@nexa/contracts';
+import {
+  refuseEarlyReminderDays,
+  refuseReminderThresholds,
+  type ScopeContext,
+  type SettingKey,
+} from '@nexa/contracts';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { SettingsResolver } from './settings-resolver.js';
 import type { SettingChangeGuard } from './settings.service.js';
@@ -77,6 +82,11 @@ export class ReminderThresholdsGuard implements SettingChangeGuard {
     return refuseReminderThresholds({ ...current, [this.camel()]: change.to });
   }
 
+  /** One guard per key, built from the one list — and the week-out slot's own guard. */
+  static withEarly(resolver: SettingsResolver): readonly SettingChangeGuard[] {
+    return [...ReminderThresholdsGuard.all(resolver), new EarlyReminderDaysGuard(resolver)];
+  }
+
   private async resolve(
     scope: ScopeContext,
     tx: TransactionScope,
@@ -128,5 +138,31 @@ export class ReminderThresholdsGuard implements SettingChangeGuard {
       keyof Awaited<ReturnType<ReminderThresholdsGuard['resolve']>>
     >;
     return fields[this.key];
+  }
+}
+
+/**
+ * WP-A9: the week-out slot, checked against the first warning when IT is written.
+ *
+ * Its own guard rather than a sixth member of `REMINDER_THRESHOLD_KEYS`, and asked only
+ * for `reminders.expiry_early_days`, for the backward-compatibility reason
+ * `refuseEarlyReminderDays` gives: a tenant that stored a first warning of seven days or
+ * more before this slot existed must still be able to edit its five older keys without
+ * first visiting a new one. Such a slot is inert rather than refused, and the Web Admin
+ * says so beside it.
+ */
+export class EarlyReminderDaysGuard implements SettingChangeGuard {
+  readonly key = 'reminders.expiry_early_days' as const satisfies SettingKey;
+
+  constructor(private readonly resolver: SettingsResolver) {}
+
+  async refuseChange(
+    scope: ScopeContext,
+    change: { readonly from: unknown; readonly to: unknown },
+    tx: TransactionScope,
+  ): Promise<string | null> {
+    if (typeof change.to !== 'number') return 'مقدار باید یک عدد صحیح باشد.';
+    const first = await this.resolver.valueOf<number>(scope, 'reminders.expiry_first_days', tx);
+    return refuseEarlyReminderDays(change.to, first);
   }
 }
