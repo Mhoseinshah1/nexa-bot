@@ -165,6 +165,14 @@ describe('the operator write shape', () => {
     ).toBe(false);
   });
 
+  it('refuses a malformed price as an issue, never by throwing out of safeParse', () => {
+    // Every other field valid, so the object refinements run after the pattern fails.
+    for (const priceAmount of ['abc', '1.5']) {
+      const parsed = serviceLocationWriteSchema.safeParse({ ...base, priceAmount });
+      expect(parsed.success, priceAmount).toBe(false);
+    }
+  });
+
   it('takes a limit as a pair, and keeps the initial location panel-wide', () => {
     expect(serviceLocationWriteSchema.safeParse({ ...base, maxChanges: 2 }).success).toBe(false);
     expect(
