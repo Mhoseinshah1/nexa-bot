@@ -1087,6 +1087,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     telegram: telegramBotGateway,
     webhookSecret: () => config.TELEGRAM_WEBHOOK_SECRET,
     webhookEnabled: () => config.TELEGRAM_WEBHOOK_ENABLED,
+    telegramCallTimeoutMs: config.NOTIFICATION_SEND_TIMEOUT_MS,
   });
 
   /*
@@ -1106,8 +1107,10 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     scopeActivity: tenants,
     outbox,
     clock,
+    ids,
     webhookSecret: () => config.TELEGRAM_WEBHOOK_SECRET,
     webhookEnabled: () => config.TELEGRAM_WEBHOOK_ENABLED,
+    telegramCallTimeoutMs: config.NOTIFICATION_SEND_TIMEOUT_MS,
   });
 
   let installationTenantId: TenantId | null = null;

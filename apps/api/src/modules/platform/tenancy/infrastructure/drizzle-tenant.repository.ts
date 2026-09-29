@@ -1,4 +1,4 @@
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, gt, isNotNull, isNull, lte, or } from 'drizzle-orm';
 import {
   isSystemContext,
   asId,
@@ -28,6 +28,7 @@ import type {
   BotBootstrapView,
   BotInstanceRepository,
   TenantRepository,
+  TokenReplacementClaims,
 } from '../application/ports.js';
 
 type TenantRow = typeof tenants.$inferSelect;
@@ -157,7 +158,9 @@ function toBootstrapView(row: BotInstanceRow): BotBootstrapView {
   };
 }
 
-export class DrizzleBotInstanceRepository implements BotInstanceRepository, BotBootstrapRepository {
+export class DrizzleBotInstanceRepository
+  implements BotInstanceRepository, BotBootstrapRepository, TokenReplacementClaims
+{
   constructor(
     private readonly db: Database,
     private readonly cipher: SecretCipher,
@@ -387,11 +390,16 @@ export class DrizzleBotInstanceRepository implements BotInstanceRepository, BotB
   async markWebhookRegistered(
     scope: ScopeContext,
     id: BotInstanceId,
-    input: { readonly url: string; readonly secretFingerprint: string; readonly now: Date },
+    input: {
+      readonly url: string;
+      readonly secretFingerprint: string;
+      readonly now: Date;
+      readonly claimId: string;
+    },
     tx: unknown,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const tenantId = requireTenantId(scope);
-    await executorOf(this.db, tx)
+    const updated = await executorOf(this.db, tx)
       .update(botInstances)
       .set({
         webhookRegisteredAt: input.now,
@@ -399,7 +407,76 @@ export class DrizzleBotInstanceRepository implements BotInstanceRepository, BotB
         webhookSecretFingerprint: input.secretFingerprint,
         updatedAt: input.now,
       })
-      .where(and(eq(botInstances.tenantId, tenantId), eq(botInstances.id, id)));
+      .where(
+        and(
+          eq(botInstances.tenantId, tenantId),
+          eq(botInstances.id, id),
+          // R4: still the installer's claim, as a replacement's activation requires.
+          eq(botInstances.tokenReplacementClaim, input.claimId),
+        ),
+      )
+      .returning({ id: botInstances.id });
+    return updated.length === 1;
+  }
+
+  async tokenReplacementHeld(id: BotInstanceId, now: Date): Promise<boolean> {
+    const [row] = await this.db
+      .select({ id: botInstances.id })
+      .from(botInstances)
+      .where(
+        and(
+          eq(botInstances.id, id),
+          isNotNull(botInstances.tokenReplacementClaim),
+          gt(botInstances.tokenReplacementClaimedUntil, now),
+        ),
+      )
+      .limit(1);
+    return row !== undefined;
+  }
+
+  async claimTokenReplacement(
+    scope: ScopeContext,
+    id: BotInstanceId,
+    claim: { readonly id: string; readonly now: Date; readonly until: Date },
+    tx: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const updated = await executorOf(this.db, tx)
+      .update(botInstances)
+      .set({ tokenReplacementClaim: claim.id, tokenReplacementClaimedUntil: claim.until })
+      .where(
+        and(
+          eq(botInstances.tenantId, tenantId),
+          eq(botInstances.id, id),
+          // Free, or lapsed: a process that died holding it blocks the next attempt for
+          // the lease and no longer. `claim.now` is the Clock's, like every timestamp here.
+          or(
+            isNull(botInstances.tokenReplacementClaim),
+            lte(botInstances.tokenReplacementClaimedUntil, claim.now),
+          ),
+        ),
+      )
+      .returning({ id: botInstances.id });
+    return updated.length === 1;
+  }
+
+  async releaseTokenReplacement(
+    scope: ScopeContext,
+    id: BotInstanceId,
+    claimId: string,
+    tx: unknown,
+  ): Promise<void> {
+    const tenantId = requireTenantId(scope);
+    await executorOf(this.db, tx)
+      .update(botInstances)
+      .set({ tokenReplacementClaim: null, tokenReplacementClaimedUntil: null })
+      .where(
+        and(
+          eq(botInstances.tenantId, tenantId),
+          eq(botInstances.id, id),
+          eq(botInstances.tokenReplacementClaim, claimId),
+        ),
+      );
   }
 
   async recordTelegramIdentity(

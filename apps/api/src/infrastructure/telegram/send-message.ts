@@ -504,6 +504,13 @@ export function callbackAnswerBody(input: {
 export interface TelegramBotIdentity {
   readonly botId: string;
   readonly username: string;
+  /**
+   * `User.is_bot` as Telegram answered it, or null when the field was absent. The Bot API
+   * always sends it for `getMe`; it is carried rather than required here because several
+   * callers only want the username, and a stand-in that omits it must not cost them the
+   * name. A caller that has to KNOW it is a bot — the token replacement — requires `true`.
+   */
+  readonly isBot: boolean | null;
 }
 
 export type TelegramIdentityOutcome =
@@ -534,9 +541,10 @@ export async function telegramGetMe(
   const call = await telegramCall({ ...request, method: 'getMe', body: {} });
   if (call.outcome !== 'SUCCEEDED') return call;
 
-  const result = call.result as { id?: unknown; username?: unknown } | null;
+  const result = call.result as { id?: unknown; username?: unknown; is_bot?: unknown } | null;
   const id = result?.id;
   const username = result?.username;
+  const isBot = typeof result?.is_bot === 'boolean' ? result.is_bot : null;
 
   /*
    * A 2xx that parsed but does not describe a bot.
@@ -553,7 +561,7 @@ export async function telegramGetMe(
     };
   }
 
-  return { outcome: 'SUCCEEDED', identity: { botId: String(id), username } };
+  return { outcome: 'SUCCEEDED', identity: { botId: String(id), username, isBot } };
 }
 
 /**
@@ -580,15 +588,28 @@ export async function telegramSetWebhook(
     readonly url: string;
     readonly secretToken: string;
     readonly dropPendingUpdates: boolean;
+    /**
+     * R4 — `allowed_updates`, sent only when given. The Bot API KEEPS the previous list
+     * when the field is omitted, so a registration somebody else narrowed (to `message`
+     * alone, say) survives an ordinary re-registration and the bot silently stops seeing
+     * button presses. An EMPTY list is Telegram's documented reset to its default set,
+     * which is not a narrowing: it is the set this installation has always relied on.
+     */
+    readonly allowedUpdates?: readonly string[];
   },
 ): Promise<TelegramSendOutcome> {
   assertOutsideTransaction('A Telegram setWebhook');
 
-  const { url, secretToken, dropPendingUpdates, ...rest } = request;
+  const { url, secretToken, dropPendingUpdates, allowedUpdates, ...rest } = request;
   const call = await telegramCall({
     ...rest,
     method: 'setWebhook',
-    body: { url, secret_token: secretToken, drop_pending_updates: dropPendingUpdates },
+    body: {
+      url,
+      secret_token: secretToken,
+      drop_pending_updates: dropPendingUpdates,
+      ...(allowedUpdates === undefined ? {} : { allowed_updates: allowedUpdates }),
+    },
   });
   if (call.outcome !== 'SUCCEEDED') return call;
   // `setWebhook` answers `result: true`. There is no id to carry, and reporting one
@@ -640,6 +661,11 @@ export interface TelegramWebhookInfo {
   readonly lastErrorAt: Date | null;
   readonly lastErrorMessage: string | null;
   readonly maxConnections: number | null;
+  /**
+   * R4 — `allowed_updates`, when Telegram reports one. Null when absent, which the Bot API
+   * uses for its default set; strings only, anything else dropped.
+   */
+  readonly allowedUpdates: readonly string[] | null;
 }
 
 export type TelegramWebhookInfoOutcome =
@@ -690,8 +716,38 @@ export async function telegramGetWebhookInfo(
           ? info.last_error_message
           : null,
       maxConnections: count(info.max_connections),
+      allowedUpdates: Array.isArray(info.allowed_updates)
+        ? info.allowed_updates.filter((entry): entry is string => typeof entry === 'string')
+        : null,
     },
   };
+}
+
+/**
+ * Remove the webhook (`deleteWebhook`). R4's compensation, and nothing else calls it.
+ *
+ * Telegram then HOLDS the bot's updates (for up to 24 hours) rather than delivering them,
+ * which is the point: a replacement that could not store its token puts a bot that had no
+ * webhook back into having none, so nothing is delivered to an installation whose stored
+ * token cannot answer it. `drop_pending_updates` is the caller's decision, for the reason
+ * `telegramSetWebhook` gives, and the only caller passes false.
+ */
+export async function telegramDeleteWebhook(
+  request: Omit<TelegramSendRequest, 'body' | 'method'> & {
+    readonly dropPendingUpdates: boolean;
+  },
+): Promise<TelegramSendOutcome> {
+  assertOutsideTransaction('A Telegram deleteWebhook');
+
+  const { dropPendingUpdates, ...rest } = request;
+  const call = await telegramCall({
+    ...rest,
+    method: 'deleteWebhook',
+    body: { drop_pending_updates: dropPendingUpdates },
+  });
+  if (call.outcome !== 'SUCCEEDED') return call;
+  // Answers `result: true`, whether or not a webhook was set. No id to carry.
+  return { outcome: 'SUCCEEDED', messageId: null };
 }
 
 // ---------------------------------------------------------------------------

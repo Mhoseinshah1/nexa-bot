@@ -1,7 +1,9 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { Body, Controller, Headers, Inject, Param, Post } from '@nestjs/common';
 import {
+  BOT_ERROR_CODES,
   errors,
+  NexaError,
   PLATFORM_ERROR_CODES,
   systemJobActor,
   TELEGRAM_SECRET_TOKEN_HEADER,
@@ -128,6 +130,35 @@ export class TelegramWebhookController {
     const tenant = await this.container.tenants.findById(botInstance.tenantId);
     if (tenant === null || tenant.status !== 'ACTIVE') {
       throw errors.notFound(PLATFORM_ERROR_CODES.TENANT_NOT_FOUND, 'Unknown bot instance.');
+    }
+
+    /*
+     * R4 — a token replacement is in flight for this bot: hold the update, write nothing.
+     *
+     * A replacement registers the webhook BEFORE it stores the new token (it must prove
+     * Telegram delivers here first), and `drop_pending_updates: false` lets Telegram start
+     * flushing its queue at once. Handled now, an update would be answered with the token
+     * still stored — the revoked one — and the reply would fail after this route had
+     * already answered 2xx, so Telegram would never deliver it again: lost. A non-2xx
+     * instead makes Telegram redeliver with back-off; it keeps updates for a day, and a
+     * claim left by a process that died lapses with its lease.
+     *
+     * 409 (CONFLICT, retryable) rather than a 5xx: no error kind here maps to 503, and a
+     * 5xx is logged as an unhandled failure for every held update. Telegram retries any
+     * non-2xx. Checked before anything below reads or writes.
+     */
+    if (
+      await this.container.botInstances.tokenReplacementHeld(
+        botInstance.id,
+        this.container.clock.now(),
+      )
+    ) {
+      throw new NexaError({
+        kind: 'CONFLICT',
+        code: BOT_ERROR_CODES.BOT_TOKEN_REPLACEMENT_IN_PROGRESS,
+        message: 'This bot is being reconfigured. Deliver the update again shortly.',
+        retryable: true,
+      });
     }
 
     // Parsed at the boundary, like every other command on this codebase.

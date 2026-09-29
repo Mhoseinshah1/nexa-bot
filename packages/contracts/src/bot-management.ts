@@ -8,8 +8,14 @@ import { BOT_INSTANCE_STATUSES, TENANT_KINDS, type BotInstanceStatus } from './t
  * What it covers is exactly what the architecture can truthfully support: reading a
  * bot's recorded state, stopping and starting it, replacing its token for the SAME
  * bot, and asking Telegram what it currently holds. What it deliberately does not
- * cover — adding a bot, repointing one to another tenant, registering a webhook — is
- * recorded in the audit with the decision that rules each out.
+ * cover — adding a bot, repointing one to another tenant — is recorded in the audit
+ * with the decision that rules each out.
+ *
+ * R4 (item 12) changed one thing here: a token replacement now REGISTERS the webhook
+ * with the new token and reads it back before the token is stored, at the one URL this
+ * installation has already proved it serves (`webhook_url`'s origin, recomposed). A
+ * replacement that stored a token and left the webhook to chance was the defect: the
+ * token was accepted and the bot stayed silent.
  */
 
 /**
@@ -98,6 +104,70 @@ export type BotIdentityCheckOutcome = (typeof BOT_IDENTITY_CHECK_OUTCOMES)[numbe
  */
 export const BOT_WEBHOOK_CHECK_OUTCOMES = ['READ', 'REJECTED', 'UNREACHABLE', 'SKIPPED'] as const;
 export type BotWebhookCheckOutcome = (typeof BOT_WEBHOOK_CHECK_OUTCOMES)[number];
+
+/**
+ * R4 — everything a LIVE look at Telegram, plus this process's configuration, found in
+ * the way of this bot receiving updates. Empty means ready.
+ *
+ * The first three are the recorded holding causes (`BOT_HOLDING_CAUSES`), repeated here
+ * so one list answers "is it ready"; the rest are what only Telegram can say:
+ *
+ *  - `TOKEN_NOT_ACCEPTED` — `getMe` did not identify the bot;
+ *  - `DIFFERENT_BOT` — it identified a bot other than the recorded one;
+ *  - `WEBHOOK_UNREADABLE` — `getWebhookInfo` could not be read;
+ *  - `WEBHOOK_EXPECTED_UNKNOWN` — this installation has never recorded the origin it
+ *    serves the webhook on, so there is nothing exact to compare with;
+ *  - `WEBHOOK_NOT_SET` — Telegram holds no webhook (updates are queued, not delivered);
+ *  - `WEBHOOK_ELSEWHERE` — Telegram delivers to a URL that is not this installation's;
+ *  - `WEBHOOK_UPDATES_NARROWED` — the registration's `allowed_updates` leaves out an
+ *    update type this bot handles;
+ *  - `WEBHOOK_SECRET_NOT_CURRENT` — the registration was not recorded as made with the
+ *    secret this installation holds now, so the route would refuse what Telegram signs.
+ */
+export const BOT_LIVE_PROBLEMS = [
+  'WEBHOOK_ROUTE_DISABLED',
+  'TENANT_INACTIVE',
+  'BOT_NOT_ACTIVE',
+  'TOKEN_NOT_ACCEPTED',
+  'DIFFERENT_BOT',
+  'WEBHOOK_UNREADABLE',
+  'WEBHOOK_EXPECTED_UNKNOWN',
+  'WEBHOOK_NOT_SET',
+  'WEBHOOK_ELSEWHERE',
+  'WEBHOOK_UPDATES_NARROWED',
+  'WEBHOOK_SECRET_NOT_CURRENT',
+] as const;
+export type BotLiveProblem = (typeof BOT_LIVE_PROBLEMS)[number];
+
+/**
+ * R4 — where a token replacement stopped, when it stopped after Telegram was asked to
+ * change something. A failure before that point has nothing to put back and carries no
+ * stage.
+ */
+export const BOT_REPLACEMENT_STAGES = ['SET_WEBHOOK', 'VERIFY_WEBHOOK', 'ACTIVATE'] as const;
+export type BotReplacementStage = (typeof BOT_REPLACEMENT_STAGES)[number];
+
+/**
+ * R4 — what was done at Telegram to undo a replacement that did not complete.
+ *
+ *  - `NOT_NEEDED` — nothing to undo: Telegram refused the change, or it already
+ *    delivered to this installation's own URL before the attempt;
+ *  - `RESTORED` — the bot had no webhook before, and it has none again;
+ *  - `HELD` — the bot was registered ELSEWHERE before. That registration cannot be put
+ *    back (Telegram never reveals the secret it was made with), so the webhook was
+ *    removed and Telegram holds the bot's updates instead of delivering them to an
+ *    installation whose stored token cannot answer them;
+ *  - `SUPERSEDED` — somebody else changed the registration meanwhile; it was left alone;
+ *  - `FAILED` — the undo could not be done or confirmed. An operational event says so.
+ */
+export const BOT_WEBHOOK_COMPENSATIONS = [
+  'NOT_NEEDED',
+  'RESTORED',
+  'HELD',
+  'SUPERSEDED',
+  'FAILED',
+] as const;
+export type BotWebhookCompensation = (typeof BOT_WEBHOOK_COMPENSATIONS)[number];
 
 /** The largest token the endpoint reads. A real one is well under 64 characters. */
 export const BOT_TOKEN_MAX_LENGTH = 256;
@@ -208,9 +278,60 @@ export const botDiagnosticSchema = z.object({
     lastErrorAt: isoInstant.nullable(),
     lastErrorMessage: z.string().max(BOT_WEBHOOK_ERROR_MESSAGE_MAX).nullable(),
     maxConnections: z.number().int().nonnegative().nullable(),
+    /**
+     * R4 — the URL THIS installation registers for this bot: the recorded registration's
+     * origin plus `/telegram/webhook/<bot instance id>`. It carries no secret. Null when no
+     * origin was ever recorded (`WEBHOOK_EXPECTED_UNKNOWN`).
+     */
+    expectedUrl: z.string().nullable(),
+    /** Whether Telegram's URL is EXACTLY `expectedUrl`. Null when either is unknown. */
+    matchesExpected: z.boolean().nullable(),
+  }),
+  /** R4 — the one answer to "can this bot receive an update right now". */
+  verdict: z.object({
+    readyToReceive: z.boolean(),
+    problems: z.array(z.enum(BOT_LIVE_PROBLEMS)),
   }),
 });
 export type BotDiagnostic = z.infer<typeof botDiagnosticSchema>;
+
+/**
+ * R4 — the answer to a token replacement: the mutation answer, and the verification the
+ * replacement itself made — `getMe` with the new token, and the webhook as Telegram
+ * reported it AFTER it was registered. It is what the Web Admin shows at once, so the
+ * operator does not have to run a live check to find out whether it worked.
+ *
+ * `changed` is about the TOKEN: `false` means the one supplied was already stored — the
+ * webhook was still registered and verified again, which is how a bot left silent by an
+ * earlier replacement is repaired. `verification` is null only on a replay of a result
+ * stored before this field existed.
+ */
+export const botTokenReplacementResponseSchema = botMutationResponseSchema.extend({
+  verification: botDiagnosticSchema.nullable(),
+});
+export type BotTokenReplacementResponse = z.infer<typeof botTokenReplacementResponseSchema>;
+
+/**
+ * R4 — the `details` of a replacement refused AFTER Telegram was asked to change the
+ * webhook (`bot.webhook_refused`, `bot.webhook_setup_failed`,
+ * `bot.webhook_verification_failed`, `bot.token_activation_failed`). Nothing in it is
+ * secret: the expected URL is this installation's own, the actual one is shown by the
+ * rule `url` above follows, and Telegram's reason is redacted and bounded.
+ */
+export const botReplacementFailureDetailsSchema = z.object({
+  stage: z.enum(BOT_REPLACEMENT_STAGES),
+  compensation: z.enum(BOT_WEBHOOK_COMPENSATIONS),
+  expectedUrl: z.string().nullable(),
+  actualUrl: z.string().nullable(),
+  telegramReason: z.string().max(BOT_WEBHOOK_ERROR_MESSAGE_MAX).nullable(),
+  /**
+   * For `bot.token_activation_failed`: the error code the storing transaction ended with
+   * (a session that expired meanwhile, a tenant stopped meanwhile, a claim that lapsed),
+   * or null when it was not a coded refusal.
+   */
+  cause: z.string().nullable(),
+});
+export type BotReplacementFailureDetails = z.infer<typeof botReplacementFailureDetailsSchema>;
 
 export const botDiagnosticResponseSchema = z.object({ diagnostic: botDiagnosticSchema });
 export type BotDiagnosticResponse = z.infer<typeof botDiagnosticResponseSchema>;

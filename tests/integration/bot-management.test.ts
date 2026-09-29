@@ -18,13 +18,17 @@ import {
 } from '@nexa/contracts';
 import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
-import { BotManagementService } from '../../apps/api/src/modules/platform/tenancy/application/bot-management.service';
+import {
+  BotManagementService,
+  type BotManagementServiceDeps,
+} from '../../apps/api/src/modules/platform/tenancy/application/bot-management.service';
 import type {
   BotManagementTelegram,
   BotWebhookRead,
 } from '../../apps/api/src/modules/platform/tenancy/application/bot-management-ports';
 import type { BotIdentityProbe } from '../../apps/api/src/modules/platform/tenancy/application/ports';
 import { DrizzleBotManagementRepository } from '../../apps/api/src/modules/platform/tenancy/infrastructure/drizzle-bot-management.repository';
+import { currentTransactionLabel } from '../../apps/api/src/infrastructure/transaction-boundary';
 import {
   adminActorFor,
   createAdmin,
@@ -52,6 +56,8 @@ const BOT_A1 = SEED_IDS.botA1 as BotInstanceId;
 const BOT_A2 = SEED_IDS.botA2 as BotInstanceId;
 const BOT_B1 = SEED_IDS.botB1 as BotInstanceId;
 const TELEGRAM_ID = '7000000001';
+/** The URL the installer registers for BOT_A1: an origin, then the route and the bot id. */
+const RECORDED_URL = `https://bot.example.test/telegram/webhook/${BOT_A1}`;
 const tokenFor = (botId: string, tail: string) => `${botId}:${tail.padEnd(35, 'x')}`;
 
 describe('WP13 bot management', () => {
@@ -383,18 +389,25 @@ describe('WP13 bot management', () => {
     let identity: BotIdentityProbe;
     let webhook: BotWebhookRead;
     let service: BotManagementService;
+    let deps: BotManagementServiceDeps;
     const scope = tenantA as unknown as TenantContext;
 
     beforeEach(async () => {
       calls = [];
-      identity = { outcome: 'IDENTIFIED', botId: TELEGRAM_ID, username: 'acme_store_bot' };
+      identity = {
+        outcome: 'IDENTIFIED',
+        botId: TELEGRAM_ID,
+        username: 'acme_store_bot',
+        isBot: true,
+      };
       webhook = {
         outcome: 'READ',
-        url: 'https://bot.example.test/telegram/webhook/a1',
+        url: RECORDED_URL,
         pendingUpdateCount: 3,
         lastErrorAt: new Date('2026-09-01T10:00:00Z'),
         lastErrorMessage: 'Wrong response from the webhook: 502 Bad Gateway',
         maxConnections: 40,
+        allowedUpdates: null,
       };
       const telegram: BotManagementTelegram = {
         identify: async () => {
@@ -405,10 +418,23 @@ describe('WP13 bot management', () => {
           calls.push('readWebhook');
           return webhook;
         },
+        // R4: a replacement registers, and the registration is what a read then reports.
+        registerWebhook: async (input) => {
+          calls.push('registerWebhook');
+          webhook = {
+            ...(webhook as Extract<BotWebhookRead, { outcome: 'READ' }>),
+            url: input.url,
+          };
+          return { outcome: 'REGISTERED' };
+        },
+        removeWebhook: async () => {
+          calls.push('removeWebhook');
+          return { outcome: 'REMOVED' };
+        },
         commandsRevision: () => 'integration-revision',
       };
       const c = api.container;
-      service = new BotManagementService({
+      deps = {
         repository: new DrizzleBotManagementRepository(c.database.db, c.cipher, c.botInstances),
         telegram,
         guard: c.guard,
@@ -420,13 +446,16 @@ describe('WP13 bot management', () => {
         scopeActivity: c.tenants,
         outbox: c.outbox,
         clock: c.clock,
+        ids: c.ids,
         webhookSecret: () => WEBHOOK_SECRET,
         webhookEnabled: () => true,
-      });
+        telegramCallTimeoutMs: 10_000,
+      };
+      service = new BotManagementService(deps);
       await db().execute(sql`
         UPDATE bot_instances
            SET telegram_bot_id = ${TELEGRAM_ID},
-               webhook_url = 'https://bot.example.test/telegram/webhook/a1',
+               webhook_url = ${RECORDED_URL},
                webhook_registered_at = now()
          WHERE id = ${BOT_A1}`);
     });
@@ -453,9 +482,49 @@ describe('WP13 bot management', () => {
       expect(calls).toEqual([]);
     });
 
+    it('refuses before any Telegram call when this installation could not receive what it registered', async () => {
+      const next = tokenFor(TELEGRAM_ID, 'unservable');
+      for (const [label, changed] of [
+        ['route off', { webhookEnabled: () => false }],
+        ['no secret', { webhookSecret: () => '' }],
+        ['short secret', { webhookSecret: () => 'too-short' }],
+      ] as const) {
+        const unservable = new BotManagementService({ ...deps, ...changed });
+        expect(
+          await refusal(
+            unservable.replaceToken(scope, owner, {
+              idempotencyKey: `unservable-${label}`,
+              botId: BOT_A1,
+              token: next,
+            }),
+          ),
+          label,
+        ).toBe(BOT_ERROR_CODES.BOT_WEBHOOK_ROUTE_UNAVAILABLE);
+      }
+      // A recorded URL that is not this bot's route is not an origin to build from.
+      await db().execute(sql`
+        UPDATE bot_instances SET webhook_url = 'https://bot.example.test/telegram/webhook/a1'
+         WHERE id = ${BOT_A1}`);
+      expect(
+        await refusal(
+          service.replaceToken(scope, owner, {
+            idempotencyKey: 'foreign-recorded-url',
+            botId: BOT_A1,
+            token: next,
+          }),
+        ),
+      ).toBe(BOT_ERROR_CODES.BOT_WEBHOOK_ORIGIN_UNKNOWN);
+      expect(calls).toEqual([]);
+    });
+
     it('refuses a token Telegram identifies as another bot, and one Telegram rejects, writing nothing', async () => {
       const before = await api.container.botInstances.resolveToken(scope as never, BOT_A1);
-      identity = { outcome: 'IDENTIFIED', botId: '7000000999', username: 'someone_else_bot' };
+      identity = {
+        outcome: 'IDENTIFIED',
+        botId: '7000000999',
+        username: 'someone_else_bot',
+        isBot: true,
+      };
       expect(
         await refusal(
           service.replaceToken(scope, owner, {
@@ -492,6 +561,10 @@ describe('WP13 bot management', () => {
       expect(await auditCount('bot_instance.token_replace', BOT_A1)).toBe(0);
     });
 
+    // The four Telegram calls a replacement makes, in order (R4): identity, the prior
+    // registration, the registration, and the read-back that verifies it.
+    const REPLACEMENT_CALLS = ['identify', 'readWebhook', 'registerWebhook', 'readWebhook'];
+
     it('replaces the token of the same bot, audited without the value, and a stopped bot too', async () => {
       await db().execute(sql`UPDATE bot_instances SET status = 'STOPPED' WHERE id = ${BOT_A1}`);
       const next = tokenFor(TELEGRAM_ID, 'fresh');
@@ -502,45 +575,56 @@ describe('WP13 bot management', () => {
       });
       expect(outcome.changed).toBe(true);
       expect(outcome.bot.status).toBe('STOPPED');
-      expect(calls).toEqual(['identify']);
+      expect(calls).toEqual(REPLACEMENT_CALLS);
       expect(await api.container.botInstances.resolveToken(scope as never, BOT_A1)).toBe(next);
+      // Verified, and truthful about the stop: the webhook is right, the bot is not ready.
+      expect(outcome.verification?.webhook.matchesExpected).toBe(true);
+      expect(outcome.verification?.verdict).toEqual({
+        readyToReceive: false,
+        problems: ['BOT_NOT_ACTIVE'],
+      });
 
       const audits = await db().execute<{ after: unknown; before: unknown }>(sql`
         SELECT "after", "before" FROM audit_logs WHERE action = 'bot_instance.token_replace'`);
       expect(audits.rows).toHaveLength(1);
       expect(JSON.stringify(audits.rows)).not.toContain(next.split(':')[1] as string);
 
-      // The same token again is a no-op, and Telegram is not asked a second time.
+      // The same token again changes no credential — and still registers and verifies the
+      // webhook (R4): that is how a bot left silent by an earlier replacement is repaired.
+      calls.length = 0;
       const same = await service.replaceToken(scope, owner, {
         idempotencyKey: 'replace-a1-same',
         botId: BOT_A1,
         token: next,
       });
       expect(same.changed).toBe(false);
-      expect(calls).toEqual(['identify']);
+      expect(calls).toEqual(REPLACEMENT_CALLS);
       expect(await auditCount('bot_instance.token_replace', BOT_A1)).toBe(1);
+      expect(await auditCount('bot_instance.webhook_registered', BOT_A1)).toBe(1);
     });
 
-    it('decides a same-token no-op again under the lock, and replaces when the token moved meanwhile', async () => {
+    it('decides whether the token changed only under the row lock, never from an earlier read', async () => {
       const mine = tokenFor(TELEGRAM_ID, 'mine');
       const theirs = tokenFor(TELEGRAM_ID, 'theirs');
-      // The stored token is somebody else's replacement...
+      // The stored token is somebody else's replacement.
       await service.replaceToken(scope, owner, {
         idempotencyKey: 'theirs',
         botId: BOT_A1,
         token: theirs,
       });
       calls.length = 0;
-      // ...but this request's unlocked read saw its own token still stored: the other
-      // replacement committed between that read and this request's transaction.
+      // R4 removed the unlocked "same token" short-cut: every comparison with the stored
+      // token on this path is made inside the activating transaction, under the bot's
+      // lock, so no replacement can commit between the comparison and the write. A read
+      // outside it would be a decision taken on a value that may already have moved.
       const c = api.container;
       const real = new DrizzleBotManagementRepository(c.database.db, c.cipher, c.botInstances);
-      let reads = 0;
-      const racing = new BotManagementService({
+      const readInside: boolean[] = [];
+      const watched = new BotManagementService({
         repository: Object.assign(Object.create(real) as typeof real, {
           resolveToken: async (s: never, id: never) => {
-            reads += 1;
-            return reads === 1 ? mine : real.resolveToken(s, id);
+            readInside.push(currentTransactionLabel() !== undefined);
+            return real.resolveToken(s, id);
           },
         }),
         telegram: {
@@ -548,7 +632,15 @@ describe('WP13 bot management', () => {
             calls.push('identify');
             return identity;
           },
-          readWebhook: async () => webhook,
+          readWebhook: async () => {
+            calls.push('readWebhook');
+            return webhook;
+          },
+          registerWebhook: async () => {
+            calls.push('registerWebhook');
+            return { outcome: 'REGISTERED' };
+          },
+          removeWebhook: async () => ({ outcome: 'REMOVED' }),
           commandsRevision: () => 'integration-revision',
         },
         guard: c.guard,
@@ -560,19 +652,90 @@ describe('WP13 bot management', () => {
         scopeActivity: c.tenants,
         outbox: c.outbox,
         clock: c.clock,
+        ids: c.ids,
         webhookSecret: () => WEBHOOK_SECRET,
         webhookEnabled: () => true,
+        telegramCallTimeoutMs: 10_000,
       });
 
-      const outcome = await racing.replaceToken(scope, owner, {
+      const outcome = await watched.replaceToken(scope, owner, {
         idempotencyKey: 'mine',
         botId: BOT_A1,
         token: mine,
       });
-      // Not "your token is already the stored one": it no longer was, so it was replaced.
       expect(outcome.changed).toBe(true);
-      expect(calls).toEqual(['identify']);
+      expect(calls).toEqual(REPLACEMENT_CALLS);
+      expect(readInside).toEqual([true]);
       expect(await api.container.botInstances.resolveToken(scope as never, BOT_A1)).toBe(mine);
+    });
+
+    /*
+     * Codex F3. A COMMIT that landed and whose acknowledgement was lost throws like one
+     * that did not. Compensating then would delete a verified webhook for a token that WAS
+     * stored, so the durable outcome is read first.
+     */
+    describe('an activation whose outcome is ambiguous', () => {
+      /** A unit of work that commits the activation (its second run) and then throws. */
+      const ackLost = (): BotManagementServiceDeps['uow'] => {
+        let runs = 0;
+        return {
+          ...deps.uow,
+          run: async (runScope, fn) => {
+            runs += 1;
+            const result = await deps.uow.run(runScope, fn);
+            if (runs === 2) throw new Error('connection lost after COMMIT');
+            return result;
+          },
+        } as BotManagementServiceDeps['uow'];
+      };
+
+      beforeEach(() => {
+        // No webhook before, so a compensation WOULD delete the one this attempt set.
+        webhook = { ...(webhook as Extract<BotWebhookRead, { outcome: 'READ' }>), url: null };
+      });
+
+      it('answers the committed replacement and compensates nothing', async () => {
+        const next = tokenFor(TELEGRAM_ID, 'committed');
+        const ambiguous = new BotManagementService({ ...deps, uow: ackLost() });
+        const outcome = await ambiguous.replaceToken(scope, owner, {
+          idempotencyKey: 'ack-lost',
+          botId: BOT_A1,
+          token: next,
+        });
+        expect(outcome.changed).toBe(true);
+        expect(outcome.verification?.webhook.matchesExpected).toBe(true);
+        expect(calls).not.toContain('removeWebhook');
+        expect(await api.container.botInstances.resolveToken(scope as never, BOT_A1)).toBe(next);
+      });
+
+      it('runs nothing destructive when the outcome cannot be read, and says so', async () => {
+        // The replay check on arrival reads normally; the read after the lost COMMIT fails.
+        let finds = 0;
+        const ambiguous = new BotManagementService({
+          ...deps,
+          uow: ackLost(),
+          idempotency: {
+            ...deps.idempotency,
+            find: async (...args: Parameters<typeof deps.idempotency.find>) => {
+              finds += 1;
+              if (finds > 1) throw new Error('database unreachable');
+              return deps.idempotency.find(...args);
+            },
+            remember: deps.idempotency.remember.bind(deps.idempotency),
+          },
+        });
+        const error = await ambiguous
+          .replaceToken(scope, owner, {
+            idempotencyKey: 'ack-lost-unknown',
+            botId: BOT_A1,
+            token: tokenFor(TELEGRAM_ID, 'unknown'),
+          })
+          .then(() => null)
+          .catch((caught: unknown) => caught);
+        expect(isNexaError(error) && error.code).toBe(BOT_ERROR_CODES.BOT_TOKEN_ACTIVATION_FAILED);
+        expect(isNexaError(error) && error.details['compensation']).toBe('FAILED');
+        expect(calls).not.toContain('removeWebhook');
+      });
     });
 
     it('refuses a reused key sent with a different token, and never reports it replaced', async () => {
@@ -609,12 +772,13 @@ describe('WP13 bot management', () => {
         token: first,
       });
       expect(again.changed).toBe(true);
-      expect(calls).toEqual(['identify']);
+      // A replay: answered from the store, Telegram not asked again.
+      expect(calls).toEqual(REPLACEMENT_CALLS);
     });
 
     it('shows a webhook URL in full only when it is the recorded one, and a foreign one by its origin', async () => {
       const recorded = await service.diagnose(scope, owner, BOT_A1);
-      expect(recorded.webhook.url).toBe('https://bot.example.test/telegram/webhook/a1');
+      expect(recorded.webhook.url).toBe(RECORDED_URL);
 
       // A legacy registration that carries the bot token in its path.
       webhook = {
@@ -643,12 +807,21 @@ describe('WP13 bot management', () => {
         pendingUpdateCount: 3,
         lastErrorAt: '2026-09-01T10:00:00.000Z',
         maxConnections: 40,
+        expectedUrl: RECORDED_URL,
+        matchesExpected: true,
+      });
+      // Registered at the right URL, but never recorded as made with the current secret.
+      expect(diagnostic.verdict).toEqual({
+        readyToReceive: false,
+        problems: ['WEBHOOK_SECRET_NOT_CURRENT'],
       });
 
       webhook = { ...webhook, url: 'https://elsewhere.example.test/hook' } as BotWebhookRead;
       identity = { outcome: 'IDENTIFIED', botId: TELEGRAM_ID, username: 'renamed_bot' };
       const drifted = await service.diagnose(scope, owner, BOT_A1);
       expect(drifted.webhook.urlMatchesRecorded).toBe(false);
+      expect(drifted.webhook.matchesExpected).toBe(false);
+      expect(drifted.verdict.problems).toContain('WEBHOOK_ELSEWHERE');
       expect(drifted.identity.usernameMatches).toBe(false);
     });
 
