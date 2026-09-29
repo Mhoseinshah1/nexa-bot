@@ -32,9 +32,15 @@ export type TelegramWizardKind = (typeof TELEGRAM_WIZARD_KINDS)[number];
  * the rule that stops a double tap, or a keyboard Telegram had not yet replaced, from moving
  * the wizard backward or repeating an operation.
  *
+ * - `INVOICE_LOADING` is the loading screen a turn has LANDED but not yet marked: the
+ *   landing is written before the edit, so for that moment the message may still show the
+ *   previous screen. The gateway worker never moves a message from here — an outcome it
+ *   committed meanwhile would be edited in and then overwritten by the turn's loading edit —
+ *   so the turn, once its loading edit has been asked for, moves it to `INVOICE_PENDING`
+ *   itself and re-reads the attempt.
  * - `INVOICE_PENDING` is `INVOICE` whose provider invoice is still being created in the
  *   worker: the message shows the loading state, and whichever of the worker and the turn
- *   moves it to `INVOICE` first (one conditional UPDATE) edits it into the invoice.
+ *   moves it on first (one conditional UPDATE) edits it into the invoice or the end.
  * - `NOTICE` is a sentence the flow ended on (a refusal, an unavailable route); its buttons,
  *   if any, restart a step.
  * - `CLOSED` is terminal: the wizard was paid, withdrawn or finalised, and no button of it is
@@ -49,6 +55,7 @@ export const TELEGRAM_WIZARD_STEPS = [
   'AWAITING_PAYMENT',
   'METHODS',
   'AMOUNT',
+  'INVOICE_LOADING',
   'INVOICE_PENDING',
   'INVOICE',
   'NOTICE',

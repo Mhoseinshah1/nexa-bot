@@ -29,7 +29,7 @@ CREATE TABLE "telegram_wizards" (
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "telegram_wizards_kind_check" CHECK (kind IN ('ORDER', 'TOPUP')),
-	CONSTRAINT "telegram_wizards_step_check" CHECK (step IN ('CATEGORIES', 'PRODUCTS', 'USERNAME', 'DISCOUNT', 'PREINVOICE', 'AWAITING_PAYMENT', 'METHODS', 'AMOUNT', 'INVOICE_PENDING', 'INVOICE', 'NOTICE', 'CLOSED')),
+	CONSTRAINT "telegram_wizards_step_check" CHECK (step IN ('CATEGORIES', 'PRODUCTS', 'USERNAME', 'DISCOUNT', 'PREINVOICE', 'AWAITING_PAYMENT', 'METHODS', 'AMOUNT', 'INVOICE_LOADING', 'INVOICE_PENDING', 'INVOICE', 'NOTICE', 'CLOSED')),
 	CONSTRAINT "telegram_wizards_version_check" CHECK (version >= 0),
 	CONSTRAINT "telegram_wizards_message_check" CHECK (message_id > 0)
 );
