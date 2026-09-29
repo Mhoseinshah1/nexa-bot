@@ -160,6 +160,34 @@ describe('control plane, third review round', () => {
       expect(await eventsOfType('FeatureFlagChanged')).toHaveLength(1);
     });
 
+    /**
+     * WP-A2 removed the reason from the ordinary toggle. The row still says who changed
+     * which flag, when, from what to what — the reason column is simply empty, never a
+     * placeholder sentence standing in for one.
+     */
+    it('records a feature-flag change made with no reason', async () => {
+      await ctx.container.featureFlags.set(tenantA, owner, {
+        key: 'ops_notifications',
+        enabled: true,
+        expectedVersion: null,
+        idempotencyKey: `flag-${Math.random()}`,
+      });
+
+      const [audit] = await auditFor('features.set');
+      expect(audit).toMatchObject({
+        entityType: 'FeatureFlag',
+        entityId: 'ops_notifications',
+        actorType: owner.type,
+        actorId: owner.id,
+        result: 'SUCCESS',
+        before: { enabled: false, source: 'DEFAULT' },
+        after: { enabled: true, source: 'TENANT' },
+        reason: null,
+      });
+      expect(audit?.occurredAt).toBeInstanceOf(Date);
+      expect(await eventsOfType('FeatureFlagChanged')).toHaveLength(1);
+    });
+
     it('records a test send, and its denial', async () => {
       // The one control-plane write this block did not cover, which meant its
       // audit call could have been deleted and the suite would still have been
@@ -1145,6 +1173,39 @@ describe('control plane, Codex round', () => {
       // this look like the same request, so the API answered success for a
       // reason it never stored.
       await expect(toggle('Something else entirely.')).rejects.toMatchObject({
+        code: 'platform.idempotency_payload_mismatch',
+      });
+    });
+
+    /**
+     * No reason is part of the request too (WP-A2). A retry of a reason-less toggle is
+     * the same request and replays; the same key reused WITH a reason is a different
+     * one, and is refused rather than answered with a result that never stored it.
+     */
+    it('replays a reason-less toggle, and refuses its key reused with a reason', async () => {
+      const key = `flag-${Math.random()}`;
+      const toggle = (extra: Record<string, unknown>) =>
+        ctx.container.featureFlags.set(tenantA, owner, {
+          key: 'template_overrides',
+          enabled: false,
+          expectedVersion: null,
+          idempotencyKey: key,
+          ...extra,
+        });
+
+      const first = await toggle({});
+      expect(first).toMatchObject({ changed: true, replayed: false });
+
+      const again = await toggle({});
+      expect(again).toMatchObject({ changed: true, replayed: true });
+      expect(again.flag.enabled).toBe(false);
+      const audits = await ctx.container.database.db
+        .select()
+        .from(auditLogs)
+        .where(eq(auditLogs.action, 'features.set'));
+      expect(audits).toHaveLength(1);
+
+      await expect(toggle({ reason: 'Now with a reason.' })).rejects.toMatchObject({
         code: 'platform.idempotency_payload_mismatch',
       });
     });

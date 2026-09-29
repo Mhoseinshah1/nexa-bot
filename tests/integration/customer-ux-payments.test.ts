@@ -296,7 +296,7 @@ describe('a customer pays through the approved screens', () => {
       ).toBe(true);
       expect(buttonsOf(lastMarkup())).toEqual([
         `w:${orderId}`,
-        `m:${orderId}`,
+        `pm:${orderId}`,
         `dc:${orderId}`,
         'mm:',
       ]);
@@ -475,7 +475,7 @@ describe('a customer pays through the approved screens', () => {
       expect(begun.replyKey).toBe('bot.wallet.topup_amount_prompt');
       const typed = await handle(text('۵۰٬۰۰۰'));
       expect(typed.replyKey).toBe('bot.wallet.topup_method_prompt');
-      expect(lastText()).toBe('💳 روش پرداخت خود را انتخاب نمایید');
+      expect(lastText()).toBe('💰 روش پرداخت خود را انتخاب نمایید');
       const labels = labelsOf(lastMarkup());
       expect(labels).toEqual(['پرداخت با کارت به کارت (10 درصد شارژ هدیه)', '❌ بستن لیست']);
       const route = buttonsOf(lastMarkup()).find((b) => b.startsWith('tp:'));

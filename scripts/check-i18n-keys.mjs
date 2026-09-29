@@ -62,11 +62,20 @@ const offenders = [];
  * `docs/conventions.md` has said since Phase 0 that web-only chrome is
  * namespaced `web.*` and "checked by the same script" — and it was not: this
  * walked `apps/api/src/surfaces` only. The claim is now true. The web
- * catalogue itself is the one file allowed to contain Persian, since holding it
- * is its entire job.
+ * catalogues themselves are the only files allowed to contain Persian, since
+ * holding it is their entire job.
  */
 const SURFACE_DIRS = ['apps/api/src/surfaces', 'apps/web/src'];
-const CATALOGUE_FILES = new Set(['apps/web/src/i18n/web.fa.ts']);
+/*
+ * `templates.fa.ts` is the Persian name, description and placeholder helper of every
+ * bot message template — web chrome, like `web.fa.ts`, but keyed by template key rather
+ * than by `web.*` key, so the unused-key check below does not apply to it. Its coverage
+ * is enforced by `tests/unit/template-copy.test.ts` instead.
+ */
+const CATALOGUE_FILES = new Set([
+  'apps/web/src/i18n/web.fa.ts',
+  'apps/web/src/i18n/templates.fa.ts',
+]);
 
 for (const dir of SURFACE_DIRS) {
   for (const file of walk(dir)) {
