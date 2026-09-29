@@ -165,6 +165,57 @@ describe('the receipt-review message is edited into its decision, once', () => {
     expect(await ledgerCount(f)).toBe(ledger);
   });
 
+  /*
+   * Codex review of #113: a receipt PHOTO is edited through its caption, which Telegram bounds
+   * at 1,024 characters, and a tenant's override of the record can pass that. The caption is
+   * never cut into a record that lost its end: it becomes the decision and the tracking code,
+   * and the COMPLETE record is sent as a reply to the same message — once.
+   */
+  it('F1: a record too long for a caption becomes a bounded caption and the whole record as a reply, once', async () => {
+    const padding = 'این متن طولانی را مدیر به قالب افزوده است. '.repeat(40);
+    await f.ctx.container.templatesService.set(TENANT_A, f.owner, {
+      key: 'bot.admin.review_final',
+      body:
+        `{outcome}\n\n${padding}\n\nشناسه عددی کاربر: {customer}\nمبلغ پرداختی: {total}\n` +
+        'کد پیگیری پرداخت: {reference}\nموجودی کیف پول پس از واریز: {walletAfter}',
+      expectedVersion: null,
+      expectedRevision: null,
+      idempotencyKey: 'f1-long-override',
+    });
+    const payment = await pendingWithReceipt(f, 'f1-long');
+    const reference = await referenceOf(payment);
+
+    await tapOn(f, `wa:${payment}`, TG.owner, { id: 507, photo: true }).result;
+    await say(f, '60000', TG.owner);
+    const confirm = keyboardOf(f.sent.at(-1)?.body ?? {}).find((b) =>
+      (b.callback_data ?? '').startsWith('wb:'),
+    )?.callback_data;
+    await tapOn(f, confirm ?? '', TG.owner, { id: PROMPT }).result;
+
+    // The caption: bounded, truthful, never an ellipsis-cut record.
+    const caption = captionOf(f.sent, 507);
+    expect(caption.length).toBeLessThanOrEqual(1024);
+    expect(caption.startsWith('💳 مبلغ به کیف پول واریز شد\n')).toBe(true);
+    expect(caption).toContain(`کد پیگیری پرداخت: ${reference}`);
+    expect(caption).toContain('در پاسخ به همین پیام');
+    expect(caption).not.toContain('…');
+    // The complete record, as a reply to that very message — its end included.
+    const replies = f.sent.filter(
+      (one) =>
+        one.method === 'sendMessage' &&
+        (one.body['reply_parameters'] as { message_id?: number } | undefined)?.message_id === 507,
+    );
+    expect(replies).toHaveLength(1);
+    const record = String(replies[0]?.body['text']);
+    expect(record.length).toBeGreaterThan(1024);
+    expect(record).toContain(`کد پیگیری پرداخت: ${reference}`);
+    expect(record).toContain('موجودی کیف پول پس از واریز: 60,000');
+
+    // A repeated tap on the receipt answers, and never sends the record again.
+    await tapOn(f, `D:${payment}`, TG.owner, { id: 507, photo: true }).result;
+    expect(methods(f.sent)).toEqual(['answerCallbackQuery']);
+  });
+
   it('reject: the confirmation becomes the result in place, the receipt «❌ پرداخت رد شد», and a repeat only answers', async () => {
     const payment = await pendingWithReceipt(f, 'r2-reject');
 

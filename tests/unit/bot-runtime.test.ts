@@ -1313,6 +1313,8 @@ describe('profile metadata, normalised before it is ever stored', () => {
        * notice names the recorded disposition and offers nothing to do again.
        */
       'bot.admin.review_final',
+      // Codex review of #113: the bounded caption of a record too long for one; the record follows.
+      'bot.admin.review_final_short',
       'bot.admin.review_repeat_approved',
       'bot.admin.review_repeat_blocked',
       'bot.admin.review_repeat_credited',

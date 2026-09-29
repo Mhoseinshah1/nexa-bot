@@ -99,6 +99,7 @@ import type {
   CustomerSendOutcome,
   CustomerSendResult,
   CustomerMessenger,
+  CustomerMessageRef,
   MainMenuVariant,
   CustomerEditMessage,
 } from '../../modules/commerce/messaging/application/ports.js';
@@ -14539,17 +14540,20 @@ export class BotRuntime {
         // A receipt becomes the final record; a prompt becomes this reply's sentence.
         const receipt = row.role === 'REVIEW';
         const record = receipt ? await recordFor(true) : null;
-        const edited = await editSent(
-          this.deps.messenger,
-          scope,
-          {
-            ...message,
-            templateKey: record?.key ?? reply.key,
-            values: record?.values ?? reply.values,
-            buttons: receipt ? [] : reply.buttons,
-          },
-          origin.media,
-        );
+        const edited =
+          record !== null
+            ? await this.editReviewRecord(scope, message, record, origin.media)
+            : await editSent(
+                this.deps.messenger,
+                scope,
+                {
+                  ...message,
+                  templateKey: reply.key,
+                  values: reply.values,
+                  buttons: reply.buttons,
+                },
+                origin.media,
+              );
         await clearFailed(row.id, edited);
         answer = edited.outcome;
         continue;
@@ -14557,18 +14561,78 @@ export class BotRuntime {
       const record = row.role === 'REVIEW' ? await recordFor(ownChat) : null;
       const other =
         record !== null
-          ? await editSent(
-              this.deps.messenger,
-              scope,
-              { ...message, templateKey: record.key, values: record.values, buttons: [] },
-              row.hasMedia,
-            )
+          ? await this.editReviewRecord(scope, message, record, row.hasMedia)
           : this.deps.messenger.clearButtons === undefined
             ? ({ outcome: 'REFUSED' } as const)
             : await this.deps.messenger.clearButtons(scope, message);
       await clearFailed(row.id, other);
     }
     return answer;
+  }
+
+  /**
+   * F1 (round N, Codex review of #113): ONE review message edited into its final record, and
+   * never into a record that silently lost its end.
+   *
+   * The record is edited in place, WHOLE (`whole`): the normal case, and still no new
+   * message. A receipt FILE is edited through its caption, which Telegram bounds at 1,024
+   * characters, and a tenant's override of the record or of its labels can pass that (a text
+   * message, at 4,096). Cut, the tracking code and the wallet lines at the end would be gone
+   * while the review reads as final. So a record that does not fit is refused by the
+   * messenger before any request, and the one documented fallback is the smallest arrangement
+   * that loses nothing and stays attached to the receipt:
+   *
+   *   1. the message becomes `bot.admin.review_final_short` — the decision and the tracking
+   *      code, and a sentence pointing at the reply (bounded; if a tenant's override of THAT
+   *      is too long it is cut, and nothing is lost, because the record follows);
+   *   2. the complete record is sent as a REPLY to that same message.
+   *
+   * The result is what the stamp logic reads: a refused or rate-limited step — Telegram
+   * definitely did not apply it — unfinalises the message so a later tap finishes it; an
+   * UNKNOWN step is left finalised, since it may have landed. This runs only for a message
+   * `finaliseReviews` stamped in THIS call, and a finalised message is never stamped again,
+   * so a repeated tap never sends the reply a second time.
+   */
+  private async editReviewRecord(
+    scope: TenantContext,
+    message: CustomerMessageRef,
+    record: { readonly key: TemplateKey; readonly values: TemplateValues },
+    media: boolean,
+  ): Promise<CustomerSendResult> {
+    const full = { ...message, templateKey: record.key, values: record.values, buttons: [] };
+    if (record.key !== 'bot.admin.review_final') {
+      return editSent(this.deps.messenger, scope, full, media);
+    }
+    const whole = await editSent(this.deps.messenger, scope, { ...full, whole: true }, media);
+    if (
+      whole.outcome !== 'REFUSED' ||
+      (whole.reason !== 'CAPTION_OVER_BOUND' && whole.reason !== 'TEXT_OVER_BOUND')
+    ) {
+      return whole;
+    }
+    const short = await editSent(
+      this.deps.messenger,
+      scope,
+      {
+        ...message,
+        templateKey: 'bot.admin.review_final_short',
+        values: {
+          outcome: record.values['outcome'] ?? '',
+          reference: record.values['reference'] ?? '',
+        },
+        buttons: [],
+      },
+      media,
+    );
+    if (short.outcome !== 'DELIVERED') return short;
+    const reply = await this.deps.messenger.send(scope, {
+      chatId: message.chatId,
+      botInstanceId: message.botInstanceId,
+      templateKey: record.key,
+      values: record.values,
+      replyToMessageId: message.messageId,
+    });
+    return reply.outcome === 'DELIVERED' ? short : reply;
   }
 
   /**
