@@ -1119,7 +1119,7 @@ export const featureFlagStates = pgTable(
     version: integer('version').notNull().default(1),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
     updatedByAdminId: uuid('updated_by_admin_id'),
-    /** Mandatory for a TENANT_WIDE flag; the confirmation protocol records why. */
+    /** The latest change's optional note; since WP-A2 no flag requires one. */
     reason: text('reason'),
   },
   (table) => [

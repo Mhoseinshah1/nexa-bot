@@ -71,7 +71,9 @@
   },
   "pnpm": {
     "overrides": {
-      "typescript": "6.0.2"
+      "typescript": "6.0.2",
+      "fast-uri@>=3.0.0 <3.1.7": "^3.1.7",
+      "fast-uri@>=4.0.0 <4.1.4": "^4.1.4"
     },
     "onlyBuiltDependencies": [
       "esbuild",

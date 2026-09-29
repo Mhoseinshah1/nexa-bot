@@ -630,13 +630,15 @@ export function fetchFeatureFlags(): Promise<FeatureFlagListResponse> {
   return authedGet(CONTROL_ROUTES.features, featureFlagListResponseSchema);
 }
 
+/**
+ * A toggle is its state, the version it was built on and its idempotency key. No typed
+ * key and no reason is sent (WP-A2), and the server records the actor on its own.
+ */
 export function saveFeatureFlag(input: {
   key: string;
   enabled: boolean;
   expectedVersion: number | null;
   idempotencyKey: string;
-  confirmKey?: string;
-  reason?: string;
 }): Promise<FeatureFlagWriteResponse> {
   const { key, ...body } = input;
   return post(CONTROL_ROUTES.feature(key), body, featureFlagWriteResponseSchema);

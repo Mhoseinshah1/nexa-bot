@@ -861,7 +861,10 @@ export const featureFlagSchema = z.object({
   updatedByAdminId: z.string().nullable(),
   reason: z.string().nullable(),
   description: z.string(),
-  /** TENANT_WIDE toggles go through the confirmation protocol (ADR-0010). */
+  /**
+   * How far a toggle reaches. Descriptive: since WP-A2 no toggle is refused for want of a
+   * typed key or a reason (ADR-0019, "Amended by WP-A2").
+   */
   blastRadius: z.enum(FLAG_BLAST_RADII),
   /**
    * The settings this flag governs, each marked inert when the flag is off.
@@ -887,9 +890,18 @@ export const setFeatureFlagRequestSchema = z.object({
   enabled: z.boolean(),
   expectedVersion: z.number().int().positive().nullable(),
   idempotencyKey: z.string().min(8).max(255),
-  /** Typed confirmation of the flag's own key. Required for TENANT_WIDE. */
+  /**
+   * The flag's own key, typed by the operator. RETIRED by WP-A2: no toggle asks for it
+   * and the server ignores it. Still accepted, so a client built before the change keeps
+   * working rather than failing on an unknown field.
+   */
   confirmKey: z.string().optional(),
-  reason: z.string().min(3).max(500).optional(),
+  /**
+   * An optional note for the audit row. WP-A2 removed it from the ordinary toggle; the
+   * audit row records actor, time and action whether or not one is given. Trimmed, and a
+   * blank one is no reason at all rather than a refusal.
+   */
+  reason: z.string().trim().max(500).optional(),
 });
 export type SetFeatureFlagRequest = z.infer<typeof setFeatureFlagRequestSchema>;
 
