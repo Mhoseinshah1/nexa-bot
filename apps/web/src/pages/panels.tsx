@@ -1881,7 +1881,7 @@ function HealthTab({ panel }: { panel: PanelSummaryResponse }) {
       {!probeable(panel) && <Banner tone="warn">{t('web.panel_not_probeable')}</Banner>}
 
       {/* WP-A8: the same stored facts, as operator checks with a remedy each. */}
-      <DiagnosticsCard panelId={panel.id} />
+      <DiagnosticsCard panelId={panel.id} refreshMs={PANEL_DETAIL_REFRESH_MS} />
 
       <Card title={t('web.panel_tab_health')}>
         <KV

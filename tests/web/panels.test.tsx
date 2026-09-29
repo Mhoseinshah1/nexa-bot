@@ -349,7 +349,7 @@ describe('the panel detail', () => {
     missingActivationFields: [],
   };
   const advancedBody = (overrides: Record<string, unknown> = {}) => ({
-    panelId: 'p1',
+    panelId: PANEL_ID,
     providerType: 'rickpanel',
     providerName: 'RickPanel',
     status: 'ACTIVE',
@@ -383,7 +383,7 @@ describe('the panel detail', () => {
     body: advancedBody(overrides),
   });
   const TECHNICAL = {
-    panelId: 'p1',
+    panelId: PANEL_ID,
     providerType: 'rickpanel',
     descriptor: {
       canonicalName: 'RickPanel',
@@ -776,7 +776,10 @@ describe('the panel detail', () => {
     const api = stubApi([
       ...detail(),
       advancedRoute(),
-      { url: '/policy', body: { advanced: advancedBody({ revision: 1 }), changed: true } },
+      {
+        url: `/${PANEL_ID}/policy`,
+        body: { advanced: advancedBody({ revision: 1 }), changed: true },
+      },
     ]);
     renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
     await screen.findByText('Frankfurt A');
@@ -796,7 +799,7 @@ describe('the panel detail', () => {
       expect(api.calls.some((call) => call.method === 'POST')).toBe(true);
     });
     const write = api.calls.find((call) => call.method === 'POST');
-    expect(write?.url).toContain('/panels/p1/policy');
+    expect(write?.url).toContain(`/panels/${PANEL_ID}/policy`);
     expect(write?.body).toMatchObject({
       expectedRevision: 0,
       policy: {
@@ -848,6 +851,97 @@ describe('the panel detail', () => {
     fireEvent.click(await screen.findByRole('button', { name: t('web.tech_show') }));
     expect(await screen.findByText(/"storedActivation"/)).toBeInTheDocument();
     expect(api.calls.some((call) => call.url.includes('/technical'))).toBe(true);
+  });
+
+  /*
+   * Codex #1 on PR #102: a save must not drop a restriction stored for an action the
+   * adapter no longer supports. The form has no control for it, so it sends the stored
+   * entry back exactly as stored.
+   */
+  it('keeps a stored restriction for an action the panel no longer supports', async () => {
+    const orphan = { customerEnabled: false, maxDeviceLimit: null };
+    const stored = advancedBody();
+    const api = stubApi([
+      ...detail(),
+      {
+        url: '/advanced',
+        body: {
+          ...stored,
+          policy: {
+            ...stored.policy,
+            policy: { delivery: { mode: 'CARD_WITH_QR' }, actions: { EXTRA_DEVICES: orphan } },
+            revision: 3,
+          },
+        },
+      },
+      {
+        url: `/${PANEL_ID}/policy`,
+        body: { advanced: advancedBody({ revision: 4 }), changed: true },
+      },
+    ]);
+    renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+    screen.getByRole('tab', { name: 'قابلیت‌ها' }).click();
+    const renew = await screen.findByLabelText(
+      `${t('web.policy_customer_enabled')} — ${t('web.cap_row_renew')}`,
+    );
+    fireEvent.click(renew);
+    fireEvent.click(screen.getByRole('button', { name: t('web.save') }));
+    await waitFor(() => {
+      expect(api.calls.some((call) => call.method === 'POST')).toBe(true);
+    });
+    expect(api.calls.find((call) => call.method === 'POST')?.body).toMatchObject({
+      expectedRevision: 3,
+      policy: { actions: { EXTRA_DEVICES: orphan, RENEW: { customerEnabled: false } } },
+    });
+  });
+
+  /* Codex #1 on PR #102: an open technical view is re-read after a policy save. */
+  it('re-reads an open technical view after a policy save', async () => {
+    const api = stubApi([
+      ...detail(),
+      advancedRoute(),
+      { url: '/technical', body: TECHNICAL },
+      {
+        url: `/${PANEL_ID}/policy`,
+        body: { advanced: advancedBody({ revision: 1 }), changed: true },
+      },
+    ]);
+    renderPage(<PanelDetailPage id="p1" mayEdit mayRotate mayViewTechnical denied={false} />);
+    await screen.findByText('Frankfurt A');
+    screen.getByRole('tab', { name: 'قابلیت‌ها' }).click();
+    fireEvent.click(await screen.findByRole('button', { name: t('web.tech_show') }));
+    await screen.findByText(/"storedActivation"/);
+    const technicalReads = () => api.calls.filter((call) => call.url.includes('/technical')).length;
+    expect(technicalReads()).toBe(1);
+
+    fireEvent.click(
+      screen.getByLabelText(`${t('web.policy_customer_enabled')} — ${t('web.cap_row_renew')}`),
+    );
+    fireEvent.click(screen.getByRole('button', { name: t('web.save') }));
+    await waitFor(() => {
+      expect(technicalReads()).toBe(2);
+    });
+  });
+
+  /* Codex #1 on PR #102: the diagnostics poll on the panel read's own cadence. */
+  it('refreshes the diagnostics on the panel health cadence', async () => {
+    const api = stubApi([...detail(), advancedRoute()]);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+      await screen.findByText('Frankfurt A');
+      screen.getByRole('tab', { name: 'سلامت' }).click();
+      await screen.findByText(t('web.diag_overall_ok'));
+      const advancedReads = () => api.calls.filter((call) => call.url.includes('/advanced')).length;
+      const before = advancedReads();
+      await vi.advanceTimersByTimeAsync(95_000);
+      await waitFor(() => {
+        expect(advancedReads()).toBeGreaterThan(before);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('reads the diagnostics in Persian, with the remedy for the failure', async () => {

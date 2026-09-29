@@ -41,6 +41,7 @@ import {
   type Tone,
 } from '../ui/kit';
 import { messageFor } from './settings';
+import { pollUnlessFinal } from '../polling';
 
 /**
  * Advanced provider settings (WP-A8), as an operator reads them.
@@ -54,6 +55,8 @@ import { messageFor } from './settings';
 
 /** The panel read's own cache prefix, so a connection test refreshes this too. */
 export const advancedKey = (panelId: string) => ['panel', panelId, 'advanced'] as const;
+/** The technical view's cache, under the same prefix. */
+export const technicalKey = (panelId: string) => ['panel', panelId, 'technical'] as const;
 
 // --- labels -------------------------------------------------------------------
 
@@ -281,11 +284,21 @@ function draftFrom(policy: PanelPolicy, actions: readonly PanelCustomerAction[])
 function policyFrom(
   mode: PanelDeliveryMode,
   draft: Partial<Record<PanelCustomerAction, ActionDraft>>,
+  kept: PanelPolicy['actions'],
 ): Record<string, unknown> {
   const actions: Record<string, unknown> = {};
   for (const action of PANEL_CUSTOMER_ACTIONS) {
     const entry = draft[action];
-    if (entry === undefined) continue;
+    if (entry === undefined) {
+      /*
+       * An action the adapter cannot perform NOW has no control, and its stored entry is
+       * sent back exactly as stored — so a restriction an operator set survives a
+       * capability that disappeared, and saving an unrelated field does not drop it. The
+       * server accepts such an entry only when it is unchanged.
+       */
+      if (kept[action] !== undefined) actions[action] = kept[action];
+      continue;
+    }
     const knob = KNOBS[action];
     const raw = entry.knob.trim();
     if (entry.customerEnabled && (knob === undefined || raw === '')) continue;
@@ -429,6 +442,9 @@ function PolicyCard({ advanced, mayEdit }: { advanced: PanelAdvancedResponse; ma
         message: result.changed ? t('web.saved') : t('web.unchanged'),
       });
       client.setQueryData(advancedKey(advanced.panelId), result.advanced);
+      // The technical view shows the stored policy too; an open one must not go on
+      // showing the policy this save replaced.
+      void client.invalidateQueries({ queryKey: technicalKey(advanced.panelId) });
     },
     onError: async (error: unknown) => {
       submission.settleOn(error);
@@ -443,7 +459,9 @@ function PolicyCard({ advanced, mayEdit }: { advanced: PanelAdvancedResponse; ma
 
   const onSubmit = (event: FormEvent) => {
     event.preventDefault();
-    const parsed = panelPolicySchema.safeParse(policyFrom(mode, draft));
+    // An unreadable stored policy has nothing to keep: the form shows the default.
+    const kept = advanced.policy.readable ? advanced.policy.policy.actions : {};
+    const parsed = panelPolicySchema.safeParse(policyFrom(mode, draft, kept));
     if (!parsed.success) {
       setInvalid([...new Set(parsed.error.issues.map((issue) => issue.path.join('.')))]);
       return;
@@ -606,7 +624,7 @@ function summarise(value: unknown): string {
 function TechnicalCard({ panelId }: { panelId: string }) {
   const [open, setOpen] = useState(false);
   const technical = useQuery({
-    queryKey: ['panel', panelId, 'technical'],
+    queryKey: technicalKey(panelId),
     queryFn: () => fetchPanelTechnical(panelId),
     enabled: open,
   });
@@ -635,10 +653,16 @@ function TechnicalCard({ panelId }: { panelId: string }) {
 
 // --- diagnostics ----------------------------------------------------------------
 
-export function DiagnosticsCard({ panelId }: { panelId: string }) {
+export function DiagnosticsCard({ panelId, refreshMs }: { panelId: string; refreshMs: number }) {
   const advanced = useQuery({
     queryKey: advancedKey(panelId),
     queryFn: () => fetchPanelAdvanced(panelId),
+    /*
+     * The diagnostics are a projection of the health the background monitor writes, so
+     * they poll on the SAME cadence as the panel read beside them — otherwise the card
+     * went on showing one probe's verdict while the health row below it moved on.
+     */
+    refetchInterval: pollUnlessFinal(refreshMs),
   });
   const diagnostics = advanced.data?.diagnostics;
   return (
