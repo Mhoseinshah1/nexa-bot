@@ -2304,6 +2304,171 @@ export const TEMPLATES = [
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
+  /*
+   * F1 (round N): the COMPLETE final record the original receipt-review message becomes once a
+   * decision is taken on it — the outcome's label (one of the four keys above, rendered
+   * through the tenant's overrides) followed by the facts the reviewer decided on. Every fact
+   * but the label, the customer, the amount and the reference is OPTIONAL, so a fact the
+   * payment does not have (a top-up has no product, a customer may have no @username) drops
+   * its whole line rather than printing a dash. The wallet lines are filled only for a
+   * decision that moved the wallet, read off the ledger, and only for a viewer who may see a
+   * balance (`users.view`). No card number, no file id, no link and no credential.
+   */
+  {
+    key: 'bot.admin.review_final',
+    description:
+      'F1: the receipt review message, edited in place into the final record of the decision: ' +
+      'the outcome line, the operation, what it bought, the service username, the customer\u2019s ' +
+      'Telegram id and username, the amount and the tracking code, and for a wallet movement ' +
+      'the credited amount and the balance before and after it. Replaces the caption or text ' +
+      'and removes the decision buttons.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'outcome',
+        type: 'STRING',
+        description: 'The decision, rendered from its own label key (approved, rejected, blocked, credited).',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'operation',
+        type: 'STRING',
+        description: 'What the payment was for: a new service, a renewal, added traffic or time, a wallet top-up.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'order',
+        type: 'STRING',
+        description: 'The product title frozen on the order, when there is one.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'trafficBytes',
+        type: 'TRAFFIC_LIMIT',
+        description: 'The order\u2019s frozen traffic allowance, when it bought one.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'durationDays',
+        type: 'DURATION_DAYS',
+        description: 'The order\u2019s frozen duration, when it bought one.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'serviceUsername',
+        type: 'STRING',
+        description: 'The service username the order created or changes, when known.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'customer',
+        type: 'STRING',
+        description: 'The customer\u2019s numeric Telegram id.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'username',
+        type: 'STRING',
+        description: 'The customer\u2019s Telegram @username, when they have one.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'name',
+        type: 'STRING',
+        description: 'The customer\u2019s Telegram display name, when they have one.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'total',
+        type: 'MONEY',
+        description: 'The payment\u2019s amount, frozen on the payment.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'reference',
+        type: 'STRING',
+        description: 'The payment tracking code the customer quoted.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'creditedAmount',
+        type: 'MONEY',
+        description: 'What this decision credited to the wallet, read off the ledger.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'walletBefore',
+        type: 'MONEY',
+        description: 'The wallet balance immediately before this decision\u2019s ledger entries.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'walletAfter',
+        type: 'MONEY',
+        description: 'The wallet balance immediately after this decision\u2019s ledger entries.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
+  /*
+   * F1: the answer to a tap on a review message ALREADY finalised — the callback's own short
+   * notice, and nothing else: no decision is asked for again, and no message is sent or
+   * edited. Decided from the payment's recorded disposition at the time of the tap.
+   */
+  {
+    key: 'bot.admin.review_repeat_approved',
+    description:
+      'F1: a tap on a finalised review message whose payment was approved. Shown as the ' +
+      'button\u2019s own notice; nothing is decided again.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.review_repeat_rejected',
+    description:
+      'F1: a tap on a finalised review message whose payment was rejected. Shown as the ' +
+      'button\u2019s own notice; nothing is decided again.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.review_repeat_credited',
+    description:
+      'F1: a tap on a finalised review message whose receipt was closed by a wallet credit. ' +
+      'Shown as the button\u2019s own notice; nothing is credited again.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.review_repeat_blocked',
+    description:
+      'F1: a tap on a review message finalised by blocking the customer, whose payment is ' +
+      'still undecided. Shown as the button\u2019s own notice; nothing happens again.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.admin.review_repeat_gone',
+    description:
+      'F1: a tap on a finalised review message whose payment is no longer awaiting review ' +
+      'for any other reason. Shown as the button\u2019s own notice.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
   {
     key: 'bot.admin.credit_button',
     description:
