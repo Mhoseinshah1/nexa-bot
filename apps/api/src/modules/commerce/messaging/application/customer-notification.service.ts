@@ -338,6 +338,31 @@ export interface CustomerNotificationDeps {
    * means no quiet hours at all, which is what every kind had before.
    */
   readonly quietHours?: QuietHoursReader;
+  /**
+   * R2 (v0.3.5 real-test item 11): what `SERVICE_RENEWED` renders — the renewed account, the
+   * duration bought, the new expiry and the payment's tracking code — read at send time from
+   * the RENEW operation the notification names, and the service its one button opens. A
+   * reader, not a payload (ADR 0030 §1). Null when the operation is not a succeeded renewal,
+   * which sends nothing. Absent, the kind renders nothing and is not sent.
+   */
+  readonly renewals?: {
+    notificationFacts(
+      scope: TenantContext,
+      operationId: string,
+    ): Promise<{
+      readonly values: TemplateValues;
+      readonly serviceId: string;
+      readonly orderId: string | null;
+    } | null>;
+  };
+  /**
+   * R2: closes the renewal's payment screens — the order's wizard messages lose their
+   * buttons — immediately BEFORE the dedicated result is sent, so the result is a new message
+   * after a closed one. Best effort: a screen that cannot be edited does not hold the result.
+   */
+  readonly orderScreens?: {
+    close(scope: TenantContext, orderId: string): Promise<void>;
+  };
   readonly uow: UnitOfWork<TransactionScope>;
   readonly clock: Clock;
   readonly scopeIsActive: (scope: TenantContext) => Promise<boolean>;
@@ -469,7 +494,19 @@ export class CustomerNotificationService {
     readonly buttons: readonly CustomerButton[];
     /** HF-A7: a file to send, with the kind's template as its caption, instead of text. */
     readonly file?: NotificationFile;
+    /** R2: the order whose payment screens are closed right before this is sent. */
+    readonly closesOrder?: string;
   } | null> {
+    if (row.kind === 'SERVICE_RENEWED') {
+      if (this.deps.renewals === undefined) return null;
+      const facts = await this.deps.renewals.notificationFacts(scope, row.subjectId);
+      if (facts === null) return null;
+      return {
+        values: facts.values,
+        buttons: this.deps.buttonsFor?.(row.kind, { serviceId: facts.serviceId }) ?? [],
+        ...(facts.orderId === null ? {} : { closesOrder: facts.orderId }),
+      };
+    }
     if (row.kind === 'TICKET_REPLY_ATTACHMENT') {
       if (this.deps.tickets === undefined) return null;
       const facts = await this.deps.tickets.attachmentFacts(scope, row.subjectId);
@@ -812,6 +849,22 @@ export class CustomerNotificationService {
         this.deps.notifications.markSendStarted(scope, row.id, this.deps.clock.now(), tx),
       );
       if (!started) return 'lost';
+
+      /*
+       * R2 (item 11): the renewal's payment message is closed FIRST, so the result that
+       * follows is its own new message after a closed one — never an edit of the invoice, and
+       * never a message beside a payment screen still offering to pay.
+       */
+      if (content.closesOrder !== undefined && this.deps.orderScreens !== undefined) {
+        try {
+          await this.deps.orderScreens.close(scope, content.closesOrder);
+        } catch (error: unknown) {
+          this.deps.logger.error(
+            { err: error instanceof Error ? error.name : 'unknown', notificationId: row.id },
+            'renewal payment screen could not be closed',
+          );
+        }
+      }
 
       /*
        * HF-A7: a kind that carries a FILE goes up as one upload, its template the caption.
