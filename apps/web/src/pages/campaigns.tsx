@@ -634,7 +634,7 @@ function Toggle({
   label: string;
 }) {
   return (
-    <label className="checkbox">
+    <label>
       <input type="checkbox" checked={on} onChange={(event) => onChange(event.target.checked)} />{' '}
       {label}
     </label>
@@ -680,7 +680,7 @@ function ScopePicker({
   categories: readonly { id: string; name: string }[];
 }) {
   return (
-    <div className="grid-3">
+    <div className="grid-2">
       <Field label={t('web.campaign_scope')}>
         <select
           value={kind}
@@ -867,7 +867,7 @@ function CampaignForm({
         />
         {state.discountOn && (
           <>
-            <div className="grid-3">
+            <div className="grid-2">
               <Field label={t('web.campaign_discount_kind')}>
                 <select
                   value={state.discountKind}
@@ -936,7 +936,7 @@ function CampaignForm({
                 }))
               }
             />
-            <div className="grid-3">
+            <div className="grid-2">
               <Field
                 label={t('web.campaign_discount_minimum')}
                 hint={`${t('web.campaign_amount_hint')} ${currency}`}
@@ -1123,7 +1123,7 @@ function CampaignForm({
               />
             </Field>
             {state.buttons.map((button, index) => (
-              <div className="grid-3" key={index}>
+              <div className="grid-2" key={index}>
                 <Field label={t('web.campaign_button_label')}>
                   <input
                     value={button.label}
@@ -1372,7 +1372,16 @@ function ActionsCard({ campaign }: { campaign: CampaignDetail }) {
 function TermsText({ kind, terms }: { kind: CampaignActionKind; terms: unknown }) {
   const d = (terms ?? {}) as Record<string, unknown>;
   const purposes = (d['appliesTo'] as DiscountablePurpose[] | undefined) ?? [];
-  const purposeText = purposes.map((p) => t(PURPOSE_LABELS[p])).join(t('web.list_separator'));
+  const purposeText = [
+    purposes.map((p) => t(PURPOSE_LABELS[p])).join(t('web.list_separator')),
+    t(
+      d['productId'] !== null && d['productId'] !== undefined
+        ? 'web.campaign_scope_product'
+        : d['categoryId'] !== null && d['categoryId'] !== undefined
+          ? 'web.campaign_scope_category'
+          : 'web.campaign_scope_all',
+    ),
+  ].join(' · ');
   switch (kind) {
     case 'DISCOUNT':
       return (
@@ -1486,6 +1495,10 @@ function ConfirmCard({ campaign }: { campaign: CampaignDetail }) {
   });
 
   const p = preview.data;
+  // The message exactly as stored; Broadcast renders its placeholders per recipient.
+  const announcementTerms = campaign.actions.find((a) => a.kind === 'ANNOUNCEMENT')?.terms as
+    { body?: string } | undefined;
+  const announcement = announcementTerms?.body;
   const typedInput = (key: keyof typeof typed, count: number) => (
     <Field
       htmlFor={`campaign-typed-${key}`}
@@ -1553,6 +1566,11 @@ function ConfirmCard({ campaign }: { campaign: CampaignDetail }) {
                     ] as [ReactNode, ReactNode][])),
               ]}
             />
+            {announcement !== undefined && (
+              <Field label={t('web.campaign_announcement_body')}>
+                <p className="bot-preview">{announcement}</p>
+              </Field>
+            )}
             {p.audience.sample.length > 0 && (
               <p className="muted small">
                 {t('web.campaign_preview_sample')}{' '}
