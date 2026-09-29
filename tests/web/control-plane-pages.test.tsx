@@ -165,17 +165,22 @@ describe('the feature flags page', () => {
     const api = stubApi([
       {
         url: '/features',
-        body: { flags: [flag({ key: 'trials', enabled: true, version: 2 })] },
+        body: { flags: [flag({ key: 'customer_link_rotation', enabled: true, version: 2 })] },
       },
       {
-        url: '/features/trials',
+        url: '/features/customer_link_rotation',
         status: 201,
-        body: { flag: flag({ key: 'trials', enabled: false, version: 3 }), changed: true },
+        body: {
+          flag: flag({ key: 'customer_link_rotation', enabled: false, version: 3 }),
+          changed: true,
+        },
       },
     ]);
     renderPage(<FeaturesPage mayEdit denied={false} />);
 
-    fireEvent.click(await screen.findByRole('switch', { name: t('web.feature_trials_title') }));
+    fireEvent.click(
+      await screen.findByRole('switch', { name: t('web.feature_customer_link_rotation_title') }),
+    );
 
     expect(screen.queryByRole('alertdialog')).toBeNull();
     await waitFor(() => expect(api.calls.some((call) => call.method === 'POST')).toBe(true));
@@ -384,6 +389,36 @@ describe('the feature flags page', () => {
 });
 
 describe('the feature presentation catalogue', () => {
+  /*
+   * F5, the owner's rule: the generic Features page no longer controls the trial. Each
+   * panel's own «سرویس تست» tab is the one switch. The page draws what the server lists,
+   * and the server lists the registry — so the registry and this catalogue both lack it,
+   * and a page fed the WHOLE registry draws no trial switch.
+   */
+  it('draws no trial switch: the trial is switched on each panel (F5)', async () => {
+    expect(FEATURE_FLAGS.map((f) => f.key as string)).not.toContain('trials');
+    expect(Object.keys(FEATURE_PRESENTATION)).not.toContain('trials');
+    stubApi([
+      {
+        url: '/features',
+        body: {
+          flags: FEATURE_FLAGS.map((definition) =>
+            flag({ key: definition.key, enabled: false, version: 1 }),
+          ),
+        },
+      },
+    ]);
+    renderPage(<FeaturesPage mayEdit denied={false} />);
+    const switches = await screen.findAllByRole('switch');
+    expect(switches).toHaveLength(FEATURE_FLAGS.length);
+    for (const one of switches) {
+      expect(one.getAttribute('aria-label') ?? one.textContent ?? '').not.toMatch(
+        /آزمایشی|سرویس تست/u,
+      );
+    }
+    expect(document.body.textContent).not.toMatch(/سرویس آزمایشی|سرویس تست/u);
+  });
+
   it('gives every registered feature its own Persian name and summary', () => {
     const titles = FEATURE_FLAGS.map((f) => t(FEATURE_PRESENTATION[f.key].title));
     const summaries = FEATURE_FLAGS.map((f) => t(FEATURE_PRESENTATION[f.key].summary));

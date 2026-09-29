@@ -90,12 +90,6 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
     summary: 'web.feature_reminder_quiet_hours_summary',
     disableEffect: null,
   },
-  // Off withdraws the offer and touches no trial already issued.
-  trials: {
-    title: 'web.feature_trials_title',
-    summary: 'web.feature_trials_summary',
-    disableEffect: null,
-  },
   // Off withdraws the button; a rotation already planned still runs.
   customer_link_rotation: {
     title: 'web.feature_customer_link_rotation_title',
