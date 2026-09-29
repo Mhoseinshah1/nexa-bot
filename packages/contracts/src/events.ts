@@ -155,6 +155,10 @@ export const EVENT_TYPES = [
   'TicketMessagePosted',
   'TicketStatusChanged',
   'TicketAssigned',
+  // Round N: a broadcast and a mass operation changing state. The content, the audience and
+  // the recipients are never in the payload: a state change is the fact.
+  'BroadcastStateChanged',
+  'BulkOperationStateChanged',
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
@@ -189,6 +193,8 @@ export const AGGREGATE_TYPES = [
   'OpsLogGroup',
   // WP-A7.
   'Ticket',
+  'Broadcast',
+  'BulkOperation',
 ] as const;
 export type AggregateType = (typeof AGGREGATE_TYPES)[number];
 
@@ -520,6 +526,19 @@ export const EVENT_PAYLOAD_SCHEMAS = {
     ticketId: z.string(),
     from: z.string().nullable(),
     to: z.string().nullable(),
+  }),
+  BroadcastStateChanged: z.object({
+    broadcastId: z.string(),
+    from: z.string(),
+    to: z.string(),
+    recipients: z.number().int().nonnegative().nullable(),
+  }),
+  BulkOperationStateChanged: z.object({
+    operationId: z.string(),
+    kind: z.string(),
+    from: z.string().nullable(),
+    to: z.string(),
+    items: z.number().int().nonnegative(),
   }),
 } as const satisfies Record<EventType, z.ZodType>;
 

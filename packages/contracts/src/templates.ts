@@ -10180,6 +10180,73 @@ export const TEMPLATES = [
       },
     ],
   },
+  // --- Round N: broadcast and safe mass actions (docs/round-n-broadcast-audit.md) ---------
+  {
+    key: 'bot.broadcast.message',
+    description:
+      'Round N (B1): the wrapper every broadcast is sent in — as the text of a text broadcast ' +
+      'and as the caption of a photo, video or document. {message} is the operator\u2019s own ' +
+      'broadcast body, rendered for the recipient at send time from the RAW body the broadcast ' +
+      'stores. A tenant may add a header or a footer here; it applies to every broadcast.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'message',
+        type: 'STRING',
+        description: 'The broadcast\u2019s own text, as the operator wrote it, for this recipient.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.wallet.mass_credited',
+    description:
+      'Round N (B2): told to a customer whose wallet a mass credit reached, when the operator ' +
+      'chose to notify. The amount is read at send time from the MASS_CREDIT ledger entry the ' +
+      'notification names \u2014 a reader, not a payload (ADR 0030 \u00a71).',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'amount',
+        type: 'MONEY',
+        description: 'What the mass credit put on this customer\u2019s wallet.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.gift_applied',
+    description:
+      'Round N (B2): told to a customer whose service a mass traffic or time grant reached, ' +
+      'only after the provider AUTHORITATIVELY applied it and only when the operator chose to ' +
+      'notify. Exactly one of {traffic} and {days} is present; the line of the other is dropped.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'service',
+        type: 'STRING',
+        description: 'The service\u2019s account name on the panel, as the service card shows it.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'traffic',
+        type: 'BYTES',
+        description: 'The traffic added, for a traffic grant.',
+        required: false,
+        repeatable: false,
+      },
+      {
+        token: 'days',
+        type: 'DURATION_DAYS',
+        description: 'The days added, for a time grant.',
+        required: false,
+        repeatable: false,
+      },
+    ],
+  },
 ] as const satisfies readonly TemplateDefinition[];
 
 export type TemplateKey = (typeof TEMPLATES)[number]['key'];
