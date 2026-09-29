@@ -40,6 +40,24 @@ export interface PreinvoiceFacts {
   readonly features: readonly string[];
   readonly walletBalance: Money;
   /**
+   * An extra users / devices purchase (WP-A5), from the order's own frozen line; null or
+   * absent for every other order.
+   */
+  readonly devices?: {
+    readonly quantity: number;
+    readonly unitPrice: Money;
+    readonly currentLimit: number;
+    readonly targetLimit: number;
+  } | null;
+  /**
+   * A paid location change (WP-A6), from the change request frozen with the order: from
+   * where and to where. Null or absent for every other order.
+   */
+  readonly locationChange?: {
+    readonly fromLocation: string;
+    readonly toLocation: string;
+  } | null;
+  /**
    * A custom service's breakdown (Package D), from the order's frozen terms; null or
    * absent for every other order.
    */
@@ -179,6 +197,28 @@ export class CustomerScreenComposer {
               pricePerDay: facts.custom.pricePerDay,
               timePrice: facts.custom.timePrice,
             }),
+          }),
+      ...(facts.devices === null || facts.devices === undefined
+        ? {}
+        : {
+            devicesBlock: await this.templates.render(scope, 'bot.order.preinvoice_devices', {
+              quantity: facts.devices.quantity,
+              unitPrice: facts.devices.unitPrice,
+              currentLimit: facts.devices.currentLimit,
+              targetLimit: facts.devices.targetLimit,
+            }),
+          }),
+      ...(facts.locationChange === null || facts.locationChange === undefined
+        ? {}
+        : {
+            locationChangeBlock: await this.templates.render(
+              scope,
+              'bot.order.preinvoice_location_change',
+              {
+                fromLocation: facts.locationChange.fromLocation,
+                toLocation: facts.locationChange.toLocation,
+              },
+            ),
           }),
       walletBalance: facts.walletBalance,
     };

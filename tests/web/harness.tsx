@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, type RenderResult } from '@testing-library/react';
 import { vi } from 'vitest';
 import type { ReactElement, ReactNode } from 'react';
+import { CAPABILITY_REGISTRY_ROWS } from '@nexa/contracts';
 import { ToastProvider } from '../../apps/web/src/ui/kit';
 
 /**
@@ -323,6 +324,24 @@ export function panel(overrides: Record<string, unknown> = {}): Record<string, u
     updatedAt: '2026-01-01T00:00:00.000Z',
     ...overrides,
   };
+}
+
+/**
+ * WP-A8: a provider's capability registry, every row in the server's order, with the
+ * named rows supported. The shape `deriveCapabilityRegistry` produces.
+ */
+export function capabilityRegistry(
+  supported: readonly string[] = [],
+): { row: string; supported: boolean; gap: string | null }[] {
+  return CAPABILITY_REGISTRY_ROWS.map((row) =>
+    supported.includes(row)
+      ? { row, supported: true, gap: null }
+      : {
+          row,
+          supported: false,
+          gap: 'NOT_SUPPORTED',
+        },
+  );
 }
 
 export function setting(overrides: Record<string, unknown> = {}): Record<string, unknown> {

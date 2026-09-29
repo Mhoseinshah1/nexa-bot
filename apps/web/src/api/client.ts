@@ -199,6 +199,15 @@ import {
   type SystemReadinessResponse,
   type SystemDiagnosticsResponse,
   PANEL_ROUTES,
+  // WP-A8: advanced provider settings.
+  PANEL_ADVANCED_ROUTES,
+  panelAdvancedResponseSchema,
+  panelTechnicalResponseSchema,
+  updatePanelPolicyResponseSchema,
+  type PanelAdvancedResponse,
+  type PanelPolicy,
+  type PanelTechnicalResponse,
+  type UpdatePanelPolicyResponse,
   panelListResponseSchema,
   panelResponseSchema,
   providerListResponseSchema,
@@ -257,6 +266,20 @@ import {
   type CustomerResponse,
   type CustomerStatus,
   PAYMENT_ACCOUNT_ROUTES,
+  SERVICE_ADDON_ROUTES,
+  SERVICE_LOCATION_ROUTES,
+  serviceLocationDeleteResponseSchema,
+  serviceLocationListResponseSchema,
+  type ServiceLocationDeleteResponse,
+  serviceLocationResponseSchema,
+  type ServiceLocationListResponse,
+  type ServiceLocationResponse,
+  serviceAddonListResponseSchema,
+  serviceAddonResponseSchema,
+  type ServiceAddonListResponse,
+  type ServiceAddonResponse,
+  type ServiceAddonKind,
+  type ServiceAddonStatus,
   BOT_ROUTES,
   botDiagnosticResponseSchema,
   botListResponseSchema,
@@ -278,6 +301,16 @@ import {
   type SupportFaqListResponse,
   type SupportFaqResponse,
   type SupportFaqStatus,
+  // WP-A10: client apps and connection guides.
+  CLIENT_APP_ROUTES,
+  clientAppDeletedSchema,
+  clientAppListSchema,
+  clientAppSchema,
+  type ClientAppDeletedResponse,
+  type ClientAppListResponse,
+  type ClientAppResponse,
+  type ClientAppStatus,
+  type CreateClientAppRequest,
   type PaymentGatewayListResponse,
   type PaymentGatewayResponse,
   type PaymentGatewayStatus,
@@ -1358,6 +1391,119 @@ export async function fetchPaymentReceiptBytes(
  * the figure at approval time is an operator able to approve a different payment from
  * the one the customer made.
  */
+// --- Service add-ons (WP-A5: the extra users / devices rate) -------------------
+
+/** One page of add-ons, optionally of one kind. The server authorizes on `catalog.view`. */
+export function fetchServiceAddons(
+  query: {
+    limit?: number;
+    cursor?: string;
+    kind?: ServiceAddonKind;
+    status?: ServiceAddonStatus;
+  } = {},
+): Promise<ServiceAddonListResponse> {
+  const params = new URLSearchParams();
+  if (query.limit !== undefined) params.set('limit', String(query.limit));
+  if (query.cursor !== undefined && query.cursor !== '') params.set('cursor', query.cursor);
+  if (query.kind !== undefined) params.set('kind', query.kind);
+  if (query.status !== undefined) params.set('status', query.status);
+  const suffix = params.toString();
+  return authedGet(
+    suffix ? `${SERVICE_ADDON_ROUTES.list}?${suffix}` : SERVICE_ADDON_ROUTES.list,
+    serviceAddonListResponseSchema,
+  );
+}
+
+/**
+ * The write body for create and edit. One shape, as for products: the kind is written on
+ * create and ignored by an edit, which checks the amount against the kind the row has.
+ */
+export interface ServiceAddonWriteInput {
+  kind: ServiceAddonKind;
+  title: string;
+  sortOrder: number;
+  trafficGb: string | null;
+  durationDays: number | null;
+  maxQuantity: number | null;
+  panelId: string | null;
+  productId: string | null;
+  priceAmount: string | null;
+  priceCurrency: CurrencyCode | null;
+  idempotencyKey: string;
+}
+
+export function createServiceAddon(input: ServiceAddonWriteInput): Promise<ServiceAddonResponse> {
+  return post(SERVICE_ADDON_ROUTES.create, input, serviceAddonResponseSchema);
+}
+
+export function updateServiceAddon(
+  input: ServiceAddonWriteInput & { id: string },
+): Promise<ServiceAddonResponse> {
+  const { id, ...body } = input;
+  return post(SERVICE_ADDON_ROUTES.update(id), body, serviceAddonResponseSchema);
+}
+
+/** Offers or withdraws one add-on. An unpriced one cannot be offered; the server says so. */
+export function setServiceAddonActive(input: {
+  id: string;
+  active: boolean;
+  idempotencyKey: string;
+}): Promise<ServiceAddonResponse> {
+  const route = input.active
+    ? SERVICE_ADDON_ROUTES.activate(input.id)
+    : SERVICE_ADDON_ROUTES.deactivate(input.id);
+  return post(route, { idempotencyKey: input.idempotencyKey }, serviceAddonResponseSchema);
+}
+
+// --- Service locations (WP-A6: the location change) --------------------------------
+
+/** Every configured location of the tenant. The server authorizes on `catalog.view`. */
+export function fetchServiceLocations(): Promise<ServiceLocationListResponse> {
+  return authedGet(SERVICE_LOCATION_ROUTES.list, serviceLocationListResponseSchema);
+}
+
+/** The write body for create and edit: one shape, every term stated. */
+export interface ServiceLocationWriteInput {
+  panelId: string;
+  productId: string | null;
+  locationKey: string;
+  label: string;
+  initial: boolean;
+  enabled: boolean;
+  priceAmount: string | null;
+  priceCurrency: CurrencyCode | null;
+  cooldownHours: number | null;
+  maxChanges: number | null;
+  periodDays: number | null;
+  sortOrder: number;
+  idempotencyKey: string;
+}
+
+export function createServiceLocation(
+  input: ServiceLocationWriteInput,
+): Promise<ServiceLocationResponse> {
+  return post(SERVICE_LOCATION_ROUTES.create, input, serviceLocationResponseSchema);
+}
+
+export function updateServiceLocation(
+  input: ServiceLocationWriteInput & { id: string },
+): Promise<ServiceLocationResponse> {
+  const { id, ...body } = input;
+  return post(SERVICE_LOCATION_ROUTES.update(id), body, serviceLocationResponseSchema);
+}
+
+/** Deletes a location nothing was quoted from; one in use is refused by the server. */
+export function deleteServiceLocation(input: {
+  id: string;
+  idempotencyKey: string;
+}): Promise<ServiceLocationDeleteResponse> {
+  return post(
+    SERVICE_LOCATION_ROUTES.remove(input.id),
+    { idempotencyKey: input.idempotencyKey },
+    serviceLocationDeleteResponseSchema,
+  );
+}
+
 /**
  * The manual-transfer destinations, all of them, with no cursor.
  *
@@ -1537,6 +1683,48 @@ export function setSupportFaqStatus(input: {
   return post(SUPPORT_FAQ_ROUTES.status(id), body, supportFaqSchema);
 }
 
+// --- WP-A10: client apps and connection guides ------------------------------------
+
+export function fetchClientApps(): Promise<ClientAppListResponse> {
+  return authedGet(CLIENT_APP_ROUTES.list, clientAppListSchema);
+}
+
+/** The fields an entry is written with; the server normalises the links and re-checks all of it. */
+export type ClientAppFields = Omit<CreateClientAppRequest, 'idempotencyKey'>;
+
+export function createClientApp(
+  input: ClientAppFields & { idempotencyKey: string },
+): Promise<ClientAppResponse> {
+  return post(CLIENT_APP_ROUTES.create, input, clientAppSchema);
+}
+
+/** `expectedVersion` is required; a row that moved comes back as `control.client_app_version_conflict`. */
+export function updateClientApp(
+  input: ClientAppFields & { id: string; idempotencyKey: string; expectedVersion: number },
+): Promise<ClientAppResponse> {
+  const { id, ...body } = input;
+  return post(CLIENT_APP_ROUTES.update(id), body, clientAppSchema);
+}
+
+export function setClientAppStatus(input: {
+  id: string;
+  idempotencyKey: string;
+  status: ClientAppStatus;
+  expectedVersion: number;
+}): Promise<ClientAppResponse> {
+  const { id, ...body } = input;
+  return post(CLIENT_APP_ROUTES.status(id), body, clientAppSchema);
+}
+
+export function deleteClientApp(input: {
+  id: string;
+  idempotencyKey: string;
+  expectedVersion: number;
+}): Promise<ClientAppDeletedResponse> {
+  const { id, ...body } = input;
+  return post(CLIENT_APP_ROUTES.remove(id), body, clientAppDeletedSchema);
+}
+
 export function fetchPanels(
   query: { limit?: number; cursor?: string; archived?: PanelListArchivedMode } = {},
 ): Promise<PanelListResponse> {
@@ -1595,6 +1783,33 @@ export function updatePanel(input: {
 }): Promise<PanelResponse> {
   const { id, ...body } = input;
   return post(PANEL_ROUTES.update(id), body, panelResponseSchema);
+}
+
+/**
+ * WP-A8: a panel's capability registry, operator policy, provider rules and
+ * diagnostics — all server-derived, so this client renders and never decides.
+ */
+export function fetchPanelAdvanced(id: string): Promise<PanelAdvancedResponse> {
+  return authedGet(PANEL_ADVANCED_ROUTES.advanced(id), panelAdvancedResponseSchema);
+}
+
+/**
+ * Replaces the panel's operator policy, whole, from the revision the form was shown.
+ * The server refuses a stale revision rather than overwriting a colleague's decision.
+ */
+export function updatePanelPolicy(input: {
+  id: string;
+  policy: PanelPolicy;
+  expectedRevision: number;
+  idempotencyKey: string;
+}): Promise<UpdatePanelPolicyResponse> {
+  const { id, ...body } = input;
+  return post(PANEL_ADVANCED_ROUTES.policy(id), body, updatePanelPolicyResponseSchema);
+}
+
+/** WP-A8: the Super Admin's read-only technical view (`panels.technical.view`). */
+export function fetchPanelTechnical(id: string): Promise<PanelTechnicalResponse> {
+  return authedGet(PANEL_ADVANCED_ROUTES.technical(id), panelTechnicalResponseSchema);
 }
 
 /**

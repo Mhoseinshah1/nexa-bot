@@ -1,7 +1,21 @@
-import { and, asc, eq, getTableColumns, isNotNull, sql, type SQL } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  getTableColumns,
+  isNotNull,
+  isNull,
+  lte,
+  or,
+  sql,
+  type SQL,
+} from 'drizzle-orm';
 import { money } from '@nexa/contracts';
 import type {
   CurrencyCode,
+  PanelId,
+  ProductId,
   ServiceAddonId,
   ServiceAddonKind,
   ServiceAddonStatus,
@@ -14,6 +28,7 @@ import {
 } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { serviceAddons } from '../../../../infrastructure/persistence/schema.js';
 import type {
+  AddonCap,
   ServiceAddonCursor,
   ServiceAddonDraft,
   ServiceAddonEdit,
@@ -134,7 +149,8 @@ export class DrizzleServiceAddonRepository implements ServiceAddonRepository {
      */
     const rows = await this.exec(tx)
       .update(serviceAddons)
-      .set({ ...columnsFor(edit), updatedAt: now })
+      // Every edit is a new version of the rule (WP-A5): a purchase names the one it saw.
+      .set({ ...columnsFor(edit), version: sql`${serviceAddons.version} + 1`, updatedAt: now })
       .where(and(eq(serviceAddons.tenantId, tenantId), eq(serviceAddons.id, id)))
       .returning();
     const row = rows[0];
@@ -179,9 +195,18 @@ export class DrizzleServiceAddonRepository implements ServiceAddonRepository {
     kind: ServiceAddonKind,
     currency: CurrencyCode,
     limit: number,
+    within?: AddonCap,
     tx?: unknown,
   ): Promise<{ readonly items: readonly ServiceAddonRecord[]; readonly hasMore: boolean }> {
     const tenantId = requireTenantId(scope);
+    /*
+     * Each cap binds only the kind whose amount it measures. A time package has no bytes
+     * and a traffic package no days, and `NULL <= x` is not true — so applying both to
+     * every kind hid every time package behind a traffic cap, and the reverse (Codex #2
+     * on PR #102).
+     */
+    const maxBytes = kind === 'ADD_TRAFFIC' ? (within?.maxTrafficBytes ?? null) : null;
+    const maxDays = kind === 'ADD_TIME' ? (within?.maxDurationDays ?? null) : null;
     const rows = await this.exec(tx)
       .select()
       .from(serviceAddons)
@@ -194,12 +219,55 @@ export class DrizzleServiceAddonRepository implements ServiceAddonRepository {
           // The tenant's own selling unit. A row priced in what this store no longer
           // sells is one `quoteAddon` would refuse, so it is not offered either.
           eq(serviceAddons.priceCurrency, currency),
+          // WP-A8: the panel's per-purchase cap, before the limit, so a page is never
+          // spent on packages the panel will not sell. An ADD_TRAFFIC row always has
+          // bytes and an ADD_TIME row always has days (`service_addons_amount_matches_kind`),
+          // and each cap is applied only to its own kind (above).
+          maxBytes === null ? undefined : lte(serviceAddons.trafficBytes, maxBytes),
+          maxDays === null ? undefined : lte(serviceAddons.durationDays, maxDays),
         ),
       )
       .orderBy(asc(serviceAddons.sortOrder), asc(serviceAddons.createdAt), asc(serviceAddons.id))
       .limit(limit + 1);
 
     return { items: rows.slice(0, limit).map(toRecord), hasMore: rows.length > limit };
+  }
+
+  async deviceRateFor(
+    scope: TenantContext,
+    service: { readonly panelId: string; readonly productId: string | null },
+    currency: CurrencyCode,
+    tx?: unknown,
+  ): Promise<ServiceAddonRecord | null> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select()
+      .from(serviceAddons)
+      .where(
+        and(
+          eq(serviceAddons.tenantId, tenantId),
+          eq(serviceAddons.kind, 'ADD_DEVICES'),
+          eq(serviceAddons.status, 'ACTIVE'),
+          isNotNull(serviceAddons.priceAmount),
+          eq(serviceAddons.priceCurrency, currency),
+          or(isNull(serviceAddons.panelId), eq(serviceAddons.panelId, service.panelId)),
+          // A service with no product (a custom service) matches only an unscoped product.
+          service.productId === null
+            ? isNull(serviceAddons.productId)
+            : or(isNull(serviceAddons.productId), eq(serviceAddons.productId, service.productId)),
+        ),
+      )
+      .orderBy(
+        // The most specific rule first: a product match, then a panel match.
+        desc(sql`(${serviceAddons.productId} IS NOT NULL)`),
+        desc(sql`(${serviceAddons.panelId} IS NOT NULL)`),
+        asc(serviceAddons.sortOrder),
+        asc(serviceAddons.createdAt),
+        asc(serviceAddons.id),
+      )
+      .limit(1);
+    const row = rows[0];
+    return row === undefined ? null : toRecord(row);
   }
 }
 
@@ -210,6 +278,9 @@ function columnsFor(draft: ServiceAddonEdit) {
     sortOrder: draft.sortOrder,
     trafficBytes: draft.specification.trafficBytes,
     durationDays: draft.specification.durationDays,
+    maxQuantity: draft.specification.maxQuantity ?? null,
+    panelId: draft.panelId ?? null,
+    productId: draft.productId ?? null,
     // Both halves of the price, or both null, written from ONE nullable value.
     priceAmount: draft.price === null ? null : draft.price.amountMinor,
     priceCurrency: draft.price === null ? null : draft.price.currency,
@@ -237,12 +308,21 @@ function toRecord(row: typeof serviceAddons.$inferSelect): ServiceAddonRecord {
       row.priceAmount === null || row.priceCurrency === null
         ? null
         : money(row.priceAmount, row.priceCurrency as CurrencyCode),
+    panelId: row.panelId as PanelId | null,
+    productId: row.productId as ProductId | null,
+    version: row.version,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
 }
 
 function specificationOf(row: typeof serviceAddons.$inferSelect, kind: ServiceAddonKind) {
+  if (kind === 'ADD_DEVICES') {
+    if (row.maxQuantity === null) {
+      throw new Error(`add-on ${row.id} is ADD_DEVICES with no maximum quantity.`);
+    }
+    return { kind, trafficBytes: null, durationDays: null, maxQuantity: row.maxQuantity } as const;
+  }
   if (kind === 'ADD_TRAFFIC') {
     if (row.trafficBytes === null) {
       throw new Error(`add-on ${row.id} is ADD_TRAFFIC with no traffic amount.`);

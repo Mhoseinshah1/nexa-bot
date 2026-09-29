@@ -187,7 +187,11 @@ export type PaymentPurpose = (typeof PAYMENT_PURPOSES)[number];
 
 // --- Connection guide ------------------------------------------------------------
 
-/** The platforms the connection guide offers. Each renders `bot.tutorial.<platform>`. */
+/**
+ * The platforms the connection guide has a guide of its own for: `bot.tutorial.<platform>`,
+ * which a platform shows when no enabled client app is configured for it. WP-A10's
+ * `CLIENT_APP_PLATFORMS` is this list plus `OTHER`, in the same order.
+ */
 export const CONNECTION_GUIDE_PLATFORMS = ['ANDROID', 'IOS', 'WINDOWS', 'MACOS', 'LINUX'] as const;
 export type ConnectionGuidePlatform = (typeof CONNECTION_GUIDE_PLATFORMS)[number];
 export const connectionGuidePlatformSchema = z.enum(CONNECTION_GUIDE_PLATFORMS);

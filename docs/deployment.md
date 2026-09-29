@@ -948,6 +948,157 @@ docker compose --env-file /etc/nexa/deploy.env -f /opt/nexa/deploy/compose.yml \
 
 An OPEN request can wait through a rollback; it is decided after the roll-forward.
 
+### What a rollback strands: extra-users rates (WP-A5)
+
+WP-A5 adds a third service add-on kind, `ADD_DEVICES`: the per-user rate an operator
+sets on the Web Admin's «افزایش کاربر / دستگاه» page. The release before WP-A5 maps every
+add-on row it reads as either `ADD_TRAFFIC` or `ADD_TIME`
+(`DrizzleServiceAddonRepository.specificationOf`), and an `ADD_DEVICES` row has neither a
+traffic amount nor a duration, so it throws. That release has no add-on screen in its Web
+Admin; what fails is its add-on API:
+
+- `GET /service-addons` answers **500** whenever the page it reads holds an
+  `ADD_DEVICES` row — with no `kind` filter, or with `status` alone. Filtered to
+  `kind=ADD_TRAFFIC` or `kind=ADD_TIME` it is unaffected. Filtered to
+  `kind=ADD_DEVICES` it answers **400**: its contract does not know the kind.
+- `GET` and `POST /service-addons/:id`, `/activate` and `/deactivate` answer **500** for
+  an `ADD_DEVICES` id.
+- The price preview (Web Admin, Discounts) answers **500** for an `ADD_DEVICES` add-on id.
+
+Nothing a customer sees is affected. The old bot lists add-ons filtered to its own two
+kinds, so extra traffic and extra time are offered as before. A `dv:` or `dq:` button tap
+reaches no handler there and gets the ordinary "unsupported" answer. Orders, operations
+and commercial actions of kind `ADD_DEVICES` cannot exist yet: no provider declares
+`DEVICE_LIMIT_ADJUSTMENT`, so nothing of that kind can be drafted, let alone paid for. The
+release that first declares the capability must add its own note here. The old
+provisioner abandons an operation type it does not know, and it does not refund it.
+
+**During the update itself** the same failures can meet the new Web Admin page, if one
+of its requests reaches an old API replica. They last only as long as old and new
+replicas both run, and a reload after the update answers them.
+
+**Before rolling back past WP-A5**, delete the extra-users rates. Withdrawing a rate is
+not enough, because the old release reads inactive rows too. Nothing references a rate
+yet, so the delete removes nothing else. If the database refuses it with a
+foreign-key error, something does reference a rate; stop and do not roll back. First
+save the rates so you can re-enter them after the roll-forward:
+
+```bash
+docker compose --env-file /etc/nexa/deploy.env -f /opt/nexa/deploy/compose.yml \
+  exec -T postgres psql -U nexa -d nexa -c \
+  "SELECT id, title, status, price_amount, price_currency, max_quantity, panel_id, product_id
+     FROM service_addons WHERE kind = 'ADD_DEVICES'"
+docker compose --env-file /etc/nexa/deploy.env -f /opt/nexa/deploy/compose.yml \
+  exec -T postgres psql -U nexa -d nexa -c \
+  "DELETE FROM service_addons WHERE kind = 'ADD_DEVICES'"
+```
+
+Roll back when this count is 0:
+
+```bash
+docker compose --env-file /etc/nexa/deploy.env -f /opt/nexa/deploy/compose.yml \
+  exec -T postgres psql -U nexa -d nexa -c \
+  "SELECT count(*) FROM service_addons WHERE kind = 'ADD_DEVICES'"
+```
+
+**If you already rolled back** with such a row present, roll forward. The release that
+knows the kind reads it again, and nothing was written wrongly in between: every failure
+above is a refused read.
+
+### What a rollback strands: service location change (WP-A6)
+
+WP-A6 adds the `CHANGE_LOCATION` order purpose, operation type and commercial-action kind,
+two tables (`service_locations`, `service_location_changes`) and two service columns
+(`location_key`, `location_label`). None of those can hold anything the release before
+WP-A6 must read:
+
+- The two tables are read by nothing in the older release. Locations an operator saved on
+  the Web Admin's «تغییر لوکیشن» page simply stop being shown, and come back on the
+  roll-forward.
+- No `CHANGE_LOCATION` order, operation, commercial action or change request can exist
+  yet, and no service can have a recorded location: no provider declares
+  `LOCATION_CHANGE`, so a move is refused before anything is written. The release that
+  first declares the capability must add its own note here — the older provisioner
+  abandons an operation type it does not know, and does not refund it.
+
+What CAN exist is the purpose's name in three operator-edited lists, because
+`CHANGE_LOCATION` is discountable and reseller-grantable like every other commercial
+action:
+
+- a discount rule or a cashback rule whose «applies to» includes «تغییر لوکیشن»;
+- a reseller tier grant whose operation is «تغییر لوکیشن».
+
+The older release's pricing engine and entitlement check read those rows correctly — a
+purpose they do not know simply never matches. But its **Web Admin** parses the list
+responses with its own purpose vocabulary, so the Discounts, Cashback and reseller Tiers
+pages fail to load while any such row exists. Nothing a customer sees is affected: the
+older bot never offers a location change, and an `lc:`, `lt:` or `lf:` tap gets the
+ordinary "unsupported" answer.
+
+**Before rolling back past WP-A6**, untick «تغییر لوکیشن» on every discount and cashback
+rule that names it, and remove it from every reseller tier's grants, in the Web Admin. No
+sale of that purpose can have been made, so nothing a rule already priced changes. Roll
+back when all three counts are 0:
+
+```bash
+docker compose --env-file /etc/nexa/deploy.env -f /opt/nexa/deploy/compose.yml \
+  exec -T postgres psql -U nexa -d nexa -c \
+  "SELECT (SELECT count(*) FROM discounts WHERE 'CHANGE_LOCATION' = ANY(applies_to)) AS discounts,
+          (SELECT count(*) FROM cashback_rules WHERE 'CHANGE_LOCATION' = ANY(applies_to)) AS cashback,
+          (SELECT count(*) FROM reseller_tier_grants
+            WHERE kind = 'OPERATION' AND subject = 'CHANGE_LOCATION') AS grants"
+```
+
+**If you already rolled back** with such a row present, roll forward: the release that
+knows the purpose shows those pages again, and nothing was written wrongly in between.
+
+### What a rollback strands: panel policies (WP-A8)
+
+WP-A8 adds `panel_policies`: one row per panel an operator configured on the panel's
+«قابلیت‌ها» tab — which customer actions that panel offers, the extra cooldowns and
+per-purchase caps it adds, and whether its services are delivered with or without the QR
+image. The release before WP-A8 neither reads nor writes the table, so nothing fails
+there: every restriction simply stops applying.
+
+- Every customer action switched off on a panel is offered again, wherever the adapter
+  supports it and the tenant's own switches allow it: renewal, extra traffic, extra time,
+  a customer's own suspend and resume, link rotation, subscription files and the usage
+  refresh.
+- A panel's longer cooldown for rotation or refresh falls back to the tenant's
+  `services.link_rotation_cooldown_hours` and the built-in one-minute refresh interval.
+- The per-purchase traffic and time caps and the device-limit ceiling vanish: every
+  package the catalogue offers is offered on every panel again.
+- A panel set to deliver the card as text sends the QR card again.
+
+Nothing else is affected. The `panels.technical.view` rows the migration added to the
+`owner` roles are skipped by the old release, which ignores a permission key it does not
+know (`DrizzleRoleRepository`). `panel.policy_update` audit rows are ordinary audit rows.
+Operator actions and the provisioner never read a policy, so no paid order changes course.
+
+**During the update itself** the new Web Admin can meet an old API replica: its
+Capabilities tab and the diagnostics card on the Health tab answer an error, and the
+provider catalogue and the new-panel form refuse the old `/providers` answer, which has no
+capability registry. They last only as long as old and new replicas both run, and a reload
+after the update answers them.
+
+**Before rolling back past WP-A8**, read the policies you would lose:
+
+```bash
+docker compose --env-file /etc/nexa/deploy.env -f /opt/nexa/deploy/compose.yml \
+  exec -T postgres psql -U nexa -d nexa -c \
+  "SELECT p.name, pp.revision, pp.policy FROM panel_policies pp
+     JOIN panels p ON p.tenant_id = pp.tenant_id AND p.id = pp.panel_id"
+```
+
+For any restriction that must hold while the old release runs, use the old release's own
+tenant-wide control: switch the `customer_link_rotation` flag off, or deactivate the
+add-on packages that must not be sold. Renewal, a customer's suspend and resume,
+subscription files and the refresh have no tenant-wide switch there, and are offered
+again until the roll-forward.
+
+**If you already rolled back**, roll forward. The rows were never touched by the old
+release, and every policy applies again as soon as the new release reads it.
+
 ### What a rollback delays or drops: support tickets (WP-A7)
 
 WP-A7 adds support tickets: a customer opens and answers them in the bot, and support

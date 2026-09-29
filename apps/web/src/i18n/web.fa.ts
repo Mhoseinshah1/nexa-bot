@@ -1002,7 +1002,7 @@ export const WEB_FA = {
     'برای دسترسی بدون دخالت انسان، توکن بر گذرواژه ترجیح دارد: پنلی که کد دومرحله‌ای می‌خواهد با گذرواژه قابل استفاده نیست.',
   'web.capability': 'قابلیت',
   'web.capabilities_hint':
-    'از توصیف‌گر ارائه‌دهنده خوانده می‌شود، نه از یک ردیف ذخیره‌شده. در این نسخه تنها «بررسی سلامت» اجرا می‌شود.',
+    'از خودِ آداپتور ارائه‌دهنده خوانده می‌شود — هم پیاده‌سازی و هم اعلام آن — نه از یک ردیف ذخیره‌شده. هیچ کلیدی در این صفحه قابلیتی را که پنل ندارد روشن نمی‌کند.',
   'web.credentials_one_way_title': 'اعتبارنامه یک‌طرفه است',
   'web.credentials_one_way_body':
     'هیچ اعتبارنامه‌ای خوانده نمی‌شود — نه مقدارش، نه شکل ستاره‌دارش. تنها «تنظیم شده» یا «تنظیم نشده» و زمان آخرین جایگزینی دیده می‌شود. کادرهای جایگزینی خالی شروع می‌شوند؛ کادر خالی یعنی «دست نزن»، نه «پاک کن».',
@@ -1595,6 +1595,86 @@ export const WEB_FA = {
   'web.support_faq_limit': 'سقف تعداد پرسش‌ها پر شده است. یکی را غیرفعال یا ویرایش کنید.',
   'web.support_faq_empty': 'هنوز پرسشی ثبت نشده است.',
   'web.support_faq_empty_hint': 'با «افزودن پرسش» نخستین پرسش را بسازید.',
+  // WP-A10: apps and connection guides.
+  'web.nav_client_apps': 'برنامه‌ها و آموزش اتصال',
+  'web.client_apps_title': 'برنامه‌ها و آموزش اتصال',
+  'web.client_apps_subtitle':
+    'برنامه‌هایی که ربات در بخش «📱 دانلود برنامه و آموزش اتصال» به مشتری پیشنهاد می‌دهد، با لینک دانلود و آموزش هر کدام. هر تغییر از همان لحظه در ربات دیده می‌شود.',
+  'web.client_apps_hint':
+    'مشتری فقط برنامه‌های فعال را می‌بیند، به ترتیب عدد ترتیب، و اگر سرویسی دارد فقط برنامه‌هایی که با سرویسش سازگارند. سیستم عاملی که برنامه‌ای ندارد همان آموزش کلی خودش را نشان می‌دهد.',
+  'web.client_apps_empty': 'هنوز برنامه‌ای ثبت نشده است.',
+  'web.client_apps_empty_hint':
+    'هیچ لینک پیش‌فرضی همراه نصب نیست. با «افزودن برنامه» برنامه‌هایی را که خودتان پیشنهاد می‌کنید ثبت کنید؛ تا آن زمان ربات آموزش کلی هر سیستم عامل را نشان می‌دهد.',
+  'web.client_apps_new': 'افزودن برنامه',
+  'web.client_apps_creating': 'برنامهٔ تازه',
+  'web.client_apps_editing': 'ویرایش برنامه',
+  'web.client_apps_form_hint':
+    'لینک‌ها باید با https:// شروع شوند و به یک نام دامنه اشاره کنند. HTML و لینک‌های javascript: یا data: پذیرفته نمی‌شوند.',
+  'web.client_apps_platform': 'سیستم عامل',
+  'web.client_apps_platform_android': 'اندروید',
+  'web.client_apps_platform_ios': 'آیفون (iOS)',
+  'web.client_apps_platform_windows': 'ویندوز',
+  'web.client_apps_platform_macos': 'مک',
+  'web.client_apps_platform_linux': 'لینوکس',
+  'web.client_apps_platform_other': 'سایر',
+  'web.client_apps_name': 'نام برنامه',
+  'web.client_apps_icon': 'نماد',
+  'web.client_apps_icon_hint':
+    'اختیاری؛ یک ایموجی یا نشانهٔ کوتاه که پیش از نام نمایش داده می‌شود.',
+  'web.client_apps_icon_invalid': 'نماد باید کوتاه و بدون فاصله باشد.',
+  'web.client_apps_description': 'توضیح کوتاه',
+  'web.client_apps_official_url': 'لینک دانلود رسمی',
+  'web.client_apps_url_hint': 'مثلاً نشانی صفحهٔ دانلود سازندهٔ برنامه، با https://',
+  'web.client_apps_alternative_url': 'لینک فروشگاه یا لینک جایگزین',
+  'web.client_apps_help_url': 'لینک ویدیو یا راهنمای بیشتر',
+  'web.client_apps_optional': 'اختیاری.',
+  'web.client_apps_url_invalid':
+    'لینک معتبر نیست. فقط https:// با نام دامنه پذیرفته می‌شود (بدون نشانی IP، فاصله یا نام کاربری در لینک).',
+  'web.client_apps_guide': 'آموزش اتصال',
+  'web.client_apps_guide_hint':
+    'متن ساده. خطی که با - شروع شود فهرست می‌شود، خطی که با عدد و نقطه شروع شود یک مرحله است، و [متن](https://…) یک پیوند. خط خالی پاراگراف‌ها را جدا می‌کند.',
+  'web.client_apps_delivery': 'نوع تحویل سرویس',
+  'web.client_apps_compat_hint':
+    'برای نمایش به همه چیزی را انتخاب نکنید. اگر انتخاب کنید، به مشتری‌ای که سرویسش با هیچ‌کدام سازگار نیست نشان داده نمی‌شود.',
+  'web.client_apps_delivery_link': 'لینک اشتراک',
+  'web.client_apps_delivery_files': 'فایل‌های اتصال',
+  'web.client_apps_protocols': 'پروتکل‌ها',
+  'web.client_apps_providers': 'نوع پنل',
+  'web.client_apps_compat': 'سازگاری',
+  'web.client_apps_compat_any': 'همه',
+  'web.client_apps_order': 'ترتیب',
+  'web.client_apps_sort_hint': 'عدد کوچک‌تر بالاتر نشان داده می‌شود.',
+  'web.client_apps_sort_invalid': 'ترتیب باید عددی صحیح از ۰ تا ۱۰۰٬۰۰۰ باشد.',
+  'web.client_apps_status': 'وضعیت',
+  'web.client_apps_enabled': 'فعال',
+  'web.client_apps_disabled': 'غیرفعال',
+  'web.client_apps_updated': 'آخرین تغییر',
+  'web.client_apps_actions': 'عملیات',
+  'web.client_apps_edit': 'ویرایش',
+  'web.client_apps_enable': 'فعال کردن',
+  'web.client_apps_disable': 'غیرفعال کردن',
+  'web.client_apps_delete': 'حذف',
+  'web.client_apps_delete_confirm':
+    'این برنامه برای همیشه حذف می‌شود و دیگر به مشتری نشان داده نمی‌شود. ادامه می‌دهید؟',
+  'web.client_apps_preview': 'پیش‌نمایش در ربات',
+  'web.client_apps_preview_hint':
+    'پیام همان‌طور که مشتری می‌بیند، با متن پیش‌فرض ربات. دکمه‌ها زیر پیام نمایش داده می‌شوند.',
+  'web.client_apps_save': 'ذخیره',
+  'web.client_apps_cancel': 'انصراف',
+  'web.client_apps_saved': 'برنامه ذخیره شد.',
+  'web.client_apps_status_done': 'وضعیت برنامه تغییر کرد.',
+  'web.client_apps_deleted': 'برنامه حذف شد.',
+  'web.client_apps_required': 'این بخش لازم است.',
+  'web.client_apps_one_line': 'باید در یک خط باشد.',
+  'web.client_apps_problem_control': 'نویسه‌های کنترلی پذیرفته نمی‌شوند.',
+  'web.client_apps_problem_markup': 'HTML پذیرفته نمی‌شود؛ متن ساده بنویسید.',
+  'web.client_apps_problem_scheme':
+    'لینک‌های javascript:، data:، vbscript: و file: پذیرفته نمی‌شوند.',
+  'web.client_apps_problem_link':
+    'هر لینک، چه به‌صورت [متن](لینک) و چه خود نشانی، باید با https:// و نام دامنه باشد؛ لینک http:// یا www. بدون https:// پذیرفته نمی‌شود.',
+  'web.client_apps_conflict':
+    'این برنامه از زمانی که باز کردید تغییر کرده است. نسخهٔ تازه را بارگذاری کنید و تغییر را دوباره اعمال کنید.',
+  'web.client_apps_limit': 'سقف تعداد برنامه‌ها پر شده است. یکی را حذف کنید.',
   'web.payment_resolution': 'نتیجهٔ بدون دریافت وجه',
   'web.payment_destination': 'مقصد واریز اعلام‌شده',
   'web.payment_destination_label': 'عنوان حساب',
@@ -1806,6 +1886,8 @@ export const WEB_FA = {
 
   // --- Product categories ---------------------------------------------------
   'web.nav_product_categories': 'دسته‌بندی‌ها',
+  'web.nav_extra_devices': 'افزایش کاربر / دستگاه',
+  'web.nav_service_locations': 'تغییر لوکیشن',
   'web.categories_title': 'دسته‌بندی محصولات',
   'web.categories_subtitle': 'هر محصول فروختنی دقیقاً در یک دسته قرار می‌گیرد.',
   'web.categories_empty': 'هنوز دسته‌ای ساخته نشده است',
@@ -2161,6 +2243,8 @@ export const WEB_FA = {
 
   'web.service_expires_at': 'انقضا',
   'web.service_traffic_limit': 'سقف حجم',
+  'web.service_device_limit': 'تعداد کاربر / دستگاه مجاز',
+  'web.service_device_limit_none': 'ثبت نشده',
   'web.service_traffic_used': 'حجم مصرف‌شده',
   'web.service_usage_synced_at': 'آخرین خواندن مصرف از پنل',
   'web.service_usage_never': 'هرگز از پنل خوانده نشده است.',
@@ -2245,6 +2329,8 @@ export const WEB_FA = {
   'web.operation_type_renew': 'تمدید',
   'web.operation_type_add_traffic': 'افزودن حجم',
   'web.operation_type_add_time': 'افزودن زمان',
+  'web.operation_type_add_devices': 'افزایش کاربر / دستگاه',
+  'web.operation_type_change_location': 'تغییر لوکیشن',
   'web.operation_type_suspend': 'قطع موقت',
   'web.operation_type_resume': 'وصل دوباره',
   'web.operation_type_terminate': 'حذف',
@@ -2611,6 +2697,130 @@ export const WEB_FA = {
   'web.purpose_renew': 'تمدید',
   'web.purpose_add_traffic': 'افزایش حجم',
   'web.purpose_add_time': 'افزایش زمان',
+  'web.purpose_add_devices': 'افزایش کاربر / دستگاه',
+  'web.purpose_change_location': 'تغییر لوکیشن',
+  // WP-A5: the extra users / devices rate — an `ADD_DEVICES` add-on, in operator words.
+  'web.extra_devices_title': 'افزایش کاربر / دستگاه',
+  'web.extra_devices_subtitle':
+    'قیمت هر کاربر یا دستگاه اضافه که مشتری برای سرویس فعلی خود می‌خرد، و حداکثر تعدادی که یک سرویس می‌تواند بخرد.',
+  'web.extra_devices_no_capable_panel':
+    'در این نسخه هیچ‌یک از انواع پنل پشتیبانی‌شده امکان افزایش تعداد کاربر یک سرویس موجود را ندارد. تعرفه‌ای که اینجا ذخیره کنید تا وقتی پنلی با این قابلیت وصل نشود به هیچ مشتری‌ای نمایش داده نمی‌شود.',
+  'web.extra_devices_capable_panels':
+    'دکمهٔ «افزایش کاربر / دستگاه» فقط برای سرویس‌هایی نمایش داده می‌شود که روی این نوع پنل‌ها هستند: {providers}',
+  'web.extra_devices_rates': 'تعرفه‌ها',
+  'web.extra_devices_empty': 'هنوز تعرفه‌ای تعریف نشده است',
+  'web.extra_devices_empty_hint':
+    'بدون تعرفهٔ فعال و قیمت‌دار، دکمهٔ افزایش کاربر به مشتری نمایش داده نمی‌شود.',
+  'web.extra_devices_rate_title': 'عنوان',
+  'web.extra_devices_unit_price': 'قیمت هر کاربر',
+  'web.extra_devices_unit_price_hint':
+    'مبلغ یک کاربر یا دستگاه اضافه. مبلغ نهایی برابر است با این قیمت ضرب در تعدادی که مشتری انتخاب می‌کند.',
+  'web.extra_devices_unpriced': 'بدون قیمت',
+  'web.extra_devices_currency': 'واحد پول',
+  'web.extra_devices_max_quantity': 'حداکثر قابل خرید',
+  'web.extra_devices_max_quantity_hint':
+    'بیشترین تعداد کاربر اضافه‌ای که یک سرویس روی هم می‌تواند بخرد؛ عددی بین ۱ تا {max}.',
+  'web.extra_devices_scope': 'پنل / محصول',
+  'web.extra_devices_scope_panel': 'پنل',
+  'web.extra_devices_scope_product': 'محصول',
+  'web.extra_devices_scope_hint':
+    'اگر برای یک سرویس چند تعرفه صدق کند، تعرفهٔ مخصوص محصول بر تعرفهٔ مخصوص پنل، و آن بر تعرفهٔ عمومی مقدم است.',
+  'web.extra_devices_scope_all_panels': 'همهٔ پنل‌ها',
+  'web.extra_devices_scope_all_products': 'همهٔ محصولات',
+  'web.extra_devices_panel_unsupported': 'این پنل افزایش کاربر را پشتیبانی نمی‌کند',
+  'web.extra_devices_scope_unavailable':
+    'فهرست کامل پنل‌ها یا محصولات خوانده نشد، پس ممکن است همهٔ گزینه‌ها نمایش داده نشوند. صفحه را دوباره بارگذاری کنید.',
+  'web.extra_devices_sort': 'ترتیب',
+  'web.extra_devices_state': 'وضعیت',
+  'web.extra_devices_active': 'فعال',
+  'web.extra_devices_inactive': 'غیرفعال',
+  'web.extra_devices_updated': 'آخرین تغییر',
+  'web.extra_devices_actions': 'عملیات',
+  'web.extra_devices_edit': 'ویرایش',
+  'web.extra_devices_enable': 'فعال کردن',
+  'web.extra_devices_disable': 'غیرفعال کردن',
+  'web.extra_devices_new': 'تعرفهٔ جدید',
+  'web.extra_devices_editing': 'ویرایش تعرفه',
+  'web.extra_devices_form_hint':
+    'تعرفهٔ جدید غیرفعال ساخته می‌شود و با «فعال کردن» به مشتری عرضه می‌شود. تغییر قیمت فقط روی خریدهای بعدی اثر دارد؛ هر سفارش قیمت و نسخهٔ تعرفه‌ای را که با آن خریده شده نگه می‌دارد.',
+  'web.extra_devices_save': 'ذخیره',
+  'web.extra_devices_cancel_edit': 'انصراف از ویرایش',
+  'web.extra_devices_saved': 'تعرفه ذخیره شد.',
+  // WP-A6: the service location change — a panel's locations and the price of moving there.
+  'web.service_locations_title': 'تغییر لوکیشن سرویس',
+  'web.service_locations_subtitle':
+    'لوکیشن‌های هر پنل، لوکیشنی که سرویس‌های جدید در آن ساخته می‌شوند، و هزینه و محدودیت انتقال سرویس فعلی مشتری به هر لوکیشن.',
+  'web.service_locations_no_capable_panel':
+    'در این نسخه هیچ‌یک از انواع پنل پشتیبانی‌شده امکان جابه‌جایی امن سرویس موجود بین لوکیشن‌ها را ندارد. تنظیماتی که اینجا ذخیره کنید تا وقتی پنلی با این قابلیت وصل نشود به هیچ مشتری‌ای نمایش داده نمی‌شود.',
+  'web.service_locations_capable_panels':
+    'دکمهٔ «🌍 تغییر لوکیشن» فقط برای سرویس‌هایی نمایش داده می‌شود که روی این نوع پنل‌ها هستند: {providers}',
+  'web.service_locations_list': 'لوکیشن‌ها',
+  'web.service_locations_empty': 'هنوز لوکیشنی تعریف نشده است',
+  'web.service_locations_empty_hint':
+    'بدون لوکیشن اولیه و دست‌کم یک لوکیشن مقصدِ فعال و قیمت‌دار، تغییر لوکیشن به مشتری پیشنهاد نمی‌شود. تنظیم‌نشده هرگز به معنای رایگان نیست.',
+  'web.service_locations_panel': 'پنل',
+  'web.service_locations_panel_unsupported': 'این پنل تغییر لوکیشن را پشتیبانی نمی‌کند',
+  'web.service_locations_panel_id_hint':
+    'فهرست پنل‌ها برای نقش شما خواندنی نیست؛ شناسهٔ پنل را وارد کنید.',
+  'web.service_locations_product_id_hint':
+    'فهرست محصولات برای نقش شما خواندنی نیست؛ برای همهٔ محصولات خالی بگذارید یا شناسهٔ محصول را وارد کنید.',
+  'web.service_locations_product': 'محصول',
+  'web.service_locations_all_products': 'همهٔ محصولات این پنل',
+  'web.service_locations_product_hint':
+    'اگر برای یک لوکیشن هم ردیف عمومی و هم ردیف مخصوص محصول باشد، ردیف مخصوص محصول برای سرویس‌های همان محصول اعمال می‌شود؛ حتی اگر غیرفعال باشد.',
+  'web.service_locations_key': 'شناسهٔ لوکیشن در پنل',
+  'web.service_locations_key_hint':
+    'همان شناسه‌ای که پنل برای این لوکیشن به کار می‌برد. به مشتری نمایش داده نمی‌شود.',
+  'web.service_locations_label': 'نام لوکیشن',
+  'web.service_locations_label_hint': 'نامی که مشتری در ربات می‌بیند؛ مثلاً «🇩🇪 آلمان».',
+  'web.service_locations_initial': 'لوکیشن اولیهٔ سرویس‌های جدید این پنل',
+  'web.service_locations_initial_hint':
+    'هر پنل یک لوکیشن اولیه دارد. بدون آن، معلوم نیست سرویسی که هنوز جابه‌جا نشده کجاست و تغییر لوکیشن برایش پیشنهاد نمی‌شود.',
+  'web.service_locations_enabled': 'به‌عنوان مقصد به مشتری عرضه شود',
+  'web.service_locations_price': 'هزینهٔ انتقال',
+  'web.service_locations_price_hint':
+    'برای انتقال رایگان صفر وارد کنید. خالی یعنی این لوکیشن مقصد فروش نیست.',
+  'web.service_locations_free': 'رایگان',
+  'web.service_locations_unpriced': 'بدون قیمت',
+  'web.service_locations_currency': 'واحد پول',
+  'web.service_locations_cooldown': 'فاصلهٔ لازم بین دو تغییر (ساعت)',
+  'web.service_locations_cooldown_hint': 'اختیاری. خالی یعنی بدون فاصلهٔ اجباری.',
+  'web.service_locations_max_changes': 'حداکثر تعداد تغییر',
+  'web.service_locations_period_days': 'در بازهٔ چند روز',
+  'web.service_locations_limit_hint':
+    'اختیاری و همراه هم؛ مثلاً ۲ تغییر در ۳۰ روز. خالی یعنی بدون سقف.',
+  'web.service_locations_limit_pair': 'حداکثر تعداد تغییر و بازهٔ روز را با هم وارد کنید.',
+  'web.service_locations_limits': 'محدودیت‌ها',
+  'web.service_locations_no_limits': 'بدون محدودیت',
+  'web.service_locations_cooldown_value': '{hours} ساعت فاصله',
+  'web.service_locations_limit_value': '{max} تغییر در {days} روز',
+  'web.service_locations_sort': 'ترتیب',
+  'web.service_locations_state': 'وضعیت',
+  'web.service_locations_target_on': 'مقصد فعال',
+  'web.service_locations_target_off': 'مقصد نیست',
+  'web.service_locations_initial_badge': 'اولیه',
+  'web.service_locations_updated': 'آخرین تغییر',
+  'web.service_locations_actions': 'عملیات',
+  'web.service_locations_edit': 'ویرایش',
+  'web.service_locations_delete': 'حذف',
+  'web.service_locations_new': 'لوکیشن جدید',
+  'web.service_locations_editing': 'ویرایش لوکیشن',
+  'web.service_locations_form_hint':
+    'تغییر قیمت یا محدودیت فقط روی درخواست‌های بعدی اثر دارد؛ هر درخواست نام، قیمت و نسخهٔ لوکیشنی را که با آن ثبت شده نگه می‌دارد. لینک یا اطلاعات اتصال مشتری ممکن است پس از جابه‌جایی تغییر کند؛ در این صورت اطلاعات جدید برایش فرستاده می‌شود.',
+  'web.service_locations_save': 'ذخیره',
+  'web.service_locations_cancel_edit': 'انصراف از ویرایش',
+  'web.service_locations_saved': 'لوکیشن ذخیره شد.',
+  'web.service_locations_unchanged': 'تغییری برای ذخیره نبود.',
+  'web.service_locations_deleted': 'لوکیشن حذف شد.',
+  'web.service_locations_error_in_use':
+    'درخواست تغییر لوکیشنی به این لوکیشن اشاره می‌کند و نمی‌توان آن را حذف کرد؛ به‌جای حذف، آن را از مقصدها خارج کنید.',
+  'web.service_locations_error_duplicate': 'این پنل برای همین محصول‌ها لوکیشنی با همین شناسه دارد.',
+  'web.service_locations_error_second_initial': 'این پنل از قبل یک لوکیشن اولیه دارد.',
+  'web.service_locations_error_currency': 'قیمت باید با واحد پول فروش این نصب باشد.',
+  'web.service_locations_error_product_panel': 'این محصول روی پنل انتخاب‌شده فروخته نمی‌شود.',
+  'web.service_locations_error_panel_full':
+    'این پنل به حداکثر تعداد لوکیشن رسیده است (۲۰ ردیف، همراه با ردیف‌های مخصوص محصول).',
+  'web.service_locations_error_count': 'به حداکثر تعداد لوکیشن‌های این نصب (۵۰۰) رسیده‌اید.',
 
   'web.preview_title': 'پیش‌نمایش قیمت',
   'web.preview_hint':
@@ -3354,6 +3564,167 @@ export const WEB_FA = {
   'web.order_custom_service_hint':
     'همان‌طور که هنگام ثبت سفارش ثبت شد؛ ویرایش یا حذف قاعده‌ها این ارقام را تغییر نمی‌دهد.',
   'web.order_custom_service_none': 'برای این سفارش شرایط سرویس دلخواهی ثبت نشده است.',
+  // --- Advanced provider settings (WP-A8) ----------------------------------
+  // The capability registry: one row per thing a person does with a service.
+  'web.cap_registry_title': 'قابلیت‌های این پنل',
+  'web.cap_support': 'پشتیبانی',
+  'web.cap_supported': 'پشتیبانی می‌شود',
+  'web.cap_unsupported': 'پشتیبانی نمی‌شود',
+  'web.cap_row_create_service': 'ساخت سرویس',
+  'web.cap_row_create_service_hint': 'ساخت حساب تازه روی پنل پس از پرداخت سفارش.',
+  'web.cap_row_renew': 'تمدید',
+  'web.cap_row_renew_hint': 'تمدید سرویس با همان پلن و قیمت امروز آن.',
+  'web.cap_row_add_traffic': 'افزایش حجم',
+  'web.cap_row_add_traffic_hint': 'افزودن حجم به سهم فعلی سرویس با خرید بسته.',
+  'web.cap_row_add_time': 'افزایش زمان',
+  'web.cap_row_add_time_hint': 'افزودن روز به مدت سرویس با خرید بسته.',
+  'web.cap_row_reset_traffic': 'بازنشانی مصرف',
+  'web.cap_row_reset_traffic_hint': 'صفر کردن حجم مصرف‌شدهٔ یک سرویس روی پنل.',
+  'web.cap_row_disable_enable': 'غیرفعال / فعال کردن',
+  'web.cap_row_disable_enable_hint': 'متوقف کردن موقت سرویس و فعال کردن دوبارهٔ آن.',
+  'web.cap_row_rotate_subscription': 'ابطال و تعویض لینک اشتراک',
+  'web.cap_row_rotate_subscription_hint': 'گرفتن لینک اشتراک تازه از پنل برای یک سرویس.',
+  'web.cap_row_subscription_files': 'فایل‌های اشتراک',
+  'web.cap_row_subscription_files_hint': 'فرستادن فایل‌های اتصال آماده‌ای که خود پنل می‌سازد.',
+  'web.cap_row_extra_devices': 'افزایش کاربر / دستگاه',
+  'web.cap_row_extra_devices_hint': 'بالا بردن محدودیت کاربر یا دستگاه یک سرویس موجود.',
+  'web.cap_row_location_change': 'تغییر لوکیشن',
+  'web.cap_row_location_change_hint': 'بردن یک سرویس موجود به لوکیشن دیگر.',
+  'web.cap_row_usage_read': 'خواندن مصرف',
+  'web.cap_row_usage_read_hint': 'خواندن حجم مصرف‌شدهٔ سرویس از پنل.',
+  'web.cap_row_terminate': 'حذف سرویس',
+  'web.cap_row_terminate_hint': 'پاک کردن حساب سرویس از پنل.',
+  'web.cap_gap_not_declared':
+    'پیاده‌سازی شده، اما هنوز روی پنل واقعی تأیید و اعلام نشده است؛ برای همین پیشنهاد نمی‌شود.',
+  'web.cap_gap_not_implemented': 'اعلام شده اما کدی پشت آن نیست؛ برای ایمنی رد می‌شود.',
+  'web.cap_gap_not_supported': 'این ارائه‌دهنده در این نسخه این کار را انجام نمی‌دهد.',
+  'web.cap_gap_not_in_release': 'این نسخه هنوز چنین قابلیتی ندارد.',
+  'web.cap_customer': 'برای مشتری',
+  'web.cap_customer_available': 'در دسترس مشتری',
+  'web.cap_customer_operator_only': 'کار مدیر یا سامانه',
+  'web.cap_blocker_unsupported': 'پنل پشتیبانی نمی‌کند',
+  'web.cap_blocker_policy_disabled': 'در سیاست این پنل خاموش است',
+  'web.cap_blocker_policy_unreadable': 'سیاست ذخیره‌شده خوانا نیست',
+  'web.cap_blocker_tenant_feature_off': 'قابلیت سراسری آن خاموش است',
+  'web.cap_customer_hint':
+    'آماده بودن بستهٔ فروش در کاتالوگ و آماده بودن خود پنل جداگانه، در بخش‌های خودشان نشان داده می‌شود.',
+
+  // The operator's policy for this panel: it can only restrict.
+  'web.policy_title': 'سیاست‌های عملیاتی این پنل',
+  'web.policy_hint':
+    'سیاست فقط می‌تواند محدود کند: کاری را برای مشتریانِ این پنل خاموش کند، فاصلهٔ انتظار را بیشتر کند یا اندازهٔ یک خرید را محدود کند. فقط کارهایی که پنل پشتیبانی می‌کند اینجا دیده می‌شوند، و کارهای مدیر و سامانه تغییر نمی‌کنند.',
+  'web.policy_customer_enabled': 'در دسترس مشتری',
+  'web.policy_cooldown_minutes': 'کمترین فاصلهٔ دو درخواست مشتری (دقیقه)',
+  'web.policy_cooldown_hint':
+    'خالی یعنی همان فاصلهٔ عمومی. فاصلهٔ واقعی بیشترینِ این عدد و فاصلهٔ عمومی است؛ هیچ‌وقت کمتر نمی‌شود.',
+  'web.policy_max_traffic_gb': 'بیشترین حجم یک خرید (گیگابایت)',
+  'web.policy_max_days': 'بیشترین مدت یک خرید (روز)',
+  'web.policy_max_device_limit': 'بیشترین تعداد کاربر یک سرویس',
+  'web.policy_limit_hint':
+    'خالی یعنی بدون سقف اضافه. بسته‌های بزرگ‌تر روی این پنل پیشنهاد نمی‌شوند.',
+  'web.policy_delivery': 'شیوهٔ تحویل سرویس',
+  'web.policy_delivery_hint':
+    'در هر دو حالت همان متن تأییدشده، لینک اشتراک و دکمه‌ها فرستاده می‌شود؛ تفاوت فقط تصویر QR است.',
+  'web.policy_delivery_card_with_qr': 'کارت تحویل همراه با تصویر QR',
+  'web.policy_delivery_card_text': 'کارت تحویل به‌صورت متن، بدون تصویر QR',
+  'web.policy_no_actions': 'این پنل هیچ کار مشتری‌ای را پشتیبانی نمی‌کند که قابل تنظیم باشد.',
+  'web.policy_invalid': 'این مقدارها معتبر نیستند:',
+  'web.policy_stale':
+    'سیاست این پنل از زمان بارگذاری تغییر کرده است. مقدار تازه بارگذاری شد؛ تغییرتان را دوباره اعمال کنید.',
+  'web.policy_unreadable': 'سیاست ذخیره‌شده خوانا نیست',
+  'web.policy_unreadable_body':
+    'تا ذخیرهٔ دوباره، همهٔ کارهای مشتری روی این پنل رد می‌شود. فرم زیر پیش‌فرض را نشان می‌دهد.',
+  'web.policy_revision': 'نسخهٔ سیاست',
+  'web.policy_read_only': 'برای تغییر سیاست به دسترسی ویرایش پنل نیاز است.',
+
+  // The fixed rules the provider's adapter applies.
+  'web.prule_title': 'تنظیمات اختصاصی ارائه‌دهنده',
+  'web.prule_hint':
+    'رفتار ثابتی که هنگام ساخت سرویس روی این پنل اعمال می‌شود. پیکربندی قابل‌ویرایش — پروتکل‌ها، تگ‌های ورودی، دامنهٔ اشتراک و شناسهٔ ورودی — در زبانهٔ «نمای کلی»، بخش پیکربندی ارائه‌دهنده است و با همان قاعدهٔ سرور بررسی می‌شود.',
+  'web.prule_traffic_reset': 'بازنشانی دوره‌ای حجم',
+  'web.prule_traffic_reset_never':
+    'هرگز. حجم خریداری‌شده کل سهم سرویس است؛ بازنشانی دوره‌ای به مشتری بیش از آنچه خریده می‌دهد، پس تنظیم‌پذیر نیست.',
+  'web.prule_protocols': 'انتخاب پروتکل',
+  'web.prule_protocols_operator_chosen': 'مدیر در پیکربندی پنل انتخاب می‌کند.',
+  'web.prule_protocols_panel_assigned': 'خود پنل همهٔ پروتکل‌ها را به هر حساب می‌دهد.',
+  'web.prule_protocols_inbound_defined': 'پروتکلِ ورودیِ انتخاب‌شده به کار می‌رود.',
+  'web.prule_inbounds': 'انتخاب ورودی',
+  'web.prule_inbounds_operator_tags': 'تگ‌های ورودی که مدیر برای هر پروتکل می‌نویسد.',
+  'web.prule_inbounds_operator_inbound_id': 'یک ورودی، با شناسه‌ای که مدیر وارد می‌کند.',
+  'web.prule_inbounds_panel_assigned': 'خود پنل همهٔ ورودی‌ها را به هر حساب می‌دهد.',
+  'web.prule_subscription_link': 'لینک اشتراک',
+  'web.prule_subscription_link_panel_issued': 'پنل لینک را می‌سازد و برمی‌گرداند.',
+  'web.prule_subscription_link_subscription_domain': 'از دامنهٔ اشتراکِ پیکربندی‌شده ساخته می‌شود.',
+  'web.prule_device_limit': 'محدودیت کاربر هنگام ساخت',
+  'web.prule_device_limit_from_product': 'محدودیت کاربرِ محصول روی حساب تازه نوشته می‌شود.',
+  'web.prule_device_limit_not_sent': 'فرستاده نمی‌شود؛ این پنل محدودیت کاربر یا دستگاه ندارد.',
+  'web.prule_current': 'پیکربندی فعلی',
+  'web.prule_nothing_to_configure': 'این پنل پیش از ساخت سرویس به پیکربندی نیاز ندارد.',
+  'web.prule_not_configured': 'هنوز تنظیم نشده است.',
+  'web.prule_location_note':
+    'لوکیشنی که مشتری می‌بیند از محصول یا سرویس دلخواه می‌آید، نه از پیکربندی پنل.',
+
+  // Diagnostics, from what the probe lane already stored.
+  'web.diag_title': 'عیب‌یابی',
+  'web.diag_hint':
+    'از آخرین نتیجهٔ ذخیره‌شده خوانده می‌شود؛ دیدن این بخش هیچ درخواستی به پنل نمی‌فرستد. برای بررسی تازه «آزمایش اتصال» را بزنید.',
+  'web.diag_check': 'بررسی',
+  'web.diag_overall_ok': 'همه چیز درست است',
+  'web.diag_overall_degraded': 'کار می‌کند، با هشدار',
+  'web.diag_overall_error': 'مشکل دارد',
+  'web.diag_overall_not_checked': 'هنوز بررسی نشده',
+  'web.diag_overall_disabled': 'پنل غیرفعال است',
+  'web.diag_check_connectivity': 'دسترسی به پنل',
+  'web.diag_check_credentials': 'اعتبارنامهٔ تنظیم‌شده',
+  'web.diag_check_authentication': 'احراز هویت',
+  'web.diag_check_provider_status': 'وضعیت خود پنل',
+  'web.diag_check_configuration': 'پیکربندی ارائه‌دهنده',
+  'web.diag_check_connection_test': 'آزمایش اتصال با پیکربندی فعلی',
+  'web.diag_check_freshness': 'تازگی نتیجه',
+  'web.diag_check_required_capabilities': 'قابلیت‌های لازم',
+  'web.diag_verdict_pass': 'درست',
+  'web.diag_verdict_warn': 'هشدار',
+  'web.diag_verdict_fail': 'نادرست',
+  'web.diag_verdict_unknown': 'نامشخص',
+  'web.diag_failure': 'آخرین خطا',
+  'web.diag_last_success': 'آخرین بررسی موفق',
+  'web.diag_missing_fields': 'فیلدهای تنظیم‌نشده',
+  'web.diag_required_title': 'قابلیت‌های لازم برای فروش و نگهداری',
+  'web.diag_capability_health_check': 'بررسی سلامت',
+  'web.diag_capability_create_user': 'ساخت حساب',
+  'web.diag_capability_deliver_subscription_link': 'تحویل لینک اشتراک',
+  'web.diag_capability_read_usage': 'خواندن مصرف',
+  'web.diag_available': 'موجود',
+  'web.diag_missing': 'موجود نیست',
+  'web.diag_failure_authentication_failed':
+    'اعتبارنامه رد شد — نام کاربری و گذرواژه یا توکن را جایگزین کنید.',
+  'web.diag_failure_authentication_requires_interaction':
+    'پنل کد دومرحله‌ای می‌خواهد — برای دسترسی خودکار توکن API تنظیم کنید.',
+  'web.diag_failure_unreachable': 'پنل در دسترس نبود — نشانی و روشن بودن سرور را بررسی کنید.',
+  'web.diag_failure_timeout': 'پنل دیر پاسخ داد یا در زمان مقرر پاسخی نداد.',
+  'web.diag_failure_tls_failed': 'گواهی یا دست‌دهی TLS ناموفق بود — گواهی پنل را بررسی کنید.',
+  'web.diag_failure_blocked_target': 'نشانی به مقصدی می‌رسد که این نصب اجازهٔ تماس با آن را ندارد.',
+  'web.diag_failure_rate_limited':
+    'پنل گفت درخواست‌ها زیاد است — خود پنل سالم است؛ کمتر با آن تماس گرفته شود.',
+  'web.diag_failure_malformed_response':
+    'پنل پاسخ داد، اما پاسخ شکل پاسخ این ارائه‌دهنده را نداشت.',
+  'web.diag_failure_provider_error': 'پنل با خطای خودش پاسخ داد.',
+  'web.diag_failure_provider_refused': 'پنل درخواست را طبق قاعدهٔ خودش رد کرد.',
+  'web.diag_failure_unsupported_capability': 'این ارائه‌دهنده کار خواسته‌شده را انجام نمی‌دهد.',
+
+  // The Super Admin's read-only technical view.
+  'web.tech_title': 'نمای فنی (فقط مدیر ارشد)',
+  'web.tech_hint':
+    'شناسه‌های خام برای عیب‌یابی یکپارچگی. فقط‌خواندنی است و هیچ اعتبارنامه‌ای در آن نیست — فقط زمان تنظیم آنها.',
+  'web.tech_show': 'نمایش نمای فنی',
+  'web.tech_hide': 'پنهان کردن نمای فنی',
+
+  // Credential shapes and the provider catalogue, in Persian.
+  'web.credential_shape_username_password': 'نام کاربری و گذرواژه',
+  'web.credential_shape_opaque_token': 'توکن API',
+  'web.credential_shape_token_or_username_password': 'توکن API یا نام کاربری و گذرواژه',
+  'web.credential_shape_none': 'بدون اعتبارنامه',
+  'web.providers_capabilities': 'کارهای پشتیبانی‌شده',
 
   // WP-A7 — support tickets.
   'web.nav_tickets': 'تیکت‌های پشتیبانی',

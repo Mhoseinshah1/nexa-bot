@@ -76,6 +76,8 @@ import {
 import { parseTrafficGb, TRAFFIC_GB_PATTERN } from './traffic-input.js';
 import {
   MAX_DEVICE_LIMIT,
+  DEVICE_ADDON_MAX_QUANTITY,
+  serviceAddonAmountMatchesKind,
   MAX_DURATION_DAYS,
   MAX_TRAFFIC_BYTES,
   PRODUCT_AUDIENCES,
@@ -139,6 +141,7 @@ import {
   PROVIDER_TYPES,
 } from './provider.js';
 import { isStorableInstant } from './time.js';
+import { capabilityRegistryEntrySchema } from './panel-advanced.js';
 import {
   SUPPORT_FAQ_STATUSES,
   TENANT_MEDIA_MAX_BYTES,
@@ -1841,6 +1844,12 @@ export const providerDescriptorSchema = z.object({
   credentialShape: z.enum(CREDENTIAL_SHAPES),
   capabilities: z.array(z.enum(PROVIDER_CAPABILITIES)),
   requiredActivationFields: z.array(z.string()),
+  /**
+   * WP-A8: what the provider's adapter can do, row by row, derived from its methods AND
+   * its declarations (`deriveCapabilityRegistry`). What the Web Admin shows an operator;
+   * `capabilities` above stays the raw declaration list.
+   */
+  capabilityRegistry: z.array(capabilityRegistryEntrySchema),
 });
 
 export const providerListResponseSchema = z.object({
@@ -2357,6 +2366,20 @@ export const serviceAddonSummarySchema = z
     sortOrder: z.number().int(),
     trafficBytes: z.string().nullable(),
     durationDays: z.number().int().nullable(),
+    /*
+     * WP-A5, `ADD_DEVICES` only: the most extra users / devices one service may be sold
+     * through this add-on, in total — and, for that kind, `priceAmount` is the price of
+     * ONE. Null for the two package kinds.
+     */
+    maxQuantity: z.number().int().nullable(),
+    /*
+     * Where an `ADD_DEVICES` add-on applies (WP-A5): a panel, a product, both or neither.
+     * Null is "every", never "none". Always null for the two package kinds.
+     */
+    panelId: z.string().nullable(),
+    productId: z.string().nullable(),
+    /** Bumped on every edit; a purchase records the version it was priced from. */
+    version: z.number().int().min(1),
     priceAmount: z.string().nullable(),
     priceCurrency: z.enum(CURRENCY_CODES).nullable(),
     createdAt: z.iso.datetime(),
@@ -2367,9 +2390,12 @@ export const serviceAddonSummarySchema = z
   })
   .refine(
     (a) =>
-      a.kind === 'ADD_TRAFFIC'
-        ? a.trafficBytes !== null && a.durationDays === null
-        : a.durationDays !== null && a.trafficBytes === null,
+      serviceAddonAmountMatchesKind({
+        kind: a.kind,
+        trafficBytes: a.trafficBytes === null ? null : 1n,
+        durationDays: a.durationDays,
+        maxQuantity: a.maxQuantity,
+      }),
     { message: 'An add-on carries exactly the amount its kind can use.' },
   );
 export type ServiceAddonSummaryResponse = z.infer<typeof serviceAddonSummarySchema>;
@@ -2398,6 +2424,15 @@ export const serviceAddonWriteSchema = z
      */
     trafficGb: z.string().trim().regex(TRAFFIC_GB_PATTERN).nullable(),
     durationDays: z.number().int().min(1).max(MAX_DURATION_DAYS).nullable(),
+    /*
+     * WP-A5, `ADD_DEVICES` only, and REQUIRED there: the most extra users / devices one
+     * service may be sold through this add-on. Absent means null, which the two package
+     * kinds require, so a form that predates the field still writes them unchanged.
+     */
+    maxQuantity: z.number().int().min(1).max(DEVICE_ADDON_MAX_QUANTITY).nullable().optional(),
+    /** `ADD_DEVICES` only: the panel and/or product it applies to. Absent or null is "every". */
+    panelId: uuidV7Schema.nullable().optional(),
+    productId: uuidV7Schema.nullable().optional(),
     priceAmount: z
       .string()
       .regex(/^\d{1,19}$/u)
@@ -2408,6 +2443,14 @@ export const serviceAddonWriteSchema = z
     message: 'A price is an amount and a currency, or it is absent.',
     path: ['priceAmount'],
   })
+  .refine(
+    (a) =>
+      a.kind === 'ADD_DEVICES' || ((a.panelId ?? null) === null && (a.productId ?? null) === null),
+    {
+      message: 'Only an extra-users add-on is scoped to a panel or a product.',
+      path: ['panelId'],
+    },
+  )
   .refine((a) => a.priceAmount === null || BigInt(a.priceAmount) > 0n, {
     message: 'A price must be greater than zero. Leave it empty for an add-on not for sale.',
     path: ['priceAmount'],
@@ -2418,9 +2461,12 @@ export const serviceAddonWriteSchema = z
   })
   .refine(
     (a) =>
-      a.kind === 'ADD_TRAFFIC'
-        ? a.trafficGb !== null && a.durationDays === null
-        : a.durationDays !== null && a.trafficGb === null,
+      serviceAddonAmountMatchesKind({
+        kind: a.kind,
+        trafficBytes: a.trafficGb === null ? null : 1n,
+        durationDays: a.durationDays,
+        maxQuantity: a.maxQuantity ?? null,
+      }),
     {
       message: 'An add-on carries exactly the amount its kind can use.',
       path: ['trafficGb'],
@@ -4748,6 +4794,11 @@ export const serviceSummarySchema = z.object({
   /** Minor-unit-style text: a byte count passes 2^53 and JSON has one number type. */
   trafficLimitBytes: z.string(),
   trafficUsedBytes: z.string(),
+  /**
+   * The device / connection limit this service is entitled to (WP-A5): the plan's own,
+   * raised by every extra-users purchase the panel applied. Null when none is recorded.
+   */
+  deviceLimit: z.number().int().nullable(),
   /** When usage was last read BACK from the panel. Null means never. */
   usageSyncedAt: z.iso.datetime().nullable(),
   deliveryState: z.enum(SERVICE_DELIVERY_STATES),

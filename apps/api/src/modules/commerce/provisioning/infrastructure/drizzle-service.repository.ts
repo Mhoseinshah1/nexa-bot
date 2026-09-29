@@ -87,6 +87,9 @@ function toRecord(row: Row): ServiceRecord {
     expiresAt: row.expiresAt,
     trafficLimitBytes: row.trafficLimitBytes,
     trafficUsedBytes: row.trafficUsedBytes,
+    deviceLimit: row.deviceLimit,
+    locationKey: row.locationKey,
+    locationLabel: row.locationLabel,
     usageSyncedAt: row.usageSyncedAt,
     deliveryState: row.deliveryState as ServiceDeliveryState,
     deliveryAttempts: row.deliveryAttempts,
@@ -135,7 +138,10 @@ const NO_PAID_ACTION_WAITING = sql`NOT EXISTS (
   SELECT 1 FROM provisioning_operations waiting
    WHERE waiting.tenant_id = ${services.tenantId}
      AND waiting.service_id = ${services.id}
-     AND waiting.type IN ('RENEW', 'ADD_TRAFFIC', 'ADD_TIME')
+     AND waiting.type IN ('RENEW', 'ADD_TRAFFIC', 'ADD_TIME', 'ADD_DEVICES', 'CHANGE_LOCATION')
+     -- A FREE location change is no paid action (Codex review #2 on PR #101): it has no
+     -- order, and one left waiting must not hold a service past its expiry.
+     AND (waiting.type <> 'CHANGE_LOCATION' OR waiting.order_id IS NOT NULL)
      AND waiting.state IN ('PLANNED', 'IN_FLIGHT')
 )`;
 
@@ -176,6 +182,7 @@ export class DrizzleServiceRepository implements ServiceRepository {
         subscriptionRef: draft.subscriptionRef,
         providerClientId: draft.providerClientId,
         trafficLimitBytes: draft.trafficLimitBytes,
+        deviceLimit: draft.deviceLimit,
         createdAt: now,
         updatedAt: now,
       })
@@ -582,6 +589,98 @@ export class DrizzleServiceRepository implements ServiceRepository {
     return rows.length === 1;
   }
 
+  async recordLocation(
+    scope: TenantContext,
+    id: string,
+    location: { readonly key: string; readonly label: string },
+    legalFrom: readonly ServiceState[],
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .update(services)
+      .set({ locationKey: location.key, locationLabel: location.label, updatedAt: now })
+      .where(
+        and(
+          eq(services.tenantId, tenantId),
+          eq(services.id, id),
+          inArray(services.state, [...legalFrom]),
+        ),
+      )
+      .returning({ id: services.id });
+    return rows.length === 1;
+  }
+
+  async recordLocationForUnmoved(
+    scope: TenantContext,
+    panelId: string,
+    location: { readonly key: string; readonly label: string },
+    legalFrom: readonly ServiceState[],
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<number> {
+    const tenantId = requireTenantId(scope);
+    const candidates = [...legalFrom, 'PENDING_PROVISION' as const];
+    /*
+     * LOCK the candidates first, then decide in a NEW statement (Codex review #2 on
+     * PR #101). A `PENDING_PROVISION` service whose create has STARTED may already have
+     * its account at the old initial location; one whose create has not started will be
+     * made wherever the panel places accounts from now on. The provisioner stamps a
+     * create's start under this same row lock (`lockForUpdate`, then `markCallStarted`,
+     * one transaction), so once these locks are held every stamp is either committed —
+     * and the statement below, a fresh READ COMMITTED snapshot, sees it — or waits for
+     * this transaction, and then starts its create under the NEW initial location.
+     * Deciding inside one UPDATE would not be enough: a row re-checked after a lock wait
+     * re-evaluates its sub-select against the statement's OLD snapshot.
+     */
+    const locked = await this.exec(tx)
+      .select({ id: services.id })
+      .from(services)
+      .where(
+        and(
+          eq(services.tenantId, tenantId),
+          eq(services.panelId, panelId),
+          isNull(services.locationKey),
+          inArray(services.state, candidates),
+        ),
+      )
+      // In id order, and `NO KEY UPDATE` as `lockForUpdate` takes it: the same lock the
+      // create's stamp waits on, without the foreign-key conflict `FOR UPDATE` would add.
+      .orderBy(asc(services.id))
+      .for('no key update');
+    if (locked.length === 0) return 0;
+    const rows = await this.exec(tx)
+      .update(services)
+      .set({ locationKey: location.key, locationLabel: location.label, updatedAt: now })
+      .where(
+        and(
+          eq(services.tenantId, tenantId),
+          inArray(
+            services.id,
+            locked.map((row) => row.id),
+          ),
+          isNull(services.locationKey),
+          or(
+            inArray(services.state, [...legalFrom]),
+            and(
+              eq(services.state, 'PENDING_PROVISION'),
+              sql`EXISTS (
+                SELECT 1 FROM provisioning_operations started
+                 WHERE started.tenant_id = ${services.tenantId}
+                   AND started.service_id = ${services.id}
+                   AND started.type = 'PROVISION'
+                   AND started.call_started_at IS NOT NULL
+                   AND started.state IN ('IN_FLIGHT', 'UNKNOWN')
+              )`,
+            ),
+          ),
+        ),
+      )
+      .returning({ id: services.id });
+    return rows.length;
+  }
+
   /**
    * Resolves sends that were handed to Telegram by a process that then died.
    *
@@ -985,6 +1084,7 @@ export class DrizzleServiceRepository implements ServiceRepository {
     allowance: {
       readonly expiresAt: Date | null;
       readonly trafficLimitBytes: bigint | null;
+      readonly deviceLimit?: number | null;
     },
     now: Date,
     tx: TransactionScope,
@@ -994,6 +1094,10 @@ export class DrizzleServiceRepository implements ServiceRepository {
     if (allowance.expiresAt !== null) patch['expiresAt'] = allowance.expiresAt;
     if (allowance.trafficLimitBytes !== null) {
       patch['trafficLimitBytes'] = allowance.trafficLimitBytes;
+    }
+    // WP-A5: the entitlement an `ADD_DEVICES` applied, from its absolute target.
+    if (allowance.deviceLimit !== undefined && allowance.deviceLimit !== null) {
+      patch['deviceLimit'] = allowance.deviceLimit;
     }
     const rows = await this.exec(tx)
       .update(services)

@@ -2,6 +2,8 @@ import {
   OPERATION_MAX_ATTEMPTS,
   operationFailureOutcome,
   UNLIMITED_DURATION_DAYS,
+  type CanAdjustDeviceLimit,
+  type CanChangeLocation,
   type CanApplyAllowance,
   type CanDeleteUser,
   type CanDisableUser,
@@ -286,6 +288,20 @@ export const PERFORMABLE_OPERATION_TYPES = [
   'ADD_TRAFFIC',
   'ADD_TIME',
   'ROTATE_SUBSCRIPTION',
+  /*
+   * WP-A5. Performable wherever an adapter passes `canAdjustDeviceLimit` — which, in this
+   * release, is nowhere: no descriptor declares `DEVICE_LIMIT_ADJUSTMENT`, so
+   * `decideOperability` refuses every `ADD_DEVICES` before it is dialled and the customer
+   * is never offered one. The branch exists so the capability, once proven on a real
+   * panel, is one declaration and one adapter method away rather than a new executor.
+   */
+  'ADD_DEVICES',
+  /*
+   * WP-A6. Performable wherever an adapter passes `canChangeLocation` — nowhere, in this
+   * release: no descriptor declares `LOCATION_CHANGE`, so `decideOperability` refuses
+   * every `CHANGE_LOCATION` before it is dialled and the customer is never offered one.
+   */
+  'CHANGE_LOCATION',
 ] as const satisfies readonly OperationType[];
 
 export function isPerformableOperation(type: OperationType): boolean {
@@ -372,6 +388,18 @@ export const OPERATION_LEGAL_FROM: Readonly<Record<OperationType, readonly Servi
    * `docs/rickpanel-rotate-audit.md` D2.
    */
   ROTATE_SUBSCRIPTION: ['ACTIVE', 'SUSPENDED'],
+  /*
+   * WP-A5: extra users on a live service only, for the reason extra traffic is `ACTIVE`
+   * alone — devices added to an expired or suspended account buy nothing the customer
+   * can use, and bringing one back is `RENEW` or `RESUME`, the edges that exist.
+   */
+  ADD_DEVICES: ['ACTIVE'],
+  /*
+   * WP-A6: a live service only. A suspended or expired account moved elsewhere buys the
+   * customer nothing they can use until it is resumed or renewed — the edges that exist —
+   * and a move is not a way round either of them.
+   */
+  CHANGE_LOCATION: ['ACTIVE'],
 };
 
 /**
@@ -531,6 +559,58 @@ export async function allowanceCall(
   plan: ProviderAllowancePlan,
 ): ReturnType<CanApplyAllowance['applyAllowance']> {
   return adapter.applyAllowance(target, http, ref, plan);
+}
+
+/**
+ * The extra-users call (WP-A5): make this account's device limit read as `deviceLimit`.
+ *
+ * Its own function, for the reason each of the calls above is: it performs exactly one
+ * adapter method and cannot be handed a transaction. The adapter arrives narrowed by
+ * `canAdjustDeviceLimit`, which requires the read, the write AND the declaration.
+ */
+export async function deviceLimitCall(
+  adapter: CanAdjustDeviceLimit,
+  target: ProviderServiceTarget,
+  http: Parameters<CanAdjustDeviceLimit['applyDeviceLimit']>[1],
+  ref: ProviderUserRef,
+  deviceLimit: number,
+): ReturnType<CanAdjustDeviceLimit['applyDeviceLimit']> {
+  return adapter.applyDeviceLimit(target, http, ref, deviceLimit);
+}
+
+/**
+ * The location call (WP-A6): make this account's location read as `locationKey`, on the
+ * panel it is on. One adapter method, no transaction, the adapter narrowed by
+ * `canChangeLocation` — the read, the write AND the declaration.
+ */
+export async function locationCall(
+  adapter: CanChangeLocation,
+  target: ProviderServiceTarget,
+  http: Parameters<CanChangeLocation['applyLocation']>[1],
+  ref: ProviderUserRef,
+  locationKey: string,
+): ReturnType<CanChangeLocation['applyLocation']> {
+  return adapter.applyLocation(target, http, ref, locationKey);
+}
+
+/** The verification READ of an ambiguous location write (WP-A6). A read and only a read. */
+export async function locationReadCall(
+  adapter: CanChangeLocation,
+  target: ProviderServiceTarget,
+  http: Parameters<CanChangeLocation['readLocation']>[1],
+  ref: ProviderUserRef,
+): ReturnType<CanChangeLocation['readLocation']> {
+  return adapter.readLocation(target, http, ref);
+}
+
+/** The verification READ of an ambiguous extra-users write (WP-A5). A read and only a read. */
+export async function deviceLimitReadCall(
+  adapter: CanAdjustDeviceLimit,
+  target: ProviderServiceTarget,
+  http: Parameters<CanAdjustDeviceLimit['readDeviceLimit']>[1],
+  ref: ProviderUserRef,
+): ReturnType<CanAdjustDeviceLimit['readDeviceLimit']> {
+  return adapter.readDeviceLimit(target, http, ref);
 }
 
 export async function terminateCall(

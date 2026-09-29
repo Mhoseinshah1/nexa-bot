@@ -139,6 +139,8 @@ export const PURPOSE_LABELS: Readonly<Record<DiscountablePurpose, WebKey>> = {
   RENEW: 'web.purpose_renew',
   ADD_TRAFFIC: 'web.purpose_add_traffic',
   ADD_TIME: 'web.purpose_add_time',
+  ADD_DEVICES: 'web.purpose_add_devices',
+  CHANGE_LOCATION: 'web.purpose_change_location',
   CUSTOM_SERVICE: 'web.purpose_custom_service',
 };
 
@@ -1748,7 +1750,12 @@ function PricePreview({ denied, options }: { denied: boolean; options: ScopeOpti
           value={purpose}
           onChange={(event) => setPurpose(event.target.value as PreviewPurpose)}
         >
-          {RESELLER_GRANTABLE_OPERATIONS.map((one) => (
+          {/*
+           * WP-A6: a location change is priced from a configured location, which this
+           * preview cannot name — it asks for a product or an add-on — so it is not offered
+           * here rather than offered and always refused.
+           */}
+          {RESELLER_GRANTABLE_OPERATIONS.filter((one) => one !== 'CHANGE_LOCATION').map((one) => (
             <option key={one} value={one}>
               {t(PURPOSE_LABELS[one])}
             </option>

@@ -129,6 +129,9 @@ export const EVENT_TYPES = [
   // Package F. A customer handed a service to another customer of the tenant. Ids only:
   // never the subscription link, its token or a file — the link did not change hands.
   'ServiceOwnershipTransferred',
+  // WP-A6. A service's panel reported it in a new location, and Nexa recorded that. The
+  // payload is the two adapter-defined keys and the customer: no link, no credential.
+  'ServiceLocationChanged',
   'ProvisioningOutcomeUnknown',
   'DiscountRedeemed',
   // WP8. The credit and its reversal are wallet entries too, and `WalletEntryRecorded`
@@ -398,6 +401,16 @@ export const EVENT_PAYLOAD_SCHEMAS = {
     serviceId: z.string(),
     fromCustomerId: z.string(),
     toCustomerId: z.string(),
+  }),
+  /*
+   * WP-A6. Aggregate is the SERVICE. `fromLocationKey` is null for a service that had never
+   * moved and whose initial location was not recorded on it; the change request row
+   * carries the names, the price and who asked.
+   */
+  ServiceLocationChanged: z.object({
+    customerId: z.string(),
+    fromLocationKey: z.string().nullable(),
+    toLocationKey: z.string(),
   }),
   ProvisioningOutcomeUnknown: z.object({
     serviceId: z.string(),

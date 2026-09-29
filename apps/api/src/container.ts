@@ -6,6 +6,8 @@ import {
   MAIN_MENU_BUTTONS,
   MAX_REQUESTS_PER_PROBE,
   OPERATION_LEASE_SECONDS_MIN,
+  canAdjustDeviceLimit,
+  canChangeLocation,
   faqNumberMarker,
   systemJobActor,
 } from '@nexa/contracts';
@@ -27,6 +29,7 @@ import type {
   OperationType,
   BotInstanceId,
   PaymentGatewayProvider,
+  ProductId,
   TenantContext,
   Translator,
 } from '@nexa/contracts';
@@ -52,10 +55,16 @@ import { PanelService } from './modules/platform/panels/application/panel.servic
 import { PanelMonitorService } from './modules/platform/panels/application/panel-monitor.service.js';
 import type { ProbeCoreDeps } from './modules/platform/panels/application/probe-core.js';
 import {
+  IMPLEMENTED_PROVIDER_TYPES,
   SERVICE_PROVIDER_TYPES,
   providerAdapter,
   providerServiceAdapter,
 } from './modules/platform/providers/infrastructure/adapter-registry.js';
+// WP-A8: advanced provider settings.
+import { PanelAdvancedService } from './modules/platform/panels/application/panel-advanced.service.js';
+import { PanelPolicyReader } from './modules/platform/panels/application/panel-policy.js';
+import { DrizzlePanelPolicyRepository } from './modules/platform/panels/infrastructure/drizzle-panel-policy.repository.js';
+import { PROVIDER_RULES } from './modules/platform/providers/infrastructure/provider-rules.js';
 import { SystemClock } from './infrastructure/clock.js';
 import { Uuidv7IdGenerator } from './infrastructure/ids.js';
 import { AesGcmSecretCipher } from './infrastructure/crypto/secret-cipher.js';
@@ -161,6 +170,13 @@ import { DrizzleTrialOverrideRepository } from './modules/commerce/trials/infras
 import { DrizzleTrialResetRepository } from './modules/commerce/trials/infrastructure/drizzle-trial-reset.repository.js';
 import { TrialAdminService } from './modules/commerce/trials/application/trial-admin.service.js';
 import { DrizzleCommercialActionRepository } from './modules/commerce/commercial/infrastructure/drizzle-commercial-action.repository.js';
+import { LocationChangePolicy } from './modules/commerce/locations/application/location-change-policy.js';
+import { LocationChangeService } from './modules/commerce/locations/application/location-change.service.js';
+import { ServiceLocationAdminService } from './modules/commerce/locations/application/service-location-admin.service.js';
+import {
+  DrizzleLocationChangeRepository,
+  DrizzleServiceLocationRepository,
+} from './modules/commerce/locations/infrastructure/drizzle-service-location.repository.js';
 import { DrizzleServiceAddonRepository } from './modules/commerce/catalog/infrastructure/drizzle-addon.repository.js';
 import {
   DrizzlePanelDirectory,
@@ -188,6 +204,10 @@ import { PaymentGatewayService } from './modules/commerce/payments/application/p
 import type { PaymentGatewayRepository } from './modules/commerce/payments/application/gateway-ports.js';
 import { DrizzleSupportFaqRepository } from './modules/control/support/infrastructure/drizzle-support-faq.repository.js';
 import { SupportFaqService } from './modules/control/support/application/support-faq.service.js';
+import { ClientAppService } from './modules/control/client-apps/application/client-app.service.js';
+import { ClientAppCatalog } from './modules/control/client-apps/application/client-app-catalog.js';
+import { ProvisionedServiceFacts } from './modules/control/client-apps/application/customer-service-facts.js';
+import { DrizzleClientAppRepository } from './modules/control/client-apps/infrastructure/drizzle-client-app.repository.js';
 import {
   SupportFaqSeeder,
   SupportScreenReader,
@@ -588,6 +608,9 @@ export interface Container {
   /** WP9-B: reseller tiers, grants and resellers, as an operator manages them. */
   readonly resellersAdmin: ResellerAdminService;
   readonly commercialActions: CommercialActionService;
+  /** WP-A6: the operator's configured locations, and a customer's free location change. */
+  readonly serviceLocations: ServiceLocationAdminService;
+  readonly locationChanges: LocationChangeService;
   /** A customer's free trial (WP6-A): issued through the purchase path, costs nothing. */
   readonly trials: TrialService;
   /** The operator's trial overrides, global reset and view (WP6-B). */
@@ -661,6 +684,8 @@ export interface Container {
 
   // Control plane — Phase 2
   readonly panels: PanelService;
+  /** WP-A8: a panel's capability registry, operator policy and diagnostics. */
+  readonly panelAdvanced: PanelAdvancedService;
   /** The Telegram admin section's reminder seam. See the construction site. */
   readonly reminderConfig: BotRuntimeDeps['reminderConfig'];
   /**
@@ -704,6 +729,10 @@ export interface Container {
   readonly supportFaqs: SupportFaqService;
   /** The customer's support screen: active FAQ in order, and the first support account's URL. */
   readonly supportScreen: SupportScreenReader;
+  /** WP-A10: the tenant's client apps as the operator maintains them. */
+  readonly clientApps: ClientAppService;
+  /** WP-A10: the customer's read of them, filtered by what their services are. */
+  readonly clientAppCatalog: ClientAppCatalog;
   /** Exposed for the tests that drive the resolver against a substituted catalogue. */
   readonly templateRepository: DrizzleTemplateRepository;
   readonly notifications: NotificationService;
@@ -1293,6 +1322,13 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    */
   const panelRepository = new DrizzlePanelRepository(database.db);
   const panelCapacity = new DrizzlePanelCapacityRepository(database.db);
+  /*
+   * WP-A8: a panel's operator policy. ONE reader, handed to every customer-action
+   * decision — commercial actions, customer operations, subscription files, delivery —
+   * so the question "may a customer do this on this panel" has one answer.
+   */
+  const panelPolicyRepository = new DrizzlePanelPolicyRepository(database.db);
+  const panelPolicyReader = new PanelPolicyReader(panelPolicyRepository);
   const panelSalesGate = new PanelSalesGate({
     panels: panelRepository,
     capacity: panelCapacity,
@@ -1391,6 +1427,13 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     repository: serviceAddonRepository,
     /* `sales.currency`. An add-on is priced in what the tenant sells in, or refused. */
     settings: settingsResolver,
+    // WP-A5: an extra-users rate's panel / product scope, checked against THIS tenant.
+    scopeTargets: {
+      panelExists: async (scope, panelId, tx) =>
+        (await panelRepository.find(scope, panelId, tx)) !== null,
+      productExists: async (scope, productId, tx) =>
+        (await productRepository.findById(scope, productId as ProductId, tx)) !== null,
+    },
     guard,
     audit,
     opsLog,
@@ -1410,6 +1453,51 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    * `customerRepository` is built here rather than inline.
    */
   const commercialActionRepository = new DrizzleCommercialActionRepository(database.db);
+
+  /**
+   * WP-A6: the operator's configured locations and the customers' frozen change requests,
+   * and the ONE evaluator of what a service may be moved to. One instance of each, shared
+   * by the admin surface, the quote, the confirmation, the free request, settlement and
+   * the provisioner, so none of them can read a different answer.
+   */
+  const serviceLocationRepository = new DrizzleServiceLocationRepository(database.db);
+  const locationChangeRepository = new DrizzleLocationChangeRepository(database.db);
+  const locationChangePolicy = new LocationChangePolicy({
+    locations: serviceLocationRepository,
+    changes: locationChangeRepository,
+    settings: settingsResolver,
+    clock,
+  });
+  const serviceLocationAdminService = new ServiceLocationAdminService({
+    repository: serviceLocationRepository,
+    targets: {
+      panelExists: async (scope, panelId, tx) =>
+        (await panelRepository.find(scope, panelId, tx)) !== null,
+      productPanel: async (scope, productId, tx) => {
+        const product = await productRepository.findById(scope, productId as ProductId, tx);
+        return product === null ? undefined : product.panelId;
+      },
+    },
+    /*
+     * Where a panel's never-moved services are frozen before its initial location changes.
+     * A closure, because the service repository is built further down: it is read when a
+     * write runs, never at construction.
+     */
+    services: {
+      recordLocationForUnmoved: (scope, panelId, location, legalFrom, now, tx) =>
+        serviceRepository.recordLocationForUnmoved(scope, panelId, location, legalFrom, now, tx),
+    },
+    settings: settingsResolver,
+    guard,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    uow,
+    clock,
+    ids,
+  });
 
   /**
    * The wallet, under the FROZEN `users.wallet.*` permissions.
@@ -1710,7 +1798,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       tx?: unknown,
     ) => {
       const view = await panelRepository.find(scope, panelId, tx as never);
-      return decideOperability({
+      const decided = decideOperability({
         panel:
           view === null
             ? null
@@ -1729,6 +1817,32 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
         serviceAdapterExists:
           view !== null && SERVICE_PROVIDER_TYPES.includes(view.panel.providerType),
       });
+      /*
+       * WP-A5: extra users are offered, drafted, confirmed and settled only where the
+       * adapter has BOTH device-limit methods as well as the declaration the descriptor
+       * check above just read — the same three-question guard the executor applies — so a
+       * declaration that outran its methods can never draw a button or take money.
+       */
+      if (
+        decided.ok &&
+        type === 'ADD_DEVICES' &&
+        !canAdjustDeviceLimit(providerServiceAdapter(decided.providerType))
+      ) {
+        return { ok: false as const, reason: 'CAPABILITY_UNSUPPORTED' as const };
+      }
+      /*
+       * WP-A6: the same three-question guard for a move — the read, the write and the
+       * declaration — so a declaration that outran its methods can never draw «🌍 تغییر
+       * لوکیشن», quote a price or plan an operation.
+       */
+      if (
+        decided.ok &&
+        type === 'CHANGE_LOCATION' &&
+        !canChangeLocation(providerServiceAdapter(decided.providerType))
+      ) {
+        return { ok: false as const, reason: 'CAPABILITY_UNSUPPORTED' as const };
+      }
+      return decided;
     },
   };
 
@@ -1752,6 +1866,9 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     features: featureFlagResolver,
     settings: settingsResolver,
     customers: customerRepository,
+    panelPolicy: panelPolicyReader,
+    // WP-A6: a paid move's frozen target, read at settlement by its order.
+    locationChanges: locationChangeRepository,
   });
 
   /**
@@ -1775,7 +1892,11 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     orders: orderRepository,
     actions: commercialActionRepository,
     panels: panelOperability,
+    panelPolicy: panelPolicyReader,
     settings: settingsResolver,
+    // WP-A6: the paid location change's evaluator and its frozen change request.
+    locations: locationChangePolicy,
+    locationChanges: locationChangeRepository,
     guard,
     audit,
     opsLog,
@@ -1784,6 +1905,25 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     uow,
     idempotency,
     outbox,
+    clock,
+    ids,
+  });
+
+  /** WP-A6: a customer's FREE location change — asked for, not bought. */
+  const locationChangeService = new LocationChangeService({
+    services: serviceRepository,
+    policy: locationChangePolicy,
+    changes: locationChangeRepository,
+    provisioning: provisioningService,
+    resellers: resellerService,
+    panels: panelOperability,
+    guard,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    uow,
     clock,
     ids,
   });
@@ -2454,6 +2594,32 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     cadence: probeCore.cadence,
   });
 
+  /*
+   * WP-A8: the registry, the policy write and the diagnostics over the panel service
+   * above — its read, so the diagnostics and the sellability card cannot disagree.
+   */
+  const panelAdvanced = new PanelAdvancedService({
+    panels: panelService,
+    repository: panelRepository,
+    policies: panelPolicyRepository,
+    adapters: (providerType) =>
+      IMPLEMENTED_PROVIDER_TYPES.includes(
+        providerType as (typeof IMPLEMENTED_PROVIDER_TYPES)[number],
+      )
+        ? providerAdapter(providerType)
+        : null,
+    providerRules: (providerType) => PROVIDER_RULES[providerType],
+    features: featureFlagResolver,
+    guard,
+    audit,
+    opsLog,
+    sessions,
+    uow,
+    idempotency,
+    scopeActivity: tenants,
+    clock,
+  });
+
   const monitorBudgetReserve = monitorBudgetReserveFor(
     config.PANEL_PROBE_TENANT_LIMIT,
     config.PANEL_MONITOR_BUDGET_RESERVE_PERCENT,
@@ -2770,6 +2936,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
      * its order's frozen terms recorded — the one location that order was sold for.
      */
     locationOf: async (scope, service) => {
+      // WP-A6: a service that has moved is where it moved to, whatever its product says.
+      if (service.locationLabel !== null) return service.locationLabel;
       if (service.productId === null) {
         const terms = await orderCustomServiceTermsRepository.findByOrder(scope, service.orderId);
         return terms?.locationLabel ?? null;
@@ -3249,7 +3417,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
             : await productRepository.findById(scope, service.productId);
         return {
           productName: order.line.title,
-          serviceLocation: product?.display.serviceLocationLabel ?? null,
+          // WP-A6: where the service has moved to, when it has; the product's label otherwise.
+          serviceLocation: service.locationLabel ?? product?.display.serviceLocationLabel ?? null,
           durationDays: order.line.specification.durationDays,
           trafficBytes: order.line.specification.trafficBytes,
         };
@@ -3260,6 +3429,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     uow,
     clock,
     guard,
+    panelPolicy: panelPolicyReader,
   });
 
   /**
@@ -3319,6 +3489,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     settings: settingsResolver,
     workerId: `${role}:${ids.uuid()}`,
     leaseMs: OPERATION_LEASE_SECONDS_MIN * 1000,
+    // WP-A6: the frozen change request a move carries out, for the name it records.
+    locationChanges: locationChangeRepository,
   });
 
   /*
@@ -3339,6 +3511,34 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     guard,
     uow,
     clock,
+    panelPolicy: panelPolicyReader,
+  });
+
+  /*
+   * WP-A10: client apps and connection guides. Built after Package E's service because
+   * the customer's read asks it — through its own `offered`, the check that draws the
+   * files button — whether a service can hand over connection files.
+   */
+  const clientAppRepository = new DrizzleClientAppRepository(database.db);
+  const clientAppService = new ClientAppService({
+    repository: clientAppRepository,
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    ids,
+    clock,
+  });
+  const clientAppCatalog = new ClientAppCatalog({
+    repository: clientAppRepository,
+    facts: new ProvisionedServiceFacts({
+      services: provisioningService,
+      panels: panelRepository,
+      subscriptionFiles: subscriptionFileService,
+    }),
   });
 
   /**
@@ -3988,6 +4188,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     resellers: resellerService,
     resellersAdmin: resellerAdminService,
     commercialActions: commercialActionService,
+    serviceLocations: serviceLocationAdminService,
+    locationChanges: locationChangeService,
     trials: trialService,
     trialAdmin: trialAdminService,
     wallet: walletService,
@@ -4113,9 +4315,13 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       // mechanism that stops a redelivery becoming a second order.
       products: productService,
       commercial: commercialActionService,
+      // WP-A6: a customer's free location change.
+      locationChanges: locationChangeService,
       trials: trialService,
       customService: customServiceFlowService,
       subscriptionFiles: subscriptionFileService,
+      // WP-A10: «📱 دانلود برنامه و آموزش اتصال», the tenant's apps for the customer's services.
+      clientApps: clientAppCatalog,
       serviceTransfers: serviceTransferService,
       /*
        * WP-A7: the ticket desk. A file answers a ticket window only when that window is open
@@ -4193,6 +4399,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       },
     }),
     panels: panelService,
+    panelAdvanced,
     /*
      * The bot's own reminder-configuration seam, exposed so a test can read the path
      * the SURFACE uses rather than a copy of it. Nothing else holds it: the HTTP
@@ -4207,6 +4414,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     templateResolver,
     supportFaqs: supportFaqService,
     supportScreen: supportScreenReader,
+    clientApps: clientAppService,
+    clientAppCatalog,
     templateRepository,
     notifications,
     notificationRepository,

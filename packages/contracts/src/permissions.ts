@@ -179,6 +179,17 @@ export const PERMISSIONS = [
   p('panels.view', 'View provider panels', 'LOW'),
   p('panels.edit', 'Create or edit provider panels', 'HIGH'),
   p('panels.credentials.rotate', 'Rotate panel credentials', 'CRITICAL'),
+  /*
+   * WP-A8: the read-only technical view of one panel — raw capability keys, the credential
+   * shape, the stored activation and policy exactly as stored. For the owner debugging an
+   * integration; normal operators read the same facts in Persian through `panels.view`.
+   * HIGH because it is the one panel read that shows internal identifiers rather than
+   * their meaning. No credential is reachable through it: the credential fields are
+   * set-at timestamps, as on every other panel read. ADDITIVE to `panels.view`: the view
+   * is a detail of a panel, so the endpoint charges both, and this key alone reaches
+   * nothing.
+   */
+  p('panels.technical.view', "View a panel's raw technical configuration", 'HIGH'),
 
   // Referral (WP9). Read-only: there is no administrative write to an attribution or a
   // commission, because either would change who is owed money (`docs/wp9-referral-audit.md`
@@ -214,6 +225,19 @@ export const PERMISSIONS = [
   // records how to reverse this if the split turns out not to earn its keep.
   p('templates.view', 'View message templates and their overrides', 'LOW'),
   p('templates.edit', 'Change or revert a message template', 'HIGH'),
+
+  /*
+   * Client apps and connection guides (WP-A10), as their own pair rather than
+   * `templates.*` or `settings.*`.
+   *
+   * What an entry holds is a DOWNLOAD LINK every customer of the tenant is told to open,
+   * which is neither a setting about how the installation behaves nor the wording of a
+   * message: a wrong one sends customers to somebody else's binary. EDIT is HIGH for that
+   * reason, level with `templates.edit` — the same audience, and a worse worst case than a
+   * typo. VIEW is LOW and read-only.
+   */
+  p('client_apps.view', 'View the client apps and connection guides offered to customers', 'LOW'),
+  p('client_apps.edit', 'Add, edit, enable, disable or remove a client app entry', 'HIGH'),
 
   // Administration
   p('admins.view', 'View administrators', 'LOW'),
@@ -332,6 +356,10 @@ export const ROLE_SEEDS: readonly RoleSeed[] = [
       'settings.view',
       'templates.view',
       'templates.edit',
+      // WP-A10: the apps and guides customers are sent to are content the operator
+      // already maintains beside the message templates.
+      'client_apps.view',
+      'client_apps.edit',
       // Read only, and that is a narrowing rather than a grant. Until Phase 5 an
       // operator COULD change the card number, by editing the template body it was
       // typed into; the destination is data now, and `templates.edit` no longer
@@ -407,6 +435,8 @@ export const ROLE_SEEDS: readonly RoleSeed[] = [
       'services.edit',
       'receipts.view',
       'reports.view',
+      // WP-A10: "which app, and where do I get it" is the question support answers most.
+      'client_apps.view',
       // WP-A7: answering tickets is this role's job. The categories are configuration.
       'tickets.view',
       'tickets.reply',

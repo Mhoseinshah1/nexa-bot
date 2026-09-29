@@ -30,6 +30,12 @@ export const BOT_COMMANDS = [
    */
   { command: 'paysupport', description: 'bot.command.paysupport' },
   /*
+   * WP-A10: «📱 دانلود برنامه و آموزش اتصال». The connection guide that was reachable only
+   * from the delivery card's «📚 مشاهده آموزش استفاده», now with the tenant's recommended
+   * apps and their download links — the same screen, not a second guide.
+   */
+  { command: 'apps', description: 'bot.command.apps' },
+  /*
    * WP-A7: the customer's support tickets. `/paysupport` stays the support screen Telegram
    * requires, and that screen links here.
    */
@@ -82,6 +88,8 @@ export const MAIN_MENU_ROWS: readonly (readonly BotMenuButton[])[] = [
     { label: 'bot.menu.wallet', command: 'wallet' },
     { label: 'bot.menu.help', command: 'help' },
   ],
+  // WP-A10: a row of its own — the label is long, and it is a place, like the four above.
+  [{ label: 'bot.menu.apps', command: 'apps' }],
   // WP-A7: the ticket desk, on a row of its own.
   [{ label: 'bot.menu.tickets', command: 'tickets' }],
 ];

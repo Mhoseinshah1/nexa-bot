@@ -393,6 +393,7 @@ function toSummary(record: ServiceRecord): ServiceSummaryResponse {
     // Text on the wire: JSON has one number type and a byte count passes 2^53.
     trafficLimitBytes: record.trafficLimitBytes.toString(),
     trafficUsedBytes: record.trafficUsedBytes.toString(),
+    deviceLimit: record.deviceLimit,
     usageSyncedAt: record.usageSyncedAt === null ? null : record.usageSyncedAt.toISOString(),
     deliveryState: record.deliveryState,
     deliveredAt: record.deliveredAt === null ? null : record.deliveredAt.toISOString(),

@@ -1,12 +1,17 @@
 import {
   COMMERCE_ERROR_CODES,
   CUSTOMER_SYNC_MIN_INTERVAL_MS,
+  customerActionVerdict,
+  effectiveCooldownMs,
+  type PanelCustomerAction,
   SERVICE_NOTE_MAX_LENGTH,
   SERVICES_LIST_PAGE_SIZE,
   extendedAllowance,
   extendedExpiry,
   errors,
+  MAX_DEVICE_LIMIT,
   MAX_TRAFFIC_BYTES,
+  extendedDeviceLimit,
   NexaError,
   SUBSCRIPTION_REF_BYTES,
   DEFAULT_USERNAME_PREFIX,
@@ -19,6 +24,7 @@ import {
   type IdGenerator,
   type OperationId,
   type OperationTarget,
+  type OrderId,
   type OperationType,
   type PermissionKey,
   type ServiceState,
@@ -47,6 +53,10 @@ import type { ServiceUsernameRepository } from './username-ports.js';
 import type { SettingsResolver } from '../../../control/settings/application/settings-resolver.js';
 import type { FeatureFlagResolver } from '../../../control/features/application/feature-flags.service.js';
 import type { CustomerRepository } from '../../customers/application/ports.js';
+import {
+  assertCustomerPolicyAllows,
+  type PanelPolicyGate,
+} from '../../../platform/panels/application/panel-policy.js';
 
 /** Asking for a provider call to be made again is `services.edit`, not `services.view`. */
 const SERVICE_EDIT_PERMISSION = 'services.edit';
@@ -101,7 +111,41 @@ export interface ProvisioningServiceDeps {
   readonly features: Pick<FeatureFlagResolver, 'isEnabled'>;
   readonly settings: Pick<SettingsResolver, 'valueOf'>;
   readonly customers: Pick<CustomerRepository, 'findById'>;
+  /**
+   * The panel's operator policy (WP-A8): which of these a customer may ask for on this
+   * panel, and the extra wait it adds. Read INSIDE the planning transaction by
+   * `planWithin`, the one place every customer-originated operation passes, and asked
+   * only after `panels.operability` — so it can refuse and never grant. Operator and
+   * system operations never consult it.
+   */
+  readonly panelPolicy: PanelPolicyGate;
+  /**
+   * A paid location change's frozen target (WP-A6), read by the order it was quoted on.
+   * The key the operation will ask the panel for is the one the customer was shown — the
+   * change request's snapshot — never today's configuration.
+   */
+  readonly locationChanges: {
+    findByOrderId(
+      scope: TenantContext,
+      orderId: OrderId,
+      tx?: unknown,
+    ): Promise<{ readonly toLocationKey: string } | null>;
+  };
 }
+
+/**
+ * The panel-policy row each customer-originated operation is decided by (WP-A8).
+ *
+ * `SUSPEND` and `RESUME` are one row — "disable / enable" — because they are one
+ * capability pair and one decision an operator makes about a panel.
+ */
+const CUSTOMER_OPERATION_POLICY_ROW: Readonly<Partial<Record<OperationType, PanelCustomerAction>>> =
+  {
+    SUSPEND: 'DISABLE_ENABLE',
+    RESUME: 'DISABLE_ENABLE',
+    ROTATE_SUBSCRIPTION: 'ROTATE_SUBSCRIPTION',
+    SYNC_USAGE: 'USAGE_READ',
+  };
 
 /**
  * What a customer's own rotation is charged against (WP6-C).
@@ -411,6 +455,12 @@ export class ProvisioningService {
          * `catalog.ts` chose zero rather than null.
          */
         trafficLimitBytes: order.line.specification.trafficBytes,
+        /*
+         * WP-A5: the entitlement starts at what the order froze, and only an applied
+         * `ADD_DEVICES` raises it. A value past the bound is not recorded rather than
+         * clamped — a clamp would record a limit the panel was never given.
+         */
+        deviceLimit: recordableDeviceLimit(order.line.specification.deviceLimit),
       },
       now,
       tx,
@@ -828,7 +878,13 @@ export class ProvisioningService {
    */
   async customerSyncOffered(scope: TenantContext, service: ServiceRecord): Promise<boolean> {
     if (!OPERATION_LEGAL_FROM.SYNC_USAGE.includes(service.state)) return false;
-    return (await this.deps.panels.operability(scope, service.panelId, 'SYNC_USAGE')).ok;
+    if (!(await this.deps.panels.operability(scope, service.panelId, 'SYNC_USAGE')).ok) {
+      return false;
+    }
+    return customerActionVerdict(
+      await this.deps.panelPolicy.forPanel(scope, service.panelId),
+      'USAGE_READ',
+    ).allowed;
   }
 
   /**
@@ -867,9 +923,15 @@ export class ProvisioningService {
           }
           const fresh = await this.deps.services.findById(scope, service.id, tx);
           const syncedAt = fresh?.usageSyncedAt ?? null;
+          // WP-A8: the panel may lengthen the wait, never shorten it.
+          const interval = effectiveCooldownMs(
+            CUSTOMER_SYNC_MIN_INTERVAL_MS,
+            await this.deps.panelPolicy.forPanel(scope, service.panelId, tx),
+            'USAGE_READ',
+          );
           if (
             syncedAt !== null &&
-            this.deps.clock.now().getTime() - syncedAt.getTime() < CUSTOMER_SYNC_MIN_INTERVAL_MS
+            this.deps.clock.now().getTime() - syncedAt.getTime() < interval
           ) {
             throw errors.conflict(
               COMMERCE_ERROR_CODES.SERVICE_SYNC_TOO_SOON,
@@ -887,10 +949,14 @@ export class ProvisioningService {
     service: ServiceRecord,
   ): Promise<readonly CustomerServiceOperation[]> {
     const available: CustomerServiceOperation[] = [];
+    const policy = await this.deps.panelPolicy.forPanel(scope, service.panelId);
     for (const type of CUSTOMER_SERVICE_OPERATIONS) {
       if (!OPERATION_LEGAL_FROM[type].includes(service.state)) continue;
       const operable = await this.deps.panels.operability(scope, service.panelId, type);
-      if (operable.ok) available.push(type);
+      if (!operable.ok) continue;
+      // WP-A8: a courtesy for drawing; `planWithin` decides again inside the transaction.
+      if (!customerActionVerdict(policy, 'DISABLE_ENABLE').allowed) continue;
+      available.push(type);
     }
     return available;
   }
@@ -990,9 +1056,17 @@ export class ProvisioningService {
       'ROTATE_SUBSCRIPTION',
     );
     if (!operable.ok) return { offered: false };
-    const cooldownHours = await this.deps.settings.valueOf<number>(
+    const policy = await this.deps.panelPolicy.forPanel(scope, service.panelId);
+    if (!customerActionVerdict(policy, 'ROTATE_SUBSCRIPTION').allowed) return { offered: false };
+    const hours = await this.deps.settings.valueOf<number>(
       scope,
       'services.link_rotation_cooldown_hours',
+    );
+    // WP-A8: the wait the customer is told is the one `requestRotation` enforces — the
+    // longer of the tenant's and this panel's — rounded UP to whole hours, so the
+    // sentence never promises a rotation sooner than it will be accepted.
+    const cooldownHours = Math.ceil(
+      effectiveCooldownMs(hours * 3_600_000, policy, 'ROTATE_SUBSCRIPTION') / 3_600_000,
     );
     return { offered: true, cooldownHours };
   }
@@ -1078,7 +1152,13 @@ export class ProvisioningService {
               'services.link_rotation_cooldown_hours',
               tx,
             );
-            const availableAt = new Date(last.getTime() + hours * 3_600_000);
+            // WP-A8: the panel may lengthen the wait, never shorten it.
+            const waitMs = effectiveCooldownMs(
+              hours * 3_600_000,
+              await this.deps.panelPolicy.forPanel(scope, service.panelId, tx),
+              'ROTATE_SUBSCRIPTION',
+            );
+            const availableAt = new Date(last.getTime() + waitMs);
             if (this.deps.clock.now().getTime() < availableAt.getTime()) {
               throw errors.conflict(
                 COMMERCE_ERROR_CODES.SERVICE_ROTATION_COOLDOWN,
@@ -1325,6 +1405,15 @@ export class ProvisioningService {
         );
       }
     }
+    /*
+     * WP-A6: a rotation and a location move exclude each other (Codex review #2 on
+     * PR #101) — both end by storing the link the panel serves, and two in flight could
+     * leave the older one stored. The lifecycle lock is the one `prepareCommercialAction`
+     * asks the mirror question under; taken last, after any row lock, as every planner
+     * takes it. An open rotation, and a replay of this key, are still RETURNED first.
+     */
+    if (type === 'ROTATE_SUBSCRIPTION')
+      await this.deps.services.lockLifecycle(scope, service.id, tx);
     const open = await this.deps.operations.findOpen(scope, service.id, type, tx);
     if (open !== null) return open;
     const operationId = this.deps.operationId(`${service.id}:${type}:${input.idempotencyKey}`);
@@ -1337,6 +1426,34 @@ export class ProvisioningService {
       const replay = await this.deps.operations.findByOperationId(scope, operationId, tx);
       if (replay !== null) return replay;
       await origin.admission.admit(tx);
+    }
+    /*
+     * WP-A8: a CUSTOMER's request is held to the panel's operator policy, here, inside
+     * the transaction every customer-originated operation is planned in — the one place
+     * that decision is made. After a replay of this key has been answered, so a request
+     * accepted before the policy changed still returns what it planned. An operator's
+     * request, and the system's, never reach this: the policy is about what customers
+     * are offered, not about what the installation may do to a service.
+     */
+    const policyRow = CUSTOMER_OPERATION_POLICY_ROW[type];
+    if (origin.requestedBy !== 'OPERATOR' && policyRow !== undefined) {
+      const replay = await this.deps.operations.findByOperationId(scope, operationId, tx);
+      if (replay !== null) return replay;
+      assertCustomerPolicyAllows(
+        await this.deps.panelPolicy.forPanel(scope, service.panelId, tx),
+        policyRow,
+      );
+    }
+    // WP-A6: after the open-rotation return and the replay, so neither is refused by the
+    // rule.
+    if (
+      type === 'ROTATE_SUBSCRIPTION' &&
+      (await this.deps.operations.hasUnsettled(scope, service.id, 'CHANGE_LOCATION', tx))
+    ) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.SERVICE_ACTION_IN_PROGRESS,
+        'This service is being moved to another location; try again once it has moved.',
+      );
     }
     const operation = await this.deps.operations.plan(
       scope,
@@ -1429,9 +1546,17 @@ export class ProvisioningService {
     scope: TenantContext,
     action: {
       readonly serviceId: string;
-      readonly kind: 'RENEW' | 'ADD_TRAFFIC' | 'ADD_TIME';
+      readonly kind: 'RENEW' | 'ADD_TRAFFIC' | 'ADD_TIME' | 'ADD_DEVICES' | 'CHANGE_LOCATION';
       /** The ORDER's customer: the payer, who must still own the service. */
       readonly customerId: UserId;
+      /** WP-A5: extra users / devices bought; zero for every other kind. */
+      readonly purchasedDeviceCount?: number;
+      /**
+       * WP-A6, `CHANGE_LOCATION` only: where the move goes — the key itself for a free
+       * change, or the ORDER whose frozen change request names it for a paid one.
+       */
+      readonly targetLocationKey?: string;
+      readonly orderId?: OrderId;
     },
     tx: TransactionScope,
     onIneligible: 'REFUSE' | 'REFUND',
@@ -1498,6 +1623,62 @@ export class ProvisioningService {
         'The panel this service lives on cannot perform that action.',
         operable.reason ?? 'UNKNOWN',
       );
+    }
+
+    /*
+     * WP-A5: extra users are computed from the limit the service RECORDS, so a service with
+     * none recorded — or a quantity that would take it past the bound — cannot be given
+     * them. Refused here, before the order's state is chosen, like every refusal above.
+     */
+    if (
+      action.kind === 'ADD_DEVICES' &&
+      extendedDeviceLimit(service.deviceLimit, action.purchasedDeviceCount ?? 0) === null
+    ) {
+      return refuse(
+        COMMERCE_ERROR_CODES.SERVICE_ACTION_UNAVAILABLE,
+        'This service cannot be given that many more users.',
+        'DEVICE_LIMIT_UNAVAILABLE',
+      );
+    }
+
+    /*
+     * WP-A6: a move to where the account already is buys nothing. The quote refused it
+     * against the location then recorded; this is the same question asked again when the
+     * money moves, because another change can land in between — and a transfer that
+     * already arrived is then given back rather than spent on a no-op.
+     */
+    if (action.kind === 'CHANGE_LOCATION') {
+      const targetKey =
+        action.targetLocationKey ??
+        (action.orderId === undefined
+          ? null
+          : ((await this.deps.locationChanges.findByOrderId(scope, action.orderId, tx))
+              ?.toLocationKey ?? null));
+      if (targetKey === null) {
+        // `service_location_changes` is written with the order; its absence is a broken
+        // database, which no refund or retry would repair.
+        throw new Error(`location change for service ${service.id} names no target`);
+      }
+      if (service.locationKey === targetKey) {
+        return refuse(
+          COMMERCE_ERROR_CODES.LOCATION_CHANGE_SAME_LOCATION,
+          'The service is already in that location.',
+          'LOCATION_UNCHANGED',
+        );
+      }
+      /*
+       * A move and a link rotation both end by storing the link the panel then serves, so
+       * two in flight together could leave the OLDER one stored (Codex review #2 on
+       * PR #101). They exclude each other in both directions under this lifecycle lock:
+       * the rotation planner takes the same lock and asks the mirror question.
+       */
+      if (await this.deps.operations.hasUnsettled(scope, service.id, 'ROTATE_SUBSCRIPTION', tx)) {
+        return refuse(
+          COMMERCE_ERROR_CODES.SERVICE_ACTION_IN_PROGRESS,
+          'This service has a new link being made; try again once it is delivered.',
+          'ROTATION_IN_PROGRESS',
+        );
+      }
     }
 
     const outstanding = await this.deps.operations.findOpenCommercial(scope, service.id, tx);
@@ -1575,9 +1756,11 @@ export class ProvisioningService {
     order: OrderRecord,
     action: {
       readonly serviceId: string;
-      readonly kind: 'RENEW' | 'ADD_TRAFFIC' | 'ADD_TIME';
+      readonly kind: 'RENEW' | 'ADD_TRAFFIC' | 'ADD_TIME' | 'ADD_DEVICES' | 'CHANGE_LOCATION';
       readonly purchasedTrafficBytes: bigint;
       readonly purchasedDurationDays: number;
+      /** WP-A5: extra users / devices bought; zero for every other kind. */
+      readonly purchasedDeviceCount: number;
     },
     now: Date,
     tx: TransactionScope,
@@ -1612,7 +1795,13 @@ export class ProvisioningService {
      */
     const usable = await this.prepareCommercialAction(
       scope,
-      { serviceId: action.serviceId, kind: action.kind, customerId: order.customerId },
+      {
+        serviceId: action.serviceId,
+        kind: action.kind,
+        customerId: order.customerId,
+        purchasedDeviceCount: action.purchasedDeviceCount,
+        orderId: order.id,
+      },
       tx,
       onIneligible,
     );
@@ -1636,16 +1825,56 @@ export class ProvisioningService {
      * the column, the provider plan and the adapter's omitted key all carry — so the
      * three agree without anybody translating between them.
      */
-    const target: OperationTarget = {
-      expiresAt:
-        action.purchasedDurationDays > 0
-          ? extendedExpiry(service.expiresAt, now, action.purchasedDurationDays)
-          : null,
-      trafficLimitBytes:
-        action.purchasedTrafficBytes > 0n || action.kind === 'RENEW'
-          ? extendedAllowance(service.trafficLimitBytes, action.purchasedTrafficBytes)
-          : null,
-    };
+    /*
+     * WP-A5: an `ADD_DEVICES` target is the limit the service records plus what was
+     * bought, and nothing else. `prepareCommercialAction` above refused the purchase when
+     * that number cannot exist, under this same lock, so the null arm is unreachable — and
+     * refused rather than asserted, because the database would refuse the row anyway.
+     */
+    const deviceTarget =
+      action.kind === 'ADD_DEVICES'
+        ? extendedDeviceLimit(service.deviceLimit, action.purchasedDeviceCount)
+        : null;
+    if (action.kind === 'ADD_DEVICES' && deviceTarget === null) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.SERVICE_ACTION_UNAVAILABLE,
+        'This service cannot be given that many more users.',
+      );
+    }
+    /*
+     * WP-A6: a paid move's target is the key its change request froze when it was quoted,
+     * and nothing else. `prepareCommercialAction` above read the same row and refused a
+     * move to where the account already is, under this same lock.
+     */
+    const locationTarget =
+      action.kind === 'CHANGE_LOCATION'
+        ? ((await this.deps.locationChanges.findByOrderId(scope, order.id, tx))?.toLocationKey ??
+          null)
+        : null;
+    if (action.kind === 'CHANGE_LOCATION' && locationTarget === null) {
+      throw new Error(`order ${order.id} is a location change with no change request`);
+    }
+    const target: OperationTarget =
+      action.kind === 'CHANGE_LOCATION'
+        ? {
+            expiresAt: null,
+            trafficLimitBytes: null,
+            deviceLimit: null,
+            locationKey: locationTarget,
+          }
+        : action.kind === 'ADD_DEVICES'
+          ? { expiresAt: null, trafficLimitBytes: null, deviceLimit: deviceTarget }
+          : {
+              expiresAt:
+                action.purchasedDurationDays > 0
+                  ? extendedExpiry(service.expiresAt, now, action.purchasedDurationDays)
+                  : null,
+              trafficLimitBytes:
+                action.purchasedTrafficBytes > 0n || action.kind === 'RENEW'
+                  ? extendedAllowance(service.trafficLimitBytes, action.purchasedTrafficBytes)
+                  : null,
+              deviceLimit: null,
+            };
 
     /*
      * An allowance that cannot survive the wire.
@@ -1671,7 +1900,12 @@ export class ProvisioningService {
       );
     }
 
-    if (target.expiresAt === null && target.trafficLimitBytes === null) {
+    if (
+      target.expiresAt === null &&
+      target.trafficLimitBytes === null &&
+      target.deviceLimit === null &&
+      (target.locationKey ?? null) === null
+    ) {
       /*
        * A purchase that asks the panel for nothing.
        *
@@ -1746,6 +1980,7 @@ export class ProvisioningService {
           state: service.state,
           expiresAt: service.expiresAt?.toISOString() ?? null,
           trafficLimitBytes: service.trafficLimitBytes.toString(),
+          deviceLimit: service.deviceLimit,
         },
         after: {
           orderId: order.id,
@@ -1753,6 +1988,10 @@ export class ProvisioningService {
           operationId: operation.operationId,
           targetExpiresAt: target.expiresAt?.toISOString() ?? null,
           targetTrafficLimitBytes: target.trafficLimitBytes?.toString() ?? null,
+          targetDeviceLimit: target.deviceLimit,
+          ...(action.kind === 'CHANGE_LOCATION'
+            ? { fromLocationKey: service.locationKey, targetLocationKey: target.locationKey }
+            : {}),
         },
         result: 'SUCCESS',
       },
@@ -1762,11 +2001,98 @@ export class ProvisioningService {
     return { outcome: 'PLANNED', operation };
   }
 
+  /**
+   * Plans a FREE location change's operation (WP-A6), inside the request's transaction.
+   *
+   * No order and no money: a free move is asked for, not bought, so there is nothing to
+   * settle and nothing a failure could refund. Everything else is the paid move's — the
+   * same `prepareCommercialAction` refusals (owner, state, panel, a move to where the
+   * account already is, another commercial action open, a deletion or a refund request
+   * pending), asked with `REFUSE` because no money has moved, and the same one-open-
+   * commercial-action index, whose loss on a race arrives as the same named refusal.
+   *
+   * The operation id is derived from the change request's id, so a replayed request
+   * plans the same operation rather than a second one.
+   */
+  async planLocationChange(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: {
+      readonly serviceId: string;
+      readonly customerId: UserId;
+      readonly locationKey: string;
+      readonly changeId: string;
+    },
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<OperationRecord> {
+    await this.prepareCommercialAction(
+      scope,
+      {
+        serviceId: input.serviceId,
+        kind: 'CHANGE_LOCATION',
+        customerId: input.customerId,
+        targetLocationKey: input.locationKey,
+      },
+      tx,
+      'REFUSE',
+    );
+    const service = await this.deps.services.findById(scope, input.serviceId, tx);
+    if (service === null) {
+      throw new Error(`location change names service ${input.serviceId}, which is not there`);
+    }
+    const operation = await this.deps.operations.plan(
+      scope,
+      {
+        id: this.deps.ids.uuid(),
+        operationId: this.deps.operationId(`${service.id}:CHANGE_LOCATION:${input.changeId}`),
+        serviceId: service.id,
+        orderId: null,
+        // The customer asked for this, so they are owed its outcome.
+        requestedByCustomerId: service.customerId,
+        panelId: service.panelId,
+        type: 'CHANGE_LOCATION',
+        target: {
+          expiresAt: null,
+          trafficLimitBytes: null,
+          deviceLimit: null,
+          locationKey: input.locationKey,
+        },
+      },
+      now,
+      tx,
+    );
+    await this.deps.audit.record(
+      scope,
+      actor,
+      {
+        action: 'service.plan_change_location',
+        entityType: 'Service',
+        entityId: service.id,
+        before: { state: service.state, locationKey: service.locationKey },
+        after: {
+          customerId: service.customerId,
+          operationId: operation.operationId,
+          targetLocationKey: input.locationKey,
+          orderId: null,
+        },
+        result: 'SUCCESS',
+      },
+      tx,
+    );
+    return operation;
+  }
+
   /** Whether a service is in a state where re-sending its configuration means anything. */
   static isDeliverable(service: ServiceRecord): boolean {
     const live: readonly ServiceState[] = ['ACTIVE', 'SUSPENDED', 'EXPIRED'];
     return live.includes(service.state) && service.subscriptionUrl !== null;
   }
+}
+
+/** The order line's device limit as the service may record it: within the bound, or none. */
+function recordableDeviceLimit(limit: number | null): number | null {
+  return limit !== null && limit >= 1 && limit <= MAX_DEVICE_LIMIT ? limit : null;
 }
 
 /** Kept honest: the sentinel the schema stores for an unlimited allowance is zero. */
