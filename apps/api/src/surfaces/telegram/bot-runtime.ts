@@ -3916,6 +3916,19 @@ export interface BotRuntimeDeps {
   >;
   /** R2 (item 4): the invoice screens the gateway worker edits too. */
   readonly invoiceScreens?: InvoiceScreensPort;
+  /**
+   * R2: the order a customer's open typed-answer window names — a username or a discount
+   * code — or null. Read AFTER a typed answer was refused (the refusal rolled back its own
+   * transaction and left the window open), so the refusal is shown on THAT order's wizard
+   * rather than on the chat's most recently touched one, which may be another order's.
+   * Presentation only: it decides which message is edited, never anything about the order.
+   */
+  readonly answerWindowOrder?: (
+    scope: TenantContext,
+    botInstanceId: string,
+    customerId: string,
+    window: 'USERNAME' | 'DISCOUNT',
+  ) => Promise<string | null>;
 }
 
 /**
@@ -12601,10 +12614,18 @@ export class BotRuntime {
       };
     } catch (error) {
       // `DISCOUNT_CODE_REJECTED` through the shared table: one sentence for every reason,
-      // and the window left open by the rolled-back transaction.
+      // and the window left open by the rolled-back transaction — on ITS order's wizard.
+      const refused = refusal(error);
+      const orderId =
+        (await this.deps.answerWindowOrder?.(scope, botInstanceId, customer.id, 'DISCOUNT')) ??
+        null;
       return {
-        ...refusal(error),
-        wizard: { kind: 'ORDER', step: 'DISCOUNT', anchor: { steps: ['DISCOUNT'] } },
+        ...refused,
+        wizard: {
+          kind: 'ORDER',
+          step: 'DISCOUNT',
+          anchor: { steps: ['DISCOUNT'], subjectId: orderId },
+        },
       };
     }
   }
@@ -12809,10 +12830,22 @@ export class BotRuntime {
        * at all and `refusal` rethrew it. One table for all five is what makes the two
        * paths answer alike.
        */
-      // R2: shown in the wizard that asked; the window stays open, so the step does too.
+      /*
+       * R2: shown in the wizard that asked; the window stays open, so the step does too. The
+       * refusal names no order, so the open window is asked which one: with two purchases
+       * open, the chat's most recently touched USERNAME wizard may be the OTHER order's.
+       */
+      const refused = refusal(error);
+      const orderId =
+        (await this.deps.answerWindowOrder?.(scope, botInstanceId, customer.id, 'USERNAME')) ??
+        null;
       return {
-        ...refusal(error),
-        wizard: { kind: 'ORDER', step: 'USERNAME', anchor: { steps: ['USERNAME'] } },
+        ...refused,
+        wizard: {
+          kind: 'ORDER',
+          step: 'USERNAME',
+          anchor: { steps: ['USERNAME'], subjectId: orderId },
+        },
       };
     }
   }

@@ -412,6 +412,68 @@ describe('the wizard is one message, edited in place', () => {
     });
   });
 
+  /*
+   * R2 finding F3: a refused typed name names no order, and the refusal was shown on the
+   * chat's most recently touched USERNAME wizard — with two purchases open, possibly the
+   * OTHER order's. It is shown on the wizard of the order whose window is open.
+   */
+  it('a refused typed username is shown on the wizard of the order whose window is open, not the latest other one', async () => {
+    const first = await product('two-a');
+    const second = await product('two-b');
+    const other = 771;
+    const asking = 770;
+    // The other purchase: its wizard waits at the username question.
+    await tapOn(other, `ck:${SEED_IDS.categoryA}.0`);
+    await tapOn(other, `p:${second}`);
+    // This purchase: the customer chose to type a name, so ITS window is open.
+    await tapOn(asking, `ck:${SEED_IDS.categoryA}.0`);
+    await tapOn(asking, `p:${first}`);
+    const orders = await draftOrders();
+    const mine = orders.at(-1);
+    if (mine === undefined || orders.length !== 2) throw new Error('two drafts expected');
+    await tapOn(asking, `j:${mine.id}`);
+    // The other wizard is the chat's most recently touched USERNAME wizard.
+    await ctx.container.database.db.execute(
+      sql`UPDATE telegram_wizards SET updated_at = now() + interval '1 minute'
+          WHERE tenant_id = ${tenantA.tenantId} AND message_id = ${other}`,
+    );
+
+    const refused = await type('!!', 4444);
+    expect(refused.replyKey).toBe('bot.username.invalid');
+    expect(edited(other)).toHaveLength(0);
+    expect(edited(asking)[0]?.body['text']).toBe(CATALOGUE_FA['bot.username.invalid']);
+    expect(methods()).not.toContain('sendMessage');
+  });
+
+  it('a refused typed discount code is shown on the wizard of the order whose window is open, not the latest other one', async () => {
+    const first = await product('code-a');
+    const second = await product('code-b');
+    const other = 781;
+    const asking = 780;
+    const toPreinvoice = async (message: number, productId: ProductId) => {
+      await tapOn(message, `ck:${SEED_IDS.categoryA}.0`);
+      await tapOn(message, `p:${productId}`);
+      const order = (await draftOrders()).at(-1);
+      if (order === undefined) throw new Error('no draft');
+      await tapOn(message, `Z:${order.id}`);
+      expect(buttonsOf(edited(message)[0])).toContain(`dc:${order.id}`);
+      await tapOn(message, `dc:${order.id}`);
+      return order.id;
+    };
+    await toPreinvoice(other, second);
+    // This order's code window supersedes the other's: a typed code answers THIS one.
+    await toPreinvoice(asking, first);
+    await ctx.container.database.db.execute(
+      sql`UPDATE telegram_wizards SET updated_at = now() + interval '1 minute'
+          WHERE tenant_id = ${tenantA.tenantId} AND message_id = ${other}`,
+    );
+
+    const refused = await type('NOSUCHCODE', 4545);
+    expect(refused.replyKey).toBe('bot.discount.rejected');
+    expect(edited(other)).toHaveLength(0);
+    expect(edited(asking)[0]?.body['text']).toBe(CATALOGUE_FA['bot.discount.rejected']);
+  });
+
   // -------------------------------------------------------------------------------------
   // Item 5: the wallet top-up wizard
   // -------------------------------------------------------------------------------------

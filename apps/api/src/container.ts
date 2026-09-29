@@ -4604,6 +4604,22 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       // R2 (items 3–5): edit-in-place state for wizards and receipt reviews.
       messageState: telegramMessageState,
       invoiceScreens: wizardScreens,
+      // R2: which order an open typed-answer window names, so a refusal edits ITS wizard.
+      answerWindowOrder: async (scope, botInstanceId, customerId, window) => {
+        const open =
+          window === 'USERNAME'
+            ? await usernameLane.openWindowFor(scope, botInstanceId, customerId, {
+                tx: database.db,
+                scope,
+              })
+            : await discountCodeCaptureRepository.findOpen(
+                scope,
+                botInstanceId,
+                customerId,
+                undefined,
+              );
+        return open?.orderId ?? null;
+      },
       tickets: {
         service: ticketService,
         categories: ticketCategoryService,
