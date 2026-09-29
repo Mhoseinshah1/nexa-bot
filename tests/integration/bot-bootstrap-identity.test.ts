@@ -73,6 +73,9 @@ describe('a Telegram bot belongs to one tenant', () => {
         // the post-rename state, which is what slips past the username index.
         identify: async () => ({ outcome: 'IDENTIFIED', botId, username }) as never,
         registerWebhook: async () => ({ outcome: 'REGISTERED' }) as never,
+        // R4: a rerun asks whether Telegram still holds the registration. Unreadable here,
+        // which leaves the marker's answer standing — nothing in this file is about it.
+        readWebhook: async () => ({ outcome: 'UNREACHABLE' }) as never,
         // The command menu. Answering `true` is the ordinary case; the bootstrap
         // service's own unit test covers a refusal, which must not fail an install.
         registerCommands: async () => true,

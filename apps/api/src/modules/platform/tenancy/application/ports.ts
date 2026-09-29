@@ -7,6 +7,7 @@ import type {
   TenantId,
   TenantStatus,
 } from '@nexa/contracts';
+import type { BotWebhookRead } from './bot-management-ports.js';
 
 /**
  * Ports owned by the tenancy module.
@@ -171,7 +172,17 @@ export interface BotBootstrapRepository {
  * question about a bot and gets an answer about a bot.
  */
 export type BotIdentityProbe =
-  | { readonly outcome: 'IDENTIFIED'; readonly botId: string; readonly username: string }
+  | {
+      readonly outcome: 'IDENTIFIED';
+      readonly botId: string;
+      readonly username: string;
+      /**
+       * `User.is_bot`, or null when Telegram's answer omitted it. Optional in the type so
+       * the bootstrap's stand-ins need not state it; the token replacement (R4) requires
+       * `true`, because the real Bot API always sends it for `getMe`.
+       */
+      readonly isBot?: boolean | null;
+    }
   /** Telegram answered, and its answer was no. A new token is the remedy. */
   | { readonly outcome: 'REJECTED'; readonly detail: string }
   /**
@@ -204,6 +215,11 @@ export type WebhookRegistration =
  */
 export interface BotBootstrapTelegram {
   identify(token: string): Promise<BotIdentityProbe>;
+  /**
+   * R4 — what Telegram holds as the webhook, so a rerun that finds its own marker current
+   * can tell whether Telegram still agrees. A read; the bot-management port's own method.
+   */
+  readWebhook(token: string): Promise<BotWebhookRead>;
   registerWebhook(input: {
     readonly token: string;
     readonly url: string;

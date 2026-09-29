@@ -36,7 +36,16 @@ describe('the Telegram bootstrap gateway — identify', () => {
       outcome: 'IDENTIFIED',
       botId: '8123456789',
       username: 'acme_bot',
+      // Absent from this answer, so not claimed either way.
+      isBot: null,
     });
+  });
+
+  it('carries is_bot as Telegram answered it (R4)', async () => {
+    respond(200, { ok: true, result: { id: 8123456789, is_bot: true, username: 'acme_bot' } });
+    expect(await gateway.identify('t')).toMatchObject({ outcome: 'IDENTIFIED', isBot: true });
+    respond(200, { ok: true, result: { id: 8123456789, is_bot: false, username: 'someone' } });
+    expect(await gateway.identify('t')).toMatchObject({ outcome: 'IDENTIFIED', isBot: false });
   });
 
   it('reports a token Telegram looked at and refused as REJECTED', async () => {
@@ -72,5 +81,91 @@ describe('the Telegram bootstrap gateway — identify', () => {
   it('keeps a 5xx UNREACHABLE', async () => {
     respond(502, { ok: false, description: 'Bad Gateway' });
     expect((await gateway.identify('t')).outcome).toBe('UNREACHABLE');
+  });
+});
+
+/**
+ * R4 — the webhook calls a token replacement makes, read off the wire. The request bodies
+ * are the Bot API's documented fields, and the answers are its documented shapes.
+ */
+describe('the Telegram bootstrap gateway — webhook calls', () => {
+  const gateway = new TelegramBotBootstrapGateway('https://telegram.invalid', 1000);
+  let sent: Array<{ url: string; body: unknown }>;
+
+  const respond = (status: number, body: unknown) => {
+    sent = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init: { body: string }) => {
+        sent.push({ url, body: JSON.parse(init.body) as unknown });
+        return { ok: status < 400, status, json: async () => body };
+      }),
+    );
+  };
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('resets allowed_updates to the default set only when asked, and keeps the queue', async () => {
+    respond(200, { ok: true, result: true, description: 'Webhook was set' });
+    const input = {
+      token: 't',
+      url: 'https://bot.example.test/telegram/webhook/b',
+      secretToken: 's'.repeat(20),
+      dropPendingUpdates: false,
+    };
+    expect(await gateway.registerWebhook({ ...input, resetAllowedUpdates: true })).toEqual({
+      outcome: 'REGISTERED',
+    });
+    expect(sent[0]?.body).toEqual({
+      url: input.url,
+      secret_token: input.secretToken,
+      drop_pending_updates: false,
+      allowed_updates: [],
+    });
+    // The bootstrap's call is unchanged: no field, so Telegram keeps what it had.
+    await gateway.registerWebhook(input);
+    expect(sent[1]?.body).not.toHaveProperty('allowed_updates');
+  });
+
+  it('reads allowed_updates when Telegram reports a list, and null for the default set', async () => {
+    respond(200, {
+      ok: true,
+      result: {
+        url: 'https://bot.example.test/telegram/webhook/b',
+        has_custom_certificate: false,
+        pending_update_count: 2,
+        max_connections: 40,
+        allowed_updates: ['message', 7],
+      },
+    });
+    expect(await gateway.readWebhook('t')).toMatchObject({
+      outcome: 'READ',
+      url: 'https://bot.example.test/telegram/webhook/b',
+      pendingUpdateCount: 2,
+      allowedUpdates: ['message'],
+    });
+    respond(200, {
+      ok: true,
+      result: { url: '', has_custom_certificate: false, pending_update_count: 0 },
+    });
+    expect(await gateway.readWebhook('t')).toMatchObject({
+      outcome: 'READ',
+      url: null,
+      allowedUpdates: null,
+    });
+  });
+
+  it('removes a webhook keeping the queue, and keeps an unanswered removal distinct', async () => {
+    respond(200, { ok: true, result: true, description: 'Webhook was deleted' });
+    expect(await gateway.removeWebhook('t')).toEqual({ outcome: 'REMOVED' });
+    expect(sent[0]?.url).toMatch(/\/deleteWebhook$/u);
+    expect(sent[0]?.body).toEqual({ drop_pending_updates: false });
+
+    respond(401, { ok: false, error_code: 401, description: 'Unauthorized' });
+    expect(await gateway.removeWebhook('t')).toEqual({ outcome: 'REFUSED' });
+    respond(502, { ok: false, description: 'Bad Gateway' });
+    expect(await gateway.removeWebhook('t')).toEqual({ outcome: 'UNREACHABLE' });
   });
 });

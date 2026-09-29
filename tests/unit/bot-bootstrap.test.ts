@@ -16,6 +16,7 @@ import type {
   BotIdentityProbe,
   WebhookRegistration,
 } from '../../apps/api/src/modules/platform/tenancy/application/ports';
+import type { BotWebhookRead } from '../../apps/api/src/modules/platform/tenancy/application/bot-management-ports';
 import {
   currentTransactionLabel,
   withinTransaction,
@@ -216,6 +217,19 @@ class FakeTelegram implements BotBootstrapTelegram {
     this.webhookCalls.push({ ...input });
     if (this.crashOnWebhook !== null) throw this.crashOnWebhook;
     return this.registration;
+  }
+
+  /**
+   * What `getWebhookInfo` answers (R4). UNREACHABLE by default, which a rerun reads as
+   * "no evidence against the marker" — the behaviour every case above was written for.
+   */
+  held: BotWebhookRead = { outcome: 'UNREACHABLE' };
+  readWebhookCalls = 0;
+
+  async readWebhook(): Promise<BotWebhookRead> {
+    expect(currentTransactionLabel()).toBeUndefined();
+    this.readWebhookCalls += 1;
+    return this.held;
   }
 }
 
@@ -698,6 +712,58 @@ describe('bot bootstrap — a rerun reconciles and never rotates', () => {
     expect(telegram.webhookCalls).toHaveLength(before);
     expect(bots.webhookMarks).toHaveLength(1);
     expect(bots.rows).toHaveLength(1);
+  });
+
+  /*
+   * R4. The marker is this installation's record of what it registered; it cannot see a
+   * registration Telegram dropped on its side. The owner's staging bot went silent that
+   * way while this command answered ALREADY_COMPLETE, so a rerun now asks.
+   */
+  it('asks Telegram, and keeps ALREADY_COMPLETE only when Telegram holds exactly this URL', async () => {
+    const { service, telegram } = await installed();
+    const url = telegram.webhookCalls[0]?.url ?? '';
+    const before = telegram.webhookCalls.length;
+    telegram.held = {
+      outcome: 'READ',
+      url,
+      pendingUpdateCount: 0,
+      lastErrorAt: null,
+      lastErrorMessage: null,
+      maxConnections: 40,
+      allowedUpdates: null,
+    };
+
+    const result = await service.execute(scope, { token: null, publicBaseUrl: ORIGIN });
+    expect(result.kind).toBe('ALREADY_COMPLETE');
+    expect(telegram.readWebhookCalls).toBe(1);
+    expect(telegram.webhookCalls).toHaveLength(before);
+  });
+
+  it('re-registers, keeping the queue, when Telegram no longer holds what the marker says', async () => {
+    const held = (url: string | null, allowedUpdates: string[] | null): BotWebhookRead => ({
+      outcome: 'READ',
+      url,
+      pendingUpdateCount: 5,
+      lastErrorAt: null,
+      lastErrorMessage: null,
+      maxConnections: 40,
+      allowedUpdates,
+    });
+    for (const [label, answer] of [
+      ['dropped', () => held(null, null)],
+      ['elsewhere', () => held('https://elsewhere.example.test/hook', null)],
+      ['narrowed', (url: string) => held(url, ['message'])],
+    ] as const) {
+      const { service, telegram } = await installed();
+      const url = telegram.webhookCalls[0]?.url ?? '';
+      telegram.held = answer(url);
+
+      const result = await service.execute(scope, { token: null, publicBaseUrl: ORIGIN });
+      expect(result.kind, label).toBe('RECONCILED');
+      expect(telegram.webhookCalls, label).toHaveLength(2);
+      // A running installation: whatever Telegram queued is customers' messages.
+      expect(telegram.webhookCalls[1], label).toMatchObject({ url, dropPendingUpdates: false });
+    }
   });
 
   it('still asks Telegram whether the stored token works', async () => {

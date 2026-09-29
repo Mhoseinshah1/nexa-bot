@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   claimedBotId,
   commandMenuState,
+  liveProblems,
   readinessOf,
   webhookSecretState,
 } from '../../apps/api/src/modules/platform/tenancy/domain/bot-readiness';
@@ -95,5 +96,66 @@ describe("a token's claimed bot id", () => {
     ]) {
       expect(claimedBotId(candidate), candidate).toBeNull();
     }
+  });
+});
+
+/**
+ * R4 — the live verdict. "Ready to receive" is a conjunction, and every conjunct that
+ * fails is named, in the order an operator acts on them.
+ */
+describe('the live verdict', () => {
+  const EXPECTED = 'https://bot.example.test/telegram/webhook/b';
+  const ready = {
+    webhookRouteEnabled: true,
+    tenantActive: true,
+    botStatus: 'ACTIVE' as const,
+    secret: 'MATCHES' as const,
+    identified: true,
+    sameBot: true,
+    webhook: { url: EXPECTED, narrowed: false },
+    expectedUrl: EXPECTED,
+  };
+
+  it('is ready only when every part holds', () => {
+    expect(liveProblems(ready)).toEqual([]);
+  });
+
+  it('names a webhook that is missing, elsewhere, narrowed or unreadable', () => {
+    expect(liveProblems({ ...ready, webhook: { url: null, narrowed: false } })).toEqual([
+      'WEBHOOK_NOT_SET',
+    ]);
+    expect(
+      liveProblems({ ...ready, webhook: { url: 'https://elsewhere.test/x', narrowed: false } }),
+    ).toEqual(['WEBHOOK_ELSEWHERE']);
+    expect(liveProblems({ ...ready, webhook: { url: EXPECTED, narrowed: true } })).toEqual([
+      'WEBHOOK_UPDATES_NARROWED',
+    ]);
+    expect(liveProblems({ ...ready, webhook: null })).toEqual(['WEBHOOK_UNREADABLE']);
+    // With nothing to compare against, a URL is never read as a match.
+    expect(liveProblems({ ...ready, expectedUrl: null })).toEqual(['WEBHOOK_EXPECTED_UNKNOWN']);
+  });
+
+  it('names a token Telegram refused, or a different bot, and a secret not current', () => {
+    expect(liveProblems({ ...ready, identified: false, sameBot: null })).toEqual([
+      'TOKEN_NOT_ACCEPTED',
+    ]);
+    expect(liveProblems({ ...ready, sameBot: false })).toEqual(['DIFFERENT_BOT']);
+    expect(liveProblems({ ...ready, secret: 'DIFFERS' })).toEqual(['WEBHOOK_SECRET_NOT_CURRENT']);
+    expect(liveProblems({ ...ready, secret: 'UNKNOWN' })).toEqual(['WEBHOOK_SECRET_NOT_CURRENT']);
+  });
+
+  it('holds for the route, the tenant and the bot first, whatever Telegram says', () => {
+    expect(
+      liveProblems({
+        ...ready,
+        webhookRouteEnabled: false,
+        tenantActive: false,
+        botStatus: 'STOPPED',
+        webhook: { url: null, narrowed: false },
+      }),
+    ).toEqual(['WEBHOOK_ROUTE_DISABLED', 'TENANT_INACTIVE', 'BOT_NOT_ACTIVE', 'WEBHOOK_NOT_SET']);
+    expect(liveProblems({ ...ready, secret: 'NOT_CONFIGURED' })).toEqual([
+      'WEBHOOK_ROUTE_DISABLED',
+    ]);
   });
 });

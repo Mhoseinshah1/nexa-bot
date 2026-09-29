@@ -24,6 +24,7 @@ import type {
   WebhookRegistration,
 } from './ports.js';
 import { webhookSecretFingerprint } from './webhook-fingerprint.js';
+import { allowedUpdatesNarrowed, telegramWebhookUrl } from '../domain/webhook-url.js';
 
 /** The identity `getMe` reported, once the probe outcome has been unwrapped. */
 interface BotIdentity {
@@ -385,7 +386,11 @@ export class BotBootstrapService {
      * RUNNING installation — updates belonging to real customers, thrown away by
      * an installer somebody ran to fix something unrelated.
      */
-    if (!ensured.createdNow && this.registrationIsCurrent(view, url)) {
+    if (
+      !ensured.createdNow &&
+      this.registrationIsCurrent(view, url) &&
+      (await this.telegramStillHolds(token, url))
+    ) {
       /*
        * The menu is reconciled even here, and THIS is `OQ-4H-02`.
        *
@@ -646,6 +651,27 @@ export class BotBootstrapService {
    * by refusing `@nexa/i18n` to an application file. So the adapter renders, and
    * this compares two opaque strings.
    */
+  /**
+   * R4 — whether Telegram STILL delivers to `url`, asked rather than assumed.
+   *
+   * `registrationIsCurrent` reads this installation's own marker, and the marker cannot
+   * see a registration Telegram dropped on its side — a BotFather revocation is the
+   * suspected case (`OQ-WP13-02`), and the owner's staging bot went silent that way while
+   * this command answered "nothing to do". So a rerun that would report ALREADY_COMPLETE
+   * first reads the registration: only an answer that shows ANOTHER URL (none included),
+   * or a narrowed update set, sends the rerun on to re-register — with the queue kept,
+   * because this is a running installation.
+   *
+   * An answer that cannot be read changes nothing: `getMe` has just succeeded, and turning
+   * a flaky read into a re-registration on every rerun is what the early return exists to
+   * prevent.
+   */
+  private async telegramStillHolds(token: string, url: string): Promise<boolean> {
+    const held = await this.deps.telegram.readWebhook(token);
+    if (held.outcome !== 'READ') return true;
+    return held.url === url && !allowedUpdatesNarrowed(held.allowedUpdates);
+  }
+
   private async reconcileCommands(
     scope: TenantContext,
     id: BotInstanceId,
@@ -983,7 +1009,9 @@ export class BotBootstrapService {
    * given" and "the URL this installation answers on" the same statement.
    */
   private webhookUrlFor(origin: string, botInstanceId: BotInstanceId): string {
-    return `${origin}/telegram/webhook/${botInstanceId}`;
+    // One composition, shared with the Web Admin's token replacement (R4), so the URL
+    // the installer registers and the URL a replacement re-registers cannot differ.
+    return telegramWebhookUrl(origin, botInstanceId);
   }
 
   private requireOrigin(publicBaseUrl: string): string {

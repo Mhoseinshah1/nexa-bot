@@ -10,6 +10,7 @@ import {
   type BotListResponse,
   type BotMutationResponse,
   type BotResponse,
+  type BotTokenReplacementResponse,
   type TenantContext,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
@@ -26,8 +27,10 @@ import { currentCorrelationId, newCorrelationId } from '../../infrastructure/log
  *   - a POST that CREATES a bot. The bootstrap is a CLI provisioning step, fenced from
  *     every surface by `scripts/check-boundaries.sh`; exposed here it would be a route
  *     that accepts a new bot token and writes a row.
- *   - a POST that registers a WEBHOOK. The API process does not know the public origin
- *     (ADR-0029), so it could only register a URL it had guessed.
+ *   - a POST that registers a webhook at a URL the REQUEST supplies. The API process is
+ *     not told the public origin (ADR-0029). The one registration it makes — inside a
+ *     token replacement (R4) — is at the URL recomposed from the origin this installation
+ *     already registered and recorded, and a request has no say in it.
  *
  * Authentication happens here; AUTHORIZATION does not — `BotManagementService` charges
  * `settings.view`, `settings.edit` and `settings.destructive` itself.
@@ -65,15 +68,15 @@ export class BotsController {
 
   /**
    * The token arrives in a JSON body over the session's TLS and goes nowhere but the
-   * service. It is never echoed: the answer is the bot's view, which has no credential
-   * field to carry it.
+   * service. It is never echoed: the answer is the bot's view and the verification the
+   * replacement made (R4), neither of which has a credential field to carry it.
    */
   @Post(routePattern(BOT_ROUTES.token, 'id'))
   async replaceToken(
     @Req() request: FastifyRequest,
     @Param('id') id: string,
     @Body() body: unknown,
-  ): Promise<BotMutationResponse> {
+  ): Promise<BotTokenReplacementResponse> {
     const { scope, actor } = await this.authenticate(request);
     // Only the key is parsed here. The token goes to the service UNPARSED, which
     // authorizes first and validates after, so a caller without `settings.destructive`
