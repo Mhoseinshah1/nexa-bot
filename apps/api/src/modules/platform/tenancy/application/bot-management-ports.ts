@@ -6,7 +6,7 @@ import type {
   TenantKind,
   TenantStatus,
 } from '@nexa/contracts';
-import type { BotIdentityProbe } from './ports.js';
+import type { BotIdentityProbe, WebhookRegistration } from './ports.js';
 
 /**
  * What the Web Admin's bot management reads about one bot instance (WP13).
@@ -73,13 +73,49 @@ export interface BotManagementRepository {
     tx: unknown,
   ): Promise<boolean>;
   /**
-   * Encrypts `token` here and replaces the stored one, WHERE the row still carries
-   * `telegramBotId` — a replacement never repoints. False when it does not.
+   * R4 — take this bot's token-replacement claim: a conditional UPDATE that succeeds when
+   * no claim is held or the one held has expired. The guard that keeps two replacements
+   * (two tabs, a double-click under two keys, two api replicas) from interleaving their
+   * Telegram calls, which no row lock can do — a lock ends with its transaction, and the
+   * Telegram calls must run outside one. False when a live claim is held.
    */
-  replaceToken(
+  claimTokenReplacement(
     scope: ScopeContext,
     id: BotInstanceId,
-    input: { readonly token: string; readonly telegramBotId: string; readonly now: Date },
+    claim: { readonly id: string; readonly now: Date; readonly until: Date },
+    tx: unknown,
+  ): Promise<boolean>;
+  /** Drops the claim WHERE it is still `claimId`; a claim taken over since is left alone. */
+  releaseTokenReplacement(
+    scope: ScopeContext,
+    id: BotInstanceId,
+    claimId: string,
+    tx: unknown,
+  ): Promise<void>;
+  /**
+   * R4 — the activation: the token (when `token` is non-null, encrypted here), the
+   * identity `getMe` proved, and the webhook registration Telegram was verified to hold,
+   * in ONE conditional UPDATE — WHERE the row still names `telegramBotId` (a replacement
+   * never repoints) AND still holds `claimId` (a claim that expired and was taken over
+   * activates nothing). The claim is released by the same statement. False when either
+   * predicate missed.
+   *
+   * The username is written only when no OTHER row holds it: the column is unique across
+   * the installation, and a stale copy on another row must not turn a verified
+   * replacement into a failed one.
+   */
+  activateTokenReplacement(
+    scope: ScopeContext,
+    id: BotInstanceId,
+    input: {
+      readonly claimId: string;
+      readonly token: string | null;
+      readonly telegramBotId: string;
+      readonly username: string;
+      readonly webhookUrl: string;
+      readonly webhookSecretFingerprint: string;
+      readonly now: Date;
+    },
     tx: unknown,
   ): Promise<boolean>;
   /** Decrypts the stored token whatever the status. Only ever compared, never returned. */
@@ -97,20 +133,44 @@ export type BotWebhookRead =
       readonly lastErrorAt: Date | null;
       readonly lastErrorMessage: string | null;
       readonly maxConnections: number | null;
+      /** `allowed_updates`, or null for Telegram's default set. */
+      readonly allowedUpdates: readonly string[] | null;
     }
   | { readonly outcome: 'REJECTED' }
   | { readonly outcome: 'UNREACHABLE' };
 
 /**
- * The Telegram READS bot management makes, and the menu digest it compares against.
+ * What `deleteWebhook` answered. `UNREACHABLE` may or may not have taken effect, so the
+ * caller reads the registration back rather than believing either.
+ */
+export type BotWebhookRemoval =
+  | { readonly outcome: 'REMOVED' }
+  | { readonly outcome: 'REFUSED' }
+  | { readonly outcome: 'UNREACHABLE' };
+
+/**
+ * The Telegram calls bot management makes, and the menu digest it compares against.
  *
- * `identify` and `commandsRevision` are the bootstrap gateway's own methods, so a token
- * is judged and a menu is digested by one implementation (`CLAUDE.md`: "the copy that
- * would silently keep the old behaviour is the unattended one"). There is no write here:
- * `setWebhook` and `setMyCommands` stay with the fenced bootstrap.
+ * `identify`, `registerWebhook` and `commandsRevision` are the bootstrap gateway's own
+ * methods, so a token is judged, a webhook registered and a menu digested by one
+ * implementation (`CLAUDE.md`: "the copy that would silently keep the old behaviour is the
+ * unattended one").
+ *
+ * R4 added the two writes. `registerWebhook` is reached only from a token replacement,
+ * with the URL the installation already registered (its recorded origin, recomposed) —
+ * never a URL a request supplies. `removeWebhook` is reached only from that replacement's
+ * compensation. `setMyCommands` stays with the fenced bootstrap.
  */
 export interface BotManagementTelegram {
   identify(token: string): Promise<BotIdentityProbe>;
   readWebhook(token: string): Promise<BotWebhookRead>;
+  registerWebhook(input: {
+    readonly token: string;
+    readonly url: string;
+    readonly secretToken: string;
+    readonly dropPendingUpdates: boolean;
+    readonly resetAllowedUpdates?: boolean;
+  }): Promise<WebhookRegistration>;
+  removeWebhook(token: string): Promise<BotWebhookRemoval>;
   commandsRevision(): string;
 }

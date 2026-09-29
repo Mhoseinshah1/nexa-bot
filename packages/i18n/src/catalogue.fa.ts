@@ -195,6 +195,9 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.menu.services': '📱 سرویس‌های من',
   'bot.menu.wallet': '💰 کیف پول',
   'bot.menu.help': '💬 پشتیبانی',
+  // R1: each behind its feature flag, and arranged on the bot-buttons page.
+  'bot.menu.trial': '🧪 دریافت سرویس تست',
+  'bot.menu.referral': '👥 زیرمجموعه‌گیری',
 
   'bot.catalog.empty': 'در حال حاضر سرویسی برای فروش تنظیم نشده است.',
   'bot.catalog.heading': 'سرویس‌های قابل خرید:',
@@ -793,6 +796,13 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.service.rotate_button': '⚙️ تغییر لینک',
   'bot.service.files_button': '📁 دریافت فایل‌های اتصال',
   'bot.service.file_caption': '{caption}',
+  // R3: the files' caption, the link-change result and the refresh failure notice.
+  'bot.service.connection_file_caption': '👤 نام کاربری: {serviceUsername}',
+  'bot.service.link_rotated':
+    '✅ لینک اشتراک سرویس {serviceUsername} با موفقیت تغییر کرد.\nلینک قبلی دیگر قابل استفاده نیست. لطفاً لینک و فایل‌های جدید را در برنامه خود جایگزین کنید.\n\n🔗 لینک جدید:\n<code>{subscriptionUrl}</code>',
+  'bot.service.back_to_card_button': '🔙 بازگشت به مشخصات سرویس',
+  'bot.service.refresh_failed':
+    'خواندن اطلاعات از سرور ممکن نشد. لطفاً کمی بعد دوباره امتحان کنید.',
   'bot.service.files_partial':
     '⚠️ {failed} فرمت از فایل‌های اتصال آماده نشد. فایل‌های دیگر ارسال شدند.',
   'bot.service.files_unavailable':
@@ -925,10 +935,12 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.referral.button': '🎁 دعوت دوستان',
   'bot.referral.unconfigured': 'برنامه معرفی دوستان در حال حاضر فعال نیست.',
 
-  'bot.trial.unavailable': 'سرویس آزمایشی در حال حاضر در دسترس نیست.',
+  'bot.trial.unavailable': '🧪 در حال حاضر امکان دریافت سرویس تست برای شما وجود ندارد.',
   'bot.trial.issued':
-    'سرویس آزمایشی شما در حال ساخته شدن است. لینک اشتراک به‌محض آماده شدن برایتان ارسال می‌شود.',
-  'bot.trial.button': '🎁 دریافت سرویس آزمایشی',
+    '🧪 سرویس تست شما در حال ساخته شدن است. لینک اتصال به‌محض آماده شدن برایتان ارسال می‌شود.',
+  'bot.trial.button': '🧪 دریافت سرویس تست',
+  'bot.trial.choose_panel': '🧪 سرویس تست را روی کدام سرور می‌خواهید؟ یکی را انتخاب کنید:',
+  'bot.trial.panel_button': '{label} — {traffic} / {hours} ساعت',
   'bot.custom_service.button': '🛠 سرویس دلخواه',
   'bot.custom_service.locations': '📍 لوکیشن سرویس دلخواه خود را انتخاب کنید:',
   'bot.custom_service.ask_volume':
@@ -1168,6 +1180,13 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.referral.gift_claimed': '🎁 هدیهٔ عضویت به کیف پول شما واریز شد: {amount}',
   'bot.referral.gift_nothing': 'در حال حاضر هدیهٔ عضویتی برای دریافت ندارید.',
   'bot.referral.gift_disabled': 'هدیهٔ عضویت در حال حاضر فعال نیست.',
+  // R1: the forwardable invite (no figures) and the customer's own dashboard.
+  'bot.referral.invite_card':
+    '💼 زیرمجموعه‌گیری و هدیه خوش‌آمد\n\n📱 خبری خوش راحت ترین راه پول دراوردن\n\n📤 با ارسال 📎 لینک دعوت اختصاصی خود به مخاطبین و دوستان خود به ازای هر فرد جدیدی که برای اولین بار با لینک شما وارد ربات شود و خرید انجام دهد {commissionPercent} درصد پورسانت دریافت کنید!\n\n💳 بعد از دعوت دیگران میتوانید درخواست برداشت موجودی خود به کارت بانکیتان را ثبت کنید و مبلغ به کارت بانکی شما واریز خواهد شد.\n\n💰برای برداشت موجودی بدست آمده به پشتیبانی ربات پیام ارسال کنید\n\n🔰همکاری با شما باعث افتخار ماست\n\n🔗 {referralLink}\n\n📢 دعوت کن، هدیه بگیر، رشد کن!',
+  'bot.referral.dashboard':
+    '📊 زیرمجموعه‌گیری — آمار و شرایط شما\n\n{giftBlock}\n\n💸 پورسانت خرید:\n• {commissionPercent} درصد از مبلغ خرید زیرمجموعه به شما تعلق می‌گیرد\n• {commissionScope}\n• حداقل مبلغ خرید: {minimumOrder}\n\n📊 آمار شما:\n• زیرمجموعه‌ها: {referralCount} نفر\n• خریدها: {referredPurchaseCount} عدد\n• مجموع خرید: {referredPurchaseTotal}\n• پورسانت دریافتی: {commissionReceivedTotal}\n\n📤 پیام بالا را برای دوستانتان هدایت (فوروارد) کنید، یا با دکمهٔ زیر لینک خود را به اشتراک بگذارید.',
+  'bot.referral.scope_first_order': 'فقط برای اولین خرید هر زیرمجموعه',
+  'bot.referral.scope_every_order': 'برای همهٔ خریدهای زیرمجموعه',
 
   // WP-A7 — support tickets (`docs/wp-a7-tickets-audit.md`).
   'bot.command.tickets': 'تیکت‌های پشتیبانی',

@@ -985,8 +985,29 @@
     {
       "idx": 140,
       "version": "7",
-      "when": 1790678086461,
-      "tag": "0140_r2_telegram_message_state",
+      "when": 1790676552783,
+      "tag": "0140_r4_bot_token_replacement_claim",
+      "breakpoints": true
+    },
+    {
+      "idx": 141,
+      "version": "7",
+      "when": 1790685954435,
+      "tag": "0141_r3_operation_card_messages",
+      "breakpoints": true
+    },
+    {
+      "idx": 142,
+      "version": "7",
+      "when": 1790686553771,
+      "tag": "0142_r1_trial_per_panel_and_main_menu",
+      "breakpoints": true
+    },
+    {
+      "idx": 143,
+      "version": "7",
+      "when": 1790695657959,
+      "tag": "0143_r2_telegram_message_state",
       "breakpoints": true
     }
   ]

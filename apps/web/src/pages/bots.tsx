@@ -1,15 +1,19 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type {
-  BotCommandMenuState,
-  BotDiagnostic,
-  BotIdentityCheckOutcome,
-  BotInstanceStatus,
-  BotInstanceView,
-  BotReadinessCause,
-  BotReadinessState,
-  BotWebhookCheckOutcome,
-  BotWebhookSecretState,
+import {
+  botReplacementFailureDetailsSchema,
+  type BotCommandMenuState,
+  type BotDiagnostic,
+  type BotIdentityCheckOutcome,
+  type BotInstanceStatus,
+  type BotInstanceView,
+  type BotLiveProblem,
+  type BotReadinessCause,
+  type BotReadinessState,
+  type BotReplacementFailureDetails,
+  type BotWebhookCheckOutcome,
+  type BotWebhookCompensation,
+  type BotWebhookSecretState,
 } from '@nexa/contracts';
 import { ApiError, checkBot, fetchBots, replaceBotToken, setBotStatus } from '../api/client';
 import { formatTimestamp } from '../format';
@@ -48,6 +52,12 @@ import {
  * **The token field is a password input that is never pre-filled and is cleared after
  * every attempt.** There is no masked stand-in for the stored token: a mask can be
  * submitted back as the value, the rule panel credentials already follow.
+ *
+ * **A replacement answers with what Telegram was verified to hold (R4).** The server
+ * registers the webhook with the new token and reads it back before storing anything, so
+ * a success is shown WITH that verification — the URL this installation expects beside
+ * the one Telegram reports — and a failure is shown with the stage it stopped at and what
+ * was put back at Telegram. Neither needs a separate live check.
  */
 
 const STATUS_LABEL: Readonly<Record<BotInstanceStatus, WebKey>> = {
@@ -120,7 +130,49 @@ const BOT_ERROR_TEXT: Readonly<Record<string, WebKey>> = {
   'bot.token_rejected': 'web.bot_error_token_rejected',
   'bot.telegram_unreachable': 'web.bot_error_telegram_unreachable',
   'bot.telegram_api_invalid': 'web.bot_error_telegram_api_invalid',
+  'bot.webhook_route_unavailable': 'web.bot_error_webhook_route_unavailable',
+  'bot.webhook_origin_unknown': 'web.bot_error_webhook_origin_unknown',
+  'bot.token_replacement_in_progress': 'web.bot_error_replacement_in_progress',
+  'bot.webhook_refused': 'web.bot_error_webhook_refused',
+  'bot.webhook_setup_failed': 'web.bot_error_webhook_setup_failed',
+  'bot.webhook_verification_failed': 'web.bot_error_webhook_verification_failed',
+  'bot.token_activation_failed': 'web.bot_error_token_activation_failed',
 };
+
+/** What was put back at Telegram after a replacement that did not complete (R4). */
+const COMPENSATION_TEXT: Readonly<Record<BotWebhookCompensation, WebKey>> = {
+  NOT_NEEDED: 'web.bot_compensation_not_needed',
+  RESTORED: 'web.bot_compensation_restored',
+  HELD: 'web.bot_compensation_held',
+  SUPERSEDED: 'web.bot_compensation_superseded',
+  FAILED: 'web.bot_compensation_failed',
+};
+
+/** Everything in the way of receiving updates, each with its remedy (R4). */
+const PROBLEM_TEXT: Readonly<Record<BotLiveProblem, WebKey>> = {
+  WEBHOOK_ROUTE_DISABLED: 'web.bot_problem_route_disabled',
+  TENANT_INACTIVE: 'web.bot_problem_tenant_inactive',
+  BOT_NOT_ACTIVE: 'web.bot_problem_bot_not_active',
+  TOKEN_NOT_ACCEPTED: 'web.bot_problem_token_not_accepted',
+  DIFFERENT_BOT: 'web.bot_problem_different_bot',
+  WEBHOOK_UNREADABLE: 'web.bot_problem_webhook_unreadable',
+  WEBHOOK_EXPECTED_UNKNOWN: 'web.bot_problem_webhook_expected_unknown',
+  WEBHOOK_NOT_SET: 'web.bot_problem_webhook_not_set',
+  WEBHOOK_ELSEWHERE: 'web.bot_problem_webhook_elsewhere',
+  WEBHOOK_UPDATES_NARROWED: 'web.bot_problem_webhook_updates_narrowed',
+  WEBHOOK_SECRET_NOT_CURRENT: 'web.bot_problem_webhook_secret_not_current',
+};
+
+/**
+ * The structured half of a replacement that stopped after Telegram was asked to change
+ * (R4), or null for any other error. Parsed, not trusted: a shape this build does not
+ * know is shown as the plain message alone.
+ */
+function replacementFailureOf(error: unknown): BotReplacementFailureDetails | null {
+  if (!(error instanceof ApiError) || error.details === undefined) return null;
+  const parsed = botReplacementFailureDetailsSchema.safeParse(error.details);
+  return parsed.success ? parsed.data : null;
+}
 
 export function botMessageFor(error: unknown): string {
   if (error instanceof ApiError) {
@@ -229,8 +281,10 @@ function BotCard({
       }),
     onSuccess: (result) => {
       submission.settle();
-      // Results obtained with the previous credential say nothing about the new one.
-      if (result.changed) setDiagnostic(null);
+      // Results obtained with the previous credential say nothing about the new one; the
+      // verification the replacement itself made replaces them (R4). A replay of an answer
+      // stored before that field existed has none, and shows none rather than an old one.
+      setDiagnostic(result.verification);
       notify({
         tone: 'ok',
         message: t(result.changed ? 'web.bot_token_done' : 'web.bot_token_same'),
@@ -391,18 +445,65 @@ function BotCard({
         </div>
       )}
 
-      {failure != null && <Banner tone="danger">{botMessageFor(failure)}</Banner>}
+      {failure != null && (
+        <Banner tone="danger">
+          <p>{botMessageFor(failure)}</p>
+          <ReplacementFailureView details={replacementFailureOf(failure)} />
+        </Banner>
+      )}
     </Card>
   );
 }
 
+/**
+ * Where a replacement stopped and what was put back (R4): the compensation, the URL this
+ * installation expected beside the one Telegram reported, and Telegram's own reason for
+ * a refusal. Nothing here is secret — the server sends a foreign URL cut to its origin.
+ */
+function ReplacementFailureView({ details }: { details: BotReplacementFailureDetails | null }) {
+  if (details === null) return null;
+  return (
+    <ul className="small" data-testid="bot-replacement-failure">
+      <li>{t(COMPENSATION_TEXT[details.compensation])}</li>
+      {details.expectedUrl !== null && (
+        <li>
+          {t('web.bot_failure_expected')} <Ltr>{details.expectedUrl}</Ltr>
+        </li>
+      )}
+      {details.stage === 'VERIFY_WEBHOOK' && (
+        <li>
+          {t('web.bot_failure_actual')}{' '}
+          {details.actualUrl === null ? t('web.bot_check_none') : <Ltr>{details.actualUrl}</Ltr>}
+        </li>
+      )}
+      {details.telegramReason !== null && (
+        <li>
+          {t('web.bot_failure_telegram_reason')} <Ltr>{details.telegramReason}</Ltr>
+        </li>
+      )}
+    </ul>
+  );
+}
+
 function DiagnosticView({ diagnostic }: { diagnostic: BotDiagnostic }) {
-  const { identity, webhook } = diagnostic;
+  const { identity, webhook, verdict } = diagnostic;
   return (
     <div className="bot-diagnostic" role="status" data-testid="bot-diagnostic">
       <p className="small">
         <strong>{t('web.bot_check_title')}</strong> {formatTimestamp(diagnostic.checkedAt)}
       </p>
+      <p data-testid="bot-verdict">
+        <Badge tone={verdict.readyToReceive ? 'ok' : 'danger'}>
+          {t(verdict.readyToReceive ? 'web.bot_verdict_ready' : 'web.bot_verdict_not_ready')}
+        </Badge>
+      </p>
+      {verdict.problems.length > 0 && (
+        <ul className="bot-causes">
+          {verdict.problems.map((problem) => (
+            <li key={problem}>{t(PROBLEM_TEXT[problem])}</li>
+          ))}
+        </ul>
+      )}
       <ul>
         <li>{t(IDENTITY_LABEL[identity.outcome])}</li>
         {identity.idMatches === false && <li>{t('web.bot_check_id_mismatch')}</li>}
@@ -415,15 +516,37 @@ function DiagnosticView({ diagnostic }: { diagnostic: BotDiagnostic }) {
         {webhook.outcome === 'READ' && (
           <>
             <li>
+              {t('web.bot_check_expected')}{' '}
+              {webhook.expectedUrl === null ? (
+                t('web.bot_check_expected_unknown')
+              ) : (
+                <Ltr>{webhook.expectedUrl}</Ltr>
+              )}
+            </li>
+            <li>
               {t('web.bot_check_url')}{' '}
               {webhook.url === null ? t('web.bot_check_none') : <Ltr>{webhook.url}</Ltr>}
-              {webhook.urlMatchesRecorded === false && (
+              {/* The exact comparison when the expected URL is known; the recorded one
+                  otherwise, which is all an installation with no recorded origin has. */}
+              {webhook.matchesExpected === true && (
+                <>
+                  {' '}
+                  <Badge tone="ok">{t('web.bot_check_url_exact')}</Badge>
+                </>
+              )}
+              {webhook.matchesExpected === false && (
+                <>
+                  {' '}
+                  <Badge tone="danger">{t('web.bot_check_url_not_exact')}</Badge>
+                </>
+              )}
+              {webhook.matchesExpected === null && webhook.urlMatchesRecorded === false && (
                 <>
                   {' '}
                   <Badge tone="danger">{t('web.bot_check_url_mismatch')}</Badge>
                 </>
               )}
-              {webhook.urlMatchesRecorded === true && (
+              {webhook.matchesExpected === null && webhook.urlMatchesRecorded === true && (
                 <>
                   {' '}
                   <Badge tone="ok">{t('web.bot_check_url_matches')}</Badge>

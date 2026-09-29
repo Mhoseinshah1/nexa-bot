@@ -11,6 +11,7 @@ import { formatNumber } from '../../apps/web/src/format';
 import { resolve } from '../../apps/web/src/app';
 import { PLANNED_SURFACES } from '../../apps/web/src/pages/planned';
 import { renderPage, stubApi } from './harness';
+import { t } from '../../apps/web/src/i18n/web.fa';
 
 /**
  * Services, rendered against the shapes the server actually returns.
@@ -52,6 +53,7 @@ function service(overrides: Record<string, unknown> = {}): Record<string, unknow
     providerUsername: 'nx-7f3a91',
     providerUserId: '4821',
     hasSubscription: true,
+    isTrial: false,
     expiresAt: '2026-12-01T00:00:00.000Z',
     trafficLimitBytes: '53687091200',
     trafficUsedBytes: '1073741824',
@@ -172,6 +174,26 @@ describe('the service list', () => {
     const table = screen.getByRole('table');
     expect(within(table).getByText('فعال')).toBeInTheDocument();
     expect(within(table).getByText('به مشتری رسید')).toBeInTheDocument();
+  });
+
+  it('marks a free trial as the database marks it, and nothing else (R1)', async () => {
+    stubApi(
+      list([
+        service(),
+        service({
+          id: '019250cd-cdef-7012-8345-6789abcdef99',
+          providerUsername: 'nx-trial',
+          isTrial: true,
+        }),
+      ]),
+    );
+    renderPage(<ServicesPage route={LIST_ROUTE} denied={false} />);
+    await screen.findByText('nx-trial');
+    const table = screen.getByRole('table');
+    // Exactly one badge, on the trial's row.
+    expect(within(table).getAllByText(t('web.service_trial_badge'))).toHaveLength(1);
+    const row = within(table).getByText('nx-trial').closest('tr') as HTMLElement;
+    expect(within(row).getByText(t('web.service_trial_badge'))).toBeInTheDocument();
   });
 
   /**

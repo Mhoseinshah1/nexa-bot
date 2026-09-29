@@ -1630,7 +1630,7 @@ in the RickPanel audits). None is resolved by WP15; each needs the named measure
 | `OQ-RP-04`                  | How long does RickPanel node propagation take?                                                     | Timed reads after a create. WP15 G3 (code-side closed): two absences ≈90 s apart before a re-create. Whether that outlasts real propagation is unmeasured.    |
 | `OQ-RP-05`                  | After an UNKNOWN create, can a found account be proved to be ours?                                 | **Code-side closed (WP15 G7):** only a create answered 2xx (`create_accepted_at`) or SUCCEEDED is provenance; 409/duplicate/pre-existing is never adopted.    |
 | `OQ-RP-06`                  | What does RickPanel answer a create with no `proxies`?                                             | A captured status on a disposable user.                                                                                                                       |
-| `OQ-RP-07`                  | After `revoke_sub`, does the subscription host refuse the OLD link?                                | Fetch both links from a reachable sub host after a rotation. Until then nothing may claim it — `tests/unit/rotation-wording.test.ts` enforces that for copy.  |
+| `OQ-RP-07`                  | After `revoke_sub`, does the subscription host refuse the OLD link?                                | Fetch both links from a sub host after a rotation. R3: only `bot.service.link_rotated` (the owner's decision) says the old link stops.                        |
 | `OQ-RP-08`                  | Customer rotation policy.                                                                          | Resolved as `OQ-WP6-04` (`docs/wp6c-audit.md`).                                                                                                               |
 | `OQ-RP-09`                  | A reset after the request was written is UNREACHABLE (safe to replay). Safe for a create?          | **Code-side closed (WP15 G6):** a write lost after sending is `TIMEOUT` + `CONNECTION_LOST_AFTER_SEND`, never replayed. Real-panel resets not re-measured.    |
 | `OQ-WP15-RESET-USAGE`       | What does `POST /api/user/{name}/reset` (RickPanel) or Marzban's reset reset, with NON-ZERO usage? | `docs/rickpanel-rotate-audit.md` lines 158-162: rotate traffic through a disposable user, call it, read back every field. `RESET_USAGE` stays undeclared.     |
@@ -2389,7 +2389,7 @@ on its meaning.
 
 ## OQ-WP13-02 — does a BotFather token revocation keep the bot's webhook registration?
 
-WP13's token replacement stores a new token for the same bot and touches neither the
+WP13's token replacement stored a new token for the same bot and touched neither the
 webhook nor the command menu. Whether Telegram keeps a bot's webhook across a token
 revocation is not established in this repository, and is not guessed. The live check
 reads the registration with the new token and reports what Telegram holds; if the
@@ -2397,6 +2397,15 @@ registration is gone, `botctl telegram register` restores it.
 
 **Trigger to resolve:** the first real token replacement on a running installation, whose
 live check answers it.
+
+**R4 (v0.3.5 real test):** the owner's staging bot stayed silent after a replacement, which
+is consistent with Telegram dropping the registration and does not establish it — the
+evidence was the symptom, not a `getWebhookInfo` read. It is no longer decisive either way:
+a replacement now registers the webhook with the new token and reads it back before storing
+it, and a `botctl telegram register` rerun asks Telegram rather than trusting its own
+marker (`docs/wp13-bots-management-audit.md` §7). The question stays open as a fact about
+Telegram; the fake in `tests/support/fake-telegram-bot-api.ts` makes every caller of its
+`revoke` state the answer rather than assume one.
 
 ## OQ-WP14-01 — should the server require an acknowledgement before suspending a reseller who owes?
 

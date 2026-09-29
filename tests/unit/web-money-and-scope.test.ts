@@ -524,8 +524,11 @@ describe('the settings the owner revisions add', () => {
      * `ops.notifications.min_severity` came BACK onto it in WP-A4, as a retirement rather
      * than a plan: the Telegram ops stream follows explicit event-to-topic routing now, so
      * nothing reads the threshold, and it stays declared only so a stored value parses.
+     *
+     * `trial.product_id` joined it in R1, for the same reason: a trial is configured per
+     * panel and issued from no product, so nothing reads the product id any more.
      */
-    expect(planned.sort()).toEqual(['ops.notifications.min_severity']);
+    expect(planned.sort()).toEqual(['ops.notifications.min_severity', 'trial.product_id']);
     for (const key of [
       'sales.currency',
       'wallet.topup.minimum',

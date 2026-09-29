@@ -193,7 +193,7 @@ export const WEB_FA = {
   'web.setting_wallet_low_balance_threshold_desc':
     'وقتی موجودی کیف پول مشتری از این مبلغ کمتر شود، یک بار به او هشدار داده می‌شود. صفر یعنی هشداری فرستاده نشود. باید به واحد پول فروشگاه باشد.',
   'web.setting_trial_product_id_desc':
-    'محصولی که سرویس آزمایشی بر اساس آن ساخته می‌شود. اگر محصولی انتخاب نشود، سرویس آزمایشی ارائه نمی‌شود.',
+    'دیگر استفاده نمی‌شود. سرویس تست اکنون مستقل از محصولات و روی هر پنل (صفحهٔ پنل، زبانهٔ «سرویس تست») تنظیم می‌شود؛ مقدار قبلی این تنظیم یک بار به تنظیمات همان پنل منتقل شده است.',
   'web.setting_trial_limit_per_customer_desc':
     'هر مشتری چند بار می‌تواند سرویس آزمایشی بگیرد. صفر یعنی سرویس آزمایشی به کسی داده نمی‌شود.',
   'web.setting_link_rotation_cooldown_hours_desc':
@@ -280,7 +280,7 @@ export const WEB_FA = {
     'یادآورهایی که در ساعات سکوت موعدشان می‌رسد حذف نمی‌شوند؛ تا پایان ساعات سکوت نگه داشته و سپس فرستاده می‌شوند، مگر اینکه دیگر معتبر نباشند. پیام‌های پرداخت، سفارش و پاسخ‌ها نگه داشته نمی‌شوند.',
   'web.feature_trials_title': 'سرویس آزمایشی رایگان',
   'web.feature_trials_summary':
-    'مشتریان می‌توانند یک سرویس آزمایشی رایگان دریافت کنند. برای کار کردن، محصول سرویس آزمایشی باید در تنظیمات انتخاب شده باشد.',
+    'مشتریان می‌توانند یک سرویس تست رایگان دریافت کنند. برای کار کردن، سرویس تست باید دست‌کم روی یک پنل (در صفحهٔ همان پنل، زبانهٔ «سرویس تست») روشن و تنظیم شده باشد.',
   'web.feature_customer_link_rotation_title': 'دریافت لینک جدید توسط مشتری',
   'web.feature_customer_link_rotation_summary':
     'مشتری می‌تواند از ربات برای سرویس فعال خود لینک اشتراک جدید بگیرد؛ فقط روی پنل‌هایی که این کار را پشتیبانی می‌کنند و با فاصلهٔ زمانی تعیین‌شده.',
@@ -733,10 +733,12 @@ export const WEB_FA = {
   'web.bot_no_change': 'ربات از قبل در همین وضعیت بود؛ چیزی تغییر نکرد.',
   'web.bot_token_label': 'توکن جدید همین ربات',
   'web.bot_token_hint':
-    'فقط توکن تازهٔ همین ربات از BotFather پذیرفته می‌شود و پیش از ذخیره با تلگرام بررسی می‌شود. توکن ربات دیگری هرگز جایگزین نمی‌شود. توکن فعلی هیچ‌جا نمایش داده نمی‌شود.',
+    'فقط توکن تازهٔ همین ربات از BotFather پذیرفته می‌شود. پیش از ذخیره، توکن با تلگرام بررسی، وب‌هوک همین نصب با آن ثبت و از تلگرام بازخوانی می‌شود؛ اگر هر مرحله ناموفق باشد، توکن ذخیره نمی‌شود. توکن ربات دیگری هرگز جایگزین نمی‌شود و توکن فعلی هیچ‌جا نمایش داده نمی‌شود.',
   'web.bot_token_submit': 'جایگزینی توکن',
-  'web.bot_token_done': 'توکن جایگزین شد. برای اطمینان از وب‌هوک، بررسی زنده را اجرا کنید.',
-  'web.bot_token_same': 'این همان توکن ذخیره‌شده است؛ چیزی تغییر نکرد.',
+  'web.bot_token_done':
+    'توکن جایگزین شد؛ وب‌هوک این نصب با توکن جدید ثبت و از تلگرام بازخوانی و تأیید شد.',
+  'web.bot_token_same':
+    'این همان توکن ذخیره‌شده است و تغییری نکرد؛ وب‌هوک این نصب دوباره ثبت و از تلگرام بازخوانی و تأیید شد.',
   'web.bot_check': 'بررسی زنده با تلگرام',
   'web.bot_check_title': 'پاسخ تلگرام در',
   'web.bot_identity_identified': 'تلگرام توکن را پذیرفت.',
@@ -771,6 +773,57 @@ export const WEB_FA = {
     'تلگرام در دسترس نبود و چیزی تغییر نکرد. کمی بعد دوباره امتحان کنید.',
   'web.bot_error_telegram_api_invalid':
     'نشانی تنظیم‌شدهٔ API تلگرام پاسخی از تلگرام نداد. TELEGRAM_API_BASE_URL را بررسی کنید.',
+  // R4 — token replacement registers and verifies the webhook before storing the token.
+  'web.bot_error_webhook_route_unavailable':
+    'این نصب مسیر وب‌هوک تلگرام را ارائه نمی‌دهد (TELEGRAM_WEBHOOK_ENABLED یا TELEGRAM_WEBHOOK_SECRET)، پس وب‌هوکی که ثبت شود کار نمی‌کند. چیزی به تلگرام فرستاده نشد و توکن ذخیره نشد.',
+  'web.bot_error_webhook_origin_unknown':
+    'این نصب هنوز نشانی عمومی‌ای را که پیام‌های تلگرام را روی آن دریافت می‌کند ثبت نکرده است، پس نشانی وب‌هوک ساخته نمی‌شود. یک بار دستور botctl telegram register را روی سرور اجرا کنید و سپس توکن را جایگزین کنید. چیزی به تلگرام فرستاده نشد.',
+  'web.bot_error_replacement_in_progress':
+    'جایگزینی دیگری برای توکن همین ربات در جریان است. چند لحظه صبر کنید، وضعیت ربات را ببینید و در صورت نیاز دوباره امتحان کنید. این درخواست چیزی به تلگرام نفرستاد.',
+  'web.bot_error_webhook_refused':
+    'تلگرام ثبت وب‌هوک این نصب را نپذیرفت، پس توکن ذخیره نشد و ربات همان‌طور که بود ماند. معمولاً دامنه برای تلگرام قابل دسترسی نیست یا گواهی https آن معتبر نیست.',
+  'web.bot_error_webhook_setup_failed':
+    'تلگرام ثبت وب‌هوک را تأیید نکرد (پاسخی نرسید)، پس توکن ذخیره نشد. کمی بعد دوباره امتحان کنید.',
+  'web.bot_error_webhook_verification_failed':
+    'تلگرام ثبت وب‌هوک را پذیرفت، اما بازخوانی آن دقیقاً نشانی این نصب را نشان نداد، پس توکن ذخیره نشد.',
+  'web.bot_error_token_activation_failed':
+    'وب‌هوک ثبت و تأیید شد، اما ذخیرهٔ توکن جدید کامل نشد، پس توکن ذخیره نشد. همان توکن را دوباره ثبت کنید.',
+  'web.bot_compensation_not_needed':
+    'در تلگرام چیزی برای برگرداندن نبود؛ وب‌هوک ربات همان است که پیش از این تلاش بود.',
+  'web.bot_compensation_restored':
+    'وب‌هوکی که این تلاش ثبت کرده بود برداشته شد و ربات در تلگرام به حالت قبل (بدون وب‌هوک) برگشت؛ تلگرام پیام‌ها را تا تلاش بعدی نگه می‌دارد.',
+  'web.bot_compensation_held':
+    'وب‌هوک قبلی ربات به نشانی دیگری بود و تلگرام راز آن را فاش نمی‌کند، پس قابل برگرداندن نیست؛ وب‌هوک برداشته شد تا تلگرام پیام‌ها را تا تلاش بعدی نگه دارد.',
+  'web.bot_compensation_superseded':
+    'در همین فاصله کس دیگری وب‌هوک ربات را تغییر داده است؛ به آن دست زده نشد.',
+  'web.bot_compensation_failed':
+    'برگرداندن وضعیت تلگرام ممکن نشد یا تأیید نشد. ربات را با «بررسی زنده» بررسی کنید و توکن را دوباره جایگزین کنید؛ یک رویداد عملیاتی هم ثبت شد.',
+  'web.bot_failure_expected': 'نشانی مورد انتظار این نصب:',
+  'web.bot_failure_actual': 'نشانی‌ای که تلگرام گزارش داد:',
+  'web.bot_failure_telegram_reason': 'دلیل تلگرام:',
+  'web.bot_check_expected': 'نشانی وب‌هوک این نصب برای این ربات:',
+  'web.bot_check_expected_unknown': 'نامعلوم؛ این نصب هنوز نشانی عمومی خود را ثبت نکرده است',
+  'web.bot_check_url_exact': 'دقیقاً همان نشانی این نصب است',
+  'web.bot_check_url_not_exact': 'با نشانی این نصب یکی نیست',
+  'web.bot_verdict_ready': 'ربات آمادهٔ دریافت پیام است.',
+  'web.bot_verdict_not_ready': 'ربات هنوز آمادهٔ دریافت پیام نیست:',
+  'web.bot_problem_route_disabled':
+    'مسیر وب‌هوک در این نصب خاموش است یا راز وب‌هوک تنظیم نشده است.',
+  'web.bot_problem_tenant_inactive': 'این مجموعه پذیرش کار را متوقف کرده است.',
+  'web.bot_problem_bot_not_active': 'ربات فعال نیست؛ برای دریافت پیام آن را راه‌اندازی کنید.',
+  'web.bot_problem_token_not_accepted': 'تلگرام توکن را نپذیرفت.',
+  'web.bot_problem_different_bot': 'تلگرام این توکن را متعلق به ربات دیگری می‌داند.',
+  'web.bot_problem_webhook_unreadable': 'وضعیت وب‌هوک از تلگرام خوانده نشد.',
+  'web.bot_problem_webhook_expected_unknown':
+    'نشانی وب‌هوک این نصب معلوم نیست؛ یک بار دستور botctl telegram register را اجرا کنید.',
+  'web.bot_problem_webhook_not_set':
+    'تلگرام هیچ وب‌هوکی برای این ربات ندارد و پیام‌ها را نگه می‌دارد؛ توکن فعلی را دوباره در فرم جایگزینی ثبت کنید.',
+  'web.bot_problem_webhook_elsewhere':
+    'تلگرام پیام‌ها را به نشانی دیگری می‌فرستد؛ توکن فعلی را دوباره در فرم جایگزینی ثبت کنید.',
+  'web.bot_problem_webhook_updates_narrowed':
+    'وب‌هوک فقط بخشی از انواع پیام را می‌پذیرد (مثلاً دکمه‌ها نمی‌رسند)؛ توکن فعلی را دوباره در فرم جایگزینی ثبت کنید.',
+  'web.bot_problem_webhook_secret_not_current':
+    'معلوم نیست وب‌هوک با راز فعلی این نصب ثبت شده باشد؛ توکن فعلی را دوباره در فرم جایگزینی ثبت کنید.',
 
   // --- Panels --------------------------------------------------------------
   'web.panel_new': 'افزودن پنل',
@@ -2570,7 +2623,7 @@ export const WEB_FA = {
   'web.reminders_templates_denied': 'برای دیدن و ویرایش متن پیام‌ها به دسترسی «متن‌ها» نیاز است.',
   // WP6-A: the trial's flag, its two settings, and the product picker's two options.
   'web.flag_trials': 'سرویس آزمایشی',
-  'web.setting_trial_product_id': 'محصول سرویس آزمایشی',
+  'web.setting_trial_product_id': 'محصول سرویس آزمایشی (بازنشسته)',
   'web.setting_trial_limit_per_customer': 'تعداد مجاز سرویس آزمایشی برای هر مشتری',
   'web.flag_customer_link_rotation': 'دریافت لینک اشتراک جدید توسط مشتری',
   'web.setting_link_rotation_cooldown_hours': 'فاصلهٔ مجاز بین دو درخواست لینک جدید',
@@ -2627,6 +2680,80 @@ export const WEB_FA = {
   'web.trials_history_actor': 'انجام‌دهنده',
   'web.trials_history_reason': 'دلیل',
   'web.trials_history_time': 'زمان',
+
+  // R1: the free trial per panel — its tab on the panel page and the Trials page overview.
+  'web.panel_tab_trial': 'سرویس تست',
+  'web.service_trial_badge': 'سرویس تست',
+  'web.panel_trial_title': 'سرویس تست این پنل',
+  'web.panel_trial_hint':
+    'سرویس تست مستقل از محصولات فروشی است و فقط از همین‌جا تنظیم می‌شود. وقتی به مشتری پیشنهاد می‌شود که قابلیت «سرویس آزمایشی» روشن باشد، این پنل بتواند سرویس جدید بپذیرد و ساخت نام کاربری خودکار در آن مجاز باشد. تعداد دفعات مجاز برای هر مشتری در صفحهٔ تنظیمات است. تغییر این مقادیر روی سرویس‌های تستی که قبلاً داده شده‌اند اثری ندارد.',
+  'web.panel_trial_unconfigured': 'سرویس تست برای این پنل هنوز تنظیم نشده است.',
+  'web.panel_trial_enabled': 'ارائهٔ سرویس تست روی این پنل',
+  'web.panel_trial_traffic': 'حجم سرویس تست',
+  'web.panel_trial_traffic_hint':
+    'مثلاً ۱۰۰ مگابایت یا ۱ گیگابایت؛ بیشتر از صفر و حداکثر ۱۰۰ گیگابایت، با حداکثر دو رقم اعشار.',
+  'web.panel_trial_unit_label': 'واحد حجم',
+  'web.panel_trial_unit_gb': 'گیگابایت',
+  'web.panel_trial_unit_mb': 'مگابایت',
+  'web.panel_trial_hours': 'مدت سرویس تست',
+  'web.panel_trial_hours_hint': 'به ساعت، از ۱ تا ۷۲۰؛ مثلاً ۷۲ ساعت برای سه روز.',
+  'web.panel_trial_hours_unit': 'ساعت',
+  'web.panel_trial_label': 'نام نمایشی برای مشتری (اختیاری)',
+  'web.panel_trial_label_hint':
+    'وقتی چند پنل سرویس تست دارند، روی دکمهٔ انتخاب سرور نشان داده می‌شود. خالی یعنی نام همین پنل.',
+  'web.panel_trial_invalid':
+    'حجم باید بیشتر از صفر و حداکثر ۱۰۰ گیگابایت و مدت باید عددی صحیح از ۱ تا ۷۲۰ ساعت باشد.',
+  'web.panel_trial_updated_at': 'آخرین تغییر',
+  'web.panel_trial_stale':
+    'تنظیمات سرویس تست این پنل در این فاصله تغییر کرده است. مقادیر تازه را بررسی و دوباره ذخیره کنید.',
+  'web.trials_panels_title': 'پنل‌های دارای سرویس تست',
+  'web.trials_panels_hint':
+    'سرویس تست روی هر پنل جداگانه و از صفحهٔ همان پنل (زبانهٔ «سرویس تست») تنظیم می‌شود. «در حال ارائه» یعنی مشتری همین حالا می‌تواند آن را دریافت کند.',
+  'web.trials_panels_empty': 'هنوز روی هیچ پنلی سرویس تست تنظیم نشده است.',
+  'web.trials_panels_denied': 'برای دیدن این فهرست به دسترسی panels.view نیاز است.',
+  'web.trials_panel': 'پنل',
+  'web.trials_panel_traffic': 'حجم',
+  'web.trials_panel_hours': 'مدت (ساعت)',
+  'web.trials_panel_state': 'وضعیت',
+  'web.trials_panel_offered': 'در حال ارائه',
+  'web.trials_panel_not_offered': 'روشن، ولی فعلاً ارائه نمی‌شود',
+  'web.trials_panel_disabled': 'خاموش',
+
+  // R1: «دکمه‌های ربات» — the customer main menu's order, switches and labels.
+  'web.nav_bot_buttons': 'دکمه‌های ربات',
+  'web.bot_buttons_title': 'دکمه‌های ربات',
+  'web.bot_buttons_intro':
+    'دکمه‌های منوی اصلی ربات، یعنی کیبوردی که زیر چت مشتری نمایش داده می‌شود: ترتیب، نمایش و متن هر دکمه. دکمه‌ها دوتا دوتا کنار هم چیده می‌شوند و دکمه‌های طولانی در یک ردیف جدا.',
+  'web.bot_buttons_order_title': 'ترتیب و نمایش',
+  'web.bot_buttons_order_hint':
+    'ترتیب را با دکمه‌های بالا و پایین تغییر دهید و در پایان ذخیره کنید. دست‌کم یکی از دکمه‌هایی که به قابلیتی وابسته نیستند باید روشن بماند.',
+  'web.bot_buttons_position': 'ترتیب',
+  'web.bot_buttons_button': 'دکمه',
+  'web.bot_buttons_shown': 'نمایش',
+  'web.bot_buttons_move_up': 'بالا',
+  'web.bot_buttons_move_down': 'پایین',
+  'web.bot_buttons_needs_trials': 'فقط وقتی قابلیت «سرویس آزمایشی» روشن باشد دیده می‌شود.',
+  'web.bot_buttons_needs_referrals': 'فقط وقتی قابلیت «معرفی دوستان» روشن باشد دیده می‌شود.',
+  'web.bot_buttons_feature_off': 'قابلیت خاموش است',
+  'web.bot_buttons_one_required':
+    'دست‌کم یکی از دکمه‌هایی که به قابلیتی وابسته نیستند باید روشن بماند.',
+  'web.bot_buttons_unsaved': 'تغییرات هنوز ذخیره نشده‌اند.',
+  'web.bot_buttons_restore_default': 'ترتیب پیش‌فرض',
+  'web.bot_buttons_preview_title': 'پیش‌نمایش کیبورد',
+  'web.bot_buttons_preview_hint':
+    'کیبورد با همین ترتیب و با قابلیت‌هایی که الان روشن‌اند؛ پنل مدیریت برای مدیران زیر آن اضافه می‌شود.',
+  'web.bot_buttons_preview_empty': 'با این تنظیمات هیچ دکمه‌ای نمایش داده نمی‌شود.',
+  'web.bot_buttons_labels_title': 'متن دکمه‌ها',
+  'web.bot_buttons_labels_hint':
+    'متن هر دکمه همان چیزی است که مشتری می‌بیند و ربات با همان متن دکمه را می‌شناسد، پس متن دو دکمه نباید یکسان باشد. پس از تغییر متن، کیبورد جدید با پیام بعدی ربات به مشتری می‌رسد و کیبورد قبلی هم همچنان کار می‌کند.',
+  'web.bot_buttons_labels_denied':
+    'برای دیدن و ویرایش متن دکمه‌ها به دسترسی templates.view نیاز است.',
+  'web.bot_buttons_label_duplicate': 'متن این دکمه با دکمهٔ دیگری یکسان است.',
+  'web.bot_buttons_stored_invalid':
+    'مقدار ذخیره‌شده خوانا نبود؛ ترتیب پیش‌فرض در حال اجراست تا دوباره ذخیره شود.',
+  'web.setting_bot_main_menu': 'دکمه‌های منوی اصلی ربات',
+  'web.setting_bot_main_menu_desc':
+    'ترتیب و نمایش دکمه‌های منوی اصلی ربات؛ در صفحهٔ «دکمه‌های ربات» ویرایش می‌شود.',
 
   /*
    * The three states a panel read has to say separately, and the eight reasons.

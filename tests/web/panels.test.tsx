@@ -1080,6 +1080,32 @@ describe('the panel detail', () => {
     expect(screen.queryByRole('button', { name: 'تست اتصال' })).toBeNull();
   });
 
+  it('shows an archived panel’s trial read-only, since the server refuses the write (Codex, PR #111)', async () => {
+    stubApi([
+      ...detail({ status: 'ARCHIVED' }),
+      {
+        url: `/panels/${PANEL_ID}/trial`,
+        body: {
+          trial: {
+            panelId: PANEL_ID,
+            enabled: true,
+            trafficBytes: '104857600',
+            durationHours: 72,
+            label: null,
+            revision: 1,
+            updatedAt: '2026-09-29T10:00:00.000Z',
+          },
+        },
+      },
+    ]);
+    renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+    fireEvent.click(screen.getByRole('tab', { name: t('web.panel_tab_trial') }));
+    const hours = (await screen.findByLabelText(t('web.panel_trial_hours'))) as HTMLInputElement;
+    expect(hours.disabled).toBe(true);
+    expect(screen.queryByRole('button', { name: t('web.save') })).toBeNull();
+  });
+
   it('does not offer a connection test on an archived panel', async () => {
     stubApi(detail({ status: 'ARCHIVED' }));
     renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
@@ -1368,6 +1394,7 @@ describe('the panel detail', () => {
     providerUsername: 'nx-7f3a91',
     providerUserId: '4821',
     hasSubscription: true,
+    isTrial: false,
     expiresAt: '2026-12-01T00:00:00.000Z',
     trafficLimitBytes: '53687091200',
     trafficUsedBytes: '1073741824',

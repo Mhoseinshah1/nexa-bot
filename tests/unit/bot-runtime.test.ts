@@ -51,6 +51,7 @@ import {
   GATEWAY_CHECK_CALLBACK_PREFIX,
   GATEWAY_PAY_CALLBACK_PREFIX,
   intentOf,
+  startPayloadOf,
   MANUAL_PAY_CALLBACK_PREFIX,
   ORDER_CALLBACK_PREFIX,
   privateChatIdOf,
@@ -152,6 +153,48 @@ describe('a Telegram turn, decided before any I/O', () => {
     expect(intentOf({ message: { text: CATALOGUE_FA['bot.menu.apps'] } }, menu)).toEqual(
       intentOf({ message: { text: '/apps' } }),
     );
+    // R1: the trial and the referral program, each the same path as its (unregistered)
+    // command and as the callback that already reached it.
+    expect(intentOf({ message: { text: CATALOGUE_FA['bot.menu.trial'] } }, menu)).toEqual({
+      intent: 'TRIAL_CLAIM',
+      targetId: null,
+      callbackQueryId: null,
+    });
+    expect(intentOf({ message: { text: '/trial' } }).intent).toBe('TRIAL_CLAIM');
+    expect(intentOf({ message: { text: CATALOGUE_FA['bot.menu.referral'] } }, menu)).toEqual({
+      intent: 'REFERRAL_INVITE',
+      targetId: null,
+      callbackQueryId: null,
+    });
+    expect(intentOf({ message: { text: '/referral' } }).intent).toBe('REFERRAL_INVITE');
+  });
+
+  it('never lets a menu label shadow a slash command (Codex, PR #111)', () => {
+    // A tenant labelled a button `/start`: the command, and its referral deep link, still
+    // mean /start — not whatever that button stands for.
+    const menu = new Map([
+      ['/start', '/wallet'],
+      ['/start ref-ABCDEFGH', '/wallet'],
+    ]);
+    expect(intentOf({ message: { text: '/start' } }, menu).intent).toBe('START');
+    expect(intentOf({ message: { text: '/start ref-ABCDEFGH' } }, menu).intent).toBe('START');
+    expect(startPayloadOf({ message: { text: '/start ref-ABCDEFGH' } })).toBe('ref-ABCDEFGH');
+  });
+
+  it('reads a trial panel choice, and VALIDATES the panel id it carries', () => {
+    const panel = '01900000-0000-7000-8000-0000000000b1';
+    expect(intentOf({ callback_query: { id: 'q1', data: `tq:${panel}` } })).toEqual({
+      intent: 'TRIAL_PANEL',
+      targetId: panel,
+      callbackQueryId: 'q1',
+    });
+    expect(intentOf({ callback_query: { id: 'q2', data: 'tq:not-a-uuid' } }).intent).toBe(
+      'UNSUPPORTED',
+    );
+    // `tp:` stays the top-up route's: the two prefixes do not collide.
+    expect(intentOf({ callback_query: { id: 'q3', data: `tp:${panel}` } }).intent).not.toBe(
+      'TRIAL_PANEL',
+    );
   });
 
   it('answers a menu label it was not given as ordinary text', () => {
@@ -206,6 +249,8 @@ describe('a Telegram turn, decided before any I/O', () => {
     expect(MAIN_MENU_ROWS.map((row) => row.map((button) => button.command))).toEqual([
       ['catalog', 'services'],
       ['wallet', 'help'],
+      // R1: the trial and the referral program, each drawn only while its flag is on.
+      ['trial', 'referral'],
       // WP-A10: «📱 دانلود برنامه و آموزش اتصال», which `/apps` answers.
       ['apps'],
       // WP-A7: the ticket desk, on a row of its own.
@@ -216,8 +261,20 @@ describe('a Telegram turn, decided before any I/O', () => {
       'bot.menu.services',
       'bot.menu.wallet',
       'bot.menu.help',
+      'bot.menu.trial',
+      'bot.menu.referral',
       'bot.menu.apps',
       'bot.menu.tickets',
+    ]);
+    // The two feature-gated buttons name their flag; every other button is always drawn.
+    expect(
+      MAIN_MENU_BUTTONS.filter((button) => button.feature !== null).map((button) => [
+        button.id,
+        button.feature,
+      ]),
+    ).toEqual([
+      ['trial', 'trials'],
+      ['referral', 'referrals'],
     ]);
     // And every label renders. A key with no catalogue entry is a blank button.
     for (const button of MAIN_MENU_BUTTONS) {
@@ -796,6 +853,8 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.service.add_traffic_button',
       'bot.service.addon_choice',
       'bot.service.addon_option',
+      // R3 item 9: a button label; it puts the service card back in the same message.
+      'bot.service.back_to_card_button',
       'bot.service.back_to_list_button',
       'bot.service.back_to_menu_button',
       'bot.service.capability_unsupported',
@@ -839,6 +898,11 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.service.prev_page_button',
       'bot.service.provisioning',
       'bot.service.refresh_button',
+      /*
+       * R3 item 7: the notice on the refresh button when the panel could not be read. It
+       * claims nothing happened and asks only for a later retry of a READ.
+       */
+      'bot.service.refresh_failed',
       'bot.service.refresh_requested',
       'bot.service.refresh_too_soon',
       'bot.service.refund_request_ask',
@@ -939,7 +1003,10 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.ticket.view',
       'bot.ticket.view_button',
       'bot.trial.button',
+      // R1: the panel choice, when more than one panel offers a trial.
+      'bot.trial.choose_panel',
       'bot.trial.issued',
+      'bot.trial.panel_button',
       'bot.trial.unavailable',
       'bot.tutorial.android',
       'bot.tutorial.android_button',

@@ -179,6 +179,8 @@ describe('Package E — RickPanel subscription files', () => {
     await ctx.container.provisionerLoop.tick();
     const service = await services.findByOrderId(tenantA, confirmed.id);
     if (service === null || service.state !== 'ACTIVE') throw new Error('not provisioned');
+    // R3: the delivery lane has already sent the files once; these tests start a minute later.
+    panel.forgetFileReads();
     sent = [];
     return service;
   }
@@ -229,11 +231,32 @@ describe('Package E — RickPanel subscription files', () => {
     expect(docs[0]!.raw).toContain(`filename="${service.providerUsername}.json"`);
     expect(docs[0]!.raw).toContain('Content-Type: application/json');
     expect(docs[0]!.raw).toContain(JSON.stringify({ outbounds: [{ token: user.subToken }] }));
-    expect(docs[0]!.raw).toContain(`${service.providerUsername} — JSON`);
+    // R3 item 8: this installation's caption — the username — never the panel's.
+    expect(docs[0]!.raw).toContain(`👤 نام کاربری: ${service.providerUsername}`);
+    expect(docs[1]!.raw).toContain(`👤 نام کاربری: ${service.providerUsername}`);
+    expect(docs[0]!.raw).not.toContain(`${service.providerUsername} — JSON`);
     expect(docs[0]!.raw).toContain(`name="chat_id"\r\n\r\n${CUSTOMER_TG}`);
     // A `charset` parameter is dropped to the vetted type, never passed through.
     expect(docs[1]!.raw).toContain('Content-Type: text/plain\r\n');
     expect(panel.filesCalls()).toBe(1);
+  });
+
+  it("never passes the panel's caption on: no Limit, no Expires, no raw <code>", async () => {
+    const service = await deliveredService('caption');
+    panel.filesBody = JSON.stringify([
+      {
+        filename: 'config.json',
+        media_type: 'application/json',
+        content_b64: b64('{"a":1}'),
+        caption: `<code>${service.providerUsername}</code>\nLimit: 50 GB\nExpires: 2026-10-29`,
+      },
+    ]);
+    expect(await send(service.id)).toEqual({ outcome: 'SENT', sent: 1, failed: 0 });
+    const caption = /name="caption"\r\n\r\n([^\r]*)\r\n/u.exec(uploads()[0]!.raw)?.[1];
+    expect(caption).toBe(`👤 نام کاربری: ${service.providerUsername}`);
+    for (const forbidden of ['Limit', 'Expires', '<code>', '</code>']) {
+      expect(uploads()[0]!.raw).not.toContain(forbidden);
+    }
   });
 
   it('sends the usable formats and counts the one the panel failed to build', async () => {

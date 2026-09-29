@@ -7,6 +7,7 @@ import {
   inArray,
   isNotNull,
   isNull,
+  lt,
   lte,
   or,
   sql,
@@ -78,6 +79,7 @@ function toRecord(row: Row): ServiceRecord {
     orderId: row.orderId as OrderId,
     panelId: row.panelId as PanelId,
     productId: row.productId as ProductId | null,
+    isTrial: row.isTrial,
     state: row.state as ServiceState,
     providerUsername: row.providerUsername,
     subscriptionRef: row.subscriptionRef,
@@ -1020,6 +1022,53 @@ export class DrizzleServiceRepository implements ServiceRepository {
       )
       .returning({ id: services.id });
     return rows.length === 1;
+  }
+
+  /** R3 item 7: `UsageRefreshReservations.reserveUsageRefresh`. A conditional UPDATE. */
+  async reserveUsageRefresh(
+    scope: TenantContext,
+    id: string,
+    at: { readonly now: Date; readonly syncedBefore: Date; readonly inFlightBefore: Date },
+    tx: TransactionScope,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .update(services)
+      .set({ usageRefreshStartedAt: at.now })
+      .where(
+        and(
+          eq(services.tenantId, tenantId),
+          eq(services.id, id),
+          eq(services.state, 'ACTIVE'),
+          or(
+            isNull(services.usageRefreshStartedAt),
+            lt(services.usageRefreshStartedAt, at.inFlightBefore),
+          ),
+          or(isNull(services.usageSyncedAt), lte(services.usageSyncedAt, at.syncedBefore)),
+        ),
+      )
+      .returning({ id: services.id });
+    return rows.length === 1;
+  }
+
+  /** R3 item 7: clears the reservation that started at `startedAt`, and no later one. */
+  async endUsageRefresh(
+    scope: TenantContext,
+    id: string,
+    startedAt: Date,
+    tx: TransactionScope,
+  ): Promise<void> {
+    const tenantId = requireTenantId(scope);
+    await this.exec(tx)
+      .update(services)
+      .set({ usageRefreshStartedAt: null })
+      .where(
+        and(
+          eq(services.tenantId, tenantId),
+          eq(services.id, id),
+          eq(services.usageRefreshStartedAt, startedAt),
+        ),
+      );
   }
 
   async recordUsage(

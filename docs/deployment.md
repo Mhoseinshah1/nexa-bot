@@ -1370,6 +1370,56 @@ While the release before it runs:
 
 Nothing needs doing before rolling back past HF-A9.
 
+### What a rollback changes back: the service card and connection files (R3)
+
+R3's migration `0141_r3_operation_card_messages` adds one table, `operation_card_messages`
+(the chat and message a customer's disable or enable was tapped from, and a 429's wait),
+and one nullable column, `services.usage_refresh_started_at` (the refresh button's
+reservation). The release before it reads neither: a reservation left set by a rollback
+mid-read is taken over as dead after three panel timeouts. While that release runs:
+
+- **A disable or enable planned by R3 and performed by the old release** is answered the
+  old way — the lane's «درخواست شما با موفقیت روی سرور اعمال شد» — and the card is not
+  edited. Its row stays unanswered; nothing reads it until the roll-forward, whose sweep
+  may then edit that card to the state it is in by then (the card shows the truth either
+  way).
+- **The refresh button queues a `SYNC_USAGE` again** and answers «request registered»,
+  and link changes and disables send their old intermediate messages.
+- **A purchase's connection files are no longer sent automatically**, and a link change
+  is announced with the purchase card again. The manual «📁 دریافت فایل‌های اتصال» still
+  works, with the panel's own caption.
+
+Nothing needs doing before rolling back past R3.
+
+### What a rollback changes: per-panel trials and the bot's buttons (R1)
+
+R1 configures the free trial per panel (`panel_trial_configs`) and issues it from no
+product; it marks trial services `is_trial`; and it lets an operator arrange and relabel
+the main-menu keyboard on «دکمه‌های ربات» (`bot.main_menu` and the `bot.menu.*` texts).
+Migration `0142_r1_trial_per_panel_and_main_menu` only adds: a table, two nullable columns, a widened CHECK, a
+`trial_grants.product_id` that may be null, and trigger bodies that accept everything
+the previous release writes. While the release before R1 runs:
+
+- **Its trial reads `trial.product_id` again.** The migration copied that product's panel,
+  traffic and duration onto the panel's trial once and left the setting stored, so a
+  tenant that had a trial product is offered it again from the product, as before R1; a
+  tenant whose trial was set up only on a panel is offered none. Nothing is lost: the
+  per-panel rows come back into force with the roll-forward.
+- **A trial issued by R1 and not yet provisioned** is provisioned from its day count —
+  its hours rounded UP to whole days — because the old provisioner does not know
+  `line_duration_hours`. A 72-hour trial is exactly 3 days; a 12-hour one gets a day.
+- **Services are still marked**: the trigger sets `is_trial` from the creating order on
+  every insert, the old release's included.
+- **The keyboard reverts to the shared default of that release** — its six buttons, in
+  their fixed order and labels. The arrangement and the relabelled `bot.menu.*` texts are
+  kept and come back with the roll-forward. A customer tapping, on a keyboard R1 drew, a
+  relabelled button or the trial or referral button (which that release does not have) is
+  answered as unknown text until then; the next reply redraws the old keyboard.
+- **The panel trial tab and «دکمه‌های ربات» are gone from the old Web Admin**; the
+  configuration they wrote is kept.
+
+Nothing needs doing before rolling back past R1.
+
 ### How far back you can roll
 
 **One release**, safely. Migrations are expand-only within a release

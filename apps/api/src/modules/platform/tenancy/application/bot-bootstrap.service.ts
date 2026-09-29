@@ -21,9 +21,12 @@ import type {
   BotBootstrapTelegram,
   BotBootstrapView,
   BotInstanceRepository,
+  TokenReplacementClaims,
   WebhookRegistration,
 } from './ports.js';
 import { webhookSecretFingerprint } from './webhook-fingerprint.js';
+import { tokenReplacementLeaseMs } from '../domain/token-replacement-lease.js';
+import { allowedUpdatesNarrowed, telegramWebhookUrl } from '../domain/webhook-url.js';
 
 /** The identity `getMe` reported, once the probe outcome has been unwrapped. */
 interface BotIdentity {
@@ -98,7 +101,9 @@ export interface BotBootstrapResult {
 
 export interface BotBootstrapDeps {
   readonly uow: UnitOfWork<TransactionScope>;
-  readonly bots: BotBootstrapRepository & Pick<BotInstanceRepository, 'resolveToken'>;
+  readonly bots: BotBootstrapRepository &
+    Pick<BotInstanceRepository, 'resolveToken'> &
+    TokenReplacementClaims;
   readonly scopeActivity: ScopeActivityReader;
   readonly audit: AuditWriter;
   readonly clock: Clock;
@@ -127,6 +132,11 @@ export interface BotBootstrapDeps {
    * the route existing is part of the answer.
    */
   readonly webhookEnabled: () => boolean;
+  /**
+   * R4 — the Telegram call timeout the gateway was built with, from which the lease of the
+   * token-replacement claim this registration takes is derived.
+   */
+  readonly telegramCallTimeoutMs: number;
 }
 
 /**
@@ -385,7 +395,11 @@ export class BotBootstrapService {
      * RUNNING installation — updates belonging to real customers, thrown away by
      * an installer somebody ran to fix something unrelated.
      */
-    if (!ensured.createdNow && this.registrationIsCurrent(view, url)) {
+    if (
+      !ensured.createdNow &&
+      this.registrationIsCurrent(view, url) &&
+      (await this.telegramStillHolds(token, url))
+    ) {
       /*
        * The menu is reconciled even here, and THIS is `OQ-4H-02`.
        *
@@ -444,63 +458,83 @@ export class BotBootstrapService {
      * carries it rather than this comment implying it is closed.
      */
     const secretToken = this.requireWebhookSecret();
-    const registered = await this.deps.telegram.registerWebhook({
-      token,
-      url,
-      secretToken,
-      /*
-       * Queued updates are discarded on a CREATE and never on a reconcile.
-       *
-       * A fresh install has no customers, so whatever Telegram holds predates
-       * this installation entirely and belongs to whatever the token was used
-       * for before; replaying it would deliver somebody else's messages into a
-       * brand-new database. A RECONCILE is the opposite case — a domain change
-       * or a crash recovery on a RUNNING installation — and dropping the queue
-       * there throws away real customers' messages, with no count, no
-       * confirmation and no record. `docs/conventions.md` calls that shape out
-       * by name.
-       */
-      dropPendingUpdates: ensured.createdNow,
-    });
-    if (registered.outcome !== 'REGISTERED') {
-      /*
-       * Nothing is rolled back. ADR-0029 decision 4: the tenant, the owner, the
-       * validated token and the row are all correct and expensive to produce,
-       * and a DNS record that has not propagated is no reason to destroy them.
-       *
-       * The install still fails. `webhook_registered_at` stays NULL, `status`
-       * keeps answering `incomplete`, and the rerun resumes from the stored
-       * token without asking for it.
-       */
-      throw this.webhookFailure(registered);
-    }
+    /*
+     * R4 — the SAME claim a Web Admin token replacement takes, so `botctl telegram
+     * register` and a replacement cannot interleave their `setWebhook` calls and markers.
+     * The marker below is written only while this run still holds it; the claim is
+     * released whatever happens. A replacement in flight is refused with a remedy.
+     */
+    const claimId = await this.claimRegistration(scope, view.id);
+    try {
+      const registered = await this.deps.telegram.registerWebhook({
+        token,
+        url,
+        secretToken,
+        /*
+         * Queued updates are discarded on a CREATE and never on a reconcile.
+         *
+         * A fresh install has no customers, so whatever Telegram holds predates
+         * this installation entirely and belongs to whatever the token was used
+         * for before; replaying it would deliver somebody else's messages into a
+         * brand-new database. A RECONCILE is the opposite case — a domain change
+         * or a crash recovery on a RUNNING installation — and dropping the queue
+         * there throws away real customers' messages, with no count, no
+         * confirmation and no record. `docs/conventions.md` calls that shape out
+         * by name.
+         */
+        dropPendingUpdates: ensured.createdNow,
+        /*
+         * R4: Telegram's default update set, on a create and a reconcile alike. The Bot API
+         * KEEPS the previous `allowed_updates` when the field is omitted, so without this a
+         * rerun that `telegramStillHolds` sent here BECAUSE the list was narrowed would
+         * re-register and leave it narrowed — on every rerun. An empty list is the default
+         * set, so a fresh install registers exactly what it always did.
+         */
+        resetAllowedUpdates: true,
+      });
+      if (registered.outcome !== 'REGISTERED') {
+        /*
+         * Nothing is rolled back. ADR-0029 decision 4: the tenant, the owner, the
+         * validated token and the row are all correct and expensive to produce,
+         * and a DNS record that has not propagated is no reason to destroy them.
+         *
+         * The install still fails. `webhook_registered_at` stays NULL, `status`
+         * keeps answering `incomplete`, and the rerun resumes from the stored
+         * token without asking for it.
+         */
+        throw this.webhookFailure(registered);
+      }
 
-    const now = this.deps.clock.now();
-    const actor = this.systemActor();
-    await this.deps.uow.run(scope, async (tx) => {
-      await this.deps.bots.lockTenantForBotChange(scope, tx);
-      await this.requireActiveScope(scope, tx);
-      await this.deps.bots.markWebhookRegistered(
-        scope,
-        view.id,
-        { url, secretFingerprint: webhookSecretFingerprint(secretToken), now },
-        tx,
-      );
-      await this.deps.audit.record(
-        scope,
-        actor,
-        {
-          action: 'bot_instance.webhook_registered',
-          entityType: 'BotInstance',
-          entityId: view.id,
-          before: { webhookUrl: view.webhookUrl },
-          after: { webhookUrl: url },
-          reason: 'Installation bootstrap: Telegram webhook registration.',
-          result: 'SUCCESS',
-        },
-        tx,
-      );
-    });
+      const now = this.deps.clock.now();
+      const actor = this.systemActor();
+      await this.deps.uow.run(scope, async (tx) => {
+        await this.deps.bots.lockTenantForBotChange(scope, tx);
+        await this.requireActiveScope(scope, tx);
+        const marked = await this.deps.bots.markWebhookRegistered(
+          scope,
+          view.id,
+          { url, secretFingerprint: webhookSecretFingerprint(secretToken), now, claimId },
+          tx,
+        );
+        if (!marked) throw this.replacementInProgress();
+        await this.deps.audit.record(
+          scope,
+          actor,
+          {
+            action: 'bot_instance.webhook_registered',
+            entityType: 'BotInstance',
+            entityId: view.id,
+            before: { webhookUrl: view.webhookUrl },
+            after: { webhookUrl: url },
+            reason: 'Installation bootstrap: Telegram webhook registration.',
+            result: 'SUCCESS',
+          },
+          tx,
+        );
+      });
+    } finally {
+      await this.releaseRegistration(scope, view.id, claimId);
+    }
 
     await this.reconcileCommands(scope, ensured.view.id, view.commandsRevision, token);
 
@@ -646,6 +680,78 @@ export class BotBootstrapService {
    * by refusing `@nexa/i18n` to an application file. So the adapter renders, and
    * this compares two opaque strings.
    */
+  /**
+   * R4 — whether Telegram STILL delivers to `url`, asked rather than assumed.
+   *
+   * `registrationIsCurrent` reads this installation's own marker, and the marker cannot
+   * see a registration Telegram dropped on its side — a BotFather revocation is the
+   * suspected case (`OQ-WP13-02`), and the owner's staging bot went silent that way while
+   * this command answered "nothing to do". So a rerun that would report ALREADY_COMPLETE
+   * first reads the registration: only an answer that shows ANOTHER URL (none included),
+   * or a narrowed update set, sends the rerun on to re-register — with the queue kept,
+   * because this is a running installation.
+   *
+   * An answer that could not be OBTAINED changes nothing: `getMe` has just succeeded, and
+   * turning a flaky read into a re-registration on every rerun is what the early return
+   * exists to prevent. A REJECTED read is an answer, not a flake, and re-registers.
+   */
+  private async telegramStillHolds(token: string, url: string): Promise<boolean> {
+    const held = await this.deps.telegram.readWebhook(token);
+    // Only an UNREACHABLE read leaves the marker standing. A REJECTED one is Telegram
+    // refusing this token; the rerun goes on to register, which fails with the clear error.
+    if (held.outcome === 'UNREACHABLE') return true;
+    if (held.outcome === 'REJECTED') return false;
+    return held.url === url && !allowedUpdatesNarrowed(held.allowedUpdates);
+  }
+
+  /** Takes the bot's token-replacement claim for this registration, or refuses. */
+  private async claimRegistration(scope: TenantContext, id: BotInstanceId): Promise<string> {
+    const claimId = this.deps.ids.uuid();
+    const now = this.deps.clock.now();
+    const taken = await this.deps.uow.run(scope, async (tx) => {
+      // The bootstrap's order in every write: the tenant lock, then the activity check.
+      await this.deps.bots.lockTenantForBotChange(scope, tx);
+      await this.requireActiveScope(scope, tx);
+      return this.deps.bots.claimTokenReplacement(
+        scope,
+        id,
+        {
+          id: claimId,
+          now,
+          until: new Date(now.getTime() + tokenReplacementLeaseMs(this.deps.telegramCallTimeoutMs)),
+        },
+        tx,
+      );
+    });
+    if (!taken) throw this.replacementInProgress();
+    return claimId;
+  }
+
+  private async releaseRegistration(
+    scope: TenantContext,
+    id: BotInstanceId,
+    claimId: string,
+  ): Promise<void> {
+    try {
+      await this.deps.uow.run(scope, (tx) =>
+        this.deps.bots.releaseTokenReplacement(scope, id, claimId, tx),
+      );
+    } catch (error) {
+      // The lease lapses on its own; the registration's own outcome is what is reported.
+      void error;
+    }
+  }
+
+  private replacementInProgress(): NexaError {
+    return new NexaError({
+      kind: 'CONFLICT',
+      code: PLATFORM_ERROR_CODES.TELEGRAM_BOOTSTRAP_WEBHOOK_FAILED,
+      message:
+        'A token replacement for this bot is in progress in the Web Admin, so nothing was ' +
+        'registered. Wait for it to finish (a few minutes at most) and run this again.',
+    });
+  }
+
   private async reconcileCommands(
     scope: TenantContext,
     id: BotInstanceId,
@@ -983,7 +1089,9 @@ export class BotBootstrapService {
    * given" and "the URL this installation answers on" the same statement.
    */
   private webhookUrlFor(origin: string, botInstanceId: BotInstanceId): string {
-    return `${origin}/telegram/webhook/${botInstanceId}`;
+    // One composition, shared with the Web Admin's token replacement (R4), so the URL
+    // the installer registers and the URL a replacement re-registers cannot differ.
+    return telegramWebhookUrl(origin, botInstanceId);
   }
 
   private requireOrigin(publicBaseUrl: string): string {

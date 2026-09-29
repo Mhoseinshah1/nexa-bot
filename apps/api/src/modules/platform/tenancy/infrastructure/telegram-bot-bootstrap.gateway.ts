@@ -1,4 +1,5 @@
 import {
+  telegramDeleteWebhook,
   telegramGetMe,
   telegramGetWebhookInfo,
   telegramSetWebhook,
@@ -12,7 +13,11 @@ import type {
   BotIdentityProbe,
   WebhookRegistration,
 } from '../application/ports.js';
-import type { BotManagementTelegram, BotWebhookRead } from '../application/bot-management-ports.js';
+import type {
+  BotManagementTelegram,
+  BotWebhookRead,
+  BotWebhookRemoval,
+} from '../application/bot-management-ports.js';
 
 /**
  * The bootstrap's two Telegram calls, over the SHARED call core.
@@ -50,6 +55,7 @@ export class TelegramBotBootstrapGateway implements BotBootstrapTelegram, BotMan
           outcome: 'IDENTIFIED',
           botId: outcome.identity.botId,
           username: outcome.identity.username,
+          isBot: outcome.identity.isBot,
         };
       /*
        * PERMANENT splits, and the field that splits it was already here.
@@ -112,6 +118,7 @@ export class TelegramBotBootstrapGateway implements BotBootstrapTelegram, BotMan
     readonly url: string;
     readonly secretToken: string;
     readonly dropPendingUpdates: boolean;
+    readonly resetAllowedUpdates?: boolean;
   }): Promise<WebhookRegistration> {
     const outcome = await telegramSetWebhook({
       token: input.token,
@@ -120,6 +127,9 @@ export class TelegramBotBootstrapGateway implements BotBootstrapTelegram, BotMan
       url: input.url,
       secretToken: input.secretToken,
       dropPendingUpdates: input.dropPendingUpdates,
+      // An empty list is the Bot API's reset to its default set (R4); omitted, Telegram
+      // keeps whatever list the previous registration had.
+      ...(input.resetAllowedUpdates === true ? { allowedUpdates: [] } : {}),
     });
 
     switch (outcome.outcome) {
@@ -132,6 +142,30 @@ export class TelegramBotBootstrapGateway implements BotBootstrapTelegram, BotMan
         return { outcome: 'REFUSED', detail: outcome.errorMessage };
       default:
         return { outcome: 'UNREACHABLE', detail: outcome.errorMessage };
+    }
+  }
+
+  /**
+   * Remove the webhook, keeping whatever Telegram has queued (R4's compensation).
+   *
+   * PERMANENT is `REFUSED` and everything else `UNREACHABLE`, the split `registerWebhook`
+   * makes: an unanswered `deleteWebhook` may or may not have taken effect, and the caller
+   * reads the registration back rather than assuming either.
+   */
+  async removeWebhook(token: string): Promise<BotWebhookRemoval> {
+    const outcome = await telegramDeleteWebhook({
+      token,
+      apiBaseUrl: this.apiBaseUrl,
+      timeoutMs: this.timeoutMs,
+      dropPendingUpdates: false,
+    });
+    switch (outcome.outcome) {
+      case 'SUCCEEDED':
+        return { outcome: 'REMOVED' };
+      case 'FAILED_PERMANENT':
+        return { outcome: 'REFUSED' };
+      default:
+        return { outcome: 'UNREACHABLE' };
     }
   }
 

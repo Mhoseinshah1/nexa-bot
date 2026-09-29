@@ -54,6 +54,7 @@ import {
   REGISTRY_ROW_LABELS,
 } from './panel-advanced';
 import { messageFor } from './settings';
+import { PanelTrialTab } from './panel-trial';
 import { HEALTH_TONES } from './dashboard';
 /*
  * The product and service vocabularies, imported rather than restated.
@@ -457,7 +458,7 @@ export function PanelsPage({
 // Detail
 // ---------------------------------------------------------------------------
 
-type DetailTab = 'overview' | 'workload' | 'health' | 'credentials' | 'capabilities';
+type DetailTab = 'overview' | 'workload' | 'health' | 'credentials' | 'capabilities' | 'trial';
 
 /** The three credential kinds, once, so no list of them can drift from another. */
 type CredentialField = 'username' | 'password' | 'apiToken';
@@ -667,6 +668,8 @@ export function PanelDetailPage({
                 { id: 'health', label: t('web.panel_tab_health') },
                 { id: 'credentials', label: t('web.panel_tab_credentials') },
                 { id: 'capabilities', label: t('web.panel_tab_capabilities') },
+                // R1: the panel's free trial — independent of the catalogue.
+                { id: 'trial', label: t('web.panel_tab_trial') },
               ]}
             />
 
@@ -709,6 +712,10 @@ export function PanelDetailPage({
                   onDone={refresh}
                   submission={credentialSubmission}
                 />
+              )}
+              {tab === 'trial' && (
+                // Read-only on an ARCHIVED panel: the server refuses the write there.
+                <PanelTrialTab panelId={data.id} mayEdit={mayEdit && data.status !== 'ARCHIVED'} />
               )}
               {tab === 'capabilities' && (
                 <CapabilitiesTab

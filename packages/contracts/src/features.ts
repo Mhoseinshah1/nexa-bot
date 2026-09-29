@@ -213,17 +213,18 @@ export const FEATURE_FLAGS = [
     key: 'trials',
     description:
       'Offer customers a free trial service. Off by default, and turning it on is not ' +
-      'enough on its own: trial.product_id must name the product a trial is issued as. A ' +
-      'trial is provisioned exactly like a purchase \u2014 the same capacity slot, the same ' +
-      'panel eligibility, the same username policy \u2014 and costs the customer nothing: ' +
-      'no wallet entry, no payment. A trial whose service could not be created is given ' +
-      'back and does not count against trial.limit_per_customer.',
+      'enough on its own: at least one panel must have its trial enabled, with a traffic ' +
+      'amount and a number of hours (R1). A trial is issued from no product: it is ' +
+      'provisioned exactly like a purchase \u2014 the same capacity slot, the same panel ' +
+      'eligibility, the same username policy \u2014 and costs the customer nothing: no ' +
+      'wallet entry, no payment. A trial whose service could not be created is given back ' +
+      'and does not count against trial.limit_per_customer.',
     defaultEnabled: false,
     // TENANT_WIDE, like the reminder flags: turning it on offers free service to every
     // customer of the tenant at once (Codex, PR #64). Turning it off withdraws the
     // offer and touches no trial already issued.
     blastRadius: 'TENANT_WIDE',
-    configuredBy: ['trial.product_id', 'trial.limit_per_customer'],
+    configuredBy: ['trial.limit_per_customer'],
   },
   {
     key: 'customer_link_rotation',

@@ -39,6 +39,8 @@ export * from './provider.js';
 export * from './panels.js';
 /** WP-A8: the capability registry, the per-panel policy and panel diagnostics. */
 export * from './panel-advanced.js';
+/** R1: the per-panel trial configuration, independent of the catalogue. */
+export * from './panel-trial.js';
 export * from './pricing.js';
 /**
  * Phase 4 vocabularies.

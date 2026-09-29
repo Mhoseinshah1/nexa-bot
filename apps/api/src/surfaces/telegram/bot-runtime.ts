@@ -30,6 +30,8 @@ import {
   paymentGatewayProviderSchema,
   telegramChannelJoinUrl,
   PAYMENT_GATEWAY_DESCRIPTORS,
+  REFERRAL_MENU_COMMAND,
+  TRIAL_MENU_COMMAND,
 } from '@nexa/contracts';
 import type { AntiSpamService } from '../../modules/commerce/customers/application/anti-spam.service.js';
 import type { ChannelMembershipService } from '../../modules/commerce/customers/application/channel-membership.service.js';
@@ -136,6 +138,8 @@ import {
 import type { CustomerCaptureService } from '../../modules/commerce/customers/application/customer-capture.service.js';
 import type { CustomerCaptureRecord } from '../../modules/commerce/customers/application/customer-capture-ports.js';
 import type { SubscriptionFileService } from '../../modules/commerce/provisioning/application/subscription-file.service.js';
+import type { ServiceRefreshService } from '../../modules/commerce/provisioning/application/service-refresh.service.js';
+import type { CardMessageRef } from '../../modules/commerce/provisioning/application/operation-card.js';
 import type { ServiceTransferService } from '../../modules/commerce/provisioning/application/service-transfer.service.js';
 import type { CustomerCountersReader } from '../../modules/commerce/customers/application/customer-counters-ports.js';
 import type {
@@ -210,10 +214,16 @@ export const BOT_INTENTS = [
   'CATALOG_PAGE',
   'CATEGORY',
   /*
-   * Take a free trial (WP6-A). Carries nothing: the product, the limit and the panel
-   * are all decided on the server, under the customer's lock, when the tap arrives.
+   * Take a free trial (WP6-A; R1). Carries nothing: which panels offer one, the limit and
+   * the panel are all decided on the server when the tap arrives — straight to the claim
+   * when one panel offers a trial, to a choice when several do.
    */
   'TRIAL_CLAIM',
+  /*
+   * R1: the customer chose a panel on the trial choice. Carries the panel's id; whether
+   * that panel still offers a trial is decided again under the customer's lock.
+   */
+  'TRIAL_PANEL',
   /*
    * Package D — the custom service. MENU carries nothing and lists the locations decided
    * on the server; LOCATION carries the panel's id and opens the volume window. The
@@ -337,6 +347,8 @@ export const BOT_INTENTS = [
   'TOPUP_CLOSE',
   'SERVICES_SEARCH',
   'SERVICE_REFRESH',
+  /* R3: the service card again, drawn IN PLACE of the message tapped (the link-change ask's back). */
+  'SERVICE_CARD',
   'SERVICE_NOTE',
   'SERVICE_RENEW_QUOTE',
   'REFERRAL_GIFT',
@@ -1046,6 +1058,8 @@ export const SERVICES_SEARCH_CALLBACK_DATA = 'ss:';
 export const SERVICE_REFRESH_CALLBACK_PREFIX = 'rs:';
 /** `sf:<service id>` — the panel's connection files for that service (Package E). */
 export const SERVICE_FILES_CALLBACK_PREFIX = 'sf:';
+/** `sv:<service id>` — R3: the service card, edited into the message the tap came from. */
+export const SERVICE_CARD_CALLBACK_PREFIX = 'sv:';
 export const SERVICE_NOTE_CALLBACK_PREFIX = 'nt:';
 export const SERVICE_RENEW_QUOTE_CALLBACK_PREFIX = 'nr:';
 export const REFERRAL_GIFT_CALLBACK_DATA = 'rg:';
@@ -2318,6 +2332,11 @@ export const CATEGORY_CALLBACK_PREFIX = 'ck:';
  */
 export const TRIAL_CALLBACK_DATA = 'tr:';
 /**
+ * R1: one panel on the trial choice — the panel's id, validated at the boundary. `tp:` is
+ * the top-up route's, so `tq:`; neither starts with the single-letter `t:`.
+ */
+export const TRIAL_PANEL_CALLBACK_PREFIX = 'tq:';
+/**
  * Package D. The catalogue's custom-service button (the whole data: it carries nothing),
  * and a location's button (the panel's id). Two letters each, parsed before the one-letter
  * prefixes: `c:` is confirm's, and neither `cu:` nor `cv:` starts with it.
@@ -2423,6 +2442,11 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
     if (data === TRIAL_CALLBACK_DATA) {
       return { intent: 'TRIAL_CLAIM', targetId: null, callbackQueryId: id };
     }
+    if (data.startsWith(TRIAL_PANEL_CALLBACK_PREFIX)) {
+      const panel = uuidV7Schema.safeParse(data.slice(TRIAL_PANEL_CALLBACK_PREFIX.length));
+      if (!panel.success) return { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
+      return { intent: 'TRIAL_PANEL', targetId: panel.data, callbackQueryId: id };
+    }
     if (data === CUSTOM_SERVICE_CALLBACK_DATA) {
       return { intent: 'CUSTOM_SERVICE_MENU', targetId: null, callbackQueryId: id };
     }
@@ -2518,6 +2542,9 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
     }
     if (data.startsWith(SERVICE_NOTE_CALLBACK_PREFIX)) {
       return callbackCommand('SERVICE_NOTE', data.slice(SERVICE_NOTE_CALLBACK_PREFIX.length), id);
+    }
+    if (data.startsWith(SERVICE_CARD_CALLBACK_PREFIX)) {
+      return callbackCommand('SERVICE_CARD', data.slice(SERVICE_CARD_CALLBACK_PREFIX.length), id);
     }
     if (data.startsWith(SERVICE_RENEW_QUOTE_CALLBACK_PREFIX)) {
       return callbackCommand(
@@ -3120,7 +3147,12 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
    * the command literally the same path rather than two that agree today.
    */
   const trimmed = text.trim();
-  const asCommand = menu.get(trimmed) ?? trimmed;
+  /*
+   * A slash command is never a menu label (Codex, PR #111). Since R1 a tenant names its
+   * buttons, and a button labelled `/start` would otherwise turn every `/start` — the
+   * referral deep link's included — into whatever that button stands for.
+   */
+  const asCommand = trimmed.startsWith('/') ? trimmed : (menu.get(trimmed) ?? trimmed);
   const first = asCommand.split(/\s+/)[0]?.toLowerCase();
   // `/start@somebot` is what Telegram sends in a group. Stripped, because the bot it
   // names is the bot that received it.
@@ -3157,6 +3189,18 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
    * (`tu:`) opens, so there is one guide and three ways into it.
    */
   if (command === '/apps') return { intent: 'TUTORIAL', targetId: null, callbackQueryId: null };
+  /*
+   * R1: «🧪 دریافت سرویس تست» and «👥 زیرمجموعه‌گیری». Not registered with
+   * `setMyCommands` (see `TRIAL_MENU_COMMAND`); reachable by the button and by typing, and
+   * each answers from its feature's own state — the same two paths the catalogue's trial
+   * button (`tr:`) and the wallet's referral button (`rf:`) already take.
+   */
+  if (command === `/${TRIAL_MENU_COMMAND}`) {
+    return { intent: 'TRIAL_CLAIM', targetId: null, callbackQueryId: null };
+  }
+  if (command === `/${REFERRAL_MENU_COMMAND}`) {
+    return { intent: 'REFERRAL_INVITE', targetId: null, callbackQueryId: null };
+  }
   /*
    * The management panel's three text entries (Phase 5T).
    *
@@ -3620,6 +3664,12 @@ export interface BotRuntimeDeps {
    */
   readonly subscriptionFiles?: Pick<SubscriptionFileService, 'offered' | 'send'>;
   /**
+   * R3 item 7 — «♻️ بروزرسانی اطلاعات» as one bounded panel read that redraws the SAME
+   * card. Optional for the fixtures that build a runtime without it: then the tap queues
+   * the `SYNC_USAGE` operation it always did.
+   */
+  readonly serviceRefresh?: Pick<ServiceRefreshService, 'refresh'>;
+  /**
    * WP-A10 — the tenant's client apps, read for this customer's services. Optional for the
    * fixtures that build a runtime without it: then the guide is the five
    * `bot.tutorial.<platform>` texts it was before, and a stale `ca:` answers not-found.
@@ -3835,6 +3885,14 @@ export interface BotRuntimeDeps {
     ) => Promise<{ readonly ok: true } | { readonly ok: false; readonly reason: string }>;
   };
   readonly mainMenu: MainMenuRoutes;
+  /**
+   * R1: this tenant's CURRENT main-menu labels and their commands (`MainMenuLayout`), the
+   * same object the messenger draws the keyboard from. Matched over `mainMenu`'s shared
+   * defaults, so a renamed button routes under its new name and a keyboard drawn before
+   * the rename still routes under the old one. Optional so a stand-in without it routes
+   * exactly as before.
+   */
+  readonly menuRoutes?: { routesFor(scope: TenantContext): Promise<ReadonlyMap<string, string>> };
   readonly queueRateLimitedFact: (
     scope: TenantContext,
     customerId: UserId,
@@ -4013,6 +4071,12 @@ export interface ReferralGiftSource {
     customerId: UserId,
     input: { readonly idempotencyKey: string },
   ): Promise<{ readonly credited: Money; readonly claimedCount: number }>;
+  /**
+   * R1: what this customer could be paid now — the claim button is drawn only when there
+   * is something. Optional so a stand-in without it keeps the older rule (drawn while the
+   * gift is on); the shipped service always has it.
+   */
+  claimableFor?(scope: TenantContext, customerId: UserId): Promise<readonly unknown[]>;
 }
 
 export interface TenantMediaSource {
@@ -4230,6 +4294,22 @@ export interface PendingReply {
    * is decorative and its failure costs the customer nothing but the picture.
    */
   readonly lead?: readonly LeadMessage[];
+  /**
+   * R3: EDIT the message the tapped button is on into this reply, rather than sending a
+   * new one — the service card redrawn after a refresh, the link-change question put in
+   * the card's place and the card put back after it.
+   *
+   * Only a callback carries a message to edit; any other turn sends as usual. When
+   * Telegram cannot edit it (deleted, too old, a photo with no text) the SAME reply is
+   * sent once as a new message — the smallest fallback, and the only one.
+   */
+  readonly edit?: boolean;
+  /**
+   * R3: a short notice on the tapped button (`answerCallbackQuery` text), from a template.
+   * Used with `key: null` where the answer must leave the card exactly as it is — a
+   * refresh that could not read the panel, a switch that is not available.
+   */
+  readonly toast?: { readonly key: TemplateKey; readonly values: TemplateValues };
 }
 
 export type LeadMessage =
@@ -4239,6 +4319,14 @@ export type LeadMessage =
       readonly bytes: Uint8Array;
       readonly mimeType: 'image/png' | 'image/jpeg';
       readonly fileName: string;
+      /**
+       * R1: the picture's CAPTION, when the photo is a message in its own right — the
+       * referral invite, whose banner, introduction and link must be ONE message so that
+       * forwarding it forwards all three. A captioned photo is not decorative: when
+       * Telegram refuses it the caption goes out as text instead, and when that fails the
+       * turn stops there, as a text lead's does.
+       */
+      readonly caption?: { readonly key: TemplateKey; readonly values: TemplateValues };
     };
 
 /** One file this installation already holds, and the bot that holds it. */
@@ -4896,6 +4984,17 @@ export function creditRefusal(error: unknown): PendingReply {
 export class BotRuntime {
   constructor(private readonly deps: BotRuntimeDeps) {}
 
+  /**
+   * The route table for this update (R1): the shared defaults, then this tenant's current
+   * labels over them. Read only for a TEXT message — a keyboard tap is text, and nothing
+   * else consults the table, so a callback or a file pays for no template rendering.
+   */
+  private async menuFor(scope: TenantContext, update: unknown): Promise<MainMenuRoutes> {
+    const text = (update as { message?: { text?: unknown } } | null)?.message?.text;
+    if (typeof text !== 'string' || this.deps.menuRoutes === undefined) return this.deps.mainMenu;
+    return new Map([...this.deps.mainMenu, ...(await this.deps.menuRoutes.routesFor(scope))]);
+  }
+
   async handle(
     scope: TenantContext,
     actor: ActorContext,
@@ -4907,7 +5006,7 @@ export class BotRuntime {
       readonly from: unknown;
     },
   ): Promise<BotTurnResult> {
-    const command = intentOf(input.update, this.deps.mainMenu);
+    const command = intentOf(input.update, await this.menuFor(scope, input.update));
     const { intent } = command;
 
     /*
@@ -5133,7 +5232,7 @@ export class BotRuntime {
      * SAME order, because the idempotency key is the update's.
      */
     if (reply.key === null || chatId === null) {
-      await this.stopSpinner(scope, command, input.botInstanceId);
+      await this.stopSpinner(scope, command, input.botInstanceId, reply.toast);
       return {
         intent,
         arrival,
@@ -5234,7 +5333,7 @@ export class BotRuntime {
      * `PendingReply.media` for why not on the other two outcomes.
      */
     for (const lead of reply.lead ?? []) {
-      const led =
+      let led =
         lead.kind === 'TEXT'
           ? await this.deps.messenger.send(scope, {
               chatId,
@@ -5252,7 +5351,60 @@ export class BotRuntime {
                 fileName: lead.fileName,
                 mimeType: lead.mimeType,
               },
+              ...(lead.kind === 'PHOTO_BYTES' && lead.caption !== undefined
+                ? {
+                    caption: { templateKey: lead.caption.key, values: lead.caption.values },
+                    // Whole or not at all: a cut invite loses the link at its end.
+                    captionWhole: true as const,
+                  }
+                : {}),
             });
+      /*
+       * R1: a CAPTIONED photo is a message, not a decoration (`LeadMessage.caption`).
+       * Refused — a broken image, a caption over Telegram's bound — its words go out as
+       * text, so the invite still arrives. UNKNOWN is not refused: it may have arrived,
+       * and a second copy of the invite would be the duplicate the lane exists to avoid.
+       */
+      if (lead.kind === 'PHOTO_BYTES' && lead.caption !== undefined) {
+        /*
+         * Too long to be a caption (a tenant's longer invite; Codex, PR #111): the banner
+         * goes bare and the invite follows as its own text, whole, link included. Two
+         * messages rather than one cut one — the text is what a customer forwards, and a
+         * forwarded invite without its link invites nobody. The bare banner is decorative
+         * again, so its own failure is ignored.
+         */
+        if (led.outcome === 'REFUSED' && led.reason === 'CAPTION_OVER_BOUND') {
+          await this.deps.messenger.sendFile(scope, {
+            chatId,
+            botInstanceId: input.botInstanceId,
+            kind: 'PHOTO',
+            source: {
+              kind: 'BYTES',
+              bytes: lead.bytes,
+              fileName: lead.fileName,
+              mimeType: lead.mimeType,
+            },
+          });
+        }
+        if (led.outcome === 'REFUSED') {
+          led = await this.deps.messenger.send(scope, {
+            chatId,
+            templateKey: lead.caption.key,
+            values: lead.caption.values,
+            botInstanceId: input.botInstanceId,
+          });
+        }
+        if (led.outcome === 'DELIVERED' || led.outcome === 'UNKNOWN') continue;
+        await this.stopSpinner(scope, command, input.botInstanceId);
+        return {
+          intent,
+          arrival,
+          customerId: customer.id,
+          replyKey: reply.key,
+          orderId: reply.orderId,
+          sent: led.outcome,
+        };
+      }
       if (led.outcome !== 'DELIVERED') {
         /*
          * A photo lead is the referral banner or a client app's picture (HF-A10): an
@@ -5274,17 +5426,27 @@ export class BotRuntime {
         };
       }
     }
+    /*
+     * R3: a reply that edits the tapped message in place. The card-shaped replies only:
+     * no lead and no media, which an `editMessageText` could not carry.
+     */
+    const editTarget =
+      reply.edit === true && reply.media === undefined && (reply.lead ?? []).length === 0
+        ? cardMessageOf(input.update, input.botInstanceId)
+        : null;
     let sent =
-      reply.media === undefined
-        ? await asText()
-        : await this.deps.messenger.sendFile(scope, {
-            chatId,
-            botInstanceId: reply.media.botInstanceId,
-            kind: reply.media.kind,
-            source: { kind: 'FILE_ID', fileId: reply.media.fileId },
-            caption: { templateKey: reply.key, values: reply.values },
-            ...(reply.buttons.length === 0 ? {} : { buttons: reply.buttons }),
-          });
+      editTarget !== null
+        ? await this.editOrSend(scope, editTarget, reply, asText)
+        : reply.media === undefined
+          ? await asText()
+          : await this.deps.messenger.sendFile(scope, {
+              chatId,
+              botInstanceId: reply.media.botInstanceId,
+              kind: reply.media.kind,
+              source: { kind: 'FILE_ID', fileId: reply.media.fileId },
+              caption: { templateKey: reply.key, values: reply.values },
+              ...(reply.buttons.length === 0 ? {} : { buttons: reply.buttons }),
+            });
     if (reply.media !== undefined && sent.outcome === 'REFUSED') sent = await asText();
     /*
      * R2: a new message that IS a wizard screen or a review message is recorded against its
@@ -5388,7 +5550,7 @@ export class BotRuntime {
     // After the real answer, not before it. The spinner is cosmetic and its failure is
     // silent; putting it first would let a slow acknowledgement delay the message the
     // customer is actually waiting for.
-    await this.stopSpinner(scope, command, input.botInstanceId);
+    await this.stopSpinner(scope, command, input.botInstanceId, reply.toast);
 
     return {
       intent,
@@ -9368,7 +9530,10 @@ export class BotRuntime {
       return this.catalogue(scope, actor, command.page ?? 0, customer);
     }
     if (command.intent === 'TRIAL_CLAIM') {
-      return this.claimTrial(scope, actor, customer, input.idempotencyKey);
+      return this.beginTrial(scope, actor, customer, input.idempotencyKey);
+    }
+    if (command.intent === 'TRIAL_PANEL' && command.targetId !== null) {
+      return this.claimTrial(scope, actor, customer, command.targetId, input.idempotencyKey);
     }
     if (command.intent === 'CUSTOM_SERVICE_MENU') {
       return this.customServiceMenu(scope, actor, customer);
@@ -9532,6 +9697,12 @@ export class BotRuntime {
     }
     if (command.intent === 'SERVICE_REFRESH' && command.targetId !== null) {
       return this.serviceRefresh(scope, actor, customer, command.targetId, input.idempotencyKey);
+    }
+    if (command.intent === 'SERVICE_CARD' && command.targetId !== null) {
+      return {
+        ...(await this.serviceDetail(scope, actor, customer, command.targetId)),
+        edit: true,
+      };
     }
     if (command.intent === 'SERVICE_NOTE' && command.targetId !== null) {
       return this.serviceNoteBegin(
@@ -9756,6 +9927,7 @@ export class BotRuntime {
         command.targetId,
         'SUSPEND',
         input.idempotencyKey,
+        cardMessageOf(input.update, input.botInstanceId),
       );
     }
     if (command.intent === 'SERVICE_RESUME' && command.targetId !== null) {
@@ -9766,6 +9938,7 @@ export class BotRuntime {
         command.targetId,
         'RESUME',
         input.idempotencyKey,
+        cardMessageOf(input.update, input.botInstanceId),
       );
     }
     /*
@@ -9917,6 +10090,27 @@ export class BotRuntime {
   }
 
   /**
+   * R3 item 10: the customer's own service card, exactly as `serviceDetail` draws it, for
+   * the provisioner to edit into the card a disable or enable was asked from. Null when
+   * the service is not theirs to see any more (the same answer the tap would get), so
+   * nothing is drawn for somebody else's service.
+   */
+  async serviceCardFor(
+    scope: TenantContext,
+    actor: ActorContext,
+    customerId: UserId,
+    serviceId: string,
+  ): Promise<{
+    readonly key: TemplateKey;
+    readonly values: TemplateValues;
+    readonly buttons: readonly CustomerButton[];
+  } | null> {
+    const reply = await this.serviceDetail(scope, actor, { id: customerId }, serviceId);
+    if (reply.key === null || reply.key === 'bot.service.not_found') return null;
+    return { key: reply.key, values: reply.values, buttons: reply.buttons };
+  }
+
+  /**
    * One service, as its owner sees it.
    *
    * `getForCustomer` asks for the service by id AND owner in one query, so an id that is
@@ -9933,7 +10127,7 @@ export class BotRuntime {
   private async serviceDetail(
     scope: TenantContext,
     actor: ActorContext,
-    customer: CustomerRecord,
+    customer: Pick<CustomerRecord, 'id'>,
     serviceId: string,
   ): Promise<PendingReply> {
     const service = await this.ownedService(scope, customer, serviceId);
@@ -10568,15 +10762,19 @@ export class BotRuntime {
     serviceId: string,
     type: CustomerServiceOperation,
     idempotencyKey: string,
+    card: CardMessageRef | null,
   ): Promise<PendingReply> {
     try {
       await this.deps.services.requestFromCustomer(scope, actor, customer.id, serviceId, type, {
         idempotencyKey,
+        ...(card === null ? {} : { card }),
       });
     } catch (error) {
       const code = (error as { code?: unknown } | null)?.code;
       if (code === COMMERCE_ERROR_CODES.SERVICE_NOT_FOUND) {
-        return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };
+        return card === null
+          ? plainReply('bot.service.not_found')
+          : toastReply('bot.service.not_found');
       }
       const refusals: readonly unknown[] = [
         COMMERCE_ERROR_CODES.ORDER_STATE_INVALID,
@@ -10584,8 +10782,17 @@ export class BotRuntime {
         COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
       ];
       if (!refusals.includes(code)) throw error;
-      return { key: 'bot.service.capability_unsupported', values: {}, buttons: [], orderId: null };
+      return card === null
+        ? plainReply('bot.service.capability_unsupported')
+        : toastReply('bot.service.capability_unsupported');
     }
+    /*
+     * R3 item 10: nothing is sent now. The provisioner performs the disable or enable and
+     * then edits THIS card to the state it left (`OperationCardEditor`); a failure is told
+     * through the lane and the card stays as it is, because nothing changed. A tap with no
+     * card to edit (a client that sent no message) is answered as before.
+     */
+    if (card !== null) return { key: null, values: {}, buttons: [], orderId: null };
     return { key: 'bot.service.action_requested', values: {}, buttons: [], orderId: null };
   }
 
@@ -10610,6 +10817,11 @@ export class BotRuntime {
     if (!offer.offered) {
       return { key: 'bot.service.capability_unsupported', values: {}, buttons: [], orderId: null };
     }
+    /*
+     * R3 item 9: the question replaces the card in place, with a way back to it; the
+     * confirmation then puts the card back (`serviceRotate`), so the change of link is
+     * one message throughout rather than a new one per step.
+     */
     return {
       key: 'bot.service.rotate_ask',
       values: { cooldownHours: offer.cooldownHours },
@@ -10617,9 +10829,12 @@ export class BotRuntime {
         {
           label: { kind: 'TEMPLATE', key: 'bot.service.rotate_confirm_button' },
           data: `${SERVICE_ROTATE_CALLBACK_PREFIX}${service.id}`,
+          row: 0,
         },
+        { ...backToCardButton(service.id), row: 1 },
       ],
       orderId: null,
+      edit: true,
     };
   }
 
@@ -10656,8 +10871,9 @@ export class BotRuntime {
           return {
             key: 'bot.service.rotate_cooldown',
             values: { availableAt: new Date(at) },
-            buttons: [],
+            buttons: [backToCardButton(serviceId)],
             orderId: null,
+            edit: true,
           };
         }
         throw error;
@@ -10672,9 +10888,22 @@ export class BotRuntime {
         COMMERCE_ERROR_CODES.SERVICE_ACTION_NOT_ALLOWED,
       ];
       if (!refusals.includes(code)) throw error;
-      return { key: 'bot.service.capability_unsupported', values: {}, buttons: [], orderId: null };
+      return {
+        key: 'bot.service.capability_unsupported',
+        values: {},
+        buttons: [backToCardButton(serviceId)],
+        orderId: null,
+        edit: true,
+      };
     }
-    return { key: 'bot.service.action_requested', values: {}, buttons: [], orderId: null };
+    /*
+     * R3 item 9: no «request registered» message, and never «service created». The
+     * question is turned back into the card; when the panel has minted the new link the
+     * delivery lane sends «the link of service X changed; the previous link is no longer
+     * usable» with the new link, then the new connection files. A failure is told through
+     * the lane (`SERVICE_ACTION_FAILED`), and the old link stays the stored one.
+     */
+    return { ...(await this.serviceDetail(scope, actor, customer, serviceId)), edit: true };
   }
 
   /**
@@ -10978,6 +11207,17 @@ export class BotRuntime {
     serviceId: string,
     idempotencyKey: string,
   ): Promise<PendingReply> {
+    /*
+     * R3 item 7: read the panel now and redraw the SAME card, or leave it untouched with a
+     * short notice on the button. No «request registered», no «result later».
+     */
+    const refresh = this.deps.serviceRefresh;
+    if (refresh !== undefined) {
+      const result = await refresh.refresh(scope, actor, { customerId: customer.id, serviceId });
+      if (result.outcome === 'NOT_FOUND') return toastReply('bot.service.not_found');
+      if (result.outcome === 'FAILED') return toastReply('bot.service.refresh_failed');
+      return { ...(await this.serviceDetail(scope, actor, customer, serviceId)), edit: true };
+    }
     try {
       await this.deps.services.requestSyncFromCustomer(scope, actor, customer.id, serviceId, {
         idempotencyKey: `${idempotencyKey}:refresh`,
@@ -12064,7 +12304,7 @@ export class BotRuntime {
   /** One of the customer's own services, or null. Never anybody else's, never a throw. */
   private async ownedService(
     scope: TenantContext,
-    customer: CustomerRecord,
+    customer: Pick<CustomerRecord, 'id'>,
     serviceId: string,
   ): Promise<ServiceRecord | null> {
     try {
@@ -12302,34 +12542,94 @@ export class BotRuntime {
   }
 
   /**
-   * A customer tapped the trial button.
+   * A customer asked for a trial — the main menu's «🧪 دریافت سرویس تست», `/trial`, or the
+   * catalogue's trial button (R1).
    *
-   * One sentence either way. `bot.trial.issued` says the service is being created —
-   * the link then arrives through the ordinary delivery lane, as a purchase's does, once
-   * the panel has answered. Every refusal says `bot.trial.unavailable`: the reason
-   * (unconfigured, limit reached, blocked, product or panel unavailable) is recorded
-   * in the audit row for an operator, and a customer cannot act on it.
+   * Which panels offer one is `TrialService.claim`'s answer, decided with no panel named —
+   * enabled, eligible by the one evaluator, able to name the account — and never this
+   * surface's. Exactly
+   * one: the trial is taken on it at once. Several: the customer chooses, from buttons
+   * carrying only the panel's id. None, or a customer who may not take one: the one
+   * unavailable sentence. Every refusal says the same thing; the reason is the service's.
+   *
+   * A NEW message rather than an edit: the main-menu tap is a text message of the
+   * customer's, which there is nothing of ours to edit, and the choice is the one step
+   * between the tap and the result.
    */
-  private async claimTrial(
+  private async beginTrial(
     scope: TenantContext,
     actor: ActorContext,
     customer: CustomerRecord,
     idempotencyKey: string,
   ): Promise<PendingReply> {
-    if (this.deps.trials === undefined) {
-      return { key: 'bot.trial.unavailable', values: {}, buttons: [], orderId: null };
+    if (this.deps.trials === undefined) return trialUnavailable();
+    /*
+     * The claim decides — not an availability read ahead of it. It answers a redelivered
+     * update from the record the first delivery left, BEFORE it looks at what is offered
+     * now: a trial already issued for this update is issued again (not "unavailable"
+     * because the allowance is now spent), and a refusal stays a refusal even if a panel
+     * came on in between. Codex, PR #111.
+     */
+    const result = await this.deps.trials.claim(scope, actor, customer.id, {
+      idempotencyKey: `${idempotencyKey}:trial`,
+    });
+    if (result.outcome === 'ISSUED') {
+      return { key: 'bot.trial.issued', values: {}, buttons: [], orderId: null };
     }
+    if (result.outcome === 'REFUSED') return trialUnavailable();
+    return {
+      key: 'bot.trial.choose_panel',
+      values: {},
+      buttons: [
+        ...result.offers.map((offer) => ({
+          label: {
+            kind: 'TEMPLATE' as const,
+            key: 'bot.trial.panel_button' as const,
+            values: {
+              label: offer.label,
+              traffic: offer.trafficBytes,
+              hours: offer.durationHours,
+            },
+          },
+          data: `${TRIAL_PANEL_CALLBACK_PREFIX}${offer.panelId}`,
+        })),
+        mainMenuButton(),
+      ],
+      orderId: null,
+    };
+  }
+
+  /**
+   * The customer takes the trial on one panel: the only one offered, or the one they
+   * chose.
+   *
+   * One sentence either way. `bot.trial.issued` says the service is being created — the
+   * link then arrives through the ordinary delivery lane, as a purchase's does, once the
+   * panel has answered. Every refusal says `bot.trial.unavailable`: the reason (limit
+   * reached, blocked, panel no longer offering one) is in the audit row for an operator.
+   *
+   * Idempotent by the UPDATE: a redelivered tap is answered from the claim's record with
+   * the same trial, and a second tap — a new update — is decided afresh under the
+   * customer's lock, finds the allowance spent and is refused, so a double tap never
+   * issues two trials a limit of one does not allow.
+   */
+  private async claimTrial(
+    scope: TenantContext,
+    actor: ActorContext,
+    customer: CustomerRecord,
+    panelId: string,
+    idempotencyKey: string,
+  ): Promise<PendingReply> {
+    if (this.deps.trials === undefined) return trialUnavailable();
     // Suffixed, as every other write this update makes: `resolveFromUpdate` has already
     // spent the bare key in the same namespace.
     const result = await this.deps.trials.claim(scope, actor, customer.id, {
       idempotencyKey: `${idempotencyKey}:trial`,
+      panelId,
     });
-    return {
-      key: result.outcome === 'ISSUED' ? 'bot.trial.issued' : 'bot.trial.unavailable',
-      values: {},
-      buttons: [],
-      orderId: null,
-    };
+    return result.outcome === 'ISSUED'
+      ? { key: 'bot.trial.issued', values: {}, buttons: [], orderId: null }
+      : trialUnavailable();
   }
 
   /**
@@ -12997,9 +13297,19 @@ export class BotRuntime {
   }
 
   /**
-   * The customer's own referral link, and how many people have joined through it
-   * (WP9 F12). Asking records the customer's code the first time, which is why it carries
-   * the turn's idempotency key; every other answer is the one unconfigured sentence.
+   * The referral program, in EXACTLY two messages (R1).
+   *
+   * 1. The invite — the one a customer forwards to a friend: the banner, the program's
+   *    introduction and the customer's link, as ONE message (the banner's caption when
+   *    there is a banner, text otherwise). It carries no figure about the customer.
+   * 2. The dashboard — theirs alone: the gift terms, the commission, its scope and
+   *    minimum, and their figures, under the share, claim-gift and back buttons.
+   *
+   * Every figure is `ReferralProgram.terms`' and `ReferralSignupGiftService.stats`' —
+   * nothing is calculated here. Asking records the customer's code the first time, which
+   * is why it carries the turn's idempotency key; every other answer is the one
+   * unconfigured sentence. Reached from the main menu's «👥 زیرمجموعه‌گیری», `/referral`
+   * and the wallet's referral button alike.
    */
   private async referralInvite(
     scope: TenantContext,
@@ -13029,9 +13339,23 @@ export class BotRuntime {
     if (invite.outcome !== 'READY') return unconfigured;
     const gift = await this.deps.referralGifts.terms(scope);
     const stats = await this.deps.referralGifts.stats(scope, customer.id);
-    const screen = await this.deps.screens.referralScreen(scope, {
+    /*
+     * The claim button only when there is something to claim — the gift on AND a share
+     * owed to this customer now (`claimableFor`, the service's own answer). A button that
+     * can only say "nothing to claim" is a promise the keyboard broke.
+     */
+    const claimable =
+      gift.active &&
+      (this.deps.referralGifts.claimableFor === undefined ||
+        (await this.deps.referralGifts.claimableFor(scope, customer.id)).length > 0);
+    const card = this.deps.screens.referralInviteCard({
       commissionPercent: terms.percent,
       referralLink: invite.link,
+    });
+    const dashboard = await this.deps.screens.referralDashboard(scope, {
+      commissionPercent: terms.percent,
+      commissionScope: terms.scope,
+      minimumOrder: terms.minimum,
       gift: gift.active
         ? {
             total: gift.total,
@@ -13049,15 +13373,15 @@ export class BotRuntime {
         ? null
         : await this.deps.media.bytesFor(scope, 'REFERRAL_BANNER');
     return {
-      key: screen.key,
-      values: screen.values,
+      key: dashboard.key,
+      values: dashboard.values,
       buttons: [
         {
           label: { kind: 'TEMPLATE', key: 'bot.referral.share_button' },
           // Telegram's own share sheet, with the customer's link as the payload.
           url: `https://t.me/share/url?url=${encodeURIComponent(invite.link)}`,
         },
-        ...(gift.active
+        ...(claimable
           ? [
               {
                 label: { kind: 'TEMPLATE' as const, key: 'bot.referral.gift_button' as const },
@@ -13068,20 +13392,19 @@ export class BotRuntime {
         mainMenuButton(),
       ],
       orderId: null,
-      // The banner FIRST, as a bare photo, then the text with the buttons: one
-      // arrangement whatever the caption bound, and the text is never cut.
-      ...(banner === null
-        ? {}
-        : {
-            lead: [
-              {
-                kind: 'PHOTO_BYTES' as const,
-                bytes: banner.bytes,
-                mimeType: banner.mimeType,
-                fileName: banner.mimeType === 'image/png' ? 'banner.png' : 'banner.jpg',
-              },
-            ],
-          }),
+      // Message 1, ahead of the dashboard: the banner WITH the invite as its caption, so
+      // forwarding it forwards the picture, the words and the link together.
+      lead: [
+        banner === null
+          ? { kind: 'TEXT' as const, key: card.key, values: card.values }
+          : {
+              kind: 'PHOTO_BYTES' as const,
+              bytes: banner.bytes,
+              mimeType: banner.mimeType,
+              fileName: banner.mimeType === 'image/png' ? 'banner.png' : 'banner.jpg',
+              caption: { key: card.key, values: card.values },
+            },
+      ],
     };
   }
 
@@ -14208,12 +14531,39 @@ export class BotRuntime {
     scope: TenantContext,
     command: BotCommand,
     botInstanceId: BotInstanceId,
+    toast?: PendingReply['toast'],
   ): Promise<void> {
     if (command.callbackQueryId === null) return;
     await this.deps.messenger.acknowledge(scope, {
       callbackQueryId: command.callbackQueryId,
       botInstanceId,
+      ...(toast === undefined ? {} : { toast: { templateKey: toast.key, values: toast.values } }),
     });
+  }
+
+  /**
+   * R3: edits the tapped message into this reply; when Telegram cannot edit it (deleted,
+   * too old, a photo with no text to edit), sends the same reply once as a new message.
+   * `UNKNOWN` and `RATE_LIMITED` are not followed by a send: the edit may have landed, or
+   * a send would meet the same refusal.
+   */
+  private async editOrSend(
+    scope: TenantContext,
+    target: CardMessageRef,
+    reply: PendingReply,
+    asText: () => Promise<CustomerSendResult>,
+  ): Promise<CustomerSendResult> {
+    const edit = this.deps.messenger.edit;
+    if (edit === undefined || reply.key === null) return asText();
+    const edited = await edit.call(this.deps.messenger, scope, {
+      chatId: target.chatId,
+      messageId: target.messageId,
+      botInstanceId: target.botInstanceId,
+      templateKey: reply.key,
+      values: reply.values,
+      buttons: reply.buttons,
+    });
+    return edited.outcome === 'REFUSED' ? asText() : edited;
   }
 }
 
@@ -14547,6 +14897,11 @@ export function gatewayAttemptScreen(
  */
 const WALLET_SHORT: WizardDirective = { kind: 'ORDER', step: 'PREINVOICE', placement: 'NEW' };
 
+/** The one trial refusal, with the way back to the main menu. */
+function trialUnavailable(): PendingReply {
+  return { key: 'bot.trial.unavailable', values: {}, buttons: [mainMenuButton()], orderId: null };
+}
+
 function mainMenuButton(): CustomerButton {
   return {
     label: { kind: 'TEMPLATE', key: 'bot.menu.main_button' },
@@ -14698,6 +15053,42 @@ export function notificationButtons(
       data: `${SERVICE_CALLBACK_PREFIX}${subject.serviceId}`,
     },
   ];
+}
+
+/** R3: back to the service card, drawn IN PLACE (`sv:`). */
+function backToCardButton(serviceId: string): CustomerButton {
+  return {
+    label: { kind: 'TEMPLATE', key: 'bot.service.back_to_card_button' },
+    data: `${SERVICE_CARD_CALLBACK_PREFIX}${serviceId}`,
+  };
+}
+
+/** R3: an answer that is only a notice on the tapped button; nothing is sent or edited. */
+function toastReply(key: TemplateKey): PendingReply {
+  return { key: null, values: {}, buttons: [], orderId: null, toast: { key, values: {} } };
+}
+
+/** An ordinary one-line reply with no buttons. */
+function plainReply(key: TemplateKey): PendingReply {
+  return { key, values: {}, buttons: [], orderId: null };
+}
+
+/**
+ * R3: the service card a tap came from — the private chat, the message's own id, and the
+ * bot that drew it — or null when the update carries no such message.
+ */
+export function cardMessageOf(
+  update: unknown,
+  botInstanceId: BotInstanceId,
+): CardMessageRef | null {
+  const chatId = privateChatIdOf(update);
+  const messageId = (update as { callback_query?: { message?: { message_id?: unknown } } } | null)
+    ?.callback_query?.message?.message_id;
+  if (chatId === null || typeof messageId !== 'number' || !Number.isSafeInteger(messageId)) {
+    return null;
+  }
+  if (messageId <= 0) return null;
+  return { botInstanceId, chatId, messageId };
 }
 
 function backToServiceButton(serviceId: string): CustomerButton {

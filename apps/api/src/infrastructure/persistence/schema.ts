@@ -129,6 +129,10 @@ import {
   RESELLER_GRANTABLE_OPERATIONS,
   RESELLER_PRICE_LAYERS,
   TRIAL_LIMIT_MAX,
+  PANEL_TRIAL_HOURS_MAX,
+  PANEL_TRIAL_HOURS_MIN,
+  PANEL_TRIAL_LABEL_MAX_LENGTH,
+  PANEL_TRIAL_TRAFFIC_MAX_BYTES,
   TRIAL_LIMIT_MIN,
   // Package D: the custom service.
   CUSTOM_SERVICE_LABEL_MAX_LENGTH,
@@ -464,6 +468,22 @@ export const botInstances = pgTable(
     /** Envelope-encrypted. Never returned by any API, never logged. */
     tokenCiphertext: text('token_ciphertext').notNull(),
     tokenKeyId: text('token_key_id').notNull(),
+    /**
+     * R4 (item 12) — the claim a Web Admin token replacement holds while it talks to
+     * Telegram, and when that claim lapses.
+     *
+     * A replacement registers the webhook and reads it back BEFORE it stores the token,
+     * and those calls cannot run inside a transaction — so no row lock can keep a second
+     * replacement (another tab, a double-click under a new key, another api replica) from
+     * interleaving its `setWebhook` with this one's. This conditional claim does, and it is
+     * a lease rather than a flag so a process that dies mid-replacement blocks the next
+     * attempt for minutes, not for ever. Activation is conditional on the claim still being
+     * this attempt's, so a replacement whose claim lapsed and was taken over stores nothing.
+     *
+     * Both NULL, or both set: the CHECK below.
+     */
+    tokenReplacementClaim: uuid('token_replacement_claim'),
+    tokenReplacementClaimedUntil: timestamptz('token_replacement_claimed_until'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
@@ -496,6 +516,10 @@ export const botInstances = pgTable(
       .where(sql`telegram_bot_id IS NOT NULL`),
     index('bot_instances_tenant_idx').on(table.tenantId),
     check('bot_instances_status_check', enumCheck('status', BOT_INSTANCE_STATUSES)),
+    check(
+      'bot_instances_token_replacement_claim_check',
+      sql`(token_replacement_claim IS NULL) = (token_replacement_claimed_until IS NULL)`,
+    ),
   ],
 );
 
@@ -3240,6 +3264,19 @@ export const orders = pgTable(
     panelId: uuid('panel_id').notNull(),
     lineTitle: text('line_title').notNull(),
     lineDurationDays: integer('line_duration_days').notNull(),
+    /**
+     * R1: a trial's length in HOURS, and set on a `TRIAL` order only
+     * (`orders_trial_hours_check`).
+     *
+     * A per-panel trial is configured in hours — 72, or 12 — and a day count cannot say
+     * 12. When present it is what the provisioner computes the expiry from;
+     * `line_duration_days` beside it carries the same length rounded UP to whole days,
+     * so every reader that knows only days — a report, the release before this one
+     * picking up a trial during a rolling update — reads a limited plan of about the
+     * right size rather than a zero that means unlimited. Frozen at confirmation with
+     * the rest of the line (`nexa_orders_snapshot_guard`).
+     */
+    lineDurationHours: integer('line_duration_hours'),
     lineTrafficBytes: bigint('line_traffic_bytes', { mode: 'bigint' }).notNull(),
     lineDeviceLimit: integer('line_device_limit'),
     lineUnitPriceAmount: bigint('line_unit_price_amount', { mode: 'bigint' }).notNull(),
@@ -3334,8 +3371,20 @@ export const orders = pgTable(
      * — present or future — can turn the free edge into a way to charge somebody.
      */
     check('orders_trial_is_free_check', sql`purpose <> 'TRIAL' OR total_amount = 0`),
-    /** A custom service names no product, and every other purpose names one (Package D). */
-    check('orders_product_purpose_check', sql`(product_id IS NULL) = (purpose = 'CUSTOM_SERVICE')`),
+    /**
+     * A custom service names no product, and every other purpose names one (Package D) —
+     * except a trial, which names one when the release before R1 issued it from
+     * `trial.product_id` and none when it was issued from a panel's trial configuration.
+     */
+    check(
+      'orders_product_purpose_check',
+      sql`purpose = 'TRIAL' OR (product_id IS NULL) = (purpose = 'CUSTOM_SERVICE')`,
+    ),
+    /** R1: hours are a trial's, positive and bounded; no other purpose carries them. */
+    check(
+      'orders_trial_hours_check',
+      sql`line_duration_hours IS NULL OR (purpose = 'TRIAL' AND line_duration_hours BETWEEN 1 AND 720)`,
+    ),
     /**
      * A custom service is a positive volume for a positive number of days, bought once.
      * Zero means "unlimited" on a product snapshot; a customer cannot type an unlimited
@@ -5139,6 +5188,14 @@ export const services = pgTable(
      * CHECK cannot see the order row.
      */
     productId: uuid('product_id'),
+    /**
+     * R1: this service is a free trial. The database's own answer, not the application's:
+     * `nexa_service_requires_purchase_order` sets it on INSERT from the creating order's
+     * purpose — whatever the writer passed — and `nexa_services_trial_frozen` refuses to
+     * change it afterwards. The DEFAULT is the rollback window: the release before this
+     * one inserts without the column, and the trigger still marks its trials.
+     */
+    isTrial: boolean('is_trial').notNull().default(false),
     state: text('state').notNull().default('PENDING_PROVISION'),
     /** The order's reserved name, frozen before payment. Unique per panel, for adoption. */
     providerUsername: text('provider_username').notNull(),
@@ -5225,6 +5282,16 @@ export const services = pgTable(
     locationKey: text('location_key'),
     locationLabel: text('location_label'),
     usageSyncedAt: timestamptz('usage_synced_at'),
+    /**
+     * R3 item 7: a customer's on-tap usage read is in flight, since when — or NULL.
+     *
+     * The reservation that serialises the refresh button: set by a conditional UPDATE
+     * (not in flight, or in flight longer than the read can take; and not read within the
+     * minimum interval) in the transaction that takes the panel budget, BEFORE the panel
+     * is dialled, and cleared when the read ends. Two taps, or a redelivered update, find
+     * one of them holding it and the other redraws the card without dialling.
+     */
+    usageRefreshStartedAt: timestamptz('usage_refresh_started_at'),
     /**
      * Last connection, as a provider PROVED it (customer UX completion §H). `AT` with a
      * time, or `NEVER`; NULL is "no provider has said" — which is every row today, since
@@ -6264,6 +6331,62 @@ export const provisioningOperations = pgTable(
 );
 
 /**
+ * R3 (v0.3.5 real-test fixes, item 10): the service card a customer's request was made
+ * from, so the result can be shown ON that card.
+ *
+ * A disable or an enable is an operation the provisioner performs later, in another
+ * process; the tap that asked for it is long answered by then. This row is how the
+ * provisioner knows which Telegram message to edit: the chat and message the tap came
+ * from, and the bot that drew it (a `message_id` is only meaningful to that bot, and a
+ * reply from a different bot leaks the relationship between them — `CustomerMessage`).
+ *
+ * One row per operation, written in the SAME transaction that plans it — only when it
+ * is newly planned, so a double tap keeps the first card — and never changed except by
+ * `answered_at`. Nothing here is a secret: a chat id and a message number.
+ *
+ * `answered_at` is the told-once claim. Stamped by a conditional UPDATE before the edit
+ * is sent, so two provisioner replicas cannot both edit (or both fall back to sending
+ * the card); released only for a 429, which is Telegram declining to look at the edit.
+ */
+export const operationCardMessages = pgTable(
+  'operation_card_messages',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    /** `provisioning_operations.id` — the row, not the derived `operation_id`. */
+    operationId: uuid('operation_id').notNull(),
+    botInstanceId: uuid('bot_instance_id').notNull(),
+    chatId: text('chat_id').notNull(),
+    messageId: bigint('message_id', { mode: 'number' }).notNull(),
+    answeredAt: timestamptz('answered_at'),
+    /**
+     * The earliest the card may be claimed again, after Telegram answered 429 — its own
+     * `retry_after`, bounded, or a floor when it gave none. NULL means now.
+     */
+    nextAttemptAt: timestamptz('next_attempt_at'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({
+      name: 'operation_card_messages_pkey',
+      columns: [table.tenantId, table.operationId],
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.operationId],
+      foreignColumns: [provisioningOperations.tenantId, provisioningOperations.id],
+      name: 'operation_card_messages_operation_fk',
+    }),
+    /** The sweep's claim surface: cards nobody has answered for, oldest first. */
+    index('operation_card_messages_unanswered_idx')
+      .on(table.tenantId, table.createdAt)
+      .where(sql`answered_at IS NULL`),
+    check('operation_card_messages_message_id_check', sql`message_id > 0`),
+    check('operation_card_messages_chat_id_check', sql`chat_id ~ '^-?[0-9]{1,20}$'`),
+  ],
+);
+
+/**
  * A discount rule (`docs/wp8-pricing-audit.md` P3).
  *
  * A `CODE` rule applies when a customer enters its code; an `AUTOMATIC` rule applies to
@@ -7082,8 +7205,12 @@ export const trialGrants = pgTable(
     customerId: uuid('customer_id').notNull(),
     /** The trial order. Its line is the snapshot of what the trial was. */
     orderId: uuid('order_id').notNull(),
-    /** The product configured as the trial when the grant was made. Navigation only. */
-    productId: uuid('product_id').notNull(),
+    /**
+     * The product configured as the trial when the grant was made. Navigation only, and
+     * NULL for every grant since R1: a trial is issued from a panel's trial configuration,
+     * and the panel is on the order.
+     */
+    productId: uuid('product_id'),
     /** The service the grant produced. Set in the granting transaction. */
     serviceId: uuid('service_id'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
@@ -7132,6 +7259,64 @@ export const trialGrants = pgTable(
     }),
     check('trial_grants_reset_pair_check', sql`(reset_at IS NULL) = (reset_id IS NULL)`),
     index('trial_grants_tenant_created_idx').on(table.tenantId, table.createdAt, table.id),
+  ],
+);
+
+/**
+ * R1: one panel's free trial — whether it is offered, how much traffic and for how many
+ * hours. One row per panel and NO row for a panel nobody has configured, which offers no
+ * trial.
+ *
+ * Independent of the catalogue by design (the owner's brief): a trial names no product.
+ * What a customer is actually offered is this row being enabled AND the one eligibility
+ * evaluator (`decideEligibility`) letting the panel take a new account AND the panel's
+ * username policy letting the installation choose the name; the claim decides all three
+ * again under the customer's and the panel's locks.
+ *
+ * `revision` is what a write must name, as `panel_policies.revision` is: two operators
+ * editing one panel's trial cannot overwrite each other unseen. Editing a row changes no
+ * trial already issued — the order's line froze what was granted.
+ */
+export const panelTrialConfigs = pgTable(
+  'panel_trial_configs',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    panelId: uuid('panel_id').notNull(),
+    enabled: boolean('enabled').notNull().default(false),
+    trafficBytes: bigint('traffic_bytes', { mode: 'bigint' }).notNull(),
+    durationHours: integer('duration_hours').notNull(),
+    /** The customer-facing name on the choice button. NULL means the panel's own name. */
+    label: text('label'),
+    revision: integer('revision').notNull().default(1),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.tenantId, table.panelId], name: 'panel_trial_configs_pk' }),
+    foreignKey({
+      columns: [table.tenantId, table.panelId],
+      foreignColumns: [panels.tenantId, panels.id],
+      name: 'panel_trial_configs_panel_fk',
+    }),
+    /** The customer's offer reads the enabled rows of one tenant. */
+    index('panel_trial_configs_enabled_idx')
+      .on(table.tenantId)
+      .where(sql`enabled`),
+    check(
+      'panel_trial_configs_traffic_check',
+      sql`traffic_bytes > 0 AND traffic_bytes <= ${sql.raw(String(PANEL_TRIAL_TRAFFIC_MAX_BYTES))}`,
+    ),
+    check(
+      'panel_trial_configs_hours_check',
+      sql`duration_hours >= ${sql.raw(String(PANEL_TRIAL_HOURS_MIN))} AND duration_hours <= ${sql.raw(String(PANEL_TRIAL_HOURS_MAX))}`,
+    ),
+    check(
+      'panel_trial_configs_label_check',
+      sql`label IS NULL OR length(btrim(label)) BETWEEN 1 AND ${sql.raw(String(PANEL_TRIAL_LABEL_MAX_LENGTH))}`,
+    ),
+    check('panel_trial_configs_revision_check', sql`revision >= 1`),
   ],
 );
 

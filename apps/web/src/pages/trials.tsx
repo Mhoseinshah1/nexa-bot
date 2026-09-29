@@ -4,6 +4,8 @@ import {
   TRIAL_ADMIN_REASON_MAX_LENGTH,
   TRIAL_OVERRIDE_PAGE_DEFAULT,
   TRIAL_RESET_PAGE_DEFAULT,
+  trafficInputOf,
+  type PanelTrialOverviewRow,
   type TrialOverrideRowResponse,
   type TrialResetPreviewResponse,
   type TrialResetSummaryResponse,
@@ -13,6 +15,7 @@ import {
   fetchTrialOverrides,
   fetchTrialResetPreview,
   fetchTrialResets,
+  fetchTrialPanels,
 } from '../api/client';
 import { formatTimestamp } from '../format';
 import { useSubmissionKey } from '../submission-key';
@@ -20,6 +23,7 @@ import { t } from '../i18n/web.fa';
 import { useLinkHandler } from '../router';
 import { messageFor } from './settings';
 import {
+  Badge,
   Banner,
   Card,
   Copyable,
@@ -48,18 +52,95 @@ export function TrialsPage({
   mayViewOverrides,
   mayReset,
   mayViewHistory,
+  mayViewPanels = false,
 }: {
   mayViewOverrides: boolean;
   mayReset: boolean;
   mayViewHistory: boolean;
+  /** R1: `panels.view`, which the per-panel overview is charged on. */
+  mayViewPanels?: boolean;
 }) {
   return (
     <>
       <PageHead title={t('web.trials_title')} maturity="now" />
+      <PanelTrialsCard mayView={mayViewPanels} />
       <OverridesCard mayView={mayViewOverrides} />
       <ResetCard mayReset={mayReset} />
       <HistoryCard mayView={mayViewHistory} />
     </>
+  );
+}
+
+/**
+ * R1: every panel with a trial configured, and whether a customer is offered it now — the
+ * server's answer from the same evaluator the bot asks. Edited on each panel's page.
+ */
+function PanelTrialsCard({ mayView }: { mayView: boolean }) {
+  const onLink = useLinkHandler();
+  const panels = useQuery({
+    queryKey: ['trial-panels'],
+    queryFn: fetchTrialPanels,
+    enabled: mayView,
+  });
+  if (!mayView) {
+    return (
+      <Card title={t('web.trials_panels_title')}>
+        <Banner tone="info">{t('web.trials_panels_denied')}</Banner>
+      </Card>
+    );
+  }
+  const columns: Column<PanelTrialOverviewRow>[] = [
+    {
+      key: 'panel',
+      header: t('web.trials_panel'),
+      render: (row) => (
+        <a href={`/panels/${encodeURIComponent(row.panelId)}`} onClick={onLink} className="strong">
+          <Ltr mono={false}>{row.trial.label ?? row.panelName}</Ltr>
+        </a>
+      ),
+    },
+    {
+      key: 'traffic',
+      header: t('web.trials_panel_traffic'),
+      render: (row) => {
+        if (row.trial.trafficBytes === null) return '—';
+        const traffic = trafficInputOf(BigInt(row.trial.trafficBytes));
+        return `${traffic.amount} ${t(traffic.unit === 'GB' ? 'web.panel_trial_unit_gb' : 'web.panel_trial_unit_mb')}`;
+      },
+    },
+    {
+      key: 'hours',
+      header: t('web.trials_panel_hours'),
+      render: (row) => (row.trial.durationHours === null ? '—' : String(row.trial.durationHours)),
+    },
+    {
+      key: 'state',
+      header: t('web.trials_panel_state'),
+      render: (row) =>
+        !row.trial.enabled ? (
+          <Badge tone="neutral">{t('web.trials_panel_disabled')}</Badge>
+        ) : row.offeredNow ? (
+          <Badge tone="ok">{t('web.trials_panel_offered')}</Badge>
+        ) : (
+          <Badge tone="warn">{t('web.trials_panel_not_offered')}</Badge>
+        ),
+    },
+  ];
+  return (
+    <Card title={t('web.trials_panels_title')} hint={t('web.trials_panels_hint')}>
+      <StateSwitch query={panels}>
+        {panels.data === undefined ? null : panels.data.panels.length === 0 ? (
+          <Empty title={t('web.trials_panels_empty')} />
+        ) : (
+          <DataTable
+            columns={columns}
+            rows={panels.data.panels}
+            rowKey={(row) => row.panelId}
+            caption={t('web.trials_panels_title')}
+          />
+        )}
+      </StateSwitch>
+    </Card>
   );
 }
 

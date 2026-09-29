@@ -325,7 +325,7 @@ describe('a customer manages the service they bought', () => {
   // Suspend and resume
   // =========================================================================
 
-  it('pauses the account on the panel and says the request was recorded, not done', async () => {
+  it('pauses the account on the panel, and claims nothing on the tap', async () => {
     const service = await activeService('suspend-ok');
 
     const tapped = await runtime().handle(
@@ -337,11 +337,11 @@ describe('a customer manages the service they bought', () => {
     expect(tapped.intent).toBe('SERVICE_SUSPEND');
     /*
      * The panel has NOT been called yet. The provisioner claims the operation on its
-     * next tick, so the acknowledgement says the request was recorded — claiming the
-     * service is paused here would be a claim about somebody else's machine made
-     * before anything was asked of it.
+     * next tick — so the tap claims nothing at all (R3 item 10): no «request recorded»,
+     * and certainly no «paused». The result is shown on the card once the panel has
+     * answered (`tests/integration/r3-service-card.test.ts`).
      */
-    expect(tapped.replyKey).toBe('bot.service.action_requested');
+    expect(tapped.replyKey).toBeNull();
     expect(panel.users.get(service.username)?.status, 'still active on the panel').toBe('active');
     expect((await services.findById(tenantA, service.id))?.state).toBe('ACTIVE');
 
@@ -481,7 +481,8 @@ describe('a customer manages the service they bought', () => {
       systemActor('bot'),
       tapUpdate(`u:${service.id}`),
     );
-    expect(paused.replyKey).toBe('bot.service.capability_unsupported');
+    // R3: answered as a notice on the button, the card left as it is.
+    expect(paused.replyKey).toBeNull();
     expect(await operationOf(service.id, 'SUSPEND'), 'nothing was planned').toBeUndefined();
   });
 
@@ -505,7 +506,8 @@ describe('a customer manages the service they bought', () => {
       tapUpdate(`u:${service.id}`, '920920'),
     );
 
-    expect(stolen.replyKey).toBe('bot.service.not_found');
+    // R3: the SAME notice an unknown id gets, on the button (`bot.service.not_found`).
+    expect(stolen.replyKey).toBeNull();
     expect(await operationOf(service.id, 'SUSPEND'), 'nothing was planned').toBeUndefined();
     await ctx.container.provisionerLoop.tick();
     expect(panel.users.get(service.username)?.status, 'and the account is untouched').toBe(
