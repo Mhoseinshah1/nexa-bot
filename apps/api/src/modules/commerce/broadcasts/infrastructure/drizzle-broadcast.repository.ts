@@ -586,16 +586,23 @@ export class DrizzleBroadcastRepository implements BroadcastRepository {
   async botsWithWork(scope: TenantContext, now: Date) {
     const tenantId = requireTenantId(scope);
     const at = sql`${now.toISOString()}::timestamptz`;
-    const rows = await this.rows<{ bot_instance_id: string }>(
-      sql`SELECT DISTINCT r.bot_instance_id
-            FROM broadcasts b
-            JOIN broadcast_recipients r ON r.tenant_id = b.tenant_id AND r.broadcast_id = b.id
-           WHERE b.tenant_id = ${tenantId}::uuid AND b.state = 'SENDING'
-             AND r.state = 'PENDING' AND r.bot_instance_id IS NOT NULL
-             AND (r.next_attempt_at IS NULL OR r.next_attempt_at <= ${at})
-             AND (r.lease_until IS NULL OR r.lease_until <= ${at})`,
+    /*
+     * The tenant's bots (a handful of rows), each asked whether ONE due recipient exists — an
+     * EXISTS that stops at the first row `broadcast_recipients_due_idx` yields, rather than a
+     * DISTINCT over every waiting recipient every second.
+     */
+    const rows = await this.rows<{ id: string }>(
+      sql`SELECT bi.id FROM bot_instances bi
+           WHERE bi.tenant_id = ${tenantId}::uuid
+             AND EXISTS (
+               SELECT 1 FROM broadcast_recipients r
+                 JOIN broadcasts b ON b.tenant_id = r.tenant_id AND b.id = r.broadcast_id
+                WHERE r.tenant_id = bi.tenant_id AND r.bot_instance_id = bi.id
+                  AND r.state = 'PENDING' AND b.state = 'SENDING'
+                  AND (r.next_attempt_at IS NULL OR r.next_attempt_at <= ${at})
+                  AND (r.lease_until IS NULL OR r.lease_until <= ${at}))`,
     );
-    return rows.map((row) => row.bot_instance_id);
+    return rows.map((row) => row.id);
   }
 
   async claimForBot(
@@ -607,10 +614,12 @@ export class DrizzleBroadcastRepository implements BroadcastRepository {
       readonly max: number;
       readonly perSecond: number;
     },
+    scopeTx: TransactionScope,
   ): Promise<readonly ClaimedRecipient[]> {
     const tenantId = requireTenantId(scope);
     const at = sql`${input.now.toISOString()}::timestamptz`;
-    return this.db.transaction(async (tx) => {
+    const tx = scopeTx.tx;
+    {
       /*
        * The pacing row FIRST, under its lock: every worker replica that wants this bot's
        * budget queues here, so two replicas share one budget rather than each spending it.
@@ -674,7 +683,7 @@ export class DrizzleBroadcastRepository implements BroadcastRepository {
         attempts: recipient.attempts,
         leaseUntil: input.leaseUntil,
       }));
-    });
+    }
   }
 
   async content(scope: TenantContext, id: string): Promise<BroadcastContent | null> {

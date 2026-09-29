@@ -198,7 +198,10 @@ describe('mass operations', () => {
     };
     await processor(crashing).pass(tenantA, 1);
     expect(await massEntries()).toHaveLength(0);
+    // The item that failed is left out of the rest of a pass; the others are not held.
+    crashes = 1;
     await processor(crashing).pass(tenantA);
+    expect(await massEntries()).toHaveLength(2);
     await processor().pass(tenantA);
     expect(await massEntries()).toHaveLength(3);
     expect((await ctx.container.bulkOperations.get(tenantA, owner, operation.id)).state).toBe(

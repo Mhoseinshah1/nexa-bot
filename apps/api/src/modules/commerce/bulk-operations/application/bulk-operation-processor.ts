@@ -116,8 +116,9 @@ export class BulkOperationProcessor {
   async pass(scope: TenantContext, limit = BULK_PASS_LIMIT): Promise<BulkPassReport> {
     const report = { credited: 0, planned: 0, skipped: 0, settled: 0, completed: 0, errored: 0 };
     const actor = this.actor();
+    const failed: string[] = [];
     for (let index = 0; index < limit; index += 1) {
-      const outcome = await this.processOne(scope, actor);
+      const outcome = await this.processOne(scope, actor, failed);
       if (outcome === 'none' || outcome === 'stopped') break;
       report[outcome] += 1;
     }
@@ -164,6 +165,7 @@ export class BulkOperationProcessor {
   private async processOne(
     scope: TenantContext,
     actor: ActorContext,
+    failed: string[],
   ): Promise<'none' | 'stopped' | 'credited' | 'planned' | 'skipped' | 'errored'> {
     const now = this.deps.clock.now();
     let locked: string | null = null;
@@ -171,7 +173,7 @@ export class BulkOperationProcessor {
       return await this.deps.uow.run(scope, async (tx) => {
         // A stopped tenant takes no new money or provider work, checked inside the write.
         if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) return 'stopped';
-        const item = await this.deps.repository.lockNextPending(scope, now, tx);
+        const item = await this.deps.repository.lockNextPending(scope, now, failed, tx);
         if (item === null) return 'none';
         locked = item.id;
         if (item.requiresActiveCustomer) {
@@ -187,14 +189,15 @@ export class BulkOperationProcessor {
       });
     } catch (error: unknown) {
       /*
-       * The transaction rolled back: nothing of this item happened. It goes to the back of
-       * the queue so one bad item cannot hold every other one behind it.
+       * The transaction rolled back: nothing of this item happened. It is left out of the rest
+       * of this pass, so one bad item cannot hold every other one behind it, and is taken
+       * again by the next pass.
        */
       this.deps.logger.error(
         { err: error instanceof Error ? error.message : 'unknown', itemId: locked },
         'bulk item failed',
       );
-      if (locked !== null) await this.deps.repository.touch(scope, locked, this.deps.clock.now());
+      if (locked !== null) failed.push(locked);
       return 'errored';
     }
   }
