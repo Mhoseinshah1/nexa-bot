@@ -260,6 +260,16 @@ export const PERMISSIONS = [
   p('tickets.close', "Change a support ticket's status: close, reopen or mark it waiting"),
   p('tickets.categories.edit', 'Create or edit support ticket categories'),
 
+  /*
+   * Campaigns (round N, C1, `docs/round-n-campaigns-audit.md` D10). A campaign composes
+   * engines that already have their own permissions, and MANAGE is charged together with
+   * each of those — a campaign is never a way to do what its operator could not do
+   * directly. MANAGE is HIGH because scheduling one publishes discount and cashback rules
+   * and starts sends and credits; VIEW is LOW and read-only.
+   */
+  p('campaigns.view', 'View campaigns, their preview and their results', 'LOW'),
+  p('campaigns.manage', 'Create, schedule, pause, resume or cancel a campaign', 'HIGH'),
+
   // Reporting and logs
   p('reports.view', 'View reports', 'LOW'),
   p('reports.pii.view', 'View personal data inside reports', 'HIGH'),
@@ -454,6 +464,9 @@ export const ROLE_SEEDS: readonly RoleSeed[] = [
       'orders.manual.create',
       'catalog.view',
       'catalog.discounts.edit',
+      // Round N, C1: a campaign's discount is this role's own authority, scheduled.
+      'campaigns.view',
+      'campaigns.manage',
       'reports.view',
     ],
   },
@@ -600,6 +613,11 @@ export const PERMISSION_REQUIRES: Readonly<Record<string, PermissionKey>> = {
   'tickets.assign': 'tickets.view' as PermissionKey,
   'tickets.close': 'tickets.view' as PermissionKey,
   'tickets.categories.edit': 'tickets.view' as PermissionKey,
+  /*
+   * Round N, C1. Every campaign command is taken FROM a campaign page, which
+   * `campaigns.view` reads, and each answers with the campaign's preview and results.
+   */
+  'campaigns.manage': 'campaigns.view' as PermissionKey,
 };
 
 /**
