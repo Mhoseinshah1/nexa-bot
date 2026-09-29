@@ -59,7 +59,8 @@ import { BYTES_PER_GB } from './traffic-input.js';
  * methods AND the declaration). No provider declares it in this release, so the row reads
  * unsupported for every provider — which is the truth, and is better than leaving the row
  * out, because an operator looking for it should learn that it is absent rather than
- * wonder whether it is hidden.
+ * wonder whether it is hidden. `docs/provider-capability-audit.md` says, per provider,
+ * what declaring it would need.
  */
 export const CAPABILITY_REGISTRY_ROWS = [
   'CREATE_SERVICE',
@@ -267,6 +268,14 @@ export const PANEL_CUSTOMER_ACTIONS = [
   'ROTATE_SUBSCRIPTION',
   'SUBSCRIPTION_FILES',
   'USAGE_READ',
+  /*
+   * HF-A6A8: a customer's move of their service to another location (WP-A6) — paid or
+   * free, from the Telegram button through the quote, its confirmation and the free
+   * request. Its switch is accepted, like every other entry, only for a panel whose
+   * adapter both implements and declares `LOCATION_CHANGE`; the capability is still
+   * asked first everywhere, so the switch can only take a move away.
+   */
+  'LOCATION_CHANGE',
 ] as const satisfies readonly CapabilityRegistryRow[];
 export type PanelCustomerAction = (typeof PANEL_CUSTOMER_ACTIONS)[number];
 
@@ -361,6 +370,12 @@ export const panelPolicySchema = z
           })
           .strict()
           .optional(),
+        /*
+         * A switch and nothing else: the cooldown and the rolling limit of a move are
+         * per LOCATION (`service_locations`), where WP-A6 put them, so a second copy here
+         * would be a knob that disagrees with the one `LocationChangePolicy` reads.
+         */
+        LOCATION_CHANGE: z.object({ customerEnabled }).strict().optional(),
       })
       .strict(),
   })

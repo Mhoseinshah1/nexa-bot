@@ -321,6 +321,7 @@ describe('the panel detail', () => {
     'ROTATE_SUBSCRIPTION',
     'SUBSCRIPTION_FILES',
     'USAGE_READ',
+    'LOCATION_CHANGE',
   ];
   const DIAGNOSTICS = {
     overall: 'OK',
@@ -811,6 +812,92 @@ describe('the panel detail', () => {
     expect(Object.keys((write?.body as { policy: { actions: object } }).policy.actions)).toEqual([
       'RENEW',
     ]);
+  });
+
+  /*
+   * HF-A6A8: «تغییر لوکیشن سرویس» is drawn on every panel. Where the adapter cannot move
+   * an account it is a DISABLED switch with the server's reason beside it, and a save
+   * sends nothing for it; where it can, it is an ordinary switch.
+   */
+  it('shows the location-change switch disabled, with the reason, where the panel cannot move', async () => {
+    const api = stubApi([
+      ...detail(),
+      advancedRoute(),
+      {
+        url: `/${PANEL_ID}/policy`,
+        body: { advanced: advancedBody({ revision: 1 }), changed: true },
+      },
+    ]);
+    renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+    screen.getByRole('tab', { name: 'قابلیت‌ها' }).click();
+    await screen.findByText(t('web.policy_title'));
+
+    const box = screen.getByLabelText(
+      `${t('web.policy_customer_enabled')} — ${t('web.cap_row_location_change')}`,
+    );
+    expect(box).toBeDisabled();
+    expect((box as HTMLInputElement).checked).toBe(false);
+    expect(
+      screen.getByText(`${t('web.policy_action_unsupported')} ${t('web.cap_gap_not_supported')}`),
+    ).toBeInTheDocument();
+
+    fireEvent.click(box);
+    fireEvent.click(
+      screen.getByLabelText(`${t('web.policy_customer_enabled')} — ${t('web.cap_row_renew')}`),
+    );
+    fireEvent.click(screen.getByRole('button', { name: t('web.save') }));
+    await waitFor(() => {
+      expect(api.calls.some((call) => call.method === 'POST')).toBe(true);
+    });
+    const sentActions = (
+      api.calls.find((call) => call.method === 'POST')?.body as { policy: { actions: object } }
+    ).policy.actions;
+    expect(Object.keys(sentActions)).toEqual(['RENEW']);
+  });
+
+  it('offers the location-change switch where the panel can move, and sends it off', async () => {
+    const withLocation = advancedBody({
+      registry: capabilityRegistry([...SUPPORTED, 'LOCATION_CHANGE']).map((entry) => ({
+        ...entry,
+        customer: CUSTOMER_ROWS.includes(entry.row)
+          ? entry.supported
+            ? { available: true, blocker: null }
+            : { available: false, blocker: 'UNSUPPORTED' }
+          : null,
+      })),
+    });
+    const api = stubApi([
+      ...detail(),
+      { url: '/advanced', body: withLocation },
+      {
+        url: `/${PANEL_ID}/policy`,
+        body: {
+          advanced: { ...withLocation, policy: { ...withLocation.policy, revision: 1 } },
+          changed: true,
+        },
+      },
+    ]);
+    renderPage(<PanelDetailPage id="p1" mayEdit mayRotate denied={false} />);
+    await screen.findByText('Frankfurt A');
+    screen.getByRole('tab', { name: 'قابلیت‌ها' }).click();
+    await screen.findByText(t('web.policy_title'));
+
+    const box = screen.getByLabelText(
+      `${t('web.policy_customer_enabled')} — ${t('web.cap_row_location_change')}`,
+    );
+    expect(box).not.toBeDisabled();
+    expect((box as HTMLInputElement).checked).toBe(true);
+    expect(screen.queryByText(t('web.policy_action_unsupported'), { exact: false })).toBeNull();
+
+    fireEvent.click(box);
+    fireEvent.click(screen.getByRole('button', { name: t('web.save') }));
+    await waitFor(() => {
+      expect(api.calls.some((call) => call.method === 'POST')).toBe(true);
+    });
+    expect(api.calls.find((call) => call.method === 'POST')?.body).toMatchObject({
+      policy: { actions: { LOCATION_CHANGE: { customerEnabled: false } } },
+    });
   });
 
   it('refuses a cap that is not a whole number in the browser, and names the field', async () => {

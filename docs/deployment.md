@@ -1228,6 +1228,29 @@ While it runs:
 Nothing needs doing before rolling back past WP-A9. After the roll-forward, a wallet that
 fell below its threshold during the rollback is told on the first low-balance pass, once.
 
+### What a rollback can make unreadable: the location-change switch (HF-A6A8)
+
+HF-A6A8 adds one entry to a panel's policy, `LOCATION_CHANGE` — the «تغییر لوکیشن سرویس»
+switch on the panel's «قابلیت‌ها» tab. No migration: it lives in the existing
+`panel_policies.policy` JSON. The release before it parses that JSON with a strict schema
+that has no such entry, so a stored policy naming it reads there as UNREADABLE, and an
+unreadable policy refuses every customer action on its panel until it is saved again.
+
+In this release that row cannot be written through the product. The write path accepts the
+entry only for a panel whose adapter implements AND declares `LOCATION_CHANGE`, and no
+provider declares it (`docs/provider-capability-audit.md`). So nothing is expected to need
+doing. **Before rolling back past HF-A6A8**, confirm it:
+
+```bash
+docker compose --env-file /etc/nexa/deploy.env -f /opt/nexa/deploy/compose.yml \
+  exec -T postgres psql -U nexa -d nexa -c \
+  "SELECT panel_id, revision FROM panel_policies WHERE policy->'actions' ? 'LOCATION_CHANGE'"
+```
+
+If a row is listed, save that panel's policy without the switch before rolling back, or,
+after the rollback, save the policy once from the old Web Admin, which writes it without
+the entry.
+
 ### What a rollback hides: client app pictures (HF-A10)
 
 HF-A10 lets an operator attach a PNG or JPEG picture to a client app entry. The bot

@@ -308,6 +308,8 @@ describe('advanced provider settings', () => {
       'TERMINATE',
     ]);
     expect(row('LOCATION_CHANGE')).toMatchObject({ supported: false, gap: 'NOT_SUPPORTED' });
+    // HF-A6A8: a customer action now, so it says why no customer is offered it.
+    expect(row('LOCATION_CHANGE')?.customer).toEqual({ available: false, blocker: 'UNSUPPORTED' });
     expect(row('EXTRA_DEVICES')?.customer).toEqual({ available: false, blocker: 'UNSUPPORTED' });
     // Rotation is supported and needs the tenant switch as well.
     expect(row('ROTATE_SUBSCRIPTION')?.customer).toEqual({
@@ -760,6 +762,57 @@ describe('advanced provider settings', () => {
     );
     expect(changed.code).toBe(PANEL_ERROR_CODES.PANEL_POLICY_CAPABILITY_UNSUPPORTED);
     expect(changed.details?.['actions']).toEqual(['EXTRA_DEVICES']);
+  });
+
+  /*
+   * HF-A6A8: «تغییر لوکیشن سرویس». RickPanel cannot move an account (its accounts have
+   * no location of their own), so the switch — on OR off — is refused as a new entry,
+   * and a stored one outlives an unrelated save exactly as A8's rule keeps any other.
+   */
+  it('refuses a location-change switch this panel cannot honour, and keeps a stored one', async () => {
+    for (const customerEnabled of [false, true]) {
+      const refused = await refusalOf(
+        setPolicy(policyWith({ LOCATION_CHANGE: { customerEnabled } })),
+      );
+      expect(refused.code).toBe(PANEL_ERROR_CODES.PANEL_POLICY_CAPABILITY_UNSUPPORTED);
+      expect(refused.details?.['actions']).toEqual(['LOCATION_CHANGE']);
+    }
+    expect(await ctx.container.database.db.select().from(panelPolicies)).toHaveLength(0);
+
+    const stored = { customerEnabled: false };
+    await ctx.container.database.db.insert(panelPolicies).values({
+      tenantId: tenantA.tenantId,
+      panelId,
+      policy: policyWith({ LOCATION_CHANGE: stored }),
+      revision: 1,
+    });
+    const saved = await ctx.container.panelAdvanced.updatePolicy(tenantA, owner, panelId, {
+      policy: policyWith({ LOCATION_CHANGE: stored, RENEW: { customerEnabled: false } }),
+      expectedRevision: 1,
+      idempotencyKey: 'keep-location',
+    });
+    expect(saved.changed).toBe(true);
+    expect(saved.advanced.policy.policy.actions).toEqual({
+      LOCATION_CHANGE: stored,
+      RENEW: { customerEnabled: false },
+    });
+    // The capability is asked first, so the stored switch is not what the customer sees.
+    expect(
+      saved.advanced.registry.find((entry) => entry.row === 'LOCATION_CHANGE')?.customer,
+    ).toEqual({ available: false, blocker: 'UNSUPPORTED' });
+
+    const flipped = await refusalOf(
+      ctx.container.panelAdvanced.updatePolicy(tenantA, owner, panelId, {
+        policy: policyWith({
+          LOCATION_CHANGE: { customerEnabled: true },
+          RENEW: { customerEnabled: false },
+        }),
+        expectedRevision: 2,
+        idempotencyKey: 'flip-location',
+      }),
+    );
+    expect(flipped.code).toBe(PANEL_ERROR_CODES.PANEL_POLICY_CAPABILITY_UNSUPPORTED);
+    expect(flipped.details?.['actions']).toEqual(['LOCATION_CHANGE']);
   });
 
   it('delivers the card as text, with no photo, on a CARD_TEXT panel', async () => {

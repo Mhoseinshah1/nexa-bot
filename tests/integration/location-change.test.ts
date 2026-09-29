@@ -731,6 +731,93 @@ describe('service location change (WP-A6)', () => {
       expect(await count('orders', sql`purpose = 'CHANGE_LOCATION'`)).toBe(0);
     });
 
+    /*
+     * HF-A6A8: the panel policy's «تغییر لوکیشن سرویس» switch. Accepted here because this
+     * block's adapter implements AND declares the capability; switched off, a move is
+     * refused at every door a customer has — the button, the choice, the tapped target,
+     * a direct quote, the confirmation of a quote drawn BEFORE the switch, and the free
+     * request — through the same policy reader and `LOCATION_CHANGE` row. Money already
+     * taken is not held by it: a move paid before the switch still runs, because a paid
+     * order is FULFILLED or REFUNDED and never waits on a setting.
+     */
+    it('refuses every customer move on a panel whose policy switched it off', async () => {
+      const service = await activeService('policy');
+      const paidEarlier = await activeService('policy-paid');
+      const { nl, fi } = await standardLocations();
+      await fund('policy');
+      const { order: early } = await draftMove(service.id, nl, 'policy-early');
+      const paidOrder = await buyMove(paidEarlier.id, nl, 'policy-paid');
+
+      const setSwitch = async (customerEnabled: boolean, key: string) => {
+        const current = await ctx.container.panelAdvanced.advanced(tenantA, owner, panelId);
+        return ctx.container.panelAdvanced.updatePolicy(tenantA, owner, panelId, {
+          policy: {
+            delivery: { mode: 'CARD_WITH_QR' },
+            actions: { LOCATION_CHANGE: { customerEnabled } },
+          },
+          expectedRevision: current.policy.revision,
+          idempotencyKey: key,
+        });
+      };
+      const off = await setSwitch(false, 'loc-policy-off');
+      expect(off.changed).toBe(true);
+      expect(off.advanced.registry.find((entry) => entry.row === 'LOCATION_CHANGE')).toMatchObject({
+        supported: true,
+        customer: { available: false, blocker: 'POLICY_DISABLED' },
+      });
+
+      // The button is not drawn, and the offer says why nothing is available.
+      await runtime().handle(tenantA, systemActor('bot'), tapUpdate(`s:${service.id}`));
+      expect(drawnCallbacks().some((data) => data.startsWith('lc:'))).toBe(false);
+      const record = (await services.findById(tenantA, service.id))!;
+      expect(
+        await ctx.container.commercialActions.availableFor(tenantA, systemActor('pol'), record),
+      ).not.toContain('CHANGE_LOCATION');
+
+      // A crafted callback at each step is refused with the capability sentence.
+      for (const data of [
+        `lc:${service.id}`,
+        `lt:${encodeIdPair(service.id, nl)}`,
+        `lt:${encodeIdPair(service.id, fi)}`,
+        `lf:${encodeIdPair(service.id, fi)}`,
+      ]) {
+        const reply = await runtime().handle(tenantA, systemActor('bot'), tapUpdate(data));
+        expect(reply.replyKey, data).toBe('bot.service.capability_unsupported');
+      }
+
+      const policyRefusal = {
+        code: COMMERCE_ERROR_CODES.PANEL_NOT_OPERABLE,
+        details: {
+          reason: 'CUSTOMER_POLICY',
+          policy: 'POLICY_DISABLED',
+          action: 'LOCATION_CHANGE',
+        },
+      };
+      await expect(draftMove(service.id, nl, 'policy-late')).rejects.toMatchObject(policyRefusal);
+      // A quote drawn before the switch is refused at confirmation, before any money moves.
+      await expect(confirmMove(early.id, 'policy-early')).rejects.toMatchObject(policyRefusal);
+      expect(await orderState(early.id)).toBe('DRAFT');
+      await expect(requestFree(service.id, fi, 'policy-free')).rejects.toMatchObject(policyRefusal);
+      expect(await moveOf(service.id)).toEqual([]);
+      expect(
+        await count(
+          'service_location_changes',
+          sql`operation_id IS NOT NULL AND service_id = ${service.id}`,
+        ),
+      ).toBe(0);
+
+      // Paid before the switch: delivered, not held.
+      expect(await orderState(paidOrder)).toBe('PAID');
+      await ctx.container.provisionerLoop.tick();
+      expect((await moveOf(paidEarlier.id))[0]?.state).toBe('SUCCEEDED');
+      expect(locationPanel.writes).toEqual([{ username: paidEarlier.username, key: 'nl' }]);
+
+      // Switched back on, the same request goes through: the switch was the refusal.
+      await setSwitch(true, 'loc-policy-on');
+      await requestFree(service.id, fi, 'policy-free-again');
+      expect(await moveOf(service.id)).toHaveLength(1);
+    });
+
     it('asks again when the money moves: a service already there is not charged', async () => {
       const service = await activeService('landed');
       const { nl } = await standardLocations();
