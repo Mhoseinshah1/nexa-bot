@@ -2534,6 +2534,10 @@ export const WEB_FA = {
   'web.service_locations_error_duplicate': 'این پنل برای همین محصول‌ها لوکیشنی با همین شناسه دارد.',
   'web.service_locations_error_second_initial': 'این پنل از قبل یک لوکیشن اولیه دارد.',
   'web.service_locations_error_currency': 'قیمت باید با واحد پول فروش این نصب باشد.',
+  'web.service_locations_error_product_panel': 'این محصول روی پنل انتخاب‌شده فروخته نمی‌شود.',
+  'web.service_locations_error_panel_full':
+    'این پنل به حداکثر تعداد لوکیشن رسیده است (۲۰ ردیف، همراه با ردیف‌های مخصوص محصول).',
+  'web.service_locations_error_count': 'به حداکثر تعداد لوکیشن‌های این نصب (۵۰۰) رسیده‌اید.',
 
   'web.preview_title': 'پیش‌نمایش قیمت',
   'web.preview_hint':

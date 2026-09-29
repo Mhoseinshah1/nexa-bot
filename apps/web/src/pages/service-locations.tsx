@@ -73,6 +73,9 @@ const INVALID_REASONS: Readonly<Record<string, WebKey>> = {
   DUPLICATE_KEY: 'web.service_locations_error_duplicate',
   SECOND_INITIAL: 'web.service_locations_error_second_initial',
   CURRENCY: 'web.service_locations_error_currency',
+  PRODUCT_PANEL: 'web.service_locations_error_product_panel',
+  PANEL_FULL: 'web.service_locations_error_panel_full',
+  COUNT: 'web.service_locations_error_count',
 };
 
 function failureText(error: unknown): string {
@@ -406,7 +409,18 @@ export function ServiceLocationsPage({ denied, mayEdit }: { denied: boolean; may
             <select
               id="sl-panel"
               value={form.panelId}
-              onChange={(event) => setForm({ ...form, panelId: event.target.value })}
+              onChange={(event) =>
+                // A product scope names a product of THIS panel; another panel's is cleared.
+                setForm({
+                  ...form,
+                  panelId: event.target.value,
+                  productId:
+                    products.data?.find((one) => one.id === form.productId)?.panelId ===
+                    event.target.value
+                      ? form.productId
+                      : '',
+                })
+              }
             >
               <option value="" disabled>
                 —
@@ -456,11 +470,14 @@ export function ServiceLocationsPage({ denied, mayEdit }: { denied: boolean; may
               onChange={(event) => setForm({ ...form, productId: event.target.value })}
             >
               <option value="">{t('web.service_locations_all_products')}</option>
-              {(products.data ?? []).map((one) => (
-                <option key={one.id} value={one.id}>
-                  {one.title}
-                </option>
-              ))}
+              {/* Only this panel's products: a scope elsewhere could never apply here. */}
+              {(products.data ?? [])
+                .filter((one) => one.panelId === form.panelId)
+                .map((one) => (
+                  <option key={one.id} value={one.id}>
+                    {one.title}
+                  </option>
+                ))}
             </select>
           </Field>
           <Field
