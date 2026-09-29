@@ -345,6 +345,11 @@ import {
   CustomerReminderLoop,
 } from './modules/commerce/messaging/application/customer-reminder-loop.js';
 import { DrizzleCustomerReminderFactsReader } from './modules/commerce/messaging/infrastructure/drizzle-customer-reminder-facts.reader.js';
+// R2: the Telegram messages edited in place, and the renewal result's facts.
+import { TelegramMessageStateService } from './modules/commerce/messaging/application/telegram-message-state.js';
+import { DrizzleTelegramMessageStateRepository } from './modules/commerce/messaging/infrastructure/drizzle-telegram-message-state.repository.js';
+import { DrizzleRenewalFactsReader } from './modules/commerce/messaging/infrastructure/drizzle-renewal-facts.reader.js';
+import { WizardInvoiceScreens } from './surfaces/telegram/wizard-invoice-screens.js';
 import { SettingsQuietHoursReader } from './modules/commerce/messaging/infrastructure/settings-quiet-hours.reader.js';
 import {
   ServiceReminderLoop,
@@ -552,6 +557,12 @@ export interface Container {
    * container and not another's is a member whose absence is discovered at runtime.
    */
   readonly customerNotificationLoop: CustomerNotificationLoop;
+  /**
+   * R2 (items 3–5): the Telegram messages edited in place — the state, and the invoice screens
+   * the gateway worker edits. Exposed so a test drives the SAME instances the roles use.
+   */
+  readonly telegramMessageState: TelegramMessageStateService;
+  readonly wizardScreens: WizardInvoiceScreens;
   /** The lane's repository, shared so producers enqueue through the same object. */
   readonly customerNotifications: DrizzleCustomerNotificationRepository;
   /** HF-A9: the quiet window the lane defers reminders by — the instance it is given. */
@@ -2339,6 +2350,21 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    * every role — the API's webhook and the Telegram surface use its reads and hints — and
    * its loop STARTED only by the worker, the one role that dials the provider.
    */
+  /*
+   * R2 (v0.3.5 real-test items 3–5): which Telegram message shows a customer's wizard or an
+   * administrator's receipt review. One writer for the turn and the gateway worker alike.
+   */
+  const telegramMessageState = new TelegramMessageStateService({
+    repository: new DrizzleTelegramMessageStateRepository(database.db),
+    guard,
+    uow,
+    audit,
+    opsLog: opsLogWriter,
+    sessions,
+    scopeActivity: tenants,
+    clock,
+    ids,
+  });
   const gatewayPayments = new GatewayPaymentService({
     invoices: gatewayInvoiceRepository,
     payments: paymentService,
@@ -2372,6 +2398,14 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     clock,
     ids,
     logger,
+    /*
+     * R2 (item 4): the worker edits the customer's invoice message the moment the invoice is
+     * ready (or refused, or settled). Late-bound: the screens share `customerMessenger`,
+     * built further down; nothing calls this before the container has finished.
+     */
+    invoiceScreens: {
+      refresh: (scope, paymentId): Promise<void> => wizardScreens.refresh(scope, paymentId),
+    },
   });
   const starsPayments = new StarsPaymentService({
     invoices: gatewayInvoiceRepository,
@@ -2402,8 +2436,11 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
         ? null
         : { tenantId: installationTenantId, botInstanceId: null },
     intervalMs: GATEWAY_PAYMENT_INTERVAL_MS,
-    // Every call a pass may make, one after another, each allowed its whole timeout.
-    passBoundMs: (GATEWAY_CREATE_BATCH + GATEWAY_INQUIRY_BATCH) * TONPAYS_TIMEOUT_MS,
+    // Every call a pass may make, one after another, each allowed its whole timeout — and,
+    // since R2, the Telegram edit of the invoice message each of them may be followed by.
+    passBoundMs:
+      (GATEWAY_CREATE_BATCH + GATEWAY_INQUIRY_BATCH) *
+      (TONPAYS_TIMEOUT_MS + config.NOTIFICATION_SEND_TIMEOUT_MS),
     now: () => clock.now().getTime(),
     logger,
   });
@@ -3253,6 +3290,18 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     config.TELEGRAM_API_BASE_URL,
     config.NOTIFICATION_SEND_TIMEOUT_MS,
   );
+  /*
+   * R2 (items 4 and 11): the invoice screens the gateway worker and the turn both edit, and
+   * the renewal's payment screens the notification lane closes before the result.
+   */
+  const wizardScreens: WizardInvoiceScreens = new WizardInvoiceScreens({
+    state: telegramMessageState,
+    payments: paymentRepository,
+    invoices: gatewayPayments,
+    messenger: customerMessenger,
+    clock,
+    actor: () => systemJobActor('telegram-wizard-screens', newCorrelationId(ids.uuid())),
+  });
 
   /**
    * The bytes of a receipt, fetched with the token of the bot that received it.
@@ -3374,6 +3423,9 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       reminderSnapshots: new DrizzleServiceReminderSnapshotReader(database.db),
       // WP-A9: the wallet alert's and the two pending reminders' send-time values.
       reminderFacts: new DrizzleCustomerReminderFactsReader(database.db),
+      // R2 (item 11): the renewal result's facts, and the payment screens closed before it.
+      renewals: new DrizzleRenewalFactsReader(database.db),
+      orderScreens: { close: (scope, orderId) => wizardScreens.closeOrder(scope, orderId) },
       // HF-A9: reminders claimed inside the tenant's quiet window wait for its end.
       quietHours: reminderQuietHours,
       logger,
@@ -3446,6 +3498,15 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     scopeIsActive: (scope) => uow.run(scope, async (tx) => tenants.scopeIsActive(scope, tx)),
     correlationId: () => newCorrelationId(ids.uuid()),
     logger,
+    // R2 (item 3): a delivered push is a review message the decision edits in place.
+    reviewMessages: {
+      record: (scope, input) =>
+        telegramMessageState.recordReview(
+          scope,
+          systemJobActor('receipt-push', newCorrelationId(ids.uuid())),
+          { ...input, role: 'REVIEW' },
+        ),
+    },
   });
   /** The refund-request review cards' send half (WP19), in the receipt push's tick. */
   const serviceRefundPush = new ServiceRefundPushService({
@@ -4342,6 +4403,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     pendingPaymentReminderSweep,
     walletLowBalanceSweep,
     customerNotificationLoop,
+    telegramMessageState,
+    wizardScreens,
     customerNotifications: customerNotificationRepository,
     reminderQuietHours,
     audit,
@@ -4538,6 +4601,9 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
        * receipt window is read here under ITS lock, inside the capture read's transaction
        * (which already holds the capture lock), so the choice cannot go stale before the read.
        */
+      // R2 (items 3–5): edit-in-place state for wizards and receipt reviews.
+      messageState: telegramMessageState,
+      invoiceScreens: wizardScreens,
       tickets: {
         service: ticketService,
         categories: ticketCategoryService,

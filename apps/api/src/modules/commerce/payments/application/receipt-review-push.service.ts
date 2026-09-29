@@ -2,6 +2,7 @@ import {
   RECEIPT_REVIEW_PUSH_MAX_ATTEMPTS,
   type ActorContext,
   type AdminId,
+  type BotInstanceId,
   type Clock,
   type CorrelationId,
   type OperationalEventRecorder,
@@ -95,6 +96,26 @@ export interface ReceiptReviewPushDeps {
   readonly scopeIsActive: (scope: TenantContext) => Promise<boolean>;
   readonly correlationId: () => CorrelationId;
   readonly logger: { error: (context: Record<string, unknown>, message: string) => void };
+  /**
+   * R2 (v0.3.5 real-test item 3): records the message a push DELIVERED as a receipt-review
+   * message of its payment, so the decision taken on it — by this administrator or another —
+   * edits it in place into the result. Best effort: a message not recorded is recorded by its
+   * own first tap instead. Absent, nothing is recorded.
+   */
+  readonly reviewMessages?: {
+    record(
+      scope: TenantContext,
+      input: {
+        readonly ref: {
+          readonly botInstanceId: BotInstanceId;
+          readonly chatId: string;
+          readonly messageId: number;
+        };
+        readonly paymentId: string;
+        readonly hasMedia: boolean;
+      },
+    ): Promise<void>;
+  };
 }
 
 /**
@@ -208,6 +229,7 @@ export class ReceiptReviewPushService {
       );
       if (!started) return 'lost';
 
+      let asFile = true;
       let result: CustomerSendResult = await this.deps.messenger.sendFile(scope, {
         chatId: reviewer.chatId,
         botInstanceId: row.botInstanceId,
@@ -222,6 +244,7 @@ export class ReceiptReviewPushService {
        * the first may have arrived, and the second would be refused again.
        */
       if (result.outcome === 'REFUSED') {
+        asFile = false;
         result = await this.deps.messenger.send(scope, {
           chatId: reviewer.chatId,
           botInstanceId: row.botInstanceId,
@@ -230,7 +253,30 @@ export class ReceiptReviewPushService {
           buttons,
         });
       }
-      return await this.record(scope, row, result);
+      const recorded = await this.record(scope, row, result);
+      if (
+        recorded === 'delivered' &&
+        result.messageId !== undefined &&
+        this.deps.reviewMessages !== undefined
+      ) {
+        try {
+          await this.deps.reviewMessages.record(scope, {
+            ref: {
+              botInstanceId: row.botInstanceId,
+              chatId: reviewer.chatId,
+              messageId: result.messageId,
+            },
+            paymentId: payment.id,
+            hasMedia: asFile,
+          });
+        } catch (error: unknown) {
+          this.deps.logger.error(
+            { err: error instanceof Error ? error.message : String(error), pushId: row.id },
+            'receipt push message not recorded',
+          );
+        }
+      }
+      return recorded;
     } catch (error: unknown) {
       // Logged, not rethrown: one row's failure must not end the pass for every other
       // administrator. A row whose send had started is the reaper's to settle.

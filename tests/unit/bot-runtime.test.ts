@@ -852,7 +852,16 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.service.renew_button',
       'bot.service.renew_choose',
       'bot.service.renew_option_button',
+      /*
+       * R2 (item 11): a wallet-paid renewal's payment message is CLOSED into this sentence
+       * (no buttons) — it says the renewal is on its way, not "order paid" — and the renewal
+       * result that follows from the notification lane carries the one details button. Both
+       * name a step this head takes: `SERVICE_RENEWED` is announced for every RENEW that
+       * succeeds, and `s:` opens the service card.
+       */
+      'bot.service.renew_paid',
       'bot.service.renew_unavailable',
+      'bot.service.renewed_details_button',
       'bot.service.resume_button',
       'bot.service.rotate_ask',
       'bot.service.rotate_button',

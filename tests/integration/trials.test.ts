@@ -673,8 +673,13 @@ describe('a free trial', () => {
       from: { id: Number(telegramUserId), first_name: 'سارا' },
     };
   };
+  // R2: a catalogue page tapped from a message is that message EDITED.
   const lastMessage = () =>
-    JSON.stringify(sent.filter((one) => one.url.includes('/sendMessage')).at(-1) ?? {});
+    JSON.stringify(
+      sent
+        .filter((one) => one.url.includes('/sendMessage') || one.url.includes('/editMessageText'))
+        .at(-1) ?? {},
+    );
 
   it('draws the trial button only when the customer can take one, and issues it on the tap', async () => {
     const runtime = ctx.container.botRuntime;

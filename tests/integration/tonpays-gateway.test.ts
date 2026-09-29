@@ -203,7 +203,7 @@ describe('TonPays, through the one settlement path', () => {
   let lane: GatewayPaymentService;
   let offsetMs: number;
   let updateSeq = 0;
-  /** Every `sendMessage` body the bot sent to the fake Telegram. */
+  /** Every `sendMessage` body — and, since R2, every `editMessageText` — the bot sent. */
   const sent: Record<string, unknown>[] = [];
   const lastMarkup = () => JSON.stringify(sent[sent.length - 1]?.['reply_markup'] ?? {});
   const lastText = () => String(sent[sent.length - 1]?.['text'] ?? '');
@@ -214,7 +214,8 @@ describe('TonPays, through the one settlement path', () => {
       request.on('data', (chunk: Buffer) => chunks.push(chunk));
       request.on('end', () => {
         try {
-          if ((request.url ?? '').includes('/sendMessage')) {
+          const url = request.url ?? '';
+          if (url.includes('/sendMessage') || url.includes('/editMessageText')) {
             sent.push(
               JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>,
             );
@@ -287,6 +288,8 @@ describe('TonPays, through the one settlement path', () => {
     overrides: {
       readonly budget?: GatewayCallBudget;
       readonly payments?: GatewayPaymentServiceDeps['payments'];
+      /** R2: the customer's invoice message, edited by the worker once the invoice is ready. */
+      readonly invoiceScreens?: GatewayPaymentServiceDeps['invoiceScreens'];
     } = {},
   ): GatewayPaymentService {
     const db = ctx.container.database.db;
@@ -316,6 +319,9 @@ describe('TonPays, through the one settlement path', () => {
       clock: { now: () => new Date(Date.now() + offsetMs) },
       ids: ctx.container.ids,
       logger: { info: () => undefined, warn: () => undefined, error: () => undefined },
+      ...(overrides.invoiceScreens === undefined
+        ? {}
+        : { invoiceScreens: overrides.invoiceScreens }),
     });
   }
 
@@ -556,6 +562,60 @@ describe('TonPays, through the one settlement path', () => {
       expect(lastMarkup()).not.toContain(invoice.invoice_url!);
       expect(lastText()).toContain('250,000');
       expect(lastText()).not.toContain('تأیید و ثبت شد');
+    });
+
+    /*
+     * R2 (v0.3.5 real-test item 4): the customer taps the gateway, sees the loading screen,
+     * and the SAME message becomes the invoice — amount, deadline, the pay link, the status
+     * check and the main menu — as soon as the worker has created it. No status-check tap.
+     */
+    it('R2: edits the tapped message into the ready invoice without a status-check tap', async () => {
+      await enableTonPays();
+      lane = laneWith(tonpays, { invoiceScreens: ctx.container.wizardScreens });
+      const orderId = await draftOrder();
+      const { paymentId } = await payWithGateway(orderId);
+      const message = updateSeq;
+      const onMessage = () => sent.filter((body) => body['message_id'] === message);
+      expect(onMessage().at(-1)?.['text']).toContain('در حال ساخت');
+      const checksBefore = tonpays.checks.length;
+
+      await pass();
+
+      const invoice = await invoiceOf(paymentId);
+      const ready = onMessage().at(-1);
+      expect(ready?.['text']).toContain('250,000');
+      expect(ready?.['text']).toContain('مهلت پرداخت');
+      const markup = JSON.stringify(ready?.['reply_markup'] ?? {});
+      expect(markup).toContain(`"url":"${invoice.web_invoice_url!}"`);
+      expect(markup).toContain(`gc:${paymentId}`);
+      expect(markup).toContain('"callback_data":"mm:"');
+      // Nobody tapped «بررسی وضعیت پرداخت»: the worker created it and edited the message.
+      expect(tonpays.checks.length).toBe(checksBefore);
+      const [wizard] = await rows<{ step: string }>(
+        sql`SELECT step FROM telegram_wizards WHERE payment_id = ${paymentId}`,
+      );
+      expect(wizard?.step).toBe('INVOICE');
+    });
+
+    it('R2: a create whose answer was lost edits the same message into a truthful end, never re-sent', async () => {
+      await enableTonPays();
+      lane = laneWith(tonpays, { invoiceScreens: ctx.container.wizardScreens });
+      tonpays.createMode = 'SERVER_ERROR';
+      const orderId = await draftOrder();
+      const { paymentId } = await payWithGateway(orderId);
+      const message = updateSeq;
+
+      await pass();
+      await pass();
+
+      const last = sent.filter((body) => body['message_id'] === message).at(-1);
+      expect(String(last?.['text'])).toContain('پاسخ درگاه');
+      const markup = JSON.stringify(last?.['reply_markup'] ?? {});
+      expect(markup).toContain(`pm:${orderId}`);
+      expect(markup).not.toContain('"url"');
+      // TonPays rule three: the lost create is never retried and never re-keyed.
+      expect(tonpays.creates).toHaveLength(1);
+      expect((await invoiceOf(paymentId)).creation_state).toBe('CREATE_UNKNOWN');
     });
 
     it('offers web_invoice_url first and falls back to invoice_url, never inventing one', async () => {

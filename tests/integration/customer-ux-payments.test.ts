@@ -244,7 +244,9 @@ describe('a customer pays through the approved screens', () => {
     );
   const handle = (update: ReturnType<typeof customerUpdate>) =>
     ctx.container.botRuntime.handle(tenantA, systemActor('bot'), update);
-  const messages = () => sent.filter((one) => one.url.includes('/sendMessage'));
+  // R2: a wizard step is the tapped message EDITED, so an edit is a message here too.
+  const messages = () =>
+    sent.filter((one) => one.url.includes('/sendMessage') || one.url.includes('/editMessageText'));
   const last = () => messages()[messages().length - 1];
   const lastText = () => String(last()?.body['text'] ?? '');
   const lastMarkup = () => JSON.stringify(last()?.body['reply_markup'] ?? {});
