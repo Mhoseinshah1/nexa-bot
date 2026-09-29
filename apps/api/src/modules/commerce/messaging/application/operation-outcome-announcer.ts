@@ -32,6 +32,8 @@ export const CUSTOMER_REQUESTABLE_OPERATIONS: readonly OperationType[] = [
   'ADD_TRAFFIC',
   'ADD_TIME',
   'ROTATE_SUBSCRIPTION',
+  // WP-A5: extra users the customer paid for, answered like the other three purchases.
+  'ADD_DEVICES',
   /*
    * Since the customer UX completion (§H1): a customer may ask for a usage read from
    * the service card, and is then owed its outcome like any other request. The

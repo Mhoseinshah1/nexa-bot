@@ -18,6 +18,7 @@ import {
   telegramUserIdSchema,
   serviceTransferRecipientRefusalSchema,
   uuidV7Schema,
+  DEVICE_ADDON_MAX_QUANTITY,
   USAGE_REMINDER_PERCENT_MAX,
   USAGE_REMINDER_PERCENT_MIN,
   CONNECTION_GUIDE_PLATFORMS,
@@ -254,6 +255,9 @@ export const BOT_INTENTS = [
   'SERVICE_ADD_TIME',
   'SERVICE_BUY_TRAFFIC',
   'SERVICE_BUY_TIME',
+  /* WP-A5: open the extra-users offer (`dv:`), and buy a chosen quantity (`dq:`). */
+  'SERVICE_ADD_DEVICES',
+  'SERVICE_BUY_DEVICES',
   'SERVICE_ACTION_CONFIRM',
   /*
    * The three the username step needs (Deliverable A).
@@ -568,6 +572,17 @@ export interface BotCommand {
    */
   readonly ownershipVersion?: number;
   /**
+   * How many extra users / devices a `dq:` tap chose (WP-A5), 1 to
+   * `DEVICE_ADDON_MAX_QUANTITY`; absent on every other command.
+   *
+   * The one callback that carries a number, and it is a CHOICE rather than an amount: the
+   * customer is entitled to pick any count the rate allows, the server bounds it again
+   * against the rate's maximum and what the service was already sold, and the price is
+   * computed from the row — so a modified client can only choose a count it could have
+   * tapped, and pays that count's price. Decoded at the boundary as a bounded integer.
+   */
+  readonly quantity?: number;
+  /**
    * The words after a slash command, for the two the management panel accepts.
    *
    * `/link <telegram id> <username>` and `/role <username> <role key>` carry their
@@ -859,6 +874,42 @@ export const SERVICE_ADD_TIME_CALLBACK_PREFIX = 'h:';
 export const SERVICE_BUY_TRAFFIC_CALLBACK_PREFIX = 'a:';
 export const SERVICE_BUY_TIME_CALLBACK_PREFIX = 'b:';
 export const SERVICE_ACTION_CONFIRM_CALLBACK_PREFIX = 'q:';
+/**
+ * Extra users / devices (WP-A5). `dv:<service id>` opens the offer and buys nothing;
+ * `dq:<service id + rate id, as a pair>.<quantity>` quotes that many. Two characters, like
+ * the other late prefixes, and neither begins nor is begun by `d:`, `dc:` or `dx:`.
+ */
+export const SERVICE_ADD_DEVICES_CALLBACK_PREFIX = 'dv:';
+export const SERVICE_BUY_DEVICES_CALLBACK_PREFIX = 'dq:';
+
+/** `dq:` data for one quantity button: the pair, a dot, then the count in decimal. */
+export function encodeDeviceQuantity(serviceId: string, addonId: string, quantity: number): string {
+  return `${SERVICE_BUY_DEVICES_CALLBACK_PREFIX}${encodeIdPair(serviceId, addonId)}.${String(quantity)}`;
+}
+
+/**
+ * A `dq:` tap, decoded, or null. The pair through the same validation every id-carrying
+ * callback uses, and the count as a bounded decimal with no sign, no leading zero and no
+ * room for anything else — so a malformed tap is UNSUPPORTED rather than a draft.
+ */
+export function decodeDeviceQuantity(
+  data: string,
+): { readonly serviceId: string; readonly addonId: string; readonly quantity: number } | null {
+  if (!data.startsWith(SERVICE_BUY_DEVICES_CALLBACK_PREFIX)) return null;
+  const [pairPart, countPart, ...rest] = data
+    .slice(SERVICE_BUY_DEVICES_CALLBACK_PREFIX.length)
+    .split('.');
+  if (rest.length > 0 || pairPart === undefined || countPart === undefined) return null;
+  if (!/^[1-9][0-9]?$/.test(countPart)) return null;
+  const quantity = Number.parseInt(countPart, 10);
+  if (quantity > DEVICE_ADDON_MAX_QUANTITY) return null;
+  const pair = decodeIdPair(pairPart);
+  if (pair === null) return null;
+  const service = uuidV7Schema.safeParse(pair.first);
+  const addon = uuidV7Schema.safeParse(pair.second);
+  if (!service.success || !addon.success) return null;
+  return { serviceId: service.data, addonId: addon.data, quantity };
+}
 
 /**
  * The two username-mode buttons.
@@ -2586,6 +2637,24 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
         data.slice(SERVICE_ADD_TIME_CALLBACK_PREFIX.length),
         id,
       );
+    }
+    if (data.startsWith(SERVICE_ADD_DEVICES_CALLBACK_PREFIX)) {
+      return callbackCommand(
+        'SERVICE_ADD_DEVICES',
+        data.slice(SERVICE_ADD_DEVICES_CALLBACK_PREFIX.length),
+        id,
+      );
+    }
+    if (data.startsWith(SERVICE_BUY_DEVICES_CALLBACK_PREFIX)) {
+      const chosen = decodeDeviceQuantity(data);
+      if (chosen === null) return { intent: 'UNSUPPORTED', targetId: null, callbackQueryId: id };
+      return {
+        intent: 'SERVICE_BUY_DEVICES',
+        targetId: chosen.serviceId,
+        secondaryId: chosen.addonId,
+        quantity: chosen.quantity,
+        callbackQueryId: id,
+      };
     }
     if (
       data.startsWith(SERVICE_BUY_TRAFFIC_CALLBACK_PREFIX) ||
@@ -9124,6 +9193,26 @@ export class BotRuntime {
         input,
       );
     }
+    if (command.intent === 'SERVICE_ADD_DEVICES' && command.targetId !== null) {
+      return this.devicesChoice(scope, actor, customer, command.targetId);
+    }
+    if (
+      command.intent === 'SERVICE_BUY_DEVICES' &&
+      command.targetId !== null &&
+      command.secondaryId != null &&
+      command.quantity !== undefined
+    ) {
+      return this.commercialQuote(
+        scope,
+        actor,
+        customer,
+        command.targetId,
+        'ADD_DEVICES',
+        command.secondaryId,
+        input,
+        command.quantity,
+      );
+    }
     if (command.intent === 'SERVICE_ACTION_CONFIRM' && command.targetId !== null) {
       return this.commercialConfirm(scope, actor, customer, command.targetId, input);
     }
@@ -9398,6 +9487,21 @@ export class BotRuntime {
         row: 3,
       });
     }
+    /*
+     * WP-A5: extra users, on a row of their own, only where `availableFor` found every
+     * condition true — a recorded limit, a panel whose adapter declares and implements
+     * DEVICE_LIMIT_ADJUSTMENT, a rate that applies, and room left under its maximum. No
+     * provider-name test anywhere: the capability decides.
+     */
+    if (commercial.includes('ADD_DEVICES')) {
+      buttons.push({
+        label: { kind: 'TEMPLATE', key: 'bot.service.add_devices_button' },
+        data: `${SERVICE_ADD_DEVICES_CALLBACK_PREFIX}${service.id}`,
+        // Its own row, drawn just below renew: an unused number is a new row where it
+        // first appears, and 3 already holds renew and the on/off switch.
+        row: 7,
+      });
+    }
     const actions = await this.deps.services.customerActionsFor(scope, service);
     if (actions.includes('SUSPEND')) {
       buttons.push({
@@ -9531,6 +9635,62 @@ export class BotRuntime {
   }
 
   /**
+   * The extra users / devices offer for one service, as quantity buttons (WP-A5).
+   *
+   * A read and nothing else — no order, no row, no money. The current limit, the price of
+   * one and how many more may be bought all come from `CommercialActionService.offer`,
+   * which refuses for every reason the purchase would. Each button carries the service,
+   * the rate and a count within what the server said remains; its label shows that
+   * count's list price, and the quote screen the next tap produces states the final one.
+   */
+  private async devicesChoice(
+    scope: TenantContext,
+    actor: ActorContext,
+    customer: CustomerRecord,
+    serviceId: string,
+  ): Promise<PendingReply> {
+    let offer;
+    try {
+      offer = await this.deps.commercial.offer(scope, actor, customer.id, serviceId, 'ADD_DEVICES');
+    } catch (error) {
+      return refusal(error);
+    }
+    const devices = offer.devices;
+    if (devices === null) {
+      return { key: 'bot.service.action_unavailable', values: {}, buttons: [], orderId: null };
+    }
+    const shown = Math.min(devices.remaining, DEVICE_ADDON_MAX_QUANTITY);
+    const unit = devices.addon.price;
+    const buttons: CustomerButton[] = [];
+    for (let quantity = 1; quantity <= shown; quantity += 1) {
+      buttons.push({
+        label: {
+          kind: 'TEMPLATE',
+          key: 'bot.service.devices_option',
+          values: {
+            quantity,
+            price: money(unit.amountMinor * BigInt(quantity), unit.currency),
+          },
+        },
+        data: encodeDeviceQuantity(serviceId, devices.addon.id, quantity),
+        // Two to a row, so a maximum of twenty stays a readable keyboard.
+        row: Math.floor((quantity - 1) / 2),
+      });
+    }
+    buttons.push({ ...backToServiceButton(serviceId), row: Math.ceil(shown / 2) });
+    return {
+      key: 'bot.service.devices_choice',
+      values: {
+        currentLimit: devices.currentLimit,
+        unitPrice: unit,
+        remaining: devices.remaining,
+      },
+      buttons,
+      orderId: null,
+    };
+  }
+
+  /**
    * The quote a customer answers: what this action buys, and what it costs.
    *
    * It writes a DRAFT order and its invoice line — both in one transaction — and
@@ -9546,9 +9706,11 @@ export class BotRuntime {
     actor: ActorContext,
     customer: CustomerRecord,
     serviceId: string,
-    kind: 'RENEW' | 'ADD_TRAFFIC' | 'ADD_TIME',
+    kind: 'RENEW' | 'ADD_TRAFFIC' | 'ADD_TIME' | 'ADD_DEVICES',
     addonId: string | null,
     input: { readonly idempotencyKey: string },
+    /** WP-A5: the extra-users count a `dq:` tap chose; absent for every other kind. */
+    quantity?: number,
   ): Promise<PendingReply> {
     try {
       const service = await this.ownedService(scope, customer, serviceId);
@@ -9559,6 +9721,7 @@ export class BotRuntime {
         serviceId,
         kind,
         ...(addonId === null ? {} : { addonId }),
+        ...(quantity === undefined ? {} : { quantity }),
         idempotencyKey: `${input.idempotencyKey}:${kind.toLowerCase()}`,
       });
       // The same pre-invoice and the same payment buttons as a new purchase (§H5, §H6):
@@ -11043,9 +11206,26 @@ export class BotRuntime {
     const commercial = order.purpose !== 'NEW_SERVICE' && order.purpose !== 'CUSTOM_SERVICE';
     // Marketing display data for the plan being bought or renewed; a package has none.
     const display =
-      order.purpose === 'ADD_TRAFFIC' || order.purpose === 'ADD_TIME'
+      order.purpose === 'ADD_TRAFFIC' ||
+      order.purpose === 'ADD_TIME' ||
+      order.purpose === 'ADD_DEVICES'
         ? null
         : await this.deps.productDisplay.displayFor(scope, order.line.productId);
+    /*
+     * WP-A5: an extra-users order states what it bought from its own frozen line — the
+     * count, the price of one, and the limit before and after, the target being what
+     * `line_device_limit` holds.
+     */
+    const target = order.line.specification.deviceLimit;
+    const devices =
+      order.purpose === 'ADD_DEVICES' && target !== null
+        ? {
+            quantity: order.line.quantity,
+            unitPrice: order.line.unitPrice,
+            currentLimit: target - order.line.quantity,
+            targetLimit: target,
+          }
+        : null;
     const balance = await this.deps.wallet.balanceForCustomer(scope, actor, customer.id);
     // A custom service shows what it was priced from, from the order's frozen terms.
     const custom =
@@ -11065,9 +11245,13 @@ export class BotRuntime {
               pricePerDay: custom.pricePerDay,
               timePrice: custom.timePrice,
             },
+      devices,
       serviceUsername: username,
       productName: order.line.title,
-      durationDays: order.purpose === 'ADD_TRAFFIC' ? null : order.line.specification.durationDays,
+      durationDays:
+        order.purpose === 'ADD_TRAFFIC' || order.purpose === 'ADD_DEVICES'
+          ? null
+          : order.line.specification.durationDays,
       total: order.totals.total,
       trafficBytes: commercial ? null : order.line.specification.trafficBytes,
       addedTrafficBytes:

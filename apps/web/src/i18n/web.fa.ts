@@ -1886,6 +1886,7 @@ export const WEB_FA = {
 
   // --- Product categories ---------------------------------------------------
   'web.nav_product_categories': 'دسته‌بندی‌ها',
+  'web.nav_extra_devices': 'افزایش کاربر / دستگاه',
   'web.categories_title': 'دسته‌بندی محصولات',
   'web.categories_subtitle': 'هر محصول فروختنی دقیقاً در یک دسته قرار می‌گیرد.',
   'web.categories_empty': 'هنوز دسته‌ای ساخته نشده است',
@@ -2241,6 +2242,8 @@ export const WEB_FA = {
 
   'web.service_expires_at': 'انقضا',
   'web.service_traffic_limit': 'سقف حجم',
+  'web.service_device_limit': 'تعداد کاربر / دستگاه مجاز',
+  'web.service_device_limit_none': 'ثبت نشده',
   'web.service_traffic_used': 'حجم مصرف‌شده',
   'web.service_usage_synced_at': 'آخرین خواندن مصرف از پنل',
   'web.service_usage_never': 'هرگز از پنل خوانده نشده است.',
@@ -2325,6 +2328,7 @@ export const WEB_FA = {
   'web.operation_type_renew': 'تمدید',
   'web.operation_type_add_traffic': 'افزودن حجم',
   'web.operation_type_add_time': 'افزودن زمان',
+  'web.operation_type_add_devices': 'افزایش کاربر / دستگاه',
   'web.operation_type_suspend': 'قطع موقت',
   'web.operation_type_resume': 'وصل دوباره',
   'web.operation_type_terminate': 'حذف',
@@ -2691,6 +2695,54 @@ export const WEB_FA = {
   'web.purpose_renew': 'تمدید',
   'web.purpose_add_traffic': 'افزایش حجم',
   'web.purpose_add_time': 'افزایش زمان',
+  'web.purpose_add_devices': 'افزایش کاربر / دستگاه',
+  // WP-A5: the extra users / devices rate — an `ADD_DEVICES` add-on, in operator words.
+  'web.extra_devices_title': 'افزایش کاربر / دستگاه',
+  'web.extra_devices_subtitle':
+    'قیمت هر کاربر یا دستگاه اضافه که مشتری برای سرویس فعلی خود می‌خرد، و حداکثر تعدادی که یک سرویس می‌تواند بخرد.',
+  'web.extra_devices_no_capable_panel':
+    'در این نسخه هیچ‌یک از انواع پنل پشتیبانی‌شده امکان افزایش تعداد کاربر یک سرویس موجود را ندارد. تعرفه‌ای که اینجا ذخیره کنید تا وقتی پنلی با این قابلیت وصل نشود به هیچ مشتری‌ای نمایش داده نمی‌شود.',
+  'web.extra_devices_capable_panels':
+    'دکمهٔ «افزایش کاربر / دستگاه» فقط برای سرویس‌هایی نمایش داده می‌شود که روی این نوع پنل‌ها هستند: {providers}',
+  'web.extra_devices_rates': 'تعرفه‌ها',
+  'web.extra_devices_empty': 'هنوز تعرفه‌ای تعریف نشده است',
+  'web.extra_devices_empty_hint':
+    'بدون تعرفهٔ فعال و قیمت‌دار، دکمهٔ افزایش کاربر به مشتری نمایش داده نمی‌شود.',
+  'web.extra_devices_rate_title': 'عنوان',
+  'web.extra_devices_unit_price': 'قیمت هر کاربر',
+  'web.extra_devices_unit_price_hint':
+    'مبلغ یک کاربر یا دستگاه اضافه. مبلغ نهایی برابر است با این قیمت ضرب در تعدادی که مشتری انتخاب می‌کند.',
+  'web.extra_devices_unpriced': 'بدون قیمت',
+  'web.extra_devices_currency': 'واحد پول',
+  'web.extra_devices_max_quantity': 'حداکثر قابل خرید',
+  'web.extra_devices_max_quantity_hint':
+    'بیشترین تعداد کاربر اضافه‌ای که یک سرویس روی هم می‌تواند بخرد؛ عددی بین ۱ تا {max}.',
+  'web.extra_devices_scope': 'پنل / محصول',
+  'web.extra_devices_scope_panel': 'پنل',
+  'web.extra_devices_scope_product': 'محصول',
+  'web.extra_devices_scope_hint':
+    'اگر برای یک سرویس چند تعرفه صدق کند، تعرفهٔ مخصوص محصول بر تعرفهٔ مخصوص پنل، و آن بر تعرفهٔ عمومی مقدم است.',
+  'web.extra_devices_scope_all_panels': 'همهٔ پنل‌ها',
+  'web.extra_devices_scope_all_products': 'همهٔ محصولات',
+  'web.extra_devices_panel_unsupported': 'این پنل افزایش کاربر را پشتیبانی نمی‌کند',
+  'web.extra_devices_scope_unavailable':
+    'فهرست کامل پنل‌ها یا محصولات خوانده نشد، پس ممکن است همهٔ گزینه‌ها نمایش داده نشوند. صفحه را دوباره بارگذاری کنید.',
+  'web.extra_devices_sort': 'ترتیب',
+  'web.extra_devices_state': 'وضعیت',
+  'web.extra_devices_active': 'فعال',
+  'web.extra_devices_inactive': 'غیرفعال',
+  'web.extra_devices_updated': 'آخرین تغییر',
+  'web.extra_devices_actions': 'عملیات',
+  'web.extra_devices_edit': 'ویرایش',
+  'web.extra_devices_enable': 'فعال کردن',
+  'web.extra_devices_disable': 'غیرفعال کردن',
+  'web.extra_devices_new': 'تعرفهٔ جدید',
+  'web.extra_devices_editing': 'ویرایش تعرفه',
+  'web.extra_devices_form_hint':
+    'تعرفهٔ جدید غیرفعال ساخته می‌شود و با «فعال کردن» به مشتری عرضه می‌شود. تغییر قیمت فقط روی خریدهای بعدی اثر دارد؛ هر سفارش قیمت و نسخهٔ تعرفه‌ای را که با آن خریده شده نگه می‌دارد.',
+  'web.extra_devices_save': 'ذخیره',
+  'web.extra_devices_cancel_edit': 'انصراف از ویرایش',
+  'web.extra_devices_saved': 'تعرفه ذخیره شد.',
 
   'web.preview_title': 'پیش‌نمایش قیمت',
   'web.preview_hint':

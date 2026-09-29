@@ -3004,12 +3004,41 @@ export const serviceAddons = pgTable(
     trafficBytes: bigint('traffic_bytes', { mode: 'bigint' }),
     /** Days added to the window. Set for `ADD_TIME`, NULL otherwise. */
     durationDays: integer('duration_days'),
+    /**
+     * WP-A5, `ADD_DEVICES` only: the most extra users / devices ONE service may be sold
+     * through this add-on in total, counted from its live purchases at read time. For that
+     * kind `price_amount` is the price of ONE, and the customer chooses how many.
+     */
+    maxQuantity: integer('max_quantity'),
+    /**
+     * WP-A5, `ADD_DEVICES` only: the panel and / or product the rate applies to. NULL is
+     * "every", never "none"; the most specific ACTIVE row wins for a service. Both are
+     * forbidden on the two package kinds, which apply tenant-wide.
+     */
+    panelId: uuid('panel_id'),
+    productId: uuid('product_id'),
+    /**
+     * Bumped on every edit. A purchase copies the version it was priced from onto its
+     * commercial action, so "which rule, as it read then" is answerable after the row
+     * has been re-priced — the rule id AND version the brief requires on the snapshot.
+     */
+    version: integer('version').notNull().default(1),
     priceAmount: bigint('price_amount', { mode: 'bigint' }),
     priceCurrency: text('price_currency'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
   (table) => [
+    foreignKey({
+      columns: [table.tenantId, table.panelId],
+      foreignColumns: [panels.tenantId, panels.id],
+      name: 'service_addons_panel_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.productId],
+      foreignColumns: [products.tenantId, products.id],
+      name: 'service_addons_product_fk',
+    }),
     index('service_addons_tenant_status_idx').on(table.tenantId, table.status),
     /** The operator's list, and its keyset: kind, then sort, then created, then id. */
     index('service_addons_tenant_sort_idx').on(
@@ -3042,9 +3071,16 @@ export const serviceAddons = pgTable(
      */
     check(
       'service_addons_amount_matches_kind',
-      sql`(kind = 'ADD_TRAFFIC' AND traffic_bytes IS NOT NULL AND traffic_bytes > 0 AND duration_days IS NULL)
-          OR (kind = 'ADD_TIME' AND duration_days IS NOT NULL AND duration_days > 0 AND traffic_bytes IS NULL)`,
+      sql`(kind = 'ADD_TRAFFIC' AND traffic_bytes IS NOT NULL AND traffic_bytes > 0 AND duration_days IS NULL AND max_quantity IS NULL)
+          OR (kind = 'ADD_TIME' AND duration_days IS NOT NULL AND duration_days > 0 AND traffic_bytes IS NULL AND max_quantity IS NULL)
+          OR (kind = 'ADD_DEVICES' AND max_quantity IS NOT NULL AND max_quantity >= 1 AND max_quantity <= 20 AND traffic_bytes IS NULL AND duration_days IS NULL)`,
     ),
+    /** Only the per-device rate is scoped; the two packages apply tenant-wide (WP-A5). */
+    check(
+      'service_addons_scope_kind_check',
+      sql`kind = 'ADD_DEVICES' OR (panel_id IS NULL AND product_id IS NULL)`,
+    ),
+    check('service_addons_version_check', sql`version >= 1`),
     check(
       'service_addons_duration_bound_check',
       sql`duration_days IS NULL OR duration_days <= 3650`,
@@ -3219,11 +3255,18 @@ export const orders = pgTable(
       sql`purpose <> 'CUSTOM_SERVICE'
           OR (line_traffic_bytes > 0 AND line_duration_days > 0 AND line_quantity = 1)`,
     ),
+    /*
+     * `ADD_DEVICES` (WP-A5) buys neither bytes nor days: its line is `line_quantity`
+     * devices at `line_unit_price_amount` each, and `line_device_limit` is the TARGET the
+     * quote promised — the limit then in force plus the quantity, so always above it.
+     */
     check(
       'orders_quantity_line_check',
-      sql`purpose NOT IN ('ADD_TRAFFIC', 'ADD_TIME')
+      sql`purpose NOT IN ('ADD_TRAFFIC', 'ADD_TIME', 'ADD_DEVICES')
           OR (purpose = 'ADD_TRAFFIC' AND line_traffic_bytes > 0 AND line_duration_days = 0)
-          OR (purpose = 'ADD_TIME' AND line_duration_days > 0 AND line_traffic_bytes = 0)`,
+          OR (purpose = 'ADD_TIME' AND line_duration_days > 0 AND line_traffic_bytes = 0)
+          OR (purpose = 'ADD_DEVICES' AND line_traffic_bytes = 0 AND line_duration_days = 0
+              AND line_device_limit IS NOT NULL AND line_device_limit > line_quantity)`,
     ),
     /**
      * A total is never negative, and the parts agree with the whole.
@@ -5060,6 +5103,17 @@ export const services = pgTable(
     trafficUsedBytes: bigint('traffic_used_bytes', { mode: 'bigint' })
       .notNull()
       .default(sql`0`),
+    /**
+     * The device / connection limit this service is entitled to (WP-A5), or NULL when none
+     * is recorded — unlimited, or a plan that set none.
+     *
+     * Seeded from the order's frozen `line_device_limit` when the service is made, and
+     * raised ONLY by an `ADD_DEVICES` operation the panel applied, written from the absolute
+     * target that operation persisted. It is what the next extra-users purchase is computed
+     * from, which is why a purchase is never offered against a NULL: there is no number to
+     * add devices to.
+     */
+    deviceLimit: integer('device_limit'),
     usageSyncedAt: timestamptz('usage_synced_at'),
     /**
      * Last connection, as a provider PROVED it (customer UX completion §H). `AT` with a
@@ -5155,6 +5209,10 @@ export const services = pgTable(
       .where(sql`state = 'UNRECONCILED'`),
     check('services_state_check', enumCheck('state', SERVICE_STATES)),
     check('services_traffic_check', sql`traffic_limit_bytes >= 0 AND traffic_used_bytes >= 0`),
+    check(
+      'services_device_limit_check',
+      sql`device_limit IS NULL OR (device_limit >= 1 AND device_limit <= 1000)`,
+    ),
     /** The format the panels accept, pinned so a bad generator fails at the write. */
     check('services_subscription_ref_check', sql`subscription_ref ~ '^[0-9a-f]{32}$'`),
     /**
@@ -5459,6 +5517,13 @@ export const serviceCommercialActions = pgTable(
       .notNull()
       .default(sql`0`),
     purchasedDurationDays: integer('purchased_duration_days').notNull().default(0),
+    /** WP-A5: extra users / devices bought. Positive for `ADD_DEVICES`, zero otherwise. */
+    purchasedDeviceCount: integer('purchased_device_count').notNull().default(0),
+    /**
+     * WP-A5: the add-on VERSION the purchase was priced from, beside `addon_id`. Required
+     * for `ADD_DEVICES`, whose rate is edited in place; null for every other kind.
+     */
+    addonVersion: integer('addon_version'),
     /** What was paid, with its currency. Never an amount without one. */
     amount: bigint('amount', { mode: 'bigint' }).notNull(),
     currency: text('currency').notNull(),
@@ -5537,9 +5602,15 @@ export const serviceCommercialActions = pgTable(
      */
     check(
       'service_commercial_actions_purchased_check',
-      sql`(kind = 'RENEW')
-          OR (kind = 'ADD_TRAFFIC' AND purchased_traffic_bytes > 0 AND purchased_duration_days = 0)
-          OR (kind = 'ADD_TIME' AND purchased_duration_days > 0 AND purchased_traffic_bytes = 0)`,
+      sql`(kind = 'RENEW' AND purchased_device_count = 0)
+          OR (kind = 'ADD_TRAFFIC' AND purchased_traffic_bytes > 0 AND purchased_duration_days = 0 AND purchased_device_count = 0)
+          OR (kind = 'ADD_TIME' AND purchased_duration_days > 0 AND purchased_traffic_bytes = 0 AND purchased_device_count = 0)
+          OR (kind = 'ADD_DEVICES' AND purchased_device_count > 0 AND purchased_traffic_bytes = 0 AND purchased_duration_days = 0
+              AND addon_id IS NOT NULL AND addon_version IS NOT NULL)`,
+    ),
+    check(
+      'service_commercial_actions_addon_version_check',
+      sql`addon_version IS NULL OR (kind = 'ADD_DEVICES' AND addon_version >= 1)`,
     ),
     unique('service_commercial_actions_tenant_id_key').on(table.tenantId, table.id),
   ],
@@ -5634,6 +5705,12 @@ export const provisioningOperations = pgTable(
      */
     targetExpiresAt: timestamptz('target_expires_at'),
     targetTrafficLimitBytes: bigint('target_traffic_limit_bytes', { mode: 'bigint' }),
+    /**
+     * WP-A5: the absolute device / connection limit an `ADD_DEVICES` should leave the
+     * account at. Set for that type and only that type, and alone: an `ADD_DEVICES` carries
+     * no expiry and no allowance, and nothing else carries a device limit.
+     */
+    targetDeviceLimit: integer('target_device_limit'),
     /** The provider's own reference for the effect, when it gave one. */
     providerReference: text('provider_reference'),
     /** A kind from the EXISTING provider taxonomy. Never a new vocabulary. */
@@ -5783,7 +5860,7 @@ export const provisioningOperations = pgTable(
     uniqueIndex('provisioning_operations_open_commercial_key')
       .on(table.tenantId, table.serviceId)
       .where(
-        sql`type IN ('RENEW', 'ADD_TRAFFIC', 'ADD_TIME') AND state IN ('PLANNED', 'IN_FLIGHT', 'UNKNOWN')`,
+        sql`type IN ('RENEW', 'ADD_TRAFFIC', 'ADD_TIME', 'ADD_DEVICES') AND state IN ('PLANNED', 'IN_FLIGHT', 'UNKNOWN')`,
       ),
     index('provisioning_operations_unknown_idx')
       .on(table.tenantId, table.createdAt)
@@ -5805,8 +5882,20 @@ export const provisioningOperations = pgTable(
      */
     check(
       'provisioning_operations_target_check',
-      sql`type IN ('RENEW', 'ADD_TRAFFIC', 'ADD_TIME')
-          OR (target_expires_at IS NULL AND target_traffic_limit_bytes IS NULL)`,
+      sql`type IN ('RENEW', 'ADD_TRAFFIC', 'ADD_TIME', 'ADD_DEVICES')
+          OR (target_expires_at IS NULL AND target_traffic_limit_bytes IS NULL AND target_device_limit IS NULL)`,
+    ),
+    /**
+     * WP-A5: a device limit is an `ADD_DEVICES` target and only one, and an `ADD_DEVICES`
+     * carries nothing else — so a raise can never be read as a renewal, nor a renewal be
+     * made to change how many devices an account allows.
+     */
+    check(
+      'provisioning_operations_target_device_check',
+      sql`(type = 'ADD_DEVICES'
+           AND target_device_limit IS NOT NULL AND target_device_limit >= 1 AND target_device_limit <= 1000
+           AND target_expires_at IS NULL AND target_traffic_limit_bytes IS NULL)
+          OR (type <> 'ADD_DEVICES' AND target_device_limit IS NULL)`,
     ),
     /**
      * And a commercial operation must carry at least one, or it asks the panel for
@@ -5814,9 +5903,10 @@ export const provisioningOperations = pgTable(
      */
     check(
       'provisioning_operations_target_present_check',
-      sql`type NOT IN ('RENEW', 'ADD_TRAFFIC', 'ADD_TIME')
+      sql`type NOT IN ('RENEW', 'ADD_TRAFFIC', 'ADD_TIME', 'ADD_DEVICES')
           OR target_expires_at IS NOT NULL
-          OR target_traffic_limit_bytes IS NOT NULL`,
+          OR target_traffic_limit_bytes IS NOT NULL
+          OR target_device_limit IS NOT NULL`,
     ),
     check(
       'provisioning_operations_target_traffic_check',

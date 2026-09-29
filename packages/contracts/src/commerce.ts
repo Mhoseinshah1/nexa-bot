@@ -225,6 +225,12 @@ export interface OrderLineSnapshot {
  * exactly as `NEW_SERVICE` does, and it is the one purpose whose order names NO product —
  * `orders_product_purpose_check` pins that, so nothing can fake one.
  */
+/**
+ * `ADD_DEVICES` (WP-A5) is extra users / devices on an existing service: a quantity the
+ * customer chose, priced per device by a configured `ADD_DEVICES` add-on, delivered as an
+ * `ADD_DEVICES` operation that raises the account's limit to an absolute target. It names
+ * a service and produces none, exactly like the other two quantity purchases.
+ */
 export const ORDER_PURPOSES = [
   'NEW_SERVICE',
   'RENEW',
@@ -232,6 +238,7 @@ export const ORDER_PURPOSES = [
   'ADD_TIME',
   'TRIAL',
   'CUSTOM_SERVICE',
+  'ADD_DEVICES',
 ] as const;
 export type OrderPurpose = (typeof ORDER_PURPOSES)[number];
 export const orderPurposeSchema = z.enum(ORDER_PURPOSES);
@@ -280,6 +287,7 @@ export function orderPurposeCreatesNewService(purpose: OrderPurpose): boolean {
     case 'RENEW':
     case 'ADD_TRAFFIC':
     case 'ADD_TIME':
+    case 'ADD_DEVICES':
       return false;
     default: {
       const unclassified: never = purpose;
@@ -302,6 +310,7 @@ export function orderPurposeTargetsExistingService(purpose: OrderPurpose): boole
     case 'RENEW':
     case 'ADD_TRAFFIC':
     case 'ADD_TIME':
+    case 'ADD_DEVICES':
       return true;
     case 'NEW_SERVICE':
     case 'TRIAL':
@@ -326,9 +335,9 @@ export function orderPurposeTargetsExistingService(purpose: OrderPurpose): boole
  */
 export function operationTypeForOrderPurpose(
   purpose: OrderPurpose,
-): 'RENEW' | 'ADD_TRAFFIC' | 'ADD_TIME' | null {
+): 'RENEW' | 'ADD_TRAFFIC' | 'ADD_TIME' | 'ADD_DEVICES' | null {
   return orderPurposeTargetsExistingService(purpose)
-    ? (purpose as 'RENEW' | 'ADD_TRAFFIC' | 'ADD_TIME')
+    ? (purpose as 'RENEW' | 'ADD_TRAFFIC' | 'ADD_TIME' | 'ADD_DEVICES')
     : null;
 }
 

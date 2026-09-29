@@ -293,6 +293,7 @@ describe('provisioning invariants', () => {
           subscriptionRef: '00000000000000000000000000000001',
           providerClientId: '00000000-0000-4000-8000-000000000001',
           trafficLimitBytes: 0n,
+          deviceLimit: null,
         },
         ctx.container.clock.now(),
         tx,

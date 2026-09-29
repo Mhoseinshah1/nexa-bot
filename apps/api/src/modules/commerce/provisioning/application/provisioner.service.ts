@@ -1,6 +1,8 @@
 import {
   canAddTime,
   canAddVolume,
+  canAdjustDeviceLimit,
+  deviceLimitReached,
   canDeleteUser,
   canDisableUser,
   canRenewUser,
@@ -28,6 +30,7 @@ import {
   type OrderId,
   type OrderPurpose,
   type ProviderAdapter,
+  type ProviderDeviceLimitOutcome,
   type ProviderFailureDetail,
   type ProviderFailureKind,
   type ProviderRemovalOutcome,
@@ -76,6 +79,8 @@ import {
   resumeCall,
   rotateCall,
   allowanceCall,
+  deviceLimitCall,
+  deviceLimitReadCall,
   suspendCall,
   terminateCall,
   usageSyncCall,
@@ -340,6 +345,8 @@ export const PURCHASED_AS: Readonly<Record<OrderPurpose, OperationType>> = {
   // A custom service is a purchase delivered exactly as one (Package D): its cashback and
   // its referral commission are earned when the PROVISION succeeds.
   CUSTOM_SERVICE: 'PROVISION',
+  // WP-A5: extra users are delivered by the raise they bought, and only that op refunds.
+  ADD_DEVICES: 'ADD_DEVICES',
 };
 
 /**
@@ -360,7 +367,10 @@ const VERIFIABLE_STATES: readonly ServiceRecord['state'][] = ['ACTIVE', 'SUSPEND
  * on a field (null) holds any finite target on it. A target of `0n` traffic is the
  * schema's "unlimited" and is reached only by a panel reporting no limit.
  */
-export function allowanceReached(target: OperationTarget, usage: ProviderUsage | null): boolean {
+export function allowanceReached(
+  target: Pick<OperationTarget, 'expiresAt' | 'trafficLimitBytes'>,
+  usage: ProviderUsage | null,
+): boolean {
   if (usage === null) return false;
   if (target.expiresAt !== null) {
     /*
@@ -935,6 +945,28 @@ export class ProvisionerService {
           service,
           operation.target,
           await allowanceCall(adapter, target, http, ref, operation.target),
+        );
+      }
+      /*
+       * WP-A5: extra users, behind the three-question guard — the read, the write and the
+       * declaration — and an absolute target the settling transaction stored. A panel
+       * that declares the capability without both methods is refused here as it is for
+       * every optional operation, and `decideOperability` has already refused a panel
+       * that does not declare it at all.
+       */
+      case 'ADD_DEVICES': {
+        const deviceTarget = operation.target?.deviceLimit ?? null;
+        if (!canAdjustDeviceLimit(adapter) || operation.target === null || deviceTarget === null) {
+          await this.refuse(scope, operation, service, 'CAPABILITY_UNSUPPORTED', now);
+          return this.refused(operation, 'CAPABILITY_UNSUPPORTED');
+        }
+        return this.finishDeviceLimit(
+          scope,
+          operation,
+          service,
+          operation.target,
+          deviceTarget,
+          await deviceLimitCall(adapter, target, http, ref, deviceTarget),
         );
       }
       case 'PROVISION':
@@ -2117,6 +2149,83 @@ export class ProvisionerService {
   }
 
   /**
+   * What one extra-users write established (WP-A5), under the same rules as an allowance.
+   *
+   * - A failure that says nothing reached the panel keeps the ordinary retry-then-refund
+   *   path: the refund is for money that bought nothing.
+   * - Any other failure may have APPLIED the raise, so it is never refunded and never sent
+   *   again blind: `IN_FLIGHT -> UNKNOWN`, and bounded READS compare the limit the panel
+   *   holds with the absolute target (`verifyOneAllowance`).
+   * - An answer that reaches the target is the raise, recorded on the service.
+   * - An answer that does NOT reach it is not a verdict — the contract makes that
+   *   `MALFORMED_RESPONSE` in the adapter — so it is verified, never trusted either way.
+   */
+  private async finishDeviceLimit(
+    scope: TenantContext,
+    operation: OperationRecord,
+    service: ServiceRecord,
+    target: OperationTarget,
+    deviceTarget: number,
+    changed: ProviderDeviceLimitOutcome,
+  ): Promise<ExecutionResult> {
+    const now = this.deps.clock.now();
+    const serviceId = service.id;
+
+    if (!changed.ok) {
+      if (!(SAFE_TO_REPLAY_FAILURE_KINDS as readonly string[]).includes(changed.failure)) {
+        await this.deferToVerification(
+          scope,
+          operation,
+          changed.failure,
+          failureNote(changed.failure, changed.status, changed.detail),
+          now,
+        );
+        return this.attempted(operation, serviceId, 'UNKNOWN', changed.failure);
+      }
+      const outcome = outcomeFor(changed.failure, operation.type);
+      await this.recordManagementFailure(
+        scope,
+        operation,
+        service,
+        outcome,
+        changed.failure,
+        failureNote(changed.failure, changed.status, changed.detail),
+        now,
+      );
+      return this.attempted(operation, serviceId, outcome, changed.failure);
+    }
+
+    if (!changed.found) {
+      // The panel answered, authenticated, that it does not hold the account. Nothing was
+      // raised, so the entitlement stays and the purchase is refunded as definitive.
+      await this.recordManagementFailure(
+        scope,
+        operation,
+        service,
+        'FAILED',
+        null,
+        'the panel does not have this service’s account',
+        now,
+      );
+      return this.attempted(operation, serviceId, 'FAILED', null);
+    }
+
+    if (!deviceLimitReached(deviceTarget, changed.deviceLimit)) {
+      await this.deferToVerification(
+        scope,
+        operation,
+        'MALFORMED_RESPONSE',
+        'the panel answered without the target device limit',
+        now,
+      );
+      return this.attempted(operation, serviceId, 'UNKNOWN', 'MALFORMED_RESPONSE');
+    }
+
+    await this.recordAllowanceApplied(scope, operation, service, target, null, 'IN_FLIGHT', now);
+    return this.attempted(operation, serviceId, 'SUCCEEDED', null);
+  }
+
+  /**
    * The allowance an operation made true, written to the service with its audit row.
    *
    * Shared by the write that was answered (`IN_FLIGHT`) and by the verification READ
@@ -2208,6 +2317,7 @@ export class ProvisionerService {
             state: from,
             expiresAt: service.expiresAt?.toISOString() ?? null,
             trafficLimitBytes: service.trafficLimitBytes.toString(),
+            deviceLimit: service.deviceLimit,
           },
           after: {
             state: to,
@@ -2218,6 +2328,7 @@ export class ProvisionerService {
              */
             expiresAt: (target.expiresAt ?? service.expiresAt)?.toISOString() ?? null,
             trafficLimitBytes: (target.trafficLimitBytes ?? service.trafficLimitBytes).toString(),
+            deviceLimit: target.deviceLimit ?? service.deviceLimit,
             orderId: operation.orderId,
           },
           result: 'SUCCESS',
@@ -2397,18 +2508,63 @@ export class ProvisionerService {
     // Nothing was read, so the read is given back: a busy budget is not evidence.
     if (!budget.permitted) return again('the tenant outbound budget had no capacity', true);
 
-    const found = await adapter.lookupUser(
-      { baseUrl: operable.baseUrl, credentials, activation: operable.activation },
-      this.deps.http.forBase(operable.baseUrl),
-      providerRefFor(service),
-    );
-    const readAt = this.deps.clock.now();
-    if (!found.ok) {
-      return again(failureNote(found.failure, found.status, found.detail));
+    const providerTarget = {
+      baseUrl: operable.baseUrl,
+      credentials,
+      activation: operable.activation,
+    };
+    const http = this.deps.http.forBase(operable.baseUrl);
+    /*
+     * The READ that settles the write, and for extra users it is the device-limit read
+     * (WP-A5): `lookupUser` answers whether the account exists and what its allowance is,
+     * never how many devices it allows. A panel whose adapter can no longer read the limit
+     * cannot settle the write, so it stops for an operator rather than guessing.
+     */
+    let found: {
+      readonly found: boolean;
+      readonly reached: boolean;
+      readonly usage: ProviderUsage | null;
+    };
+    if (operation.type === 'ADD_DEVICES') {
+      const deviceTarget = target.deviceLimit;
+      if (!canAdjustDeviceLimit(adapter) || deviceTarget === null) {
+        return this.rescheduleVerification(
+          scope,
+          operation,
+          true,
+          'the panel cannot read a device limit; an operator must decide',
+          now,
+        );
+      }
+      const read = await deviceLimitReadCall(
+        adapter,
+        providerTarget,
+        http,
+        providerRefFor(service),
+      );
+      if (!read.ok) return again(failureNote(read.failure, read.status, read.detail));
+      found = {
+        found: read.found,
+        reached: read.found && deviceLimitReached(deviceTarget, read.deviceLimit),
+        usage: null,
+      };
+    } else {
+      const looked = await adapter.lookupUser(providerTarget, http, providerRefFor(service));
+      if (!looked.ok) {
+        return again(failureNote(looked.failure, looked.status, looked.detail));
+      }
+      // A record without its figures is an incomplete answer, not a verdict (G5).
+      if (looked.found && looked.usage === null) {
+        return again('the account answered without usage');
+      }
+      found = {
+        found: looked.found,
+        reached: looked.found && allowanceReached(target, looked.usage),
+        usage: looked.found ? looked.usage : null,
+      };
     }
-    // A record without its figures is an incomplete answer, not a verdict (G5).
-    if (found.found && found.usage === null) return again('the account answered without usage');
-    if (found.found && allowanceReached(target, found.usage)) {
+    const readAt = this.deps.clock.now();
+    if (found.reached) {
       await this.recordAllowanceApplied(
         scope,
         operation,

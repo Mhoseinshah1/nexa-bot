@@ -56,6 +56,15 @@ export const PROVIDER_CAPABILITIES = [
    * `canFetchSubscriptionFiles`, which also requires the method.
    */
   'SUBSCRIPTION_FILES',
+  /*
+   * Raising an EXISTING account's device / connection limit to an absolute target, and
+   * reading the limit back (WP-A5). Not `LIMIT_DEVICES`, which names what a CREATE writes
+   * and mutates nothing afterwards: this is a separate promise, gated by
+   * `canAdjustDeviceLimit`, which requires BOTH methods — `readDeviceLimit` and
+   * `applyDeviceLimit` — AND this declaration. Declared by no provider in this release;
+   * each descriptor below records the evidence it was measured against.
+   */
+  'DEVICE_LIMIT_ADJUSTMENT',
 ] as const;
 export type ProviderCapability = (typeof PROVIDER_CAPABILITIES)[number];
 
@@ -1218,6 +1227,84 @@ export interface ProviderAdapter extends ProviderConnectionAdapter {
     http: ProviderHttpClient,
     ref: ProviderUserRef,
   ): Promise<ProviderSubscriptionFilesOutcome>;
+
+  /**
+   * The account's device / connection limit as the panel holds it NOW (WP-A5).
+   *
+   * A READ, and the evidence every ambiguous `applyDeviceLimit` is settled by: after a
+   * write whose answer was lost, the executor never sends it again blind — it asks this,
+   * and compares what the panel holds with the absolute target the operation persisted.
+   * So an adapter must never report `found: false` because a request failed, and never
+   * report a limit it did not read off the panel's own record.
+   *
+   * `maxDeviceLimit` is the most the panel will accept for this account, where the panel
+   * says; null where it does not, which is the honest value for every panel whose API
+   * publishes no ceiling.
+   *
+   * Optional, and gated by `canAdjustDeviceLimit`, which requires this method, its write
+   * twin below AND the `DEVICE_LIMIT_ADJUSTMENT` capability.
+   */
+  readDeviceLimit?(
+    target: ProviderServiceTarget,
+    http: ProviderHttpClient,
+    ref: ProviderUserRef,
+  ): Promise<ProviderDeviceLimitOutcome>;
+
+  /**
+   * Make the account's device / connection limit read as `deviceLimit` (WP-A5).
+   *
+   * An ABSOLUTE target, never an increment, for the reason `applyAllowance` takes one:
+   * replaying "make the limit three" is a no-op, and replaying "add one device" is a
+   * customer paying for one device and receiving two. The target is computed once, in
+   * the transaction that settled the order, and stored on the operation row.
+   *
+   * Two rules an implementation must keep, and the contract states them because nothing
+   * below the type can:
+   *
+   *   - It must NOT lower a limit the panel already holds at or above the target. A panel
+   *     an operator raised by hand past what was bought already gives the customer what
+   *     they paid for; writing the smaller target would take a device away from them.
+   *     Such an account answers `found: true` with the limit it holds.
+   *   - `deviceLimit` on success is what the panel reports AFTER the write — read from
+   *     its own answer or a read-back — never the value that was sent. A 2xx whose record
+   *     cannot be read, or does not carry the target, is `MALFORMED_RESPONSE`, which the
+   *     executor treats as ambiguous and settles with `readDeviceLimit`.
+   */
+  applyDeviceLimit?(
+    target: ProviderServiceTarget,
+    http: ProviderHttpClient,
+    ref: ProviderUserRef,
+    deviceLimit: number,
+  ): Promise<ProviderDeviceLimitOutcome>;
+}
+
+/**
+ * What a device-limit read or write established (WP-A5).
+ *
+ * `found` carries exactly the meaning it has on `ProviderLookupOutcome`: `false` is the
+ * panel answering, authenticated, that it does not hold the account — never a failed
+ * request. `deviceLimit` null is a panel that places NO limit on this account, which is
+ * the one value that already holds every finite target.
+ */
+export type ProviderDeviceLimitOutcome =
+  | {
+      readonly ok: true;
+      readonly found: true;
+      readonly deviceLimit: number | null;
+      readonly maxDeviceLimit: number | null;
+    }
+  | { readonly ok: true; readonly found: false }
+  | ProviderFailureResult;
+
+/**
+ * Whether a limit a panel reports holds the absolute target an operation persisted.
+ *
+ * "At least", for the reason `allowanceReached` says it: a panel reporting more than was
+ * bought already gives the customer what they paid for, and no limit at all (`null`)
+ * holds any finite target. Pure, so the verification's verdict is one table.
+ */
+export function deviceLimitReached(target: number, reported: number | null): boolean {
+  return reported === null || reported >= target;
 }
 
 /*
@@ -1391,6 +1478,26 @@ export function canAddTime(adapter: ProviderAdapter): adapter is CanApplyAllowan
   return typeof adapter.applyAllowance === 'function' && adapter.supports('ADD_TIME');
 }
 
+/** An adapter narrowed to one it is safe to read and raise a device limit on (WP-A5). */
+export type CanAdjustDeviceLimit = ProviderAdapter &
+  Pick<Required<ProviderAdapter>, 'readDeviceLimit' | 'applyDeviceLimit'>;
+
+/*
+ * THREE questions, all required: the read, the write and the declaration.
+ *
+ * The read is part of the promise rather than an optional extra, because it is what makes
+ * the write safe to have lost: an ambiguous raise is settled by reading the limit back
+ * against its absolute target, and a panel that could be written but not read would leave
+ * every lost answer undecidable — money taken and nobody able to say what it bought.
+ */
+export function canAdjustDeviceLimit(adapter: ProviderAdapter): adapter is CanAdjustDeviceLimit {
+  return (
+    typeof adapter.readDeviceLimit === 'function' &&
+    typeof adapter.applyDeviceLimit === 'function' &&
+    adapter.supports('DEVICE_LIMIT_ADJUSTMENT')
+  );
+}
+
 /** Whether this adapter implements the service half, not just the connection half. */
 export function isServiceAdapter(adapter: ProviderConnectionAdapter): adapter is ProviderAdapter {
   const candidate = adapter as Partial<ProviderAdapter>;
@@ -1464,6 +1571,13 @@ const MARZBAN: ProviderDescriptor = {
    * The other six are absent because this release cannot perform them — rotating a
    * link, resetting usage, limiting devices — and each returns in the commit that
    * implements it, per that same rule.
+   *
+   * `DEVICE_LIMIT_ADJUSTMENT` (WP-A5) is absent for a stronger reason than "not yet":
+   * the pinned v0.8.4 has no per-user device, IP or connection limit at all. Its `User`
+   * table (`app/db/models.py`) and its `UserCreate`/`UserModify` models
+   * (`app/models/user.py`) carry proxies, inbounds, expiry, data limit, reset strategy,
+   * note and on-hold fields, and nothing that bounds devices — so there is no field an
+   * adapter could raise, and extra users are never offered on a Marzban panel.
    */
   capabilities: [
     'HEALTH_CHECK',
@@ -1538,6 +1652,15 @@ const MARZBAN: ProviderDescriptor = {
  * (`docs/rickpanel-rotate-audit.md`). What was NOT shown — that the old link stops
  * working — is claimed nowhere. `RESET_USAGE` stays undeclared: the route exists,
  * and what it resets has not been measured.
+ *
+ * `DEVICE_LIMIT_ADJUSTMENT` (WP-A5) stays undeclared because the panel's own contract
+ * has no such field. The owner's OpenAPI document gives `PUT /api/user/{username}`
+ * exactly twelve properties — `proxies`, `expire`, `data_limit`,
+ * `data_limit_reset_strategy`, `inbounds`, `note`, `sub_updated_at`,
+ * `sub_last_user_agent`, `online_at`, `on_hold_expire_duration`, `on_hold_timeout`,
+ * `auto_delete_in_days` — and none bounds devices, IPs or connections; its only mention
+ * of devices is a "multi-device warning" rendered on the subscription page. A capability
+ * resting on a field nobody has seen is the promise this array's history is made of.
  */
 const RICKPANEL: ProviderDescriptor = {
   key: 'rickpanel',
@@ -1622,6 +1745,13 @@ const SANAEI: ProviderDescriptor = {
    * the descriptor understate the adapter, which is the less dangerous direction of the
    * two but still a lie a surface reads: anything asking "can this panel limit devices"
    * was told no about a panel that does.
+   *
+   * `DEVICE_LIMIT_ADJUSTMENT` (WP-A5) is NOT here although the panel could honour it —
+   * v3.7.0 stores `limitIp` per client (`internal/database/model/model.go`) and accepts
+   * `POST /panel/api/clients/update/:email` (`internal/web/controller/client.go`). The
+   * owner's correction in `docs/phase4e-audit.md` freezes 3X-UI at the capabilities it
+   * has, with no new mutable scope, and raising a live client's limit is exactly that.
+   * Declaring it needs the owner's decision first and a real-panel acceptance after.
    */
   capabilities: [
     'HEALTH_CHECK',

@@ -318,6 +318,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.admin.operation_renew': 'تمدید سرویس',
   'bot.admin.operation_add_traffic': 'افزایش حجم سرویس',
   'bot.admin.operation_add_time': 'افزایش زمان سرویس',
+  'bot.admin.operation_add_devices': 'افزایش کاربر / دستگاه سرویس',
   'bot.admin.operation_topup': 'افزایش موجودی کیف پول',
   'bot.admin.receipt_already_approved':
     'این رسید قبلاً تأیید شده است. اقدام دیگری روی آن ممکن نیست و چیزی جابه‌جا نشد.',
@@ -813,6 +814,11 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.service.renew_button': '💊 تمدید سرویس',
   'bot.service.add_traffic_button': '➕ خرید حجم اضافه',
   'bot.service.add_time_button': 'زمان اضافه',
+  // WP-A5: extra users / devices, shown only where the panel can really raise the limit.
+  'bot.service.add_devices_button': '👥 افزایش کاربر / دستگاه',
+  'bot.service.devices_choice':
+    '👥 تعداد کاربر / دستگاه مجاز فعلی این سرویس: {currentLimit}\n💵 قیمت هر کاربر اضافه: {unitPrice}\n➕ تا {remaining} کاربر دیگر قابل افزودن است.\n\nتعداد مورد نظر را انتخاب کنید:',
+  'bot.service.devices_option': '➕ {quantity} کاربر — {price}',
   // ONE message for "no package is configured", "the plan behind this renewal was
   // withdrawn" and "this panel cannot do it". The customer's next step is the same for
   // all three, and naming which would tell them about an operator's configuration;
@@ -971,9 +977,11 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.support.contact': 'برای ارتباط با پشتیبانی روی دکمهٔ زیر بزنید.',
   'bot.support.unconfigured': 'در حال حاضر راه ارتباطی با پشتیبانی تنظیم نشده است.',
   'bot.order.preinvoice':
-    '🧾 پیش فاکتور شما:\n\n👤 نام کاربر: {serviceUsername}\n🔐 نام سرویس: {productName}\n📆 مدت اعتبار: {durationDays}\n💵 قیمت: {total}\n👥 حجم اکانت: {trafficBytes}\n➕ حجم افزوده: {addedTrafficBytes}\n{customBlock}\n{discountLine}\n{cashbackLine}\n\n{locationsBlock}\n\n{featuresBlock}\n\n💰 موجودی کیف پول شما: {walletBalance}\n\n💰 سفارش شما آماده پرداخت است',
+    '🧾 پیش فاکتور شما:\n\n👤 نام کاربر: {serviceUsername}\n🔐 نام سرویس: {productName}\n📆 مدت اعتبار: {durationDays}\n💵 قیمت: {total}\n👥 حجم اکانت: {trafficBytes}\n➕ حجم افزوده: {addedTrafficBytes}\n{customBlock}\n{devicesBlock}\n{discountLine}\n{cashbackLine}\n\n{locationsBlock}\n\n{featuresBlock}\n\n💰 موجودی کیف پول شما: {walletBalance}\n\n💰 سفارش شما آماده پرداخت است',
   'bot.order.preinvoice_custom':
     '🛠 سرویس دلخواه\n📍 لوکیشن: {location}\n📦 حجم: {volumeBytes} × {pricePerGb} = {volumePrice}\n⏳ مدت: {durationDays} × {pricePerDay} = {timePrice}',
+  'bot.order.preinvoice_devices':
+    '👥 افزایش کاربر / دستگاه: {quantity} × {unitPrice}\n🔢 تعداد مجاز: {currentLimit} ← {targetLimit}',
   'bot.order.preinvoice_locations': '🌍 لوکیشن‌های محصول:\n{lines}',
   'bot.order.preinvoice_features': '{lines}',
   'bot.order.preinvoice_discount_line': '🏷 تخفیف: {discount} (قیمت پیش از تخفیف: {subtotal})',

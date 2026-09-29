@@ -2819,7 +2819,11 @@ describe('WP19 — a customer asks for their money back', () => {
           requestedByCustomerId: null,
           panelId: record.panelId,
           type: 'RENEW',
-          target: { expiresAt: new Date(Date.now() + 30 * 86_400_000), trafficLimitBytes: null },
+          target: {
+            expiresAt: new Date(Date.now() + 30 * 86_400_000),
+            trafficLimitBytes: null,
+            deviceLimit: null,
+          },
         },
         new Date(),
         tx as never,

@@ -1996,7 +1996,12 @@ export class PaymentService {
     }
     return this.deps.provisioning.prepareCommercialAction(
       scope,
-      { serviceId: action.serviceId, kind: action.kind, customerId: order.customerId },
+      {
+        serviceId: action.serviceId,
+        kind: action.kind,
+        customerId: order.customerId,
+        purchasedDeviceCount: action.purchasedDeviceCount,
+      },
       tx,
       onIneligible,
     );
@@ -4125,6 +4130,7 @@ export class PaymentService {
           kind: action.kind,
           purchasedTrafficBytes: action.purchasedTrafficBytes,
           purchasedDurationDays: action.purchasedDurationDays,
+          purchasedDeviceCount: action.purchasedDeviceCount,
         },
         now,
         tx,

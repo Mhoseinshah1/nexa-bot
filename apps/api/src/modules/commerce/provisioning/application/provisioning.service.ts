@@ -6,7 +6,9 @@ import {
   extendedAllowance,
   extendedExpiry,
   errors,
+  MAX_DEVICE_LIMIT,
   MAX_TRAFFIC_BYTES,
+  extendedDeviceLimit,
   NexaError,
   SUBSCRIPTION_REF_BYTES,
   DEFAULT_USERNAME_PREFIX,
@@ -411,6 +413,12 @@ export class ProvisioningService {
          * `catalog.ts` chose zero rather than null.
          */
         trafficLimitBytes: order.line.specification.trafficBytes,
+        /*
+         * WP-A5: the entitlement starts at what the order froze, and only an applied
+         * `ADD_DEVICES` raises it. A value past the bound is not recorded rather than
+         * clamped — a clamp would record a limit the panel was never given.
+         */
+        deviceLimit: recordableDeviceLimit(order.line.specification.deviceLimit),
       },
       now,
       tx,
@@ -1429,9 +1437,11 @@ export class ProvisioningService {
     scope: TenantContext,
     action: {
       readonly serviceId: string;
-      readonly kind: 'RENEW' | 'ADD_TRAFFIC' | 'ADD_TIME';
+      readonly kind: 'RENEW' | 'ADD_TRAFFIC' | 'ADD_TIME' | 'ADD_DEVICES';
       /** The ORDER's customer: the payer, who must still own the service. */
       readonly customerId: UserId;
+      /** WP-A5: extra users / devices bought; zero for every other kind. */
+      readonly purchasedDeviceCount?: number;
     },
     tx: TransactionScope,
     onIneligible: 'REFUSE' | 'REFUND',
@@ -1497,6 +1507,22 @@ export class ProvisioningService {
         COMMERCE_ERROR_CODES.PANEL_NOT_OPERABLE,
         'The panel this service lives on cannot perform that action.',
         operable.reason ?? 'UNKNOWN',
+      );
+    }
+
+    /*
+     * WP-A5: extra users are computed from the limit the service RECORDS, so a service with
+     * none recorded — or a quantity that would take it past the bound — cannot be given
+     * them. Refused here, before the order's state is chosen, like every refusal above.
+     */
+    if (
+      action.kind === 'ADD_DEVICES' &&
+      extendedDeviceLimit(service.deviceLimit, action.purchasedDeviceCount ?? 0) === null
+    ) {
+      return refuse(
+        COMMERCE_ERROR_CODES.SERVICE_ACTION_UNAVAILABLE,
+        'This service cannot be given that many more users.',
+        'DEVICE_LIMIT_UNAVAILABLE',
       );
     }
 
@@ -1575,9 +1601,11 @@ export class ProvisioningService {
     order: OrderRecord,
     action: {
       readonly serviceId: string;
-      readonly kind: 'RENEW' | 'ADD_TRAFFIC' | 'ADD_TIME';
+      readonly kind: 'RENEW' | 'ADD_TRAFFIC' | 'ADD_TIME' | 'ADD_DEVICES';
       readonly purchasedTrafficBytes: bigint;
       readonly purchasedDurationDays: number;
+      /** WP-A5: extra users / devices bought; zero for every other kind. */
+      readonly purchasedDeviceCount: number;
     },
     now: Date,
     tx: TransactionScope,
@@ -1612,7 +1640,12 @@ export class ProvisioningService {
      */
     const usable = await this.prepareCommercialAction(
       scope,
-      { serviceId: action.serviceId, kind: action.kind, customerId: order.customerId },
+      {
+        serviceId: action.serviceId,
+        kind: action.kind,
+        customerId: order.customerId,
+        purchasedDeviceCount: action.purchasedDeviceCount,
+      },
       tx,
       onIneligible,
     );
@@ -1636,16 +1669,36 @@ export class ProvisioningService {
      * the column, the provider plan and the adapter's omitted key all carry — so the
      * three agree without anybody translating between them.
      */
-    const target: OperationTarget = {
-      expiresAt:
-        action.purchasedDurationDays > 0
-          ? extendedExpiry(service.expiresAt, now, action.purchasedDurationDays)
-          : null,
-      trafficLimitBytes:
-        action.purchasedTrafficBytes > 0n || action.kind === 'RENEW'
-          ? extendedAllowance(service.trafficLimitBytes, action.purchasedTrafficBytes)
-          : null,
-    };
+    /*
+     * WP-A5: an `ADD_DEVICES` target is the limit the service records plus what was
+     * bought, and nothing else. `prepareCommercialAction` above refused the purchase when
+     * that number cannot exist, under this same lock, so the null arm is unreachable — and
+     * refused rather than asserted, because the database would refuse the row anyway.
+     */
+    const deviceTarget =
+      action.kind === 'ADD_DEVICES'
+        ? extendedDeviceLimit(service.deviceLimit, action.purchasedDeviceCount)
+        : null;
+    if (action.kind === 'ADD_DEVICES' && deviceTarget === null) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.SERVICE_ACTION_UNAVAILABLE,
+        'This service cannot be given that many more users.',
+      );
+    }
+    const target: OperationTarget =
+      action.kind === 'ADD_DEVICES'
+        ? { expiresAt: null, trafficLimitBytes: null, deviceLimit: deviceTarget }
+        : {
+            expiresAt:
+              action.purchasedDurationDays > 0
+                ? extendedExpiry(service.expiresAt, now, action.purchasedDurationDays)
+                : null,
+            trafficLimitBytes:
+              action.purchasedTrafficBytes > 0n || action.kind === 'RENEW'
+                ? extendedAllowance(service.trafficLimitBytes, action.purchasedTrafficBytes)
+                : null,
+            deviceLimit: null,
+          };
 
     /*
      * An allowance that cannot survive the wire.
@@ -1671,7 +1724,11 @@ export class ProvisioningService {
       );
     }
 
-    if (target.expiresAt === null && target.trafficLimitBytes === null) {
+    if (
+      target.expiresAt === null &&
+      target.trafficLimitBytes === null &&
+      target.deviceLimit === null
+    ) {
       /*
        * A purchase that asks the panel for nothing.
        *
@@ -1746,6 +1803,7 @@ export class ProvisioningService {
           state: service.state,
           expiresAt: service.expiresAt?.toISOString() ?? null,
           trafficLimitBytes: service.trafficLimitBytes.toString(),
+          deviceLimit: service.deviceLimit,
         },
         after: {
           orderId: order.id,
@@ -1753,6 +1811,7 @@ export class ProvisioningService {
           operationId: operation.operationId,
           targetExpiresAt: target.expiresAt?.toISOString() ?? null,
           targetTrafficLimitBytes: target.trafficLimitBytes?.toString() ?? null,
+          targetDeviceLimit: target.deviceLimit,
         },
         result: 'SUCCESS',
       },
@@ -1767,6 +1826,11 @@ export class ProvisioningService {
     const live: readonly ServiceState[] = ['ACTIVE', 'SUSPENDED', 'EXPIRED'];
     return live.includes(service.state) && service.subscriptionUrl !== null;
   }
+}
+
+/** The order line's device limit as the service may record it: within the bound, or none. */
+function recordableDeviceLimit(limit: number | null): number | null {
+  return limit !== null && limit >= 1 && limit <= MAX_DEVICE_LIMIT ? limit : null;
 }
 
 /** Kept honest: the sentinel the schema stores for an unlimited allowance is zero. */

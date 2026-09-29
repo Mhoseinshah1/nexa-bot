@@ -99,11 +99,14 @@ function toRecord(row: Row): OperationRecord {
      * able to read one half without noticing the other.
      */
     target:
-      row.targetExpiresAt === null && row.targetTrafficLimitBytes === null
+      row.targetExpiresAt === null &&
+      row.targetTrafficLimitBytes === null &&
+      row.targetDeviceLimit === null
         ? null
         : {
             expiresAt: row.targetExpiresAt,
             trafficLimitBytes: row.targetTrafficLimitBytes,
+            deviceLimit: row.targetDeviceLimit,
           },
     providerReference: row.providerReference,
     failureKind: row.failureKind as ProviderFailureKind | null,
@@ -171,6 +174,7 @@ export class DrizzleOperationRepository implements OperationRepository {
          */
         targetExpiresAt: draft.target?.expiresAt ?? null,
         targetTrafficLimitBytes: draft.target?.trafficLimitBytes ?? null,
+        targetDeviceLimit: draft.target?.deviceLimit ?? null,
         /*
          * Due NOW, stamped rather than left null.
          *

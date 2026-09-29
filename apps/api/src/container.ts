@@ -6,6 +6,7 @@ import {
   MAIN_MENU_BUTTONS,
   MAX_REQUESTS_PER_PROBE,
   OPERATION_LEASE_SECONDS_MIN,
+  canAdjustDeviceLimit,
   faqNumberMarker,
   systemJobActor,
 } from '@nexa/contracts';
@@ -27,6 +28,7 @@ import type {
   OperationType,
   BotInstanceId,
   PaymentGatewayProvider,
+  ProductId,
   TenantContext,
   Translator,
 } from '@nexa/contracts';
@@ -1375,6 +1377,13 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     repository: serviceAddonRepository,
     /* `sales.currency`. An add-on is priced in what the tenant sells in, or refused. */
     settings: settingsResolver,
+    // WP-A5: an extra-users rate's panel / product scope, checked against THIS tenant.
+    scopeTargets: {
+      panelExists: async (scope, panelId, tx) =>
+        (await panelRepository.find(scope, panelId, tx)) !== null,
+      productExists: async (scope, productId, tx) =>
+        (await productRepository.findById(scope, productId as ProductId, tx)) !== null,
+    },
     guard,
     audit,
     opsLog,
@@ -1694,7 +1703,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       tx?: unknown,
     ) => {
       const view = await panelRepository.find(scope, panelId, tx as never);
-      return decideOperability({
+      const decided = decideOperability({
         panel:
           view === null
             ? null
@@ -1713,6 +1722,20 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
         serviceAdapterExists:
           view !== null && SERVICE_PROVIDER_TYPES.includes(view.panel.providerType),
       });
+      /*
+       * WP-A5: extra users are offered, drafted, confirmed and settled only where the
+       * adapter has BOTH device-limit methods as well as the declaration the descriptor
+       * check above just read — the same three-question guard the executor applies — so a
+       * declaration that outran its methods can never draw a button or take money.
+       */
+      if (
+        decided.ok &&
+        type === 'ADD_DEVICES' &&
+        !canAdjustDeviceLimit(providerServiceAdapter(decided.providerType))
+      ) {
+        return { ok: false as const, reason: 'CAPABILITY_UNSUPPORTED' as const };
+      }
+      return decided;
     },
   };
 

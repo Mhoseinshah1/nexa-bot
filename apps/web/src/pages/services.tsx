@@ -146,6 +146,7 @@ export const OPERATION_TYPE_LABELS: Readonly<Record<OperationType, WebKey>> = {
   RENEW: 'web.operation_type_renew',
   ADD_TRAFFIC: 'web.operation_type_add_traffic',
   ADD_TIME: 'web.operation_type_add_time',
+  ADD_DEVICES: 'web.operation_type_add_devices',
   SUSPEND: 'web.operation_type_suspend',
   RESUME: 'web.operation_type_resume',
   TERMINATE: 'web.operation_type_terminate',
@@ -919,6 +920,17 @@ export function ServiceDetailPage({
                   [
                     t('web.service_traffic_used'),
                     <Bytes key="u" bytes={BigInt(row.trafficUsedBytes)} />,
+                  ],
+                  // WP-A5: the device limit the service is entitled to, extra users included.
+                  [
+                    t('web.service_device_limit'),
+                    row.deviceLimit === null ? (
+                      <span key="d" className="muted small">
+                        {t('web.service_device_limit_none')}
+                      </span>
+                    ) : (
+                      String(row.deviceLimit)
+                    ),
                   ],
                   [
                     t('web.service_usage_synced_at'),
