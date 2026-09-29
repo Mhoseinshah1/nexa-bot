@@ -6,6 +6,7 @@ import {
   getTableColumns,
   isNotNull,
   isNull,
+  lte,
   or,
   sql,
   type SQL,
@@ -27,6 +28,7 @@ import {
 } from '../../../../infrastructure/persistence/unit-of-work.js';
 import { serviceAddons } from '../../../../infrastructure/persistence/schema.js';
 import type {
+  AddonCap,
   ServiceAddonCursor,
   ServiceAddonDraft,
   ServiceAddonEdit,
@@ -193,9 +195,18 @@ export class DrizzleServiceAddonRepository implements ServiceAddonRepository {
     kind: ServiceAddonKind,
     currency: CurrencyCode,
     limit: number,
+    within?: AddonCap,
     tx?: unknown,
   ): Promise<{ readonly items: readonly ServiceAddonRecord[]; readonly hasMore: boolean }> {
     const tenantId = requireTenantId(scope);
+    /*
+     * Each cap binds only the kind whose amount it measures. A time package has no bytes
+     * and a traffic package no days, and `NULL <= x` is not true — so applying both to
+     * every kind hid every time package behind a traffic cap, and the reverse (Codex #2
+     * on PR #102).
+     */
+    const maxBytes = kind === 'ADD_TRAFFIC' ? (within?.maxTrafficBytes ?? null) : null;
+    const maxDays = kind === 'ADD_TIME' ? (within?.maxDurationDays ?? null) : null;
     const rows = await this.exec(tx)
       .select()
       .from(serviceAddons)
@@ -208,6 +219,12 @@ export class DrizzleServiceAddonRepository implements ServiceAddonRepository {
           // The tenant's own selling unit. A row priced in what this store no longer
           // sells is one `quoteAddon` would refuse, so it is not offered either.
           eq(serviceAddons.priceCurrency, currency),
+          // WP-A8: the panel's per-purchase cap, before the limit, so a page is never
+          // spent on packages the panel will not sell. An ADD_TRAFFIC row always has
+          // bytes and an ADD_TIME row always has days (`service_addons_amount_matches_kind`),
+          // and each cap is applied only to its own kind (above).
+          maxBytes === null ? undefined : lte(serviceAddons.trafficBytes, maxBytes),
+          maxDays === null ? undefined : lte(serviceAddons.durationDays, maxDays),
         ),
       )
       .orderBy(asc(serviceAddons.sortOrder), asc(serviceAddons.createdAt), asc(serviceAddons.id))

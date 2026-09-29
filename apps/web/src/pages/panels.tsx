@@ -2,11 +2,9 @@ import { useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   PANEL_HEALTH_FRESH_FOR_MS,
-  PROVIDER_CAPABILITIES,
   PROVIDER_FAILURE_RETRYABLE,
   type PanelStatus,
   type PanelSummaryResponse,
-  type ProviderCapability,
   type ProviderType,
   type PanelIneligibilityReason,
   type UsernamePolicyDraft,
@@ -47,6 +45,14 @@ import {
   type ActivationDraft,
 } from './panel-activation';
 import { navigate, setQuery, useLinkHandler, type Route } from '../router';
+// WP-A8: the capability registry, the panel policy, provider rules and diagnostics.
+import {
+  ACTIVATION_FIELD_LABELS,
+  CREDENTIAL_SHAPE_LABELS,
+  CapabilitiesTab,
+  DiagnosticsCard,
+  REGISTRY_ROW_LABELS,
+} from './panel-advanced';
 import { messageFor } from './settings';
 import { HEALTH_TONES } from './dashboard';
 /*
@@ -75,7 +81,6 @@ import {
   Field,
   KV,
   Ltr,
-  MaturityBadge,
   Num,
   PageHead,
   Pills,
@@ -517,11 +522,14 @@ export function PanelDetailPage({
   id,
   mayEdit,
   mayRotate,
+  mayViewTechnical = false,
   denied,
 }: {
   id: string;
   mayEdit: boolean;
   mayRotate: boolean;
+  /** WP-A8: `panels.technical.view` — the Super Admin's read-only raw view. */
+  mayViewTechnical?: boolean;
   denied: boolean;
 }) {
   const client = useQueryClient();
@@ -702,7 +710,13 @@ export function PanelDetailPage({
                   submission={credentialSubmission}
                 />
               )}
-              {tab === 'capabilities' && <CapabilitiesTab panel={data} />}
+              {tab === 'capabilities' && (
+                <CapabilitiesTab
+                  panel={data}
+                  mayEdit={mayEdit}
+                  mayViewTechnical={mayViewTechnical}
+                />
+              )}
             </TabPanel>
           </>
         )}
@@ -1866,6 +1880,9 @@ function HealthTab({ panel }: { panel: PanelSummaryResponse }) {
       */}
       {!probeable(panel) && <Banner tone="warn">{t('web.panel_not_probeable')}</Banner>}
 
+      {/* WP-A8: the same stored facts, as operator checks with a remedy each. */}
+      <DiagnosticsCard panelId={panel.id} refreshMs={PANEL_DETAIL_REFRESH_MS} />
+
       <Card title={t('web.panel_tab_health')}>
         <KV
           items={[
@@ -2295,32 +2312,6 @@ function WorkloadTab({ panel }: { panel: PanelSummaryResponse }) {
   );
 }
 
-function CapabilitiesTab({ panel }: { panel: PanelSummaryResponse }) {
-  const held = new Set<string>(panel.capabilities);
-  return (
-    <Card title={t('web.panel_tab_capabilities')} hint={t('web.capabilities_hint')}>
-      <DataTable
-        caption={t('web.panel_tab_capabilities')}
-        rows={[...PROVIDER_CAPABILITIES]}
-        rowKey={(row) => row}
-        columns={[
-          {
-            key: 'name',
-            header: t('web.capability'),
-            render: (row) => <Ltr>{row}</Ltr>,
-          },
-          {
-            key: 'state',
-            header: t('web.status'),
-            render: (row: ProviderCapability) =>
-              held.has(row) ? <MaturityBadge value="now" /> : <MaturityBadge value="planned" />,
-          },
-        ]}
-      />
-    </Card>
-  );
-}
-
 // ---------------------------------------------------------------------------
 // Create
 // ---------------------------------------------------------------------------
@@ -2525,11 +2516,16 @@ export function NewPanelPage({
             {chosen !== undefined && (
               <>
                 <Banner tone="info" title={t('web.panel_credential_shape')}>
-                  <Ltr>{chosen.credentialShape}</Ltr>
+                  {t(CREDENTIAL_SHAPE_LABELS[chosen.credentialShape])}
                 </Banner>
                 {chosen.requiredActivationFields.length > 0 && (
                   <Banner tone="warn" title={t('web.panel_activation_fields')}>
-                    <Ltr>{chosen.requiredActivationFields.join(', ')}</Ltr>
+                    {chosen.requiredActivationFields
+                      .map((field) => {
+                        const label = ACTIVATION_FIELD_LABELS[field];
+                        return label === undefined ? field : t(label);
+                      })
+                      .join(t('web.list_separator'))}
                   </Banner>
                 )}
               </>
@@ -2619,24 +2615,30 @@ export function ProvidersPage() {
             caption={t('web.providers_title')}
             rows={rows}
             rowKey={(row) => row.key}
+            /*
+             * WP-A8: every column in Persian. The raw provider key, the credential-shape
+             * enum and the capability identifiers were shown here verbatim; an operator
+             * reads what the adapter can DO, row by row, from the server's registry.
+             */
             columns={[
               { key: 'name', header: t('web.panel_provider'), render: (row) => row.canonicalName },
-              { key: 'key', header: t('web.key'), render: (row) => <Ltr>{row.key}</Ltr> },
               {
                 key: 'shape',
                 header: t('web.panel_credential_shape'),
-                render: (row) => <Ltr>{row.credentialShape}</Ltr>,
+                render: (row) => t(CREDENTIAL_SHAPE_LABELS[row.credentialShape]),
               },
               {
                 key: 'caps',
-                header: t('web.capability'),
+                header: t('web.providers_capabilities'),
                 render: (row) => (
                   <span className="nowrap">
-                    {row.capabilities.map((capability) => (
-                      <Badge key={capability} tone="ok">
-                        <Ltr>{capability}</Ltr>
-                      </Badge>
-                    ))}
+                    {row.capabilityRegistry
+                      .filter((entry) => entry.supported)
+                      .map((entry) => (
+                        <Badge key={entry.row} tone="ok">
+                          {t(REGISTRY_ROW_LABELS[entry.row])}
+                        </Badge>
+                      ))}
                   </span>
                 ),
               },
@@ -2647,7 +2649,12 @@ export function ProvidersPage() {
                   row.requiredActivationFields.length === 0 ? (
                     <span className="faint">—</span>
                   ) : (
-                    <Ltr>{row.requiredActivationFields.join(', ')}</Ltr>
+                    row.requiredActivationFields
+                      .map((field) => {
+                        const label = ACTIVATION_FIELD_LABELS[field];
+                        return label === undefined ? field : t(label);
+                      })
+                      .join(t('web.list_separator'))
                   ),
               },
             ]}

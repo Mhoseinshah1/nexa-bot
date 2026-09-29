@@ -102,6 +102,22 @@ export interface CommercialActionRepository {
     tx?: unknown,
   ): Promise<number>;
 
+  /**
+   * How many extra users / devices this service has been sold and NOT YET GIVEN (WP-A8,
+   * Codex #2 on PR #102): its `ADD_DEVICES` actions whose order is live — awaiting
+   * payment or paid — and whose raise has not succeeded. `services.device_limit` moves
+   * only when a raise succeeds, so an absolute ceiling judged against the recorded limit
+   * alone let two live purchases each fit and together pass it; settlement computes each
+   * target from the limit recorded THEN plus what was bought. `UNKNOWN` counts: that
+   * write may have landed and the recorded limit has not moved yet.
+   */
+  unappliedDeviceQuantity(
+    scope: TenantContext,
+    serviceId: string,
+    excludeOrderId: OrderId | null,
+    tx?: unknown,
+  ): Promise<number>;
+
   /** This service's actions, newest first, for a detail view and an operator's history. */
   listForService(
     scope: TenantContext,

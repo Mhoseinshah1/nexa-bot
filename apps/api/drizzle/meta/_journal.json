@@ -939,6 +939,13 @@
       "when": 1790646633548,
       "tag": "0133_wpa6_location_change",
       "breakpoints": true
+    },
+    {
+      "idx": 134,
+      "version": "7",
+      "when": 1790647118749,
+      "tag": "0134_wpa8_panel_policies",
+      "breakpoints": true
     }
   ]
 }

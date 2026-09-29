@@ -31,7 +31,17 @@ import {
   type TenantContext,
   type UnitOfWork,
   type UserId,
+  customerActionVerdict,
+  policyMaxDays,
+  policyMaxDeviceLimit,
+  policyMaxTrafficBytes,
+  type PanelCustomerAction,
+  type ResolvedPanelPolicy,
 } from '@nexa/contracts';
+import {
+  assertCustomerPolicyAllows,
+  type PanelPolicyGate,
+} from '../../../platform/panels/application/panel-policy.js';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
 import {
   recordMutationDenial,
@@ -127,6 +137,47 @@ function assertExtendable(
 export type CommercialKind = Exclude<OrderPurpose, 'NEW_SERVICE' | 'TRIAL' | 'CUSTOM_SERVICE'>;
 
 /**
+ * The panel-policy row each commercial kind is decided by (WP-A8).
+ *
+ * A `Record`, so a commercial kind added later without a decision here does not compile:
+ * a purchase no policy can switch off would be the one customer action an operator
+ * cannot stop on a panel.
+ *
+ * `CHANGE_LOCATION` (WP-A6) is the one explicit null: the panel policy has no row for a
+ * move yet, and a move is decided by `LocationChangePolicy` and the panel's declared
+ * `LOCATION_CHANGE` capability, which no provider declares in this release. Giving it a
+ * per-panel switch is a contract change of its own.
+ */
+const COMMERCIAL_POLICY_ROW: Readonly<Record<CommercialKind, PanelCustomerAction | null>> = {
+  RENEW: 'RENEW',
+  ADD_TRAFFIC: 'ADD_TRAFFIC',
+  ADD_TIME: 'ADD_TIME',
+  ADD_DEVICES: 'EXTRA_DEVICES',
+  CHANGE_LOCATION: null,
+};
+
+/** The policy's verdict for one kind; a kind with no policy row is not restricted by it. */
+function commercialPolicyAllows(resolved: ResolvedPanelPolicy, kind: CommercialKind): boolean {
+  const row = COMMERCIAL_POLICY_ROW[kind];
+  return row === null || customerActionVerdict(resolved, row).allowed;
+}
+
+/**
+ * Whether one package fits the panel's per-purchase cap (WP-A8). A cap only ever
+ * removes packages from what is offered; it never makes one purchasable.
+ */
+function withinPanelCap(
+  resolved: ResolvedPanelPolicy,
+  amount: { readonly trafficBytes: bigint | null; readonly durationDays: number | null },
+): boolean {
+  const maxBytes = policyMaxTrafficBytes(resolved);
+  if (maxBytes !== null && (amount.trafficBytes ?? 0n) > maxBytes) return false;
+  const maxDays = policyMaxDays(resolved);
+  if (maxDays !== null && (amount.durationDays ?? 0) > maxDays) return false;
+  return true;
+}
+
+/**
  * What a customer may buy for one service, right now, server-derived.
  *
  * Never a price a client sent, and never a price computed from a callback: the service
@@ -178,6 +229,11 @@ export interface CommercialActionServiceDeps {
       tx?: unknown,
     ): Promise<{ readonly ok: boolean; readonly reason?: string }>;
   };
+  /**
+   * The panel's operator policy (WP-A8), asked AFTER `panels.operability` and only ever
+   * to refuse: a customer action switched off on this panel, or a package past its cap.
+   */
+  readonly panelPolicy: PanelPolicyGate;
   readonly guard: PermissionGuard;
   readonly uow: UnitOfWork<TransactionScope>;
   readonly audit: AuditWriter;
@@ -282,19 +338,19 @@ export class CommercialActionService {
       return { kind, product: null, addons: [], devices: null, locations };
     }
 
-    const addons = await this.deps.addons.listOfferable(
+    const offerable = await this.offerableAddons(
       scope,
+      service,
       kind === 'ADD_TRAFFIC' ? 'ADD_TRAFFIC' : 'ADD_TIME',
-      await this.salesCurrency(scope),
       ADDON_OFFER_LIMIT,
     );
-    if (addons.items.length === 0) {
+    if (offerable.length === 0) {
       throw errors.conflict(
         COMMERCE_ERROR_CODES.SERVICE_ACTION_UNAVAILABLE,
         'Nothing of that kind is offered.',
       );
     }
-    return { kind, product: null, addons: addons.items, devices: null };
+    return { kind, product: null, addons: offerable, devices: null };
   }
 
   /**
@@ -320,10 +376,13 @@ export class CommercialActionService {
     const available: CommercialKind[] = [];
     // A custom service has nothing to renew from and no add-on path (Package D §9).
     if (service.productId === null) return available;
+    // WP-A8: the panel's policy, read once for every kind below.
+    const policy = await this.deps.panelPolicy.forPanel(scope, service.panelId);
     for (const kind of COMMERCIAL_ORDER_PURPOSES as readonly CommercialKind[]) {
       if (!OPERATION_LEGAL_FROM[kind].includes(service.state)) continue;
       const operable = await this.deps.panels.operability(scope, service.panelId, kind);
       if (!operable.ok) continue;
+      if (!commercialPolicyAllows(policy, kind)) continue;
       if (kind === 'RENEW') {
         /*
          * The product must still be sellable, in the tenant's own currency.
@@ -366,13 +425,9 @@ export class CommercialActionService {
         if ((await this.deps.locations.offer(scope, service)) !== null) available.push(kind);
         continue;
       }
-      const offered = await this.deps.addons.listOfferable(
-        scope,
-        kind,
-        await this.salesCurrency(scope),
-        1,
-      );
-      if (offered.items.length > 0) available.push(kind);
+      // The same helper `offer` lists through, so the button is drawn exactly when its
+      // tap has something to show.
+      if ((await this.offerableAddons(scope, service, kind, 1)).length > 0) available.push(kind);
     }
     return available;
   }
@@ -741,6 +796,7 @@ export class CommercialActionService {
         this.assertLifecycleAllows(action.kind, service);
         await this.assertPanelCanPerform(scope, service, action.kind, tx);
         await this.assertStillOffered(scope, action, tx);
+        await this.assertWithinPanelCap(scope, service, action, tx);
         if (action.kind === 'ADD_DEVICES') await this.assertDevicesStillFit(scope, action, tx);
         if (action.kind === 'CHANGE_LOCATION') {
           await this.assertLocationStillFits(scope, action, now, tx);
@@ -1015,6 +1071,18 @@ export class CommercialActionService {
         'That package is no longer offered.',
       );
     }
+    // WP-A8: a package past this panel's per-purchase cap is not offered on it.
+    if (
+      !withinPanelCap(
+        await this.deps.panelPolicy.forPanel(scope, service.panelId, tx),
+        addon.specification,
+      )
+    ) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.SERVICE_ACTION_UNAVAILABLE,
+        'That package is not offered for this service.',
+      );
+    }
     await this.assertSalesCurrency(scope, addon.price, tx);
 
     /*
@@ -1193,7 +1261,25 @@ export class CommercialActionService {
     const maxQuantity = rate?.specification.maxQuantity ?? null;
     if (rate === null || rate.price === null || maxQuantity === null) return null;
     const sold = await this.deps.actions.soldDeviceQuantity(scope, service.id, excludeOrderId, tx);
-    const remaining = Math.min(maxQuantity - sold, MAX_DEVICE_LIMIT - service.deviceLimit);
+    /*
+     * The ABSOLUTE ceilings are judged against the limit the service will reach once every
+     * live purchase is applied, not the one it records now: settlement computes each target
+     * from the limit recorded at THAT moment plus what was bought, so two purchases that
+     * each fit the recorded limit would together pass the ceiling (Codex #2 on PR #102).
+     * Confirmation re-decides this under the order's and the service's locks.
+     */
+    const projected =
+      service.deviceLimit +
+      (await this.deps.actions.unappliedDeviceQuantity(scope, service.id, excludeOrderId, tx));
+    // WP-A8: the panel may cap how high an account on it is raised; it only lowers this.
+    const panelCap = policyMaxDeviceLimit(
+      await this.deps.panelPolicy.forPanel(scope, service.panelId, tx),
+    );
+    const remaining = Math.min(
+      maxQuantity - sold,
+      MAX_DEVICE_LIMIT - projected,
+      panelCap === null ? MAX_DEVICE_LIMIT : panelCap - projected,
+    );
     if (remaining < 1) return null;
     return {
       addon: { ...rate, price: rate.price },
@@ -1433,6 +1519,46 @@ export class CommercialActionService {
         { reason: operable.reason ?? 'UNKNOWN' },
       );
     }
+    /*
+     * WP-A8: then the panel's operator policy, inside the same transaction where there
+     * is one — so a confirmation after an operator switched the action off on this
+     * panel is refused before any money moves, whatever the button said.
+     */
+    const row = COMMERCIAL_POLICY_ROW[kind];
+    if (row !== null) {
+      assertCustomerPolicyAllows(
+        await this.deps.panelPolicy.forPanel(scope, service.panelId, tx),
+        row,
+      );
+    }
+  }
+
+  /**
+   * What was quoted must still fit the panel's per-purchase cap (WP-A8).
+   *
+   * Re-decided at confirmation like the add-on's own status, and refused rather than
+   * re-priced: a cap lowered after the draft makes the quote unfulfillable on this panel,
+   * which is the one kind of change confirmation re-decides.
+   */
+  private async assertWithinPanelCap(
+    scope: TenantContext,
+    service: ServiceRecord,
+    action: CommercialActionRecord,
+    tx: TransactionScope,
+  ): Promise<void> {
+    if (action.kind !== 'ADD_TRAFFIC' && action.kind !== 'ADD_TIME') return;
+    const policy = await this.deps.panelPolicy.forPanel(scope, service.panelId, tx);
+    if (
+      !withinPanelCap(policy, {
+        trafficBytes: action.purchasedTrafficBytes,
+        durationDays: action.purchasedDurationDays,
+      })
+    ) {
+      throw errors.conflict(
+        COMMERCE_ERROR_CODES.SERVICE_ACTION_UNAVAILABLE,
+        'That package is larger than this service can be sold now.',
+      );
+    }
   }
 
   /** What was quoted must still be on sale at confirmation. Never re-priced. */
@@ -1480,6 +1606,31 @@ export class CommercialActionService {
   }
 
   /** The unit this installation sells in, read where it is needed rather than cached. */
+  /**
+   * The packages of one kind this service may be offered, at most `limit` of them (WP-A8).
+   *
+   * The ONE read `offer` and `availableFor` share, with the panel's per-purchase cap
+   * applied in the query before the limit — so ten packages over the cap cannot hide an
+   * eleventh that fits, and the two callers cannot disagree about whether anything is on
+   * sale.
+   */
+  private async offerableAddons(
+    scope: TenantContext,
+    service: ServiceRecord,
+    kind: 'ADD_TRAFFIC' | 'ADD_TIME',
+    limit: number,
+  ): Promise<readonly ServiceAddonRecord[]> {
+    const policy = await this.deps.panelPolicy.forPanel(scope, service.panelId);
+    const page = await this.deps.addons.listOfferable(
+      scope,
+      kind,
+      await this.salesCurrency(scope),
+      limit,
+      { maxTrafficBytes: policyMaxTrafficBytes(policy), maxDurationDays: policyMaxDays(policy) },
+    );
+    return page.items;
+  }
+
   private async salesCurrency(scope: TenantContext, tx?: unknown): Promise<SalesCurrencyCode> {
     return this.deps.settings.valueOf<SalesCurrencyCode>(scope, 'sales.currency', tx);
   }

@@ -1052,6 +1052,53 @@ docker compose --env-file /etc/nexa/deploy.env -f /opt/nexa/deploy/compose.yml \
 **If you already rolled back** with such a row present, roll forward: the release that
 knows the purpose shows those pages again, and nothing was written wrongly in between.
 
+### What a rollback strands: panel policies (WP-A8)
+
+WP-A8 adds `panel_policies`: one row per panel an operator configured on the panel's
+«قابلیت‌ها» tab — which customer actions that panel offers, the extra cooldowns and
+per-purchase caps it adds, and whether its services are delivered with or without the QR
+image. The release before WP-A8 neither reads nor writes the table, so nothing fails
+there: every restriction simply stops applying.
+
+- Every customer action switched off on a panel is offered again, wherever the adapter
+  supports it and the tenant's own switches allow it: renewal, extra traffic, extra time,
+  a customer's own suspend and resume, link rotation, subscription files and the usage
+  refresh.
+- A panel's longer cooldown for rotation or refresh falls back to the tenant's
+  `services.link_rotation_cooldown_hours` and the built-in one-minute refresh interval.
+- The per-purchase traffic and time caps and the device-limit ceiling vanish: every
+  package the catalogue offers is offered on every panel again.
+- A panel set to deliver the card as text sends the QR card again.
+
+Nothing else is affected. The `panels.technical.view` rows the migration added to the
+`owner` roles are skipped by the old release, which ignores a permission key it does not
+know (`DrizzleRoleRepository`). `panel.policy_update` audit rows are ordinary audit rows.
+Operator actions and the provisioner never read a policy, so no paid order changes course.
+
+**During the update itself** the new Web Admin can meet an old API replica: its
+Capabilities tab and the diagnostics card on the Health tab answer an error, and the
+provider catalogue and the new-panel form refuse the old `/providers` answer, which has no
+capability registry. They last only as long as old and new replicas both run, and a reload
+after the update answers them.
+
+**Before rolling back past WP-A8**, read the policies you would lose:
+
+```bash
+docker compose --env-file /etc/nexa/deploy.env -f /opt/nexa/deploy/compose.yml \
+  exec -T postgres psql -U nexa -d nexa -c \
+  "SELECT p.name, pp.revision, pp.policy FROM panel_policies pp
+     JOIN panels p ON p.tenant_id = pp.tenant_id AND p.id = pp.panel_id"
+```
+
+For any restriction that must hold while the old release runs, use the old release's own
+tenant-wide control: switch the `customer_link_rotation` flag off, or deactivate the
+add-on packages that must not be sold. Renewal, a customer's suspend and resume,
+subscription files and the refresh have no tenant-wide switch there, and are offered
+again until the roll-forward.
+
+**If you already rolled back**, roll forward. The rows were never touched by the old
+release, and every policy applies again as soon as the new release reads it.
+
 ### How far back you can roll
 
 **One release**, safely. Migrations are expand-only within a release

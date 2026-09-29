@@ -54,9 +54,29 @@ describe('the extra users / devices screen', () => {
     cleanup();
   });
 
+  /*
+   * Codex #2 on PR #102: a view-only role (the seeded observer holds `catalog.view` and
+   * `panels.view`, not `catalog.edit`) reads a scoped rate by NAME. The label lists were
+   * gated on edit access, so it read two raw ids.
+   */
+  it('names a scoped rate for a role that may only view it', async () => {
+    const scoped = {
+      ...RATE,
+      panelId: String(panel()['id']),
+      productId: String(product()['id']),
+    };
+    stubApi(routes([scoped]));
+    const view = renderPage(<ExtraDevicesPage denied={false} mayEdit={false} mayViewPanels />);
+    // The scope cell reads «panel / product», by name.
+    await screen.findByText('Frankfurt A / پلن یک‌ماهه');
+    expect(view.container.textContent ?? '').not.toContain(scoped.panelId);
+    expect(view.container.textContent ?? '').not.toContain(scoped.productId);
+    cleanup();
+  });
+
   it('writes an ADD_DEVICES rate with a per-user price, a maximum and a scope', async () => {
     const api = stubApi(routes([]));
-    renderPage(<ExtraDevicesPage denied={false} mayEdit />);
+    renderPage(<ExtraDevicesPage denied={false} mayEdit mayViewPanels />);
     await screen.findByText('تعرفهٔ جدید');
     // The panel list marks a panel whose adapter cannot raise a limit.
     await screen.findByText(/این پنل افزایش کاربر را پشتیبانی نمی‌کند/u);
@@ -91,7 +111,7 @@ describe('the extra users / devices screen', () => {
 
   it('refuses to save a maximum outside what one service may be sold', async () => {
     stubApi(routes([]));
-    renderPage(<ExtraDevicesPage denied={false} mayEdit />);
+    renderPage(<ExtraDevicesPage denied={false} mayEdit mayViewPanels />);
     await screen.findByText('تعرفهٔ جدید');
     fireEvent.change(screen.getByLabelText('عنوان'), { target: { value: 'x' } });
     fireEvent.change(screen.getByLabelText('قیمت هر کاربر'), { target: { value: '1000' } });
@@ -139,7 +159,7 @@ describe('the extra users / devices screen', () => {
       { url: '/panels?limit=100&cursor=p-2', body: { panels: [far], nextCursor: null } },
       { url: '/products', body: { products: [product()], nextCursor: null } },
     ]);
-    renderPage(<ExtraDevicesPage denied={false} mayEdit />);
+    renderPage(<ExtraDevicesPage denied={false} mayEdit mayViewPanels />);
     await screen.findByText(/Tehran Z/u);
     cleanup();
   });
@@ -167,7 +187,7 @@ describe('the extra users / devices screen', () => {
       { url: '/panels?limit=100&cursor=p-2', body: { panels: [], nextCursor: 'p-2' } },
       { url: '/products', body: { products: [product()], nextCursor: null } },
     ]);
-    renderPage(<ExtraDevicesPage denied={false} mayEdit />);
+    renderPage(<ExtraDevicesPage denied={false} mayEdit mayViewPanels />);
     await screen.findByText(/فهرست کامل پنل‌ها یا محصولات خوانده نشد/u);
     cleanup();
   });

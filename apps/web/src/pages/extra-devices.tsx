@@ -121,7 +121,16 @@ function quantityOf(raw: string): number | null {
   return value >= 1 && value <= DEVICE_ADDON_MAX_QUANTITY ? value : null;
 }
 
-export function ExtraDevicesPage({ denied, mayEdit }: { denied: boolean; mayEdit: boolean }) {
+export function ExtraDevicesPage({
+  denied,
+  mayEdit,
+  mayViewPanels = false,
+}: {
+  denied: boolean;
+  mayEdit: boolean;
+  /** `panels.view`: what the panel list the scope labels come from requires. */
+  mayViewPanels?: boolean;
+}) {
   const queries = useQueryClient();
   const notify = useToast();
   const submission = useSubmissionKey();
@@ -146,8 +155,11 @@ export function ExtraDevicesPage({ denied, mayEdit }: { denied: boolean; mayEdit
     enabled: !denied,
   });
   /*
-   * The two scope pickers. Each is a courtesy: a role without `panels.view` sees only
-   * "every panel", and the server checks the chosen id against this tenant either way.
+   * The two scope pickers, and the NAMES a scoped rate is listed with. Each list is read
+   * under the permission its own endpoint charges — `panels.view`, and the `catalog.view`
+   * this page already needs — never under edit access: gating them on `catalog.edit` left
+   * a view-only role reading raw ids in the scope column (Codex #2 on PR #102). The server
+   * checks a chosen id against this tenant either way.
    */
   const panels = useQuery({
     queryKey: ['panels', 'extra-devices-scope'],
@@ -156,7 +168,7 @@ export function ExtraDevicesPage({ denied, mayEdit }: { denied: boolean; mayEdit
         const page = await fetchPanels({ limit: 100, ...(cursor === null ? {} : { cursor }) });
         return { items: page.panels, nextCursor: page.nextCursor };
       }),
-    enabled: mayEdit,
+    enabled: !denied && mayViewPanels,
     retry: false,
   });
   const products = useQuery({
@@ -166,7 +178,7 @@ export function ExtraDevicesPage({ denied, mayEdit }: { denied: boolean; mayEdit
         const page = await fetchProducts({ limit: 100, ...(cursor === null ? {} : { cursor }) });
         return { items: page.products, nextCursor: page.nextCursor };
       }),
-    enabled: mayEdit,
+    enabled: !denied,
     retry: false,
   });
 

@@ -1733,6 +1733,45 @@ export const panelHealth = pgTable(
 );
 
 /**
+ * WP-A8: one panel's operator policy — which customer actions it offers, the extra
+ * cooldowns and per-purchase caps it adds, and how its services are delivered.
+ *
+ * One row per panel and NO row for a panel nobody has configured, which reads as
+ * `DEFAULT_PANEL_POLICY`: everything the adapter supports, no extra limit. The policy
+ * is validated against `panelPolicySchema` at the application boundary, for the reason
+ * `panels.activation` is — a CHECK constraint cannot hold a per-action shape — and a
+ * row that does not parse is read as refusing every customer action on the panel,
+ * never as allowing them.
+ *
+ * `revision` is what a write must name: the conditional UPDATE is `revision = expected`,
+ * so two operators editing one panel's policy cannot overwrite each other unseen.
+ */
+export const panelPolicies = pgTable(
+  'panel_policies',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    panelId: uuid('panel_id').notNull(),
+    policy: jsonb('policy').notNull(),
+    revision: integer('revision').notNull().default(1),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.tenantId, table.panelId], name: 'panel_policies_pk' }),
+    /** The pair, for the reason `panel_health_tenant_panel_fk` gives. */
+    foreignKey({
+      columns: [table.tenantId, table.panelId],
+      foreignColumns: [panels.tenantId, panels.id],
+      name: 'panel_policies_panel_fk',
+    }),
+    check('panel_policies_revision_check', sql`revision >= 1`),
+    check('panel_policies_policy_check', sql`jsonb_typeof(policy) = 'object'`),
+  ],
+);
+
+/**
  * A slot on a panel, held for one order while the customer decides whether to pay.
  *
  * Phase 6B. The alternative — counting services and comparing against the cap —

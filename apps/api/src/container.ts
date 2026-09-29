@@ -55,10 +55,16 @@ import { PanelService } from './modules/platform/panels/application/panel.servic
 import { PanelMonitorService } from './modules/platform/panels/application/panel-monitor.service.js';
 import type { ProbeCoreDeps } from './modules/platform/panels/application/probe-core.js';
 import {
+  IMPLEMENTED_PROVIDER_TYPES,
   SERVICE_PROVIDER_TYPES,
   providerAdapter,
   providerServiceAdapter,
 } from './modules/platform/providers/infrastructure/adapter-registry.js';
+// WP-A8: advanced provider settings.
+import { PanelAdvancedService } from './modules/platform/panels/application/panel-advanced.service.js';
+import { PanelPolicyReader } from './modules/platform/panels/application/panel-policy.js';
+import { DrizzlePanelPolicyRepository } from './modules/platform/panels/infrastructure/drizzle-panel-policy.repository.js';
+import { PROVIDER_RULES } from './modules/platform/providers/infrastructure/provider-rules.js';
 import { SystemClock } from './infrastructure/clock.js';
 import { Uuidv7IdGenerator } from './infrastructure/ids.js';
 import { AesGcmSecretCipher } from './infrastructure/crypto/secret-cipher.js';
@@ -666,6 +672,8 @@ export interface Container {
 
   // Control plane — Phase 2
   readonly panels: PanelService;
+  /** WP-A8: a panel's capability registry, operator policy and diagnostics. */
+  readonly panelAdvanced: PanelAdvancedService;
   /** The Telegram admin section's reminder seam. See the construction site. */
   readonly reminderConfig: BotRuntimeDeps['reminderConfig'];
   /**
@@ -1290,6 +1298,13 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    */
   const panelRepository = new DrizzlePanelRepository(database.db);
   const panelCapacity = new DrizzlePanelCapacityRepository(database.db);
+  /*
+   * WP-A8: a panel's operator policy. ONE reader, handed to every customer-action
+   * decision — commercial actions, customer operations, subscription files, delivery —
+   * so the question "may a customer do this on this panel" has one answer.
+   */
+  const panelPolicyRepository = new DrizzlePanelPolicyRepository(database.db);
+  const panelPolicyReader = new PanelPolicyReader(panelPolicyRepository);
   const panelSalesGate = new PanelSalesGate({
     panels: panelRepository,
     capacity: panelCapacity,
@@ -1827,6 +1842,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     features: featureFlagResolver,
     settings: settingsResolver,
     customers: customerRepository,
+    panelPolicy: panelPolicyReader,
     // WP-A6: a paid move's frozen target, read at settlement by its order.
     locationChanges: locationChangeRepository,
   });
@@ -1852,6 +1868,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     orders: orderRepository,
     actions: commercialActionRepository,
     panels: panelOperability,
+    panelPolicy: panelPolicyReader,
     settings: settingsResolver,
     // WP-A6: the paid location change's evaluator and its frozen change request.
     locations: locationChangePolicy,
@@ -2551,6 +2568,32 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     serviceAdapterExists: (providerType) =>
       SERVICE_PROVIDER_TYPES.includes(providerType as (typeof SERVICE_PROVIDER_TYPES)[number]),
     cadence: probeCore.cadence,
+  });
+
+  /*
+   * WP-A8: the registry, the policy write and the diagnostics over the panel service
+   * above — its read, so the diagnostics and the sellability card cannot disagree.
+   */
+  const panelAdvanced = new PanelAdvancedService({
+    panels: panelService,
+    repository: panelRepository,
+    policies: panelPolicyRepository,
+    adapters: (providerType) =>
+      IMPLEMENTED_PROVIDER_TYPES.includes(
+        providerType as (typeof IMPLEMENTED_PROVIDER_TYPES)[number],
+      )
+        ? providerAdapter(providerType)
+        : null,
+    providerRules: (providerType) => PROVIDER_RULES[providerType],
+    features: featureFlagResolver,
+    guard,
+    audit,
+    opsLog,
+    sessions,
+    uow,
+    idempotency,
+    scopeActivity: tenants,
+    clock,
   });
 
   const monitorBudgetReserve = monitorBudgetReserveFor(
@@ -3321,6 +3364,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     uow,
     clock,
     guard,
+    panelPolicy: panelPolicyReader,
   });
 
   /**
@@ -3402,6 +3446,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     guard,
     uow,
     clock,
+    panelPolicy: panelPolicyReader,
   });
 
   /*
@@ -4263,6 +4308,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       },
     }),
     panels: panelService,
+    panelAdvanced,
     /*
      * The bot's own reminder-configuration seam, exposed so a test can read the path
      * the SURFACE uses rather than a copy of it. Nothing else holds it: the HTTP

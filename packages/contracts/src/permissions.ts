@@ -179,6 +179,17 @@ export const PERMISSIONS = [
   p('panels.view', 'View provider panels', 'LOW'),
   p('panels.edit', 'Create or edit provider panels', 'HIGH'),
   p('panels.credentials.rotate', 'Rotate panel credentials', 'CRITICAL'),
+  /*
+   * WP-A8: the read-only technical view of one panel — raw capability keys, the credential
+   * shape, the stored activation and policy exactly as stored. For the owner debugging an
+   * integration; normal operators read the same facts in Persian through `panels.view`.
+   * HIGH because it is the one panel read that shows internal identifiers rather than
+   * their meaning. No credential is reachable through it: the credential fields are
+   * set-at timestamps, as on every other panel read. ADDITIVE to `panels.view`: the view
+   * is a detail of a panel, so the endpoint charges both, and this key alone reaches
+   * nothing.
+   */
+  p('panels.technical.view', "View a panel's raw technical configuration", 'HIGH'),
 
   // Referral (WP9). Read-only: there is no administrative write to an attribution or a
   // commission, because either would change who is owed money (`docs/wp9-referral-audit.md`

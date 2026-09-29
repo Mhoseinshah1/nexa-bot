@@ -538,6 +538,19 @@ export const PANEL_ERROR_CODES = {
    */
   PANEL_CONFIGURATION_CHANGED: 'panel.configuration_changed',
   /**
+   * A panel policy names a customer action this panel's adapter cannot perform (WP-A8).
+   *
+   * Refused rather than stored: a policy may only restrict, and a setting over an action
+   * that does not exist is a control that changes nothing — the write-only-setting defect
+   * in a new place. The details name the actions.
+   */
+  PANEL_POLICY_CAPABILITY_UNSUPPORTED: 'panel.policy_capability_unsupported',
+  /**
+   * The policy changed since the operator read it (WP-A8). Their save would have replaced
+   * a colleague's decision they never saw; they are asked to reload it instead.
+   */
+  PANEL_POLICY_STALE: 'panel.policy_stale',
+  /**
    * A username policy that leaves a customer no way to name their service.
    *
    * Both modes off is not a strict configuration, it is a panel nothing can be bought
