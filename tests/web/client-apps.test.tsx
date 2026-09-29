@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import { NAV, navPermitted } from '../../apps/web/src/app';
 import { ClientAppsPage, formProblems } from '../../apps/web/src/pages/client-apps';
 import { t } from '../../apps/web/src/i18n/web.fa';
@@ -480,5 +480,200 @@ describe('an entry’s picture', () => {
       expectedVersion: 2,
     });
     expect(await screen.findByText(t('web.client_apps_image_none'))).toBeInTheDocument();
+  });
+  // --- Codex review of PR #104 -------------------------------------------------------
+
+  it('does not carry a file picked for one entry over to another (R1)', async () => {
+    const OTHER_ID = '019250ab-cdef-7012-8345-6789abcdef22';
+    const api = stubApi([listAndRow([app(), app({ id: OTHER_ID, name: 'دومی' })], app())]);
+    renderPage(<ClientAppsPage denied={false} mayEdit />);
+    const [editA] = await screen.findAllByRole('button', { name: t('web.client_apps_edit') });
+    fireEvent.click(editA as HTMLElement);
+    pick(pngFile(64, 64));
+    expect(await screen.findByTestId('client-app-image-picked')).toBeInTheDocument();
+
+    // Straight to the other entry, without closing the editor.
+    const [, editB] = screen.getAllByRole('button', { name: t('web.client_apps_edit') });
+    fireEvent.click(editB as HTMLElement);
+    expect(screen.getByLabelText(t('web.client_apps_name'))).toHaveValue('دومی');
+    expect(screen.queryByTestId('client-app-image-picked')).toBeNull();
+    const upload = screen.getByRole('button', { name: t('web.client_apps_image_upload') });
+    expect(upload).toBeDisabled();
+    fireEvent.click(upload);
+    expect(api.calls.some((call) => call.url.includes('/image'))).toBe(false);
+  });
+
+  it('keeps the file the input shows when an earlier read finishes last (R2)', async () => {
+    /*
+     * A FileReader whose reads finish when the test says so, in the order it says.
+     */
+    const original = globalThis.FileReader;
+    const pending: DeferredReader[] = [];
+    class DeferredReader {
+      result: string | null = null;
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      private file: File | null = null;
+      readAsDataURL(file: File) {
+        this.file = file;
+        pending.push(this);
+      }
+      /** The real reader's answer, delivered now. */
+      async finish() {
+        const file = this.file as File;
+        this.result = await new Promise<string>((resolve) => {
+          const real = new original();
+          real.onload = () => resolve(String(real.result));
+          real.readAsDataURL(file);
+        });
+        this.onload?.();
+      }
+    }
+    vi.stubGlobal('FileReader', DeferredReader);
+    try {
+      const api = stubApi([
+        listAndRow([app()], app()),
+        { url: `/client-apps/${APP_ID}/image`, body: app({ version: 3 }) },
+      ]);
+      renderPage(<ClientAppsPage denied={false} mayEdit />);
+      fireEvent.click(await screen.findByRole('button', { name: t('web.client_apps_edit') }));
+
+      pick(pngFile(64, 32, 'first.png'));
+      pick(pngFile(48, 48, 'second.png'));
+      expect(pending).toHaveLength(2);
+      // The SECOND file's read finishes first, the first file's last.
+      await act(async () => {
+        await (pending[1] as DeferredReader).finish();
+      });
+      await act(async () => {
+        await (pending[0] as DeferredReader).finish();
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: t('web.client_apps_image_upload') }));
+      await waitFor(() => {
+        expect(api.calls.some((call) => call.url.endsWith('/image'))).toBe(true);
+      });
+      const body = api.calls.find((call) => call.url.endsWith('/image'))?.body as {
+        contentBase64: string;
+      };
+      const sent = Buffer.from(body.contentBase64, 'base64');
+      expect([sent.readUInt32BE(16), sent.readUInt32BE(20)]).toEqual([48, 48]);
+    } finally {
+      vi.stubGlobal('FileReader', original);
+    }
+  });
+
+  it('lets no write on an entry start while another is in flight (R3)', async () => {
+    const stored = app({
+      image: {
+        mimeType: 'image/png',
+        byteLength: 64,
+        width: 64,
+        height: 64,
+        sha256: SHA,
+        updatedAt: '2026-09-10T12:30:00.000Z',
+      },
+    });
+    stubApi([listAndRow([stored], stored)]);
+    // Every write hangs: what matters is what can be pressed while one is in flight.
+    const stubbed = globalThis.fetch;
+    vi.stubGlobal('fetch', (input: unknown, init?: RequestInit) =>
+      (init?.method ?? 'GET') === 'POST'
+        ? new Promise<Response>(() => undefined)
+        : stubbed(input as RequestInfo, init),
+    );
+    renderPage(<ClientAppsPage denied={false} mayEdit />);
+    fireEvent.click(await screen.findByRole('button', { name: t('web.client_apps_edit') }));
+    const save = () => screen.getByRole('button', { name: t('web.client_apps_save') });
+    const clear = () => screen.getByRole('button', { name: t('web.client_apps_image_clear') });
+    expect(save()).toBeEnabled();
+
+    // The picture's removal in flight: no text save, switch, delete or other entry's edit.
+    fireEvent.click(clear());
+    await waitFor(() => {
+      expect(save()).toBeDisabled();
+    });
+    expect(screen.getByRole('button', { name: t('web.client_apps_edit') })).toBeDisabled();
+    expect(screen.getByRole('button', { name: t('web.client_apps_delete') })).toBeDisabled();
+    expect(screen.getByRole('button', { name: t('web.client_apps_cancel') })).toBeDisabled();
+  });
+
+  it('lets no picture write start while a text save is in flight (R3)', async () => {
+    const stored = app({
+      image: {
+        mimeType: 'image/png',
+        byteLength: 64,
+        width: 64,
+        height: 64,
+        sha256: SHA,
+        updatedAt: '2026-09-10T12:30:00.000Z',
+      },
+    });
+    stubApi([listAndRow([stored], stored)]);
+    const stubbed = globalThis.fetch;
+    vi.stubGlobal('fetch', (input: unknown, init?: RequestInit) =>
+      (init?.method ?? 'GET') === 'POST'
+        ? new Promise<Response>(() => undefined)
+        : stubbed(input as RequestInfo, init),
+    );
+    renderPage(<ClientAppsPage denied={false} mayEdit />);
+    fireEvent.click(await screen.findByRole('button', { name: t('web.client_apps_edit') }));
+    pick(pngFile(64, 64));
+    await screen.findByTestId('client-app-image-picked');
+    const clear = () => screen.getByRole('button', { name: t('web.client_apps_image_clear') });
+    const upload = () => screen.getByRole('button', { name: t('web.client_apps_image_upload') });
+    expect(clear()).toBeEnabled();
+    expect(upload()).toBeEnabled();
+
+    fireEvent.click(screen.getByRole('button', { name: t('web.client_apps_save') }));
+    await waitFor(() => {
+      expect(clear()).toBeDisabled();
+    });
+    expect(upload()).toBeDisabled();
+    expect(screen.getByLabelText(t('web.client_apps_image_file'))).toBeDisabled();
+  });
+
+  it('gives a different file a new key after an ambiguous failure, even with the same name and size (R4)', async () => {
+    const api = stubApi([
+      listAndRow([app()], app()),
+      {
+        url: `/client-apps/${APP_ID}/image`,
+        status: 503,
+        body: {
+          error: {
+            kind: 'unavailable',
+            code: 'platform.unavailable',
+            message: 'try again',
+            correlationId: 'test',
+          },
+        },
+      },
+    ]);
+    renderPage(<ClientAppsPage denied={false} mayEdit />);
+    fireEvent.click(await screen.findByRole('button', { name: t('web.client_apps_edit') }));
+    const uploads = () => api.calls.filter((call) => call.url.endsWith('/image'));
+    const send = async (file: File, count: number) => {
+      pick(file);
+      await screen.findByTestId('client-app-image-picked');
+      fireEvent.click(screen.getByRole('button', { name: t('web.client_apps_image_upload') }));
+      await waitFor(() => {
+        expect(uploads()).toHaveLength(count);
+      });
+      await waitFor(() => {
+        expect(
+          screen.getByRole('button', { name: t('web.client_apps_image_upload') }),
+        ).toBeEnabled();
+      });
+    };
+    const keyOf = (index: number) =>
+      (uploads()[index]?.body as { idempotencyKey: string }).idempotencyKey;
+
+    await send(pngFile(64, 32, 'icon.png'), 1);
+    // The same file again is a retry of the same question: the held key.
+    await send(pngFile(64, 32, 'icon.png'), 2);
+    expect(keyOf(1)).toBe(keyOf(0));
+    // A different file with the same name and the same size is a new command.
+    await send(pngFile(32, 64, 'icon.png'), 3);
+    expect(keyOf(2)).not.toBe(keyOf(0));
   });
 });

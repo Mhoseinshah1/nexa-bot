@@ -1,5 +1,5 @@
-import { useState, type ChangeEvent, type FormEvent } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useRef, useState, type ChangeEvent, type FormEvent } from 'react';
+import { useIsMutating, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   CLIENT_APP_DELIVERY_KINDS,
   CLIENT_APP_DESCRIPTION_MAX_LENGTH,
@@ -82,6 +82,20 @@ import {
 
 const VERSION_CONFLICT = 'control.client_app_version_conflict';
 const LIMIT = 'control.client_app_limit';
+
+/**
+ * Every write on an entry — save, switch, delete, and the picture's upload and removal —
+ * carries this mutation key, and the controls read ONE pending state from it
+ * (`useClientAppWriteBusy`). Two writes in flight at once would state the same
+ * `expectedVersion`, and one of them would come back a conflict; a text save that lands
+ * while a picture is in flight could also close the editor before the picture's refusal
+ * is shown. So while any write is in flight, none of the others can start.
+ */
+const CLIENT_APP_WRITE = ['client-app-write'] as const;
+
+function useClientAppWriteBusy(): boolean {
+  return useIsMutating({ mutationKey: CLIENT_APP_WRITE }) > 0;
+}
 
 export const PLATFORM_LABELS: Readonly<Record<ClientAppPlatform, WebKey>> = {
   ANDROID: 'web.client_apps_platform_android',
@@ -352,6 +366,9 @@ function imageFaultOf(error: unknown): string {
  * The picture of the entry being edited: what is stored (served back from the stored copy,
  * never from what was picked), a file input, and the two writes.
  *
+ * Keyed by the entry's id where it is drawn, so switching to another entry starts a fresh
+ * card: a file picked, or a refusal raised, for one entry never carries over to the next.
+ *
  * Only for an entry that exists — the writes name its id and version. Each answers with the
  * row at its new version, handed to `onChanged` so the editor's basis follows it and the
  * text form, still open, saves against the version it now holds.
@@ -365,9 +382,16 @@ function ImageCard({
 }) {
   const notify = useToast();
   const submission = useSubmissionKey();
+  const writeBusy = useClientAppWriteBusy();
   const [picked, setPicked] = useState<PickedImage>({ kind: 'NONE' });
+  /*
+   * The latest selection. A read that completes after a newer file was picked is
+   * discarded, so the preview and the payload are always the file the input shows.
+   */
+  const selection = useRef(0);
 
   const upload = useMutation({
+    mutationKey: CLIENT_APP_WRITE,
     // The file and the row travel as the VARIABLE, the banner card's reason.
     mutationFn: (input: { file: ReadyImage; row: ClientAppResponse }) =>
       uploadClientAppImage({
@@ -375,11 +399,19 @@ function ImageCard({
         expectedVersion: input.row.version,
         mimeType: input.file.mimeType,
         contentBase64: input.file.contentBase64,
+        /*
+         * The CONTENT is part of the fingerprint, not only the name and size. A key held
+         * across an ambiguous failure must not be reused for a different file that happens
+         * to share both, which the server would refuse as a payload mismatch. The bytes
+         * themselves rather than a Web Crypto digest: `crypto.subtle` exists only in a
+         * secure context, and an admin reached over plain HTTP would lose the upload.
+         */
         idempotencyKey: submission.current({
           image: input.row.id,
           version: input.row.version,
           name: input.file.name,
           size: input.file.byteLength,
+          content: input.file.contentBase64,
         }),
       }),
     onSuccess: (row) => {
@@ -392,6 +424,7 @@ function ImageCard({
   });
 
   const clear = useMutation({
+    mutationKey: CLIENT_APP_WRITE,
     mutationFn: (row: ClientAppResponse) =>
       clearClientAppImage({
         id: row.id,
@@ -415,15 +448,18 @@ function ImageCard({
   }
 
   const onPick = (event: ChangeEvent<HTMLInputElement>) => {
+    selection.current += 1;
+    const ticket = selection.current;
+    // Nothing is uploadable while the new file is being read.
+    setPicked({ kind: 'NONE' });
     const file = event.target.files?.[0];
-    if (file === undefined) {
-      setPicked({ kind: 'NONE' });
-      return;
-    }
-    void readPickedImage(file).then(setPicked);
+    if (file === undefined) return;
+    void readPickedImage(file).then((result) => {
+      if (selection.current === ticket) setPicked(result);
+    });
   };
 
-  const busy = upload.isPending || clear.isPending;
+  const busy = writeBusy;
   const failure = upload.error ?? clear.error;
   const stored = entry.image;
   const size = stored === null ? null : splitBytes(BigInt(stored.byteLength));
@@ -546,6 +582,7 @@ export function ClientAppsPage({ denied, mayEdit }: { denied: boolean; mayEdit: 
 
   /** The WHOLE command is the variable, so a retry resends exactly what was clicked. */
   const save = useMutation({
+    mutationKey: CLIENT_APP_WRITE,
     mutationFn: (command: {
       idempotencyKey: string;
       fields: ClientAppFields;
@@ -572,6 +609,7 @@ export function ClientAppsPage({ denied, mayEdit }: { denied: boolean; mayEdit: 
   });
 
   const toggle = useMutation({
+    mutationKey: CLIENT_APP_WRITE,
     mutationFn: (input: { id: string; status: ClientAppStatus; expectedVersion: number }) =>
       setClientAppStatus({ ...input, idempotencyKey: submission.current({ toggle: input }) }),
     onSuccess: () => {
@@ -586,6 +624,7 @@ export function ClientAppsPage({ denied, mayEdit }: { denied: boolean; mayEdit: 
   });
 
   const remove = useMutation({
+    mutationKey: CLIENT_APP_WRITE,
     mutationFn: (input: { id: string; expectedVersion: number }) =>
       deleteClientApp({ ...input, idempotencyKey: submission.current({ remove: input }) }),
     onSuccess: () => {
@@ -599,7 +638,8 @@ export function ClientAppsPage({ denied, mayEdit }: { denied: boolean; mayEdit: 
     },
   });
 
-  const busy = save.isPending || toggle.isPending || remove.isPending;
+  // Every write on an entry, the picture's included: one pending state for all of them.
+  const busy = useClientAppWriteBusy();
   const problems = formProblems(form);
   const formInvalid = Object.keys(problems).length > 0;
   const shown = (field: keyof FormState) => (touched ? problems[field] : undefined);
@@ -1013,6 +1053,7 @@ export function ClientAppsPage({ denied, mayEdit }: { denied: boolean; mayEdit: 
 
       {mayEdit && editor.kind !== 'closed' && (
         <ImageCard
+          key={editor.kind === 'edit' ? editor.basis.id : 'new'}
           entry={editor.kind === 'edit' ? editor.basis : null}
           onChanged={(row) => {
             /*
