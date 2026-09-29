@@ -158,6 +158,10 @@ import {
   CLIENT_APP_DESCRIPTION_MAX_LENGTH,
   CLIENT_APP_GUIDE_MAX_LENGTH,
   CLIENT_APP_ICON_MAX_LENGTH,
+  CLIENT_APP_IMAGE_MAX_BYTES,
+  CLIENT_APP_IMAGE_MAX_SIDE,
+  CLIENT_APP_IMAGE_MIME_TYPES,
+  CLIENT_APP_IMAGE_MIN_SIDE,
   CLIENT_APP_NAME_MAX_LENGTH,
   CLIENT_APP_PLATFORMS,
   CLIENT_APP_PROTOCOLS,
@@ -8407,6 +8411,18 @@ export const clientApps = pgTable(
     version: integer('version').notNull().default(1),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+    /*
+     * HF-A10 — the entry's optional picture. All six set, or none (`client_apps_image_check`).
+     * The bytes are selected by one repository method only, for the bot and the editor's
+     * preview; every other read names the metadata columns and never `image_content`.
+     */
+    imageContent: bytea('image_content'),
+    imageMimeType: text('image_mime_type'),
+    imageByteLength: integer('image_byte_length'),
+    imageWidth: integer('image_width'),
+    imageHeight: integer('image_height'),
+    imageSha256: text('image_sha256'),
+    imageUpdatedAt: timestamptz('image_updated_at'),
   },
   (table) => [
     /** The customer's read: one platform's enabled rows, in the operator's order. */
@@ -8457,6 +8473,36 @@ export const clientApps = pgTable(
       sql`sort_order BETWEEN ${sql.raw(String(CLIENT_APP_SORT_MIN))} AND ${sql.raw(String(CLIENT_APP_SORT_MAX))}`,
     ),
     check('client_apps_version_check', sql`version >= 1`),
+    /*
+     * The image is whole or absent, bounded, of a contract type, and its stated length is
+     * its real one. Every column is named `IS NOT NULL` in the second arm on purpose: a
+     * CHECK passes when it evaluates to NULL, so `image_mime_type IN (…)` alone would admit
+     * bytes with no type. The MIME list by hand for `tenant_media_assets_mime_check`'s reason:
+     * `enumCheck` refuses a literal with a slash.
+     */
+    check(
+      'client_apps_image_check',
+      sql`(image_content IS NULL AND image_mime_type IS NULL AND image_byte_length IS NULL
+            AND image_width IS NULL AND image_height IS NULL AND image_sha256 IS NULL
+            AND image_updated_at IS NULL)
+          OR (image_content IS NOT NULL AND image_mime_type IS NOT NULL
+            AND image_byte_length IS NOT NULL AND image_width IS NOT NULL
+            AND image_height IS NOT NULL AND image_sha256 IS NOT NULL
+            AND image_updated_at IS NOT NULL
+            AND image_mime_type IN (${sql.raw(
+              CLIENT_APP_IMAGE_MIME_TYPES.map((value) => {
+                if (!/^[a-z]+\/[a-z0-9.+-]+$/.test(value)) {
+                  throw new Error(`client_apps: "${value}" is not a plain MIME literal.`);
+                }
+                return `'${value}'`;
+              }).join(', '),
+            )})
+            AND image_byte_length BETWEEN 1 AND ${sql.raw(String(CLIENT_APP_IMAGE_MAX_BYTES))}
+            AND image_byte_length = octet_length(image_content)
+            AND image_width BETWEEN ${sql.raw(String(CLIENT_APP_IMAGE_MIN_SIDE))} AND ${sql.raw(String(CLIENT_APP_IMAGE_MAX_SIDE))}
+            AND image_height BETWEEN ${sql.raw(String(CLIENT_APP_IMAGE_MIN_SIDE))} AND ${sql.raw(String(CLIENT_APP_IMAGE_MAX_SIDE))}
+            AND image_sha256 ~ '^[0-9a-f]{64}$')`,
+    ),
   ],
 );
 

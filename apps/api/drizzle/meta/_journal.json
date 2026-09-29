@@ -967,6 +967,13 @@
       "when": 1790649686704,
       "tag": "0137_wp_a9_reminders",
       "breakpoints": true
+    },
+    {
+      "idx": 138,
+      "version": "7",
+      "when": 1790663867961,
+      "tag": "0138_hf_a10_client_app_image",
+      "breakpoints": true
     }
   ]
 }
