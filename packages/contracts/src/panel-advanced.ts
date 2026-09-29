@@ -9,6 +9,7 @@ import {
   canAddTime,
   canAddVolume,
   canAdjustDeviceLimit,
+  canChangeLocation,
   canDeleteUser,
   canDisableUser,
   canEnableUser,
@@ -54,12 +55,11 @@ import { BYTES_PER_GB } from './traffic-input.js';
  * underneath: `DISABLE_ENABLE` is one row over two declarations, and
  * `CREATE_SERVICE` is a row whose method half is the whole service adapter.
  *
- * `LOCATION_CHANGE` is listed with no capability behind it. This release has no
- * adapter operation that moves a service between locations, so the row reads
- * unsupported for every provider — which is the truth, and is better than leaving
- * the row out, because an operator looking for it should learn that it is absent
- * rather than wonder whether it is hidden. The row gains a guard in the same commit
- * as the capability that implements it.
+ * `LOCATION_CHANGE` is WP-A6's capability, gated by `canChangeLocation` (both location
+ * methods AND the declaration). No provider declares it in this release, so the row reads
+ * unsupported for every provider — which is the truth, and is better than leaving the row
+ * out, because an operator looking for it should learn that it is absent rather than
+ * wonder whether it is hidden.
  */
 export const CAPABILITY_REGISTRY_ROWS = [
   'CREATE_SERVICE',
@@ -186,8 +186,15 @@ const REGISTRY_SPECS: Readonly<Record<CapabilityRegistryRow, RegistryRowSpec | n
       hasMethod(adapter, 'applyDeviceLimit'),
     guard: serviceGuard(canAdjustDeviceLimit),
   },
-  /* No capability in this release. See `CAPABILITY_REGISTRY_ROWS`. */
-  LOCATION_CHANGE: null,
+  /* WP-A6's capability. See `CAPABILITY_REGISTRY_ROWS`. */
+  LOCATION_CHANGE: {
+    declarations: ['LOCATION_CHANGE'],
+    implemented: (adapter) =>
+      isServiceAdapter(adapter) &&
+      hasMethod(adapter, 'readLocation') &&
+      hasMethod(adapter, 'applyLocation'),
+    guard: serviceGuard(canChangeLocation),
+  },
   USAGE_READ: {
     declarations: ['READ_USAGE'],
     implemented: (adapter) => isServiceAdapter(adapter),
