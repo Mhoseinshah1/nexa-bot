@@ -757,6 +757,39 @@ describe('extra users / devices on an existing service (WP-A5)', () => {
       expect(await orderState(two.order.id)).toBe('DRAFT');
     });
 
+    /*
+     * Codex #2 on PR #102: an absolute ceiling — here the panel's own, WP-A8 — is judged
+     * against the limit the service reaches once every live purchase is applied, not the
+     * limit it records now. At 2 with a ceiling of 15, two +10 orders each fit alone; the
+     * second confirmation must see the first and refuse, or settlement takes it to 22.
+     */
+    it('counts live, unapplied purchases against the panel ceiling, at quote and confirmation', async () => {
+      const service = await activeService('ceiling');
+      const rate = await offeredRate('ceiling', 20);
+      await fund('ceiling');
+      await ctx.container.panelAdvanced.updatePolicy(tenantA, owner, panelId, {
+        policy: {
+          delivery: { mode: 'CARD_WITH_QR' },
+          actions: { EXTRA_DEVICES: { customerEnabled: true, maxDeviceLimit: 15 } },
+        },
+        expectedRevision: 0,
+        idempotencyKey: 'ceiling-policy',
+      });
+
+      const one = await draftDevices(service.id, rate, 10, 'ceiling-one');
+      const two = await draftDevices(service.id, rate, 10, 'ceiling-two');
+      await confirmDevices(one.order.id, 'ceiling-one');
+      await expect(confirmDevices(two.order.id, 'ceiling-two')).rejects.toMatchObject({
+        code: COMMERCE_ERROR_CODES.SERVICE_ACTION_UNAVAILABLE,
+      });
+      expect(await orderState(two.order.id)).toBe('DRAFT');
+      // And a fresh quote past what is left is refused before it is drafted.
+      await expect(draftDevices(service.id, rate, 4, 'ceiling-three')).rejects.toMatchObject({
+        code: COMMERCE_ERROR_CODES.SERVICE_ACTION_UNAVAILABLE,
+      });
+      await expect(draftDevices(service.id, rate, 3, 'ceiling-four')).resolves.toBeDefined();
+    });
+
     it('refuses a rate, and a quote, whose total the order row could not hold', async () => {
       /*
        * Codex review #2 on PR #97. The price bound admits any bigint and the quote is

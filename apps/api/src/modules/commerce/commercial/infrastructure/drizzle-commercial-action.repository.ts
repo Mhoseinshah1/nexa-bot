@@ -159,6 +159,48 @@ export class DrizzleCommercialActionRepository implements CommercialActionReposi
     return Number(rows[0]?.total ?? '0');
   }
 
+  async unappliedDeviceQuantity(
+    scope: TenantContext,
+    serviceId: string,
+    excludeOrderId: OrderId | null,
+    tx?: unknown,
+  ): Promise<number> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select({
+        total: sql<string>`COALESCE(SUM(${serviceCommercialActions.purchasedDeviceCount}), 0)`,
+      })
+      .from(serviceCommercialActions)
+      .innerJoin(
+        orders,
+        and(
+          eq(orders.tenantId, serviceCommercialActions.tenantId),
+          eq(orders.id, serviceCommercialActions.orderId),
+        ),
+      )
+      .where(
+        and(
+          eq(serviceCommercialActions.tenantId, tenantId),
+          eq(serviceCommercialActions.serviceId, serviceId),
+          eq(serviceCommercialActions.kind, 'ADD_DEVICES'),
+          inArray(orders.state, ['AWAITING_PAYMENT', 'PAID']),
+          // Applied means SUCCEEDED, which is when `services.device_limit` moved.
+          sql`NOT EXISTS (
+            SELECT 1 FROM ${provisioningOperations}
+             WHERE ${provisioningOperations.tenantId} = ${serviceCommercialActions.tenantId}
+               AND ${provisioningOperations.serviceId} = ${serviceCommercialActions.serviceId}
+               AND ${provisioningOperations.orderId} = ${serviceCommercialActions.orderId}
+               AND ${provisioningOperations.type} = 'ADD_DEVICES'
+               AND ${provisioningOperations.state} = 'SUCCEEDED'
+          )`,
+          ...(excludeOrderId === null
+            ? []
+            : [ne(serviceCommercialActions.orderId, excludeOrderId)]),
+        ),
+      );
+    return Number(rows[0]?.total ?? '0');
+  }
+
   async listForService(
     scope: TenantContext,
     serviceId: string,

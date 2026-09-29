@@ -1105,14 +1105,24 @@ export class CommercialActionService {
     const maxQuantity = rate?.specification.maxQuantity ?? null;
     if (rate === null || rate.price === null || maxQuantity === null) return null;
     const sold = await this.deps.actions.soldDeviceQuantity(scope, service.id, excludeOrderId, tx);
+    /*
+     * The ABSOLUTE ceilings are judged against the limit the service will reach once every
+     * live purchase is applied, not the one it records now: settlement computes each target
+     * from the limit recorded at THAT moment plus what was bought, so two purchases that
+     * each fit the recorded limit would together pass the ceiling (Codex #2 on PR #102).
+     * Confirmation re-decides this under the order's and the service's locks.
+     */
+    const projected =
+      service.deviceLimit +
+      (await this.deps.actions.unappliedDeviceQuantity(scope, service.id, excludeOrderId, tx));
     // WP-A8: the panel may cap how high an account on it is raised; it only lowers this.
     const panelCap = policyMaxDeviceLimit(
       await this.deps.panelPolicy.forPanel(scope, service.panelId, tx),
     );
     const remaining = Math.min(
       maxQuantity - sold,
-      MAX_DEVICE_LIMIT - service.deviceLimit,
-      panelCap === null ? MAX_DEVICE_LIMIT : panelCap - service.deviceLimit,
+      MAX_DEVICE_LIMIT - projected,
+      panelCap === null ? MAX_DEVICE_LIMIT : panelCap - projected,
     );
     if (remaining < 1) return null;
     return {

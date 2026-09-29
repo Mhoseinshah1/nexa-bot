@@ -262,6 +262,26 @@ describe('advanced provider settings', () => {
     return created.id;
   }
 
+  async function offeredTime(key: string, days: number): Promise<string> {
+    const created = await ctx.container.serviceAddons.create(tenantA, owner, {
+      idempotencyKey: `${key}-addon`,
+      draft: {
+        kind: 'ADD_TIME',
+        title: `${String(days)} days`,
+        sortOrder: days,
+        specification: { kind: 'ADD_TIME', trafficBytes: null, durationDays: days },
+        price: money(1_000n * BigInt(days), 'IRT'),
+        panelId: null,
+        productId: null,
+      },
+    });
+    await ctx.container.serviceAddons.activate(tenantA, owner, {
+      idempotencyKey: `${key}-addon-on`,
+      addonId: created.id,
+    });
+    return created.id;
+  }
+
   const policyAudits = async () =>
     ctx.container.database.db
       .select()
@@ -667,6 +687,39 @@ describe('advanced provider settings', () => {
       'ADD_TRAFFIC',
     );
     expect(offer.addons.map((addon) => addon.id)).toEqual([fits]);
+  });
+
+  /*
+   * Codex #2 on PR #102: each cap binds only its own kind. A time package has no bytes and
+   * a traffic package no days, so a cap applied across kinds hid every package of the
+   * other kind, through the offer and the button alike.
+   */
+  it('lets a traffic cap leave time packages alone, and a time cap leave traffic ones', async () => {
+    const service = await deliveredService('kinds');
+    const traffic = await offeredTraffic('kinds-traffic', 10n);
+    const time = await offeredTime('kinds-time', 30);
+    const offered = async (kind: 'ADD_TRAFFIC' | 'ADD_TIME') =>
+      (
+        await ctx.container.commercialActions.offer(
+          tenantA,
+          systemActor(`kinds-${kind}`),
+          customerId,
+          service.id,
+          kind,
+        )
+      ).addons.map((addon) => addon.id);
+
+    await setPolicy(policyWith({ ADD_TRAFFIC: { customerEnabled: true, maxTrafficGb: 50 } }));
+    expect(await offered('ADD_TIME')).toEqual([time]);
+    expect(
+      await ctx.container.commercialActions.availableFor(tenantA, systemActor('k1'), service),
+    ).toEqual(expect.arrayContaining(['ADD_TRAFFIC', 'ADD_TIME']));
+
+    await setPolicy(policyWith({ ADD_TIME: { customerEnabled: true, maxDays: 60 } }));
+    expect(await offered('ADD_TRAFFIC')).toEqual([traffic]);
+    expect(
+      await ctx.container.commercialActions.availableFor(tenantA, systemActor('k2'), service),
+    ).toEqual(expect.arrayContaining(['ADD_TRAFFIC', 'ADD_TIME']));
   });
 
   /*
