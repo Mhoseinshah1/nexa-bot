@@ -295,6 +295,10 @@ campaign adds no segmentation, no delivery lane and no credit path of its own.
   fingerprint are frozen on the campaign row (`audience_confirmed_count`,
   `audience_fingerprint`).
 
+- The Web Admin edits a campaign's audience with Broadcast's own `AudienceBuilder`
+  (`apps/web/src/pages/audience-builder.tsx`) and describes a stored one with its
+  `describeAudience`: one segmentation UI over one segmentation engine.
+
 ### 5.2 When recipient identity is frozen
 
 The brief asks for identity frozen "at launch" for broadcast and direct-grant campaigns and

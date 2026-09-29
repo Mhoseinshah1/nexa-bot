@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
-import { CampaignDetailPage, CampaignsPage } from '../../apps/web/src/pages/campaigns';
+import {
+  CampaignDetailPage,
+  CampaignNewPage,
+  CampaignsPage,
+} from '../../apps/web/src/pages/campaigns';
 import { NAV, resolve } from '../../apps/web/src/app';
 import { renderPage, stubApi, type Api } from './harness';
 
@@ -157,6 +161,44 @@ describe('the campaigns list', () => {
     expect(
       resolve({ path: '/campaigns', query: new URLSearchParams() }, ['campaigns.view']).title,
     ).toBe('کمپین‌ها');
+  });
+});
+
+describe('a new campaign', () => {
+  it('edits its audience with the SHARED builder and sends the definition as it stands', async () => {
+    const api = stubApi([
+      {
+        url: '/audience/options',
+        body: { currency: 'IRT', resellerTiers: [], products: [], panels: [] },
+      },
+      { url: '/products', body: { products: [], nextCursor: null } },
+      { url: '/product-categories', body: { categories: [] } },
+      { url: '/campaigns', body: detail() },
+    ]);
+    renderPage(<CampaignNewPage denied={false} mayManage />);
+    // Broadcast's own builder, not a second one.
+    expect(await screen.findByText('چه کسانی')).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText('کاربران عادی (غیر نماینده)'));
+
+    const inputs = screen.getAllByRole('textbox');
+    fireEvent.change(inputs[0] as HTMLElement, { target: { value: 'جشنواره پاییز' } });
+    fireEvent.change(screen.getByPlaceholderText('1405-07-10'), {
+      target: { value: '1405-07-10' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('1405-07-20'), {
+      target: { value: '1405-07-20' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'ذخیرهٔ پیش‌نویس' }));
+
+    await waitFor(() => expect(posts(api, '/campaigns')).toHaveLength(1));
+    const body = posts(api, '/campaigns')[0]?.body as Record<string, unknown>;
+    expect(body).toMatchObject({
+      name: 'جشنواره پاییز',
+      start: { date: '1405-07-10', time: '10:00' },
+      end: { date: '1405-07-20', time: '10:00' },
+      audience: { version: 1, segment: { ordinary: true, resellerTierIds: [] } },
+      actions: {},
+    });
   });
 });
 

@@ -1,10 +1,6 @@
 import { useState, type FormEvent, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  AUDIENCE_CUSTOMER_STATUSES,
-  AUDIENCE_PURCHASE_FILTERS,
-  AUDIENCE_REFERRAL_FILTERS,
-  AUDIENCE_TRIAL_FILTERS,
   BROADCAST_BUTTONS_MAX,
   CAMPAIGN_DESCRIPTION_MAX_LENGTH,
   CAMPAIGN_NAME_MAX_LENGTH,
@@ -14,12 +10,6 @@ import {
   DISCOUNTABLE_PURPOSES,
   PRODUCT_PAGE_MAX,
   uuidV7Schema,
-  type AudienceCustomerStatus,
-  type AudienceDefinitionInput,
-  type AudienceOptionsResponse,
-  type AudiencePurchaseFilter,
-  type AudienceReferralFilter,
-  type AudienceTrialFilter,
   type BroadcastCounts,
   type BulkCounts,
   type CampaignActionKind,
@@ -53,6 +43,13 @@ import { useSubmissionKey } from '../submission-key';
 import { t, type WebKey } from '../i18n/web.fa';
 import { navigate, useLinkHandler, type Route } from '../router';
 import { PURPOSE_LABELS } from './discounts';
+import {
+  AudienceBuilder,
+  EMPTY_AUDIENCE,
+  describeAudience,
+  draftOf,
+  type AudienceDraft,
+} from './audience-builder';
 import { messageFor } from './settings';
 import {
   Badge,
@@ -131,29 +128,6 @@ const ACTION_STATE_LABELS: Readonly<Record<CampaignActionState, WebKey>> = {
   LAUNCHED: 'web.campaign_action_state_launched',
   CANCELLED: 'web.campaign_action_state_cancelled',
   FAILED: 'web.campaign_action_state_failed',
-};
-
-const CUSTOMER_STATUS_LABELS: Readonly<Record<AudienceCustomerStatus, WebKey>> = {
-  ACTIVE: 'web.campaign_audience_status_active',
-  BLOCKED: 'web.campaign_audience_status_blocked',
-  ANY: 'web.campaign_audience_any',
-};
-const PURCHASE_LABELS: Readonly<Record<AudiencePurchaseFilter, WebKey>> = {
-  ANY: 'web.campaign_audience_any',
-  PURCHASED: 'web.campaign_audience_purchased',
-  NEVER_PURCHASED: 'web.campaign_audience_never_purchased',
-};
-const TRIAL_LABELS: Readonly<Record<AudienceTrialFilter, WebKey>> = {
-  ANY: 'web.campaign_audience_any',
-  USED: 'web.campaign_audience_trial_used',
-  NOT_USED: 'web.campaign_audience_trial_not_used',
-};
-const REFERRAL_LABELS: Readonly<Record<AudienceReferralFilter, WebKey>> = {
-  ANY: 'web.campaign_audience_any',
-  PARTICIPANT: 'web.campaign_audience_referral_participant',
-  NON_PARTICIPANT: 'web.campaign_audience_referral_non_participant',
-  REFERRER: 'web.campaign_audience_referral_referrer',
-  REFERRED: 'web.campaign_audience_referral_referred',
 };
 
 /** The persisted states the results group by, in words. Unknown ones show as they are. */
@@ -350,23 +324,7 @@ export function CampaignsPage({
 // The form
 // ---------------------------------------------------------------------------
 
-type SegmentMode = 'ALL' | 'ORDINARY' | 'TIERS' | 'ORDINARY_AND_TIERS';
 type ScopeKind = 'ALL' | 'PRODUCT' | 'CATEGORY';
-
-interface AudienceState {
-  customerStatus: AudienceCustomerStatus;
-  purchase: AudiencePurchaseFilter;
-  segmentMode: SegmentMode;
-  tierIds: readonly string[];
-  trial: AudienceTrialFilter;
-  referral: AudienceReferralFilter;
-  noPurchaseForDays: string;
-  serviceOn: boolean;
-  productIds: readonly string[];
-  panelIds: readonly string[];
-  expiringWithinHours: string;
-  expired: boolean;
-}
 
 interface FormState {
   name: string;
@@ -375,7 +333,7 @@ interface FormState {
   startTime: string;
   endDate: string;
   endTime: string;
-  audience: AudienceState;
+  audience: AudienceDraft;
   discountOn: boolean;
   discountKind: 'AUTOMATIC' | 'CODE';
   discountCode: string;
@@ -409,21 +367,6 @@ interface FormState {
   announcementBody: string;
   buttons: readonly { label: string; url: string }[];
 }
-
-const EMPTY_AUDIENCE: AudienceState = {
-  customerStatus: 'ACTIVE',
-  purchase: 'ANY',
-  segmentMode: 'ALL',
-  tierIds: [],
-  trial: 'ANY',
-  referral: 'ANY',
-  noPurchaseForDays: '',
-  serviceOn: false,
-  productIds: [],
-  panelIds: [],
-  expiringWithinHours: '',
-  expired: false,
-};
 
 const EMPTY_FORM: FormState = {
   name: '',
@@ -481,80 +424,6 @@ function optionalWhole(raw: string, min: number, max: number): number | null | u
   return value === null ? undefined : value;
 }
 
-/** The audience state as the shared contract's definition. */
-export function audienceDefinitionOf(state: AudienceState): AudienceDefinitionInput | WebKey {
-  const noPurchase = optionalWhole(state.noPurchaseForDays, 1, 3650);
-  if (noPurchase === undefined) return 'web.campaign_problem_days';
-  const expiring = optionalWhole(state.expiringWithinHours, 1, 24 * 366);
-  if (expiring === undefined) return 'web.campaign_problem_hours';
-  if (
-    (state.segmentMode === 'TIERS' || state.segmentMode === 'ORDINARY_AND_TIERS') &&
-    state.tierIds.length === 0
-  ) {
-    return 'web.campaign_problem_tiers';
-  }
-  return {
-    version: 1,
-    customerStatus: state.customerStatus,
-    purchase: state.purchase,
-    segment:
-      state.segmentMode === 'ALL'
-        ? null
-        : {
-            ordinary:
-              state.segmentMode === 'ORDINARY' || state.segmentMode === 'ORDINARY_AND_TIERS',
-            resellerTierIds: state.segmentMode === 'ORDINARY' ? [] : [...state.tierIds],
-          },
-    trial: state.trial,
-    referral: state.referral,
-    noPurchaseForDays: noPurchase,
-    service: state.serviceOn
-      ? {
-          productIds: [...state.productIds],
-          panelIds: [...state.panelIds],
-          expiringWithinHours: state.expired ? null : expiring,
-          expired: state.expired,
-        }
-      : null,
-  };
-}
-
-function audienceStateOf(raw: unknown): AudienceState {
-  const d = (raw ?? {}) as Record<string, unknown>;
-  const segment = d['segment'] as { ordinary: boolean; resellerTierIds: string[] } | null;
-  const service = d['service'] as {
-    productIds: string[];
-    panelIds: string[];
-    expiringWithinHours: number | null;
-    expired: boolean;
-  } | null;
-  return {
-    customerStatus: (d['customerStatus'] as AudienceCustomerStatus | undefined) ?? 'ACTIVE',
-    purchase: (d['purchase'] as AudiencePurchaseFilter | undefined) ?? 'ANY',
-    segmentMode:
-      segment === null || segment === undefined
-        ? 'ALL'
-        : segment.ordinary && segment.resellerTierIds.length > 0
-          ? 'ORDINARY_AND_TIERS'
-          : segment.ordinary
-            ? 'ORDINARY'
-            : 'TIERS',
-    tierIds: segment?.resellerTierIds ?? [],
-    trial: (d['trial'] as AudienceTrialFilter | undefined) ?? 'ANY',
-    referral: (d['referral'] as AudienceReferralFilter | undefined) ?? 'ANY',
-    noPurchaseForDays:
-      typeof d['noPurchaseForDays'] === 'number' ? String(d['noPurchaseForDays']) : '',
-    serviceOn: service !== null && service !== undefined,
-    productIds: service?.productIds ?? [],
-    panelIds: service?.panelIds ?? [],
-    expiringWithinHours:
-      service?.expiringWithinHours === null || service?.expiringWithinHours === undefined
-        ? ''
-        : String(service.expiringWithinHours),
-    expired: service?.expired ?? false,
-  };
-}
-
 /** The whole form as the create/update body, or the field that is wrong. */
 export function campaignBodyOf(
   state: FormState,
@@ -565,8 +434,8 @@ export function campaignBodyOf(
   if (!moment.test(state.startDate) || !moment.test(state.endDate)) {
     return { problem: 'web.campaign_problem_date' };
   }
-  const audience = audienceDefinitionOf(state.audience);
-  if (typeof audience === 'string') return { problem: audience };
+  // The shared builder's own draft: the contract's input shape, sent as it is.
+  const audience = state.audience;
 
   const scopeOf = (kind: ScopeKind, productId: string, categoryId: string) => ({
     productId: kind === 'PRODUCT' ? productId : null,
@@ -683,7 +552,7 @@ function formStateOf(campaign: CampaignDetail): FormState {
     startTime: campaign.startLocal.time,
     endDate: campaign.endLocal.date,
     endTime: campaign.endLocal.time,
-    audience: audienceStateOf(campaign.audience),
+    audience: draftOf(campaign.audience),
   };
   for (const action of campaign.actions) {
     const terms = (action.terms ?? {}) as Record<string, unknown>;
@@ -858,186 +727,6 @@ function ScopePicker({
   );
 }
 
-function MultiSelect({
-  label,
-  value,
-  onChange,
-  options,
-}: {
-  label: string;
-  value: readonly string[];
-  onChange: (next: readonly string[]) => void;
-  options: readonly { id: string; name: string }[];
-}) {
-  return (
-    <Field label={label}>
-      <div className="checks">
-        {options.length === 0 && (
-          <span className="muted small">{t('web.campaign_none_available')}</span>
-        )}
-        {options.map((option) => (
-          <Toggle
-            key={option.id}
-            on={value.includes(option.id)}
-            label={option.name}
-            onChange={(on) =>
-              onChange(on ? [...value, option.id] : value.filter((id) => id !== option.id))
-            }
-          />
-        ))}
-      </div>
-    </Field>
-  );
-}
-
-/**
- * The shared audience, as a form. Every field is one dimension of the SAME definition
- * Broadcast and the mass operations use (`audience.ts`); the server counts it with the same
- * query, so what the preview says is what the campaign reaches.
- */
-function AudienceFields({
-  value,
-  onChange,
-  options,
-}: {
-  value: AudienceState;
-  onChange: (next: AudienceState) => void;
-  options: AudienceOptionsResponse | undefined;
-}) {
-  const set = <K extends keyof AudienceState>(key: K, next: AudienceState[K]) =>
-    onChange({ ...value, [key]: next });
-  return (
-    <>
-      <div className="grid-3">
-        <Field label={t('web.campaign_audience_status')}>
-          <select
-            value={value.customerStatus}
-            onChange={(event) =>
-              set('customerStatus', event.target.value as AudienceCustomerStatus)
-            }
-          >
-            {AUDIENCE_CUSTOMER_STATUSES.map((item) => (
-              <option key={item} value={item}>
-                {t(CUSTOMER_STATUS_LABELS[item])}
-              </option>
-            ))}
-          </select>
-        </Field>
-        <Field label={t('web.campaign_audience_purchase')}>
-          <select
-            value={value.purchase}
-            onChange={(event) => set('purchase', event.target.value as AudiencePurchaseFilter)}
-          >
-            {AUDIENCE_PURCHASE_FILTERS.map((item) => (
-              <option key={item} value={item}>
-                {t(PURCHASE_LABELS[item])}
-              </option>
-            ))}
-          </select>
-        </Field>
-        <Field label={t('web.campaign_audience_segment')}>
-          <select
-            value={value.segmentMode}
-            onChange={(event) => set('segmentMode', event.target.value as SegmentMode)}
-          >
-            <option value="ALL">{t('web.campaign_audience_segment_all')}</option>
-            <option value="ORDINARY">{t('web.campaign_audience_segment_ordinary')}</option>
-            <option value="TIERS">{t('web.campaign_audience_segment_tiers')}</option>
-            <option value="ORDINARY_AND_TIERS">
-              {t('web.campaign_audience_segment_ordinary_and_tiers')}
-            </option>
-          </select>
-        </Field>
-      </div>
-      {(value.segmentMode === 'TIERS' || value.segmentMode === 'ORDINARY_AND_TIERS') && (
-        <MultiSelect
-          label={t('web.campaign_audience_tiers')}
-          value={value.tierIds}
-          onChange={(next) => set('tierIds', next)}
-          options={options?.resellerTiers ?? []}
-        />
-      )}
-      <div className="grid-3">
-        <Field label={t('web.campaign_audience_trial')}>
-          <select
-            value={value.trial}
-            onChange={(event) => set('trial', event.target.value as AudienceTrialFilter)}
-          >
-            {AUDIENCE_TRIAL_FILTERS.map((item) => (
-              <option key={item} value={item}>
-                {t(TRIAL_LABELS[item])}
-              </option>
-            ))}
-          </select>
-        </Field>
-        <Field label={t('web.campaign_audience_referral')}>
-          <select
-            value={value.referral}
-            onChange={(event) => set('referral', event.target.value as AudienceReferralFilter)}
-          >
-            {AUDIENCE_REFERRAL_FILTERS.map((item) => (
-              <option key={item} value={item}>
-                {t(REFERRAL_LABELS[item])}
-              </option>
-            ))}
-          </select>
-        </Field>
-        <Field
-          label={t('web.campaign_audience_no_purchase_days')}
-          hint={t('web.campaign_audience_no_purchase_days_hint')}
-        >
-          <input
-            dir="ltr"
-            inputMode="numeric"
-            value={value.noPurchaseForDays}
-            onChange={(event) => set('noPurchaseForDays', event.target.value.trim())}
-          />
-        </Field>
-      </div>
-      <Toggle
-        on={value.serviceOn}
-        onChange={(on) => set('serviceOn', on)}
-        label={t('web.campaign_audience_service_on')}
-      />
-      {value.serviceOn && (
-        <>
-          <MultiSelect
-            label={t('web.campaign_audience_products')}
-            value={value.productIds}
-            onChange={(next) => set('productIds', next)}
-            options={(options?.products ?? []).map((p) => ({ id: p.id, name: p.title }))}
-          />
-          <MultiSelect
-            label={t('web.campaign_audience_panels')}
-            value={value.panelIds}
-            onChange={(next) => set('panelIds', next)}
-            options={options?.panels ?? []}
-          />
-          <div className="grid-3">
-            <Field
-              label={t('web.campaign_audience_expiring_hours')}
-              hint={t('web.campaign_audience_expiring_hours_hint')}
-            >
-              <input
-                dir="ltr"
-                inputMode="numeric"
-                value={value.expiringWithinHours}
-                disabled={value.expired}
-                onChange={(event) => set('expiringWithinHours', event.target.value.trim())}
-              />
-            </Field>
-            <Toggle
-              on={value.expired}
-              onChange={(on) => set('expired', on)}
-              label={t('web.campaign_audience_expired')}
-            />
-          </div>
-        </>
-      )}
-    </>
-  );
-}
-
 function CampaignForm({
   initial,
   campaignId,
@@ -1167,11 +856,7 @@ function CampaignForm({
       </Card>
 
       <Card title={t('web.campaign_section_audience')} hint={t('web.campaign_audience_hint')}>
-        <AudienceFields
-          value={state.audience}
-          onChange={(next) => set('audience', next)}
-          options={options.data}
-        />
+        <AudienceBuilder value={state.audience} onChange={(next) => set('audience', next)} />
       </Card>
 
       <Card title={t('web.campaign_action_discount')} hint={t('web.campaign_discount_hint')}>
@@ -1596,6 +1281,14 @@ function SummaryCard({ campaign }: { campaign: CampaignDetail }) {
             </span>,
           ],
           [t('web.campaign_actions'), kindsText(campaign.actionKinds)],
+          [
+            t('web.campaign_audience'),
+            <ul key="aud" className="plain">
+              {describeAudience(campaign.audience).map((line) => (
+                <li key={line}>{line}</li>
+              ))}
+            </ul>,
+          ],
           [
             t('web.campaign_audience_confirmed'),
             campaign.audienceConfirmedCount === null ? (

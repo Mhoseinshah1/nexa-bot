@@ -392,10 +392,7 @@ import {
   type PanelTrialResponse,
   type UpdatePanelTrialRequest,
   type UpdatePanelTrialResponse,
-  // Round N, C1: campaigns, and the shared audience's options.
-  AUDIENCE_ROUTES,
-  audienceOptionsResponseSchema,
-  type AudienceOptionsResponse,
+  // Round N, C1: campaigns.
   CAMPAIGN_ROUTES,
   campaignListResponseSchema,
   campaignPreviewResponseSchema,
@@ -2412,14 +2409,6 @@ export function fetchOrderPricing(id: string): Promise<OrderPricingResponse> {
 }
 
 // --- Campaigns (round N, C1) ---------------------------------------------------
-
-/**
- * The shared audience's builder options (round N): reseller tiers, products, panels and the
- * selling currency, by name. The same endpoint Broadcast and the mass operations read.
- */
-export function fetchAudienceOptions(): Promise<AudienceOptionsResponse> {
-  return authedGet(AUDIENCE_ROUTES.options, audienceOptionsResponseSchema);
-}
 
 /** One page of campaigns, newest first. */
 export function fetchCampaigns(
