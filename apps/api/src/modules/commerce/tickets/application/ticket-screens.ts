@@ -43,8 +43,12 @@ export class TicketScreenComposer {
     scope: TenantContext,
     messages: readonly TicketMessageRecord[],
     messageCount: number,
+    /** HF-A7: the messages that carry a file from support, marked like a customer's file. */
+    filed: ReadonlySet<string> = new Set(),
   ): Promise<{ readonly conversation: string; readonly olderLine: string | null }> {
-    const marker = messages.some((message) => message.attachment !== null)
+    const hasFile = (message: TicketMessageRecord) =>
+      message.attachment !== null || filed.has(message.id);
+    const marker = messages.some(hasFile)
       ? await this.templates.render(scope, 'bot.ticket.attachment_marker', {})
       : '';
     const lines: string[] = [];
@@ -58,7 +62,7 @@ export class TicketScreenComposer {
         );
         continue;
       }
-      const text = [message.attachment === null ? null : marker, excerpt(message.body)]
+      const text = [hasFile(message) ? marker : null, excerpt(message.body)]
         .filter((part): part is string => part !== null && part !== '')
         .join('\n');
       lines.push(

@@ -9,6 +9,7 @@ import type {
   TicketMessageId,
   TicketMessageSender,
   TicketPriority,
+  TicketReplyFileMimeType,
   TicketStatus,
   TicketSystemEvent,
   UserId,
@@ -78,12 +79,38 @@ export interface TicketMessageRecord {
   readonly createdAt: Date;
 }
 
+/**
+ * The file support attached to a reply (HF-A7): what it is, and where its bytes are now.
+ * Never the bytes themselves — `replyFileContent` is the one read that returns them.
+ */
+export interface TicketReplyFileRecord {
+  readonly messageId: TicketMessageId;
+  readonly ticketId: TicketId;
+  /** The ticket's bot: its token sends the file, and the stamped `file_id` is its. */
+  readonly botInstanceId: BotInstanceId;
+  readonly kind: TicketAttachmentKind;
+  readonly mimeType: TicketReplyFileMimeType;
+  readonly fileName: string;
+  readonly byteLength: number;
+  readonly sha256: string;
+  /** True while the bytes are still held here, waiting for Telegram. */
+  readonly staged: boolean;
+  /** Telegram's handle once it accepted the file; null until then, or if it never did. */
+  readonly telegramFileId: string | null;
+  readonly telegramFileUniqueId: string | null;
+  readonly createdAt: Date;
+}
+
 /** One message as an operator reads it: who signed it, and how far a reply got. */
 export interface TicketMessageListItem {
   readonly message: TicketMessageRecord;
   readonly authorUsername: string | null;
   /** The `TICKET_REPLY` notification's state, for an ADMIN message; null otherwise. */
   readonly delivery: CustomerNotificationState | null;
+  /** HF-A7: support's file on this message, when it sent one. */
+  readonly replyFile: TicketReplyFileRecord | null;
+  /** HF-A7: the `TICKET_REPLY_ATTACHMENT` notification's state; null without a file. */
+  readonly attachmentDelivery: CustomerNotificationState | null;
 }
 
 /** One inbox row: the ticket, who filed it, and who owns it. */
@@ -240,12 +267,68 @@ export interface TicketRepository {
     ticketId: TicketId,
     only?: TicketMessageId,
   ): Promise<readonly TicketMessageListItem[]>;
-  /** The newest `limit` messages, oldest first, and how many there are in all. */
+  /**
+   * The newest `limit` messages, oldest first, how many there are in all, and which of them
+   * carry a file from support (HF-A7) — the bot's conversation view marks those too.
+   */
   latestMessages(
     scope: TenantContext,
     ticketId: TicketId,
     limit: number,
-  ): Promise<{ readonly messages: readonly TicketMessageRecord[]; readonly messageCount: number }>;
+  ): Promise<{
+    readonly messages: readonly TicketMessageRecord[];
+    readonly messageCount: number;
+    readonly filed: ReadonlySet<string>;
+  }>;
+
+  // --- HF-A7: support's files ------------------------------------------------------------
+
+  /**
+   * Serialises one tenant's staging of support's files, so two replies arriving together
+   * cannot both fit under `TICKET_REPLY_FILE_STAGED_MAX_BYTES` and together cross it.
+   * Advisory and transaction-scoped.
+   */
+  lockReplyFileStaging(scope: TenantContext, tx: unknown): Promise<void>;
+  /** The bytes this tenant holds for files Telegram has not accepted yet. */
+  stagedReplyFileBytes(scope: TenantContext, tx: unknown): Promise<number>;
+  insertReplyFile(
+    scope: TenantContext,
+    input: {
+      readonly messageId: TicketMessageId;
+      readonly ticketId: TicketId;
+      readonly botInstanceId: BotInstanceId;
+      readonly kind: TicketAttachmentKind;
+      readonly mimeType: TicketReplyFileMimeType;
+      readonly fileName: string;
+      readonly content: Uint8Array;
+      readonly sha256: string;
+      readonly now: Date;
+    },
+    tx: unknown,
+  ): Promise<TicketReplyFileRecord>;
+  findReplyFile(
+    scope: TenantContext,
+    messageId: string,
+    tx?: unknown,
+  ): Promise<TicketReplyFileRecord | null>;
+  /** The staged bytes, or null once they were cleared. The ONE read that returns them. */
+  replyFileContent(scope: TenantContext, messageId: string): Promise<Uint8Array | null>;
+  /**
+   * Telegram accepted the file: stamp its handle and clear the bytes, conditionally on the
+   * bytes still being here. False when there was nothing left to clear.
+   */
+  markReplyFileDelivered(
+    scope: TenantContext,
+    messageId: string,
+    file: { readonly fileId: string; readonly fileUniqueId: string },
+    at: Date,
+    tx: unknown,
+  ): Promise<boolean>;
+  /**
+   * Housekeeping across every tenant, the `RetentionSweeper` family: clears the bytes of at
+   * most `limit` files staged before `cutoff`. The row — name, type, size, digest — stays.
+   */
+  purgeReplyFileContentBefore(cutoff: Date, at: Date, limit: number): Promise<number>;
 }
 
 export interface TicketCategoryRepository {

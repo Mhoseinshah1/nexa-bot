@@ -11325,7 +11325,12 @@ export class BotRuntime {
     );
     if (found === null) return ticketNotFound();
     const { ticket } = found;
-    const rendered = await desk.screens.conversation(scope, found.messages, found.messageCount);
+    const rendered = await desk.screens.conversation(
+      scope,
+      found.messages,
+      found.messageCount,
+      found.filed,
+    );
     const active = ticket.status !== 'CLOSED';
     return {
       key: 'bot.ticket.view',

@@ -2514,7 +2514,17 @@ place to keep the bytes until Telegram has them (this deployment has no blob sto
 same type and size rules, and a notification that carries a file — which the customer lane
 does not do today (`docs/wp-a7-tickets-audit.md` §8).
 
-UNRESOLVED. Nothing is built.
+RESOLVED by HF-A7 (`docs/wp-a7-tickets-audit.md` §9). The owner asked for it. Support may
+attach one JPEG or PNG image (up to 5 MB), PDF (up to 10 MB) or plain-text file (up to 1 MB)
+to a reply. The declared type, the name's extension and the bytes' own signature must agree.
+The bytes are held in a bounded staging table (`ticket_reply_files`, at most 100 MB of
+undelivered files per tenant) until Telegram accepts the upload. They are then cleared,
+and Telegram's `file_id` is kept instead. Bytes Telegram never took are cleared after 7
+days. The file travels on its own customer notification kind, `TICKET_REPLY_ATTACHMENT`.
+
+Still open: the upload has been exercised only against a stand-in for the Bot API. What a
+real `sendPhoto`/`sendDocument` answers for these types has not been checked against the
+real Telegram, including the photo's recompression and a `.txt` document's preview.
 
 ## OQ-WPA7-02 — whether the ticket desk is exempt from the channel-membership guard
 

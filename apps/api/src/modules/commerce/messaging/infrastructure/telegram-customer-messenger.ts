@@ -430,7 +430,12 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
      * arrived, and a failed re-send must not make an operator's "the bot is not
      * replying" alarm fire for a bot that is replying.
      */
-    return this.classify(await telegramSend(request)).sent;
+    const outcome = await telegramSend(request);
+    const sent = this.classify(outcome).sent;
+    // HF-A7: the handle Telegram gave the delivered file, so an upload's bytes can be let go.
+    return outcome.outcome === 'SUCCEEDED' && outcome.file !== undefined
+      ? { ...sent, file: outcome.file }
+      : sent;
   }
 
   private async recordFailure(
