@@ -80,7 +80,7 @@ const providerId = z
  * came in. Before round N a `null` or a decimal `final_amount` made the whole create
  * `unexpected_body`, and a created, payable invoice was shown to the customer as a lost one.
  */
-export function metadataAmount(value: unknown): bigint | null {
+function metadataAmount(value: unknown): bigint | null {
   if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) return BigInt(value);
   if (typeof value === 'string' && /^\d{1,18}$/u.test(value)) return BigInt(value);
   return null;
@@ -267,8 +267,9 @@ export class TonPaysAdapter implements ExternalGatewayAdapter {
 
     const raw = await this.call('POST', TONPAYS_CREATE_PATH, apiKey, body);
     if (raw.kind === 'NO_RESPONSE') return { kind: 'UNKNOWN', code: `http.${raw.reason}` };
-    if (raw.kind === 'UNREADABLE')
+    if (raw.kind === 'UNREADABLE') {
       return { kind: 'UNKNOWN', code: boundedCode(unreadableCode(raw)) };
+    }
     if (raw.status >= 200 && raw.status < 300) {
       const parsed = createResponseSchema.safeParse(raw.body);
       if (!parsed.success) {
@@ -340,8 +341,9 @@ export class TonPaysAdapter implements ExternalGatewayAdapter {
     // The documented POST form, so the invoice id travels in the body rather than a path.
     const raw = await this.call('POST', TONPAYS_CHECK_PATH, apiKey, { invoice_id: invoiceId });
     if (raw.kind === 'NO_RESPONSE') return { kind: 'FAILED', code: `http.${raw.reason}` };
-    if (raw.kind === 'UNREADABLE')
+    if (raw.kind === 'UNREADABLE') {
       return { kind: 'FAILED', code: boundedCode(unreadableCode(raw)) };
+    }
     if (raw.status >= 200 && raw.status < 300) {
       const parsed = inquiryResponseSchema.safeParse(raw.body);
       if (!parsed.success) {
