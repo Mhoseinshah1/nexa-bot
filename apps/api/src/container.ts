@@ -10,6 +10,8 @@ import {
   TICKET_REPLY_FILE_RETENTION_DAYS,
   canAdjustDeviceLimit,
   canChangeLocation,
+  // Round N: the mass credit's notification renders the amount the ledger holds.
+  money,
   faqNumberMarker,
   systemJobActor,
 } from '@nexa/contracts';
@@ -189,6 +191,13 @@ import {
 import { DrizzleBroadcastRepository } from './modules/commerce/broadcasts/infrastructure/drizzle-broadcast.repository.js';
 import { DrizzleRecipientFactsReader } from './modules/commerce/broadcasts/infrastructure/drizzle-recipient-facts.reader.js';
 import { TelegramBroadcastTransport } from './modules/commerce/broadcasts/infrastructure/telegram-broadcast.transport.js';
+import { BulkOperationService } from './modules/commerce/bulk-operations/application/bulk-operation.service.js';
+import { BulkOperationProcessor } from './modules/commerce/bulk-operations/application/bulk-operation-processor.js';
+import {
+  BULK_OPERATION_INTERVAL_MS,
+  BulkOperationLoop,
+} from './modules/commerce/bulk-operations/application/bulk-operation-loop.js';
+import { DrizzleBulkOperationRepository } from './modules/commerce/bulk-operations/infrastructure/drizzle-bulk-operation.repository.js';
 import { DrizzleCommercialActionRepository } from './modules/commerce/commercial/infrastructure/drizzle-commercial-action.repository.js';
 import { LocationChangePolicy } from './modules/commerce/locations/application/location-change-policy.js';
 import { LocationChangeService } from './modules/commerce/locations/application/location-change.service.js';
@@ -711,6 +720,11 @@ export interface Container {
   readonly broadcastLoop: BroadcastLoop;
   /** Round N (B1): the dispatcher itself, exposed so a test drives the pass production runs. */
   readonly broadcastDispatcher: BroadcastDispatcher;
+  /** Round N (B2): «عملیات گروهی» — mass wallet credit and mass traffic/time. */
+  readonly bulkOperations: BulkOperationService;
+  /** Round N (B2): the processor, exposed so a test drives the pass production runs. */
+  readonly bulkOperationProcessor: BulkOperationProcessor;
+  readonly bulkOperationLoop: BulkOperationLoop;
   readonly wallet: WalletService;
   readonly payments: PaymentService;
   readonly paymentAccounts: PaymentAccountService;
@@ -2918,6 +2932,53 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     sellingCurrency: (scope) =>
       settingsResolver.valueOf<SalesCurrencyCode>(scope, 'sales.currency'),
   });
+  /*
+   * Round N (B2): safe mass actions over the shared audience. The processor writes ledger
+   * entries through the wallet repository and PLANS free ADD_TRAFFIC / ADD_TIME operations
+   * through `ProvisioningService.planGrant`, which the provisioner executes as it executes a
+   * purchased add-on — no new provider write path.
+   */
+  const bulkOperationRepository = new DrizzleBulkOperationRepository(database.db);
+  const bulkSellingCurrency = (scope: TenantContext, tx?: unknown) =>
+    settingsResolver.valueOf<SalesCurrencyCode>(scope, 'sales.currency', tx as never);
+  const bulkOperationService = new BulkOperationService({
+    repository: bulkOperationRepository,
+    audience: audienceService,
+    panels: panelOperability,
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    outbox,
+    sellingCurrency: bulkSellingCurrency,
+    clock,
+    ids,
+  });
+  const bulkOperationProcessor = new BulkOperationProcessor({
+    repository: bulkOperationRepository,
+    wallet: walletRepository,
+    grants: provisioningService,
+    notifier: customerNotifier,
+    outbox,
+    uow,
+    scopeActivity: tenants,
+    sellingCurrency: bulkSellingCurrency,
+    clock,
+    ids,
+    logger,
+  });
+  const bulkOperationLoop = new BulkOperationLoop(bulkOperationProcessor, {
+    scope: () =>
+      installationTenantId === null
+        ? null
+        : { tenantId: installationTenantId, botInstanceId: null },
+    intervalMs: BULK_OPERATION_INTERVAL_MS,
+    now: () => clock.now().getTime(),
+    logger,
+  });
   const featureFlags = new FeatureFlagsService(
     guard,
     uow,
@@ -3552,6 +3613,24 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       orderScreens: { close: (scope, orderId) => wizardScreens.closeOrder(scope, orderId) },
       // HF-A9: reminders claimed inside the tenant's quiet window wait for its end.
       quietHours: reminderQuietHours,
+      // Round N (B2): the mass credit's amount and the grant's service, read from the item.
+      massActions: {
+        notificationValues: async (scope, kind, itemId) => {
+          const facts = await bulkOperationRepository.notificationValues(scope, kind, itemId);
+          if (facts === null) return null;
+          if (kind === 'WALLET_MASS_CREDITED') {
+            return facts.amountMinor === null || facts.currency === null
+              ? null
+              : { amount: money(facts.amountMinor, facts.currency) };
+          }
+          if (facts.serviceLabel === null) return null;
+          return {
+            service: facts.serviceLabel,
+            ...(facts.trafficBytes === null ? {} : { traffic: facts.trafficBytes }),
+            ...(facts.durationDays === null ? {} : { days: facts.durationDays }),
+          };
+        },
+      },
       logger,
     }),
     {
@@ -4692,6 +4771,9 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     broadcasts: broadcastService,
     broadcastLoop,
     broadcastDispatcher,
+    bulkOperations: bulkOperationService,
+    bulkOperationProcessor,
+    bulkOperationLoop,
     wallet: walletService,
     payments: paymentService,
     paymentAccounts: paymentAccountService,
@@ -5001,6 +5083,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       await customerNotificationLoop.stop();
       // Round N: and the broadcast lane, for the same reason — a stamped send is recorded.
       await broadcastLoop.stop();
+      await bulkOperationLoop.stop();
       await receiptReviewPushLoop.stop();
       await opsGroupMaintainer.stop();
       await interactionCounter.close();

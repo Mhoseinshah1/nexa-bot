@@ -121,6 +121,8 @@ async function main(): Promise<void> {
         // Round N: the broadcast lane. No flag: a confirmed broadcast nobody sends is a
         // report that says "sending" for ever, and silence is what a stalled lane looks like.
         ['broadcasts', true, () => container.broadcastLoop.isFresh(now)],
+        // Round N: and the mass-operation lane, for the same reason.
+        ['bulk-operations', true, () => container.bulkOperationLoop.isFresh(now)],
         // The administrators' receipt push (ADR-0031). No flag, for the customer lane's
         // reason: a receipt nobody is told about is a customer waiting on a reviewer who
         // does not know, and silence is exactly what a stalled lane looks like.
@@ -209,6 +211,8 @@ async function main(): Promise<void> {
   container.customerNotificationLoop.start();
   // Round N: and the broadcast lane — frozen recipients, paced per bot, at most once.
   container.broadcastLoop.start();
+  // And the mass-operation lane: one item, one transaction, exactly once.
+  container.bulkOperationLoop.start();
   // And the administrators' receipt push: a new card-to-card receipt, to every Telegram
   // administrator who may decide it (WP10 follow-up §3, ADR-0031).
   container.receiptReviewPushLoop.start();
