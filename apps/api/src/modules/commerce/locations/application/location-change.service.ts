@@ -29,6 +29,10 @@ import type { ServiceRepository } from '../../provisioning/application/ports.js'
 import type { ProvisioningService } from '../../provisioning/application/provisioning.service.js';
 import type { ResellerService } from '../../resellers/application/reseller.service.js';
 import { OPERATION_LEGAL_FROM } from '../../provisioning/application/provision-executor.js';
+import {
+  assertCustomerPolicyAllows,
+  type PanelPolicyGate,
+} from '../../../platform/panels/application/panel-policy.js';
 import type { LocationChangePolicy } from './location-change-policy.js';
 import type { LocationChangeRepository } from './ports.js';
 
@@ -62,6 +66,13 @@ export interface LocationChangeServiceDeps {
       tx?: unknown,
     ): Promise<{ readonly ok: boolean; readonly reason?: string }>;
   };
+  /**
+   * The panel's operator policy (WP-A8, HF-A6A8): whether customers on this panel may move
+   * a service at all. The same reader and the same `LOCATION_CHANGE` row the paid move is
+   * decided by in `CommercialActionService`, asked inside this transaction after the
+   * capability, so it can refuse and never grant.
+   */
+  readonly panelPolicy: PanelPolicyGate;
   readonly guard: PermissionGuard;
   readonly uow: UnitOfWork<TransactionScope>;
   readonly audit: AuditWriter;
@@ -80,9 +91,9 @@ export interface LocationChangeServiceDeps {
  * settle and nothing a failure could refund — so it is not a commercial ORDER, and
  * `CommercialActionService` refuses to quote one. Everything else is the paid move's:
  * the same `LocationChangePolicy` decision (not where it already is, within the cooldown
- * and the rolling limit), the same `prepareCommercialAction` refusals (owner, state,
- * panel capability, another commercial action open, a deletion or refund request
- * pending), the same one-open-commercial-action index, the same `CHANGE_LOCATION`
+ * and the rolling limit), the same panel-policy switch (`LOCATION_CHANGE`), the same
+ * `prepareCommercialAction` refusals (owner, state, panel capability, another commercial
+ * action open, a deletion or refund request pending), the same one-open-commercial-action index, the same `CHANGE_LOCATION`
  * operation to an absolute key, the same provisioner, verification and announcement.
  *
  * One transaction: the lifecycle lock, the decision, the operation, the frozen change
@@ -170,6 +181,12 @@ export class LocationChangeService {
             { reason: operable.reason ?? 'UNKNOWN' },
           );
         }
+        // HF-A6A8: then the operator's switch for this panel, read in this transaction —
+        // a switch-off that commits after the confirmation screen was drawn still refuses.
+        assertCustomerPolicyAllows(
+          await this.deps.panelPolicy.forPanel(scope, service.panelId, tx),
+          'LOCATION_CHANGE',
+        );
         const { current, target } = await this.deps.policy.decide(
           scope,
           service,
