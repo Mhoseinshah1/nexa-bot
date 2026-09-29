@@ -86,7 +86,8 @@ export interface TelegramUploadRequest {
   readonly token: string;
   readonly apiBaseUrl: string;
   readonly timeoutMs: number;
-  readonly method: 'sendPhoto' | 'sendDocument';
+  // Round N: `sendVideo` for a broadcast's video, the one upload that is neither.
+  readonly method: 'sendPhoto' | 'sendDocument' | 'sendVideo';
   readonly multipart: TelegramMultipartBody;
 }
 
@@ -132,8 +133,12 @@ export function sentFileOf(
   result: unknown,
 ): { readonly fileId: string; readonly fileUniqueId: string } | null {
   if (typeof result !== 'object' || result === null) return null;
-  const message = result as { document?: unknown; photo?: unknown };
-  const candidate = Array.isArray(message.photo) ? message.photo.at(-1) : message.document;
+  const message = result as { document?: unknown; photo?: unknown; video?: unknown };
+  // Round N: a broadcast's video is answered with `video`, and its handle is what lets every
+  // later recipient of the same broadcast be sent it without a second upload.
+  const candidate = Array.isArray(message.photo)
+    ? message.photo.at(-1)
+    : (message.document ?? message.video);
   if (typeof candidate !== 'object' || candidate === null) return null;
   const { file_id: fileId, file_unique_id: fileUniqueId } = candidate as {
     file_id?: unknown;

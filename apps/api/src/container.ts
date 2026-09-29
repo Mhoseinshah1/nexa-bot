@@ -179,6 +179,15 @@ import { DrizzleTrialResetRepository } from './modules/commerce/trials/infrastru
 import { TrialAdminService } from './modules/commerce/trials/application/trial-admin.service.js';
 import { AudienceService } from './modules/commerce/audience/application/audience.service.js';
 import { DrizzleAudienceReader } from './modules/commerce/audience/infrastructure/drizzle-audience.reader.js';
+import { BroadcastService } from './modules/commerce/broadcasts/application/broadcast.service.js';
+import { BroadcastDispatcher } from './modules/commerce/broadcasts/application/broadcast-dispatcher.js';
+import {
+  BROADCAST_INTERVAL_MS,
+  BroadcastLoop,
+} from './modules/commerce/broadcasts/application/broadcast-loop.js';
+import { DrizzleBroadcastRepository } from './modules/commerce/broadcasts/infrastructure/drizzle-broadcast.repository.js';
+import { DrizzleRecipientFactsReader } from './modules/commerce/broadcasts/infrastructure/drizzle-recipient-facts.reader.js';
+import { TelegramBroadcastTransport } from './modules/commerce/broadcasts/infrastructure/telegram-broadcast.transport.js';
 import { DrizzleCommercialActionRepository } from './modules/commerce/commercial/infrastructure/drizzle-commercial-action.repository.js';
 import { LocationChangePolicy } from './modules/commerce/locations/application/location-change-policy.js';
 import { LocationChangeService } from './modules/commerce/locations/application/location-change.service.js';
@@ -686,6 +695,12 @@ export interface Container {
    * mass actions and Campaigns. One query implementation (`audience-sql.ts`).
    */
   readonly audience: AudienceService;
+  /** Round N (B1): «ارسال همگانی» for an operator — compose, preview, test, launch, steer. */
+  readonly broadcasts: BroadcastService;
+  /** Round N (B1): the broadcast dispatcher's timer, run by the WORKER role. */
+  readonly broadcastLoop: BroadcastLoop;
+  /** Round N (B1): the dispatcher itself, exposed so a test drives the pass production runs. */
+  readonly broadcastDispatcher: BroadcastDispatcher;
   readonly wallet: WalletService;
   readonly payments: PaymentService;
   readonly paymentAccounts: PaymentAccountService;
@@ -3509,6 +3524,58 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   );
 
   /*
+   * Round N (B1): the broadcast lane. Its own tables and dispatcher — ADR-0030 closes the
+   * customer notification lane to operator-authored content — sharing the one Telegram
+   * transport (`telegramSend`), the tenant's template renderer and the bot-token source.
+   */
+  const broadcastRepository = new DrizzleBroadcastRepository(database.db);
+  const broadcastTransport = new TelegramBroadcastTransport(
+    templateResolver,
+    botInstances,
+    config.TELEGRAM_API_BASE_URL,
+    config.NOTIFICATION_SEND_TIMEOUT_MS,
+  );
+  const broadcastFacts = new DrizzleRecipientFactsReader(database.db, (scope) =>
+    settingsResolver.valueOf<SalesCurrencyCode>(scope, 'sales.currency'),
+  );
+  const broadcastService = new BroadcastService({
+    repository: broadcastRepository,
+    audience: audienceService,
+    transport: broadcastTransport,
+    facts: broadcastFacts,
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    outbox,
+    clock,
+    ids,
+  });
+  const broadcastDispatcher = new BroadcastDispatcher({
+    repository: broadcastRepository,
+    transport: broadcastTransport,
+    facts: broadcastFacts,
+    outbox,
+    uow,
+    clock,
+    ids,
+    scopeIsActive: (scope) => uow.run(scope, async (tx) => tenants.scopeIsActive(scope, tx)),
+    logger,
+  });
+  const broadcastLoop = new BroadcastLoop(broadcastDispatcher, {
+    scope: () =>
+      installationTenantId === null
+        ? null
+        : { tenantId: installationTenantId, botInstanceId: null },
+    intervalMs: BROADCAST_INTERVAL_MS,
+    now: () => clock.now().getTime(),
+    logger,
+  });
+
+  /*
    * Block User from the receipt message (WP10 follow-up §4). The payment READ, the customer
    * READ, the capture table and the customers section's own block — nothing that decides a
    * payment, and no blocking of its own. Its reason is read through the same capture
@@ -4578,6 +4645,9 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     trialAdmin: trialAdminService,
     panelTrials,
     audience: audienceService,
+    broadcasts: broadcastService,
+    broadcastLoop,
+    broadcastDispatcher,
     wallet: walletService,
     payments: paymentService,
     paymentAccounts: paymentAccountService,
@@ -4884,6 +4954,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       await serviceReminderLoop.stop();
       await customerReminderLoop.stop();
       await customerNotificationLoop.stop();
+      // Round N: and the broadcast lane, for the same reason — a stamped send is recorded.
+      await broadcastLoop.stop();
       await receiptReviewPushLoop.stop();
       await opsGroupMaintainer.stop();
       await interactionCounter.close();

@@ -6,6 +6,7 @@ import {
   TENANT_MEDIA_MAX_BYTES,
   TICKET_MESSAGE_MAX_LENGTH,
   TICKET_REPLY_FILE_MAX_BYTES,
+  BROADCAST_MEDIA_MAX_BYTES,
   type SalesCurrencyCode,
   type TenantContext,
 } from '@nexa/contracts';
@@ -36,6 +37,9 @@ const TICKET_REPLY_ROUTE = /\/tickets\/[^/]+\/messages$/u;
 /** The base64 form of the largest allowed file, the text at its bound, and the envelope. */
 const TICKET_REPLY_BODY_LIMIT_BYTES =
   Math.ceil((TICKET_REPLY_FILE_MAX_BYTES * 4) / 3) + TICKET_MESSAGE_MAX_LENGTH * 4 * 6 + 16 * 1024;
+/** Round N: a broadcast's media, as base64 inside JSON — the tenant-media shape. */
+const BROADCAST_MEDIA_ROUTE = /\/broadcasts\/[^/]+\/media$/u;
+const BROADCAST_MEDIA_BODY_LIMIT_BYTES = Math.ceil((BROADCAST_MEDIA_MAX_BYTES * 4) / 3) + 16 * 1024;
 
 /**
  * Resolves the primary tenant this installation serves.
@@ -225,6 +229,10 @@ export async function createApiApp(config: AppConfig = loadConfig()): Promise<Ap
      */
     if (methods.includes('POST') && TICKET_REPLY_ROUTE.test(route.url)) {
       route.bodyLimit = TICKET_REPLY_BODY_LIMIT_BYTES;
+    }
+    // Round N: a broadcast's photo, video or document, bounded by the schema and the service.
+    if (methods.includes('POST') && BROADCAST_MEDIA_ROUTE.test(route.url)) {
+      route.bodyLimit = BROADCAST_MEDIA_BODY_LIMIT_BYTES;
     }
   });
 
