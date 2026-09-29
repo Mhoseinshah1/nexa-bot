@@ -963,3 +963,36 @@ export function parseSettingValue(
     ),
   };
 }
+
+/**
+ * The inclusive whole-number range a numeric setting accepts, read from its own schema.
+ *
+ * For the admin's numeric field, which states the range beside the input (WP-A1). Read
+ * from the declaration rather than retyped in the web, for the reason
+ * `sales.order_expiry_minutes` gives for using the contract's own constants: two copies of
+ * a bound drift, and a field that tells an operator "5 to 60" while the server enforces
+ * something else is the setting surface lying about what it will accept.
+ *
+ * A nullable number is unwrapped: null is its "not set" state, not a bound. An exclusive
+ * bound (`.positive()`) is reported as the first integer the schema accepts, by asking the
+ * schema rather than by reading how it spells the bound.
+ *
+ * `null` for a key whose value is not a number, and for one with no declared ceiling (a
+ * topic id is bounded only by the safe-integer range, which is not a range an operator can
+ * use). Presentation only: the server validates every write against the schema whatever
+ * this returns.
+ */
+export function settingIntegerRange(
+  key: SettingKey,
+): { readonly min: number; readonly max: number } | null {
+  let schema: z.ZodType = settingDefinition(key).schema;
+  if (schema instanceof z.ZodNullable) schema = schema.unwrap() as z.ZodType;
+  if (!(schema instanceof z.ZodNumber)) return null;
+  const { minValue, maxValue } = schema;
+  if (minValue === null || maxValue === null) return null;
+  const min = schema.safeParse(minValue).success ? minValue : minValue + 1;
+  const max = schema.safeParse(maxValue).success ? maxValue : maxValue - 1;
+  if (!Number.isSafeInteger(min) || !Number.isSafeInteger(max)) return null;
+  if (min <= Number.MIN_SAFE_INTEGER + 1 || max >= Number.MAX_SAFE_INTEGER - 1) return null;
+  return { min, max };
+}

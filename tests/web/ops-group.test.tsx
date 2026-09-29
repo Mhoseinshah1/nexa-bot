@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { ReactElement } from 'react';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
-import { OPS_GROUP_MANAGED_SETTING_KEYS } from '@nexa/contracts';
+import { OPS_GROUP_MANAGED_SETTING_KEYS, featureFlagSchema } from '@nexa/contracts';
 import { OpsGroupPage, opsGroupPollsFast } from '../../apps/web/src/pages/ops-group';
 import { SettingsPage } from '../../apps/web/src/pages/settings';
+import { FeaturesPage } from '../../apps/web/src/pages/features';
 import { resolve } from '../../apps/web/src/app';
+import { t } from '../../apps/web/src/i18n/web.fa';
 import { renderPage, setting, stubApi } from './harness';
 
 /**
@@ -219,5 +221,49 @@ describe('the settings page, after WP-A4', () => {
     for (const key of OPS_GROUP_MANAGED_SETTING_KEYS) {
       expect(container.textContent ?? '').not.toContain(key);
     }
+  });
+});
+
+describe('the features page, after WP-A4', () => {
+  it('does not list the ops group’s managed keys among a feature’s related settings', async () => {
+    stubApi([
+      {
+        url: '/features',
+        body: {
+          flags: [
+            featureFlagSchema.parse({
+              key: 'ops_notifications',
+              description: 'Project operational events.',
+              enabled: true,
+              source: 'TENANT',
+              blastRadius: 'TENANT_WIDE',
+              version: 2,
+              reason: null,
+              updatedAt: '2026-09-01T00:00:00.000Z',
+              updatedByAdminId: 'a1',
+              configuration: [
+                {
+                  ...setting({ key: 'ops.notifications.telegram_chat_id', value: '-100777000' }),
+                  inert: false,
+                },
+                {
+                  ...setting({ key: 'ops.notifications.max_attempts', value: 10 }),
+                  inert: false,
+                },
+                {
+                  ...setting({ key: 'ops.notifications.max_per_minute', value: 20 }),
+                  inert: false,
+                },
+              ],
+            }),
+          ],
+        },
+      },
+    ]);
+    const { container } = renderPage((<FeaturesPage mayEdit denied={false} />) as ReactElement);
+    await screen.findByText('20');
+    expect(container.textContent).not.toContain('-100777000');
+    expect(container.textContent).not.toContain(t('web.setting_ops_max_attempts'));
+    expect(container.textContent).toContain(t('web.setting_ops_max_per_minute'));
   });
 });

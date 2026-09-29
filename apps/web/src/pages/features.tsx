@@ -1,24 +1,30 @@
-import { useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { FeatureFlagResponse } from '@nexa/contracts';
+import { OPS_GROUP_MANAGED_SETTING_KEYS, type FeatureFlagResponse } from '@nexa/contracts';
 import { fetchFeatureFlags, saveFeatureFlag } from '../api/client';
+import { formatTimestamp } from '../format';
 import { useSubmissionKey } from '../submission-key';
 import { t } from '../i18n/web.fa';
+import { ConfirmDialog, confirmDialogOpen } from '../ui/confirm-dialog';
+import { Badge, Card, Ltr, PageHead, StateSwitch, Switch } from '../ui/kit';
+import { featurePresentation } from './features-catalogue';
 import { ErrorReport, registryLabel } from './settings';
-import { Badge, Banner, Card, DataTable, Ltr, PageHead, StateSwitch } from '../ui/kit';
 
 /**
- * The feature-flag screen.
+ * The feature screen: a Persian control panel of on/off switches (WP-A2).
  *
- * Each flag is drawn with the settings it governs, and a setting whose flag is
- * off is labelled inert. In the legacy system the balance-warning flag and its
- * threshold sit on different screens, the flag is off, and nothing on either
- * screen says that the value therefore does nothing (CBR-007, GSR-008).
+ * Each feature shows its Persian name, one practical sentence, its state and a switch.
+ * Turning a feature on is one click. Turning one off is one click too, except for the
+ * few whose switch-off silently stops something people rely on, and any flag this
+ * build does not know. Those ask a plain yes/cancel question first
+ * (`FEATURE_PRESENTATION[key].disableEffect`). Nothing is
+ * typed: no internal key, no phrase, no reason. The audit row records who, when and
+ * what on its own.
  *
- * A flag whose blast radius is TENANT_WIDE is drawn differently from one that is
- * not, and asks for the flag's own key to be typed plus a reason. The legacy
- * capability screen renders the whole-bot kill switch identically to the dice
- * toggle and takes one press (CBR-009).
+ * Each feature is still drawn with the settings it governs, and those settings are
+ * labelled inert while it is off. In the legacy system the balance-warning flag and its
+ * threshold sit on different screens, the flag is off, and nothing on either screen says
+ * that the value therefore does nothing (CBR-007, GSR-008).
  */
 export function FeaturesPage({ mayEdit, denied }: { mayEdit: boolean; denied: boolean }) {
   const flags = useQuery({ queryKey: ['features'], queryFn: fetchFeatureFlags, enabled: !denied });
@@ -38,9 +44,18 @@ export function FeaturesPage({ mayEdit, denied }: { mayEdit: boolean; denied: bo
 
 function FlagCard({ flag, mayEdit }: { flag: FeatureFlagResponse; mayEdit: boolean }) {
   const client = useQueryClient();
-  const wide = flag.blastRadius === 'TENANT_WIDE';
-  const [confirmKey, setConfirmKey] = useState('');
-  const [reason, setReason] = useState('');
+  const presentation = featurePresentation(flag.key);
+  // A flag this build has no Persian entry for can only come from a newer server; its
+  // own description is then the best there is, and the key is its only name.
+  const title = presentation === undefined ? flag.key : t(presentation.title);
+  const summary = presentation === undefined ? flag.description : t(presentation.summary);
+  // A flag this build does not know takes the CONSERVATIVE path: nothing here can say its
+  // switch-off is harmless, and the server no longer asks for any confirmation, so the
+  // page asks, with a generic sentence, rather than switching it off on one click.
+  const disableEffect =
+    presentation === undefined ? 'web.feature_unknown_off_effect' : presentation.disableEffect;
+  const [asking, setAsking] = useState(false);
+  const switchSlot = useRef<HTMLSpanElement>(null);
 
   const refresh = async () => {
     await client.invalidateQueries({ queryKey: ['features'] });
@@ -50,22 +65,15 @@ function FlagCard({ flag, mayEdit }: { flag: FeatureFlagResponse; mayEdit: boole
   const submission = useSubmissionKey();
 
   const toggle = useMutation({
-    // Minted once per submission and passed as a variable, so a retry carries
-    // the key the first attempt used.
-    // The WHOLE command travels as the variable; see the note in
-    // `settings.tsx`. Reading `confirmKey` and `reason` out of the closure
-    // would let a retry carry the original key with a later reason.
-    mutationFn: (
-      command: {
-        idempotencyKey: string;
-        enabled: boolean;
-        expectedVersion: number | null;
-      } & Partial<{ confirmKey: string; reason: string }>,
-    ) => saveFeatureFlag({ key: flag.key, ...command }),
+    // The WHOLE command travels as the variable, with the key minted for it, so a retry
+    // carries the key and the command its first attempt used; see `settings.tsx`.
+    mutationFn: (command: {
+      idempotencyKey: string;
+      enabled: boolean;
+      expectedVersion: number | null;
+    }) => saveFeatureFlag({ key: flag.key, ...command }),
     onSuccess: async () => {
       submission.settle();
-      setConfirmKey('');
-      setReason('');
       await refresh();
     },
     // A conflict means the cached row is stale; refreshing is what makes a
@@ -76,114 +84,158 @@ function FlagCard({ flag, mayEdit }: { flag: FeatureFlagResponse; mayEdit: boole
     },
   });
 
-  const onSubmit = (event: FormEvent) => {
-    event.preventDefault();
-    // Snapshotted at the click, so a retry cannot see a later edit.
-    const command = {
-      enabled: !flag.enabled,
-      expectedVersion: flag.version,
-      ...(wide ? { confirmKey, reason } : {}),
-    };
+  const send = (enabled: boolean) => {
+    // Snapshotted at the click, against the version this card was drawn from.
+    const command = { enabled, expectedVersion: flag.version };
     toggle.mutate({ ...command, idempotencyKey: submission.current(command) });
   };
 
+  const onSwitch = (next: boolean) => {
+    // One question at a time, and nothing is sent behind an open one.
+    if (confirmDialogOpen()) return;
+    if (!next && disableEffect !== null) {
+      setAsking(true);
+      return;
+    }
+    send(next);
+  };
+
+  const cancel = useCallback(() => setAsking(false), []);
+  const returnFocus = useCallback(
+    () => switchSlot.current?.querySelector<HTMLElement>('[role="switch"]') ?? null,
+    [],
+  );
+
+  /*
+   * Focus after a CONFIRMED switch-off.
+   *
+   * «بله، خاموش شود» closes the dialog and starts the write, and the switch is disabled
+   * while the write is pending. The dialog hands focus back to a switch that is disabled,
+   * or is about to be, and focus falls to the page body. So confirming arms this. The
+   * restore waits until the write has started ('armed' to 'pending') and then settled
+   * ('pending' to idle, on success or error), by which point the switch is enabled
+   * again.
+   *
+   * Focus is restored only when it is nowhere useful. An operator who has since moved
+   * to another control keeps it. Cancel never arms this, because nothing is pending and
+   * the dialog's own hand-back already works.
+   */
+  const restoreAfterWrite = useRef<'idle' | 'armed' | 'pending'>('idle');
+  useEffect(() => {
+    if (restoreAfterWrite.current === 'armed' && toggle.isPending) {
+      restoreAfterWrite.current = 'pending';
+    } else if (restoreAfterWrite.current === 'pending' && !toggle.isPending) {
+      restoreAfterWrite.current = 'idle';
+      const active = document.activeElement;
+      if (active === null || active === document.body) returnFocus()?.focus();
+    }
+  }, [toggle.isPending, returnFocus]);
+
   return (
     <Card
-      title={registryLabel(flag.key) ?? flag.key}
-      {...(registryLabel(flag.key) === undefined ? {} : { hint: flag.key })}
+      title={title}
       actions={
         <>
           <Badge tone={flag.enabled ? 'ok' : 'neutral'}>
             {flag.enabled ? t('web.enabled') : t('web.disabled')}
           </Badge>
-          {wide && <Badge tone="danger">{t('web.tenant_wide')}</Badge>}
+          {mayEdit && (
+            // The slot exists so the dialog can hand focus back to this switch on close;
+            // the kit's Switch takes no ref.
+            <span ref={switchSlot} className="switch-slot">
+              <Switch
+                checked={flag.enabled}
+                onChange={onSwitch}
+                label={title}
+                disabled={toggle.isPending || asking}
+              />
+            </span>
+          )}
         </>
       }
     >
-      <form onSubmit={onSubmit}>
-        <p className="muted small">{flag.description}</p>
+      <p className="muted small">{summary}</p>
 
-        {flag.reason !== null && flag.reason !== '' && (
-          <p className="faint small">
-            {t('web.confirm_reason')}: <span className="plain">{flag.reason}</span>
-          </p>
-        )}
+      {flag.updatedAt !== null && (
+        <p className="faint small">
+          {t('web.feature_last_changed')}: {formatTimestamp(flag.updatedAt)}
+        </p>
+      )}
 
-        {flag.configuration.length > 0 && (
-          <DataTable
-            caption={t('web.features_title')}
-            rows={flag.configuration}
-            rowKey={(setting) => setting.key}
-            columns={[
-              {
-                key: 'key',
-                header: t('web.key'),
-                render: (setting) => (
-                  <div className={setting.inert ? 'inert' : undefined}>
-                    <Ltr>{setting.key}</Ltr>
-                    {setting.inert && <p className="muted small">{t('web.inert')}</p>}
-                    {setting.storedValueInvalid && (
-                      <p className="danger small">{t('web.stored_value_invalid')}</p>
-                    )}
-                  </div>
-                ),
-              },
-              {
-                key: 'value',
-                header: t('web.value'),
-                render: (setting) => <Ltr>{displayValue(setting.value)}</Ltr>,
-              },
-              {
-                key: 'source',
-                header: t('web.source'),
-                render: (setting) =>
-                  setting.source === 'TENANT' ? t('web.source_tenant') : t('web.source_default'),
-              },
-            ]}
-          />
-        )}
+      {flag.configuration.length > 0 && <RelatedSettings flag={flag} />}
 
-        {mayEdit && wide && (
-          <>
-            <Banner tone="warn">{t('web.confirm_required')}</Banner>
-            <label htmlFor={`confirm-${flag.key}`}>{t('web.confirm_key')}</label>
-            <input
-              id={`confirm-${flag.key}`}
-              className="input ltr mono"
-              value={confirmKey}
-              onChange={(event) => setConfirmKey(event.target.value)}
-              placeholder={flag.key}
-            />
-            <label htmlFor={`reason-${flag.key}`}>{t('web.confirm_reason')}</label>
-            <input
-              id={`reason-${flag.key}`}
-              className="input"
-              value={reason}
-              onChange={(event) => setReason(event.target.value)}
-            />
-          </>
-        )}
+      {toggle.isError && <ErrorReport error={toggle.error} />}
 
-        {mayEdit && (
-          <button type="submit" className="btn primary" disabled={toggle.isPending}>
-            {toggle.isPending ? t('web.saving') : flag.enabled ? t('web.disable') : t('web.enable')}
-          </button>
-        )}
-        {toggle.isError && <ErrorReport error={toggle.error} />}
-      </form>
+      {asking && disableEffect !== null && (
+        <ConfirmDialog
+          title={title}
+          question={t('web.feature_confirm_disable')}
+          detail={t(disableEffect)}
+          confirmLabel={t('web.feature_confirm_disable_yes')}
+          cancelLabel={t('web.feature_confirm_cancel')}
+          onConfirm={() => {
+            restoreAfterWrite.current = 'armed';
+            setAsking(false);
+            send(false);
+          }}
+          onCancel={cancel}
+          returnFocusTo={returnFocus}
+        />
+      )}
     </Card>
   );
 }
 
 /**
- * A setting value as a table cell.
+ * The settings a feature governs: their Persian names and current values.
  *
- * `String(null)` is the four characters "null", which reads as a stored value
- * rather than as an absent one — the same class of confusion as a screen that
- * shows a default as though somebody had chosen it. An em dash says "nothing
- * here" and cannot be mistaken for content.
+ * Read-only here, and edited on the settings screen. The names come from the settings
+ * screen's own `registryLabel`, so one setting cannot be named one way here and another
+ * way there. That is the one place this page meets the settings presentation. A setting
+ * that has no Persian name yet shows its key, isolated as left-to-right text, until it
+ * is given one.
  */
-function displayValue(value: unknown): string {
-  if (value === null || value === undefined || value === '') return '—';
-  return typeof value === 'string' ? value : JSON.stringify(value);
+function RelatedSettings({ flag }: { flag: FeatureFlagResponse }) {
+  const inert = !flag.enabled;
+  // WP-A4: the ops group panel owns these; they are not shown on the normal pages.
+  const shown = flag.configuration.filter(
+    (setting) => !(OPS_GROUP_MANAGED_SETTING_KEYS as readonly string[]).includes(setting.key),
+  );
+  return (
+    <section className="feature-settings" aria-label={t('web.feature_related_settings')}>
+      <h3 className="small">{t('web.feature_related_settings')}</h3>
+      {inert && <p className="muted small">{t('web.inert')}</p>}
+      <dl className={inert ? 'inert' : undefined}>
+        {shown.map((setting) => {
+          const label = registryLabel(setting.key);
+          return (
+            <div key={setting.key}>
+              <dt>{label ?? <Ltr>{setting.key}</Ltr>}</dt>
+              <dd>
+                <SettingValue value={setting.value} />
+                {setting.storedValueInvalid && (
+                  <span className="danger small"> {t('web.stored_value_invalid')}</span>
+                )}
+              </dd>
+            </div>
+          );
+        })}
+      </dl>
+    </section>
+  );
+}
+
+/**
+ * A setting's current value, as an operator reads it.
+ *
+ * `String(null)` is the four characters "null", which reads as a stored value rather
+ * than an absent one, so an absent value says so in words. A boolean reads as on/off.
+ * Anything else is data, and is shown as left-to-right text.
+ */
+function SettingValue({ value }: { value: unknown }) {
+  if (value === null || value === undefined || value === '') {
+    return <span className="muted">{t('web.feature_setting_unset')}</span>;
+  }
+  if (typeof value === 'boolean') return <>{value ? t('web.enabled') : t('web.disabled')}</>;
+  return <Ltr>{typeof value === 'string' ? value : JSON.stringify(value)}</Ltr>;
 }

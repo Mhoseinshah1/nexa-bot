@@ -1,17 +1,28 @@
-import { useState, type FormEvent } from 'react';
+import { useState, type FormEvent, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   COMMERCE_ERROR_CODES,
+  CONTROL_ERROR_CODES,
   CURRENCY_CODES,
   OPS_GROUP_MANAGED_SETTING_KEYS,
   PRODUCT_PAGE_MAX,
+  SALES_CURRENCY_CODES,
 } from '@nexa/contracts';
 import type { CurrencyCode, MoneyWire, ResolvedSettingResponse } from '@nexa/contracts';
 import { ApiError, fetchProducts, fetchSettings, saveSetting } from '../api/client';
-import { currencyLabel, formatNumber, formatTimestamp } from '../format';
+import { currencyLabel, formatMoneyText, formatNumber, formatTimestamp } from '../format';
 import { finalAnswer } from '../polling';
 import { useSubmissionKey } from '../submission-key';
 import { t, type WebKey } from '../i18n/web.fa';
+import {
+  SETTING_GROUPS,
+  SETTING_GROUP_TITLES,
+  integerRange,
+  settingPresentation,
+  type SelectOption,
+  type SettingControl,
+  type SettingGroup,
+} from '../settings-presentation';
 import {
   Badge,
   Banner,
@@ -26,28 +37,32 @@ import {
 } from '../ui/kit';
 
 /**
- * The settings screen.
+ * The settings screen (WP-A1: an operator's page, not a developer's).
  *
- * Every row shows its value, where the value came from, and what zero or empty
- * means for that key — the three things roughly fifteen legacy settings screens
- * never show, where "the only way to read a price is to overwrite it".
+ * Every row shows a Persian title, a short Persian description, the value in force, a
+ * control that fits the value and a save button. The title, description, group and
+ * control come from `settings-presentation.ts`, which is total over the registry, so no
+ * key reaches this screen titled by its machine key or described in the registry's
+ * English. What an engineer needs when something is wrong — the machine key and whether
+ * the value is the installation's default or was set here — is kept in a closed
+ * "technical information" disclosure under each row, not in the row itself.
  *
  * A save carries the version the row was read at. A stale version comes back as
  * a conflict and is shown as one, rather than quietly discarding whatever the
  * other administrator did.
  *
- * New in Phase 3D: a key whose registry entry declares `consumer: 'PLANNED'` is
- * labelled as stored-but-unread. Four of the nine keys are in that state — the
- * store currency, the support accounts, the channels and the top-up minimum —
- * and an operator who configures required channel membership needs to know that
- * nothing enforces it yet. That is the whole reason `consumer` is a declared
- * field on the frozen registry rather than a list held in this file.
+ * A key whose registry entry declares `consumer: 'PLANNED'` is labelled as
+ * stored-but-unread: a screen that answers "saved" for a change with no observable
+ * effect is the legacy defect the registry exists to end. That is why `consumer` is a
+ * declared field on the frozen registry rather than a list held in this file.
  */
 export function SettingsPage({ mayEdit, denied }: { mayEdit: boolean; denied: boolean }) {
   const settings = useQuery({ queryKey: ['settings'], queryFn: fetchSettings, enabled: !denied });
+  const all = settings.data?.settings ?? [];
+  const salesCurrency = sellingCurrencyOf(all);
   // WP-A4: the ops group panel owns these — the manual chat and topic ids under its
   // advanced section, the retired severity cutoff and the internal attempt ceiling nowhere.
-  const rows = (settings.data?.settings ?? []).filter(
+  const rows = all.filter(
     (setting) => !(OPS_GROUP_MANAGED_SETTING_KEYS as readonly string[]).includes(setting.key),
   );
 
@@ -56,8 +71,20 @@ export function SettingsPage({ mayEdit, denied }: { mayEdit: boolean; denied: bo
       <PageHead title={t('web.settings_title')} subtitle={t('web.settings_intro')} maturity="now" />
 
       <StateSwitch query={settings} denied={denied} isEmpty={rows.length === 0}>
-        {rows.map((setting) => (
-          <SettingRow key={setting.key} setting={setting} mayEdit={mayEdit} />
+        {grouped(rows).map(({ group, title, members }) => (
+          <section key={group} className="settings-group" aria-labelledby={`settings-${group}`}>
+            <h2 id={`settings-${group}`} className="settings-group-head">
+              {t(title)}
+            </h2>
+            {members.map((setting) => (
+              <SettingRow
+                key={setting.key}
+                setting={setting}
+                mayEdit={mayEdit}
+                salesCurrency={salesCurrency}
+              />
+            ))}
+          </section>
         ))}
       </StateSwitch>
     </>
@@ -65,64 +92,117 @@ export function SettingsPage({ mayEdit, denied }: { mayEdit: boolean; denied: bo
 }
 
 /**
- * Persian names for the registry keys that have one.
+ * The currency this installation sells in, as the page's own `sales.currency` row says.
  *
- * A LITERAL map, not a key built from the registry key at runtime. Two reasons, and
- * the second is the one that decided it: `check:i18n` proves every `web.*` key is
- * rendered somewhere by looking for the key in the source, and a key assembled from
- * `` `web.${kind}_${key}` `` is invisible to it — the catalogue would grow entries
- * nothing could prove are reachable, which is the class of drift that check exists to
- * stop. The first is simply that a reader can grep for either half.
- *
- * Partial on purpose. A key with no entry is titled by its machine key, exactly as
- * every row was before this existed: naming five of twenty-two settings and leaving
- * seventeen bare would read worse than the consistent bareness it replaces, and a
- * total map would force seventeen names nobody has agreed on.
+ * Every money setting is compared against it by its consumer, with no conversion: a
+ * top-up bound in another currency makes top-up unavailable, a referral minimum in
+ * another currency earns no order a commission, and a signup gift in another currency
+ * cannot be switched on. So the money editors offer this currency as the choice (F3).
+ * `null` when the row is absent — then nothing is narrowed rather than a currency
+ * guessed.
  */
-const REGISTRY_LABELS: Readonly<Record<string, WebKey>> = {
-  'reminders.expiry_first_days': 'web.setting_reminders_expiry_first_days',
-  'reminders.expiry_second_days': 'web.setting_reminders_expiry_second_days',
-  'reminders.usage_first_percent': 'web.setting_reminders_usage_first_percent',
-  'reminders.usage_second_percent': 'web.setting_reminders_usage_second_percent',
-  'reminders.usage_final_percent': 'web.setting_reminders_usage_final_percent',
+function sellingCurrencyOf(rows: readonly ResolvedSettingResponse[]): CurrencyCode | null {
+  const value = rows.find((row) => row.key === 'sales.currency')?.value;
+  return typeof value === 'string' && (SALES_CURRENCY_CODES as readonly string[]).includes(value)
+    ? (value as CurrencyCode)
+    : null;
+}
+
+/**
+ * The currencies a money control offers: the selling currency, plus any currency a stored
+ * value already carries, so opening the page never silently rewrites it. Every code the
+ * schema accepts when the selling currency is not known.
+ */
+function currencyChoices(
+  sales: CurrencyCode | null,
+  stored: readonly string[],
+): readonly CurrencyCode[] {
+  if (sales === null) return CURRENCY_CODES;
+  return [sales, ...CURRENCY_CODES.filter((code) => code !== sales && stored.includes(code))];
+}
+
+/** An option's label; a currency other than the selling one says so. */
+function currencyOptionLabel(code: CurrencyCode, sales: CurrencyCode | null): string {
+  return sales === null || code === sales
+    ? currencyLabel(code)
+    : `${currencyLabel(code)} — ${t('web.settings_currency_not_sales')}`;
+}
+
+/** Whether a stored money value is a non-zero amount outside the selling currency. */
+function offCurrency(money: MoneyWire, sales: CurrencyCode | null): boolean {
+  return sales !== null && money.currency !== sales && /[1-9]/u.test(money.amountMinor);
+}
+
+/**
+ * The rows under their groups, groups in a fixed order, rows in the order the server sent.
+ *
+ * A key this bundle does not know — a tab holding the previous release across a deploy —
+ * goes to a last group rather than disappearing: a setting the page cannot name is still
+ * a setting the operator must be able to read.
+ */
+function grouped(
+  rows: readonly ResolvedSettingResponse[],
+): { group: SettingGroup | 'other'; title: WebKey; members: ResolvedSettingResponse[] }[] {
+  const sections = SETTING_GROUPS.map((group) => ({
+    group: group as SettingGroup | 'other',
+    title: SETTING_GROUP_TITLES[group],
+    members: rows.filter((row) => settingPresentation(row.key)?.group === group),
+  }));
+  sections.push({
+    group: 'other',
+    title: 'web.settings_group_other',
+    members: rows.filter((row) => settingPresentation(row.key) === null),
+  });
+  return sections.filter((section) => section.members.length > 0);
+}
+
+/**
+ * Persian names for the feature flags that have one.
+ *
+ * Only FLAGS now. Every setting's name lives in `settings-presentation.ts`, which is total
+ * over the registry; this map stays for the feature-flag screen, which names its flags
+ * through `registryLabel` below.
+ *
+ * A LITERAL map, not a key built from the registry key at runtime: `check:i18n` proves
+ * every `web.*` key is rendered somewhere by looking for the key in the source, and a key
+ * assembled from `` `web.${kind}_${key}` `` is invisible to it.
+ */
+const FLAG_LABELS: Readonly<Record<string, WebKey>> = {
   service_expiry_reminders: 'web.flag_service_expiry_reminders',
   service_expired_notice: 'web.flag_service_expired_notice',
   service_usage_reminders: 'web.flag_service_usage_reminders',
   trials: 'web.flag_trials',
-  'trial.product_id': 'web.setting_trial_product_id',
-  'trial.limit_per_customer': 'web.setting_trial_limit_per_customer',
   customer_link_rotation: 'web.flag_customer_link_rotation',
-  'services.link_rotation_cooldown_hours': 'web.setting_link_rotation_cooldown_hours',
   referral_signup_gift: 'web.flag_referral_signup_gift',
   custom_service: 'web.flag_custom_service',
-  'referral.signup_gift.total': 'web.setting_referral_signup_gift_total',
-  'referral.signup_gift.referrer_percent': 'web.setting_referral_signup_gift_referrer_percent',
-  'referral.signup_gift.referred_percent': 'web.setting_referral_signup_gift_referred_percent',
 };
 
 /**
- * A Persian name for a registry key, or `undefined` when none has been written.
+ * A Persian name for a registry key — a setting's or a flag's — or `undefined` when none
+ * has been written.
  *
  * Shared by the settings rows and the feature-flag rows, so one setting cannot end up
- * named one way here and another way there. Where a name IS shown the machine key is
- * shown under it rather than replaced: the Telegram section prints
- * `reminders.usage_first_percent`, and an operator moving between the two surfaces has
- * to be able to see they are looking at one setting.
+ * named one way here and another way there.
  */
 export function registryLabel(key: string): string | undefined {
-  const found = REGISTRY_LABELS[key];
-  return found === undefined ? undefined : t(found);
+  const setting = settingPresentation(key);
+  if (setting !== null) return t(setting.title);
+  const flag = FLAG_LABELS[key];
+  return flag === undefined ? undefined : t(flag);
 }
 
-const ZERO_MEANING_KEYS: Record<ResolvedSettingResponse['zeroMeaning'], WebKey> = {
-  DISABLES: 'web.zero_disables',
-  UNLIMITED: 'web.zero_unlimited',
-  LITERAL: 'web.zero_literal',
-  NOT_APPLICABLE: 'web.zero_not_applicable',
-};
-
-function SettingRow({ setting, mayEdit }: { setting: ResolvedSettingResponse; mayEdit: boolean }) {
+function SettingRow({
+  setting,
+  mayEdit,
+  salesCurrency,
+}: {
+  setting: ResolvedSettingResponse;
+  mayEdit: boolean;
+  salesCurrency: CurrencyCode | null;
+}) {
   const client = useQueryClient();
+  const presentation = settingPresentation(setting.key);
+  const title = presentation === null ? t('web.settings_unknown_title') : t(presentation.title);
 
   /**
    * The row the draft is based on, held separately from the row the query
@@ -211,34 +291,30 @@ function SettingRow({ setting, mayEdit }: { setting: ResolvedSettingResponse; ma
 
   return (
     <Card
-      title={registryLabel(setting.key) ?? setting.key}
-      /*
-       * The machine key, under the Persian name, when there is one.
-       *
-       * Never instead of it. The Telegram section prints `reminders.usage_first_percent`
-       * and an operator moving between the two surfaces has to be able to see they are
-       * looking at one setting, not two.
-       */
-      {...(registryLabel(setting.key) === undefined ? {} : { hint: setting.key })}
+      title={title}
       actions={
         <>
           {setting.consumer === 'PLANNED' && <MaturityBadge value="ready" />}
-          {setting.classification === 'SENSITIVE' && (
-            <Badge tone="warn">{t('web.sensitive')}</Badge>
-          )}
           {setting.mutability === 'RESTART_REQUIRED' && (
             <Badge tone="warn">{t('web.restart_required')}</Badge>
           )}
         </>
       }
     >
-      <form onSubmit={onSubmit}>
-        <p className="muted small">{setting.description}</p>
+      {/* `noValidate`: the server's schema decides what is acceptable and its refusal is
+          shown in Persian below. A browser's own validation bubble would speak the
+          browser's language and a range the server does not own. */}
+      <form onSubmit={onSubmit} noValidate>
+        <p className="muted small">
+          {presentation === null ? t('web.settings_unknown_desc') : t(presentation.description)}
+        </p>
+        {setting.configures !== null && (
+          <p className="faint small">{t('web.settings_needs_feature')}</p>
+        )}
 
-        {/* Stored, and nothing reads it. An operator who configures required
-            channel membership has to know that nothing enforces it yet — the
-            legacy pattern this whole registry exists to end is a screen that
-            answers "saved" for a change with no observable effect. */}
+        {/* Stored, and nothing reads it. An operator has to know that a change here
+            has no effect yet — the legacy pattern this whole registry exists to end is
+            a screen that answers "saved" for a change with no observable effect. */}
         {setting.consumer === 'PLANNED' && (
           <Banner tone="info">{t('web.setting_no_consumer')}</Banner>
         )}
@@ -250,11 +326,30 @@ function SettingRow({ setting, mayEdit }: { setting: ResolvedSettingResponse; ma
           <Banner tone="danger">{t('web.stored_value_invalid')}</Banner>
         )}
 
+        <p className="small">
+          <span className="muted">{t('web.settings_current_value')}: </span>
+          <CurrentValue control={presentation?.control ?? null} value={setting.value} />
+        </p>
+
+        {/* A stored amount outside the selling currency is one its consumer cannot
+            compare with anything (F3): said here, not left for the operator to infer. */}
+        {presentation?.control.kind === 'money' &&
+          offCurrency(asMoney(setting.value), salesCurrency) && (
+            <Banner tone="warn">{t('web.settings_money_currency_mismatch')}</Banner>
+          )}
+        {presentation?.control.kind === 'money_list' &&
+          asMoneyList(setting.value).some((money) => offCurrency(money, salesCurrency)) && (
+            <Banner tone="warn">{t('web.settings_presets_currency_mismatch')}</Banner>
+          )}
+
         <SettingEditor
           // Remounting on a new basis is what makes "reload value" reset the
           // editor's own internal draft as well as the value above it.
           key={`${setting.key}:${basis.version ?? 0}`}
           setting={basis}
+          control={presentation?.control ?? null}
+          title={title}
+          salesCurrency={salesCurrency}
           value={draft}
           onChange={setDraft}
           disabled={!mayEdit}
@@ -269,31 +364,18 @@ function SettingRow({ setting, mayEdit }: { setting: ResolvedSettingResponse; ma
           </Banner>
         )}
 
-        <dl className="kv">
-          <div>
-            <dt>{t('web.source')}</dt>
-            <dd>
-              {setting.source === 'TENANT' ? t('web.source_tenant') : t('web.source_default')}
-            </dd>
-          </div>
-          <div>
-            <dt>{t('web.zero_meaning')}</dt>
-            <dd>{t(ZERO_MEANING_KEYS[setting.zeroMeaning])}</dd>
-          </div>
-          {setting.updatedAt !== null && (
-            <div>
-              <dt>{t('web.updated_at')}</dt>
-              <dd>{formatTimestamp(setting.updatedAt)}</dd>
-            </div>
-          )}
-        </dl>
+        {setting.updatedAt !== null && (
+          <p className="faint small">
+            {t('web.updated_at')}: {formatTimestamp(setting.updatedAt)}
+          </p>
+        )}
 
         {mayEdit && (
           <button type="submit" className="btn primary" disabled={save.isPending}>
             {save.isPending ? t('web.saving') : t('web.save')}
           </button>
         )}
-        {save.isError && <ErrorReport error={save.error} />}
+        {save.isError && <SaveError error={save.error} settingKey={setting.key} />}
         {/* A no-op says so. The legacy screens answer "✅ updated" either way,
             and one of them said it three times while nothing changed. */}
         {save.isSuccess && (
@@ -301,9 +383,198 @@ function SettingRow({ setting, mayEdit }: { setting: ResolvedSettingResponse; ma
             {save.data.changed ? t('web.saved') : t('web.unchanged')}
           </Banner>
         )}
+
+        {/* For troubleshooting only, and closed by default: the machine key an
+            engineer or a log names, and whether the value in force is the
+            installation's default or was set here. */}
+        <details className="settings-technical">
+          <summary className="faint small">{t('web.settings_technical')}</summary>
+          <dl className="kv">
+            <div>
+              <dt>{t('web.settings_technical_key')}</dt>
+              <dd>
+                <Ltr>{setting.key}</Ltr>
+              </dd>
+            </div>
+            <div>
+              <dt>{t('web.source')}</dt>
+              <dd>
+                {setting.source === 'TENANT' ? t('web.source_tenant') : t('web.source_default')}
+              </dd>
+            </div>
+          </dl>
+        </details>
       </form>
     </Card>
   );
+}
+
+/** Whether a string carries Persian or Arabic script. */
+const PERSIAN_SCRIPT = /[\u0600-\u06FF]/u;
+
+/**
+ * A refused save, in Persian.
+ *
+ * `control.invalid_value` arrives two ways. The registry's schema refuses a value with
+ * an English sentence and a list of English issues written for a log; the operator is
+ * told in Persian that the value was not accepted, and the issues are kept behind a
+ * disclosure for whoever has to debug it. A change guard refuses a value that is valid
+ * on its own but not in combination (the reminder thresholds) with a sentence written
+ * for the operator — shown as it is when it is Persian. The store-currency guard speaks
+ * English, so its one refusal has a Persian sentence of its own here.
+ *
+ * Every other refusal keeps the shared `ErrorReport`.
+ */
+function SaveError({ error, settingKey }: { error: unknown; settingKey: string }) {
+  if (!(error instanceof ApiError) || error.code !== CONTROL_ERROR_CODES.INVALID_VALUE) {
+    return <ErrorReport error={error} />;
+  }
+  const guarded = error.status === 409;
+  if (guarded && PERSIAN_SCRIPT.test(error.message)) {
+    return <Banner tone="danger">{error.message}</Banner>;
+  }
+  const sentence =
+    guarded && settingKey === 'sales.currency'
+      ? t('web.setting_sales_currency_refused')
+      : t('web.settings_invalid_value');
+  const issues = issuesFrom(error);
+  const detail = issues.length > 0 ? issues : [error.message];
+  return (
+    <>
+      <Banner tone="danger">{sentence}</Banner>
+      <details className="settings-technical">
+        <summary className="faint small">{t('web.settings_technical_issues')}</summary>
+        <ul className="danger">
+          {detail.map((issue, index) => (
+            <li key={`${index}:${issue}`}>
+              <Ltr mono={false}>{issue}</Ltr>
+            </li>
+          ))}
+        </ul>
+      </details>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// The value in force
+// ---------------------------------------------------------------------------
+
+/**
+ * The stored value, as an operator reads it: a number with its unit, an option's
+ * Persian label, an amount with its currency. Shown above the control, so the value in
+ * force stays visible while the field below holds an unsaved edit.
+ */
+function CurrentValue({ control, value }: { control: SettingControl | null; value: unknown }) {
+  const unset = <span className="muted">{t('web.settings_value_unset')}</span>;
+  if (control === null) {
+    return value === null || value === '' ? unset : <Ltr>{toEditable(value)}</Ltr>;
+  }
+  switch (control.kind) {
+    case 'integer':
+      if (typeof value !== 'number') return unset;
+      return (
+        <span className="num">
+          {formatNumber(value)}
+          {control.unit === undefined ? null : ` ${t(control.unit)}`}
+        </span>
+      );
+    case 'text':
+      return typeof value === 'string' && value !== '' ? <Ltr>{value}</Ltr> : unset;
+    case 'select': {
+      const option = control.options.find((candidate) => candidate.value === value);
+      if (option !== undefined) return <>{t(option.label)}</>;
+      return typeof value === 'string' ? <Ltr>{value}</Ltr> : unset;
+    }
+    case 'currency':
+      return typeof value === 'string' && (CURRENCY_CODES as readonly string[]).includes(value) ? (
+        <>{currencyLabel(value as CurrencyCode)}</>
+      ) : (
+        unset
+      );
+    case 'money':
+      return <>{formatMoneyText(asMoney(value))}</>;
+    case 'money_list': {
+      const amounts = asMoneyList(value);
+      return amounts.length === 0 ? unset : <>{joined(amounts.map(formatMoneyText))}</>;
+    }
+    case 'handle_list': {
+      const handles = asStringList(value);
+      return handles.length === 0 ? unset : <>{joined(handles.map(isolated))}</>;
+    }
+    case 'channel_list': {
+      const channels = asChannelList(value);
+      return channels.length === 0 ? unset : <>{joined(channels.map(channelSummary))}</>;
+    }
+    case 'product':
+      return typeof value === 'string' ? <TrialProductName id={value} /> : unset;
+  }
+}
+
+/**
+ * One channel as it behaves (F1): who it is, whether membership is required, and the
+ * link a customer is sent to. Two channels differing only in `mandatory` or `joinUrl`
+ * behave differently, so they must not read the same.
+ */
+function channelSummary(channel: Channel): ReactNode {
+  return (
+    <>
+      <Ltr>{channel.handle ?? channel.chatId ?? ''}</Ltr>
+      {channel.handle !== undefined && channel.chatId !== undefined && (
+        <>
+          {' '}
+          <Ltr>{`(${channel.chatId})`}</Ltr>
+        </>
+      )}
+      {' — '}
+      {channel.mandatory ? t('web.channel_mandatory') : t('web.channel_optional')}
+      {channel.joinUrl !== undefined && (
+        <>
+          {' — '}
+          {t('web.channel_join_url')}: <Ltr>{channel.joinUrl}</Ltr>
+        </>
+      )}
+    </>
+  );
+}
+
+function isolated(text: string): ReactNode {
+  return <Ltr>{text}</Ltr>;
+}
+
+function joined(items: readonly ReactNode[]): ReactNode {
+  return items.map((item, index) => (
+    // Position is the identity: these are the items of one stored list, in order.
+    <span key={index}>
+      {index > 0 && t('web.list_separator')}
+      {item}
+    </span>
+  ));
+}
+
+/** The trial product's title, from the same query the picker below makes. */
+function TrialProductName({ id }: { id: string }) {
+  const products = useTrialProducts();
+  // "Not in the active list" is a fact only a SUCCESSFUL and COMPLETE read can establish
+  // (F4, Codex #2). While the list is loading, when it cannot be read (no catalogue
+  // permission), or when the product may be on a later page, the stored id is what is
+  // known, and that is what is shown.
+  if (products.isPending) return <span className="muted">{t('web.loading')}</span>;
+  if (products.isError) return <Ltr>{id}</Ltr>;
+  const found = products.data.products.find((product) => product.id === id);
+  if (found !== undefined) return <>{found.title}</>;
+  return products.data.nextCursor === null ? (
+    <>{t('web.trial_product_unlisted')}</>
+  ) : (
+    <Ltr>{id}</Ltr>
+  );
+}
+
+function useTrialProducts() {
+  return useQuery({
+    queryKey: ['products', 'trial-picker'],
+    queryFn: () => fetchProducts({ status: 'ACTIVE', limit: TRIAL_PICKER_LIMIT }),
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -311,51 +582,333 @@ function SettingRow({ setting, mayEdit }: { setting: ResolvedSettingResponse; ma
 // ---------------------------------------------------------------------------
 
 /**
- * The control for a key, chosen by the key.
+ * The control for a key, chosen by its presentation entry.
  *
  * A list of support accounts is not a JSON blob an operator should have to type
  * — revision 22 asks for add, remove, reorder and validate, and none of those
- * is expressible in a text field. The generic editor stays for the scalar keys,
- * where a text field is genuinely the right control.
+ * is expressible in a text field. A number gets a numeric field with its range,
+ * a closed set a select, money an amount and a currency. The raw text field is
+ * left only for a key this bundle does not know.
  */
 function SettingEditor({
   setting,
+  control,
+  title,
+  salesCurrency,
   value,
   onChange,
   disabled,
 }: {
   setting: ResolvedSettingResponse;
+  control: SettingControl | null;
+  title: string;
+  salesCurrency: CurrencyCode | null;
   value: unknown;
   onChange: (next: unknown) => void;
   disabled: boolean;
 }) {
-  if (setting.key === 'support.accounts') {
-    return <HandleListEditor value={asStringList(value)} onChange={onChange} disabled={disabled} />;
-  }
-  if (setting.key === 'telegram.channels') {
+  const id = `setting-${setting.key}`;
+  if (control === null) {
     return (
-      <ChannelListEditor value={asChannelList(value)} onChange={onChange} disabled={disabled} />
+      <RawEditor id={id} title={title} setting={setting} onChange={onChange} disabled={disabled} />
     );
   }
-  if (setting.key === 'wallet.topup.minimum') {
-    return <MoneyEditor value={asMoney(value)} onChange={onChange} disabled={disabled} />;
+  switch (control.kind) {
+    case 'integer':
+      return (
+        <IntegerEditor
+          id={id}
+          title={title}
+          settingKey={setting.key}
+          unit={control.unit}
+          optional={control.optional === true}
+          initial={value}
+          onChange={onChange}
+          disabled={disabled}
+        />
+      );
+    case 'text':
+      return (
+        <TextEditor id={id} title={title} value={value} onChange={onChange} disabled={disabled} />
+      );
+    case 'select':
+      return (
+        <SelectEditor
+          id={id}
+          title={title}
+          options={control.options}
+          value={value}
+          onChange={onChange}
+          disabled={disabled}
+        />
+      );
+    case 'currency':
+      return (
+        <CurrencyEditor
+          id={id}
+          title={title}
+          value={String(value)}
+          onChange={onChange}
+          disabled={disabled}
+        />
+      );
+    case 'money':
+      return (
+        <MoneyEditor
+          id={id}
+          title={title}
+          salesCurrency={salesCurrency}
+          value={asMoney(value)}
+          onChange={onChange}
+          disabled={disabled}
+        />
+      );
+    case 'money_list':
+      return (
+        <TopupPresetEditor
+          title={title}
+          salesCurrency={salesCurrency}
+          value={asMoneyList(value)}
+          onChange={onChange}
+          disabled={disabled}
+        />
+      );
+    case 'handle_list':
+      return (
+        <HandleListEditor value={asStringList(value)} onChange={onChange} disabled={disabled} />
+      );
+    case 'channel_list':
+      return (
+        <ChannelListEditor value={asChannelList(value)} onChange={onChange} disabled={disabled} />
+      );
+    case 'product':
+      return (
+        <TrialProductEditor
+          id={id}
+          title={title}
+          value={typeof value === 'string' ? value : null}
+          onChange={onChange}
+          disabled={disabled}
+        />
+      );
   }
-  if (setting.key === 'wallet.topup.presets') {
-    return <TopupPresetEditor value={asMoneyList(value)} onChange={onChange} disabled={disabled} />;
-  }
-  if (setting.key === 'sales.currency') {
-    return <CurrencyEditor value={String(value)} onChange={onChange} disabled={disabled} />;
-  }
-  if (setting.key === 'trial.product_id') {
-    return (
-      <TrialProductEditor
-        value={typeof value === 'string' ? value : null}
-        onChange={onChange}
+}
+
+/**
+ * A label a screen reader announces and a sighted operator does not need: the card's
+ * own title already names the one control under it, and printing it twice reads as two
+ * things.
+ */
+function HiddenLabel({ htmlFor, children }: { htmlFor: string; children: string }) {
+  return (
+    <label className="visually-hidden" htmlFor={htmlFor}>
+      {children}
+    </label>
+  );
+}
+
+/**
+ * Persian and Arabic-Indic digits as the Latin digits they mean, grouping marks dropped.
+ *
+ * `minorOf`'s rule from the gateways page: those are ways of WRITING the same number, so
+ * an operator typing Persian sixty means 60. Anything else — a sign, a decimal point, a
+ * letter — is left as typed, for the server's schema to refuse rather than for a field
+ * to reinterpret. Shared by the whole-number field and every money amount (F5).
+ */
+function latinDigits(text: string): string {
+  return text
+    .trim()
+    .replace(/[\s,\u066C\u2009\u202F']/gu, '')
+    .replace(/[\u06F0-\u06F9]/gu, (d) => String(d.charCodeAt(0) - 0x06f0))
+    .replace(/[\u0660-\u0669]/gu, (d) => String(d.charCodeAt(0) - 0x0660));
+}
+
+/**
+ * A whole number, or `null` when the text does not spell one. Any SAFE integer (F2): a
+ * digit cap would refuse a schema-valid topic id and send it as a string.
+ */
+function wholeNumberOf(text: string): number | null {
+  const latin = latinDigits(text);
+  if (!/^[0-9]+$/u.test(latin)) return null;
+  const parsed = Number(latin);
+  return Number.isSafeInteger(parsed) ? parsed : null;
+}
+
+/**
+ * A whole-number setting.
+ *
+ * Holds its own STRING while the row above holds the parsed value, because a
+ * half-typed number is a string that is not yet a number: converting on every
+ * keystroke turns `-` into NaN and `1.` into `1`, and the operator's cursor
+ * lands somewhere else.
+ *
+ * The range under the field is the key's own schema (`settingIntegerRange`), so what
+ * the field says it accepts and what the server enforces are one declaration.
+ */
+function IntegerEditor({
+  id,
+  title,
+  settingKey,
+  unit,
+  optional,
+  initial,
+  onChange,
+  disabled,
+}: {
+  id: string;
+  title: string;
+  settingKey: string;
+  unit: WebKey | undefined;
+  optional: boolean;
+  initial: unknown;
+  onChange: (next: unknown) => void;
+  disabled: boolean;
+}) {
+  const [text, setText] = useState(() => (typeof initial === 'number' ? String(initial) : ''));
+  const range = integerRange(settingKey);
+  const hints = [
+    ...(range === null
+      ? []
+      : [
+          `${t('web.settings_range_from')} ${formatNumber(range.min)} ${t('web.settings_range_to')} ${formatNumber(range.max)}`,
+        ]),
+    ...(optional ? [t('web.settings_optional_empty')] : []),
+  ];
+  return (
+    <div className="field">
+      <HiddenLabel htmlFor={id}>{title}</HiddenLabel>
+      <div className="input-group">
+        <input
+          id={id}
+          className="input ltr num"
+          inputMode="numeric"
+          value={text}
+          disabled={disabled}
+          onChange={(event) => {
+            const typed = event.target.value;
+            setText(typed);
+            if (typed.trim() === '') {
+              // Empty is null where the schema allows "not set", and otherwise
+              // sent as it is for the schema to refuse — never guessed as zero.
+              onChange(optional ? null : typed);
+              return;
+            }
+            onChange(wholeNumberOf(typed) ?? typed);
+          }}
+        />
+        {unit !== undefined && <span className="addon">{t(unit)}</span>}
+      </div>
+      {hints.length > 0 && (
+        <span className="muted small">{hints.join(t('web.list_separator'))}</span>
+      )}
+    </div>
+  );
+}
+
+/** A free-form identifier, left to right. Empty is an ordinary value here. */
+function TextEditor({
+  id,
+  title,
+  value,
+  onChange,
+  disabled,
+}: {
+  id: string;
+  title: string;
+  value: unknown;
+  onChange: (next: unknown) => void;
+  disabled: boolean;
+}) {
+  return (
+    <div className="field">
+      <HiddenLabel htmlFor={id}>{title}</HiddenLabel>
+      <input
+        id={id}
+        className="input ltr mono"
+        value={typeof value === 'string' ? value : ''}
         disabled={disabled}
+        onChange={(event) => onChange(event.target.value)}
       />
-    );
-  }
-  return <TextEditor setting={setting} onChange={onChange} disabled={disabled} />;
+    </div>
+  );
+}
+
+/**
+ * A closed set. A stored value that is not one of the options is kept as an option of
+ * its own, so opening the page never silently changes the value — the trial picker's
+ * rule, for the same reason.
+ */
+function SelectEditor({
+  id,
+  title,
+  options,
+  value,
+  onChange,
+  disabled,
+}: {
+  id: string;
+  title: string;
+  options: readonly SelectOption[];
+  value: unknown;
+  onChange: (next: unknown) => void;
+  disabled: boolean;
+}) {
+  const current = typeof value === 'string' ? value : '';
+  const listed = options.some((option) => option.value === current);
+  return (
+    <div className="field">
+      <HiddenLabel htmlFor={id}>{title}</HiddenLabel>
+      <select
+        id={id}
+        className="input"
+        value={current}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.value)}
+      >
+        {listed ? null : <option value={current}>{current}</option>}
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>
+            {t(option.label)}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+/**
+ * The generic editor, for a key this bundle does not know. The value as text; the
+ * server's schema is what decides whether it is acceptable.
+ */
+function RawEditor({
+  id,
+  title,
+  setting,
+  onChange,
+  disabled,
+}: {
+  id: string;
+  title: string;
+  setting: ResolvedSettingResponse;
+  onChange: (next: unknown) => void;
+  disabled: boolean;
+}) {
+  const [text, setText] = useState(() => toEditable(setting.value));
+  return (
+    <div className="field">
+      <HiddenLabel htmlFor={id}>{title}</HiddenLabel>
+      <input
+        id={id}
+        className="input ltr mono"
+        value={text}
+        disabled={disabled}
+        onChange={(event) => {
+          setText(event.target.value);
+          onChange(fromEditable(event.target.value, setting.value));
+        }}
+      />
+    </div>
+  );
 }
 
 /** Revision 22: support accounts — add, remove, reorder, validate. */
@@ -497,104 +1050,107 @@ function ChannelListEditor({
 }
 
 /**
- * Revision 24: the minimum top-up, as an amount AND a currency.
+ * An amount AND a currency (revision 24), for every money setting: the top-up minimum
+ * and maximum, the referral minimum and the signup gift.
  *
  * Never a bare number. The legacy financial surface has no exchange rate on any
  * of its seven gateways and Toman implicit everywhere, which is the failure
  * this shape prevents at the type level.
  *
- * The per-gateway override the revision also asks for is not here, and the
- * banner says why rather than leaving a gap: no payment gateway is registered
- * anywhere in this system, so there is nothing for an override to be keyed by.
+ * Each input's accessible name carries the setting's title: four money settings share
+ * this page, and four fields all announced as "amount" are indistinguishable to
+ * anything that navigates by label.
  */
 function MoneyEditor({
+  id,
+  title,
+  salesCurrency,
   value,
   onChange,
   disabled,
 }: {
+  id: string;
+  title: string;
+  salesCurrency: CurrencyCode | null;
   value: MoneyWire;
   onChange: (next: unknown) => void;
   disabled: boolean;
 }) {
   return (
-    <>
-      <Banner tone="info" title={t('web.topup_precedence_title')}>
-        {t('web.topup_precedence_body')}
-      </Banner>
-      <div className="input-group">
-        <Field label={t('web.amount_minor')} htmlFor="topup-amount">
-          <input
-            id="topup-amount"
-            className="input ltr mono"
-            inputMode="numeric"
-            value={value.amountMinor}
-            disabled={disabled}
-            onChange={(event) => onChange({ ...value, amountMinor: event.target.value })}
-          />
-        </Field>
-        <Field
-          label={`${t('web.currency')} — ${t('web.setting_topup_minimum')}`}
-          htmlFor="topup-currency"
+    <div className="input-group">
+      <Field label={t('web.amount_minor')} htmlFor={`${id}-amount`}>
+        <input
+          id={`${id}-amount`}
+          aria-label={`${t('web.amount_minor')} — ${title}`}
+          className="input ltr mono"
+          inputMode="numeric"
+          value={value.amountMinor}
+          disabled={disabled}
+          onChange={(event) => onChange({ ...value, amountMinor: latinDigits(event.target.value) })}
+        />
+      </Field>
+      <Field label={t('web.currency')} htmlFor={`${id}-currency`}>
+        <select
+          id={`${id}-currency`}
+          aria-label={`${t('web.currency')} — ${title}`}
+          className="input"
+          value={value.currency}
+          disabled={disabled}
+          onChange={(event) => onChange({ ...value, currency: event.target.value })}
         >
-          <select
-            id="topup-currency"
-            className="input"
-            value={value.currency}
-            disabled={disabled}
-            onChange={(event) => onChange({ ...value, currency: event.target.value })}
-          >
-            {/*
-              EVERY code `moneySchema` accepts, because that is what the server
-              stores for this key. `sales.currency` is narrowed to Toman and
-              Rial by its own schema and its editor below says so; this key is
-              not, so a minimum written through the API in dollars was a valid
-              stored value this select had no option for — a controlled select
-              with no matching option shows its first one, and saving then
-              rewrote the currency to Toman without anyone choosing it.
-              Narrowing the server schema instead is a product decision this
-              screen does not get to make by omission.
-            */}
-            {CURRENCY_CODES.map((code) => (
-              <option key={code} value={code}>
-                {currencyLabel(code)}
-              </option>
-            ))}
-          </select>
-        </Field>
-      </div>
-    </>
+          {/*
+            The SELLING currency, plus the stored one when it differs (F3). Every
+            consumer of these keys compares them with the selling currency and
+            converts nothing, so any other choice silently switches the rule off,
+            or the feature with it. The stored currency stays an option because
+            a controlled select with no matching option shows its first one, and
+            saving would then rewrite a value nobody chose to change.
+          */}
+          {currencyChoices(salesCurrency, [value.currency]).map((code) => (
+            <option key={code} value={code}>
+              {currencyOptionLabel(code, salesCurrency)}
+            </option>
+          ))}
+        </select>
+      </Field>
+    </div>
   );
 }
 
-/** Revision 1: the currency every amount in this admin inherits. */
+/**
+ * Revision 1: the currency every amount in this admin inherits. The options are the
+ * contract's `SALES_CURRENCY_CODES`, the same list the server refuses against.
+ */
 function CurrencyEditor({
+  id,
+  title,
   value,
   onChange,
   disabled,
 }: {
+  id: string;
+  title: string;
   value: string;
   onChange: (next: unknown) => void;
   disabled: boolean;
 }) {
   return (
-    <Field
-      label={`${t('web.currency')} — ${t('web.setting_sales_currency')}`}
-      htmlFor="sales-currency"
-    >
+    <div className="field">
+      <HiddenLabel htmlFor={id}>{`${t('web.currency')} — ${title}`}</HiddenLabel>
       <select
-        id="sales-currency"
+        id={id}
         className="input"
         value={value}
         disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
       >
-        {(['IRT', 'IRR'] as const).map((code) => (
+        {SALES_CURRENCY_CODES.map((code) => (
           <option key={code} value={code}>
-            {currencyLabel(code as CurrencyCode)}
+            {currencyLabel(code)}
           </option>
         ))}
       </select>
-    </Field>
+    </div>
   );
 }
 
@@ -613,52 +1169,64 @@ function CurrencyEditor({
  * empty picker.
  */
 function TrialProductEditor({
+  id,
+  title,
   value,
   onChange,
   disabled,
 }: {
+  id: string;
+  title: string;
   value: string | null;
   onChange: (next: unknown) => void;
   disabled: boolean;
 }) {
-  const products = useQuery({
-    queryKey: ['products', 'trial-picker'],
-    queryFn: () => fetchProducts({ status: 'ACTIVE', limit: TRIAL_PICKER_LIMIT }),
-  });
+  const products = useTrialProducts();
   if (products.isError) {
     return (
-      <Field label={t('web.setting_trial_product_id')} htmlFor="trial-product">
+      <div className="field">
+        <HiddenLabel htmlFor={id}>{title}</HiddenLabel>
         <input
-          id="trial-product"
+          id={id}
           className="input"
           dir="ltr"
           value={value ?? ''}
           disabled={disabled}
           onChange={(event) => onChange(event.target.value === '' ? null : event.target.value)}
         />
-      </Field>
+      </div>
     );
   }
   const items = products.data?.products ?? [];
   const listed = value === null || items.some((product) => product.id === value);
   return (
-    <Field label={t('web.setting_trial_product_id')} htmlFor="trial-product">
+    <div className="field">
+      <HiddenLabel htmlFor={id}>{title}</HiddenLabel>
       <select
-        id="trial-product"
+        id={id}
         className="input"
         value={value ?? ''}
         disabled={disabled || products.isPending}
         onChange={(event) => onChange(event.target.value === '' ? null : event.target.value)}
       >
         <option value="">{t('web.trial_product_none')}</option>
-        {listed ? null : <option value={value}>{t('web.trial_product_unlisted')}</option>}
+        {/* The stored id is always an option, so the select shows what is stored. It is
+            called "not in the active list" only when the list read is complete; on a
+            partial page it may simply be further on, and is named by its id. */}
+        {listed ? null : (
+          <option value={value}>
+            {products.data?.nextCursor === null
+              ? t('web.trial_product_unlisted')
+              : `${t('web.trial_product_current')} (${value})`}
+          </option>
+        )}
         {items.map((product) => (
           <option key={product.id} value={product.id}>
             {product.title}
           </option>
         ))}
       </select>
-    </Field>
+    </div>
   );
 }
 
@@ -666,121 +1234,76 @@ function TrialProductEditor({
 const TRIAL_PICKER_LIMIT = PRODUCT_PAGE_MAX;
 
 /**
- * The scalar editor.
- *
- * Holds its own STRING while the row above holds the parsed value, because a
- * half-typed number is a string that is not yet a number: converting on every
- * keystroke turns `-` into NaN and `1.` into `1`, and the operator's cursor
- * lands somewhere else.
- */
-function TextEditor({
-  setting,
-  onChange,
-  disabled,
-}: {
-  setting: ResolvedSettingResponse;
-  onChange: (next: unknown) => void;
-  disabled: boolean;
-}) {
-  const [text, setText] = useState(() => toEditable(setting.value));
-  // The setting's own key, not the word "value". Five `ops.notifications.*`
-  // keys render at once, and labelling every one of them "مقدار" gave the page
-  // five inputs with one accessible name — indistinguishable to anything that
-  // navigates by label, which is the same defect the support-account list had.
-  return (
-    <Field label={`${t('web.value')} — ${setting.key}`} htmlFor={`value-${setting.key}`}>
-      <input
-        id={`value-${setting.key}`}
-        className="input"
-        value={text}
-        disabled={disabled}
-        onChange={(event) => {
-          setText(event.target.value);
-          onChange(fromEditable(event.target.value, setting.value));
-        }}
-      />
-    </Field>
-  );
-}
-
-/**
  * The top-up amounts a customer may choose. 5B.
  *
  * A list, in the order offered, each with its own currency — the same shape the setting
- * stores, so what is saved is what a customer sees. The currency select lists every code
- * `moneySchema` accepts for `MoneyEditor`'s reason: the server stores them all, and a
- * controlled select with no matching option silently rewrites the value on save.
- *
- * The hint is not decoration. Only presets in the SELLING currency are offered to a
- * customer — no conversion exists anywhere in this product — so a row in another currency
- * is saved, kept and never shown. Saying so here is the difference between a deliberate
- * configuration and a button nobody can find.
+ * stores, so what is saved is what a customer sees. Only presets in the SELLING currency
+ * are offered to a customer, so that is the currency each row offers and a new row
+ * starts in; a row already stored in another currency keeps it as an option, for
+ * `MoneyEditor`'s reason (F3).
  */
 function TopupPresetEditor({
+  title,
+  salesCurrency,
   value,
   onChange,
   disabled,
 }: {
+  title: string;
+  salesCurrency: CurrencyCode | null;
   value: readonly MoneyWire[];
   onChange: (next: unknown) => void;
   disabled: boolean;
 }) {
   return (
-    <>
-      <Banner tone="info" title={t('web.topup_presets_title')}>
-        {t('web.topup_presets_body')}
-      </Banner>
-      <ListEditor
-        items={value}
-        onChange={(next) => onChange([...next])}
-        addLabel={t('web.topup_preset_add')}
-        emptyHint={t('web.topup_preset_empty')}
-        disabled={disabled}
-        // An empty amount rather than a number: the field is text, the schema refuses a
-        // non-positive value, and pre-filling a figure would be this screen inventing a
-        // price.
-        onAdd={() => ({ amountMinor: '', currency: 'IRT' })}
-        renderRow={(item, index, update) => (
-          <div className="input-group">
-            {/*
-              The setting's own name is IN the accessible name, not just the index. The
-              support-account list's finding applies here too: several inputs whose label
-              is a bare number are indistinguishable to anything that navigates by label,
-              and this screen has two money editors on it.
-            */}
-            <label className="visually-hidden" htmlFor={`preset-${index}`}>
-              {`${t('web.setting_topup_presets')} — ${t('web.amount_minor')} ${formatNumber(
-                index + 1,
-              )}`}
-            </label>
-            <input
-              id={`preset-${index}`}
-              className="input ltr mono grow"
-              inputMode="numeric"
-              value={item.amountMinor}
-              disabled={disabled}
-              onChange={(event) => update({ ...item, amountMinor: event.target.value })}
-            />
-            <label className="visually-hidden" htmlFor={`preset-currency-${index}`}>
-              {`${t('web.currency')} ${formatNumber(index + 1)}`}
-            </label>
-            <select
-              id={`preset-currency-${index}`}
-              className="input"
-              value={item.currency}
-              disabled={disabled}
-              onChange={(event) => update({ ...item, currency: event.target.value })}
-            >
-              {CURRENCY_CODES.map((code) => (
-                <option key={code} value={code}>
-                  {currencyLabel(code)}
-                </option>
-              ))}
-            </select>
-          </div>
-        )}
-      />
-    </>
+    <ListEditor
+      items={value}
+      onChange={(next) => onChange([...next])}
+      addLabel={t('web.topup_preset_add')}
+      emptyHint={t('web.topup_preset_empty')}
+      disabled={disabled}
+      // An empty amount rather than a number: the field is text, the schema refuses a
+      // non-positive value, and pre-filling a figure would be this screen inventing a
+      // price.
+      onAdd={() => ({ amountMinor: '', currency: salesCurrency ?? 'IRT' })}
+      renderRow={(item, index, update) => (
+        <div className="input-group">
+          {/*
+            The setting's own name is IN the accessible name, not just the index. The
+            support-account list's finding applies here too: several inputs whose label
+            is a bare number are indistinguishable to anything that navigates by label,
+            and this screen has several money editors on it.
+          */}
+          <label className="visually-hidden" htmlFor={`preset-${index}`}>
+            {`${title} — ${t('web.amount_minor')} ${formatNumber(index + 1)}`}
+          </label>
+          <input
+            id={`preset-${index}`}
+            className="input ltr mono grow"
+            inputMode="numeric"
+            value={item.amountMinor}
+            disabled={disabled}
+            onChange={(event) => update({ ...item, amountMinor: latinDigits(event.target.value) })}
+          />
+          <label className="visually-hidden" htmlFor={`preset-currency-${index}`}>
+            {`${t('web.currency')} ${formatNumber(index + 1)}`}
+          </label>
+          <select
+            id={`preset-currency-${index}`}
+            className="input"
+            value={item.currency}
+            disabled={disabled}
+            onChange={(event) => update({ ...item, currency: event.target.value as CurrencyCode })}
+          >
+            {currencyChoices(salesCurrency, [item.currency]).map((code) => (
+              <option key={code} value={code}>
+                {currencyOptionLabel(code, salesCurrency)}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+    />
   );
 }
 
@@ -950,7 +1473,6 @@ export function messageFor(error: unknown): string {
     const reseller = RESELLER_MESSAGES[error.code];
     if (reseller !== undefined) return t(reseller);
     if (error.code === 'control.version_conflict') return t('web.conflict');
-    if (error.code === 'control.confirmation_required') return t('web.confirm_required');
     if (error.code === 'control.destination_not_configured') return t('web.destination_missing');
     if (error.code === 'commerce.referral_gift_terms_invalid')
       return t('web.referral_gift_terms_invalid');

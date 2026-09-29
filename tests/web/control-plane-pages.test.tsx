@@ -1,11 +1,17 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
-import { featureFlagSchema, notificationSchema, templateViewSchema } from '@nexa/contracts';
+import {
+  FEATURE_FLAGS,
+  featureFlagSchema,
+  notificationSchema,
+  templateViewSchema,
+} from '@nexa/contracts';
 import { FeaturesPage } from '../../apps/web/src/pages/features';
+import { FEATURE_PRESENTATION } from '../../apps/web/src/pages/features-catalogue';
 import { ContentPage } from '../../apps/web/src/pages/content';
 import { NotificationsPage } from '../../apps/web/src/pages/alerts';
 import { t } from '../../apps/web/src/i18n/web.fa';
-import { renderPage, stubApi } from './harness';
+import { renderPage, setting, stubApi } from './harness';
 
 const NO_PERMISSION = t('web.no_permission');
 
@@ -83,30 +89,36 @@ const notification = (over: Record<string, unknown> = {}) =>
   });
 
 describe('the feature flags page', () => {
-  it('renders a flag and the settings it governs', async () => {
-    stubApi([{ url: '/features', body: { flags: [flag()] } }]);
-    renderPage(<FeaturesPage mayEdit denied={false} />);
+  const OPS_TITLE = t('web.feature_ops_notifications_title');
 
-    expect(await screen.findByText('ops_notifications')).toBeInTheDocument();
+  it('names a feature in Persian and never shows its internal key', async () => {
+    stubApi([{ url: '/features', body: { flags: [flag()] } }]);
+    const { container } = renderPage(<FeaturesPage mayEdit denied={false} />);
+
+    expect(await screen.findByText(OPS_TITLE)).toBeInTheDocument();
+    expect(screen.getByText(t('web.feature_ops_notifications_summary'))).toBeInTheDocument();
+    expect(screen.getByText(t('web.enabled'))).toBeInTheDocument();
+    // WP-A2: an operator never needs to read, let alone type, the flag identifier.
+    expect(container.textContent).not.toContain('ops_notifications');
+    // The server's English description is the fallback for an unknown key only.
+    expect(container.textContent).not.toContain('Project operational events');
   });
 
   /**
    * A flag is a BOOLEAN and its parameters are settings — the Phase 2 rule
    * that neither registry may grow a field belonging to the other. The only
-   * action a flag row offers is enable/disable; a value input beside it would
-   * be the first step back.
+   * control a flag offers is its on/off switch; a value input beside it would
+   * be the first step back, and WP-A2 removed the typed key and the reason.
    */
   it('offers only enable and disable, never a value to type', async () => {
     stubApi([{ url: '/features', body: { flags: [flag({ enabled: true })] } }]);
     const { container } = renderPage(<FeaturesPage mayEdit denied={false} />);
-    await screen.findByText('ops_notifications');
+    await screen.findByText(OPS_TITLE);
 
-    expect(screen.getByRole('button', { name: t('web.disable') })).toBeEnabled();
+    const toggle = screen.getByRole('switch', { name: OPS_TITLE });
+    expect(toggle).toBeEnabled();
+    expect(toggle).toHaveAttribute('aria-checked', 'true');
     // T32 — NO input at all, not "no input carrying one of two type values".
-    // A plain `<input>` with no `type` attribute is a text field, so the
-    // selector-based version left the flag/setting conflation it names free to
-    // come back the most ordinary way there is. A flag is a boolean; its
-    // parameters are settings, and they live on the settings screen.
     expect(container.querySelectorAll('input, textarea, select')).toHaveLength(0);
     expect(screen.queryAllByRole('textbox')).toHaveLength(0);
     expect(screen.queryAllByRole('spinbutton')).toHaveLength(0);
@@ -116,13 +128,289 @@ describe('the feature flags page', () => {
   it('draws no toggle at all for an actor who may only view', async () => {
     stubApi([{ url: '/features', body: { flags: [flag({ enabled: true })] } }]);
     renderPage(<FeaturesPage mayEdit={false} denied={false} />);
-    await screen.findByText('ops_notifications');
+    await screen.findByText(OPS_TITLE);
 
-    // Absent, not disabled. The earlier version of this case looped over
-    // elements that do not exist without `mayEdit`, so it passed vacuously
-    // and would have passed just as happily with the control drawn.
-    expect(screen.queryByRole('button', { name: t('web.disable') })).toBeNull();
-    expect(screen.queryByRole('button', { name: t('web.enable') })).toBeNull();
+    // Absent, not disabled.
+    expect(screen.queryByRole('switch')).toBeNull();
+    expect(screen.getByText(t('web.enabled'))).toBeInTheDocument();
+  });
+
+  it('turns a feature on with one click, sending no typed key and no reason', async () => {
+    const api = stubApi([
+      { url: '/features', body: { flags: [flag({ enabled: false, version: 4 })] } },
+      {
+        url: '/features/ops_notifications',
+        status: 201,
+        body: { flag: flag({ enabled: true, version: 5 }), changed: true },
+      },
+    ]);
+    renderPage(<FeaturesPage mayEdit denied={false} />);
+
+    fireEvent.click(await screen.findByRole('switch', { name: OPS_TITLE }));
+
+    await waitFor(() => expect(api.calls.some((call) => call.method === 'POST')).toBe(true));
+    const post = api.calls.find((call) => call.method === 'POST');
+    expect(post?.url).toContain('/features/ops_notifications');
+    expect(Object.keys(post?.body as object).sort()).toEqual([
+      'enabled',
+      'expectedVersion',
+      'idempotencyKey',
+    ]);
+    expect(post?.body).toMatchObject({ enabled: true, expectedVersion: 4 });
+    // Turning on never asks.
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+  });
+
+  it('turns an ordinary feature off with one click and no question', async () => {
+    const api = stubApi([
+      {
+        url: '/features',
+        body: { flags: [flag({ key: 'trials', enabled: true, version: 2 })] },
+      },
+      {
+        url: '/features/trials',
+        status: 201,
+        body: { flag: flag({ key: 'trials', enabled: false, version: 3 }), changed: true },
+      },
+    ]);
+    renderPage(<FeaturesPage mayEdit denied={false} />);
+
+    fireEvent.click(await screen.findByRole('switch', { name: t('web.feature_trials_title') }));
+
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    await waitFor(() => expect(api.calls.some((call) => call.method === 'POST')).toBe(true));
+    expect(api.calls.find((call) => call.method === 'POST')?.body).toMatchObject({
+      enabled: false,
+      expectedVersion: 2,
+    });
+  });
+
+  /**
+   * A sensitive switch-off asks one plain question first. Cancelling sends nothing; «بله،
+   * خاموش شود» sends exactly the ordinary toggle. There is nothing to type in the modal.
+   */
+  it('asks a plain yes/cancel question before switching off a sensitive feature', async () => {
+    const api = stubApi([
+      { url: '/features', body: { flags: [flag({ enabled: true, version: 2 })] } },
+      {
+        url: '/features/ops_notifications',
+        status: 201,
+        body: { flag: flag({ enabled: false, version: 3 }), changed: true },
+      },
+    ]);
+    renderPage(<FeaturesPage mayEdit denied={false} />);
+    const posts = () => api.calls.filter((call) => call.method === 'POST');
+
+    fireEvent.click(await screen.findByRole('switch', { name: OPS_TITLE }));
+    const dialog = screen.getByRole('alertdialog');
+    expect(dialog).toHaveTextContent(t('web.feature_confirm_disable'));
+    expect(dialog).toHaveTextContent(t('web.feature_ops_notifications_off_effect'));
+    expect(dialog.querySelectorAll('input, textarea, select')).toHaveLength(0);
+    expect(posts()).toHaveLength(0);
+
+    fireEvent.click(screen.getByRole('button', { name: t('web.feature_confirm_cancel') }));
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(posts()).toHaveLength(0);
+
+    fireEvent.click(screen.getByRole('switch', { name: OPS_TITLE }));
+    fireEvent.click(screen.getByRole('button', { name: t('web.feature_confirm_disable_yes') }));
+
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    expect(Object.keys(posts()[0]?.body as object).sort()).toEqual([
+      'enabled',
+      'expectedVersion',
+      'idempotencyKey',
+    ]);
+    expect(posts()[0]?.body).toMatchObject({ enabled: false, expectedVersion: 2 });
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+  });
+
+  /**
+   * A flag from a newer server that this bundle has no entry for. Nothing here can say
+   * its switch-off is harmless, and the server no longer asks for a confirmation, so the
+   * page asks, with the generic sentence.
+   */
+  it('asks before switching off a flag this build does not know', async () => {
+    const api = stubApi([
+      {
+        url: '/features',
+        body: { flags: [flag({ key: 'future_flag', enabled: true, version: 1 })] },
+      },
+      {
+        url: '/features/future_flag',
+        status: 201,
+        body: { flag: flag({ key: 'future_flag', enabled: false, version: 2 }), changed: true },
+      },
+    ]);
+    renderPage(<FeaturesPage mayEdit denied={false} />);
+    const posts = () => api.calls.filter((call) => call.method === 'POST');
+
+    fireEvent.click(await screen.findByRole('switch', { name: 'future_flag' }));
+    const dialog = screen.getByRole('alertdialog');
+    expect(dialog).toHaveTextContent(t('web.feature_confirm_disable'));
+    expect(dialog).toHaveTextContent(t('web.feature_unknown_off_effect'));
+    expect(posts()).toHaveLength(0);
+
+    fireEvent.click(screen.getByRole('button', { name: t('web.feature_confirm_disable_yes') }));
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    expect(posts()[0]?.url).toContain('/features/future_flag');
+    expect(posts()[0]?.body).toMatchObject({ enabled: false, expectedVersion: 1 });
+  });
+
+  /**
+   * The dialog holds focus: Tab from its last button goes to its first and Shift+Tab
+   * back, never to the switches behind it. A second switch pressed behind it opens
+   * nothing and sends nothing. Cancelling hands focus back to the switch that opened it.
+   */
+  it('keeps focus inside the dialog and hands it back to the switch on cancel', async () => {
+    const api = stubApi([
+      {
+        url: '/features',
+        body: {
+          flags: [
+            flag({ enabled: true, version: 2 }),
+            flag({ key: 'template_overrides', enabled: true, version: 1 }),
+          ],
+        },
+      },
+    ]);
+    renderPage(<FeaturesPage mayEdit denied={false} />);
+
+    // Not focused first: a click does not focus a button in every browser (Safari),
+    // so focus must come back to the switch by name, not by "what had focus".
+    const opener = await screen.findByRole('switch', { name: OPS_TITLE });
+    fireEvent.click(opener);
+
+    const yes = screen.getByRole('button', { name: t('web.feature_confirm_disable_yes') });
+    const cancel = screen.getByRole('button', { name: t('web.feature_confirm_cancel') });
+    expect(cancel).toHaveFocus();
+
+    fireEvent.keyDown(cancel, { key: 'Tab' });
+    expect(yes).toHaveFocus();
+    fireEvent.keyDown(yes, { key: 'Tab', shiftKey: true });
+    expect(cancel).toHaveFocus();
+
+    // Focus moved out by any other route is pulled back in.
+    screen.getByRole('switch', { name: t('web.feature_template_overrides_title') }).focus();
+    expect(cancel).toHaveFocus();
+
+    // A second sensitive switch behind the open dialog: no second dialog, no request.
+    fireEvent.click(
+      screen.getByRole('switch', { name: t('web.feature_template_overrides_title') }),
+    );
+    expect(screen.getAllByRole('alertdialog')).toHaveLength(1);
+    expect(api.calls.filter((call) => call.method === 'POST')).toHaveLength(0);
+
+    fireEvent.click(cancel);
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    await waitFor(() => expect(opener).toHaveFocus());
+  });
+
+  /**
+   * «بله، خاموش شود» disables the switch while the write is pending, so the dialog's
+   * hand-back lands on a disabled control and focus falls to the body. Once the write
+   * settles and the switch is enabled again, focus comes back to it.
+   */
+  it('returns focus to the switch once a confirmed switch-off has settled', async () => {
+    stubApi([
+      { url: '/features', body: { flags: [flag({ enabled: true, version: 2 })] } },
+      {
+        url: '/features/ops_notifications',
+        status: 201,
+        body: { flag: flag({ enabled: false, version: 3 }), changed: true },
+      },
+    ]);
+    // Hold the POST until the test releases it; everything else answers at once.
+    const answer = globalThis.fetch;
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.stubGlobal('fetch', (input: unknown, init?: RequestInit) =>
+      init?.method === 'POST'
+        ? held.then(() => answer(input as RequestInfo, init))
+        : answer(input as RequestInfo, init),
+    );
+    renderPage(<FeaturesPage mayEdit denied={false} />);
+
+    const opener = await screen.findByRole('switch', { name: OPS_TITLE });
+    fireEvent.click(opener);
+    fireEvent.click(screen.getByRole('button', { name: t('web.feature_confirm_disable_yes') }));
+
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    await waitFor(() => expect(opener).toBeDisabled());
+    expect(opener).not.toHaveFocus();
+
+    release();
+    await waitFor(() => expect(opener).toBeEnabled());
+    await waitFor(() => expect(opener).toHaveFocus());
+  });
+
+  it('shows related settings by their Persian names and current values, not as a key table', async () => {
+    stubApi([
+      {
+        url: '/features',
+        body: {
+          flags: [
+            flag({
+              key: 'service_expiry_reminders',
+              enabled: false,
+              configuration: [
+                {
+                  ...setting({
+                    key: 'reminders.expiry_first_days',
+                    value: 3,
+                    configures: 'service_expiry_reminders',
+                  }),
+                  inert: true,
+                },
+              ],
+            }),
+          ],
+        },
+      },
+    ]);
+    const { container } = renderPage(<FeaturesPage mayEdit denied={false} />);
+
+    await screen.findByText(t('web.feature_service_expiry_reminders_title'));
+    expect(screen.getByText(t('web.feature_related_settings'))).toBeInTheDocument();
+    expect(screen.getByText(t('web.setting_reminders_expiry_first_days'))).toBeInTheDocument();
+    expect(screen.getByText('3')).toBeInTheDocument();
+    // Off, so the value does nothing, and the page says so.
+    expect(screen.getByText(t('web.inert'))).toBeInTheDocument();
+    expect(container.textContent).not.toContain('reminders.expiry_first_days');
+    expect(screen.queryByRole('table')).toBeNull();
+  });
+});
+
+describe('the feature presentation catalogue', () => {
+  it('gives every registered feature its own Persian name and summary', () => {
+    const titles = FEATURE_FLAGS.map((f) => t(FEATURE_PRESENTATION[f.key].title));
+    const summaries = FEATURE_FLAGS.map((f) => t(FEATURE_PRESENTATION[f.key].summary));
+    expect(new Set(titles).size).toBe(FEATURE_FLAGS.length);
+    expect(new Set(summaries).size).toBe(FEATURE_FLAGS.length);
+    for (const title of titles) expect(title).toMatch(/[؀-ۿ]/);
+    expect(t(FEATURE_PRESENTATION.ops_notifications.title)).toBe('اعلان‌های مدیریتی');
+    expect(t(FEATURE_PRESENTATION.template_overrides.title)).toBe('شخصی‌سازی متن‌های ربات');
+    expect(t(FEATURE_PRESENTATION.service_expiry_reminders.title)).toBe('یادآوری انقضای سرویس');
+  });
+
+  /**
+   * The WP-A2 decision, pinned: which switch-offs ask first. Changing this set is a
+   * product decision, so it should fail a test rather than slip through.
+   */
+  it('asks before switching off exactly the features whose switch-off loses something', () => {
+    const asking = FEATURE_FLAGS.filter((f) => FEATURE_PRESENTATION[f.key].disableEffect !== null)
+      .map((f) => f.key)
+      .sort();
+    expect(asking).toEqual([
+      'ops_notifications',
+      'referrals',
+      'service_expired_notice',
+      'service_expiry_reminders',
+      'service_usage_reminders',
+      'template_overrides',
+    ]);
   });
 });
 

@@ -31,10 +31,15 @@
  * How much a toggle changes.
  *
  * The legacy capability screen renders the whole-bot kill switch identically to
- * the dice toggle (CBR-009). Blast radius is therefore declared, and a
- * `TENANT_WIDE` flag goes through the confirmation protocol in
- * docs/adr/0010-destructive-operations.md — the operator states what they are
- * turning off and the audit row carries the reason.
+ * the dice toggle (CBR-009). Blast radius is therefore declared, and travels to
+ * every surface on the flag's response.
+ *
+ * It no longer gates the write. Until WP-A2 a `TENANT_WIDE` toggle was refused
+ * unless the operator typed the flag's key and a reason; the owner removed both
+ * (an operator must never type an internal key), and the audit row records actor,
+ * time and action on its own. Which disables deserve a plain confirmation is a
+ * presentation decision the Web Admin makes per flag — see
+ * docs/adr/0019-feature-flags.md, "Amended by WP-A2".
  *
  * This is not a second permission. `settings.destructive` is for bulk
  * mutations, and turning a feature off is not one.
@@ -153,8 +158,7 @@ export const FEATURE_FLAGS = [
       'back and does not count against trial.limit_per_customer.',
     defaultEnabled: false,
     // TENANT_WIDE, like the reminder flags: turning it on offers free service to every
-    // customer of the tenant at once, so it takes the typed confirmation and the reason
-    // ADR-0010 asks of a change that size (Codex, PR #64). Turning it off withdraws the
+    // customer of the tenant at once (Codex, PR #64). Turning it off withdraws the
     // offer and touches no trial already issued.
     blastRadius: 'TENANT_WIDE',
     configuredBy: ['trial.product_id', 'trial.limit_per_customer'],
@@ -201,7 +205,7 @@ export const FEATURE_FLAGS = [
       'and new commissions; commissions already promised are still paid.',
     defaultEnabled: false,
     // TENANT_WIDE: turning it on puts money on offer to every customer of the tenant at
-    // once, like `trials`, so it takes ADR-0010's typed confirmation and reason.
+    // once, like `trials`.
     blastRadius: 'TENANT_WIDE',
     configuredBy: [
       'referral.commission_percent',
