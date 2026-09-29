@@ -808,6 +808,12 @@ describe('profile metadata, normalised before it is ever stored', () => {
        */
       'bot.payment.gateway_invoice_order_fee',
       'bot.payment.gateway_invoice_topup_fee',
+      /*
+       * F3 (round N): the gateway reported the invoice created without a link that can be
+       * opened. Says only that, that nothing was recorded as paid, and that the customer may
+       * start again — which opens a new attempt; it promises no link that is coming.
+       */
+      'bot.payment.gateway_no_link',
       'bot.payment.gateway_pay_button',
       'bot.payment.gateway_preparing',
       'bot.payment.gateway_unavailable',

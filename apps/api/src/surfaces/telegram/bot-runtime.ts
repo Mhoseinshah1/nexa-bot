@@ -14849,7 +14849,24 @@ export function gatewayAttemptScreen(
   if (invoice.creationState === 'CREATING') {
     return screen('bot.payment.gateway_preparing', [check], 'INVOICE_LOADING', true);
   }
+  /*
+   * F3 (round N): each end says what actually happened, and each offers a way on that opens
+   * a NEW attempt — none of these is an open attempt (`findOpenAttempt`), so the retry is
+   * never handed this one back.
+   *
+   * - A create the gateway REFUSED is "unavailable" even while its payment is still PENDING
+   *   (the failure's own write did not land): it was a refusal, never a lost answer.
+   * - An invoice the gateway reported CREATED with no link a customer can open: its answer
+   *   was received, so it is not "the answer was lost".
+   * - Only a create whose answer really was lost (`CREATE_UNKNOWN`) is `gateway_unknown`.
+   */
+  if (invoice.creationState === 'CREATE_FAILED') {
+    return screen('bot.payment.gateway_unavailable', [retry], 'NOTICE');
+  }
   const link = invoice.webInvoiceUrl ?? invoice.invoiceUrl;
+  if (invoice.creationState === 'CREATED' && link === null) {
+    return screen('bot.payment.gateway_no_link', [retry], 'NOTICE');
+  }
   if (invoice.creationState !== 'CREATED' || link === null) {
     return screen('bot.payment.gateway_unknown', [retry], 'NOTICE');
   }

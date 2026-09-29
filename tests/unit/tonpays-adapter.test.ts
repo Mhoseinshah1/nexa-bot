@@ -265,7 +265,7 @@ describe('what a create outcome may conclude', () => {
     });
     expect(await create(() => new Response(endless, { status: 201 }))).toEqual({
       kind: 'UNKNOWN',
-      code: 'http.201.unreadable',
+      code: 'http.201.unreadable.too_large',
     });
     expect(pulled).toBeLessThanOrEqual(64 * 1024 + 2 * chunk.byteLength);
 
@@ -283,7 +283,7 @@ describe('what a create outcome may conclude', () => {
     });
     expect(await create(() => response)).toEqual({
       kind: 'UNKNOWN',
-      code: 'http.201.unreadable',
+      code: 'http.201.unreadable.too_large',
     });
     expect(declaredPulls).toBeLessThanOrEqual(1);
 
@@ -303,6 +303,160 @@ describe('what a create outcome may conclude', () => {
     for (const answer of answers) {
       expect(serialised(await create(answer))).not.toContain(API_KEY);
     }
+  });
+});
+
+/*
+ * F3 (round N): the real v0.3.6 failure was a create the customer saw end as "the gateway's
+ * answer was not received". Two things about the adapter made that worse than it had to be,
+ * and each case below pins one:
+ *
+ * - it discarded a created invoice for the SHAPE of fields the documentation never typed and
+ *   CLAUDE.md calls metadata (the amounts, the create's status), or for an id sent as a JSON
+ *   number — turning a payable invoice into an UNKNOWN one;
+ * - it kept nothing of WHY an answer decided nothing, so the operator could not tell a
+ *   timeout from a firewall page from a changed answer.
+ *
+ * Neither loosens a money rule: the create still needs its invoice id and the echo of OUR
+ * order id, a 5xx and a lost answer are still UNKNOWN, and nothing here is retried.
+ */
+describe('F3: a created invoice is not discarded for its metadata, and a failure says why', () => {
+  const create = async (answer: () => Response | Promise<Response>) =>
+    new TonPaysAdapter({ fetch: fakeFetch(answer).fetch, timeoutMs: 50 }).createInvoice(
+      API_KEY,
+      request(),
+    );
+
+  it('keeps a created invoice whose amounts or status are null, decimal or strings, recording them as absent', async () => {
+    for (const metadata of [
+      { request_amount: null, final_amount: null, status: null },
+      { request_amount: 50000.5, final_amount: '50037.00', status: 7 },
+      { request_amount: '50000', final_amount: -1 },
+    ]) {
+      const outcome = await create(() => json(201, { ...CREATED, ...metadata }));
+      expect(outcome, JSON.stringify(metadata)).toMatchObject({
+        kind: 'CREATED',
+        invoiceId: CREATED.invoice_id,
+        webInvoiceUrl: CREATED.web_invoice_url,
+      });
+    }
+    const strings = await create(() =>
+      json(201, { ...CREATED, request_amount: '50000', final_amount: null, status: null }),
+    );
+    expect(strings).toMatchObject({ requestAmount: 50000n, finalAmount: null, status: null });
+  });
+
+  it('normalises an invoice id sent as a JSON integer, and still refuses an answer for another order', async () => {
+    expect(await create(() => json(201, { ...CREATED, invoice_id: 918273 }))).toMatchObject({
+      kind: 'CREATED',
+      invoiceId: '918273',
+    });
+    expect(
+      await create(() => json(201, { ...CREATED, invoice_id: 918273, order_id: 'OTHER' })),
+    ).toEqual({ kind: 'UNKNOWN', code: 'nexa.order_id_mismatch' });
+    // No invoice id at all is still no invoice: UNKNOWN, naming the field.
+    const { invoice_id: _none, ...withoutId } = CREATED;
+    expect(await create(() => json(201, withoutId))).toEqual({
+      kind: 'UNKNOWN',
+      code: 'http.201.unexpected_body:invoice_id',
+    });
+  });
+
+  it('drops only an oversized or non-https link, never the answer it came in', async () => {
+    const outcome = await create(() =>
+      json(201, { ...CREATED, web_invoice_url: `https://x.example/${'a'.repeat(3000)}` }),
+    );
+    expect(outcome).toMatchObject({
+      kind: 'CREATED',
+      webInvoiceUrl: null,
+      invoiceUrl: CREATED.invoice_url,
+    });
+  });
+
+  it('says what an unreadable answer looked like, never what it said', async () => {
+    const page = `<!DOCTYPE html><html><body>blocked ${API_KEY}</body></html>`;
+    const html = await create(
+      () => new Response(page, { status: 403, headers: { 'content-type': 'text/html' } }),
+    );
+    expect(html).toEqual({ kind: 'UNKNOWN', code: 'http.403.unreadable.html' });
+    expect(await create(() => new Response('', { status: 502 }))).toEqual({
+      kind: 'UNKNOWN',
+      code: 'http.502.unreadable.empty',
+    });
+    expect(await create(() => new Response('upstream says no', { status: 200 }))).toEqual({
+      kind: 'UNKNOWN',
+      code: 'http.200.unreadable.text',
+    });
+    expect(serialised(html)).not.toContain(API_KEY);
+  });
+
+  it('names the field of a framework validation answer, and nothing it said', async () => {
+    const outcome = await create(() =>
+      json(422, {
+        detail: [{ loc: ['body', 'buyer_chat_id'], msg: `bad ${API_KEY}`, type: 'int_parsing' }],
+      }),
+    );
+    expect(outcome).toEqual({ kind: 'UNKNOWN', code: 'http.422.validation:buyer_chat_id' });
+    expect(serialised(outcome)).not.toContain(API_KEY);
+  });
+
+  it('keeps the system code of a transport failure and the fact of a refused redirect, never the message', async () => {
+    const dns = Object.assign(new TypeError(`fetch failed ${API_KEY}`), {
+      cause: Object.assign(new Error(`getaddrinfo ENOTFOUND ${API_KEY}`), { code: 'ENOTFOUND' }),
+    });
+    const refused = await create(() => {
+      throw dns;
+    });
+    expect(refused).toEqual({ kind: 'UNKNOWN', code: 'http.network.ENOTFOUND' });
+    expect(serialised(refused)).not.toContain(API_KEY);
+
+    const redirect = Object.assign(new TypeError('fetch failed'), {
+      cause: new Error('unexpected redirect'),
+    });
+    expect(
+      await create(() => {
+        throw redirect;
+      }),
+    ).toEqual({ kind: 'UNKNOWN', code: 'http.redirect' });
+
+    // A code that is not a plain system code is not kept: it could be anything.
+    const odd = Object.assign(new TypeError('fetch failed'), {
+      cause: Object.assign(new Error('x'), { code: `weird ${API_KEY}` }),
+    });
+    expect(
+      await create(() => {
+        throw odd;
+      }),
+    ).toEqual({ kind: 'UNKNOWN', code: 'http.network' });
+  });
+
+  it('reads an inquiry whose amounts are null and whose id is a number, and still decides only by status and paid', async () => {
+    const { fetch } = fakeFetch(() =>
+      json(200, {
+        invoice_id: 918273,
+        order_id: 'NX1',
+        request_amount: null,
+        final_amount: '50037.5',
+        status: 'completed',
+        paid: true,
+      }),
+    );
+    const outcome = await new TonPaysAdapter({ fetch }).inquire(API_KEY, '918273');
+    expect(outcome).toMatchObject({
+      kind: 'OBSERVED',
+      invoiceId: '918273',
+      verdict: 'APPROVED',
+      requestAmount: null,
+      finalAmount: null,
+    });
+    // The status still decides, so a missing one is still no answer.
+    const { fetch: noStatus } = fakeFetch(() =>
+      json(200, { invoice_id: 'TP-1', order_id: 'NX1', paid: true }),
+    );
+    expect(await new TonPaysAdapter({ fetch: noStatus }).inquire(API_KEY, 'TP-1')).toEqual({
+      kind: 'FAILED',
+      code: 'http.200.unexpected_body:status',
+    });
   });
 });
 

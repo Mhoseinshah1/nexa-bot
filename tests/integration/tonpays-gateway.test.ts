@@ -112,6 +112,14 @@ type CreateMode =
   | 'NO_WEB_LINK'
   | 'TIMEOUT_AFTER_CREATING'
   | 'SERVER_ERROR'
+  /*
+   * F3 (round N): answers the documentation does not rule out and the adapter used to
+   * discard — a numeric invoice id and metadata that is null or not a whole number — and a
+   * created invoice with no link a customer can open, and an HTML page in front of the API.
+   */
+  | 'UNDOCUMENTED_METADATA'
+  | 'NO_LINK'
+  | 'HTML_PAGE'
   | { readonly code: string; readonly status: number };
 
 class FakeTonPays {
@@ -131,8 +139,17 @@ class FakeTonPays {
         return json(mode.status, { detail: { code: mode.code, message: 'refused' } });
       }
       if (mode === 'SERVER_ERROR') return json(502, { error: 'bad gateway' });
+      if (mode === 'HTML_PAGE') {
+        return new Response('<!DOCTYPE html><html><body>Access denied</body></html>', {
+          status: 403,
+          headers: { 'content-type': 'text/html; charset=utf-8' },
+        });
+      }
       this.seq += 1;
-      const invoiceId = `TP-${String(this.seq).padStart(8, '0')}`;
+      const invoiceId =
+        mode === 'UNDOCUMENTED_METADATA'
+          ? String(700_000 + this.seq)
+          : `TP-${String(this.seq).padStart(8, '0')}`;
       const invoice: FakeInvoice = {
         invoiceId,
         orderId: String(body.order_id),
@@ -144,6 +161,26 @@ class FakeTonPays {
       };
       this.invoices.set(invoiceId, invoice);
       if (mode === 'TIMEOUT_AFTER_CREATING') throw new Error('socket hang up');
+      if (mode === 'UNDOCUMENTED_METADATA') {
+        return json(201, {
+          invoice_id: Number(invoiceId),
+          order_id: invoice.orderId,
+          request_amount: `${String(invoice.amount)}.0`,
+          final_amount: null,
+          status: null,
+          invoice_url: `https://t.me/TonPaysInvoiceBot?start=inv_${invoiceId}`,
+          web_invoice_url: `https://pay.tonpays.online/i/${invoiceId}?p=xyz`,
+          callback_url: body.callback_url,
+        });
+      }
+      if (mode === 'NO_LINK') {
+        return json(201, {
+          invoice_id: invoiceId,
+          order_id: invoice.orderId,
+          status: 'pending',
+          invoice_url: `tg://resolve?domain=TonPaysInvoiceBot&start=inv_${invoiceId}`,
+        });
+      }
       return json(201, {
         invoice_id: invoiceId,
         order_id: invoice.orderId,
@@ -804,6 +841,232 @@ describe('TonPays, through the one settlement path', () => {
       expect(String(onMessage().at(-1)?.['text'])).not.toContain('در حال ساخت');
       expect(JSON.stringify(onMessage().at(-1)?.['reply_markup'] ?? {})).toContain(`pm:${orderId}`);
       expect(await stepOf()).toBe('NOTICE');
+    });
+
+    /*
+     * F3 (round N) — the real v0.3.6 failure: purchase and top-up both showed the loading
+     * screen, then «پاسخ درگاه ... دریافت نشد». Every case above builds its OWN lane over an
+     * injected `fetch`; none ran the lane production runs. These drive the CONTAINER's own
+     * `gatewayPaymentLoop` — the worker's loop, its `GatewayPaymentService`, its
+     * `TonPaysAdapter` on the real global `fetch`, its `WizardInvoiceScreens` — and replace
+     * nothing but the network: `https://tonpays.online` answers from the fake, every other
+     * request (the Telegram stand-in) goes out as it would.
+     */
+    async function onProductionNetwork<T>(run: () => Promise<T>): Promise<T> {
+      const original = globalThis.fetch;
+      globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
+        const url =
+          typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        return url.startsWith('https://tonpays.online/')
+          ? tonpays.fetch(url, init ?? {})
+          : original(input, init);
+      }) as typeof fetch;
+      try {
+        return await run();
+      } finally {
+        globalThis.fetch = original;
+      }
+    }
+    const workerPass = () => ctx.container.gatewayPaymentLoop.tick();
+    const wizardStep = async (paymentId: string) =>
+      (
+        await rows<{ step: string }>(
+          sql`SELECT step FROM telegram_wizards WHERE payment_id = ${paymentId}`,
+        )
+      ).map((row) => row.step);
+    const typed = (value: string) => {
+      updateSeq += 1;
+      return ctx.container.botRuntime.handle(tenantA, systemActor('bot'), {
+        idempotencyKey: `tp-update-${String(updateSeq)}`,
+        botInstanceId: BOT_A,
+        update: {
+          update_id: updateSeq,
+          message: {
+            message_id: updateSeq,
+            date: 0,
+            chat: { id: Number(MARYAM), type: 'private' },
+            from: { id: Number(MARYAM), first_name: 'مریم', is_bot: false },
+            text: value,
+          },
+        },
+        telegramUserId: MARYAM,
+        from: { id: Number(MARYAM), first_name: 'مریم' },
+      });
+    };
+
+    it('F3: the production lane edits the purchase wizard into the ready invoice, with no tap', async () => {
+      await enableTonPays();
+      await onProductionNetwork(async () => {
+        const orderId = await draftOrder();
+        const { paymentId } = await payWithGateway(orderId);
+        const message = updateSeq;
+        const onMessage = () => sent.filter((body) => body['message_id'] === message);
+        expect(String(onMessage().at(-1)?.['text'])).toContain('در حال ساخت');
+
+        await workerPass();
+
+        const invoice = await invoiceOf(paymentId);
+        expect(invoice.creation_state).toBe('CREATED');
+        const ready = onMessage().at(-1);
+        expect(String(ready?.['text'])).toContain('250,000');
+        expect(String(ready?.['text'])).toContain('مهلت پرداخت');
+        const markup = JSON.stringify(ready?.['reply_markup'] ?? {});
+        expect(markup).toContain(`"url":"${invoice.web_invoice_url!}"`);
+        expect(markup).toContain(`gc:${paymentId}`);
+        expect(markup).toContain('"callback_data":"mm:"');
+        expect(await wizardStep(paymentId)).toEqual(['INVOICE']);
+        expect(tonpays.checks).toHaveLength(0);
+      });
+    });
+
+    it('F3: the production lane edits the wallet top-up wizard into the ready invoice, with no tap', async () => {
+      await enableTonPays();
+      await onProductionNetwork(async () => {
+        await tap('o:');
+        const message = updateSeq;
+        await typed('75000');
+        const route = [
+          ...JSON.stringify(sent.at(-1)?.['reply_markup'] ?? {}).matchAll(
+            /"callback_data":"(tp:[^"]+\.TONPAYS)"/gu,
+          ),
+        ][0]?.[1];
+        expect(route).toBeDefined();
+        await tapOn(message, route ?? '');
+        const [payment] = await rows<{ id: string }>(
+          sql`SELECT id FROM payments WHERE tenant_id = ${tenantA.tenantId} AND order_id IS NULL
+              AND method = 'GATEWAY'`,
+        );
+        expect(payment).toBeDefined();
+        const paymentId = payment!.id;
+        const onMessage = () => sent.filter((body) => body['message_id'] === message);
+        expect(String(onMessage().at(-1)?.['text'])).toContain('در حال ساخت');
+
+        await workerPass();
+
+        const invoice = await invoiceOf(paymentId);
+        expect(invoice.creation_state).toBe('CREATED');
+        const ready = onMessage().at(-1);
+        expect(String(ready?.['text'])).toContain('75,000');
+        expect(String(ready?.['text'])).toContain('مهلت پرداخت');
+        const markup = JSON.stringify(ready?.['reply_markup'] ?? {});
+        expect(markup).toContain(`"url":"${invoice.web_invoice_url!}"`);
+        expect(markup).toContain(`gc:${paymentId}`);
+        expect(markup).toContain('"callback_data":"mm:"');
+        expect(await wizardStep(paymentId)).toEqual(['INVOICE']);
+      });
+    });
+
+    it('F3: a created invoice whose ids and metadata come in undocumented shapes is still the invoice, and renders', async () => {
+      await enableTonPays();
+      tonpays.createMode = 'UNDOCUMENTED_METADATA';
+      await onProductionNetwork(async () => {
+        const orderId = await draftOrder();
+        const { paymentId } = await payWithGateway(orderId);
+        const message = updateSeq;
+
+        await workerPass();
+
+        const invoice = await invoiceOf(paymentId);
+        expect(invoice.creation_state).toBe('CREATED');
+        expect(invoice.provider_invoice_id).toMatch(/^7\d{5}$/u);
+        // Metadata of a shape nobody documented is recorded as absent, never invented.
+        expect(invoice.request_amount).toBeNull();
+        expect(invoice.final_amount).toBeNull();
+        expect((await paymentOf(paymentId)).external_reference).toBe(invoice.provider_invoice_id);
+        const ready = sent.filter((body) => body['message_id'] === message).at(-1);
+        expect(JSON.stringify(ready?.['reply_markup'] ?? {})).toContain(
+          `"url":"${invoice.web_invoice_url!}"`,
+        );
+
+        // And the inquiry reads the same numeric id back and settles on completed + paid.
+        tonpays.set(invoice.provider_invoice_id!, 'completed', true);
+        offsetMs += 6 * 60_000;
+        await pass();
+        expect((await paymentOf(paymentId)).state).toBe('CONFIRMED');
+      });
+    });
+
+    it('F3: a create answered without a payable link says so, never fabricates one, and the retry opens a new attempt', async () => {
+      await enableTonPays();
+      tonpays.createMode = 'NO_LINK';
+      await onProductionNetwork(async () => {
+        const orderId = await draftOrder();
+        const { paymentId } = await payWithGateway(orderId);
+        const message = updateSeq;
+
+        await workerPass();
+
+        const invoice = await invoiceOf(paymentId);
+        expect(invoice.creation_state).toBe('CREATED');
+        expect(invoice.web_invoice_url).toBeNull();
+        expect(invoice.invoice_url).toBeNull();
+        const [row] = await rows<{ creation_error_code: string | null }>(
+          sql`SELECT creation_error_code FROM gateway_invoices WHERE payment_id = ${paymentId}`,
+        );
+        expect(row?.creation_error_code).toBe('nexa.no_payment_link');
+        const end = sent.filter((body) => body['message_id'] === message).at(-1);
+        expect(String(end?.['text'])).toContain('لینک پرداختی برای آن نفرستاد');
+        expect(String(end?.['text'])).not.toContain('دریافت نشد');
+        const markup = JSON.stringify(end?.['reply_markup'] ?? {});
+        expect(markup).not.toContain('"url"');
+        expect(markup).toContain(`pm:${orderId}`);
+
+        // The way on: the methods, then the gateway again — a NEW attempt, not this one.
+        tonpays.createMode = 'OK';
+        await tapOn(message, `pm:${orderId}`);
+        await tapOn(message, `g:${orderId}`);
+        const attempts = await rows<{ id: string }>(
+          sql`SELECT id FROM payments WHERE order_id = ${orderId} AND method = 'GATEWAY'
+              ORDER BY created_at`,
+        );
+        expect(attempts.map((one) => one.id)).toHaveLength(2);
+        expect(attempts[1]!.id).not.toBe(paymentId);
+        await workerPass();
+        const second = await invoiceOf(attempts[1]!.id);
+        expect(second.creation_state).toBe('CREATED');
+        expect(
+          JSON.stringify(
+            sent.filter((body) => body['message_id'] === message).at(-1)?.['reply_markup'] ?? {},
+          ),
+        ).toContain(`"url":"${second.web_invoice_url!}"`);
+      });
+    });
+
+    it('F3: a create answered by an HTML page is a truthful end with no link, and the operator reads why', async () => {
+      await enableTonPays();
+      tonpays.createMode = 'HTML_PAGE';
+      await onProductionNetwork(async () => {
+        const orderId = await draftOrder();
+        const { paymentId } = await payWithGateway(orderId);
+        const message = updateSeq;
+
+        await workerPass();
+
+        const [row] = await rows<{ creation_state: string; creation_error_code: string | null }>(
+          sql`SELECT creation_state, creation_error_code FROM gateway_invoices
+              WHERE payment_id = ${paymentId}`,
+        );
+        expect(row).toEqual({
+          creation_state: 'CREATE_UNKNOWN',
+          creation_error_code: 'http.403.unreadable.html',
+        });
+        const events = await rows<{ context: Record<string, unknown> }>(
+          sql`SELECT context FROM operational_events WHERE tenant_id = ${tenantA.tenantId}
+              AND code = 'payments.gateway_create_unknown'`,
+        );
+        expect(events[0]?.context).toMatchObject({ reason: 'http.403.unreadable.html' });
+        expect(typeof events[0]?.context['elapsedMs']).toBe('number');
+        expect(JSON.stringify(events)).not.toContain(API_KEY);
+
+        const end = sent.filter((body) => body['message_id'] === message).at(-1);
+        expect(String(end?.['text'])).toContain('پاسخ درگاه');
+        expect(JSON.stringify(end?.['reply_markup'] ?? {})).not.toContain('"url"');
+        expect(JSON.stringify(end?.['reply_markup'] ?? {})).toContain(`pm:${orderId}`);
+        // TonPays rule three: never sent again.
+        await workerPass();
+        expect(tonpays.creates).toHaveLength(1);
+        expect((await paymentOf(paymentId)).state).toBe('PENDING');
+      });
     });
 
     it('offers web_invoice_url first and falls back to invoice_url, never inventing one', async () => {
