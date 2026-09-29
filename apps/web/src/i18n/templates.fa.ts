@@ -124,6 +124,8 @@ export const TEMPLATE_GROUPS_FA: readonly TemplateGroupDefinition[] = [
   { id: 'referral', label: 'معرفی دوستان و هدیهٔ عضویت', prefixes: ['bot.referral.'] },
   { id: 'support', label: 'پشتیبانی و پرسش‌های متداول', prefixes: ['bot.faq.', 'bot.support.'] },
   { id: 'tickets', label: 'تیکت‌های پشتیبانی (مشتری)', prefixes: ['bot.ticket.'] },
+  // Round N: the wrapper every broadcast is sent in.
+  { id: 'broadcast', label: 'ارسال همگانی', prefixes: ['bot.broadcast.'] },
   {
     id: 'admin',
     label: 'مدیریت در تلگرام — عمومی',
@@ -509,6 +511,14 @@ export const PLACEHOLDER_LABEL_OVERRIDES_FA: Partial<
   'bot.ticket.support_attachment': { number: 'شمارهٔ تیکت', category: 'موضوع تیکت' },
   'ops.support.ticket_opened': { number: 'شمارهٔ تیکت', category: 'موضوع تیکت' },
   'ops.support.customer_replied': { number: 'شمارهٔ تیکت', category: 'موضوع تیکت' },
+  // Round N: the broadcast wrapper and the two mass-action notices.
+  'bot.broadcast.message': { message: 'متن پیام همگانی' },
+  'bot.wallet.mass_credited': { amount: 'مبلغ شارژ همگانی' },
+  'bot.service.gift_applied': {
+    service: 'نام کاربری سرویس',
+    traffic: 'حجم هدیه',
+    days: 'زمان هدیه',
+  },
 };
 
 /**
@@ -2957,5 +2967,19 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'ops.support.customer_replied': [
     'اعلان پیام تازهٔ مشتری در تیکت',
     'وقتی مشتری در تیکتی موجود می‌نویسد به مدیران پشتیبانی فرستاده می‌شود؛ متن مشتری را هرگز.',
+  ],
+
+  // --- Round N: broadcast and mass actions ------------------------------------------
+  'bot.broadcast.message': [
+    'قالب پیام همگانی',
+    'هر پیام همگانی درون این قالب فرستاده می‌شود؛ می‌توانید سرتیتر یا پانویس ثابتی به همهٔ پیام‌های همگانی اضافه کنید.',
+  ],
+  'bot.wallet.mass_credited': [
+    'اطلاع شارژ همگانی کیف پول',
+    'وقتی شارژ همگانی به کیف پول مشتری رسید و مدیر اطلاع‌رسانی را انتخاب کرده بود فرستاده می‌شود.',
+  ],
+  'bot.service.gift_applied': [
+    'اطلاع هدیهٔ حجم یا زمان',
+    'فقط پس از اعمال قطعی هدیهٔ گروهی حجم یا زمان روی پنل، و اگر مدیر اطلاع‌رسانی را انتخاب کرده بود، فرستاده می‌شود.',
   ],
 };

@@ -292,6 +292,20 @@ export const CUSTOMER_NOTIFICATION_KINDS = [
    * it and the service; the producer passes a kind and the operation id and nothing else.
    */
   'SERVICE_RENEWED',
+  /*
+   * Round N (B2): a mass wallet credit, told to the customer when the operator chose to
+   * notify. The subject is the `MASS_CREDIT` wallet entry; the amount is read from it at send
+   * time — a reader, not a payload (ADR 0030 §1). Enqueued in the transaction that writes the
+   * entry, so a credit that did not happen is never announced.
+   */
+  'WALLET_MASS_CREDITED',
+  /*
+   * Round N (B2): a mass traffic or time grant that the provider AUTHORITATIVELY applied. The
+   * subject is the bulk item; what was granted and to which service is read from it at send
+   * time. Enqueued only when the item's operation is SUCCEEDED — never for a planned, unknown
+   * or failed one.
+   */
+  'SERVICE_GIFT_APPLIED',
 ] as const;
 export type CustomerNotificationKind = (typeof CUSTOMER_NOTIFICATION_KINDS)[number];
 export const customerNotificationKindSchema = z.enum(CUSTOMER_NOTIFICATION_KINDS);
@@ -445,6 +459,9 @@ export const CUSTOMER_NOTIFICATION_PRECONDITIONS: Readonly<
    * operation's own frozen target and the order's frozen line, not today's service row.
    */
   SERVICE_RENEWED: false,
+  // Round N: both are terminal facts about work already done.
+  WALLET_MASS_CREDITED: false,
+  SERVICE_GIFT_APPLIED: false,
 };
 
 /**
@@ -514,6 +531,8 @@ export const CUSTOMER_NOTIFICATION_QUIET_HOURS: Readonly<
   TICKET_REPLY_ATTACHMENT: false,
   // R2: the result of a renewal the customer just paid for is expected NOW.
   SERVICE_RENEWED: false,
+  WALLET_MASS_CREDITED: false,
+  SERVICE_GIFT_APPLIED: false,
 };
 
 /**
@@ -582,6 +601,8 @@ export const CUSTOMER_NOTIFICATION_TEMPLATES: Readonly<
   TICKET_REPLY_ATTACHMENT: 'bot.ticket.support_attachment',
   // R2: the dedicated renewal result, its values read at send time from the operation.
   SERVICE_RENEWED: 'bot.service.renewed',
+  WALLET_MASS_CREDITED: 'bot.wallet.mass_credited',
+  SERVICE_GIFT_APPLIED: 'bot.service.gift_applied',
 };
 
 /**

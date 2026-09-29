@@ -81,6 +81,9 @@ export const PERMISSIONS = [
    * research calls the mass credit "the single most dangerous control found
    * anywhere in MirzaBot" — no preview, no affected count, no confirmation, no
    * undo. If it is ever built it needs the ADR-0010 shape.
+   *
+   * Round N built the mass credit with that shape (`bulk-operations.ts`): `users.wallet.mass`
+   * is charged by it now. `users.tier.change` is still charged by nothing.
    */
   p('users.tier.change', 'Change a customer tier', 'HIGH'),
   p('users.wallet.credit', 'Credit a customer wallet', 'HIGH'),
@@ -246,6 +249,21 @@ export const PERMISSIONS = [
 
   // Broadcasts
   p('broadcasts.send', 'Send a broadcast to customers', 'HIGH'),
+  /*
+   * Round N (B1): reading the broadcasts, their frozen audiences and their delivery reports.
+   * LOW: it changes nothing, and it is what `broadcasts.send` is exercised FROM
+   * (`PERMISSION_REQUIRES`).
+   */
+  p('broadcasts.view', 'View broadcasts and their delivery reports', 'LOW'),
+
+  /*
+   * Round N (B2): safe mass actions. `users.wallet.mass` above is the wallet half and is
+   * finally charged; the service half is its own key, CRITICAL like it: a mass grant gives
+   * free service to every eligible account in an audience through real provider writes.
+   * Both are exercised from the bulk-operation history, which `bulk_operations.view` reads.
+   */
+  p('services.mass.grant', 'Run a mass traffic or time grant on existing services', 'CRITICAL'),
+  p('bulk_operations.view', 'View mass operations and their per-item results', 'LOW'),
 
   /*
    * Support tickets (WP-A7, `docs/wp-a7-tickets-audit.md`). Five keys, because reading a
@@ -613,6 +631,14 @@ export const PERMISSION_REQUIRES: Readonly<Record<string, PermissionKey>> = {
   'tickets.assign': 'tickets.view' as PermissionKey,
   'tickets.close': 'tickets.view' as PermissionKey,
   'tickets.categories.edit': 'tickets.view' as PermissionKey,
+  /*
+   * Round N. A broadcast is composed, launched, paused and cancelled from the broadcast pages,
+   * which `broadcasts.view` reads; a mass action is confirmed and followed from the mass
+   * operation history, which `bulk_operations.view` reads.
+   */
+  'broadcasts.send': 'broadcasts.view' as PermissionKey,
+  'users.wallet.mass': 'bulk_operations.view' as PermissionKey,
+  'services.mass.grant': 'bulk_operations.view' as PermissionKey,
   /*
    * Round N, C1. Every campaign command is taken FROM a campaign page, which
    * `campaigns.view` reads, and each answers with the campaign's preview and results.

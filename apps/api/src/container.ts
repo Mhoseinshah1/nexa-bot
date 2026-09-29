@@ -33,6 +33,8 @@ import type {
   ProductId,
   TenantContext,
   Translator,
+  // Round N: the audience's balance range is written in the selling currency.
+  SalesCurrencyCode,
 } from '@nexa/contracts';
 
 import { acceptsV1, type AppConfig } from './infrastructure/config/config.schema.js';
@@ -175,6 +177,8 @@ import { DrizzleTrialGrantRepository } from './modules/commerce/trials/infrastru
 import { DrizzleTrialOverrideRepository } from './modules/commerce/trials/infrastructure/drizzle-trial-override.repository.js';
 import { DrizzleTrialResetRepository } from './modules/commerce/trials/infrastructure/drizzle-trial-reset.repository.js';
 import { TrialAdminService } from './modules/commerce/trials/application/trial-admin.service.js';
+import { AudienceService } from './modules/commerce/audience/application/audience.service.js';
+import { DrizzleAudienceReader } from './modules/commerce/audience/infrastructure/drizzle-audience.reader.js';
 import { DrizzleCommercialActionRepository } from './modules/commerce/commercial/infrastructure/drizzle-commercial-action.repository.js';
 import { LocationChangePolicy } from './modules/commerce/locations/application/location-change-policy.js';
 import { LocationChangeService } from './modules/commerce/locations/application/location-change.service.js';
@@ -677,6 +681,11 @@ export interface Container {
   readonly trialAdmin: TrialAdminService;
   /** R1: each panel's free trial, for an operator. */
   readonly panelTrials: PanelTrialService;
+  /**
+   * Round N: the SHARED audience — preview for an operator, evaluation for Broadcast, the
+   * mass actions and Campaigns. One query implementation (`audience-sql.ts`).
+   */
+  readonly audience: AudienceService;
   readonly wallet: WalletService;
   readonly payments: PaymentService;
   readonly paymentAccounts: PaymentAccountService;
@@ -2876,6 +2885,14 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     scopeActivity: tenants,
     clock,
   });
+  /** Round N: the shared audience (`docs/round-n-broadcast-audit.md` §3). */
+  const audienceService = new AudienceService({
+    reader: new DrizzleAudienceReader(database.db),
+    guard,
+    clock,
+    sellingCurrency: (scope) =>
+      settingsResolver.valueOf<SalesCurrencyCode>(scope, 'sales.currency'),
+  });
   const featureFlags = new FeatureFlagsService(
     guard,
     uow,
@@ -4560,6 +4577,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     trials: trialService,
     trialAdmin: trialAdminService,
     panelTrials,
+    audience: audienceService,
     wallet: walletService,
     payments: paymentService,
     paymentAccounts: paymentAccountService,

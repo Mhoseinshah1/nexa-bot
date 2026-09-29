@@ -96,3 +96,7 @@ export * from './secrets.js';
 export * from './ports.js';
 export * from './http.js';
 export * from './reporting.js';
+/** Round N: the shared audience, broadcast, and safe mass actions. */
+export * from './audience.js';
+export * from './broadcasts.js';
+export * from './bulk-operations.js';
