@@ -83,6 +83,17 @@ export const BULK_NOTE_MAX_LENGTH = 300;
 export const BULK_PAGE_DEFAULT = 25;
 export const BULK_PAGE_MAX = 100;
 
+export const bulkOperationListQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(BULK_PAGE_MAX).optional(),
+  cursor: z.string().min(1).max(200).optional(),
+});
+
+export const bulkItemListQuerySchema = z.object({
+  state: z.enum(BULK_ITEM_STATES).optional(),
+  limit: z.coerce.number().int().min(1).max(BULK_PAGE_MAX).optional(),
+  cursor: z.string().min(1).max(200).optional(),
+});
+
 // --- HTTP -------------------------------------------------------------------------------
 
 const minorAmount = z.string().regex(/^[1-9][0-9]{0,17}$/u, 'must be positive whole minor units');
@@ -170,6 +181,13 @@ export const createBulkOperationRequestSchema = z
       .default(null),
     confirmed: z.literal(true),
     typedCount: z.number().int().positive().nullable().default(null),
+    /**
+     * The earliest instant any item may be processed; null means at once. The items and the
+     * confirmation are still frozen NOW — only the processing waits, so a campaign can
+     * schedule a grant the operator has already seen, counted and confirmed. A cancel before
+     * this instant cancels every item, and nothing is credited or granted.
+     */
+    notBefore: z.iso.datetime({ offset: true }).nullable().default(null),
   })
   .strict();
 export type CreateBulkOperationRequest = z.input<typeof createBulkOperationRequestSchema>;
@@ -204,6 +222,8 @@ export const bulkOperationSchema = z.object({
   audience: z.unknown(),
   audienceHash: z.string(),
   audienceAsOf: z.iso.datetime(),
+  /** No item is processed before this instant; null means at once. */
+  notBefore: z.iso.datetime().nullable(),
   itemCount: z.number().int().nonnegative(),
   fingerprint: z.string(),
   /** Wallet credit: amount × items, what the confirmation promised at most. */

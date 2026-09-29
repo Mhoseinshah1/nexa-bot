@@ -1,0 +1,1 @@
+ALTER TABLE "bulk_operations" ADD COLUMN "not_before" timestamp with time zone;

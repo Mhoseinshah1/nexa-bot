@@ -1,6 +1,6 @@
 {
-  "id": "8373a5bd-9885-4978-bb0f-24f6798c25dd",
-  "prevId": "141d5a5a-cfb5-4417-8406-80aaaa9646d0",
+  "id": "810eadbd-7bb8-4378-bdf6-fd74201bc577",
+  "prevId": "8373a5bd-9885-4978-bb0f-24f6798c25dd",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -3236,6 +3236,604 @@
         "bulk_operations_cancelled_check": {
           "name": "bulk_operations_cancelled_check",
           "value": "(state = 'CANCELLED') = (cancelled_at IS NOT NULL)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.campaign_actions": {
+      "name": "campaign_actions",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "campaign_id": {
+          "name": "campaign_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "state": {
+          "name": "state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'PENDING'"
+        },
+        "config": {
+          "name": "config",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "discount_id": {
+          "name": "discount_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "cashback_rule_id": {
+          "name": "cashback_rule_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "failure_code": {
+          "name": "failure_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "launched_at": {
+          "name": "launched_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "campaign_actions_campaign_kind_key": {
+          "name": "campaign_actions_campaign_kind_key",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "campaign_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "kind",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "campaign_actions_discount_key": {
+          "name": "campaign_actions_discount_key",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "discount_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "discount_id IS NOT NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "campaign_actions_cashback_rule_key": {
+          "name": "campaign_actions_cashback_rule_key",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "cashback_rule_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "cashback_rule_id IS NOT NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "campaign_actions_tenant_id_tenants_id_fk": {
+          "name": "campaign_actions_tenant_id_tenants_id_fk",
+          "tableFrom": "campaign_actions",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "campaign_actions_campaign_fk": {
+          "name": "campaign_actions_campaign_fk",
+          "tableFrom": "campaign_actions",
+          "tableTo": "campaigns",
+          "columnsFrom": [
+            "tenant_id",
+            "campaign_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "campaign_actions_discount_fk": {
+          "name": "campaign_actions_discount_fk",
+          "tableFrom": "campaign_actions",
+          "tableTo": "discounts",
+          "columnsFrom": [
+            "tenant_id",
+            "discount_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "campaign_actions_cashback_rule_fk": {
+          "name": "campaign_actions_cashback_rule_fk",
+          "tableFrom": "campaign_actions",
+          "tableTo": "cashback_rules",
+          "columnsFrom": [
+            "tenant_id",
+            "cashback_rule_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "campaign_actions_kind_check": {
+          "name": "campaign_actions_kind_check",
+          "value": "kind IN ('DISCOUNT', 'CASHBACK', 'WALLET_GIFT', 'TRAFFIC_GIFT', 'TIME_GIFT', 'ANNOUNCEMENT')"
+        },
+        "campaign_actions_state_check": {
+          "name": "campaign_actions_state_check",
+          "value": "state IN ('PENDING', 'LAUNCHED', 'CANCELLED', 'FAILED')"
+        },
+        "campaign_actions_discount_kind_check": {
+          "name": "campaign_actions_discount_kind_check",
+          "value": "discount_id IS NULL OR kind = 'DISCOUNT'"
+        },
+        "campaign_actions_cashback_kind_check": {
+          "name": "campaign_actions_cashback_kind_check",
+          "value": "cashback_rule_id IS NULL OR kind = 'CASHBACK'"
+        },
+        "campaign_actions_launched_check": {
+          "name": "campaign_actions_launched_check",
+          "value": "(state = 'LAUNCHED') = (launched_at IS NOT NULL)"
+        },
+        "campaign_actions_failed_check": {
+          "name": "campaign_actions_failed_check",
+          "value": "(state = 'FAILED') = (failure_code IS NOT NULL)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.campaigns": {
+      "name": "campaigns",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "description": {
+          "name": "description",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "''"
+        },
+        "state": {
+          "name": "state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'DRAFT'"
+        },
+        "starts_at": {
+          "name": "starts_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "ends_at": {
+          "name": "ends_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "audience": {
+          "name": "audience",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "audience_hash": {
+          "name": "audience_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "audience_frozen_at": {
+          "name": "audience_frozen_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "audience_confirmed_count": {
+          "name": "audience_confirmed_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "audience_fingerprint": {
+          "name": "audience_fingerprint",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_by_admin_id": {
+          "name": "created_by_admin_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "scheduled_by_admin_id": {
+          "name": "scheduled_by_admin_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "scheduled_at": {
+          "name": "scheduled_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "started_at": {
+          "name": "started_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "paused_at": {
+          "name": "paused_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "completed_at": {
+          "name": "completed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "cancelled_by_admin_id": {
+          "name": "cancelled_by_admin_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "cancelled_at": {
+          "name": "cancelled_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "campaigns_tenant_created_idx": {
+          "name": "campaigns_tenant_created_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "campaigns_due_start_idx": {
+          "name": "campaigns_due_start_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "starts_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "state = 'SCHEDULED'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "campaigns_due_end_idx": {
+          "name": "campaigns_due_end_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "ends_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "state IN ('ACTIVE', 'PAUSED')",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "campaigns_tenant_id_tenants_id_fk": {
+          "name": "campaigns_tenant_id_tenants_id_fk",
+          "tableFrom": "campaigns",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "campaigns_created_by_fk": {
+          "name": "campaigns_created_by_fk",
+          "tableFrom": "campaigns",
+          "tableTo": "admins",
+          "columnsFrom": [
+            "tenant_id",
+            "created_by_admin_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "campaigns_scheduled_by_fk": {
+          "name": "campaigns_scheduled_by_fk",
+          "tableFrom": "campaigns",
+          "tableTo": "admins",
+          "columnsFrom": [
+            "tenant_id",
+            "scheduled_by_admin_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "campaigns_cancelled_by_fk": {
+          "name": "campaigns_cancelled_by_fk",
+          "tableFrom": "campaigns",
+          "tableTo": "admins",
+          "columnsFrom": [
+            "tenant_id",
+            "cancelled_by_admin_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "campaigns_tenant_id_key": {
+          "name": "campaigns_tenant_id_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "campaigns_state_check": {
+          "name": "campaigns_state_check",
+          "value": "state IN ('DRAFT', 'SCHEDULED', 'ACTIVE', 'PAUSED', 'COMPLETED', 'CANCELLED')"
+        },
+        "campaigns_window_check": {
+          "name": "campaigns_window_check",
+          "value": "starts_at < ends_at"
+        },
+        "campaigns_name_check": {
+          "name": "campaigns_name_check",
+          "value": "char_length(name) BETWEEN 1 AND 80"
+        },
+        "campaigns_description_check": {
+          "name": "campaigns_description_check",
+          "value": "char_length(description) <= 2000"
+        },
+        "campaigns_frozen_check": {
+          "name": "campaigns_frozen_check",
+          "value": "(audience_frozen_at IS NULL) = (scheduled_at IS NULL) AND (scheduled_at IS NULL) = (audience_confirmed_count IS NULL) AND (scheduled_at IS NULL) = (audience_fingerprint IS NULL)"
+        },
+        "campaigns_scheduled_check": {
+          "name": "campaigns_scheduled_check",
+          "value": "state IN ('DRAFT', 'CANCELLED') OR scheduled_at IS NOT NULL"
+        },
+        "campaigns_started_check": {
+          "name": "campaigns_started_check",
+          "value": "state NOT IN ('ACTIVE', 'PAUSED') OR started_at IS NOT NULL"
+        },
+        "campaigns_completed_check": {
+          "name": "campaigns_completed_check",
+          "value": "(state = 'COMPLETED') = (completed_at IS NOT NULL)"
+        },
+        "campaigns_cancelled_check": {
+          "name": "campaigns_cancelled_check",
+          "value": "(state = 'CANCELLED') = (cancelled_at IS NOT NULL)"
+        },
+        "campaigns_paused_check": {
+          "name": "campaigns_paused_check",
+          "value": "(state = 'PAUSED') = (paused_at IS NOT NULL)"
+        },
+        "campaigns_audience_hash_check": {
+          "name": "campaigns_audience_hash_check",
+          "value": "audience_hash ~ '^[0-9a-f]{64}$'"
+        },
+        "campaigns_audience_fingerprint_check": {
+          "name": "campaigns_audience_fingerprint_check",
+          "value": "audience_fingerprint IS NULL OR audience_fingerprint ~ '^[0-9a-f]{32}$'"
+        },
+        "campaigns_confirmed_count_check": {
+          "name": "campaigns_confirmed_count_check",
+          "value": "audience_confirmed_count IS NULL OR audience_confirmed_count >= 0"
         }
       },
       "isRLSEnabled": false
