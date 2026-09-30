@@ -4324,6 +4324,8 @@ export const WEB_FA = {
   'web.bc_media_available': 'در دسترس برای ارسال',
   'web.bc_media_expired': 'پاک‌شده؛ دوباره بارگذاری کنید',
   'web.bc_media_pick': 'انتخاب فایل',
+  'web.bc_media_save_first':
+    'ابتدا تغییرات پیش‌نویس را ذخیره کنید؛ تغییر فایل، ویرایش‌های ذخیره‌نشده را از بین می‌برد.',
   'web.bc_media_remove': 'حذف فایل',
   'web.bc_yes': 'بله',
   'web.bc_launch': 'تأیید و ارسال',

@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   BULK_ITEM_STATES,
@@ -85,6 +85,9 @@ const ITEM_LABELS: Readonly<Record<BulkItemState, WebKey>> = {
   SKIPPED: 'web.bulk_item_skipped',
   CANCELLED: 'web.bulk_item_cancelled',
 };
+/** How often a RUNNING operation's detail and its items are read again. */
+export const BULK_LIVE_REFRESH_MS = 5_000;
+
 const NOTICE_LABELS: Readonly<Record<CustomerNotificationState, WebKey>> = {
   PENDING: 'web.bulk_notice_pending',
   DELIVERED: 'web.bulk_notice_delivered',
@@ -511,8 +514,10 @@ export function BulkOperationDetailPage({
     queryKey: ['bulk-operation', id],
     queryFn: () => fetchBulkOperation(id),
     enabled: !denied,
-    refetchInterval: (query) => (query.state.data?.operation.state === 'RUNNING' ? 5_000 : false),
+    refetchInterval: (query) =>
+      query.state.data?.operation.state === 'RUNNING' ? BULK_LIVE_REFRESH_MS : false,
   });
+  const operationState = detail.data?.operation.state;
   const [cancelAsked, setCancelAsked] = useState(false);
   const cancel = useMutation({
     mutationFn: () => cancelBulkOperation(id),
@@ -529,7 +534,17 @@ export function BulkOperationDetailPage({
         ...(cursor === undefined ? {} : { cursor }),
       }),
     enabled: !denied,
+    // Refreshed WITH the detail while running, and once more when the operation leaves a
+    // state, so the item page never stays at what it was before it finished (Codex R7).
+    refetchInterval: operationState === 'RUNNING' ? BULK_LIVE_REFRESH_MS : false,
   });
+  const seenState = useRef(operationState);
+  useEffect(() => {
+    if (seenState.current !== undefined && seenState.current !== operationState) {
+      void client.invalidateQueries({ queryKey: ['bulk-items', id] });
+    }
+    seenState.current = operationState;
+  }, [operationState, client, id]);
   const op = detail.data?.operation;
   const mayCancel = op !== undefined && (op.kind === 'WALLET_CREDIT' ? mayWallet : mayGrant);
   return (

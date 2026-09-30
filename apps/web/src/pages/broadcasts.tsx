@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   BROADCAST_BODY_DEFINITION,
@@ -265,8 +265,19 @@ export function renderBroadcastPreview(body: string): string {
   });
 }
 
-function Composer({ record }: { record: BroadcastResponseItem | null }) {
+function Composer({
+  record,
+  onDirtyChange,
+}: {
+  record: BroadcastResponseItem | null;
+  onDirtyChange?: (dirty: boolean) => void;
+}) {
   const [state, setState] = useState<ComposerState>(() => initial(record));
+  // Unsaved edits, compared with what the saved draft holds. The detail page blocks media
+  // actions while this is true: a media change bumps the version, the composer remounts on
+  // it, and the edits would be dropped (Codex R5 on PR #117).
+  const dirty = JSON.stringify(state) !== JSON.stringify(initial(record));
+  useEffect(() => onDirtyChange?.(dirty), [dirty, onDirtyChange]);
   const toast = useToast();
   const client = useQueryClient();
   const submission = useSubmissionKey();
@@ -453,7 +464,14 @@ function readMedia(
   });
 }
 
-function MediaCard({ record }: { record: BroadcastResponseItem }) {
+function MediaCard({
+  record,
+  blocked,
+}: {
+  record: BroadcastResponseItem;
+  /** The composer holds unsaved edits: changing the file now would discard them. */
+  blocked: boolean;
+}) {
   const client = useQueryClient();
   const [rejected, setRejected] = useState(false);
   const refresh = () => void client.invalidateQueries({ queryKey: ['broadcast', record.id] });
@@ -493,17 +511,24 @@ function MediaCard({ record }: { record: BroadcastResponseItem }) {
           ]}
         />
       )}
+      {blocked && <Banner tone="warn">{t('web.bc_media_save_first')}</Banner>}
       <input
         type="file"
         aria-label={t('web.bc_media_pick')}
         accept={accept}
+        disabled={blocked || upload.isPending}
         onChange={(event) => {
           const file = event.target.files?.[0];
           if (file !== undefined) upload.mutate(file);
         }}
       />
       {record.media !== null && (
-        <button type="button" className="btn sm" onClick={() => remove.mutate()}>
+        <button
+          type="button"
+          className="btn sm"
+          disabled={blocked || remove.isPending}
+          onClick={() => remove.mutate()}
+        >
           {t('web.bc_media_remove')}
         </button>
       )}
@@ -745,10 +770,16 @@ function ReportCard({ record, maySend }: { record: BroadcastResponseItem; maySen
   );
 }
 
-function RecipientsCard({ id }: { id: string }) {
+/** How often a SENDING broadcast's detail and its recipients are read again. */
+export const BROADCAST_LIVE_REFRESH_MS = 5_000;
+
+function RecipientsCard({ id, broadcastState }: { id: string; broadcastState: BroadcastState }) {
   const [state, setState] = useState<BroadcastRecipientState | ''>('');
   const [trail, setTrail] = useState<string[]>([]);
   const cursor = trail[trail.length - 1];
+  const client = useQueryClient();
+  // Refreshed WITH the detail while sending, and once more when the broadcast leaves a
+  // state, so the last page read is never the one from before it finished (Codex R6).
   const rows = useQuery({
     queryKey: ['broadcast-recipients', id, state, cursor],
     queryFn: () =>
@@ -756,7 +787,15 @@ function RecipientsCard({ id }: { id: string }) {
         ...(state === '' ? {} : { state }),
         ...(cursor === undefined ? {} : { cursor }),
       }),
+    refetchInterval: broadcastState === 'SENDING' ? BROADCAST_LIVE_REFRESH_MS : false,
   });
+  const seenState = useRef(broadcastState);
+  useEffect(() => {
+    if (seenState.current !== broadcastState) {
+      void client.invalidateQueries({ queryKey: ['broadcast-recipients', id] });
+    }
+    seenState.current = broadcastState;
+  }, [broadcastState, client, id]);
   return (
     <Card title={t('web.bc_recipients')}>
       <Field label={t('web.bc_state')} htmlFor="bc-r-state">
@@ -843,9 +882,11 @@ export function BroadcastDetailPage({
     queryKey: ['broadcast', id],
     queryFn: () => fetchBroadcast(id),
     enabled: !denied,
-    refetchInterval: (query) => (query.state.data?.broadcast.state === 'SENDING' ? 5_000 : false),
+    refetchInterval: (query) =>
+      query.state.data?.broadcast.state === 'SENDING' ? BROADCAST_LIVE_REFRESH_MS : false,
   });
   const record = detail.data?.broadcast;
+  const [composerDirty, setComposerDirty] = useState(false);
   return (
     <StateSwitch query={detail} denied={denied}>
       {record === undefined ? null : (
@@ -895,15 +936,15 @@ export function BroadcastDetailPage({
           {record.state === 'DRAFT' ? (
             maySend ? (
               <>
-                <Composer key={record.version} record={record} />
-                <MediaCard record={record} />
+                <Composer key={record.version} record={record} onDirtyChange={setComposerDirty} />
+                <MediaCard record={record} blocked={composerDirty} />
                 <LaunchCard record={record} />
               </>
             ) : null
           ) : (
             <>
               <ReportCard record={record} maySend={maySend} />
-              <RecipientsCard id={record.id} />
+              <RecipientsCard id={record.id} broadcastState={record.state} />
             </>
           )}
         </>
