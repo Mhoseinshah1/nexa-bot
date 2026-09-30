@@ -164,6 +164,15 @@ export function Num({ value, signed = false }: { value: number | string; signed?
 }
 
 /**
+ * A compound quantity — `215 / 400`, `42 ms`, `3 / 5` — kept in its written
+ * order (isolated left to right) and drawn in the body's digits, like `Num`.
+ * Not `Ltr`, which would turn every digit in it Latin.
+ */
+export function Quantity({ children }: { children: ReactNode }) {
+  return <span className="num signed">{children}</span>;
+}
+
+/**
  * A duration, in the largest whole unit it divides into.
  *
  * In the kit rather than in a page, because a SECOND copy was about to be

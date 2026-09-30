@@ -36,6 +36,7 @@ import {
   PageHead,
   StateSwitch,
   type Column,
+  Quantity,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
 import { pollUnlessFinal, pollUnlessFinalWhile } from '../polling';
@@ -524,9 +525,9 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
       header: t('web.attempts'),
       align: 'end',
       render: (row) => (
-        <Ltr mono={false}>
+        <Quantity>
           <Num value={row.attemptCount} /> / <Num value={row.maxAttempts} />
-        </Ltr>
+        </Quantity>
       ),
     },
     {

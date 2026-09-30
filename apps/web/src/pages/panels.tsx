@@ -102,6 +102,7 @@ import {
   type Column,
   type Tone,
   PermissionDeniedState,
+  Quantity,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
 import { pollUnlessFinal } from '../polling';
@@ -249,7 +250,7 @@ function FailureBadge({ failure }: { failure: string | null }) {
 function CapacityCell({ capacity }: { capacity: PanelSummaryResponse['capacity'] }) {
   return (
     <span className="panels-capacity">
-      <Ltr mono={false}>
+      <Quantity>
         <Num value={capacity.used} />
         {' / '}
         {capacity.maxServices === null ? (
@@ -264,7 +265,7 @@ function CapacityCell({ capacity }: { capacity: PanelSummaryResponse['capacity']
             {')'}
           </span>
         )}
-      </Ltr>
+      </Quantity>
       {/* A share only where there is a whole: an uncapped panel has no bar. */}
       {capacity.maxServices !== null && (
         <Progress
@@ -410,9 +411,9 @@ export function PanelsPage({
         row.health.latencyMs === null ? (
           <span className="faint">—</span>
         ) : (
-          <Ltr mono={false}>
+          <Quantity>
             <Num value={row.health.latencyMs} /> ms
-          </Ltr>
+          </Quantity>
         ),
     },
     {
@@ -904,9 +905,9 @@ function PanelHead({ panel, actions }: { panel: PanelSummaryResponse; actions?: 
             health.latencyMs === null ? (
               <span className="faint">—</span>
             ) : (
-              <Ltr mono={false}>
+              <Quantity>
                 <Num value={health.latencyMs} /> ms
-              </Ltr>
+              </Quantity>
             ),
         },
         {
@@ -2218,9 +2219,9 @@ function HealthTab({ panel }: { panel: PanelSummaryResponse }) {
                   panel.health.latencyMs === null ? (
                     '—'
                   ) : (
-                    <Ltr key="l" mono={false}>
+                    <Quantity key="l">
                       <Num value={panel.health.latencyMs} /> ms
-                    </Ltr>
+                    </Quantity>
                   ),
                 ],
                 [

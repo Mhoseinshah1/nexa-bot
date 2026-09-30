@@ -18,6 +18,7 @@ import {
   PageHead,
   PeriodControl,
   Progress,
+  Quantity,
   RoutedTabs,
   Sparkline,
   StatCard,
@@ -506,6 +507,9 @@ describe('quantities and identifiers', () => {
         <Num value={1250} />
         <Num value="12.5" />
         <Num value="+4.2%" signed />
+        <Quantity>
+          <Num value={42} /> ms
+        </Quantity>
       </>,
     );
     const [count, figure, signed] = [...container.querySelectorAll('span')];
@@ -513,6 +517,9 @@ describe('quantities and identifiers', () => {
     expect(count?.textContent).toBe(formatNumber(1250));
     expect(figure?.textContent).toBe('12.5');
     expect(signed?.className.split(' ')).toEqual(['num', 'signed']);
+    const group = [...container.querySelectorAll('span.num.signed')].at(-1);
+    expect(group?.className).toBe('num signed');
+    expect(group?.textContent).toBe('42 ms');
     expect(container.querySelector('.ltr')).toBeNull();
   });
 
@@ -536,7 +543,7 @@ describe('quantities and identifiers', () => {
   it('is what every page uses for a formatted quantity', () => {
     const dir = join(import.meta.dirname, '../../apps/web/src/pages');
     const quantity =
-      /<Ltr[^>]*>\s*\{\s*(formatNumber|formatTrafficGbText|formatRate|formatBasisPoints|bytesText)\(/;
+      /<Ltr[^>]*>\s*(<Num\b|\{\s*(formatNumber|formatTrafficGbText|formatRate|formatBasisPoints|bytesText)\()/;
     const offenders = readdirSync(dir)
       .filter((name) => name.endsWith('.tsx'))
       .filter((name) => quantity.test(readFileSync(join(dir, name), 'utf8')));
