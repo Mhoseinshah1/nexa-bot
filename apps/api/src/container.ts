@@ -313,6 +313,24 @@ import {
 } from './modules/commerce/payments/infrastructure/tonpays-adapter.js';
 import { DrizzleGatewayInvoiceRepository } from './modules/commerce/payments/infrastructure/drizzle-gateway-invoice.repository.js';
 import { TelegramStarsAdapter } from './modules/commerce/payments/infrastructure/telegram-stars-adapter.js';
+import { FxService } from './modules/commerce/fx/application/fx.service.js';
+import type { FxSourceAdapter } from './modules/commerce/fx/application/ports.js';
+import type { FxSource } from '@nexa/contracts';
+import {
+  FX_REFRESH_INTERVAL_MS,
+  FxRefreshLoop,
+} from './modules/commerce/fx/application/fx-refresh-loop.js';
+import {
+  StarsPerUsdtGuard,
+  StarsPricingModeGuard,
+} from './modules/commerce/fx/application/stars-pricing.guards.js';
+import { DrizzleFxQuoteRepository } from './modules/commerce/fx/infrastructure/drizzle-fx.repository.js';
+import {
+  FX_SOURCE_MAX_RESPONSE_BYTES,
+  FX_SOURCE_TIMEOUT_MS,
+} from './modules/commerce/fx/infrastructure/fx-source-parsing.js';
+import { NobitexFxSource } from './modules/commerce/fx/infrastructure/nobitex-source.js';
+import { WallexFxSource } from './modules/commerce/fx/infrastructure/wallex-source.js';
 import { TelegramStarsCheckoutAnswerer } from './modules/commerce/payments/infrastructure/telegram-stars-checkout-answerer.js';
 import { StarsPaymentService } from './modules/commerce/payments/application/telegram-stars-payment.service.js';
 import {
@@ -584,6 +602,9 @@ export interface Container {
    */
   readonly gatewayPayments: GatewayPaymentService;
   readonly gatewayPaymentLoop: GatewayPaymentLoop;
+  /** Package FX: the central exchange rate, and the worker's lane that keeps it fresh. */
+  readonly fx: FxService;
+  readonly fxRefreshLoop: FxRefreshLoop;
   /**
    * Telegram Stars' two payment updates (Package A), answered by the webhook before the
    * customer turn: pre-checkout, and the recording and settling of `successful_payment`.
@@ -2425,6 +2446,9 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   /** The append-only record of a receipt's credit-to-wallet disposition (D2). */
   const receiptCreditRepository = new DrizzleReceiptCreditRepository(database.db);
 
+  /** Filled once the FX service exists (package FX); see the `fx` dependency below. */
+  const fxRef: { current: FxService } = { current: null as unknown as FxService };
+
   const paymentService = new PaymentService({
     resellers: resellerService,
     undeliverable: undeliverableOrders,
@@ -2489,6 +2513,15 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     gatewayInvoices: gatewayInvoiceRepository,
     gatewayAdapters,
     gatewayCredentials: gatewayCredentialStore,
+    /*
+     * Package FX: the central rate, LATE-BOUND. The FX service is built further down,
+     * beside the HTTP client its sources dial through; nothing calls these before the
+     * container has finished, and the attempt that does reads a stored quote only.
+     */
+    fx: {
+      quoteFor: (scope, baseAsset, now, tx) => fxRef.current.quoteFor(scope, baseAsset, now, tx),
+      recordStaleUse: (scope, quote, tx) => fxRef.current.recordStaleUse(scope, quote, tx),
+    },
   });
 
   /*
@@ -2713,6 +2746,51 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     maxRetries: PANEL_HTTP_RETRIES,
   });
 
+  /*
+   * Package FX: the central exchange rate. Its two sources dial through the SAME client
+   * class and URL policy as every provider call, with their own tighter bounds; the
+   * base URLs are configuration only so the integration suite can stub them. The
+   * service is what the payment core was handed above through `fxRef`.
+   */
+  const fxHttp = new SafeHttpClient({
+    ...urlPolicy,
+    totalTimeoutMs: FX_SOURCE_TIMEOUT_MS,
+    maxResponseBytes: FX_SOURCE_MAX_RESPONSE_BYTES,
+    maxRetries: 0,
+  });
+  const fxService = new FxService({
+    repository: new DrizzleFxQuoteRepository(database.db),
+    sources: new Map<FxSource, FxSourceAdapter>([
+      ['NOBITEX', new NobitexFxSource(fxHttp.forBase(config.FX_NOBITEX_BASE_URL))],
+      ['WALLEX', new WallexFxSource(fxHttp.forBase(config.FX_WALLEX_BASE_URL))],
+    ]),
+    settings: settingsResolver,
+    features: featureFlagResolver,
+    gateways: paymentGatewayRepository,
+    conditions: new DrizzleOperationalConditionReader(database.db),
+    guard,
+    audit,
+    opsLog,
+    scopeActivity: tenants,
+    uow,
+    clock,
+    ids,
+    logger,
+  });
+  fxRef.current = fxService;
+  const fxRefreshLoop = new FxRefreshLoop(fxService, {
+    scope: () =>
+      installationTenantId === null
+        ? null
+        : { tenantId: installationTenantId, botInstanceId: null },
+    baseAsset: 'USDT',
+    intervalMs: FX_REFRESH_INTERVAL_MS,
+    // Both sources, each allowed its whole timeout, back to back.
+    passBoundMs: 2 * FX_SOURCE_TIMEOUT_MS,
+    now: () => clock.now().getTime(),
+    logger,
+  });
+
   /**
    * The cadence every probe writes, whoever asked for it.
    *
@@ -2920,6 +2998,10 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
      */
     [
       new SalesCurrencyChangeGuard(refundRepository),
+      // Package FX-STARS: the central pricing mode needs the feature on and a ratio set,
+      // and the ratio cannot be cleared while the mode depends on it.
+      new StarsPricingModeGuard(featureFlagResolver, settingsResolver),
+      new StarsPerUsdtGuard(settingsResolver),
       // The trial product must be a product of this tenant (WP6-A).
       new TrialProductGuard(productRepository),
       // One per reminder threshold. The five have to agree with one another, and no
@@ -4879,6 +4961,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     paymentExpiryLoop,
     gatewayPayments,
     gatewayPaymentLoop,
+    fx: fxService,
+    fxRefreshLoop,
     starsPayments,
     /** The sweep itself, so a test runs one pass instead of starting a timer. */
     paymentExpirySweep,

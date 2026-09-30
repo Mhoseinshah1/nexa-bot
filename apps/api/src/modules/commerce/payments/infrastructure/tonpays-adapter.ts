@@ -14,6 +14,7 @@ import {
   TONPAYS_CHECK_PATH,
   TONPAYS_CREATE_PATH,
   type Money,
+  type ResolvedConversion,
 } from '@nexa/contracts';
 import { assertOutsideTransaction } from '../../../../infrastructure/transaction-boundary.js';
 import type {
@@ -271,7 +272,9 @@ export class TonPaysAdapter implements ExternalGatewayAdapter {
     } = {},
   ) {}
 
-  providerAmountOf(amount: Money): bigint | null {
+  /** TonPays bills in Toman: the same unit, or no amount. It never converts by a rate. */
+  providerAmountOf(amount: Money, conversion: ResolvedConversion): bigint | null {
+    if (conversion.policy !== 'SAME_UNIT') return null;
     return tomanAmountOf(amount);
   }
 

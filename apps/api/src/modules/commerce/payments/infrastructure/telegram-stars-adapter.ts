@@ -5,8 +5,10 @@ import {
   TELEGRAM_STARS_CALL_BUDGET_PER_MINUTE,
   TELEGRAM_STARS_CURRENCY,
   TELEGRAM_STARS_PAYLOAD_HEX_LENGTH,
+  providerUnitsByCentralFx,
   telegramStarsFor,
   type Money,
+  type ResolvedConversion,
 } from '@nexa/contracts';
 import {
   telegramSendInvoice,
@@ -101,10 +103,30 @@ export class TelegramStarsAdapter implements ExternalGatewayAdapter {
     },
   ) {}
 
-  /** `ceil(payable / rate)`, in `bigint`. No rate, or no positive payable, is no amount. */
-  providerAmountOf(amount: Money, rateMinor: bigint | null): bigint | null {
-    if (rateMinor === null) return null;
-    return telegramStarsFor(amount.amountMinor, rateMinor);
+  /**
+   * The Stars for a payable, by the owner's rule `ceil(payable / fiat_per_star)`, in
+   * `bigint`, under whichever policy the core resolved (package FX-STARS):
+   *
+   * - `FIXED_RATE`: the route's operator-set Toman per Star (Package A, unchanged);
+   * - `CENTRAL_FX`: the central USDT quote combined with the configured Stars per USDT,
+   *   by the contract's exact integer arithmetic (`providerUnitsByCentralFx`).
+   *
+   * A Star is never billed in the sales currency, so `SAME_UNIT` is no amount. No
+   * positive payable is no amount either.
+   */
+  providerAmountOf(amount: Money, conversion: ResolvedConversion): bigint | null {
+    switch (conversion.policy) {
+      case 'FIXED_RATE':
+        return telegramStarsFor(amount.amountMinor, conversion.rateMinor);
+      case 'CENTRAL_FX':
+        return providerUnitsByCentralFx(
+          amount.amountMinor,
+          conversion.quote.rate,
+          conversion.unitRatio,
+        );
+      case 'SAME_UNIT':
+        return null;
+    }
   }
 
   /** 32 hex characters of randomness: opaque, and well inside Telegram's 1–128 bytes. */

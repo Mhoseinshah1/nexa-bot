@@ -133,6 +133,14 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
     summary: 'web.feature_custom_service_summary',
     disableEffect: null,
   },
+  // Off: every route priced by the central rate refuses NEW invoices at once (an issued
+  // invoice keeps its own snapshot), and the Stars route in its central mode stops selling
+  // until the feature is back on or the mode is switched back to the fixed rate.
+  central_fx: {
+    title: 'web.feature_central_fx_title',
+    summary: 'web.feature_central_fx_summary',
+    disableEffect: 'web.feature_central_fx_off_effect',
+  },
 };
 
 /**

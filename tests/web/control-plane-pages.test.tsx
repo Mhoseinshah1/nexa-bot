@@ -439,6 +439,9 @@ describe('the feature presentation catalogue', () => {
       .map((f) => f.key)
       .sort();
     expect(asking).toEqual([
+      // Package FX: off refuses every new central-rate invoice at once, and the Stars route
+      // in its central mode stops selling until the mode is switched back.
+      'central_fx',
       'ops_notifications',
       // WP-A9: a reminder the customer relies on stops silently, like the families below.
       'payment_pending_reminders',

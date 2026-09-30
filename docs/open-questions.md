@@ -2658,3 +2658,31 @@ revocation. Round P re-registers the menu with the new token after every replace
 `OQ-WP13-02` is the same question about the webhook.
 
 UNRESOLVED. A real bot's «بررسی وضعیت» after a revocation answers it per installation.
+
+## OQ-FX-01 — Telegram publishes no canonical Star↔USDT merchant rate
+
+Round P, package FX-STARS. Telegram's Bot API documents Stars as the currency `XTR` and
+gives no live merchant conversion feed for it; the Star's purchase price varies by platform
+and store, and the developer's payout terms are a contractual figure, not an API. So the
+central rate cannot derive Toman per Star on its own. The product decision (the brief's)
+is a configurable rational ratio, `stars.per_usdt`, set by the operator and snapshotted on
+every attempt beside the USDT quote; the Web Admin shows the figure per Star it produces.
+
+UNRESOLVED as a source. Not a defect: the ratio is the operator's own terms, exactly as the
+fixed rate was, and nothing here pretends Telegram supplies one.
+
+## OQ-FX-02 — Wallex's live response shape, and both sources' live behaviour
+
+Round P, package FX. `apidocs.nobitex.ir`, `api.nobitex.ir`, `api-docs.wallex.ir`,
+`developers.wallex.ir` and `api.wallex.ir` were all refused by the build session's egress
+policy, so no live response was recorded. Nobitex's shape is read off the official
+documentation source (`nobitex/docs-api`, `_market_data.md`, commit d5330f0, 2026-04-22),
+which is authoritative. Wallex's shape is read off two open-source clients that mirror its
+documentation (`darhelm/go-wallex` 2025-11-23, `amiwrpremium/wallex` 2022-11-22); the
+symbol `USDTTMN`, the `result.bid[].price` field and its Toman unit are what they agree on,
+and what `docs/fx-audit.md` §6 lists as the acceptance still owed against the live host.
+
+UNRESOLVED until one live read of each source has been recorded from a machine that can
+reach them (the staging server can: `POST /api/admin/v1/fx/refresh`, then read the
+operational log and the FX section). A wrong shape fails closed — the source reads
+`UNAVAILABLE`, the other prices the pair, and no figure is invented.

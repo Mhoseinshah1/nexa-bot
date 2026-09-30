@@ -1,6 +1,42 @@
 import { z } from 'zod';
-import { CURRENCY_CODES } from './money.js';
+import { CURRENCY_CODES, salesCurrencyCodeSchema } from './money.js';
 import { TELEGRAM_STARS_CURRENCY } from './telegram-stars.js';
+import {
+  FX_USABLE_QUOTE_STATES,
+  fxBaseAssetSchema,
+  fxSourceSchema,
+  gatewayConversionPolicySchema,
+} from './fx.js';
+
+/**
+ * The central-rate snapshot on one attempt, for the Web Admin's payment detail (package
+ * FX). Every figure is a decimal STRING: the rate's mantissa and scale as stored, the
+ * unit ratio the same way, the effective sales-currency figure per provider unit as an
+ * exact fraction, and a rendered decimal of it for the screen.
+ */
+export const fxSnapshotViewSchema = z.object({
+  quoteId: z.string(),
+  source: fxSourceSchema,
+  baseAsset: fxBaseAssetSchema,
+  quoteCurrency: salesCurrencyCodeSchema,
+  rateMantissa: z.string(),
+  rateScale: z.number().int(),
+  /** The rate as decimal text, quote-currency minor units per base unit. */
+  rate: z.string(),
+  sourceAt: z.iso.datetime().nullable(),
+  fetchedAt: z.iso.datetime(),
+  quoteState: z.enum(FX_USABLE_QUOTE_STATES),
+  policyVersion: z.number().int(),
+  unitRatioMantissa: z.string(),
+  unitRatioScale: z.number().int(),
+  /** Provider units per base unit, as decimal text. */
+  unitRatio: z.string(),
+  effectiveRateNumerator: z.string(),
+  effectiveRateDenominator: z.string(),
+  /** Sales-currency minor units per ONE provider unit, rendered to four places. */
+  effectiveRate: z.string(),
+});
+export type FxSnapshotView = z.infer<typeof fxSnapshotViewSchema>;
 
 /**
  * The units a provider's invoice may be denominated in: every sales currency, and the ones
@@ -87,7 +123,7 @@ export const GATEWAY_ERROR_CODE_MAX_LENGTH = 64;
  * amount. The links are omitted — a payment link is a capability, and an operator
  * diagnosing a payment needs the ids and the states, not a way to pay it.
  */
-export const gatewayInvoiceViewSchema = z.object({
+const gatewayInvoiceViewShape = z.object({
   provider: z.string(),
   providerOrderId: z.string(),
   providerInvoiceId: z.string().nullable(),
@@ -110,6 +146,19 @@ export const gatewayInvoiceViewSchema = z.object({
    * per provider unit. Null for a route that bills in the sales currency.
    */
   conversionRateMinor: z.string().nullable(),
+  /**
+   * How `sentAmount` was derived from the payable (package FX). ABSENT in a response
+   * from the previous release, which had only the fixed rate: the transform below infers
+   * it from the legacy rate, so a Stars invoice served by that release during a rolling
+   * deploy is never shown as billed in the sales currency (Codex review of #122).
+   */
+  conversionPolicy: gatewayConversionPolicySchema.optional(),
+  /**
+   * The central-rate snapshot of a `CENTRAL_FX` attempt: the quote, its provenance, the
+   * unit ratio and the effective figure per provider unit, exactly as the attempt was
+   * priced. Never recomputed from a newer quote. Null for any other policy.
+   */
+  fx: fxSnapshotViewSchema.nullable().default(null),
   /** The provider's charge id, recorded from a pushed payment (Stars). Null until then. */
   providerChargeId: z.string().nullable(),
   requestAmount: z.string().nullable(),
@@ -119,4 +168,15 @@ export const gatewayInvoiceViewSchema = z.object({
   lateCompletionObservedAt: z.iso.datetime().nullable(),
   createdAt: z.iso.datetime(),
 });
+/**
+ * The view with its policy always present: what the previous release sent without one is
+ * a fixed-rate attempt exactly when it carries a rate, and a same-unit one otherwise —
+ * the same inference migration 0150 backfilled into the rows.
+ */
+export const gatewayInvoiceViewSchema = gatewayInvoiceViewShape.transform((view) => ({
+  ...view,
+  conversionPolicy:
+    view.conversionPolicy ??
+    (view.conversionRateMinor === null ? ('SAME_UNIT' as const) : ('FIXED_RATE' as const)),
+}));
 export type GatewayInvoiceView = z.infer<typeof gatewayInvoiceViewSchema>;

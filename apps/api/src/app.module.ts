@@ -30,6 +30,7 @@ import { OpsGroupController } from './surfaces/web/ops-group.controller.js';
 // Premium UI: «ظاهر ربات».
 import { AppearanceController } from './surfaces/web/appearance.controller.js';
 import { PaymentGatewaysController } from './surfaces/web/payment-gateways.controller.js';
+import { FxController } from './surfaces/web/fx.controller.js';
 import { SupportFaqController } from './surfaces/web/support-faq.controller.js';
 import { ClientAppController } from './surfaces/web/client-app.controller.js';
 import { TicketsController } from './surfaces/web/tickets.controller.js';
@@ -105,6 +106,8 @@ export class AppModule implements NestModule {
         OpsGroupController as never,
         AppearanceController as never,
         PaymentGatewaysController as never,
+        // Package FX: the central exchange rate's status and manual refresh.
+        FxController as never,
         SupportFaqController as never,
         ClientAppController as never,
         // WP-A7: support tickets.
