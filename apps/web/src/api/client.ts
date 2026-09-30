@@ -343,6 +343,11 @@ import {
   PAYMENT_GATEWAY_ROUTES,
   paymentGatewayListResponseSchema,
   paymentGatewayResponseSchema,
+  FX_ROUTES,
+  fxRefreshResponseSchema,
+  fxStatusResponseSchema,
+  type FxRefreshResponse,
+  type FxStatusResponse,
   supportFaqListSchema,
   supportFaqSchema,
   SUPPORT_FAQ_ROUTES,
@@ -1709,6 +1714,24 @@ export function setPaymentGatewayCredential(input: {
 }): Promise<PaymentGatewayResponse> {
   const { provider, ...body } = input;
   return post(PAYMENT_GATEWAY_ROUTES.credential(provider), body, paymentGatewayResponseSchema);
+}
+
+/**
+ * The central exchange rate's status (package FX): the feature's state, the sources,
+ * the quote in force and its freshness, and the Stars route's mode and figures. Every
+ * figure is a decimal string; this client computes nothing with it.
+ */
+export function fetchFxStatus(): Promise<FxStatusResponse> {
+  return authedGet(FX_ROUTES.status, fxStatusResponseSchema);
+}
+
+/**
+ * An operator's manual refresh: dials the primary and then the fallback NOW and answers
+ * with what it did and the status afterwards. Not a keyed command — like a panel's
+ * connection test, its answer is the sources' and a replay could not repeat it.
+ */
+export function refreshFx(): Promise<FxRefreshResponse> {
+  return post(FX_ROUTES.refresh, {}, fxRefreshResponseSchema);
 }
 
 /**

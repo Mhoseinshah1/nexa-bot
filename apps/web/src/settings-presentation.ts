@@ -1,9 +1,12 @@
 import {
   isSettingKey,
   settingIntegerRange,
+  type FxFallbackSource,
+  type FxSource,
   type OperationalSeverity,
   type ReferralCommissionScope,
   type SettingKey,
+  type StarsPricingMode,
 } from '@nexa/contracts';
 import type { WebKey } from './i18n/web.fa';
 
@@ -38,6 +41,7 @@ export const SETTING_GROUPS = [
   'trial',
   'referral',
   'support',
+  'fx',
   'ops',
 ] as const;
 export type SettingGroup = (typeof SETTING_GROUPS)[number];
@@ -50,6 +54,7 @@ export const SETTING_GROUP_TITLES: Readonly<Record<SettingGroup, WebKey>> = {
   trial: 'web.settings_group_trial',
   referral: 'web.settings_group_referral',
   support: 'web.settings_group_support',
+  fx: 'web.settings_group_fx',
   ops: 'web.settings_group_ops',
 };
 
@@ -126,6 +131,20 @@ const COMMISSION_SCOPE_OPTIONS: Readonly<Record<ReferralCommissionScope, WebKey>
 function options(labels: Readonly<Record<string, WebKey>>): readonly SelectOption[] {
   return Object.entries(labels).map(([value, label]) => ({ value, label }));
 }
+
+/** Package FX: the two sources, and "none" for the fallback only. */
+const FX_SOURCE_OPTIONS: Readonly<Record<FxSource, WebKey>> = {
+  NOBITEX: 'web.fx_source_nobitex',
+  WALLEX: 'web.fx_source_wallex',
+};
+const FX_FALLBACK_OPTIONS: Readonly<Record<FxFallbackSource, WebKey>> = {
+  ...FX_SOURCE_OPTIONS,
+  NONE: 'web.fx_source_none',
+};
+const STARS_PRICING_MODE_OPTIONS: Readonly<Record<StarsPricingMode, WebKey>> = {
+  FIXED_RATE: 'web.fx_stars_mode_fixed',
+  CENTRAL_FX_RATIO: 'web.fx_stars_mode_central',
+};
 
 export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentation>> = {
   /*
@@ -360,6 +379,48 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
     description: 'web.setting_referral_signup_gift_referred_percent_desc',
     group: 'referral',
     control: { kind: 'integer', unit: 'web.unit_percent' },
+  },
+  /*
+   * Package FX: the central exchange rate and the Stars route's pricing mode. The live
+   * figures (the rate in force, its age, the sources) are on the payment routes page;
+   * this group holds only what an operator SETS.
+   */
+  'fx.primary_source': {
+    title: 'web.setting_fx_primary_source',
+    description: 'web.setting_fx_primary_source_desc',
+    group: 'fx',
+    control: { kind: 'select', options: options(FX_SOURCE_OPTIONS) },
+  },
+  'fx.fallback_source': {
+    title: 'web.setting_fx_fallback_source',
+    description: 'web.setting_fx_fallback_source_desc',
+    group: 'fx',
+    control: { kind: 'select', options: options(FX_FALLBACK_OPTIONS) },
+  },
+  'fx.fresh_ttl_seconds': {
+    title: 'web.setting_fx_fresh_ttl_seconds',
+    description: 'web.setting_fx_fresh_ttl_seconds_desc',
+    group: 'fx',
+    control: { kind: 'integer', unit: 'web.unit_seconds' },
+  },
+  'fx.max_stale_seconds': {
+    title: 'web.setting_fx_max_stale_seconds',
+    description: 'web.setting_fx_max_stale_seconds_desc',
+    group: 'fx',
+    control: { kind: 'integer', unit: 'web.unit_seconds' },
+  },
+  'stars.pricing_mode': {
+    title: 'web.setting_stars_pricing_mode',
+    description: 'web.setting_stars_pricing_mode_desc',
+    group: 'fx',
+    control: { kind: 'select', options: options(STARS_PRICING_MODE_OPTIONS) },
+  },
+  'stars.per_usdt': {
+    title: 'web.setting_stars_per_usdt',
+    description: 'web.setting_stars_per_usdt_desc',
+    group: 'fx',
+    // A decimal typed left to right; the registry's own pattern validates it.
+    control: { kind: 'text' },
   },
 };
 
