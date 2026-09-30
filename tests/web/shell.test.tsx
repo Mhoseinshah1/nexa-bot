@@ -141,6 +141,21 @@ describe('the sidebar', () => {
     expect(without.container.querySelector('.identity-env')).toBeNull();
   });
 
+  it('titles the identity card with the product name, never the host', async () => {
+    stubApi([session([]), INFO]);
+    const { container } = renderPage(<App />);
+    const card = await screen.findByRole('group', { name: t('web.identity_label') });
+    await waitFor(() => expect(container.querySelector('.identity-env')).not.toBeNull());
+    // The title is the catalogue's product name — no contract carries a store name.
+    expect(card.querySelector('.identity-name')?.textContent).toBe(t('web.title'));
+    // The line beneath is the server's environment and service, as a technical value.
+    const env = card.querySelector('.identity-env .ltr');
+    expect(env?.textContent).toBe('staging · nexa-bot');
+    // And the address the operator typed is not presented as an identity at all.
+    expect(card.textContent).not.toContain(window.location.host);
+    expect(card.textContent).not.toContain(window.location.hostname);
+  });
+
   it('draws no counter nobody supplied', async () => {
     stubApi([session(['users.view'])]);
     const { container } = renderPage(<App />);

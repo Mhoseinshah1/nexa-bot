@@ -176,9 +176,10 @@ Shell behaviour:
   desk width; below 980px it is a rail that opens as a drawer over the page
   (scrim, closes on navigation); below 640px the rail hides and the topbar's
   menu button opens the drawer.
-- **Identity card** (top): the host the operator opened and the environment +
-  service name from `GET /health/info` (session-only, fetched once). There is
-  no store name in any contract, so none is shown; there is no switcher.
+- **Identity card** (top): no contract carries a store or tenant display
+  name, so the title is the product name (`web.title`) and the line beneath
+  is the environment and service name from `GET /health/info` (session-only,
+  fetched once), LTR with Latin digits. Never the host. There is no switcher.
 - **Footer**: `v<version> · <commit7>` from the same `/health/info`, the theme
   button, the collapse toggle. On failure nothing is drawn — never a guess.
 - **Counters**: `useNavCounters()` (`src/nav-counters.ts`) returns none today;

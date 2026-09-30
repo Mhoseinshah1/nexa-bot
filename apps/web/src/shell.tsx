@@ -83,17 +83,17 @@ export function Sidebar({
       </div>
 
       {/*
-        The installation this console is connected to: the host the operator
-        opened, and the environment and version the server reports. Identity
-        only — the session carries one tenant and no way to switch, so nothing
-        here is pressable and nothing pretends to be a picker.
+        The installation this console is connected to. No contract carries a
+        store or tenant display name, so the title is the product's own name
+        and the line beneath it is the environment and service the server
+        reports (`GET /health/info`) — never the host, which is an address and
+        not a name anybody recognises. Identity only: the session carries one
+        tenant and no way to switch, so nothing here is pressable.
       */}
       <div className="identity" aria-label={t('web.identity_label')} role="group">
         <i className={`dot ${info.data === undefined ? '' : 'ok'}`} aria-hidden="true" />
         <div className="identity-text">
-          <div className="identity-name truncate">
-            <span className="ltr">{window.location.host}</span>
-          </div>
+          <div className="identity-name truncate">{t('web.title')}</div>
           {info.data !== undefined && (
             <div className="identity-env truncate">
               <span className="ltr">{`${info.data.environment} · ${info.data.name}`}</span>
