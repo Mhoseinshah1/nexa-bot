@@ -1,0 +1,58 @@
+/*
+ * Page family: OPS-A — /panels (+:id and its sub-views, new/edit), /providers,
+ * /bots, /bot-buttons, /appearance, /payment-gateways (+ FX), /payment-accounts,
+ * /client-apps.
+ *
+ * Owned by the OPS-A agent. Page-scoped classes only.
+ */
+
+/* HF-A10: a client app's picture — the stored copy, the picked file, the bot preview. */
+.client-app-image {
+  display: block;
+  max-width: min(100%, 240px);
+  max-height: 240px;
+  width: auto;
+  height: auto;
+  margin-block-end: 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  pointer-events: none;
+}
+
+/* WP-A10: the bot's message as a customer will read it — plain text, line breaks kept. */
+.bot-preview {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg-1);
+}
+
+/* R1: «دکمه‌های ربات» — the main-menu keyboard as the customer will see it. */
+.menu-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 420px;
+}
+.menu-preview-row {
+  display: flex;
+  gap: 6px;
+}
+.menu-preview-key {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 8px;
+  text-align: center;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg-1);
+}
+
+/* WP13: the causes a bot's live check reports. */
+.bot-causes {
+  margin: 0;
+  padding-inline-start: 1.25rem;
+}

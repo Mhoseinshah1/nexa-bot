@@ -1,0 +1,182 @@
+/*
+ * Page family: OPS-B — /settings, /features, /reminders, /content, /support,
+ * /tickets (+:id), /ops-group, /alerts, /notifications, /system (+ diagnostics,
+ * administrators), /recovery.
+ *
+ * Owned by the OPS-B agent. Page-scoped classes only.
+ */
+
+/*
+ * WP-A1: the settings page, one section per group of settings. The heading names the
+ * group; each setting inside is still its own card, saved by its own button.
+ */
+.settings-group {
+  display: grid;
+  gap: 12px;
+}
+.settings-group + .settings-group {
+  margin-top: 24px;
+}
+.settings-group-head {
+  font-size: 14px;
+  color: var(--fg-2);
+}
+.settings-technical {
+  margin-top: 12px;
+}
+/* Package B: a channel's handle, id, join link and flag — wraps on a narrow screen. */
+.channel-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.channel-row .input,
+.channel-row input {
+  min-width: 0;
+  flex: 1 1 160px;
+}
+
+/* --- Features (WP-A2) -------------------------------------------------------- */
+
+.feature-settings {
+  margin-top: 12px;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+.feature-settings h3 {
+  margin: 0 0 6px;
+  color: var(--fg-2);
+  font-weight: 600;
+}
+.feature-settings dl {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: var(--fs-ui);
+}
+.feature-settings dl > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+}
+.feature-settings dt {
+  color: var(--fg-2);
+}
+.feature-settings dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* --- WP-A7 tickets ------------------------------------------------------------- */
+
+/*
+ * One ticket's conversation, oldest first. Support's replies sit on the accent side so an
+ * operator reading back can tell at a glance who said what; a system fact is one quiet line.
+ */
+.ticket-thread {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 12px;
+}
+.ticket-message {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  padding: 12px 14px;
+  display: grid;
+  gap: 8px;
+}
+.ticket-message.support {
+  border-color: var(--accent-soft);
+  background: var(--accent-soft);
+}
+.ticket-message.system {
+  border-style: dashed;
+  padding: 6px 14px;
+}
+.ticket-message-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.ticket-body {
+  margin: 0;
+  /* The customer's and support's own line breaks are part of what they wrote. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* --- Bot texts (the template screen, WP-A3) -------------------------------------- */
+
+/*
+ * The editor and its helpers stacked with room between them. The card used to be
+ * a bare form: a textarea a few words wide with its label beside it.
+ */
+.template-card form > * + * {
+  margin-top: 10px;
+}
+.template-card label {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 12.25px;
+  font-weight: 500;
+  color: var(--fg-2);
+}
+.template-card textarea.input,
+.template-card textarea {
+  display: block;
+  width: 100%;
+  min-height: 120px;
+}
+.template-card input.input {
+  width: 100%;
+  max-width: 460px;
+}
+.template-card table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+.template-card th,
+.template-card td {
+  padding: 6px 8px;
+  text-align: start;
+  border-bottom: 1px solid var(--line);
+}
+/*
+ * One column that may shrink to the viewport. A bare `.grid` sizes its implicit track to
+ * its widest child, which on a phone made the whole screen scroll sideways.
+ */
+.template-stack {
+  grid-template-columns: minmax(0, 1fr);
+}
+.template-card code {
+  overflow-wrap: anywhere;
+}
+/* Grows to fill the toolbar, and shrinks below it on a phone instead of widening the page. */
+.template-search {
+  flex: 1 1 260px;
+  min-width: 0;
+}
+/* Four columns and long tokens: the table scrolls inside the card, the page does not. */
+.template-table {
+  overflow-x: auto;
+}
+/* A token chip wraps as a whole; many of them wrap as a list. */
+.template-tokens {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* WP-A4: the report group's binding code, shown to be pasted into Telegram. */
+.ops-group-code {
+  font-family: var(--font-mono);
+  direction: ltr;
+  unicode-bidi: isolate;
+}

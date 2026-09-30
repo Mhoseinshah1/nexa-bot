@@ -1,0 +1,36 @@
+/*
+ * Page family: COMMERCE-A — /users (+:id), /trials, /services (+:id,
+ * refund requests), /orders (+:id), /payments (+:id, timeline), /compensations.
+ *
+ * Owned by the COMMERCE-A agent. Page-scoped classes only; the shared kit in
+ * `kit.css` is not restyled here.
+ */
+
+/*
+ * A customer's receipt, as an operator reads it.
+ *
+ * `max-height` rather than only `max-width`: a banking-app screenshot is tall
+ * and narrow, and one unconstrained would push the confirm form off the
+ * screen — the form being the reason the operator opened the receipt at all.
+ */
+.receipt-list {
+  display: grid;
+  gap: 14px;
+}
+.receipt {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  padding: 14px;
+  display: grid;
+  gap: 10px;
+}
+.receipt-image {
+  max-width: 100%;
+  max-height: 60vh;
+  width: auto;
+  height: auto;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  /* The image is untrusted content from a customer; nothing about it is a control. */
+  pointer-events: none;
+}
