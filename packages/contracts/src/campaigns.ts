@@ -464,8 +464,14 @@ export type CampaignScheduleRequest = z.input<typeof campaignScheduleRequestSche
 export const campaignActionViewSchema = z.object({
   kind: campaignActionKindSchema,
   state: z.enum(CAMPAIGN_ACTION_STATES),
-  /** The action's frozen terms, as written. */
+  /**
+   * The action's terms. For a discount or a cashback action that has made its rule, these
+   * are the LIVE rule's terms (the rule may have been edited on the discounts page — one
+   * rule, one truth); before that, and for every other kind, the terms as confirmed.
+   */
   terms: z.unknown(),
+  /** The linked rule's status now (`ACTIVE` / `INACTIVE`); null when there is no rule. */
+  ruleStatus: z.string().nullable(),
   discountId: z.string().nullable(),
   cashbackRuleId: z.string().nullable(),
   /** The shared engine's own record: a broadcast id, or a bulk operation id. */
@@ -532,9 +538,18 @@ export const campaignResultsResponseSchema = z.object({
   cashback: z
     .object({
       byState: z.array(campaignTallySchema),
-      earned: moneySchema.nullable(),
-      reversedRecovered: moneySchema.nullable(),
-      reversedUnrecovered: moneySchema.nullable(),
+      /**
+       * Per currency, never summed across currencies: what was credited, and what refunds
+       * took back or could not recover.
+       */
+      totals: z.array(
+        z.object({
+          currency: z.enum(CURRENCY_CODES),
+          earned: moneySchema,
+          reversedRecovered: moneySchema,
+          reversedUnrecovered: moneySchema,
+        }),
+      ),
     })
     .nullable(),
   /** The shared engines' own counts, read through. */
