@@ -83,6 +83,12 @@ export interface SelectOption {
 export type SettingControl =
   | { readonly kind: 'integer'; readonly unit?: WebKey; readonly optional?: true }
   | { readonly kind: 'text' }
+  /**
+   * A decimal typed left to right. Persian and Arabic-Indic digits and the Arabic decimal
+   * separator (`٫`) are normalised as they are typed, so the figure the description shows
+   * as an example is one the registry's Latin-only pattern accepts (Codex review of #122).
+   */
+  | { readonly kind: 'decimal' }
   | { readonly kind: 'select'; readonly options: readonly SelectOption[] }
   | { readonly kind: 'currency' }
   | { readonly kind: 'money' }
@@ -419,8 +425,8 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
     title: 'web.setting_stars_per_usdt',
     description: 'web.setting_stars_per_usdt_desc',
     group: 'fx',
-    // A decimal typed left to right; the registry's own pattern validates it.
-    control: { kind: 'text' },
+    // A decimal typed left to right, digits normalised; the registry's pattern validates it.
+    control: { kind: 'decimal' },
   },
 };
 
