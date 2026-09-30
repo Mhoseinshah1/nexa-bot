@@ -295,6 +295,11 @@ export interface GatewayInvoiceRepository {
       readonly buyerChatIdSent: boolean;
       readonly callbackUrlSent: boolean;
       /**
+       * F3: a note kept in `creation_error_code` on a created invoice — `nexa.no_payment_link`
+       * when the provider returned no link a customer can open. Null otherwise.
+       */
+      readonly note?: string | null;
+      /**
        * Null for a `RECORDED_PAYMENT` provider, which is never asked: the row keeps
        * whatever schedule it has, so a charge recorded before this commits stays due.
        */
@@ -432,6 +437,12 @@ export interface GatewayInvoiceRepository {
        */
       readonly botInstanceId: string | null;
       readonly now: Date;
+      /**
+       * F3: the provider's invoice is a LINK, so a created invoice without one is not open —
+       * the customer never had a way to pay it, and handing it back would hold them on it
+       * until its deadline. False for a provider whose invoice is a message (Stars).
+       */
+      readonly requireLink: boolean;
     },
     tx: unknown,
   ): Promise<GatewayInvoiceRecord | null>;

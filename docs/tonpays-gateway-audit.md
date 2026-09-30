@@ -370,3 +370,82 @@ the provider's `final_amount` from `gateway_invoices` for display only.
 - `tests/integration/tonpays-http.test.ts` — the Web Admin key route, the enable gate and
   the webhook route's answers.
 - `tests/web/payment-gateways.test.tsx` — the key's state and the write-only form.
+
+## 8. Round N (F3): "the gateway's answer was not received" on staging
+
+The owner's v0.3.6 staging test: for both a purchase and a wallet top-up, choosing the
+gateway showed the loading screen, which then became `bot.payment.gateway_unknown`
+(«پاسخ درگاه برای ساخت این فاکتور دریافت نشد و لینکی برای آن در دسترس نیست…»).
+
+### 8.1 What the code path was proven to do
+
+Every earlier TonPays test built its OWN lane over an injected `fetch`. Round N adds two
+cases that drive the container's own `gatewayPaymentLoop` — the worker's loop, its
+`GatewayPaymentService`, its `TonPaysAdapter` on the real global `fetch`, and its
+`WizardInvoiceScreens` — replacing nothing but `https://tonpays.online` itself. With a
+documented answer, both the purchase and the top-up wizard message are edited from the
+loading screen into the ready invoice (amount, deadline, pay link, «🔄 بررسی وضعیت پرداخت»,
+«🏠 بازگشت به منوی اصلی») with no tap. Those two cases pass on `main` unchanged: the lane
+runs, the create is dispatched, the URL is persisted where the screen reads it, and the
+worker edits the message after the commit.
+
+So the loading → `gateway_unknown` sequence is reached only through the create's own
+outcome. `gatewayAttemptScreen` draws `gateway_unknown` for exactly three states:
+
+1. `CREATE_UNKNOWN` — the adapter classified the answer as possibly-created: a timeout
+   (15 s), a network error, a 5xx, a body that is not JSON, a 2xx that failed the response
+   schema, an answer for another order id, a 4xx without a readable `detail.code`, or
+   `DUPLICATE_ORDER_ID`; or a claim found a stamped send (a worker died mid-call);
+2. `CREATED` with no https link;
+3. `CREATE_FAILED` while the payment is still `PENDING` (the failure's own write did not
+   land).
+
+This environment cannot reach `tonpays.online` or `doc.tonpays.online` (egress is refused),
+so which of these the staging create took cannot be observed from here, and is not guessed.
+
+### 8.2 What was wrong in the code, and is fixed
+
+- **A created invoice was discarded for the shape of its metadata.** The create schema
+  required the amounts to be non-negative JSON integers or absent, the status a non-empty
+  string or absent, the ids strings, and a link at most 2,048 characters — none of which
+  the documentation states. A `null` `final_amount` (plausible before payment), a decimal
+  amount, a `null` status, a numeric `invoice_id` or one long link turned a created,
+  payable invoice into `http.201.unexpected_body` → `CREATE_UNKNOWN` → "not received".
+  CLAUDE.md already calls the amounts metadata; they are now recorded as absent when
+  undocumented, ids sent as JSON integers are normalised to their decimal string, and a
+  link that cannot be used costs only itself. What decides a create is unchanged: a 2xx,
+  an invoice id, and the echo of OUR order id. The inquiry's `status` stays strict — it
+  decides — and `paid` is still judged only by `tonpaysVerdict`.
+- **The operator could not see why.** `creation_error_code`, the audit row and the
+  `payments.gateway_create_unknown` condition carried `http.201.unexpected_body` or
+  `http.403.unreadable` and nothing more. They now say which field failed
+  (`…unexpected_body:invoice_id`), what an unreadable answer looked like
+  (`…unreadable.html|text|empty|too_large|stream` — an HTML page is a proxy, firewall or
+  maintenance page in front of the API), which field a framework validation answer names
+  (`http.422.validation:<field>`), the system code of a transport failure
+  (`http.network.ENOTFOUND`, a TLS code, …) and a refused redirect (`http.redirect`). The
+  condition's context and the worker's log line carry the call's `elapsedMs`, so a timeout
+  is told from a slow success. Never a body, a header, a URL, an error message or the key.
+- **Two ends said something untrue, and one of them held the customer.** A `CREATED`
+  invoice with no usable link was told "the answer was not received" although it was, and
+  — being PENDING and CREATED — it was the "open attempt", so the screen's own retry handed
+  the same linkless attempt back until its 70-minute deadline. It is now
+  `bot.payment.gateway_no_link`, `creation_error_code = nexa.no_payment_link` marks it for
+  the operator, and `findOpenAttempt` no longer hands back a created attempt without a
+  link for a provider whose invoice is a link, so the retry opens a new attempt with a new
+  order id. A refusal whose payment is still PENDING is `gateway_unavailable`, not "lost".
+
+The three rules are untouched: only the inquiry approves; the deadline is checked under the
+payment's lock; a create whose answer was lost is never retried or re-keyed (a new attempt
+always has a new order id, which is rule 5 of §3).
+
+### 8.3 What the next staging run should read
+
+On the payment's detail page in the Web Admin, the gateway card's creation state and code;
+or the operational log's `payments.gateway_create_unknown` entry (`reason`, `elapsedMs`); or
+the worker's `gateway invoice create produced no payable invoice` line. The code names the
+cause: `http.timeout` with ~15000 ms (the provider is slower than the timeout),
+`http.network.<CODE>` (DNS, firewall, TLS), `http.<status>.unreadable.html` (something in
+front of the API), `…unexpected_body:<field>` or `…validation:<field>` (the real answer
+differs from the documentation in that field). That reading is still owed against the real
+provider (`OQ-WP10-01`).

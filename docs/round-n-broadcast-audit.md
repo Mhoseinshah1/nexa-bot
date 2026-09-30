@@ -227,12 +227,12 @@ Mirza's absence of a count, a total and a confirmation is recorded in the resear
 
 ## 7. Migrations
 
-- `0144_round_n_broadcast`:
-  - the seven tables;
+- `0146_round_n_broadcast` (renumbered at merge after round N's 0144 and 0145; the branch's
+  own 0144 and 0145 were folded into it):
+  - the seven tables, with `bulk_operations.not_before`;
   - `trial_grants_customer_idx`;
   - the widened notification-kind CHECK;
   - the role backfill.
-- `0145_round_n_bulk_not_before`: one nullable column, added after 0144 was pushed so that stacked branches could apply it in order. It can be folded into 0144 at renumbering.
 - Bulk item ids are minted by the database (`gen_random_uuid()`). This is the one deliberate exception to application-generated UUIDv7: an `INSERT … SELECT` over tens of thousands of rows must not ship every id through Node, and nothing needs an item id before its row exists.
 
 ## 8. Regressions (brief, "Required validation / Broadcast")

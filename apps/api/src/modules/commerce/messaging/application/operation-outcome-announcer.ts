@@ -77,6 +77,27 @@ export function successAnsweredElsewhere(subject: {
 }
 
 /**
+ * Round N (F4): the customer-requested FAILURES answered on the service card they were
+ * asked from (`OperationCardEditor`, `CARD_FAILURE_ANSWERED_OPERATIONS` — the same three,
+ * pinned equal by a test). The tap turned that card into «working», so the card itself is
+ * redrawn as the service still is with `bot.service.notice_action_failed`; a second,
+ * separate «…انجام نشد» message would be the result-later spam the owner asked to remove.
+ * One asked with no card recorded is still told by message, exactly as before.
+ */
+export const CARD_ANSWERED_FAILURE_TYPES: readonly OperationType[] = [
+  'SUSPEND',
+  'RESUME',
+  'ROTATE_SUBSCRIPTION',
+];
+
+export function failureAnsweredOnCard(subject: {
+  readonly type: OperationType;
+  readonly answeredOnCard?: boolean;
+}): boolean {
+  return subject.answeredOnCard === true && CARD_ANSWERED_FAILURE_TYPES.includes(subject.type);
+}
+
+/**
  * The operations whose ABANDONMENT is a delay the customer is waiting on.
  *
  * Neither is customer-initiated, which is why they are a separate list rather than
@@ -367,6 +388,11 @@ export class OperationOutcomeAnnouncer {
 
       /* R3: a success another channel answers is stamped here and told nothing twice. */
       if (outcome === 'SUCCEEDED' && successAnsweredElsewhere(subject)) {
+        await stamp();
+        return;
+      }
+      /* Round N (F4): so is a failure the service card answers. */
+      if (outcome !== 'SUCCEEDED' && failureAnsweredOnCard(subject)) {
         await stamp();
         return;
       }

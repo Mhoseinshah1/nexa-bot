@@ -54,6 +54,7 @@ function tier(overrides: Record<string, unknown> = {}): Record<string, unknown> 
     creditLimit: { amount: '500000', currency: 'IRT' },
     grants: [],
     resellerCount: 2,
+    monthlyMinimum: null,
     createdAt: '2026-09-01T08:00:00.000Z',
     updatedAt: '2026-09-01T08:00:00.000Z',
     ...overrides,

@@ -103,6 +103,8 @@ export const TEMPLATE_GROUPS_FA: readonly TemplateGroupDefinition[] = [
       'bot.wallet.low_balance',
       'bot.payment.pending_reminder',
       'bot.order.pending_reminder',
+      // Round N, package D: the reseller monthly minimum.
+      'bot.reseller.minimum_',
     ],
   },
   { id: 'transfer', label: 'انتقال سرویس', prefixes: ['bot.service.transfer_'] },
@@ -236,6 +238,7 @@ export const PLACEHOLDER_TYPE_LABELS_FA: Readonly<Record<PlaceholderType, string
  * here and the specific one is in `PLACEHOLDER_LABEL_OVERRIDES_FA` below.
  */
 export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
+  achievedSales: 'فروش نماینده در این ماه',
   addedTrafficBytes: 'حجم افزوده‌شده',
   adminId: 'شناسهٔ مدیر تصمیم‌گیرنده',
   amount: 'مبلغ',
@@ -264,6 +267,7 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   cooldownHours: 'فاصلهٔ مجاز (ساعت)',
   correlationId: 'شناسهٔ پیگیری',
   count: 'تعداد',
+  creditedAmount: 'مبلغ واریزشده به کیف پول',
   current: 'مقدار فعلی',
   currentLimit: 'تعداد کاربر / دستگاه مجاز فعلی',
   currentLocation: 'لوکیشن فعلی سرویس',
@@ -324,6 +328,7 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   name: 'نام',
   noExpiry: 'خط بدون تاریخ انقضا',
   note: 'یادداشت',
+  notice: 'اطلاعیهٔ کارت سرویس',
   number: 'شماره',
   occurrences: 'تعداد تکرار',
   olderLine: 'خط پیام‌های قدیمی‌تر',
@@ -374,6 +379,7 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   registeredAt: 'زمان عضویت',
   remaining: 'مبلغ قابل بازگشت باقی‌مانده',
   remainingPercent: 'درصد حجم باقی‌مانده',
+  remainingSales: 'مبلغ باقی‌مانده تا حداقل فروش',
   remainingDays: 'روزهای باقی‌مانده',
   remainingTraffic: 'حجم باقی‌مانده',
   requestId: 'شناسهٔ درخواست',
@@ -434,7 +440,9 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   visibility: 'نمایش به مشتری',
   volumeBytes: 'حجم',
   volumePrice: 'قیمت حجم',
+  walletAfter: 'موجودی کیف پول پس از واریز',
   walletBalance: 'موجودی کیف پول',
+  walletBefore: 'موجودی کیف پول پیش از واریز',
 };
 
 /**
@@ -454,6 +462,12 @@ export const PLACEHOLDER_LABEL_OVERRIDES_FA: Partial<
   'bot.order.summary_cashback': { username: 'نام کاربری سرویس' },
   'bot.order.summary_discounted_cashback': { username: 'نام کاربری سرویس' },
   'bot.admin.receipt': { name: 'نام مشتری', order: 'محصول سفارش' },
+  'bot.admin.review_final': {
+    name: 'نام مشتری',
+    order: 'محصول سفارش',
+    total: 'مبلغ پرداخت',
+    outcome: 'نتیجهٔ بررسی (یکی از چهار متن نتیجه)',
+  },
   'bot.admin.service': { username: 'نام کاربری سرویس روی پنل' },
   'bot.admin.reminder_saved': { value: 'مقدار تازه' },
   'bot.admin.panel_detail': { name: 'نام پنل', status: 'وضعیت پنل' },
@@ -488,6 +502,12 @@ export const PLACEHOLDER_LABEL_OVERRIDES_FA: Partial<
   'bot.service.renew_option_button': { title: 'نام محصول' },
   // R2: the renewal result names the renewed account, not the customer's Telegram username.
   'bot.service.renewed': { username: 'نام کاربری سرویس' },
+  // Round N, package D: the minimum is a monthly SALES minimum, and the days run to month end.
+  'bot.reseller.minimum_reminder': {
+    minimum: 'حداقل فروش ماهانه',
+    days: 'روزهای باقی‌مانده تا پایان ماه',
+  },
+  'bot.reseller.minimum_achieved': { minimum: 'حداقل فروش ماهانه' },
   'bot.service.list': { total: 'تعداد کل سرویس‌ها' },
   'bot.service.list_item_button': { username: 'نام کاربری سرویس' },
   'bot.service.card': { lastSeen: 'آخرین اتصال', status: 'وضعیت سرویس' },
@@ -588,7 +608,7 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   ],
   'bot.menu.trial': [
     'دکمهٔ سرویس تست در منوی اصلی',
-    'دکمهٔ منوی اصلی برای دریافت سرویس تست رایگان؛ فقط وقتی قابلیت سرویس آزمایشی روشن است نمایش داده می‌شود.',
+    'دکمهٔ منوی اصلی برای دریافت سرویس تست رایگان؛ فقط وقتی دست‌کم یک پنل سرویس تست ارائه می‌کند نمایش داده می‌شود.',
   ],
   'bot.menu.referral': [
     'دکمهٔ زیرمجموعه‌گیری در منوی اصلی',
@@ -862,8 +882,8 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
     'تأیید می‌کند سرویس آزمایشی در حال ساخته شدن است؛ لینک جداگانه فرستاده می‌شود.',
   ],
   'bot.trial.button': [
-    'دکمهٔ دریافت سرویس آزمایشی',
-    'دکمهٔ فروشگاه برای گرفتن سرویس آزمایشی؛ فقط وقتی مشتری همین حالا می‌تواند آن را بگیرد.',
+    'دکمهٔ سرویس آزمایشی در فروشگاه (بازنشسته)',
+    'دیگر نمایش داده نمی‌شود؛ سرویس تست فقط از دکمهٔ خودش در منوی اصلی گرفته می‌شود و در مراحل خرید نیست.',
   ],
   'bot.trial.choose_panel': [
     'انتخاب سرور سرویس تست',
@@ -1226,6 +1246,10 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
     'پاسخ درگاه دریافت نشد',
     'پاسخ درگاه برای ساخت فاکتور گم شد و لینکی نمایش داده نمی‌شود؛ چیزی پرداخت‌شده ثبت نشده است.',
   ],
+  'bot.payment.gateway_no_link': [
+    'درگاه لینک پرداخت نفرستاد',
+    'درگاه ساخت فاکتور را اعلام کرد اما لینکی که مشتری بتواند باز کند برنگرداند؛ مبلغی ثبت نشده و مشتری می‌تواند پرداخت تازه‌ای شروع کند.',
+  ],
   'bot.payment.gateway_closed': [
     'فاکتور درگاه بسته شده',
     'مهلت این فاکتور تمام شده یا بسته شده است؛ سفارش لغو نمی‌شود و مشتری می‌تواند پرداخت تازه‌ای شروع کند.',
@@ -1308,6 +1332,18 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'bot.service.state_terminated': [
     'وضعیت سرویس: حذف‌شده',
     'متن وضعیت در کارت سرویسی که به پایان رسیده و حذف شده است.',
+  ],
+  'bot.service.state_working': [
+    'وضعیت سرویس: در حال اعمال درخواست',
+    'متن وضعیت در کارت سرویس تا وقتی خاموش/روشن کردن، تغییر لینک یا تغییر لوکیشن هنوز روی سرور نهایی نشده است؛ دکمه‌های عملیات تا پاسخ نهایی نمایش داده نمی‌شوند.',
+  ],
+  'bot.service.status_with_notice': [
+    'وضعیت سرویس همراه با یک اطلاعیه',
+    'وقتی کارت سرویس دربارهٔ آخرین درخواست یک خط توضیح دارد: وضعیت و سپس همان خط.',
+  ],
+  'bot.service.notice_action_failed': [
+    'اطلاعیهٔ انجام نشدن درخواست',
+    'روی همان کارت سرویس، وقتی خاموش/روشن کردن یا تغییر لینک قطعاً روی سرور انجام نشد.',
   ],
   'bot.service.state_unreconciled': [
     'وضعیت سرویس: در حال بررسی',
@@ -1406,12 +1442,12 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
     'فایل‌های آمادهٔ اتصال را از پنل می‌گیرد؛ فقط وقتی پنل این امکان را دارد.',
   ],
   'bot.service.file_caption': [
-    'توضیح قدیمی فایل اتصال (دیگر استفاده نمی‌شود)',
-    'توضیح پنل زیر فایل‌های اتصال در نسخه‌های قبلی؛ اکنون «توضیح فایل اتصال» با نام کاربری سرویس جایگزین آن است.',
+    'توضیح پنل زیر فایل اتصال',
+    'توضیح آماده‌ای که خود پنل برای هر فایل اتصال می‌فرستد، همان‌طور که پنل نوشته است؛ قالب‌بندی آن (مثلاً متن کد) حفظ می‌شود.',
   ],
   'bot.service.connection_file_caption': [
-    'توضیح فایل اتصال',
-    'توضیح زیر هر فایل اتصال: فقط نام کاربری سرویس.',
+    'توضیح فایل اتصال بدون توضیح پنل',
+    'فقط وقتی پنل برای یک فایل توضیحی نفرستاده باشد: نام کاربری سرویس.',
   ],
   'bot.service.link_rotated': [
     'لینک اشتراک تغییر کرد',
@@ -1693,6 +1729,15 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
     'یادآور سفارش پرداخت‌نشده',
     'کمی پیش از پایان مهلت سفارشی که هنوز پرداختی برایش شروع نشده است.',
   ],
+  // Round N, package D: informational only — nothing happens to a reseller below the minimum.
+  'bot.reseller.minimum_reminder': [
+    'یادآوری حداقل فروش ماهانهٔ نمایندگی',
+    'چند روز پیش از پایان ماه، یک بار به نماینده‌ای که فروشش هنوز به حداقل ماهانه نرسیده فرستاده می‌شود.',
+  ],
+  'bot.reseller.minimum_achieved': [
+    'رسیدن به حداقل فروش ماهانه',
+    'یک بار در ماه، وقتی فروش نماینده به حداقل ماهانهٔ او برسد (اگر این پیام روشن باشد).',
+  ],
 
   // --- Service transfer -------------------------------------------------------------
   'bot.service.transfer_button': [
@@ -1831,8 +1876,8 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   ],
   'bot.referral.unconfigured': ['برنامهٔ معرفی غیرفعال است', 'وقتی پاداش معرفی تنظیم نشده است.'],
   'bot.referral.button': [
-    'دکمهٔ دعوت دوستان',
-    'دکمهٔ صفحهٔ کیف پول که لینک دعوت را نشان می‌دهد؛ فقط وقتی برنامهٔ معرفی فعال است.',
+    'دکمهٔ دعوت دوستان در کیف پول (بازنشسته)',
+    'دیگر نمایش داده نمی‌شود؛ کیف پول فقط عملیات کیف پول را دارد و زیرمجموعه‌گیری از دکمهٔ خودش در منوی اصلی باز می‌شود.',
   ],
   'bot.referral.screen': [
     'صفحهٔ زیرمجموعه‌گیری (بازنشسته)',
@@ -2216,6 +2261,34 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'bot.admin.review_credited': [
     'نتیجهٔ بررسی رسید: واریز به کیف پول',
     'پیام اصلی بررسی رسید پس از واریز مبلغ به کیف پول مشتری به این متن تبدیل می‌شود و دکمه‌هایش حذف می‌شود.',
+  ],
+  'bot.admin.review_final': [
+    'سابقهٔ نهایی بررسی رسید',
+    'پیام اصلی بررسی رسید پس از تصمیم به این سابقهٔ کامل تبدیل می‌شود: خط نتیجه، نوع عملیات، محصول، نام کاربری سرویس، شناسه و یوزرنیم تلگرام مشتری، مبلغ و کد پیگیری، و برای واریز به کیف پول موجودی پیش و پس از آن. سطری که مقداری ندارد حذف می‌شود.',
+  ],
+  'bot.admin.review_final_short': [
+    'سابقهٔ نهایی بررسی رسید (نسخهٔ کوتاه)',
+    'وقتی سابقهٔ کامل در توضیح عکس رسید جا نشود (بیش از ۱۰۲۴ نویسه)، توضیح عکس به این متن کوتاه تبدیل می‌شود و سابقهٔ کامل به‌صورت پاسخ به همان پیام فرستاده می‌شود.',
+  ],
+  'bot.admin.review_repeat_approved': [
+    'پاسخ دکمهٔ تکراری: قبلاً تأیید شده',
+    'وقتی روی پیامی که قبلاً نهایی شده دوباره دکمه‌ای زده شود و پرداخت تأیید شده باشد، همین متن کوتاه نشان داده می‌شود و کاری تکرار نمی‌شود.',
+  ],
+  'bot.admin.review_repeat_rejected': [
+    'پاسخ دکمهٔ تکراری: قبلاً رد شده',
+    'وقتی روی پیامی که قبلاً نهایی شده دوباره دکمه‌ای زده شود و پرداخت رد شده باشد، همین متن کوتاه نشان داده می‌شود.',
+  ],
+  'bot.admin.review_repeat_credited': [
+    'پاسخ دکمهٔ تکراری: قبلاً به کیف پول واریز شده',
+    'وقتی روی پیامی که قبلاً نهایی شده دوباره دکمه‌ای زده شود و رسید با واریز به کیف پول بسته شده باشد؛ چیزی دوباره واریز نمی‌شود.',
+  ],
+  'bot.admin.review_repeat_blocked': [
+    'پاسخ دکمهٔ تکراری: کاربر قبلاً بلاک شده',
+    'وقتی روی پیامی که با بلاک کردن مشتری نهایی شده دوباره دکمه‌ای زده شود و پرداخت هنوز تصمیمی نگرفته باشد.',
+  ],
+  'bot.admin.review_repeat_gone': [
+    'پاسخ دکمهٔ تکراری: دیگر در انتظار بررسی نیست',
+    'وقتی روی پیامی که قبلاً نهایی شده دوباره دکمه‌ای زده شود و پرداخت به هر دلیل دیگری دیگر در انتظار بررسی نباشد.',
   ],
   'bot.admin.reject_reason_prompt': [
     'درخواست دلیل رد پرداخت',

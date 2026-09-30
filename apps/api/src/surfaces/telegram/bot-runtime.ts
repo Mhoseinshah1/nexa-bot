@@ -49,6 +49,7 @@ import type {
   CustomerNotificationKind,
   Money,
   OrderId,
+  OperationState,
   OrderPurpose,
   PaymentId,
   PermissionKey,
@@ -99,6 +100,7 @@ import type {
   CustomerSendOutcome,
   CustomerSendResult,
   CustomerMessenger,
+  CustomerMessageRef,
   MainMenuVariant,
   CustomerEditMessage,
 } from '../../modules/commerce/messaging/application/ports.js';
@@ -127,11 +129,15 @@ import type {
   GatewayPaymentService,
 } from '../../modules/commerce/payments/application/gateway-payment.service.js';
 import type { WalletService } from '../../modules/commerce/wallet/application/wallet.service.js';
-import { ProvisioningService } from '../../modules/commerce/provisioning/application/provisioning.service.js';
+import {
+  ProvisioningService,
+  operationHasEnded,
+} from '../../modules/commerce/provisioning/application/provisioning.service.js';
 import type { CustomerServiceOperation } from '../../modules/commerce/provisioning/application/provisioning.service.js';
 import type { DeliveryService } from '../../modules/commerce/provisioning/application/delivery.service.js';
 import {
   CONNECTED_CALLBACK_PREFIX,
+  SERVICE_CARD_CALLBACK_PREFIX,
   SUPPORT_CALLBACK_DATA,
   TUTORIAL_CALLBACK_DATA,
 } from '../../modules/commerce/provisioning/application/delivery.service.js';
@@ -880,7 +886,13 @@ export const CANCEL_ORDER_CALLBACK_PREFIX = 'f:';
  */
 export const TOPUP_MENU_CALLBACK_PREFIX = 'o:';
 export const TOPUP_PICK_CALLBACK_PREFIX = 'y:';
-/** The wallet screen's invite button (WP9). Matched on the whole string, like the top-up menu. */
+/**
+ * The wallet screen's invite button (WP9). Matched on the whole string, like the top-up menu.
+ *
+ * F5: the wallet no longer draws it — the wallet shows wallet operations only, and the
+ * referral program is its own main-menu action. Still PARSED, so a wallet message drawn
+ * before F5 opens the same referral screen the menu's button does.
+ */
 export const REFERRAL_INVITE_CALLBACK_PREFIX = 'rf:';
 
 export const SERVICE_CALLBACK_PREFIX = 's:';
@@ -1058,8 +1070,11 @@ export const SERVICES_SEARCH_CALLBACK_DATA = 'ss:';
 export const SERVICE_REFRESH_CALLBACK_PREFIX = 'rs:';
 /** `sf:<service id>` — the panel's connection files for that service (Package E). */
 export const SERVICE_FILES_CALLBACK_PREFIX = 'sf:';
-/** `sv:<service id>` — R3: the service card, edited into the message the tap came from. */
-export const SERVICE_CARD_CALLBACK_PREFIX = 'sv:';
+/**
+ * `sv:<service id>` — R3: the service card, edited into the message the tap came from.
+ * Declared beside the delivery lane's buttons since round N (F4), which draws it too.
+ */
+export { SERVICE_CARD_CALLBACK_PREFIX };
 export const SERVICE_NOTE_CALLBACK_PREFIX = 'nt:';
 export const SERVICE_RENEW_QUOTE_CALLBACK_PREFIX = 'nr:';
 export const REFERRAL_GIFT_CALLBACK_DATA = 'rg:';
@@ -2329,6 +2344,10 @@ export const CATEGORY_CALLBACK_PREFIX = 'ck:';
  * id and no figure, because nothing about a trial is the client's to say. Two letters
  * because every single-letter prefix is taken; `t:` is terminate's, and `tr:` does not
  * start with it.
+ *
+ * F5: the catalogue no longer draws it — a trial is its own main-menu action, not a step
+ * of buying. It is still PARSED, so a catalogue message drawn before F5 and still sitting
+ * in a chat answers its tap exactly as the menu's button does (the claim decides).
  */
 export const TRIAL_CALLBACK_DATA = 'tr:';
 /**
@@ -3192,8 +3211,8 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
   /*
    * R1: «🧪 دریافت سرویس تست» and «👥 زیرمجموعه‌گیری». Not registered with
    * `setMyCommands` (see `TRIAL_MENU_COMMAND`); reachable by the button and by typing, and
-   * each answers from its feature's own state — the same two paths the catalogue's trial
-   * button (`tr:`) and the wallet's referral button (`rf:`) already take.
+   * each answers from its feature's own state — the same two paths the pre-F5 catalogue
+   * trial button (`tr:`) and wallet referral button (`rf:`) still take from old messages.
    */
   if (command === `/${TRIAL_MENU_COMMAND}`) {
     return { intent: 'TRIAL_CLAIM', targetId: null, callbackQueryId: null };
@@ -3648,10 +3667,11 @@ export interface BotRuntimeDeps {
   readonly locationChanges?: Pick<LocationChangeService, 'requestFree'>;
   /**
    * The free trial (WP6-A). Optional only so the customer-side unit fixtures need not
-   * build it; the composition root always supplies it, and without it the catalogue
-   * simply offers no trial — which is also what a tenant with the flag off sees.
+   * build it; the composition root always supplies it, and without it every trial tap is
+   * answered unavailable. Only the claim is asked: since F5 no purchase screen offers a
+   * trial, so nothing here reads availability ahead of a tap.
    */
-  readonly trials?: Pick<TrialService, 'availabilityFor' | 'claim'>;
+  readonly trials?: Pick<TrialService, 'claim'>;
   /**
    * Package D — the custom-service flow. Optional for the fixtures that build a runtime
    * without it: then no button is drawn and a stale tap answers the unavailable sentence.
@@ -3675,7 +3695,7 @@ export interface BotRuntimeDeps {
    * `bot.tutorial.<platform>` texts it was before, and a stale `ca:` answers not-found.
    */
   readonly clientApps?: Pick<ClientAppCatalog, 'platformsFor' | 'appsFor' | 'appFor'>;
-  /** The referral program (WP9): its terms, for the wallet button, and the invite. */
+  /** The referral program (WP9): its terms and the invite, for the referral screen. */
   readonly referrals?: Pick<ReferralProgram, 'terms' | 'invite'>;
   readonly orders: OrderService;
   readonly payments: PaymentService;
@@ -3698,7 +3718,7 @@ export interface BotRuntimeDeps {
    */
   readonly receipts: Pick<
     ReceiptService,
-    'submit' | 'reviewQueue' | 'reviewItem' | 'dispositionOf'
+    'submit' | 'reviewQueue' | 'reviewItem' | 'dispositionOf' | 'finalRecord'
   >;
   /**
    * The reviewer's amount capture for the credit-to-wallet disposition (Payment File 02
@@ -5142,11 +5162,11 @@ export class BotRuntime {
      */
     const origin = callbackOriginOf(input.update);
     const state = this.deps.messageState;
-    const repeatedReview =
+    const reviewRecord =
       state !== undefined && origin !== null && REVIEW_TAP_INTENTS.has(command.intent)
-        ? ((await state.findReview(scope, this.refOf(input.botInstanceId, origin)))?.finalisedAt ??
-            null) !== null
-        : false;
+        ? await state.findReview(scope, this.refOf(input.botInstanceId, origin))
+        : null;
+    const repeatedReview = (reviewRecord?.finalisedAt ?? null) !== null;
     const gate = WIZARD_GATES.get(command.intent);
     let claim: TelegramWizardRecord | null = null;
     let staleWizard = false;
@@ -5161,11 +5181,19 @@ export class BotRuntime {
       if (claimed.outcome === 'CLAIMED') claim = claimed.wizard;
       else if (claimed.outcome === 'STALE') staleWizard = true;
     }
+    /*
+     * F1 (round N): a repeated review tap is still answered and nothing else — but with the
+     * truthful notice of what was decided (e.g. «این پرداخت قبلاً تأیید شده است.»).
+     */
+    const repeatToast =
+      repeatedReview && reviewRecord !== null
+        ? await this.repeatedReviewToast(scope, actor, input.telegramUserId, reviewRecord.paymentId)
+        : {};
     let answered: PendingReply;
     try {
       answered =
         repeatedReview || staleWizard
-          ? { key: null, values: {}, buttons: [], orderId: null }
+          ? { key: null, values: {}, buttons: [], orderId: null, ...repeatToast }
           : arrival === 'BLOCKED'
             ? (blockedAdminText ??
               (ADMIN_INTENTS.has(command.intent)
@@ -5249,7 +5277,14 @@ export class BotRuntime {
      * out as it always did.
      */
     if (state !== undefined && origin !== null && reply.review?.outcome !== undefined) {
-      const reviewed = await this.finaliseReview(scope, actor, reply, origin, input.botInstanceId);
+      const reviewed = await this.finaliseReview(
+        scope,
+        actor,
+        reply,
+        origin,
+        input.botInstanceId,
+        input.telegramUserId,
+      );
       if (reviewed !== null) {
         await this.stopSpinner(scope, command, input.botInstanceId);
         return {
@@ -9704,17 +9739,25 @@ export class BotRuntime {
         edit: true,
       };
     }
+    /*
+     * Round N (F4): every screen a service card's button opens is edited INTO the card's
+     * message (`inCard`), and its way back (`sv:`) draws the same card in place again.
+     */
     if (command.intent === 'SERVICE_NOTE' && command.targetId !== null) {
-      return this.serviceNoteBegin(
-        scope,
-        actor,
-        customer,
+      return inCard(
         command.targetId,
-        input.botInstanceId,
-        input.idempotencyKey,
+        await this.serviceNoteBegin(
+          scope,
+          actor,
+          customer,
+          command.targetId,
+          input.botInstanceId,
+          input.idempotencyKey,
+        ),
       );
     }
     if (command.intent === 'SERVICE_RENEW_QUOTE' && command.targetId !== null) {
+      // The quote opens the payment wizard, which is its own message (R2).
       return this.commercialQuote(scope, actor, customer, command.targetId, 'RENEW', null, input);
     }
     if (command.intent === 'REFERRAL_GIFT') {
@@ -9812,13 +9855,22 @@ export class BotRuntime {
       return this.cancelOrder(scope, actor, command.targetId, customer, input.idempotencyKey);
     }
     if (command.intent === 'SERVICE_RENEW' && command.targetId !== null) {
-      return this.renewMenu(scope, actor, customer, command.targetId);
+      return inCard(
+        command.targetId,
+        await this.renewMenu(scope, actor, customer, command.targetId),
+      );
     }
     if (command.intent === 'SERVICE_ADD_TRAFFIC' && command.targetId !== null) {
-      return this.addonChoice(scope, actor, customer, command.targetId, 'ADD_TRAFFIC');
+      return inCard(
+        command.targetId,
+        await this.addonChoice(scope, actor, customer, command.targetId, 'ADD_TRAFFIC'),
+      );
     }
     if (command.intent === 'SERVICE_ADD_TIME' && command.targetId !== null) {
-      return this.addonChoice(scope, actor, customer, command.targetId, 'ADD_TIME');
+      return inCard(
+        command.targetId,
+        await this.addonChoice(scope, actor, customer, command.targetId, 'ADD_TIME'),
+      );
     }
     if (
       command.intent === 'SERVICE_BUY_TRAFFIC' &&
@@ -9851,7 +9903,10 @@ export class BotRuntime {
       );
     }
     if (command.intent === 'SERVICE_ADD_DEVICES' && command.targetId !== null) {
-      return this.devicesChoice(scope, actor, customer, command.targetId);
+      return inCard(
+        command.targetId,
+        await this.devicesChoice(scope, actor, customer, command.targetId),
+      );
     }
     if (
       command.intent === 'SERVICE_BUY_DEVICES' &&
@@ -9871,20 +9926,26 @@ export class BotRuntime {
       );
     }
     if (command.intent === 'SERVICE_CHANGE_LOCATION' && command.targetId !== null) {
-      return this.locationChoice(scope, actor, customer, command.targetId);
+      return inCard(
+        command.targetId,
+        await this.locationChoice(scope, actor, customer, command.targetId),
+      );
     }
     if (
       command.intent === 'SERVICE_LOCATION_TARGET' &&
       command.targetId !== null &&
       command.secondaryId != null
     ) {
-      return this.locationTarget(
-        scope,
-        actor,
-        customer,
+      return inCard(
         command.targetId,
-        command.secondaryId,
-        input,
+        await this.locationTarget(
+          scope,
+          actor,
+          customer,
+          command.targetId,
+          command.secondaryId,
+          input,
+        ),
       );
     }
     if (
@@ -9892,13 +9953,16 @@ export class BotRuntime {
       command.targetId !== null &&
       command.secondaryId != null
     ) {
-      return this.locationRequest(
-        scope,
-        actor,
-        customer,
+      return inCard(
         command.targetId,
-        command.secondaryId,
-        input,
+        await this.locationRequest(
+          scope,
+          actor,
+          customer,
+          command.targetId,
+          command.secondaryId,
+          input,
+        ),
       );
     }
     if (command.intent === 'SERVICE_ACTION_CONFIRM' && command.targetId !== null) {
@@ -9955,21 +10019,30 @@ export class BotRuntime {
       return this.serviceRotateAsk(scope, customer, command.targetId);
     }
     if (command.intent === 'SERVICE_REFUND_ASK' && command.targetId !== null) {
-      return this.serviceRefundAsk(scope, customer, command.targetId);
+      return inCard(
+        command.targetId,
+        await this.serviceRefundAsk(scope, customer, command.targetId),
+      );
     }
     if (command.intent === 'SERVICE_REFUND_CONFIRM' && command.targetId !== null) {
-      return this.serviceRefundConfirm(
-        scope,
-        actor,
-        customer,
+      return inCard(
         command.targetId,
-        input.botInstanceId,
-        input.idempotencyKey,
-        updateIdOf(input.update),
+        await this.serviceRefundConfirm(
+          scope,
+          actor,
+          customer,
+          command.targetId,
+          input.botInstanceId,
+          input.idempotencyKey,
+          updateIdOf(input.update),
+        ),
       );
     }
     if (command.intent === 'SERVICE_TRANSFER_ASK' && command.targetId !== null) {
-      return this.serviceTransferAsk(scope, actor, customer, command.targetId, input);
+      return inCard(
+        command.targetId,
+        await this.serviceTransferAsk(scope, actor, customer, command.targetId, input),
+      );
     }
     if (
       command.intent === 'SERVICE_TRANSFER_CONFIRM' &&
@@ -9977,16 +10050,19 @@ export class BotRuntime {
       typeof command.secondaryId === 'string' &&
       command.ownershipVersion !== undefined
     ) {
-      return this.serviceTransferConfirm(
-        scope,
-        actor,
-        customer,
+      return inCard(
         command.targetId,
-        {
-          recipientTelegramUserId: command.secondaryId,
-          ownershipVersion: command.ownershipVersion,
-        },
-        input,
+        await this.serviceTransferConfirm(
+          scope,
+          actor,
+          customer,
+          command.targetId,
+          {
+            recipientTelegramUserId: command.secondaryId,
+            ownershipVersion: command.ownershipVersion,
+          },
+          input,
+        ),
       );
     }
     if (command.intent === 'SERVICE_ROTATE' && command.targetId !== null) {
@@ -10000,6 +10076,7 @@ export class BotRuntime {
         customer,
         command.targetId,
         `${input.idempotencyKey}:rotate`,
+        cardMessageOf(input.update, input.botInstanceId),
       );
     }
     /*
@@ -10100,12 +10177,20 @@ export class BotRuntime {
     actor: ActorContext,
     customerId: UserId,
     serviceId: string,
+    /** Round N (F4): the one-line notice the card carries, e.g. a change that did not happen. */
+    notice?: TemplateKey,
   ): Promise<{
     readonly key: TemplateKey;
     readonly values: TemplateValues;
     readonly buttons: readonly CustomerButton[];
   } | null> {
-    const reply = await this.serviceDetail(scope, actor, { id: customerId }, serviceId);
+    const reply = await this.serviceDetail(
+      scope,
+      actor,
+      { id: customerId },
+      serviceId,
+      notice === undefined ? {} : { notice },
+    );
     if (reply.key === null || reply.key === 'bot.service.not_found') return null;
     return { key: reply.key, values: reply.values, buttons: reply.buttons };
   }
@@ -10129,6 +10214,12 @@ export class BotRuntime {
     actor: ActorContext,
     customer: Pick<CustomerRecord, 'id'>,
     serviceId: string,
+    /**
+     * Round N (F4): `working` draws the card as «working» before the change it is about is
+     * even planned — the tap's own answer, put on the card first so no later edit can
+     * overwrite a final one — and `notice` adds one line under the status.
+     */
+    options: { readonly working?: boolean; readonly notice?: TemplateKey } = {},
   ): Promise<PendingReply> {
     const service = await this.ownedService(scope, customer, serviceId);
     if (service === null) {
@@ -10137,6 +10228,35 @@ export class BotRuntime {
     const title = await this.deps.purchaseTitle(scope, service.orderId);
     if (title === null) {
       return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };
+    }
+    /*
+     * Round N (F4): a change still being applied — a disable, an enable, a new link or a
+     * location move, planned, in flight or being reconciled — makes the card «working»,
+     * from the operation rows, whichever message draws it. Its state is not final, so it
+     * offers no action until the change has its answer; only the refresh (which redraws
+     * it) and the way back to the list.
+     */
+    const working =
+      options.working === true || (await this.deps.services.changeInProgress(scope, service));
+    if (working) {
+      const buttons: CustomerButton[] = [];
+      if (await this.deps.services.customerSyncOffered(scope, service)) {
+        buttons.push({
+          label: { kind: 'TEMPLATE', key: 'bot.service.refresh_button' },
+          data: `${SERVICE_REFRESH_CALLBACK_PREFIX}${service.id}`,
+          row: 0,
+        });
+      }
+      buttons.push({
+        label: { kind: 'TEMPLATE', key: 'bot.service.back_to_list_button' },
+        data: `${SERVICES_LIST_PAGE_CALLBACK_PREFIX}1`,
+        row: 5,
+      });
+      const card = await this.serviceCardScreen(scope, service, title, false, {
+        working: true,
+        ...(options.notice === undefined ? {} : { notice: options.notice }),
+      });
+      return { key: card.key, values: card.values, buttons, orderId: null };
     }
 
     /*
@@ -10264,8 +10384,26 @@ export class BotRuntime {
       row: 5,
     });
 
+    const card = await this.serviceCardScreen(
+      scope,
+      service,
+      title,
+      rotation.offered,
+      options.notice === undefined ? {} : { notice: options.notice },
+    );
+    return { key: card.key, values: card.values, buttons, orderId: null };
+  }
+
+  /** The card's text: one composition for the ordinary card and the «working» one. */
+  private async serviceCardScreen(
+    scope: TenantContext,
+    service: ServiceRecord,
+    title: string,
+    rotateOffered: boolean,
+    extra: { readonly working?: boolean; readonly notice?: TemplateKey },
+  ): Promise<{ readonly key: TemplateKey; readonly values: TemplateValues }> {
     const display = await this.deps.productDisplay.displayFor(scope, service.productId);
-    const card = await this.deps.screens.serviceCard(scope, {
+    return this.deps.screens.serviceCard(scope, {
       state: service.state,
       serviceUsername: service.providerUsername,
       // WP-A6: where the service has moved to, when it has; the product's label otherwise.
@@ -10278,9 +10416,9 @@ export class BotRuntime {
       now: this.deps.clock.now(),
       lastSeen: lastSeenOf(service),
       note: service.customerNote,
-      rotateOffered: rotation.offered,
+      rotateOffered,
+      ...extra,
     });
-    return { key: card.key, values: card.values, buttons, orderId: null };
   }
 
   /**
@@ -10656,10 +10794,25 @@ export class BotRuntime {
        */
       return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };
     }
+    /*
+     * Round N (F4): «🔗 لینک اشتراک» turns the card the tap came from into the link, with a
+     * way back to the card — no separate link message (`DeliveryService.showLinkOnCard`).
+     * Without a card (a client that sent no message) the delivery card is sent, as before.
+     */
+    const card = cardMessageOf(input.update, input.botInstanceId);
     try {
-      await this.deps.delivery.redeliver(scope, service, customer.id, chatId, input.botInstanceId);
+      await this.deps.delivery.redeliver(
+        scope,
+        service,
+        customer.id,
+        chatId,
+        input.botInstanceId,
+        card === null ? {} : { card },
+      );
       return { key: null, values: {}, buttons: [], orderId: null };
     } catch {
+      // Round N (F4): with a card, the card stays as it is and the tap gets the notice.
+      if (card !== null) return toastReply('bot.service.not_found');
       /*
        * Every refusal `deliver` can produce, as one customer-facing answer.
        *
@@ -10764,17 +10917,58 @@ export class BotRuntime {
     idempotencyKey: string,
     card: CardMessageRef | null,
   ): Promise<PendingReply> {
+    /*
+     * Round N (F4): the card turns «working» on the tap — BEFORE the operation exists, so the
+     * provisioner's answer (`OperationCardEditor`), which can only follow the operation, can
+     * never be overwritten by this turn's loading edit. The switch is re-offered first, so a
+     * tap from a keyboard that is already out of date (a second tap after the change landed)
+     * redraws the card as it is, with a notice, and never flashes «working».
+     */
+    if (card !== null) {
+      const service = await this.ownedService(scope, customer, serviceId);
+      if (service === null) return toastReply('bot.service.not_found');
+      /*
+       * Codex review of #116: a REDELIVERY of this very tap is decided before the card is
+       * touched. Its operation already exists: open, the card already reads «working» and is
+       * answered when it ends; ended, the card was answered (or the sweep answers it) — and a
+       * «working» edit now would overwrite that answer with a state nothing ever clears.
+       */
+      if (
+        (await this.deps.services.findCustomerRequest(scope, serviceId, type, idempotencyKey)) !==
+        null
+      ) {
+        return { key: null, values: {}, buttons: [], orderId: null };
+      }
+      if (!(await this.deps.services.customerActionsFor(scope, service)).includes(type)) {
+        return this.cardWithToast(
+          scope,
+          actor,
+          customer,
+          serviceId,
+          'bot.service.capability_unsupported',
+        );
+      }
+      await this.showWorking(scope, actor, customer, serviceId, card);
+    }
+    let planned;
     try {
-      await this.deps.services.requestFromCustomer(scope, actor, customer.id, serviceId, type, {
-        idempotencyKey,
-        ...(card === null ? {} : { card }),
-      });
+      planned = await this.deps.services.requestFromCustomer(
+        scope,
+        actor,
+        customer.id,
+        serviceId,
+        type,
+        {
+          idempotencyKey,
+          ...(card === null ? {} : { card }),
+        },
+      );
     } catch (error) {
       const code = (error as { code?: unknown } | null)?.code;
       if (code === COMMERCE_ERROR_CODES.SERVICE_NOT_FOUND) {
         return card === null
           ? plainReply('bot.service.not_found')
-          : toastReply('bot.service.not_found');
+          : this.cardWithToast(scope, actor, customer, serviceId, 'bot.service.not_found');
       }
       const refusals: readonly unknown[] = [
         COMMERCE_ERROR_CODES.ORDER_STATE_INVALID,
@@ -10782,16 +10976,31 @@ export class BotRuntime {
         COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
       ];
       if (!refusals.includes(code)) throw error;
+      // The card was turned «working» above: it is put back as it is, with the notice.
       return card === null
         ? plainReply('bot.service.capability_unsupported')
-        : toastReply('bot.service.capability_unsupported');
+        : this.cardWithToast(
+            scope,
+            actor,
+            customer,
+            serviceId,
+            'bot.service.capability_unsupported',
+          );
     }
     /*
-     * R3 item 10: nothing is sent now. The provisioner performs the disable or enable and
-     * then edits THIS card to the state it left (`OperationCardEditor`); a failure is told
-     * through the lane and the card stays as it is, because nothing changed. A tap with no
-     * card to edit (a client that sent no message) is answered as before.
+     * R3 item 10: nothing more is sent now. The provisioner performs the disable or enable
+     * and then edits THIS card — «working» since the tap — to the state it left
+     * (`OperationCardEditor`); round N: a failure is answered on the card too, as the service
+     * still is with the failure line. A tap with no card to edit (a client that sent no
+     * message) is answered as before.
+     *
+     * Codex review of #116: a concurrent redelivery can pass the check above before the
+     * first turn planned, then get the first turn's operation back ENDED — answered on the
+     * card before this turn's «working» edit landed. The card is drawn as it now is.
      */
+    if (card !== null && operationHasEnded(planned)) {
+      return this.cardAfterEnded(scope, actor, customer, serviceId, planned.state);
+    }
     if (card !== null) return { key: null, values: {}, buttons: [], orderId: null };
     return { key: 'bot.service.action_requested', values: {}, buttons: [], orderId: null };
   }
@@ -10853,15 +11062,47 @@ export class BotRuntime {
     customer: CustomerRecord,
     serviceId: string,
     idempotencyKey: string,
+    /** Round N (F4): the card the confirmation was tapped on — answered on it. */
+    card: CardMessageRef | null = null,
   ): Promise<PendingReply> {
+    /*
+     * Round N (F4): the card reads «working» from the confirmation until the panel has
+     * answered — put there BEFORE the rotation is planned, for the reason `serviceAction`
+     * gives. The new link then lands on this same card (`DeliveryService.sendRotated`), a
+     * failure puts the card back with its notice (`OperationCardEditor`), and a refusal
+     * below is edited over it.
+     */
+    if (card !== null) {
+      const service = await this.ownedService(scope, customer, serviceId);
+      // Codex review of #116: a redelivered confirmation leaves the card to its answer.
+      if (
+        service !== null &&
+        (await this.deps.services.findCustomerRequest(
+          scope,
+          serviceId,
+          'ROTATE_SUBSCRIPTION',
+          idempotencyKey,
+        )) !== null
+      ) {
+        return { key: null, values: {}, buttons: [], orderId: null };
+      }
+      if (
+        service !== null &&
+        (await this.deps.services.customerRotationFor(scope, service)).offered
+      ) {
+        await this.showWorking(scope, actor, customer, serviceId, card);
+      }
+    }
+    let planned;
     try {
-      await this.deps.services.requestRotation(scope, actor, customer.id, serviceId, {
+      planned = await this.deps.services.requestRotation(scope, actor, customer.id, serviceId, {
         idempotencyKey,
+        ...(card === null ? {} : { card }),
       });
     } catch (error) {
       const code = (error as { code?: unknown } | null)?.code;
       if (code === COMMERCE_ERROR_CODES.SERVICE_NOT_FOUND) {
-        return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null };
+        return { key: 'bot.service.not_found', values: {}, buttons: [], orderId: null, edit: true };
       }
       if (code === COMMERCE_ERROR_CODES.SERVICE_ROTATION_COOLDOWN) {
         const at = (error as { details?: Readonly<Record<string, unknown>> }).details?.[
@@ -10879,13 +11120,15 @@ export class BotRuntime {
         throw error;
       }
       if (code === COMMERCE_ERROR_CODES.CUSTOMER_BLOCKED) {
-        return { key: 'bot.blocked', values: {}, buttons: [], orderId: null };
+        return { key: 'bot.blocked', values: {}, buttons: [], orderId: null, edit: true };
       }
       const refusals: readonly unknown[] = [
         COMMERCE_ERROR_CODES.ORDER_STATE_INVALID,
         COMMERCE_ERROR_CODES.PANEL_NOT_OPERABLE,
         COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
         COMMERCE_ERROR_CODES.SERVICE_ACTION_NOT_ALLOWED,
+        // WP-A6: a location move in flight refuses a rotation; the card is put back.
+        COMMERCE_ERROR_CODES.SERVICE_ACTION_IN_PROGRESS,
       ];
       if (!refusals.includes(code)) throw error;
       return {
@@ -10897,13 +11140,78 @@ export class BotRuntime {
       };
     }
     /*
-     * R3 item 9: no «request registered» message, and never «service created». The
-     * question is turned back into the card; when the panel has minted the new link the
-     * delivery lane sends «the link of service X changed; the previous link is no longer
-     * usable» with the new link, then the new connection files. A failure is told through
-     * the lane (`SERVICE_ACTION_FAILED`), and the old link stays the stored one.
+     * R3 item 9: no «request registered» message, and never «service created». Round N
+     * (F4): with a card, it already reads «working» and nothing more is sent now — the new
+     * link lands on it (then the files, as an album), or it comes back with the failure
+     * notice. Without one (a client that sent no message), the card is drawn as before.
+     * A concurrent redelivery that got the operation back ENDED draws the card as it is
+     * (Codex review of #116, as `serviceAction`).
      */
+    if (card !== null && operationHasEnded(planned)) {
+      return this.cardAfterEnded(scope, actor, customer, serviceId, planned.state);
+    }
+    if (card !== null) return { key: null, values: {}, buttons: [], orderId: null };
     return { ...(await this.serviceDetail(scope, actor, customer, serviceId)), edit: true };
+  }
+
+  /**
+   * Round N (F4): the service card, as «working», edited into the message a change was asked
+   * from. Best effort: a card Telegram cannot edit is answered by the provisioner's own
+   * fallback (the final card, sent once), so nothing here needs one.
+   */
+  private async showWorking(
+    scope: TenantContext,
+    actor: ActorContext,
+    customer: Pick<CustomerRecord, 'id'>,
+    serviceId: string,
+    card: CardMessageRef,
+  ): Promise<void> {
+    const edit = this.deps.messenger.edit;
+    if (edit === undefined) return;
+    const working = await this.serviceDetail(scope, actor, customer, serviceId, { working: true });
+    if (working.key === null || working.key === 'bot.service.not_found') return;
+    await edit.call(this.deps.messenger, scope, {
+      ...card,
+      templateKey: working.key,
+      values: working.values,
+      buttons: working.buttons,
+    });
+  }
+
+  /**
+   * Codex review of #116: the card as it now is, edited in place, after a request whose
+   * operation had already ENDED — with the failure line when it ended without happening.
+   */
+  private async cardAfterEnded(
+    scope: TenantContext,
+    actor: ActorContext,
+    customer: Pick<CustomerRecord, 'id'>,
+    serviceId: string,
+    state: OperationState,
+  ): Promise<PendingReply> {
+    return {
+      ...(await this.serviceDetail(
+        scope,
+        actor,
+        customer,
+        serviceId,
+        state === 'SUCCEEDED' ? {} : { notice: 'bot.service.notice_action_failed' },
+      )),
+      edit: true,
+    };
+  }
+
+  /** Round N (F4): the card as it now is, edited in place, with a short notice on the tap. */
+  private async cardWithToast(
+    scope: TenantContext,
+    actor: ActorContext,
+    customer: Pick<CustomerRecord, 'id'>,
+    serviceId: string,
+    toast: TemplateKey,
+  ): Promise<PendingReply> {
+    const card = await this.serviceDetail(scope, actor, customer, serviceId);
+    if (card.key === 'bot.service.not_found') return toastReply(toast);
+    return { ...card, edit: true, toast: { key: toast, values: {} } };
   }
 
   /**
@@ -11000,12 +11308,15 @@ export class BotRuntime {
         capture.subjectId,
         cleared ? null : text,
       );
-      return {
-        key: saved.note === null ? 'bot.service.note_cleared' : 'bot.service.note_saved',
-        values: {},
-        buttons: [backToServiceButton(capture.subjectId)],
-        orderId: null,
-      };
+      /*
+       * Round N (F4): the answer IS the service card, with the note as it now stands and the
+       * saved/cleared line under its status — one message showing the result, not a sentence
+       * and a button back to it. A new message, because a typed answer carries no reference
+       * to the card that asked for it (the smallest fallback for a typed step).
+       */
+      return this.serviceDetail(scope, actor, customer, capture.subjectId, {
+        notice: saved.note === null ? 'bot.service.note_cleared' : 'bot.service.note_saved',
+      });
     } catch (error) {
       if (isNexaError(error) && error.code === COMMERCE_ERROR_CODES.CAPTURE_INPUT_INVALID) {
         return {
@@ -12358,31 +12669,26 @@ export class BotRuntime {
       customer.id,
     );
     /*
-     * The trial, first on the first page and only there — and only when this customer
-     * could take one NOW. A button that answers "no trial for you" is a promise the
-     * keyboard broke; `claimTrial` decides again anyway, because this read is a
-     * courtesy made before the tap and without the lock.
+     * No trial here (F5). A trial is not something a customer buys or browses to: it is
+     * its own main-menu action («🧪 دریافت سرویس تست», `/trial`), drawn while a panel
+     * offers one. The purchase flow — categories, products, plans — sells, and only sells.
+     *
+     * The custom service (Package D), on the first page only: drawn when at least one
+     * location could price this customer now. A courtesy — every step after the tap
+     * decides again. Unlike the trial it IS a way to buy, so it stays.
      */
-    const trial: CustomerButton[] =
-      page === 0 && (await this.trialOffered(scope, actor, customer))
-        ? [{ label: { kind: 'TEMPLATE', key: 'bot.trial.button' }, data: TRIAL_CALLBACK_DATA }]
-        : [];
-    /*
-     * The custom service (Package D), beside the trial and on the first page only: drawn
-     * when at least one location could price this customer now. A courtesy — every step
-     * after the tap decides again.
-     */
+    const leading: CustomerButton[] = [];
     if (page === 0 && (await this.customServiceOffered(scope, actor, customer))) {
-      trial.push({
+      leading.push({
         label: { kind: 'TEMPLATE', key: 'bot.custom_service.button' },
         data: CUSTOM_SERVICE_CALLBACK_DATA,
       });
     }
     if (items.length === 0) {
       if (page > 0) return this.catalogue(scope, actor, 0, customer);
-      return { key: 'bot.catalog.empty', values: {}, buttons: trial, orderId: null };
+      return { key: 'bot.catalog.empty', values: {}, buttons: leading, orderId: null };
     }
-    const buttons: CustomerButton[] = [...trial];
+    const buttons: CustomerButton[] = [...leading];
     buttons.push(
       ...items.map((category) => ({
         // Operator text, exactly as a product title is. The emoji is optional and its
@@ -12530,20 +12836,9 @@ export class BotRuntime {
     }
   }
 
-  /** Whether to draw the trial button for this customer. Never throws a reply away. */
-  private async trialOffered(
-    scope: TenantContext,
-    actor: ActorContext,
-    customer: CustomerRecord,
-  ): Promise<boolean> {
-    if (this.deps.trials === undefined) return false;
-    const availability = await this.deps.trials.availabilityFor(scope, actor, customer.id);
-    return availability.available;
-  }
-
   /**
-   * A customer asked for a trial — the main menu's «🧪 دریافت سرویس تست», `/trial`, or the
-   * catalogue's trial button (R1).
+   * A customer asked for a trial — the main menu's «🧪 دریافت سرویس تست», `/trial`, or a
+   * pre-F5 catalogue message's trial button (R1).
    *
    * Which panels offer one is `TrialService.claim`'s answer, decided with no panel named —
    * enabled, eligible by the one evaluator, able to name the account — and never this
@@ -13249,7 +13544,12 @@ export class BotRuntime {
   ): Promise<PendingReply> {
     const balance = await this.deps.wallet.balanceForCustomer(scope, actor, customer.id);
     const counters = await this.deps.counters.counters(scope, customer.id);
-    const referring = (await this.deps.referrals?.terms(scope))?.active === true;
+    /*
+     * The referral COUNT stays on the account summary: it is a fact about this customer
+     * that Mirza's /wallet shows too (the one referral surface its research VERIFIED). The
+     * referral BUTTON does not (F5): the wallet carries wallet operations only, and the
+     * program is reached from its own main-menu button and `/referral`.
+     */
     const referralCount =
       this.deps.referralGifts === undefined
         ? 0
@@ -13282,14 +13582,6 @@ export class BotRuntime {
               },
             ]
           : []),
-        ...(referring
-          ? [
-              {
-                label: { kind: 'TEMPLATE' as const, key: 'bot.referral.button' as const },
-                data: REFERRAL_INVITE_CALLBACK_PREFIX,
-              },
-            ]
-          : []),
         mainMenuButton(),
       ],
       orderId: null,
@@ -13309,7 +13601,7 @@ export class BotRuntime {
    * nothing is calculated here. Asking records the customer's code the first time, which
    * is why it carries the turn's idempotency key; every other answer is the one
    * unconfigured sentence. Reached from the main menu's «👥 زیرمجموعه‌گیری», `/referral`
-   * and the wallet's referral button alike.
+   * and — from a wallet message drawn before F5 — the wallet's old referral button alike.
    */
   private async referralInvite(
     scope: TenantContext,
@@ -14455,6 +14747,7 @@ export class BotRuntime {
     reply: PendingReply,
     origin: CallbackOrigin,
     botInstanceId: BotInstanceId,
+    telegramUserId: string,
   ): Promise<CustomerSendOutcome | 'NOT_ATTEMPTED' | null> {
     const state = this.deps.messageState;
     const directive = reply.review;
@@ -14486,6 +14779,31 @@ export class BotRuntime {
         await state.unfinaliseReview(scope, actor, id);
       }
     };
+    /*
+     * F1 (round N): a receipt becomes the COMPLETE final record — the outcome's label and the
+     * facts the reviewer decided on — read once, after the decision committed. The wallet
+     * lines go only on this reviewer's own chat: a copy pushed to another reviewer is read by
+     * somebody whose permissions this turn does not know, so theirs carries every fact but
+     * the balance. A record that cannot be read (no administrator behind the tap, a payment
+     * gone) falls back to the outcome's one line, which is still true.
+     */
+    const records = new Map<boolean, { key: TemplateKey; values: TemplateValues }>();
+    const recordFor = async (
+      own: boolean,
+    ): Promise<{ key: TemplateKey; values: TemplateValues }> => {
+      const cached = records.get(own);
+      if (cached !== undefined) return cached;
+      const record = await this.finalReviewRecord(
+        scope,
+        actor,
+        telegramUserId,
+        paymentId,
+        outcome,
+        own,
+      );
+      records.set(own, record);
+      return record;
+    };
     let answer: CustomerSendOutcome | 'NOT_ATTEMPTED' = 'NOT_ATTEMPTED';
     for (const row of stamped) {
       const message = {
@@ -14493,38 +14811,189 @@ export class BotRuntime {
         messageId: row.messageId,
         botInstanceId: row.botInstanceId,
       };
+      const ownChat = row.botInstanceId === ref.botInstanceId && row.chatId === ref.chatId;
       if (same(row)) {
-        // A receipt becomes the outcome's one line; a prompt becomes this reply's sentence.
+        // A receipt becomes the final record; a prompt becomes this reply's sentence.
         const receipt = row.role === 'REVIEW';
-        const edited = await editSent(
-          this.deps.messenger,
-          scope,
-          {
-            ...message,
-            templateKey: receipt ? REVIEW_OUTCOME_KEYS[outcome] : reply.key,
-            values: receipt ? {} : reply.values,
-            buttons: receipt ? [] : reply.buttons,
-          },
-          origin.media,
-        );
+        const record = receipt ? await recordFor(true) : null;
+        const edited =
+          record !== null
+            ? await this.editReviewRecord(scope, message, record, origin.media)
+            : await editSent(
+                this.deps.messenger,
+                scope,
+                {
+                  ...message,
+                  templateKey: reply.key,
+                  values: reply.values,
+                  buttons: reply.buttons,
+                },
+                origin.media,
+              );
         await clearFailed(row.id, edited);
         answer = edited.outcome;
         continue;
       }
+      const record = row.role === 'REVIEW' ? await recordFor(ownChat) : null;
       const other =
-        row.role === 'REVIEW'
-          ? await editSent(
-              this.deps.messenger,
-              scope,
-              { ...message, templateKey: REVIEW_OUTCOME_KEYS[outcome], values: {}, buttons: [] },
-              row.hasMedia,
-            )
+        record !== null
+          ? await this.editReviewRecord(scope, message, record, row.hasMedia)
           : this.deps.messenger.clearButtons === undefined
             ? ({ outcome: 'REFUSED' } as const)
             : await this.deps.messenger.clearButtons(scope, message);
       await clearFailed(row.id, other);
     }
     return answer;
+  }
+
+  /**
+   * F1 (round N, Codex review of #113): ONE review message edited into its final record, and
+   * never into a record that silently lost its end.
+   *
+   * The record is edited in place, WHOLE (`whole`): the normal case, and still no new
+   * message. A receipt FILE is edited through its caption, which Telegram bounds at 1,024
+   * characters, and a tenant's override of the record or of its labels can pass that (a text
+   * message, at 4,096). Cut, the tracking code and the wallet lines at the end would be gone
+   * while the review reads as final. So a record that does not fit is refused by the
+   * messenger before any request, and the one documented fallback is the smallest arrangement
+   * that loses nothing and stays attached to the receipt:
+   *
+   *   1. the message becomes `bot.admin.review_final_short` — the decision and the tracking
+   *      code, and a sentence pointing at the reply (bounded; if a tenant's override of THAT
+   *      is too long it is cut, and nothing is lost, because the record follows);
+   *   2. the complete record is sent as a REPLY to that same message.
+   *
+   * The result is what the stamp logic reads: a refused or rate-limited step — Telegram
+   * definitely did not apply it — unfinalises the message so a later tap finishes it; an
+   * UNKNOWN step is left finalised, since it may have landed. This runs only for a message
+   * `finaliseReviews` stamped in THIS call, and a finalised message is never stamped again,
+   * so a repeated tap never sends the reply a second time.
+   */
+  private async editReviewRecord(
+    scope: TenantContext,
+    message: CustomerMessageRef,
+    record: { readonly key: TemplateKey; readonly values: TemplateValues },
+    media: boolean,
+  ): Promise<CustomerSendResult> {
+    const full = { ...message, templateKey: record.key, values: record.values, buttons: [] };
+    if (record.key !== 'bot.admin.review_final') {
+      return editSent(this.deps.messenger, scope, full, media);
+    }
+    const whole = await editSent(this.deps.messenger, scope, { ...full, whole: true }, media);
+    if (
+      whole.outcome !== 'REFUSED' ||
+      (whole.reason !== 'CAPTION_OVER_BOUND' && whole.reason !== 'TEXT_OVER_BOUND')
+    ) {
+      return whole;
+    }
+    const short = await editSent(
+      this.deps.messenger,
+      scope,
+      {
+        ...message,
+        templateKey: 'bot.admin.review_final_short',
+        values: {
+          outcome: record.values['outcome'] ?? '',
+          reference: record.values['reference'] ?? '',
+        },
+        buttons: [],
+      },
+      media,
+    );
+    if (short.outcome !== 'DELIVERED') return short;
+    const reply = await this.deps.messenger.send(scope, {
+      chatId: message.chatId,
+      botInstanceId: message.botInstanceId,
+      templateKey: record.key,
+      values: record.values,
+      replyToMessageId: message.messageId,
+    });
+    return reply.outcome === 'DELIVERED' ? short : reply;
+  }
+
+  /**
+   * F1 (round N): the final record a receipt review message becomes — `bot.admin.review_final`
+   * with the facts the reviewer decided on, read as the administrator who tapped (the
+   * receipts read charges `receipts.view`, and the wallet lines `users.view`). `GONE`, or a
+   * record that cannot be read, is the outcome's own one line: still true, and never blank.
+   */
+  private async finalReviewRecord(
+    scope: TenantContext,
+    actor: ActorContext,
+    telegramUserId: string,
+    paymentId: string,
+    outcome: TelegramReviewOutcome | 'GONE',
+    wallet: boolean,
+  ): Promise<{ key: TemplateKey; values: TemplateValues }> {
+    const line = { key: REVIEW_OUTCOME_KEYS[outcome], values: {} };
+    if (outcome === 'GONE') return line;
+    try {
+      const reviewer = await this.reviewerActor(scope, actor, telegramUserId);
+      if (reviewer === null) return line;
+      const values = await this.deps.receipts.finalRecord(
+        scope,
+        reviewer,
+        paymentId as PaymentId,
+        outcome,
+        REVIEW_OUTCOME_KEYS[outcome],
+        wallet,
+      );
+      return values === null ? line : { key: 'bot.admin.review_final', values };
+    } catch {
+      // A refused read decides nothing; the one line still says what was decided.
+      return line;
+    }
+  }
+
+  /** The administrator behind a review tap, or null when there is none. */
+  private async reviewerActor(
+    scope: TenantContext,
+    actor: ActorContext,
+    telegramUserId: string,
+  ): Promise<ActorContext | null> {
+    const admins = this.deps.telegramAdmins;
+    if (admins === undefined) return null;
+    const identity = await admins.resolve(scope, telegramUserId, actor.correlationId);
+    return identity === null ? null : identity.actor;
+  }
+
+  /**
+   * F1 (round N): what a tap on a review message ALREADY finalised is answered with — the
+   * callback's own notice, and nothing else. The payment's recorded disposition decides the
+   * sentence; a payment still pending whose message was finalised was finalised by a BLOCK
+   * (the one decision that leaves it in the queue). Nothing is decided, credited, sent or
+   * edited here. A read that cannot be made answers without a notice, as before.
+   */
+  private async repeatedReviewToast(
+    scope: TenantContext,
+    actor: ActorContext,
+    telegramUserId: string,
+    paymentId: string,
+  ): Promise<Pick<PendingReply, 'toast'>> {
+    const toast = (key: TemplateKey): Pick<PendingReply, 'toast'> => ({
+      toast: { key, values: {} },
+    });
+    try {
+      const reviewer = await this.reviewerActor(scope, actor, telegramUserId);
+      if (reviewer === null) return {};
+      const found = await this.deps.receipts.dispositionOf(scope, reviewer, paymentId as PaymentId);
+      if (found !== null) {
+        switch (found.disposition) {
+          case 'APPROVED':
+            return toast('bot.admin.review_repeat_approved');
+          case 'REJECTED':
+            return toast('bot.admin.review_repeat_rejected');
+          case 'CREDITED_TO_WALLET':
+            return toast('bot.admin.review_repeat_credited');
+        }
+      }
+      const pending = await this.deps.receipts.reviewItem(scope, reviewer, paymentId as PaymentId);
+      return toast(
+        pending === null ? 'bot.admin.review_repeat_gone' : 'bot.admin.review_repeat_blocked',
+      );
+    } catch {
+      return {};
+    }
   }
 
   private async stopSpinner(
@@ -14849,7 +15318,24 @@ export function gatewayAttemptScreen(
   if (invoice.creationState === 'CREATING') {
     return screen('bot.payment.gateway_preparing', [check], 'INVOICE_LOADING', true);
   }
+  /*
+   * F3 (round N): each end says what actually happened, and each offers a way on that opens
+   * a NEW attempt — none of these is an open attempt (`findOpenAttempt`), so the retry is
+   * never handed this one back.
+   *
+   * - A create the gateway REFUSED is "unavailable" even while its payment is still PENDING
+   *   (the failure's own write did not land): it was a refusal, never a lost answer.
+   * - An invoice the gateway reported CREATED with no link a customer can open: its answer
+   *   was received, so it is not "the answer was lost".
+   * - Only a create whose answer really was lost (`CREATE_UNKNOWN`) is `gateway_unknown`.
+   */
+  if (invoice.creationState === 'CREATE_FAILED') {
+    return screen('bot.payment.gateway_unavailable', [retry], 'NOTICE');
+  }
   const link = invoice.webInvoiceUrl ?? invoice.invoiceUrl;
+  if (invoice.creationState === 'CREATED' && link === null) {
+    return screen('bot.payment.gateway_no_link', [retry], 'NOTICE');
+  }
   if (invoice.creationState !== 'CREATED' || link === null) {
     return screen('bot.payment.gateway_unknown', [retry], 'NOTICE');
   }
@@ -15091,11 +15577,31 @@ export function cardMessageOf(
   return { botInstanceId, chatId, messageId };
 }
 
+/**
+ * The way back from a screen about one service. Round N (F4): the service card drawn IN
+ * PLACE (`sv:`) — every screen a card's button opens is the card's own message, so «back»
+ * restores that same card rather than sending a second one. On a screen that is a message
+ * of its own (the answer to a typed step), it turns that message into the card.
+ */
 function backToServiceButton(serviceId: string): CustomerButton {
-  return {
-    label: { kind: 'TEMPLATE', key: 'bot.service.back_to_list_button' },
-    data: `${SERVICE_CALLBACK_PREFIX}${serviceId}`,
-  };
+  return backToCardButton(serviceId);
+}
+
+/**
+ * Round N (F4): a screen a service card's button opened, edited INTO the card's message
+ * (`PendingReply.edit`) — the renew menu, the add-traffic and extra-users offers, the
+ * location move, the note, refund and transfer prompts and their answers. A screen that
+ * would be left without a single button gets the way back to the card, so the card is
+ * never lost in its own message.
+ *
+ * A WIZARD screen is left as its own message: a quote opens the payment wizard, whose
+ * message identity and step gate are R2's (`telegram_wizards`), and a card message already
+ * tracked there could not be given a fresh quote in place without rewinding that state.
+ */
+function inCard(serviceId: string, reply: PendingReply): PendingReply {
+  if (reply.key === null || reply.wizard !== undefined) return reply;
+  const lost = reply.buttons.length === 0 && reply.key !== 'bot.service.not_found';
+  return { ...reply, ...(lost ? { buttons: [backToCardButton(serviceId)] } : {}), edit: true };
 }
 
 /**

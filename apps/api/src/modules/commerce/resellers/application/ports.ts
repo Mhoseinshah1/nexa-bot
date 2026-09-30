@@ -1,9 +1,12 @@
 import type {
+  Calendar,
   CurrencyCode,
   Money,
   OrderPurpose,
   OrderState,
+  ResellerEntitlementDimension,
   ResellerGrantKind,
+  ResellerMinimumNoticeKind,
   ResellerOverrideMode,
   ResellerPriceLayer,
   ResellerPricingMode,
@@ -30,6 +33,8 @@ export interface ResellerTierRecord {
   readonly pricingMode: ResellerPricingMode;
   readonly discountPercentage: number | null;
   readonly creditLimit: Money;
+  /** Round N R2: the tier's monthly minimum sales; null (or zero) for none. */
+  readonly monthlyMinimum: Money | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }
@@ -48,8 +53,33 @@ export interface ResellerRecord {
   readonly discountPercentage: number | null;
   /** The reseller's own limit, or null for the tier's. */
   readonly creditLimit: Money | null;
+  /**
+   * Round N R2: the reseller's own monthly minimum. Null inherits the tier's; a zero amount
+   * is an explicit "no minimum for this reseller".
+   */
+  readonly monthlyMinimum: Money | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
+}
+
+/**
+ * Round N R1: a reseller's own entitlement override — the dimensions it overrides and its
+ * grants of them. Empty `dimensions` is "no override": the tier's grants apply unchanged.
+ */
+export interface ResellerOverrideRecord {
+  readonly dimensions: readonly ResellerEntitlementDimension[];
+  readonly grants: readonly ResellerTierGrantRecord[];
+}
+
+/** Round N R2: one monthly-minimum notice, the subject of its notification. */
+export interface ResellerMinimumNoticeWrite {
+  readonly id: string;
+  readonly customerId: string;
+  readonly kind: ResellerMinimumNoticeKind;
+  readonly periodStart: Date;
+  readonly periodEnd: Date;
+  readonly minimum: Money;
+  readonly achieved: bigint;
 }
 
 export interface ResellerListing extends ResellerRecord {
@@ -214,6 +244,87 @@ export interface ResellerRepository {
     limit: number,
     cursor: ResellerCursor | null,
   ): Promise<{ readonly items: readonly ResellerListing[]; readonly next: ResellerCursor | null }>;
+
+  // -- Round N: overrides and the monthly minimum ------------------------------------
+
+  /** The reseller's entitlement override; empty dimensions when there is none. */
+  overridesOf(
+    scope: TenantContext,
+    customerId: string,
+    tx?: unknown,
+  ): Promise<ResellerOverrideRecord>;
+
+  /** Replaces the whole override set. The caller holds the reseller row's lock. */
+  replaceOverrides(
+    scope: TenantContext,
+    customerId: string,
+    override: ResellerOverrideRecord,
+    now: Date,
+    tx: unknown,
+  ): Promise<void>;
+
+  /** Sets a tier's minimum (null for none). Null when no tier has this id. */
+  setTierMinimum(
+    scope: TenantContext,
+    tierId: string,
+    minimum: Money | null,
+    now: Date,
+    tx: unknown,
+  ): Promise<ResellerTierRecord | null>;
+
+  /** Sets a reseller's own minimum (null inherits). Null when the customer is no reseller. */
+  setMinimum(
+    scope: TenantContext,
+    customerId: string,
+    minimum: Money | null,
+    now: Date,
+    tx: unknown,
+  ): Promise<ResellerRecord | null>;
+
+  /**
+   * Every reseller of the tenant with its tier, oldest first, at most `limit` — the monthly
+   * progress read and the notice sweep. `activeOnly` keeps ACTIVE resellers only.
+   */
+  listAll(
+    scope: TenantContext,
+    filter: { readonly activeOnly: boolean },
+    limit: number,
+    tx?: unknown,
+  ): Promise<readonly ResellerListing[]>;
+
+  /**
+   * ACTIVE resellers, oldest first, one keyset page at a time on `(created_at, id)` — the
+   * notice sweep walks every page, so no reseller is starved behind a fixed prefix.
+   */
+  pageActive(
+    scope: TenantContext,
+    after: ResellerCursor | null,
+    limit: number,
+    tx: unknown,
+  ): Promise<{ readonly items: readonly ResellerListing[]; readonly next: ResellerCursor | null }>;
+
+  /**
+   * The tenant's display timezone and calendar, read THROUGH the caller's transaction, so a
+   * sweep holding a pool connection never asks the pool for a second one.
+   */
+  presentationOf(
+    scope: TenantContext,
+    tx: unknown,
+  ): Promise<{ readonly timezone: string; readonly calendar: Calendar }>;
+
+  /** The notices already raised for a month, as `${customerId}:${kind}`. */
+  noticesIn(scope: TenantContext, periodStart: Date, tx: unknown): Promise<ReadonlySet<string>>;
+
+  /**
+   * Records one notice, or `false` when this (reseller, kind, month) already has one — the
+   * unique key is the arbiter between replicas.
+   */
+  raiseNotice(
+    scope: TenantContext,
+    notice: ResellerMinimumNoticeWrite,
+    now: Date,
+    tx: unknown,
+  ): Promise<boolean>;
 
   // -- Purchase terms ------------------------------------------------------------
 

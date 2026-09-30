@@ -14,7 +14,6 @@ push of the branch; R1-05 to R1-11 answer the Codex review of PR #111.
 | R1-06 | an invite too long for a caption is never cut                                   | the captioned banner lead without `captionWhole`                | `customer-ux-payments.test.ts` › sends a tenant’s invite too long for a caption whole, link included, after the bare banner (Codex, PR #111)                                                                                               | KILLED |
 | R1-07 | a slash command is never a menu label (parser)                                  | `intentOf` consults the menu map before a leading `/`           | `bot-runtime.test.ts` › never lets a menu label shadow a slash command (Codex, PR #111)                                                                                                                                                    | KILLED |
 | R1-08 | a slash command is never a menu label (route table)                             | `routesFor` routes a label starting with `/`                    | `main-menu-layout.test.ts` › routes no label that reads as a slash command (Codex, PR #111)                                                                                                                                                | KILLED |
-| R1-09 | the overview offers nothing while the `trials` switch is off                    | `offeredNow` ignores the flag                                   | `trials.test.ts` › offers no panel in the operator’s overview while the trials switch is off (Codex, PR #111)                                                                                                                              | KILLED |
 | R1-10 | an archived panel's trial is read-only                                          | the trial tab gets `mayEdit` without the status                 | `panels.test.tsx` › shows an archived panel’s trial read-only, since the server refuses the write (Codex, PR #111)                                                                                                                         | KILLED |
 | R1-11 | a traffic figure saved as shown keeps the stored bytes                          | `trafficAfterEdit` always returns the submitted bytes           | `trials.test.ts` › keeps a carried-forward byte count when the traffic figure is saved as shown (Codex, PR #111)                                                                                                                           | KILLED |
 
@@ -22,3 +21,7 @@ R1-11's web half, `bot-buttons.test.tsx` › sends a carried-forward figure back
 shown when only the hours change (Codex, PR #111), pins that the form submits the figure
 it showed (`953.67` MB for 10^9 bytes) untouched; the bytes are kept by the server, which
 is where the product editor's rule (`trafficBytesAfterEdit`) lives too.
+
+**R1-09 is retired in F5**: the `trials` switch it held the overview to no longer exists,
+so the overview offers exactly what `trialPanelVerdicts` offers — R1-01's rule, which still
+holds it. That no flag is read is the "what holds it" row of `docs/f5-falsification.md`.

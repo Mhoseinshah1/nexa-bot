@@ -3,7 +3,9 @@ import type {
   CurrencyCode,
   OrderId,
   OrderPurpose,
+  PaymentId,
   PermissionKey,
+  TelegramReviewOutcome,
   TemplateKey,
   TemplateValues,
   TenantContext,
@@ -61,6 +63,26 @@ export interface ReceiptReviewFactsReader {
   ): Promise<ReceiptReviewFacts>;
 }
 
+/**
+ * F1 (round N): what one payment's own ledger entries did to the wallet — the net movement,
+ * and the balance immediately before the first and after the last of them.
+ */
+export interface ReceiptWalletMovement {
+  readonly moved: bigint;
+  readonly before: bigint;
+  readonly after: bigint;
+}
+
+export interface ReceiptWalletMovementReader {
+  movementOf(
+    scope: TenantContext,
+    customerId: UserId,
+    paymentId: PaymentId,
+    currency: CurrencyCode,
+    tx?: unknown,
+  ): Promise<ReceiptWalletMovement | null>;
+}
+
 /** The permission the wallet balance read charges anywhere else (`WalletService.balance`). */
 export const RECEIPT_REVIEW_BALANCE_PERMISSION: PermissionKey = 'users.view';
 
@@ -101,6 +123,8 @@ export interface ReceiptReviewCaptionDeps {
   readonly labels: {
     render(scope: TenantContext, key: TemplateKey, values: TemplateValues): Promise<string>;
   };
+  /** F1: the payment's own wallet movement, for the final record. Absent: no wallet lines. */
+  readonly movements?: ReceiptWalletMovementReader;
 }
 
 /**
@@ -183,5 +207,80 @@ export class ReceiptReviewCaption {
       // second note on a later receipt is not repeated; the file it came with follows.
       note: reviewNoteOf(receipts.find((one) => one.caption !== null)?.caption ?? null),
     };
+  }
+
+  /**
+   * F1 (round N): the values of `bot.admin.review_final` — the COMPLETE record the original
+   * review message becomes once `outcome` was decided on it. The same facts, from the same
+   * readers, as the caption the reviewer decided on (`valuesFor`), so the two cannot
+   * disagree; but a fact the payment does not have is ABSENT rather than a dash, and the
+   * template drops its whole line.
+   *
+   * The wallet lines are filled only when the decision MOVED the wallet — a receipt credited
+   * to it, or an approved top-up — and only for a viewer holding `users.view`, the key every
+   * balance read charges: the ledger's own figures immediately before and after this
+   * payment's entries, never "the balance now". The customer's note and the current balance
+   * are not repeated: the record says what was decided, not what the customer wrote.
+   */
+  async finalValuesFor(
+    scope: TenantContext,
+    viewer: ActorContext,
+    payment: PaymentRecord,
+    customer: CustomerRecord | null,
+    decision: {
+      readonly outcome: TelegramReviewOutcome;
+      readonly outcomeLabel: TemplateKey;
+      /** False: no wallet lines whatever the viewer holds (a copy another reviewer reads). */
+      readonly wallet: boolean;
+    },
+  ): Promise<TemplateValues> {
+    const { outcome, outcomeLabel } = decision;
+    const facts = await this.deps.facts.factsFor(scope, payment.orderId);
+    const [label, operation] = await Promise.all([
+      this.deps.labels.render(scope, outcomeLabel, {}),
+      this.deps.labels.render(
+        scope,
+        OPERATION_LABELS[payment.orderId === null ? 'TOPUP' : (facts.purpose ?? 'NEW_SERVICE')],
+        {},
+      ),
+    ]);
+    const name = [customer?.firstName ?? null, customer?.lastName ?? null]
+      .filter((part): part is string => part !== null && part.trim() !== '')
+      .join(' ');
+    const values: Record<string, TemplateValues[string]> = {
+      outcome: label,
+      operation,
+      customer: customer?.telegramUserId ?? payment.customerId,
+      total: payment.amount,
+      reference: payment.reference,
+    };
+    if (facts.productTitle !== null) values['order'] = facts.productTitle;
+    if (facts.trafficBytes !== null) values['trafficBytes'] = facts.trafficBytes;
+    if (facts.durationDays !== null) values['durationDays'] = facts.durationDays;
+    if (facts.serviceUsername !== null) values['serviceUsername'] = facts.serviceUsername;
+    if (customer?.username != null) values['username'] = `@${customer.username}`;
+    if (name !== '') values['name'] = name;
+
+    const walletMoved =
+      outcome === 'CREDITED' || (outcome === 'APPROVED' && payment.orderId === null);
+    if (
+      walletMoved &&
+      decision.wallet &&
+      this.deps.movements !== undefined &&
+      (await this.deps.guard.has(scope, viewer, RECEIPT_REVIEW_BALANCE_PERMISSION))
+    ) {
+      const movement = await this.deps.movements.movementOf(
+        scope,
+        payment.customerId,
+        payment.id,
+        payment.amount.currency,
+      );
+      if (movement !== null && movement.moved > 0n) {
+        values['creditedAmount'] = money(movement.moved, payment.amount.currency);
+        values['walletBefore'] = money(movement.before, payment.amount.currency);
+        values['walletAfter'] = money(movement.after, payment.amount.currency);
+      }
+    }
+    return values;
   }
 }

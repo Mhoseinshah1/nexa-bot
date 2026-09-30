@@ -58,6 +58,13 @@ export const GATEWAY_CREATE_UNKNOWN_CODE = 'payments.gateway_create_unknown';
 export const GATEWAY_LATE_COMPLETION_CODE = 'payments.gateway_late_completion';
 export const GATEWAY_IDENTITY_MISMATCH_CODE = 'payments.gateway_identity_mismatch';
 
+/**
+ * F3 (round N): the note a CREATED attempt carries in `creation_error_code` when the
+ * provider returned no link a customer can open. A machine code on the row, not an
+ * operational-event code.
+ */
+export const NO_PAYMENT_LINK_CODE = 'nexa.no_payment_link';
+
 /** How long a claimed row is held before another replica may take it. */
 export const GATEWAY_CLAIM_LEASE_MS = 60_000;
 /** Rows per pass, per queue. Small: every one of them is a call to a third party. */
@@ -391,6 +398,7 @@ export class GatewayPaymentService {
     );
     if (!stamped) return 'createUnknown';
 
+    const calledAt = this.deps.clock.now();
     const outcome = await adapter.createInvoice(apiKey, {
       orderId: invoice.providerOrderId,
       amount: invoice.sentAmount,
@@ -399,6 +407,36 @@ export class GatewayPaymentService {
       presentation,
     });
     const at = this.deps.clock.now();
+    /*
+     * F3 (round N): every create leaves one line saying what the provider's answer was and
+     * how long it took — the machine code the adapter classified it by, never a body, a URL
+     * or the key. Before this a create that ended UNKNOWN left the operator the customer's
+     * one sentence and nothing to tell a timeout from a firewall page from a changed answer.
+     */
+    const elapsedMs = at.getTime() - calledAt.getTime();
+    /*
+     * A provider whose invoice is a LINK (every one but a bot-sent Stars invoice) answered
+     * "created" without one the customer can open: the invoice exists and is still asked
+     * about, but it cannot be paid from Telegram. Recorded against the attempt, so the
+     * operator reads it on the payment, and the customer is told exactly that.
+     */
+    const unpayable =
+      outcome.kind === 'CREATED' &&
+      descriptor.invoiceCredential !== 'BOT_TOKEN' &&
+      outcome.webInvoiceUrl === null &&
+      outcome.invoiceUrl === null;
+    const logContext = {
+      paymentId: invoice.paymentId,
+      provider: invoice.provider,
+      outcome: outcome.kind,
+      reason: outcome.kind === 'CREATED' ? (unpayable ? NO_PAYMENT_LINK_CODE : null) : outcome.code,
+      elapsedMs,
+    };
+    if (outcome.kind === 'CREATED' && !unpayable) {
+      this.deps.logger.info(logContext, 'gateway invoice created');
+    } else {
+      this.deps.logger.warn(logContext, 'gateway invoice create produced no payable invoice');
+    }
 
     switch (outcome.kind) {
       case 'CREATED': {
@@ -415,6 +453,7 @@ export class GatewayPaymentService {
               finalAmount: outcome.finalAmount,
               buyerChatIdSent: buyerChatId !== null,
               callbackUrlSent: callbackUrl !== null,
+              note: unpayable ? NO_PAYMENT_LINK_CODE : null,
               // A provider that pushes its payments is never asked (Stars).
               firstInquiryAt:
                 descriptor.approval === 'INQUIRY'
@@ -447,6 +486,8 @@ export class GatewayPaymentService {
                 providerStatus: outcome.status,
                 buyerChatIdSent: buyerChatId !== null,
                 callbackUrlSent: callbackUrl !== null,
+                paymentLinkReturned: !unpayable,
+                elapsedMs,
               },
               result: 'SUCCESS',
             },
@@ -502,6 +543,7 @@ export class GatewayPaymentService {
             provider: invoice.provider,
             providerOrderId: invoice.providerOrderId,
             reason: outcome.code,
+            elapsedMs,
           },
         });
         return 'createUnknown';

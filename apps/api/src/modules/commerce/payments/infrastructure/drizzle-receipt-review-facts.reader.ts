@@ -1,5 +1,12 @@
-import { and, eq } from 'drizzle-orm';
-import type { OrderId, OrderPurpose, TenantContext } from '@nexa/contracts';
+import { and, eq, sql } from 'drizzle-orm';
+import type {
+  CurrencyCode,
+  OrderId,
+  OrderPurpose,
+  PaymentId,
+  TenantContext,
+  UserId,
+} from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import {
   requireTenantId,
@@ -14,6 +21,8 @@ import {
 import type {
   ReceiptReviewFacts,
   ReceiptReviewFactsReader,
+  ReceiptWalletMovement,
+  ReceiptWalletMovementReader,
 } from '../application/receipt-review-caption.js';
 
 /**
@@ -29,7 +38,9 @@ import type {
  * Read-only, no lock: a caption is a snapshot at render time and must never wait on a
  * disposition's row locks.
  */
-export class DrizzleReceiptReviewFactsReader implements ReceiptReviewFactsReader {
+export class DrizzleReceiptReviewFactsReader
+  implements ReceiptReviewFactsReader, ReceiptWalletMovementReader
+{
   constructor(private readonly db: Database) {}
 
   private exec(tx?: unknown): Executor {
@@ -128,5 +139,49 @@ export class DrizzleReceiptReviewFactsReader implements ReceiptReviewFactsReader
           : order.trafficBytes,
       serviceUsername,
     };
+  }
+
+  /**
+   * F1 (round N): what ONE payment's own ledger entries did to the customer's wallet, read off
+   * the ledger and nothing else — the running balance in `(created_at, id)` order, the same
+   * window the low-balance lane takes, since there is no balance column to read.
+   *
+   * `before` is the balance immediately before the payment's first entry and `after` the
+   * balance immediately after its last, so an entry written LATER (another top-up, a
+   * purchase) never leaks into either figure. Null when the payment wrote no entry in this
+   * currency. Read-only and unlocked, like everything a caption reads.
+   */
+  async movementOf(
+    scope: TenantContext,
+    customerId: UserId,
+    paymentId: PaymentId,
+    currency: CurrencyCode,
+    tx?: unknown,
+  ): Promise<ReceiptWalletMovement | null> {
+    const tenantId = requireTenantId(scope);
+    const result = await this.exec(tx).execute(sql`
+      WITH running AS (
+        SELECT e.id, e.created_at, e.payment_id,
+               CASE WHEN e.direction = 'CREDIT' THEN e.amount ELSE -e.amount END AS signed,
+               SUM(CASE WHEN e.direction = 'CREDIT' THEN e.amount ELSE -e.amount END)
+                 OVER (ORDER BY e.created_at, e.id
+                       ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS after_entry
+        FROM wallet_entries e
+        WHERE e.tenant_id = ${tenantId} AND e.customer_id = ${customerId}
+          AND e.currency = ${currency}
+      ),
+      ours AS (SELECT * FROM running WHERE payment_id = ${paymentId})
+      SELECT
+        (SELECT (after_entry - signed)::text FROM ours ORDER BY created_at, id LIMIT 1) AS before,
+        (SELECT after_entry::text FROM ours ORDER BY created_at DESC, id DESC LIMIT 1) AS after,
+        (SELECT SUM(signed)::text FROM ours) AS moved
+    `);
+    const row = result.rows[0] as
+      { before: string | null; after: string | null; moved: string | null } | undefined;
+    if (row === undefined || row.before === null || row.after === null || row.moved === null) {
+      return null;
+    }
+    // `BigInt(string)`: SUM over bigint is numeric, handed back as a string (`balanceOf`).
+    return { moved: BigInt(row.moved), before: BigInt(row.before), after: BigInt(row.after) };
   }
 }

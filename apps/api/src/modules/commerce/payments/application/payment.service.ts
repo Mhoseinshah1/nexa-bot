@@ -3656,6 +3656,7 @@ export class PaymentService {
         amount: input.amount,
         botInstanceId,
         now: input.now,
+        requireLink: descriptor.invoiceCredential !== 'BOT_TOKEN',
       },
       tx,
     );

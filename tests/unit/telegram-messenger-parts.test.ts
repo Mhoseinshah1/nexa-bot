@@ -362,6 +362,62 @@ describe('a sent message changed in place (R2)', () => {
     expect(calls).toHaveLength(0);
   });
 
+  /*
+   * Round N (F1, Codex review of #113): a record that must arrive WHOLE is refused over the
+   * bound, before any request, instead of being cut by `boundCaption` into one that lost its
+   * end — and a text edit says why instead of folding it into NOT_EDITABLE.
+   */
+  it('refuses a WHOLE plain caption or text over the bound without asking Telegram, and still cuts one that is not', async () => {
+    const edit = {
+      chatId: '42',
+      messageId: 84,
+      botInstanceId,
+      templateKey: PLAIN_KEY,
+      values: {},
+      buttons: [],
+    } as const;
+    const long = harness({ [PLAIN_KEY]: 'z'.repeat(TELEGRAM_CAPTION_MAX + 1) });
+    long.respondWith([OK]);
+    expect(await long.messenger.editCaption(scope, { ...edit, whole: true })).toEqual({
+      outcome: 'REFUSED',
+      reason: 'CAPTION_OVER_BOUND',
+    });
+    expect(long.calls).toHaveLength(0);
+    // Without `whole`, the cut every other caption is sized around is unchanged.
+    expect((await long.messenger.editCaption(scope, edit)).outcome).toBe('DELIVERED');
+    expect(String(long.calls[0]?.body?.['caption'])).toHaveLength(TELEGRAM_CAPTION_MAX);
+
+    const text = harness({ [PLAIN_KEY]: 'w'.repeat(TELEGRAM_MESSAGE_MAX + 1) });
+    text.respondWith([OK]);
+    expect(await text.messenger.edit(scope, { ...edit, whole: true })).toEqual({
+      outcome: 'REFUSED',
+      reason: 'TEXT_OVER_BOUND',
+    });
+    expect(text.calls).toHaveLength(0);
+  });
+
+  it('sends a reply to one message, on the first part of a split body only', async () => {
+    const paragraphs = Array.from({ length: 3 }, (_, i) => `${i}-${'r'.repeat(3000)}`);
+    const { messenger, calls, respondWith } = harness({ [PLAIN_KEY]: paragraphs.join('\n\n') });
+    respondWith([OK]);
+    const result = await messenger.send(scope, {
+      chatId: '42',
+      botInstanceId,
+      templateKey: PLAIN_KEY,
+      values: {},
+      replyToMessageId: 85,
+    });
+    expect(result.outcome).toBe('DELIVERED');
+    expect(calls.length).toBeGreaterThan(1);
+    expect(calls[0]?.body?.['reply_parameters']).toEqual({
+      message_id: 85,
+      allow_sending_without_reply: true,
+    });
+    expect(calls.slice(1).every((call) => call.body?.['reply_parameters'] === undefined)).toBe(
+      true,
+    );
+  });
+
   it('takes every button off, and deletes a message, by its id', async () => {
     const { messenger, calls, respondWith } = harness({});
     respondWith([OK, { status: 200, body: { ok: true, result: true } }]);

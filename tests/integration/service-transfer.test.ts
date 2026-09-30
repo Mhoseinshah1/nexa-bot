@@ -800,14 +800,7 @@ describe('Package F — a customer transfers a service to another customer', () 
       durationHours: 24,
       label: null,
     });
-    await ctx.container.featureFlags.set(tenantA, owner, {
-      key: 'trials',
-      enabled: true,
-      expectedVersion: null,
-      confirmKey: 'trials',
-      reason: 'offer a trial',
-      idempotencyKey: key('trial-flag'),
-    });
+    // F5: the panel's own trial is the one switch; there is no `trials` flag to turn on.
     const claimed = await ctx.container.trials.claim(tenantA, systemActor('trial'), sender, {
       idempotencyKey: key('trial-claim'),
       panelId,

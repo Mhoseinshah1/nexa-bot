@@ -293,6 +293,22 @@ export const CUSTOMER_NOTIFICATION_KINDS = [
    */
   'SERVICE_RENEWED',
   /*
+   * ## Round N, package D: the reseller monthly minimum (`docs/round-n-reseller-audit.md` §3.4)
+   *
+   * The subject of both is a `reseller_minimum_notices` row — one per (reseller, kind,
+   * month) — so each is told at most once a month, the `wallet_threshold_alerts` shape.
+   * Neither carries a payload: the minimum is read from the notice row and the sales figure
+   * from the ledger of orders, at send time. Neither has any consequence beyond the
+   * sentence: no debt, fee, debit, settlement, demotion or block exists behind them.
+   */
+  /**
+   * The month ends in a few days and the reseller's sales are still below their minimum.
+   * `reseller_minimum_notices.id` is the subject.
+   */
+  'RESELLER_MINIMUM_REMINDER',
+  /** The reseller's sales this month reached their minimum. `reseller_minimum_notices.id`. */
+  'RESELLER_MINIMUM_ACHIEVED',
+  /*
    * Round N (B2): a mass wallet credit, told to the customer when the operator chose to
    * notify. The subject is the bulk item; the amount is read at send time from the
    * `MASS_CREDIT` wallet entry the item names — a reader, not a payload (ADR 0030 §1).
@@ -460,6 +476,16 @@ export const CUSTOMER_NOTIFICATION_PRECONDITIONS: Readonly<
    * operation's own frozen target and the order's frozen line, not today's service row.
    */
   SERVICE_RENEWED: false,
+  /*
+   * Round N, package D. The reminder is `true`: "your sales are still below your minimum" is
+   * a claim about the month NOW. The reader re-reads the notice row, the reseller and the
+   * month's sales, and holds only while the reseller is ACTIVE, the month has not ended, the
+   * effective minimum is still the one recorded and the sales are still below it. The
+   * achievement is `false`: a month that reached its minimum did reach it, and a late copy
+   * of the sentence is still true.
+   */
+  RESELLER_MINIMUM_REMINDER: true,
+  RESELLER_MINIMUM_ACHIEVED: false,
   // Round N: both are terminal facts about work already done.
   WALLET_MASS_CREDITED: false,
   SERVICE_GIFT_APPLIED: false,
@@ -532,6 +558,9 @@ export const CUSTOMER_NOTIFICATION_QUIET_HOURS: Readonly<
   TICKET_REPLY_ATTACHMENT: false,
   // R2: the result of a renewal the customer just paid for is expected NOW.
   SERVICE_RENEWED: false,
+  // Round N, package D: the month-end reminder is held like every reminder; the achievement is not.
+  RESELLER_MINIMUM_REMINDER: true,
+  RESELLER_MINIMUM_ACHIEVED: false,
   WALLET_MASS_CREDITED: false,
   SERVICE_GIFT_APPLIED: false,
 };
@@ -602,6 +631,9 @@ export const CUSTOMER_NOTIFICATION_TEMPLATES: Readonly<
   TICKET_REPLY_ATTACHMENT: 'bot.ticket.support_attachment',
   // R2: the dedicated renewal result, its values read at send time from the operation.
   SERVICE_RENEWED: 'bot.service.renewed',
+  // Round N, package D: values read at send time from the notice row and the month's sales.
+  RESELLER_MINIMUM_REMINDER: 'bot.reseller.minimum_reminder',
+  RESELLER_MINIMUM_ACHIEVED: 'bot.reseller.minimum_achieved',
   WALLET_MASS_CREDITED: 'bot.wallet.mass_credited',
   SERVICE_GIFT_APPLIED: 'bot.service.gift_applied',
 };

@@ -108,6 +108,7 @@ const RECORDS = [
   'docs/package-e-falsification.md',
   'docs/package-f-falsification.md',
   'docs/r1-falsification.md',
+  'docs/f5-falsification.md',
 ];
 /**
  * The fewest citations this record may contain.
@@ -134,7 +135,7 @@ const RECORDS = [
  * have to be a map, and a map is a place for a record to be added with no entry
  * and checked against nothing — which is this script's own failure mode.
  */
-const EXPECTED = 2451;
+const EXPECTED = 2459;
 /**
  * A table whose last column is one of these is making citations.
  *

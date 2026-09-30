@@ -1,6 +1,6 @@
 {
-  "id": "141d5a5a-cfb5-4417-8406-80aaaa9646d0",
-  "prevId": "b8cea3f7-8bd0-4686-8468-33d1be7dd72b",
+  "id": "7215f5c1-9e81-4ac8-b552-0617bcddb684",
+  "prevId": "83095a07-dc1d-4960-b546-90bc8b2e4cdf",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -3076,6 +3076,12 @@
           "primaryKey": false,
           "notNull": true
         },
+        "not_before": {
+          "name": "not_before",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_by_admin_id": {
           "name": "created_by_admin_id",
           "type": "uuid",
@@ -4438,7 +4444,7 @@
       "checkConstraints": {
         "customer_notifications_kind_check": {
           "name": "customer_notifications_kind_check",
-          "value": "kind IN ('PAYMENT_REJECTED', 'PAYMENT_EXPIRED', 'ORDER_EXPIRED', 'SERVICE_ACTION_SUCCEEDED', 'SERVICE_ACTION_FAILED', 'SERVICE_PROVISION_DELAYED', 'PAYMENT_TRANSFER_RECORDED', 'ORDER_CANCELLED', 'WALLET_TOPUP_CREDITED', 'ORDER_REFUNDED_TO_WALLET', 'SERVICE_EXPIRY_FIRST', 'SERVICE_EXPIRY_SECOND', 'SERVICE_EXPIRED', 'SERVICE_USAGE_FIRST', 'SERVICE_USAGE_SECOND', 'SERVICE_USAGE_FINAL', 'TRIAL_NOT_DELIVERED', 'RECEIPT_CREDITED_TO_WALLET', 'WALLET_TOPUP_GIFT_CREDITED', 'REFUND_COMPLETED', 'GATEWAY_PAYMENT_FAILED', 'SERVICE_REFUND_REQUEST_REGISTERED', 'SERVICE_REFUND_REQUEST_APPROVED', 'SERVICE_REFUND_REQUEST_REJECTED', 'SERVICE_TRANSFER_RECEIVED', 'TICKET_REPLY', 'SERVICE_EXPIRY_EARLY', 'SERVICE_EXPIRY_DAY', 'WALLET_LOW_BALANCE', 'PAYMENT_PENDING_REMINDER', 'ORDER_PENDING_REMINDER', 'TICKET_REPLY_ATTACHMENT', 'SERVICE_RENEWED', 'WALLET_MASS_CREDITED', 'SERVICE_GIFT_APPLIED')"
+          "value": "kind IN ('PAYMENT_REJECTED', 'PAYMENT_EXPIRED', 'ORDER_EXPIRED', 'SERVICE_ACTION_SUCCEEDED', 'SERVICE_ACTION_FAILED', 'SERVICE_PROVISION_DELAYED', 'PAYMENT_TRANSFER_RECORDED', 'ORDER_CANCELLED', 'WALLET_TOPUP_CREDITED', 'ORDER_REFUNDED_TO_WALLET', 'SERVICE_EXPIRY_FIRST', 'SERVICE_EXPIRY_SECOND', 'SERVICE_EXPIRED', 'SERVICE_USAGE_FIRST', 'SERVICE_USAGE_SECOND', 'SERVICE_USAGE_FINAL', 'TRIAL_NOT_DELIVERED', 'RECEIPT_CREDITED_TO_WALLET', 'WALLET_TOPUP_GIFT_CREDITED', 'REFUND_COMPLETED', 'GATEWAY_PAYMENT_FAILED', 'SERVICE_REFUND_REQUEST_REGISTERED', 'SERVICE_REFUND_REQUEST_APPROVED', 'SERVICE_REFUND_REQUEST_REJECTED', 'SERVICE_TRANSFER_RECEIVED', 'TICKET_REPLY', 'SERVICE_EXPIRY_EARLY', 'SERVICE_EXPIRY_DAY', 'WALLET_LOW_BALANCE', 'PAYMENT_PENDING_REMINDER', 'ORDER_PENDING_REMINDER', 'TICKET_REPLY_ATTACHMENT', 'SERVICE_RENEWED', 'RESELLER_MINIMUM_REMINDER', 'RESELLER_MINIMUM_ACHIEVED', 'WALLET_MASS_CREDITED', 'SERVICE_GIFT_APPLIED')"
         },
         "customer_notifications_state_check": {
           "name": "customer_notifications_state_check",
@@ -14997,6 +15003,322 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.reseller_entitlement_overrides": {
+      "name": "reseller_entitlement_overrides",
+      "schema": "",
+      "columns": {
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "customer_id": {
+          "name": "customer_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "dimension": {
+          "name": "dimension",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "reseller_entitlement_overrides_tenant_id_tenants_id_fk": {
+          "name": "reseller_entitlement_overrides_tenant_id_tenants_id_fk",
+          "tableFrom": "reseller_entitlement_overrides",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "reseller_entitlement_overrides_reseller_fk": {
+          "name": "reseller_entitlement_overrides_reseller_fk",
+          "tableFrom": "reseller_entitlement_overrides",
+          "tableTo": "resellers",
+          "columnsFrom": [
+            "tenant_id",
+            "customer_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "customer_id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "reseller_entitlement_overrides_pkey": {
+          "name": "reseller_entitlement_overrides_pkey",
+          "columns": [
+            "tenant_id",
+            "customer_id",
+            "dimension"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "reseller_entitlement_overrides_dimension_check": {
+          "name": "reseller_entitlement_overrides_dimension_check",
+          "value": "dimension IN ('OPERATION', 'CATALOGUE', 'PANEL', 'BOT')"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.reseller_grant_overrides": {
+      "name": "reseller_grant_overrides",
+      "schema": "",
+      "columns": {
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "customer_id": {
+          "name": "customer_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "dimension": {
+          "name": "dimension",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "subject": {
+          "name": "subject",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "reseller_grant_overrides_tenant_id_tenants_id_fk": {
+          "name": "reseller_grant_overrides_tenant_id_tenants_id_fk",
+          "tableFrom": "reseller_grant_overrides",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "reseller_grant_overrides_dimension_fk": {
+          "name": "reseller_grant_overrides_dimension_fk",
+          "tableFrom": "reseller_grant_overrides",
+          "tableTo": "reseller_entitlement_overrides",
+          "columnsFrom": [
+            "tenant_id",
+            "customer_id",
+            "dimension"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "customer_id",
+            "dimension"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "reseller_grant_overrides_pkey": {
+          "name": "reseller_grant_overrides_pkey",
+          "columns": [
+            "tenant_id",
+            "customer_id",
+            "kind",
+            "subject"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "reseller_grant_overrides_kind_check": {
+          "name": "reseller_grant_overrides_kind_check",
+          "value": "kind IN ('PRODUCT', 'CATEGORY', 'PANEL', 'BOT', 'OPERATION')"
+        },
+        "reseller_grant_overrides_dimension_check": {
+          "name": "reseller_grant_overrides_dimension_check",
+          "value": "(kind = 'OPERATION' AND dimension = 'OPERATION')\n          OR (kind IN ('PRODUCT', 'CATEGORY') AND dimension = 'CATALOGUE')\n          OR (kind = 'PANEL' AND dimension = 'PANEL')\n          OR (kind = 'BOT' AND dimension = 'BOT')"
+        },
+        "reseller_grant_overrides_subject_check": {
+          "name": "reseller_grant_overrides_subject_check",
+          "value": "subject = '*' OR (kind = 'OPERATION' AND subject IN ('NEW_SERVICE', 'RENEW', 'ADD_TRAFFIC', 'ADD_TIME', 'ADD_DEVICES', 'CHANGE_LOCATION')) OR (kind <> 'OPERATION' AND subject ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.reseller_minimum_notices": {
+      "name": "reseller_minimum_notices",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "customer_id": {
+          "name": "customer_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "period_start": {
+          "name": "period_start",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "period_end": {
+          "name": "period_end",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "minimum_amount": {
+          "name": "minimum_amount",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "currency": {
+          "name": "currency",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "achieved_amount": {
+          "name": "achieved_amount",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "raised_at": {
+          "name": "raised_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "reseller_minimum_notices_tenant_id_tenants_id_fk": {
+          "name": "reseller_minimum_notices_tenant_id_tenants_id_fk",
+          "tableFrom": "reseller_minimum_notices",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "reseller_minimum_notices_reseller_fk": {
+          "name": "reseller_minimum_notices_reseller_fk",
+          "tableFrom": "reseller_minimum_notices",
+          "tableTo": "resellers",
+          "columnsFrom": [
+            "tenant_id",
+            "customer_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "customer_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "reseller_minimum_notices_period_key": {
+          "name": "reseller_minimum_notices_period_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "customer_id",
+            "kind",
+            "period_start"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "reseller_minimum_notices_kind_check": {
+          "name": "reseller_minimum_notices_kind_check",
+          "value": "kind IN ('REMINDER', 'ACHIEVED')"
+        },
+        "reseller_minimum_notices_currency_check": {
+          "name": "reseller_minimum_notices_currency_check",
+          "value": "currency IN ('IRT', 'IRR', 'USD', 'EUR', 'USDT')"
+        },
+        "reseller_minimum_notices_period_check": {
+          "name": "reseller_minimum_notices_period_check",
+          "value": "period_end > period_start"
+        },
+        "reseller_minimum_notices_amounts_check": {
+          "name": "reseller_minimum_notices_amounts_check",
+          "value": "minimum_amount > 0 AND achieved_amount >= 0"
+        }
+      },
+      "isRLSEnabled": false
+    },
     "public.reseller_tier_grants": {
       "name": "reseller_tier_grants",
       "schema": "",
@@ -15136,6 +15458,18 @@
           "primaryKey": false,
           "notNull": true
         },
+        "monthly_minimum_amount": {
+          "name": "monthly_minimum_amount",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "monthly_minimum_currency": {
+          "name": "monthly_minimum_currency",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -15241,6 +15575,18 @@
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {
+        "reseller_tiers_minimum_pair_check": {
+          "name": "reseller_tiers_minimum_pair_check",
+          "value": "(monthly_minimum_amount IS NULL) = (monthly_minimum_currency IS NULL)"
+        },
+        "reseller_tiers_minimum_check": {
+          "name": "reseller_tiers_minimum_check",
+          "value": "monthly_minimum_amount IS NULL OR monthly_minimum_amount >= 0"
+        },
+        "reseller_tiers_minimum_currency_check": {
+          "name": "reseller_tiers_minimum_currency_check",
+          "value": "monthly_minimum_currency IS NULL OR monthly_minimum_currency IN ('IRT', 'IRR', 'USD', 'EUR', 'USDT')"
+        },
         "reseller_tiers_pricing_mode_check": {
           "name": "reseller_tiers_pricing_mode_check",
           "value": "pricing_mode IN ('LIST_PRICE', 'PERCENTAGE_DISCOUNT')"
@@ -15321,6 +15667,18 @@
         },
         "credit_limit_currency": {
           "name": "credit_limit_currency",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "monthly_minimum_amount": {
+          "name": "monthly_minimum_amount",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "monthly_minimum_currency": {
+          "name": "monthly_minimum_currency",
           "type": "text",
           "primaryKey": false,
           "notNull": false
@@ -15487,6 +15845,18 @@
         "resellers_discount_range_check": {
           "name": "resellers_discount_range_check",
           "value": "discount_percentage IS NULL OR (discount_percentage >= 1 AND discount_percentage <= 100)"
+        },
+        "resellers_minimum_pair_check": {
+          "name": "resellers_minimum_pair_check",
+          "value": "(monthly_minimum_amount IS NULL) = (monthly_minimum_currency IS NULL)"
+        },
+        "resellers_minimum_check": {
+          "name": "resellers_minimum_check",
+          "value": "monthly_minimum_amount IS NULL OR monthly_minimum_amount >= 0"
+        },
+        "resellers_minimum_currency_check": {
+          "name": "resellers_minimum_currency_check",
+          "value": "monthly_minimum_currency IS NULL OR monthly_minimum_currency IN ('IRT', 'IRR', 'USD', 'EUR', 'USDT')"
         }
       },
       "isRLSEnabled": false

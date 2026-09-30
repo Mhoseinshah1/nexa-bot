@@ -12,7 +12,13 @@ import {
   type ResolvedSettingResponse,
   type TemplateViewResponse,
 } from '@nexa/contracts';
-import { fetchFeatureFlags, fetchSettings, fetchTemplates, saveSetting } from '../api/client';
+import {
+  fetchFeatureFlags,
+  fetchSettings,
+  fetchTemplates,
+  fetchTrialPanels,
+  saveSetting,
+} from '../api/client';
 import { t, type WebKey } from '../i18n/web.fa';
 import { useSubmissionKey } from '../submission-key';
 import { templateCopy } from '../template-copy';
@@ -24,7 +30,6 @@ const SETTING_KEY = 'bot.main_menu';
 
 /** The sentence under a feature-gated button, keyed by the contract's own flag union. */
 const FEATURE_NOTES: Readonly<Record<NonNullable<BotMenuButton['feature']>, WebKey>> = {
-  trials: 'web.bot_buttons_needs_trials',
   referrals: 'web.bot_buttons_needs_referrals',
 };
 
@@ -40,7 +45,8 @@ const FEATURE_NOTES: Readonly<Record<NonNullable<BotMenuButton['feature']>, WebK
  * - the LABEL of each button: its `bot.menu.*` template, edited with the texts screen's own
  *   card — the bot draws the keyboard from the tenant's text AND routes a tap by it;
  * - whether a feature-gated button can appear at all: its feature flag, shown here and
- *   switched on the Features page.
+ *   switched on the Features page — or, for the trial button (F5), whether any panel
+ *   offers a trial now, from the Trials overview and switched on each panel's own tab.
  *
  * The preview packs the draft with the contract's own layout rule (`packMainMenuRows`), so
  * it is the keyboard the bot will draw, not a picture of one.
@@ -50,14 +56,31 @@ export function BotButtonsPage({
   denied,
   mayViewTemplates,
   mayEditTemplates,
+  mayViewPanels = false,
 }: {
   mayEdit: boolean;
   denied: boolean;
   mayViewTemplates: boolean;
   mayEditTemplates: boolean;
+  /** F5: `panels.view`, which the trial overview — "does any panel offer a trial" — needs. */
+  mayViewPanels?: boolean;
 }) {
   const settings = useQuery({ queryKey: ['settings'], queryFn: fetchSettings, enabled: !denied });
   const flags = useQuery({ queryKey: ['features'], queryFn: fetchFeatureFlags, enabled: !denied });
+  const trialPanels = useQuery({
+    queryKey: ['trial-panels'],
+    queryFn: fetchTrialPanels,
+    enabled: !denied && mayViewPanels,
+  });
+  /*
+   * Whether the trial button would be drawn now: known only from a successful read of the
+   * overview, which asks the evaluator the bot asks. Unknown (no permission, not loaded,
+   * refused) says nothing rather than guessing either way.
+   */
+  const trialOffered =
+    trialPanels.data === undefined
+      ? null
+      : trialPanels.data.panels.some((panel) => panel.offeredNow);
   const templates = useQuery({
     queryKey: ['templates'],
     queryFn: fetchTemplates,
@@ -78,6 +101,7 @@ export function BotButtonsPage({
             key={String(setting.version ?? 0)}
             setting={setting}
             flags={flags.data?.flags ?? []}
+            trialOffered={trialOffered}
             labels={menuTemplates}
             mayEdit={mayEdit}
           />
@@ -136,11 +160,14 @@ function storedLayout(setting: ResolvedSettingResponse): readonly MainMenuLayout
 function LayoutCard({
   setting,
   flags,
+  trialOffered,
   labels,
   mayEdit,
 }: {
   setting: ResolvedSettingResponse;
   flags: readonly FeatureFlagResponse[];
+  /** Whether any panel offers a trial now; null when the page cannot know. */
+  trialOffered: boolean | null;
   labels: readonly TemplateViewResponse[];
   mayEdit: boolean;
 }) {
@@ -149,6 +176,9 @@ function LayoutCard({
   const [draft, setDraft] = useState<readonly MainMenuLayoutEntry[]>(() => storedLayout(setting));
   const flagOn = (button: BotMenuButton) =>
     button.feature === null || flags.find((flag) => flag.key === button.feature)?.enabled === true;
+  // The preview leaves the trial button out only when the page KNOWS no panel offers one.
+  const shown = (button: BotMenuButton) =>
+    flagOn(button) && !(button.needsTrialOffer && trialOffered === false);
 
   const save = useMutation({
     mutationFn: (command: {
@@ -191,7 +221,7 @@ function LayoutCard({
     draft
       .filter((entry) => entry.enabled)
       .map((entry) => mainMenuButton(entry.button))
-      .filter(flagOn),
+      .filter(shown),
   );
 
   return (
@@ -225,6 +255,14 @@ function LayoutCard({
                           {t(FEATURE_NOTES[button.feature])}{' '}
                           {!flagOn(button) && (
                             <Badge tone="warn">{t('web.bot_buttons_feature_off')}</Badge>
+                          )}
+                        </p>
+                      )}
+                      {button.needsTrialOffer && (
+                        <p className="muted small">
+                          {t('web.bot_buttons_needs_trial_offer')}{' '}
+                          {trialOffered === false && (
+                            <Badge tone="warn">{t('web.bot_buttons_trial_not_offered')}</Badge>
                           )}
                         </p>
                       )}

@@ -11,6 +11,7 @@ import type {
   TicketReplyFileMimeType,
 } from '@nexa/contracts';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
+import type { CaptionEntity } from './caption-markup.js';
 
 /**
  * What a button says.
@@ -155,6 +156,13 @@ export interface CustomerMessage {
    * both today, and Telegram's `reply_markup` holds one or the other.
    */
   readonly keyboard?: MainMenuVariant;
+  /**
+   * Round N (F1): send this as a REPLY to one message of the same chat — the complete
+   * receipt-review record under the review message whose caption could not hold it. Only the
+   * first part of a split body carries it; `allow_sending_without_reply`, so a message
+   * deleted in between costs the link and never the record.
+   */
+  readonly replyToMessageId?: number;
 }
 
 /**
@@ -210,7 +218,7 @@ export interface CustomerFileMessage {
    * image rather than in a second message beside it. Absent means a bare file, which is
    * what every further receipt of the same payment is.
    */
-  readonly caption?: { readonly templateKey: TemplateKey; readonly values: TemplateValues };
+  readonly caption?: CustomerCaption;
   /**
    * R1: refuse a plain-text caption over Telegram's bound (`CAPTION_OVER_BOUND`) instead of
    * cutting it — for a caption that must arrive whole, like the referral invite whose link
@@ -219,6 +227,40 @@ export interface CustomerFileMessage {
   readonly captionWhole?: true;
   /** An inline keyboard on the file, with `CustomerMessage.buttons`' rules. */
   readonly buttons?: readonly CustomerButton[];
+}
+
+/**
+ * A file's caption: a template key and its values, rendered where the tenant's overrides
+ * live, in the key's own format.
+ *
+ * Round N (F2): `markup` carries the formatting of ONE value — a provider's ready-made
+ * caption read by `parseCaptionMarkup` into plain text and Telegram entities. The messenger
+ * places the entities on that value inside the rendered caption (`placeCaptionEntities`),
+ * and only for a PLAIN_TEXT key: an HTML key is parsed by Telegram, and the two cannot be
+ * mixed on one caption.
+ */
+export interface CustomerCaption {
+  readonly templateKey: TemplateKey;
+  readonly values: TemplateValues;
+  readonly markup?: {
+    /** The placeholder whose value the entities describe. */
+    readonly token: string;
+    readonly entities: readonly CaptionEntity[];
+  };
+}
+
+/**
+ * Round N (F2): an album — 2 to 10 uploaded files of one album class, sent as ONE
+ * `sendMediaGroup` (`media-group.ts` plans them). No keyboard: Telegram's albums carry none.
+ */
+export interface CustomerMediaGroupMessage {
+  readonly chatId: string;
+  readonly botInstanceId: BotInstanceId;
+  readonly items: readonly {
+    readonly kind: 'PHOTO' | 'DOCUMENT';
+    readonly source: Extract<CustomerFileSource, { readonly kind: 'BYTES' }>;
+    readonly caption?: CustomerCaption;
+  }[];
 }
 
 export type CustomerFileSource =
@@ -312,7 +354,7 @@ export interface CustomerMessageRef {
  * and Telegram's answer to that is the same 400 as to a long one — so it is refused
  * whole, and the caller decides what to send instead.
  */
-export type CustomerSendRefusal = 'CAPTION_OVER_BOUND' | 'NOT_EDITABLE';
+export type CustomerSendRefusal = 'CAPTION_OVER_BOUND' | 'NOT_EDITABLE' | 'TEXT_OVER_BOUND';
 
 /**
  * R3: one message a customer already has, rewritten in place — the service card after a
@@ -330,6 +372,13 @@ export interface CustomerEditMessage {
   readonly templateKey: TemplateKey;
   readonly values: TemplateValues;
   readonly buttons: readonly CustomerButton[];
+  /**
+   * Round N (F1): the edited body must arrive WHOLE. Over Telegram's bound it is refused
+   * without a request — `CAPTION_OVER_BOUND` for a caption (never cut by `boundCaption`),
+   * `TEXT_OVER_BOUND` for a text (never folded into `NOT_EDITABLE`) — so the caller can
+   * choose an arrangement that loses nothing. Absent keeps the cut and the refusal as before.
+   */
+  readonly whole?: true;
 }
 
 export interface CustomerMessenger {
@@ -357,6 +406,17 @@ export interface CustomerMessenger {
    * a `reason`, without a request — see `CustomerSendRefusal`.
    */
   sendFile(scope: TenantContext, message: CustomerFileMessage): Promise<CustomerSendResult>;
+
+  /**
+   * Round N (F2): an album of uploaded files, as one `sendMediaGroup`. Same contract as
+   * `sendFile`: never throws for a send failure, and the outcome is the album's — Telegram
+   * delivers an album whole or not at all. Optional, so a stand-in written before it still
+   * satisfies the port; a caller that finds it absent sends the files one by one.
+   */
+  sendMediaGroup?(
+    scope: TenantContext,
+    message: CustomerMediaGroupMessage,
+  ): Promise<CustomerSendResult>;
 
   /**
    * R2 (v0.3.5 real-test items 3–5), beside R3's `edit` and on its rules: the receipt a

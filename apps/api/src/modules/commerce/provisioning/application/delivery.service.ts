@@ -23,6 +23,11 @@ import type {
 } from '../../messaging/application/ports.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
 import { serviceIdOrNotFound } from './service-id.js';
+import {
+  cardRetryDelayMs,
+  type CardMessageRef,
+  type OperationCardRepository,
+} from './operation-card.js';
 import type {
   CustomerContactReader,
   QrCodeEncoder,
@@ -137,6 +142,12 @@ export interface DeliverySweepReport {
 export interface DeliveryRecord {
   readonly state: ServiceDeliveryState;
   readonly recorded: boolean;
+  /**
+   * Codex review of #116: the chat and bot the link actually went to, when that is not the
+   * caller's — a link change answered ON the card it was asked from, through the bot that
+   * drew that card. The files that follow go there too, so they arrive beside the link.
+   */
+  readonly sentTo?: { readonly chatId: string; readonly botInstanceId: BotInstanceId };
 }
 
 /**
@@ -209,6 +220,12 @@ export interface DeliveryServiceDeps {
    * created». Optional: without it every automatic delivery is the purchase card.
    */
   readonly rotations?: RotationHistoryReader;
+  /**
+   * Round N (F4): the service card a customer's link change was asked from. The new link is
+   * delivered ON that card (`claimRotationCard`) instead of in a message beside it.
+   * Optional: without it the link change is announced as its own message, as in R3.
+   */
+  readonly cards?: Pick<OperationCardRepository, 'claimRotationCard' | 'release'>;
 }
 
 /**
@@ -282,7 +299,15 @@ export class DeliveryService {
      * the automatic lane, from `RotationHistoryReader`; a customer's or operator's resend
      * keeps the card it always sent.
      */
-    options: { readonly rotated?: boolean } = {},
+    options: {
+      readonly rotated?: boolean;
+      /**
+       * Round N (F4): the service card «🔗 لینک اشتراک» was tapped on. The link is shown ON
+       * it (`showLinkOnCard`) rather than sent as a new message; set only by a customer's
+       * own request.
+       */
+      readonly card?: CardMessageRef;
+    } = {},
   ): Promise<DeliveryRecord> {
     if (service.subscriptionUrl === null) {
       /*
@@ -374,10 +399,17 @@ export class DeliveryService {
      * it, and the record of the old link's send must not land on the row that now holds
      * the new one: that would mark a link DELIVERED the customer never received.
      */
-    const result =
+    const rotated =
       options.rotated === true
         ? await this.sendRotated(scope, service, chatId, botInstanceId, sentUrl)
-        : await this.sendCard(scope, service, chatId, botInstanceId, sentUrl);
+        : null;
+    const sentTo = rotated?.sentTo;
+    const result =
+      rotated !== null
+        ? rotated.result
+        : options.card !== undefined
+          ? await this.showLinkOnCard(scope, service, options.card, sentUrl)
+          : await this.sendCard(scope, service, chatId, botInstanceId, sentUrl);
 
     const now = this.deps.clock.now();
 
@@ -407,7 +439,7 @@ export class DeliveryService {
       const held = await this.deps.uow.run(scope, async (tx) =>
         this.deps.services.recordRateLimited(scope, service.id, from, retryAt, sentUrl, now, tx),
       );
-      return { state: from, recorded: held };
+      return { state: from, recorded: held, ...(sentTo === undefined ? {} : { sentTo }) };
     }
 
     const outcome = result.outcome;
@@ -450,7 +482,7 @@ export class DeliveryService {
      * separately, and a `false` here is the one case where the next sweep may send the
      * customer a second message.
      */
-    return { state: to, recorded };
+    return { state: to, recorded, ...(sentTo === undefined ? {} : { sentTo }) };
   }
 
   /**
@@ -567,7 +599,8 @@ export class DeliveryService {
          * twice. Its failure is swallowed by `sendFilesAfter` and changes nothing here.
          */
         if (record.recorded && record.state === 'DELIVERED') {
-          await this.sendFilesAfter(scope, service, lookup.contact);
+          // Codex review of #116: beside the link — the card's own chat and bot, if it went there.
+          await this.sendFilesAfter(scope, service, record.sentTo ?? lookup.contact);
         }
         if (!record.recorded) {
           // Sent, and the outcome could not be written because somebody else had
@@ -785,12 +818,59 @@ export class DeliveryService {
     chatId: string,
     botInstanceId: BotInstanceId,
     sentUrl: string,
-  ): Promise<CustomerSendResult> {
+  ): Promise<{
+    readonly result: CustomerSendResult;
+    readonly sentTo?: { readonly chatId: string; readonly botInstanceId: BotInstanceId };
+  }> {
     const values: TemplateValues = {
       serviceUsername: service.providerUsername,
       subscriptionUrl: sentUrl,
     };
     const buttons = deliveryCardButtons(service.id);
+    /*
+     * Round N (F4): a link change asked from the service card is answered ON that card —
+     * the card that has read «working» since the tap becomes «the link changed; the previous
+     * link no longer works» with the new link, and a way back to the card. Never the
+     * purchase card, never a second message. The claim (`answered_at`) is taken first, in
+     * its own transaction, so a replica cannot edit the same card; a 429 gives it back with
+     * Telegram's wait, and this delivery is re-queued by the caller.
+     *
+     * Text only: a text message cannot be edited into a photo, so the QR the panel's
+     * delivery mode may ask for is not drawn on the card. A card Telegram cannot edit
+     * (deleted, too old) falls back, once, to the message R3 sends — the smallest fallback.
+     */
+    const edit = this.deps.messenger.edit;
+    const cards = this.deps.cards;
+    if (edit !== undefined && cards !== undefined) {
+      const card = await this.deps.uow.run(scope, async (tx) =>
+        cards.claimRotationCard(scope, service.id, this.deps.clock.now(), tx),
+      );
+      if (card !== null) {
+        const edited = await edit.call(this.deps.messenger, scope, {
+          chatId: card.chatId,
+          messageId: card.messageId,
+          botInstanceId: card.botInstanceId,
+          templateKey: 'bot.service.link_rotated',
+          values,
+          buttons: [...buttons, { ...backToCardButton(service.id), row: 2 }],
+        });
+        if (edited.outcome === 'RATE_LIMITED') {
+          const retryAt = new Date(
+            this.deps.clock.now().getTime() + cardRetryDelayMs(edited.retryAfterMs),
+          );
+          await this.deps.uow.run(scope, async (tx) =>
+            cards.release(scope, card.operationId, retryAt, tx),
+          );
+          return { result: edited };
+        }
+        if (edited.outcome !== 'REFUSED') {
+          return {
+            result: edited,
+            sentTo: { chatId: card.chatId, botInstanceId: card.botInstanceId },
+          };
+        }
+      }
+    }
     const text = {
       chatId,
       botInstanceId,
@@ -799,7 +879,7 @@ export class DeliveryService {
       buttons,
     };
     const mode = deliveryModeOf(await this.deps.panelPolicy.forPanel(scope, service.panelId));
-    if (mode === 'CARD_TEXT') return this.deps.messenger.send(scope, text);
+    if (mode === 'CARD_TEXT') return { result: await this.deps.messenger.send(scope, text) };
     const photo = {
       chatId,
       botInstanceId,
@@ -816,13 +896,15 @@ export class DeliveryService {
       caption: { templateKey: 'bot.service.link_rotated', values },
       buttons,
     });
-    if (single.outcome !== 'REFUSED' || single.reason !== 'CAPTION_OVER_BOUND') return single;
+    if (single.outcome !== 'REFUSED' || single.reason !== 'CAPTION_OVER_BOUND') {
+      return { result: single };
+    }
     const first = await this.deps.messenger.sendFile(scope, {
       ...photo,
       caption: { templateKey: 'bot.service.delivered_qr_caption', values: {} },
     });
-    if (first.outcome !== 'DELIVERED') return first;
-    return this.deps.messenger.send(scope, text);
+    if (first.outcome !== 'DELIVERED') return { result: first };
+    return { result: await this.deps.messenger.send(scope, text) };
   }
 
   async redeliver(
@@ -831,11 +913,54 @@ export class DeliveryService {
     customerId: UserId,
     chatId: string,
     botInstanceId: BotInstanceId,
+    /** Round N (F4): the card the tap came from, which the link is shown on. */
+    options: { readonly card?: CardMessageRef } = {},
   ): Promise<DeliveryRecord> {
     if (service.customerId !== customerId) {
       throw errors.notFound(COMMERCE_ERROR_CODES.SERVICE_NOT_FOUND, 'Unknown service.');
     }
-    return this.deliver(scope, service, chatId, botInstanceId);
+    return this.deliver(
+      scope,
+      service,
+      chatId,
+      botInstanceId,
+      options.card === undefined ? {} : { card: options.card },
+    );
+  }
+
+  /**
+   * Round N (F4): «🔗 لینک اشتراک» on the service card. The card itself becomes the link
+   * (`bot.service.subscription`, the link in `<code>` so it copies on tap) with a way back
+   * to the card — no separate link message. Recorded exactly as any delivery is: the same
+   * `markSendStarted` stamp and outcome record, so a customer whose automatic announcement
+   * was UNCONFIRMED is now recorded as told.
+   *
+   * A card Telegram cannot edit (deleted, too old, a photo) gets the same link view ONCE as a
+   * new message — the smallest fallback. A text card cannot become the QR photo, so the QR
+   * stays with the delivery card.
+   */
+  private async showLinkOnCard(
+    scope: TenantContext,
+    service: ServiceRecord,
+    card: CardMessageRef,
+    sentUrl: string,
+  ): Promise<CustomerSendResult> {
+    const view = {
+      chatId: card.chatId,
+      botInstanceId: card.botInstanceId,
+      templateKey: 'bot.service.subscription' as const,
+      values: { subscriptionUrl: sentUrl },
+      buttons: [backToCardButton(service.id)],
+    };
+    const edit = this.deps.messenger.edit;
+    if (edit !== undefined) {
+      const edited = await edit.call(this.deps.messenger, scope, {
+        ...view,
+        messageId: card.messageId,
+      });
+      if (edited.outcome !== 'REFUSED') return edited;
+    }
+    return this.deps.messenger.send(scope, view);
   }
 
   /**
@@ -924,6 +1049,17 @@ export function deliveryCardButtons(serviceId: string): readonly CustomerButton[
 }
 
 /**
+ * Round N (F4): «🔙 بازگشت به مشخصات سرویس» — the service card, drawn back into the message
+ * that shows the link or the changed link.
+ */
+export function backToCardButton(serviceId: string): CustomerButton {
+  return {
+    label: { kind: 'TEMPLATE', key: 'bot.service.back_to_card_button' },
+    data: `${SERVICE_CARD_CALLBACK_PREFIX}${serviceId}`,
+  };
+}
+
+/**
  * The callbacks the card's buttons carry. Declared HERE, beside the one composer that
  * draws them, and read by the Telegram surface's router, so the two cannot drift: the
  * surface imports these rather than spelling them a second time.
@@ -931,3 +1067,5 @@ export function deliveryCardButtons(serviceId: string): readonly CustomerButton[
 export const TUTORIAL_CALLBACK_DATA = 'tu:';
 export const CONNECTED_CALLBACK_PREFIX = 'ok:';
 export const SUPPORT_CALLBACK_DATA = 'sp:';
+/** `sv:<service id>` — R3: the service card, edited into the message the tap came from. */
+export const SERVICE_CARD_CALLBACK_PREFIX = 'sv:';

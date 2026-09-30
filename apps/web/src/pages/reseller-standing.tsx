@@ -109,6 +109,10 @@ const ACTION_LABELS: Readonly<Record<string, WebKey>> = {
   'reseller_tier.create': 'web.history_action_tier_create',
   'reseller_tier.update': 'web.history_action_tier_update',
   'reseller_tier.grants': 'web.history_action_tier_grants',
+  // Round N, package D.
+  'reseller_tier.monthly_minimum': 'web.history_action_tier_minimum',
+  'reseller.grants_override': 'web.history_action_reseller_grants_override',
+  'reseller.monthly_minimum': 'web.history_action_reseller_minimum',
 };
 
 /** The fields the reseller and tier writes audit (`serialisableReseller`, `serialisableTier`). */
