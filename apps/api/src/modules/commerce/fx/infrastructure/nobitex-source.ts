@@ -1,7 +1,13 @@
 import type { FxBaseAsset, ProviderHttpClient } from '@nexa/contracts';
 import { assertOutsideTransaction } from '../../../../infrastructure/transaction-boundary.js';
 import type { FxSourceAdapter, FxSourceOutcome } from '../application/ports.js';
-import { bestBid, isExactObject, parseExactJson, priceOf, transportOutcome } from './fx-source-parsing.js';
+import {
+  bestBid,
+  isExactObject,
+  parseExactJson,
+  priceOf,
+  transportOutcome,
+} from './fx-source-parsing.js';
 
 /**
  * Nobitex, read off its OWN published documentation (`nobitex/docs-api`,
@@ -53,9 +59,7 @@ export class NobitexFxSource implements FxSourceAdapter {
     }
     const bids = body['bids'];
     if (!Array.isArray(bids)) return { kind: 'UNAVAILABLE', code: 'nobitex.no_bids' };
-    const best = bestBid(
-      bids.map((level) => (Array.isArray(level) ? priceOf(level[0]) : null)),
-    );
+    const best = bestBid(bids.map((level) => (Array.isArray(level) ? priceOf(level[0]) : null)));
     if (best === null) return { kind: 'UNAVAILABLE', code: 'nobitex.no_bids' };
     const lastUpdate = body['lastUpdate'];
     const sourceAt =

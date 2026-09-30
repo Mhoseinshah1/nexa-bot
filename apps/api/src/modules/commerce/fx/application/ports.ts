@@ -114,7 +114,12 @@ export interface FxQuoteRepository {
     tx: unknown,
   ): Promise<void>;
   sourceStates(scope: TenantContext, tx?: unknown): Promise<FxSourceStateRow[]>;
-  recordSourceSuccess(scope: TenantContext, source: FxSource, now: Date, tx: unknown): Promise<void>;
+  recordSourceSuccess(
+    scope: TenantContext,
+    source: FxSource,
+    now: Date,
+    tx: unknown,
+  ): Promise<void>;
   recordSourceFailure(
     scope: TenantContext,
     source: FxSource,

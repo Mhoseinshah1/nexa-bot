@@ -1,7 +1,10 @@
 import { and, eq, isNull, lte, or, sql } from 'drizzle-orm';
 import type { FxBaseAsset, FxSource, SalesCurrencyCode, TenantContext } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
-import { requireTenantId, type TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
+import {
+  requireTenantId,
+  type TransactionScope,
+} from '../../../../infrastructure/persistence/unit-of-work.js';
 import { fxQuotes, fxSourceStates } from '../../../../infrastructure/persistence/schema.js';
 import type {
   FxPair,
@@ -70,7 +73,10 @@ export class DrizzleFxQuoteRepository implements FxQuoteRepository {
     tx: unknown,
   ): Promise<boolean> {
     const tenantId = requireTenantId(scope);
-    const free = or(isNull(fxQuotes.refreshClaimedUntil), lte(fxQuotes.refreshClaimedUntil, input.now));
+    const free = or(
+      isNull(fxQuotes.refreshClaimedUntil),
+      lte(fxQuotes.refreshClaimedUntil, input.now),
+    );
     const due =
       input.dueBefore === null
         ? sql`true`

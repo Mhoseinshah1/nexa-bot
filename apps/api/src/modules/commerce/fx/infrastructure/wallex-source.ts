@@ -1,7 +1,13 @@
 import type { FxBaseAsset, ProviderHttpClient } from '@nexa/contracts';
 import { assertOutsideTransaction } from '../../../../infrastructure/transaction-boundary.js';
 import type { FxSourceAdapter, FxSourceOutcome } from '../application/ports.js';
-import { bestBid, isExactObject, parseExactJson, priceOf, transportOutcome } from './fx-source-parsing.js';
+import {
+  bestBid,
+  isExactObject,
+  parseExactJson,
+  priceOf,
+  transportOutcome,
+} from './fx-source-parsing.js';
 
 /**
  * Wallex, read off what its public API is documented to return (`docs/fx-audit.md` §2.2).

@@ -18,7 +18,8 @@ import type { FxSourceOutcome } from '../application/ports.js';
  */
 
 /** A JSON value with every number replaced by its exact source text. */
-export type ExactJson = string | boolean | null | ExactJson[] | { readonly [key: string]: ExactJson };
+export type ExactJson =
+  string | boolean | null | ExactJson[] | { readonly [key: string]: ExactJson };
 
 /** Parses a body keeping numbers as their exact text. Null for anything that is not JSON. */
 export function parseExactJson(text: string): ExactJson | null | undefined {
@@ -32,13 +33,18 @@ export function parseExactJson(text: string): ExactJson | null | undefined {
       }
       return value;
     };
-    return JSON.parse(text, reviver as unknown as (key: string, value: unknown) => unknown) as ExactJson;
+    return JSON.parse(
+      text,
+      reviver as unknown as (key: string, value: unknown) => unknown,
+    ) as ExactJson;
   } catch {
     return undefined;
   }
 }
 
-export function isExactObject(value: ExactJson | null | undefined): value is { readonly [key: string]: ExactJson } {
+export function isExactObject(
+  value: ExactJson | null | undefined,
+): value is { readonly [key: string]: ExactJson } {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
@@ -63,7 +69,10 @@ function higher(a: FxRate, b: FxRate): boolean {
 }
 
 /** A transport failure, in the source vocabulary. A 429 is the one answer that says "later". */
-export function transportOutcome(result: ProviderHttpResult, prefix: string): FxSourceOutcome | null {
+export function transportOutcome(
+  result: ProviderHttpResult,
+  prefix: string,
+): FxSourceOutcome | null {
   if (!result.ok) {
     return { kind: 'UNAVAILABLE', code: `${prefix}.${failureCode(result.failure)}` };
   }

@@ -33,7 +33,10 @@ export interface FxCandidate {
   readonly sourceAt: Date | null;
 }
 
-export function toCandidate(reading: FxSourceReading, quoteCurrency: SalesCurrencyCode): FxCandidate {
+export function toCandidate(
+  reading: FxSourceReading,
+  quoteCurrency: SalesCurrencyCode,
+): FxCandidate {
   return {
     source: reading.source,
     rate: normaliseRate(convertQuoteCurrency(reading.rate, reading.currency, quoteCurrency)),
