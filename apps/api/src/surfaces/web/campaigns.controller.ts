@@ -366,6 +366,7 @@ function actionViewOf(action: CampaignActionRecord, detail: CampaignDetail): Cam
     cashbackRuleId: action.cashbackRuleId,
     broadcastId: action.broadcastId,
     bulkOperationId: action.bulkOperationId,
+    frozenAudienceId: action.frozenAudienceId,
     failureCode: action.failureCode,
     launchedAt: action.launchedAt === null ? null : action.launchedAt.toISOString(),
   };

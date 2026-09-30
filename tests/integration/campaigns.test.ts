@@ -17,6 +17,10 @@ import {
   type UserId,
 } from '@nexa/contracts';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
+import { BulkOperationProcessor } from '../../apps/api/src/modules/commerce/bulk-operations/application/bulk-operation-processor';
+import { DrizzleBulkOperationRepository } from '../../apps/api/src/modules/commerce/bulk-operations/infrastructure/drizzle-bulk-operation.repository';
+import { DrizzleWalletRepository } from '../../apps/api/src/modules/commerce/wallet/infrastructure/drizzle-wallet.repository';
+import { CustomerNotifier } from '../../apps/api/src/modules/commerce/messaging/application/customer-notifier';
 import type { OrderRecord } from '../../apps/api/src/modules/commerce/orders/application/ports';
 import type {
   CampaignActionConfig,
@@ -741,7 +745,11 @@ describe('campaigns', () => {
   describe('the announcement is a broadcast of the shared lane', () => {
     const ANNOUNCE = {
       kind: 'ANNOUNCEMENT' as const,
-      terms: { body: 'سلام {firstName}، جشنواره شروع شد', buttons: [] },
+      terms: {
+        body: 'سلام {firstName}، جشنواره شروع شد',
+        buttons: [],
+        purpose: 'MARKETING' as const,
+      },
     };
 
     const broadcastOf = async (campaignId: string) =>
@@ -996,7 +1004,7 @@ describe('campaigns', () => {
       ]);
     });
 
-    it('a delayed hand-over never gifts a set other than the one confirmed', async () => {
+    it('a delayed hand-over gifts exactly the confirmed set, however the audience moved since', async () => {
       const id = await draftCampaign([GIFT], { fromMs: 2 * HOUR, toMs: DAY });
       // The confirmation commits, and the engine is unreachable for the hand-over.
       const down = new CampaignService({
@@ -1026,19 +1034,77 @@ describe('campaigns', () => {
       ).rejects.toThrow('unreachable');
       expect(await stateOf(id)).toBe('SCHEDULED');
 
-      // Somebody registers before the hand-over is retried: the set confirmed is gone.
-      await ctx.container.customers.resolveFromUpdate(tenantA, customerActor('late-gift'), {
-        idempotencyKey: 'resolve-late-gift',
-        telegramUserId: '930003',
-        from: { id: 930003, first_name: 'مریم' },
-        botInstanceId: BOT_A,
-      });
+      // The confirmation FROZE the set: one customer, held durably and named by the action.
+      const frozenId = (
+        await rows<{ frozen_audience_id: string | null }>(
+          sql`SELECT frozen_audience_id FROM campaign_actions WHERE campaign_id = ${id}`,
+        )
+      )[0]?.frozen_audience_id;
+      expect(frozenId).toBeTruthy();
+      expect(
+        await rows<{ customer_id: string }>(
+          sql`SELECT customer_id FROM frozen_audience_members WHERE frozen_audience_id = ${frozenId}`,
+        ),
+      ).toEqual([{ customer_id: customerA }]);
+
+      // Somebody registers before the hand-over is retried: the LIVE definition has moved.
+      const late = await ctx.container.customers.resolveFromUpdate(
+        tenantA,
+        customerActor('late-gift'),
+        {
+          idempotencyKey: 'resolve-late-gift',
+          telegramUserId: '930003',
+          from: { id: 930003, first_name: 'مریم' },
+          botInstanceId: BOT_A,
+        },
+      );
+      expect(
+        (await ctx.container.audience.evaluate(tenantA, { version: 1 })).customers,
+        'the live audience now has two',
+      ).toBe(2);
+
+      // Round N close (§A, closing OQ-C1-04): the retry seeds the engine from the frozen
+      // members, so it succeeds with exactly the confirmed set — the newcomer gets nothing.
       const detail = await service.launchPending(tenantA, owner, id);
       const action = detail.actions.find((a) => a.kind === 'WALLET_GIFT');
-      // Refused, visibly, and nothing was handed to the engine for the new set.
-      expect(action?.state).toBe('FAILED');
-      expect(action?.failureCode).toBe('audience.changed');
-      expect(await count(sql`SELECT count(*)::int AS n FROM bulk_operations`)).toBe(0);
+      expect(action?.state).toBe('LAUNCHED');
+      expect(action?.frozenAudienceId).toBe(frozenId);
+      const operation = await ctx.container.bulkOperations.get(
+        tenantA,
+        owner,
+        action?.bulkOperationId as string,
+      );
+      expect(operation.frozenAudienceId).toBe(frozenId);
+      expect(operation.itemCount).toBe(1);
+      expect(
+        await rows<{ customer_id: string }>(
+          sql`SELECT customer_id FROM bulk_operation_items WHERE bulk_operation_id = ${operation.id}`,
+        ),
+      ).toEqual([{ customer_id: customerA }]);
+      expect(late.customer.id).not.toBe(customerA);
+
+      // And when the start comes, the credit reaches the confirmed customer alone. The
+      // container's processor keeps the real clock, so one on the test's clock is driven.
+      clock.advance(3 * HOUR);
+      const processor = new BulkOperationProcessor({
+        repository: new DrizzleBulkOperationRepository(ctx.container.database.db),
+        wallet: new DrizzleWalletRepository(ctx.container.database.db),
+        grants: ctx.container.provisioning,
+        notifier: new CustomerNotifier({
+          notifications: ctx.container.customerNotifications,
+          bots: { botFor: async () => BOT_A },
+          ids: ctx.container.ids,
+        }),
+        outbox: ctx.container.outbox,
+        uow: ctx.container.uow,
+        scopeActivity: ctx.container.tenants,
+        sellingCurrency: async () => 'IRT',
+        clock,
+        ids: ctx.container.ids,
+        logger: { info: () => undefined, error: () => undefined },
+      });
+      await processor.pass(tenantA);
+      expect(await massCredits()).toEqual([{ customer_id: customerA, amount: '5000' }]);
     });
 
     it('refuses a time gift that reaches no service, before anything is written', async () => {

@@ -33,7 +33,10 @@ export class CampaignScheduleLoop {
   private readonly progress: LoopProgress;
 
   constructor(
-    private readonly service: Pick<CampaignService, 'startIfDue' | 'completeIfDue'>,
+    private readonly service: Pick<
+      CampaignService,
+      'startIfDue' | 'completeIfDue' | 'releaseFrozenAudiences'
+    >,
     private readonly campaigns: Pick<CampaignRepository, 'dueToStart' | 'dueToComplete'>,
     private readonly options: {
       readonly scope: () => TenantContext | null;
@@ -82,6 +85,8 @@ export class CampaignScheduleLoop {
         return { started: 0, completed: 0 };
       }
       const result = await this.runOnce(scope);
+      const released = await this.releaseOnce(scope);
+      if (released > 0) this.options.logger.info({ released }, 'frozen audiences released');
       this.progress.record(this.options.now().getTime());
       if (result.started + result.completed > 0) {
         this.options.logger.info(result, 'campaigns moved');
@@ -93,6 +98,15 @@ export class CampaignScheduleLoop {
     } finally {
       this.running = false;
     }
+  }
+
+  /**
+   * Round N close (§A): the frozen-audience release sweep, once per tick beside the two
+   * edges. Its own method so `runOnce`'s answer stays the two counts the tests pin.
+   */
+  async releaseOnce(scope: TenantContext): Promise<number> {
+    const actor = systemJobActor('campaign-schedule', this.options.ids.uuid() as CorrelationId);
+    return this.service.releaseFrozenAudiences(scope, actor);
   }
 
   /** One pass over one tenant, without the loop's own re-entrancy guard. */

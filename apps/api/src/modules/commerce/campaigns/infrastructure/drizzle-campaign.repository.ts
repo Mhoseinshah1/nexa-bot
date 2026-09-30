@@ -206,6 +206,7 @@ export class DrizzleCampaignRepository implements CampaignRepository {
       broadcastId: row.broadcastId,
       bulkOperationId: row.bulkOperationId,
       binding: (row.binding as CampaignLaunchBindingRecord | null) ?? null,
+      frozenAudienceId: row.frozenAudienceId,
       failureCode: row.failureCode,
       launchedAt: row.launchedAt,
     }));
@@ -402,13 +403,17 @@ export class DrizzleCampaignRepository implements CampaignRepository {
 
   async bindAction(
     scope: TenantContext,
-    input: { readonly actionId: string; readonly binding: CampaignLaunchBindingRecord },
+    input: {
+      readonly actionId: string;
+      readonly binding: CampaignLaunchBindingRecord;
+      readonly frozenAudienceId: string;
+    },
     tx: unknown,
   ): Promise<boolean> {
     const tenantId = requireTenantId(scope);
     const rows = await this.exec(tx)
       .update(campaignActions)
-      .set({ binding: input.binding })
+      .set({ binding: input.binding, frozenAudienceId: input.frozenAudienceId })
       .where(
         and(
           eq(campaignActions.tenantId, tenantId),
