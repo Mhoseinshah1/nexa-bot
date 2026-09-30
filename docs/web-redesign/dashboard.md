@@ -274,7 +274,8 @@ polls faster than its constant, and every poll stops on a final answer (`pollUnl
 - The panel cards no longer walk one page of `GET /panels`, so the partial-fleet caveat and
   its copy are gone; `docs/phase3d-falsification.md` R-01, V5 and W11 cite tests that now pin
   the exact-count successors of those rules (same names, `dashboard.test.tsx` › "the dashboard
-  fleet").
+  fleet"). The consistency pass rewrote those three rows' rule and mutation text to the
+  current rules and re-ran each mutation against the current page (each fails its test).
 - The WP12 dashboard assertions left `reports.test.tsx` for `dashboard.test.tsx`; the two
   pure report rules they also held (range from the URL, the five-minute cadence) stay there.
 
