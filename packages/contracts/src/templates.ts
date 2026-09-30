@@ -10586,10 +10586,11 @@ export const TEMPLATES = [
   {
     key: 'bot.appearance.test_message',
     description:
-      'The test message «ارسال پیام آزمایشی» sends to the signed-in administrator\u2019s own ' +
-      'Telegram chat, through the bot they chose. Its default body names every appearance ' +
-      'slot with an `{icon:\u2026}` marker, so one message shows each configured custom emoji ' +
-      'where Telegram accepts them and the fallback emoji where it does not.',
+      'The human-readable part of the test message «ارسال پیام آزمایشی» sends to the ' +
+      'signed-in administrator\u2019s own Telegram chat, through the bot they chose. The ' +
+      'messenger appends a fixed line carrying every appearance slot\u2019s marker below it, ' +
+      'so the icons under test never depend on this body; a marker typed here renders as ' +
+      'its fallback emoji.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
