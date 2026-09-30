@@ -297,9 +297,6 @@ shown, while the operator has no Telegram bound or nothing is configured.
 
 ### 8.1 Mutation runs
 
-Recorded below after each mutation was applied, the named test run, the file restored
-byte for byte, and the test run green again.
-
 Each mutation was applied to the working tree by an exact-string replacement, the named
 file run with `pnpm exec vitest run --project <unit|integration> <file>`, the source
 restored with `git checkout -- <file>` (byte for byte; `git status` clean afterwards), and
