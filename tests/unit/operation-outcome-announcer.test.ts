@@ -7,10 +7,12 @@ import type {
   UserId,
 } from '@nexa/contracts';
 import {
+  CARD_ANSWERED_FAILURE_TYPES,
   ANNOUNCE_GRACE_MS,
   CUSTOMER_REQUESTABLE_OPERATIONS,
   OperationOutcomeAnnouncer,
 } from '../../apps/api/src/modules/commerce/messaging/application/operation-outcome-announcer';
+import { CARD_FAILURE_ANSWERED_OPERATIONS } from '../../apps/api/src/modules/commerce/provisioning/application/operation-card';
 import type { CustomerNotifier } from '../../apps/api/src/modules/commerce/messaging/application/customer-notifier';
 import type { TransactionScope } from '../../apps/api/src/infrastructure/persistence/unit-of-work';
 
@@ -262,16 +264,37 @@ describe('announcing how an operation turned out', () => {
     }
   });
 
-  it('R3: a disable or enable with no card is still told by message, and a card never hides a failure', async () => {
+  it('R3: a disable or enable with no card is still told by message, success or failure', async () => {
     for (const type of ['SUSPEND', 'RESUME'] as const) {
       const plain = announcerFor(type, 'SUCCEEDED', CUSTOMER, null, false);
       await plain.announcer.announce(scope, 'operation-1');
       expect(plain.queued.map((one) => one.kind)).toEqual(['SERVICE_ACTION_SUCCEEDED']);
 
-      const failed = announcerFor(type, 'FAILED', CUSTOMER, null, true);
+      const failed = announcerFor(type, 'FAILED', CUSTOMER, null, false);
       await failed.announcer.announce(scope, 'operation-1');
       expect(failed.queued.map((one) => one.kind)).toEqual(['SERVICE_ACTION_FAILED']);
     }
+  });
+
+  /*
+   * Round N (F4): the card turned «working» on the tap, so a disable, enable or link change
+   * asked from a card that ENDED without happening is answered by that card
+   * (`OperationCardEditor`, with the failure notice) and stamped here without a second,
+   * separate message. Every other type keeps its failure message even with a card.
+   */
+  it('Round N: a failure asked from a card is stamped and told on the card, not by message', async () => {
+    for (const type of ['SUSPEND', 'RESUME', 'ROTATE_SUBSCRIPTION'] as const) {
+      for (const state of ['FAILED', 'ABANDONED'] as const) {
+        const { announcer, queued, stamped } = announcerFor(type, state, CUSTOMER, null, true);
+        await announcer.announce(scope, 'operation-1');
+        expect(queued, `${type} ${state}`).toEqual([]);
+        expect(stamped, `${type} ${state} is answered`).toEqual(['operation-1']);
+      }
+    }
+    const renew = announcerFor('RENEW', 'FAILED', CUSTOMER, null, true);
+    await renew.announcer.announce(scope, 'operation-1');
+    expect(renew.queued.map((one) => one.kind)).toEqual(['SERVICE_ACTION_FAILED']);
+    expect(CARD_ANSWERED_FAILURE_TYPES).toEqual(CARD_FAILURE_ANSWERED_OPERATIONS);
   });
 
   it('says nothing about an operation an OPERATOR asked for, of any requestable type', async () => {

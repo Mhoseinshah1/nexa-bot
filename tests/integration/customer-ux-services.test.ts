@@ -488,19 +488,29 @@ describe('a customer looks after the services they bought', () => {
   describe('the customer’s note', () => {
     it('sets, shows, and clears a note on the customer’s own service', async () => {
       const service = await activeService('note');
+      sent = [];
       const asked = await handle(tap(`nt:${service.id}`));
       expect(asked.replyKey).toBe('bot.service.note_prompt');
-      expect(lastText()).toContain('حداکثر 200 نویسه');
+      // Round N (F4): the prompt replaces the card in place, with the way back to it.
+      expect(messages()).toHaveLength(0);
+      const prompt = sent.filter((one) => one.url.includes('/editMessageText')).at(-1);
+      expect(String(prompt?.body['text'])).toContain('حداکثر 200 نویسه');
+      expect(JSON.stringify(prompt?.body['reply_markup'])).toContain(`sv:${service.id}`);
 
+      // The answer IS the card: the note as it now stands, and the saved line on it.
       const saved = await handle(text('  گوشی مادر  '));
-      expect(saved.replyKey).toBe('bot.service.note_saved');
+      expect(saved.replyKey).toBe('bot.service.card');
+      expect(lastText()).toContain('📝 یادداشت: گوشی مادر');
+      expect(lastText()).toContain('📝 یادداشت ذخیره شد.');
       expect((await services.findById(tenantA, service.id))?.customerNote).toBe('گوشی مادر');
       await handle(tap(`s:${service.id}`));
       expect(lastText()).toContain('📝 یادداشت: گوشی مادر');
+      expect(lastText()).not.toContain('📝 یادداشت ذخیره شد.');
 
       await handle(tap(`nt:${service.id}`));
       const cleared = await handle(text('-'));
-      expect(cleared.replyKey).toBe('bot.service.note_cleared');
+      expect(cleared.replyKey).toBe('bot.service.card');
+      expect(lastText()).toContain('📝 یادداشت حذف شد.');
       expect((await services.findById(tenantA, service.id))?.customerNote).toBeNull();
     });
 
@@ -508,11 +518,11 @@ describe('a customer looks after the services they bought', () => {
       const service = await activeService('note-bound');
       await handle(tap(`nt:${service.id}`));
       const saved = await handle(text('a\u0007b\n\nc'));
-      expect(saved.replyKey).toBe('bot.service.note_saved');
+      expect(saved.replyKey).toBe('bot.service.card');
       expect((await services.findById(tenantA, service.id))?.customerNote).toBe('a b c');
       await handle(tap(`nt:${service.id}`));
       const long = await handle(text('x'.repeat(250)));
-      expect(long.replyKey).toBe('bot.service.note_saved');
+      expect(long.replyKey).toBe('bot.service.card');
       expect((await services.findById(tenantA, service.id))?.customerNote).toHaveLength(200);
     });
 

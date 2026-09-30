@@ -1166,6 +1166,11 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.service.search_invalid': 'عبارت جستجو معتبر نیست.',
   'bot.service.card':
     '📊وضعیت سرویس: {status}\n👤 نام سرویس: {serviceUsername}\n\n🌍 موقعیت سرویس: 🚀 {serviceLocation}\n📦 نام محصول: {productName}\n\n🟩 ترافیک: {trafficBytes}\n📥 حجم مصرفی: {usedTraffic}\n💢 حجم باقی مانده: {remainingTraffic}\n\n📅 تاریخ اتمام: {expiresAt} ({remainingDays} روز)\n{noExpiry}\n\n📶 آخرین زمان اتصال شما: {lastSeen}\n\n📝 یادداشت: {note}\n\n{rotateHint}',
+  // Round N (F4): the card while a change is applied, and its one-line notice.
+  'bot.service.state_working': '⏳ در حال اعمال درخواست شما روی سرور…',
+  'bot.service.status_with_notice': '{status}\n{notice}',
+  'bot.service.notice_action_failed':
+    '⚠️ درخواست قبلی شما روی سرور انجام نشد؛ وضعیت سرویس تغییری نکرد.',
   'bot.service.state_pending_provision': '🟡 در حال ساخت',
   'bot.service.state_active': '🟢 فعال',
   'bot.service.state_suspended': '🔴 خاموش',

@@ -1,4 +1,17 @@
-import { and, asc, eq, inArray, isNotNull, isNull, lt, lte, or } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  inArray,
+  isNotNull,
+  isNull,
+  lt,
+  lte,
+  or,
+  sql,
+  type SQL,
+} from 'drizzle-orm';
 import type { BotInstanceId, TenantContext, UserId } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import {
@@ -8,9 +21,11 @@ import {
 import {
   operationCardMessages,
   provisioningOperations,
+  services,
 } from '../../../../infrastructure/persistence/schema.js';
 import {
   CARD_ANSWERED_OPERATIONS,
+  CARD_FAILURE_ANSWERED_OPERATIONS,
   type CardMessageRef,
   type ClaimedCard,
   type OperationCardRepository,
@@ -77,8 +92,9 @@ export class DrizzleOperationCardRepository implements OperationCardRepository {
     const tenantId = requireTenantId(scope);
     /*
      * The card is answered only for what it is for: a SUCCEEDED disable or enable a
-     * customer asked for. Stated in the UPDATE, so no caller can claim a card for an
-     * operation that failed or is still running.
+     * customer asked for, or (round N, F4) a disable, enable or link change that ENDED
+     * without happening — ABANDONED, or FAILED with no retry left. Stated in the UPDATE, so
+     * no caller can claim a card for an operation that is still running or reconciling.
      */
     const answerable = this.exec(tx)
       .select({ id: provisioningOperations.id })
@@ -87,8 +103,7 @@ export class DrizzleOperationCardRepository implements OperationCardRepository {
         and(
           eq(provisioningOperations.tenantId, tenantId),
           eq(provisioningOperations.id, operationId),
-          eq(provisioningOperations.state, 'SUCCEEDED'),
-          inArray(provisioningOperations.type, [...CARD_ANSWERED_OPERATIONS]),
+          cardAnswerable(),
           isNotNull(provisioningOperations.requestedByCustomerId),
         ),
       );
@@ -119,6 +134,7 @@ export class DrizzleOperationCardRepository implements OperationCardRepository {
       .select({
         serviceId: provisioningOperations.serviceId,
         requestedBy: provisioningOperations.requestedByCustomerId,
+        state: provisioningOperations.state,
       })
       .from(provisioningOperations)
       .where(
@@ -135,6 +151,7 @@ export class DrizzleOperationCardRepository implements OperationCardRepository {
     if (operation === undefined || operation.requestedBy === null) return null;
     return {
       operationId,
+      outcome: operation.state === 'SUCCEEDED' ? 'SUCCEEDED' : 'FAILED',
       serviceId: operation.serviceId,
       customerId: operation.requestedBy as UserId,
       botInstanceId: card.botInstanceId as BotInstanceId,
@@ -188,7 +205,7 @@ export class DrizzleOperationCardRepository implements OperationCardRepository {
             isNull(operationCardMessages.nextAttemptAt),
             lte(operationCardMessages.nextAttemptAt, now),
           ),
-          eq(provisioningOperations.state, 'SUCCEEDED'),
+          cardAnswerable(),
           lt(provisioningOperations.completedAt, before),
         ),
       )
@@ -196,4 +213,93 @@ export class DrizzleOperationCardRepository implements OperationCardRepository {
       .limit(limit);
     return rows.map((row) => row.id);
   }
+
+  async claimRotationCard(
+    scope: TenantContext,
+    serviceId: string,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<(CardMessageRef & { readonly operationId: string }) | null> {
+    const tenantId = requireTenantId(scope);
+    /*
+     * The card of the service's MOST RECENT successful link change a customer asked for —
+     * the one whose new link is being delivered — and only while nobody has answered it.
+     */
+    const latest = this.exec(tx)
+      .select({ id: provisioningOperations.id })
+      .from(provisioningOperations)
+      .where(
+        and(
+          eq(provisioningOperations.tenantId, tenantId),
+          eq(provisioningOperations.serviceId, serviceId),
+          eq(provisioningOperations.type, 'ROTATE_SUBSCRIPTION'),
+          eq(provisioningOperations.state, 'SUCCEEDED'),
+          isNotNull(provisioningOperations.requestedByCustomerId),
+        ),
+      )
+      .orderBy(desc(provisioningOperations.completedAt))
+      .limit(1);
+    const rows = await this.exec(tx)
+      .update(operationCardMessages)
+      .set({ answeredAt: now, nextAttemptAt: null })
+      .where(
+        and(
+          eq(operationCardMessages.tenantId, tenantId),
+          isNull(operationCardMessages.answeredAt),
+          inArray(operationCardMessages.operationId, latest),
+        ),
+      )
+      .returning({
+        operationId: operationCardMessages.operationId,
+        botInstanceId: operationCardMessages.botInstanceId,
+        chatId: operationCardMessages.chatId,
+        messageId: operationCardMessages.messageId,
+      });
+    const card = rows[0];
+    if (card === undefined) return null;
+    return {
+      operationId: card.operationId,
+      botInstanceId: card.botInstanceId as BotInstanceId,
+      chatId: card.chatId,
+      messageId: card.messageId,
+    };
+  }
+}
+
+/**
+ * The operations whose card may be answered: a SUCCEEDED `CARD_ANSWERED_OPERATIONS` one, or
+ * (round N, F4) a `CARD_FAILURE_ANSWERED_OPERATIONS` one that ended without happening —
+ * ABANDONED, or FAILED with no retry scheduled (the announcer's own "terminal failure").
+ *
+ * And (Codex review of #116) a SUCCEEDED link change whose service is not ACTIVE: its new
+ * link waits for the delivery lane, which only announces ACTIVE services, so the card —
+ * «working» since the tap — would otherwise never be answered. It is drawn as the service
+ * now is; the link follows as its own message once the service is active again. An ACTIVE
+ * service's link change stays the delivery lane's to answer (`claimRotationCard`).
+ */
+function cardAnswerable(): SQL {
+  return or(
+    and(
+      eq(provisioningOperations.state, 'SUCCEEDED'),
+      inArray(provisioningOperations.type, [...CARD_ANSWERED_OPERATIONS]),
+    ),
+    and(
+      eq(provisioningOperations.state, 'SUCCEEDED'),
+      eq(provisioningOperations.type, 'ROTATE_SUBSCRIPTION'),
+      sql`EXISTS (SELECT 1 FROM ${services}
+                   WHERE ${services.tenantId} = ${provisioningOperations.tenantId}
+                     AND ${services.id} = ${provisioningOperations.serviceId}
+                     AND ${services.state} <> 'ACTIVE')`,
+    ),
+    and(
+      inArray(provisioningOperations.type, [...CARD_FAILURE_ANSWERED_OPERATIONS]),
+      or(
+        eq(provisioningOperations.state, 'ABANDONED'),
+        and(
+          eq(provisioningOperations.state, 'FAILED'),
+          isNull(provisioningOperations.nextAttemptAt),
+        ),
+      ),
+    ),
+  ) as SQL;
 }

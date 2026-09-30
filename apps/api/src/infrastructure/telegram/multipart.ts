@@ -70,6 +70,18 @@ export function encodeMultipart(
   fields: Readonly<Record<string, string>>,
   file: MultipartFilePart,
 ): MultipartBody {
+  return encodeMultipartFiles(fields, [file]);
+}
+
+/**
+ * Round N (F2): the same body with SEVERAL files — an album (`sendMediaGroup`), whose
+ * `media` field names each part by `attach://<field>`. The fields first, then the files in
+ * the order given, each under its own field name; one boundary for all of them.
+ */
+export function encodeMultipartFiles(
+  fields: Readonly<Record<string, string>>,
+  files: readonly MultipartFilePart[],
+): MultipartBody {
   const boundary = newBoundary();
   const chunks: Buffer[] = [];
 
@@ -84,16 +96,19 @@ export function encodeMultipart(
     );
   }
 
-  chunks.push(
-    Buffer.from(
-      `--${boundary}${CRLF}` +
-        `Content-Disposition: form-data; name="${quoted(file.field)}"; filename="${quoted(file.fileName)}"${CRLF}` +
-        `Content-Type: ${file.mimeType}${CRLF}${CRLF}`,
-      'utf8',
-    ),
-    Buffer.from(file.bytes.buffer, file.bytes.byteOffset, file.bytes.byteLength),
-    Buffer.from(`${CRLF}--${boundary}--${CRLF}`, 'utf8'),
-  );
+  for (const file of files) {
+    chunks.push(
+      Buffer.from(
+        `--${boundary}${CRLF}` +
+          `Content-Disposition: form-data; name="${quoted(file.field)}"; filename="${quoted(file.fileName)}"${CRLF}` +
+          `Content-Type: ${file.mimeType}${CRLF}${CRLF}`,
+        'utf8',
+      ),
+      Buffer.from(file.bytes.buffer, file.bytes.byteOffset, file.bytes.byteLength),
+      Buffer.from(CRLF, 'utf8'),
+    );
+  }
+  chunks.push(Buffer.from(`--${boundary}--${CRLF}`, 'utf8'));
 
   return {
     contentType: `multipart/form-data; boundary=${boundary}`,

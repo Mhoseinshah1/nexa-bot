@@ -91,6 +91,9 @@ Inside the response, after decoding:
   longer shown; every file carries `bot.service.connection_file_caption` —
   «👤 نام کاربری: {serviceUsername}» — because the panel's carried Limit, Expires and raw
   `<code>` markup.
+  **Superseded again by round N (F2, `docs/n-service-ux-audit.md`):** the panel's caption is
+  the source of truth, shown through `bot.service.file_caption` with its markup read into
+  Telegram entities, and the files go as albums.
 
 ## 4. Security (E3)
 

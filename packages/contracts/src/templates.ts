@@ -5416,9 +5416,10 @@ export const TEMPLATES = [
     key: 'bot.service.file_caption',
     description:
       "The caption on one connection file: the panel's own ready-made caption, cleaned and " +
-      "bounded. PLAIN_TEXT, so a panel's text is never parsed as markup. No longer sent " +
-      'since R3: `bot.service.connection_file_caption` replaced it. Kept declared so a ' +
-      'stored override and a rollback to a release that still sends it stay valid.',
+      'bounded — the source of truth again since round N (F2), after R3 had replaced it. ' +
+      "PLAIN_TEXT: the panel's markup is read into Telegram formatting entities by this " +
+      'installation and never parsed as HTML, so `<code>` shows as code and a stray tag ' +
+      'cannot refuse the send.',
     format: 'PLAIN_TEXT',
     placeholders: [
       {
@@ -5437,9 +5438,9 @@ export const TEMPLATES = [
   {
     key: 'bot.service.connection_file_caption',
     description:
-      'The caption on each connection file: the service username and nothing else. ' +
-      "Replaces the panel's own caption, which carried Limit, Expires and raw markup a " +
-      'customer cannot use. PLAIN_TEXT.',
+      'The caption on a connection file the panel sent WITHOUT a caption of its own: the ' +
+      "service username and nothing else. Since round N (F2) the panel's own caption " +
+      '(`bot.service.file_caption`) is shown whenever it gives one. PLAIN_TEXT.',
     format: 'PLAIN_TEXT',
     placeholders: [
       {
@@ -5457,8 +5458,9 @@ export const TEMPLATES = [
       'Sent when a customer’s link change has been applied on the SAME service: says the ' +
       'link changed, that the previous link is no longer usable (the owner’s decision, R3 ' +
       'item 9), and carries the new link. Never says a service was created. Followed by ' +
-      'the new connection files where the panel provides them. TELEGRAM_HTML so the link ' +
-      'is in <code> and copies on tap.',
+      'the new connection files where the panel provides them. Since round N (F4) a link ' +
+      'change asked from the service card is answered BY that card, edited into this text ' +
+      'with a way back to the card. TELEGRAM_HTML so the link is in <code> and copies on tap.',
     format: 'TELEGRAM_HTML',
     placeholders: [
       {
@@ -5533,6 +5535,52 @@ export const TEMPLATES = [
       },
     ],
   },
+  /*
+   * Round N (F4): the service card's own status while a change is being applied, and the
+   * one-line notice a card can carry about the last change asked from it.
+   */
+  {
+    key: 'bot.service.state_working',
+    description:
+      'The status line of the service card while a change the customer (or an operator) ' +
+      'asked for — disable, enable, a new link, a location move — is still being applied ' +
+      'on the server, including while an ambiguous answer is being reconciled. The action ' +
+      'buttons are withheld until the change has a final answer.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.service.status_with_notice',
+    description:
+      'The service card’s status value when the card also carries a one-line notice about ' +
+      'the last change asked from it: the rendered status, then the notice.',
+    format: 'PLAIN_TEXT',
+    placeholders: [
+      {
+        token: 'status',
+        type: 'STRING',
+        description: 'Rendered `bot.service.state_*`.',
+        required: true,
+        repeatable: false,
+      },
+      {
+        token: 'notice',
+        type: 'STRING',
+        description: 'The rendered notice, e.g. `bot.service.notice_action_failed`.',
+        required: true,
+        repeatable: false,
+      },
+    ],
+  },
+  {
+    key: 'bot.service.notice_action_failed',
+    description:
+      'The notice on the service card when the disable, enable or link change asked from ' +
+      'it definitely did not happen on the server: the service is shown as it still is. ' +
+      'Replaces the separate failure message for a change asked from a card.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
   {
     key: 'bot.service.detail',
     description:
@@ -5590,7 +5638,8 @@ export const TEMPLATES = [
     description:
       "The customer's subscription link. TELEGRAM_HTML so the link is rendered in " +
       '<code> and can be tapped to copy; this is the one customer-facing key where ' +
-      'the format is load-bearing rather than incidental.',
+      'the format is load-bearing rather than incidental. Since round N (F4) it is also ' +
+      'what «🔗 لینک اشتراک» turns the service card into, with a way back to the card.',
     format: 'TELEGRAM_HTML',
     placeholders: [
       {

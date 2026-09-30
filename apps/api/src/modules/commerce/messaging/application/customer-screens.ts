@@ -99,6 +99,17 @@ export interface ServiceCardFacts {
   readonly note: string | null;
   /** Drawn only when the rotate button is: the hint names a button. */
   readonly rotateOffered: boolean;
+  /**
+   * Round N (F4): a change asked for this service is still being applied on the server (or
+   * its ambiguous answer reconciled). The status reads `bot.service.state_working` instead of
+   * the state, which is not final until the change is.
+   */
+  readonly working?: boolean;
+  /**
+   * Round N (F4): a one-line notice under the status about the last change asked from this
+   * card — a rendered template key, e.g. `bot.service.notice_action_failed`.
+   */
+  readonly notice?: TemplateKey;
 }
 
 /** What a transfer's summary shows of a service (Package F). */
@@ -277,7 +288,7 @@ export class CustomerScreenComposer {
     return {
       key: 'bot.service.card',
       values: {
-        status: await this.templates.render(scope, STATE_KEYS[facts.state], {}),
+        status: await this.statusLine(scope, facts),
         serviceUsername: facts.serviceUsername,
         ...(facts.serviceLocation === null ? {} : { serviceLocation: facts.serviceLocation }),
         productName: facts.productName,
@@ -292,6 +303,24 @@ export class CustomerScreenComposer {
           : {}),
       },
     };
+  }
+
+  /**
+   * The card's status value (round N, F4): the state, or «working» while a change is still
+   * being applied — and, when the card carries a notice, the status followed by it through
+   * `bot.service.status_with_notice`, so an override of the card keeps showing both.
+   */
+  private async statusLine(scope: ScopeContext, facts: ServiceCardFacts): Promise<string> {
+    const status = await this.templates.render(
+      scope,
+      facts.working === true ? 'bot.service.state_working' : STATE_KEYS[facts.state],
+      {},
+    );
+    if (facts.notice === undefined) return status;
+    return this.templates.render(scope, 'bot.service.status_with_notice', {
+      status,
+      notice: await this.templates.render(scope, facts.notice, {}),
+    });
   }
 
   /**

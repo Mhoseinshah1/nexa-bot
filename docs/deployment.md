@@ -1420,6 +1420,26 @@ the previous release writes. While the release before R1 runs:
 
 Nothing needs doing before rolling back past R1.
 
+### What a rollback changes back: albums, panel captions and the same-card answers (round N, F2 + F4)
+
+Round N's service UX (`docs/n-service-ux-audit.md`) has **no migration**: it reuses R3's
+`operation_card_messages` and adds only code and template keys. While the release before it
+runs:
+
+- **Connection files go one document each again**, with the username caption R3 wrote,
+  instead of an album with the panel's own captions.
+- **A card a round-N tap turned «working»** stays «working» until it is answered or drawn
+  again. The old release answers a SUCCEEDED disable or enable on it as before; a FAILED one
+  it tells by message (the card stays «working» until the customer taps «♻️ بروزرسانی
+  اطلاعات» or opens the service again, which draws it as it is); a link change is announced
+  as a new message, as in R3. A failure round N had already stamped as answered on the card
+  is not told again by the old release.
+- **«🔗 لینک اشتراک» sends the delivery card again**, and the renew, add-traffic, note,
+  refund, transfer and location screens arrive as new messages; their «back» buttons (`sv:`)
+  are understood by that release and draw the card in place.
+
+Nothing needs doing before rolling back past round N's service UX.
+
 ### What a rollback changes: reseller overrides and the monthly minimum (round N, package D)
 
 Package D lets an operator override a tier's entitlements for one reseller, set a monthly

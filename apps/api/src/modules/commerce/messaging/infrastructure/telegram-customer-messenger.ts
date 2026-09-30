@@ -21,6 +21,7 @@ import {
   isMessageNotModified,
   fileMessageBody,
   fileUploadBody,
+  mediaGroupUploadBody,
   telegramSend,
   textMessageBody,
   // R2: the caption edit, the keyboard removal and the deletion.
@@ -37,9 +38,12 @@ import {
   TELEGRAM_MESSAGE_MAX,
   worstOutcome,
 } from '../application/message-split.js';
+import { placeCaptionEntities, type CaptionEntity } from '../application/caption-markup.js';
 import type {
   CustomerButton,
   CustomerButtonLabel,
+  CustomerCaption,
+  CustomerMediaGroupMessage,
   CustomerButtonRow,
   CustomerEditMessage,
   CustomerFileMessage,
@@ -400,13 +404,10 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
     const token = await this.bots.tokenForBotInstance(scope, message.botInstanceId);
     if (token === null) return { outcome: 'REFUSED' };
 
-    const caption =
-      message.caption === undefined
-        ? undefined
-        : await this.templates.render(scope, message.caption.templateKey, message.caption.values);
-    const html =
-      message.caption !== undefined &&
-      templateDefinition(message.caption.templateKey).format === 'TELEGRAM_HTML';
+    const rendered =
+      message.caption === undefined ? undefined : await this.renderCaption(scope, message.caption);
+    const caption = rendered?.caption;
+    const html = rendered?.html === true;
     /*
      * An HTML caption over Telegram's bound is refused HERE, with a reason, before a
      * request is spent. It cannot be cut: a cut can split a tag or an entity, and the
@@ -429,6 +430,9 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
       chatId: message.chatId,
       kind: message.kind,
       ...(caption === undefined ? {} : { caption, html }),
+      ...(rendered === undefined || rendered.entities.length === 0
+        ? {}
+        : { captionEntities: rendered.entities }),
       buttons,
     };
     /*
@@ -474,6 +478,64 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
       ...(outcome.file === undefined ? {} : { file: outcome.file }),
       ...(outcome.messageId === null ? {} : { messageId: outcome.messageId }),
     };
+  }
+
+  /**
+   * Round N (F2): an album of uploaded files — the connection files a panel built — as ONE
+   * `sendMediaGroup`. Each item's caption is rendered from its template like `sendFile`'s,
+   * with the provider's formatting placed as entities (`renderCaption`). Telegram delivers an
+   * album whole or not at all, so the outcome is one outcome, read by the same `classify`;
+   * like `sendFile`, nothing here opens the send-failure condition.
+   */
+  async sendMediaGroup(
+    scope: TenantContext,
+    message: CustomerMediaGroupMessage,
+  ): Promise<CustomerSendResult> {
+    const token = await this.bots.tokenForBotInstance(scope, message.botInstanceId);
+    if (token === null) return { outcome: 'REFUSED' };
+    const items = [];
+    for (const item of message.items) {
+      const rendered =
+        item.caption === undefined ? undefined : await this.renderCaption(scope, item.caption);
+      // An album carries no parse mode per item here: an HTML caption is refused, not sent raw.
+      if (rendered !== undefined && rendered.html) return { outcome: 'REFUSED' };
+      items.push({
+        kind: item.kind,
+        bytes: item.source.bytes,
+        fileName: item.source.fileName,
+        mimeType: item.source.mimeType,
+        ...(rendered === undefined ? {} : { caption: rendered.caption }),
+        ...(rendered === undefined || rendered.entities.length === 0
+          ? {}
+          : { captionEntities: rendered.entities }),
+      });
+    }
+    const outcome = await telegramSend({
+      token,
+      apiBaseUrl: this.apiBaseUrl,
+      timeoutMs: this.timeoutMs,
+      method: 'sendMediaGroup',
+      multipart: mediaGroupUploadBody({ chatId: message.chatId, items }),
+    });
+    return this.classify(outcome).sent;
+  }
+
+  /**
+   * A caption rendered from its template in the key's own format — and, for a PLAIN_TEXT key
+   * whose value carries a provider's formatting (`CustomerCaption.markup`), that formatting
+   * placed as entities and bounded with the text (`placeCaptionEntities`).
+   */
+  private async renderCaption(
+    scope: TenantContext,
+    caption: CustomerCaption,
+  ): Promise<{ caption: string; html: boolean; entities: readonly CaptionEntity[] }> {
+    const text = await this.templates.render(scope, caption.templateKey, caption.values);
+    const html = templateDefinition(caption.templateKey).format === 'TELEGRAM_HTML';
+    if (html || caption.markup === undefined) return { caption: text, html, entities: [] };
+    const value = caption.values[caption.markup.token];
+    if (typeof value !== 'string') return { caption: text, html, entities: [] };
+    const placed = placeCaptionEntities(text, value, caption.markup.entities);
+    return { caption: placed.caption, html, entities: placed.entities };
   }
 
   /**

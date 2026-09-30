@@ -481,8 +481,9 @@ describe('a customer manages the service they bought', () => {
       systemActor('bot'),
       tapUpdate(`u:${service.id}`),
     );
-    // R3: answered as a notice on the button, the card left as it is.
-    expect(paused.replyKey).toBeNull();
+    // R3: answered as a notice on the button. Round N (F4): and the stale card is redrawn
+    // as the service now is, so the keyboard that offered the pause is gone.
+    expect(paused.replyKey).toBe('bot.service.card');
     expect(await operationOf(service.id, 'SUSPEND'), 'nothing was planned').toBeUndefined();
   });
 

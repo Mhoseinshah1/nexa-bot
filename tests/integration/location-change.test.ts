@@ -384,8 +384,13 @@ describe('service location change (WP-A6)', () => {
   };
 
   const runtime = () => ctx.container.botRuntime;
+  // Round N (F4): a screen a service card's button opens is the card's message, edited.
   const lastMessage = () =>
-    JSON.stringify(sent.filter((one) => one.url.includes('/sendMessage')).at(-1) ?? {});
+    JSON.stringify(
+      sent
+        .filter((one) => one.url.includes('/sendMessage') || one.url.includes('/editMessageText'))
+        .at(-1) ?? {},
+    );
   const drawnCallbacks = (): string[] =>
     [...lastMessage().matchAll(/callback_data\\?":\\?"([^"\\]+)/gu)].map((match) => match[1] ?? '');
 

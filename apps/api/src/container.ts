@@ -3754,6 +3754,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       hasRotated: (scope, serviceId) =>
         operationRepository.hasSucceeded(scope, serviceId, 'ROTATE_SUBSCRIPTION'),
     },
+    // Round N (F4): a customer's link change is answered on the card it was asked from.
+    cards: operationCardRepository,
   });
 
   /**
@@ -3930,10 +3932,10 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   const operationCardEditor = new OperationCardEditor({
     cards: operationCardRepository,
     renderer: {
-      cardFor: async (scope, customerId, serviceId) =>
+      cardFor: async (scope, customerId, serviceId, notice) =>
         serviceCardRenderer.current === null
           ? null
-          : serviceCardRenderer.current.cardFor(scope, customerId, serviceId),
+          : serviceCardRenderer.current.cardFor(scope, customerId, serviceId, notice),
     },
     messenger: customerMessenger,
     scopeActivity: tenants,
@@ -4929,12 +4931,13 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   };
   // R3 item 10: the card renderer the provisioner's card editor draws with (above).
   serviceCardRenderer.current = {
-    cardFor: (scope, customerId, serviceId) =>
+    cardFor: (scope, customerId, serviceId, notice) =>
       container.botRuntime.serviceCardFor(
         scope,
         systemJobActor('service-card', newCorrelationId(ids.uuid())),
         customerId,
         serviceId,
+        notice,
       ),
   };
   return container;

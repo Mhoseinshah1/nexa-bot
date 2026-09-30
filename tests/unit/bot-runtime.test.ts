@@ -901,6 +901,8 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.service.note_invalid',
       'bot.service.note_prompt',
       'bot.service.note_saved',
+      // Codex review of #116: a request whose operation had ended is drawn with its notice.
+      'bot.service.notice_action_failed',
       'bot.service.page_button',
       'bot.service.prev_page_button',
       'bot.service.provisioning',
