@@ -129,6 +129,14 @@ import {
   ZERO_MEANINGS,
 } from './settings.js';
 import { FEATURE_FLAG_SOURCES, FLAG_BLAST_RADII } from './features.js';
+import {
+  FX_QUOTE_SIDE,
+  fxBaseAssetSchema,
+  fxFallbackSourceSchema,
+  fxQuoteStateSchema,
+  fxSourceSchema,
+  starsPricingModeSchema,
+} from './fx.js';
 import { PLACEHOLDER_TYPES, TEMPLATE_FORMATS, TEMPLATE_REVISION_ACTIONS } from './templates.js';
 import {
   PANEL_BASE_URL_MAX_LENGTH,
@@ -4874,6 +4882,103 @@ export const PAYMENT_GATEWAY_ROUTES = {
   update: (provider: string) => `/payment-gateways/${encodeURIComponent(provider)}`,
   status: (provider: string) => `/payment-gateways/${encodeURIComponent(provider)}/status`,
   credential: (provider: string) => `/payment-gateways/${encodeURIComponent(provider)}/credential`,
+} as const;
+
+// --- Central exchange rates (package FX) ----------------------------------------------
+
+/** One source's recent history, for the operator's diagnostics. Never a body or a URL. */
+export const fxSourceStatusSchema = z.object({
+  source: fxSourceSchema,
+  lastSuccessAt: z.iso.datetime().nullable(),
+  lastFailureAt: z.iso.datetime().nullable(),
+  /** The machine code of the last failure: a failure kind, `rate_limited`, `outlier`, ... */
+  lastFailureCode: z.string().nullable(),
+  /** Set after a rate-limit answer: the source is not asked again before this. */
+  retryAfter: z.iso.datetime().nullable(),
+  consecutiveFailures: z.number().int(),
+});
+export type FxSourceStatus = z.infer<typeof fxSourceStatusSchema>;
+
+/** The quote in force, as the FX section shows it. Decimal strings, never numbers. */
+export const fxQuoteViewSchema = z.object({
+  quoteId: z.string(),
+  source: fxSourceSchema,
+  /** Quote-currency minor units per base unit, as decimal text. */
+  rate: z.string(),
+  rateMantissa: z.string(),
+  rateScale: z.number().int(),
+  sourceAt: z.iso.datetime().nullable(),
+  fetchedAt: z.iso.datetime(),
+  ageSeconds: z.number().int(),
+  policyVersion: z.number().int(),
+});
+export type FxQuoteView = z.infer<typeof fxQuoteViewSchema>;
+
+/**
+ * The FX section of the payment settings: the feature's state, the sources, the quote
+ * in force and its freshness, and — for the Stars route — the mode, the ratio and the
+ * Toman per Star they produce. Everything an operator needs to answer "what would a
+ * Star cost right now, and where does that figure come from".
+ */
+export const fxStatusResponseSchema = z.object({
+  enabled: z.boolean(),
+  baseAsset: fxBaseAssetSchema,
+  quoteCurrency: salesCurrencyCodeSchema,
+  side: z.literal(FX_QUOTE_SIDE),
+  primarySource: fxSourceSchema,
+  fallbackSource: fxFallbackSourceSchema,
+  freshTtlSeconds: z.number().int(),
+  maxStaleSeconds: z.number().int(),
+  state: fxQuoteStateSchema,
+  quote: fxQuoteViewSchema.nullable(),
+  lastAttemptAt: z.iso.datetime().nullable(),
+  lastErrorCode: z.string().nullable(),
+  sources: z.array(fxSourceStatusSchema),
+  stars: z.object({
+    pricingMode: starsPricingModeSchema,
+    /** `stars.per_usdt` as stored; `0` means not set. */
+    starsPerUsdt: z.string(),
+    /** The route's fixed rate, minor units per Star, or null when none is stored. */
+    fixedRateMinor: z.string().nullable(),
+    /**
+     * Sales-currency minor units per ONE Star under the CENTRAL rate and the ratio, to four
+     * places; null when there is no usable quote or no ratio. Informational: the figure an
+     * attempt uses is decided in its own transaction.
+     */
+    centralRatePerStar: z.string().nullable(),
+  }),
+  policyVersion: z.number().int(),
+});
+export type FxStatusResponse = z.infer<typeof fxStatusResponseSchema>;
+
+/**
+ * What an operator's manual refresh did. `outcome` is the service's own word for it:
+ * a quote was fetched, the primary failed and the fallback answered, every source
+ * failed (the previous quote, if any, stays), the feature is off, or another replica
+ * was already refreshing. The status afterwards travels with it.
+ */
+export const FX_REFRESH_OUTCOMES = [
+  'REFRESHED',
+  'REFRESHED_BY_FALLBACK',
+  'FAILED',
+  'DISABLED',
+  'BUSY',
+] as const;
+export const fxRefreshResponseSchema = z.object({
+  outcome: z.enum(FX_REFRESH_OUTCOMES),
+  /**
+   * WHY, as a machine code, whenever a source did not price the pair: the first failure
+   * or rejection of the pass (`<source>:<code>`), so a `FAILED` — and a fallback answer —
+   * is a diagnosis an operator can make. Null when the primary answered.
+   */
+  reason: z.string().nullable(),
+  status: fxStatusResponseSchema,
+});
+export type FxRefreshResponse = z.infer<typeof fxRefreshResponseSchema>;
+
+export const FX_ROUTES = {
+  status: '/fx/status',
+  refresh: '/fx/refresh',
 } as const;
 
 // --- Support FAQ and tenant media (customer UX completion §J, §I) --------------

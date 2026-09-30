@@ -1111,6 +1111,8 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.payment.stars_price_label': 'مبلغ قابل پرداخت',
   'bot.payment.stars_precheckout_refused':
     'این فاکتور دیگر قابل پرداخت نیست. لطفاً از داخل ربات دوباره پرداخت را آغاز کنید.',
+  'bot.payment.fx_unavailable':
+    'نرخ ارز در این لحظه در دسترس نیست و فاکتور جدید با این روش صادر نمی‌شود.\n\nلطفاً چند دقیقهٔ دیگر دوباره تلاش کنید یا روش پرداخت دیگری را انتخاب کنید.',
   'bot.payment.gateway_preparing':
     '⏳ فاکتور پرداخت آنلاین شما در حال ساخت است.\n\nچند لحظه صبر کنید؛ لینک پرداخت به‌محض آماده شدن در همین پیام نمایش داده می‌شود.',
   'bot.payment.gateway_invoice':

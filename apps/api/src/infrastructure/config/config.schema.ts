@@ -277,6 +277,14 @@ export const configSchema = z
      * Production insists on HTTPS; see the cross-field check below.
      */
     TELEGRAM_API_BASE_URL: z.string().url().default('https://api.telegram.org'),
+    /**
+     * The two exchange-rate sources (package FX), overridable so the integration suite
+     * can point them at a local stub. No credential ever travels to either — the reads
+     * are public — and the panel URL policy still judges the address: plaintext to a
+     * public host is refused, and loopback only where `PANEL_HTTP_ALLOW_LOOPBACK` says.
+     */
+    FX_NOBITEX_BASE_URL: z.string().url().default('https://apiv2.nobitex.ir'),
+    FX_WALLEX_BASE_URL: z.string().url().default('https://api.wallex.ir'),
     NOTIFICATION_SEND_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120_000).default(10_000),
     NOTIFICATION_DISPATCH_ENABLED: booleanish.default(true),
     NOTIFICATION_DISPATCH_INTERVAL_MS: z.coerce.number().int().min(50).max(60_000).default(2000),

@@ -1643,6 +1643,45 @@ was last given. While the release before round P runs:
 
 Nothing needs doing before rolling back past round P.
 
+### What a rollback leaves running: the central exchange rate (round P, package FX)
+
+Package FX (`docs/fx-audit.md`) adds two tables, `fx_quotes` and `fx_source_states`, and
+snapshot columns on `gateway_invoices` (migration `0150_round_p_fx`): a NOT NULL
+`conversion_policy` with a default, backfilled from the rows the previous release wrote,
+and nullable `fx_*` columns. It only adds, and the snapshot-guard trigger it widens still
+freezes every column the previous release froze. So while a release without the package
+runs:
+
+- **Every invoice already issued keeps its snapshot.** The old release reads
+  `conversion_rate_minor` and `sent_amount`, both unchanged, and never touches the new
+  columns; a Stars attempt opened under the central rate carries `conversion_rate_minor
+= NULL`, which the old code treats as a same-unit invoice for display only — the Star
+  figure it asks Telegram for is `sent_amount`, already frozen, and pre-checkout compares
+  against that.
+- **New Stars attempts are priced by the fixed rate**, whatever `stars.pricing_mode`
+  says: the old release does not read the mode, and every enabled Stars route has a rate
+  because enabling has required one since Package A. The central rate is not consulted
+  and cannot be. This is the one behaviour that silently changes across the rollback, and
+  it is the conservative direction — the operator's own figure. The old release's INSERT
+  carries the rate and no policy, so it arrives with the column's default beside a rate —
+  the combination the snapshot CHECK refuses; a BEFORE INSERT trigger in 0150 infers
+  `FIXED_RATE` for it, exactly as the backfill did for the rows already there. Without
+  that trigger every Stars attempt on the old replica failed, during the rolling deploy
+  as well as after a rollback (Codex review of #122, P1).
+- **The refresh lane stops**, and `fx_quotes` goes stale. Nothing reads it in the old
+  release. After the roll-forward the worker's first pass refreshes it within the TTL,
+  and until then a central-rate attempt is refused, not priced by a stale quote past the
+  limit.
+- **The `central_fx` flag and the six `fx.*` / `stars.*` settings are stored rows the old
+  release skips** (unknown keys are not read); the FX section is gone from the old Web
+  Admin, and the old settings page draws no group for them.
+
+Nothing needs doing before rolling back past package FX. Before rolling FORWARD again,
+nothing either: the mode an operator set is still stored, and the first attempt after
+the roll-forward prices by it — so an operator who switched to the central mode should
+expect the fixed rate to have applied in between, and can read which policy each attempt
+used on its invoice row.
+
 ### How far back you can roll
 
 **One release**, safely. Migrations are expand-only within a release

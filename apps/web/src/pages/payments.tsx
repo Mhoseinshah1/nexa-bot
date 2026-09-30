@@ -11,6 +11,7 @@ import {
   type RefundResponse,
   type RefundState,
   type RefundView,
+  type GatewayConversionPolicy,
   type PaymentMethod,
   type PaymentReceiptView,
   type PaymentState,
@@ -102,6 +103,13 @@ const METHOD_LABELS: Readonly<Record<PaymentMethod, WebKey>> = {
   WALLET: 'web.payment_method_wallet',
   MANUAL_TRANSFER: 'web.payment_method_manual',
   GATEWAY: 'web.payment_method_gateway',
+};
+
+/** Package FX: how a gateway invoice's provider figure was derived from the payable. */
+const CONVERSION_POLICY_LABELS: Readonly<Record<GatewayConversionPolicy, WebKey>> = {
+  SAME_UNIT: 'web.fx_policy_same_unit',
+  FIXED_RATE: 'web.fx_policy_fixed_rate',
+  CENTRAL_FX: 'web.fx_policy_central_fx',
 };
 
 const REFUND_STATE_LABELS: Readonly<Record<RefundState, WebKey>> = {
@@ -1451,6 +1459,26 @@ export function PaymentDetailPage({
                         {`${row.gatewayInvoice.sentAmount} / ${row.gatewayInvoice.requestAmount ?? '—'} / ${row.gatewayInvoice.finalAmount ?? '—'} / ${row.gatewayInvoice.creditAmount ?? '—'} ${row.gatewayInvoice.providerUnit}`}
                       </Ltr>,
                     ],
+                    /*
+                     * Package FX: how the provider figure was derived, and — for the central
+                     * rate — the snapshot it was derived from: the quote, its source and
+                     * times, the ratio and the effective figure per unit. Read from the
+                     * invoice row, never recomputed from today's rate.
+                     */
+                    [
+                      t('web.payment_gateway_invoice_policy'),
+                      t(CONVERSION_POLICY_LABELS[row.gatewayInvoice.conversionPolicy]),
+                    ],
+                    ...(row.gatewayInvoice.fx === null
+                      ? []
+                      : [
+                          [
+                            t('web.payment_gateway_invoice_fx'),
+                            <Ltr key="fx">
+                              {`${row.gatewayInvoice.fx.rate} ${row.gatewayInvoice.fx.quoteCurrency}/${row.gatewayInvoice.fx.baseAsset} · ${row.gatewayInvoice.fx.source} · ${row.gatewayInvoice.fx.quoteState} · ${formatTimestamp(row.gatewayInvoice.fx.fetchedAt)} · ×${row.gatewayInvoice.fx.unitRatio} → ${row.gatewayInvoice.fx.effectiveRate} ${row.gatewayInvoice.fx.quoteCurrency}/${row.gatewayInvoice.providerUnit} · v${String(row.gatewayInvoice.fx.policyVersion)}`}
+                            </Ltr>,
+                          ] as [ReactNode, ReactNode],
+                        ]),
                     [
                       t('web.payment_gateway_invoice_outcome'),
                       <Ltr key="oc">{row.gatewayInvoice.outcome ?? '—'}</Ltr>,

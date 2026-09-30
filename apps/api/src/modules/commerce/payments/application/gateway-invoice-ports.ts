@@ -1,13 +1,41 @@
 import type {
+  FxBaseAsset,
+  FxRate,
+  FxSource,
+  FxUnitRatio,
   GatewayApprovalVerdict,
+  GatewayConversionPolicy,
   GatewayInvoiceCreationState,
   GatewayInvoiceOutcome,
   GatewayProviderUnit,
   Money,
   PaymentGatewayProvider,
   PaymentId,
+  ResolvedConversion,
+  SalesCurrencyCode,
   TenantContext,
 } from '@nexa/contracts';
+
+/**
+ * What a `CENTRAL_FX` attempt snapshots (package FX, `docs/fx-audit.md` §3.5): the quote
+ * exactly as it was read and its state at the moment it priced the attempt, the unit
+ * ratio the route was configured with, and the effective sales-currency figure per
+ * provider unit as an exact fraction. Enough to explain the provider amount later
+ * without consulting any rate that came afterwards.
+ */
+export interface GatewayInvoiceFxSnapshot {
+  readonly quoteId: string;
+  readonly source: FxSource;
+  readonly baseAsset: FxBaseAsset;
+  readonly quoteCurrency: SalesCurrencyCode;
+  readonly rate: FxRate;
+  readonly sourceAt: Date | null;
+  readonly fetchedAt: Date;
+  readonly quoteState: 'FRESH' | 'STALE_ALLOWED';
+  readonly policyVersion: number;
+  readonly unitRatio: FxUnitRatio;
+  readonly effectiveRate: { readonly numerator: bigint; readonly denominator: bigint };
+}
 
 /**
  * The generic external-gateway contract (WP11A, `docs/tonpays-gateway-audit.md` §5.1).
@@ -119,12 +147,15 @@ export interface ExternalGatewayAdapter {
   readonly callBudgetPerMinute: number;
   readonly inquiryBudgetPerMinute: number;
   /**
-   * The payment's amount in the provider's unit, or null when it has no exact value there.
+   * The payment's amount in the provider's unit, or null when it has no exact value there
+   * — or when the conversion handed in is not one this provider's unit can be priced by.
    *
-   * `rateMinor` is the route's snapshotted rate for a `FIXED_RATE` provider (sales-currency
-   * minor units per provider unit), and null for a `SAME_UNIT` one, which ignores it.
+   * `conversion` is what the payment core resolved for the attempt from the route's
+   * descriptor (package FX): the same unit, an operator's fixed rate, or the central
+   * quote with a unit ratio. The adapter is the authority on its UNIT; the arithmetic for
+   * each policy is the contract's, so no adapter derives a rate of its own.
    */
-  providerAmountOf(amount: Money, rateMinor: bigint | null): bigint | null;
+  providerAmountOf(amount: Money, conversion: ResolvedConversion): bigint | null;
   /** A fresh provider order id for one attempt. Never reused, never re-keyed. */
   newOrderId(): string;
   /**
@@ -163,6 +194,10 @@ export interface GatewayInvoiceRecord {
    * currency minor units per provider unit. Frozen with the row. Null for `SAME_UNIT`.
    */
   readonly conversionRateMinor: bigint | null;
+  /** How `sentAmount` was derived from the payable (package FX). Frozen with the row. */
+  readonly conversionPolicy: GatewayConversionPolicy;
+  /** The central-rate snapshot of a `CENTRAL_FX` attempt, frozen with the row. Null otherwise. */
+  readonly fx: GatewayInvoiceFxSnapshot | null;
   /** The bot whose token sends the invoice and whose webhook may pay it. Stars only. */
   readonly botInstanceId: string | null;
   /**
@@ -210,6 +245,8 @@ export interface GatewayInvoiceRepository {
       readonly providerUnit: GatewayProviderUnit;
       readonly sentAmount: bigint;
       readonly conversionRateMinor: bigint | null;
+      readonly conversionPolicy: GatewayConversionPolicy;
+      readonly fx: GatewayInvoiceFxSnapshot | null;
       readonly botInstanceId: string | null;
       readonly now: Date;
     },

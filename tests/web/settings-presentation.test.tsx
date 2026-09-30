@@ -396,6 +396,30 @@ describe('the settings page', () => {
     });
   });
 
+  it('sends a decimal ratio typed in Persian digits with the Arabic separator as the Latin decimal the schema accepts (Codex #122)', async () => {
+    const api = stubApi([
+      {
+        url: '/settings',
+        body: { settings: [setting({ key: 'stars.per_usdt', value: '', configures: null })] },
+      },
+      {
+        url: '/settings/stars.per_usdt',
+        body: { setting: setting({ key: 'stars.per_usdt', value: '77.5' }), changed: true },
+      },
+    ]);
+    renderPage(<SettingsPage mayEdit denied={false} />);
+    const field = (await screen.findByLabelText(
+      t('web.setting_stars_per_usdt'),
+    )) as HTMLInputElement;
+    expect(field).toHaveAttribute('inputmode', 'decimal');
+    fireEvent.change(field, { target: { value: ' ۷۷٫۵ ' } });
+    fireEvent.click(screen.getByRole('button', { name: t('web.save') }));
+    await waitFor(() => {
+      const write = api.calls.find((call) => call.method === 'POST');
+      expect(write?.body).toMatchObject({ value: '77.5' });
+    });
+  });
+
   /**
    * F2: any safe integer is a number; a digit cap sent a valid 16-digit id as a string.
    *

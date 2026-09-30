@@ -491,6 +491,7 @@ function CurrentValue({ control, value }: { control: SettingControl | null; valu
         </span>
       );
     case 'text':
+    case 'decimal':
       return typeof value === 'string' && value !== '' ? <Ltr>{value}</Ltr> : unset;
     case 'select': {
       const option = control.options.find((candidate) => candidate.value === value);
@@ -615,6 +616,18 @@ function SettingEditor({
       return (
         <TextEditor id={id} title={title} value={value} onChange={onChange} disabled={disabled} />
       );
+    case 'decimal':
+      // Digits normalised as typed, so the operator sees the value the server is sent.
+      return (
+        <TextEditor
+          id={id}
+          title={title}
+          value={value}
+          onChange={(next) => onChange(typeof next === 'string' ? decimalText(next) : next)}
+          disabled={disabled}
+          inputMode="decimal"
+        />
+      );
     case 'select':
       return (
         <SelectEditor
@@ -695,6 +708,21 @@ function latinDigits(text: string): string {
     .replace(/[\s,\u066C\u2009\u202F']/gu, '')
     .replace(/[\u06F0-\u06F9]/gu, (d) => String(d.charCodeAt(0) - 0x06f0))
     .replace(/[\u0660-\u0669]/gu, (d) => String(d.charCodeAt(0) - 0x0660));
+}
+
+/**
+ * A decimal as the registry spells it: Latin digits and `.`. Persian and Arabic-Indic
+ * digits are the same number written differently, and the Arabic decimal separator `٫`
+ * is a point; surrounding whitespace is noise. Anything else is left as typed for the
+ * server's pattern to refuse rather than for a field to reinterpret (Codex review of #122).
+ */
+export function decimalText(text: string): string {
+  return text
+    .trim()
+    .replace(/[\s\u2009\u202F]/gu, '')
+    .replace(/[\u06F0-\u06F9]/gu, (d) => String(d.charCodeAt(0) - 0x06f0))
+    .replace(/[\u0660-\u0669]/gu, (d) => String(d.charCodeAt(0) - 0x0660))
+    .replace(/\u066B/gu, '.');
 }
 
 /**
@@ -786,12 +814,14 @@ function TextEditor({
   value,
   onChange,
   disabled,
+  inputMode,
 }: {
   id: string;
   title: string;
   value: unknown;
   onChange: (next: unknown) => void;
   disabled: boolean;
+  inputMode?: 'decimal';
 }) {
   return (
     <div className="field">
@@ -801,6 +831,7 @@ function TextEditor({
         className="input ltr mono"
         value={typeof value === 'string' ? value : ''}
         disabled={disabled}
+        inputMode={inputMode}
         onChange={(event) => onChange(event.target.value)}
       />
     </div>
