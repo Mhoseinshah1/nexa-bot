@@ -6,24 +6,210 @@
  * Owned by the OPS-B agent. Page-scoped classes only.
  */
 
+/* --- Shared: the in-page section list (settings, reminders) ------------------- */
+
 /*
- * WP-A1: the settings page, one section per group of settings. The heading names the
- * group; each setting inside is still its own card, saved by its own button.
+ * A long settings-like page: the list of its sections at the start, sticky, and every
+ * section rendered in the column beside it. Below 980px the list becomes a wrapping row
+ * of chips above the sections.
+ */
+.ob-sectioned {
+  display: grid;
+  grid-template-columns: 196px minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+.ob-secnav {
+  position: sticky;
+  top: 16px;
+  border-inline-end: 1px solid var(--line);
+  padding-inline-end: 8px;
+}
+.ob-secnav ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ob-secnav button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  text-align: start;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  padding: 8px 12px;
+  color: var(--fg-2);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.ob-secnav button:hover {
+  color: var(--fg);
+  background: var(--bg-3);
+}
+.ob-secnav button[aria-current='true'] {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.ob-secnav-mark {
+  display: inline-flex;
+}
+/* A section is a jump target: it is focused programmatically, never tabbed to. */
+.ob-sectioned [tabindex='-1']:focus {
+  outline: none;
+}
+@media (max-width: 980px) {
+  .ob-sectioned {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .ob-secnav {
+    position: static;
+    border-inline-end: none;
+    padding-inline-end: 0;
+  }
+  .ob-secnav ul {
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .ob-secnav button {
+    width: auto;
+    border: 1px solid var(--line-2);
+    border-radius: var(--radius-pill);
+    padding: 4px 12px;
+    font-size: var(--fs-sm);
+  }
+}
+
+/* --- Settings (WP-A1) -------------------------------------------------------- */
+
+/*
+ * One card per group; inside it one row per setting, in the reference's setting-row
+ * layout: the Persian label, its helper text and the value in force on the start side,
+ * the control and its own Save on the end side, notices and the closed technical
+ * disclosure across the whole row beneath.
  */
 .settings-group {
+  scroll-margin-top: 16px;
+}
+.set-row {
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--line);
+}
+.set-row:last-child {
+  border-bottom: none;
+}
+.set-row form > * + *,
+form.set-row > * + * {
+  margin-top: 10px;
+}
+.set-row-main {
   display: grid;
-  gap: 12px;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+  gap: 10px 24px;
+  align-items: start;
 }
-.settings-group + .settings-group {
-  margin-top: 24px;
+.set-row-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
 }
-.settings-group-head {
-  font-size: 14px;
-  color: var(--fg-2);
+.set-row-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.set-row-label {
+  font-size: var(--fs-ui);
+  font-weight: 600;
+  color: var(--fg);
+}
+.set-row-title h3 {
+  margin: 0;
+  font-size: var(--fs-ui);
+  font-weight: 600;
+  color: var(--fg);
+}
+.set-row-current {
+  margin-top: 2px;
+}
+.set-row-control {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.set-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
 }
 .settings-technical {
-  margin-top: 12px;
+  font-size: var(--fs-sm);
 }
+.settings-technical > summary {
+  font-weight: 400;
+}
+@media (max-width: 760px) {
+  .set-row-main {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .set-row-actions {
+    justify-content: flex-start;
+  }
+}
+/* --- Reminders (WP-A9) --------------------------------------------------------- */
+
+/* A family's switches, each a line: name and helper, state, switch. */
+.rem-flag {
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--line);
+}
+.rem-flag > * + * {
+  margin-top: 8px;
+}
+.rem-flag-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.rem-flag-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.rem-note {
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--line);
+}
+.rem-note:last-child {
+  border-bottom: none;
+}
+.rem-time {
+  max-width: 160px;
+}
+.rem-templates {
+  padding: 12px 18px;
+  background: var(--bg-1);
+  border-bottom-left-radius: var(--radius-card);
+  border-bottom-right-radius: var(--radius-card);
+}
+.rem-templates > * + * {
+  margin-top: 10px;
+}
+
 /* Package B: a channel's handle, id, join link and flag — wraps on a narrow screen. */
 .channel-row {
   display: flex;
@@ -39,12 +225,53 @@
 
 /* --- Features (WP-A2) -------------------------------------------------------- */
 
-.feature-settings {
-  margin-top: 12px;
-  border-top: 1px solid var(--line);
-  padding-top: 10px;
+/* One list of features, each a row: name and sentence, then its state and switch. */
+.feature-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
 }
-.feature-settings h3 {
+.feature-row {
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--line);
+}
+.feature-row:last-child {
+  border-bottom: none;
+}
+.feature-row-main {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+}
+.feature-row-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.feature-row-text h3 {
+  margin: 0;
+  font-size: var(--fs-ui);
+  font-weight: 600;
+}
+.feature-row-state {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+  padding-top: 2px;
+}
+.feature-row > * + * {
+  margin-top: 10px;
+}
+.feature-settings {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ctl);
+  background: var(--bg-1);
+  padding: 10px 12px;
+}
+.feature-settings h4 {
   margin: 0 0 6px;
   color: var(--fg-2);
   font-weight: 600;
@@ -58,11 +285,12 @@
 }
 .feature-settings dl > div {
   display: flex;
-  justify-content: space-between;
-  gap: 18px;
+  flex-wrap: wrap;
+  gap: 4px 12px;
 }
 .feature-settings dt {
-  color: var(--fg-2);
+  color: var(--fg-3);
+  min-width: 200px;
 }
 .feature-settings dd {
   margin: 0;
@@ -70,53 +298,302 @@
   overflow-wrap: anywhere;
 }
 
+/* --- Support (FAQ) ------------------------------------------------------------- */
+
+/* Where support goes is edited on the settings page: said in one quiet line. */
+.support-destination {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  background: var(--bg-2);
+  color: var(--fg-3);
+}
+.support-destination > div {
+  flex: 1;
+  min-width: 0;
+  color: var(--fg);
+}
+.support-destination p {
+  margin: 2px 0 0;
+}
+/* The answer under its question, two lines at most in the list. */
+.support-answer {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  color: var(--fg-3);
+  font-size: var(--fs-sm);
+}
+.support-sort {
+  max-width: 140px;
+}
+
 /* --- WP-A7 tickets ------------------------------------------------------------- */
 
+/* The inbox's filter row: compact fields that wrap, the two buttons on the same line. */
+.tickets-filters {
+  align-items: flex-end;
+}
+.tickets-filters .field {
+  min-width: 140px;
+}
+.tickets-filter-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.tickets-number {
+  font-size: var(--fs-ui);
+}
+/* A closed ticket stays in the list, quieter than the ones that want an answer. */
+.tickets-row-closed td {
+  color: var(--fg-3);
+}
+.tickets-inline-edit {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+.tickets-order {
+  width: 84px;
+}
+.tickets-category-form {
+  align-items: flex-end;
+}
+
+/* One ticket: the conversation and the reply in the main column, the rest beside it. */
+.ticket-transitions {
+  flex-wrap: wrap;
+}
+.ticket-links {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.ticket-links > .btn {
+  align-self: flex-start;
+}
+
 /*
- * One ticket's conversation, oldest first. Support's replies sit on the accent side so an
- * operator reading back can tell at a glance who said what; a system fact is one quiet line.
+ * The conversation, oldest first, as a chat: the customer on the start side, support on
+ * the end side on the accent tint, a system fact as one quiet centred line. Who said what
+ * is also in words on every message — the side and colour only repeat it.
  */
 .ticket-thread {
   list-style: none;
   margin: 0;
   padding: 0;
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 12px;
 }
 .ticket-message {
+  max-width: 82%;
   border: 1px solid var(--line);
-  border-radius: var(--radius-card);
-  padding: 12px 14px;
+  border-radius: 12px;
+  border-start-start-radius: 4px;
+  background: var(--bg-3);
+  padding: 10px 14px;
   display: grid;
   gap: 8px;
+  align-self: flex-start;
 }
 .ticket-message.support {
+  align-self: flex-end;
   border-color: var(--accent-soft);
   background: var(--accent-soft);
+  border-start-start-radius: 12px;
+  border-start-end-radius: 4px;
 }
 .ticket-message.system {
+  align-self: center;
+  max-width: none;
   border-style: dashed;
-  padding: 6px 14px;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  padding: 3px 14px;
+  color: var(--fg-3);
 }
 .ticket-message-head {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
+}
+.ticket-avatar {
+  width: 22px;
+  height: 22px;
+}
+.ticket-avatar.support {
+  background: var(--accent);
+  color: var(--on-solid);
 }
 .ticket-body {
   margin: 0;
   /* The customer's and support's own line breaks are part of what they wrote. */
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+  line-height: 1.8;
+}
+/* An attachment inside a message: what it is, and the control that fetches it. */
+.ticket-attachment {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ctl);
+  background: var(--bg-1);
+  padding: 10px 12px;
+  display: grid;
+  gap: 8px;
+}
+.ticket-attachment-image {
+  max-width: 100%;
+  max-height: 60vh;
+  width: auto;
+  height: auto;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  /* The image is untrusted content from a customer; nothing about it is a control. */
+  pointer-events: none;
+}
+.ticket-reply-actions {
+  justify-content: flex-end;
+}
+@media (max-width: 640px) {
+  .ticket-message {
+    max-width: 100%;
+  }
 }
 
 /* --- Bot texts (the template screen, WP-A3) -------------------------------------- */
 
 /*
- * The editor and its helpers stacked with room between them. The card used to be
- * a bare form: a textarea a few words wide with its label beside it.
+ * The list and the editor side by side, as the reference draws it: every template on
+ * the start side, searchable and grouped, and the chosen one's editor beside it. Below
+ * 1100px the list sits above the editor.
  */
+.content-split {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+.content-nav {
+  position: sticky;
+  top: 16px;
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - var(--topbar-h) - 32px);
+  overflow: hidden;
+}
+.content-nav-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-bottom: 1px solid var(--line);
+}
+.content-nav-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.content-nav-filters select {
+  flex: 1 1 120px;
+  min-width: 0;
+}
+.content-nav-empty {
+  padding: 14px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+  color: var(--fg-2);
+}
+.content-nav-list {
+  overflow-y: auto;
+  padding: 6px 0 10px;
+}
+.content-nav-list ul {
+  list-style: none;
+  margin: 0;
+  padding: 0 6px;
+}
+.content-nav-group {
+  margin: 10px 14px 4px;
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  color: var(--fg-3);
+}
+.content-item {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px 8px;
+  align-items: center;
+  text-align: start;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  padding: 7px 10px;
+  color: var(--fg);
+  cursor: pointer;
+}
+.content-item:hover {
+  background: var(--bg-3);
+}
+.content-item[aria-current='true'] {
+  background: var(--accent-soft);
+}
+.content-item[aria-current='true'] .content-item-name {
+  color: var(--accent);
+}
+.content-item-name {
+  font-size: var(--fs-ui);
+  font-weight: 500;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.content-item-key {
+  grid-column: 1;
+  display: flex;
+  justify-content: flex-start;
+  font-size: var(--fs-2xs);
+  color: var(--fg-3);
+  min-width: 0;
+}
+.content-item-key > .ltr {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.content-item-marks {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  display: inline-flex;
+  gap: 4px;
+}
+.content-item-mark {
+  display: inline-flex;
+}
+@media (max-width: 1100px) {
+  .content-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .content-nav {
+    position: static;
+    max-height: 420px;
+  }
+}
+
+/* The editor card: the body, its tokens and notices, then the four disclosures. */
 .template-card form > * + * {
   margin-top: 10px;
 }
@@ -131,37 +608,26 @@
 .template-card textarea {
   display: block;
   width: 100%;
-  min-height: 120px;
+  min-height: 160px;
 }
 .template-card input.input {
   width: 100%;
   max-width: 460px;
 }
-.template-card table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 12.5px;
+.template-card details {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ctl);
+  padding: 8px 12px;
+  background: var(--bg-1);
 }
-.template-card th,
-.template-card td {
-  padding: 6px 8px;
-  text-align: start;
-  border-bottom: 1px solid var(--line);
+.template-card details > * + * {
+  margin-top: 8px;
 }
-/*
- * One column that may shrink to the viewport. A bare `.grid` sizes its implicit track to
- * its widest child, which on a phone made the whole screen scroll sideways.
- */
-.template-stack {
-  grid-template-columns: minmax(0, 1fr);
+.template-card details > summary {
+  font-size: var(--fs-sm);
 }
 .template-card code {
   overflow-wrap: anywhere;
-}
-/* Grows to fill the toolbar, and shrinks below it on a phone instead of widening the page. */
-.template-search {
-  flex: 1 1 260px;
-  min-width: 0;
 }
 /* Four columns and long tokens: the table scrolls inside the card, the page does not. */
 .template-table {
@@ -172,6 +638,42 @@
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+.template-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.template-default {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--fg-2);
+  font-family: inherit;
+}
+/*
+ * The preview, drawn as a message bubble. It is TEXT in a `pre` — the rendered output
+ * is never injected as markup — so the bubble is only a frame around it.
+ */
+.template-bubble {
+  margin: 0;
+  max-width: 420px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border-start-start-radius: 4px;
+  background: var(--bg-3);
+  border: 1px solid var(--line-2);
+  color: var(--fg);
+  font-family: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.template-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 4px;
 }
 
 /* WP-A4: the report group's binding code, shown to be pasted into Telegram. */

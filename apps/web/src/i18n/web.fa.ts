@@ -117,6 +117,23 @@ export const WEB_FA = {
   'web.settings_unknown_title': 'تنظیم ناشناخته',
   'web.settings_unknown_desc':
     'این تنظیم در این نسخه از پنل مدیریت شناخته نمی‌شود. صفحه را تازه کنید.',
+  // OPS-B redesign (round W): the settings-like pages' shared structure.
+  'web.ob_sections': 'بخش‌های این صفحه',
+  'web.ob_unsaved_count': 'تغییر ذخیره‌نشده',
+  'web.ob_unsaved_row': 'ذخیره‌نشده',
+  'web.ob_toast_saved': 'ذخیره شد',
+  'web.ob_toast_unchanged': 'ثبت شد؛ مقداری تغییر نکرد',
+  'web.ob_toast_failed': 'ذخیره نشد',
+  'web.settings_currency_confirm': 'واحد پول فروشگاه عوض شود؟',
+  'web.settings_currency_confirm_detail':
+    'هیچ قیمتی تبدیل نمی‌شود. مبالغ و گزینه‌های شارژی که به واحد قبلی ذخیره شده‌اند دیگر اعمال نمی‌شوند تا دوباره به واحد تازه تنظیم شوند.',
+  'web.settings_currency_confirm_yes': 'بله، عوض شود',
+  'web.features_list_title': 'همهٔ قابلیت‌ها',
+  'web.features_list_hint':
+    'هر تغییر همان لحظه اعمال می‌شود؛ خاموش‌کردن قابلیت‌هایی که چیزی را متوقف می‌کنند پیش از اجرا پرسیده می‌شود.',
+  'web.features_on_count': 'قابلیت‌های روشن',
+  'web.templates_list': 'فهرست متن‌ها',
+  'web.reminders_wallet_threshold_invalid': 'مبلغ را فقط با رقم بنویسید؛ بدون ممیز و علامت.',
   'web.unit_days': 'روز',
   'web.unit_percent': 'درصد',
   'web.unit_times': 'بار',
