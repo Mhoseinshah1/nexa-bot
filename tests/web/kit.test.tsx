@@ -16,6 +16,7 @@ import {
   RoutedTabs,
   Sparkline,
   StatCard,
+  axisLabelSlots,
   progressRatio,
   useUnsavedChanges,
   type PeriodPreset,
@@ -382,6 +383,37 @@ describe('charts', () => {
     );
     expect(container.querySelector('svg.spark')).toBeNull();
     expect(screen.getAllByText(t('web.chart_empty'))).toHaveLength(2);
+  });
+
+  it('never draws two x-axis labels closer than one step, and always the last', () => {
+    for (const most of [8, 10]) {
+      for (let slots = 1; slots <= 120; slots += 1) {
+        const shown = [...axisLabelSlots(slots, most)].sort((a, b) => a - b);
+        const step = Math.max(1, Math.ceil(slots / most));
+        expect(shown[0]).toBe(0);
+        expect(shown[shown.length - 1]).toBe(slots - 1);
+        expect(shown.length).toBeLessThanOrEqual(most + 1);
+        for (let n = 1; n < shown.length; n += 1) {
+          expect((shown[n] as number) - (shown[n - 1] as number)).toBeGreaterThanOrEqual(step);
+        }
+      }
+    }
+    // The dashboard's 30-day month: stepping by 4 ends on 28, one slot from 29.
+    expect([...axisLabelSlots(30, 8)].sort((a, b) => a - b)).toEqual([0, 4, 8, 12, 16, 20, 24, 29]);
+  });
+
+  it('labels the 30th day without drawing it over the 29th', () => {
+    const labels = Array.from({ length: 30 }, (_, i) => `d${i + 1}`);
+    const { container } = renderPage(
+      <LineChart
+        caption="درآمد"
+        labels={labels}
+        series={[{ name: 'جاری', values: labels.map((_, i) => i) }]}
+      />,
+    );
+    const drawn = [...container.querySelectorAll('svg.chart > text')].map((n) => n.textContent);
+    expect(drawn).toContain('d30');
+    expect(drawn).not.toContain('d29');
   });
 
   it('stacks bars from SVG geometry', () => {

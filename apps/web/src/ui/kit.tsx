@@ -2083,6 +2083,6 @@ export function Breadcrumbs({ items }: { items: readonly Crumb[] }) {
 
 /* Re-exported so a page imports its whole kit from one module. */
 export { Modal, Drawer, Menu, useFocusTrap } from './overlays';
-export { ChartCard, Sparkline, BarChart, LineChart, Donut, Legend } from './charts';
+export { ChartCard, Sparkline, BarChart, LineChart, Donut, Legend, axisLabelSlots } from './charts';
 export { useUnsavedChanges, LeaveGuardHost } from './unsaved';
 export { ConfirmDialog, confirmDialogOpen } from './confirm-dialog';
