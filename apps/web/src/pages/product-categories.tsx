@@ -14,18 +14,26 @@ import { useSubmissionKey } from '../submission-key';
 import { queryState } from '../view-state';
 import { t } from '../i18n/web.fa';
 import { messageFor } from './settings';
+import { useLinkHandler } from '../router';
 import {
   Badge,
   Banner,
+  Button,
   Card,
+  ConfirmDialog,
   DataTable,
   Empty,
   Field,
+  IconButton,
   PageHead,
+  RowActions,
   StateSwitch,
   useToast,
+  useUnsavedChanges,
   type Column,
 } from '../ui/kit';
+import { Icon } from '../ui/icons';
+import { SaveBar, revealField } from './editor-layout';
 
 /**
  * Product categories — the one place a tenant arranges what it sells.
@@ -100,10 +108,17 @@ export function ProductCategoriesPage({ denied, mayEdit }: { denied: boolean; ma
   });
 
   /** Null while adding; a category id while editing one. ONE form, two intents. */
+  const onLink = useLinkHandler();
   const [editing, setEditing] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
+  /** The category whose deletion is being asked about, or null. */
+  const [deleting, setDeleting] = useState<ProductCategoryListingResponse | null>(null);
 
   const rows = categories.data?.categories ?? [];
+  const editedRow = editing === null ? undefined : rows.find((row) => row.id === editing);
+  const loaded = editedRow === undefined ? EMPTY_FORM : formOf(editedRow);
+  const dirty = JSON.stringify(form) !== JSON.stringify(loaded);
+  useUnsavedChanges(dirty);
 
   const reset = () => {
     setEditing(null);
@@ -217,22 +232,27 @@ export function ProductCategoriesPage({ denied, mayEdit }: { denied: boolean; ma
       key: 'name',
       header: t('web.category_name'),
       render: (row) => (
-        <>
-          {row.emoji !== null && <span aria-hidden="true">{row.emoji} </span>}
-          {row.name}
-        </>
+        <span className="categories-name">
+          {row.emoji !== null && (
+            <span className="categories-emoji" aria-hidden="true">
+              {row.emoji}{' '}
+            </span>
+          )}
+          <span className="strong">{row.name}</span>
+        </span>
       ),
     },
     {
       key: 'products',
       header: t('web.category_products'),
-      render: (row) => row.productCount,
+      align: 'end',
+      render: (row) => <span className="num">{row.productCount}</span>,
     },
     {
       key: 'status',
       header: t('web.category_status'),
       render: (row) => (
-        <Badge tone={row.status === 'ACTIVE' ? 'ok' : 'neutral'}>
+        <Badge tone={row.status === 'ACTIVE' ? 'ok' : 'neutral'} dot>
           {t(row.status === 'ACTIVE' ? 'web.category_active' : 'web.category_inactive')}
         </Badge>
       ),
@@ -241,7 +261,7 @@ export function ProductCategoriesPage({ denied, mayEdit }: { denied: boolean; ma
       key: 'visibility',
       header: t('web.category_visibility'),
       render: (row) => (
-        <Badge tone={row.visibility === 'VISIBLE' ? 'ok' : 'neutral'}>
+        <Badge tone={row.visibility === 'VISIBLE' ? 'info' : 'neutral'} outline>
           {t(row.visibility === 'VISIBLE' ? 'web.category_visible' : 'web.category_hidden')}
         </Badge>
       ),
@@ -250,33 +270,27 @@ export function ProductCategoriesPage({ denied, mayEdit }: { denied: boolean; ma
       key: 'actions',
       header: t('web.category_actions'),
       align: 'end',
-      // Nothing at all for a view-only role. The column header stays, because a table
-      // whose columns depend on the reader is a table two operators describe differently.
       render: (row) => {
         if (!mayEdit) return null;
-        /*
-         * The position is looked up by ID rather than taken from a render index.
-         * `Column.render` is given the row alone, and threading an index through would
-         * have tied "which neighbour to swap with" to the order the table happened to
-         * iterate in — which is the same array, until somebody sorts the view.
-         */
         const index = rows.findIndex((candidate) => candidate.id === row.id);
         return (
-          <div className="toolbar">
-            <button
-              type="button"
-              className="btn sm"
+          <RowActions>
+            <Button
+              size="sm"
+              variant="ghost"
+              icon="edit"
               disabled={busy}
               onClick={() => {
                 setEditing(row.id);
                 setForm(formOf(row));
+                revealField('cat-name');
               }}
             >
               {t('web.category_edit')}
-            </button>
-            <button
-              type="button"
-              className="btn sm"
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
               disabled={busy}
               onClick={() =>
                 transition.mutate({
@@ -286,10 +300,10 @@ export function ProductCategoriesPage({ denied, mayEdit }: { denied: boolean; ma
               }
             >
               {t(row.status === 'ACTIVE' ? 'web.category_deactivate' : 'web.category_activate')}
-            </button>
-            <button
-              type="button"
-              className="btn sm"
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
               disabled={busy}
               onClick={() =>
                 transition.mutate({
@@ -299,41 +313,37 @@ export function ProductCategoriesPage({ denied, mayEdit }: { denied: boolean; ma
               }
             >
               {t(row.visibility === 'VISIBLE' ? 'web.category_hide' : 'web.category_show')}
-            </button>
-            <button
-              type="button"
-              className="btn sm"
+            </Button>
+            <IconButton
+              size="sm"
+              icon="arrowUp"
+              label={t('web.category_move_up')}
               disabled={busy || index === 0}
               onClick={() => move(index, -1)}
-            >
-              {t('web.category_move_up')}
-            </button>
-            <button
-              type="button"
-              className="btn sm"
+            />
+            <IconButton
+              size="sm"
+              icon="arrowDown"
+              label={t('web.category_move_down')}
               disabled={busy || index === rows.length - 1}
               onClick={() => move(index, 1)}
-            >
-              {t('web.category_move_down')}
-            </button>
+            />
             {/*
               Drawn whatever the count says, and refused by the SERVER when products
               remain. Hiding it on a non-zero count would make the button's absence the
               enforcement — and the count is a read that is stale the moment a product
               is created into the category. The refusal carries the number.
             */}
-            <button
-              type="button"
-              className="btn sm danger"
+            <IconButton
+              size="sm"
+              icon="trash"
+              variant="danger"
+              className="ghost"
+              label={t('web.category_delete')}
               disabled={busy}
-              onClick={() => {
-                if (!window.confirm(t('web.category_delete_confirm'))) return;
-                remove.mutate(row.id);
-              }}
-            >
-              {t('web.category_delete')}
-            </button>
-          </div>
+              onClick={() => setDeleting(row)}
+            />
+          </RowActions>
         );
       },
     },
@@ -345,104 +355,162 @@ export function ProductCategoriesPage({ denied, mayEdit }: { denied: boolean; ma
         title={t('web.categories_title')}
         subtitle={t('web.categories_subtitle')}
         maturity="now"
+        actions={
+          <>
+            <a className="btn" href="/products" onClick={onLink}>
+              <Icon name="products" />
+              {t('web.nav_products')}
+            </a>
+            {mayEdit && (
+              <Button
+                variant="primary"
+                icon="plus"
+                onClick={() => {
+                  reset();
+                  revealField('cat-name');
+                }}
+              >
+                {t('web.category_new')}
+              </Button>
+            )}
+          </>
+        }
       />
 
-      <StateSwitch
-        query={categories}
-        denied={denied}
-        isEmpty={queryState(categories) === 'ready' && rows.length === 0}
-        empty={<Empty title={t('web.categories_empty')} hint={t('web.categories_empty_hint')} />}
-      >
-        <Card title={t('web.categories_title')}>
-          <DataTable
-            columns={columns}
-            rows={rows}
-            rowKey={(row) => row.id}
-            caption={t('web.categories_title')}
-          />
-          <p className="muted small">{t('web.category_inactive_note')}</p>
-          <p className="muted small">{t('web.category_hidden_note')}</p>
-        </Card>
-      </StateSwitch>
-
-      {/*
-        Outside the StateSwitch on purpose: a tenant with NO category still needs the
-        form, and that is exactly the installation whose first product would otherwise
-        be refused by a rule nothing offered a way to satisfy.
-      */}
-      {mayEdit && (
-        <Card
-          title={t(editing === null ? 'web.category_new' : 'web.category_editing')}
-          hint={t('web.category_form_hint')}
-        >
-          <Field label={t('web.category_name')} htmlFor="cat-name">
-            <input
-              id="cat-name"
-              value={form.name}
-              maxLength={120}
-              onChange={(event) => setForm({ ...form, name: event.target.value })}
-            />
-          </Field>
-          <Field label={t('web.category_description')} htmlFor="cat-description">
-            <input
-              id="cat-description"
-              value={form.description}
-              maxLength={500}
-              onChange={(event) => setForm({ ...form, description: event.target.value })}
-            />
-          </Field>
-          <Field
-            label={t('web.category_emoji')}
-            htmlFor="cat-emoji"
-            hint={t('web.category_emoji_hint')}
+      <div className={mayEdit ? 'cb-split' : undefined}>
+        <div className="stack">
+          <StateSwitch
+            query={categories}
+            denied={denied}
+            isEmpty={queryState(categories) === 'ready' && rows.length === 0}
+            empty={
+              <Card>
+                <Empty
+                  title={t('web.categories_empty')}
+                  hint={t('web.categories_empty_hint')}
+                  icon="folder"
+                />
+              </Card>
+            }
           >
-            <input
-              id="cat-emoji"
-              value={form.emoji}
-              maxLength={40}
-              onChange={(event) => setForm({ ...form, emoji: event.target.value })}
-            />
-          </Field>
-          {/*
-            Only on create. An existing category is reordered with the up/down buttons,
-            which send the whole arrangement; a number typed here as well would be two
-            ways to express the same thing that can disagree.
-          */}
-          {editing === null && (
-            <Field label={t('web.category_sort')} htmlFor="cat-sort">
+            <Card title={t('web.categories_title')}>
+              <DataTable
+                columns={columns}
+                rows={rows}
+                rowKey={(row) => row.id}
+                caption={t('web.categories_title')}
+                dense
+              />
+            </Card>
+            <Card tone="muted">
+              <ul className="cb-notes">
+                <li>{t('web.category_inactive_note')}</li>
+                <li>{t('web.category_hidden_note')}</li>
+              </ul>
+            </Card>
+          </StateSwitch>
+        </div>
+
+        {/*
+          Outside the StateSwitch on purpose: a tenant with NO category still needs the
+          form, and that is exactly the installation whose first product would otherwise
+          be refused by a rule nothing offered a way to satisfy.
+        */}
+        {mayEdit && (
+          <Card
+            className="cb-side-form cb-sticky"
+            title={t(editing === null ? 'web.category_new' : 'web.category_editing')}
+            hint={t('web.category_form_hint')}
+            foot={
+              <SaveBar dirty={dirty}>
+                {editing !== null && (
+                  <Button size="sm" disabled={busy} onClick={reset}>
+                    {t('web.category_cancel_edit')}
+                  </Button>
+                )}
+                <Button
+                  variant="primary"
+                  size="sm"
+                  icon="check"
+                  disabled={busy || form.name.trim() === ''}
+                  onClick={() => save.mutate()}
+                >
+                  {t('web.category_save')}
+                </Button>
+              </SaveBar>
+            }
+          >
+            <Field label={t('web.category_name')} htmlFor="cat-name">
               <input
-                id="cat-sort"
-                value={form.sortOrder}
-                inputMode="numeric"
-                onChange={(event) => setForm({ ...form, sortOrder: event.target.value })}
+                id="cat-name"
+                value={form.name}
+                maxLength={120}
+                onChange={(event) => setForm({ ...form, name: event.target.value })}
               />
             </Field>
-          )}
+            <Field label={t('web.category_description')} htmlFor="cat-description">
+              <input
+                id="cat-description"
+                value={form.description}
+                maxLength={500}
+                onChange={(event) => setForm({ ...form, description: event.target.value })}
+              />
+            </Field>
+            <div className="form-grid">
+              <Field
+                label={t('web.category_emoji')}
+                htmlFor="cat-emoji"
+                hint={t('web.category_emoji_hint')}
+              >
+                <input
+                  id="cat-emoji"
+                  value={form.emoji}
+                  maxLength={40}
+                  onChange={(event) => setForm({ ...form, emoji: event.target.value })}
+                />
+              </Field>
+              {/*
+                Only on create. An existing category is reordered with the up/down buttons,
+                which send the whole arrangement; a number typed here as well would be two
+                ways to express the same thing that can disagree.
+              */}
+              {editing === null && (
+                <Field label={t('web.category_sort')} htmlFor="cat-sort">
+                  <input
+                    id="cat-sort"
+                    dir="ltr"
+                    value={form.sortOrder}
+                    inputMode="numeric"
+                    onChange={(event) => setForm({ ...form, sortOrder: event.target.value })}
+                  />
+                </Field>
+              )}
+            </div>
 
-          <div className="toolbar">
-            <button
-              type="button"
-              className="btn primary sm"
-              disabled={busy || form.name.trim() === ''}
-              onClick={() => save.mutate()}
-            >
-              {t('web.category_save')}
-            </button>
-            {editing !== null && (
-              <button type="button" className="btn sm" disabled={busy} onClick={reset}>
-                {t('web.category_cancel_edit')}
-              </button>
-            )}
-          </div>
+            {failure != null && <Banner tone="danger">{messageFor(failure)}</Banner>}
+            {/*
+              The delete refusal has its own banner, because it is the one an operator
+              most needs to read the NUMBER out of — and a shared banner would have shown
+              whichever of the two mutations failed most recently.
+            */}
+            {remove.error != null && <Banner tone="danger">{deleteMessage(remove.error)}</Banner>}
+          </Card>
+        )}
+      </div>
 
-          {failure != null && <Banner tone="danger">{messageFor(failure)}</Banner>}
-          {/*
-            The delete refusal has its own banner, because it is the one an operator
-            most needs to read the NUMBER out of — and a shared banner would have shown
-            whichever of the two mutations failed most recently.
-          */}
-          {remove.error != null && <Banner tone="danger">{deleteMessage(remove.error)}</Banner>}
-        </Card>
+      {deleting !== null && (
+        <ConfirmDialog
+          title={deleting.name}
+          question={t('web.category_delete_confirm')}
+          confirmLabel={t('web.cb_delete_yes')}
+          cancelLabel={t('web.cb_cancel')}
+          onConfirm={() => {
+            const id = deleting.id;
+            setDeleting(null);
+            remove.mutate(id);
+          }}
+          onCancel={() => setDeleting(null)}
+        />
       )}
     </>
   );

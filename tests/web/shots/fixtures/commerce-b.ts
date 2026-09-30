@@ -1,9 +1,307 @@
-import type { ShotFixture } from '../fixture.ts';
+import {
+  customServiceLocationListResponseSchema,
+  customServiceRuleListResponseSchema,
+  productCategoryListResponseSchema,
+  productListResponseSchema,
+  productResponseSchema,
+  resellerTierListResponseSchema,
+  serviceAddonListResponseSchema,
+  serviceLocationListResponseSchema,
+} from '@nexa/contracts';
+import { ago, fixture, type ShotFixture } from '../fixture.ts';
 
 /*
  * Page family COMMERCE-B: products, categories, extra devices, service
  * locations, custom service, discounts, campaigns, broadcasts, bulk
  * operations, referrals, resellers, reseller tiers and plans, reports.
  * The COMMERCE-B agent adds the fixtures its pages need here.
+ *
+ * Panels come from OPS-A's `/panels` fixture and customers from COMMERCE-A's
+ * `/users`; the ids below that name one of them are copied from there.
  */
-export const COMMERCE_B: readonly ShotFixture[] = [];
+
+type Json = Record<string, unknown>;
+
+const PANEL_A = '01a05e35-c9ad-7e93-bef3-1ed9b55292c8';
+const PANEL_B = '01a05e35-c9ad-7e93-bef3-1ed9b55292c9';
+
+const GIB = 1024n ** 3n;
+
+/* --------------------------------------------------------------- catalogue --- */
+
+function category(
+  id: string,
+  name: string,
+  emoji: string | null,
+  sortOrder: number,
+  productCount: number,
+  over: Json = {},
+): Json {
+  return {
+    id,
+    name,
+    description: null,
+    emoji,
+    status: 'ACTIVE',
+    visibility: 'VISIBLE',
+    sortOrder,
+    productCount,
+    createdAt: ago(60 * 24 * 300),
+    updatedAt: ago(60 * 24 * 12),
+    ...over,
+  };
+}
+
+export const CATEGORIES: readonly Json[] = [
+  category('0192c0de-0000-7000-8000-00000000ca01', 'اشتراک استاندارد', '⚡', 0, 5),
+  category('0192c0de-0000-7000-8000-00000000ca02', 'اشتراک حرفه‌ای', '🚀', 1, 3),
+  category('0192c0de-0000-7000-8000-00000000ca03', 'نامحدود', '♾️', 2, 1),
+  category('0192c0de-0000-7000-8000-00000000ca04', 'پلن‌های قدیمی', null, 3, 2, {
+    status: 'INACTIVE',
+    visibility: 'HIDDEN',
+  }),
+];
+
+const CATEGORY_ID = CATEGORIES.map((row) => row['id'] as string);
+
+function product(index: number, title: string, over: Json = {}): Json {
+  return {
+    id: `0192c0de-0000-7000-8000-0000000001${String(index).padStart(2, '0')}`,
+    title,
+    description: null,
+    status: 'ACTIVE',
+    audience: 'EVERYONE',
+    sortOrder: index,
+    panelId: index % 2 === 0 ? PANEL_A : PANEL_B,
+    categoryId: CATEGORY_ID[0],
+    durationDays: 30,
+    trafficBytes: String(50n * GIB),
+    deviceLimit: 2,
+    priceAmount: '149000',
+    priceCurrency: 'IRT',
+    displayLocations: [],
+    displayFeatures: [],
+    serviceLocationLabel: null,
+    createdAt: ago(60 * 24 * (240 - index * 9)),
+    updatedAt: ago(60 * (index * 11 + 3)),
+    ...over,
+  };
+}
+
+export const PRODUCTS: readonly Json[] = [
+  product(1, '۳۰ گیگ — ۱ ماهه', {
+    trafficBytes: String(30n * GIB),
+    priceAmount: '89000',
+    description: 'مناسب استفادهٔ روزمره روی یک یا دو دستگاه.',
+    displayLocations: ['آلمان', 'هلند'],
+    displayFeatures: ['بدون قطعی', 'پشتیبانی ۲۴ ساعته'],
+    serviceLocationLabel: 'Frankfurt',
+  }),
+  product(2, '۶۰ گیگ — ۱ ماهه', { trafficBytes: String(60n * GIB), priceAmount: '149000' }),
+  product(3, '۱۰۰ گیگ — ۱ ماهه', {
+    trafficBytes: String(100n * GIB),
+    priceAmount: '219000',
+    categoryId: CATEGORY_ID[1],
+    deviceLimit: 3,
+  }),
+  product(4, '۲۰۰ گیگ — ۳ ماهه', {
+    trafficBytes: String(200n * GIB),
+    durationDays: 90,
+    priceAmount: '549000',
+    categoryId: CATEGORY_ID[1],
+  }),
+  product(5, 'نامحدود — ۱ ماهه', {
+    trafficBytes: '0',
+    priceAmount: '390000',
+    categoryId: CATEGORY_ID[2],
+  }),
+  product(6, 'نمایندگی — ۵۰۰ گیگ', {
+    trafficBytes: String(500n * GIB),
+    durationDays: 180,
+    priceAmount: '1290000',
+    audience: 'RESELLERS_ONLY',
+    categoryId: CATEGORY_ID[1],
+  }),
+  product(7, 'پلن هدیه — ۱۰ گیگ', {
+    trafficBytes: String(10n * GIB),
+    durationDays: 7,
+    priceAmount: '19000',
+    audience: 'HIDDEN',
+  }),
+  product(8, '۱۵ گیگ — ۱ ماهه (قدیمی)', {
+    trafficBytes: String(15n * GIB),
+    priceAmount: '59000',
+    categoryId: CATEGORY_ID[3],
+  }),
+  product(9, 'پلن آزمایشی بدون قیمت', {
+    status: 'INACTIVE',
+    priceAmount: null,
+    priceCurrency: null,
+    categoryId: null,
+    panelId: null,
+  }),
+];
+
+/* ------------------------------------------------ extra devices, locations --- */
+
+function addon(index: number, title: string, over: Json = {}): Json {
+  return {
+    id: `0192c0de-0000-7000-8000-0000000002${String(index).padStart(2, '0')}`,
+    kind: 'ADD_DEVICES',
+    title,
+    status: 'ACTIVE',
+    sortOrder: index,
+    trafficBytes: null,
+    durationDays: null,
+    maxQuantity: 3,
+    panelId: null,
+    productId: null,
+    version: 1,
+    priceAmount: '50000',
+    priceCurrency: 'IRT',
+    createdAt: ago(60 * 24 * 60),
+    updatedAt: ago(60 * 24 * (index + 1)),
+    ...over,
+  };
+}
+
+const ADDONS: readonly Json[] = [
+  addon(1, 'کاربر اضافه — عمومی'),
+  addon(2, 'کاربر اضافه — فرانکفورت', { panelId: PANEL_A, priceAmount: '40000', maxQuantity: 5 }),
+  addon(3, 'کاربر اضافه — پلن حرفه‌ای', {
+    productId: PRODUCTS[2]?.['id'],
+    priceAmount: '30000',
+    status: 'INACTIVE',
+  }),
+];
+
+function serviceLocation(index: number, label: string, key: string, over: Json = {}): Json {
+  return {
+    id: `0192c0de-0000-7000-8000-0000000003${String(index).padStart(2, '0')}`,
+    panelId: PANEL_A,
+    productId: null,
+    locationKey: key,
+    label,
+    initial: false,
+    enabled: true,
+    priceAmount: '30000',
+    priceCurrency: 'IRT',
+    cooldownHours: 24,
+    maxChanges: 2,
+    periodDays: 30,
+    sortOrder: index,
+    version: 1,
+    createdAt: ago(60 * 24 * 90),
+    updatedAt: ago(60 * 24 * index),
+    ...over,
+  };
+}
+
+const SERVICE_LOCATIONS: readonly Json[] = [
+  serviceLocation(1, '🇩🇪 آلمان', 'de-1', {
+    initial: true,
+    enabled: false,
+    priceAmount: null,
+    priceCurrency: null,
+    cooldownHours: null,
+    maxChanges: null,
+    periodDays: null,
+  }),
+  serviceLocation(2, '🇳🇱 هلند', 'nl-1', { priceAmount: '0' }),
+  serviceLocation(3, '🇫🇮 فنلاند', 'fi-1'),
+  serviceLocation(4, '🇹🇷 ترکیه', 'tr-1', { panelId: PANEL_B, maxChanges: null, periodDays: null }),
+];
+
+/* ---------------------------------------------------------- custom service --- */
+
+const TIERS: readonly Json[] = [
+  tier(1, 'برنزی', 'LIST_PRICE', null, '0', 4),
+  tier(2, 'نقره‌ای', 'PERCENTAGE_DISCOUNT', 10, '5000000', 7),
+  tier(3, 'طلایی', 'PERCENTAGE_DISCOUNT', 20, '20000000', 2),
+];
+
+function tier(
+  index: number,
+  name: string,
+  pricingMode: string,
+  discountPercentage: number | null,
+  credit: string,
+  resellerCount: number,
+): Json {
+  return {
+    id: `0192c0de-0000-7000-8000-0000000004${String(index).padStart(2, '0')}`,
+    name,
+    pricingMode,
+    discountPercentage,
+    creditLimit: { amount: credit, currency: 'IRT' },
+    grants: [],
+    resellerCount,
+    monthlyMinimum: null,
+    createdAt: ago(60 * 24 * 200),
+    updatedAt: ago(60 * 24 * 20),
+  };
+}
+
+function customRule(index: number, over: Json): Json {
+  return {
+    id: `0192c0de-0000-7000-8000-0000000005${String(index).padStart(2, '0')}`,
+    dimension: 'VOLUME',
+    label: null,
+    minimum: '10',
+    maximum: '500',
+    unitPriceAmount: '2500',
+    currency: 'IRT',
+    customerId: null,
+    resellerTierId: null,
+    panelId: null,
+    enabled: true,
+    createdAt: ago(60 * 24 * 30),
+    updatedAt: ago(60 * 24 * 3),
+    ...over,
+  };
+}
+
+const CUSTOM_RULES: readonly Json[] = [
+  customRule(1, { label: 'حجم عمومی' }),
+  customRule(2, {
+    dimension: 'TIME',
+    label: 'روز عمومی',
+    minimum: '1',
+    maximum: '90',
+    unitPriceAmount: '900',
+  }),
+  customRule(3, {
+    label: 'حجم نمایندگان طلایی',
+    resellerTierId: TIERS[2]?.['id'],
+    unitPriceAmount: '1800',
+    panelId: PANEL_A,
+  }),
+  customRule(4, { label: 'حجم عمده', minimum: '100.5', maximum: '2000', enabled: false }),
+];
+
+export const COMMERCE_B: readonly ShotFixture[] = [
+  fixture('/service-addons', serviceAddonListResponseSchema, { addons: ADDONS, nextCursor: null }),
+  fixture('/service-locations', serviceLocationListResponseSchema, {
+    locations: SERVICE_LOCATIONS,
+  }),
+  fixture('/reseller-tiers', resellerTierListResponseSchema, { tiers: TIERS }),
+  fixture('/custom-service/rules', customServiceRuleListResponseSchema, { rules: CUSTOM_RULES }),
+  fixture('/custom-service/locations', customServiceLocationListResponseSchema, {
+    locations: [
+      {
+        panelId: PANEL_A,
+        panelName: 'Frankfurt A',
+        label: '🇩🇪 آلمان',
+        enabled: true,
+        createdAt: ago(60 * 24 * 30),
+        updatedAt: ago(60 * 24 * 2),
+      },
+    ],
+  }),
+  fixture('/product-categories', productCategoryListResponseSchema, { categories: CATEGORIES }),
+  fixture('/products', productListResponseSchema, {
+    products: PRODUCTS,
+    nextCursor: 'cursor-products-2',
+  }),
+  fixture('/products/:id', productResponseSchema, { product: PRODUCTS[0] }),
+];

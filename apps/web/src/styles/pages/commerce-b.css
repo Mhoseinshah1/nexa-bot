@@ -66,3 +66,237 @@
   border-radius: 8px;
   background: var(--bg-1);
 }
+
+/* --- Shared by the COMMERCE-B editors (editor-layout.tsx) ------------------------ */
+
+/*
+ * An editor page: the section sub-nav, the form, and a side column of facts and
+ * isolated actions — the reference product editor's three columns. The side
+ * column drops under the form below 1200px; the nav hides below 980px, where the
+ * sections are one scroll anyway.
+ */
+.cb-editor {
+  display: grid;
+  grid-template-columns: 190px minmax(0, 1fr) 340px;
+  gap: 16px;
+  align-items: start;
+}
+.cb-editor.no-nav {
+  grid-template-columns: minmax(0, 1fr) 340px;
+}
+.cb-editor-main,
+.cb-editor-side {
+  min-width: 0;
+}
+.cb-section-nav {
+  position: sticky;
+  top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.cb-section-nav button {
+  text-align: start;
+  border: none;
+  background: transparent;
+  color: var(--fg-2);
+  font: inherit;
+  font-size: var(--fs-ui);
+  padding: 8px 12px;
+  border-radius: var(--radius-ctl);
+  cursor: pointer;
+}
+.cb-section-nav button:hover {
+  background: var(--bg-2);
+  color: var(--fg);
+}
+.cb-form-section {
+  scroll-margin-top: 12px;
+}
+.cb-form-section:focus {
+  outline: none;
+}
+.cb-form-section:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.cb-form-error {
+  padding: 0 20px 16px;
+}
+.cb-savebar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+}
+.cb-dirty {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--warn);
+  font-size: var(--fs-sm);
+}
+.cb-dirty .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+/*
+ * A list beside its editor (categories, extra devices, service locations, custom
+ * service): the table takes the room, the form a fixed side column that stays in
+ * view while the list scrolls. One column below 1200px.
+ */
+.cb-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  gap: 16px;
+  align-items: start;
+}
+.cb-split > * {
+  min-width: 0;
+}
+.cb-side-form.cb-sticky {
+  position: sticky;
+  top: 12px;
+}
+/* The rules a page states about itself, as a quiet list. */
+.cb-notes {
+  margin: 0;
+  padding-inline-start: 1.1rem;
+  color: var(--fg-2);
+  font-size: var(--fs-sm);
+}
+.cb-notes li + li {
+  margin-top: 4px;
+}
+/*
+ * A list's search and filter rows, wrapped so they can be hidden together while the
+ * list cannot answer. Flush with the card, as the kit draws a bare toolbar.
+ */
+.card-body > .cb-filters {
+  margin: -16px -16px 0;
+}
+.card-body > .cb-filters + .tbl-wrap {
+  margin-top: 0;
+}
+/* A checkbox field: the box and its label on one line, the hint beneath. */
+.cb-check-field .check {
+  font-weight: 500;
+}
+/* A checkbox that qualifies the input beside it (unlimited ↔ a figure). */
+.cb-inline-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  align-items: center;
+}
+.cb-inline-controls > input {
+  flex: 1;
+  min-width: 140px;
+}
+/* A quiet meta line under a detail title: kind · id. */
+.cb-meta {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  align-items: baseline;
+}
+.cb-search {
+  flex: 1;
+  max-width: 360px;
+}
+/* Duration · traffic in one list cell. */
+.cb-specs {
+  display: inline-flex;
+  gap: 6px;
+  align-items: baseline;
+  white-space: nowrap;
+}
+
+@media (max-width: 1200px) {
+  .cb-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .cb-side-form.cb-sticky {
+    position: static;
+  }
+  .cb-editor {
+    grid-template-columns: 170px minmax(0, 1fr);
+  }
+  .cb-editor.no-nav {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .cb-editor > .cb-editor-side {
+    grid-column: 1 / -1;
+  }
+}
+@media (max-width: 980px) {
+  .cb-editor {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .cb-section-nav {
+    display: none;
+  }
+}
+
+/* --- /products ------------------------------------------------------------------- */
+
+/* Why a product is not in the bot's list: a dot and a sentence that may wrap. */
+.products-gap {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  max-width: 260px;
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  color: var(--fg-2);
+  white-space: normal;
+}
+.products-gap .dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--fg-3);
+  transform: translateY(-1px);
+}
+.products-gap.warn {
+  color: var(--warn);
+}
+.products-gap.warn .dot {
+  background: var(--warn);
+}
+
+/* --- /product-categories -------------------------------------------------------- */
+
+.categories-name {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+.categories-emoji {
+  font-size: 15px;
+}
+
+/* --- /custom-service --------------------------------------------------------------- */
+
+.custom-levels {
+  margin: 0;
+  padding-inline-start: 1.25rem;
+}
+.custom-levels li + li {
+  margin-top: 2px;
+}
+/* A form's on/off line: its label, and the switch at the end. */
+.cb-toggle-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ctl);
+  background: var(--bg-1);
+}

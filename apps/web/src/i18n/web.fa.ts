@@ -2182,6 +2182,20 @@ export const WEB_FA = {
   'web.order_category': 'دستهٔ خرید',
   'web.order_category_unknown': 'ثبت نشده',
 
+  // COMMERCE-B redesign (round W): editor sections, page actions, summaries.
+  'web.cb_sections': 'بخش‌های فرم',
+  'web.cb_section_basic': 'اطلاعات پایه',
+  'web.cb_section_pricing': 'قیمت‌گذاری',
+  'web.cb_section_volume': 'حجم و مدت',
+  'web.cb_section_placement': 'پنل و دسته‌بندی',
+  'web.cb_section_display': 'نمایش در ربات',
+  'web.cb_product_new': 'محصول جدید',
+  'web.cb_cancel': 'انصراف',
+  'web.cb_add': 'افزودن',
+  'web.cb_section_where': 'کجا',
+  'web.cb_section_offer': 'عرضه و هزینه',
+  'web.cb_delete_yes': 'بله، حذف شود',
+
   'web.products_intro': 'سرویس‌هایی که مشتری می‌تواند بخرد، و آنهایی که هنوز نمی‌تواند.',
   'web.products_empty': 'هنوز محصولی تعریف نشده است.',
   'web.products_empty_hint': 'با فرم پایین همین صفحه اولین محصول را بسازید.',
@@ -3469,6 +3483,8 @@ export const WEB_FA = {
   'web.service_locations_actions': 'عملیات',
   'web.service_locations_edit': 'ویرایش',
   'web.service_locations_delete': 'حذف',
+  'web.service_locations_delete_confirm':
+    'این لوکیشن حذف شود؟ اگر درخواست تغییر لوکیشنی به آن اشاره کند، حذف پذیرفته نمی‌شود.',
   'web.service_locations_new': 'لوکیشن جدید',
   'web.service_locations_editing': 'ویرایش لوکیشن',
   'web.service_locations_form_hint':

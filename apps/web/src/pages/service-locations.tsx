@@ -31,16 +31,23 @@ import { everyPage } from './extra-devices';
 import {
   Badge,
   Banner,
+  Button,
   Card,
+  CellMain,
+  ConfirmDialog,
   DataTable,
   Empty,
   Field,
+  IconButton,
   Money,
   PageHead,
+  RowActions,
   StateSwitch,
   useToast,
+  useUnsavedChanges,
   type Column,
 } from '../ui/kit';
+import { CheckField, FormSection, SaveBar, revealField } from './editor-layout';
 
 /**
  * Service location change (WP-A6) — a panel's locations, the one its new accounts start
@@ -185,7 +192,14 @@ export function ServiceLocationsPage({
 
   const [editing, setEditing] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
+  /** The location whose deletion is being asked about, or null (D3: it had no question). */
+  const [deleting, setDeleting] = useState<ServiceLocationSummaryResponse | null>(null);
   const rows = locations.data?.locations ?? [];
+  const editedRow = editing === null ? undefined : rows.find((row) => row.id === editing);
+  const dirty =
+    JSON.stringify(form) !==
+    JSON.stringify(editedRow === undefined ? EMPTY_FORM : formOf(editedRow));
+  useUnsavedChanges(dirty);
 
   const panelName = (id: string): string => panels.data?.find((one) => one.id === id)?.name ?? id;
   const productName = (id: string | null): string =>
@@ -290,52 +304,59 @@ export function ServiceLocationsPage({
 
   const columns: readonly Column<ServiceLocationSummaryResponse>[] = [
     {
+      key: 'label',
+      header: t('web.service_locations_label'),
+      render: (row) => (
+        <CellMain
+          primary={
+            <span className="row">
+              <span className="strong">{row.label}</span>
+              {row.initial && <Badge tone="info">{t('web.service_locations_initial_badge')}</Badge>}
+            </span>
+          }
+          secondary={
+            <span dir="ltr" className="mono small">
+              {row.locationKey}
+            </span>
+          }
+        />
+      ),
+    },
+    {
       key: 'panel',
       header: t('web.service_locations_panel'),
       render: (row) => panelName(row.panelId),
     },
     {
-      key: 'label',
-      header: t('web.service_locations_label'),
-      render: (row) => (
-        <>
-          {row.label}{' '}
-          {row.initial && <Badge tone="info">{t('web.service_locations_initial_badge')}</Badge>}
-        </>
-      ),
-    },
-    {
-      key: 'key',
-      header: t('web.service_locations_key'),
-      render: (row) => (
-        <span dir="ltr" className="mono small">
-          {row.locationKey}
-        </span>
-      ),
-    },
-    {
       key: 'product',
       header: t('web.service_locations_product'),
-      render: (row) => productName(row.productId),
+      render: (row) => <span className="muted">{productName(row.productId)}</span>,
     },
     {
       key: 'price',
       header: t('web.service_locations_price'),
       render: (row) =>
         row.priceAmount === null || row.priceCurrency === null ? (
-          t('web.service_locations_unpriced')
+          <span className="faint">{t('web.service_locations_unpriced')}</span>
         ) : row.priceAmount === '0' ? (
-          t('web.service_locations_free')
+          <Badge tone="ok" outline>
+            {t('web.service_locations_free')}
+          </Badge>
         ) : (
           <Money value={{ amountMinor: row.priceAmount, currency: row.priceCurrency }} />
         ),
     },
-    { key: 'limits', header: t('web.service_locations_limits'), render: limitsText },
+    {
+      key: 'limits',
+      header: t('web.service_locations_limits'),
+      wrap: true,
+      render: (row) => <span className="muted small">{limitsText(row)}</span>,
+    },
     {
       key: 'state',
       header: t('web.service_locations_state'),
       render: (row) => (
-        <Badge tone={row.enabled ? 'ok' : 'neutral'}>
+        <Badge tone={row.enabled ? 'ok' : 'neutral'} dot>
           {t(row.enabled ? 'web.service_locations_target_on' : 'web.service_locations_target_off')}
         </Badge>
       ),
@@ -343,7 +364,7 @@ export function ServiceLocationsPage({
     {
       key: 'updated',
       header: t('web.service_locations_updated'),
-      render: (row) => formatTimestamp(row.updatedAt),
+      render: (row) => <span className="muted small">{formatTimestamp(row.updatedAt)}</span>,
     },
     {
       key: 'actions',
@@ -351,27 +372,30 @@ export function ServiceLocationsPage({
       align: 'end',
       render: (row) =>
         !mayEdit ? null : (
-          <div className="toolbar">
-            <button
-              type="button"
-              className="btn sm"
+          <RowActions>
+            <Button
+              size="sm"
+              variant="ghost"
+              icon="edit"
               disabled={busy}
               onClick={() => {
                 setEditing(row.id);
                 setForm(formOf(row));
+                revealField('sl-panel');
               }}
             >
               {t('web.service_locations_edit')}
-            </button>
-            <button
-              type="button"
-              className="btn sm danger"
+            </Button>
+            <IconButton
+              size="sm"
+              icon="trash"
+              variant="danger"
+              className="ghost"
+              label={t('web.service_locations_delete')}
               disabled={busy}
-              onClick={() => remove.mutate(row.id)}
-            >
-              {t('web.service_locations_delete')}
-            </button>
-          </div>
+              onClick={() => setDeleting(row)}
+            />
+          </RowActions>
         ),
     },
   ];
@@ -382,6 +406,22 @@ export function ServiceLocationsPage({
         title={t('web.service_locations_title')}
         subtitle={t('web.service_locations_subtitle')}
         maturity="now"
+        {...(mayEdit
+          ? {
+              actions: (
+                <Button
+                  variant="primary"
+                  icon="plus"
+                  onClick={() => {
+                    reset();
+                    revealField('sl-panel');
+                  }}
+                >
+                  {t('web.cb_add')}
+                </Button>
+              ),
+            }
+          : {})}
       />
 
       {CAPABLE_PROVIDERS.length === 0 ? (
@@ -395,251 +435,285 @@ export function ServiceLocationsPage({
         </Banner>
       )}
 
-      <StateSwitch
-        query={locations}
-        denied={denied}
-        isEmpty={queryState(locations) === 'ready' && rows.length === 0}
-        empty={
-          <Empty
-            title={t('web.service_locations_empty')}
-            hint={t('web.service_locations_empty_hint')}
-          />
-        }
-      >
-        <Card title={t('web.service_locations_list')}>
-          <DataTable
-            columns={columns}
-            rows={rows}
-            rowKey={(row) => row.id}
-            caption={t('web.service_locations_list')}
-          />
-        </Card>
-      </StateSwitch>
-
-      {mayEdit && (
-        <Card
-          title={t(
-            editing === null ? 'web.service_locations_new' : 'web.service_locations_editing',
-          )}
-          hint={t('web.service_locations_form_hint')}
+      <div className="stack">
+        <StateSwitch
+          query={locations}
+          denied={denied}
+          isEmpty={queryState(locations) === 'ready' && rows.length === 0}
+          empty={
+            <Card>
+              <Empty
+                title={t('web.service_locations_empty')}
+                hint={t('web.service_locations_empty_hint')}
+                icon="globe"
+              />
+            </Card>
+          }
         >
-          <Field
-            label={t('web.service_locations_panel')}
-            htmlFor="sl-panel"
-            {...(panelList ? {} : { hint: t('web.service_locations_panel_id_hint') })}
-          >
-            {!panelList ? (
-              <input
-                id="sl-panel"
-                dir="ltr"
-                value={form.panelId}
-                onChange={(event) => setForm({ ...form, panelId: event.target.value.trim() })}
-              />
-            ) : (
-              <select
-                id="sl-panel"
-                value={form.panelId}
-                onChange={(event) =>
-                  // A product scope names a product of THIS panel; another panel's is cleared.
-                  setForm({
-                    ...form,
-                    panelId: event.target.value,
-                    productId:
-                      products.data?.find((one) => one.id === form.productId)?.panelId ===
-                      event.target.value
-                        ? form.productId
-                        : '',
-                  })
-                }
-              >
-                <option value="" disabled>
-                  —
-                </option>
-                {(panels.data ?? []).map((one) => (
-                  <option key={one.id} value={one.id}>
-                    {one.capabilities.includes('LOCATION_CHANGE')
-                      ? one.name
-                      : `${one.name} — ${t('web.service_locations_panel_unsupported')}`}
-                  </option>
-                ))}
-              </select>
-            )}
-          </Field>
-          <Field
-            label={t('web.service_locations_label')}
-            hint={t('web.service_locations_label_hint')}
-            htmlFor="sl-label"
-          >
-            <input
-              id="sl-label"
-              value={form.label}
-              maxLength={SERVICE_LOCATION_LABEL_MAX_LENGTH}
-              onChange={(event) => setForm({ ...form, label: event.target.value })}
+          <Card title={t('web.service_locations_list')}>
+            <DataTable
+              columns={columns}
+              rows={rows}
+              rowKey={(row) => row.id}
+              caption={t('web.service_locations_list')}
+              dense
             />
-          </Field>
-          <Field
-            label={t('web.service_locations_key')}
-            hint={t('web.service_locations_key_hint')}
-            htmlFor="sl-key"
-          >
-            <input
-              id="sl-key"
-              dir="ltr"
-              value={form.locationKey}
-              maxLength={SERVICE_LOCATION_KEY_MAX_LENGTH}
-              onChange={(event) => setForm({ ...form, locationKey: event.target.value })}
-            />
-          </Field>
-          <Field
-            label={t('web.service_locations_product')}
-            hint={t(
-              productList
-                ? 'web.service_locations_product_hint'
-                : 'web.service_locations_product_id_hint',
+          </Card>
+        </StateSwitch>
+
+        {mayEdit && (
+          <Card
+            title={t(
+              editing === null ? 'web.service_locations_new' : 'web.service_locations_editing',
             )}
-            htmlFor="sl-product"
+            hint={t('web.service_locations_form_hint')}
+            tight
+            foot={
+              <SaveBar dirty={dirty}>
+                {editing !== null && (
+                  <Button size="sm" disabled={busy} onClick={reset}>
+                    {t('web.service_locations_cancel_edit')}
+                  </Button>
+                )}
+                <Button
+                  variant="primary"
+                  size="sm"
+                  icon="check"
+                  disabled={busy || !formValid}
+                  onClick={() => save.mutate()}
+                >
+                  {t('web.service_locations_save')}
+                </Button>
+              </SaveBar>
+            }
           >
-            {!productList ? (
-              <input
-                id="sl-product"
-                dir="ltr"
-                placeholder={t('web.service_locations_all_products')}
-                value={form.productId}
-                onChange={(event) => setForm({ ...form, productId: event.target.value.trim() })}
-              />
-            ) : (
-              <select
-                id="sl-product"
-                value={form.productId}
-                onChange={(event) => setForm({ ...form, productId: event.target.value })}
+            <FormSection id="sl-section-where" title={t('web.cb_section_where')}>
+              <Field
+                label={t('web.service_locations_panel')}
+                htmlFor="sl-panel"
+                {...(panelList ? {} : { hint: t('web.service_locations_panel_id_hint') })}
               >
-                <option value="">{t('web.service_locations_all_products')}</option>
-                {/* Only this panel's products: a scope elsewhere could never apply here. */}
-                {(products.data ?? [])
-                  .filter((one) => one.panelId === form.panelId)
-                  .map((one) => (
-                    <option key={one.id} value={one.id}>
-                      {one.title}
+                {!panelList ? (
+                  <input
+                    id="sl-panel"
+                    dir="ltr"
+                    value={form.panelId}
+                    onChange={(event) => setForm({ ...form, panelId: event.target.value.trim() })}
+                  />
+                ) : (
+                  <select
+                    id="sl-panel"
+                    value={form.panelId}
+                    onChange={(event) =>
+                      // A product scope names a product of THIS panel; another panel's is cleared.
+                      setForm({
+                        ...form,
+                        panelId: event.target.value,
+                        productId:
+                          products.data?.find((one) => one.id === form.productId)?.panelId ===
+                          event.target.value
+                            ? form.productId
+                            : '',
+                      })
+                    }
+                  >
+                    <option value="" disabled>
+                      —
+                    </option>
+                    {(panels.data ?? []).map((one) => (
+                      <option key={one.id} value={one.id}>
+                        {one.capabilities.includes('LOCATION_CHANGE')
+                          ? one.name
+                          : `${one.name} — ${t('web.service_locations_panel_unsupported')}`}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </Field>
+              <Field
+                label={t('web.service_locations_label')}
+                hint={t('web.service_locations_label_hint')}
+                htmlFor="sl-label"
+              >
+                <input
+                  id="sl-label"
+                  value={form.label}
+                  maxLength={SERVICE_LOCATION_LABEL_MAX_LENGTH}
+                  onChange={(event) => setForm({ ...form, label: event.target.value })}
+                />
+              </Field>
+              <Field
+                label={t('web.service_locations_key')}
+                hint={t('web.service_locations_key_hint')}
+                htmlFor="sl-key"
+              >
+                <input
+                  id="sl-key"
+                  dir="ltr"
+                  value={form.locationKey}
+                  maxLength={SERVICE_LOCATION_KEY_MAX_LENGTH}
+                  onChange={(event) => setForm({ ...form, locationKey: event.target.value })}
+                />
+              </Field>
+              <Field
+                label={t('web.service_locations_product')}
+                hint={t(
+                  productList
+                    ? 'web.service_locations_product_hint'
+                    : 'web.service_locations_product_id_hint',
+                )}
+                htmlFor="sl-product"
+              >
+                {!productList ? (
+                  <input
+                    id="sl-product"
+                    dir="ltr"
+                    placeholder={t('web.service_locations_all_products')}
+                    value={form.productId}
+                    onChange={(event) => setForm({ ...form, productId: event.target.value.trim() })}
+                  />
+                ) : (
+                  <select
+                    id="sl-product"
+                    value={form.productId}
+                    onChange={(event) => setForm({ ...form, productId: event.target.value })}
+                  >
+                    <option value="">{t('web.service_locations_all_products')}</option>
+                    {/* Only this panel's products: a scope elsewhere could never apply here. */}
+                    {(products.data ?? [])
+                      .filter((one) => one.panelId === form.panelId)
+                      .map((one) => (
+                        <option key={one.id} value={one.id}>
+                          {one.title}
+                        </option>
+                      ))}
+                  </select>
+                )}
+              </Field>
+            </FormSection>
+
+            <FormSection id="sl-section-offer" title={t('web.cb_section_offer')}>
+              <CheckField
+                id="sl-initial"
+                label={t('web.service_locations_initial')}
+                hint={t('web.service_locations_initial_hint')}
+                checked={form.initial}
+                onChange={(next) => setForm({ ...form, initial: next })}
+              />
+              <CheckField
+                id="sl-enabled"
+                label={t('web.service_locations_enabled')}
+                checked={form.enabled}
+                onChange={(next) => setForm({ ...form, enabled: next })}
+              />
+              <Field
+                label={t('web.service_locations_price')}
+                hint={t('web.service_locations_price_hint')}
+                htmlFor="sl-price"
+              >
+                <input
+                  id="sl-price"
+                  dir="ltr"
+                  inputMode="numeric"
+                  value={form.priceAmount}
+                  onChange={(event) => setForm({ ...form, priceAmount: event.target.value.trim() })}
+                />
+              </Field>
+              <Field label={t('web.service_locations_currency')} htmlFor="sl-currency">
+                <select
+                  id="sl-currency"
+                  value={form.priceCurrency}
+                  onChange={(event) =>
+                    setForm({ ...form, priceCurrency: event.target.value as SalesCurrencyCode })
+                  }
+                >
+                  {SALES_CURRENCY_CODES.map((code) => (
+                    <option key={code} value={code}>
+                      {t(CURRENCY_LABEL[code])}
                     </option>
                   ))}
-              </select>
-            )}
-          </Field>
-          <Field
-            label={t('web.service_locations_initial')}
-            hint={t('web.service_locations_initial_hint')}
-            htmlFor="sl-initial"
-          >
-            <input
-              id="sl-initial"
-              type="checkbox"
-              checked={form.initial}
-              onChange={(event) => setForm({ ...form, initial: event.target.checked })}
-            />
-          </Field>
-          <Field label={t('web.service_locations_enabled')} htmlFor="sl-enabled">
-            <input
-              id="sl-enabled"
-              type="checkbox"
-              checked={form.enabled}
-              onChange={(event) => setForm({ ...form, enabled: event.target.checked })}
-            />
-          </Field>
-          <Field
-            label={t('web.service_locations_price')}
-            hint={t('web.service_locations_price_hint')}
-            htmlFor="sl-price"
-          >
-            <input
-              id="sl-price"
-              dir="ltr"
-              inputMode="numeric"
-              value={form.priceAmount}
-              onChange={(event) => setForm({ ...form, priceAmount: event.target.value.trim() })}
-            />
-          </Field>
-          <Field label={t('web.service_locations_currency')} htmlFor="sl-currency">
-            <select
-              id="sl-currency"
-              value={form.priceCurrency}
-              onChange={(event) =>
-                setForm({ ...form, priceCurrency: event.target.value as SalesCurrencyCode })
-              }
-            >
-              {SALES_CURRENCY_CODES.map((code) => (
-                <option key={code} value={code}>
-                  {t(CURRENCY_LABEL[code])}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field
-            label={t('web.service_locations_cooldown')}
-            hint={t('web.service_locations_cooldown_hint')}
-            htmlFor="sl-cooldown"
-          >
-            <input
-              id="sl-cooldown"
-              dir="ltr"
-              inputMode="numeric"
-              value={form.cooldownHours}
-              onChange={(event) => setForm({ ...form, cooldownHours: event.target.value.trim() })}
-            />
-          </Field>
-          <Field
-            label={t('web.service_locations_max_changes')}
-            hint={t('web.service_locations_limit_hint')}
-            htmlFor="sl-max"
-          >
-            <input
-              id="sl-max"
-              dir="ltr"
-              inputMode="numeric"
-              value={form.maxChanges}
-              onChange={(event) => setForm({ ...form, maxChanges: event.target.value.trim() })}
-            />
-          </Field>
-          <Field label={t('web.service_locations_period_days')} htmlFor="sl-period">
-            <input
-              id="sl-period"
-              dir="ltr"
-              inputMode="numeric"
-              value={form.periodDays}
-              onChange={(event) => setForm({ ...form, periodDays: event.target.value.trim() })}
-            />
-          </Field>
-          <Field label={t('web.service_locations_sort')} htmlFor="sl-sort">
-            <input
-              id="sl-sort"
-              dir="ltr"
-              inputMode="numeric"
-              value={form.sortOrder}
-              onChange={(event) => setForm({ ...form, sortOrder: event.target.value.trim() })}
-            />
-          </Field>
+                </select>
+              </Field>
+            </FormSection>
 
-          {(panels.isError || products.isError) && (
-            <Banner tone="danger">{t('web.extra_devices_scope_unavailable')}</Banner>
-          )}
-          {!limitsValid && <Banner tone="warn">{t('web.service_locations_limit_pair')}</Banner>}
+            <FormSection id="sl-section-limits" title={t('web.service_locations_limits')}>
+              <Field
+                label={t('web.service_locations_cooldown')}
+                hint={t('web.service_locations_cooldown_hint')}
+                htmlFor="sl-cooldown"
+              >
+                <input
+                  id="sl-cooldown"
+                  dir="ltr"
+                  inputMode="numeric"
+                  value={form.cooldownHours}
+                  onChange={(event) =>
+                    setForm({ ...form, cooldownHours: event.target.value.trim() })
+                  }
+                />
+              </Field>
+              <Field
+                label={t('web.service_locations_max_changes')}
+                hint={t('web.service_locations_limit_hint')}
+                htmlFor="sl-max"
+              >
+                <input
+                  id="sl-max"
+                  dir="ltr"
+                  inputMode="numeric"
+                  value={form.maxChanges}
+                  onChange={(event) => setForm({ ...form, maxChanges: event.target.value.trim() })}
+                />
+              </Field>
+              <Field
+                label={t('web.service_locations_period_days')}
+                htmlFor="sl-period"
+                {...(limitsValid ? {} : { error: t('web.service_locations_limit_pair') })}
+              >
+                <input
+                  id="sl-period"
+                  dir="ltr"
+                  inputMode="numeric"
+                  value={form.periodDays}
+                  onChange={(event) => setForm({ ...form, periodDays: event.target.value.trim() })}
+                />
+              </Field>
+              <Field label={t('web.service_locations_sort')} htmlFor="sl-sort">
+                <input
+                  id="sl-sort"
+                  dir="ltr"
+                  inputMode="numeric"
+                  value={form.sortOrder}
+                  onChange={(event) => setForm({ ...form, sortOrder: event.target.value.trim() })}
+                />
+              </Field>
+            </FormSection>
 
-          <div className="toolbar">
-            <button
-              type="button"
-              className="btn primary sm"
-              disabled={busy || !formValid}
-              onClick={() => save.mutate()}
-            >
-              {t('web.service_locations_save')}
-            </button>
-            {editing !== null && (
-              <button type="button" className="btn sm" disabled={busy} onClick={reset}>
-                {t('web.service_locations_cancel_edit')}
-              </button>
+            {(panels.isError || products.isError || failure != null) && (
+              <div className="cb-form-error stack-sm">
+                {(panels.isError || products.isError) && (
+                  <Banner tone="danger">{t('web.extra_devices_scope_unavailable')}</Banner>
+                )}
+                {failure != null && <Banner tone="danger">{failureText(failure)}</Banner>}
+              </div>
             )}
-          </div>
-          {failure != null && <Banner tone="danger">{failureText(failure)}</Banner>}
-        </Card>
+          </Card>
+        )}
+      </div>
+
+      {deleting !== null && (
+        <ConfirmDialog
+          title={deleting.label}
+          question={t('web.service_locations_delete_confirm')}
+          confirmLabel={t('web.cb_delete_yes')}
+          cancelLabel={t('web.cb_cancel')}
+          onConfirm={() => {
+            const id = deleting.id;
+            setDeleting(null);
+            remove.mutate(id);
+          }}
+          onCancel={() => setDeleting(null)}
+        />
       )}
     </>
   );
