@@ -117,13 +117,20 @@ export const APPEARANCE_SLOT_FALLBACKS: Readonly<Record<AppearanceSlot, string>>
  * placeholder, and the catalogue audit does not report it as undeclared. The appearance
  * renderer is the only thing that consumes it, after the template has been rendered.
  */
-export const APPEARANCE_MARKER_EXPRESSION_SOURCE = '\\{icon:([a-z_]+)\\}';
+export const APPEARANCE_MARKER_EXPRESSION_SOURCE = '\\{icon:([^{}]*)\\}';
 
 export function appearanceMarker(slot: AppearanceSlot): string {
   return `{icon:${slot}}`;
 }
 
-/** Every marker's slot NAME in a body, in order, known or not. */
+/**
+ * Every marker's slot NAME in a body, in order, known or not — and MALFORMED or not.
+ *
+ * The scanner matches the whole `{icon:…}` form (anything but a brace inside), so
+ * `{icon:success1}`, `{icon:Payment}` and `{icon: payment}` are seen by
+ * `validateTemplateBody` and refused as `UNKNOWN_ICON`, rather than reaching a customer
+ * as literal text because a narrower pattern never noticed them (Codex, PR #121).
+ */
 export function appearanceMarkersIn(body: string): string[] {
   const found: string[] = [];
   for (const match of body.matchAll(new RegExp(APPEARANCE_MARKER_EXPRESSION_SOURCE, 'g'))) {
@@ -253,8 +260,15 @@ export const saveAppearanceSlotRequestSchema = z
   .strict();
 export type SaveAppearanceSlotRequest = z.infer<typeof saveAppearanceSlotRequestSchema>;
 
-/** Reset one slot to the catalogue: its row is removed. */
-export const resetAppearanceSlotRequestSchema = z.object({ idempotencyKey }).strict();
+/**
+ * Reset one slot to the catalogue: its row is removed — the row at `expectedVersion`, the
+ * version the operator read. A reset built on a stale read is `control.version_conflict`,
+ * never the deletion of a colleague's newer row (Codex, PR #121). Null names a slot with
+ * no row, which a reset leaves as it is.
+ */
+export const resetAppearanceSlotRequestSchema = z
+  .object({ idempotencyKey, expectedVersion: z.number().int().nullable() })
+  .strict();
 export type ResetAppearanceSlotRequest = z.infer<typeof resetAppearanceSlotRequestSchema>;
 
 export const appearanceSlotMutationResponseSchema = z.object({
