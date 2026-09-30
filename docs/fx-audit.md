@@ -142,7 +142,11 @@ The rate is parsed from the provider's TEXT (`parseDecimalRate`), truncated past
    button calls `refresh`. Both take the **lease** first: one conditional upsert on
    `fx_quotes` that creates the row or claims it when no unexpired lease exists and — for
    the worker — the stored quote is older than `fx.fresh_ttl_seconds`. Two replicas is the
-   normal case; the loser dials nothing.
+   normal case; the loser dials nothing. The claim is stamped with a token the claimer
+   minted (`refresh_claim_token`, held exactly when a lease is), and the store and the
+   release in step 5 are conditioned on it: a refresher that stalled past its lease and
+   woke up after another replica claimed it can neither clear nor overwrite that claim
+   (Codex review of #122).
 2. Sources are asked in order, primary then fallback (`NONE` or the same source means
    primary only), each through `SafeHttpClient` outside any transaction. A source inside a
    rate-limit cooldown is skipped. The pass stops at the first ACCEPTED answer: the fallback
@@ -155,7 +159,10 @@ The rate is parsed from the provider's TEXT (`parseDecimalRate`), truncated past
    as the feed was down.
 4. `chooseQuote`: the first accepted candidate; failing that, two outliers within
    `FX_SOURCE_AGREEMENT_BPS` (3 %) of each other — the market moved — win, the first of
-   them; a lone outlier prices nothing.
+   them; a lone outlier prices nothing. Every source standing behind the chosen quote
+   (`sourcesBehind`: the chosen one and each outlier within the agreement bound of it) is
+   recorded as a success; the one that corroborated the move was right too, and is not
+   recorded as a rejected outlier against the market it confirmed (Codex review of #122).
 5. The store is **only if newer** (`fetched_at < new`), and releases the lease. A refresh
    that stored nothing releases the lease with the failure's machine code; a refresh whose
    figure lost to a newer stored one releases it with none (a defect the integration case
@@ -229,9 +236,14 @@ Toman per Star the central rate produces; one button refreshes and audits who pr
 
 ## 4. Implementation notes
 
-- **Migration 0149** is generated plus two hand-written statements: the backfill of
+- **Migration 0149** is generated plus three hand-written statements: the backfill of
   `conversion_policy` to `FIXED_RATE` where a rate is snapshotted, placed BEFORE the CHECK
-  that requires the two to agree, and the widened guard trigger. `pnpm db:check` runs on
+  that requires the two to agree; the widened guard trigger; and a BEFORE INSERT trigger
+  that infers `FIXED_RATE` for a row arriving with a rate and the column's default — the
+  previous release's own write shape, which the CHECK alone refused, so every Stars
+  attempt on the old replica failed during a rolling deploy and the rollback window
+  (Codex review of #122, P1). The integration case re-inserts a live row through the
+  pre-P column list and reads it back. `pnpm db:check` runs on
   an empty database and would never see the row the ordering exists for, so it was proven
   by hand: migrate `nexa_pfx` to 0148 (journal trimmed, restored), insert a rate-bearing
   Stars invoice and a TonPays one with FK checks off, apply 0149 → `TELEGRAM_STARS |
@@ -274,9 +286,27 @@ mutation rebuilt the package before and after.
 | M14 | `claimRefresh`: the "older than the TTL" condition dropped                                | `fx-stars`                                                     | **1 failed** / 11                                                                                                                                                                                                                                                                                                                     |
 | M15 | `storeQuote`: "only if newer" dropped                                                     | `fx-stars`                                                     | first run **survived**: nothing stored an older fetch. A case was added (the stored quote reads as fetched an hour from now; an operator refresh must not replace it) — and it failed on the UNMUTATED code: the refused store left the lease held. Fixed (§3.3 step 5). Rerun on the fixed baseline (13/13 green): **1 failed** / 12 |
 
+The Codex review of #122 (one P1, six P2; each confirmed against the code) added seven
+rules, each reverted the same way. The migration one needed a fresh `nexa_pfx` (the
+migrator applies a tag once), so it was run by hand: mutate, drop the schema, run, restore,
+drop the schema again.
+
+| #    | Rule reverted                                                                                      | Named test(s)           | Result                                                                             |
+| ---- | -------------------------------------------------------------------------------------------------- | ----------------------- | ---------------------------------------------------------------------------------- |
+| M16  | 0149: the BEFORE INSERT trigger inferring `FIXED_RATE` from a rate removed                         | `fx-stars`              | **1 failed** / 16 — `gateway_invoices_fx_snapshot_check` on the pre-P-shape insert |
+| M17  | `sourcesBehind`: only the chosen source counted a success (a corroborating outlier still rejected) | `fx-service`            | **1 failed** / 17                                                                  |
+| M18  | `gatewayInvoiceViewSchema`: a legacy view without a policy read as `SAME_UNIT` whatever its rate   | `fx-conversion`         | **1 failed** / 21                                                                  |
+| M19  | `openGatewayAttempt`: the conversion resolved BEFORE the open attempt is looked up                 | `fx-stars`              | **1 failed** / 16                                                                  |
+| M20  | `decimalText`: Persian/Arabic-Indic digits and the Arabic decimal separator left as typed          | `settings-presentation` | **1 failed** / 20                                                                  |
+| M21a | `storeQuote`: the claim-token condition dropped                                                    | `fx-stars`              | **1 failed** / 16                                                                  |
+| M21b | `releaseRefresh`: the claim-token condition dropped                                                | `fx-stars`              | **1 failed** / 16                                                                  |
+| M22  | `bookTimeOf`: an out-of-range book time returned as an invalid Date                                | `fx-sources`            | **1 failed** / 7                                                                   |
+
 Not covered by mutation, stated rather than hidden:
 
 - The migration's backfill ordering (§4): proven once by hand, not by a test that runs.
+  (The previous release's INSERT shape, the other half of the same compatibility, IS
+  tested — M16.)
 - The Telegram surface's mapping of `FX_UNAVAILABLE` to `bot.payment.fx_unavailable`
   (`gatewayRefusal` is not exported); `check:i18n` proves the key renders, the
   integration test proves the refusal's `reason` and `detail`.

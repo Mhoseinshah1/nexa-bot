@@ -1597,7 +1597,12 @@ runs:
   says: the old release does not read the mode, and every enabled Stars route has a rate
   because enabling has required one since Package A. The central rate is not consulted
   and cannot be. This is the one behaviour that silently changes across the rollback, and
-  it is the conservative direction — the operator's own figure.
+  it is the conservative direction — the operator's own figure. The old release's INSERT
+  carries the rate and no policy, so it arrives with the column's default beside a rate —
+  the combination the snapshot CHECK refuses; a BEFORE INSERT trigger in 0149 infers
+  `FIXED_RATE` for it, exactly as the backfill did for the rows already there. Without
+  that trigger every Stars attempt on the old replica failed, during the rolling deploy
+  as well as after a rollback (Codex review of #122, P1).
 - **The refresh lane stops**, and `fx_quotes` goes stale. Nothing reads it in the old
   release. After the roll-forward the worker's first pass refreshes it within the TTL,
   and until then a central-rate attempt is refused, not priced by a stale quote past the
