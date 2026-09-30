@@ -159,7 +159,12 @@ export const customEmojiIdSchema = z.string().regex(CUSTOM_EMOJI_ID_PATTERN, {
  *  - `UNREACHABLE` — no answer, a 5xx or an unreadable answer: nothing is known.
  *  - `RATE_LIMITED` — a 429; the test was declined, not judged.
  */
-export const APPEARANCE_TEST_OUTCOMES = ['SENT', 'REJECTED', 'UNREACHABLE', 'RATE_LIMITED'] as const;
+export const APPEARANCE_TEST_OUTCOMES = [
+  'SENT',
+  'REJECTED',
+  'UNREACHABLE',
+  'RATE_LIMITED',
+] as const;
 export type AppearanceTestOutcome = (typeof APPEARANCE_TEST_OUTCOMES)[number];
 
 /**
@@ -292,6 +297,13 @@ export const APPEARANCE_ERROR_CODES = {
   BOT_NOT_ACTIVE: 'appearance.bot_not_active',
   /** A test with this key is still being sent. */
   TEST_IN_FLIGHT: 'appearance.test_in_flight',
+  /**
+   * No slot carries a custom emoji, so a test message would carry no `custom_emoji`
+   * entity and its acceptance would prove nothing about the bot. Refused rather than sent:
+   * a recorded `SENT` from such a message would switch decoration on for a bot nothing
+   * has actually tested.
+   */
+  NOTHING_TO_TEST: 'appearance.nothing_to_test',
 } as const;
 
 /** The permissions, each an existing key: the bot-buttons precedent (R1) and the ops group's. */
