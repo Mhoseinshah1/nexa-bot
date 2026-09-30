@@ -7,6 +7,7 @@ import {
   type BulkOperationState,
   type BulkSkipReason,
   type CurrencyCode,
+  type CustomerNotificationState,
   type TenantContext,
 } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
@@ -96,7 +97,17 @@ const EMPTY: BulkCounts = {
   skipped: 0,
   cancelled: 0,
   notified: 0,
+  notificationQueued: 0,
 };
+
+/**
+ * The item's notice as the notification lane holds it. `notified_at` on the item is only the
+ * instant it was ENQUEUED; whether the customer was told is the lane's row, found by its
+ * unique key (tenant, kind, subject = the item). Codex R4 on PR #117.
+ */
+const NOTICE_JOIN = sql`LEFT JOIN customer_notifications n
+                   ON n.tenant_id = i.tenant_id AND n.subject_id = i.id
+                  AND n.kind IN ('WALLET_MASS_CREDITED', 'SERVICE_GIFT_APPLIED')`;
 
 /**
  * The eligibility rule a grant adds to the audience's service block: ACTIVE (the one state
@@ -205,13 +216,16 @@ export class DrizzleBulkOperationRepository implements BulkOperationRepository {
       n: number;
       unknown: number;
       notified: number;
+      queued: number;
     }>(
       sql`SELECT i.bulk_operation_id, i.state, count(*)::int AS n,
                  count(*) FILTER (WHERE p.state = 'UNKNOWN')::int AS unknown,
-                 count(*) FILTER (WHERE i.notified_at IS NOT NULL)::int AS notified
+                 count(*) FILTER (WHERE n.state = 'DELIVERED')::int AS notified,
+                 count(*) FILTER (WHERE n.state = 'PENDING')::int AS queued
             FROM bulk_operation_items i
             LEFT JOIN provisioning_operations p
                    ON p.tenant_id = i.tenant_id AND p.id = i.provisioning_operation_id
+            ${NOTICE_JOIN}
            WHERE i.tenant_id = ${tenantId}::uuid
              AND i.bulk_operation_id = ANY(${sql.param([...ids])}::uuid[])
            GROUP BY i.bulk_operation_id, i.state`,
@@ -224,6 +238,7 @@ export class DrizzleBulkOperationRepository implements BulkOperationRepository {
         [key]: row.n,
         total: current.total + row.n,
         notified: current.notified + row.notified,
+        notificationQueued: current.notificationQueued + row.queued,
         awaitingReconciliation:
           current.awaitingReconciliation + (row.state === 'PLANNED' ? row.unknown : 0),
       });
@@ -269,17 +284,19 @@ export class DrizzleBulkOperationRepository implements BulkOperationRepository {
       skip_reason: BulkSkipReason | null;
       operation_state: string | null;
       failure_kind: string | null;
-      notified_at: Instant | null;
+      notice_state: CustomerNotificationState | null;
       processed_at: Instant | null;
     }>(
       sql`SELECT i.id, i.customer_id, c.first_name, c.username, i.service_id,
                  s.provider_username AS service_label, i.state, i.skip_reason,
-                 p.state AS operation_state, p.failure_kind, i.notified_at, i.processed_at
+                 p.state AS operation_state, p.failure_kind, n.state AS notice_state,
+                 i.processed_at
             FROM bulk_operation_items i
             JOIN customers c ON c.tenant_id = i.tenant_id AND c.id = i.customer_id
             LEFT JOIN services s ON s.tenant_id = i.tenant_id AND s.id = i.service_id
             LEFT JOIN provisioning_operations p
                    ON p.tenant_id = i.tenant_id AND p.id = i.provisioning_operation_id
+            ${NOTICE_JOIN}
            WHERE i.tenant_id = ${tenantId}::uuid AND i.bulk_operation_id = ${id}::uuid
              AND ${input.state === null ? sql`true` : sql`i.state = ${input.state}`}
              AND ${input.after === null ? sql`true` : sql`i.id > ${input.after}::uuid`}
@@ -297,7 +314,8 @@ export class DrizzleBulkOperationRepository implements BulkOperationRepository {
       skipReason: row.skip_reason,
       operationState: row.operation_state,
       failureKind: row.failure_kind,
-      notified: row.notified_at !== null,
+      notified: row.notice_state === 'DELIVERED',
+      notificationState: row.notice_state,
       processedAt: maybeDate(row.processed_at),
     }));
   }

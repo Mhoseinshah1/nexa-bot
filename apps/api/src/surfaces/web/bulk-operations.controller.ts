@@ -33,6 +33,7 @@ const EMPTY: BulkCounts = {
   skipped: 0,
   cancelled: 0,
   notified: 0,
+  notificationQueued: 0,
 };
 
 /**
@@ -156,6 +157,7 @@ export class BulkOperationsController {
         operationState: row.operationState,
         failureKind: row.failureKind,
         notified: row.notified,
+        notificationState: row.notificationState,
         processedAt: row.processedAt?.toISOString() ?? null,
       })),
       nextCursor: rows.length > limit ? (page.at(-1)?.id ?? null) : null,

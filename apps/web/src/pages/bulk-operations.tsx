@@ -12,6 +12,7 @@ import {
   type BulkOperationState,
   type BulkPreview,
   type BulkSkipReason,
+  type CustomerNotificationState,
 } from '@nexa/contracts';
 import {
   ApiError,
@@ -84,6 +85,14 @@ const ITEM_LABELS: Readonly<Record<BulkItemState, WebKey>> = {
   SKIPPED: 'web.bulk_item_skipped',
   CANCELLED: 'web.bulk_item_cancelled',
 };
+const NOTICE_LABELS: Readonly<Record<CustomerNotificationState, WebKey>> = {
+  PENDING: 'web.bulk_notice_pending',
+  DELIVERED: 'web.bulk_notice_delivered',
+  UNCONFIRMED: 'web.bulk_notice_unconfirmed',
+  FAILED: 'web.bulk_notice_failed',
+  SUPERSEDED: 'web.bulk_notice_superseded',
+};
+
 const SKIP_LABELS: Readonly<Record<BulkSkipReason, WebKey>> = {
   CUSTOMER_BLOCKED: 'web.bulk_skip_blocked',
   CURRENCY_CHANGED: 'web.bulk_skip_currency',
@@ -563,6 +572,7 @@ export function BulkOperationDetailPage({
                 [t('web.bulk_item_skipped'), formatNumber(op.counts.skipped)],
                 [t('web.bulk_item_cancelled'), formatNumber(op.counts.cancelled)],
                 [t('web.bulk_notified'), formatNumber(op.counts.notified)],
+                [t('web.bulk_notice_queued'), formatNumber(op.counts.notificationQueued)],
                 [t('web.bulk_progress'), `${formatNumber(op.progressPercent)}%`],
                 [t('web.bulk_reason'), op.note],
                 [t('web.bc_created_by'), op.createdBy?.username ?? '—'],
@@ -670,9 +680,13 @@ export function BulkOperationDetailPage({
                           ),
                       },
                       {
-                        key: 'notified',
-                        header: t('web.bulk_notified'),
-                        render: (row) => (row.notified ? t('web.bc_yes') : '—'),
+                        key: 'notice',
+                        header: t('web.bulk_notice'),
+                        // The lane's own state: enqueued is not told (Codex R4).
+                        render: (row) =>
+                          row.notificationState === null
+                            ? '—'
+                            : t(NOTICE_LABELS[row.notificationState]),
                       },
                     ]}
                     rows={items.data.items}

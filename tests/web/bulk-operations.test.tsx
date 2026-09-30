@@ -48,6 +48,7 @@ function operation(overrides: Record<string, unknown> = {}): Record<string, unkn
       skipped: 0,
       cancelled: 0,
       notified: 1,
+      notificationQueued: 0,
     },
     progressPercent: 50,
     createdBy: { id: 'x', username: 'owner' },
@@ -145,6 +146,7 @@ describe('mass operations in the Web Admin', () => {
               operationState: 'UNKNOWN',
               failureKind: null,
               notified: false,
+              notificationState: 'PENDING',
               processedAt: '2026-09-20T10:00:00.000Z',
             },
           ],
@@ -156,5 +158,8 @@ describe('mass operations in the Web Admin', () => {
     expect(await screen.findByText('nxabc')).toBeInTheDocument();
     expect(screen.getAllByText('در انتظار بررسی نتیجه روی پنل').length).toBeGreaterThan(1);
     expect(screen.getByRole('button', { name: 'لغو موارد باقی‌مانده' })).toBeInTheDocument();
+    // An enqueued notice reads as queued, never as told (Codex R4).
+    expect(screen.getByText('در صف ارسال')).toBeInTheDocument();
+    expect(screen.getByText('اطلاع‌رسانی در صف ارسال')).toBeInTheDocument();
   });
 });

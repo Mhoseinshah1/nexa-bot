@@ -6,6 +6,7 @@ import type {
   BulkOperationState,
   BulkSkipReason,
   CurrencyCode,
+  CustomerNotificationState,
   TenantContext,
 } from '@nexa/contracts';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
@@ -104,7 +105,9 @@ export interface BulkItemPageRow {
   readonly skipReason: BulkSkipReason | null;
   readonly operationState: string | null;
   readonly failureKind: string | null;
+  /** The lane DELIVERED the notice — not merely enqueued it. */
   readonly notified: boolean;
+  readonly notificationState: CustomerNotificationState | null;
   readonly processedAt: Date | null;
 }
 
@@ -201,6 +204,7 @@ export interface BulkOperationRepository {
     now: Date,
     tx: TransactionScope,
   ): Promise<void>;
+  /** Stamps the instant the item's notice was ENQUEUED; delivery is the lane's to report. */
   markNotified(
     scope: TenantContext,
     itemId: string,

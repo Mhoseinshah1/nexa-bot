@@ -9722,6 +9722,11 @@ export const bulkOperationItems = pgTable(
     skipReason: text('skip_reason'),
     walletEntryId: uuid('wallet_entry_id'),
     provisioningOperationId: uuid('provisioning_operation_id'),
+    /**
+     * When the item's notice was ENQUEUED on the customer notification lane — never whether
+     * it was delivered. What the operator reads as "notified" is the lane's own row
+     * (`customer_notifications`, subject = this item), Codex R4 on PR #117.
+     */
     notifiedAt: timestamptz('notified_at'),
     processedAt: timestamptz('processed_at'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
