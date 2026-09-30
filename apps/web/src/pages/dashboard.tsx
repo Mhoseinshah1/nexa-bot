@@ -68,6 +68,7 @@ import {
   type DistributionSlice,
   type PeriodPreset,
   type Tone,
+  Quantity,
 } from '../ui/kit';
 import type { SeriesTone } from '../ui/charts';
 import type { QueryView } from '../view-state';
@@ -330,7 +331,7 @@ function LastUpdated({
   if (text === null) return null;
   return (
     <span className="dash-updated">
-      {t('web.dashboard_updated_at')} <span className="ltr">{text}</span>
+      {t('web.dashboard_updated_at')} <Quantity>{text}</Quantity>
     </span>
   );
 }

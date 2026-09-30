@@ -67,6 +67,7 @@ import {
   Legend,
   StatCard,
   type Column,
+  Quantity,
 } from '../ui/kit';
 import type { DonutSlice, SeriesTone } from '../ui/charts';
 import { Icon } from '../ui/icons';
@@ -269,10 +270,10 @@ function PeriodNote({
       : `${side.startLocal} – ${side.endLocalInclusive}`;
   return (
     <p className="faint small">
-      {t('web.report_period_current')} <Ltr>{span(period.current)}</Ltr> ·{' '}
-      {t('web.report_period_previous')} <Ltr>{span(period.previous)}</Ltr> ·{' '}
+      {t('web.report_period_current')} <Quantity>{span(period.current)}</Quantity> ·{' '}
+      {t('web.report_period_previous')} <Quantity>{span(period.previous)}</Quantity> ·{' '}
       {t('web.report_updated_at')}{' '}
-      <Ltr>{formatInstantIn(period.generatedAt, period.timezone, period.calendar)}</Ltr>
+      <Quantity>{formatInstantIn(period.generatedAt, period.timezone, period.calendar)}</Quantity>
       {period.lengthsDiffer && <> · {t('web.report_lengths_differ')}</>}
     </p>
   );
