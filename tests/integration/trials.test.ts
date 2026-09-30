@@ -155,21 +155,6 @@ describe('a free trial', () => {
     return resolved.customer.id;
   }
 
-  async function setFlag(enabled: boolean): Promise<void> {
-    const current = (await ctx.container.featureFlags.list(tenantA, owner)).find(
-      (flag) => flag.key === 'trials',
-    );
-    if (current?.enabled === enabled) return;
-    await ctx.container.featureFlags.set(tenantA, owner, {
-      key: 'trials',
-      enabled,
-      expectedVersion: current?.version ?? null,
-      confirmKey: 'trials',
-      reason: 'offer a trial',
-      idempotencyKey: randomUUID(),
-    });
-  }
-
   async function setLimit(limit: number): Promise<void> {
     const current = await ctx.container.settingsService.get(
       tenantA,
@@ -207,9 +192,11 @@ describe('a free trial', () => {
     });
   }
 
-  /** The flag on and the main panel offering 100 MB for 72 hours — the owner's example. */
+  /**
+   * The main panel offering 100 MB for 72 hours — the owner's example. No switch besides the
+   * panel's own since F5: the `trials` flag is retired.
+   */
   async function configureTrial(input: { readonly limit?: number } = {}): Promise<void> {
-    await setFlag(true);
     await configurePanel(panelId);
     if (input.limit !== undefined) await setLimit(input.limit);
   }
@@ -299,23 +286,137 @@ describe('a free trial', () => {
 
   it('is off by default, and says so without writing anything', async () => {
     expect(await offered()).toBe('UNCONFIGURED');
-    expect(await claim(customerId, 'off')).toEqual({ outcome: 'REFUSED', reason: 'UNCONFIGURED' });
-    // A panel configured while the flag is off is still no trial: the flag is the switch.
-    await configurePanel(panelId);
-    expect(await claim(customerId, 'config-only')).toEqual({
-      outcome: 'REFUSED',
-      reason: 'UNCONFIGURED',
-    });
-    // The flag on with no panel offering one is still no trial.
+    // The menu's claim, which names no panel: no panel has a trial switched on.
+    expect(
+      await ctx.container.trials.claim(tenantA, systemActor('off'), customerId, {
+        idempotencyKey: 'off',
+      }),
+    ).toEqual({ outcome: 'REFUSED', reason: 'UNCONFIGURED' });
+    // A panel configured with its trial switched off is still no trial — and the operator's
+    // allowance card says no panel has one on (F5: `featureEnabled` is the panels' switch).
     await configurePanel(panelId, { enabled: false });
-    await setFlag(true);
     expect(await offered()).toBe('UNCONFIGURED');
+    expect(
+      (await ctx.container.trialAdmin.allowance(tenantA, owner, customerId)).featureEnabled,
+    ).toBe(false);
     expect(await claim(customerId, 'no-panel')).toEqual({
       outcome: 'REFUSED',
       reason: 'PRODUCT_UNAVAILABLE',
     });
     expect(await count(sql`SELECT count(*)::int AS n FROM orders`)).toBe(0);
     expect(await count(sql`SELECT count(*)::int AS n FROM trial_grants`)).toBe(0);
+  });
+
+  it('is switched by the panel’s own trial alone: there is no trial flag (F5)', async () => {
+    /*
+     * The owner's F5 rule: per-panel trial settings are authoritative. The panel's
+     * `enabled` turns the trial on and off, with nothing else to switch; the Features
+     * registry has no trial switch to find, and a write naming the old key is refused as
+     * an unknown key rather than stored as a switch that does nothing.
+     */
+    const flags = await ctx.container.featureFlags.list(tenantA, owner);
+    expect(flags.map((flag) => flag.key as string)).not.toContain('trials');
+    await expect(
+      ctx.container.featureFlags.set(tenantA, owner, {
+        key: 'trials',
+        enabled: false,
+        expectedVersion: null,
+        idempotencyKey: randomUUID(),
+      }),
+    ).rejects.toMatchObject({ code: 'control.unknown_key' });
+
+    await configurePanel(panelId);
+    expect(await offered()).toEqual([panelId]);
+    expect(
+      (await ctx.container.trialAdmin.allowance(tenantA, owner, customerId)).featureEnabled,
+    ).toBe(true);
+    await configurePanel(panelId, { enabled: false });
+    expect(await offered()).toBe('UNCONFIGURED');
+    await configurePanel(panelId, { enabled: true });
+    const issued = await claim(customerId, 'panel-switch');
+    expect(issued).toMatchObject({ outcome: 'ISSUED' });
+
+    // A flag row a previous release stored is read by nothing: an OFF one withdraws nothing.
+    await ctx.container.database.db.execute(
+      sql`INSERT INTO feature_flag_states (id, tenant_id, flag_key, enabled, version)
+          VALUES (${randomUUID()}, ${tenantA.tenantId}, 'trials', false, 1)` as never,
+    );
+    const other = await customer('950960');
+    expect(await offered(other)).toEqual([panelId]);
+  });
+
+  it('carries each tenant’s effective trial switch across the flag’s retirement, once (F5)', async () => {
+    /*
+     * Migration 0144, replayed. Before F5 a panel trial was offered only while the tenant's
+     * `trials` flag was on too; after it, the panel's own switch alone decides. So the
+     * migration switches off every panel trial of a tenant whose flag was OFF — a stored
+     * `false`, or no row at all, the flag's default — and leaves a tenant whose flag was ON
+     * exactly as it was. Nobody starts offering a trial they were not offering.
+     */
+    const migration = readFileSync('apps/api/drizzle/0144_f5_trial_flag_retired.sql', 'utf8');
+    const update = migration.slice(migration.indexOf('UPDATE "panel_trial_configs"'));
+    const second = await newPanel('Second', await extraFake('127.0.0.3'));
+    const flagRow = async (enabled: boolean | null) => {
+      await ctx.container.database.db.execute(
+        sql`DELETE FROM feature_flag_states WHERE flag_key = 'trials'` as never,
+      );
+      if (enabled === null) return;
+      await ctx.container.database.db.execute(
+        sql`INSERT INTO feature_flag_states (id, tenant_id, flag_key, enabled, version)
+            VALUES (${randomUUID()}, ${tenantA.tenantId}, 'trials', ${enabled}, 1)` as never,
+      );
+    };
+    const states = async () =>
+      (
+        (await ctx.container.database.db.execute(
+          sql`SELECT panel_id, enabled, revision, traffic_bytes::text AS traffic, duration_hours
+                FROM panel_trial_configs ORDER BY panel_id` as never,
+        )) as unknown as {
+          rows: {
+            panel_id: string;
+            enabled: boolean;
+            revision: number;
+            traffic: string;
+            duration_hours: number;
+          }[];
+        }
+      ).rows;
+
+    // Flag ON: both panels as they were, one on and one off; nothing moves.
+    await configurePanel(panelId);
+    await configurePanel(second, { enabled: false, hours: 24 });
+    await flagRow(true);
+    const before = await states();
+    await ctx.container.database.db.execute(sql.raw(update));
+    expect(await states()).toEqual(before);
+    expect(await offered()).toEqual([panelId]);
+
+    // Flag OFF (stored): the enabled panel is switched off, its figures kept, its revision
+    // moved on so an open form is told it changed. A replay changes nothing more.
+    await flagRow(false);
+    await ctx.container.database.db.execute(sql.raw(update));
+    await ctx.container.database.db.execute(sql.raw(update));
+    const after = await states();
+    const main = after.find((row) => row.panel_id === panelId);
+    expect(main).toMatchObject({
+      enabled: false,
+      revision: (before.find((row) => row.panel_id === panelId)?.revision ?? 0) + 1,
+      traffic: String(100n * MB),
+      duration_hours: 72,
+    });
+    expect(after.find((row) => row.panel_id === second)).toEqual(
+      before.find((row) => row.panel_id === second),
+    );
+    expect(await offered()).toBe('UNCONFIGURED');
+
+    // Flag never set (its default, OFF): the same.
+    await configurePanel(panelId);
+    await flagRow(null);
+    await ctx.container.database.db.execute(sql.raw(update));
+    expect(await offered()).toBe('UNCONFIGURED');
+    // The operator re-enables it on the panel, and it is offered as configured.
+    await configurePanel(panelId);
+    expect(await offered()).toEqual([panelId]);
   });
 
   it('does not require a product: the order, the grant and the service name none', async () => {
@@ -414,7 +515,6 @@ describe('a free trial', () => {
   });
 
   it('computes a short trial’s expiry from its hours, not from whole days', async () => {
-    await setFlag(true);
     await configurePanel(panelId, { hours: 12, amount: '0.5', unit: 'GB' });
     const issued = await claim(customerId, 'short');
     if (issued.outcome !== 'ISSUED') throw new Error('refused');
@@ -586,7 +686,6 @@ describe('a free trial', () => {
     // A tenant that still has `trial.product_id` stored and no panel configured has no
     // trial: nothing reads the key since R1.
     await trialProduct(1);
-    await setFlag(true);
     expect(await offered()).toBe('UNCONFIGURED');
     expect(await count(sql`SELECT count(*)::int AS n FROM orders`)).toBe(0);
   });
@@ -775,19 +874,21 @@ describe('a free trial', () => {
     expect(await moneyRows()).toEqual({ wallet: 0, payments: 0, refunds: 0 });
   });
 
-  it('offers no panel in the operator’s overview while the trials switch is off (Codex, PR #111)', async () => {
+  it('offers in the operator’s overview exactly what the panel’s own switch offers (F5)', async () => {
     await configureTrial();
-    expect(
+    const overview = async () =>
       (await ctx.container.panelTrials.overview(tenantA, owner)).panels.map(
         (row) => row.offeredNow,
-      ),
-    ).toEqual([true]);
-    await setFlag(false);
-    expect(
-      (await ctx.container.panelTrials.overview(tenantA, owner)).panels.map(
-        (row) => row.offeredNow,
-      ),
-    ).toEqual([false]);
+      );
+    expect(await overview()).toEqual([true]);
+    // A stored flag row, off, from the release before, withdraws nothing: nothing reads it.
+    await ctx.container.database.db.execute(
+      sql`INSERT INTO feature_flag_states (id, tenant_id, flag_key, enabled, version)
+          VALUES (${randomUUID()}, ${tenantA.tenantId}, 'trials', false, 1)` as never,
+    );
+    expect(await overview()).toEqual([true]);
+    await configurePanel(panelId, { enabled: false });
+    expect(await overview()).toEqual([false]);
   });
 
   it('keeps a carried-forward byte count when the traffic figure is saved as shown (Codex, PR #111)', async () => {
@@ -919,6 +1020,47 @@ describe('a free trial', () => {
   };
   const grants = () => count(sql`SELECT count(*)::int AS n FROM trial_grants`);
 
+  it('draws the main-menu trial button exactly while a panel offers a trial (F5)', async () => {
+    /*
+     * The owner's F5 rule, on the wire: the trial button on the reply keyboard follows the
+     * per-panel trial — `trialOffersFor`, the evaluator the claim and the overview share —
+     * and nothing else. No flag is consulted, because there is none.
+     */
+    const runtime = ctx.container.botRuntime;
+    const keyboard = () => {
+      const last = sent.filter((one) => one.url.includes('/sendMessage')).at(-1);
+      const markup = last?.body['reply_markup'] as { keyboard?: { text: string }[][] } | undefined;
+      return (markup?.keyboard ?? []).flat().map((button) => button.text);
+    };
+    const trialLabel = CATALOGUE_FA['bot.menu.trial'];
+
+    await runtime.handle(tenantA, systemActor('tg'), typed('/start', '950950'));
+    expect(keyboard()).toContain(CATALOGUE_FA['bot.menu.catalog']);
+    expect(keyboard()).not.toContain(trialLabel);
+
+    await configureTrial();
+    sent = [];
+    await runtime.handle(tenantA, systemActor('tg'), typed('/start', '950950'));
+    expect(keyboard()).toContain(trialLabel);
+
+    // Switched off on the panel: gone, with no other switch touched.
+    await configurePanel(panelId, { enabled: false });
+    sent = [];
+    await runtime.handle(tenantA, systemActor('tg'), typed('/start', '950950'));
+    expect(keyboard()).toContain(CATALOGUE_FA['bot.menu.catalog']);
+    expect(keyboard()).not.toContain(trialLabel);
+
+    // On, but the panel cannot take a new account: the one eligibility evaluator decides.
+    await configurePanel(panelId, { enabled: true });
+    await ctx.container.panels.setStatus(tenantA, owner, panelId, {
+      status: 'DISABLED',
+      idempotencyKey: 'menu-panel-off',
+    });
+    sent = [];
+    await runtime.handle(tenantA, systemActor('tg'), typed('/start', '950950'));
+    expect(keyboard()).not.toContain(trialLabel);
+  });
+
   it('takes the trial straight from the main-menu button when one panel offers it', async () => {
     const runtime = ctx.container.botRuntime;
     const button = CATALOGUE_FA['bot.menu.trial'];
@@ -961,7 +1103,6 @@ describe('a free trial', () => {
 
   it('answers a redelivered menu tap with the refusal it already gave, even once a panel offers a trial (Codex, PR #111)', async () => {
     const runtime = ctx.container.botRuntime;
-    await setFlag(true);
     const update = typed(CATALOGUE_FA['bot.menu.trial'], '950950');
     expect((await runtime.handle(tenantA, systemActor('tg'), update)).replyKey).toBe(
       'bot.trial.unavailable',
@@ -1026,7 +1167,6 @@ describe('a free trial', () => {
 
   it('refuses a crafted choice for a panel that offers no trial', async () => {
     const runtime = ctx.container.botRuntime;
-    await setFlag(true);
     const crafted = await runtime.handle(
       tenantA,
       systemActor('tg'),
@@ -1038,23 +1178,46 @@ describe('a free trial', () => {
     expect(await grants()).toBe(0);
   });
 
-  it('draws the trial button only when the customer can take one, and issues it on the tap', async () => {
+  it('never draws a trial in the catalogue, and still answers an old catalogue’s trial tap (F5)', async () => {
+    /*
+     * The owner's F5 rule: the trial is a main-menu action, not a step of buying. The
+     * catalogue — its first page, with a trial offered and the customer able to take it —
+     * draws no trial button and no trial label. A catalogue message drawn before F5 still
+     * carries `tr:`, and that tap is the menu's claim.
+     */
     const runtime = ctx.container.botRuntime;
-    await runtime.handle(tenantA, systemActor('tg'), tap('cg:0', '950950'));
-    expect(lastMessage()).not.toContain('"tr:"');
     await configureTrial();
+    expect(await offered()).toEqual([panelId]);
     await runtime.handle(tenantA, systemActor('tg'), tap('cg:0', '950950'));
-    expect(lastMessage()).toContain('"tr:"');
+    const page = lastMessage();
+    expect(page).not.toContain('"tr:"');
+    expect(page).not.toContain('"tq:');
+    expect(page).not.toContain(CATALOGUE_FA['bot.trial.button']);
+    expect(page).not.toContain(CATALOGUE_FA['bot.menu.trial']);
+    // `/catalog` is the same screen.
+    await runtime.handle(tenantA, systemActor('tg'), typed('/catalog', '950950'));
+    expect(lastMessage()).not.toContain('"tr:"');
+    expect(await grants()).toBe(0);
+
     const taken = await runtime.handle(tenantA, systemActor('tg'), tap('tr:', '950950'));
     expect(taken.replyKey).toBe('bot.trial.issued');
-    await runtime.handle(tenantA, systemActor('tg'), tap('cg:0', '950950'));
-    expect(lastMessage()).not.toContain('"tr:"');
+    expect(await grants()).toBe(1);
   });
 
   it('is scoped to its tenant: another tenant sees no trial', async () => {
     await configureTrial();
+    const resolved = await ctx.container.customers.resolveFromUpdate(tenantB, systemActor('rb'), {
+      idempotencyKey: 'resolve-tenant-b',
+      telegramUserId: '970970',
+      from: { id: 970970, first_name: 'Bita' },
+      botInstanceId: SEED_IDS.botB1 as BotInstanceId,
+    });
     expect(
-      await ctx.container.trials.availabilityFor(tenantB, systemActor('b'), customerId),
+      await ctx.container.trials.availabilityFor(tenantB, systemActor('b'), resolved.customer.id),
     ).toEqual({ available: false, reason: 'UNCONFIGURED' });
+    // And tenant A's customer is nobody in tenant B.
+    await expect(
+      ctx.container.trials.availabilityFor(tenantB, systemActor('b'), customerId),
+    ).rejects.toMatchObject({ code: 'commerce.customer_not_found' });
   });
 });

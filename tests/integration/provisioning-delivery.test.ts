@@ -2223,8 +2223,9 @@ describe('a provisioned service announces itself', () => {
 
     // And the request itself is refused, not merely undrawn.
     const tapped = await runtime().handle(tenantA, systemActor('bot'), tapUpdate(`u:${id}`));
-    // R3: refused as a notice on the button, the card left as it is.
-    expect(tapped.replyKey).toBeNull();
+    // R3: refused as a notice on the button. Round N (F4): the stale card is redrawn as
+    // the service is, still without the switch.
+    expect(tapped.replyKey).toBe('bot.service.card');
     expect(
       JSON.stringify(sent.filter((one) => one.url.endsWith('/answerCallbackQuery')).at(-1)),
     ).toContain('این قابلیت برای سرویس شما در دسترس نیست');
@@ -2241,15 +2242,14 @@ describe('a provisioned service announces itself', () => {
     await ctx.container.provisionerLoop.tick();
     const service = await services.findByOrderId(tenantA, orderId);
     expect(service?.deliveryState, 'the automatic announcement already ran').toBe('DELIVERED');
-    // The card is a photo, so the count that must grow is the photos', not the texts'.
-    const photos = () => sent.filter((one) => one.url.includes('/sendPhoto'));
-    const before = photos().length;
+    // Round N (F4): «🔗 لینک اشتراک» turns the card it was tapped on into the link — an
+    // edit of that message, never a new one.
+    const edits = () => sent.filter((one) => one.url.includes('/editMessageText'));
+    const before = edits().length;
+    const sendsBefore = sent.filter((one) => /\/send(Message|Photo)$/u.test(one.url)).length;
 
-    const result = await runtime().handle(
-      tenantA,
-      systemActor('bot'),
-      tapUpdate(`r:${service?.id ?? ''}`),
-    );
+    const update = tapUpdate(`r:${service?.id ?? ''}`);
+    const result = await runtime().handle(tenantA, systemActor('bot'), update);
 
     /*
      * `key: null`, and the message still arrives.
@@ -2262,9 +2262,18 @@ describe('a provisioned service announces itself', () => {
      */
     expect(result.intent).toBe('SERVICE_RESEND');
     expect(result.replyKey).toBeNull();
-    expect(photos().length, 'and the subscription really went out').toBeGreaterThan(before);
-    const resent = photos()[photos().length - 1];
+    expect(edits().length, 'and the subscription really went out').toBe(before + 1);
+    const resent = edits()[edits().length - 1];
     expect(JSON.stringify(resent)).toContain(service?.subscriptionRef ?? 'MISSING');
+    const tapped = (update.update as { callback_query: { message: { message_id: number } } })
+      .callback_query.message.message_id;
+    expect(resent?.body['message_id'], 'the card the tap came from').toBe(tapped);
+    // Back restores the same card, in place.
+    expect(JSON.stringify(resent?.body['reply_markup'])).toContain(`sv:${service?.id ?? ''}`);
+    expect(
+      sent.filter((one) => /\/send(Message|Photo)$/u.test(one.url)).length,
+      'no separate link message',
+    ).toBe(sendsBefore);
 
     const after = await services.findByOrderId(tenantA, orderId);
     expect(after?.deliveryAttempts, 'the attempt is accounted for').toBeGreaterThan(

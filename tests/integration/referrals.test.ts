@@ -1888,28 +1888,43 @@ describe('the referral surfaces: HTTP for the operator, Telegram for the custome
       ]);
     });
 
-    it('draws the referral button on /wallet only while the program is active', async () => {
+    /*
+     * F5, the owner's rule: the wallet carries wallet operations only. The referral program
+     * is reached from its own main-menu button and `/referral` — never from the wallet, not
+     * even while it is running. A wallet message drawn before F5 still carries `rf:`, so
+     * that tap still opens the referral screen rather than answering unknown.
+     */
+    it('draws no referral button on /wallet, even while the program is active (F5)', async () => {
       await command('/start', REFERRER_TELEGRAM_ID);
-
-      sent = [];
-      await command('/wallet', REFERRER_TELEGRAM_ID);
-      expect(lastMessage(), 'the wallet answered').toBeDefined();
-      expect(buttons().filter((b) => b.callback_data === 'rf:')).toEqual([]);
-
       await f.program();
-      sent = [];
-      await command('/wallet', REFERRER_TELEGRAM_ID);
-      expect(buttons().filter((b) => b.callback_data === 'rf:')).toEqual([
-        { text: CATALOGUE_FA['bot.referral.button'], callback_data: 'rf:' },
-      ]);
 
-      await f.setSetting('referral.commission_percent', null, tenantA, owner);
       sent = [];
       await command('/wallet', REFERRER_TELEGRAM_ID);
+      expect(lastMessage()?.body['text'], 'the wallet answered').toBeDefined();
+      expect(buttons().filter((b) => b.callback_data === 'rf:')).toEqual([]);
       expect(
-        buttons().filter((b) => b.callback_data === 'rf:'),
-        'no rate, no program',
+        buttons().filter((b) => b.text === CATALOGUE_FA['bot.referral.button']),
+        'no «دعوت دوستان» on the wallet',
       ).toEqual([]);
+      // What IS on it is a wallet operation (the top-up menu, `o:`) or the way back (`mm:`).
+      expect(buttons().length).toBeGreaterThan(0);
+      for (const button of buttons()) {
+        expect(['o:', 'mm:'], button.text).toContain(button.callback_data);
+      }
+
+      // The referral program is its own place: `/referral` opens it, invite first.
+      sent = [];
+      await command('/referral', REFERRER_TELEGRAM_ID);
+      const referral = sent.filter((one) => one.url.includes('/sendMessage'));
+      expect(referral.length).toBe(2);
+      expect(String(referral[0]?.body['text'])).toContain(
+        `https://t.me/${BOT_A_USERNAME}?start=ref-`,
+      );
+
+      // A pre-F5 wallet message's `rf:` still opens it.
+      sent = [];
+      await tap('rf:', REFERRER_TELEGRAM_ID);
+      expect(sent.filter((one) => one.url.includes('/sendMessage')).length).toBe(2);
     });
 
     /*

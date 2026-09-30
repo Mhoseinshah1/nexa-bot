@@ -155,6 +155,18 @@ const CUSTOMER_OPERATION_POLICY_ROW: Readonly<Partial<Record<OperationType, Pane
   };
 
 /**
+ * Round N (F4): the operations whose pending outcome changes what the service card may
+ * say — its state (disable, enable), its link, or its location. While one is unsettled the
+ * card reads «working» (`ProvisioningService.changeInProgress`).
+ */
+export const CARD_WORKING_OPERATIONS: readonly OperationType[] = [
+  'SUSPEND',
+  'RESUME',
+  'ROTATE_SUBSCRIPTION',
+  'CHANGE_LOCATION',
+];
+
+/**
  * What a customer's own rotation is charged against (WP6-C).
  *
  * The permission every other customer write through the webhook's `SYSTEM_JOB` takes —
@@ -951,6 +963,41 @@ export class ProvisioningService {
     });
   }
 
+  /**
+   * Round N (F4): is a change to this service still being applied on its panel — a disable,
+   * an enable, a new link or a location move that is planned, in flight, or `UNKNOWN` and
+   * waiting on a read? The service card then reads «working» and offers no action, because
+   * the state it would show is not final until the change is.
+   *
+   * Read from the operation rows (`hasUnsettled`), the record of what is happening, and not
+   * from a flag the card keeps: whichever message draws the card — the one a change was asked
+   * from, a card opened from the list, a refresh — draws the same truth.
+   */
+  async changeInProgress(scope: TenantContext, service: ServiceRecord): Promise<boolean> {
+    for (const type of CARD_WORKING_OPERATIONS) {
+      if (await this.deps.operations.hasUnsettled(scope, service.id, type)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Round N (Codex review of #116): the operation a customer's request with THIS idempotency
+   * key already planned, if any — the same derivation `planWithin` uses, read-only. A
+   * redelivered tap is told apart from a new one with it BEFORE the service card is turned
+   * «working»: a request whose operation has already ended was already answered on the card.
+   */
+  async findCustomerRequest(
+    scope: TenantContext,
+    serviceId: string,
+    type: OperationType,
+    idempotencyKey: string,
+  ): Promise<OperationRecord | null> {
+    return this.deps.operations.findByOperationId(
+      scope,
+      this.deps.operationId(`${serviceId}:${type}:${idempotencyKey}`),
+    );
+  }
+
   async customerActionsFor(
     scope: TenantContext,
     service: ServiceRecord,
@@ -1109,7 +1156,11 @@ export class ProvisioningService {
     actor: ActorContext,
     customerId: UserId,
     serviceId: string,
-    input: { readonly idempotencyKey: string },
+    input: {
+      readonly idempotencyKey: string;
+      /** Round N (F4): the service card the confirmation came from; answered on it. */
+      readonly card?: CardMessageRef;
+    },
   ): Promise<OperationRecord> {
     await this.deps.guard.check(scope, actor, CUSTOMER_ROTATION_PERMISSION);
     const service = await this.getForCustomer(scope, customerId, serviceId);
@@ -1118,6 +1169,7 @@ export class ProvisioningService {
     let locked: ServiceRecord | null = null;
     return this.planRequestedOperation(scope, actor, service, 'ROTATE_SUBSCRIPTION', input, {
       requestedBy: customerId,
+      ...(input.card === undefined ? {} : { card: input.card }),
       stateRefusal,
       admission: {
         serialize: async (tx) => {
@@ -2241,4 +2293,18 @@ export function normaliseCustomerNote(raw: string): string {
     .replace(/\s+/gu, ' ')
     .trim();
   return Array.from(flat).slice(0, SERVICE_NOTE_MAX_LENGTH).join('');
+}
+
+/**
+ * Round N (Codex review of #116): an operation that has ended — SUCCEEDED, ABANDONED, or
+ * FAILED with no retry scheduled (the announcer's own "terminal failure").
+ */
+export function operationHasEnded(
+  operation: Pick<OperationRecord, 'state' | 'nextAttemptAt'>,
+): boolean {
+  return (
+    operation.state === 'SUCCEEDED' ||
+    operation.state === 'ABANDONED' ||
+    (operation.state === 'FAILED' && operation.nextAttemptAt === null)
+  );
 }

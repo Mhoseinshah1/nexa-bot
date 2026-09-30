@@ -203,6 +203,15 @@ in an already-large change is how a format migration becomes an outage.
 | `O-9`        | **DECISION** | Referral anti-abuse minimum-purchase floor.                  | On by default.                                            |
 | `UNK-UM-006` | UNKNOWN      | Is referral binding immutable, and can an admin override it? | Immutable; override is an audited administrative action.  |
 
+**`O-2`, round N package D.** The owner's round N brief decided the basis and calendar and
+it is built as tracking only (`docs/round-n-reseller-audit.md` §3): WP12's reseller sales
+amount (paid purchases under reseller terms, fully refunded orders excluded) over the
+calendar month in the tenant's timezone and calendar (Jalali by default). There is no
+consequence, so the 48-hour grace period has nothing to delay and is not built. Mirza's
+declared loss of reseller status below the floor is PARTIAL evidence (never observed) and
+is deliberately not implemented; `UNK-RGS-007` and `UNK-RGS-008` stay open as evidence
+questions about Mirza, not as Nexa behaviour.
+
 ## Blocks Phase 8 — reporting
 
 | Id                                    | Type    | Question                                                                                                                  | Fallback                                                                                      |
@@ -2294,6 +2303,14 @@ Two parts stand:
   enabled for real customers until an acceptance run against the real provider has passed.
 - **One active external gateway at a time** (File 02). Not enforced: TonPays is the only
   external route. The partial unique index belongs with the second external provider.
+- **Round N (F3): the v0.3.6 staging create ended "not received" for every attempt.**
+  The in-process lane was proven correct end to end with only the network replaced
+  (`docs/tonpays-gateway-audit.md` §8); the provider's real answer could not be observed
+  from the development environment. The adapter no longer discards a created invoice for
+  undocumented metadata shapes, and every create that decides nothing now records WHY
+  (`creation_error_code`, the `payments.gateway_create_unknown` context with `elapsedMs`).
+  UNRESOLVED until the next staging run reads that code: it is the acceptance evidence
+  this question has been waiting for.
 
 ## OQ-WP11A-01 — how to verify `X-TonPays-Signature`
 
@@ -2550,6 +2567,23 @@ the join screen, and the support screen's contact button still works. Whether th
 wants the whole ticket flow (taps and the typed message) exempt is a product decision.
 
 UNRESOLVED. The desk follows the guard.
+
+## OQ-N-FILES — RickPanel's caption markup, and albums of its files, on real Telegram
+
+Round N (F2, `docs/n-service-ux-audit.md`) shows the caption RickPanel returns for each
+file (`caption`, the field the owner's `rickpanel-openapi.json` names) as the source of
+truth again. The only evidence of its content is the R3 real-panel observation: «Limit»,
+«Expires» and raw `<code>` markup. So the caption is read as Telegram's HTML subset — the
+attribute-free formatting tags become `caption_entities`, every other character is text —
+and never handed to Telegram's HTML parser. What is not known:
+
+- the full tag vocabulary a real panel writes (a tag outside Telegram's set is shown as the
+  text it is, not interpreted); whether it ever sends `<a href>` (dropped, text kept);
+- whether a real panel ever omits `caption` (then the username line is sent, as R3 did);
+- that Telegram accepts an album of these documents (`sendMediaGroup`) with these names and
+  types — only a stand-in for the Bot API has answered it.
+
+UNRESOLVED until a real RickPanel's `/files` answer and a real bot are observed together.
 
 ## OQ-C1-01 — should a campaign's discount or cashback be restricted to its audience?
 

@@ -78,6 +78,11 @@ stored. A refused budget rolls the reservation back; the read's end clears it.
 Every file carries `bot.service.connection_file_caption`: «👤 نام کاربری: {serviceUsername}».
 The panel's caption is still parsed and bounded, never shown.
 
+**Superseded by round N (F2, `docs/n-service-ux-audit.md`):** the panel's own caption is
+shown again, its markup read into Telegram entities (never raw tags, never parsed as HTML),
+and the files arrive as albums; the username line is only for a file the panel sent with no
+caption. Disable, enable and the link change are answered on the card, failures included.
+
 ### Item 9 — change link
 
 `ROTATE_SUBSCRIPTION` and its adapter-side ambiguity rule are unchanged. The ask replaces

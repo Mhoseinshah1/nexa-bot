@@ -5,11 +5,10 @@ import {
   CONTROL_ERROR_CODES,
   CURRENCY_CODES,
   OPS_GROUP_MANAGED_SETTING_KEYS,
-  PRODUCT_PAGE_MAX,
   SALES_CURRENCY_CODES,
 } from '@nexa/contracts';
 import type { CurrencyCode, MoneyWire, ResolvedSettingResponse } from '@nexa/contracts';
-import { ApiError, fetchProducts, fetchSettings, saveSetting } from '../api/client';
+import { ApiError, fetchSettings, saveSetting } from '../api/client';
 import { currencyLabel, formatMoneyText, formatNumber, formatTimestamp } from '../format';
 import { finalAnswer } from '../polling';
 import { useSubmissionKey } from '../submission-key';
@@ -18,6 +17,7 @@ import {
   SETTING_GROUPS,
   SETTING_GROUP_TITLES,
   SETTINGS_MANAGED_ELSEWHERE,
+  SETTINGS_RETIRED,
   integerRange,
   settingPresentation,
   type SelectOption,
@@ -64,10 +64,12 @@ export function SettingsPage({ mayEdit, denied }: { mayEdit: boolean; denied: bo
   // WP-A4: the ops group panel owns these — the manual chat and topic ids under its
   // advanced section, the retired severity cutoff and the internal attempt ceiling nowhere.
   // R1: the main menu's arrangement is edited on the «دکمه‌های ربات» page.
+  // F5: a retired key is drawn nowhere — it is stored only so an old value keeps parsing.
   const rows = all.filter(
     (setting) =>
       !(OPS_GROUP_MANAGED_SETTING_KEYS as readonly string[]).includes(setting.key) &&
-      !(SETTINGS_MANAGED_ELSEWHERE as readonly string[]).includes(setting.key),
+      !(SETTINGS_MANAGED_ELSEWHERE as readonly string[]).includes(setting.key) &&
+      !(SETTINGS_RETIRED as readonly string[]).includes(setting.key),
   );
 
   return (
@@ -181,7 +183,6 @@ const FLAG_LABELS: Readonly<Record<string, WebKey>> = {
   payment_pending_reminders: 'web.flag_payment_pending_reminders',
   // HF-A9.
   reminder_quiet_hours: 'web.flag_reminder_quiet_hours',
-  trials: 'web.flag_trials',
   customer_link_rotation: 'web.flag_customer_link_rotation',
   referral_signup_gift: 'web.flag_referral_signup_gift',
   custom_service: 'web.flag_custom_service',
@@ -516,8 +517,6 @@ function CurrentValue({ control, value }: { control: SettingControl | null; valu
       const channels = asChannelList(value);
       return channels.length === 0 ? unset : <>{joined(channels.map(channelSummary))}</>;
     }
-    case 'product':
-      return typeof value === 'string' ? <TrialProductName id={value} /> : unset;
   }
 }
 
@@ -560,31 +559,6 @@ function joined(items: readonly ReactNode[]): ReactNode {
       {item}
     </span>
   ));
-}
-
-/** The trial product's title, from the same query the picker below makes. */
-function TrialProductName({ id }: { id: string }) {
-  const products = useTrialProducts();
-  // "Not in the active list" is a fact only a SUCCESSFUL and COMPLETE read can establish
-  // (F4, Codex #2). While the list is loading, when it cannot be read (no catalogue
-  // permission), or when the product may be on a later page, the stored id is what is
-  // known, and that is what is shown.
-  if (products.isPending) return <span className="muted">{t('web.loading')}</span>;
-  if (products.isError) return <Ltr>{id}</Ltr>;
-  const found = products.data.products.find((product) => product.id === id);
-  if (found !== undefined) return <>{found.title}</>;
-  return products.data.nextCursor === null ? (
-    <>{t('web.trial_product_unlisted')}</>
-  ) : (
-    <Ltr>{id}</Ltr>
-  );
-}
-
-function useTrialProducts() {
-  return useQuery({
-    queryKey: ['products', 'trial-picker'],
-    queryFn: () => fetchProducts({ status: 'ACTIVE', limit: TRIAL_PICKER_LIMIT }),
-  });
 }
 
 // ---------------------------------------------------------------------------
@@ -690,16 +664,6 @@ function SettingEditor({
     case 'channel_list':
       return (
         <ChannelListEditor value={asChannelList(value)} onChange={onChange} disabled={disabled} />
-      );
-    case 'product':
-      return (
-        <TrialProductEditor
-          id={id}
-          title={title}
-          value={typeof value === 'string' ? value : null}
-          onChange={onChange}
-          disabled={disabled}
-        />
       );
   }
 }
@@ -1163,85 +1127,6 @@ function CurrencyEditor({
     </div>
   );
 }
-
-/**
- * WP6-A: the trial product, chosen from the ACTIVE products rather than typed as an id.
- *
- * An id pasted into a text field is how a typo becomes a configured trial nobody can
- * take; the server's `TrialProductGuard` refuses an id that is not a product, and this
- * is the half that makes the right one easy to pick. A product without a price is
- * listed too — that is the usual trial product, kept out of the catalogue by having
- * none.
- *
- * The stored id is always an option, even when it is not in the list (inactive since,
- * or beyond the first page), so opening the page never silently changes the value.
- * An operator who may not read the catalogue gets the plain text field instead of an
- * empty picker.
- */
-function TrialProductEditor({
-  id,
-  title,
-  value,
-  onChange,
-  disabled,
-}: {
-  id: string;
-  title: string;
-  value: string | null;
-  onChange: (next: unknown) => void;
-  disabled: boolean;
-}) {
-  const products = useTrialProducts();
-  if (products.isError) {
-    return (
-      <div className="field">
-        <HiddenLabel htmlFor={id}>{title}</HiddenLabel>
-        <input
-          id={id}
-          className="input"
-          dir="ltr"
-          value={value ?? ''}
-          disabled={disabled}
-          onChange={(event) => onChange(event.target.value === '' ? null : event.target.value)}
-        />
-      </div>
-    );
-  }
-  const items = products.data?.products ?? [];
-  const listed = value === null || items.some((product) => product.id === value);
-  return (
-    <div className="field">
-      <HiddenLabel htmlFor={id}>{title}</HiddenLabel>
-      <select
-        id={id}
-        className="input"
-        value={value ?? ''}
-        disabled={disabled || products.isPending}
-        onChange={(event) => onChange(event.target.value === '' ? null : event.target.value)}
-      >
-        <option value="">{t('web.trial_product_none')}</option>
-        {/* The stored id is always an option, so the select shows what is stored. It is
-            called "not in the active list" only when the list read is complete; on a
-            partial page it may simply be further on, and is named by its id. */}
-        {listed ? null : (
-          <option value={value}>
-            {products.data?.nextCursor === null
-              ? t('web.trial_product_unlisted')
-              : `${t('web.trial_product_current')} (${value})`}
-          </option>
-        )}
-        {items.map((product) => (
-          <option key={product.id} value={product.id}>
-            {product.title}
-          </option>
-        ))}
-      </select>
-    </div>
-  );
-}
-
-/** One page of the picker; the stored value is shown even when it falls beyond it. */
-const TRIAL_PICKER_LIMIT = PRODUCT_PAGE_MAX;
 
 /**
  * The top-up amounts a customer may choose. 5B.

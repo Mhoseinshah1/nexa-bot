@@ -12,7 +12,7 @@ import {
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { ProductRepository } from '../../catalog/application/ports.js';
 import type { OrderRecord } from '../../orders/application/ports.js';
-import { decideEntitlement } from '../domain/entitlement.js';
+import { decideEntitlement, effectiveGrants } from '../domain/entitlement.js';
 import { quotedResellerLayer, type ResellerPricingTerms } from '../domain/reseller-pricing.js';
 import type {
   ResellerRecord,
@@ -31,6 +31,11 @@ export interface ResellerServiceDeps {
 export interface ResellerStanding {
   readonly reseller: ResellerRecord;
   readonly tier: ResellerTierRecord;
+  /**
+   * The EFFECTIVE grants: the tier's, with every dimension the reseller overrides replaced
+   * by the reseller's own grants of it (round N R1, `effectiveGrants`). What every caller —
+   * the catalogue courtesy, the draft, the confirmation, a commercial action — is judged by.
+   */
   readonly grants: readonly ResellerTierGrantRecord[];
 }
 
@@ -91,8 +96,14 @@ export class ResellerService {
         { dimension: 'TIER' },
       );
     }
-    const grants = await this.deps.resellers.grantsOf(scope, tier.id, tx);
-    return { reseller, tier, grants };
+    /*
+     * Round N R1: the reseller's own override, read after the reseller row it belongs to.
+     * Its writer holds that row `FOR UPDATE` (`ResellerAdminService.replaceOverrides`), so
+     * inside a transaction the `FOR SHARE` above already orders it against this read.
+     */
+    const tierGrants = await this.deps.resellers.grantsOf(scope, tier.id, tx);
+    const override = await this.deps.resellers.overridesOf(scope, reseller.customerId, tx);
+    return { reseller, tier, grants: effectiveGrants(tierGrants, override) };
   }
 
   /**

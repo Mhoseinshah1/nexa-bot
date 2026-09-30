@@ -39,7 +39,7 @@ export const PANEL_TRIAL_LABEL_MAX_LENGTH = 64;
 /** One panel's trial configuration, as the operator reads it. */
 export const panelTrialSchema = z.object({
   panelId: z.string(),
-  /** Offered to customers — while the `trials` flag is on and the panel may take new accounts. */
+  /** Offered to customers — while the panel may take new accounts (the one switch since F5). */
   enabled: z.boolean(),
   /** Bytes, as a decimal string; null when this panel has never been configured. */
   trafficBytes: z

@@ -1,6 +1,6 @@
 import { TELEGRAM_CAPTION_MAX } from '../../modules/commerce/messaging/application/message-split.js';
 import { assertOutsideTransaction } from '../transaction-boundary.js';
-import { encodeMultipart, type MultipartFilePart } from './multipart.js';
+import { encodeMultipart, encodeMultipartFiles, type MultipartFilePart } from './multipart.js';
 
 /*
  * The caption bound is DECLARED beside the message bound in the messaging application
@@ -86,9 +86,21 @@ export interface TelegramUploadRequest {
   readonly token: string;
   readonly apiBaseUrl: string;
   readonly timeoutMs: number;
-  // Round N: `sendVideo` for a broadcast's video, the one upload that is neither.
-  readonly method: 'sendPhoto' | 'sendDocument' | 'sendVideo';
-  readonly multipart: TelegramMultipartBody;
+  /**
+   * Round N: `sendVideo` for a broadcast's video (B1), and (F2) `sendMediaGroup`, an album of
+   * uploaded files.
+   */
+  readonly method: 'sendPhoto' | 'sendDocument' | 'sendVideo' | 'sendMediaGroup';
+  readonly multipart: TelegramMultipartBody | TelegramAlbumBody;
+}
+
+/**
+ * Round N (F2): an album's upload — its `media` list (a field, JSON text) naming each file
+ * by `attach://<field>`, and the files themselves, in order.
+ */
+export interface TelegramAlbumBody {
+  readonly fields: Readonly<Record<string, string>>;
+  readonly files: readonly MultipartFilePart[];
 }
 
 /** The text fields and the one file of an upload, before encoding. */
@@ -189,7 +201,9 @@ async function telegramCall(request: TelegramRequest): Promise<TelegramCallOutco
      */
     const wire =
       'multipart' in request
-        ? encodeMultipart(request.multipart.fields, request.multipart.file)
+        ? 'files' in request.multipart
+          ? encodeMultipartFiles(request.multipart.fields, request.multipart.files)
+          : encodeMultipart(request.multipart.fields, request.multipart.file)
         : { contentType: 'application/json', body: JSON.stringify(request.body) };
     const response = await fetch(
       `${request.apiBaseUrl}/bot${request.token}/${request.method ?? 'sendMessage'}`,
@@ -362,6 +376,11 @@ export function textMessageBody(input: {
    * Supplied instead of `buttons`, never beside it — `reply_markup` holds one markup.
    */
   readonly keyboard?: readonly (readonly string[])[];
+  /**
+   * Round N (F1): a reply to this message of the same chat. `allow_sending_without_reply`,
+   * so a message deleted in the meantime costs the reply's link, never the message.
+   */
+  readonly replyToMessageId?: number;
 }): Record<string, unknown> {
   const body: Record<string, unknown> = {
     chat_id: input.chatId,
@@ -369,6 +388,12 @@ export function textMessageBody(input: {
     link_preview_options: { is_disabled: true },
   };
   if (input.html) body.parse_mode = 'HTML';
+  if (input.replyToMessageId !== undefined) {
+    body.reply_parameters = {
+      message_id: input.replyToMessageId,
+      allow_sending_without_reply: true,
+    };
+  }
   if (input.buttons !== undefined && input.buttons.length > 0) {
     body.reply_markup = { inline_keyboard: telegramButtonMarkup(input.buttons) };
   } else if (input.keyboard !== undefined && input.keyboard.length > 0) {
@@ -434,11 +459,21 @@ function captionAndKeyboardFields(input: {
   readonly caption?: string;
   readonly html?: boolean;
   readonly buttons?: readonly TelegramButton[];
+  /** Round N (F2): a PLAIN caption's formatting, as entities; ignored for HTML. */
+  readonly captionEntities?: TelegramAlbumItem['captionEntities'];
 }): Record<string, unknown> {
   const fields: Record<string, unknown> = {};
   if (input.caption !== undefined && input.caption.length > 0) {
-    fields.caption = input.html === true ? input.caption : boundCaption(input.caption);
+    const caption = input.html === true ? input.caption : boundCaption(input.caption);
+    fields.caption = caption;
     if (input.html === true) fields.parse_mode = 'HTML';
+    const entities =
+      input.html === true
+        ? []
+        : (input.captionEntities ?? []).filter(
+            (entity) => entity.length > 0 && entity.offset + entity.length <= caption.length,
+          );
+    if (entities.length > 0) fields.caption_entities = entities;
   }
   if (input.buttons !== undefined && input.buttons.length > 0) {
     fields.reply_markup = { inline_keyboard: telegramButtonMarkup(input.buttons) };
@@ -511,6 +546,7 @@ export function fileUploadBody(input: {
   readonly caption?: string;
   readonly html?: boolean;
   readonly buttons?: readonly TelegramButton[];
+  readonly captionEntities?: TelegramAlbumItem['captionEntities'];
 }): TelegramMultipartBody {
   const fields: Record<string, string> = { chat_id: input.chatId };
   for (const [name, value] of Object.entries(captionAndKeyboardFields(input))) {
@@ -524,6 +560,61 @@ export function fileUploadBody(input: {
       mimeType: input.mimeType,
       bytes: input.bytes,
     },
+  };
+}
+
+/**
+ * Round N (F2): one item of an album — a file this installation holds as bytes, and its
+ * caption as PLAIN text with optional `caption_entities`. Never `parse_mode`: the caption of
+ * a connection file is a provider's text, and entities are the one way to show its
+ * formatting that no string from that provider can break (`caption-markup.ts`).
+ */
+export interface TelegramAlbumItem {
+  readonly kind: 'PHOTO' | 'DOCUMENT';
+  readonly bytes: Uint8Array;
+  readonly fileName: string;
+  readonly mimeType: string;
+  readonly caption?: string;
+  readonly captionEntities?: readonly {
+    readonly type: string;
+    readonly offset: number;
+    readonly length: number;
+  }[];
+}
+
+/**
+ * The upload of a `sendMediaGroup` (Round N, F2): 2–10 items, each attached as its own part
+ * (`file0`, `file1`, …) and named in `media` by `attach://`. The caller has already bounded
+ * each caption and its entities (`placeCaptionEntities`); a plain caption is still bounded
+ * here by `boundCaption`, exactly as a single file's is, and entities past it are dropped.
+ */
+export function mediaGroupUploadBody(input: {
+  readonly chatId: string;
+  readonly items: readonly TelegramAlbumItem[];
+}): TelegramAlbumBody {
+  const media = input.items.map((item, index) => {
+    const entry: Record<string, unknown> = {
+      type: item.kind === 'PHOTO' ? 'photo' : 'document',
+      media: `attach://file${String(index)}`,
+    };
+    if (item.caption !== undefined && item.caption.length > 0) {
+      const caption = boundCaption(item.caption);
+      entry.caption = caption;
+      const entities = (item.captionEntities ?? []).filter(
+        (entity) => entity.length > 0 && entity.offset + entity.length <= caption.length,
+      );
+      if (entities.length > 0) entry.caption_entities = entities;
+    }
+    return entry;
+  });
+  return {
+    fields: { chat_id: input.chatId, media: JSON.stringify(media) },
+    files: input.items.map((item, index) => ({
+      field: `file${String(index)}`,
+      fileName: item.fileName,
+      mimeType: item.mimeType,
+      bytes: item.bytes,
+    })),
   };
 }
 

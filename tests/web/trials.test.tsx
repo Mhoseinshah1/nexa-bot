@@ -92,8 +92,9 @@ describe("the customer's trial card", () => {
     expect(await screen.findByText('ندارد (از سقف پیش‌فرض پیروی می‌کند)')).toBeInTheDocument();
     expect(screen.getByText(/users\.trial\.edit/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'ثبت سقف اختصاصی' })).toBeNull();
-    // The flag is off, and the card says the numbers cannot be used yet.
-    expect(screen.getByText(/خاموش است/)).toBeInTheDocument();
+    // No panel has its trial on (F5: the one switch), and the card says the numbers cannot
+    // be used yet.
+    expect(screen.getByText(/روی هیچ پنلی روشن نیست/)).toBeInTheDocument();
   });
 });
 

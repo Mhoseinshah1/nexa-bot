@@ -48,9 +48,9 @@ export type BotCommandName = (typeof BOT_COMMANDS)[number]['command'];
 /**
  * R1: the two main-menu commands that are NOT registered with `setMyCommands`.
  *
- * Both are features a tenant may have switched off (`trials`, `referrals`), and Telegram's
- * command list is per BOT: registering `/trial` would advertise a trial to every customer
- * of a tenant that offers none. So they are reachable by their main-menu button, and by
+ * Both are features a tenant may not be offering (no panel with a trial since F5; the
+ * `referrals` flag off), and Telegram's command list is per BOT: registering `/trial`
+ * would advertise a trial to every customer of a tenant that offers none. So they are reachable by their main-menu button, and by
  * typing them, exactly as `/admin` is — and a turn that resolves one answers from the
  * feature's own state, never from the button having been drawn.
  */
@@ -97,11 +97,25 @@ export interface BotMenuButton {
    * The feature flag that must be ON for the button to be drawn, or null.
    *
    * A keyboard is a promise, so a button for a feature a tenant has switched off is not
-   * drawn at all — whatever the bot-buttons page says. A feature that is on but has
-   * nothing to offer right now (no panel with a trial) is still drawn, and its tap says
-   * so in one plain sentence: that is the owner's decision for the trial button (R1).
+   * drawn at all — whatever the bot-buttons page says.
    */
-  readonly feature: 'trials' | 'referrals' | null;
+  readonly feature: 'referrals' | null;
+  /**
+   * F5: drawn only while at least one panel offers a trial NOW — `trialOffersFor`, the one
+   * answer the claim, the overview and this keyboard share. The trial has no flag since
+   * F5: each panel's own trial is the switch, so "no panel offers one" is what hides it.
+   * The tap still answers from the claim, never from the button having been drawn.
+   */
+  readonly needsTrialOffer: boolean;
+}
+
+/**
+ * Whether something other than the operator's own switch can hide this button — a flag, or
+ * no panel offering a trial. The layout rule "one button nothing else can hide stays on"
+ * and the fallback keyboard both ask it, so they cannot disagree about which buttons count.
+ */
+export function mainMenuButtonIsGated(button: BotMenuButton): boolean {
+  return button.feature !== null || button.needsTrialOffer;
 }
 
 /**
@@ -126,7 +140,8 @@ export interface BotMenuButton {
  * wheel are not built, and a keyboard is a promise: a button that answers "not
  * available" is the legacy system's defect — a menu describing a product that does not
  * exist — reproduced deliberately. The list grows when a capability ships; the trial and
- * the referral program shipped (R1), each drawn only while its feature flag is on.
+ * the referral program shipped (R1): the referral button is drawn only while its flag is on,
+ * and the trial button only while a panel offers a trial (F5).
  *
  * ## Labels are the tenant's, and so are the routes (R1)
  *
@@ -143,17 +158,49 @@ export interface BotMenuButton {
  * with its validated id and its ownership check. This is navigation and nothing else.
  */
 export const MAIN_MENU_BUTTONS: readonly BotMenuButton[] = [
-  { id: 'catalog', label: 'bot.menu.catalog', command: 'catalog', wide: false, feature: null },
-  { id: 'services', label: 'bot.menu.services', command: 'services', wide: false, feature: null },
-  { id: 'wallet', label: 'bot.menu.wallet', command: 'wallet', wide: false, feature: null },
-  { id: 'help', label: 'bot.menu.help', command: 'help', wide: false, feature: null },
-  // R1: «🧪 دریافت سرویس تست» and «👥 زیرمجموعه‌گیری», side by side, each behind its flag.
+  {
+    id: 'catalog',
+    label: 'bot.menu.catalog',
+    command: 'catalog',
+    wide: false,
+    feature: null,
+    needsTrialOffer: false,
+  },
+  {
+    id: 'services',
+    label: 'bot.menu.services',
+    command: 'services',
+    wide: false,
+    feature: null,
+    needsTrialOffer: false,
+  },
+  {
+    id: 'wallet',
+    label: 'bot.menu.wallet',
+    command: 'wallet',
+    wide: false,
+    feature: null,
+    needsTrialOffer: false,
+  },
+  {
+    id: 'help',
+    label: 'bot.menu.help',
+    command: 'help',
+    wide: false,
+    feature: null,
+    needsTrialOffer: false,
+  },
+  /*
+   * R1: «🧪 دریافت سرویس تست» and «👥 زیرمجموعه‌گیری», side by side. The referral button is
+   * behind its flag; the trial button, since F5, behind a panel offering a trial.
+   */
   {
     id: 'trial',
     label: 'bot.menu.trial',
     command: TRIAL_MENU_COMMAND,
     wide: false,
-    feature: 'trials',
+    feature: null,
+    needsTrialOffer: true,
   },
   {
     id: 'referral',
@@ -161,11 +208,26 @@ export const MAIN_MENU_BUTTONS: readonly BotMenuButton[] = [
     command: REFERRAL_MENU_COMMAND,
     wide: false,
     feature: 'referrals',
+    needsTrialOffer: false,
   },
   // WP-A10: a row of its own — the label is long, and it is a place, like the four above.
-  { id: 'apps', label: 'bot.menu.apps', command: 'apps', wide: true, feature: null },
+  {
+    id: 'apps',
+    label: 'bot.menu.apps',
+    command: 'apps',
+    wide: true,
+    feature: null,
+    needsTrialOffer: false,
+  },
   // WP-A7: the ticket desk, on a row of its own.
-  { id: 'tickets', label: 'bot.menu.tickets', command: 'tickets', wide: true, feature: null },
+  {
+    id: 'tickets',
+    label: 'bot.menu.tickets',
+    command: 'tickets',
+    wide: true,
+    feature: null,
+    needsTrialOffer: false,
+  },
 ];
 
 /** The declared button for an id. Total over `MAIN_MENU_BUTTON_IDS`. */
@@ -215,9 +277,10 @@ export const MAIN_MENU_ROWS: readonly (readonly BotMenuButton[])[] =
  * release added — is appended in its declared place, switched ON, so shipping a button
  * never needs a migration of anybody's arrangement (`resolveMainMenuLayout`).
  *
- * At least one button with no feature gate must be on: every feature-gated button can be
- * hidden by its flag, and a keyboard with no buttons at all is one Telegram refuses —
- * which would take every reply that carries it down with it.
+ * At least one button with no gate must be on: every gated button can be hidden by its
+ * flag or, for the trial, by no panel offering one (`mainMenuButtonIsGated`), and a
+ * keyboard with no buttons at all is one Telegram refuses — which would take every reply
+ * that carries it down with it.
  */
 export const mainMenuLayoutEntrySchema = z
   .object({ button: z.enum(MAIN_MENU_BUTTON_IDS), enabled: z.boolean() })
@@ -233,9 +296,9 @@ export const mainMenuLayoutSchema = z
   .refine(
     (entries) =>
       resolveMainMenuLayout(entries).some(
-        (entry) => entry.enabled && mainMenuButton(entry.button).feature === null,
+        (entry) => entry.enabled && !mainMenuButtonIsGated(mainMenuButton(entry.button)),
       ),
-    { message: 'At least one button that no feature switch can hide must stay on.' },
+    { message: 'At least one button that nothing else can hide must stay on.' },
   );
 
 /** Every declared button, in its declared order, switched on. */

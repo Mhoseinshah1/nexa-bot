@@ -209,23 +209,41 @@ export const FEATURE_FLAGS = [
     blastRadius: 'TENANT_WIDE',
     configuredBy: ['reminders.quiet_hours_start', 'reminders.quiet_hours_end'],
   },
+  /*
+   * Round N, package D: the reseller monthly minimum's two sentences
+   * (`docs/round-n-reseller-audit.md` §3.4). Informational only — neither switch has, or
+   * turns on, any consequence for a reseller below the minimum.
+   */
   {
-    key: 'trials',
+    key: 'reseller_minimum_reminders',
     description:
-      'Offer customers a free trial service. Off by default, and turning it on is not ' +
-      'enough on its own: at least one panel must have its trial enabled, with a traffic ' +
-      'amount and a number of hours (R1). A trial is issued from no product: it is ' +
-      'provisioned exactly like a purchase \u2014 the same capacity slot, the same panel ' +
-      'eligibility, the same username policy \u2014 and costs the customer nothing: no ' +
-      'wallet entry, no payment. A trial whose service could not be created is given back ' +
-      'and does not count against trial.limit_per_customer.',
-    defaultEnabled: false,
-    // TENANT_WIDE, like the reminder flags: turning it on offers free service to every
-    // customer of the tenant at once (Codex, PR #64). Turning it off withdraws the
-    // offer and touches no trial already issued.
+      'Remind an active reseller, once a month, reminders.reseller_minimum_days local days ' +
+      'before the month ends, that their sales this month are still below their monthly ' +
+      'minimum. ON by default, as Mirza\u2019s three-day warning is, and inert until an ' +
+      'operator sets a minimum on a tier or a reseller: every minimum defaults to none.',
+    defaultEnabled: true,
     blastRadius: 'TENANT_WIDE',
-    configuredBy: ['trial.limit_per_customer'],
+    configuredBy: ['reminders.reseller_minimum_days'],
   },
+  {
+    key: 'reseller_minimum_achieved_notices',
+    description:
+      'Tell an active reseller, once a month, that their sales this month reached their ' +
+      'monthly minimum. OFF by default.',
+    defaultEnabled: false,
+    blastRadius: 'TENANT_WIDE',
+    configuredBy: [],
+  },
+  /*
+   * `trials` was here until F5. It was the tenant-wide switch in front of the free
+   * trial, and R1 made each panel's own trial (`panel_trial_configs.enabled`) the thing that
+   * is offered, so the switch became a second answer to "is a trial offered" that could
+   * only disagree with the first. It is gone rather than kept as a dead switch: a flag
+   * exists here only when it turns something on. Migration 0144 switched off every panel
+   * trial of a tenant whose switch was off, so nothing started being offered; the stored
+   * `feature_flag_states` rows are left in place, unread, for the release before this one
+   * (`docs/deployment.md`, the F5 rollback section).
+   */
   {
     key: 'customer_link_rotation',
     description:
@@ -234,8 +252,8 @@ export const FEATURE_FLAGS = [
       'services.link_rotation_cooldown_hours. It issues a new link; it makes no promise ' +
       'about the old one.',
     defaultEnabled: false,
-    // TENANT_WIDE, like `trials`: turning it on offers a new action to every customer of
-    // the tenant at once. Turning it off withdraws the button and refuses the callback;
+    // TENANT_WIDE: turning it on offers a new action to every customer of the tenant at
+    // once. Turning it off withdraws the button and refuses the callback;
     // a rotation already planned still runs.
     blastRadius: 'TENANT_WIDE',
     configuredBy: ['services.link_rotation_cooldown_hours'],
@@ -268,7 +286,7 @@ export const FEATURE_FLAGS = [
       'and new commissions; commissions already promised are still paid.',
     defaultEnabled: false,
     // TENANT_WIDE: turning it on puts money on offer to every customer of the tenant at
-    // once, like `trials`.
+    // once.
     blastRadius: 'TENANT_WIDE',
     configuredBy: [
       'referral.commission_percent',
@@ -306,8 +324,8 @@ export const FEATURE_FLAGS = [
       'customer on it. Turning it off withdraws the button and refuses new drafts and ' +
       'confirmations; orders already confirmed are still paid for and delivered.',
     defaultEnabled: false,
-    // TENANT_WIDE, like `trials`: it offers a new way to buy to every customer of the
-    // tenant at once. The brief names it `custom_service_enabled`; a flag key is the name
+    // TENANT_WIDE, like `customer_link_rotation`: it offers a new way to buy to every
+    // customer of the tenant at once. The brief names it `custom_service_enabled`; a flag key is the name
     // of the feature, as every other key here is, and the flag IS the enablement.
     blastRadius: 'TENANT_WIDE',
     configuredBy: [],

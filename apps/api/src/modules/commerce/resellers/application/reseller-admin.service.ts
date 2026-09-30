@@ -1,11 +1,15 @@
 import {
   COMMERCE_ERROR_CODES,
+  PRODUCT_PAGE_MAX,
+  RESELLER_ENTITLEMENT_DIMENSIONS,
+  RESELLER_GRANT_DIMENSION,
   RESELLER_HISTORY_MAX,
   RESELLER_PAGE_DEFAULT,
   RESELLER_PAGE_MAX,
   RESELLER_PURCHASE_PAGE_DEFAULT,
   RESELLER_PURCHASE_PAGE_MAX,
   errors,
+  resellerPriceLayer,
   uuidV7Schema,
   type ActorContext,
   type AuditWriter,
@@ -19,8 +23,14 @@ import {
   type PermissionKey,
   type ProductCategoryId,
   type ProductId,
+  type ProductStatus,
   type ResellerCreditState,
+  type ResellerEntitlementDimension,
   type ResellerLimitSource,
+  type ResellerMinimumSource,
+  type ResellerOverrideMode,
+  type ResellerPriceLayer,
+  type ResellerPricingMode,
   type ResellerStatus,
   type SalesCurrencyCode,
   type TenantContext,
@@ -51,6 +61,7 @@ import {
   type AuditHistoryRecord,
 } from '../../../platform/audit/application/ports.js';
 import { ORDER_VIEW_PERMISSION } from '../../orders/application/order.service.js';
+import { PRODUCT_VIEW_PERMISSION } from '../../catalog/application/product.service.js';
 import type { WalletRepository } from '../../wallet/application/ports.js';
 import { WALLET_VIEW_PERMISSION } from '../../wallet/application/wallet.service.js';
 import {
@@ -60,6 +71,12 @@ import {
   effectiveLimitOf,
   type CreditTerms,
 } from '../domain/reseller-credit.js';
+import {
+  decideEntitlement,
+  effectiveGrants,
+  type EntitlementDecision,
+} from '../domain/entitlement.js';
+import { effectiveMonthlyMinimum } from '../domain/monthly-minimum.js';
 import type {
   OrderResellerTermsRecord,
   ResellerCursor,
@@ -80,7 +97,7 @@ const IDEMPOTENCY_NAMESPACE = 'WEB';
 export interface ResellerAdminServiceDeps {
   readonly resellers: ResellerRepository;
   readonly customers: Pick<CustomerRepository, 'findById'>;
-  readonly products: Pick<ProductRepository, 'findById'>;
+  readonly products: Pick<ProductRepository, 'findById' | 'list'>;
   readonly categories: Pick<ProductCategoryRepository, 'findById'>;
   readonly panels: Pick<PanelRepository, 'find'>;
   readonly bots: Pick<BotInstanceRepository, 'findById'>;
@@ -118,6 +135,57 @@ export interface ResellerCreditStandingRecord {
   readonly creditInUse: bigint;
   readonly availableToSpend: bigint;
   readonly overLimitBy: bigint;
+}
+
+/** Round N R1: one entitlement dimension, as the tier grants it and as the reseller does. */
+export interface ResellerPolicyDimension {
+  readonly dimension: ResellerEntitlementDimension;
+  readonly source: 'TIER' | 'RESELLER';
+  readonly tierGrants: readonly ResellerTierGrantRecord[];
+  /** Null: not overridden. */
+  readonly overrideGrants: readonly ResellerTierGrantRecord[] | null;
+  readonly effectiveGrants: readonly ResellerTierGrantRecord[];
+}
+
+/** Round N R1: what a reseller can do, and where each part of it comes from. */
+export interface ResellerPolicyRecord {
+  readonly customerId: string;
+  readonly status: ResellerStatus;
+  readonly tier: { readonly id: string; readonly name: string };
+  readonly dimensions: readonly ResellerPolicyDimension[];
+  readonly pricing: {
+    readonly tierMode: ResellerPricingMode;
+    readonly tierPercent: number | null;
+    readonly overrideMode: ResellerOverrideMode;
+    readonly overridePercent: number | null;
+    readonly layer: ResellerPriceLayer;
+    readonly percent: number | null;
+  };
+  readonly monthlyMinimum: {
+    readonly tier: Money | null;
+    readonly own: Money | null;
+    readonly effective: Money | null;
+    readonly source: ResellerMinimumSource;
+  };
+  readonly botBasis: 'ANY_BOT' | 'GRANTED_BOT' | 'NO_BOT';
+  /** Null when the caller does not hold `catalog.view` (the catalogue's own gate). */
+  readonly products:
+    | readonly {
+        readonly productId: string;
+        readonly title: string;
+        readonly status: ProductStatus;
+        readonly categoryId: string | null;
+        readonly panelId: string | null;
+        readonly decision: EntitlementDecision;
+      }[]
+    | null;
+  readonly productsComplete: boolean;
+}
+
+/** Round N R1: the override write — the dimensions overridden and the grants of each. */
+export interface ResellerOverrideWrite {
+  readonly dimension: ResellerEntitlementDimension;
+  readonly grants: readonly ResellerTierGrantRecord[];
 }
 
 /**
@@ -495,6 +563,305 @@ export class ResellerAdminService {
     return this.resellerListing(scope, customerId);
   }
 
+  // -- Round N: plan controls and the monthly minimum --------------------------------------
+
+  /**
+   * A tier's monthly minimum (R2). Null or a zero amount: none. Tracking only — nothing this
+   * writes, or that reads it, charges, debits, settles, demotes or blocks anybody.
+   */
+  async setTierMinimum(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: {
+      readonly idempotencyKey: string;
+      readonly tierId: string;
+      readonly minimum: Money | null;
+    },
+  ): Promise<ResellerTierListing> {
+    const tierId = this.id(input.tierId, 'tier');
+    const minimum = normaliseMinimum(input.minimum, 'TIER');
+    const requestHash = hashRequest({ tierId, minimum: serialisableMoney(minimum) });
+    const denial = {
+      action: 'reseller_tier.monthly_minimum',
+      entityType: 'ResellerTier',
+      entityId: tierId,
+    };
+    await this.authorize(scope, actor, denial);
+
+    const replay = await this.replay<{ tierId: string }>(scope, input.idempotencyKey, requestHash);
+    if (replay !== null) return this.tierListing(scope, replay.tierId);
+
+    const now = this.deps.clock.now();
+    await runAuthorizedMutation(
+      this.mutationDeps(),
+      scope,
+      actor,
+      RESELLERS_EDIT_PERMISSION,
+      denial,
+      async (tx) => {
+        await this.assertScopeActive(scope, tx);
+        const before = await this.deps.resellers.lockTier(scope, tierId, tx);
+        if (before === null) throw tierNotFound();
+        const after = await this.deps.resellers.setTierMinimum(scope, tierId, minimum, now, tx);
+        if (after === null) throw tierNotFound();
+        await this.deps.audit.record(
+          scope,
+          actor,
+          {
+            action: 'reseller_tier.monthly_minimum',
+            entityType: 'ResellerTier',
+            entityId: tierId,
+            before: { monthlyMinimum: serialisableMoney(before.monthlyMinimum) },
+            after: { monthlyMinimum: serialisableMoney(after.monthlyMinimum) },
+            result: 'SUCCESS',
+          },
+          tx,
+        );
+        await this.remember(scope, input.idempotencyKey, requestHash, { tierId }, tx);
+      },
+    );
+    return this.tierListing(scope, tierId);
+  }
+
+  /**
+   * A reseller's own monthly minimum (R2): null inherits the tier's, a zero amount is an
+   * explicit "no minimum for this reseller". Under the reseller row's `FOR UPDATE`, like
+   * every other write to the row.
+   */
+  async setMinimum(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: {
+      readonly idempotencyKey: string;
+      readonly customerId: string;
+      readonly minimum: Money | null;
+    },
+  ): Promise<ResellerListing> {
+    const customerId = this.id(input.customerId, 'customer');
+    const minimum = normaliseMinimum(input.minimum, 'RESELLER');
+    const requestHash = hashRequest({ customerId, minimum: serialisableMoney(minimum) });
+    const denial = {
+      action: 'reseller.monthly_minimum',
+      entityType: 'Customer',
+      entityId: customerId,
+    };
+    await this.authorize(scope, actor, denial);
+
+    const replay = await this.replay<{ customerId: string }>(
+      scope,
+      input.idempotencyKey,
+      requestHash,
+    );
+    if (replay !== null) return this.resellerListing(scope, replay.customerId);
+
+    const now = this.deps.clock.now();
+    await runAuthorizedMutation(
+      this.mutationDeps(),
+      scope,
+      actor,
+      RESELLERS_EDIT_PERMISSION,
+      denial,
+      async (tx) => {
+        await this.assertScopeActive(scope, tx);
+        const before = await this.deps.resellers.lockByCustomer(scope, customerId, tx);
+        if (before === null) throw resellerNotFound();
+        const after = await this.deps.resellers.setMinimum(scope, customerId, minimum, now, tx);
+        if (after === null) throw resellerNotFound();
+        await this.deps.audit.record(
+          scope,
+          actor,
+          {
+            action: 'reseller.monthly_minimum',
+            entityType: 'Customer',
+            entityId: customerId,
+            before: { monthlyMinimum: serialisableMoney(before.monthlyMinimum) },
+            after: { monthlyMinimum: serialisableMoney(after.monthlyMinimum) },
+            result: 'SUCCESS',
+          },
+          tx,
+        );
+        await this.remember(scope, input.idempotencyKey, requestHash, { customerId }, tx);
+      },
+    );
+    return this.resellerListing(scope, customerId);
+  }
+
+  /**
+   * Replaces a reseller's whole entitlement override (R1), under the reseller row's
+   * `FOR UPDATE` — the row every commercial transaction reads `FOR SHARE` before it reads
+   * the override — with the old and new sets in one audit row. Every subject must name a
+   * row of this tenant, exactly as for a tier's grants.
+   */
+  async replaceOverrides(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: {
+      readonly idempotencyKey: string;
+      readonly customerId: string;
+      readonly overrides: readonly ResellerOverrideWrite[];
+    },
+  ): Promise<ResellerPolicyRecord> {
+    const customerId = this.id(input.customerId, 'customer');
+    const override = normaliseOverride(input.overrides);
+    const requestHash = hashRequest({ customerId, override: serialisableOverride(override) });
+    const denial = {
+      action: 'reseller.grants_override',
+      entityType: 'Customer',
+      entityId: customerId,
+    };
+    await this.authorize(scope, actor, denial);
+
+    const replay = await this.replay<{ customerId: string }>(
+      scope,
+      input.idempotencyKey,
+      requestHash,
+    );
+    if (replay !== null) {
+      return this.policyOf(scope, replay.customerId, await this.mayViewCatalog(scope, actor));
+    }
+
+    const now = this.deps.clock.now();
+    await runAuthorizedMutation(
+      this.mutationDeps(),
+      scope,
+      actor,
+      RESELLERS_EDIT_PERMISSION,
+      denial,
+      async (tx) => {
+        await this.assertScopeActive(scope, tx);
+        if ((await this.deps.resellers.lockByCustomer(scope, customerId, tx)) === null) {
+          throw resellerNotFound();
+        }
+        await this.assertSubjectsExist(scope, override.grants, tx);
+        const before = await this.deps.resellers.overridesOf(scope, customerId, tx);
+        await this.deps.resellers.replaceOverrides(scope, customerId, override, now, tx);
+        await this.deps.audit.record(
+          scope,
+          actor,
+          {
+            action: 'reseller.grants_override',
+            entityType: 'Customer',
+            entityId: customerId,
+            before: serialisableOverride(before),
+            after: serialisableOverride(override),
+            result: 'SUCCESS',
+          },
+          tx,
+        );
+        await this.remember(scope, input.idempotencyKey, requestHash, { customerId }, tx);
+      },
+    );
+    return this.policyOf(scope, customerId, await this.mayViewCatalog(scope, actor));
+  }
+
+  /**
+   * The effective-policy preview (R1): per dimension the tier's grants, the override and
+   * what applies; the pricing layer; the monthly minimum; and one page of the existing
+   * Products, each with `decideEntitlement`'s own answer for a new purchase. `resellers.view`.
+   */
+  async policy(
+    scope: TenantContext,
+    actor: ActorContext,
+    rawCustomerId: string,
+  ): Promise<ResellerPolicyRecord> {
+    await this.deps.guard.check(scope, actor, RESELLERS_VIEW_PERMISSION);
+    return this.policyOf(
+      scope,
+      this.id(rawCustomerId, 'customer'),
+      await this.mayViewCatalog(scope, actor),
+    );
+  }
+
+  /**
+   * Whether the product section may be shown: `catalog.view`, the key `ProductService.list`
+   * charges for the same titles, statuses and ids (Codex review of PR #115). Asked with
+   * `has`, not `check`: without it the preview OMITS the section — the rest of the policy is
+   * the caller's to read — rather than refusing the whole read or recording a denial.
+   */
+  private mayViewCatalog(scope: TenantContext, actor: ActorContext): Promise<boolean> {
+    return this.deps.guard.has(scope, actor, PRODUCT_VIEW_PERMISSION);
+  }
+
+  private async policyOf(
+    scope: TenantContext,
+    customerId: string,
+    includeProducts: boolean,
+  ): Promise<ResellerPolicyRecord> {
+    const listing = await this.resellerListing(scope, customerId);
+    const tierGrants = await this.deps.resellers.grantsOf(scope, listing.tier.id);
+    const override = await this.deps.resellers.overridesOf(scope, customerId);
+    // The SAME function `ResellerService.standing` judges every sale by.
+    const effective = effectiveGrants(tierGrants, override);
+    const ofDimension = (
+      grants: readonly ResellerTierGrantRecord[],
+      dimension: ResellerEntitlementDimension,
+    ) => grants.filter((g) => RESELLER_GRANT_DIMENSION[g.kind] === dimension);
+
+    const everyBot = effective.some((g) => g.kind === 'BOT' && g.subject === null);
+    const firstBot = effective.find((g) => g.kind === 'BOT' && g.subject !== null)?.subject ?? null;
+    const botBasis = everyBot ? 'ANY_BOT' : firstBot !== null ? 'GRANTED_BOT' : 'NO_BOT';
+    const botInstanceId = everyBot ? null : firstBot;
+
+    const page = includeProducts
+      ? await this.deps.products.list(scope, {}, PRODUCT_PAGE_MAX, null)
+      : null;
+    const layer = resellerPriceLayer(
+      { mode: listing.tier.pricingMode, percent: listing.tier.discountPercentage },
+      { mode: listing.pricingMode, percent: listing.discountPercentage },
+    );
+    const minimum = effectiveMonthlyMinimum(listing.tier.monthlyMinimum, listing.monthlyMinimum);
+    return {
+      customerId: listing.customerId,
+      status: listing.status,
+      tier: { id: listing.tier.id, name: listing.tier.name },
+      dimensions: RESELLER_ENTITLEMENT_DIMENSIONS.map((dimension) => {
+        const overridden = override.dimensions.includes(dimension);
+        return {
+          dimension,
+          source: overridden ? ('RESELLER' as const) : ('TIER' as const),
+          tierGrants: ofDimension(tierGrants, dimension),
+          overrideGrants: overridden ? ofDimension(override.grants, dimension) : null,
+          effectiveGrants: ofDimension(effective, dimension),
+        };
+      }),
+      pricing: {
+        tierMode: listing.tier.pricingMode,
+        tierPercent: listing.tier.discountPercentage,
+        overrideMode: listing.pricingMode,
+        overridePercent: listing.discountPercentage,
+        layer: layer.layer,
+        percent: layer.percent,
+      },
+      monthlyMinimum: {
+        tier: listing.tier.monthlyMinimum,
+        own: listing.monthlyMinimum,
+        effective: minimum.minimum,
+        source: minimum.source,
+      },
+      botBasis,
+      products:
+        page === null
+          ? null
+          : page.items.map((product) => ({
+              productId: product.id,
+              title: product.title,
+              status: product.status,
+              categoryId: product.categoryId,
+              panelId: product.panelId,
+              decision: decideEntitlement(effective, {
+                operation: 'NEW_SERVICE',
+                productId: product.id,
+                categoryId: product.categoryId,
+                // A product with no panel yet is unsellable anyway; the preview answers only
+                // whether the reseller's grants would allow it, and no grant names an empty id.
+                panelId: product.panelId ?? '',
+                botInstanceId,
+              }),
+            })),
+      productsComplete: page !== null && page.nextCursor === null,
+    };
+  }
+
   // -- Phase 2 reads (WP14) -----------------------------------------------------------------
 
   /**
@@ -754,6 +1121,60 @@ function serialisableReseller(r: ResellerWrite) {
         ? null
         : { amount: r.creditLimit.amountMinor.toString(), currency: r.creditLimit.currency },
   };
+}
+
+/**
+ * A minimum as stored. On a tier a zero amount and a null both mean none, and are stored as
+ * null so "none" has one spelling; on a reseller a zero is kept, because it is the explicit
+ * "no minimum for this reseller" that overrides a tier's.
+ */
+function normaliseMinimum(minimum: Money | null, on: 'TIER' | 'RESELLER'): Money | null {
+  if (minimum === null) return null;
+  if (minimum.amountMinor < 0n) {
+    throw errors.validation(
+      COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+      'A monthly minimum cannot be negative.',
+    );
+  }
+  return on === 'TIER' && minimum.amountMinor === 0n ? null : minimum;
+}
+
+function serialisableMoney(value: Money | null) {
+  return value === null ? null : { amount: value.amountMinor.toString(), currency: value.currency };
+}
+
+/**
+ * The override in its one canonical order — dimensions in the contract's order, grants by
+ * `kind:subject` — so the same set is the same fingerprint however it was listed. A grant
+ * outside the dimension it is listed under is refused (the schema refuses it first).
+ */
+function normaliseOverride(overrides: readonly ResellerOverrideWrite[]): {
+  readonly dimensions: readonly ResellerEntitlementDimension[];
+  readonly grants: readonly ResellerTierGrantRecord[];
+} {
+  for (const o of overrides) {
+    if (o.grants.some((g) => RESELLER_GRANT_DIMENSION[g.kind] !== o.dimension)) {
+      throw errors.validation(
+        COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+        'Every grant of an override belongs to the dimension it overrides.',
+      );
+    }
+  }
+  const listed = new Set(overrides.map((o) => o.dimension));
+  const key = (g: ResellerTierGrantRecord) => `${g.kind}:${g.subject ?? '*'}`;
+  return {
+    dimensions: RESELLER_ENTITLEMENT_DIMENSIONS.filter((d) => listed.has(d)),
+    grants: overrides
+      .flatMap((o) => o.grants.map((g) => ({ kind: g.kind, subject: g.subject })))
+      .sort((a, b) => key(a).localeCompare(key(b))),
+  };
+}
+
+function serialisableOverride(o: {
+  readonly dimensions: readonly ResellerEntitlementDimension[];
+  readonly grants: readonly ResellerTierGrantRecord[];
+}) {
+  return { dimensions: [...o.dimensions], grants: o.grants.map((g) => ({ ...g })) };
 }
 
 function tierNotFound() {

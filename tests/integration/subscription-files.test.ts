@@ -75,9 +75,12 @@ describe('Package E — RickPanel subscription files', () => {
       request.on('data', (chunk: Buffer) => chunks.push(chunk));
       request.on('end', () => {
         sent.push({ url: request.url ?? '', raw: Buffer.concat(chunks).toString('utf8') });
+        // An album is answered with the array of its messages, as Telegram answers it.
         const answer = telegramAnswer ?? {
           status: 200,
-          body: { ok: true, result: { message_id: 7 } },
+          body: (request.url ?? '').endsWith('/sendMediaGroup')
+            ? { ok: true, result: [{ message_id: 7 }, { message_id: 8 }] }
+            : { ok: true, result: { message_id: 7 } },
         };
         response.writeHead(answer.status, { 'content-type': 'application/json' });
         response.end(JSON.stringify(answer.body));
@@ -193,7 +196,19 @@ describe('Package E — RickPanel subscription files', () => {
       botInstanceId: BOT_A,
     });
 
-  const uploads = () => sent.filter((one) => one.url.endsWith('/sendDocument'));
+  // Round N (F2): every request that carried files — an album, or a single document.
+  const uploads = () =>
+    sent.filter((one) => one.url.endsWith('/sendDocument') || one.url.endsWith('/sendMediaGroup'));
+  const albums = () => sent.filter((one) => one.url.endsWith('/sendMediaGroup'));
+  const field = (raw: string, name: string) =>
+    new RegExp(`name="${name}"\r\n\r\n([^\r]*)\r\n`, 'u').exec(raw)?.[1];
+  const mediaOf = (raw: string) =>
+    JSON.parse(field(raw, 'media') ?? '[]') as {
+      type: string;
+      media: string;
+      caption?: string;
+      caption_entities?: { type: string; offset: number; length: number }[];
+    }[];
 
   const b64 = (text: string) => Buffer.from(text, 'utf8').toString('base64');
 
@@ -221,27 +236,41 @@ describe('Package E — RickPanel subscription files', () => {
     });
   };
 
-  it('sends every format as a document with its file name, media type, bytes and caption', async () => {
+  it("sends every format as ONE album, in the panel's order, each with the panel's caption", async () => {
     const service = await deliveredService('ok');
     const result = await send(service.id);
     expect(result).toEqual({ outcome: 'SENT', sent: 2, failed: 0 });
-    const docs = uploads();
-    expect(docs).toHaveLength(2);
+    // Round N (F2): one sendMediaGroup, not a document per file.
+    expect(uploads()).toHaveLength(1);
+    const album = albums()[0]!.raw;
     const user = panel.users.get(service.providerUsername)!;
-    expect(docs[0]!.raw).toContain(`filename="${service.providerUsername}.json"`);
-    expect(docs[0]!.raw).toContain('Content-Type: application/json');
-    expect(docs[0]!.raw).toContain(JSON.stringify({ outbounds: [{ token: user.subToken }] }));
-    // R3 item 8: this installation's caption — the username — never the panel's.
-    expect(docs[0]!.raw).toContain(`👤 نام کاربری: ${service.providerUsername}`);
-    expect(docs[1]!.raw).toContain(`👤 نام کاربری: ${service.providerUsername}`);
-    expect(docs[0]!.raw).not.toContain(`${service.providerUsername} — JSON`);
-    expect(docs[0]!.raw).toContain(`name="chat_id"\r\n\r\n${CUSTOMER_TG}`);
+    expect(field(album, 'chat_id')).toBe(CUSTOMER_TG);
+    expect(album).toContain(`filename="${service.providerUsername}.json"`);
+    expect(album).toContain('Content-Type: application/json');
+    expect(album).toContain(JSON.stringify({ outbounds: [{ token: user.subToken }] }));
     // A `charset` parameter is dropped to the vetted type, never passed through.
-    expect(docs[1]!.raw).toContain('Content-Type: text/plain\r\n');
+    expect(album).toContain('Content-Type: text/plain\r\n');
+    // The JSON file is the panel's first entry and the album's first item.
+    expect(album.indexOf('name="file0"')).toBeLessThan(album.indexOf('name="file1"'));
+    expect(album.indexOf('name="file0"')).toBeLessThan(album.indexOf('.json"'));
+    // The panel's own caption on each file — never this installation's username line.
+    expect(mediaOf(album)).toEqual([
+      {
+        type: 'document',
+        media: 'attach://file0',
+        caption: `${service.providerUsername} — JSON`,
+      },
+      {
+        type: 'document',
+        media: 'attach://file1',
+        caption: `${service.providerUsername} — links`,
+      },
+    ]);
+    expect(album).not.toContain('👤 نام کاربری');
     expect(panel.filesCalls()).toBe(1);
   });
 
-  it("never passes the panel's caption on: no Limit, no Expires, no raw <code>", async () => {
+  it("keeps the panel's caption, <code> as code and never a raw tag, with no HTML parse mode", async () => {
     const service = await deliveredService('caption');
     panel.filesBody = JSON.stringify([
       {
@@ -252,11 +281,61 @@ describe('Package E — RickPanel subscription files', () => {
       },
     ]);
     expect(await send(service.id)).toEqual({ outcome: 'SENT', sent: 1, failed: 0 });
-    const caption = /name="caption"\r\n\r\n([^\r]*)\r\n/u.exec(uploads()[0]!.raw)?.[1];
-    expect(caption).toBe(`👤 نام کاربری: ${service.providerUsername}`);
-    for (const forbidden of ['Limit', 'Expires', '<code>', '</code>']) {
-      expect(uploads()[0]!.raw).not.toContain(forbidden);
-    }
+    // One file is not an album: it goes as a document, in its place.
+    expect(albums()).toHaveLength(0);
+    const raw = uploads()[0]!.raw;
+    expect(raw).toContain(
+      `name="caption"\r\n\r\n${service.providerUsername}\nLimit: 50 GB\nExpires: 2026-10-29\r\n`,
+    );
+    expect(JSON.parse(field(raw, 'caption_entities') ?? 'null')).toEqual([
+      { type: 'code', offset: 0, length: service.providerUsername.length },
+    ]);
+    expect(raw).not.toContain('<code>');
+    expect(raw).not.toContain('parse_mode');
+    expect(raw).not.toContain('👤 نام کاربری');
+  });
+
+  it('captions a file the panel sent without a caption with the service username', async () => {
+    const service = await deliveredService('no-caption');
+    panel.filesBody = JSON.stringify([
+      { filename: 'a.json', media_type: 'application/json', content_b64: b64('{"a":1}') },
+      {
+        filename: 'b.txt',
+        media_type: 'text/plain',
+        content_b64: b64('b'),
+        caption: 'panel caption',
+      },
+    ]);
+    expect(await send(service.id)).toEqual({ outcome: 'SENT', sent: 2, failed: 0 });
+    expect(mediaOf(albums()[0]!.raw).map((item) => item.caption)).toEqual([
+      `👤 نام کاربری: ${service.providerUsername}`,
+      'panel caption',
+    ]);
+  });
+
+  it('cuts more than ten files into the fewest albums, in order, none with one file', async () => {
+    const service = await deliveredService('twelve');
+    panel.filesBody = JSON.stringify(
+      Array.from({ length: 12 }, (_, i) => ({
+        filename: `f${String(i).padStart(2, '0')}.txt`,
+        media_type: 'text/plain',
+        content_b64: b64(`file ${String(i)}`),
+        caption: `caption ${String(i)}`,
+      })),
+    );
+    expect(await send(service.id)).toEqual({ outcome: 'SENT', sent: 12, failed: 0 });
+    expect(uploads()).toHaveLength(2);
+    const captions = albums().map((album) => mediaOf(album.raw).map((item) => item.caption));
+    expect(captions).toEqual([
+      Array.from({ length: 6 }, (_, i) => `caption ${String(i)}`),
+      Array.from({ length: 6 }, (_, i) => `caption ${String(i + 6)}`),
+    ]);
+    const names = albums().flatMap((album) =>
+      [...album.raw.matchAll(/filename="([^"]+)"/gu)].map((match) => match[1]),
+    );
+    expect(names).toEqual(
+      Array.from({ length: 12 }, (_, i) => `f${String(i).padStart(2, '0')}.txt`),
+    );
   });
 
   it('sends the usable formats and counts the one the panel failed to build', async () => {
@@ -398,7 +477,9 @@ describe('Package E — RickPanel subscription files', () => {
     it('sends the files to the private chat the tap came from', async () => {
       const service = await deliveredService('tap');
       await tap(`sf:${service.id}`);
-      expect(uploads()).toHaveLength(2);
+      // Round N (F2): the manual re-download is the same album.
+      expect(albums()).toHaveLength(1);
+      expect(mediaOf(albums()[0]!.raw)).toHaveLength(2);
       expect(uploads()[0]!.raw).toContain(`name="chat_id"\r\n\r\n${CUSTOMER_TG}`);
     });
 

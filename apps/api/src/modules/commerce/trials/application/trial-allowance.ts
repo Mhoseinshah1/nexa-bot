@@ -1,8 +1,11 @@
 import type { TenantContext, UserId } from '@nexa/contracts';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
-import type { FeatureFlagResolver } from '../../../control/features/application/feature-flags.service.js';
 import type { SettingsResolver } from '../../../control/settings/application/settings-resolver.js';
-import type { TrialGrantRepository, TrialOverrideRepository } from './ports.js';
+import type {
+  PanelTrialConfigRepository,
+  TrialGrantRepository,
+  TrialOverrideRepository,
+} from './ports.js';
 
 /**
  * One customer's trial allowance: ADR-0015's two numbers and what follows from them.
@@ -13,6 +16,10 @@ import type { TrialGrantRepository, TrialOverrideRepository } from './ports.js';
  */
 export interface TrialAllowance {
   readonly customerId: UserId;
+  /**
+   * Whether any panel has its trial switched on (F5): the one switch in front of a trial
+   * since the `trials` flag was retired. Named for the HTTP field it fills.
+   */
   readonly featureEnabled: boolean;
   readonly globalLimit: number;
   readonly override: { readonly limit: number; readonly setAt: Date } | null;
@@ -23,7 +30,8 @@ export interface TrialAllowance {
 
 export interface TrialAllowanceDeps {
   readonly settings: SettingsResolver;
-  readonly features: FeatureFlagResolver;
+  /** F5: each panel's trial — whether any is switched on is what `featureEnabled` says. */
+  readonly configs: Pick<PanelTrialConfigRepository, 'list'>;
   readonly grants: Pick<TrialGrantRepository, 'countCounting'>;
   readonly overrides: Pick<TrialOverrideRepository, 'find'>;
 }
@@ -40,7 +48,7 @@ export async function trialAllowanceFor(
   customerId: UserId,
   tx?: TransactionScope,
 ): Promise<TrialAllowance> {
-  const featureEnabled = await deps.features.isEnabled(scope, 'trials', tx);
+  const featureEnabled = (await deps.configs.list(scope, tx)).some((config) => config.enabled);
   const globalLimit = await deps.settings.valueOf<number>(scope, 'trial.limit_per_customer', tx);
   const stored = await deps.overrides.find(scope, customerId, tx);
   const effectiveLimit = stored === null ? globalLimit : stored.limit;

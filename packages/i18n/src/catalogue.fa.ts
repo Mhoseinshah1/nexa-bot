@@ -356,6 +356,19 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.admin.review_blocked': '⛔ کاربر بلاک شد',
   'bot.admin.review_credited': '💳 مبلغ به کیف پول واریز شد',
   /*
+   * F1 (round N): the COMPLETE final record the review message becomes. A line whose facts
+   * the payment does not have is dropped whole by the renderer (optional placeholders).
+   */
+  'bot.admin.review_final':
+    '{outcome}\n\nنوع عملیات: {operation}\nنام محصول: {order}\nحجم محصول: {trafficBytes}\nمدت محصول: {durationDays}\nنام کاربری سرویس: {serviceUsername}\n\nنام اکانت کاربر: {name}\nشناسه عددی کاربر: {customer}\nیوزرنیم تلگرام: {username}\n\nمبلغ پرداختی: {total}\nکد پیگیری پرداخت: {reference}\nمبلغ واریز شده به کیف پول: {creditedAmount}\nموجودی کیف پول پیش از واریز: {walletBefore}\nموجودی کیف پول پس از واریز: {walletAfter}',
+  'bot.admin.review_final_short':
+    '{outcome}\nکد پیگیری پرداخت: {reference}\n\nسابقهٔ کامل این تصمیم در پاسخ به همین پیام آمده است.',
+  'bot.admin.review_repeat_approved': 'این پرداخت قبلاً تأیید شده است.',
+  'bot.admin.review_repeat_rejected': 'این پرداخت قبلاً رد شده است.',
+  'bot.admin.review_repeat_credited': 'مبلغ این پرداخت قبلاً به کیف پول واریز شده است.',
+  'bot.admin.review_repeat_blocked': 'این کاربر قبلاً بلاک شده است.',
+  'bot.admin.review_repeat_gone': 'این پرداخت دیگر در انتظار بررسی نیست.',
+  /*
    * Payment File 02 §12 — the third disposition, in Telegram. The capture reads ONE
    * message from ONE administrator about ONE payment, for five minutes, and nothing moves
    * until the stated amount is confirmed.
@@ -919,6 +932,20 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.service.renew_paid':
     '✅ پرداخت تمدید انجام شد. نتیجهٔ تمدید سرویس در پیام جداگانه برای شما ارسال می‌شود.',
   'bot.service.capability_unsupported': 'این قابلیت برای سرویس شما در دسترس نیست.',
+  /*
+   * Round N, package D: the reseller monthly minimum. Informational only — nothing happens
+   * to a reseller below it, so neither sentence threatens anything.
+   */
+  'bot.reseller.minimum_reminder':
+    '📊 یادآوری حداقل فروش ماهانه نمایندگی\n\n' +
+    'تا پایان این ماه {days} روز باقی مانده است.\n' +
+    'حداقل فروش ماهانه شما: {minimum}\n' +
+    'فروش شما در این ماه تاکنون: {achievedSales}\n' +
+    'مبلغ باقی‌مانده تا رسیدن به حداقل: {remainingSales}',
+  'bot.reseller.minimum_achieved':
+    '🎉 فروش شما در این ماه به حداقل فروش ماهانه نمایندگی رسید.\n\n' +
+    'حداقل فروش ماهانه: {minimum}\n' +
+    'فروش شما در این ماه: {achievedSales}',
 
   'bot.discount.applied': 'کد تخفیف {code} اعمال شد. مبلغ تخفیف: {amount}',
   // One message for every rejection reason, so the bot is not an oracle for guessing
@@ -1101,6 +1128,8 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     'این روش پرداخت در حال حاضر در دسترس نیست. لطفاً روش دیگری را انتخاب کنید یا کمی بعد دوباره تلاش کنید.',
   'bot.payment.gateway_unknown':
     'پاسخ درگاه برای ساخت این فاکتور دریافت نشد و لینکی برای آن در دسترس نیست. از این فاکتور مبلغی ثبت نشده است؛ می‌توانید دوباره پرداخت را آغاز کنید.',
+  'bot.payment.gateway_no_link':
+    'درگاه ساخت این فاکتور را اعلام کرد اما لینک پرداختی برای آن نفرستاد، بنابراین از اینجا قابل پرداخت نیست. از این فاکتور مبلغی ثبت نشده است؛ می‌توانید دوباره پرداخت را آغاز کنید یا روش دیگری انتخاب کنید.',
   'bot.payment.gateway_closed':
     'این فاکتور دیگر قابل پرداخت نیست (مهلت آن تمام شده یا بسته شده است). برای پرداخت می‌توانید دوباره اقدام کنید.',
   'bot.wallet.summary':
@@ -1137,6 +1166,11 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.service.search_invalid': 'عبارت جستجو معتبر نیست.',
   'bot.service.card':
     '📊وضعیت سرویس: {status}\n👤 نام سرویس: {serviceUsername}\n\n🌍 موقعیت سرویس: 🚀 {serviceLocation}\n📦 نام محصول: {productName}\n\n🟩 ترافیک: {trafficBytes}\n📥 حجم مصرفی: {usedTraffic}\n💢 حجم باقی مانده: {remainingTraffic}\n\n📅 تاریخ اتمام: {expiresAt} ({remainingDays} روز)\n{noExpiry}\n\n📶 آخرین زمان اتصال شما: {lastSeen}\n\n📝 یادداشت: {note}\n\n{rotateHint}',
+  // Round N (F4): the card while a change is applied, and its one-line notice.
+  'bot.service.state_working': '⏳ در حال اعمال درخواست شما روی سرور…',
+  'bot.service.status_with_notice': '{status}\n{notice}',
+  'bot.service.notice_action_failed':
+    '⚠️ درخواست قبلی شما روی سرور انجام نشد؛ وضعیت سرویس تغییری نکرد.',
   'bot.service.state_pending_provision': '🟡 در حال ساخت',
   'bot.service.state_active': '🟢 فعال',
   'bot.service.state_suspended': '🔴 خاموش',

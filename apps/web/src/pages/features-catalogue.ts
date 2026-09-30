@@ -84,16 +84,21 @@ export const FEATURE_PRESENTATION: Readonly<Record<FeatureFlagKey, FeaturePresen
     summary: 'web.feature_payment_pending_reminders_summary',
     disableEffect: 'web.feature_payment_pending_reminders_off_effect',
   },
+  // Round N, package D. Off, resellers are simply not told; nothing else depends on it.
+  reseller_minimum_reminders: {
+    title: 'web.feature_reseller_minimum_reminders_title',
+    summary: 'web.feature_reseller_minimum_reminders_summary',
+    disableEffect: null,
+  },
+  reseller_minimum_achieved_notices: {
+    title: 'web.feature_reseller_minimum_achieved_notices_title',
+    summary: 'web.feature_reseller_minimum_achieved_notices_summary',
+    disableEffect: null,
+  },
   // HF-A9. Off loses nothing: a held reminder is simply sent at its next claim.
   reminder_quiet_hours: {
     title: 'web.feature_reminder_quiet_hours_title',
     summary: 'web.feature_reminder_quiet_hours_summary',
-    disableEffect: null,
-  },
-  // Off withdraws the offer and touches no trial already issued.
-  trials: {
-    title: 'web.feature_trials_title',
-    summary: 'web.feature_trials_summary',
     disableEffect: null,
   },
   // Off withdraws the button; a rotation already planned still runs.

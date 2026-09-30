@@ -56,9 +56,12 @@ import {
   type ReportTrendResponse,
   type ReportWalletResponse,
   COMMERCE_ERROR_CODES,
+  RESELLER_MINIMUM_ROUTES,
   RESELLER_ROUTES,
   RESELLER_TIER_ROUTES,
   resellerCreditResponseSchema,
+  resellerMinimumReportSchema,
+  resellerPolicyResponseSchema,
   resellerHistoryResponseSchema,
   resellerListResponseSchema,
   resellerPurchasePageSchema,
@@ -66,6 +69,13 @@ import {
   resellerTierListResponseSchema,
   resellerTierResponseSchema,
   type ResellerCreditResponse,
+  type ResellerGrantOverridesWriteRequest,
+  type ResellerMinimumFilter,
+  type ResellerMinimumPeriod,
+  type ResellerMinimumReport,
+  type ResellerMinimumWriteRequest,
+  type ResellerPolicyResponse,
+  type ResellerTierMinimumWriteRequest,
   type ResellerHistoryResponse,
   type ResellerListResponse,
   type ResellerPurchasePage,
@@ -2739,6 +2749,55 @@ export function fetchResellerHistory(customerId: string): Promise<ResellerHistor
 
 export function fetchResellerTierHistory(tierId: string): Promise<ResellerHistoryResponse> {
   return authedGet(RESELLER_TIER_ROUTES.history(tierId), resellerHistoryResponseSchema);
+}
+
+/*
+ * Round N, package D (`docs/round-n-reseller-audit.md`): plan controls and the monthly
+ * minimum. Writes need `resellers.edit`; the policy `resellers.view`; the progress
+ * `resellers.view` and `orders.view`.
+ */
+
+/** A tier's monthly minimum; null (or a zero amount) is none. */
+export function setResellerTierMinimum(
+  input: ResellerTierMinimumWriteRequest & { id: string },
+): Promise<ResellerTierResponse> {
+  const { id, ...body } = input;
+  return post(RESELLER_TIER_ROUTES.monthlyMinimum(id), body, resellerTierResponseSchema);
+}
+
+/** A reseller's own minimum: null inherits the tier's, a zero amount is an explicit none. */
+export function setResellerMinimum(
+  input: ResellerMinimumWriteRequest & { customerId: string },
+): Promise<ResellerResponse> {
+  const { customerId, ...body } = input;
+  return post(RESELLER_ROUTES.monthlyMinimum(customerId), body, resellerResponseSchema);
+}
+
+/** REPLACES a reseller's whole entitlement override; a dimension not listed inherits. */
+export function replaceResellerOverrides(
+  input: ResellerGrantOverridesWriteRequest & { customerId: string },
+): Promise<ResellerPolicyResponse> {
+  const { customerId, ...body } = input;
+  return post(RESELLER_ROUTES.grants(customerId), body, resellerPolicyResponseSchema);
+}
+
+/** What a reseller can do, and where each part comes from: the tier or their override. */
+export function fetchResellerPolicy(customerId: string): Promise<ResellerPolicyResponse> {
+  return authedGet(RESELLER_ROUTES.policy(customerId), resellerPolicyResponseSchema);
+}
+
+/** Every reseller's standing against the monthly minimum, this month or the previous one. */
+export function fetchResellerMinimums(
+  query: { period?: ResellerMinimumPeriod; filter?: ResellerMinimumFilter } = {},
+): Promise<ResellerMinimumReport> {
+  const params = new URLSearchParams();
+  if (query.period !== undefined) params.set('period', query.period);
+  if (query.filter !== undefined && query.filter !== 'ALL') params.set('filter', query.filter);
+  const suffix = params.toString();
+  return authedGet(
+    suffix ? `${RESELLER_MINIMUM_ROUTES.progress}?${suffix}` : RESELLER_MINIMUM_ROUTES.progress,
+    resellerMinimumReportSchema,
+  );
 }
 
 // ---------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 {
-  "id": "8573afc6-c3b4-459f-8c96-d7d307e3eecf",
-  "prevId": "8373a5bd-9885-4978-bb0f-24f6798c25dd",
+  "id": "7215f5c1-9e81-4ac8-b552-0617bcddb684",
+  "prevId": "83095a07-dc1d-4960-b546-90bc8b2e4cdf",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -3240,704 +3240,6 @@
       },
       "isRLSEnabled": false
     },
-    "public.campaign_actions": {
-      "name": "campaign_actions",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "tenant_id": {
-          "name": "tenant_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "campaign_id": {
-          "name": "campaign_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "kind": {
-          "name": "kind",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "state": {
-          "name": "state",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'PENDING'"
-        },
-        "config": {
-          "name": "config",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "discount_id": {
-          "name": "discount_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "cashback_rule_id": {
-          "name": "cashback_rule_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "binding": {
-          "name": "binding",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "broadcast_id": {
-          "name": "broadcast_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "bulk_operation_id": {
-          "name": "bulk_operation_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "failure_code": {
-          "name": "failure_code",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "launched_at": {
-          "name": "launched_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "campaign_actions_campaign_kind_key": {
-          "name": "campaign_actions_campaign_kind_key",
-          "columns": [
-            {
-              "expression": "tenant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "campaign_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "kind",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "campaign_actions_discount_key": {
-          "name": "campaign_actions_discount_key",
-          "columns": [
-            {
-              "expression": "tenant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "discount_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "where": "discount_id IS NOT NULL",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "campaign_actions_cashback_rule_key": {
-          "name": "campaign_actions_cashback_rule_key",
-          "columns": [
-            {
-              "expression": "tenant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "cashback_rule_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "where": "cashback_rule_id IS NOT NULL",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "campaign_actions_broadcast_key": {
-          "name": "campaign_actions_broadcast_key",
-          "columns": [
-            {
-              "expression": "tenant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "broadcast_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "where": "broadcast_id IS NOT NULL",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "campaign_actions_bulk_operation_key": {
-          "name": "campaign_actions_bulk_operation_key",
-          "columns": [
-            {
-              "expression": "tenant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "bulk_operation_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "where": "bulk_operation_id IS NOT NULL",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "campaign_actions_tenant_id_tenants_id_fk": {
-          "name": "campaign_actions_tenant_id_tenants_id_fk",
-          "tableFrom": "campaign_actions",
-          "tableTo": "tenants",
-          "columnsFrom": [
-            "tenant_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "campaign_actions_campaign_fk": {
-          "name": "campaign_actions_campaign_fk",
-          "tableFrom": "campaign_actions",
-          "tableTo": "campaigns",
-          "columnsFrom": [
-            "tenant_id",
-            "campaign_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "campaign_actions_discount_fk": {
-          "name": "campaign_actions_discount_fk",
-          "tableFrom": "campaign_actions",
-          "tableTo": "discounts",
-          "columnsFrom": [
-            "tenant_id",
-            "discount_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "campaign_actions_cashback_rule_fk": {
-          "name": "campaign_actions_cashback_rule_fk",
-          "tableFrom": "campaign_actions",
-          "tableTo": "cashback_rules",
-          "columnsFrom": [
-            "tenant_id",
-            "cashback_rule_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "campaign_actions_broadcast_fk": {
-          "name": "campaign_actions_broadcast_fk",
-          "tableFrom": "campaign_actions",
-          "tableTo": "broadcasts",
-          "columnsFrom": [
-            "tenant_id",
-            "broadcast_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "campaign_actions_bulk_operation_fk": {
-          "name": "campaign_actions_bulk_operation_fk",
-          "tableFrom": "campaign_actions",
-          "tableTo": "bulk_operations",
-          "columnsFrom": [
-            "tenant_id",
-            "bulk_operation_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "campaign_actions_broadcast_kind_check": {
-          "name": "campaign_actions_broadcast_kind_check",
-          "value": "broadcast_id IS NULL OR kind = 'ANNOUNCEMENT'"
-        },
-        "campaign_actions_bulk_kind_check": {
-          "name": "campaign_actions_bulk_kind_check",
-          "value": "bulk_operation_id IS NULL OR kind IN ('WALLET_GIFT', 'TRAFFIC_GIFT', 'TIME_GIFT')"
-        },
-        "campaign_actions_kind_check": {
-          "name": "campaign_actions_kind_check",
-          "value": "kind IN ('DISCOUNT', 'CASHBACK', 'WALLET_GIFT', 'TRAFFIC_GIFT', 'TIME_GIFT', 'ANNOUNCEMENT')"
-        },
-        "campaign_actions_state_check": {
-          "name": "campaign_actions_state_check",
-          "value": "state IN ('PENDING', 'LAUNCHED', 'CANCELLED', 'FAILED')"
-        },
-        "campaign_actions_discount_kind_check": {
-          "name": "campaign_actions_discount_kind_check",
-          "value": "discount_id IS NULL OR kind = 'DISCOUNT'"
-        },
-        "campaign_actions_cashback_kind_check": {
-          "name": "campaign_actions_cashback_kind_check",
-          "value": "cashback_rule_id IS NULL OR kind = 'CASHBACK'"
-        },
-        "campaign_actions_launched_check": {
-          "name": "campaign_actions_launched_check",
-          "value": "(state = 'LAUNCHED') = (launched_at IS NOT NULL)"
-        },
-        "campaign_actions_failed_check": {
-          "name": "campaign_actions_failed_check",
-          "value": "(state = 'FAILED') = (failure_code IS NOT NULL)"
-        }
-      },
-      "isRLSEnabled": false
-    },
-    "public.campaigns": {
-      "name": "campaigns",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "tenant_id": {
-          "name": "tenant_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "name": {
-          "name": "name",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "description": {
-          "name": "description",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "''"
-        },
-        "state": {
-          "name": "state",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'DRAFT'"
-        },
-        "starts_at": {
-          "name": "starts_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "ends_at": {
-          "name": "ends_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "audience": {
-          "name": "audience",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "audience_hash": {
-          "name": "audience_hash",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "audience_frozen_at": {
-          "name": "audience_frozen_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "audience_confirmed_count": {
-          "name": "audience_confirmed_count",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "audience_fingerprint": {
-          "name": "audience_fingerprint",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_by_admin_id": {
-          "name": "created_by_admin_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "scheduled_by_admin_id": {
-          "name": "scheduled_by_admin_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "scheduled_at": {
-          "name": "scheduled_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "started_at": {
-          "name": "started_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "paused_at": {
-          "name": "paused_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "completed_at": {
-          "name": "completed_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "cancelled_by_admin_id": {
-          "name": "cancelled_by_admin_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "cancelled_at": {
-          "name": "cancelled_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "campaigns_tenant_created_idx": {
-          "name": "campaigns_tenant_created_idx",
-          "columns": [
-            {
-              "expression": "tenant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "created_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "campaigns_due_start_idx": {
-          "name": "campaigns_due_start_idx",
-          "columns": [
-            {
-              "expression": "tenant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "starts_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "where": "state = 'SCHEDULED'",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "campaigns_due_end_idx": {
-          "name": "campaigns_due_end_idx",
-          "columns": [
-            {
-              "expression": "tenant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "ends_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "where": "state IN ('ACTIVE', 'PAUSED')",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "campaigns_tenant_id_tenants_id_fk": {
-          "name": "campaigns_tenant_id_tenants_id_fk",
-          "tableFrom": "campaigns",
-          "tableTo": "tenants",
-          "columnsFrom": [
-            "tenant_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "campaigns_created_by_fk": {
-          "name": "campaigns_created_by_fk",
-          "tableFrom": "campaigns",
-          "tableTo": "admins",
-          "columnsFrom": [
-            "tenant_id",
-            "created_by_admin_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "campaigns_scheduled_by_fk": {
-          "name": "campaigns_scheduled_by_fk",
-          "tableFrom": "campaigns",
-          "tableTo": "admins",
-          "columnsFrom": [
-            "tenant_id",
-            "scheduled_by_admin_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "campaigns_cancelled_by_fk": {
-          "name": "campaigns_cancelled_by_fk",
-          "tableFrom": "campaigns",
-          "tableTo": "admins",
-          "columnsFrom": [
-            "tenant_id",
-            "cancelled_by_admin_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "campaigns_tenant_id_key": {
-          "name": "campaigns_tenant_id_key",
-          "nullsNotDistinct": false,
-          "columns": [
-            "tenant_id",
-            "id"
-          ]
-        }
-      },
-      "policies": {},
-      "checkConstraints": {
-        "campaigns_state_check": {
-          "name": "campaigns_state_check",
-          "value": "state IN ('DRAFT', 'SCHEDULED', 'ACTIVE', 'PAUSED', 'COMPLETED', 'CANCELLED')"
-        },
-        "campaigns_window_check": {
-          "name": "campaigns_window_check",
-          "value": "starts_at < ends_at"
-        },
-        "campaigns_name_check": {
-          "name": "campaigns_name_check",
-          "value": "char_length(name) BETWEEN 1 AND 80"
-        },
-        "campaigns_description_check": {
-          "name": "campaigns_description_check",
-          "value": "char_length(description) <= 2000"
-        },
-        "campaigns_frozen_check": {
-          "name": "campaigns_frozen_check",
-          "value": "(audience_frozen_at IS NULL) = (scheduled_at IS NULL) AND (scheduled_at IS NULL) = (audience_confirmed_count IS NULL) AND (scheduled_at IS NULL) = (audience_fingerprint IS NULL)"
-        },
-        "campaigns_scheduled_check": {
-          "name": "campaigns_scheduled_check",
-          "value": "state IN ('DRAFT', 'CANCELLED') OR scheduled_at IS NOT NULL"
-        },
-        "campaigns_started_check": {
-          "name": "campaigns_started_check",
-          "value": "state NOT IN ('ACTIVE', 'PAUSED') OR started_at IS NOT NULL"
-        },
-        "campaigns_completed_check": {
-          "name": "campaigns_completed_check",
-          "value": "(state = 'COMPLETED') = (completed_at IS NOT NULL)"
-        },
-        "campaigns_cancelled_check": {
-          "name": "campaigns_cancelled_check",
-          "value": "(state = 'CANCELLED') = (cancelled_at IS NOT NULL)"
-        },
-        "campaigns_paused_check": {
-          "name": "campaigns_paused_check",
-          "value": "(state = 'PAUSED') = (paused_at IS NOT NULL)"
-        },
-        "campaigns_audience_hash_check": {
-          "name": "campaigns_audience_hash_check",
-          "value": "audience_hash ~ '^[0-9a-f]{64}$'"
-        },
-        "campaigns_audience_fingerprint_check": {
-          "name": "campaigns_audience_fingerprint_check",
-          "value": "audience_fingerprint IS NULL OR audience_fingerprint ~ '^[0-9a-f]{32}$'"
-        },
-        "campaigns_confirmed_count_check": {
-          "name": "campaigns_confirmed_count_check",
-          "value": "audience_confirmed_count IS NULL OR audience_confirmed_count >= 0"
-        }
-      },
-      "isRLSEnabled": false
-    },
     "public.cashback_reversals": {
       "name": "cashback_reversals",
       "schema": "",
@@ -5142,7 +4444,7 @@
       "checkConstraints": {
         "customer_notifications_kind_check": {
           "name": "customer_notifications_kind_check",
-          "value": "kind IN ('PAYMENT_REJECTED', 'PAYMENT_EXPIRED', 'ORDER_EXPIRED', 'SERVICE_ACTION_SUCCEEDED', 'SERVICE_ACTION_FAILED', 'SERVICE_PROVISION_DELAYED', 'PAYMENT_TRANSFER_RECORDED', 'ORDER_CANCELLED', 'WALLET_TOPUP_CREDITED', 'ORDER_REFUNDED_TO_WALLET', 'SERVICE_EXPIRY_FIRST', 'SERVICE_EXPIRY_SECOND', 'SERVICE_EXPIRED', 'SERVICE_USAGE_FIRST', 'SERVICE_USAGE_SECOND', 'SERVICE_USAGE_FINAL', 'TRIAL_NOT_DELIVERED', 'RECEIPT_CREDITED_TO_WALLET', 'WALLET_TOPUP_GIFT_CREDITED', 'REFUND_COMPLETED', 'GATEWAY_PAYMENT_FAILED', 'SERVICE_REFUND_REQUEST_REGISTERED', 'SERVICE_REFUND_REQUEST_APPROVED', 'SERVICE_REFUND_REQUEST_REJECTED', 'SERVICE_TRANSFER_RECEIVED', 'TICKET_REPLY', 'SERVICE_EXPIRY_EARLY', 'SERVICE_EXPIRY_DAY', 'WALLET_LOW_BALANCE', 'PAYMENT_PENDING_REMINDER', 'ORDER_PENDING_REMINDER', 'TICKET_REPLY_ATTACHMENT', 'SERVICE_RENEWED', 'WALLET_MASS_CREDITED', 'SERVICE_GIFT_APPLIED')"
+          "value": "kind IN ('PAYMENT_REJECTED', 'PAYMENT_EXPIRED', 'ORDER_EXPIRED', 'SERVICE_ACTION_SUCCEEDED', 'SERVICE_ACTION_FAILED', 'SERVICE_PROVISION_DELAYED', 'PAYMENT_TRANSFER_RECORDED', 'ORDER_CANCELLED', 'WALLET_TOPUP_CREDITED', 'ORDER_REFUNDED_TO_WALLET', 'SERVICE_EXPIRY_FIRST', 'SERVICE_EXPIRY_SECOND', 'SERVICE_EXPIRED', 'SERVICE_USAGE_FIRST', 'SERVICE_USAGE_SECOND', 'SERVICE_USAGE_FINAL', 'TRIAL_NOT_DELIVERED', 'RECEIPT_CREDITED_TO_WALLET', 'WALLET_TOPUP_GIFT_CREDITED', 'REFUND_COMPLETED', 'GATEWAY_PAYMENT_FAILED', 'SERVICE_REFUND_REQUEST_REGISTERED', 'SERVICE_REFUND_REQUEST_APPROVED', 'SERVICE_REFUND_REQUEST_REJECTED', 'SERVICE_TRANSFER_RECEIVED', 'TICKET_REPLY', 'SERVICE_EXPIRY_EARLY', 'SERVICE_EXPIRY_DAY', 'WALLET_LOW_BALANCE', 'PAYMENT_PENDING_REMINDER', 'ORDER_PENDING_REMINDER', 'TICKET_REPLY_ATTACHMENT', 'SERVICE_RENEWED', 'RESELLER_MINIMUM_REMINDER', 'RESELLER_MINIMUM_ACHIEVED', 'WALLET_MASS_CREDITED', 'SERVICE_GIFT_APPLIED')"
         },
         "customer_notifications_state_check": {
           "name": "customer_notifications_state_check",
@@ -15701,6 +15003,322 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.reseller_entitlement_overrides": {
+      "name": "reseller_entitlement_overrides",
+      "schema": "",
+      "columns": {
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "customer_id": {
+          "name": "customer_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "dimension": {
+          "name": "dimension",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "reseller_entitlement_overrides_tenant_id_tenants_id_fk": {
+          "name": "reseller_entitlement_overrides_tenant_id_tenants_id_fk",
+          "tableFrom": "reseller_entitlement_overrides",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "reseller_entitlement_overrides_reseller_fk": {
+          "name": "reseller_entitlement_overrides_reseller_fk",
+          "tableFrom": "reseller_entitlement_overrides",
+          "tableTo": "resellers",
+          "columnsFrom": [
+            "tenant_id",
+            "customer_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "customer_id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "reseller_entitlement_overrides_pkey": {
+          "name": "reseller_entitlement_overrides_pkey",
+          "columns": [
+            "tenant_id",
+            "customer_id",
+            "dimension"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "reseller_entitlement_overrides_dimension_check": {
+          "name": "reseller_entitlement_overrides_dimension_check",
+          "value": "dimension IN ('OPERATION', 'CATALOGUE', 'PANEL', 'BOT')"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.reseller_grant_overrides": {
+      "name": "reseller_grant_overrides",
+      "schema": "",
+      "columns": {
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "customer_id": {
+          "name": "customer_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "dimension": {
+          "name": "dimension",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "subject": {
+          "name": "subject",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "reseller_grant_overrides_tenant_id_tenants_id_fk": {
+          "name": "reseller_grant_overrides_tenant_id_tenants_id_fk",
+          "tableFrom": "reseller_grant_overrides",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "reseller_grant_overrides_dimension_fk": {
+          "name": "reseller_grant_overrides_dimension_fk",
+          "tableFrom": "reseller_grant_overrides",
+          "tableTo": "reseller_entitlement_overrides",
+          "columnsFrom": [
+            "tenant_id",
+            "customer_id",
+            "dimension"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "customer_id",
+            "dimension"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "reseller_grant_overrides_pkey": {
+          "name": "reseller_grant_overrides_pkey",
+          "columns": [
+            "tenant_id",
+            "customer_id",
+            "kind",
+            "subject"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "reseller_grant_overrides_kind_check": {
+          "name": "reseller_grant_overrides_kind_check",
+          "value": "kind IN ('PRODUCT', 'CATEGORY', 'PANEL', 'BOT', 'OPERATION')"
+        },
+        "reseller_grant_overrides_dimension_check": {
+          "name": "reseller_grant_overrides_dimension_check",
+          "value": "(kind = 'OPERATION' AND dimension = 'OPERATION')\n          OR (kind IN ('PRODUCT', 'CATEGORY') AND dimension = 'CATALOGUE')\n          OR (kind = 'PANEL' AND dimension = 'PANEL')\n          OR (kind = 'BOT' AND dimension = 'BOT')"
+        },
+        "reseller_grant_overrides_subject_check": {
+          "name": "reseller_grant_overrides_subject_check",
+          "value": "subject = '*' OR (kind = 'OPERATION' AND subject IN ('NEW_SERVICE', 'RENEW', 'ADD_TRAFFIC', 'ADD_TIME', 'ADD_DEVICES', 'CHANGE_LOCATION')) OR (kind <> 'OPERATION' AND subject ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.reseller_minimum_notices": {
+      "name": "reseller_minimum_notices",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "customer_id": {
+          "name": "customer_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "period_start": {
+          "name": "period_start",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "period_end": {
+          "name": "period_end",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "minimum_amount": {
+          "name": "minimum_amount",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "currency": {
+          "name": "currency",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "achieved_amount": {
+          "name": "achieved_amount",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "raised_at": {
+          "name": "raised_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "reseller_minimum_notices_tenant_id_tenants_id_fk": {
+          "name": "reseller_minimum_notices_tenant_id_tenants_id_fk",
+          "tableFrom": "reseller_minimum_notices",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "reseller_minimum_notices_reseller_fk": {
+          "name": "reseller_minimum_notices_reseller_fk",
+          "tableFrom": "reseller_minimum_notices",
+          "tableTo": "resellers",
+          "columnsFrom": [
+            "tenant_id",
+            "customer_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "customer_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "reseller_minimum_notices_period_key": {
+          "name": "reseller_minimum_notices_period_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "customer_id",
+            "kind",
+            "period_start"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "reseller_minimum_notices_kind_check": {
+          "name": "reseller_minimum_notices_kind_check",
+          "value": "kind IN ('REMINDER', 'ACHIEVED')"
+        },
+        "reseller_minimum_notices_currency_check": {
+          "name": "reseller_minimum_notices_currency_check",
+          "value": "currency IN ('IRT', 'IRR', 'USD', 'EUR', 'USDT')"
+        },
+        "reseller_minimum_notices_period_check": {
+          "name": "reseller_minimum_notices_period_check",
+          "value": "period_end > period_start"
+        },
+        "reseller_minimum_notices_amounts_check": {
+          "name": "reseller_minimum_notices_amounts_check",
+          "value": "minimum_amount > 0 AND achieved_amount >= 0"
+        }
+      },
+      "isRLSEnabled": false
+    },
     "public.reseller_tier_grants": {
       "name": "reseller_tier_grants",
       "schema": "",
@@ -15840,6 +15458,18 @@
           "primaryKey": false,
           "notNull": true
         },
+        "monthly_minimum_amount": {
+          "name": "monthly_minimum_amount",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "monthly_minimum_currency": {
+          "name": "monthly_minimum_currency",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -15945,6 +15575,18 @@
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {
+        "reseller_tiers_minimum_pair_check": {
+          "name": "reseller_tiers_minimum_pair_check",
+          "value": "(monthly_minimum_amount IS NULL) = (monthly_minimum_currency IS NULL)"
+        },
+        "reseller_tiers_minimum_check": {
+          "name": "reseller_tiers_minimum_check",
+          "value": "monthly_minimum_amount IS NULL OR monthly_minimum_amount >= 0"
+        },
+        "reseller_tiers_minimum_currency_check": {
+          "name": "reseller_tiers_minimum_currency_check",
+          "value": "monthly_minimum_currency IS NULL OR monthly_minimum_currency IN ('IRT', 'IRR', 'USD', 'EUR', 'USDT')"
+        },
         "reseller_tiers_pricing_mode_check": {
           "name": "reseller_tiers_pricing_mode_check",
           "value": "pricing_mode IN ('LIST_PRICE', 'PERCENTAGE_DISCOUNT')"
@@ -16025,6 +15667,18 @@
         },
         "credit_limit_currency": {
           "name": "credit_limit_currency",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "monthly_minimum_amount": {
+          "name": "monthly_minimum_amount",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "monthly_minimum_currency": {
+          "name": "monthly_minimum_currency",
           "type": "text",
           "primaryKey": false,
           "notNull": false
@@ -16191,6 +15845,18 @@
         "resellers_discount_range_check": {
           "name": "resellers_discount_range_check",
           "value": "discount_percentage IS NULL OR (discount_percentage >= 1 AND discount_percentage <= 100)"
+        },
+        "resellers_minimum_pair_check": {
+          "name": "resellers_minimum_pair_check",
+          "value": "(monthly_minimum_amount IS NULL) = (monthly_minimum_currency IS NULL)"
+        },
+        "resellers_minimum_check": {
+          "name": "resellers_minimum_check",
+          "value": "monthly_minimum_amount IS NULL OR monthly_minimum_amount >= 0"
+        },
+        "resellers_minimum_currency_check": {
+          "name": "resellers_minimum_currency_check",
+          "value": "monthly_minimum_currency IS NULL OR monthly_minimum_currency IN ('IRT', 'IRR', 'USD', 'EUR', 'USDT')"
         }
       },
       "isRLSEnabled": false

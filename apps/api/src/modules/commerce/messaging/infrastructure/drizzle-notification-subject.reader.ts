@@ -16,6 +16,7 @@ import {
   services,
 } from '../../../../infrastructure/persistence/schema.js';
 import type { NotificationSubjectReader } from '../application/customer-notification.service.js';
+import { resellerMinimumReminderHolds } from '../../resellers/infrastructure/drizzle-reseller-minimum-facts.js';
 
 /**
  * WP-A9: which service reminder a notification kind carries, inverted from the contract's
@@ -39,6 +40,8 @@ const ANSWERABLE_KINDS: readonly CustomerNotificationKind[] = [
   'WALLET_LOW_BALANCE',
   'PAYMENT_PENDING_REMINDER',
   'ORDER_PENDING_REMINDER',
+  // Round N R2: answered from the notice row, the reseller and the month's sales.
+  'RESELLER_MINIMUM_REMINDER',
 ];
 
 /**
@@ -99,6 +102,9 @@ export class DrizzleNotificationSubjectReader implements NotificationSubjectRead
     if (kind === 'PAYMENT_PENDING_REMINDER')
       return this.paymentStillPending(tenantId, subjectId, now);
     if (kind === 'ORDER_PENDING_REMINDER') return this.orderStillPending(tenantId, subjectId, now);
+    if (kind === 'RESELLER_MINIMUM_REMINDER') {
+      return resellerMinimumReminderHolds(this.db, tenantId, subjectId, now);
+    }
 
     /*
      * Package F: "a service was given to you" holds while the transfer's recipient still
