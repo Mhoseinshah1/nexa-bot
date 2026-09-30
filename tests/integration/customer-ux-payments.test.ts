@@ -639,10 +639,12 @@ describe('a customer pays through the approved screens', () => {
         body.endsWith('💡 در صورتی که جواب سوالتون رو نگرفتید میتونید به «پشتیبانی» مراجعه کنید.'),
       ).toBe(true);
       expect(lastMarkup()).toContain('"url":"https://t.me/nexa_support"');
-      // WP-A7: the support screen also leads into the ticket desk.
+      // WP-A7: the support screen also leads into the ticket desk. Round N
+      // close: the marketing preference lives here too, before the menu.
       expect(labelsOf(lastMarkup())).toEqual([
         '🎫 تیکت\u200cهای پشتیبانی',
         '📨 ارسال پیام به پشتیبانی',
+        '🔕 قطع پیام\u200cهای تبلیغاتی',
         '🏠 بازگشت به منوی اصلی',
       ]);
 
@@ -656,6 +658,7 @@ describe('a customer pays through the approved screens', () => {
       expect(lastMarkup()).not.toContain('"url"');
       expect(labelsOf(lastMarkup())).toEqual([
         '🎫 تیکت\u200cهای پشتیبانی',
+        '🔕 قطع پیام\u200cهای تبلیغاتی',
         '🏠 بازگشت به منوی اصلی',
       ]);
     });

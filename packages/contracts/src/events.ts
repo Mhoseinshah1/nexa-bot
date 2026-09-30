@@ -99,6 +99,13 @@ export const EVENT_TYPES = [
   'CustomerRegistered',
   'CustomerBlocked',
   'CustomerUnblocked',
+  /**
+   * Round N close (§D): the customer opted out of, or back into, promotional broadcasts.
+   * An event because a MARKETING broadcast already materialised must skip them, and the
+   * dispatcher re-reads the column rather than this event; it is here so the change is a
+   * durable fact with a correlation id, like a block.
+   */
+  'CustomerMarketingOptOutChanged',
   'OrderConfirmed',
   'OrderSettled',
   'OrderCancelled',
@@ -270,6 +277,7 @@ export const EVENT_PAYLOAD_SCHEMAS = {
   }),
   CustomerBlocked: z.object({ reason: z.string().max(500).nullable() }),
   CustomerUnblocked: z.object({ reason: z.string().max(500).nullable() }),
+  CustomerMarketingOptOutChanged: z.object({ optedOut: z.boolean() }),
   OrderConfirmed: z.object({
     customerId: z.string(),
     /** Null for a custom service (Package D), which is bought from no product. */

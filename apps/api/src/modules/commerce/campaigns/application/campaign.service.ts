@@ -191,11 +191,18 @@ export interface CampaignServiceDeps {
   readonly cashbackAdmin: Pick<CashbackRuleAdminService, 'assertReferences'>;
   readonly calendar: CampaignCalendar;
   /** The SHARED audience engine (round N, B1): the same query Broadcast and the mass actions use. */
-  readonly audience: Pick<AudienceService, 'evaluate' | 'sampleOf'>;
+  readonly audience: Pick<AudienceService, 'evaluate' | 'sampleOf' | 'freeze' | 'releaseFrozen'>;
   /** The SHARED mass-action engine (round N, B2): wallet, traffic and time gifts. */
   readonly massActions: Pick<
     BulkOperationService,
-    'preview' | 'create' | 'cancel' | 'get' | 'progress'
+    | 'preview'
+    | 'create'
+    | 'cancel'
+    | 'pause'
+    | 'resume'
+    | 'get'
+    | 'progress'
+    | 'freezeServiceAudience'
   >;
   /** The SHARED Broadcast lane (round N, B1): the announcement. */
   readonly broadcasts: Pick<
@@ -673,6 +680,35 @@ export class CampaignService {
         }
         const audienceCount = audience.customers;
 
+        /*
+         * Round N close (§A): the CUSTOMERS confirmed are frozen here, in this transaction,
+         * by the same query at the same instant the comparison above read — so the rows
+         * written are the set confirmed, and the engines are later seeded from them rather
+         * than from a live re-selection. Frozen once, shared by the announcement and the
+         * wallet gift; a service gift freezes its own SERVICES set below, through the engine
+         * that owns the eligibility rule.
+         */
+        let frozenCustomers: { readonly id: string } | null = null;
+        const frozenCustomersId = async () => {
+          if (frozenCustomers === null) {
+            const frozen = await this.deps.audience.freeze(
+              scope,
+              campaign.audience,
+              now,
+              adminIdOf(actor),
+              tx,
+            );
+            if (frozen.count !== audienceCount || frozen.fingerprint !== audience.fingerprint) {
+              throw errors.conflict(
+                AUDIENCE_ERROR_CODES.CHANGED,
+                'The audience changed while it was being confirmed. Preview again.',
+              );
+            }
+            frozenCustomers = frozen;
+          }
+          return frozenCustomers.id;
+        };
+
         for (const action of actions) {
           if (LAUNCHED_KINDS.has(action.kind)) {
             const binding =
@@ -680,7 +716,15 @@ export class CampaignService {
                 ? this.announcementBinding(audience, input.typedCount ?? null)
                 : bindings.get(action.kind);
             if (binding === undefined) throw bindingInvalid(action.kind);
-            await this.deps.campaigns.bindAction(scope, { actionId: action.id, binding }, tx);
+            const frozenAudienceId =
+              action.kind === 'TRAFFIC_GIFT' || action.kind === 'TIME_GIFT'
+                ? await this.freezeGiftServices(scope, actor, campaign, action, binding, now, tx)
+                : await frozenCustomersId();
+            await this.deps.campaigns.bindAction(
+              scope,
+              { actionId: action.id, binding, frozenAudienceId },
+              tx,
+            );
             continue;
           }
           await this.createStandingRule(scope, actor, campaign, action, now, tx);
@@ -768,8 +812,8 @@ export class CampaignService {
         await this.recordHandOver(scope, actor, action, { failedCode: error.code });
         continue;
       }
-      const linked = await this.recordHandOver(scope, actor, action, { launched });
-      if (!linked) await this.compensate(scope, actor, action, launched);
+      await this.recordHandOver(scope, actor, action, { launched });
+      await this.reconcile(scope, actor, action, launched);
     }
     return this.detailOf(scope, id);
   }
@@ -822,29 +866,42 @@ export class CampaignService {
   }
 
   /**
-   * The campaign was cancelled while its action was being handed over: the cancel found no
-   * engine record to stop, and the engine has just made one. Stop it now — before the start
-   * a cancel credits, grants and sends nothing. An action that is LAUNCHED already (a
-   * concurrent hand-over linked it) needs nothing.
+   * The engine record was made AFTER the campaign's own edges looked for one. A cancel or a
+   * pause that committed before the link found no engine record to stop, and the engine has
+   * just made one — RUNNING, or SENDING — under a campaign that is no longer running. The
+   * campaign is read again only now, after the link committed, so every edge that commits
+   * from here on sees the link and propagates itself; and every edge that committed before
+   * is seen here. An action CANCELLED meanwhile stops its engine — before the start a cancel
+   * credits, grants and sends nothing; a campaign PAUSED meanwhile pauses it, exactly as
+   * `pause` would have (a RUNNING operation, a SENDING broadcast). An action LAUNCHED by a
+   * concurrent hand-over, or a campaign still running, needs nothing.
    */
-  private async compensate(
+  private async reconcile(
     scope: TenantContext,
     actor: ActorContext,
     action: CampaignActionRecord,
     launched: { broadcastId?: string; bulkOperationId?: string },
   ): Promise<void> {
+    const campaign = await this.deps.campaigns.findById(scope, action.campaignId);
     const current = (await this.deps.campaigns.actionsOf(scope, action.campaignId)).find(
       (a) => a.id === action.id,
     );
-    if (current?.state !== 'CANCELLED') return;
-    if (launched.bulkOperationId !== undefined) {
-      await ignoringStateConflict(
-        this.deps.massActions.cancel(scope, actor, launched.bulkOperationId),
-      );
+    if (current?.state === 'CANCELLED') {
+      if (launched.bulkOperationId !== undefined) {
+        await ignoringStateConflict(
+          this.deps.massActions.cancel(scope, actor, launched.bulkOperationId),
+        );
+      }
+      if (launched.broadcastId !== undefined) {
+        await ignoringStateConflict(
+          this.deps.broadcasts.cancel(scope, actor, launched.broadcastId),
+        );
+      }
+      return;
     }
-    if (launched.broadcastId !== undefined) {
-      await ignoringStateConflict(this.deps.broadcasts.cancel(scope, actor, launched.broadcastId));
-    }
+    if (campaign?.state !== 'PAUSED' || current === undefined) return;
+    await this.forEachBroadcast(scope, actor, [current], 'SENDING', 'pause');
+    await this.forEachBulkOperation(scope, actor, [current], 'RUNNING', 'pause');
   }
 
   /** One action to its engine. Returns the engine record's id. */
@@ -857,6 +914,13 @@ export class CampaignService {
   ): Promise<{ broadcastId?: string; bulkOperationId?: string }> {
     const config = action.config;
     const key = `campaign:${campaign.id}:${action.kind.toLowerCase()}`;
+    /*
+     * Round N close (§A): every engine record is seeded from the frozen audience bound at
+     * the confirmation, so a retry finds the same members however the live audience moved.
+     * An action confirmed by the release before this one carries no frozen id and keeps
+     * its old path (a live evaluation the engine compares with the binding).
+     */
+    const frozenAudienceId = action.frozenAudienceId;
     if (config.kind === 'ANNOUNCEMENT') {
       const draft = await this.deps.broadcasts.create(scope, actor, {
         idempotencyKey: key,
@@ -865,6 +929,8 @@ export class CampaignService {
         body: config.terms.body,
         buttons: config.terms.buttons,
         audience: campaign.audience,
+        purpose: config.terms.purpose,
+        frozenAudienceId,
       });
       // A retry after a launch that committed: the broadcast is already past DRAFT.
       if (draft.state !== 'DRAFT') return { broadcastId: draft.id };
@@ -897,8 +963,54 @@ export class CampaignService {
       typedCount: binding.typedCount,
       // Frozen and confirmed now; processed from the campaign's start (never before).
       notBefore: campaign.startsAt,
+      frozenAudienceId,
     });
     return { bulkOperationId: created.id };
+  }
+
+  /**
+   * Round N close (§A): a traffic or time gift's SERVICES, frozen in the confirming
+   * transaction by the mass-action engine's own eligibility query, and compared with the
+   * binding its preview produced — a service that became eligible or ineligible since the
+   * preview refuses the confirmation, exactly as a customer would.
+   */
+  private async freezeGiftServices(
+    scope: TenantContext,
+    actor: ActorContext,
+    campaign: CampaignRecord,
+    action: CampaignActionRecord,
+    binding: CampaignLaunchBindingRecord,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<string> {
+    const config = action.config;
+    if (config.kind !== 'TRAFFIC_GIFT' && config.kind !== 'TIME_GIFT')
+      throw bindingInvalid(action.kind);
+    const frozen = await this.deps.massActions.freezeServiceAudience(
+      scope,
+      actor,
+      { grant: grantOf(config), definition: campaign.audience, asOf: now },
+      tx,
+    );
+    if (frozen.count !== binding.count || frozen.fingerprint !== binding.fingerprint) {
+      throw errors.conflict(
+        AUDIENCE_ERROR_CODES.CHANGED,
+        'What this gift reaches changed since the preview. Preview again before confirming.',
+        { kind: config.kind, previewed: binding.count, now: frozen.count },
+      );
+    }
+    return frozen.id;
+  }
+
+  /**
+   * Round N close (§A): the release sweep for frozen audiences nothing live names any more.
+   * Run by the campaign lane under `maintenance.run`; the audience engine decides which.
+   */
+  async releaseFrozenAudiences(scope: TenantContext, actor: ActorContext): Promise<number> {
+    return this.deps.uow.run(scope, async (tx) => {
+      await this.deps.guard.check(scope, actor, 'maintenance.run', tx);
+      return this.deps.audience.releaseFrozen(scope, this.deps.clock.now(), tx);
+    });
   }
 
   /**
@@ -1016,9 +1128,13 @@ export class CampaignService {
         }
         return this.setRules(scope, actor, actions, 'INACTIVE', now, tx);
       },
-      // The announcement pauses with it where Broadcast can (a SENDING broadcast). A mass
-      // gift has no pause in its engine: one already running finishes its frozen items.
-      (actions) => this.forEachBroadcast(scope, actor, actions, 'SENDING', 'pause'),
+      // The announcement pauses with it where Broadcast can (a SENDING broadcast), and each
+      // gift where its engine can (a RUNNING operation): no new item is claimed until the
+      // resume; an item already PLANNED on a panel still reaches its own end (round N close §B).
+      async (actions) => {
+        await this.forEachBroadcast(scope, actor, actions, 'SENDING', 'pause');
+        await this.forEachBulkOperation(scope, actor, actions, 'RUNNING', 'pause');
+      },
       'PAUSED',
     );
   }
@@ -1040,7 +1156,10 @@ export class CampaignService {
         }
         return this.setRules(scope, actor, actions, 'ACTIVE', now, tx);
       },
-      (actions) => this.forEachBroadcast(scope, actor, actions, 'PAUSED', 'resume'),
+      async (actions) => {
+        await this.forEachBroadcast(scope, actor, actions, 'PAUSED', 'resume');
+        await this.forEachBulkOperation(scope, actor, actions, 'PAUSED', 'resume');
+      },
       'ACTIVE',
     );
   }
@@ -1095,6 +1214,28 @@ export class CampaignService {
       },
       'CANCELLED',
     );
+  }
+
+  /**
+   * Pause or resume each gift's mass operation, where it stands in `from` (round N close §B).
+   * Idempotent: an operation already moved by a replay, or steered by hand on its own page,
+   * is left as it is, and the engine's own repeated-command answer covers the rest.
+   */
+  private async forEachBulkOperation(
+    scope: TenantContext,
+    actor: ActorContext,
+    actions: readonly CampaignActionRecord[],
+    from: 'RUNNING' | 'PAUSED',
+    command: 'pause' | 'resume',
+  ): Promise<void> {
+    for (const action of actions) {
+      if (action.bulkOperationId === null) continue;
+      const current = await this.deps.massActions.get(scope, actor, action.bulkOperationId);
+      if (current.state !== from) continue;
+      await ignoringStateConflict(
+        this.deps.massActions[command](scope, actor, action.bulkOperationId),
+      );
+    }
   }
 
   /** Pause, resume or cancel the announcement's broadcast, where it stands in `from`. */

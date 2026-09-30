@@ -115,6 +115,12 @@ export interface CampaignActionRecord {
   readonly broadcastId: string | null;
   readonly bulkOperationId: string | null;
   readonly binding: CampaignLaunchBindingRecord | null;
+  /**
+   * Round N close (§A): the frozen audience the engine record is seeded from, materialised
+   * in the confirming transaction beside the binding. A hand-over retried after the live
+   * audience moved copies its members, never re-selects.
+   */
+  readonly frozenAudienceId: string | null;
   readonly failureCode: string | null;
   readonly launchedAt: Date | null;
 }
@@ -251,10 +257,14 @@ export interface CampaignRepository {
   /** Campaign ids whose end has passed while ACTIVE or PAUSED, oldest first, bounded. */
   dueToComplete(scope: TenantContext, now: Date, limit: number): Promise<readonly string[]>;
 
-  /** Freezes each launched action's binding, at the schedule. Conditional on PENDING. */
+  /** Freezes each launched action's binding and frozen audience, at the schedule. Conditional on PENDING. */
   bindAction(
     scope: TenantContext,
-    input: { readonly actionId: string; readonly binding: CampaignLaunchBindingRecord },
+    input: {
+      readonly actionId: string;
+      readonly binding: CampaignLaunchBindingRecord;
+      readonly frozenAudienceId: string;
+    },
     tx: unknown,
   ): Promise<boolean>;
 

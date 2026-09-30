@@ -771,6 +771,16 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.discount.remove_button',
       'bot.faq.page',
       'bot.help',
+      /*
+       * Round N close (§D), reviewed: the two answers to the promotional opt-out and the
+       * two buttons that carry it. Each names only what THIS head does — /stop stops
+       * MARKETING broadcasts, the button on the reply and the support screen turns them
+       * back on — and promises no flow beyond that.
+       */
+      'bot.marketing.opt_in_button',
+      'bot.marketing.opt_out_button',
+      'bot.marketing.opted_in',
+      'bot.marketing.opted_out',
       'bot.menu.main_button',
       // WP-A10: an app's detail points a customer with several services at their list.
       'bot.menu.services',

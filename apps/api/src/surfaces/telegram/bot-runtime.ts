@@ -360,6 +360,15 @@ export const BOT_INTENTS = [
   'SERVICE_RENEW_QUOTE',
   'REFERRAL_GIFT',
   'HELP',
+  /*
+   * Round N close (§D): the promotional opt-out. `/stop` and the support screen's button opt
+   * the customer out of MARKETING broadcasts; the button on that reply, and on the support
+   * screen afterwards, opts them back in. Neither touches a transactional notice. Both are
+   * exempt from the membership guard: a customer who has not joined the channel must still
+   * be able to say "stop", and the guard's own screen is not the place to be refused that.
+   */
+  'MARKETING_OPT_OUT',
+  'MARKETING_OPT_IN',
   'RECEIPT_UPLOAD',
   /*
    * Package B — the `✅ بررسی عضویت` button. Exempt from the membership guard, and it
@@ -1057,6 +1066,9 @@ export const DISCOUNT_CODE_REMOVE_CALLBACK_PREFIX = 'dx:';
  * declared beside the composer that draws them and imported here.
  */
 export const MAIN_MENU_CALLBACK_DATA = 'mm:';
+/** Round N close (§D): the promotional opt-out and opt-in buttons. No id: the tapper is the subject. */
+export const MARKETING_OPT_OUT_CALLBACK_DATA = 'mk:out';
+export const MARKETING_OPT_IN_CALLBACK_DATA = 'mk:in';
 /** Package B: the membership check button's callback data. */
 export const MEMBERSHIP_CHECK_CALLBACK_DATA = 'mc:';
 export const TUTORIAL_PLATFORM_CALLBACK_PREFIX = 'to:';
@@ -1270,7 +1282,12 @@ const ADMIN_INTENTS: ReadonlySet<BotIntent> = new Set<BotIntent>(
  * the minimal support path, which `/paysupport` opens too. The check button and the
  * management panel are let through by `guardedAct` itself.
  */
-const MEMBERSHIP_EXEMPT_INTENTS: ReadonlySet<BotIntent> = new Set<BotIntent>(['SUPPORT', 'HELP']);
+const MEMBERSHIP_EXEMPT_INTENTS: ReadonlySet<BotIntent> = new Set<BotIntent>([
+  'SUPPORT',
+  'HELP',
+  'MARKETING_OPT_OUT',
+  'MARKETING_OPT_IN',
+]);
 
 /**
  * The join screen (brief B4): one message, a URL button per missing REQUIRED channel, and
@@ -2496,6 +2513,12 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
      * the reason the catalogue's are: none shadows another today, and placing them
      * first keeps that true if a one-letter prefix is ever added that would.
      */
+    if (data === MARKETING_OPT_OUT_CALLBACK_DATA) {
+      return { intent: 'MARKETING_OPT_OUT', targetId: null, callbackQueryId: id };
+    }
+    if (data === MARKETING_OPT_IN_CALLBACK_DATA) {
+      return { intent: 'MARKETING_OPT_IN', targetId: null, callbackQueryId: id };
+    }
     if (data === MAIN_MENU_CALLBACK_DATA) {
       return { intent: 'MAIN_MENU', targetId: null, callbackQueryId: id };
     }
@@ -3198,6 +3221,13 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
    */
   if (command === '/paysupport') {
     return { intent: 'SUPPORT', targetId: null, callbackQueryId: null };
+  }
+  /*
+   * Round N close (§D): `/stop`, the command Telegram users know for "stop messaging me".
+   * It stops MARKETING broadcasts and nothing else; the reply says so and offers the way back.
+   */
+  if (command === '/stop') {
+    return { intent: 'MARKETING_OPT_OUT', targetId: null, callbackQueryId: null };
   }
   // WP-A7: the customer's support tickets — the menu's ticket button routes here.
   if (command === '/tickets') {
@@ -5218,6 +5248,18 @@ export class BotRuntime {
             ? (blockedAdminText ??
               (ADMIN_INTENTS.has(command.intent)
                 ? await this.adminTurn(scope, actor, command, input)
+                : null) ??
+              // Round N close (§D): a blocked customer's /stop is still their preference.
+              // Blocking stops what they can BUY; it does not make a promotion welcome, and
+              // a MARKETING send to an audience that admits blocked customers reads this row.
+              (command.intent === 'MARKETING_OPT_OUT' || command.intent === 'MARKETING_OPT_IN'
+                ? await this.marketingPreference(
+                    scope,
+                    actor,
+                    customer,
+                    command.intent === 'MARKETING_OPT_OUT',
+                    input.idempotencyKey,
+                  )
                 : null) ??
               blocked)
             : await this.guardedAct(scope, actor, command, customer, arrival, input);
@@ -9687,12 +9729,21 @@ export class BotRuntime {
       }
     }
     if (command.intent === 'WALLET') return this.walletBalance(scope, actor, customer);
+    if (command.intent === 'MARKETING_OPT_OUT' || command.intent === 'MARKETING_OPT_IN') {
+      return this.marketingPreference(
+        scope,
+        actor,
+        customer,
+        command.intent === 'MARKETING_OPT_OUT',
+        input.idempotencyKey,
+      );
+    }
     if (
       command.intent === 'MAIN_MENU' ||
       command.intent === 'HELP' ||
       command.intent === 'SUPPORT'
     ) {
-      if (command.intent !== 'MAIN_MENU') return this.supportScreen(scope);
+      if (command.intent !== 'MAIN_MENU') return this.supportScreen(scope, customer);
       return {
         key: 'bot.start.welcome_back',
         values: {},
@@ -12544,7 +12595,37 @@ export class BotRuntime {
    * active entry, the contact action alone. The contact button opens the FIRST configured
    * support account and is not drawn when none is configured.
    */
-  private async supportScreen(scope: TenantContext): Promise<PendingReply> {
+  /**
+   * Round N close (§D): the customer's own promotional opt-out or opt-in, under the update's
+   * key. The reply names what changed and carries the way back; a repeated tap is answered
+   * with the same reply, because the preference already holds.
+   */
+  private async marketingPreference(
+    scope: TenantContext,
+    actor: ActorContext,
+    customer: CustomerRecord,
+    optedOut: boolean,
+    idempotencyKey: string,
+  ): Promise<PendingReply> {
+    // The update's key is already spent by `resolveFromUpdate` under this surface: the
+    // preference is a second command of the same turn, so it takes the turn's sub-key.
+    await this.deps.customers.setMarketingOptOut(scope, actor, {
+      idempotencyKey: `${idempotencyKey}:marketing`,
+      customerId: customer.id,
+      optedOut,
+    });
+    return {
+      key: optedOut ? 'bot.marketing.opted_out' : 'bot.marketing.opted_in',
+      values: {},
+      buttons: [marketingPreferenceButton(!optedOut), mainMenuButton()],
+      orderId: null,
+    };
+  }
+
+  private async supportScreen(
+    scope: TenantContext,
+    customer: CustomerRecord,
+  ): Promise<PendingReply> {
     const screen = await this.deps.support.partsFor(scope);
     const buttons: CustomerButton[] = [
       // WP-A7: the ticket desk, from the support screen and from /paysupport alike.
@@ -12557,6 +12638,9 @@ export class BotRuntime {
               url: screen.supportUrl,
             },
           ]),
+      // Round N close (§D): the promotional opt-out lives on the support screen, as the
+      // reverse of whatever the customer holds now — the same path /stop takes.
+      marketingPreferenceButton(customer.marketingOptOutAt !== null),
       mainMenuButton(),
     ];
     if (screen.parts.length === 0) {
@@ -15413,6 +15497,23 @@ function mainMenuButton(): CustomerButton {
     label: { kind: 'TEMPLATE', key: 'bot.menu.main_button' },
     data: MAIN_MENU_CALLBACK_DATA,
   };
+}
+
+/**
+ * Round N close (§D): the opt-in button when the customer has opted out of promotions, the
+ * opt-out button otherwise. One button, the reverse of the state, so the screen never shows
+ * a choice that is already the case.
+ */
+export function marketingPreferenceButton(optedOut: boolean): CustomerButton {
+  return optedOut
+    ? {
+        label: { kind: 'TEMPLATE', key: 'bot.marketing.opt_in_button' },
+        data: MARKETING_OPT_IN_CALLBACK_DATA,
+      }
+    : {
+        label: { kind: 'TEMPLATE', key: 'bot.marketing.opt_out_button' },
+        data: MARKETING_OPT_OUT_CALLBACK_DATA,
+      };
 }
 
 function topupButton(): CustomerButton {

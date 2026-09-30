@@ -6,7 +6,10 @@ import {
   type BroadcastCounts,
   type BroadcastMediaMimeType,
   type BroadcastPauseReason,
+  type BroadcastPinState,
+  type BroadcastPurpose,
   type BroadcastRecipientState,
+  type BroadcastSource,
   type BroadcastState,
   type TenantContext,
 } from '@nexa/contracts';
@@ -15,6 +18,7 @@ import {
   requireTenantId,
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
+import { BROADCAST_LEASE_MS } from '@nexa/contracts';
 import {
   audienceCustomersQuery,
   fingerprintOf,
@@ -28,6 +32,7 @@ import type {
   BroadcastRecord,
   BroadcastRepository,
   ClaimedRecipient,
+  PinOutcome,
   RecipientOutcome,
   RecipientPageRow,
 } from '../application/ports.js';
@@ -40,6 +45,12 @@ interface BroadcastRow {
   content_kind: BroadcastContentKind;
   body: string;
   buttons: BroadcastButton[];
+  purpose: BroadcastPurpose;
+  source_chat_id: string | null;
+  source_message_id: number | string | null;
+  source_verified_at: Date | string | null;
+  pin: boolean;
+  frozen_audience_id: string | null;
   audience_definition: unknown;
   audience_hash: string;
   audience_as_of: Date | string | null;
@@ -78,6 +89,11 @@ function toRecord(row: BroadcastRow): BroadcastRecord {
     contentKind: row.content_kind,
     body: row.body,
     buttons: row.buttons,
+    purpose: row.purpose,
+    source: sourceOf(row.source_chat_id, row.source_message_id),
+    sourceVerifiedAt: maybeDate(row.source_verified_at),
+    pin: row.pin,
+    frozenAudienceId: row.frozen_audience_id,
     audienceDefinition: canonicalAudienceDefinition(row.audience_definition),
     audienceHash: row.audience_hash,
     audienceAsOf: maybeDate(row.audience_as_of),
@@ -113,6 +129,15 @@ function toRecord(row: BroadcastRow): BroadcastRecord {
   };
 }
 
+/** A source as the row holds it; `bigint` columns arrive as text from the driver. */
+function sourceOf(
+  chatId: string | null,
+  messageId: number | string | null,
+): BroadcastSource | null {
+  if (chatId === null || messageId === null) return null;
+  return { chatId, messageId: Number(messageId) };
+}
+
 const EMPTY_COUNTS: BroadcastCounts = {
   total: 0,
   pending: 0,
@@ -123,6 +148,8 @@ const EMPTY_COUNTS: BroadcastCounts = {
   unreachable: 0,
   skipped: 0,
   cancelled: 0,
+  pinned: 0,
+  pinFailed: 0,
 };
 
 /**
@@ -143,6 +170,8 @@ export class DrizzleBroadcastRepository implements BroadcastRepository {
 
   private selectBroadcast(where: SQL, suffix: SQL = sql``): SQL {
     return sql`SELECT b.id, b.title, b.state, b.pause_reason, b.content_kind, b.body, b.buttons,
+                      b.purpose, b.source_chat_id, b.source_message_id::text AS source_message_id,
+                      b.source_verified_at, b.pin, b.frozen_audience_id,
                       b.audience_definition, b.audience_hash, b.audience_as_of, b.recipient_count,
                       b.audience_fingerprint, b.scheduled_at, b.version,
                       b.created_by_admin_id AS created_by_id, ca.username AS created_by_username,
@@ -162,11 +191,15 @@ export class DrizzleBroadcastRepository implements BroadcastRepository {
   async create(scope: TenantContext, draft: BroadcastDraftInput, tx: TransactionScope) {
     const tenantId = requireTenantId(scope);
     await this.exec(tx).execute(sql`
-      INSERT INTO broadcasts (id, tenant_id, title, state, content_kind, body, buttons,
+      INSERT INTO broadcasts (id, tenant_id, title, state, content_kind, body, buttons, purpose,
+                              source_chat_id, source_message_id, pin, frozen_audience_id,
                               audience_definition, audience_hash, version, created_by_admin_id,
                               created_at, updated_at)
       VALUES (${draft.id}::uuid, ${tenantId}::uuid, ${draft.title}, 'DRAFT', ${draft.contentKind},
-              ${draft.body}, ${JSON.stringify(draft.buttons)}::jsonb, ${draft.audienceJson}::jsonb,
+              ${draft.body}, ${JSON.stringify(draft.buttons)}::jsonb, ${draft.purpose},
+              ${draft.source?.chatId ?? null}, ${draft.source?.messageId ?? null}::bigint,
+              ${draft.pin}, ${draft.frozenAudienceId}::uuid,
+              ${draft.audienceJson}::jsonb,
               ${draft.audienceHash}, 1, ${draft.createdByAdminId}::uuid,
               ${draft.now.toISOString()}::timestamptz, ${draft.now.toISOString()}::timestamptz)`);
   }
@@ -192,19 +225,55 @@ export class DrizzleBroadcastRepository implements BroadcastRepository {
     scope: TenantContext,
     id: string,
     expectedVersion: number,
-    input: Omit<BroadcastDraftInput, 'id' | 'createdByAdminId'>,
+    input: Omit<BroadcastDraftInput, 'id' | 'createdByAdminId' | 'frozenAudienceId'>,
     tx: TransactionScope,
   ): Promise<boolean> {
     const tenantId = requireTenantId(scope);
+    const chatId = input.source?.chatId ?? null;
+    const messageId = input.source?.messageId ?? null;
     const rows = await this.rows<{ id: string }>(
       sql`UPDATE broadcasts
              SET title = ${input.title}, content_kind = ${input.contentKind}, body = ${input.body},
                  buttons = ${JSON.stringify(input.buttons)}::jsonb,
+                 purpose = ${input.purpose}, pin = ${input.pin},
+                 -- A verification is bound to the message it reached AND the way it was sent:
+                 -- a changed source, or a COPY turned FORWARD, is unverified.
+                 source_verified_at = CASE
+                   WHEN source_chat_id IS NOT DISTINCT FROM ${chatId}
+                    AND source_message_id IS NOT DISTINCT FROM ${messageId}::bigint
+                    AND content_kind = ${input.contentKind}
+                   THEN source_verified_at ELSE NULL END,
+                 source_chat_id = ${chatId}, source_message_id = ${messageId}::bigint,
                  audience_definition = ${input.audienceJson}::jsonb,
                  audience_hash = ${input.audienceHash}, version = version + 1,
                  updated_at = ${input.now.toISOString()}::timestamptz
            WHERE tenant_id = ${tenantId}::uuid AND id = ${id}::uuid
              AND state = 'DRAFT' AND version = ${expectedVersion}
+       RETURNING id`,
+      tx,
+    );
+    return rows.length === 1;
+  }
+
+  async markSourceVerified(
+    scope: TenantContext,
+    id: string,
+    tested: {
+      readonly version: number;
+      readonly contentKind: BroadcastContentKind;
+      readonly source: BroadcastSource;
+    },
+    now: Date,
+    tx: TransactionScope,
+  ) {
+    const tenantId = requireTenantId(scope);
+    // The draft as it was tested, or nothing: `updateDraft` bumps `version` on every edit.
+    const rows = await this.rows<{ id: string }>(
+      sql`UPDATE broadcasts SET source_verified_at = ${now.toISOString()}::timestamptz
+           WHERE tenant_id = ${tenantId}::uuid AND id = ${id}::uuid AND state = 'DRAFT'
+             AND version = ${tested.version} AND content_kind = ${tested.contentKind}
+             AND source_chat_id = ${tested.source.chatId}
+             AND source_message_id = ${tested.source.messageId}::bigint
        RETURNING id`,
       tx,
     );
@@ -362,6 +431,48 @@ export class DrizzleBroadcastRepository implements BroadcastRepository {
     return { count: row?.count ?? 0, fingerprint: row?.fingerprint ?? '' };
   }
 
+  async materialiseFromFrozen(
+    scope: TenantContext,
+    id: string,
+    frozenAudienceId: string,
+    input: { readonly excludeMarketingOptOuts: boolean; readonly now: Date },
+    tx: TransactionScope,
+  ) {
+    const tenantId = requireTenantId(scope);
+    const at = input.now.toISOString();
+    /*
+     * A COPY of the frozen members: the customer, the bot and the chat as they were frozen.
+     * Two live facts are decided at once, each recorded as its own resolved row rather than
+     * dropped from the count: no bot to reach (UNREACHABLE, as the live materialisation
+     * records it) and, for a MARKETING send, a customer who has opted out since (SKIPPED).
+     */
+    const optedOut = input.excludeMarketingOptOuts
+      ? sql`c.marketing_opt_out_at IS NOT NULL`
+      : sql`false`;
+    await this.exec(tx).execute(sql`
+      INSERT INTO broadcast_recipients (tenant_id, broadcast_id, customer_id, bot_instance_id,
+                                        chat_id, state, resolved_at, error_code, created_at,
+                                        updated_at)
+      SELECT ${tenantId}::uuid, ${id}::uuid, m.customer_id, m.bot_instance_id, m.chat_id,
+             CASE WHEN ${optedOut} THEN 'SKIPPED'
+                  WHEN m.bot_instance_id IS NULL THEN 'UNREACHABLE' ELSE 'PENDING' END,
+             CASE WHEN ${optedOut} OR m.bot_instance_id IS NULL THEN ${at}::timestamptz END,
+             CASE WHEN ${optedOut} THEN 'broadcast.marketing_opted_out'
+                  WHEN m.bot_instance_id IS NULL THEN 'broadcast.no_bot_recorded' END,
+             ${at}::timestamptz, ${at}::timestamptz
+        FROM frozen_audience_members m
+        JOIN customers c ON c.tenant_id = m.tenant_id AND c.id = m.customer_id
+       WHERE m.tenant_id = ${tenantId}::uuid AND m.frozen_audience_id = ${frozenAudienceId}::uuid
+         AND m.service_id IS NULL`);
+    const [row] = await this.rows<{ count: number; fingerprint: string }>(
+      sql`SELECT count(*)::int AS count, ${fingerprintOf(sql`r.customer_id`)} AS fingerprint
+            FROM broadcast_recipients r
+           WHERE r.tenant_id = ${tenantId}::uuid AND r.broadcast_id = ${id}::uuid`,
+      tx,
+    );
+    return { count: row?.count ?? 0, fingerprint: row?.fingerprint ?? '' };
+  }
+
   async markLaunched(
     scope: TenantContext,
     id: string,
@@ -441,6 +552,8 @@ export class DrizzleBroadcastRepository implements BroadcastRepository {
       sql`UPDATE broadcast_recipients
              SET state = 'PENDING', resolved_at = NULL, attempts = 0, next_attempt_at = NULL,
                  lease_until = NULL, send_started_at = NULL, error_code = NULL,
+                 sent_message_id = NULL, pin_state = NULL, pin_error_code = NULL,
+                 pin_started_at = NULL,
                  updated_at = ${now.toISOString()}::timestamptz
            WHERE tenant_id = ${tenantId}::uuid AND broadcast_id = ${id}::uuid AND state = 'FAILED'
        RETURNING customer_id`,
@@ -453,8 +566,17 @@ export class DrizzleBroadcastRepository implements BroadcastRepository {
     const tenantId = requireTenantId(scope);
     const result = new Map<string, BroadcastCounts>();
     if (ids.length === 0) return result;
-    const rows = await this.rows<{ broadcast_id: string; state: string; n: number }>(
-      sql`SELECT broadcast_id, state, count(*)::int AS n FROM broadcast_recipients
+    const rows = await this.rows<{
+      broadcast_id: string;
+      state: string;
+      n: number;
+      pinned: number;
+      pin_failed: number;
+    }>(
+      sql`SELECT broadcast_id, state, count(*)::int AS n,
+                 count(*) FILTER (WHERE pin_state = 'PINNED')::int AS pinned,
+                 count(*) FILTER (WHERE pin_state IN ('FAILED', 'UNCONFIRMED'))::int AS pin_failed
+            FROM broadcast_recipients
            WHERE tenant_id = ${tenantId}::uuid
              AND broadcast_id = ANY(${sql.param([...ids])}::uuid[])
            GROUP BY broadcast_id, state`,
@@ -467,6 +589,8 @@ export class DrizzleBroadcastRepository implements BroadcastRepository {
         ...current,
         [key]: row.n,
         total: current.total + row.n,
+        pinned: current.pinned + row.pinned,
+        pinFailed: current.pinFailed + row.pin_failed,
       });
     }
     return result;
@@ -509,9 +633,11 @@ export class DrizzleBroadcastRepository implements BroadcastRepository {
       attempts: number;
       error_code: string | null;
       resolved_at: Date | string | null;
+      pin_state: BroadcastPinState | null;
+      pin_error_code: string | null;
     }>(
       sql`SELECT r.customer_id, c.first_name, c.username, r.state, r.attempts, r.error_code,
-                 r.resolved_at
+                 r.resolved_at, r.pin_state, r.pin_error_code
             FROM broadcast_recipients r
             JOIN customers c ON c.tenant_id = r.tenant_id AND c.id = r.customer_id
            WHERE r.tenant_id = ${tenantId}::uuid AND r.broadcast_id = ${id}::uuid
@@ -528,6 +654,8 @@ export class DrizzleBroadcastRepository implements BroadcastRepository {
       attempts: row.attempts,
       errorCode: row.error_code,
       resolvedAt: maybeDate(row.resolved_at),
+      pinState: row.pin_state,
+      pinErrorCode: row.pin_error_code,
     }));
   }
 
@@ -577,6 +705,22 @@ export class DrizzleBroadcastRepository implements BroadcastRepository {
              SET state = 'UNCONFIRMED', resolved_at = ${at}, lease_until = NULL,
                  error_code = 'broadcast.send_interrupted', updated_at = ${at}
            WHERE tenant_id = ${tenantId}::uuid AND state = 'SENDING' AND lease_until <= ${at}
+       RETURNING customer_id`,
+      tx,
+    );
+    return rows.length;
+  }
+
+  async reapStrandedPins(scope: TenantContext, now: Date, tx: TransactionScope) {
+    const tenantId = requireTenantId(scope);
+    const at = sql`${now.toISOString()}::timestamptz`;
+    // The same lease as a send: a pin stamped and never answered may have pinned.
+    const rows = await this.rows<{ customer_id: string }>(
+      sql`UPDATE broadcast_recipients
+             SET pin_state = 'UNCONFIRMED', pin_error_code = 'broadcast.pin_interrupted',
+                 updated_at = ${at}
+           WHERE tenant_id = ${tenantId}::uuid AND pin_state = 'PENDING'
+             AND pin_started_at <= ${new Date(now.getTime() - BROADCAST_LEASE_MS).toISOString()}::timestamptz
        RETURNING customer_id`,
       tx,
     );
@@ -694,9 +838,14 @@ export class DrizzleBroadcastRepository implements BroadcastRepository {
       content_kind: BroadcastContentKind;
       body: string;
       buttons: BroadcastButton[];
+      purpose: BroadcastPurpose;
+      source_chat_id: string | null;
+      source_message_id: string | null;
+      pin: boolean;
       customer_status: string | null;
     }>(
-      sql`SELECT id, state, content_kind, body, buttons,
+      sql`SELECT id, state, content_kind, body, buttons, purpose, source_chat_id,
+                 source_message_id::text AS source_message_id, pin,
                  audience_definition ->> 'customerStatus' AS customer_status
             FROM broadcasts WHERE tenant_id = ${tenantId}::uuid AND id = ${id}::uuid`,
     );
@@ -707,6 +856,9 @@ export class DrizzleBroadcastRepository implements BroadcastRepository {
       contentKind: row.content_kind,
       body: row.body,
       buttons: row.buttons,
+      purpose: row.purpose,
+      source: sourceOf(row.source_chat_id, row.source_message_id),
+      pin: row.pin,
       requiresActiveCustomer: row.customer_status === 'ACTIVE',
     };
   }
@@ -747,11 +899,40 @@ export class DrizzleBroadcastRepository implements BroadcastRepository {
   async stamp(
     scope: TenantContext,
     recipient: ClaimedRecipient,
-    input: { readonly now: Date; readonly leaseUntil: Date },
+    input: { readonly now: Date; readonly leaseUntil: Date; readonly marketing: boolean },
     tx: TransactionScope,
-  ) {
+  ): Promise<'STAMPED' | 'SKIPPED' | 'MOVED'> {
     const tenantId = requireTenantId(scope);
     const at = sql`${input.now.toISOString()}::timestamptz`;
+    const mine = sql`r.tenant_id = ${tenantId}::uuid AND r.broadcast_id = ${recipient.broadcastId}::uuid
+                     AND r.customer_id = ${recipient.customerId}::uuid AND r.state = 'PENDING'
+                     AND r.lease_until = ${recipient.leaseUntil.toISOString()}::timestamptz`;
+    /*
+     * Round N close (§D): a MARKETING send decides the opt-out HERE, in the transaction that
+     * stamps, and under the customer's row lock (`FOR SHARE`): an opt-out in flight commits
+     * first and is seen, or waits for this stamp and lands after a send that was already
+     * decided. Read before the stamp and outside it, the same fact could commit between the
+     * two, and the customer would be told something they had just asked not to be told.
+     */
+    if (input.marketing) {
+      const [customer] = await this.rows<{ opted_out: boolean }>(
+        sql`SELECT (marketing_opt_out_at IS NOT NULL) AS opted_out FROM customers
+             WHERE tenant_id = ${tenantId}::uuid AND id = ${recipient.customerId}::uuid
+             FOR SHARE`,
+        tx,
+      );
+      if (customer?.opted_out === true) {
+        const skipped = await this.rows<{ customer_id: string }>(
+          sql`UPDATE broadcast_recipients r
+                 SET state = 'SKIPPED', resolved_at = ${at}, lease_until = NULL,
+                     error_code = 'broadcast.marketing_opted_out', updated_at = ${at}
+               WHERE ${mine}
+           RETURNING r.customer_id`,
+          tx,
+        );
+        return skipped.length === 1 ? 'SKIPPED' : 'MOVED';
+      }
+    }
     /*
      * Only the lease THIS pass took, only while still PENDING, and only while the broadcast
      * is SENDING — so a pause or a cancel that committed after the claim stops the send
@@ -761,16 +942,14 @@ export class DrizzleBroadcastRepository implements BroadcastRepository {
       sql`UPDATE broadcast_recipients r
              SET state = 'SENDING', send_started_at = ${at},
                  lease_until = ${input.leaseUntil.toISOString()}::timestamptz, updated_at = ${at}
-           WHERE r.tenant_id = ${tenantId}::uuid AND r.broadcast_id = ${recipient.broadcastId}::uuid
-             AND r.customer_id = ${recipient.customerId}::uuid AND r.state = 'PENDING'
-             AND r.lease_until = ${recipient.leaseUntil.toISOString()}::timestamptz
+           WHERE ${mine}
              AND EXISTS (SELECT 1 FROM broadcasts b
                           WHERE b.tenant_id = r.tenant_id AND b.id = r.broadcast_id
                             AND b.state = 'SENDING')
        RETURNING r.customer_id`,
       tx,
     );
-    return rows.length === 1;
+    return rows.length === 1 ? 'STAMPED' : 'MOVED';
   }
 
   async record(
@@ -787,10 +966,21 @@ export class DrizzleBroadcastRepository implements BroadcastRepository {
                      AND send_started_at = ${stampedAt.toISOString()}::timestamptz`;
     let update: SQL;
     switch (outcome.to) {
-      case 'SENT':
+      case 'SENT': {
+        /*
+         * The pin is STAMPED here, in the write that records the send, so the pin request
+         * that follows sits between two commits exactly as the send does: PENDING before
+         * it, its outcome after it, and the reaper for what dies in between.
+         */
+        const pin =
+          outcome.pinRequested && outcome.messageId !== null
+            ? sql`pin_state = 'PENDING', pin_started_at = ${at}`
+            : sql`pin_state = NULL, pin_started_at = NULL`;
         update = sql`state = 'SENT', resolved_at = ${at}, lease_until = NULL, error_code = NULL,
-                     attempts = attempts + 1`;
+                     attempts = attempts + 1,
+                     sent_message_id = ${outcome.messageId}::bigint, ${pin}`;
         break;
+      }
       case 'UNCONFIRMED':
       case 'UNREACHABLE':
       case 'FAILED':
@@ -813,6 +1003,30 @@ export class DrizzleBroadcastRepository implements BroadcastRepository {
     const rows = await this.rows<{ customer_id: string }>(
       sql`UPDATE broadcast_recipients SET ${update}, updated_at = ${at}
            WHERE ${mine} RETURNING customer_id`,
+      tx,
+    );
+    return rows.length === 1;
+  }
+
+  async recordPin(
+    scope: TenantContext,
+    recipient: ClaimedRecipient,
+    stampedAt: Date,
+    outcome: PinOutcome,
+    now: Date,
+    tx: TransactionScope,
+  ) {
+    const tenantId = requireTenantId(scope);
+    const at = sql`${now.toISOString()}::timestamptz`;
+    const rows = await this.rows<{ customer_id: string }>(
+      sql`UPDATE broadcast_recipients
+             SET pin_state = ${outcome.to},
+                 pin_error_code = ${outcome.to === 'PINNED' ? null : outcome.errorCode},
+                 updated_at = ${at}
+           WHERE ${this.recipientKey(tenantId, recipient)} AND state = 'SENT'
+             AND pin_state = 'PENDING'
+             AND pin_started_at = ${stampedAt.toISOString()}::timestamptz
+       RETURNING customer_id`,
       tx,
     );
     return rows.length === 1;

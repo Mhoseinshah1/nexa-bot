@@ -107,6 +107,7 @@ export class BulkOperationsController {
       expectedTotalMinor: command.expectedTotalMinor,
       typedCount: command.typedCount,
       notBefore: command.notBefore === null ? null : new Date(command.notBefore),
+      frozenAudienceId: command.frozenAudienceId,
     });
     return this.respond(scope, actor, record);
   }
@@ -127,6 +128,25 @@ export class BulkOperationsController {
   ): Promise<BulkOperationResponse> {
     const { scope, actor } = await this.authenticate(request, { write: true });
     return this.respond(scope, actor, await this.container.bulkOperations.cancel(scope, actor, id));
+  }
+
+  /** Round N close (§B): RUNNING → PAUSED; no new item is claimed until a resume. */
+  @Post(':id/pause')
+  async pause(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+  ): Promise<BulkOperationResponse> {
+    const { scope, actor } = await this.authenticate(request, { write: true });
+    return this.respond(scope, actor, await this.container.bulkOperations.pause(scope, actor, id));
+  }
+
+  @Post(':id/resume')
+  async resume(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+  ): Promise<BulkOperationResponse> {
+    const { scope, actor } = await this.authenticate(request, { write: true });
+    return this.respond(scope, actor, await this.container.bulkOperations.resume(scope, actor, id));
   }
 
   @Get(':id/items')
@@ -220,6 +240,7 @@ export function toItem(
     audienceHash: record.audienceHash,
     audienceAsOf: record.audienceAsOf.toISOString(),
     notBefore: record.notBefore?.toISOString() ?? null,
+    frozenAudienceId: record.frozenAudienceId,
     itemCount: record.itemCount,
     fingerprint: record.audienceFingerprint,
     totalLiability: money(
@@ -230,6 +251,7 @@ export function toItem(
     progressPercent: counts.total === 0 ? 0 : Math.floor((done * 100) / counts.total),
     createdBy: record.createdBy,
     createdAt: record.createdAt.toISOString(),
+    pausedAt: record.pausedAt?.toISOString() ?? null,
     completedAt: record.completedAt?.toISOString() ?? null,
     cancelledAt: record.cancelledAt?.toISOString() ?? null,
   };

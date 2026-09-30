@@ -206,8 +206,8 @@ describe('customer HTTP surface', () => {
      * `customerListResponseSchema.parse` would pass an extra field straight
      * through — zod strips unknown keys by default and says nothing — so the
      * schema alone cannot catch a response that grew a `walletBalance`. These
-     * are the eleven fields the contract declares, listed, so adding a twelfth
-     * fails here.
+     * are the twelve fields the contract declares (round N close added
+     * `marketingOptOutAt`), listed, so adding a thirteenth fails here.
      */
     expect(Object.keys(row).sort()).toEqual(
       [
@@ -220,6 +220,7 @@ describe('customer HTTP surface', () => {
         'languageCode',
         'lastName',
         'lastSeenAt',
+        'marketingOptOutAt',
         'status',
         'telegramUserId',
         'username',

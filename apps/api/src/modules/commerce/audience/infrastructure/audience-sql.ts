@@ -29,6 +29,14 @@ export interface AudienceEvaluation {
   readonly tenantId: string;
   readonly definition: AudienceDefinition;
   readonly asOf: Date;
+  /**
+   * Round N close (§D): leave out customers who opted out of promotional broadcasts
+   * (`customers.marketing_opt_out_at`). NOT part of the definition and NOT in its hash —
+   * it is a fact about the SEND's purpose, which a MARKETING broadcast applies and a
+   * service announcement or a gift does not. Applied by the preview and the launch alike,
+   * so the count an operator confirmed is the count that is materialised.
+   */
+  readonly excludeMarketingOptOuts?: boolean;
 }
 
 const DAY_MS = 86_400_000;
@@ -107,6 +115,10 @@ export function audienceCustomerPredicate(
   if (d.customerIds !== null) parts.push(sql`${c}.id = ANY(${uuids(d.customerIds)})`);
 
   if (d.customerStatus !== 'ANY') parts.push(sql`${c}.status = ${d.customerStatus}`);
+
+  if (evaluation.excludeMarketingOptOuts === true) {
+    parts.push(sql`${c}.marketing_opt_out_at IS NULL`);
+  }
 
   if (d.segment !== null) {
     const branches: SQL[] = [];

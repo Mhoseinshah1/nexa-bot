@@ -354,20 +354,23 @@ move a CANCELLED action; when it does not, the campaign cancels the record it ha
 given (before the start, that credits, grants and sends nothing). Every hand-over outcome is
 audited (`campaign.action_launched` / `campaign.action_failed`) with the engine's ids.
 
-A hand-over retried after an interruption is bound to the SAME confirmation. If the
-confirmed set moved in between, the engine refuses with `audience.changed`, the action is
-FAILED, and nothing is ever given to a set the operator did not confirm; the Web Admin says
-so and names the remedy (cancel, re-make). Succeeding with the frozen set would need the
-engines to accept a frozen member list (OQ-C1-04). Pinned by "a delayed hand-over never
-gifts a set other than the one confirmed", which fails if the hand-over is re-bound to a
-fresh preview.
+A hand-over retried after an interruption is bound to the SAME confirmation — and, since
+round N close (`docs/round-n-close-audit.md` §A), to the same MEMBERS: the confirmation
+freezes the customers it confirmed (and each service gift's services) into
+`frozen_audiences` in its own transaction, and the hand-over seeds every engine from that
+frozen set by id. So a retry after the live set moved succeeds with exactly the confirmed
+members and gives nothing to a newcomer; only live safety is re-decided at the write. This
+closed OQ-C1-04. Pinned by "a delayed hand-over gifts exactly the confirmed set, however the
+audience moved since", which fails if the hand-over stops passing the frozen id (mutation
+M4 in the close audit).
 
 ### 5.4 Pause, resume, cancel
 
-- Pause/resume move the standing rules and steer the announcement (Broadcast pauses a
-  `SENDING` broadcast and resumes a `PAUSED` one). **A gift is not paused**: the mass-action
-  engine has no pause, so a gift already processing finishes its frozen items. The Web
-  Admin says so beside the buttons.
+- Pause/resume move the standing rules, steer the announcement (Broadcast pauses a
+  `SENDING` broadcast and resumes a `PAUSED` one) and — since round N close (§B of its
+  audit) — each gift's mass operation (RUNNING → PAUSED, PAUSED → RUNNING), from the state
+  the engine is in and through the same replay-aware `steerEngines`. A paused gift claims no
+  new item; an item already planned on a panel reaches its own end; nothing done is undone.
 - Cancel asks each engine to cancel what is left (a repeated cancel is answered by the
   engine), withdraws the rules, and cancels actions never handed over. Cancelling a
   CANCELLED campaign again re-asks the engines, so an engine cancel that failed can be
@@ -377,7 +380,6 @@ fresh preview.
 
 - The announcement is text with link buttons and Broadcast's placeholder catalogue; media
   is composed on the Broadcast page itself, not from a campaign.
-- A PAUSED campaign's gift keeps processing (above).
 - A campaign's discount or cashback edited on the discounts page is the campaign's rule;
   one rule, one truth (§3 D4).
 

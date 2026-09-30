@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   BROADCAST_BODY_DEFINITION,
@@ -8,12 +8,16 @@ import {
   BROADCAST_CONTENT_KINDS,
   BROADCAST_LARGE_AUDIENCE,
   BROADCAST_MEDIA_TYPES,
+  BROADCAST_PURPOSES,
   BROADCAST_RECIPIENT_STATES,
   BROADCAST_TEXT_MAX_LENGTH,
   BROADCAST_TITLE_MAX_LENGTH,
   broadcastMediaType,
+  isSourcedBroadcastKind,
   type AudiencePreview,
   type BroadcastContentKind,
+  type BroadcastPinState,
+  type BroadcastPurpose,
   type BroadcastRecipientState,
   type BroadcastResponseItem,
   type BroadcastState,
@@ -46,6 +50,7 @@ import {
   Empty,
   Field,
   KV,
+  Ltr,
   PageHead,
   StateSwitch,
   useToast,
@@ -93,6 +98,19 @@ const KIND_LABELS: Readonly<Record<BroadcastContentKind, WebKey>> = {
   PHOTO: 'web.bc_kind_photo',
   VIDEO: 'web.bc_kind_video',
   DOCUMENT: 'web.bc_kind_document',
+  // Round N close (§C): an existing Telegram message, with or without its attribution.
+  FORWARD: 'web.bc_kind_forward',
+  COPY: 'web.bc_kind_copy',
+};
+const PURPOSE_LABELS: Readonly<Record<BroadcastPurpose, WebKey>> = {
+  MARKETING: 'web.bc_purpose_marketing',
+  SERVICE_ANNOUNCEMENT: 'web.bc_purpose_service',
+};
+const PIN_LABELS: Readonly<Record<BroadcastPinState, WebKey>> = {
+  PENDING: 'web.bc_pin_pending',
+  PINNED: 'web.bc_pin_pinned',
+  FAILED: 'web.bc_pin_failed_one',
+  UNCONFIRMED: 'web.bc_pin_unconfirmed',
 };
 const RECIPIENT_LABELS: Readonly<Record<BroadcastRecipientState, WebKey>> = {
   PENDING: 'web.bc_r_pending',
@@ -118,6 +136,12 @@ export function broadcastMessage(error: unknown): string {
       'broadcast.media_refused': 'web.bc_error_media_refused',
       'broadcast.media_storage_full': 'web.bc_error_media_full',
       'broadcast.media_expired': 'web.bc_error_media_expired',
+      'broadcast.source_required': 'web.bc_error_source_required',
+      'broadcast.source_content_invalid': 'web.bc_error_source_content',
+      'broadcast.source_unverified': 'web.bc_error_source_unverified',
+      'audience.frozen_not_found': 'web.bc_error_frozen',
+      'audience.frozen_released': 'web.bc_error_frozen',
+      'audience.frozen_kind_mismatch': 'web.bc_error_frozen',
       'broadcast.confirmation_required': 'web.bc_error_confirmation',
       'broadcast.schedule_invalid': 'web.bc_error_schedule',
       'broadcast.test_target_unavailable': 'web.bc_error_test_target',
@@ -243,18 +267,47 @@ interface ComposerState {
   body: string;
   buttons: { label: string; url: string }[];
   audience: AudienceDraft;
+  purpose: BroadcastPurpose;
+  /** As typed: the chat id and the message number of a FORWARD or COPY source. */
+  sourceChatId: string;
+  sourceMessageId: string;
+  pin: boolean;
 }
 
 function initial(record: BroadcastResponseItem | null): ComposerState {
   return record === null
-    ? { title: '', contentKind: 'TEXT', body: '', buttons: [], audience: EMPTY_AUDIENCE }
+    ? {
+        title: '',
+        contentKind: 'TEXT',
+        body: '',
+        buttons: [],
+        audience: EMPTY_AUDIENCE,
+        purpose: 'MARKETING',
+        sourceChatId: '',
+        sourceMessageId: '',
+        pin: false,
+      }
     : {
         title: record.title,
         contentKind: record.contentKind,
         body: record.body,
         buttons: record.buttons.map((button) => ({ ...button })),
         audience: draftOf(record.audience),
+        purpose: record.purpose,
+        sourceChatId: record.source?.chatId ?? '',
+        sourceMessageId: record.source === null ? '' : String(record.source.messageId),
+        pin: record.pin,
       };
+}
+
+/** The source as the API takes it, or null when the kind has none or it is incomplete. */
+function sourceOf(state: ComposerState): { chatId: string; messageId: number } | null {
+  if (!isSourcedBroadcastKind(state.contentKind)) return null;
+  const messageId = Number(state.sourceMessageId.trim());
+  if (state.sourceChatId.trim() === '' || !Number.isInteger(messageId) || messageId <= 0) {
+    return null;
+  }
+  return { chatId: state.sourceChatId.trim(), messageId };
 }
 
 /** The operator's own text, rendered by the bot's renderer for a sample recipient. */
@@ -287,14 +340,22 @@ function Composer({
 
   const save = useMutation({
     mutationFn: () => {
+      const sourced = isSourcedBroadcastKind(state.contentKind);
       const content = {
         title: state.title,
         contentKind: state.contentKind,
-        body: state.body,
-        buttons: state.buttons.filter(
-          (button) => button.label.trim() !== '' || button.url.trim() !== '',
-        ),
+        // A forward or copy carries no text of ours; a forward takes no buttons either.
+        body: sourced ? '' : state.body,
+        buttons:
+          state.contentKind === 'FORWARD'
+            ? []
+            : state.buttons.filter(
+                (button) => button.label.trim() !== '' || button.url.trim() !== '',
+              ),
         audience: state.audience,
+        purpose: state.purpose,
+        source: sourceOf(state),
+        pin: state.pin,
       };
       return record === null
         ? createBroadcast({ ...content, idempotencyKey: submission.current(content) })
@@ -335,63 +396,115 @@ function Composer({
           </select>
         </Field>
       </div>
-      <Field
-        label={state.contentKind === 'TEXT' ? t('web.bc_body') : t('web.bc_caption')}
-        htmlFor="bc-body"
-        hint={t('web.bc_placeholders_hint')}
-      >
-        <textarea
-          id="bc-body"
-          rows={6}
-          dir="auto"
-          value={state.body}
-          maxLength={max}
-          onChange={(event) => set({ body: event.target.value })}
-        />
+      <Field label={t('web.bc_purpose')} htmlFor="bc-purpose" hint={t('web.bc_purpose_hint')}>
+        <select
+          id="bc-purpose"
+          value={state.purpose}
+          onChange={(event) => set({ purpose: event.target.value as BroadcastPurpose })}
+        >
+          {BROADCAST_PURPOSES.map((purpose) => (
+            <option key={purpose} value={purpose}>
+              {t(PURPOSE_LABELS[purpose])}
+            </option>
+          ))}
+        </select>
       </Field>
-      <p className="muted small">
-        {t('web.bc_placeholders')}: <code>{'{firstName}'}</code> {t('web.bc_ph_first_name')} ·{' '}
-        <code>{'{username}'}</code> {t('web.bc_ph_username')} · <code>{'{walletBalance}'}</code>{' '}
-        {t('web.bc_ph_wallet')}
-      </p>
-      <h3>{t('web.bc_buttons')}</h3>
-      {state.buttons.map((button, index) => (
-        <div className="grid-2" key={index}>
-          <Field label={t('web.bc_button_label')} htmlFor={`bc-btn-label-${String(index)}`}>
-            <input
-              id={`bc-btn-label-${String(index)}`}
-              value={button.label}
-              maxLength={BROADCAST_BUTTON_LABEL_MAX_LENGTH}
-              onChange={(event) =>
-                set({
-                  buttons: state.buttons.map((item, at) =>
-                    at === index ? { ...item, label: event.target.value } : item,
-                  ),
-                })
-              }
+      {isSourcedBroadcastKind(state.contentKind) ? (
+        <>
+          <Banner tone="info">{t('web.bc_forward_note')}</Banner>
+          <div className="grid-2">
+            <Field
+              label={t('web.bc_source_chat')}
+              htmlFor="bc-source-chat"
+              hint={t('web.bc_source_hint')}
+            >
+              <input
+                id="bc-source-chat"
+                dir="ltr"
+                value={state.sourceChatId}
+                onChange={(event) => set({ sourceChatId: event.target.value })}
+              />
+            </Field>
+            <Field label={t('web.bc_source_message')} htmlFor="bc-source-message">
+              <input
+                id="bc-source-message"
+                dir="ltr"
+                inputMode="numeric"
+                value={state.sourceMessageId}
+                onChange={(event) => set({ sourceMessageId: event.target.value })}
+              />
+            </Field>
+          </div>
+        </>
+      ) : (
+        <>
+          <Field
+            label={state.contentKind === 'TEXT' ? t('web.bc_body') : t('web.bc_caption')}
+            htmlFor="bc-body"
+            hint={t('web.bc_placeholders_hint')}
+          >
+            <textarea
+              id="bc-body"
+              rows={6}
+              dir="auto"
+              value={state.body}
+              maxLength={max}
+              onChange={(event) => set({ body: event.target.value })}
             />
           </Field>
-          <Field label={t('web.bc_button_url')} htmlFor={`bc-btn-url-${String(index)}`}>
-            <input
-              id={`bc-btn-url-${String(index)}`}
-              dir="ltr"
-              value={button.url}
-              onChange={(event) =>
-                set({
-                  buttons: state.buttons.map((item, at) =>
-                    at === index ? { ...item, url: event.target.value } : item,
-                  ),
-                })
-              }
-            />
-          </Field>
-        </div>
-      ))}
+          <p className="muted small">
+            {t('web.bc_placeholders')}: <code>{'{firstName}'}</code> {t('web.bc_ph_first_name')} ·{' '}
+            <code>{'{username}'}</code> {t('web.bc_ph_username')} · <code>{'{walletBalance}'}</code>{' '}
+            {t('web.bc_ph_wallet')}
+          </p>
+        </>
+      )}
+      <label className="checks">
+        <input type="checkbox" checked={state.pin} onChange={() => set({ pin: !state.pin })} />{' '}
+        {t('web.bc_pin')}
+      </label>
+      <p className="muted small">{t('web.bc_pin_hint')}</p>
+      {state.contentKind !== 'FORWARD' && <h3>{t('web.bc_buttons')}</h3>}
+      {state.contentKind !== 'FORWARD' &&
+        state.buttons.map((button, index) => (
+          <div className="grid-2" key={index}>
+            <Field label={t('web.bc_button_label')} htmlFor={`bc-btn-label-${String(index)}`}>
+              <input
+                id={`bc-btn-label-${String(index)}`}
+                value={button.label}
+                maxLength={BROADCAST_BUTTON_LABEL_MAX_LENGTH}
+                onChange={(event) =>
+                  set({
+                    buttons: state.buttons.map((item, at) =>
+                      at === index ? { ...item, label: event.target.value } : item,
+                    ),
+                  })
+                }
+              />
+            </Field>
+            <Field label={t('web.bc_button_url')} htmlFor={`bc-btn-url-${String(index)}`}>
+              <input
+                id={`bc-btn-url-${String(index)}`}
+                dir="ltr"
+                value={button.url}
+                onChange={(event) =>
+                  set({
+                    buttons: state.buttons.map((item, at) =>
+                      at === index ? { ...item, url: event.target.value } : item,
+                    ),
+                  })
+                }
+              />
+            </Field>
+          </div>
+        ))}
       <div className="toolbar">
         <button
           type="button"
           className="btn sm"
-          disabled={state.buttons.length >= BROADCAST_BUTTONS_MAX}
+          disabled={
+            state.buttons.length >= BROADCAST_BUTTONS_MAX || state.contentKind === 'FORWARD'
+          }
           onClick={() => set({ buttons: [...state.buttons, { label: '', url: 'https://' }] })}
         >
           {t('web.bc_button_add')}
@@ -409,7 +522,9 @@ function Composer({
 
       <h3>{t('web.bc_preview')}</h3>
       <div className="broadcast-preview" dir="auto">
-        {state.body.trim() === '' ? (
+        {isSourcedBroadcastKind(state.contentKind) ? (
+          <span className="faint">{t(KIND_LABELS[state.contentKind])}</span>
+        ) : state.body.trim() === '' ? (
           <span className="faint">{t('web.bc_preview_empty')}</span>
         ) : (
           <pre className="preview-text">{renderBroadcastPreview(state.body)}</pre>
@@ -431,7 +546,11 @@ function Composer({
         <button
           type="button"
           className="btn primary"
-          disabled={save.isPending || state.title.trim() === ''}
+          disabled={
+            save.isPending ||
+            state.title.trim() === '' ||
+            (isSourcedBroadcastKind(state.contentKind) && sourceOf(state) === null)
+          }
           onClick={() => save.mutate()}
         >
           {record === null ? t('web.bc_create') : t('web.bc_save')}
@@ -491,7 +610,7 @@ function MediaCard({
     mutationFn: () => removeBroadcastMedia(record.id),
     onSuccess: refresh,
   });
-  if (record.contentKind === 'TEXT') return null;
+  if (record.contentKind === 'TEXT' || isSourcedBroadcastKind(record.contentKind)) return null;
   const accept = BROADCAST_MEDIA_TYPES.filter((type) => type.kind === record.contentKind)
     .map((type) => type.mimeType)
     .join(',');
@@ -557,12 +676,15 @@ function LaunchCard({ record }: { record: BroadcastResponseItem }) {
   });
   const test = useMutation({
     mutationFn: () => testBroadcast(record.id),
-    onSuccess: (response) =>
+    onSuccess: (response) => {
       toast(
         response.outcome === 'SENT'
           ? { tone: 'ok', message: t('web.bc_test_sent') }
           : { tone: 'warn', message: t('web.bc_test_not_sent') },
-      ),
+      );
+      // A test that reached the operator verified a FORWARD/COPY source: read it back.
+      void client.invalidateQueries({ queryKey: ['broadcast', record.id] });
+    },
   });
   const large = preview !== null && preview.customers >= BROADCAST_LARGE_AUDIENCE;
   const launch = useMutation({
@@ -595,9 +717,18 @@ function LaunchCard({ record }: { record: BroadcastResponseItem }) {
     preview.customers > 0 &&
     confirmed &&
     (!large || typed.trim() === String(preview.customers)) &&
-    (mode === 'NOW' || scheduledAt !== '');
+    (mode === 'NOW' || scheduledAt !== '') &&
+    (!isSourcedBroadcastKind(record.contentKind) || record.sourceVerifiedAt !== null);
+  const sourced = isSourcedBroadcastKind(record.contentKind);
   return (
     <Card title={t('web.bc_launch')} hint={t('web.bc_launch_hint')}>
+      {sourced && (
+        <Banner tone={record.sourceVerifiedAt === null ? 'warn' : 'ok'}>
+          {record.sourceVerifiedAt === null
+            ? t('web.bc_source_verified_no')
+            : t('web.bc_source_verified_yes')}
+        </Banner>
+      )}
       <div className="toolbar">
         <button
           type="button"
@@ -715,6 +846,12 @@ function ReportCard({ record, maySend }: { record: BroadcastResponseItem; maySen
               t('web.bc_progress'),
               record.progressPercent === null ? '—' : `${formatNumber(record.progressPercent)}%`,
             ],
+            ...(record.pin
+              ? ([
+                  [t('web.bc_pinned'), formatNumber(c.pinned)],
+                  [t('web.bc_pin_failed'), formatNumber(c.pinFailed)],
+                ] as [string, string][])
+              : []),
           ]}
         />
       </div>
@@ -847,6 +984,21 @@ function RecipientsCard({ id, broadcastState }: { id: string; broadcastState: Br
                   render: (row) =>
                     row.resolvedAt === null ? '—' : formatTimestamp(row.resolvedAt),
                 },
+                {
+                  key: 'pin',
+                  header: t('web.bc_pin_state'),
+                  // The pin's own outcome, beside the send's: delivered stays delivered.
+                  render: (row) =>
+                    row.pinState === null ? (
+                      '—'
+                    ) : row.pinErrorCode === null ? (
+                      t(PIN_LABELS[row.pinState])
+                    ) : (
+                      <>
+                        {t(PIN_LABELS[row.pinState])} <code>{row.pinErrorCode}</code>
+                      </>
+                    ),
+                },
               ]}
               rows={rows.data.recipients}
               rowKey={(row) => row.customerId}
@@ -901,6 +1053,22 @@ export function BroadcastDetailPage({
               items={[
                 [t('web.bc_state'), t(BROADCAST_STATE_LABELS[record.state])],
                 [t('web.bc_kind'), t(KIND_LABELS[record.contentKind])],
+                [t('web.bc_purpose'), t(PURPOSE_LABELS[record.purpose])],
+                [t('web.bc_pin'), record.pin ? t('web.bc_pin_yes') : t('web.bc_pin_no')],
+                ...(record.source === null
+                  ? []
+                  : ([
+                      [
+                        t('web.bc_source'),
+                        <Ltr key="src">{`${record.source.chatId} / ${String(record.source.messageId)}`}</Ltr>,
+                      ],
+                      [
+                        t('web.bc_source_verified'),
+                        record.sourceVerifiedAt === null
+                          ? t('web.bc_source_verified_no')
+                          : formatTimestamp(record.sourceVerifiedAt),
+                      ],
+                    ] as [ReactNode, ReactNode][])),
                 [t('web.bc_created_by'), record.createdBy?.username ?? '—'],
                 [t('web.bc_launched_by'), record.launchedBy?.username ?? '—'],
                 [t('web.bc_created'), formatTimestamp(record.createdAt)],
@@ -923,15 +1091,22 @@ export function BroadcastDetailPage({
               ]}
             />
             <h3>{t('web.bc_filters')}</h3>
+            {record.frozenAudienceId !== null && (
+              <p className="muted small">{t('web.bc_frozen_audience')}</p>
+            )}
             <ul className="small">
               {describeAudience(record.audience).map((line) => (
                 <li key={line}>{line}</li>
               ))}
             </ul>
-            <h3>{t('web.bc_preview')}</h3>
-            <pre className="preview-text" dir="auto">
-              {renderBroadcastPreview(record.body)}
-            </pre>
+            {!isSourcedBroadcastKind(record.contentKind) && (
+              <>
+                <h3>{t('web.bc_preview')}</h3>
+                <pre className="preview-text" dir="auto">
+                  {renderBroadcastPreview(record.body)}
+                </pre>
+              </>
+            )}
           </Card>
           {record.state === 'DRAFT' ? (
             maySend ? (

@@ -210,6 +210,8 @@ import {
   TELEGRAM_REVIEW_MESSAGE_ROLES,
   // Round N: broadcast and safe mass actions.
   BROADCAST_CONTENT_KINDS,
+  BROADCAST_PIN_STATES,
+  BROADCAST_PURPOSES,
   BROADCAST_MEDIA_FILE_NAME_MAX_LENGTH,
   BROADCAST_MEDIA_TYPES,
   BROADCAST_PAUSE_REASONS,
@@ -220,6 +222,8 @@ import {
   BULK_NOTE_MAX_LENGTH,
   BULK_OPERATION_KINDS,
   BULK_OPERATION_STATES,
+  FROZEN_AUDIENCE_GRANT_KINDS,
+  FROZEN_AUDIENCE_KINDS,
   BULK_SKIP_REASONS,
   // Premium UI: appearance slots and the per-bot custom emoji test.
   APPEARANCE_SLOTS,
@@ -2925,6 +2929,13 @@ export const customers = pgTable(
      * — BLOCKED, a reason, and this — so a stale TRUE on an active row shows nothing.
      */
     blockedReasonShown: boolean('blocked_reason_shown').notNull().default(false),
+    /**
+     * Round N close (§D): when the customer opted out of PROMOTIONAL broadcasts (`/stop`);
+     * NULL while they receive them. A preference, not a status: it governs MARKETING
+     * broadcasts only, and never a notification about their own payment, service or ticket.
+     * Set and cleared by the customer's own Telegram turn through a conditional UPDATE.
+     */
+    marketingOptOutAt: timestamptz('marketing_opt_out_at'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
@@ -7306,6 +7317,13 @@ export const campaignActions = pgTable(
     broadcastId: uuid('broadcast_id'),
     /** A wallet, traffic or time gift: the mass-action engine's own record. */
     bulkOperationId: uuid('bulk_operation_id'),
+    /**
+     * Round N close (§A): the FROZEN audience this action's engine record is seeded from —
+     * customers for the announcement and a wallet gift, services for a traffic or time
+     * gift — materialised in the confirming transaction. A hand-over retried after the live
+     * audience moved copies these members, never re-selects. Null for the standing rules.
+     */
+    frozenAudienceId: uuid('frozen_audience_id'),
     /** Why the engine refused to take the work, as its error code. Null otherwise. */
     failureCode: text('failure_code'),
     launchedAt: timestamptz('launched_at'),
@@ -7313,6 +7331,15 @@ export const campaignActions = pgTable(
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
   (table) => [
+    foreignKey({
+      columns: [table.tenantId, table.frozenAudienceId],
+      foreignColumns: [frozenAudiences.tenantId, frozenAudiences.id],
+      name: 'campaign_actions_frozen_audience_fk',
+    }).onDelete('restrict'),
+    check(
+      'campaign_actions_frozen_kind_check',
+      sql`frozen_audience_id IS NULL OR kind IN ('WALLET_GIFT', 'TRAFFIC_GIFT', 'TIME_GIFT', 'ANNOUNCEMENT')`,
+    ),
     uniqueIndex('campaign_actions_campaign_kind_key').on(
       table.tenantId,
       table.campaignId,
@@ -10062,6 +10089,103 @@ export const telegramReviewMessages = pgTable(
   ],
 );
 
+// --- Round N close: frozen audiences (docs/round-n-close-audit.md §A) --------------------
+
+/**
+ * A frozen audience's header: what was confirmed, and never changed afterwards. The
+ * definition it was selected by, that definition's hash, the instant it was evaluated at,
+ * the member count and the set's fingerprint (md5 over the sorted member ids, exactly as
+ * the preview computes it). The members are the table below; `released_at` says the sweep
+ * has cleared them, which it does only once every campaign action, mass operation and
+ * broadcast that names this row has ended (`FROZEN_AUDIENCE_RELEASE_AFTER_DAYS`). The
+ * header itself is never deleted: every reference to it is `ON DELETE RESTRICT`.
+ */
+export const frozenAudiences = pgTable(
+  'frozen_audiences',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    kind: text('kind').notNull(),
+    /** The grant a SERVICES audience was selected for (its eligibility rule); null for CUSTOMERS. */
+    grantKind: text('grant_kind'),
+    definition: jsonb('definition').notNull(),
+    definitionHash: text('definition_hash').notNull(),
+    asOf: timestamptz('as_of').notNull(),
+    memberCount: integer('member_count').notNull(),
+    fingerprint: text('fingerprint').notNull(),
+    createdByAdminId: uuid('created_by_admin_id').references(() => admins.id),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    releasedAt: timestamptz('released_at'),
+  },
+  (table) => [
+    unique('frozen_audiences_tenant_id_key').on(table.tenantId, table.id),
+    check(
+      'frozen_audiences_grant_kind_check',
+      sql`grant_kind IS NULL OR ${enumCheck('grant_kind', FROZEN_AUDIENCE_GRANT_KINDS)}`,
+    ),
+    /** A SERVICES set names the grant whose rule selected it; a CUSTOMERS set names none. */
+    check('frozen_audiences_grant_check', sql`(kind = 'SERVICES') = (grant_kind IS NOT NULL)`),
+    /** The release sweep's question: which held audiences are old enough to consider. */
+    index('frozen_audiences_held_idx')
+      .on(table.tenantId, table.createdAt)
+      .where(sql`released_at IS NULL`),
+    check('frozen_audiences_kind_check', enumCheck('kind', FROZEN_AUDIENCE_KINDS)),
+    check('frozen_audiences_hash_check', sql`definition_hash ~ '^[0-9a-f]{64}$'`),
+    check('frozen_audiences_fingerprint_check', sql`fingerprint ~ '^[0-9a-f]{32}$'`),
+    check('frozen_audiences_count_check', sql`member_count >= 0`),
+  ],
+);
+
+/**
+ * One member of a frozen audience: the customer and, for a SERVICES audience, the service;
+ * with the bot the customer would be messaged through and the chat to reach, copied at the
+ * freeze so a broadcast seeded later needs no second lookup. Ids are minted by the database
+ * (`gen_random_uuid()`) for the reason `bulk_operation_items` gives: an `INSERT … SELECT`
+ * over tens of thousands of rows must not ship every id through Node.
+ */
+export const frozenAudienceMembers = pgTable(
+  'frozen_audience_members',
+  {
+    id: uuid('id')
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    frozenAudienceId: uuid('frozen_audience_id').notNull(),
+    customerId: uuid('customer_id').notNull(),
+    serviceId: uuid('service_id'),
+    botInstanceId: uuid('bot_instance_id').references(() => botInstances.id),
+    chatId: text('chat_id').notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.tenantId, table.frozenAudienceId],
+      foreignColumns: [frozenAudiences.tenantId, frozenAudiences.id],
+      name: 'frozen_audience_members_audience_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+      name: 'frozen_audience_members_customer_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.serviceId],
+      foreignColumns: [services.tenantId, services.id],
+      name: 'frozen_audience_members_service_fk',
+    }),
+    /** One row per customer of a CUSTOMERS audience, one per service of a SERVICES one. */
+    uniqueIndex('frozen_audience_members_customer_key')
+      .on(table.tenantId, table.frozenAudienceId, table.customerId)
+      .where(sql`service_id IS NULL`),
+    uniqueIndex('frozen_audience_members_service_key')
+      .on(table.tenantId, table.frozenAudienceId, table.serviceId)
+      .where(sql`service_id IS NOT NULL`),
+  ],
+);
+
 // --- Round N: broadcast and safe mass actions (docs/round-n-broadcast-audit.md) ---------
 
 /**
@@ -10089,6 +10213,20 @@ export const broadcasts = pgTable(
     buttons: jsonb('buttons')
       .notNull()
       .default(sql`'[]'::jsonb`),
+    /** Round N close (§D): MARKETING excludes opted-out customers; SERVICE_ANNOUNCEMENT does not. */
+    purpose: text('purpose').notNull().default('MARKETING'),
+    /**
+     * Round N close (§C): the Telegram message a FORWARD or COPY sends, by its chat and
+     * message id, and when a real preview last reached the operator from it. A launch
+     * refuses a source with no verification; an edit of the source clears it.
+     */
+    sourceChatId: text('source_chat_id'),
+    sourceMessageId: bigint('source_message_id', { mode: 'number' }),
+    sourceVerifiedAt: timestamptz('source_verified_at'),
+    /** Round N close (§C): pin each delivered message in the recipient's chat, once. */
+    pin: boolean('pin').notNull().default(false),
+    /** Round N close (§A): the frozen audience the recipients were copied from, if any. */
+    frozenAudienceId: uuid('frozen_audience_id'),
     audienceDefinition: jsonb('audience_definition').notNull(),
     audienceHash: text('audience_hash').notNull(),
     audienceAsOf: timestamptz('audience_as_of'),
@@ -10117,12 +10255,25 @@ export const broadcasts = pgTable(
     index('broadcasts_sending_idx')
       .on(table.tenantId)
       .where(sql`state = 'SENDING'`),
+    foreignKey({
+      columns: [table.tenantId, table.frozenAudienceId],
+      foreignColumns: [frozenAudiences.tenantId, frozenAudiences.id],
+      name: 'broadcasts_frozen_audience_fk',
+    }).onDelete('restrict'),
     check('broadcasts_state_check', enumCheck('state', BROADCAST_STATES)),
     check(
       'broadcasts_pause_reason_check',
       nullableEnumCheck('pause_reason', BROADCAST_PAUSE_REASONS),
     ),
     check('broadcasts_content_kind_check', enumCheck('content_kind', BROADCAST_CONTENT_KINDS)),
+    check('broadcasts_purpose_check', enumCheck('purpose', BROADCAST_PURPOSES)),
+    /** A sourced kind names its message; a composed kind names none. */
+    check(
+      'broadcasts_source_check',
+      sql`(content_kind IN ('FORWARD', 'COPY')) = (source_chat_id IS NOT NULL AND source_message_id IS NOT NULL)
+          AND (source_message_id IS NULL OR source_message_id > 0)
+          AND (source_verified_at IS NULL OR source_chat_id IS NOT NULL)`,
+    ),
     check(
       'broadcasts_title_check',
       sql`length(title) BETWEEN 1 AND ${sql.raw(String(BROADCAST_TITLE_MAX_LENGTH))}`,
@@ -10256,10 +10407,32 @@ export const broadcastRecipients = pgTable(
     resolvedAt: timestamptz('resolved_at'),
     /** The transport's code, never Telegram's description (which can quote a chat id). */
     errorCode: text('error_code'),
+    /**
+     * Round N close (§C): the delivered message's id, kept for the pin; and the pin's own
+     * outcome, recorded apart from the send. `pin_started_at` is stamped BEFORE the pin
+     * request; a PENDING pin whose stamp is older than the lease is resolved UNCONFIRMED.
+     */
+    sentMessageId: bigint('sent_message_id', { mode: 'number' }),
+    pinState: text('pin_state'),
+    pinErrorCode: text('pin_error_code'),
+    pinStartedAt: timestamptz('pin_started_at'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
   (table) => [
+    /** The pin reaper: stamped pins whose answer never came. */
+    index('broadcast_recipients_pin_stranded_idx')
+      .on(table.pinStartedAt)
+      .where(sql`pin_state = 'PENDING'`),
+    check(
+      'broadcast_recipients_pin_state_check',
+      nullableEnumCheck('pin_state', BROADCAST_PIN_STATES),
+    ),
+    check(
+      'broadcast_recipients_pin_check',
+      sql`(pin_state IS NULL OR (state = 'SENT' AND sent_message_id IS NOT NULL AND pin_started_at IS NOT NULL))
+          AND (pin_error_code IS NULL OR length(pin_error_code) BETWEEN 1 AND 100)`,
+    ),
     primaryKey({
       name: 'broadcast_recipients_pk',
       columns: [table.tenantId, table.broadcastId, table.customerId],
@@ -10362,16 +10535,26 @@ export const bulkOperations = pgTable(
      * enforces it.
      */
     notBefore: timestamptz('not_before'),
+    /** Round N close (§A): the frozen audience the items were copied from, if any. */
+    frozenAudienceId: uuid('frozen_audience_id'),
     createdByAdminId: uuid('created_by_admin_id')
       .notNull()
       .references(() => admins.id),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+    /** Round N close (§B): set while PAUSED, cleared by a resume. */
+    pausedAt: timestamptz('paused_at'),
     completedAt: timestamptz('completed_at'),
     cancelledAt: timestamptz('cancelled_at'),
   },
   (table) => [
     unique('bulk_operations_tenant_id_key').on(table.tenantId, table.id),
+    foreignKey({
+      columns: [table.tenantId, table.frozenAudienceId],
+      foreignColumns: [frozenAudiences.tenantId, frozenAudiences.id],
+      name: 'bulk_operations_frozen_audience_fk',
+    }).onDelete('restrict'),
+    check('bulk_operations_paused_check', sql`(state = 'PAUSED') = (paused_at IS NOT NULL)`),
     index('bulk_operations_tenant_created_idx').on(table.tenantId, table.createdAt, table.id),
     index('bulk_operations_running_idx')
       .on(table.tenantId)

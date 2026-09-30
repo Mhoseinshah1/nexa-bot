@@ -123,6 +123,11 @@ Mirza's absence of a count, a total and a confirmation is recorded in the resear
 - The rendered text then travels as `{message}` in the tenant's `bot.broadcast.message` template, so a header or footer is an ordinary template override.
 - Plain text only, on purpose. An operator's HTML that Telegram cannot parse would be a 400 for every recipient.
 
+**Round N close** (`docs/round-n-close-audit.md`) adds to this lane: a declared `purpose`
+(MARKETING excludes customers who opted out with `/stop`; SERVICE_ANNOUNCEMENT does not),
+`FORWARD` and `COPY` of an existing Telegram message validated by the real test send, a
+per-recipient pin recorded apart from the send, and a launch seeded from a frozen audience.
+
 **Media.**
 
 - The HF-A7 shape: the declared type, the extension and the byte signature must agree.

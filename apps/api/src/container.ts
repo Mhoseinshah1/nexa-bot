@@ -194,6 +194,7 @@ import { DrizzleTrialResetRepository } from './modules/commerce/trials/infrastru
 import { TrialAdminService } from './modules/commerce/trials/application/trial-admin.service.js';
 import { AudienceService } from './modules/commerce/audience/application/audience.service.js';
 import { DrizzleAudienceReader } from './modules/commerce/audience/infrastructure/drizzle-audience.reader.js';
+import { DrizzleFrozenAudienceRepository } from './modules/commerce/audience/infrastructure/drizzle-frozen-audience.repository.js';
 import { BroadcastService } from './modules/commerce/broadcasts/application/broadcast.service.js';
 import { BroadcastDispatcher } from './modules/commerce/broadcasts/application/broadcast-dispatcher.js';
 import {
@@ -3087,10 +3088,13 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   /** Round N: the shared audience (`docs/round-n-broadcast-audit.md` §3). */
   const audienceService = new AudienceService({
     reader: new DrizzleAudienceReader(database.db),
+    // Round N close (§A): the durable member sets a campaign's confirmation freezes.
+    frozen: new DrizzleFrozenAudienceRepository(database.db),
     guard,
     clock,
     sellingCurrency: (scope) =>
       settingsResolver.valueOf<SalesCurrencyCode>(scope, 'sales.currency'),
+    ids,
   });
   /*
    * Round N (B2): safe mass actions over the shared audience. The processor writes ledger

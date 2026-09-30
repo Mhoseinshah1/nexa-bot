@@ -14,6 +14,7 @@ import { BroadcastService } from '../../apps/api/src/modules/commerce/broadcasts
 import { BroadcastDispatcher } from '../../apps/api/src/modules/commerce/broadcasts/application/broadcast-dispatcher';
 import type {
   BroadcastDeliverRequest,
+  BroadcastPinResult,
   BroadcastRenderRequest,
   BroadcastRenderResult,
   BroadcastSendResult,
@@ -57,6 +58,15 @@ class ScriptedTransport implements BroadcastTransport {
     this.scripts.set(chatId, results);
   }
 
+  /** Every pin request, by chat id; and what each answers. */
+  readonly pinned: string[] = [];
+  private readonly pinScripts = new Map<string, BroadcastPinResult[]>();
+  crashOnPin: string | null = null;
+
+  scriptPin(chatId: string, ...results: BroadcastPinResult[]): void {
+    this.pinScripts.set(chatId, results);
+  }
+
   async render(_scope: unknown, request: BroadcastRenderRequest): Promise<BroadcastRenderResult> {
     const name = request.facts.firstName ?? '';
     return {
@@ -65,19 +75,41 @@ class ScriptedTransport implements BroadcastTransport {
         contentKind: request.contentKind,
         text: request.body.replace('{firstName}', name),
         buttons: request.buttons,
+        source: request.source,
       },
     };
   }
 
+  async pin(
+    _scope: unknown,
+    request: { chatId: string; botInstanceId: string; messageId: number },
+  ): Promise<BroadcastPinResult> {
+    this.pinned.push(request.chatId);
+    if (this.crashOnPin === request.chatId) throw new Error('worker died mid-pin');
+    return this.pinScripts.get(request.chatId)?.shift() ?? { outcome: 'PINNED' };
+  }
+
+  /** A send that Telegram answers only after another chat's send has been asked for. */
+  private readonly holds = new Map<string, string>();
+
+  answerAfter(chatId: string, other: string): void {
+    this.holds.set(chatId, other);
+  }
+
   async deliver(_scope: unknown, request: BroadcastDeliverRequest): Promise<BroadcastSendResult> {
     this.delivered.push(request.chatId);
+    const other = this.holds.get(request.chatId);
+    while (other !== undefined && !this.delivered.includes(other)) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
     if (this.crashOn === request.chatId) {
       // The process "dies" after Telegram took the request: nothing is recorded.
       throw new Error('worker died mid-send');
     }
     const queue = this.scripts.get(request.chatId);
     const next = queue?.shift();
-    return next ?? { outcome: 'SENT' };
+    // A message id with every success, as Telegram answers, so a pin has something to pin.
+    return next ?? { outcome: 'SENT', messageId: this.delivered.length };
   }
 }
 
@@ -378,6 +410,9 @@ describe('broadcast', () => {
     await launchNow(broadcast.id);
     transport.script('881000', { outcome: 'BOT_UNAVAILABLE', errorCode: 'broadcast.no_bot' });
     transport.script('881001', { outcome: 'REFUSED', errorCode: 'telegram.rejected.400' });
+    // Two workers: the second recipient is stamped and asked for before the first one's
+    // answer pauses the broadcast, so its refusal is recorded rather than its send stopped.
+    transport.answerAfter('881000', '881001');
     await dispatcher.pass(tenantA);
     const paused = await ctx.container.broadcasts.get(tenantA, owner, broadcast.id);
     expect(paused).toMatchObject({ state: 'PAUSED', pauseReason: 'BOT_UNAVAILABLE' });

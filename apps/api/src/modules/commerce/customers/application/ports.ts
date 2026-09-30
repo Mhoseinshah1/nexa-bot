@@ -32,6 +32,11 @@ export interface CustomerRecord {
    * note was never shown (pre-release hardening V2).
    */
   readonly blockedReasonShown: boolean;
+  /**
+   * Round N close (§D): when the customer opted out of promotional broadcasts; null while
+   * they receive them. Governs MARKETING broadcasts only.
+   */
+  readonly marketingOptOutAt: Date | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }
@@ -170,6 +175,19 @@ export interface CustomerRepository {
     from: CustomerStatus,
     to: CustomerStatus,
     reason: string | null,
+    now: Date,
+    tx?: unknown,
+  ): Promise<boolean>;
+
+  /**
+   * Round N close (§D): the promotional opt-out, as a conditional UPDATE naming the state it
+   * expects — opted in when opting out, opted out when opting back in — so a replay and a
+   * double tap change the row once and answer `false` the second time.
+   */
+  setMarketingOptOut(
+    scope: TenantContext,
+    id: UserId,
+    optedOut: boolean,
     now: Date,
     tx?: unknown,
   ): Promise<boolean>;

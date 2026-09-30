@@ -128,7 +128,11 @@ export const TEMPLATE_GROUPS_FA: readonly TemplateGroupDefinition[] = [
   { id: 'support', label: 'پشتیبانی و پرسش‌های متداول', prefixes: ['bot.faq.', 'bot.support.'] },
   { id: 'tickets', label: 'تیکت‌های پشتیبانی (مشتری)', prefixes: ['bot.ticket.'] },
   // Round N: the wrapper every broadcast is sent in.
-  { id: 'broadcast', label: 'ارسال همگانی', prefixes: ['bot.broadcast.'] },
+  {
+    id: 'broadcast',
+    label: 'ارسال همگانی و پیام‌های تبلیغاتی',
+    prefixes: ['bot.broadcast.', 'bot.marketing.'],
+  },
   {
     id: 'admin',
     label: 'مدیریت در تلگرام — عمومی',
@@ -586,6 +590,27 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'bot.command.tickets': [
     'توضیح دستور /tickets در فهرست دستورها',
     'متن کوتاه کنار دستور /tickets (تیکت‌های پشتیبانی) در فهرست دستورهای تلگرام.',
+  ],
+  // --- Round N close: the promotional opt-out ----------------------------------------
+  'bot.command.stop': [
+    'توضیح دستور /stop در فهرست دستورها',
+    'متن کوتاه کنار دستور /stop (قطع پیام‌های تبلیغاتی) در فهرست دستورهای تلگرام.',
+  ],
+  'bot.marketing.opted_out': [
+    'پاسخ به قطع پیام‌های تبلیغاتی',
+    'وقتی مشتری /stop را می‌فرستد یا دکمهٔ قطع را می‌زند؛ می‌گوید فقط پیام‌های تبلیغاتی قطع شد و اطلاع‌رسانی‌های حساب همچنان می‌آید.',
+  ],
+  'bot.marketing.opted_in': [
+    'پاسخ به فعال‌سازی دوبارهٔ پیام‌های تبلیغاتی',
+    'وقتی مشتری دکمهٔ دریافت دوبارهٔ پیام‌های تبلیغاتی را می‌زند.',
+  ],
+  'bot.marketing.opt_out_button': [
+    'دکمهٔ قطع پیام‌های تبلیغاتی',
+    'روی صفحهٔ پشتیبانی، برای مشتری‌ای که پیام‌های تبلیغاتی را دریافت می‌کند؛ همان کار دستور /stop.',
+  ],
+  'bot.marketing.opt_in_button': [
+    'دکمهٔ دریافت دوبارهٔ پیام‌های تبلیغاتی',
+    'زیر پاسخ قطع و روی صفحهٔ پشتیبانی، برای مشتری‌ای که پیام‌های تبلیغاتی را قطع کرده است.',
   ],
   'bot.menu.tickets': [
     'دکمهٔ تیکت‌ها در منوی اصلی',

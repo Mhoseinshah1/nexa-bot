@@ -179,7 +179,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   // One list in `BOT_COMMANDS` feeds both, so a command cannot be registered and
   // undocumented, or documented and unregistered.
   'bot.help':
-    'دستورهای این ربات:\n/catalog — دیدن و خرید سرویس‌ها\n/services — سرویس‌های من و مدیریت آن‌ها\n/wallet — موجودی کیف پول\n/apps — دانلود برنامه و آموزش اتصال\n/paysupport — پشتیبانی پرداخت\n/tickets — تیکت‌های پشتیبانی\n/help — همین راهنما',
+    'دستورهای این ربات:\n/catalog — دیدن و خرید سرویس‌ها\n/services — سرویس‌های من و مدیریت آن‌ها\n/wallet — موجودی کیف پول\n/apps — دانلود برنامه و آموزش اتصال\n/paysupport — پشتیبانی پرداخت\n/tickets — تیکت‌های پشتیبانی\n/stop — قطع پیام‌های تبلیغاتی\n/help — همین راهنما',
   'bot.command.start': 'شروع',
   'bot.command.catalog': 'خرید سرویس',
   'bot.command.services': 'سرویس‌های من',
@@ -1230,6 +1230,13 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
 
   // WP-A7 — support tickets (`docs/wp-a7-tickets-audit.md`).
   'bot.command.tickets': 'تیکت‌های پشتیبانی',
+  // Round N close: the promotional opt-out.
+  'bot.command.stop': 'قطع پیام‌های تبلیغاتی',
+  'bot.marketing.opted_out':
+    '🔕 پیام‌های تبلیغاتی برای شما قطع شد.\nاطلاع‌رسانی‌های مربوط به پرداخت، سرویس و پشتیبانی شما همچنان ارسال می‌شود. هر وقت خواستید، با دکمهٔ زیر دوباره فعال کنید.',
+  'bot.marketing.opted_in': '🔔 پیام‌های تبلیغاتی دوباره برای شما فعال شد.',
+  'bot.marketing.opt_out_button': '🔕 قطع پیام‌های تبلیغاتی',
+  'bot.marketing.opt_in_button': '🔔 دریافت پیام‌های تبلیغاتی',
   'bot.menu.tickets': '🎫 پشتیبانی / تیکت‌ها',
   'bot.support.tickets_button': '🎫 تیکت‌های پشتیبانی',
   'bot.ticket.list':

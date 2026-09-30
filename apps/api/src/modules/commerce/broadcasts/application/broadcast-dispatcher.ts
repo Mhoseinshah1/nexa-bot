@@ -5,6 +5,7 @@ import {
   BROADCAST_MEDIA_RETENTION_DAYS,
   BROADCAST_RETRY_FLOOR_MS,
   BROADCAST_SENDS_PER_SECOND,
+  isSourcedBroadcastKind,
   placeholderTokensIn,
   systemJobActor,
   type ActorContext,
@@ -21,6 +22,7 @@ import type {
   BroadcastRepository,
   BroadcastTransport,
   ClaimedRecipient,
+  PinOutcome,
   RecipientFactsReader,
   RecipientOutcome,
 } from './ports.js';
@@ -46,6 +48,10 @@ export interface BroadcastPassReport {
   readonly errored: number;
   readonly completed: number;
   readonly purged: number;
+  /** Round N close (§C): pins attempted this pass, by outcome, and stranded pins reaped. */
+  readonly pinned: number;
+  readonly pinFailed: number;
+  readonly pinsReaped: number;
 }
 
 type Tally = { -readonly [K in keyof BroadcastPassReport]: number };
@@ -107,6 +113,9 @@ export class BroadcastDispatcher {
       errored: 0,
       completed: 0,
       purged: 0,
+      pinned: 0,
+      pinFailed: 0,
+      pinsReaped: 0,
     };
     // A stopped tenant is a healthy pass that did nothing, as for the notification lane.
     if (!(await this.deps.scopeIsActive(scope))) return tally;
@@ -131,6 +140,10 @@ export class BroadcastDispatcher {
     // Stranded sends first, in their own transaction: resolved UNCONFIRMED, never re-sent.
     tally.reaped = await this.deps.uow.run(scope, (tx) =>
       this.deps.repository.reapStranded(scope, now, tx),
+    );
+    // And stranded pins, the same way: a pin stamped and never answered may have pinned.
+    tally.pinsReaped = await this.deps.uow.run(scope, (tx) =>
+      this.deps.repository.reapStrandedPins(scope, now, tx),
     );
 
     const contents = new Map<string, BroadcastContent | null>();
@@ -160,7 +173,7 @@ export class BroadcastDispatcher {
         while (index < claimed.length) {
           const recipient = claimed[index] as ClaimedRecipient;
           index += 1;
-          const outcome = await this.deliverOne(scope, recipient, contentOf, actor);
+          const outcome = await this.deliverOne(scope, recipient, contentOf, actor, tally);
           tally[outcome] += 1;
         }
       };
@@ -205,6 +218,7 @@ export class BroadcastDispatcher {
     recipient: ClaimedRecipient,
     contentOf: (id: string) => Promise<BroadcastContent | null>,
     actor: ActorContext,
+    tally: Tally,
   ): Promise<keyof BroadcastPassReport> {
     try {
       const content = await contentOf(recipient.broadcastId);
@@ -242,28 +256,41 @@ export class BroadcastDispatcher {
         body: content.body,
         facts,
         buttons: content.buttons,
+        source: content.source,
       });
-      const media =
-        content.contentKind === 'TEXT'
-          ? null
-          : await this.deps.repository.mediaSource(
-              scope,
-              recipient.broadcastId,
-              recipient.botInstanceId,
-            );
+      const isMedia =
+        content.contentKind !== 'TEXT' && !isSourcedBroadcastKind(content.contentKind);
+      const media = !isMedia
+        ? null
+        : await this.deps.repository.mediaSource(
+            scope,
+            recipient.broadcastId,
+            recipient.botInstanceId,
+          );
 
+      /*
+       * Round N close (§D): the second live fact a MARKETING send re-reads — a customer who
+       * opted out of promotions since the recipients were materialised — is decided by the
+       * stamp itself, in its transaction and under the customer's lock (`stamp`): SKIPPED
+       * before anything looks sent. A service announcement asks nothing of it.
+       */
       const stampedAt = this.deps.clock.now();
       const stamped = await this.deps.uow.run(scope, (tx) =>
         this.deps.repository.stamp(
           scope,
           recipient,
-          { now: stampedAt, leaseUntil: new Date(stampedAt.getTime() + BROADCAST_LEASE_MS) },
+          {
+            now: stampedAt,
+            leaseUntil: new Date(stampedAt.getTime() + BROADCAST_LEASE_MS),
+            marketing: content.purpose === 'MARKETING',
+          },
           tx,
         ),
       );
-      if (!stamped) return 'lost';
+      if (stamped === 'SKIPPED') return 'skipped';
+      if (stamped === 'MOVED') return 'lost';
 
-      if (!rendered.ok || (content.contentKind !== 'TEXT' && media === null)) {
+      if (!rendered.ok || (isMedia && media === null)) {
         const errorCode = rendered.ok ? 'broadcast.media_unavailable' : rendered.errorCode;
         return this.finish(scope, recipient, stampedAt, { to: 'FAILED', errorCode }, 'failed');
       }
@@ -277,19 +304,41 @@ export class BroadcastDispatcher {
       const at = this.deps.clock.now();
 
       switch (result.outcome) {
-        case 'SENT':
-          return this.finish(scope, recipient, stampedAt, { to: 'SENT' }, 'sent', async (tx) => {
-            // The first upload through this bot hands every later recipient Telegram's handle.
-            if (media?.kind === 'BYTES' && result.fileId !== undefined) {
-              await this.deps.repository.rememberHandle(
-                scope,
-                recipient.broadcastId,
-                recipient.botInstanceId,
-                result.fileId,
-                tx,
-              );
-            }
-          });
+        case 'SENT': {
+          const messageId = result.messageId ?? null;
+          const pinRequested = content.pin && messageId !== null;
+          const counted = await this.finish(
+            scope,
+            recipient,
+            stampedAt,
+            { to: 'SENT', messageId, pinRequested },
+            'sent',
+            async (tx) => {
+              // The first upload through this bot hands every later recipient Telegram's handle.
+              if (media?.kind === 'BYTES' && result.fileId !== undefined) {
+                await this.deps.repository.rememberHandle(
+                  scope,
+                  recipient.broadcastId,
+                  recipient.botInstanceId,
+                  result.fileId,
+                  tx,
+                );
+              }
+            },
+            // The pin's stamp IS this record's instant: `recordPin` names it exactly.
+            at,
+          );
+          /*
+           * Round N close (§C): the pin, AFTER the send is recorded and its stamp committed.
+           * Its outcome is its own column; the send stays SENT whatever happens here. One
+           * attempt: `recordPin` names the stamp, so a row the reaper resolved meanwhile, or
+           * a send that was never recorded (`counted === 'lost'`), takes no write.
+           */
+          if (counted === 'sent' && pinRequested && messageId !== null) {
+            await this.pinOne(scope, recipient, at, messageId, tally);
+          }
+          return counted;
+        }
         case 'RATE_LIMITED': {
           const until = new Date(
             at.getTime() + Math.max(result.retryAfterMs ?? 0, BROADCAST_RETRY_FLOOR_MS),
@@ -396,6 +445,8 @@ export class BroadcastDispatcher {
     outcome: RecipientOutcome,
     counted: keyof BroadcastPassReport,
     alongside?: (tx: TransactionScope) => Promise<void>,
+    /** The instant the outcome is recorded at; the SENT branch passes the pin's stamp. */
+    recordedAt: Date = this.deps.clock.now(),
   ): Promise<keyof BroadcastPassReport> {
     const recorded = await this.deps.uow.run(scope, async (tx) => {
       const moved = await this.deps.repository.record(
@@ -403,12 +454,62 @@ export class BroadcastDispatcher {
         recipient,
         stampedAt,
         outcome,
-        this.deps.clock.now(),
+        recordedAt,
         tx,
       );
       if (moved && alongside !== undefined) await alongside(tx);
       return moved;
     });
     return recorded ? counted : 'lost';
+  }
+
+  /**
+   * One pin request for a delivered message, between the commit that stamped it PENDING
+   * (`record` of the SENT outcome, at `pinStampedAt`) and the commit that records its
+   * answer. Never a retry: bounded at one by construction, and a failure is the pin's own.
+   */
+  private async pinOne(
+    scope: TenantContext,
+    recipient: ClaimedRecipient,
+    pinStampedAt: Date,
+    messageId: number,
+    tally: Tally,
+  ): Promise<void> {
+    try {
+      const result = await this.deps.transport.pin(scope, {
+        chatId: recipient.chatId,
+        botInstanceId: recipient.botInstanceId,
+        messageId,
+      });
+      const outcome: PinOutcome =
+        result.outcome === 'PINNED'
+          ? { to: 'PINNED' }
+          : result.outcome === 'UNKNOWN'
+            ? { to: 'UNCONFIRMED', errorCode: result.errorCode }
+            : { to: 'FAILED', errorCode: result.errorCode };
+      const recorded = await this.deps.uow.run(scope, (tx) =>
+        this.deps.repository.recordPin(
+          scope,
+          recipient,
+          pinStampedAt,
+          outcome,
+          this.deps.clock.now(),
+          tx,
+        ),
+      );
+      if (recorded) {
+        if (outcome.to === 'PINNED') tally.pinned += 1;
+        else tally.pinFailed += 1;
+      }
+    } catch (error: unknown) {
+      // The stamp stands; the pin reaper resolves it UNCONFIRMED. Never attempted again.
+      this.deps.logger.error(
+        {
+          err: error instanceof Error ? error.name : 'unknown',
+          broadcastId: recipient.broadcastId,
+        },
+        'broadcast pin failed',
+      );
+    }
   }
 }

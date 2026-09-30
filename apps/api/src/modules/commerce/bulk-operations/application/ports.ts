@@ -28,8 +28,12 @@ export interface BulkOperationRecord {
   readonly itemCount: number;
   readonly audienceFingerprint: string;
   readonly notBefore: Date | null;
+  /** Round N close (§A): the frozen audience the items were copied from; null when live. */
+  readonly frozenAudienceId: string | null;
   readonly createdBy: { readonly id: string; readonly username: string } | null;
   readonly createdAt: Date;
+  /** Round N close (§B): set while PAUSED. */
+  readonly pausedAt: Date | null;
   readonly completedAt: Date | null;
   readonly cancelledAt: Date | null;
 }
@@ -49,6 +53,7 @@ export interface BulkOperationDraft {
   readonly itemCount: number;
   readonly fingerprint: string;
   readonly notBefore: Date | null;
+  readonly frozenAudienceId: string | null;
   readonly createdByAdminId: string;
   readonly now: Date;
 }
@@ -169,7 +174,43 @@ export interface BulkOperationRepository {
     tx: TransactionScope,
   ): Promise<FrozenItems>;
 
+  /**
+   * Round N close (§A): the items copied from a FROZEN audience's member rows — customers
+   * for a wallet credit, `(customer, service)` for a grant — with the count and fingerprint
+   * of the rows written, for the caller to compare with the frozen header.
+   */
+  materialiseFromFrozen(
+    scope: TenantContext,
+    id: string,
+    frozenAudienceId: string,
+    kind: BulkOperationKind,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<FrozenItems>;
+  /**
+   * Round N close (§A): writes a SERVICES frozen audience's member rows — the services the
+   * audience's block selects that are eligible for the grant NOW, by the same query the
+   * preview and the live materialisation use.
+   */
+  freezeServiceMembers(
+    scope: TenantContext,
+    frozenAudienceId: string,
+    evaluation: AudienceEvaluation,
+    eligibility: GrantEligibility,
+    tx: TransactionScope,
+  ): Promise<void>;
+
+  /** Cancels a RUNNING or PAUSED operation and every PENDING item. False when it had ended. */
   cancel(scope: TenantContext, id: string, now: Date, tx: TransactionScope): Promise<boolean>;
+  /** Round N close (§B): one conditional edge of `BULK_OPERATION_MACHINE`, naming its `from` states. */
+  transition(
+    scope: TenantContext,
+    id: string,
+    from: readonly BulkOperationState[],
+    to: 'RUNNING' | 'PAUSED',
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<boolean>;
 
   // --- the processor's half -----------------------------------------------------------
   /**

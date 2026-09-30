@@ -5,6 +5,7 @@ import { SERVICE_MACHINE, OPERATION_MACHINE } from './provisioning.js';
 import { CUSTOMER_NOTIFICATION_MACHINE } from './customer-notifications.js';
 import { TICKET_MACHINE } from './tickets.js';
 import { BROADCAST_MACHINE } from './broadcasts.js';
+import { BULK_OPERATION_MACHINE } from './bulk-operations.js';
 import { CAMPAIGN_MACHINE } from './campaigns.js';
 
 /**
@@ -172,4 +173,6 @@ export const STATE_MACHINES: readonly StateMachineDefinition<string, string>[] =
   BROADCAST_MACHINE as StateMachineDefinition<string, string>,
   // Round N, C1: a campaign. COMPLETED and CANCELLED are terminal.
   CAMPAIGN_MACHINE as StateMachineDefinition<string, string>,
+  // Round N close: a mass operation gains PAUSED; COMPLETED is reached from RUNNING only.
+  BULK_OPERATION_MACHINE as StateMachineDefinition<string, string>,
 ];

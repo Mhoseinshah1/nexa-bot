@@ -1578,6 +1578,41 @@ composed. So while a release without campaigns runs:
 
 Nothing needs doing before rolling back past C1.
 
+### What a rollback sends, leaves paused and cannot list: round N close
+
+Round N close (`docs/round-n-close-audit.md`) adds frozen audiences, a PAUSED state on
+mass operations, FORWARD/COPY broadcasts with a per-recipient pin, a broadcast purpose and
+the customers' promotional opt-out (migration `0152_round_n_close`, expand-only: two tables
+— `frozen_audiences` with its `grant_kind` — and new nullable or defaulted columns; the
+CHECKs on `content_kind` and `state` are widened, never narrowed). While the release before it runs on this schema:
+
+- **Opted-out customers receive MARKETING broadcasts again.** The old dispatcher reads
+  neither `purpose` nor `marketing_opt_out_at`; a broadcast it materialises or sends goes to
+  the whole audience, and `/stop` is answered as an unknown command. Recipients already
+  written SKIPPED stay skipped. If that is not acceptable, pause every SENDING broadcast
+  before rolling back and leave scheduled ones cancelled.
+- **A FORWARD or COPY broadcast that is sending FAILS its remaining recipients**, one by
+  one: the old transport has no method for those kinds and records
+  `broadcast.media_unavailable` after the stamp. Nothing is sent twice and nothing wrong is
+  sent; after the roll-forward «تلاش دوباره برای ناموفق‌ها» re-queues them. Pause such a
+  broadcast first. **The old Web Admin's broadcasts list refuses to render while a
+  FORWARD or COPY broadcast is among the rows on the page** — its response schema does not
+  know the kinds — so an operator who must roll back with one present reads the list through
+  the API or after it has paged past.
+- **A PAUSED mass operation stays paused** — the old claim query names RUNNING — and cannot
+  be resumed from the old release, whose page also refuses to render an operation in a state
+  its schema does not know. Resume, or cancel, every paused operation before rolling back.
+- **Pins are not attempted** by the old dispatcher; a pin stamped PENDING by the new one is
+  reaped UNCONFIRMED after the roll-forward. No pin is ever attempted twice.
+- **Frozen audiences are ignored**: the old hand-over evaluates the definition live and
+  refuses `audience.changed` on a moved set, as before; the old mass-action create ignores
+  `frozenAudienceId`. Nothing releases member rows while the old release runs; the sweep
+  resumes after the roll-forward. Header rows are never deleted by any release.
+
+Before rolling back past round N close: pause sending FORWARD/COPY broadcasts, resume or
+cancel paused mass operations, and know that opted-out customers are not excluded until the
+roll-forward.
+
 ### What a rollback leaves as text: appearance markers (round P, Premium UI)
 
 The Premium UI release puts `{icon:…}` markers into the DEFAULT bodies of about forty

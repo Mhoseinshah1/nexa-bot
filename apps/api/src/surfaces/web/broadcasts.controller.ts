@@ -35,6 +35,8 @@ const EMPTY_COUNTS: BroadcastCounts = {
   unreachable: 0,
   skipped: 0,
   cancelled: 0,
+  pinned: 0,
+  pinFailed: 0,
 };
 
 /**
@@ -86,6 +88,10 @@ export class BroadcastsController {
       body: command.body,
       buttons: command.buttons,
       audience: command.audience,
+      purpose: command.purpose,
+      source: command.source,
+      pin: command.pin,
+      frozenAudienceId: command.frozenAudienceId,
     });
     return this.respond(scope, actor, record);
   }
@@ -111,6 +117,9 @@ export class BroadcastsController {
       body: command.body,
       buttons: command.buttons,
       audience: command.audience,
+      purpose: command.purpose,
+      source: command.source,
+      pin: command.pin,
     });
     return this.respond(scope, actor, record);
   }
@@ -244,6 +253,8 @@ export class BroadcastsController {
         attempts: row.attempts,
         errorCode: row.errorCode,
         resolvedAt: row.resolvedAt?.toISOString() ?? null,
+        pinState: row.pinState,
+        pinErrorCode: row.pinErrorCode,
       })),
       nextCursor: rows.length > limit ? (page.at(-1)?.customerId ?? null) : null,
     };
@@ -295,6 +306,11 @@ export function toItem(record: BroadcastRecord, counts: BroadcastCounts): Broadc
             byteLength: record.media.byteLength,
             available: record.media.available,
           },
+    purpose: record.purpose,
+    source: record.source,
+    sourceVerifiedAt: record.sourceVerifiedAt?.toISOString() ?? null,
+    pin: record.pin,
+    frozenAudienceId: record.frozenAudienceId,
     audience: record.audienceDefinition,
     audienceHash: record.audienceHash,
     audienceAsOf: record.audienceAsOf?.toISOString() ?? null,

@@ -352,6 +352,67 @@ export const AUDIENCE_ROUTES = {
   options: '/audience/options',
 } as const;
 
+// --- Frozen audiences (round N close, `docs/round-n-close-audit.md` §A) -----------------
+
+/**
+ * A FROZEN audience: the exact member identities a confirmation selected, materialised
+ * durably at confirmation time, immutable afterwards, and named by id.
+ *
+ * Why it exists: a campaign hands its gifts and its announcement to the shared engines
+ * AFTER its own confirmation commits, and a hand-over that is interrupted and retried later
+ * used to re-evaluate the live definition — which had moved — and refuse (`OQ-C1-04`). A
+ * definition selects "whoever matches now"; a frozen audience is "these people, decided
+ * then". The engines accept either: a definition (evaluated live, as before) or a frozen
+ * audience's id (its members copied, never re-selected). Live SAFETY facts — a customer
+ * blocked since, a service no longer active, a panel no longer operable, a customer who
+ * opted out of promotions — are still re-read at the actual money or provider write.
+ *
+ * `CUSTOMERS` freezes customer ids (the audience's customers); `SERVICES` freezes
+ * `(customer, service)` pairs, for a traffic or time gift whose recipients are services.
+ */
+export const FROZEN_AUDIENCE_KINDS = ['CUSTOMERS', 'SERVICES'] as const;
+export type FrozenAudienceKind = (typeof FROZEN_AUDIENCE_KINDS)[number];
+
+/**
+ * The grant a SERVICES audience was frozen FOR. Its members were selected by that grant's
+ * own eligibility rule — a traffic grant needs a panel that can ADD_TRAFFIC, a time grant
+ * one that can ADD_TIME — so a set frozen for one is not a set frozen for the other, and a
+ * mass operation of the other kind refuses it (`FROZEN_KIND_MISMATCH`). Null for a
+ * CUSTOMERS audience, which no grant rule selected.
+ */
+export const FROZEN_AUDIENCE_GRANT_KINDS = ['SERVICE_TRAFFIC', 'SERVICE_TIME'] as const;
+export type FrozenAudienceGrantKind = (typeof FROZEN_AUDIENCE_GRANT_KINDS)[number];
+
+/**
+ * How long a frozen audience's member rows are kept once nothing live references them.
+ * The header (count, fingerprint, definition, hash) is never deleted: it is the record of
+ * what was confirmed. Members are released by a sweep only when every campaign action,
+ * mass operation and broadcast that names the audience has ended, and at least this many
+ * days have passed since it was frozen — never by age alone, because a campaign may be
+ * confirmed up to fifty-nine days before it starts.
+ */
+export const FROZEN_AUDIENCE_RELEASE_AFTER_DAYS = 1;
+
+/** A frozen audience as HTTP carries it: its header, never its members. */
+export const frozenAudienceSchema = z.object({
+  id: z.string(),
+  kind: z.enum(FROZEN_AUDIENCE_KINDS),
+  /** The grant a SERVICES audience was selected for; null for CUSTOMERS. */
+  grantKind: z.enum(FROZEN_AUDIENCE_GRANT_KINDS).nullable(),
+  /** sha256 of the canonical definition the audience was selected by. */
+  definitionHash: z.string().regex(/^[0-9a-f]{64}$/u),
+  /** The instant every relative criterion was evaluated against. */
+  asOf: z.iso.datetime(),
+  /** Members: customers for `CUSTOMERS`, services for `SERVICES`. */
+  count: z.number().int().nonnegative(),
+  /** md5 over the sorted member ids (customer ids, or service ids). */
+  fingerprint: audienceFingerprintSchema,
+  frozenAt: z.iso.datetime(),
+  /** When the member rows were released by the sweep; null while they are still held. */
+  releasedAt: z.iso.datetime().nullable(),
+});
+export type FrozenAudienceResponseItem = z.infer<typeof frozenAudienceSchema>;
+
 export const AUDIENCE_ERROR_CODES = {
   /** The definition does not match its schema. */
   DEFINITION_INVALID: 'audience.definition_invalid',
@@ -362,4 +423,13 @@ export const AUDIENCE_ERROR_CODES = {
   CHANGED: 'audience.changed',
   /** The definition selects nobody. */
   EMPTY: 'audience.empty',
+  /** The frozen audience a confirmation named does not exist in this tenant. */
+  FROZEN_NOT_FOUND: 'audience.frozen_not_found',
+  /** The frozen audience's members were released by the sweep; it can seed nothing now. */
+  FROZEN_RELEASED: 'audience.frozen_released',
+  /**
+   * A CUSTOMERS audience was given where a SERVICES one was needed, or the reverse — or a
+   * SERVICES audience frozen for the other grant kind.
+   */
+  FROZEN_KIND_MISMATCH: 'audience.frozen_kind_mismatch',
 } as const;

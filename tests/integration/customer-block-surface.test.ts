@@ -60,6 +60,43 @@ describe('customer block idempotency is namespaced by the initiating surface', (
   const webRef = `${tenantA.tenantId}|WEB`;
   const telegramRef = `${tenantA.tenantId}|TELEGRAM`;
 
+  it('a blocked customer’s /stop still records their preference, and their /start is still refused', async () => {
+    await f.ctx.container.customers.block(tenantA, f.owner, {
+      idempotencyKey: 'web-block-stop',
+      customerId: f.customer,
+      reason: 'از وب',
+    });
+    const optOutAt = async () =>
+      (
+        await rows<{ at: Date | null }>(
+          f,
+          sql`SELECT marketing_opt_out_at AS at FROM customers WHERE id = ${f.customer}`,
+        )
+      )[0]?.at ?? null;
+    expect(await optOutAt()).toBeNull();
+    // Unblocked first: the same two turns, through the same runtime and the same keys.
+    await f.ctx.container.customers.unblock(tenantA, f.owner, {
+      idempotencyKey: 'web-unblock-stop',
+      customerId: f.customer,
+      reason: null,
+    });
+    expect((await say(f, '/stop', TG.customer)).replyKey).toBe('bot.marketing.opted_out');
+    expect(await optOutAt()).not.toBeNull();
+    expect((await tap(f, 'mk:in', TG.customer)).replyKey).toBe('bot.marketing.opted_in');
+    expect(await optOutAt()).toBeNull();
+    await f.ctx.container.customers.block(tenantA, f.owner, {
+      idempotencyKey: 'web-block-stop-2',
+      customerId: f.customer,
+      reason: 'از وب',
+    });
+    // Blocking stops what they can buy; it does not make a promotion welcome.
+    expect((await say(f, '/stop', TG.customer)).replyKey).toBe('bot.marketing.opted_out');
+    expect(await optOutAt()).not.toBeNull();
+    expect((await say(f, '/start', TG.customer)).replyKey).toBe('bot.blocked_with_reason');
+    expect((await tap(f, 'mk:in', TG.customer)).replyKey).toBe('bot.marketing.opted_in');
+    expect(await optOutAt()).toBeNull();
+  });
+
   it('a Web block is remembered under WEB and audited as WEB', async () => {
     await f.ctx.container.customers.block(tenantA, f.owner, {
       idempotencyKey: 'web-block-1',

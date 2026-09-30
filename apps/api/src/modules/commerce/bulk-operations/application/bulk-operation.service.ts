@@ -18,6 +18,7 @@ import {
   type BulkPreview,
   type Clock,
   type CurrencyCode,
+  type FrozenAudienceKind,
   type IdGenerator,
   type IdempotencyStore,
   type OperationType,
@@ -43,11 +44,13 @@ import {
   type AudienceService,
   type FrozenAudience,
 } from '../../audience/application/audience.service.js';
+import type { FrozenAudienceRecord } from '../../audience/application/ports.js';
 import type { PanelOperabilityReader } from '../../provisioning/application/ports.js';
 import type {
   BulkItemPageRow,
   BulkOperationRecord,
   BulkOperationRepository,
+  FrozenItems,
   GrantEligibility,
 } from './ports.js';
 
@@ -87,12 +90,17 @@ export interface CreateBulkOperationInput {
   readonly typedCount: number | null;
   /** The earliest an item may be processed; null means at once. */
   readonly notBefore: Date | null;
+  /**
+   * Round N close (§A): a frozen audience to copy the items from, instead of evaluating
+   * `definition` live. Null means live, as before.
+   */
+  readonly frozenAudienceId?: string | null;
 }
 
 export interface BulkOperationServiceDeps {
   readonly repository: BulkOperationRepository;
   /** The shared audience's evaluator: a wallet credit's preview is its summary. */
-  readonly audience: Pick<AudienceService, 'evaluate'>;
+  readonly audience: Pick<AudienceService, 'evaluate' | 'frozen' | 'freezeServices'>;
   readonly panels: PanelOperabilityReader;
   readonly guard: PermissionGuard;
   readonly uow: UnitOfWork<TransactionScope>;
@@ -294,6 +302,7 @@ export class BulkOperationService {
       expectedFingerprint: input.expectedFingerprint,
       expectedTotalMinor: input.expectedTotalMinor,
       notBefore: input.notBefore?.toISOString() ?? null,
+      frozenAudienceId: input.frozenAudienceId ?? null,
     });
     const replay = await this.deps.idempotency.find<{ operationId: string }>(
       scope,
@@ -334,6 +343,17 @@ export class BulkOperationService {
           definition: audience.definition,
           asOf: now,
         };
+        /*
+         * Round N close (§A): seeded from a FROZEN audience, the items are a copy of its
+         * members and the confirmation must be the frozen header's own. The frozen audience
+         * is this tenant's, of the kind the grant needs, still held, and frozen by the very
+         * definition the request carries — otherwise the request is confirming one thing
+         * and materialising another.
+         */
+        const source =
+          input.frozenAudienceId === null || input.frozenAudienceId === undefined
+            ? null
+            : await this.frozenSource(scope, input.frozenAudienceId, grant.kind, audience, tx);
         await this.deps.repository.create(
           scope,
           {
@@ -347,26 +367,48 @@ export class BulkOperationService {
             note,
             audienceJson: audience.json,
             audienceHash: audience.hash,
-            audienceAsOf: now,
+            audienceAsOf: source?.asOf ?? now,
             itemCount: input.expectedCount,
             fingerprint: input.expectedFingerprint,
             notBefore: input.notBefore,
+            frozenAudienceId: source?.id ?? null,
             createdByAdminId: createdBy,
             now,
           },
           tx,
         );
-        const frozen =
-          grant.kind === 'WALLET_CREDIT'
-            ? await this.deps.repository.materialiseCustomers(scope, id, evaluation, now, tx)
-            : await this.deps.repository.materialiseServices(
+        const frozen: FrozenItems =
+          source !== null
+            ? await this.deps.repository.materialiseFromFrozen(
                 scope,
                 id,
-                evaluation,
-                await this.eligibility(scope, evaluation, grant.kind, tx),
+                source.id,
+                grant.kind,
                 now,
                 tx,
-              );
+              )
+            : grant.kind === 'WALLET_CREDIT'
+              ? await this.deps.repository.materialiseCustomers(scope, id, evaluation, now, tx)
+              : await this.deps.repository.materialiseServices(
+                  scope,
+                  id,
+                  evaluation,
+                  await this.eligibility(scope, evaluation, grant.kind, tx),
+                  now,
+                  tx,
+                );
+        if (
+          source !== null &&
+          (frozen.count !== source.count || frozen.fingerprint !== source.fingerprint)
+        ) {
+          // The rows copied are not the rows frozen: a member row is missing (a release
+          // raced this) or was added, which nothing does. Never materialise a guess.
+          throw errors.conflict(
+            AUDIENCE_ERROR_CODES.FROZEN_RELEASED,
+            'The frozen audience no longer holds the members it was confirmed with.',
+            { frozenAudienceId: source.id },
+          );
+        }
         if (frozen.count === 0) {
           throw errors.preconditionFailed(
             AUDIENCE_ERROR_CODES.EMPTY,
@@ -410,6 +452,7 @@ export class BulkOperationService {
               notBefore: input.notBefore?.toISOString() ?? null,
               audienceHash: audience.hash,
               fingerprint: frozen.fingerprint,
+              frozenAudienceId: source?.id ?? null,
             },
             result: 'SUCCESS',
             reason: note,
@@ -446,15 +489,107 @@ export class BulkOperationService {
    * Stops every item not yet processed. A credit already written is never reversed by a
    * cancel, and a grant already planned runs to its own authoritative end. Cancelling before
    * `notBefore` therefore cancels everything. A repeated cancel is answered, not refused.
+   * A PAUSED operation is cancelled the same way: its PENDING items become CANCELLED.
    */
   async cancel(
     scope: TenantContext,
     actor: ActorContext,
     id: string,
   ): Promise<BulkOperationRecord> {
+    return this.steer(scope, actor, id, 'bulk.cancel', 'CANCELLED', (tx, now) =>
+      this.deps.repository.cancel(scope, id, now, tx),
+    );
+  }
+
+  /**
+   * Round N close (§B): RUNNING → PAUSED. The processor claims no new PENDING item of a
+   * paused operation (the claim query names RUNNING); an item whose provider write is
+   * already PLANNED keeps being settled from the operation's authoritative end, because a
+   * reconciliation READ is not new work and holding it back would leave a grant nobody
+   * records. A repeated pause is answered, not refused.
+   */
+  async pause(scope: TenantContext, actor: ActorContext, id: string): Promise<BulkOperationRecord> {
+    return this.steer(scope, actor, id, 'bulk.pause', 'PAUSED', (tx, now) =>
+      this.deps.repository.transition(scope, id, ['RUNNING'], 'PAUSED', now, tx),
+    );
+  }
+
+  /**
+   * PAUSED → RUNNING, once: the edge is a conditional UPDATE, so a replayed resume finds
+   * RUNNING and is answered. Nothing is done twice because the ITEMS decide — each moves
+   * out of PENDING exactly once, whatever the operation's state did in between.
+   */
+  async resume(
+    scope: TenantContext,
+    actor: ActorContext,
+    id: string,
+  ): Promise<BulkOperationRecord> {
+    return this.steer(scope, actor, id, 'bulk.resume', 'RUNNING', (tx, now) =>
+      this.deps.repository.transition(scope, id, ['PAUSED'], 'RUNNING', now, tx),
+    );
+  }
+
+  /**
+   * Round N close (§A): freezes, in the CALLER's transaction, the services a traffic or time
+   * grant over `definition` would reach now — the audience's service block, ACTIVE, with a
+   * finite allowance in the granted dimension, on a panel where the operation is operable
+   * — so a campaign can confirm exactly those services and hand them over later, unchanged.
+   * Charges the grant's own permission. Live eligibility is decided again when each item is
+   * processed (`planGrant`): a service that ceased to qualify is SKIPPED, never a write.
+   */
+  async freezeServiceAudience(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: {
+      readonly grant: BulkGrant;
+      readonly definition: unknown;
+      readonly asOf: Date;
+    },
+    tx: TransactionScope,
+  ): Promise<FrozenAudienceRecord> {
+    await this.deps.guard.check(scope, actor, permissionFor(input.grant.kind), tx);
+    const grant = await this.checkedGrant(scope, input.grant);
+    if (grant.kind === 'WALLET_CREDIT') {
+      throw errors.validation(
+        COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+        'A wallet credit freezes customers, not services.',
+      );
+    }
+    const kind = grant.kind;
+    return this.deps.audience.freezeServices(
+      scope,
+      {
+        definition: input.definition,
+        asOf: input.asOf,
+        createdByAdminId: adminIdOf(actor),
+        grantKind: kind,
+      },
+      tx,
+      async (frozenAudienceId, evaluation) => {
+        const eligibility = await this.eligibility(scope, evaluation, kind, tx);
+        await this.deps.repository.freezeServiceMembers(
+          scope,
+          frozenAudienceId,
+          evaluation,
+          eligibility,
+          tx,
+        );
+      },
+    );
+  }
+
+  /** One steering edge: lock, already-there answered, conditional move, audit, event. */
+  private async steer(
+    scope: TenantContext,
+    actor: ActorContext,
+    id: string,
+    action: 'bulk.cancel' | 'bulk.pause' | 'bulk.resume',
+    to: 'CANCELLED' | 'PAUSED' | 'RUNNING',
+    move: (tx: TransactionScope, now: Date) => Promise<boolean>,
+  ): Promise<BulkOperationRecord> {
     const existing = await this.require(scope, id);
     const permission = permissionFor(existing.kind);
-    const denial = { action: 'bulk.cancel', entityType: 'BulkOperation', entityId: id };
+    const denial = { action, entityType: 'BulkOperation', entityId: id };
     await this.authorize(scope, actor, permission, denial);
     const now = this.deps.clock.now();
     await runAuthorizedMutation(
@@ -472,21 +607,24 @@ export class BulkOperationService {
         }
         const current = await this.deps.repository.lock(scope, id, tx);
         if (current === null) throw this.notFound();
-        if (current.state === 'CANCELLED') return;
-        if (!(await this.deps.repository.cancel(scope, id, now, tx))) {
-          throw errors.conflict(BULK_ERROR_CODES.STATE_CONFLICT, 'This operation has finished.', {
-            state: current.state,
-          });
+        // Already where it was asked to go: a repeated click is answered, not refused.
+        if (current.state === to) return;
+        if (!(await move(tx, now))) {
+          throw errors.conflict(
+            BULK_ERROR_CODES.STATE_CONFLICT,
+            'That is not possible for this operation now.',
+            { state: current.state },
+          );
         }
         await this.deps.audit.record(
           scope,
           actor,
           {
-            action: 'bulk.cancel',
+            action,
             entityType: 'BulkOperation',
             entityId: id,
             before: { state: current.state },
-            after: { state: 'CANCELLED' },
+            after: { state: to },
             result: 'SUCCESS',
           },
           tx,
@@ -499,13 +637,61 @@ export class BulkOperationService {
             operationId: id,
             kind: current.kind,
             from: current.state,
-            to: 'CANCELLED',
+            to,
             items: current.itemCount,
           },
         });
       },
     );
     return this.require(scope, id);
+  }
+
+  /** The frozen audience a create names, checked against the grant and the definition. */
+  private async frozenSource(
+    scope: TenantContext,
+    frozenAudienceId: string,
+    kind: BulkOperationKind,
+    audience: FrozenAudience,
+    tx: TransactionScope,
+  ): Promise<FrozenAudienceRecord> {
+    const source = await this.deps.audience.frozen(scope, frozenAudienceId, tx);
+    if (source === null) {
+      throw errors.notFound(AUDIENCE_ERROR_CODES.FROZEN_NOT_FOUND, 'No such frozen audience.');
+    }
+    if (source.releasedAt !== null) {
+      throw errors.conflict(
+        AUDIENCE_ERROR_CODES.FROZEN_RELEASED,
+        'This frozen audience was released; its members are no longer held.',
+      );
+    }
+    const needed: FrozenAudienceKind = kind === 'WALLET_CREDIT' ? 'CUSTOMERS' : 'SERVICES';
+    if (source.kind !== needed) {
+      throw errors.validation(
+        AUDIENCE_ERROR_CODES.FROZEN_KIND_MISMATCH,
+        `This grant needs a ${needed} audience.`,
+        { kind: source.kind },
+      );
+    }
+    /*
+     * A SERVICES set was selected by ONE grant's eligibility rule — the panels that can
+     * ADD_TRAFFIC are not the panels that can ADD_TIME — so a set frozen for a traffic
+     * grant seeds no time grant: it would carry services the rule for this grant never
+     * admitted, and the processor would find out one item at a time.
+     */
+    if (needed === 'SERVICES' && source.grantKind !== kind) {
+      throw errors.validation(
+        AUDIENCE_ERROR_CODES.FROZEN_KIND_MISMATCH,
+        `This frozen audience was selected for a ${String(source.grantKind)} grant.`,
+        { kind: source.kind, grantKind: source.grantKind },
+      );
+    }
+    if (source.definitionHash !== audience.hash) {
+      throw errors.conflict(
+        AUDIENCE_ERROR_CODES.CHANGED,
+        'The frozen audience was not frozen by the definition this request carries.',
+      );
+    }
+    return source;
   }
 
   // --- helpers -------------------------------------------------------------------------

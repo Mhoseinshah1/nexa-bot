@@ -133,6 +133,7 @@ export function customer(overrides: Record<string, unknown> = {}): Record<string
     blockedAt: null,
     blockedReason: null,
     blockedReasonShown: false,
+    marketingOptOutAt: null,
     ...overrides,
   };
 }

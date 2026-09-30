@@ -294,6 +294,30 @@ export class DrizzleCustomerRepository implements CustomerRepository {
       .returning({ id: customers.id });
     return rows.length > 0;
   }
+
+  async setMarketingOptOut(
+    scope: TenantContext,
+    id: UserId,
+    optedOut: boolean,
+    now: Date,
+    tx?: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .update(customers)
+      .set({ marketingOptOutAt: optedOut ? now : null, updatedAt: now })
+      .where(
+        and(
+          eq(customers.tenantId, tenantId),
+          eq(customers.id, id),
+          optedOut
+            ? sql`${customers.marketingOptOutAt} IS NULL`
+            : sql`${customers.marketingOptOutAt} IS NOT NULL`,
+        ),
+      )
+      .returning({ id: customers.id });
+    return rows.length > 0;
+  }
 }
 
 function toRecord(row: typeof customers.$inferSelect): CustomerRecord {
@@ -311,6 +335,7 @@ function toRecord(row: typeof customers.$inferSelect): CustomerRecord {
     blockedAt: row.blockedAt,
     blockedReason: row.blockedReason,
     blockedReasonShown: row.blockedReasonShown,
+    marketingOptOutAt: row.marketingOptOutAt,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
