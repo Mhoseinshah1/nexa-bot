@@ -931,6 +931,8 @@ function bodyIssue(issue: unknown): TemplateIssueCopy {
       return withToken('web.template_issue_missing');
     case 'REPEATED_PLACEHOLDER':
       return withToken('web.template_issue_repeated');
+    case 'UNKNOWN_ICON':
+      return withToken('web.template_issue_unknown_icon');
     default:
       if (typeof issue === 'string') return { text: issue };
       return { text: typeof shaped.detail === 'string' ? shaped.detail : JSON.stringify(issue) };

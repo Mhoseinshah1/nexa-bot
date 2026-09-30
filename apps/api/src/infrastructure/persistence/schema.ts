@@ -225,6 +225,10 @@ import {
   FROZEN_AUDIENCE_GRANT_KINDS,
   FROZEN_AUDIENCE_KINDS,
   BULK_SKIP_REASONS,
+  // Premium UI: appearance slots and the per-bot custom emoji test.
+  APPEARANCE_SLOTS,
+  APPEARANCE_TEST_ERROR_CODES,
+  APPEARANCE_TEST_OUTCOMES,
 } from '@nexa/contracts';
 
 /**
@@ -514,6 +518,20 @@ export const botInstances = pgTable(
      */
     tokenReplacementClaim: uuid('token_replacement_claim'),
     tokenReplacementClaimedUntil: timestamptz('token_replacement_claimed_until'),
+    /**
+     * Premium UI — what the last «ارسال پیام آزمایشی» through THIS bot found
+     * (`docs/premium-ui-audit.md` §6).
+     *
+     * Per bot, not per tenant: the Bot API grants custom emoji entities to "bots that
+     * purchased additional usernames on Fragment", which is a property of one bot. Only a
+     * recorded `SENT` lets the messenger decorate a message from this bot; NULL means
+     * untested and is treated exactly as a refusal — never assumed. The three columns are
+     * one fact: all NULL, or tested-at and outcome set with the error code NULL iff `SENT`
+     * (the CHECK below). No raw answer is stored; the error code is a closed vocabulary.
+     */
+    customEmojiTestedAt: timestamptz('custom_emoji_tested_at'),
+    customEmojiTestOutcome: text('custom_emoji_test_outcome'),
+    customEmojiTestErrorCode: text('custom_emoji_test_error_code'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
@@ -550,6 +568,60 @@ export const botInstances = pgTable(
       'bot_instances_token_replacement_claim_check',
       sql`(token_replacement_claim IS NULL) = (token_replacement_claimed_until IS NULL)`,
     ),
+    check(
+      'bot_instances_custom_emoji_test_outcome_check',
+      enumCheck('custom_emoji_test_outcome', APPEARANCE_TEST_OUTCOMES),
+    ),
+    check(
+      'bot_instances_custom_emoji_test_error_code_check',
+      enumCheck('custom_emoji_test_error_code', APPEARANCE_TEST_ERROR_CODES),
+    ),
+    check(
+      'bot_instances_custom_emoji_test_shape_check',
+      sql`(custom_emoji_tested_at IS NULL AND custom_emoji_test_outcome IS NULL AND custom_emoji_test_error_code IS NULL)
+        OR (custom_emoji_tested_at IS NOT NULL AND custom_emoji_test_outcome IS NOT NULL
+            AND ((custom_emoji_test_outcome = 'SENT') = (custom_emoji_test_error_code IS NULL)))`,
+    ),
+  ],
+);
+
+/**
+ * Premium UI — one row per appearance slot a tenant has configured
+ * (`docs/premium-ui-audit.md` §3). A slot with no row is the catalogue fallback, switched
+ * on; a row holds at most a Telegram `custom_emoji_id` and a switch. Never HTML, never a
+ * rendered string. Per TENANT, deliberately: the icons are the tenant's brand, and every
+ * bot of the tenant draws them — subject to that bot's own eligibility test on its row above.
+ */
+export const botAppearanceSlots = pgTable(
+  'bot_appearance_slots',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    slot: text('slot').notNull(),
+    /** Telegram's decimal custom emoji id. NULL means "no custom emoji; draw the fallback". */
+    customEmojiId: text('custom_emoji_id'),
+    enabled: boolean('enabled').notNull().default(true),
+    version: integer('version').notNull().default(1),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+    updatedByAdminId: uuid('updated_by_admin_id'),
+  },
+  (table) => [
+    uniqueIndex('bot_appearance_slots_tenant_slot_key').on(table.tenantId, table.slot),
+    check('bot_appearance_slots_slot_check', enumCheck('slot', APPEARANCE_SLOTS)),
+    check(
+      'bot_appearance_slots_custom_emoji_id_check',
+      sql`custom_emoji_id IS NULL OR custom_emoji_id ~ '^[0-9]{1,32}$'`,
+    ),
+    check('bot_appearance_slots_version_check', sql`version >= 1`),
+    // Only an administrator of this tenant can have edited this tenant's slot.
+    foreignKey({
+      name: 'bot_appearance_slots_tenant_admin_fk',
+      columns: [table.tenantId, table.updatedByAdminId],
+      foreignColumns: [admins.tenantId, admins.id],
+    }),
   ],
 );
 

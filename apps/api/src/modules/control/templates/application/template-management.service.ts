@@ -42,6 +42,7 @@ import type {
   TenantPresentationReader,
 } from './ports.js';
 import { DEFAULT_TEMPLATE_LOCALE, type Locale } from './template-resolver.js';
+import { appearanceFallbackText } from '../../../commerce/messaging/application/appearance-render.js';
 
 export const TEMPLATES_VIEW: PermissionKey = 'templates.view';
 export const TEMPLATES_EDIT: PermissionKey = 'templates.edit';
@@ -288,7 +289,9 @@ export class TemplateManagementService {
       .map((placeholder) => placeholder.token)
       .filter((token) => values[token] === undefined && command.body.includes(`{${token}}`));
 
-    return { rendered, unresolved };
+    // Premium UI: a preview shows each `{icon:…}` as the emoji every customer without a
+    // custom emoji reads. The custom one can only be seen in Telegram, by the test message.
+    return { rendered: appearanceFallbackText(rendered), unresolved };
   }
 
   async set(scope: ScopeContext, actor: ActorContext, input: unknown): Promise<SetTemplateResult> {

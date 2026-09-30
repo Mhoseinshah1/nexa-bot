@@ -1,3 +1,4 @@
+import { appearanceFallbackText } from '../../apps/api/src/modules/commerce/messaging/application/appearance-render';
 import type { TenantContext } from '@nexa/contracts';
 import { createTranslator } from '@nexa/i18n';
 import { DrizzleCustomerRepository } from '../../apps/api/src/modules/commerce/customers/infrastructure/drizzle-customer.repository';
@@ -54,6 +55,7 @@ export function capturingLane(ctx: TestContext) {
     sends,
     sweep: (scope: TenantContext) => service.deliverDue(scope, 50),
     /** The built-in Persian sentence each recorded send would render as. */
-    rendered: () => sends.map((one) => translator.translate(one.templateKey, one.values)),
+    rendered: () =>
+      sends.map((one) => appearanceFallbackText(translator.translate(one.templateKey, one.values))),
   };
 }

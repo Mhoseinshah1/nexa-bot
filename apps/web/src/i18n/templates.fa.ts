@@ -62,6 +62,7 @@ export const TEMPLATE_GROUPS_FA: readonly TemplateGroupDefinition[] = [
   { id: 'username', label: 'انتخاب یوزرنیم سرویس', prefixes: ['bot.username.'] },
   { id: 'discount', label: 'کد تخفیف', prefixes: ['bot.discount.'] },
   { id: 'trial', label: 'سرویس آزمایشی', prefixes: ['bot.trial.'] },
+  { id: 'appearance', label: 'ظاهر ربات و ایموجی سفارشی', prefixes: ['bot.appearance.'] },
   { id: 'custom_service', label: 'سرویس دلخواه', prefixes: ['bot.custom_service.'] },
   { id: 'wallet', label: 'کیف پول و شارژ', prefixes: ['bot.wallet.'] },
   {
@@ -921,6 +922,12 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'bot.trial.not_delivered': [
     'سرویس آزمایشی ساخته نشد',
     'وقتی سرویس آزمایشی روی پنل ساخته نشد؛ می‌گوید از سهمیهٔ مشتری کم نشده است.',
+  ],
+
+  // --- Appearance: custom emoji --------------------------------------------------
+  'bot.appearance.test_message': [
+    'پیام آزمایشی ظاهر ربات',
+    'پیامی که دکمهٔ «ارسال پیام آزمایشی» صفحهٔ «ظاهر ربات» به چت تلگرام خود مدیر می‌فرستد؛ هر نشانگر {icon:…} آیکون سفارشی یا ایموجی جایگزین همان جایگاه را نشان می‌دهد.',
   ],
 
   // --- Custom service ---------------------------------------------------------------

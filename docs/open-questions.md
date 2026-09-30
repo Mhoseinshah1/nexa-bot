@@ -2657,6 +2657,29 @@ their behalf (a customer who asks by ticket) is a product decision.
 
 UNRESOLVED. Not built.
 
+## OQ-P-UI-01 — an appearance marker typed into a customer value
+
+A template's `{icon:…}` markers are rendered AFTER the values are substituted
+(`appearance-render.ts`), so a customer who types `{icon:success}` into a ticket message
+reads the fallback emoji in the support notification, or the tenant's custom emoji if the
+sending bot is eligible. Bounded and cosmetic: only one of the tenant's own icons can be
+made to appear, and never an arbitrary sticker. Neutralising it would mean altering
+customer text inside the i18n renderer (`docs/premium-ui-audit.md` §4).
+
+UNRESOLVED. Recorded, not changed.
+
+## OQ-P-UI-02 — what Telegram answers an ineligible bot
+
+The Bot API says "Custom emoji entities can only be used by bots that purchased additional
+usernames on Fragment" and documents no answer for a bot that has not. The eligibility test
+records Telegram's ACTUAL answer per bot (`docs/premium-ui-audit.md` §6): a 4xx is
+`REJECTED` with a code derived from its wording, a 2xx is `SENT`. If Telegram accepts the
+message and silently strips the entity, the bot records `SENT` and the operator sees the
+fallback in their own chat — which is why the test goes there. Needs one real bot of each
+kind to settle.
+
+UNRESOLVED. Pending real-bot acceptance.
+
 ## OQ-P-MENU-01 — does a BotFather token revocation keep the bot's command list?
 
 The Bot API documents `setMyCommands` and `getMyCommands` per bot and says nothing about a

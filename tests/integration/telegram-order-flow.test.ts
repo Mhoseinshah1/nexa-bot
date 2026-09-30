@@ -9,6 +9,7 @@ import {
   type ProductId,
 } from '@nexa/contracts';
 import { CATALOGUE_FA, formatMoney } from '@nexa/i18n';
+import { appearanceFallbackText as plain } from '../../apps/api/src/modules/commerce/messaging/application/appearance-render';
 import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
 import { seed, SEED_IDS } from '../../apps/api/src/infrastructure/persistence/seed';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
@@ -384,7 +385,7 @@ describe('the customer purchase flow over Telegram', () => {
     expect(await orders(), 'an inactive category was sold through a direct reference').toHaveLength(
       0,
     );
-    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.order.unavailable']);
+    expect(lastMessage()?.body['text']).toBe(plain(CATALOGUE_FA['bot.order.unavailable']));
   });
 
   it('never lists a category with nothing sellable in it', async () => {
@@ -878,7 +879,7 @@ describe('the customer purchase flow over Telegram', () => {
     await products.setStatus(tenantA, sellable.id, 'ACTIVE', 'INACTIVE', api.container.clock.now());
 
     await tap(`p:${sellable.id}`);
-    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.order.unavailable']);
+    expect(lastMessage()?.body['text']).toBe(plain(CATALOGUE_FA['bot.order.unavailable']));
     expect(await orders()).toHaveLength(0);
   });
 
@@ -895,7 +896,7 @@ describe('the customer purchase flow over Telegram', () => {
     await tap(`p:${reseller.id}`);
     // Deliberately the SAME sentence as every other refusal: a distinct one would teach
     // a customer that a cheaper tier exists and that they are not in it.
-    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.order.unavailable']);
+    expect(lastMessage()?.body['text']).toBe(plain(CATALOGUE_FA['bot.order.unavailable']));
     expect(await orders()).toHaveLength(0);
   });
 
@@ -956,7 +957,7 @@ describe('the customer purchase flow over Telegram', () => {
     const response = await tap(`p:${sellable.id}`);
     expect(response.statusCode).toBe(201);
     expect(messages()).toHaveLength(before + 1);
-    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.order.unavailable']);
+    expect(lastMessage()?.body['text']).toBe(plain(CATALOGUE_FA['bot.order.unavailable']));
     expect(await orders()).toHaveLength(0);
   });
 
@@ -1049,7 +1050,7 @@ describe('the customer purchase flow over Telegram', () => {
     await tap(`p:${theirs.id}`);
     // The same message a withdrawn product gets, on purpose: a distinct one would
     // answer "does this id exist in some tenant" for anybody willing to guess.
-    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.order.unavailable']);
+    expect(lastMessage()?.body['text']).toBe(plain(CATALOGUE_FA['bot.order.unavailable']));
     expect(await orders()).toHaveLength(0);
   });
 
@@ -1079,7 +1080,7 @@ describe('the customer purchase flow over Telegram', () => {
       },
     });
 
-    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.order.unavailable']);
+    expect(lastMessage()?.body['text']).toBe(plain(CATALOGUE_FA['bot.order.unavailable']));
     expect((await orders())[0]?.['state']).toBe('DRAFT');
   });
 

@@ -9,6 +9,7 @@ import {
   type ProductId,
 } from '@nexa/contracts';
 import { CATALOGUE_FA, formatMoney } from '@nexa/i18n';
+import { appearanceFallbackText as plain } from '../../apps/api/src/modules/commerce/messaging/application/appearance-render';
 import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
 import { seed, SEED_IDS } from '../../apps/api/src/infrastructure/persistence/seed';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
@@ -375,8 +376,8 @@ describe('the customer payment flow over Telegram', () => {
      */
     const texts = messages().map((one) => String(one.body['text']));
     expect(texts).toEqual([
-      CATALOGUE_FA['bot.order.settled'],
-      CATALOGUE_FA['bot.service.provisioning'],
+      plain(CATALOGUE_FA['bot.order.settled']),
+      plain(CATALOGUE_FA['bot.service.provisioning']),
     ]);
     const settled = texts[0] ?? '';
     for (const claim of ['آماده‌سازی', 'سرویس شما', 'در حال ساخت']) {
@@ -395,7 +396,7 @@ describe('the customer payment flow over Telegram', () => {
     await tap(`w:${orderId}`);
 
     expect(lastMessage()?.body['text']).toBe(
-      CATALOGUE_FA['bot.wallet.insufficient'].replace(
+      plain(CATALOGUE_FA['bot.wallet.insufficient']).replace(
         '{shortfall}',
         formatMoney(money(150_000n, 'IRT')),
       ),
@@ -438,10 +439,10 @@ describe('the customer payment flow over Telegram', () => {
      * that lost its follow-up on the replay path, fails here.
      */
     expect(messages().map((one) => String(one.body['text']))).toEqual([
-      CATALOGUE_FA['bot.order.settled'],
-      CATALOGUE_FA['bot.service.provisioning'],
-      CATALOGUE_FA['bot.order.settled'],
-      CATALOGUE_FA['bot.service.provisioning'],
+      plain(CATALOGUE_FA['bot.order.settled']),
+      plain(CATALOGUE_FA['bot.service.provisioning']),
+      plain(CATALOGUE_FA['bot.order.settled']),
+      plain(CATALOGUE_FA['bot.service.provisioning']),
     ]);
   });
 
@@ -534,7 +535,7 @@ describe('the customer payment flow over Telegram', () => {
 
     // UNKNOWN, not FORBIDDEN: a distinct refusal would answer "does order X exist" for
     // anybody willing to guess ids.
-    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.order.unavailable']);
+    expect(lastMessage()?.body['text']).toBe(plain(CATALOGUE_FA['bot.order.unavailable']));
     expect(await payments()).toHaveLength(0);
     expect((await entries()).filter((e) => e['reason'] === 'PURCHASE')).toHaveLength(0);
   });
@@ -575,7 +576,7 @@ describe('the customer payment flow over Telegram', () => {
 
     await tap(`w:${theirOrder}`);
 
-    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.order.unavailable']);
+    expect(lastMessage()?.body['text']).toBe(plain(CATALOGUE_FA['bot.order.unavailable']));
     expect(await payments()).toHaveLength(0);
   });
 
@@ -586,7 +587,7 @@ describe('the customer payment flow over Telegram', () => {
 
     await tap(`w:${api.container.ids.uuid()}`);
 
-    expect(lastMessage()?.body['text']).toBe(CATALOGUE_FA['bot.order.unavailable']);
+    expect(lastMessage()?.body['text']).toBe(plain(CATALOGUE_FA['bot.order.unavailable']));
     expect(await payments()).toHaveLength(0);
   });
 
