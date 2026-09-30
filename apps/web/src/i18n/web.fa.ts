@@ -606,6 +606,8 @@ export const WEB_FA = {
   'web.unsaved_question': 'تغییرات این صفحه هنوز ذخیره نشده‌اند. اگر خارج شوید از بین می‌روند.',
   'web.unsaved_leave': 'خروج بدون ذخیره',
   'web.unsaved_stay': 'ماندن و ادامهٔ ویرایش',
+  'web.discard_draft_question':
+    'آنچه در این فرم نوشته‌اید هنوز ذخیره نشده است. اگر بسته شود از بین می‌رود.',
   'web.period_label': 'بازهٔ زمانی',
   'web.period_today': 'امروز',
   'web.period_7d': '۷ روز',

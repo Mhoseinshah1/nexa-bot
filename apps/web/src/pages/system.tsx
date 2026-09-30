@@ -45,11 +45,13 @@ import {
   StatusDot,
   Tabs,
   TabPanel,
+  useConfirmedClose,
   useToast,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
 import { formatNumber } from '../format';
 import { pollUnlessFinal } from '../polling';
+import { queryState } from '../view-state';
 import { useSubmissionKey } from '../submission-key';
 import { DiagnosticsSection } from './system-diagnostics';
 
@@ -165,6 +167,13 @@ function StatusSection() {
   const info = useQuery({ queryKey: ['info'], queryFn: fetchInfo });
   const dependencies = readiness.data?.dependencies ?? [];
   const down = dependencies.filter((row) => row.status !== 'up').length;
+  // The overall verdict is the SERVER's, not a count of red rows. A dependency the
+  // service reports as `required: false` (Redis, today) can be down while the process
+  // stays ready; only a down dependency that blocks readiness makes the answer
+  // `degraded`, and a badge derived from the rows would call the system down while its
+  // own readiness probe keeps serving traffic. An optional dependency down is said as a
+  // warning on the same card, never as the verdict.
+  const ready = readiness.data?.status === 'ok';
   const latencies = dependencies.flatMap((row) =>
     row.latencyMs === undefined ? [] : [row.latencyMs],
   );
@@ -177,12 +186,12 @@ function StatusSection() {
             label={t('web.system_overall')}
             icon="activity"
             value={
-              <StatusDot tone={down === 0 ? 'ok' : 'danger'}>
-                {down === 0 ? t('web.system_overall_ok') : t('web.system_overall_down')}
+              <StatusDot tone={!ready ? 'danger' : down === 0 ? 'ok' : 'warn'}>
+                {ready ? t('web.system_overall_ok') : t('web.system_overall_down')}
               </StatusDot>
             }
             hint={`${formatNumber(dependencies.length - down)} ${t('web.templates_count_of')} ${formatNumber(dependencies.length)} ${t('web.system_dependencies_up')}`}
-            {...(down > 0 ? { tone: 'alert' as const } : {})}
+            {...(!ready ? { tone: 'alert' as const } : down > 0 ? { tone: 'warn' as const } : {})}
           />
           <StatCard
             label={t('web.system_slowest')}
@@ -307,7 +316,11 @@ function MonitorSection({ denied }: { denied: boolean }) {
     enabled: !denied,
     refetchInterval: pollUnlessFinal(MONITOR_PROFILE_REFRESH_MS),
   });
-  const profile = monitor.data?.monitor;
+  // The banner and the figure cards sit OUTSIDE the `StateSwitch`es below, so they are
+  // held to the same answer those cards give: nothing when the actor may not see the
+  // monitor (a revoked `panels.view` disables the query but keeps its cached profile),
+  // and nothing when the query is in the state that draws an error instead of data.
+  const profile = !denied && queryState(monitor) === 'ready' ? monitor.data?.monitor : undefined;
 
   return (
     <>
@@ -644,6 +657,9 @@ function CreateAdmin() {
     setPassword('');
     setProblem(null);
   };
+  // Closing keeps the name, the display name and the roles, and clears the password — on
+  // purpose, see `onSuccess`. So a close with a password typed loses it, and asks first.
+  const { requestClose, dialog: discardQuestion } = useConfirmedClose(password !== '', cancel);
 
   return (
     <>
@@ -651,7 +667,7 @@ function CreateAdmin() {
         <Icon name="userPlus" />
         {t('web.admin_add')}
       </button>
-      <Drawer open={open} onClose={cancel} title={t('web.admin_add_title')}>
+      <Drawer open={open} onClose={requestClose} title={t('web.admin_add_title')}>
         <form
           className="stack"
           onSubmit={(event) => {
@@ -715,12 +731,18 @@ function CreateAdmin() {
             <button type="submit" className="btn primary" disabled={mutate.isPending || !ready}>
               {t('web.admin_add')}
             </button>
-            <button type="button" className="btn" disabled={mutate.isPending} onClick={cancel}>
+            <button
+              type="button"
+              className="btn"
+              disabled={mutate.isPending}
+              onClick={requestClose}
+            >
               {t('web.admin_telegram_cancel')}
             </button>
           </div>
         </form>
       </Drawer>
+      {discardQuestion}
     </>
   );
 }
@@ -924,6 +946,9 @@ function AdminControls({ row, mayEdit }: { row: AdminSummary; mayEdit: boolean }
     setNewPassword('');
     setProblem(null);
   };
+  // The reason and the roles survive a close; the new password is cleared by it, so a
+  // close with one typed asks first.
+  const { requestClose, dialog: discardQuestion } = useConfirmedClose(newPassword !== '', close);
 
   return (
     <>
@@ -932,7 +957,7 @@ function AdminControls({ row, mayEdit }: { row: AdminSummary; mayEdit: boolean }
       </button>
       <Drawer
         open={open}
-        onClose={close}
+        onClose={requestClose}
         wide
         title={<Ident name={row.displayName} id={row.username} />}
       >
@@ -1070,12 +1095,13 @@ function AdminControls({ row, mayEdit }: { row: AdminSummary; mayEdit: boolean }
           )}
 
           <div className="toolbar">
-            <button type="button" className="btn sm" disabled={busy} onClick={close}>
+            <button type="button" className="btn sm" disabled={busy} onClick={requestClose}>
               {t('web.admin_manage_close')}
             </button>
           </div>
         </div>
       </Drawer>
+      {discardQuestion}
     </>
   );
 }

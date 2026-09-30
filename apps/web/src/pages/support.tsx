@@ -34,6 +34,7 @@ import {
   PageHead,
   RowActions,
   StateSwitch,
+  useConfirmedClose,
   useToast,
   useUnsavedChanges,
   type Column,
@@ -243,6 +244,10 @@ export function SupportPage({ denied, mayEdit }: { denied: boolean; mayEdit: boo
       form.answer !== opened.answer ||
       form.sortOrder !== opened.sortOrder);
   useUnsavedChanges(mayEdit && formDirty);
+  // `close` clears the form, so Escape, the backdrop, ✕ and Cancel ask first while it holds
+  // an edit — the same question the leave guard asks about the same draft. A save closes
+  // through `close` itself: what it held is stored, not discarded.
+  const { requestClose, dialog: discardQuestion } = useConfirmedClose(mayEdit && formDirty, close);
 
   const newButton = (
     <button type="button" className="btn primary sm" disabled={busy} onClick={openCreate}>
@@ -368,7 +373,7 @@ export function SupportPage({ denied, mayEdit }: { denied: boolean; mayEdit: boo
 
       <Drawer
         open={mayEdit && editor.kind !== 'closed'}
-        onClose={close}
+        onClose={requestClose}
         title={t(editor.kind === 'create' ? 'web.support_faq_creating' : 'web.support_faq_editing')}
       >
         <p className="muted small">{t('web.support_faq_form_hint')}</p>
@@ -435,12 +440,13 @@ export function SupportPage({ denied, mayEdit }: { denied: boolean; mayEdit: boo
             >
               {t('web.support_faq_save')}
             </button>
-            <button type="button" className="btn" disabled={busy} onClick={close}>
+            <button type="button" className="btn" disabled={busy} onClick={requestClose}>
               {t('web.support_faq_cancel')}
             </button>
           </div>
         </form>
       </Drawer>
+      {discardQuestion}
     </>
   );
 }

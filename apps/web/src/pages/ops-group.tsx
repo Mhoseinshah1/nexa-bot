@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { PLATFORM_ERROR_CODES } from '@nexa/contracts';
 import type {
@@ -39,6 +39,7 @@ import {
   StatCard,
   StateSwitch,
   StatusDot,
+  useFocusAfterWrite,
   useToast,
   type Tone,
 } from '../ui/kit';
@@ -231,6 +232,18 @@ export function OpsGroupPage({ denied, mayManage }: { denied: boolean; mayManage
     onError: (error) => settleUnlessInFlight(submission, error),
   });
 
+  /*
+   * Focus around the disconnect question. The trigger is not drawn while the question is
+   * open, so the dialog's own opener is the page body: Cancel hands focus back to the
+   * trigger by ref, and a confirmed disconnect — whose write disables every action here —
+   * puts it back once the write settles: on the trigger if the group is still connected
+   * (a refusal), otherwise on Reconnect, the action that undoes it.
+   */
+  const disconnectButton = useRef<HTMLButtonElement>(null);
+  const reconnectButton = useRef<HTMLButtonElement>(null);
+  const disconnectFocus = () => disconnectButton.current ?? reconnectButton.current;
+  const armFocusRestore = useFocusAfterWrite(act.isPending, disconnectFocus);
+
   const busy = connect.isPending || act.isPending || test.isPending || requeue.isPending;
   const failure = connect.error ?? act.error ?? test.error ?? requeue.error;
   const connected = view?.connection === 'CONNECTED';
@@ -329,6 +342,7 @@ export function OpsGroupPage({ denied, mayManage }: { denied: boolean; mayManage
                           )}
                           {view.group !== null && (
                             <button
+                              ref={reconnectButton}
                               type="button"
                               className="btn sm"
                               disabled={busy}
@@ -342,6 +356,7 @@ export function OpsGroupPage({ denied, mayManage }: { denied: boolean; mayManage
                             <>
                               <span className="spacer" />
                               <button
+                                ref={disconnectButton}
                                 type="button"
                                 className="btn danger sm"
                                 disabled={busy}
@@ -511,10 +526,12 @@ export function OpsGroupPage({ denied, mayManage }: { denied: boolean; mayManage
                 onConfirm={() => {
                   // Closed at once, so a refusal is read on the page rather than behind
                   // the dialog; the action's shared key makes a second press a replay.
+                  armFocusRestore();
                   setConfirmingDisconnect(false);
                   act.mutate('disconnect');
                 }}
                 onCancel={() => setConfirmingDisconnect(false)}
+                returnFocusTo={disconnectFocus}
               />
             )}
           </>

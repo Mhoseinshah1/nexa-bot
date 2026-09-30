@@ -948,6 +948,20 @@ form.set-row > * + * {
   background: var(--ok-soft);
   color: var(--ok);
 }
+.recovery-steps li.failed {
+  border-color: var(--danger);
+  color: var(--fg);
+  background: var(--danger-soft);
+}
+.recovery-steps li.failed .recovery-step-n {
+  background: var(--danger);
+  color: var(--on-solid);
+}
+.recovery-step-state {
+  margin-inline-start: auto;
+  color: var(--danger);
+  font-weight: 600;
+}
 .recovery-current {
   padding: 12px;
   border: 1px solid var(--line);

@@ -1,4 +1,4 @@
-import { useState, type FormEvent, type ReactNode } from 'react';
+import { useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   COMMERCE_ERROR_CODES,
@@ -37,6 +37,7 @@ import {
   Switch,
   confirmDialogOpen,
   useToast,
+  useFocusAfterWrite,
   useUnsavedChanges,
 } from '../ui/kit';
 import {
@@ -339,6 +340,14 @@ function SettingRow({
     },
   });
 
+  /*
+   * The currency question is opened by this row's Save, and confirming it starts a write
+   * that disables that Save — so the dialog's hand-back lands on a disabled button and
+   * focus falls to the page body. Focus comes back to Save once the write has settled.
+   */
+  const saveButton = useRef<HTMLButtonElement>(null);
+  const armFocusRestore = useFocusAfterWrite(save.isPending, () => saveButton.current);
+
   /**
    * Not while OUR OWN write is settling.
    *
@@ -442,6 +451,7 @@ function SettingRow({
                 {/* Primary only while there is something to save: a column of identical
                     blue buttons reads as a column of pending work. */}
                 <button
+                  ref={saveButton}
                   type="submit"
                   className={unsaved ? 'btn primary sm' : 'btn sm'}
                   disabled={save.isPending}
@@ -527,10 +537,12 @@ function SettingRow({
           cancelLabel={t('web.feature_confirm_cancel')}
           onConfirm={() => {
             const command = asking;
+            armFocusRestore();
             setAsking(null);
             send(command);
           }}
           onCancel={() => setAsking(null)}
+          returnFocusTo={() => saveButton.current}
         />
       )}
     </article>
