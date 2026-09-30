@@ -1,3 +1,4 @@
+import { APPEARANCE_SLOTS, appearanceMarkersIn, isAppearanceSlot } from './appearance.js';
 import { CURRENCY_CODES, currencyCodeSchema, money, type Money } from './money.js';
 
 /**
@@ -10579,6 +10580,19 @@ export const TEMPLATES = [
       },
     ],
   },
+  /*
+   * Premium UI (`docs/premium-ui-audit.md`): the one message the appearance page sends.
+   */
+  {
+    key: 'bot.appearance.test_message',
+    description:
+      'The test message «ارسال پیام آزمایشی» sends to the signed-in administrator\u2019s own ' +
+      'Telegram chat, through the bot they chose. Its default body names every appearance ' +
+      'slot with an `{icon:\u2026}` marker, so one message shows each configured custom emoji ' +
+      'where Telegram accepts them and the fallback emoji where it does not.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
 ] as const satisfies readonly TemplateDefinition[];
 
 export type TemplateKey = (typeof TEMPLATES)[number]['key'];
@@ -10802,6 +10816,8 @@ export const TEMPLATE_BODY_ISSUES = [
   'UNKNOWN_PLACEHOLDER',
   'MISSING_REQUIRED_PLACEHOLDER',
   'REPEATED_PLACEHOLDER',
+  /** Premium UI: `{icon:…}` names a slot `APPEARANCE_SLOTS` does not declare. */
+  'UNKNOWN_ICON',
 ] as const;
 export type TemplateBodyIssueKind = (typeof TEMPLATE_BODY_ISSUES)[number];
 
@@ -10883,6 +10899,21 @@ export function validateTemplateBody(
         kind: 'MISSING_REQUIRED_PLACEHOLDER',
         token: placeholder.token,
         detail: `${key} requires {${placeholder.token}}: ${placeholder.description}`,
+      });
+    }
+  }
+
+  /*
+   * Premium UI: an icon marker names a declared slot or the body is refused. The
+   * appearance renderer leaves an unknown marker LITERAL rather than guessing, so the
+   * only place a typo can be caught before a customer reads `{icon:paymnt}` is here.
+   */
+  for (const slot of new Set(appearanceMarkersIn(body))) {
+    if (!isAppearanceSlot(slot)) {
+      issues.push({
+        kind: 'UNKNOWN_ICON',
+        token: `icon:${slot}`,
+        detail: `{icon:${slot}} names no appearance slot; the slots are ${APPEARANCE_SLOTS.join(', ')}.`,
       });
     }
   }
