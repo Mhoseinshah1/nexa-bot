@@ -226,7 +226,7 @@ function serviceLocation(index: number, label: string, key: string, over: Json =
   };
 }
 
-const SERVICE_LOCATIONS: readonly Json[] = [
+export const SERVICE_LOCATIONS: readonly Json[] = [
   serviceLocation(1, '🇩🇪 آلمان', 'de-1', {
     initial: true,
     enabled: false,
@@ -502,7 +502,7 @@ const SENDING_BROADCAST = broadcast(2, 'اطلاع‌رسانی به‌روزر�
   },
 });
 
-const BROADCASTS: readonly Json[] = [
+export const BROADCASTS: readonly Json[] = [
   broadcast(1, 'تخفیف پاییزه — مشتریان فعال'),
   SENDING_BROADCAST,
   broadcast(3, 'یادآوری تمدید', {
@@ -806,7 +806,7 @@ function resellerRow(index: number, name: string | null, tierIndex: number, over
   };
 }
 
-const RESELLERS: readonly Json[] = [
+export const RESELLERS: readonly Json[] = [
   resellerRow(3, 'حامد کریمی', 2, { pricingMode: 'PERCENTAGE_DISCOUNT', discountPercentage: 25 }),
   resellerRow(8, 'الهام احمدی', 1),
   resellerRow(9, null, 1, { creditLimit: IRT('8000000'), effectiveCreditLimit: IRT('8000000') }),
