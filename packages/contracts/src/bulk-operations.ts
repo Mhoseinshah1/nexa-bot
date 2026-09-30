@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { audienceFingerprintSchema } from './audience.js';
+import { customerNotificationStateSchema } from './customer-notifications.js';
 import { currencyCodeSchema } from './money.js';
 import { TRAFFIC_GB_PATTERN } from './traffic-input.js';
 
@@ -203,8 +204,14 @@ export const bulkCountsSchema = z.object({
   failed: z.number().int().nonnegative(),
   skipped: z.number().int().nonnegative(),
   cancelled: z.number().int().nonnegative(),
-  /** Customers told, through the notification lane, of an effect that happened. */
+  /**
+   * Customers whose notice the notification lane DELIVERED — read from the lane's own row,
+   * never from the moment it was enqueued. An enqueued notice is not a told customer: it can
+   * still end UNCONFIRMED, FAILED or SUPERSEDED (Codex R4 on PR #117).
+   */
   notified: z.number().int().nonnegative(),
+  /** Notices enqueued and not yet resolved by the lane (its PENDING state). */
+  notificationQueued: z.number().int().nonnegative(),
 });
 export type BulkCounts = z.infer<typeof bulkCountsSchema>;
 
@@ -259,7 +266,10 @@ export const bulkItemSchema = z.object({
   operationState: z.string().nullable(),
   /** A provider failure kind, never a provider's raw message. */
   failureKind: z.string().nullable(),
+  /** The lane DELIVERED this item's notice (`notificationState === 'DELIVERED'`). */
   notified: z.boolean(),
+  /** The notification lane's state for this item's notice; null when none was enqueued. */
+  notificationState: customerNotificationStateSchema.nullable(),
   processedAt: z.iso.datetime().nullable(),
 });
 export type BulkItemRow = z.infer<typeof bulkItemSchema>;
