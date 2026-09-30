@@ -43,4 +43,17 @@ describe('campaign calendar', () => {
     expect(calendar.instantOf('1405-07-10', '9:00', tehranJalali)).toBeNull();
     expect(calendar.instantOf('10/07/1405', '10:00', tehranJalali)).toBeNull();
   });
+
+  it('refuses a wall time a spring-forward gap swallows, rather than shifting it', () => {
+    const berlin = { timezone: 'Europe/Berlin', calendar: 'gregorian' } as const;
+    // 29 March 2026: Berlin's clocks go from 02:00 to 03:00. 02:30 never happens.
+    expect(calendar.instantOf('2026-03-29', '02:30', berlin)).toBeNull();
+    // Either side of the gap is an ordinary time.
+    expect(calendar.instantOf('2026-03-29', '01:30', berlin)?.toISOString()).toBe(
+      '2026-03-29T00:30:00.000Z',
+    );
+    expect(calendar.instantOf('2026-03-29', '03:30', berlin)?.toISOString()).toBe(
+      '2026-03-29T01:30:00.000Z',
+    );
+  });
 });
