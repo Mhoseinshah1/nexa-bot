@@ -133,8 +133,11 @@ changes what the keyboard shows; the reference is for the screen the item opens.
 `MainMenuLayout.describeFor` answers every item with `{ gate: FEATURE | TRIAL_OFFER |
 null, gateOpen, shown }`; `buttonsFor` is its shown subset. The Web Admin's table reads
 that same answer through `/bot-menu`, so the page no longer evaluates gates in the browser
-and no longer needs `panels.view`. A gate is read only when the item is on (the trial
-offer dials the panel repositories; a keyboard is drawn on every reply).
+and no longer needs `panels.view`. For the keyboard a gate is read only when the item is
+on (the trial offer dials the panel repositories; a keyboard is drawn on every reply); the
+page asks with `gatesForHidden`, so a switched-off item's gate is answered too and the
+preview of switching it on is the keyboard's answer — and a gated item whose gate is not
+KNOWN open is never previewed (Codex #6).
 
 ### D5 — The sync lane: per bot, by digest, leased, backed off, observable
 
@@ -154,17 +157,22 @@ the same transaction as the sync row.
   `commands_revision` and nothing is queued yet. Decided under the bot row's lock.
 - `attempt(row)` — the token through `tokenForBotInstance` (ACTIVE only, `OQ-5R-02`),
   the list rendered NOW, `setMyCommands` OUTSIDE any transaction on the shared gateway,
-  then one transaction: `commands_revision`, the row, an audit row `bot.commands.sync`,
-  and the condition `bot.command_sync_failing` (WARN, deduped per bot, opened at the third
+  then one transaction: the row FIRST, WHERE it still holds this attempt's claim (its
+  `claimedUntil`; a lapsed claim taken over by another worker records nothing, Codex #4),
+  then `commands_revision` (the digest SENT), an audit row `bot.commands.sync`, and the
+  condition `bot.command_sync_failing` (WARN, deduped per bot, opened at the third
   consecutive failure) or `bot.command_sync_recovered` (only when the condition is open,
-  read through the same transaction). Back-off `30 s · 2^(n−1)`, capped at one hour, a
-  longer `retry_after` honoured. Attempts are unbounded: a bot that never answers is
+  read through the same transaction). A success clears the queue only while the row still
+  wants the sent digest; a description edited in flight leaves it due (Codex #3). Back-off
+  `30 s · 2^(n−1)`, capped at one hour, a 429's `retry_after` honoured when longer (the
+  gateway carries it, Codex #2). Attempts are unbounded: a bot that never answers is
   asked once an hour and heals itself when Telegram answers.
 - `tick(now)` — `claimDue` across ACTIVE tenants and ACTIVE bots, FOR UPDATE SKIP LOCKED,
   leased for one call plus a minute (never under two minutes); each row attempted in
   isolation. Two replicas split the batch.
 - `reconcile()` — every five minutes, re-derive every ACTIVE bot's desired digest and
-  queue what differs and is not queued. Covers a release that changed `BOT_COMMANDS` on
+  queue what differs and is not queued; paged by bot id until a short page, so an
+  installation of any size is swept whole (Codex #1). Covers a release that changed `BOT_COMMANDS` on
   an installation the installer's reconcile did not reach, and any lost event.
 - `syncNow(scope, botId)` — `claimOne` then `attempt`; never throws; `SKIPPED` for a bot
   that is not ACTIVE or is held by a live claim.
@@ -299,6 +307,18 @@ I6 SURVIVED, and that is recorded rather than hidden: the consumer's `bot.comman
 prefix is an optimisation. The rule that nothing is sent for an unrelated change is held
 by the digest comparison in `upsertDesired`, which I7 proves; U4 pins the filter itself.
 
+### The Codex review round (PR #119, seven P2 findings — all confirmed and fixed)
+
+| #   | Finding, and the rule now in force                                                                                                                                                 | Test                                                                                                                                 | Mutation, result                                                 |
+| --- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------- |
+| 1   | The sweep read one page of 500 bots for ever. It pages by bot id (keyset) until a short page.                                                                                      | integration "reconciles every bot, page after page, not only the first page"                                                         | loop stops after the first page — 1 failed                       |
+| 2   | A 429's `retry_after` was dropped by the gateway. `UNREACHABLE` carries `retryAfterMs`; the back-off takes the longer of the two.                                                  | unit gateway "carries a 429's retry_after…"; integration "waits out Telegram's retry_after…"                                         | gateway drops it — 1 failed; service ignores it — 1 failed       |
+| 3   | `recordSuccess` cleared the queue unconditionally, erasing an edit consumed in flight. Cleared only while the row still wants the SENT digest.                                     | integration "keeps a row due when the description changed while the registration was in flight"                                      | unconditional NULL — 1 failed                                    |
+| 4   | Success, failure and release were predicated on bot and tenant only. Every record names the claim (`claimedUntil`) and writes nothing without it.                                  | integration "records nothing for a claim another worker took over while the call was in flight"                                      | claim predicate removed — 1 failed                               |
+| 5   | `slice(0, 256)` could split a surrogate pair. `boundDescription` steps the cut back one unit when it would.                                                                        | unit "bounds a description at 256 units without splitting a surrogate pair"                                                          | plain slice — 1 failed                                           |
+| 6   | The preview read `gateOpen: null` as open. `describeFor` answers gates for switched-off items when the page asks; the preview draws a gated item only when its gate is KNOWN open. | unit "reads a switched-off item's gate only when asked to"; web "keeps a gated item out of the preview until its gate is known open" | option ignored — 1 failed; `!== false` in the preview — 1 failed |
+| 7   | `TemplateCard` invalidated only its own queries. It gains `onChanged`; the page re-reads `['bot-menu']`.                                                                           | web "re-reads the menu after a label is saved through the texts card"                                                                | `onChanged` never run — 1 failed                                 |
+
 ## 6. Deployment and rollback
 
 See `docs/deployment.md`, "What a rollback leaves queued: the command-menu sync (round P)".
@@ -309,6 +329,8 @@ See `docs/deployment.md`, "What a rollback leaves queued: the command-menu sync 
   against the PREMIUM-UI catalogue's names and the Persian labels
   (`web.appearance_slot_*`) at merge time. The stored value is a string, so a rename is a
   schema edit plus a data note, not a migration.
+- **`boundDescription`** (Codex #5) cuts at 256 UTF-16 units without splitting a pair; the
+  texts card saving a label or a description re-reads `/bot-menu` (Codex #7).
 - **Real Telegram acceptance.** The fake models the documented bounds; a real bot must
   confirm (a) `setMyCommands` with the Persian descriptions as rendered, (b)
   `getMyCommands` answers the same list, (c) the client draws the menu button after a
