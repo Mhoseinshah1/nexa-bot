@@ -77,13 +77,18 @@ describe('the desired command menu (CommandMenu)', () => {
     expect((await menuWith().desiredFor(scope)).hash).toBe(shared.hash);
   });
 
+  /** No lone surrogate: every high one is followed by a low one, and no low one stands alone. */
+  const wellFormed = (text: string) =>
+    !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(text);
+
   it('bounds a description at 256 units without splitting a surrogate pair (Codex #5)', async () => {
     // 255 units then an emoji (two units): a code-unit cut at 256 would keep only the high
     // surrogate — a string Telegram refuses, digested and re-sent for ever.
     const straddling = 'x'.repeat(255) + '😀';
     const bounded = boundDescription(straddling);
     expect(bounded).toHaveLength(255);
-    expect(bounded.isWellFormed()).toBe(true);
+    expect(wellFormed(bounded)).toBe(true);
+    expect(wellFormed('x'.repeat(255) + '😀'.slice(0, 1))).toBe(false);
     // A pair that fits is kept whole; text within the bound is untouched.
     expect(boundDescription('x'.repeat(254) + '😀')).toHaveLength(256);
     expect(boundDescription('x'.repeat(256) + 'y')).toBe('x'.repeat(256));
@@ -91,7 +96,7 @@ describe('the desired command menu (CommandMenu)', () => {
     // And the evaluator applies it to what the tenant wrote.
     const desired = await menuWith({ 'bot.command.apps': straddling }).desiredFor(scope);
     expect(
-      desired.entries.find((entry) => entry.command === 'apps')?.description.isWellFormed(),
+      wellFormed(desired.entries.find((entry) => entry.command === 'apps')?.description ?? ''),
     ).toBe(true);
   });
 
