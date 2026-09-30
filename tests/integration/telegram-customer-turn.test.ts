@@ -12,6 +12,7 @@ import {
   type UserId,
 } from '@nexa/contracts';
 import { CATALOGUE_FA } from '@nexa/i18n';
+import { appearanceFallbackText as plain } from '../../apps/api/src/modules/commerce/messaging/application/appearance-render';
 import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
 import {
   CUSTOMER_SEND_FAILED_CODE,
@@ -331,7 +332,7 @@ describe('the customer Telegram turn', () => {
     // The hidden trial button still routes: a keyboard drawn while a panel offered one.
     sent = [];
     await start({ text: CATALOGUE_FA['bot.menu.trial'] });
-    expect(sent.at(-1)?.body['text']).toBe(CATALOGUE_FA['bot.trial.unavailable']);
+    expect(sent.at(-1)?.body['text']).toBe(plain(CATALOGUE_FA['bot.trial.unavailable']));
   });
 
   it('still opens the management panel for a BLOCKED customer who is an administrator', async () => {

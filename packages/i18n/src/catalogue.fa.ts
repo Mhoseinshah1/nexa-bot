@@ -248,7 +248,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.order.summary_discounted_cashback':
     'سفارش شما\nسرویس: {productTitle}\nمدت: {durationDays}\nحجم: {trafficBytes}\nیوزرنیم: {username}\nمبلغ: {subtotal}\nتخفیف: {discount}\nمبلغ قابل پرداخت: {total}\nکش‌بک: {cashback} پس از تحویل سرویس به کیف پول شما افزوده می‌شود.',
   'bot.order.confirm_button': 'تأیید و ثبت سفارش',
-  'bot.order.unavailable': 'این سرویس در حال حاضر قابل خرید نیست.',
+  'bot.order.unavailable': '{icon:warning} این سرویس در حال حاضر قابل خرید نیست.',
   'bot.order.terms_changed':
     'قیمت این سفارش تغییر کرده است. هیچ مبلغی کسر نشده است. لطفاً سفارش را دوباره شروع کنید.',
   'bot.order.expired': 'مهلت این سفارش به پایان رسیده است. لطفاً دوباره سفارش دهید.',
@@ -273,7 +273,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
    * later phase words it however they like; the default must not lie in the release
    * that ships it.
    */
-  'bot.order.settled': 'پرداخت با موفقیت تأیید شد و سفارش شما پرداخت‌شده است.',
+  'bot.order.settled': '{icon:success} پرداخت با موفقیت تأیید شد و سفارش شما پرداخت‌شده است.',
   'bot.order.cancelled': 'سفارش لغو شد.',
   /*
    * Three lines, and the two figures are the point of the change.
@@ -290,8 +290,8 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
    * something they can act on.
    */
   'bot.order.refunded_to_wallet':
-    'در ساخت سرویس شما خطایی رخ داد و سفارش انجام نشد.\n' +
-    'مبلغ {refundAmount} به کیف پول شما بازگردانده شد.\n' +
+    '{icon:error} در ساخت سرویس شما خطایی رخ داد و سفارش انجام نشد.\n' +
+    '{icon:wallet} مبلغ {refundAmount} به کیف پول شما بازگردانده شد.\n' +
     'موجودی جدید کیف پول: {walletBalance}',
   'bot.order.cancel_button': 'لغو سفارش',
   /*
@@ -655,7 +655,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     'رسید تازه‌ای برای بررسی ثبت شد.\nکد پیگیری: {reference}\nمبلغ: {total}\nاز بخش «رسید های تایید نشده» در پنل مدیریت آن را بررسی کنید.',
 
   'bot.wallet.balance': 'موجودی کیف پول شما: {balance}',
-  'bot.wallet.insufficient': 'موجودی کیف پول کافی نیست. کمبود: {shortfall}',
+  'bot.wallet.insufficient': '{icon:warning} موجودی کیف پول کافی نیست. کمبود: {shortfall}',
   'bot.wallet.topup_button': '💰 افزایش موجودی',
   'bot.wallet.topup_choose': 'مبلغ شارژ را انتخاب کنید:',
   'bot.wallet.topup_refused': 'این مبلغ قابل شارژ نیست. لطفاً مبلغ دیگری را از فهرست انتخاب کنید.',
@@ -667,11 +667,11 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
    * ADR 0030 §1), and a missing entry sends nothing rather than a sentence with no amount.
    */
   'bot.wallet.topup_credited':
-    '✅ مبلغ {amount} به کیف پول شما اضافه شد. موجودی را با /wallet ببینید.',
+    '{icon:success} مبلغ {amount} به کیف پول شما اضافه شد. موجودی را با /wallet ببینید.',
   'bot.wallet.topup_gift_credited': '🎁 مبلغ {amount} نیز بابت هدیهٔ شارژ به کیف پول شما واریز شد.',
   /* WP-A9: sent once per fall below the tenant's threshold. */
   'bot.wallet.low_balance':
-    'موجودی کیف پول شما به {balance} رسیده و کمتر از {threshold} است.\n' +
+    '{icon:warning} موجودی کیف پول شما به {balance} رسیده و کمتر از {threshold} است.\n' +
     'برای خرید و تمدید بدون وقفه، کیف پول خود را از بخش /wallet شارژ کنید.',
   /*
    * Payment File 02 §12: a reviewer credited the receipt to the wallet instead of taking
@@ -745,7 +745,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
    * reply could not be delivered.
    */
   'bot.payment.received_for_review':
-    'اعلام شما ثبت شد. هنوز مبلغی دریافت یا تأیید نشده است؛ پس از بررسی، نتیجه به شما اطلاع داده می‌شود.',
+    '{icon:info} اعلام شما ثبت شد. هنوز مبلغی دریافت یا تأیید نشده است؛ پس از بررسی، نتیجه به شما اطلاع داده می‌شود.',
   'bot.payment.receipt_prompt':
     'اعلام شما ثبت شد. هنوز مبلغی دریافت یا تأیید نشده است.\n\nاکنون تصویر یا فایل رسید را در همین گفتگو ارسال کنید. تا {minutes} دقیقه فرصت دارید.',
   'bot.payment.receipt_received':
@@ -763,7 +763,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     'آیا از انصراف این پرداخت مطمئن هستید؟ کد پیگیری فعلی باطل می‌شود و اگر پس از آن مبلغی واریز کنید، قابل پیگیری نخواهد بود. این کار برگشت‌پذیر نیست.',
   'bot.payment.cancel_confirm_button': 'بله، انصراف بده',
   'bot.payment.cancelled':
-    'پرداخت شما لغو شد و کد پیگیری قبلی دیگر معتبر نیست. سفارش تا پایان مهلت آن باز است و می‌توانید با روش دیگری پرداخت کنید.',
+    '{icon:warning} پرداخت شما لغو شد و کد پیگیری قبلی دیگر معتبر نیست. سفارش تا پایان مهلت آن باز است و می‌توانید با روش دیگری پرداخت کنید.',
   // Sent by the customer notification lane, not as a reply. Both say the payment is
   // closed and neither says the ORDER is: a rejection and an expiry leave the order open
   // until its own deadline, which is the behaviour OQ-4G-05 records.
@@ -775,8 +775,8 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
    * One kind, one frozen template (ADR 0030), so the sentence has to be true of both.
    */
   'bot.payment.rejected':
-    'پرداخت شما بررسی شد و تأیید نشد.\nدلیل: {reason}\nاگر سفارشی در انتظار پرداخت دارید، تا پایان مهلت آن می‌توانید دوباره پرداخت کنید.',
-  'bot.payment.expired': 'مهلت پرداخت شما به پایان رسید و این پرداخت بسته شد.',
+    '{icon:error} پرداخت شما بررسی شد و تأیید نشد.\nدلیل: {reason}\nاگر سفارشی در انتظار پرداخت دارید، تا پایان مهلت آن می‌توانید دوباره پرداخت کنید.',
+  'bot.payment.expired': '{icon:time} مهلت پرداخت شما به پایان رسید و این پرداخت بسته شد.',
   /* WP-A9: one reminder before the window closes, while it can still be paid. */
   'bot.payment.pending_reminder':
     '⏳ تنها {minutes} دقیقه تا پایان مهلت پرداخت فاکتور {reference} باقی مانده است (تا {expiresAt}).\n' +
@@ -804,7 +804,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.service.not_found': 'این سرویس در دسترس شما نیست.',
   'bot.service.detail':
     'سرویس: {productTitle}\nوضعیت: {state}\nمصرف: {usedTrafficBytes} از {totalTrafficBytes}\nانقضا: {expiresAt}\nآخرین به‌روزرسانی مصرف: {syncedAt}',
-  'bot.service.subscription': 'لینک اشتراک شما:\n<code>{subscriptionUrl}</code>',
+  'bot.service.subscription': '{icon:link} لینک اشتراک شما:\n<code>{subscriptionUrl}</code>',
   'bot.service.resend_button': 'ارسال دوباره لینک اشتراک',
   'bot.service.rotate_button': '⚙️ تغییر لینک',
   'bot.service.files_button': '📁 دریافت فایل‌های اتصال',
@@ -829,7 +829,8 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.service.rotate_confirm_button': 'بله، لینک جدید بساز',
   'bot.service.rotate_cooldown':
     'شما به‌تازگی برای این سرویس لینک جدید گرفته‌اید.\nاز {availableAt} می‌توانید دوباره درخواست کنید.',
-  'bot.service.provisioning': 'سرویس شما در حال ساخته شدن است. نتیجه به شما اطلاع داده می‌شود.',
+  'bot.service.provisioning':
+    '{icon:service} سرویس شما در حال ساخته شدن است. نتیجه به شما اطلاع داده می‌شود.',
   // Deliberately does NOT invite a retry: `templates.ts` records that a retry after an
   // unknown outcome is how a duplicate account is created.
   /*
@@ -844,13 +845,13 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
    * at send time, so the sentence cannot disagree with the threshold it names.
    */
   'bot.service.expiry_first':
-    'سرویس «{service}» تا {days} روز دیگر به پایان اعتبار می‌رسد (تاریخ: {expiresAt}).\n' +
+    '{icon:warning} سرویس «{service}» تا {days} روز دیگر به پایان اعتبار می‌رسد (تاریخ: {expiresAt}).\n' +
     'برای جلوگیری از قطع شدن، از بخش «سرویس‌های من» تمدید کنید.',
   'bot.service.expiry_second':
-    'تنها {days} روز تا پایان اعتبار سرویس «{service}» مانده است (تاریخ: {expiresAt}).\n' +
+    '{icon:warning} تنها {days} روز تا پایان اعتبار سرویس «{service}» مانده است (تاریخ: {expiresAt}).\n' +
     'برای جلوگیری از قطع شدن، همین حالا از بخش «سرویس‌های من» تمدید کنید.',
   'bot.service.expired':
-    'اعتبار سرویس «{service}» در {expiresAt} به پایان رسید.\n' +
+    '{icon:inactive} اعتبار سرویس «{service}» در {expiresAt} به پایان رسید.\n' +
     'از بخش «سرویس‌های من» می‌توانید آن را تمدید کنید.',
   /*
    * WP-A9: the usage sentences speak in traffic REMAINING, as the thresholds now do, and
@@ -858,21 +859,21 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
    * stored 100% it reads «۰ درصد باقی مانده», which is the same fact.
    */
   'bot.service.usage_first':
-    'تنها {remainingPercent} درصد از حجم سرویس «{service}» باقی مانده است ({usedTraffic} از {totalTraffic} مصرف شده).\n' +
+    '{icon:traffic} تنها {remainingPercent} درصد از حجم سرویس «{service}» باقی مانده است ({usedTraffic} از {totalTraffic} مصرف شده).\n' +
     'در صورت نیاز می‌توانید از بخش «سرویس‌های من» حجم اضافه کنید.',
   'bot.service.usage_second':
-    'تنها {remainingPercent} درصد از حجم سرویس «{service}» باقی مانده است ({usedTraffic} از {totalTraffic} مصرف شده).\n' +
+    '{icon:traffic} تنها {remainingPercent} درصد از حجم سرویس «{service}» باقی مانده است ({usedTraffic} از {totalTraffic} مصرف شده).\n' +
     'برای جلوگیری از قطع شدن، از بخش «سرویس‌های من» حجم اضافه کنید.',
   'bot.service.usage_final':
-    'حجم سرویس «{service}» رو به پایان است: {remainingPercent} درصد باقی مانده ({usedTraffic} از {totalTraffic} مصرف شده).\n' +
+    '{icon:traffic} حجم سرویس «{service}» رو به پایان است: {remainingPercent} درصد باقی مانده ({usedTraffic} از {totalTraffic} مصرف شده).\n' +
     'از بخش «سرویس‌های من» می‌توانید حجم اضافه کنید.',
   /* WP-A9: the week-out warning and the day of expiry. */
   'bot.service.expiry_early':
-    'سرویس «{service}» تا {days} روز دیگر به پایان اعتبار می‌رسد (تاریخ: {expiresAt}).\n' +
+    '{icon:warning} سرویس «{service}» تا {days} روز دیگر به پایان اعتبار می‌رسد (تاریخ: {expiresAt}).\n' +
     'می‌توانید از بخش «سرویس‌های من» آن را تمدید کنید.',
   // Not «امروز»: for a deadline just after local midnight this is sent before midnight.
   'bot.service.expiry_day':
-    'اعتبار سرویس «{service}» به‌زودی، در {expiresAt}، به پایان می‌رسد.\n' +
+    '{icon:warning} اعتبار سرویس «{service}» به‌زودی، در {expiresAt}، به پایان می‌رسد.\n' +
     'برای جلوگیری از قطع شدن، همین حالا از بخش «سرویس‌های من» تمدید کنید.',
   'bot.service.provision_delayed':
     'ساخت سرویس کامل نشد و موضوع به پشتیبانی اطلاع داده شد. لطفاً منتظر پیگیری بمانید.',
@@ -903,8 +904,9 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   // withdrawn" and "this panel cannot do it". The customer's next step is the same for
   // all three, and naming which would tell them about an operator's configuration;
   // `templates.ts` records that the operational log carries the distinction.
-  'bot.service.action_unavailable': 'این امکان در حال حاضر برای این سرویس در دسترس نیست.',
-  'bot.service.action_not_allowed': 'وضعیت این سرویس اجازه‌ی این کار را نمی‌دهد.',
+  'bot.service.action_unavailable':
+    '{icon:warning} این امکان در حال حاضر برای این سرویس در دسترس نیست.',
+  'bot.service.action_not_allowed': '{icon:warning} وضعیت این سرویس اجازه‌ی این کار را نمی‌دهد.',
   'bot.service.action_in_progress':
     'یک درخواست قبلی برای این سرویس هنوز اعمال نشده است. چند لحظه بعد دوباره تلاش کنید.',
   'bot.service.addon_choice': 'یکی از بسته‌های زیر را انتخاب کنید:',
@@ -922,15 +924,15 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   // The counterparts to `action_requested`, sent by the notification lane once the
   // provisioner has an answer. `action_failed` deliberately carries no reason: a
   // provider failure is operational detail and belongs in the operations log.
-  'bot.service.action_succeeded': 'درخواست شما با موفقیت روی سرور اعمال شد.',
+  'bot.service.action_succeeded': '{icon:success} درخواست شما با موفقیت روی سرور اعمال شد.',
   'bot.service.action_failed':
-    'درخواست شما اعمال نشد. لطفاً دوباره تلاش کنید یا با پشتیبانی تماس بگیرید.',
+    '{icon:error} درخواست شما اعمال نشد. لطفاً دوباره تلاش کنید یا با پشتیبانی تماس بگیرید.',
   // R2 (item 11): the dedicated renewal result, and what the paid renewal's message becomes.
   'bot.service.renewed':
-    '✅ سرویس شما با موفقیت تمدید شد\n\n👤 نام کاربری: {username}\n⏳ مدت تمدید: {durationDays}\n📅 تاریخ انقضای جدید: {expiresAt}\n🧾 کد پیگیری: {reference}',
+    '{icon:success} سرویس شما با موفقیت تمدید شد\n\n{icon:user} نام کاربری: {username}\n{icon:time} مدت تمدید: {durationDays}\n{icon:date} تاریخ انقضای جدید: {expiresAt}\n🧾 کد پیگیری: {reference}',
   'bot.service.renewed_details_button': '📊 مشخصات سرویس',
   'bot.service.renew_paid':
-    '✅ پرداخت تمدید انجام شد. نتیجهٔ تمدید سرویس در پیام جداگانه برای شما ارسال می‌شود.',
+    '{icon:success} پرداخت تمدید انجام شد. نتیجهٔ تمدید سرویس در پیام جداگانه برای شما ارسال می‌شود.',
   'bot.service.capability_unsupported': 'این قابلیت برای سرویس شما در دسترس نیست.',
   /*
    * Round N, package D: the reseller monthly minimum. Informational only — nothing happens
@@ -958,15 +960,16 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     'تخفیف این سفارش دیگر معتبر نیست. هیچ مبلغی کسر نشده است. لطفاً سفارش را دوباره شروع کنید.',
 
   'bot.referral.invite':
-    'لینک دعوت شما:\n{referralLink}\n\nکد معرف: {referralCode}\nتعداد دوستانی که با لینک شما عضو شده‌اند: {referredCount}\n\nهر کسی که برای اولین بار با این لینک وارد ربات شود، برای همیشه زیرمجموعه شما ثبت می‌شود.',
+    '{icon:referral} لینک دعوت شما:\n{referralLink}\n\nکد معرف: {referralCode}\nتعداد دوستانی که با لینک شما عضو شده‌اند: {referredCount}\n\nهر کسی که برای اولین بار با این لینک وارد ربات شود، برای همیشه زیرمجموعه شما ثبت می‌شود.',
   'bot.referral.button': '🎁 دعوت دوستان',
   'bot.referral.unconfigured': 'برنامه معرفی دوستان در حال حاضر فعال نیست.',
 
-  'bot.trial.unavailable': '🧪 در حال حاضر امکان دریافت سرویس تست برای شما وجود ندارد.',
+  'bot.trial.unavailable': '{icon:trial} در حال حاضر امکان دریافت سرویس تست برای شما وجود ندارد.',
   'bot.trial.issued':
-    '🧪 سرویس تست شما در حال ساخته شدن است. لینک اتصال به‌محض آماده شدن برایتان ارسال می‌شود.',
+    '{icon:trial} سرویس تست شما در حال ساخته شدن است. لینک اتصال به‌محض آماده شدن برایتان ارسال می‌شود.',
   'bot.trial.button': '🧪 دریافت سرویس تست',
-  'bot.trial.choose_panel': '🧪 سرویس تست را روی کدام سرور می‌خواهید؟ یکی را انتخاب کنید:',
+  'bot.trial.choose_panel':
+    '{icon:trial} سرویس تست را روی کدام سرور می‌خواهید؟ یکی را انتخاب کنید:',
   'bot.trial.panel_button': '{label} — {traffic} / {hours} ساعت',
   'bot.custom_service.button': '🛠 سرویس دلخواه',
   'bot.custom_service.locations': '📍 لوکیشن سرویس دلخواه خود را انتخاب کنید:',
@@ -985,7 +988,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.custom_service.terms_changed':
     'قیمت این سرویس دلخواه از زمان پیش‌فاکتور تغییر کرده است. مبلغی کسر نشد؛ لطفاً دوباره سفارش دهید تا قیمت فعلی را ببینید.',
   'bot.trial.not_delivered':
-    'متأسفیم، سرویس آزمایشی شما ساخته نشد. این مورد جزو سهمیه سرویس آزمایشی شما حساب نمی‌شود.',
+    '{icon:error} متأسفیم، سرویس آزمایشی شما ساخته نشد. این مورد جزو سهمیه سرویس آزمایشی شما حساب نمی‌شود.',
   /*
    * WP10 P3. True of both refund channels — the wallet and a transfer out of band — so it
    * names neither, and points at the one place a figure is shown.
@@ -1000,7 +1003,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
    * carry the approved lines exactly as written.
    */
   'bot.service.delivered':
-    '✅ سرویس با موفقیت ایجاد شد\n\n👤 نام کاربری سرویس: {serviceUsername}\n🌿 نام سرویس: {productName}\n🌍 لوکیشن: 🚀 {serviceLocation}\n⌛ مدت زمان: {durationDays}\n⏱ حجم سرویس: {trafficBytes}\n\nلینک اتصال:\n<code>{subscriptionUrl}</code>\n\n🚶 شما میتوانید شیوه اتصال را با فشردن دکمه زیر و\nانتخاب سیستم عامل خود را دریافت کنید',
+    '{icon:success} سرویس با موفقیت ایجاد شد\n\n{icon:user} نام کاربری سرویس: {serviceUsername}\n🌿 نام سرویس: {productName}\n{icon:location} لوکیشن: 🚀 {serviceLocation}\n⌛ مدت زمان: {durationDays}\n⏱ حجم سرویس: {trafficBytes}\n\nلینک اتصال:\n<code>{subscriptionUrl}</code>\n\n🚶 شما میتوانید شیوه اتصال را با فشردن دکمه زیر و\nانتخاب سیستم عامل خود را دریافت کنید',
   'bot.service.delivered_qr_caption':
     '📷 کد QR لینک اتصال شما. جزئیات سرویس در پیام بعدی آمده است.',
   'bot.service.tutorial_button': '📚 مشاهده آموزش استفاده',
@@ -1076,7 +1079,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.faq.default_9_answer': 'امکان بازگشت وجه در صورت حل نشدن مشکل از سمت ما وجود دارد.',
   'bot.faq.page': '{content}',
   'bot.support.contact_button': '📨 ارسال پیام به پشتیبانی',
-  'bot.support.contact': 'برای ارتباط با پشتیبانی روی دکمهٔ زیر بزنید.',
+  'bot.support.contact': '{icon:support} برای ارتباط با پشتیبانی روی دکمهٔ زیر بزنید.',
   'bot.support.unconfigured': 'در حال حاضر راه ارتباطی با پشتیبانی تنظیم نشده است.',
   'bot.order.preinvoice':
     '🧾 پیش فاکتور شما:\n\n👤 نام کاربر: {serviceUsername}\n🔐 نام سرویس: {productName}\n📆 مدت اعتبار: {durationDays}\n💵 قیمت: {total}\n👥 حجم اکانت: {trafficBytes}\n➕ حجم افزوده: {addedTrafficBytes}\n{customBlock}\n{devicesBlock}\n{locationChangeBlock}\n{discountLine}\n{cashbackLine}\n\n{locationsBlock}\n\n{featuresBlock}\n\n💰 موجودی کیف پول شما: {walletBalance}\n\n💰 سفارش شما آماده پرداخت است',
@@ -1204,7 +1207,8 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.service.note_invalid': 'یادداشت معتبر نیست. متنی بین ۱ تا {max} نویسه بفرستید.',
   'bot.service.renew_choose': '💊 یکی از گزینه‌های تمدید یا افزایش زمان را انتخاب کنید:',
   'bot.service.renew_option_button': '🔄 تمدید {title} — {price}',
-  'bot.service.renew_unavailable': 'در حال حاضر گزینه‌ای برای تمدید این سرویس در دسترس نیست.',
+  'bot.service.renew_unavailable':
+    '{icon:warning} در حال حاضر گزینه‌ای برای تمدید این سرویس در دسترس نیست.',
   'bot.referral.screen':
     '💼 زیرمجموعه‌گیری و هدیه خوش‌آمد\n\n📱 خبری خوش راحت ترین راه پول دراوردن\n\n📤 با ارسال 📎 لینک دعوت اختصاصی خود به مخاطبین و دوستان خود به ازای هر فرد جدیدی که برای اولین بار با لینک شما وارد ربات شود و خرید انجام دهد {commissionPercent} درصد پورسانت دریافت کنید!\n\n💳 بعد از دعوت دیگران میتوانید درخواست برداشت موجودی خود به کارت بانکیتان را ثبت کنید و مبلغ به کارت بانکی شما واریز خواهد شد.\n\n💰برای برداشت موجودی بدست آمده به پشتیبانی ربات پیام ارسال کنید\n\n🔰همکاری با شما باعث افتخار ماست\n\n🔗 {referralLink}\n\n{giftBlock}\n\n💸 پورسانت خرید:\n• {commissionPercent} درصد از مبلغ خرید زیرمجموعه به شما تعلق می‌گیرد\n\n📊 آمار شما:\n• زیرمجموعه‌ها: {referralCount} نفر\n• خریدها: {referredPurchaseCount} عدد\n• مجموع خرید: {referredPurchaseTotal}\n• پورسانت دریافتی: {commissionReceivedTotal}\n\n📢 دعوت کن، هدیه بگیر، رشد کن!',
   'bot.referral.gift_block':
@@ -1246,16 +1250,16 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.ticket.attachment_type_refused':
     'این نوع فایل پذیرفته نمی‌شود. فقط عکس، PDF، تصویر (JPG، PNG، WEBP) یا فایل متنی (TXT) بفرستید.',
   'bot.ticket.created':
-    '✅ تیکت #{number} ثبت شد.\nپاسخ پشتیبانی در همین ربات برای شما فرستاده می‌شود.',
-  'bot.ticket.reply_sent': '✅ پیام شما به تیکت #{number} افزوده شد.',
+    '{icon:success} تیکت #{number} ثبت شد.\nپاسخ پشتیبانی در همین ربات برای شما فرستاده می‌شود.',
+  'bot.ticket.reply_sent': '{icon:success} پیام شما به تیکت #{number} افزوده شد.',
   'bot.ticket.open_limit':
     'شما {max} تیکت باز دارید. پیش از ثبت تیکت تازه، منتظر پاسخ بمانید یا یکی از تیکت‌های باز را ببندید.',
   'bot.ticket.message_limit': 'این تیکت به سقف پیام‌ها رسیده است. لطفاً یک تیکت تازه ثبت کنید.',
   'bot.ticket.view':
     '🎫 تیکت #{number}\n📂 موضوع: {category}\n📌 وضعیت: {status}\n\n{olderLine}\n{conversation}',
   'bot.ticket.view_older': '… {count} پیام قدیمی‌تر در پنل پشتیبانی نگه داشته شده است.',
-  'bot.ticket.line_customer': '👤 شما — {at}\n{text}',
-  'bot.ticket.line_support': '🎧 پشتیبانی — {at}\n{text}',
+  'bot.ticket.line_customer': '{icon:user} شما — {at}\n{text}',
+  'bot.ticket.line_support': '{icon:support} پشتیبانی — {at}\n{text}',
   'bot.ticket.line_closed_by_customer': '🔒 {at} — تیکت را بستید.',
   'bot.ticket.line_closed_by_support': '🔒 {at} — پشتیبانی تیکت را بست.',
   'bot.ticket.line_reopened': '🔓 {at} — پشتیبانی تیکت را دوباره باز کرد.',
@@ -1287,7 +1291,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.broadcast.message': '{message}',
   'bot.wallet.mass_credited': '🎁 مبلغ {amount} به کیف پول شما اضافه شد.',
   'bot.service.gift_applied':
-    '🎁 هدیه برای سرویس {service} اعمال شد.\n📦 حجم اضافه: {traffic}\n⏳ زمان اضافه: {days}',
+    '🎁 هدیه برای سرویس {service} اعمال شد.\n📦 حجم اضافه: {traffic}\n{icon:time} زمان اضافه: {days}',
   /*
    * Premium UI: one line per appearance slot, each with its marker. Where Telegram accepts
    * the tenant's custom emoji the icon is the custom one; everywhere else it is the fallback.
