@@ -1043,4 +1043,147 @@ generic in the kit or shell stylesheet.
 
 ## 14. Phase 2 record
 
-_To be filled after the rebuild: routes migrated, deviations, screenshot paths, test counts._
+Branch `claude/w-commerce-a`, on the merged foundation. Presentation only: no API,
+contract, backend, permission or query changed. Page CSS is `styles/pages/commerce-a.css`
+(`ca-*` classes, no kit class restyled, no `style` attribute); the one new shared piece is
+`pages/commerce-parts.tsx` (`ChipGroup`, a labelled group of kit `FilterChip`s). Three web
+keys were added (`web.user_stat_trial_remaining`, `web.service_identity_title`,
+`web.payment_tech_details`) and one removed because nothing renders it any more
+(`web.user_identity_title` — its rows moved into the customer head).
+
+### 14.1 What changed, per route
+
+| Route            | Before                                                                             | Now                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| ---------------- | ---------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/users`         | Card with a stacked search form, a Pills row, a default table, pager; a scope card | One list card: the two exact-match boxes as a compact toolbar form (label, hint and inline error kept; Apply with a search icon, Clear as a ghost button), the status filter as a labelled chip group, a dense sticky-header table (name column gains a decorative initial tile; status badge gains a dot), the ascending pager at the foot; the scope card is muted                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `/users/:id`     | PageHead «مشتری» + nine stacked cards                                              | `DetailHead`: initial tile, name (or `@username`, or «مشتری»), status badge, meta line (username, Telegram id with copy, language), block/unblock as the head action, and a strip — first seen, last seen, balance (only with `users.view` wallet read), trial remaining — read through the SAME query keys as the cards (no extra request). Blocked banner under it. `TwoColumn`: main = services, orders, wallet; side = access (status, blocked at/reason, reason-shown, marketing), trial, reseller, referral, scope. «All orders / all services / all referrals / manage reseller» links moved into the card heads. Block/unblock step two is a `Modal` (block: danger, warn banner, mandatory reason with the same two inline errors; unblock: plain confirm), error banner inside it                                                                                                                                                                                                              |
+| `/trials`        | Four stacked cards                                                                 | Panels overview full width (dense, dot badges); `TwoColumn`: overrides + reset history (actor shown as an 8-char copyable id) / the global reset as a danger-zone card (preview, typed count, reason, solid-danger execute)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `/services`      | Refund queue card, a card with two Pills rows and a form, table, pager, rules card | Refund queue (dense, dot badges) unchanged in place; list card with the three exact-match boxes as a toolbar form (one form, one submit — unchanged), state and delivery as two labelled chip groups split by a divider, a dense sticky table (state badge filled, delivery badge outlined — two columns, never merged), the pager; the four rules as a muted notes list                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `/services/:id`  | PageHead + refund card + banners + five stacked cards                              | PageHead: the username (LTR) with a copy button as the title, state + delivery (+ trial) badges, the ordinary actions as the head's button group (each refused one `aria-describedby` its blocker sentence). Banners. Four stat cards: traffic used (with the limit, a bar only when limited, and «synced at» or the «never read» sentence), expiry, delivery attempts (+ next attempt), device limit (or its sentence). Refund requests (decision form split into an approve block with a danger border and a reject block). `TwoColumn`: identity (provider user id, customer, order, panel, product, created, updated, username hint) / action notes (hint, the `services.edit` denial, one row per refused action: action name → blocker sentence) + delivery (subscription present/absent, delivered, provisioned, terminated, withheld sentence). Operations full width (dense; failure message verbatim, LTR). Transfer-absent note (muted). Terminate isolated in a danger-zone card at the foot |
+| `/orders`        | As `/users`                                                                        | As `/users`: toolbar form (customer, product), state chips, dense sticky table (total end-aligned), ascending pager; scope and future-rules as two muted cards side by side                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `/orders/:id`    | PageHead «جزئیات سفارش» + ten stacked cards                                        | PageHead: the snapshot title, state badge, subtitle «جزئیات سفارش · <order id>». Banners. `TwoColumn`: main = what was bought (purpose, title, category, duration, traffic, devices, unit price, quantity, then subtotal/discount/total as a totals block), custom-service terms, pricing (reseller terms, code, adjustments, redemptions, cashback), the produced service + its operations; side = lifecycle (created, expires, confirmed, settled, updated — the state is the head badge), references, payments (one line each: reference link, state badge, amount), scope                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `/payments`      | Card with three Pills rows, a sentence and a form, table, pager                    | Toolbar form (reference, customer, order), state / method / disposition as three labelled chip groups, the `planned_missing_gateway` sentence under them, a dense sticky table (14 columns, amount end-aligned, state dot badge, disposition outlined), the URL-cursor pager                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `/payments/:id`  | PageHead + up to twelve stacked cards                                              | PageHead: the reference (LTR) with a copy button, state badge, method as subtitle. UNKNOWN banner. `TwoColumn`: main = payment details (id, disposition, gateway, amount, customer, Telegram identity, order or top-up, external reference, created, updated, expires, signalled + hint), evidence, resolution, receipt credit, customer fee, gateway invoice (its rows inside a closed `<details>` — technical, one click away); side = the Telegram-review note for a pending manual transfer, destination, top-up gift, receipts. Full width: refunds (ledger inline; request form and the answer form each in their own block, the answer block danger-bordered because «abandon» is there; the issue error banner stays OUTSIDE the request form), then the timeline, then the not-settled-here note (muted)                                                                                                                                                                                        |
+| `/compensations` | Card, table, pager                                                                 | Dense sticky table (payment link strong, amounts end-aligned, state dot badge), the URL-cursor pager                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+
+### 14.2 Deviations from the Phase 1 plan (§11–§13), and why
+
+- **No tabs on `/users/:id` or `/services/:id`.** Every card stays mounted, so every request
+  fires when it did before and no existing "asks for X / asks for nothing" assertion moved.
+  The reference's tab composition is approximated with a head + summary strip + two
+  columns. Nothing about the tabs was a capability; they can be added later with
+  `RoutedTabs` without touching any card.
+- **Identity rows moved into the heads** rather than duplicated: the customer's username,
+  Telegram id and language are the head's meta line and first/last seen are its strip; the
+  service's username is the title (with copy), its traffic/devices/expiry/attempts are the
+  stat cards; the payment's reference is the title (with copy), its state the badge and its
+  method the subtitle; an order's state is the badge. Each value is drawn once, so no test
+  query became ambiguous and no reader sees two copies that could disagree.
+- **Order totals are the foot of the line card**, not their own card; the three figures are
+  unchanged.
+- **Payment timeline stays a table.** It is an ordered audit the server returns (28 tests read
+  its rows and cells); it gains a dense layout, a tone dot per event kind beside the label,
+  and an icon refresh button.
+
+### 14.3 Capability checklist (§0–§10) — result: all preserved
+
+Each line was checked against the code and the suite; «T» names the test that still pins it.
+
+- [x] §0 Permissions arrive as props; denied cards draw the info banner and issue no request
+      (users, services, orders, payments, trials suites; `commerce-a-redesign`: no wallet read
+      and no balance without the permission).
+- [x] §0 Keyset cursors, labels and cursor state per list unchanged (URL cursor: services,
+      payments, compensations; trails: users, orders, embedded cards, trials, refund queue;
+      wallet single cursor). T `labels the next page older…`, `steps the orders pager back one
+page…`, both embedded pager-label tests, `pages the ledger…`.
+- [x] §0 Filters in the URL, one `setQueries` per apply, draft follows the URL, cursor
+      dropped. T `applies BOTH search boxes…`, `applies all three filters in ONE navigation…`,
+      `clears the search boxes when navigation drops the query`.
+- [x] §0 Ids validated against the contract before a request (Telegram id, uuidv7,
+      provider username). T `refuses a malformed Telegram id…`, `refuses a partial id at the
+field…`, `refuses a name the server would refuse…`.
+- [x] §0 Toolbars hidden while the list cannot answer (`hidden={!mayRequest(…)}` on each
+      toolbar row now, instead of one wrapper).
+- [x] §0 View state only through `StateSwitch query=…` (state-switch contract test).
+- [x] §0 Idempotency (`useSubmissionKey`, `settle`/`settleOn`) untouched on every write.
+      T `repeats the SAME idempotency key…`, `reuses the key when a FAILED submission…`.
+- [x] §0 Error mapping (`messageFor`, `refundMessageFor`, service toast) unchanged.
+- [x] §0 Money/time/traffic/bidi formatting; no subscription URL/ref/client id rendered;
+      destination `•••• last4` only. T `renders no subscription url…` (list and detail),
+      `renders no subscription link…`, `never renders a full card number…`.
+- [x] §0 Detail routes keyed by id; shared vocabularies still exported from their owners.
+- [x] §1 `/users`: six columns, search only with `users.search` (else the named sentence),
+      status chips for everyone, two empty states, ascending pager, no tags/commercial columns.
+- [x] §2 `/users/:id`: identity rows (head), access rows, two-step block with the mandatory
+      code-point-counted reason and unblock with no reason, trial card (override set/remove),
+      reseller card, wallet (derived balance, entry count, negative warning, ledger, immutable
+      note, credit/debit under their own permissions, fieldset disabled until the balance
+      loads, no set-balance control), orders and services cards (bound 10, separate delivery
+      column, links to the full lists), referral card, scope card, no activity feed.
+      T all 49 of `users.test`, referrals/resellers/trials customer-card tests.
+- [x] §3 `/trials`: four independently gated cards; reset needs the previewed count typed
+      back and a reason, keyed; history pager. T `stays disabled until the previewed count…`,
+      `names the permission…`, `lists each configured panel…`.
+- [x] §4 `/services`: refund queue independent of `services.view`; two filter axes; exactly
+      one form and one submit; exact-name lookup sent raw; trial badge; state and delivery in
+      separate columns; rules copy. T all of `services.test` list block,
+      `service-refund-requests.test`.
+- [x] §5 `/services/:id`: refund requests + decision form (tick-to-approve, 300-emoji
+      reject reason, toast by returned state, both keyed); banners; identity, traffic and
+      delivery facts; one button per declared ordinary action, disabled with its blocker
+      sentence; `services.edit` and `services.terminate` denials as sentences; terminate only on
+      the exact typed phrase, sent as `confirm`; «planned»/«resent» toasts; refresh of service,
+      operations and list; operations with the server's truncation bound; transfer-absent note.
+      T all of `services.test` detail block; `commerce-a-redesign` (blocker as description,
+      bar only when limited).
+- [x] §6 `/orders`: read-only; two id filters + six state chips; snapshot title; ascending
+      trail pager; scope and future-rules copy. T `presses every control it has and still
+issues nothing but reads`, `offers every frozen state…`, `records the needs-attention…`.
+- [x] §7 `/orders/:id`: awaiting/refunded banners; snapshot line (purpose, title, category
+      snapshot, duration, traffic, devices, unit price, quantity) and totals; custom-service
+      terms; pricing (reseller terms, code, adjustments, redemptions, cashback + unrecovered
+      warning); lifecycle; references; payments (gated, truncation banner); produced service
+      and its operations (gated). T `products-and-orders`, `discounts`, `resellers`,
+      `custom-service` order tests.
+- [x] §8 `/payments`: three chip axes, the missing-gateway sentence, three filters in one
+      navigation, 14 columns, no evidence note on the list, URL-cursor pager. T all
+      `payments.test` list cases.
+- [x] §9 `/payments/:id`: no card-to-card decision for anyone; every conditional card absent
+      (not dashed) when null; receipts only with `receipts.view` (object URL revoked, photo
+      inline as `img.receipt-image`, document as a download); refunds (remaining is the
+      server's figure, both forms, the issue error outside the form, answer complete/abandon
+      disabling each other); pending-transfer note; timeline polling and reconciliation
+      untouched. T `payments.test` (50), `payments-refund-consequences.test`,
+      `payment-timeline.test` (28), `wp18-payments-topic-test`.
+- [x] §10 `/compensations`: eight columns, reason words, URL-cursor pager. T
+      `compensations.test`.
+
+New behaviour is pinned in `tests/web/commerce-a-redesign.test.tsx` (7 cases, two of them
+checked by mutation: removing the wallet leave guard and removing the blocker
+`aria-describedby` each fail their case). The only edit to an existing assertion: the
+wallet balance test now looks inside the wallet card (the head strip draws the same
+derived balance) and additionally asserts the strip.
+
+### 14.4 Forms and dirty state
+
+`useUnsavedChanges` holds the leave guard while any of these holds typed input: the wallet
+movement, the trial override, the trial reset confirmation, a refund request or answer, a
+service refund decision. The block reason lives in a modal that cancel/Escape discards, so
+it is not guarded.
+
+### 14.5 Screenshots (`pnpm web:shots`, zero WARN)
+
+Scratch paths, not committed: `/tmp/claude-0/ca-shots/final/` — every route dark at 1440,
+`/users/:id` and `/services/:id` light, `/services`, `/users` and `/orders/:id` at 390, and
+`/payments/:id` and `/services/:id` at 900. Fixture ids: user `019210ab-…6789abcdef01`,
+service `019250ab-…`, order `019230ab-…`, payment `019240ab-…` (same suffix).
+
+### 14.6 Left as it was, on purpose
+
+- **Short ids on lists** are still the first 8 characters of a uuidv7, as before. Those
+  characters are the timestamp, so rows created close together share them; showing a
+  different slice is a product decision, not a presentation one.
+- **The payments list keeps all 14 columns** and scrolls horizontally inside its card at
+  desk width, as the inventory requires every column.
+- **No kit change.** A disclosure (`<details>`) for technical sections is page-level here
+  (`.ca-tech`); if other families need it, it belongs in the kit.
