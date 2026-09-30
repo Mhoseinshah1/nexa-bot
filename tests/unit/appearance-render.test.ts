@@ -5,6 +5,7 @@ import {
   CUSTOM_EMOJI_ID_PATTERN,
   appearanceMarker,
   appearanceMarkersIn,
+  money,
   templateDefinition,
   validateTemplateBody,
   type AppearanceSlot,
@@ -45,7 +46,7 @@ describe('the slot catalogue', () => {
     const rendered = renderTemplateBody(
       templateDefinition('bot.wallet.balance'),
       '{icon:wallet} موجودی: {balance}',
-      { balance: { amount: 1000n, currency: 'IRT' } },
+      { balance: money(1000n, 'IRT') },
     );
     expect(rendered.startsWith('{icon:wallet} ')).toBe(true);
     expect(CUSTOM_EMOJI_ID_PATTERN.test(ID)).toBe(true);
