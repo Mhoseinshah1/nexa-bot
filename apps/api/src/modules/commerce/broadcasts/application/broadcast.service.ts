@@ -495,6 +495,20 @@ export class BroadcastService {
         { reason: rendered.ok ? 'broadcast.media_unavailable' : rendered.errorCode },
       );
     }
+    // The FINAL authorization, before anything leaves: session live, the key held and the
+    // scope still accepting work, decided in a committed transaction of its own — never with
+    // the network call inside one. A stop or a revocation that lands after this point is
+    // the same race any request has; one that landed before it sends nothing (Codex R2).
+    await runAuthorizedMutation(
+      this.mutationDeps(),
+      scope,
+      actor,
+      BROADCAST_SEND,
+      denial,
+      async (tx) => {
+        await this.assertScopeActive(scope, tx);
+      },
+    );
     const result = await this.deps.transport.deliver(scope, {
       chatId: target.chatId,
       botInstanceId: target.botInstanceId,
@@ -509,6 +523,7 @@ export class BroadcastService {
           : result.outcome === 'UNKNOWN'
             ? 'UNCONFIRMED'
             : 'NOT_SENT';
+    // Recording the result: authorised again inside its own transaction, as every write is.
     await runAuthorizedMutation(
       this.mutationDeps(),
       scope,
@@ -560,16 +575,6 @@ export class BroadcastService {
   ): Promise<BroadcastRecord> {
     const denial = { action: 'broadcast.launch', entityType: 'Broadcast', entityId: id };
     await this.authorize(scope, actor, denial);
-    const now = this.deps.clock.now();
-    if (input.mode === 'SCHEDULE') {
-      const at = input.scheduledAt?.getTime() ?? 0;
-      if (at < now.getTime() + SCHEDULE_MIN_LEAD_MS || at > now.getTime() + SCHEDULE_MAX_LEAD_MS) {
-        throw errors.validation(
-          BROADCAST_ERROR_CODES.SCHEDULE_INVALID,
-          'Schedule a broadcast at least a minute and at most sixty days ahead.',
-        );
-      }
-    }
     if (
       input.expectedRecipients >= BROADCAST_LARGE_AUDIENCE &&
       input.typedCount !== input.expectedRecipients
@@ -593,6 +598,20 @@ export class BroadcastService {
       requestHash,
     );
     if (replay !== null) return this.require(scope, replay.result.broadcastId);
+
+    // Time-relative validation only AFTER the replay lookup: a committed scheduled launch
+    // replayed once its lead time has shrunk below a minute is the same launch, and must be
+    // answered with it rather than refused as `schedule_invalid` (Codex R3).
+    const now = this.deps.clock.now();
+    if (input.mode === 'SCHEDULE') {
+      const at = input.scheduledAt?.getTime() ?? 0;
+      if (at < now.getTime() + SCHEDULE_MIN_LEAD_MS || at > now.getTime() + SCHEDULE_MAX_LEAD_MS) {
+        throw errors.validation(
+          BROADCAST_ERROR_CODES.SCHEDULE_INVALID,
+          'Schedule a broadcast at least a minute and at most sixty days ahead.',
+        );
+      }
+    }
 
     await runAuthorizedMutation(
       this.mutationDeps(),
