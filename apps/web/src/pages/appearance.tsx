@@ -84,6 +84,12 @@ const OUTCOME_TONE: Readonly<Record<AppearanceTestOutcome, Tone>> = {
   UNREACHABLE: 'warn',
   RATE_LIMITED: 'warn',
 };
+const TOAST_LABEL: Readonly<Record<AppearanceTestOutcome, WebKey>> = {
+  SENT: 'web.appearance_test_toast_sent',
+  REJECTED: 'web.appearance_test_toast_rejected',
+  UNREACHABLE: 'web.appearance_test_toast_unreachable',
+  RATE_LIMITED: 'web.appearance_test_toast_rate_limited',
+};
 const ERROR_LABEL: Readonly<Record<AppearanceTestErrorCode, WebKey>> = {
   'appearance.custom_emoji_refused': 'web.appearance_test_error_custom_emoji_refused',
   'appearance.chat_unavailable': 'web.appearance_test_error_chat_unavailable',
@@ -199,6 +205,8 @@ function SlotRow({ slot, mayEdit }: { slot: AppearanceSlotView; mayEdit: boolean
     mutationFn: () =>
       resetAppearanceSlot({
         slot: slot.slot,
+        // The version this row was read at: a stale reset is a conflict, never a deletion.
+        expectedVersion: slot.version,
         idempotencyKey: submission.current({ slot: slot.slot, reset: true, v: slot.version }),
       }),
     onSuccess: async () => {
@@ -320,9 +328,12 @@ function TestCard({
       }),
     onSuccess: async (result) => {
       submission.settle();
+      // The toast says what Telegram ANSWERED, not that a request was made: a refused,
+      // unreachable or rate-limited test is not "sent" (Codex, PR #121, finding 9).
+      const outcome = result.bot.customEmojiTest?.outcome ?? 'UNREACHABLE';
       notify({
-        tone: OUTCOME_TONE[result.bot.customEmojiTest?.outcome ?? 'REJECTED'],
-        message: `${t('web.appearance_test_sent_toast')} ${t('web.appearance_decorated_slots')} ${String(result.decoratedSlots)}`,
+        tone: OUTCOME_TONE[outcome],
+        message: `${t(TOAST_LABEL[outcome])} ${t('web.appearance_decorated_slots')} ${String(result.decoratedSlots)}`,
       });
       await client.invalidateQueries({ queryKey: ['appearance'] });
     },

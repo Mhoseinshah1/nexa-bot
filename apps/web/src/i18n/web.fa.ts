@@ -4219,7 +4219,14 @@ export const WEB_FA = {
   'web.appearance_test_error_telegram_rejected': 'تلگرام این پیام را رد کرد.',
   'web.appearance_test_error_telegram_unreachable': 'تلگرام در دسترس نبود یا پاسخ خوانا نداد.',
   'web.appearance_test_error_rate_limited': 'تلگرام درخواست را به دلیل محدودیت نرخ نپذیرفت.',
-  'web.appearance_test_sent_toast': 'پیام آزمایشی ارسال شد؛ نتیجه در همین صفحه ثبت شد.',
+  'web.appearance_test_toast_sent':
+    'تلگرام پیام آزمایشی را پذیرفت؛ ایموجی سفارشی برای این ربات فعال شد. نتیجه در همین صفحه ثبت شد.',
+  'web.appearance_test_toast_rejected':
+    'تلگرام پیام آزمایشی را رد کرد؛ این ربات فقط ایموجی پیش‌فرض می‌فرستد. علت در همین صفحه ثبت شد.',
+  'web.appearance_test_toast_unreachable':
+    'پاسخی از تلگرام نرسید؛ نتیجهٔ آزمایش نامعلوم است. کمی بعد دوباره بزنید.',
+  'web.appearance_test_toast_rate_limited':
+    'تلگرام درخواست را به دلیل محدودیت نرخ نپذیرفت؛ کمی بعد دوباره بزنید.',
   'web.appearance_decorated_slots': 'تعداد ایموجی سفارشی در پیام:',
   'web.nav_ops_group': 'گروه گزارش‌ها',
   'web.opsgroup_title': 'گروه گزارش‌های مدیریتی',

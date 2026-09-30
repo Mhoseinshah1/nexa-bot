@@ -97,6 +97,39 @@ describe('the appearance page', () => {
         true,
       ),
     );
+    // The reset names the version it was read at, so a stale one is a conflict server-side.
+    const resetCall = api.calls.find((call) => call.url.endsWith('/appearance/slots/wallet/reset'));
+    expect(resetCall?.body).toMatchObject({ expectedVersion: 3 });
+  });
+
+  it('tells the operator what Telegram answered — a refused test is not "sent"', async () => {
+    const answered = (outcome: string, errorCode: string | null) => ({
+      bot: {
+        id: BOT_A,
+        username: 'acme_store_bot',
+        status: 'ACTIVE',
+        customEmojiTest: { testedAt: '2026-09-30T09:00:00.000Z', outcome, errorCode },
+      },
+      decoratedSlots: 1,
+    });
+    const configured = view({
+      slots: APPEARANCE_SLOTS.map((name) =>
+        slot(name, name === 'payment' ? { customEmojiId: ID, version: 1 } : {}),
+      ),
+    });
+    stubApi([
+      route(configured),
+      { url: '/appearance/test', body: answered('REJECTED', 'appearance.custom_emoji_refused') },
+    ]);
+    renderPage(<AppearancePage denied={false} mayEdit />);
+    fireEvent.click(await screen.findByRole('button', { name: t('web.appearance_test_send') }));
+    const toast = await screen.findByText((text) =>
+      text.startsWith(t('web.appearance_test_toast_rejected')),
+    );
+    expect(toast).toBeInTheDocument();
+    expect(
+      screen.queryByText((text) => text.startsWith(t('web.appearance_test_toast_sent'))),
+    ).toBeNull();
   });
 
   it('sends the test through the chosen bot when there are several, and shows each bot’s real answer', async () => {

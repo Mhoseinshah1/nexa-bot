@@ -3052,6 +3052,7 @@ export function saveAppearanceSlot(input: {
 export function resetAppearanceSlot(input: {
   slot: string;
   idempotencyKey: string;
+  expectedVersion: number | null;
 }): Promise<AppearanceSlotMutationResponse> {
   const { slot, ...body } = input;
   return post(APPEARANCE_ROUTES.slotReset(slot), body, appearanceSlotMutationResponseSchema);
