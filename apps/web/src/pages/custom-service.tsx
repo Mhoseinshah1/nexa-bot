@@ -56,6 +56,7 @@ import {
   useUnsavedChanges,
   type Column,
   type Tone,
+  Num,
 } from '../ui/kit';
 import { SaveBar, revealField } from './editor-layout';
 
@@ -604,8 +605,8 @@ function RuleRange({ row }: { row: CustomServiceRuleSummaryResponse }) {
   const figure = (text: string) => (row.dimension === 'VOLUME' ? groupTrafficFigure(text) : text);
   return (
     <span className="nowrap">
-      <Ltr>{figure(row.minimum)}</Ltr> {t('web.custom_service_range_to')}{' '}
-      <Ltr>{figure(row.maximum)}</Ltr>{' '}
+      <Num value={figure(row.minimum)} /> {t('web.custom_service_range_to')}{' '}
+      <Num value={figure(row.maximum)} />{' '}
       {row.dimension === 'VOLUME' ? t('web.unit_gib') : t('web.product_days_unit')}
     </span>
   );

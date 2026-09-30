@@ -19,7 +19,7 @@ import {
   type ServiceSummaryResponse,
 } from '@nexa/contracts';
 import { actOnService, fetchService, fetchServiceOperations, fetchServices } from '../api/client';
-import { formatNumber, formatTimestamp, formatTrafficGbText } from '../format';
+import { formatTimestamp, formatTrafficGbText } from '../format';
 import { messageFor } from './settings';
 import { useSubmissionKey } from '../submission-key';
 import { mayRequest, queryState } from '../view-state';
@@ -220,7 +220,7 @@ function TrafficLimit({ bytes }: { bytes: string }) {
 function Bytes({ bytes }: { bytes: bigint }) {
   return (
     <span className="nowrap">
-      <Ltr>{formatTrafficGbText(bytes)}</Ltr> {t('web.unit_gib')}
+      <Num value={formatTrafficGbText(bytes)} /> {t('web.unit_gib')}
     </span>
   );
 }
@@ -994,7 +994,7 @@ function ServiceStats({ row }: { row: ServiceDetail }) {
       <StatCard
         icon="activity"
         label={t('web.service_traffic_used')}
-        value={<Ltr>{formatTrafficGbText(used)}</Ltr>}
+        value={<Num value={formatTrafficGbText(used)} />}
         unit={t('web.unit_gib')}
         hint={
           <span className="ca-stat-line">
@@ -1021,7 +1021,7 @@ function ServiceStats({ row }: { row: ServiceDetail }) {
       <StatCard
         icon="send"
         label={t('web.service_delivery_attempts')}
-        value={<Ltr>{formatNumber(row.deliveryAttempts)}</Ltr>}
+        value={<Num value={row.deliveryAttempts} />}
         hint={
           <span className="ca-stat-line">
             <span>{t('web.service_delivery_next_attempt')}</span>
@@ -1040,7 +1040,7 @@ function ServiceStats({ row }: { row: ServiceDetail }) {
           row.deviceLimit === null ? (
             <span className="ca-stat-sentence">{t('web.service_device_limit_none')}</span>
           ) : (
-            <Ltr>{formatNumber(row.deviceLimit)}</Ltr>
+            <Num value={row.deviceLimit} />
           )
         }
       />
@@ -1160,7 +1160,7 @@ const OPERATION_COLUMNS: readonly Column<ServiceOperationResponse>[] = [
     key: 'attempts',
     header: t('web.operation_attempts'),
     align: 'end',
-    render: (op) => <Ltr>{formatNumber(op.attempts)}</Ltr>,
+    render: (op) => <Num value={op.attempts} />,
   },
   {
     key: 'created',

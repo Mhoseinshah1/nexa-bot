@@ -734,11 +734,11 @@ function DiscountValue({ row }: { row: DiscountSummaryResponse }) {
   if (row.type === 'PERCENTAGE') {
     return (
       <span className="nowrap">
-        <Ltr>{row.value}</Ltr> {t('web.discount_percent_unit')}
+        <Num value={row.value} /> {t('web.discount_percent_unit')}
       </span>
     );
   }
-  if (row.currency === null) return <Ltr>{row.value}</Ltr>;
+  if (row.currency === null) return <Num value={row.value} />;
   return <Money value={{ amountMinor: row.value, currency: row.currency }} />;
 }
 
@@ -749,7 +749,7 @@ function DiscountValue({ row }: { row: DiscountSummaryResponse }) {
  */
 function Minimum({ row }: { row: DiscountSummaryResponse }) {
   if (row.minimumSubtotalAmount === null) return <Dash />;
-  if (row.currency === null) return <Ltr>{row.minimumSubtotalAmount}</Ltr>;
+  if (row.currency === null) return <Num value={row.minimumSubtotalAmount} />;
   return <Money value={{ amountMinor: row.minimumSubtotalAmount, currency: row.currency }} />;
 }
 
@@ -1608,7 +1608,7 @@ function CashbackRules({
       render: (row) => (
         <Badge tone="teal">
           <span className="nowrap">
-            <Ltr>{String(row.percent)}</Ltr> {t('web.discount_percent_unit')}
+            <Num value={String(row.percent)} /> {t('web.discount_percent_unit')}
           </span>
         </Badge>
       ),
@@ -2118,7 +2118,7 @@ function PreviewResult({ result }: { result: PricePreviewResponse }) {
                 </span>
               ) : (
                 <span key="c">
-                  {cashback.ruleLabel} — <Ltr>{String(cashback.percent)}</Ltr>{' '}
+                  {cashback.ruleLabel} — <Num value={String(cashback.percent)} />{' '}
                   {t('web.discount_percent_unit')} — <Money value={cashback.amount} />
                 </span>
               ),

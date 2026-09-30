@@ -66,6 +66,7 @@ import {
   useUnsavedChanges,
   type Column,
   type Tone,
+  Num,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
 import { FormSection, SaveBar, SectionNav, revealField } from './editor-layout';
@@ -246,7 +247,7 @@ function Traffic({ bytes }: { bytes: string }) {
   if (value === UNLIMITED_TRAFFIC_BYTES) return <span>{t('web.product_unlimited')}</span>;
   return (
     <span className="nowrap">
-      <Ltr>{formatTrafficGbText(value)}</Ltr> {t('web.unit_gib')}
+      <Num value={formatTrafficGbText(value)} /> {t('web.unit_gib')}
     </span>
   );
 }
@@ -256,7 +257,7 @@ function Duration({ days }: { days: number }) {
   if (days === UNLIMITED_DURATION_DAYS) return <span>{t('web.product_unlimited')}</span>;
   return (
     <span className="nowrap">
-      <Ltr>{formatNumber(days)}</Ltr> {t('web.product_days_unit')}
+      <Num value={days} /> {t('web.product_days_unit')}
     </span>
   );
 }
@@ -455,7 +456,7 @@ export function ProductsPage({
       key: 'sort',
       header: t('web.product_sort_order'),
       align: 'end',
-      render: (row) => <Ltr>{formatNumber(row.sortOrder)}</Ltr>,
+      render: (row) => <Num value={row.sortOrder} />,
     },
   ];
 
@@ -1523,13 +1524,10 @@ export function ProductDetailPage({
                         row.deviceLimit === null ? (
                           <span key="dl">{t('web.product_devices_provider_default')}</span>
                         ) : (
-                          <Ltr key="dl">{formatNumber(row.deviceLimit)}</Ltr>
+                          <Num key="dl" value={row.deviceLimit} />
                         ),
                       ],
-                      [
-                        t('web.product_sort_order'),
-                        <Ltr key="so">{formatNumber(row.sortOrder)}</Ltr>,
-                      ],
+                      [t('web.product_sort_order'), <Num key="so" value={row.sortOrder} />],
                       [
                         t('web.product_panel'),
                         row.panelId === null ? (

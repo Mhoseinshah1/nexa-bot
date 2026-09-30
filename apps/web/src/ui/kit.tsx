@@ -144,9 +144,22 @@ export function Money({ value }: { value: MoneyWire }) {
   );
 }
 
-/** A count. Grouped, tabular, never shortened to `1.2k`. */
-export function Num({ value }: { value: number }) {
-  return <span className="num">{formatNumber(value)}</span>;
+/**
+ * A quantity — a count, days, gigabytes, a percentage, a rate. Grouped,
+ * tabular, never shortened to `1.2k`, and drawn in the body's digit shapes:
+ * a quantity is not a technical identifier, so it is never `Ltr` (which
+ * keeps Latin digits for ids, hosts, hashes and usernames).
+ *
+ * `value` is a number to group, or a figure a formatter already wrote (a
+ * traffic amount, a rate, `12.5%`). `signed` isolates it left to right, so a
+ * leading `+`/`−` stays in front of its digits inside a Persian sentence.
+ */
+export function Num({ value, signed = false }: { value: number | string; signed?: boolean }) {
+  return (
+    <span className={signed ? 'num signed' : 'num'}>
+      {typeof value === 'number' ? formatNumber(value) : value}
+    </span>
+  );
 }
 
 /**

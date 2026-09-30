@@ -981,7 +981,7 @@ function OtherFigures({ selection }: { selection: ReportRangeSelection }) {
   const count = (value: { current: number; previous: number }): ReactNode => (
     <span className="dash-figure">
       <Num value={value.current} />
-      <span className="faint small ltr">
+      <span className="faint small num signed">
         {kpiDelta(BigInt(value.current), BigInt(value.previous), 'neutral').text}
       </span>
     </span>

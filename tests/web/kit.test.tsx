@@ -14,6 +14,7 @@ import {
   LineChart,
   Menu,
   Modal,
+  Num,
   PeriodControl,
   Progress,
   RoutedTabs,
@@ -470,6 +471,39 @@ describe('Disclosure', () => {
     const offenders = readdirSync(dir)
       .filter((name) => name.endsWith('.tsx'))
       .filter((name) => /<details[\s>]/.test(readFileSync(join(dir, name), 'utf8')));
+    expect(offenders).toEqual([]);
+  });
+});
+
+describe('quantities and identifiers', () => {
+  /*
+   * Days, gigabytes, counts, percentages and rates are quantities: they take
+   * the body's digit shapes. `Ltr` resets those shapes to Latin, which is
+   * right for an id, a host or a username and wrong for «۳۰ روز».
+   */
+  it('draws a quantity as Num, never as a technical Latin run', () => {
+    const { container } = renderPage(
+      <>
+        <Num value={1250} />
+        <Num value="12.5" />
+        <Num value="+4.2%" signed />
+      </>,
+    );
+    const [count, figure, signed] = [...container.querySelectorAll('span')];
+    expect(count?.className).toBe('num');
+    expect(count?.textContent).toBe(formatNumber(1250));
+    expect(figure?.textContent).toBe('12.5');
+    expect(signed?.className.split(' ')).toEqual(['num', 'signed']);
+    expect(container.querySelector('.ltr')).toBeNull();
+  });
+
+  it('is what every page uses for a formatted quantity', () => {
+    const dir = join(import.meta.dirname, '../../apps/web/src/pages');
+    const quantity =
+      /<Ltr[^>]*>\s*\{\s*(formatNumber|formatTrafficGbText|formatRate|formatBasisPoints|bytesText)\(/;
+    const offenders = readdirSync(dir)
+      .filter((name) => name.endsWith('.tsx'))
+      .filter((name) => quantity.test(readFileSync(join(dir, name), 'utf8')));
     expect(offenders).toEqual([]);
   });
 });

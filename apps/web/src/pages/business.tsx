@@ -327,7 +327,7 @@ export function ChangeNote({ current, previous }: { current: bigint; previous: b
     return <span className="faint small">{t('web.report_change_new')}</span>;
   return (
     <span className="faint small" title={t('web.report_change_hint')}>
-      <Ltr>{formatBasisPoints(change.basisPoints)}</Ltr>
+      <Num signed value={formatBasisPoints(change.basisPoints)} />
     </span>
   );
 }
@@ -1071,7 +1071,7 @@ function ServicesReport({ selection }: { selection: ReportRangeSelection }) {
               <Stat label={t('web.report_kpi_active_services')} value={data.activeServices} />
               <StatCard
                 label={t('web.report_traffic_sold')}
-                value={<Ltr>{bytesText(BigInt(data.trafficSoldBytes))}</Ltr>}
+                value={<Num value={bytesText(BigInt(data.trafficSoldBytes))} />}
                 hint={
                   <>
                     {t('web.report_unlimited_lines')} <Num value={data.unlimitedTrafficLines} />
@@ -1226,7 +1226,7 @@ function PaymentsReport({ selection }: { selection: ReportRangeSelection }) {
     {
       key: 'rate',
       header: t('web.report_col_success_rate'),
-      render: (r) => <Ltr>{formatRate(r.successRateBasisPoints)}</Ltr>,
+      render: (r) => <Num value={formatRate(r.successRateBasisPoints)} />,
       align: 'end',
     },
     {
@@ -1265,7 +1265,7 @@ function PaymentsReport({ selection }: { selection: ReportRangeSelection }) {
             />
             <p className="faint small">
               {t('web.report_success_rate_total')}{' '}
-              <Ltr>{formatRate(data.totals.successRateBasisPoints)}</Ltr>
+              <Num value={formatRate(data.totals.successRateBasisPoints)} />
             </p>
           </>
         )}
@@ -1389,7 +1389,7 @@ function InfrastructureReport({ selection }: { selection: ReportRangeSelection }
     {
       key: 'traffic',
       header: t('web.report_traffic_sold'),
-      render: (r) => <Ltr>{bytesText(BigInt(r.trafficSoldBytes))}</Ltr>,
+      render: (r) => <Num value={bytesText(BigInt(r.trafficSoldBytes))} />,
       align: 'end',
     },
     {
@@ -1600,7 +1600,7 @@ export function ReferralAnalytics({
                 value={<Num value={data.convertedBuyers} />}
               >
                 <span className="faint small">
-                  <Ltr>{formatRate(data.conversionBasisPoints)}</Ltr>
+                  <Num value={formatRate(data.conversionBasisPoints)} />
                 </span>
               </Kpi>
               <Kpi label={t('web.report_referral_gifts')} value={sum(data.signupGifts)} />

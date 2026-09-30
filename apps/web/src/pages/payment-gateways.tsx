@@ -40,6 +40,7 @@ import {
   useToast,
   useUnsavedChanges,
   type Column,
+  Num,
 } from '../ui/kit';
 
 /**
@@ -543,13 +544,13 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
           row.topupCashbackPercent === 0 ? null : (
             <span key="gift">
               <span className="muted">{t('web.payment_gateway_topup_gift')}:</span>{' '}
-              <Ltr>{`${String(row.topupCashbackPercent)}%`}</Ltr>
+              <Num value={`${String(row.topupCashbackPercent)}%`} />
             </span>
           ),
           row.customerFeeBasisPoints === 0 ? null : (
             <span key="fee">
               <span className="muted">{t('web.payment_gateway_customer_fee')}:</span>{' '}
-              <Ltr>{`${formatBasisPointsPercent(row.customerFeeBasisPoints)}%`}</Ltr>
+              <Num value={`${formatBasisPointsPercent(row.customerFeeBasisPoints)}%`} />
             </span>
           ),
           !row.conversion.rateRequired ? null : (

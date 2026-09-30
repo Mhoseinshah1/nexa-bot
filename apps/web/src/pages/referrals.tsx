@@ -47,6 +47,7 @@ import {
   useToast,
   type Column,
   type Tone,
+  Num,
 } from '../ui/kit';
 
 /**
@@ -402,7 +403,7 @@ function Commissions({ denied, referrerId }: { denied: boolean; referrerId: stri
       header: t('web.referral_percent'),
       render: (row) => (
         <span className="nowrap">
-          <Ltr>{String(row.percent)}</Ltr> {t('web.discount_percent_unit')}
+          <Num value={String(row.percent)} /> {t('web.discount_percent_unit')}
         </span>
       ),
     },

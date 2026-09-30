@@ -62,6 +62,7 @@ import {
   useUnsavedChanges,
   type Column,
   type Tone,
+  Num,
 } from '../ui/kit';
 
 /**
@@ -1515,7 +1516,10 @@ export function PaymentDetailPage({
                         items={[
                           [
                             t('web.payment_customer_fee_rate'),
-                            <Ltr key="r">{`${formatBasisPointsPercent(row.customerFee.basisPoints)}%`}</Ltr>,
+                            <Num
+                              key="r"
+                              value={`${formatBasisPointsPercent(row.customerFee.basisPoints)}%`}
+                            />,
                           ],
                           [
                             t('web.payment_customer_fee_amount'),
@@ -1733,7 +1737,7 @@ export function PaymentDetailPage({
                   {row.topupCashbackPercent !== null && (
                     <Card title={t('web.payment_topup_gift')}>
                       <p className="strong">
-                        <Ltr>{`${String(row.topupCashbackPercent)}%`}</Ltr>
+                        <Num value={`${String(row.topupCashbackPercent)}%`} />
                       </p>
                       <p className="muted small">{t('web.payment_topup_gift_hint')}</p>
                     </Card>

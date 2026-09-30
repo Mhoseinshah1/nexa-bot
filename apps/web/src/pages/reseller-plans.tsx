@@ -932,7 +932,8 @@ export function ResellerPolicyCard({
                     {data.pricing.percent !== null && (
                       <>
                         {' '}
-                        <Ltr>{String(data.pricing.percent)}</Ltr> {t('web.discount_percent_unit')}
+                        <Num value={String(data.pricing.percent)} />{' '}
+                        {t('web.discount_percent_unit')}
                       </>
                     )}
                   </span>,

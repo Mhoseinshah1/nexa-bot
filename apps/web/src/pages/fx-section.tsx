@@ -16,6 +16,7 @@ import {
   StateSwitch,
   useToast,
   type Column,
+  Num,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
 
@@ -155,7 +156,7 @@ export function FxSection({ denied, mayEdit }: { denied: boolean; mayEdit: boole
                 status.data.quote === null ? (
                   <span className="muted small">{t('web.fx_no_quote')}</span>
                 ) : (
-                  <Ltr>{status.data.quote.rate}</Ltr>
+                  <Num value={status.data.quote.rate} />
                 )
               }
               {...(status.data.quote === null
@@ -236,7 +237,7 @@ export function FxSection({ denied, mayEdit }: { denied: boolean; mayEdit: boole
                         {t('web.fx_stars_ratio_unset')}
                       </span>
                     ) : (
-                      <Ltr key="ra">{status.data.stars.starsPerUsdt}</Ltr>
+                      <Num key="ra" value={status.data.stars.starsPerUsdt} />
                     ),
                   ],
                   [
@@ -245,7 +246,7 @@ export function FxSection({ denied, mayEdit }: { denied: boolean; mayEdit: boole
                       '—'
                     ) : (
                       <span key="fr">
-                        <Ltr>{status.data.stars.fixedRateMinor}</Ltr>{' '}
+                        <Num value={status.data.stars.fixedRateMinor} />{' '}
                         {currencyLabel(status.data.quoteCurrency)}
                       </span>
                     ),
@@ -258,7 +259,7 @@ export function FxSection({ denied, mayEdit }: { denied: boolean; mayEdit: boole
                       </span>
                     ) : (
                       <span key="cr">
-                        <Ltr>{status.data.stars.centralRatePerStar}</Ltr>{' '}
+                        <Num value={status.data.stars.centralRatePerStar} />{' '}
                         {currencyLabel(status.data.quoteCurrency)}
                       </span>
                     ),

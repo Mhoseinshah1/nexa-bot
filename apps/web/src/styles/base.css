@@ -114,6 +114,11 @@ hr {
 .num {
   font-variant-numeric: tabular-nums;
 }
+/* A signed quantity: its sign stays in front, its digits keep the body's shapes. */
+.num.signed {
+  direction: ltr;
+  unicode-bidi: isolate;
+}
 .muted {
   color: var(--fg-2);
 }

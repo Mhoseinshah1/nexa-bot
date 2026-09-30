@@ -35,6 +35,7 @@ import {
   StateSwitch,
   useToast,
   type Tone,
+  Num,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
 
@@ -631,7 +632,7 @@ function DiagnosticView({ diagnostic }: { diagnostic: BotDiagnostic }) {
               )}
             </li>
             <li>
-              {t('web.bot_check_pending')} <Ltr>{String(webhook.pendingUpdateCount ?? '—')}</Ltr>
+              {t('web.bot_check_pending')} <Num value={webhook.pendingUpdateCount ?? '—'} />
             </li>
             <li>
               {t('web.bot_check_last_error')}{' '}

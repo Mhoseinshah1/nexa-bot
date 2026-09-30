@@ -32,6 +32,7 @@ import {
   StateSwitch,
   type Column,
   type Tone,
+  Num,
 } from '../ui/kit';
 import { STATE_LABELS as ORDER_STATE_LABELS, STATE_TONES as ORDER_STATE_TONES } from './orders';
 import { PRICE_LAYER_LABELS, limitWire } from './resellers';
@@ -279,7 +280,7 @@ export function ResellerPurchasesCard({
           {row.percent === null ? null : (
             <>
               {' '}
-              <Ltr>{`${row.percent}%`}</Ltr>
+              <Num value={`${row.percent}%`} />
             </>
           )}
         </span>
