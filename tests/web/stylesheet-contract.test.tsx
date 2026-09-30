@@ -3,7 +3,16 @@ import { dirname, join } from 'node:path';
 import { useState } from 'react';
 import { describe, expect, it } from 'vitest';
 import { fireEvent, screen } from '@testing-library/react';
-import { KV, Ltr, Money, Pills, RowActions, Tabs } from '../../apps/web/src/ui/kit';
+import {
+  ButtonGroup,
+  Card,
+  KV,
+  Ltr,
+  Money,
+  Pills,
+  RowActions,
+  Tabs,
+} from '../../apps/web/src/ui/kit';
 import { renderPage } from './harness';
 
 /**
@@ -157,6 +166,110 @@ describe('spacing and wrapping the kit leaves to its containers', () => {
     const rule = block('.tbl .row-actions.wrap');
     expect(rule).toMatch(/flex-wrap:\s*wrap/);
     expect(rule).toMatch(/max-width:\s*var\(--row-actions-wrap-w\)/);
+  });
+});
+
+/**
+ * The declarations of the rule whose selector LIST contains `selector` —
+ * `block` needs the selector to be the last one before the brace.
+ */
+function ruleListing(selector: string): string {
+  const stripped = CSS.replace(/\/\*[\s\S]*?\*\//g, '');
+  for (const match of stripped.matchAll(/(^|[};])\s*([^{}@;]+)\{([^}]*)\}/gm)) {
+    const selectors = (match[2] ?? '').split(',').map((part) => part.trim());
+    if (selectors.includes(selector)) return match[3] ?? '';
+  }
+  throw new Error(`No rule listing ${selector} in styles.css.`);
+}
+
+/** The body of every at-rule with exactly this prelude, braces balanced. */
+function atRules(prelude: string): string[] {
+  const stripped = CSS.replace(/\/\*[\s\S]*?\*\//g, '');
+  const bodies: string[] = [];
+  let from = 0;
+  for (;;) {
+    const at = stripped.indexOf(`${prelude} {`, from);
+    if (at === -1) return bodies;
+    const open = stripped.indexOf('{', at);
+    let depth = 0;
+    let end = open;
+    for (; end < stripped.length; end += 1) {
+      if (stripped[end] === '{') depth += 1;
+      else if (stripped[end] === '}') {
+        depth -= 1;
+        if (depth === 0) break;
+      }
+    }
+    bodies.push(stripped.slice(open + 1, end));
+    from = end;
+  }
+}
+
+describe('what the consistency pass found at 390 and 1440', () => {
+  /*
+   * With `flex: 1` (a zero basis) the titles shrank to nothing before the
+   * actions would wrap, so a card head with three export buttons set its
+   * heading one word a line on a phone (the referral analytics card).
+   */
+  it("wraps a card head's actions beneath titles that reach their floor", () => {
+    const { container } = renderPage(
+      <Card title="عنوان" hint="توضیح" actions={<button type="button">الف</button>}>
+        <p>بدنه</p>
+      </Card>,
+    );
+    expect(container.querySelector('.card-head > .titles + .actions')).not.toBeNull();
+    expect(block('.card-head')).toMatch(/flex-wrap:\s*wrap/);
+    expect(block('.card-head > .titles')).toMatch(/flex:\s*1 1 var\(--card-head-titles-min\)/);
+    expect(block(':root')).toMatch(/--card-head-titles-min:\s*12rem/);
+  });
+
+  /*
+   * A card whose only content is a filter toolbar drew the toolbar's bottom
+   * rule and then the card's 16px padding under it: an empty band.
+   */
+  it('ends a card on its toolbar or filter row without a band beneath', () => {
+    for (const selector of [
+      '.card-body > .toolbar:last-child',
+      '.card-body > .filter-row:last-child',
+    ]) {
+      const rule = ruleListing(selector);
+      expect(rule, selector).toMatch(/margin-bottom:\s*-16px/);
+      expect(rule, selector).toMatch(/border-bottom:\s*0/);
+    }
+    expect(block('.card-body')).toMatch(/padding:\s*16px/);
+  });
+
+  /*
+   * A segmented set does not wrap, so the eight report periods ran off a 390px
+   * card and the last of them could not be seen or pressed.
+   */
+  it('lets a segmented set wrap on a phone, and only there', () => {
+    const { container } = renderPage(
+      <ButtonGroup segmented label="بازه">
+        <button type="button" className="btn">
+          الف
+        </button>
+      </ButtonGroup>,
+    );
+    expect(container.querySelector('.btn-group.segmented')).not.toBeNull();
+    expect(block('.btn-group.segmented')).toMatch(/flex-wrap:\s*nowrap/);
+    const phone = atRules('@media (max-width: 640px)').join('\n');
+    const wrap = /\.btn-group\.segmented\s*\{([^}]*)\}/.exec(phone);
+    expect(wrap?.[1] ?? '', 'no phone rule wraps a segmented set').toMatch(/flex-wrap:\s*wrap/);
+    expect(phone).toMatch(
+      /\.btn-group\.segmented \.btn \+ \.btn\s*\{[^}]*margin-inline-start:\s*0/,
+    );
+  });
+
+  /*
+   * Six KPI cards abreast at 1440 leave a nine-digit toman figure no room for
+   * its unit; the unit fell to its own line and the whole row grew with it.
+   */
+  it("sets a narrow dashboard KPI card's figure a step smaller", () => {
+    expect(block('.dash-kpis > .stat')).toMatch(/container-type:\s*inline-size/);
+    const narrow = atRules('@container (max-width: 200px)').join('\n');
+    expect(narrow).toMatch(/\.dash-kpis \.stat \.val\s*\{[^}]*font-size:\s*var\(--fs-kpi-narrow\)/);
+    expect(block(':root')).toMatch(/--fs-kpi-narrow:\s*17px/);
   });
 });
 

@@ -121,6 +121,8 @@
   --fs-sm: 12px;
   --fs-xs: 11.5px;
   --fs-2xs: 10.5px;
+  /* A KPI figure in a card too narrow for the 20px one and its unit. */
+  --fs-kpi-narrow: 17px;
   --radius-card: 10px;
   --radius-ctl: 7px;
   --radius-sm: 5px;
@@ -133,6 +135,8 @@
   --sidebar-w-full: 248px;
   --sidebar-w-rail: 60px;
   --row-actions-wrap-w: 170px;
+  /* How narrow a card head's titles get before its actions wrap beneath them. */
+  --card-head-titles-min: 12rem;
   --topbar-h: 52px;
   --gap: 14px;
 }

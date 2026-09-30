@@ -128,6 +128,23 @@
 .btn-group.segmented .btn + .btn {
   margin-inline-start: -1px;
 }
+/*
+ * On a phone a segmented set wraps into separate controls rather than running
+ * past its card: eight period presets are wider than 390px, and the ones off
+ * the edge could not be seen or reached.
+ */
+@media (max-width: 640px) {
+  .btn-group.segmented {
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+  .btn-group.segmented .btn {
+    border-radius: var(--radius-ctl);
+  }
+  .btn-group.segmented .btn + .btn {
+    margin-inline-start: 0;
+  }
+}
 .btn-group .btn.on,
 .btn-group .btn[aria-pressed='true'] {
   background: var(--accent-soft);
@@ -362,8 +379,13 @@
   border-bottom: 1px solid var(--line);
   flex-wrap: wrap;
 }
+/*
+ * The titles keep a floor before the actions may sit beside them: with a zero
+ * basis a card head never wrapped, and three export buttons squeezed a heading
+ * and its hint to one word a line on a phone.
+ */
 .card-head > .titles {
-  flex: 1;
+  flex: 1 1 var(--card-head-titles-min);
   min-width: 0;
 }
 .card-head h2,
@@ -411,6 +433,15 @@
 .card-body > .tbl-wrap:last-child,
 .card-body > .pager:last-child {
   margin-bottom: -16px;
+}
+/*
+ * A toolbar or filter row that ends the card is its bottom edge: flush, and
+ * without a rule of its own above the card's padding, which drew an empty band.
+ */
+.card-body > .toolbar:last-child,
+.card-body > .filter-row:last-child {
+  margin-bottom: -16px;
+  border-bottom: 0;
 }
 .card-body > .tbl-wrap + *,
 .card-body > .toolbar + *,
