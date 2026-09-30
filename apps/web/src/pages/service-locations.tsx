@@ -44,6 +44,7 @@ import {
   RowActions,
   StateSwitch,
   useToast,
+  useDiscardGuard,
   useUnsavedChanges,
   type Column,
 } from '../ui/kit';
@@ -200,6 +201,8 @@ export function ServiceLocationsPage({
     JSON.stringify(form) !==
     JSON.stringify(editedRow === undefined ? EMPTY_FORM : formOf(editedRow));
   useUnsavedChanges(dirty);
+  /** Edit or Add replaces the form's contents: asked first while they are unsaved. */
+  const discard = useDiscardGuard(dirty);
 
   const panelName = (id: string): string => panels.data?.find((one) => one.id === id)?.name ?? id;
   const productName = (id: string | null): string =>
@@ -378,11 +381,13 @@ export function ServiceLocationsPage({
               variant="ghost"
               icon="edit"
               disabled={busy}
-              onClick={() => {
-                setEditing(row.id);
-                setForm(formOf(row));
-                revealField('sl-panel');
-              }}
+              onClick={() =>
+                discard.confirmDiscard(() => {
+                  setEditing(row.id);
+                  setForm(formOf(row));
+                  revealField('sl-panel');
+                })
+              }
             >
               {t('web.service_locations_edit')}
             </Button>
@@ -412,10 +417,12 @@ export function ServiceLocationsPage({
                 <Button
                   variant="primary"
                   icon="plus"
-                  onClick={() => {
-                    reset();
-                    revealField('sl-panel');
-                  }}
+                  onClick={() =>
+                    discard.confirmDiscard(() => {
+                      reset();
+                      revealField('sl-panel');
+                    })
+                  }
                 >
                   {t('web.cb_add')}
                 </Button>
@@ -715,6 +722,7 @@ export function ServiceLocationsPage({
           onCancel={() => setDeleting(null)}
         />
       )}
+      {discard.dialog}
     </>
   );
 }

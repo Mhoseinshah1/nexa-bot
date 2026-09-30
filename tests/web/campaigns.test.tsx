@@ -1,11 +1,14 @@
-import { describe, expect, it } from 'vitest';
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { afterEach, describe, expect, it } from 'vitest';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import {
   CampaignDetailPage,
   CampaignNewPage,
   CampaignsPage,
 } from '../../apps/web/src/pages/campaigns';
 import { NAV, resolve } from '../../apps/web/src/app';
+import { LeaveGuardHost } from '../../apps/web/src/ui/kit';
+import { navigate } from '../../apps/web/src/router';
+import { t } from '../../apps/web/src/i18n/web.fa';
 import { renderPage, stubApi, type Api } from './harness';
 
 /**
@@ -448,3 +451,65 @@ function results() {
     timeGift: null,
   };
 }
+
+describe('the campaign editor', () => {
+  const pickers = [
+    {
+      url: '/audience/options',
+      body: { currency: 'IRT', resellerTiers: [], products: [], panels: [] },
+    },
+    { url: '/products', body: { products: [], nextCursor: null } },
+    { url: '/product-categories', body: { categories: [] } },
+  ];
+  const go = (url: string) => act(() => navigate(url, { replace: true, force: true }));
+
+  afterEach(() => {
+    go('/');
+  });
+
+  it('closes an edit once it is saved, so the draft it saved is not called unsaved', async () => {
+    const api = stubApi([
+      ...pickers,
+      { url: `/campaigns/${CAMPAIGN_ID}/draft`, body: detail() },
+      { url: `/campaigns/${CAMPAIGN_ID}`, body: detail() },
+    ]);
+    go(`/campaigns/${CAMPAIGN_ID}`);
+    renderPage(
+      <>
+        <CampaignDetailPage id={CAMPAIGN_ID} denied={false} mayManage may={ALL} />
+        <LeaveGuardHost />
+      </>,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: t('web.campaign_edit') }));
+    // A trailing space: the server stores the name trimmed, so the record the save
+    // refetches differs from what was typed.
+    fireEvent.change(await screen.findByLabelText(t('web.campaign_name')), {
+      target: { value: 'جشنواره پاییز ' },
+    });
+    expect(screen.getByText(t('web.unsaved_changes'))).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: t('web.campaign_save_draft') }));
+    await waitFor(() => expect(posts(api, '/draft')).toHaveLength(1));
+    await waitFor(() => expect(screen.queryByLabelText(t('web.campaign_name'))).toBeNull());
+    expect(screen.queryByText(t('web.unsaved_changes'))).toBeNull();
+
+    // Nothing is held: the page has nothing unsaved to ask about.
+    act(() => navigate('/orders'));
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(window.location.pathname).toBe('/orders');
+  });
+
+  it('moves focus into the section the section list names', async () => {
+    stubApi([...pickers, listWithPresentation]);
+    renderPage(<CampaignNewPage denied={false} mayManage may={ALL} />);
+    await screen.findByLabelText(t('web.campaign_name'));
+    const nav = screen.getByRole('navigation', { name: t('web.cb_sections') });
+    for (const [label, id] of [
+      [t('web.campaign_window'), 'campaign-section-window'],
+      [t('web.campaign_action_announcement'), 'campaign-section-announcement'],
+    ] as const) {
+      fireEvent.click(within(nav).getByRole('button', { name: label }));
+      await waitFor(() => expect(document.activeElement?.id).toBe(id));
+    }
+  });
+});

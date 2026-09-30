@@ -29,6 +29,7 @@ import {
   RowActions,
   StateSwitch,
   useToast,
+  useDiscardGuard,
   useUnsavedChanges,
   type Column,
 } from '../ui/kit';
@@ -119,6 +120,8 @@ export function ProductCategoriesPage({ denied, mayEdit }: { denied: boolean; ma
   const loaded = editedRow === undefined ? EMPTY_FORM : formOf(editedRow);
   const dirty = JSON.stringify(form) !== JSON.stringify(loaded);
   useUnsavedChanges(dirty);
+  /** Edit or Add replaces the form's contents: asked first while they are unsaved. */
+  const discard = useDiscardGuard(dirty);
 
   const reset = () => {
     setEditing(null);
@@ -280,11 +283,13 @@ export function ProductCategoriesPage({ denied, mayEdit }: { denied: boolean; ma
               variant="ghost"
               icon="edit"
               disabled={busy}
-              onClick={() => {
-                setEditing(row.id);
-                setForm(formOf(row));
-                revealField('cat-name');
-              }}
+              onClick={() =>
+                discard.confirmDiscard(() => {
+                  setEditing(row.id);
+                  setForm(formOf(row));
+                  revealField('cat-name');
+                })
+              }
             >
               {t('web.category_edit')}
             </Button>
@@ -365,10 +370,12 @@ export function ProductCategoriesPage({ denied, mayEdit }: { denied: boolean; ma
               <Button
                 variant="primary"
                 icon="plus"
-                onClick={() => {
-                  reset();
-                  revealField('cat-name');
-                }}
+                onClick={() =>
+                  discard.confirmDiscard(() => {
+                    reset();
+                    revealField('cat-name');
+                  })
+                }
               >
                 {t('web.category_new')}
               </Button>
@@ -512,6 +519,7 @@ export function ProductCategoriesPage({ denied, mayEdit }: { denied: boolean; ma
           onCancel={() => setDeleting(null)}
         />
       )}
+      {discard.dialog}
     </>
   );
 }

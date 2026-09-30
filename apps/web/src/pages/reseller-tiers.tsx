@@ -55,6 +55,8 @@ import {
   StateSwitch,
   Button,
   RowActions,
+  useDiscardGuard,
+  useReportDirty,
   useUnsavedChanges,
   useToast,
   type Column,
@@ -359,6 +361,8 @@ export function ResellerTiersPage({
 
   /** Which tier's form, and which tier's grants, are open — by id, so a refetch shows. */
   const [editingId, setEditingId] = useState<string | null>(null);
+  /** Opening another tier's edit drops the open form's draft: asked first. */
+  const discard = useDiscardGuard();
   const [grantsId, setGrantsId] = useState<string | null>(null);
   const [historyId, setHistoryId] = useState<string | null>(null);
   const editing = rows.find((row) => row.id === editingId);
@@ -413,8 +417,12 @@ export function ResellerTiersPage({
               variant="ghost"
               icon="edit"
               onClick={() => {
-                setEditingId(row.id);
-                revealField('tier-edit-name');
+                if (editingId === row.id) revealField('tier-edit-name');
+                else
+                  discard.confirmDiscard(() => {
+                    setEditingId(row.id);
+                    revealField('tier-edit-name');
+                  });
               }}
             >
               {t('web.rule_edit')}
@@ -518,9 +526,14 @@ export function ResellerTiersPage({
             <Banner tone="info">{t('web.reseller_tier_edit_denied')}</Banner>
           </Card>
         ) : editing !== undefined ? (
-          <TierForm key={editing.id} tier={editing} onDone={() => setEditingId(null)} />
+          <TierForm
+            key={editing.id}
+            tier={editing}
+            onDone={() => setEditingId(null)}
+            onDirtyChange={discard.onDirtyChange}
+          />
         ) : (
-          <TierForm onDone={() => undefined} />
+          <TierForm onDone={() => undefined} onDirtyChange={discard.onDirtyChange} />
         )}
 
         <Card title={t('web.reseller_tiers_scope_title')} tone="muted">
@@ -537,6 +550,7 @@ export function ResellerTiersPage({
           </p>
         </Card>
       </div>
+      {discard.dialog}
     </>
   );
 }
@@ -861,7 +875,16 @@ export function tierBodyFrom(
   };
 }
 
-function TierForm({ tier, onDone }: { tier?: ResellerTierSummaryResponse; onDone: () => void }) {
+function TierForm({
+  tier,
+  onDone,
+  onDirtyChange,
+}: {
+  tier?: ResellerTierSummaryResponse;
+  onDone: () => void;
+  /** Told whether the form holds unsaved edits, so the page asks before replacing it. */
+  onDirtyChange?: (dirty: boolean) => void;
+}) {
   const mode = tier === undefined ? 'create' : 'edit';
   const prefix = `tier-${mode}`;
   const notify = useToast();
@@ -873,6 +896,7 @@ function TierForm({ tier, onDone }: { tier?: ResellerTierSummaryResponse; onDone
   const dirty =
     JSON.stringify(state) !== JSON.stringify(tier === undefined ? BLANK_TIER : tierStateOf(tier));
   useUnsavedChanges(dirty);
+  useReportDirty(dirty, onDirtyChange);
   const set = <K extends keyof TierFormState>(key: K, value: TierFormState[K]) =>
     setState((current) => ({ ...current, [key]: value }));
 

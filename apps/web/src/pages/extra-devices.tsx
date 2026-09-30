@@ -35,6 +35,7 @@ import {
   RowActions,
   StateSwitch,
   useToast,
+  useDiscardGuard,
   useUnsavedChanges,
   type Column,
 } from '../ui/kit';
@@ -194,6 +195,8 @@ export function ExtraDevicesPage({
     JSON.stringify(form) !==
     JSON.stringify(editedRow === undefined ? EMPTY_FORM : formOf(editedRow));
   useUnsavedChanges(dirty);
+  /** Edit or Add replaces the form's contents: asked first while they are unsaved. */
+  const discard = useDiscardGuard(dirty);
 
   const panelName = (id: string | null): string =>
     id === null
@@ -316,11 +319,13 @@ export function ExtraDevicesPage({
               variant="ghost"
               icon="edit"
               disabled={busy}
-              onClick={() => {
-                setEditing(row.id);
-                setForm(formOf(row));
-                revealField('xd-title');
-              }}
+              onClick={() =>
+                discard.confirmDiscard(() => {
+                  setEditing(row.id);
+                  setForm(formOf(row));
+                  revealField('xd-title');
+                })
+              }
             >
               {t('web.extra_devices_edit')}
             </Button>
@@ -356,10 +361,12 @@ export function ExtraDevicesPage({
                 <Button
                   variant="primary"
                   icon="plus"
-                  onClick={() => {
-                    reset();
-                    revealField('xd-title');
-                  }}
+                  onClick={() =>
+                    discard.confirmDiscard(() => {
+                      reset();
+                      revealField('xd-title');
+                    })
+                  }
                 >
                   {t('web.cb_add')}
                 </Button>
@@ -547,6 +554,7 @@ export function ExtraDevicesPage({
           </Card>
         )}
       </div>
+      {discard.dialog}
     </>
   );
 }

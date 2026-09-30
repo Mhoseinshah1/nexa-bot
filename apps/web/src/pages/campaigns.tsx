@@ -787,12 +787,19 @@ function CampaignForm({
   campaignId,
   presentation,
   may,
+  onSaved,
 }: {
   initial: FormState;
   campaignId: string | null;
   presentation: { timezone: string; calendar: 'jalali' | 'gregorian' };
   /** Each action's own server permission; an editor the actor may not use is not drawn. */
   may: CampaignActionPermissions;
+  /**
+   * Called once a save is accepted. An edit's page closes the form with it: the form
+   * would otherwise stay mounted over a refetched `initial` the server has normalised
+   * (a trimmed name), and call the draft it just saved unsaved.
+   */
+  onSaved?: () => void;
 }) {
   const client = useQueryClient();
   const notify = useToast();
@@ -831,6 +838,7 @@ function CampaignForm({
       setProblem(null);
       void client.invalidateQueries({ queryKey: [CAMPAIGNS_KEY] });
       notify({ tone: 'ok', message: t('web.campaign_saved') });
+      onSaved?.();
       // Saved: opening the campaign is not leaving unsaved work.
       navigate(`/campaigns/${response.campaign.id}`, { force: true });
     },
@@ -869,7 +877,7 @@ function CampaignForm({
         ]}
       />
       <div className="cb-editor-main stack">
-        <Card id="campaign-section-identity" title={t('web.campaign_section_identity')}>
+        <Card id="campaign-section-identity" focusable title={t('web.campaign_section_identity')}>
           <div className="grid-2">
             <Field label={t('web.campaign_name')} htmlFor="campaign-name">
               <input
@@ -894,7 +902,12 @@ function CampaignForm({
           </div>
         </Card>
 
-        <Card id="campaign-section-window" title={t('web.campaign_window')} hint={calendarHint}>
+        <Card
+          id="campaign-section-window"
+          focusable
+          title={t('web.campaign_window')}
+          hint={calendarHint}
+        >
           <div className="grid-2">
             <Field
               label={t('web.campaign_start')}
@@ -945,6 +958,7 @@ function CampaignForm({
 
         <Card
           id="campaign-section-audience"
+          focusable
           title={t('web.campaign_section_audience')}
           hint={t('web.campaign_audience_hint')}
         >
@@ -953,6 +967,7 @@ function CampaignForm({
 
         <Card
           id="campaign-section-discount"
+          focusable
           title={t('web.campaign_action_discount')}
           hint={t('web.campaign_discount_hint')}
         >
@@ -1104,6 +1119,7 @@ function CampaignForm({
 
         <Card
           id="campaign-section-cashback"
+          focusable
           title={t('web.campaign_action_cashback')}
           hint={t('web.campaign_cashback_hint')}
         >
@@ -1160,6 +1176,7 @@ function CampaignForm({
 
         <Card
           id="campaign-section-gifts"
+          focusable
           title={t('web.campaign_section_gifts')}
           hint={t('web.campaign_gifts_hint')}
         >
@@ -1259,6 +1276,7 @@ function CampaignForm({
 
         <Card
           id="campaign-section-announcement"
+          focusable
           title={t('web.campaign_action_announcement')}
           hint={t('web.campaign_announcement_hint')}
         >
@@ -1494,6 +1512,7 @@ export function CampaignDetailPage({
               campaignId={campaign.id}
               presentation={detail.data.presentation}
               may={may}
+              onSaved={() => setEditing(false)}
             />
           ) : (
             <TwoColumn
