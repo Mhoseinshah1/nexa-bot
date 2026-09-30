@@ -230,10 +230,11 @@ describe('R3 — service delivery, connection files and the service card', () =>
     return service;
   }
 
-  const tap = (data: string, messageId: number) => {
+  /** Codex review of #116: `key` repeats an update, as Telegram's redelivery does. */
+  const tap = (data: string, messageId: number, key?: string) => {
     updateSeq += 1;
     return ctx.container.botRuntime.handle(tenantA, systemActor('bot'), {
-      idempotencyKey: `r3-update-${String(updateSeq)}-${randomUUID()}`,
+      idempotencyKey: key ?? `r3-update-${String(updateSeq)}-${randomUUID()}`,
       botInstanceId: BOT_A,
       update: {
         update_id: updateSeq,
@@ -627,6 +628,38 @@ describe('R3 — service delivery, connection files and the service card', () =>
 
   describe('round N: the same card', () => {
     const CARD = 6160;
+
+    /*
+     * Codex review of #116, finding 1: Telegram redelivers a disable whose failure the card
+     * has already answered. The replay must not turn the answered card back into «working»
+     * — the operation has ended and nothing would ever answer it again.
+     */
+    it('a redelivered switch tap leaves the answered card alone', async () => {
+      const service = await paidService('replay-switch');
+      (panel.users as Map<string, unknown>).delete(service.providerUsername);
+      const key = `replay-${randomUUID()}`;
+      await tap(`u:${service.id}`, CARD, key);
+      await ctx.container.provisionerLoop.tick();
+      const [ended] = (
+        (await ctx.container.database.db.execute(
+          sql`SELECT state FROM provisioning_operations
+               WHERE service_id = ${service.id} AND type = 'SUSPEND'`,
+        )) as unknown as { rows: { state: string }[] }
+      ).rows;
+      expect(ended?.state).toBe('FAILED');
+
+      sent = [];
+      const again = await tap(`u:${service.id}`, CARD, key);
+      expect(again.replyKey).toBeNull();
+      expect(of('editMessageText'), 'the answered card is not touched').toHaveLength(0);
+      expect(of('sendMessage')).toHaveLength(0);
+      expect(
+        await count(
+          sql`SELECT count(*)::int AS n FROM provisioning_operations
+               WHERE service_id = ${service.id} AND type = 'SUSPEND'`,
+        ),
+      ).toBe(1);
+    });
 
     it('reads «working» wherever it is drawn while a change is unsettled, then final', async () => {
       const service = await paidService('working-any');

@@ -1,4 +1,17 @@
-import { and, asc, desc, eq, inArray, isNotNull, isNull, lt, lte, or, type SQL } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  inArray,
+  isNotNull,
+  isNull,
+  lt,
+  lte,
+  or,
+  sql,
+  type SQL,
+} from 'drizzle-orm';
 import type { BotInstanceId, TenantContext, UserId } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import {
@@ -8,6 +21,7 @@ import {
 import {
   operationCardMessages,
   provisioningOperations,
+  services,
 } from '../../../../infrastructure/persistence/schema.js';
 import {
   CARD_ANSWERED_OPERATIONS,
@@ -256,12 +270,26 @@ export class DrizzleOperationCardRepository implements OperationCardRepository {
  * The operations whose card may be answered: a SUCCEEDED `CARD_ANSWERED_OPERATIONS` one, or
  * (round N, F4) a `CARD_FAILURE_ANSWERED_OPERATIONS` one that ended without happening —
  * ABANDONED, or FAILED with no retry scheduled (the announcer's own "terminal failure").
+ *
+ * And (Codex review of #116) a SUCCEEDED link change whose service is not ACTIVE: its new
+ * link waits for the delivery lane, which only announces ACTIVE services, so the card —
+ * «working» since the tap — would otherwise never be answered. It is drawn as the service
+ * now is; the link follows as its own message once the service is active again. An ACTIVE
+ * service's link change stays the delivery lane's to answer (`claimRotationCard`).
  */
 function cardAnswerable(): SQL {
   return or(
     and(
       eq(provisioningOperations.state, 'SUCCEEDED'),
       inArray(provisioningOperations.type, [...CARD_ANSWERED_OPERATIONS]),
+    ),
+    and(
+      eq(provisioningOperations.state, 'SUCCEEDED'),
+      eq(provisioningOperations.type, 'ROTATE_SUBSCRIPTION'),
+      sql`EXISTS (SELECT 1 FROM ${services}
+                   WHERE ${services.tenantId} = ${provisioningOperations.tenantId}
+                     AND ${services.id} = ${provisioningOperations.serviceId}
+                     AND ${services.state} <> 'ACTIVE')`,
     ),
     and(
       inArray(provisioningOperations.type, [...CARD_FAILURE_ANSWERED_OPERATIONS]),

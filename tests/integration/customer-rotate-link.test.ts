@@ -276,6 +276,34 @@ describe('a customer rotating their own subscription link', () => {
       from: { id: Number(telegramUserId), first_name: 'سارا' },
     });
   };
+  /**
+   * Codex review of #116: a tap whose update key, message and bot the test chooses — so a
+   * REDELIVERY (the same update again) and a tap through a second bot can be written.
+   */
+  const tapAs = (
+    data: string,
+    options: { readonly key: string; readonly messageId: number; readonly bot?: BotInstanceId },
+  ) =>
+    ctx.container.botRuntime.handle(tenantA, systemActor('bot'), {
+      idempotencyKey: options.key,
+      botInstanceId: options.bot ?? BOT_A,
+      update: {
+        update_id: options.messageId,
+        callback_query: {
+          id: `cbq-${options.key}`,
+          from: { id: Number(CUSTOMER_TG), is_bot: false, first_name: 'سارا' },
+          data,
+          message: {
+            message_id: options.messageId,
+            date: 0,
+            chat: { id: Number(CUSTOMER_TG), type: 'private' },
+            from: { id: 999999, is_bot: true, first_name: 'Nexa' },
+          },
+        },
+      },
+      telegramUserId: CUSTOMER_TG,
+      from: { id: Number(CUSTOMER_TG), first_name: 'سارا' },
+    });
   const lastMessage = () =>
     JSON.stringify(sent.filter((one) => one.url.includes('/sendMessage')).at(-1) ?? {});
   const lastEdit = () =>
@@ -436,6 +464,95 @@ describe('a customer rotating their own subscription link', () => {
       ),
       'the card is the answer',
     ).toBe(0);
+  });
+
+  /*
+   * Codex review of #116, finding 1: Telegram redelivering a confirmation whose rotation has
+   * already been answered on the card must not turn that card back into «working» — nothing
+   * would ever answer it again.
+   */
+  it('a redelivered confirmation leaves the answered card alone', async () => {
+    await enableRotation();
+    const service = await deliveredService('replay');
+    const confirm = { key: `replay-${randomUUID()}`, messageId: 81_001 };
+    await tapAs(`rd:${service.id}`, confirm);
+    panel.forgetFileReads();
+    await ctx.container.provisionerLoop.tick();
+    expect((await rotations(service.id))[0]?.state).toBe('SUCCEEDED');
+
+    sent = [];
+    const again = await tapAs(`rd:${service.id}`, confirm);
+    expect(again.replyKey).toBeNull();
+    expect(sent.filter((one) => one.url.endsWith('/editMessageText'))).toHaveLength(0);
+    expect(sent.filter((one) => one.url.endsWith('/sendMessage'))).toHaveLength(0);
+    expect(await rotations(service.id)).toHaveLength(1);
+  });
+
+  /*
+   * Codex review of #116, finding 2: a link change whose service stops being ACTIVE before
+   * the new link is delivered — the delivery lane announces only ACTIVE services — is still
+   * answered on its card, drawn as the service now is, and never left «working».
+   */
+  it('answers the card of a link change whose service was suspended before delivery', async () => {
+    await enableRotation();
+    const service = await deliveredService('deferred');
+    const confirm = { key: `deferred-${randomUUID()}`, messageId: 82_001 };
+    await tapAs(`rd:${service.id}`, confirm);
+    // The rotation waits; an operator's disable runs first.
+    await ctx.container.database.db.execute(
+      sql`UPDATE provisioning_operations SET next_attempt_at = now() + interval '1 hour'
+           WHERE service_id = ${service.id} AND type = 'ROTATE_SUBSCRIPTION'`,
+    );
+    await ctx.container.provisioning.requestFromOperator(tenantA, owner, service.id, 'SUSPEND', {
+      idempotencyKey: 'deferred-suspend',
+    });
+    await ctx.container.provisionerLoop.tick();
+    expect((await reload(service.id)).state).toBe('SUSPENDED');
+    await ctx.container.database.db.execute(
+      sql`UPDATE provisioning_operations SET next_attempt_at = now() - interval '1 hour'
+           WHERE service_id = ${service.id} AND type = 'ROTATE_SUBSCRIPTION'`,
+    );
+    sent = [];
+    await ctx.container.provisionerLoop.tick();
+    const after = await reload(service.id);
+    expect((await rotations(service.id))[0]?.state).toBe('SUCCEEDED');
+    expect(after.subscriptionUrl).not.toBe(service.subscriptionUrl);
+    expect(after.deliveryState, 'the link waits for the service to be active').toBe('PENDING');
+    const edits = sent.filter((one) => one.url.endsWith('/editMessageText'));
+    expect(edits).toHaveLength(1);
+    expect(edits[0]?.body['message_id']).toBe(confirm.messageId);
+    const text = String(edits[0]?.body['text']);
+    expect(text).toContain('🔴');
+    expect(text).not.toContain('در حال اعمال درخواست شما روی سرور');
+    expect(text).not.toContain(after.subscriptionUrl ?? '-');
+  });
+
+  /*
+   * Codex review of #116, finding 3: the link change is answered on the card through the bot
+   * that drew it, and the connection files follow through that SAME bot, into that chat —
+   * not through the bot the customer first used.
+   */
+  it('sends the files through the bot whose card showed the new link', async () => {
+    await enableRotation();
+    const botA2 = SEED_IDS.botA2 as BotInstanceId;
+    await ctx.container.database.db.execute(
+      sql`UPDATE bot_instances SET status = 'ACTIVE' WHERE id = ${botA2}`,
+    );
+    const service = await deliveredService('second-bot');
+    await tapAs(`rd:${service.id}`, {
+      key: `second-bot-${randomUUID()}`,
+      messageId: 83_001,
+      bot: botA2,
+    });
+    panel.forgetFileReads();
+    sent = [];
+    await ctx.container.provisionerLoop.tick();
+    const card = sent.find((one) => one.url.endsWith('/editMessageText'));
+    expect(card?.url).toContain('seed-token-acme-2');
+    expect(card?.body['message_id']).toBe(83_001);
+    const albums = sent.filter((one) => one.url.endsWith('/sendMediaGroup'));
+    expect(albums).toHaveLength(1);
+    expect(albums[0]?.url, 'the files go through the card’s bot').toContain('seed-token-acme-2');
   });
 
   // =========================================================================

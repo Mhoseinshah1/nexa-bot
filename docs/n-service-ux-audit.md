@@ -115,6 +115,20 @@ that message into the card.
 - A second card message tapped for a change already in flight reads «working» until it is
   redrawn (refresh, or reopened): only the card the operation was planned from is answered.
 
+## 3a. Codex review of #116
+
+- **A redelivered tap.** A switch or link-change confirmation Telegram delivers again is
+  recognised before the card is touched (`ProvisioningService.findCustomerRequest`, the
+  operation its idempotency key planned): the card is left to the answer it has or will get,
+  never turned back into «working». A concurrent redelivery that still gets the operation
+  back ENDED redraws the card as it is, with the failure line when it failed.
+- **A link change whose service stops being ACTIVE.** The delivery lane announces only ACTIVE
+  services, so such a card is answered by `OperationCardEditor` instead: a SUCCEEDED rotation
+  whose service is not ACTIVE is answerable, and the card is drawn as the service now is. The
+  new link follows as its own message once the service is active again.
+- **The files follow the link.** When the new link lands on a card, the files go through that
+  card's chat and bot (`DeliveryRecord.sentTo`), not the bot the customer first used.
+
 ## 4. Tests
 
 - `tests/unit/caption-markup.test.ts` — the caption grammar, entity placement and bounding,

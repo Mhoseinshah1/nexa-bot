@@ -980,6 +980,24 @@ export class ProvisioningService {
     return false;
   }
 
+  /**
+   * Round N (Codex review of #116): the operation a customer's request with THIS idempotency
+   * key already planned, if any — the same derivation `planWithin` uses, read-only. A
+   * redelivered tap is told apart from a new one with it BEFORE the service card is turned
+   * «working»: a request whose operation has already ended was already answered on the card.
+   */
+  async findCustomerRequest(
+    scope: TenantContext,
+    serviceId: string,
+    type: OperationType,
+    idempotencyKey: string,
+  ): Promise<OperationRecord | null> {
+    return this.deps.operations.findByOperationId(
+      scope,
+      this.deps.operationId(`${serviceId}:${type}:${idempotencyKey}`),
+    );
+  }
+
   async customerActionsFor(
     scope: TenantContext,
     service: ServiceRecord,
@@ -2166,4 +2184,18 @@ export function normaliseCustomerNote(raw: string): string {
     .replace(/\s+/gu, ' ')
     .trim();
   return Array.from(flat).slice(0, SERVICE_NOTE_MAX_LENGTH).join('');
+}
+
+/**
+ * Round N (Codex review of #116): an operation that has ended — SUCCEEDED, ABANDONED, or
+ * FAILED with no retry scheduled (the announcer's own "terminal failure").
+ */
+export function operationHasEnded(
+  operation: Pick<OperationRecord, 'state' | 'nextAttemptAt'>,
+): boolean {
+  return (
+    operation.state === 'SUCCEEDED' ||
+    operation.state === 'ABANDONED' ||
+    (operation.state === 'FAILED' && operation.nextAttemptAt === null)
+  );
 }

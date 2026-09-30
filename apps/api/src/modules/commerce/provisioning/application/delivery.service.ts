@@ -142,6 +142,12 @@ export interface DeliverySweepReport {
 export interface DeliveryRecord {
   readonly state: ServiceDeliveryState;
   readonly recorded: boolean;
+  /**
+   * Codex review of #116: the chat and bot the link actually went to, when that is not the
+   * caller's — a link change answered ON the card it was asked from, through the bot that
+   * drew that card. The files that follow go there too, so they arrive beside the link.
+   */
+  readonly sentTo?: { readonly chatId: string; readonly botInstanceId: BotInstanceId };
 }
 
 /**
@@ -393,9 +399,14 @@ export class DeliveryService {
      * it, and the record of the old link's send must not land on the row that now holds
      * the new one: that would mark a link DELIVERED the customer never received.
      */
-    const result =
+    const rotated =
       options.rotated === true
         ? await this.sendRotated(scope, service, chatId, botInstanceId, sentUrl)
+        : null;
+    const sentTo = rotated?.sentTo;
+    const result =
+      rotated !== null
+        ? rotated.result
         : options.card !== undefined
           ? await this.showLinkOnCard(scope, service, options.card, sentUrl)
           : await this.sendCard(scope, service, chatId, botInstanceId, sentUrl);
@@ -428,7 +439,7 @@ export class DeliveryService {
       const held = await this.deps.uow.run(scope, async (tx) =>
         this.deps.services.recordRateLimited(scope, service.id, from, retryAt, sentUrl, now, tx),
       );
-      return { state: from, recorded: held };
+      return { state: from, recorded: held, ...(sentTo === undefined ? {} : { sentTo }) };
     }
 
     const outcome = result.outcome;
@@ -471,7 +482,7 @@ export class DeliveryService {
      * separately, and a `false` here is the one case where the next sweep may send the
      * customer a second message.
      */
-    return { state: to, recorded };
+    return { state: to, recorded, ...(sentTo === undefined ? {} : { sentTo }) };
   }
 
   /**
@@ -588,7 +599,8 @@ export class DeliveryService {
          * twice. Its failure is swallowed by `sendFilesAfter` and changes nothing here.
          */
         if (record.recorded && record.state === 'DELIVERED') {
-          await this.sendFilesAfter(scope, service, lookup.contact);
+          // Codex review of #116: beside the link — the card's own chat and bot, if it went there.
+          await this.sendFilesAfter(scope, service, record.sentTo ?? lookup.contact);
         }
         if (!record.recorded) {
           // Sent, and the outcome could not be written because somebody else had
@@ -806,7 +818,10 @@ export class DeliveryService {
     chatId: string,
     botInstanceId: BotInstanceId,
     sentUrl: string,
-  ): Promise<CustomerSendResult> {
+  ): Promise<{
+    readonly result: CustomerSendResult;
+    readonly sentTo?: { readonly chatId: string; readonly botInstanceId: BotInstanceId };
+  }> {
     const values: TemplateValues = {
       serviceUsername: service.providerUsername,
       subscriptionUrl: sentUrl,
@@ -846,9 +861,14 @@ export class DeliveryService {
           await this.deps.uow.run(scope, async (tx) =>
             cards.release(scope, card.operationId, retryAt, tx),
           );
-          return edited;
+          return { result: edited };
         }
-        if (edited.outcome !== 'REFUSED') return edited;
+        if (edited.outcome !== 'REFUSED') {
+          return {
+            result: edited,
+            sentTo: { chatId: card.chatId, botInstanceId: card.botInstanceId },
+          };
+        }
       }
     }
     const text = {
@@ -859,7 +879,7 @@ export class DeliveryService {
       buttons,
     };
     const mode = deliveryModeOf(await this.deps.panelPolicy.forPanel(scope, service.panelId));
-    if (mode === 'CARD_TEXT') return this.deps.messenger.send(scope, text);
+    if (mode === 'CARD_TEXT') return { result: await this.deps.messenger.send(scope, text) };
     const photo = {
       chatId,
       botInstanceId,
@@ -876,13 +896,15 @@ export class DeliveryService {
       caption: { templateKey: 'bot.service.link_rotated', values },
       buttons,
     });
-    if (single.outcome !== 'REFUSED' || single.reason !== 'CAPTION_OVER_BOUND') return single;
+    if (single.outcome !== 'REFUSED' || single.reason !== 'CAPTION_OVER_BOUND') {
+      return { result: single };
+    }
     const first = await this.deps.messenger.sendFile(scope, {
       ...photo,
       caption: { templateKey: 'bot.service.delivered_qr_caption', values: {} },
     });
-    if (first.outcome !== 'DELIVERED') return first;
-    return this.deps.messenger.send(scope, text);
+    if (first.outcome !== 'DELIVERED') return { result: first };
+    return { result: await this.deps.messenger.send(scope, text) };
   }
 
   async redeliver(

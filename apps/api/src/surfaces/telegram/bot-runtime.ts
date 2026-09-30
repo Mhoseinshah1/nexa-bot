@@ -49,6 +49,7 @@ import type {
   CustomerNotificationKind,
   Money,
   OrderId,
+  OperationState,
   OrderPurpose,
   PaymentId,
   PermissionKey,
@@ -127,7 +128,10 @@ import type {
   GatewayPaymentService,
 } from '../../modules/commerce/payments/application/gateway-payment.service.js';
 import type { WalletService } from '../../modules/commerce/wallet/application/wallet.service.js';
-import { ProvisioningService } from '../../modules/commerce/provisioning/application/provisioning.service.js';
+import {
+  ProvisioningService,
+  operationHasEnded,
+} from '../../modules/commerce/provisioning/application/provisioning.service.js';
 import type { CustomerServiceOperation } from '../../modules/commerce/provisioning/application/provisioning.service.js';
 import type { DeliveryService } from '../../modules/commerce/provisioning/application/delivery.service.js';
 import {
@@ -10896,6 +10900,18 @@ export class BotRuntime {
     if (card !== null) {
       const service = await this.ownedService(scope, customer, serviceId);
       if (service === null) return toastReply('bot.service.not_found');
+      /*
+       * Codex review of #116: a REDELIVERY of this very tap is decided before the card is
+       * touched. Its operation already exists: open, the card already reads «working» and is
+       * answered when it ends; ended, the card was answered (or the sweep answers it) — and a
+       * «working» edit now would overwrite that answer with a state nothing ever clears.
+       */
+      if (
+        (await this.deps.services.findCustomerRequest(scope, serviceId, type, idempotencyKey)) !==
+        null
+      ) {
+        return { key: null, values: {}, buttons: [], orderId: null };
+      }
       if (!(await this.deps.services.customerActionsFor(scope, service)).includes(type)) {
         return this.cardWithToast(
           scope,
@@ -10907,11 +10923,19 @@ export class BotRuntime {
       }
       await this.showWorking(scope, actor, customer, serviceId, card);
     }
+    let planned;
     try {
-      await this.deps.services.requestFromCustomer(scope, actor, customer.id, serviceId, type, {
-        idempotencyKey,
-        ...(card === null ? {} : { card }),
-      });
+      planned = await this.deps.services.requestFromCustomer(
+        scope,
+        actor,
+        customer.id,
+        serviceId,
+        type,
+        {
+          idempotencyKey,
+          ...(card === null ? {} : { card }),
+        },
+      );
     } catch (error) {
       const code = (error as { code?: unknown } | null)?.code;
       if (code === COMMERCE_ERROR_CODES.SERVICE_NOT_FOUND) {
@@ -10942,7 +10966,14 @@ export class BotRuntime {
      * (`OperationCardEditor`); round N: a failure is answered on the card too, as the service
      * still is with the failure line. A tap with no card to edit (a client that sent no
      * message) is answered as before.
+     *
+     * Codex review of #116: a concurrent redelivery can pass the check above before the
+     * first turn planned, then get the first turn's operation back ENDED — answered on the
+     * card before this turn's «working» edit landed. The card is drawn as it now is.
      */
+    if (card !== null && operationHasEnded(planned)) {
+      return this.cardAfterEnded(scope, actor, customer, serviceId, planned.state);
+    }
     if (card !== null) return { key: null, values: {}, buttons: [], orderId: null };
     return { key: 'bot.service.action_requested', values: {}, buttons: [], orderId: null };
   }
@@ -11016,6 +11047,18 @@ export class BotRuntime {
      */
     if (card !== null) {
       const service = await this.ownedService(scope, customer, serviceId);
+      // Codex review of #116: a redelivered confirmation leaves the card to its answer.
+      if (
+        service !== null &&
+        (await this.deps.services.findCustomerRequest(
+          scope,
+          serviceId,
+          'ROTATE_SUBSCRIPTION',
+          idempotencyKey,
+        )) !== null
+      ) {
+        return { key: null, values: {}, buttons: [], orderId: null };
+      }
       if (
         service !== null &&
         (await this.deps.services.customerRotationFor(scope, service)).offered
@@ -11023,8 +11066,9 @@ export class BotRuntime {
         await this.showWorking(scope, actor, customer, serviceId, card);
       }
     }
+    let planned;
     try {
-      await this.deps.services.requestRotation(scope, actor, customer.id, serviceId, {
+      planned = await this.deps.services.requestRotation(scope, actor, customer.id, serviceId, {
         idempotencyKey,
         ...(card === null ? {} : { card }),
       });
@@ -11073,7 +11117,12 @@ export class BotRuntime {
      * (F4): with a card, it already reads «working» and nothing more is sent now — the new
      * link lands on it (then the files, as an album), or it comes back with the failure
      * notice. Without one (a client that sent no message), the card is drawn as before.
+     * A concurrent redelivery that got the operation back ENDED draws the card as it is
+     * (Codex review of #116, as `serviceAction`).
      */
+    if (card !== null && operationHasEnded(planned)) {
+      return this.cardAfterEnded(scope, actor, customer, serviceId, planned.state);
+    }
     if (card !== null) return { key: null, values: {}, buttons: [], orderId: null };
     return { ...(await this.serviceDetail(scope, actor, customer, serviceId)), edit: true };
   }
@@ -11100,6 +11149,29 @@ export class BotRuntime {
       values: working.values,
       buttons: working.buttons,
     });
+  }
+
+  /**
+   * Codex review of #116: the card as it now is, edited in place, after a request whose
+   * operation had already ENDED — with the failure line when it ended without happening.
+   */
+  private async cardAfterEnded(
+    scope: TenantContext,
+    actor: ActorContext,
+    customer: Pick<CustomerRecord, 'id'>,
+    serviceId: string,
+    state: OperationState,
+  ): Promise<PendingReply> {
+    return {
+      ...(await this.serviceDetail(
+        scope,
+        actor,
+        customer,
+        serviceId,
+        state === 'SUCCEEDED' ? {} : { notice: 'bot.service.notice_action_failed' },
+      )),
+      edit: true,
+    };
   }
 
   /** Round N (F4): the card as it now is, edited in place, with a short notice on the tap. */
