@@ -556,6 +556,118 @@ export class CustomerService {
   }
 
   /**
+   * Round N close (§D): the customer's own promotional opt-out, from their Telegram turn.
+   *
+   * Authorised by `maintenance.run`, as every customer-initiated write on the webhook path
+   * is (`resolveFromUpdate`, the ticket desk): the surface acts as SYSTEM_JOB and the
+   * customer named is the one the update resolved, never one the request chose. The
+   * preference governs MARKETING broadcasts only — a payment, service or ticket notice is a
+   * fact about their own account and still arrives — and ADR-0030's lane never reads it.
+   * Idempotent under the update's key; a replay answers the first result. The change is a
+   * conditional UPDATE, audited, and a `CustomerMarketingOptOutChanged` event.
+   */
+  async setMarketingOptOut(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: {
+      readonly idempotencyKey: string;
+      readonly customerId: string;
+      readonly optedOut: boolean;
+    },
+  ): Promise<{ readonly customer: CustomerRecord; readonly changed: boolean }> {
+    const customerId = this.customerId(input.customerId);
+    const requestHash = hashRequest({ customerId, marketingOptOut: input.optedOut });
+    await this.deps.guard.check(scope, actor, RESOLVE_CUSTOMER_PERMISSION);
+    const namespace = actor.surface;
+    const replay = await this.deps.idempotency.find<{ customerId: string; changed: boolean }>(
+      scope,
+      namespace,
+      input.idempotencyKey,
+      requestHash,
+    );
+    if (replay !== null) {
+      const replayed = await this.deps.repository.findById(
+        scope,
+        replay.result.customerId as UserId,
+      );
+      if (replayed !== null) return { customer: replayed, changed: replay.result.changed };
+    }
+    const now = this.deps.clock.now();
+    const action = input.optedOut ? 'customer.marketing_opt_out' : 'customer.marketing_opt_in';
+    return runAuthorizedMutation(
+      {
+        uow: this.deps.uow,
+        guard: this.deps.guard,
+        audit: this.deps.audit,
+        opsLog: this.deps.opsLog,
+        sessions: this.deps.sessions,
+        clock: this.deps.clock,
+      },
+      scope,
+      actor,
+      RESOLVE_CUSTOMER_PERMISSION,
+      { action, entityType: 'Customer', entityId: customerId },
+      async (tx) => {
+        if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+            'This installation has stopped accepting work.',
+          );
+        }
+        const before = await this.deps.repository.findById(scope, customerId, tx);
+        if (before === null) {
+          throw errors.notFound(COMMERCE_ERROR_CODES.CUSTOMER_NOT_FOUND, 'Unknown customer.');
+        }
+        const changed = await this.deps.repository.setMarketingOptOut(
+          scope,
+          customerId,
+          input.optedOut,
+          now,
+          tx,
+        );
+        const after = await this.deps.repository.findById(scope, customerId, tx);
+        if (after === null) {
+          throw errors.notFound(COMMERCE_ERROR_CODES.CUSTOMER_NOT_FOUND, 'Unknown customer.');
+        }
+        await this.deps.audit.record(
+          scope,
+          actor,
+          {
+            action,
+            entityType: 'Customer',
+            entityId: customerId,
+            before: { marketingOptOutAt: before.marketingOptOutAt?.toISOString() ?? null },
+            after: {
+              marketingOptOutAt: after.marketingOptOutAt?.toISOString() ?? null,
+              changed,
+            },
+            result: 'SUCCESS',
+          },
+          tx,
+        );
+        if (changed) {
+          await this.deps.outbox.write(tx, actor, {
+            eventType: 'CustomerMarketingOptOutChanged',
+            aggregateType: 'Customer',
+            aggregateId: customerId,
+            payload: { optedOut: input.optedOut },
+          });
+        }
+        await rememberOnce(
+          this.deps.idempotency,
+          scope,
+          namespace,
+          input.idempotencyKey,
+          requestHash,
+          { customerId, changed },
+          tx,
+        );
+        return { customer: after, changed };
+      },
+    );
+  }
+
+  /**
    * Both directions, in one place.
    *
    * Two near-identical methods is how one of them eventually loses its audit row or its

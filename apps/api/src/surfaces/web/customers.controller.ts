@@ -181,6 +181,7 @@ function toSummary(record: CustomerRecord): CustomerSummaryResponse {
     blockedAt: record.blockedAt === null ? null : record.blockedAt.toISOString(),
     blockedReason: record.blockedReason,
     blockedReasonShown: record.blockedReasonShown,
+    marketingOptOutAt: record.marketingOptOutAt?.toISOString() ?? null,
   };
 }
 
