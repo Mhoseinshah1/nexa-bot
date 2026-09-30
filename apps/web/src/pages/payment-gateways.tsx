@@ -647,7 +647,6 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
       <PageHead
         title={t('web.payment_gateways_title')}
         subtitle={t('web.payment_gateways_subtitle')}
-        maturity="now"
       />
 
       <StateSwitch

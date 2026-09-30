@@ -288,7 +288,6 @@ export function CampaignsPage({
       <PageHead
         title={t('web.campaigns_title')}
         subtitle={t('web.campaigns_intro')}
-        maturity="now"
         actions={
           mayManage && !denied ? (
             <>

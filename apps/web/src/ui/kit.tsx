@@ -453,7 +453,12 @@ export function PageHead({
 }: {
   title: ReactNode;
   subtitle?: ReactNode;
-  maturity?: Maturity;
+  /**
+   * Only for a page that does not do its job yet (planned, server-ready,
+   * unsupported). A working page carries no badge: «فعال» beside a list's
+   * title read as the state of some record, and the reference draws none.
+   */
+  maturity?: Exclude<Maturity, 'now'>;
   /** A status badge beside the title — the entity's state on a detail page. */
   badge?: ReactNode;
   actions?: ReactNode;

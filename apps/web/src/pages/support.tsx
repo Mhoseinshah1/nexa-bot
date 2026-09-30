@@ -326,7 +326,6 @@ export function SupportPage({ denied, mayEdit }: { denied: boolean; mayEdit: boo
       <PageHead
         title={t('web.support_title')}
         subtitle={t('web.support_subtitle')}
-        maturity="now"
         actions={mayEdit && editor.kind === 'closed' && rows.length > 0 ? newButton : undefined}
       />
 

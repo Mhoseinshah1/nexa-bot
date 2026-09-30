@@ -222,7 +222,6 @@ export function BulkOperationsPage({
       <PageHead
         title={t('web.bulk_page_title')}
         subtitle={t('web.bulk_page_intro')}
-        maturity="now"
         actions={
           mayRun ? (
             <a className="btn primary" href="/bulk-operations/new" onClick={onLink}>

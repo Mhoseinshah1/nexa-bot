@@ -126,7 +126,6 @@ export function DiscountsPage({
       <PageHead
         title={t('web.discounts_title')}
         subtitle={t('web.discounts_intro')}
-        maturity="now"
         actions={
           <a className="btn" href="/campaigns" onClick={onLink}>
             <Icon name="megaphone" />

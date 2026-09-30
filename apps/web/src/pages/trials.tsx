@@ -66,7 +66,7 @@ export function TrialsPage({
 }) {
   return (
     <>
-      <PageHead title={t('web.trials_title')} maturity="now" />
+      <PageHead title={t('web.trials_title')} />
       <PanelTrialsCard mayView={mayViewPanels} />
       <TwoColumn
         main={

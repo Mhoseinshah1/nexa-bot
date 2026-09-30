@@ -210,11 +210,7 @@ export function ReferralsPage({
 
   return (
     <>
-      <PageHead
-        title={t('web.referrals_title')}
-        subtitle={t('web.referrals_intro')}
-        maturity="now"
-      />
+      <PageHead title={t('web.referrals_title')} subtitle={t('web.referrals_intro')} />
 
       {!denied && (
         <Card className="referrals-filter">

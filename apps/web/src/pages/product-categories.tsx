@@ -354,7 +354,6 @@ export function ProductCategoriesPage({ denied, mayEdit }: { denied: boolean; ma
       <PageHead
         title={t('web.categories_title')}
         subtitle={t('web.categories_subtitle')}
-        maturity="now"
         actions={
           <>
             <a className="btn" href="/products" onClick={onLink}>

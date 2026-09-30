@@ -239,11 +239,7 @@ export function OpsGroupPage({ denied, mayManage }: { denied: boolean; mayManage
 
   return (
     <>
-      <PageHead
-        title={t('web.opsgroup_title')}
-        subtitle={t('web.opsgroup_subtitle')}
-        maturity="now"
-      />
+      <PageHead title={t('web.opsgroup_title')} subtitle={t('web.opsgroup_subtitle')} />
 
       <StateSwitch query={status} denied={denied} isEmpty={false}>
         {view !== undefined && (

@@ -348,7 +348,6 @@ export function ResellerPlansPage({
       <PageHead
         title={t('web.reseller_plans_title')}
         subtitle={t('web.reseller_plans_intro')}
-        maturity="now"
         actions={
           <>
             <a className="btn" href="/resellers" onClick={onLink}>

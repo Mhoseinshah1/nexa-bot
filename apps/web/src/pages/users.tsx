@@ -372,7 +372,7 @@ export function UsersPage({
 
   return (
     <>
-      <PageHead title={t('web.users_title')} subtitle={t('web.users_intro')} maturity="now" />
+      <PageHead title={t('web.users_title')} subtitle={t('web.users_intro')} />
 
       <Card className="ca-list">
         {maySearch ? (

@@ -34,7 +34,7 @@ export function FeaturesPage({ mayEdit, denied }: { mayEdit: boolean; denied: bo
 
   return (
     <>
-      <PageHead title={t('web.features_title')} subtitle={t('web.features_intro')} maturity="now" />
+      <PageHead title={t('web.features_title')} subtitle={t('web.features_intro')} />
       <StateSwitch query={flags} denied={denied} isEmpty={rows.length === 0}>
         <Card
           title={t('web.features_list_title')}

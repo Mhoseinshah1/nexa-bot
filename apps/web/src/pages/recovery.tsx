@@ -126,7 +126,7 @@ export function RecoveryPage({
 
   return (
     <>
-      <PageHead title={t('web.recovery_title')} subtitle={t('web.recovery_intro')} maturity="now" />
+      <PageHead title={t('web.recovery_title')} subtitle={t('web.recovery_intro')} />
 
       {status.data?.quiesced === true && (
         <Banner tone="danger" title={t('web.recovery_quiesced')}>

@@ -169,7 +169,6 @@ export function ContentPage({ mayEdit, denied }: { mayEdit: boolean; denied: boo
       <PageHead
         title={t('web.templates_title')}
         subtitle={t('web.templates_intro')}
-        maturity="now"
         badge={<UnsavedCount count={dirty.size} />}
       />
       <StateSwitch query={templates} denied={denied} isEmpty={rows.length === 0}>

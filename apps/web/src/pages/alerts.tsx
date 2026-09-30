@@ -233,7 +233,6 @@ export function AlertsPage({ denied }: { denied: boolean }) {
       <PageHead
         title={t('web.alerts_title')}
         subtitle={t('web.alerts_intro')}
-        maturity="now"
         actions={
           /*
            * Gone once the answer is final, for the same reason the error card's
@@ -543,7 +542,6 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
       <PageHead
         title={t('web.notifications_title')}
         subtitle={t('web.notifications_intro')}
-        maturity="now"
         actions={
           mayTest ? (
             <>

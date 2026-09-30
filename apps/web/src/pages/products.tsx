@@ -465,7 +465,6 @@ export function ProductsPage({
       <PageHead
         title={t('web.products_title')}
         subtitle={t('web.products_intro')}
-        maturity="now"
         actions={
           <>
             <a className="btn" href="/product-categories" onClick={onLink}>

@@ -15,6 +15,7 @@ import {
   Menu,
   Modal,
   Num,
+  PageHead,
   PeriodControl,
   Progress,
   RoutedTabs,
@@ -83,6 +84,24 @@ describe('StatCard and DetailHead', () => {
     const term = screen.getByText('سرویس');
     expect(term.tagName).toBe('DT');
     expect(term.nextElementSibling?.textContent).toBe('۱۲');
+  });
+});
+
+describe('PageHead', () => {
+  it('flags only a page that does not do its job yet', () => {
+    const { container } = renderPage(
+      <>
+        <PageHead title="کاربران" subtitle="فهرست" />
+        <PageHead title="گزارش" maturity="planned" />
+        {/* @ts-expect-error — a working page carries no maturity badge beside its title. */}
+        <PageHead title="سفارش‌ها" maturity="now" />
+      </>,
+    );
+    const heads = [...container.querySelectorAll('.page-head')];
+    expect(heads[0]?.querySelector('.maturity')).toBeNull();
+    expect(heads[1]?.querySelector('.maturity.planned')?.textContent).toBe(
+      t('web.maturity_planned'),
+    );
   });
 });
 

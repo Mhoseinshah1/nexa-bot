@@ -471,7 +471,7 @@ export function PaymentsPage({ route, denied }: { route: Route; denied: boolean 
 
   return (
     <>
-      <PageHead title={t('web.payments_title')} subtitle={t('web.payments_intro')} maturity="now" />
+      <PageHead title={t('web.payments_title')} subtitle={t('web.payments_intro')} />
 
       <Card className="ca-list">
         <form className="toolbar ca-search" onSubmit={apply} hidden={toolbarHidden}>
@@ -1283,7 +1283,7 @@ export function PaymentDetailPage({
   return (
     <>
       {row === undefined ? (
-        <PageHead title={t('web.payment_detail')} maturity="now" />
+        <PageHead title={t('web.payment_detail')} />
       ) : (
         <PageHead
           title={

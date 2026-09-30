@@ -113,7 +113,6 @@ export function SystemPage({
             )}
           </>
         }
-        maturity="now"
       />
 
       <Tabs

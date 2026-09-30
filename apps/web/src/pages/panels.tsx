@@ -459,7 +459,6 @@ export function PanelsPage({
       <PageHead
         title={t('web.panels_title')}
         subtitle={t('web.panels_intro')}
-        maturity="now"
         actions={
           mayEdit ? (
             <a className="btn primary" href="/panels/new" onClick={onLink}>
@@ -2774,7 +2773,7 @@ export function NewPanelPage({
 
   return (
     <>
-      <PageHead title={t('web.panel_new')} subtitle={t('web.panel_new_intro')} maturity="now" />
+      <PageHead title={t('web.panel_new')} subtitle={t('web.panel_new_intro')} />
 
       {/* The success an actor who cannot open the detail page still gets to
           see. Naming the panel matters: it is the only confirmation that the
@@ -2965,11 +2964,7 @@ export function ProvidersPage() {
 
   return (
     <>
-      <PageHead
-        title={t('web.providers_title')}
-        subtitle={t('web.providers_intro')}
-        maturity="now"
-      />
+      <PageHead title={t('web.providers_title')} subtitle={t('web.providers_intro')} />
 
       <Banner tone="info" title={t('web.providers_code_title')}>
         {t('web.providers_code_body')}

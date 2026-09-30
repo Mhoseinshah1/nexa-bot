@@ -200,7 +200,7 @@ export function BotsPage({
 
   return (
     <>
-      <PageHead title={t('web.nav_bots')} subtitle={t('web.bots_subtitle')} maturity="now" />
+      <PageHead title={t('web.nav_bots')} subtitle={t('web.bots_subtitle')} />
 
       <StateSwitch
         query={bots}

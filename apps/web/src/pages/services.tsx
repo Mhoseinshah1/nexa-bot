@@ -403,7 +403,7 @@ export function ServicesPage({
 
   return (
     <>
-      <PageHead title={t('web.services_title')} subtitle={t('web.services_intro')} maturity="now" />
+      <PageHead title={t('web.services_title')} subtitle={t('web.services_intro')} />
       {/* Its own permission, not the list's: `refunds.view` alone reaches the queue (WP19). */}
       {mayViewRefundRequests && <OpenServiceRefundRequestsCard />}
 
@@ -870,11 +870,7 @@ export function ServiceDetailPage({
     <>
       {row === undefined && (
         <>
-          <PageHead
-            title={t('web.service_detail')}
-            subtitle={t('web.services_intro')}
-            maturity="now"
-          />
+          <PageHead title={t('web.service_detail')} subtitle={t('web.services_intro')} />
           {refundRequests}
         </>
       )}

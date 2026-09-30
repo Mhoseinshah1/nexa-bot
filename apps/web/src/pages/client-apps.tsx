@@ -782,11 +782,7 @@ export function ClientAppsPage({ denied, mayEdit }: { denied: boolean; mayEdit: 
 
   return (
     <>
-      <PageHead
-        title={t('web.client_apps_title')}
-        subtitle={t('web.client_apps_subtitle')}
-        maturity="now"
-      />
+      <PageHead title={t('web.client_apps_title')} subtitle={t('web.client_apps_subtitle')} />
 
       <StateSwitch
         query={apps}

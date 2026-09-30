@@ -95,7 +95,6 @@ export function SettingsPage({ mayEdit, denied }: { mayEdit: boolean; denied: bo
       <PageHead
         title={t('web.settings_title')}
         subtitle={t('web.settings_intro')}
-        maturity="now"
         badge={<UnsavedCount count={dirty.size} />}
       />
 

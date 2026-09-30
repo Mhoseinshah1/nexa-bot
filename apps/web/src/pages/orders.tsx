@@ -308,7 +308,7 @@ export function OrdersPage({ route, denied }: { route: Route; denied: boolean })
 
   return (
     <>
-      <PageHead title={t('web.orders_title')} subtitle={t('web.orders_intro')} maturity="now" />
+      <PageHead title={t('web.orders_title')} subtitle={t('web.orders_intro')} />
 
       <Card className="ca-list">
         <form className="toolbar ca-search" onSubmit={apply} hidden={toolbarHidden}>
@@ -497,7 +497,7 @@ export function OrderDetailPage({
   return (
     <>
       {row === undefined ? (
-        <PageHead title={t('web.order_detail')} maturity="now" />
+        <PageHead title={t('web.order_detail')} />
       ) : (
         <PageHead
           title={row.lineTitle}

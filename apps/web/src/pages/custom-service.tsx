@@ -101,11 +101,7 @@ export function CustomServicePage({
   });
   return (
     <>
-      <PageHead
-        title={t('web.custom_service_title')}
-        subtitle={t('web.custom_service_intro')}
-        maturity="now"
-      />
+      <PageHead title={t('web.custom_service_title')} subtitle={t('web.custom_service_intro')} />
       <Banner tone="info" title={t('web.custom_service_flag_title')}>
         {t('web.custom_service_flag_note')}
       </Banner>
