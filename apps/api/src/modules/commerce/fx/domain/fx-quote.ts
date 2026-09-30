@@ -129,3 +129,24 @@ export function verdictCode(verdict: FxCandidateVerdict): string {
       return 'outlier';
   }
 }
+
+/**
+ * Every source whose figure stands behind the chosen quote: the chosen source itself and,
+ * when it was chosen because outliers AGREED, each outlier within the agreement bound of
+ * it. A corroborating source was right about the move too; recording it as an outlier
+ * failure would open a condition against the source that confirmed the market
+ * (Codex review of #122). Empty when nothing was chosen.
+ */
+export function sourcesBehind(
+  judged: readonly JudgedCandidate[],
+  chosen: FxCandidate | null,
+): readonly FxSource[] {
+  if (chosen === null) return [];
+  const behind: FxSource[] = [chosen.source];
+  for (const entry of judged) {
+    if (entry.verdict.kind !== 'OUTLIER' || entry.candidate.source === chosen.source) continue;
+    const apart = rateDeviationBps(entry.candidate.rate, chosen.rate);
+    if (apart !== null && apart <= FX_SOURCE_AGREEMENT_BPS) behind.push(entry.candidate.source);
+  }
+  return behind;
+}

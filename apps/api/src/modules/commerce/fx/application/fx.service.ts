@@ -37,6 +37,7 @@ import type { ScopeActivityReader } from '../../../platform/system/application/r
 import {
   chooseQuote,
   judgeCandidate,
+  sourcesBehind,
   toCandidate,
   verdictCode,
   type FxCandidate,
@@ -411,8 +412,14 @@ export class FxService {
 
     const chosen = chooseQuote(judged);
     const fetchedAt = this.deps.clock.now();
-    // A candidate chosen because two outliers agreed counts as that source's success too.
-    if (chosen !== null && !successes.includes(chosen.source)) successes.push(chosen.source);
+    /*
+     * A quote chosen because outliers agreed is every agreeing source's success: the one
+     * that corroborated the move was right too, and stays out of the rejections below.
+     */
+    for (const source of sourcesBehind(judged, chosen)) {
+      if (!successes.includes(source)) successes.push(source);
+    }
+    const stillRejected = rejected.filter((entry) => !successes.includes(entry.source));
 
     return this.deps.uow.run(scope, async (tx) => {
       if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) return 'FAILED';
@@ -437,8 +444,7 @@ export class FxService {
           tx,
         );
       }
-      for (const entry of rejected) {
-        if (chosen !== null && entry.source === chosen.source) continue;
+      for (const entry of stillRejected) {
         await this.deps.repository.recordSourceFailure(
           scope,
           entry.source,

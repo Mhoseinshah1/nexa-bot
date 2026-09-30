@@ -496,6 +496,33 @@ describe('the central rate: refreshing', () => {
     });
   });
 
+  it('a source that corroborated a move is a success, never a rejected outlier: nothing opens against it (Codex #122)', async () => {
+    let primary = 1_035_500n;
+    let fallback = 103_500n;
+    const w = world({
+      nobitex: () => reading('NOBITEX', primary, 'IRR'),
+      wallex: () => reading('WALLEX', fallback, 'IRT'),
+    });
+    await w.service.refreshIfDue(scope, 'USDT');
+    // Both say the market moved 30 %: the primary's figure is stored, and the fallback
+    // — an outlier against the last-known-good on its own — was right too.
+    primary = 1_346_150n;
+    fallback = 134_000n;
+    w.clockMs += 60_000;
+    expect(await w.service.refreshIfDue(scope, 'USDT')).toBe('REFRESHED');
+    expect(w.repository.row?.quote).toMatchObject({ source: 'NOBITEX' });
+    expect(codes(w)).toEqual([]);
+    expect(w.repository.states.get('WALLEX')).toMatchObject({
+      lastSuccessAt: new Date(w.clockMs),
+      lastFailureAt: null,
+      consecutiveFailures: 0,
+    });
+    expect(w.repository.states.get('NOBITEX')).toMatchObject({
+      lastSuccessAt: new Date(w.clockMs),
+      consecutiveFailures: 0,
+    });
+  });
+
   it('a rate-limited source is left alone for the cooldown, on every replica, and the fallback answers meanwhile', async () => {
     const w = world({ nobitex: () => ({ kind: 'RATE_LIMITED', code: 'nobitex.rate_limited' }) });
     expect(await w.service.refreshIfDue(scope, 'USDT')).toBe('REFRESHED_BY_FALLBACK');
