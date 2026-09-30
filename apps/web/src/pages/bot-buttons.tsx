@@ -126,7 +126,11 @@ export function BotButtonsPage({
   mayViewTemplates: boolean;
   mayEditTemplates: boolean;
 }) {
+  const client = useQueryClient();
   const menu = useQuery({ queryKey: ['bot-menu'], queryFn: fetchBotMenu, enabled: !denied });
+  // A label or description saved through a card changes the table, the command list, the
+  // digest and every bot's state: the read model is re-read (Codex #7).
+  const refreshMenu = () => client.invalidateQueries({ queryKey: ['bot-menu'] });
   const templates = useQuery({
     queryKey: ['templates'],
     queryFn: fetchTemplates,
@@ -171,7 +175,11 @@ export function BotButtonsPage({
                   {duplicated(item, menu.data?.layout.items ?? []) && (
                     <Banner tone="warn">{t('web.bot_buttons_label_duplicate')}</Banner>
                   )}
-                  <TemplateCard template={template} mayEdit={mayEditTemplates} />
+                  <TemplateCard
+                    template={template}
+                    mayEdit={mayEditTemplates}
+                    onChanged={refreshMenu}
+                  />
                 </details>
               );
             })}
@@ -185,7 +193,11 @@ export function BotButtonsPage({
                   <summary>
                     <Ltr>/{entry.command}</Ltr> — {template.body}
                   </summary>
-                  <TemplateCard template={template} mayEdit={mayEditTemplates} />
+                  <TemplateCard
+                    template={template}
+                    mayEdit={mayEditTemplates}
+                    onChanged={refreshMenu}
+                  />
                 </details>
               );
             })}

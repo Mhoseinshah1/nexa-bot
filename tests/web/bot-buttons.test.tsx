@@ -157,6 +157,14 @@ function api(
     },
     { url: '/settings/bot.main_menu', body: { setting: setting(), changed: true } },
     {
+      url: '/templates/bot.menu.wallet',
+      body: {
+        template: view('bot.menu.wallet', CATALOGUE_FA['bot.menu.wallet']),
+        revision: 1,
+        changed: true,
+      },
+    },
+    {
       url: '/templates',
       body: {
         templates: [
@@ -261,6 +269,29 @@ describe('«دکمه‌های ربات»', () => {
     expect(within(preview).queryByText(CATALOGUE_FA['bot.menu.trial'])).toBeNull();
     // An ungated item switched on in the draft IS previewed: the draft's switches count.
     expect(within(preview).getByText(CATALOGUE_FA['bot.menu.catalog'])).toBeInTheDocument();
+  });
+
+  it('re-reads the menu after a label is saved through the texts card (Codex #7)', async () => {
+    const calls = api();
+    renderPage(page());
+    await waitFor(() => expect(rowOf('wallet')).not.toBeNull());
+    const menuReads = () =>
+      calls.calls.filter((call) => call.method === 'GET' && call.url.endsWith('/bot-menu')).length;
+    await waitFor(() => expect(menuReads()).toBe(1));
+
+    const summary = screen.getByText(CATALOGUE_FA['bot.menu.wallet'], { selector: 'summary' });
+    const details = summary.closest('details') as HTMLDetailsElement;
+    details.open = true;
+    fireEvent(details, new Event('toggle'));
+    fireEvent.click(within(details).getByRole('button', { name: t('web.save') }));
+    await waitFor(() =>
+      expect(calls.calls.some((call) => call.url.includes('/templates/bot.menu.wallet'))).toBe(
+        true,
+      ),
+    );
+    // The table, the command list, the digest and the sync states come from `/bot-menu`,
+    // so the save re-reads it.
+    await waitFor(() => expect(menuReads()).toBeGreaterThan(1));
   });
 
   it('reorders, switches and re-slots buttons, and saves the whole arrangement with its version', async () => {
