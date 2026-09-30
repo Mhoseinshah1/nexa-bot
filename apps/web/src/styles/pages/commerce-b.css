@@ -27,27 +27,6 @@
   gap: 10px;
   align-items: flex-end;
 }
-.kpi-grid {
-  display: grid;
-  gap: 12px;
-  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
-  margin-bottom: 10px;
-}
-.kpi {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 12px 14px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-card);
-  background: var(--bg-2);
-  min-width: 0;
-}
-.kpi strong {
-  font-size: 18px;
-  font-weight: 650;
-  font-variant-numeric: tabular-nums;
-}
 .kpi-money,
 .money-line {
   display: flex;
@@ -604,4 +583,31 @@
 }
 .tiers-foot {
   align-items: start;
+}
+
+/* --- /reports (and the dashboard's business section) --------------------------------- */
+
+.report-custom {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  align-items: flex-end;
+}
+.report-kpis {
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+}
+/* The tile keeps its tooltip wrapper; the card fills it. */
+.report-kpi > .card {
+  height: 100%;
+}
+.report-substats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  padding: 8px 2px 0;
+  border-top: 1px dashed var(--line);
+}
+/* The payments donut beside its legend, not spread across the card. */
+.report-donut {
+  max-width: 440px;
 }

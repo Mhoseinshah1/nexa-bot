@@ -1,4 +1,11 @@
 import {
+  reportInfrastructureResponseSchema,
+  reportOrdersResponseSchema,
+  reportPaymentsResponseSchema,
+  reportReferralsResponseSchema,
+  reportResellersResponseSchema,
+  reportServicesResponseSchema,
+  reportWalletResponseSchema,
   resellerCreditResponseSchema,
   resellerHistoryResponseSchema,
   resellerListResponseSchema,
@@ -898,7 +905,276 @@ function minimumRow(reseller: Json, over: Json): Json {
   };
 }
 
+/* ----------------------------------------------------------------- reports --- */
+
+/*
+ * The report tabs the dashboard does not already answer (DASH owns summary, trend,
+ * products and failures). One period serves them all; the pages only print it.
+ */
+const REPORT_PERIOD = {
+  range: 'THIS_MONTH',
+  timezone: 'Asia/Tehran',
+  calendar: 'jalali',
+  granularity: 'DAY',
+  current: {
+    start: '2026-08-22T20:30:00.000Z',
+    end: '2026-09-22T20:30:00.000Z',
+    effectiveEnd: '2026-09-06T08:00:00.000Z',
+    startLocal: '1405/06/01',
+    endLocalInclusive: '1405/06/31',
+  },
+  previous: {
+    start: '2026-07-22T20:30:00.000Z',
+    end: '2026-08-22T20:30:00.000Z',
+    effectiveEnd: '2026-08-06T08:00:00.000Z',
+    startLocal: '1405/05/01',
+    endLocalInclusive: '1405/05/31',
+  },
+  lengthsDiffer: false,
+  generatedAt: ago(0),
+};
+
+const cmp = (current: number, previous: number): Json => ({ current, previous });
+const irtCmp = (current: string, previous: string): Json[] => [
+  { currency: 'IRT', current, previous },
+];
+
+function payment(method: string, provider: string | null, kind: string, over: Json): Json {
+  return {
+    method,
+    provider,
+    kind,
+    attempts: 0,
+    confirmed: 0,
+    failed: 0,
+    cancelled: 0,
+    expired: 0,
+    pending: 0,
+    unknown: 0,
+    successRateBasisPoints: null,
+    confirmedAmount: [],
+    ...over,
+  };
+}
+
+const PAYMENT_ROWS: readonly Json[] = [
+  payment('GATEWAY', 'tonpays', 'ORDER', {
+    attempts: 212,
+    confirmed: 184,
+    failed: 9,
+    expired: 14,
+    pending: 5,
+    successRateBasisPoints: 8_679,
+    confirmedAmount: [{ currency: 'IRT', amount: '27416000' }],
+  }),
+  payment('MANUAL_TRANSFER', null, 'ORDER', {
+    attempts: 96,
+    confirmed: 88,
+    cancelled: 5,
+    pending: 3,
+    successRateBasisPoints: 9_167,
+    confirmedAmount: [{ currency: 'IRT', amount: '13112000' }],
+  }),
+  payment('WALLET', null, 'ORDER', {
+    attempts: 141,
+    confirmed: 141,
+    successRateBasisPoints: 10_000,
+    confirmedAmount: [{ currency: 'IRT', amount: '19740000' }],
+  }),
+  payment('GATEWAY', 'tonpays', 'TOPUP', {
+    attempts: 41,
+    confirmed: 37,
+    expired: 4,
+    successRateBasisPoints: 9_024,
+    confirmedAmount: [{ currency: 'IRT', amount: '9250000' }],
+  }),
+];
+
+function infra(over: Json): Json {
+  return {
+    servicesCreated: 0,
+    activeServices: 0,
+    trafficSoldBytes: '0',
+    unlimitedTrafficLines: 0,
+    provisioningFailures: 0,
+    ...over,
+  };
+}
+
 export const COMMERCE_B: readonly ShotFixture[] = [
+  fixture('/reports/orders', reportOrdersResponseSchema, {
+    period: REPORT_PERIOD,
+    rows: PRODUCTS.slice(0, 6).map((row, index) => ({
+      orderId: `0192c0de-0000-7000-8000-0000000016${String(index).padStart(2, '0')}`,
+      settledAt: ago(60 * (index * 7 + 1)),
+      purpose: index % 3 === 1 ? 'RENEW' : 'NEW_SERVICE',
+      title: row['title'],
+      categoryName: null,
+      subtotal: row['priceAmount'] ?? '0',
+      discount: index === 0 ? '17800' : '0',
+      total: String(
+        BigInt((row['priceAmount'] as string | null) ?? '0') - (index === 0 ? 17800n : 0n),
+      ),
+      currency: 'IRT',
+      paymentMethod: index % 2 === 0 ? 'GATEWAY' : 'WALLET',
+      paymentProvider: index % 2 === 0 ? 'tonpays' : null,
+      customerId: `019210ab-cdef-7012-8345-${String(6789 + index).padStart(4, '0')}abcdef01`,
+    })),
+    nextCursor: 'cursor-orders-2',
+  }),
+  fixture('/reports/services', reportServicesResponseSchema, {
+    period: REPORT_PERIOD,
+    newServices: cmp(186, 161),
+    newTrialServices: cmp(74, 90),
+    activeServices: 412,
+    states: [
+      { state: 'ACTIVE', count: 412 },
+      { state: 'SUSPENDED', count: 18 },
+      { state: 'EXPIRED', count: 96 },
+    ],
+    operations: [
+      { purpose: 'NEW_SERVICE', orders: cmp(186, 161), revenue: irtCmp('33210000', '28400000') },
+      { purpose: 'RENEW', orders: cmp(143, 150), revenue: irtCmp('21860000', '22950000') },
+      { purpose: 'ADD_TRAFFIC', orders: cmp(61, 44), revenue: irtCmp('3050000', '2200000') },
+      { purpose: 'ADD_TIME', orders: cmp(12, 9), revenue: irtCmp('540000', '405000') },
+    ],
+    trafficSoldBytes: String(18_400n * GIB),
+    unlimitedTrafficLines: 22,
+  }),
+  fixture('/reports/payments', reportPaymentsResponseSchema, {
+    period: REPORT_PERIOD,
+    rows: PAYMENT_ROWS,
+    totals: payment('GATEWAY', null, 'ORDER', {
+      attempts: 490,
+      confirmed: 450,
+      failed: 9,
+      cancelled: 5,
+      expired: 18,
+      pending: 8,
+      successRateBasisPoints: 9_184,
+      confirmedAmount: [{ currency: 'IRT', amount: '69518000' }],
+    }),
+  }),
+  fixture('/reports/wallet', reportWalletResponseSchema, {
+    period: REPORT_PERIOD,
+    reasons: [
+      {
+        reason: 'TOPUP_GATEWAY',
+        direction: 'CREDIT',
+        group: 'TOPUP',
+        currency: 'IRT',
+        entries: 37,
+        amount: '9250000',
+      },
+      {
+        reason: 'PURCHASE',
+        direction: 'DEBIT',
+        group: 'SPENDING',
+        currency: 'IRT',
+        entries: 141,
+        amount: '19740000',
+      },
+      {
+        reason: 'CASHBACK_PURCHASE',
+        direction: 'CREDIT',
+        group: 'CASHBACK',
+        currency: 'IRT',
+        entries: 64,
+        amount: '480000',
+      },
+    ],
+    groups: [
+      { group: 'TOPUP', currency: 'IRT', entries: 37, amount: '9250000' },
+      { group: 'SPENDING', currency: 'IRT', entries: 141, amount: '19740000' },
+      { group: 'CASHBACK', currency: 'IRT', entries: 64, amount: '480000' },
+    ],
+    balances: [{ currency: 'IRT', amount: '41200000' }],
+  }),
+  fixture('/reports/infrastructure', reportInfrastructureResponseSchema, {
+    period: REPORT_PERIOD,
+    panels: [
+      {
+        panelId: PANEL_A,
+        panelName: 'Frankfurt A',
+        providerType: 'marzban',
+        ...infra({
+          servicesCreated: 120,
+          activeServices: 212,
+          trafficSoldBytes: String(11_200n * GIB),
+          unlimitedTrafficLines: 14,
+          provisioningFailures: 2,
+        }),
+      },
+      {
+        panelId: PANEL_B,
+        panelName: 'Frankfurt B',
+        providerType: 'marzban',
+        ...infra({
+          servicesCreated: 66,
+          activeServices: 200,
+          trafficSoldBytes: String(7_200n * GIB),
+          unlimitedTrafficLines: 8,
+        }),
+      },
+    ],
+    providers: [
+      {
+        providerType: 'marzban',
+        ...infra({
+          servicesCreated: 186,
+          activeServices: 412,
+          trafficSoldBytes: String(18_400n * GIB),
+          unlimitedTrafficLines: 22,
+          provisioningFailures: 2,
+        }),
+      },
+    ],
+    truncated: false,
+    locationSupported: false,
+  }),
+  fixture('/reports/resellers', reportResellersResponseSchema, {
+    period: REPORT_PERIOD,
+    rows: RESELLERS.slice(0, 3).map((row, index) => ({
+      resellerCustomerId: row['customerId'],
+      tierName: (row['tier'] as Json)['name'],
+      status: row['status'],
+      orders: 48 - index * 13,
+      sales: [{ currency: 'IRT', amount: String(7_860_000 - index * 2_100_000) }],
+      services: 40 - index * 11,
+      creditLimit: {
+        amountMinor: (row['effectiveCreditLimit'] as Json)['amount'],
+        currency: 'IRT',
+      },
+      creditInUse: { amountMinor: String(3_200_000 - index * 1_000_000), currency: 'IRT' },
+    })),
+    truncated: false,
+  }),
+  fixture('/reports/referrals', reportReferralsResponseSchema, {
+    period: REPORT_PERIOD,
+    signups: cmp(64, 51),
+    convertedBuyers: 23,
+    conversionBasisPoints: 3_594,
+    signupGifts: [{ currency: 'IRT', amount: '640000', entries: 64 }],
+    commissions: [{ currency: 'IRT', amount: '342700', entries: 23 }],
+    commissionReversals: [],
+    referredSales: 31,
+    referredRevenue: [{ currency: 'IRT', amount: '4930000' }],
+    topReferrers: {
+      by: 'SIGNUPS',
+      rankingCurrency: 'IRT',
+      page: 1,
+      limit: 10,
+      totalRows: 3,
+      rows: REFERRERS.map((referrer, index) => ({
+        rank: index + 1,
+        referrerId: referrer['customerId'],
+        signups: 28 - index * 9,
+        convertedBuyers: 11 - index * 4,
+        revenue: [{ currency: 'IRT', amount: String(2_100_000 - index * 600_000) }],
+        commission: [{ currency: 'IRT', amount: String(149_000 - index * 45_000) }],
+      })),
+    },
+  }),
   fixture('/resellers', resellerListResponseSchema, { resellers: RESELLERS, nextCursor: null }),
   fixture('/resellers/:id/credit', resellerCreditResponseSchema, {
     credit: {
