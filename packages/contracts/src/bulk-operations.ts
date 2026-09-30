@@ -1,7 +1,9 @@
 import { z } from 'zod';
 import { audienceFingerprintSchema } from './audience.js';
 import { customerNotificationStateSchema } from './customer-notifications.js';
+import { uuidV7Schema } from './ids.js';
 import { currencyCodeSchema } from './money.js';
+import type { StateMachineDefinition } from './state-machine.js';
 import { TRAFFIC_GB_PATTERN } from './traffic-input.js';
 
 /**
@@ -34,8 +36,43 @@ import { TRAFFIC_GB_PATTERN } from './traffic-input.js';
 export const BULK_OPERATION_KINDS = ['WALLET_CREDIT', 'SERVICE_TRAFFIC', 'SERVICE_TIME'] as const;
 export type BulkOperationKind = (typeof BULK_OPERATION_KINDS)[number];
 
-export const BULK_OPERATION_STATES = ['RUNNING', 'COMPLETED', 'CANCELLED'] as const;
+export const BULK_OPERATION_STATES = ['RUNNING', 'PAUSED', 'COMPLETED', 'CANCELLED'] as const;
 export type BulkOperationState = (typeof BULK_OPERATION_STATES)[number];
+
+export type BulkOperationEvent = 'PAUSE' | 'RESUME' | 'COMPLETE' | 'CANCEL';
+
+/**
+ * The machine (round N close, `docs/round-n-close-audit.md` §B). Every edge is a conditional
+ * UPDATE naming its `from` states, so a replay, a double click and two worker replicas are
+ * all safe.
+ *
+ * - `PAUSED` claims no new PENDING item: the processor's claim query names `RUNNING`.
+ * - An item whose provider write is already PLANNED keeps being settled while paused: a
+ *   reconciliation READ of an ambiguous write is not new work, and holding it back would
+ *   leave a customer with a grant nobody records.
+ * - `RESUME` is `PAUSED → RUNNING` once; a replayed resume finds `RUNNING` and is answered,
+ *   not repeated, and nothing it did is done twice because the items decide, not the edge.
+ * - `CANCEL` from either running state stops PENDING items only; a credit written and a
+ *   grant planned are never reversed.
+ * - `COMPLETED` is reached from `RUNNING` only, by the sweep that finds nothing left, so a
+ *   paused operation is never closed under an operator who meant to resume it.
+ */
+export const BULK_OPERATION_MACHINE: StateMachineDefinition<
+  BulkOperationState,
+  BulkOperationEvent
+> = {
+  name: 'BulkOperation',
+  initial: 'RUNNING',
+  states: BULK_OPERATION_STATES,
+  terminal: ['COMPLETED', 'CANCELLED'],
+  transitions: [
+    { from: 'RUNNING', to: 'PAUSED', on: 'PAUSE' },
+    { from: 'PAUSED', to: 'RUNNING', on: 'RESUME' },
+    { from: 'RUNNING', to: 'COMPLETED', on: 'COMPLETE' },
+    { from: 'RUNNING', to: 'CANCELLED', on: 'CANCEL' },
+    { from: 'PAUSED', to: 'CANCELLED', on: 'CANCEL' },
+  ],
+};
 
 export const BULK_ITEM_STATES = [
   /** Not processed yet. The only state a cancel touches. */
@@ -170,6 +207,16 @@ export const createBulkOperationRequestSchema = z
     idempotencyKey: z.string().min(8).max(255),
     grant: bulkGrantSchema,
     definition: z.unknown(),
+    /**
+     * Round N close (§A): a FROZEN audience to seed the items from, instead of evaluating
+     * `definition` live. Its members are copied exactly — a customer who joined the
+     * definition since is not an item, one who left it still is — and the confirmation's
+     * hash, count and fingerprint must be the frozen audience's own. `definition` still
+     * carries the definition the audience was frozen by, for the record and the live
+     * `customerStatus` re-check. There is no size cap: the cap on hand-picked ids protects
+     * a request body, and a frozen audience is a row set.
+     */
+    frozenAudienceId: uuidV7Schema.nullable().default(null),
     notify: z.boolean(),
     note: z.string().trim().min(1).max(BULK_NOTE_MAX_LENGTH),
     expectedDefinitionHash: z.string().regex(/^[0-9a-f]{64}$/u),
@@ -231,6 +278,8 @@ export const bulkOperationSchema = z.object({
   audienceAsOf: z.iso.datetime(),
   /** No item is processed before this instant; null means at once. */
   notBefore: z.iso.datetime().nullable(),
+  /** The frozen audience the items were copied from; null when a definition was evaluated. */
+  frozenAudienceId: z.string().nullable(),
   itemCount: z.number().int().nonnegative(),
   fingerprint: z.string(),
   /** Wallet credit: amount × items, what the confirmation promised at most. */
@@ -241,6 +290,8 @@ export const bulkOperationSchema = z.object({
   progressPercent: z.number().int().min(0).max(100),
   createdBy: operatorSchema,
   createdAt: z.iso.datetime(),
+  /** Set while PAUSED; cleared by a resume. */
+  pausedAt: z.iso.datetime().nullable(),
   completedAt: z.iso.datetime().nullable(),
   cancelledAt: z.iso.datetime().nullable(),
 });
@@ -287,6 +338,8 @@ export const BULK_OPERATION_ROUTES = {
   one: (id: string) => `/bulk-operations/${id}`,
   items: (id: string) => `/bulk-operations/${id}/items`,
   cancel: (id: string) => `/bulk-operations/${id}/cancel`,
+  pause: (id: string) => `/bulk-operations/${id}/pause`,
+  resume: (id: string) => `/bulk-operations/${id}/resume`,
 } as const;
 
 export const BULK_ERROR_CODES = {
