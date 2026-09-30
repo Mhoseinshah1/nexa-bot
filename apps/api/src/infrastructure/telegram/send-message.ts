@@ -369,6 +369,11 @@ export function textMessageBody(input: {
    * Supplied instead of `buttons`, never beside it — `reply_markup` holds one markup.
    */
   readonly keyboard?: readonly (readonly string[])[];
+  /**
+   * Round N (F1): a reply to this message of the same chat. `allow_sending_without_reply`,
+   * so a message deleted in the meantime costs the reply's link, never the message.
+   */
+  readonly replyToMessageId?: number;
 }): Record<string, unknown> {
   const body: Record<string, unknown> = {
     chat_id: input.chatId,
@@ -376,6 +381,12 @@ export function textMessageBody(input: {
     link_preview_options: { is_disabled: true },
   };
   if (input.html) body.parse_mode = 'HTML';
+  if (input.replyToMessageId !== undefined) {
+    body.reply_parameters = {
+      message_id: input.replyToMessageId,
+      allow_sending_without_reply: true,
+    };
+  }
   if (input.buttons !== undefined && input.buttons.length > 0) {
     body.reply_markup = { inline_keyboard: telegramButtonMarkup(input.buttons) };
   } else if (input.keyboard !== undefined && input.keyboard.length > 0) {

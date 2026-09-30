@@ -186,6 +186,8 @@ describe('which kinds quiet hours hold', () => {
         'WALLET_LOW_BALANCE',
         'PAYMENT_PENDING_REMINDER',
         'ORDER_PENDING_REMINDER',
+        // Round N, package D: the reseller month-end reminder (never the achievement).
+        'RESELLER_MINIMUM_REMINDER',
       ].sort(),
     );
   });

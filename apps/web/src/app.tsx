@@ -43,6 +43,7 @@ import { ReportsPage } from './pages/business';
 import { isSuperAdmin, mayExportReports } from './report-view';
 import { ResellersPage } from './pages/resellers';
 import { ResellerTiersPage } from './pages/reseller-tiers';
+import { ResellerPlansPage } from './pages/reseller-plans';
 
 /**
  * The Web Admin shell.
@@ -414,6 +415,17 @@ export const NAV: readonly NavEntry[] = [
     label: 'web.nav_reseller_tiers',
     icon: 'layers',
     // The same key, for the same reason: every tier write opens from the list it charges.
+    permission: 'resellers.view',
+    group: 'web.navgroup_sales',
+  },
+  {
+    // Round N, package D: «تنظیمات نمایندگان / پلن‌ها و حداقل فروش».
+    id: 'reseller-plans',
+    path: '/reseller-plans',
+    label: 'web.nav_reseller_plans',
+    icon: 'layers',
+    // The tiers list it opens with is charged `resellers.view`; the progress card asks
+    // `orders.view` as well and says so when it is missing.
     permission: 'resellers.view',
     group: 'web.navgroup_sales',
   },
@@ -965,6 +977,8 @@ export function resolve(
           mayViewWallet={may('users.view')}
           mayViewOrders={may('orders.view')}
           mayViewAudit={may('audit.view')}
+          mayViewCatalog={may('catalog.view')}
+          mayViewPanels={may('panels.view')}
         />
       ),
       crumbs: [{ label: t('web.resellers_title') }],
@@ -991,6 +1005,22 @@ export function resolve(
       ),
       crumbs: [nav('resellers'), { label: t('web.reseller_tiers_title') }],
       title: t('web.reseller_tiers_title'),
+    };
+  }
+
+  if (route.path === '/reseller-plans') {
+    return {
+      element: (
+        <ResellerPlansPage
+          denied={!may('resellers.view')}
+          mayEdit={may('resellers.edit')}
+          mayViewOrders={may('orders.view')}
+          mayViewCatalog={may('catalog.view')}
+          mayViewPanels={may('panels.view')}
+        />
+      ),
+      crumbs: [nav('resellers'), { label: t('web.reseller_plans_title') }],
+      title: t('web.reseller_plans_title'),
     };
   }
 
@@ -1206,6 +1236,7 @@ export function resolve(
           denied={!may('settings.view')}
           mayViewTemplates={may('templates.view')}
           mayEditTemplates={may('templates.edit')}
+          mayViewPanels={may('panels.view')}
         />
       ),
       crumbs: [{ label: t('web.nav_bot_buttons') }],

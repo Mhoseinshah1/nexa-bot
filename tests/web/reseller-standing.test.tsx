@@ -35,6 +35,7 @@ const tier = (overrides: Record<string, unknown> = {}) => ({
   creditLimit: { amount: '100000', currency: 'IRT' },
   grants: [],
   resellerCount: 1,
+  monthlyMinimum: null,
   createdAt: '2026-09-01T08:00:00.000Z',
   updatedAt: '2026-09-01T08:00:00.000Z',
   ...overrides,

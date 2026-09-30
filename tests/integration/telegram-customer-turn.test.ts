@@ -266,38 +266,38 @@ describe('the customer Telegram turn', () => {
     expect(markup?.one_time_keyboard).toBe(false);
 
     // The six this release always draws (WP-A10's apps and WP-A7's tickets included),
-    // plus R1's trial and referral buttons, which a tenant with their flags off — every
-    // tenant by default — does not see: the keyboard above is exactly the six.
+    // plus R1's trial and referral buttons, which a tenant with no panel offering a trial
+    // (F5) and the referral flag off — every tenant by default — does not see: the
+    // keyboard above is exactly the six.
     expect(MAIN_MENU_BUTTONS).toHaveLength(8);
   });
 
   it('draws the tenant’s own main menu — order, switches, flags, labels — and routes a renamed button (R1)', async () => {
     /*
      * «دکمه‌های ربات». The arrangement is the `bot.main_menu` setting, the labels are the
-     * tenant's `bot.menu.*` templates, and the two new buttons appear only while their
-     * feature flags are on. A renamed button must route under its NEW name — the keyboard
-     * and the route table are read from one object — and its old name keeps working for
-     * a keyboard already sitting in the chat.
+     * tenant's `bot.menu.*` templates, and the two new buttons appear only while their gate
+     * is open: the referral button while its flag is on, the trial button (F5) while a
+     * panel offers a trial — none does here, so it is not drawn even switched ON. A renamed
+     * button must route under its NEW name — the keyboard and the route table are read
+     * from one object — and its old name keeps working for a keyboard already in the chat.
      */
     const owner = adminActorFor(
       await createAdmin(api.container, tenantA, { username: 'menu-owner', roleKeys: ['owner'] }),
     );
-    for (const flagKey of ['trials', 'referrals'] as const) {
-      const flag = (await api.container.featureFlags.list(tenantA, owner)).find(
-        (row) => row.key === flagKey,
-      );
-      await api.container.featureFlags.set(tenantA, owner, {
-        key: flagKey,
-        enabled: true,
-        expectedVersion: flag?.version ?? null,
-        confirmKey: flagKey,
-        reason: 'menu test',
-        idempotencyKey: `menu-flag-${flagKey}`,
-      });
-    }
+    const referrals = (await api.container.featureFlags.list(tenantA, owner)).find(
+      (row) => row.key === 'referrals',
+    );
+    await api.container.featureFlags.set(tenantA, owner, {
+      key: 'referrals',
+      enabled: true,
+      expectedVersion: referrals?.version ?? null,
+      reason: 'menu test',
+      idempotencyKey: 'menu-flag-referrals',
+    });
     await api.container.settingsService.set(tenantA, owner, {
       key: 'bot.main_menu',
       value: [
+        { button: 'referral', enabled: true },
         { button: 'trial', enabled: true },
         { button: 'help', enabled: false },
       ],
@@ -305,8 +305,8 @@ describe('the customer Telegram turn', () => {
       idempotencyKey: 'menu-layout',
     });
     await api.container.templatesService.set(tenantA, owner, {
-      key: 'bot.menu.trial',
-      body: '🎁 تست رایگان',
+      key: 'bot.menu.referral',
+      body: '🎁 دعوت و پاداش',
       expectedVersion: null,
       expectedRevision: null,
       idempotencyKey: 'menu-label',
@@ -315,20 +315,23 @@ describe('the customer Telegram turn', () => {
     await start();
     const markup = sent[0]?.body['reply_markup'] as { keyboard?: { text: string }[][] } | undefined;
     expect(markup?.keyboard?.map((row) => row.map((button) => button.text))).toEqual([
-      ['🎁 تست رایگان', CATALOGUE_FA['bot.menu.catalog']],
+      ['🎁 دعوت و پاداش', CATALOGUE_FA['bot.menu.catalog']],
       [CATALOGUE_FA['bot.menu.services'], CATALOGUE_FA['bot.menu.wallet']],
-      [CATALOGUE_FA['bot.menu.referral']],
       [CATALOGUE_FA['bot.menu.apps']],
       [CATALOGUE_FA['bot.menu.tickets']],
     ]);
 
-    // The renamed label routes to the trial — no panel offers one here, so the one
-    // Persian sentence — and so does the shared default a stale keyboard would send.
-    for (const label of ['🎁 تست رایگان', CATALOGUE_FA['bot.menu.trial']]) {
+    // The renamed label routes to the referral screen — no rate is chosen here, so the one
+    // unconfigured sentence — and so does the shared default a stale keyboard would send.
+    for (const label of ['🎁 دعوت و پاداش', CATALOGUE_FA['bot.menu.referral']]) {
       sent = [];
       await start({ text: label });
-      expect(sent.at(-1)?.body['text']).toBe(CATALOGUE_FA['bot.trial.unavailable']);
+      expect(sent.at(-1)?.body['text']).toBe(CATALOGUE_FA['bot.referral.unconfigured']);
     }
+    // The hidden trial button still routes: a keyboard drawn while a panel offered one.
+    sent = [];
+    await start({ text: CATALOGUE_FA['bot.menu.trial'] });
+    expect(sent.at(-1)?.body['text']).toBe(CATALOGUE_FA['bot.trial.unavailable']);
   });
 
   it('still opens the management panel for a BLOCKED customer who is an administrator', async () => {

@@ -13,6 +13,7 @@ import {
   SETTING_GROUP_TITLES,
   SETTING_PRESENTATION,
   SETTINGS_MANAGED_ELSEWHERE,
+  SETTINGS_RETIRED,
 } from '../../apps/web/src/settings-presentation';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { renderPage, setting, stubApi } from './harness';
@@ -51,7 +52,9 @@ const VISIBLE_KEYS = SETTING_KEYS.filter(
   (key) =>
     !(OPS_GROUP_MANAGED_SETTING_KEYS as readonly string[]).includes(key) &&
     // R1: the main menu's arrangement is edited on the «دکمه‌های ربات» page.
-    !SETTINGS_MANAGED_ELSEWHERE.includes(key),
+    !SETTINGS_MANAGED_ELSEWHERE.includes(key) &&
+    // F5: a retired key is drawn nowhere.
+    !SETTINGS_RETIRED.includes(key),
 );
 
 /** A connected, healthy ops group, for the page that now edits the manual topic id. */
@@ -78,10 +81,7 @@ const OPS_GROUP_VIEW = {
   manual: { configured: false, inUse: false },
 };
 
-const ROUTES = [
-  { url: '/settings', body: { settings: EVERY_SETTING } },
-  { url: '/products', body: { products: [], nextCursor: null } },
-];
+const ROUTES = [{ url: '/settings', body: { settings: EVERY_SETTING } }];
 
 /** The page as an operator reads it: everything except the closed technical disclosures. */
 function visibleText(container: HTMLElement): string {
@@ -173,8 +173,13 @@ describe('the settings page', () => {
       VISIBLE_KEYS.length,
     );
     // WP-A4: the keys the ops group panel owns are not drawn here at all; nor, since R1,
-    // the main menu's arrangement, which the «دکمه‌های ربات» page edits.
-    for (const key of [...OPS_GROUP_MANAGED_SETTING_KEYS, ...SETTINGS_MANAGED_ELSEWHERE]) {
+    // the main menu's arrangement, which the «دکمه‌های ربات» page edits; nor, since F5, a
+    // retired key.
+    for (const key of [
+      ...OPS_GROUP_MANAGED_SETTING_KEYS,
+      ...SETTINGS_MANAGED_ELSEWHERE,
+      ...SETTINGS_RETIRED,
+    ]) {
       expect(
         screen.queryByRole('heading', { name: t(SETTING_PRESENTATION[key].title) }),
         key,
@@ -463,67 +468,26 @@ describe('the settings page', () => {
   });
 
   /** F4: "not in the active list" only from a successful read of the list. */
-  it('does not call the trial product unlisted when the product list cannot be read', async () => {
-    const id = '01a05e35-c9ad-7e93-bef3-1ed9b55292c9';
-    stubApi([
-      {
-        url: '/settings',
-        body: { settings: [setting({ key: 'trial.product_id', value: id, configures: 'trials' })] },
-      },
-      {
-        url: '/products',
-        status: 403,
-        body: {
-          error: {
-            kind: 'forbidden',
-            code: 'access.permission_denied',
-            message: 'no',
-            correlationId: 'test',
-          },
-        },
-      },
-    ]);
+  /*
+   * F5: the retired trial product is drawn nowhere — a trial is configured on each panel's
+   * own tab — and the trial's one remaining setting, the customer's allowance, stands on
+   * its own: it names no feature switch, because the `trials` flag is gone.
+   */
+  it('draws no retired trial control, and the trial allowance without a feature switch', async () => {
+    expect(SETTINGS_RETIRED).toEqual(['trial.product_id']);
+    for (const key of SETTINGS_RETIRED) {
+      expect(settingDefinition(key).consumer, key).toBe('PLANNED');
+    }
+    stubApi(ROUTES);
     renderPage(<SettingsPage mayEdit denied={false} />);
-    await screen.findByRole('heading', { name: t('web.setting_trial_product_id') });
-    await waitFor(() => expect(screen.getAllByText(id).length).toBeGreaterThan(0));
-    expect(screen.queryByText(t('web.trial_product_unlisted'))).toBeNull();
-  });
-
-  /** Codex #2: a partial page cannot establish that the product is absent. */
-  it('does not call the trial product unlisted when it may be on a later page', async () => {
-    const id = '01a05e35-c9ad-7e93-bef3-1ed9b55292c9';
-    stubApi([
-      {
-        url: '/settings',
-        body: { settings: [setting({ key: 'trial.product_id', value: id, configures: 'trials' })] },
-      },
-      { url: '/products', body: { products: [], nextCursor: 'more' } },
-    ]);
-    renderPage(<SettingsPage mayEdit denied={false} />);
-    const select = (await screen.findByLabelText(
-      t('web.setting_trial_product_id'),
-    )) as HTMLSelectElement;
-    await waitFor(() => expect(select.disabled).toBe(false));
-    expect(screen.getByText(id)).toBeInTheDocument();
-    expect(select.value).toBe(id);
-    expect(select.selectedOptions[0]?.text).toBe(`${t('web.trial_product_current')} (${id})`);
-    expect(screen.queryByText(t('web.trial_product_unlisted'))).toBeNull();
-  });
-
-  it('calls the trial product unlisted only when the list was read and lacks it', async () => {
-    const id = '01a05e35-c9ad-7e93-bef3-1ed9b55292c9';
-    stubApi([
-      {
-        url: '/settings',
-        body: { settings: [setting({ key: 'trial.product_id', value: id, configures: 'trials' })] },
-      },
-      { url: '/products', body: { products: [], nextCursor: null } },
-    ]);
-    renderPage(<SettingsPage mayEdit denied={false} />);
-    // Once in the value line and once as the picker's option for the stored id.
-    await waitFor(() =>
-      expect(screen.getAllByText(t('web.trial_product_unlisted')).length).toBe(2),
-    );
+    const heading = await screen.findByRole('heading', {
+      name: t('web.setting_trial_limit_per_customer'),
+    });
+    expect(screen.queryByRole('heading', { name: t('web.setting_trial_product_id') })).toBeNull();
+    const card = heading.closest('section.card') as HTMLElement;
+    expect(within(card).queryByText(t('web.settings_needs_feature'))).toBeNull();
+    // No row on the page is a control nothing reads.
+    expect(screen.queryByText(t('web.setting_no_consumer'))).toBeNull();
   });
 
   it('says a refused value in Persian and keeps the English detail out of sight', async () => {

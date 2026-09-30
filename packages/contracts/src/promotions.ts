@@ -467,9 +467,9 @@ export function referralCommissionMinor(basisMinor: bigint, percent: number): bi
  * Why a trial was refused.
  *
  * `UNCONFIGURED` is listed first because it is the state a tenant is in until they
- * turn the `trials` flag on and choose a trial product, and the honest answer to a
- * customer in that state is "this installation does not offer a trial" — not a
- * zero-traffic service that looks broken.
+ * enable a trial on at least one panel (F5: there is no flag in front of it any more),
+ * and the honest answer to a customer in that state is "this installation does not
+ * offer a trial" — not a zero-traffic service that looks broken.
  *
  * `LIMIT_REACHED` was `ALREADY_TAKEN`, renamed before anything consumed it. ADR-0015
  * makes a trial allowance a LIMIT with a separate USED count, so a customer can be
@@ -612,6 +612,58 @@ export const RESELLER_GRANTABLE_OPERATIONS = [
 /** The dimension an entitlement refusal names, for the audit row and the operator. */
 export const RESELLER_ENTITLEMENT_DIMENSIONS = ['OPERATION', 'CATALOGUE', 'PANEL', 'BOT'] as const;
 export type ResellerEntitlementDimension = (typeof RESELLER_ENTITLEMENT_DIMENSIONS)[number];
+
+// ---------------------------------------------------------------------------
+// Round N, package D: per-reseller entitlement overrides and the monthly minimum
+// (`docs/round-n-reseller-audit.md`)
+// ---------------------------------------------------------------------------
+
+/**
+ * The dimension each grant kind belongs to — the unit a reseller's own row overrides (R1).
+ *
+ * An override REPLACES the tier's grants of a whole DIMENSION, never of one kind: `PRODUCT`
+ * and `CATEGORY` are one dimension, so an override naming only products must not leave the
+ * tier's "every category" standing beside it and keep everything it meant to narrow.
+ */
+export const RESELLER_GRANT_DIMENSION: Readonly<
+  Record<ResellerGrantKind, ResellerEntitlementDimension>
+> = {
+  OPERATION: 'OPERATION',
+  PRODUCT: 'CATALOGUE',
+  CATEGORY: 'CATALOGUE',
+  PANEL: 'PANEL',
+  BOT: 'BOT',
+};
+
+/** A monthly minimum's sanity ceiling, the credit limit's: a policy, not a product number. */
+export const RESELLER_MONTHLY_MINIMUM_MAX_MINOR = 1_000_000_000_000n;
+
+/**
+ * Where a reseller's effective monthly minimum comes from (R2): the reseller's own row, else
+ * the tier's; `NONE` when the one that applies is absent or zero.
+ */
+export const RESELLER_MINIMUM_SOURCES = ['RESELLER', 'TIER', 'NONE'] as const;
+export type ResellerMinimumSource = (typeof RESELLER_MINIMUM_SOURCES)[number];
+
+/**
+ * A reseller's standing against the monthly minimum in one period. Reporting only: none of
+ * these states has a consequence — no debt, fee, debit, settlement, demotion or block.
+ * `NOT_ACTIVE` is a SUSPENDED reseller, an ordinary customer to whom no minimum applies (R1).
+ */
+export const RESELLER_MINIMUM_STATES = ['ACHIEVED', 'BELOW', 'NO_MINIMUM', 'NOT_ACTIVE'] as const;
+export type ResellerMinimumState = (typeof RESELLER_MINIMUM_STATES)[number];
+
+/** The two things the lane may tell a reseller about a month: at most one of each per month. */
+export const RESELLER_MINIMUM_NOTICE_KINDS = ['REMINDER', 'ACHIEVED'] as const;
+export type ResellerMinimumNoticeKind = (typeof RESELLER_MINIMUM_NOTICE_KINDS)[number];
+
+/**
+ * How many local days before the month ends the reminder goes out. Three is Mirza's VERIFIED
+ * value (`📊 کف خرید ماهانه نمایندگی`, RGS/MASTER.md); one to ten.
+ */
+export const RESELLER_MINIMUM_REMINDER_DAYS_DEFAULT = 3;
+export const RESELLER_MINIMUM_REMINDER_DAYS_MIN = 1;
+export const RESELLER_MINIMUM_REMINDER_DAYS_MAX = 10;
 
 /**
  * Which pricing layer set a reseller's price (R3, R9).

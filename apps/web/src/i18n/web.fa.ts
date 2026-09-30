@@ -195,7 +195,7 @@ export const WEB_FA = {
   'web.setting_trial_product_id_desc':
     'دیگر استفاده نمی‌شود. سرویس تست اکنون مستقل از محصولات و روی هر پنل (صفحهٔ پنل، زبانهٔ «سرویس تست») تنظیم می‌شود؛ مقدار قبلی این تنظیم یک بار به تنظیمات همان پنل منتقل شده است.',
   'web.setting_trial_limit_per_customer_desc':
-    'هر مشتری چند بار می‌تواند سرویس آزمایشی بگیرد. صفر یعنی سرویس آزمایشی به کسی داده نمی‌شود.',
+    'هر مشتری در مجموع همهٔ پنل‌ها چند بار می‌تواند سرویس آزمایشی بگیرد. صفر یعنی سرویس آزمایشی به کسی داده نمی‌شود. روشن یا خاموش بودن سرویس تست روی هر پنل جداگانه (صفحهٔ پنل، زبانهٔ «سرویس تست») تعیین می‌شود.',
   'web.setting_link_rotation_cooldown_hours_desc':
     'مشتری پس از دریافت لینک اشتراک تازه، باید این مدت صبر کند تا دوباره بتواند لینک تازه بگیرد.',
   'web.setting_referral_commission_percent': 'درصد پورسانت معرفی',
@@ -264,6 +264,12 @@ export const WEB_FA = {
     'در روز پایان مدت سرویس و پیش از پایان آن، یک بار به مشتری یادآوری می‌شود.',
   'web.feature_service_expiry_day_reminder_off_effect':
     'مشتریان در روز انقضای سرویس خود یادآوری دریافت نمی‌کنند.',
+  'web.feature_reseller_minimum_reminders_title': 'یادآوری حداقل فروش ماهانهٔ نمایندگان',
+  'web.feature_reseller_minimum_reminders_summary':
+    'چند روز پیش از پایان ماه، به نماینده‌ای که فروشش هنوز به حداقل ماهانه نرسیده یک بار یادآوری می‌شود. تا برای سطح یا نماینده‌ای حداقل تعیین نشود کاری نمی‌کند و هیچ پیامدی برای نماینده ندارد.',
+  'web.feature_reseller_minimum_achieved_notices_title': 'پیام رسیدن به حداقل فروش ماهانه',
+  'web.feature_reseller_minimum_achieved_notices_summary':
+    'وقتی فروش ماهانهٔ نماینده به حداقل او برسد، یک بار در ماه به او خبر داده می‌شود.',
   'web.feature_wallet_low_balance_reminders_title': 'هشدار کمبود موجودی کیف پول',
   'web.feature_wallet_low_balance_reminders_summary':
     'وقتی موجودی کیف پول مشتری از مبلغ تعیین‌شده در تنظیمات کمتر شود، یک بار به او هشدار داده می‌شود.',
@@ -278,9 +284,6 @@ export const WEB_FA = {
   'web.feature_reminder_quiet_hours_title': 'ساعات سکوت یادآورها',
   'web.feature_reminder_quiet_hours_summary':
     'یادآورهایی که در ساعات سکوت موعدشان می‌رسد حذف نمی‌شوند؛ تا پایان ساعات سکوت نگه داشته و سپس فرستاده می‌شوند، مگر اینکه دیگر معتبر نباشند. پیام‌های پرداخت، سفارش و پاسخ‌ها نگه داشته نمی‌شوند.',
-  'web.feature_trials_title': 'سرویس آزمایشی رایگان',
-  'web.feature_trials_summary':
-    'مشتریان می‌توانند یک سرویس تست رایگان دریافت کنند. برای کار کردن، سرویس تست باید دست‌کم روی یک پنل (در صفحهٔ همان پنل، زبانهٔ «سرویس تست») روشن و تنظیم شده باشد.',
   'web.feature_customer_link_rotation_title': 'دریافت لینک جدید توسط مشتری',
   'web.feature_customer_link_rotation_summary':
     'مشتری می‌تواند از ربات برای سرویس فعال خود لینک اشتراک جدید بگیرد؛ فقط روی پنل‌هایی که این کار را پشتیبانی می‌کنند و با فاصلهٔ زمانی تعیین‌شده.',
@@ -545,6 +548,7 @@ export const WEB_FA = {
   'web.nav_referrals': 'معرفی و پورسانت',
   'web.nav_resellers': 'نمایندگان',
   'web.nav_reseller_tiers': 'سطوح نمایندگی',
+  'web.nav_reseller_plans': 'پلن‌ها و حداقل فروش',
   'web.nav_reports': 'گزارش‌ها',
   'web.nav_panels': 'پنل‌ها',
   'web.nav_providers': 'ارائه‌دهندگان',
@@ -2547,6 +2551,10 @@ export const WEB_FA = {
   'web.flag_service_usage_reminders': 'یادآور مصرف حجم سرویس',
   // WP-A9: the names of the reminder keys and switches this package added.
   'web.setting_reminders_expiry_early_days': 'یادآور هفتگی پیش از انقضا',
+  'web.setting_reminders_reseller_minimum_days':
+    'یادآوری حداقل فروش نمایندگان (روز پیش از پایان ماه)',
+  'web.setting_reminders_reseller_minimum_days_desc':
+    'چند روز مانده به پایان ماه تقویمی، نماینده‌ای که هنوز به حداقل فروش ماهانه نرسیده یک بار یادآوری بگیرد؛ از ۱ تا ۱۰ روز.',
   'web.setting_reminders_payment_pending_minutes': 'زمان یادآور پرداخت در انتظار',
   'web.setting_wallet_low_balance_threshold': 'آستانهٔ هشدار کمبود موجودی کیف پول',
   'web.flag_service_expiry_day_reminder': 'یادآور روز انقضای سرویس',
@@ -2621,8 +2629,7 @@ export const WEB_FA = {
   'web.reminders_templates_hint':
     'متن هر پیام را می‌توانید همین‌جا ویرایش کنید؛ همان متنی است که در بخش «متن‌ها» هم دیده می‌شود.',
   'web.reminders_templates_denied': 'برای دیدن و ویرایش متن پیام‌ها به دسترسی «متن‌ها» نیاز است.',
-  // WP6-A: the trial's flag, its two settings, and the product picker's two options.
-  'web.flag_trials': 'سرویس آزمایشی',
+  // WP6-A: the trial's two settings. Its flag and the product picker went in F5.
   'web.setting_trial_product_id': 'محصول سرویس آزمایشی (بازنشسته)',
   'web.setting_trial_limit_per_customer': 'تعداد مجاز سرویس آزمایشی برای هر مشتری',
   'web.flag_customer_link_rotation': 'دریافت لینک اشتراک جدید توسط مشتری',
@@ -2631,15 +2638,12 @@ export const WEB_FA = {
   'web.setting_referral_signup_gift_total': 'مبلغ کل هدیهٔ عضویت',
   'web.setting_referral_signup_gift_referrer_percent': 'سهم معرف از هدیهٔ عضویت',
   'web.setting_referral_signup_gift_referred_percent': 'سهم کاربر معرفی‌شده از هدیهٔ عضویت',
-  'web.trial_product_none': 'هیچ‌کدام (سرویس آزمایشی ارائه نمی‌شود)',
-  'web.trial_product_unlisted': 'محصول فعلی (در فهرست محصولات فعال نیست)',
-  'web.trial_product_current': 'محصول فعلی',
 
   // WP6-B: a customer's trial allowance, the override, the global reset and its history.
   'web.nav_trials': 'سرویس آزمایشی',
   'web.trial_card_title': 'سرویس آزمایشی',
   'web.trial_feature_off':
-    'سرویس آزمایشی در این نصب خاموش است؛ این اعداد تا روشن شدن آن به کار نمی‌آیند.',
+    'سرویس تست فعلاً روی هیچ پنلی روشن نیست؛ این اعداد تا روشن شدن آن روی دست‌کم یک پنل به کار نمی‌آیند.',
   'web.trial_global_limit': 'سقف پیش‌فرض',
   'web.trial_override': 'سقف اختصاصی',
   'web.trial_override_none': 'ندارد (از سقف پیش‌فرض پیروی می‌کند)',
@@ -2686,7 +2690,7 @@ export const WEB_FA = {
   'web.service_trial_badge': 'سرویس تست',
   'web.panel_trial_title': 'سرویس تست این پنل',
   'web.panel_trial_hint':
-    'سرویس تست مستقل از محصولات فروشی است و فقط از همین‌جا تنظیم می‌شود. وقتی به مشتری پیشنهاد می‌شود که قابلیت «سرویس آزمایشی» روشن باشد، این پنل بتواند سرویس جدید بپذیرد و ساخت نام کاربری خودکار در آن مجاز باشد. تعداد دفعات مجاز برای هر مشتری در صفحهٔ تنظیمات است. تغییر این مقادیر روی سرویس‌های تستی که قبلاً داده شده‌اند اثری ندارد.',
+    'سرویس تست مستقل از محصولات فروشی است و فقط از همین‌جا روشن، خاموش و تنظیم می‌شود. وقتی به مشتری پیشنهاد می‌شود که اینجا روشن باشد، این پنل بتواند سرویس جدید بپذیرد و ساخت نام کاربری خودکار در آن مجاز باشد. تعداد دفعات مجاز برای هر مشتری در صفحهٔ تنظیمات است. تغییر این مقادیر روی سرویس‌های تستی که قبلاً داده شده‌اند اثری ندارد.',
   'web.panel_trial_unconfigured': 'سرویس تست برای این پنل هنوز تنظیم نشده است.',
   'web.panel_trial_enabled': 'ارائهٔ سرویس تست روی این پنل',
   'web.panel_trial_traffic': 'حجم سرویس تست',
@@ -2732,7 +2736,9 @@ export const WEB_FA = {
   'web.bot_buttons_shown': 'نمایش',
   'web.bot_buttons_move_up': 'بالا',
   'web.bot_buttons_move_down': 'پایین',
-  'web.bot_buttons_needs_trials': 'فقط وقتی قابلیت «سرویس آزمایشی» روشن باشد دیده می‌شود.',
+  'web.bot_buttons_needs_trial_offer':
+    'فقط وقتی دیده می‌شود که دست‌کم روی یک پنل سرویس تست روشن باشد و همین حالا ارائه شود (صفحهٔ پنل، زبانهٔ «سرویس تست»).',
+  'web.bot_buttons_trial_not_offered': 'فعلاً هیچ پنلی سرویس تست ارائه نمی‌کند',
   'web.bot_buttons_needs_referrals': 'فقط وقتی قابلیت «معرفی دوستان» روشن باشد دیده می‌شود.',
   'web.bot_buttons_feature_off': 'قابلیت خاموش است',
   'web.bot_buttons_one_required':
@@ -3407,6 +3413,9 @@ export const WEB_FA = {
   'web.history_action_tier_create': 'ساخت سطح',
   'web.history_action_tier_update': 'ویرایش سطح',
   'web.history_action_tier_grants': 'تغییر مجوزها',
+  'web.history_action_tier_minimum': 'تغییر حداقل فروش ماهانه',
+  'web.history_action_reseller_grants_override': 'تغییر مجوزهای اختصاصی',
+  'web.history_action_reseller_minimum': 'تغییر حداقل فروش ماهانهٔ اختصاصی',
   'web.history_actor_customer': 'مشتری',
   'web.history_actor_telegram_admin': 'مدیر در تلگرام',
   'web.history_actor_web_admin': 'مدیر در پنل وب',
@@ -3468,6 +3477,116 @@ export const WEB_FA = {
   'web.reseller_layer_list': 'قیمت فهرست — سطح تغییری در قیمت نداد',
   'web.reseller_layer_tier': 'نرخ سطح',
   'web.reseller_layer_override': 'نرخ اختصاصی نماینده',
+
+  /*
+   * Round N, package D (`docs/round-n-reseller-audit.md`): plans per tier, per-reseller
+   * overrides and the monthly minimum. Tracking only — every sentence about the minimum
+   * says so, because nothing happens to a reseller below it.
+   */
+  'web.reseller_plans_title': 'تنظیمات نمایندگان / پلن‌ها و حداقل فروش',
+  'web.reseller_plans_intro':
+    'اینکه هر سطح نمایندگی کدام محصولات موجود را می‌تواند بفروشد، با چه نرخی، و حداقل فروش ماهانهٔ هر نماینده چقدر است و تا کجا پیش رفته.',
+  'web.reseller_plans_tiers_title': 'پلن‌های هر سطح',
+  'web.reseller_plans_tiers_hint':
+    'محصولات همان محصولات فروشگاه‌اند؛ اینجا فقط مشخص می‌شود کدام‌یک برای نمایندگان هر سطح مجاز است.',
+  'web.reseller_plans_products': 'محصولات و دسته‌های مجاز',
+  'web.reseller_plans_edit_products': 'محصولات و مجوزها',
+  'web.reseller_plans_pricing_rule':
+    'قیمت نماینده همان قیمت محصول است با نرخ سطح یا نرخ اختصاصی نماینده؛ هنگام خرید محاسبه و در سفارش ثبت می‌شود. فهرست قیمت جداگانه‌ای برای نمایندگان وجود ندارد.',
+  'web.reseller_minimum': 'حداقل فروش ماهانه',
+  'web.reseller_minimum_none': 'بدون حداقل',
+  'web.reseller_minimum_own_none': 'بدون حداقل (اختصاصی این نماینده)',
+  'web.reseller_minimum_edit': 'حداقل فروش',
+  'web.reseller_minimum_tier_title': 'حداقل فروش ماهانهٔ سطح',
+  'web.reseller_minimum_tier_hint':
+    'نمایندگان این سطح همین حداقل را دارند مگر حداقل اختصاصی داشته باشند. صفر یعنی بدون حداقل.',
+  'web.reseller_minimum_amount': 'مبلغ حداقل (واحد خرد)',
+  'web.reseller_minimum_amount_hint': 'فقط فروش با همین ارز حساب می‌شود. صفر یعنی بدون حداقل.',
+  'web.reseller_minimum_problem': 'مبلغ باید عددی صحیح و نامنفی به واحد خرد و در بازهٔ مجاز باشد.',
+  'web.reseller_minimum_problem_own':
+    'برای حداقل اختصاصی مبلغی بزرگ‌تر از صفر وارد کنید، یا «بدون حداقل» را برگزینید.',
+  'web.reseller_minimum_saved': 'حداقل فروش ذخیره شد.',
+  'web.reseller_minimum_save': 'ذخیرهٔ حداقل فروش',
+  'web.reseller_minimum_choice_inherit': 'مطابق سطح',
+  'web.reseller_minimum_choice_none': 'بدون حداقل برای این نماینده',
+  'web.reseller_minimum_choice_own': 'حداقل اختصاصی',
+  'web.reseller_minimum_source_tier': 'از سطح',
+  'web.reseller_minimum_source_own': 'اختصاصی این نماینده',
+  'web.reseller_minimum_source_none': 'بدون حداقل',
+  'web.reseller_minimum_progress_title': 'پیشرفت حداقل فروش ماهانه',
+  'web.reseller_minimum_progress_hint':
+    'فروش هر نماینده در ماه تقویمی، در منطقهٔ زمانی و تقویم همین نصب، در برابر حداقل او.',
+  'web.reseller_minimum_progress_denied':
+    'برای دیدن فروش نمایندگان دسترسی orders.view هم لازم است.',
+  'web.reseller_minimum_period_this': 'این ماه',
+  'web.reseller_minimum_period_previous': 'ماه قبل',
+  'web.reseller_minimum_filter_all': 'همه',
+  'web.reseller_minimum_filter_achieved': 'رسیده به حداقل',
+  'web.reseller_minimum_filter_below': 'زیر حداقل',
+  'web.reseller_minimum_period': 'دوره',
+  'web.reseller_minimum_period_to': 'تا',
+  'web.reseller_minimum_timezone': 'منطقهٔ زمانی',
+  'web.reseller_minimum_running': 'این ماه هنوز تمام نشده است؛ ارقام تا همین لحظه‌اند.',
+  'web.reseller_minimum_achieved': 'فروش دوره',
+  'web.reseller_minimum_remaining': 'باقی‌مانده',
+  'web.reseller_minimum_progress': 'پیشرفت',
+  'web.reseller_minimum_state_achieved': 'رسیده به حداقل',
+  'web.reseller_minimum_state_below': 'هنوز نرسیده',
+  'web.reseller_minimum_state_none': 'بدون حداقل',
+  'web.reseller_minimum_state_not_active': 'نمایندگی معلق',
+  'web.reseller_minimum_empty': 'نماینده‌ای با این شرط نیست.',
+  'web.reseller_minimum_truncated':
+    'تعداد نمایندگان بیش از ظرفیت این فهرست است؛ فقط بخشی از آنها نشان داده شده است.',
+  'web.reseller_minimum_rules_title': 'حداقل فروش ماهانه چگونه حساب می‌شود',
+  'web.reseller_minimum_rule_counts':
+    'فقط سفارش‌های پرداخت‌شده‌ای حساب می‌شوند که با شرایط نمایندگی همین نماینده تأیید شده‌اند؛ همان رقم «فروش» در گزارش نمایندگان. سفارشی که کامل بازپرداخت شده حساب نمی‌شود و بازپرداخت جزئی از فروش کم نمی‌شود. سرویس آزمایشی فروش نیست.',
+  'web.reseller_minimum_rule_period':
+    'دوره، ماه تقویمی در منطقهٔ زمانی و تقویم همین نصب است، از نیمه‌شب روز اول تا نیمه‌شب روز اول ماه بعد.',
+  'web.reseller_minimum_rule_no_consequence':
+    'رسیدن یا نرسیدن به حداقل هیچ پیامدی ندارد: هیچ بدهی، کارمزد، کسر از کیف پول، تسویه، تنزل سطح، تعلیق یا مسدودسازی ایجاد نمی‌شود. این بخش فقط برای پیگیری، گزارش و اطلاع‌رسانی است.',
+  'web.reseller_minimum_rule_notices':
+    'یادآوری چند روز پیش از پایان ماه (پیش‌فرض سه روز) و پیام رسیدن به حداقل، هر کدام حداکثر یک بار در ماه برای هر نماینده فرستاده می‌شوند؛ هر دو را از صفحهٔ قابلیت‌ها روشن یا خاموش کنید و تعداد روزها را از تنظیمات تغییر دهید.',
+  'web.reseller_minimum_rule_mirza':
+    'در میرزا گفته شده نماینده‌ای که به حداقل نرسد نمایندگی‌اش را از دست می‌دهد، اما این رفتار هرگز مشاهده نشده و معیار آن نامعلوم است؛ برای همین در نکسا پیاده نشده است.',
+  'web.reseller_minimum_features_link': 'قابلیت‌ها',
+  'web.reseller_minimum_settings_link': 'تنظیمات',
+  'web.reseller_policy_open': 'سیاست مؤثر',
+  'web.reseller_policy_title': 'سیاست مؤثر نماینده',
+  'web.reseller_policy_hint':
+    'آنچه از سطح به ارث رسیده، آنچه برای همین نماینده جایگزین شده، و آنچه در عمل اعمال می‌شود.',
+  'web.reseller_policy_suspended':
+    'این نماینده معلق است: اکنون مانند مشتری عادی خرید می‌کند و این سیاست تا فعال شدن دوباره اعمال نمی‌شود.',
+  'web.reseller_policy_entitlements': 'مجوزها',
+  'web.reseller_policy_dimension': 'بخش',
+  'web.reseller_policy_tier_value': 'مقدار سطح',
+  'web.reseller_policy_override_value': 'اختصاصی این نماینده',
+  'web.reseller_policy_effective_value': 'اعمال‌شده',
+  'web.reseller_policy_inherited': 'مطابق سطح',
+  'web.reseller_policy_source_tier': 'از سطح',
+  'web.reseller_policy_source_own': 'اختصاصی',
+  'web.reseller_policy_pricing_note':
+    'قیمت نهایی هر خرید هنگام پرداخت و از روی همین نرخ محاسبه و در سفارش ثبت می‌شود؛ اینجا قیمتی محاسبه نمی‌شود.',
+  'web.reseller_policy_products': 'محصولاتی که این نماینده می‌تواند بفروشد',
+  'web.reseller_policy_products_partial': 'فقط نخستین صفحهٔ محصولات نشان داده شده است.',
+  'web.reseller_policy_products_empty': 'هنوز محصولی ساخته نشده است.',
+  'web.reseller_policy_products_denied':
+    'برای دیدن فهرست محصولات و اینکه کدام‌یک برای این نماینده مجاز است، دسترسی catalog.view لازم است.',
+  'web.reseller_policy_can_sell': 'خرید سرویس تازه',
+  'web.reseller_policy_allowed': 'مجاز',
+  'web.reseller_policy_refused': 'مجاز نیست',
+  'web.reseller_policy_bot_any': 'پاسخ برای خرید سرویس تازه از هر رباتی است.',
+  'web.reseller_policy_bot_granted':
+    'پاسخ برای خرید سرویس تازه از ربات مجاز این نماینده است؛ از ربات‌های دیگر خریدی پذیرفته نمی‌شود.',
+  'web.reseller_policy_bot_none':
+    'هیچ رباتی برای این نماینده مجاز نیست؛ بنابراین هیچ خریدی پذیرفته نمی‌شود.',
+  'web.reseller_policy_edit': 'ویرایش تنظیمات اختصاصی',
+  'web.reseller_policy_edit_title': 'تنظیمات اختصاصی این نماینده',
+  'web.reseller_policy_edit_hint':
+    'هر بخش یا مطابق سطح است یا اختصاصی. بخش اختصاصی کاملاً جایگزین مجوزهای سطح در همان بخش می‌شود؛ بخش اختصاصی بدون هیچ انتخابی یعنی هیچ چیز از آن بخش مجاز نیست.',
+  'web.reseller_policy_choice_inherit': 'مطابق سطح',
+  'web.reseller_policy_choice_own': 'اختصاصی',
+  'web.reseller_policy_save': 'ذخیرهٔ مجوزهای اختصاصی',
+  'web.reseller_policy_saved': 'مجوزهای اختصاصی ذخیره شد.',
 
   'web.user_reseller_title': 'نمایندگی',
   'web.user_reseller_denied': 'برای دیدن نمایندگی این مشتری دسترسی resellers.view لازم است.',

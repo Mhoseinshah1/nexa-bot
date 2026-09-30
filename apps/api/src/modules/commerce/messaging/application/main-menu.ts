@@ -19,6 +19,14 @@ export interface MainMenuDeps {
   readonly features: {
     isEnabled(scope: ScopeContext, key: FeatureFlagKey, tx?: unknown): Promise<boolean>;
   };
+  /**
+   * F5: whether at least one panel offers a trial NOW — `trialOffersFor`, the answer the
+   * claim and the operator's overview share. The trial button's only gate: the `trials`
+   * flag is retired and each panel's own trial is the switch.
+   */
+  readonly trials: {
+    anyOffered(scope: ScopeContext): Promise<boolean>;
+  };
   /** The tenant's own rendering — the resolver every customer message goes through. */
   readonly templates: {
     render(scope: ScopeContext, key: TemplateKey, values: TemplateValues): Promise<string>;
@@ -32,8 +40,9 @@ export interface MainMenuDeps {
  * matched against cannot disagree:
  *
  * - `rowsFor` is what `TelegramCustomerMessenger` draws: the operator's arrangement
- *   (`bot.main_menu`), without the buttons they switched off and without a button whose
- *   feature is off, labelled by the tenant's own templates, two to a row.
+ *   (`bot.main_menu`), without the buttons they switched off, without a button whose
+ *   feature is off and — since F5 — without the trial button while no panel offers a
+ *   trial, labelled by the tenant's own templates, two to a row.
  * - `routesFor` is what the runtime matches a tap against: EVERY declared button's label
  *   as the tenant renders it now, whatever is switched on — so a keyboard already sitting
  *   in a chat still routes after a button is hidden, and a renamed button routes under
@@ -46,17 +55,26 @@ export interface MainMenuDeps {
 export class MainMenuLayout {
   constructor(private readonly deps: MainMenuDeps) {}
 
-  /** The buttons drawn, in order: switched on, and their feature (if any) on. */
+  /**
+   * The buttons drawn, in order: switched on, their feature (if any) on, and — for the
+   * trial button — a panel offering a trial. Each gate is read once, and only when a button
+   * that needs it is switched on.
+   */
   async buttonsFor(scope: ScopeContext): Promise<readonly BotMenuButton[]> {
     const stored = await this.deps.settings.valueOf<readonly MainMenuLayoutEntry[]>(
       scope,
       'bot.main_menu',
     );
     const flags = new Map<FeatureFlagKey, boolean>();
+    let trialOffered: boolean | undefined;
     const drawn: BotMenuButton[] = [];
     for (const entry of resolveMainMenuLayout(stored)) {
       if (!entry.enabled) continue;
       const button = mainMenuButton(entry.button);
+      if (button.needsTrialOffer) {
+        trialOffered ??= await this.deps.trials.anyOffered(scope);
+        if (!trialOffered) continue;
+      }
       if (button.feature !== null) {
         let on = flags.get(button.feature);
         if (on === undefined) {

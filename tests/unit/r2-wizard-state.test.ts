@@ -183,6 +183,31 @@ describe('the gateway invoice screen', () => {
     expect(topup.wizard?.kind).toBe('TOPUP');
   });
 
+  /*
+   * F3 (round N): the lost-answer sentence is for a lost answer only. A refusal whose
+   * payment is still PENDING (its failure write did not land) and an invoice the gateway
+   * reported created WITHOUT a link each say what happened, never "the answer was lost".
+   */
+  it('F3: a refusal with its payment still pending is unavailable, and a created invoice without a link says so', () => {
+    const refusedPending = gatewayAttemptScreen(
+      { payment: payment(), invoice: invoice({ creationState: 'CREATE_FAILED' }) },
+      null,
+      at,
+    );
+    expect(refusedPending.key).toBe('bot.payment.gateway_unavailable');
+    expect(data(refusedPending)).toEqual(['pm:01900000-0000-7000-8000-00000000bbbb', 'mm:']);
+
+    const linkless = gatewayAttemptScreen(
+      { payment: payment(), invoice: invoice({ creationState: 'CREATED' }) },
+      null,
+      at,
+    );
+    expect(linkless.key).toBe('bot.payment.gateway_no_link');
+    // Never a URL button it does not have, and a way on that opens a new attempt.
+    expect(data(linkless)).toEqual(['pm:01900000-0000-7000-8000-00000000bbbb', 'mm:']);
+    expect(linkless.wizard?.step).toBe('NOTICE');
+  });
+
   it('a confirmed attempt CLOSES the wizard, and nothing on it can pay again', () => {
     const done = gatewayAttemptScreen(
       { payment: payment({ state: 'CONFIRMED' }), invoice: invoice({ creationState: 'CREATED' }) },

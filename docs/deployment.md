@@ -1440,6 +1440,85 @@ runs:
 
 Nothing needs doing before rolling back past round N's service UX.
 
+### What a rollback changes: reseller overrides and the monthly minimum (round N, package D)
+
+Package D lets an operator override a tier's entitlements for one reseller, set a monthly
+minimum sales figure on a tier or a reseller, and tell a reseller about it
+(`docs/round-n-reseller-audit.md`). Migration `0145_round_n_reseller_controls` only adds:
+three tables, two nullable column pairs and a widened notification-kind CHECK. While the
+release before package D runs:
+
+- **Every reseller is judged by their tier's grants again.** The old release does not read
+  `reseller_entitlement_overrides`, so a reseller an override NARROWED can again buy what
+  the tier allows, and one it WIDENED is refused what only the override allowed — at the
+  catalogue and at confirmation alike, since both read the same grants. If a narrowing
+  override exists for a reason that must hold during the rollback (a Product a reseller must
+  not sell), put it in the tier or suspend the reseller before rolling back. The overrides
+  are kept and come back into force with the roll-forward.
+- **The two monthly-minimum kinds wait.** A `RESELLER_MINIMUM_REMINDER` or
+  `RESELLER_MINIMUM_ACHIEVED` row still `PENDING` has no template in the old dispatcher,
+  which defers it without spending an attempt; after the roll-forward the reminder is
+  re-checked before it is sent, so a reseller who reached the minimum meanwhile is not
+  told they are behind.
+- **No notice is raised and the progress page is gone.** The minimums, the flags and
+  `reminders.reseller_minimum_days` are kept but ignored. The minimum never had a
+  consequence, so nothing about money, status or tiers differs.
+
+Nothing needs doing before rolling back past package D unless a narrowing override must
+keep holding (above).
+
+### What a rollback changes: the trial switch, the catalogue and the wallet (F5)
+
+F5 retires the tenant-wide `trials` feature flag: a trial is offered exactly when a panel
+has its own trial enabled (the panel's «سرویس تست» tab), and the Features page no longer
+shows a trial switch. The catalogue no longer draws a trial button — the trial is its own
+main-menu button, drawn only while at least one panel offers a trial — and the wallet no
+longer draws the referral button, which stays on its own main-menu button.
+
+Migration `0144_f5_trial_flag_retired` changes data once and adds nothing: every panel
+trial of a tenant whose `trials` switch was OFF (or never set, which was off) is switched
+off, with its revision moved on. A tenant whose switch was on keeps every panel as it was.
+So no tenant starts offering a trial it was not offering before the upgrade. Traffic, hours
+and the label are kept; re-enabling a panel offers what it was configured with. The
+`feature_flag_states` rows for `trials` are left in place, unread by F5.
+
+While the release before F5 runs:
+
+- **The switch is read again, from where it was left.** A tenant whose switch was on
+  behaves exactly as under F5. A tenant whose switch was off offers no trial even on a
+  panel an operator enabled after the upgrade; to offer it during the rollback, turn
+  «سرویس آزمایشی رایگان» on on that release's Features page — the panels decide the rest,
+  as they do under F5.
+- **A trial withdrawn during the rollback must be withdrawn on the panel.** F5 does not read
+  the switch, so a trial switched off with it on the old release comes back with the
+  roll-forward. Switch the panel's trial off on its «سرویس تست» tab — that release has
+  the tab — and it stays off in both.
+- **The catalogue's trial button and the wallet's referral button come back**; both callbacks
+  are still answered by F5, so a message the old release drew keeps working after the
+  roll-forward.
+
+Nothing needs doing before rolling back past F5.
+
+### What a rollback changes back: the review record and the gateway invoice ends (round N, F1 + F3)
+
+Neither package has a migration: nothing new is stored but machine codes in columns that
+already held free text, and nothing is removed. While the release before them runs:
+
+- **A receipt decided then is finalised into the one-line outcome again** (✅ پرداخت تأیید
+  شد …), not the complete record, and a tap on a finalised review message is acknowledged
+  without its notice. Messages finalised by the newer release keep the record they show.
+- **A gateway create's `creation_error_code` keeps the longer codes** the newer adapter
+  wrote (`http.403.unreadable.html`, `http.network.ENOTFOUND`, …); the older Web Admin shows
+  them as text, and the older adapter writes its shorter ones again.
+- **A created invoice without a payable link** (`creation_error_code =
+nexa.no_payment_link`) is shown by the older release as «پاسخ درگاه … دریافت نشد», and
+  its retry hands the same attempt back until the attempt's deadline, as before this round.
+- **A create answered with metadata in an undocumented shape** (a numeric invoice id, a
+  null or decimal amount) is UNKNOWN again under the older adapter. An invoice the newer
+  release already recorded as CREATED stays CREATED and is asked about as before.
+
+Nothing needs doing before rolling back past round N's payments package.
+
 ### How far back you can roll
 
 **One release**, safely. Migrations are expand-only within a release

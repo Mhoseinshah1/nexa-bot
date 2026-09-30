@@ -3,6 +3,8 @@ import {
   DEFAULT_MAIN_MENU_LAYOUT,
   MAIN_MENU_BUTTON_IDS,
   MAIN_MENU_BUTTONS,
+  mainMenuButton,
+  mainMenuButtonIsGated,
   mainMenuLayoutSchema,
   packMainMenuRows,
   parseTrafficInput,
@@ -32,13 +34,23 @@ const scope = {
 function layoutWith(options: {
   readonly stored?: readonly MainMenuLayoutEntry[];
   readonly flags?: Partial<Record<FeatureFlagKey, boolean>>;
+  /** F5: whether any panel offers a trial now — the trial button's one gate. */
+  readonly trialOffered?: boolean;
   readonly labels?: Partial<Record<TemplateKey, string>>;
+  /** Counts the offer reads, so a test can see when the gate is asked. */
+  readonly offerReads?: { count: number };
 }): MainMenuLayout {
   return new MainMenuLayout({
     settings: {
       valueOf: <T>() => Promise.resolve((options.stored ?? DEFAULT_MAIN_MENU_LAYOUT) as T),
     },
     features: { isEnabled: (_scope, key) => Promise.resolve(options.flags?.[key] ?? false) },
+    trials: {
+      anyOffered: () => {
+        if (options.offerReads !== undefined) options.offerReads.count += 1;
+        return Promise.resolve(options.trialOffered ?? false);
+      },
+    },
     templates: {
       render: (_scope, key) =>
         Promise.resolve(
@@ -96,12 +108,25 @@ describe('the main-menu arrangement (bot.main_menu)', () => {
     expect(mainMenuLayoutSchema.safeParse([{ button: 'lottery', enabled: true }]).success).toBe(
       false,
     );
-    // Only the feature-gated buttons left on: a flag switched off would empty the keyboard.
+    // Only the gated buttons left on: a flag switched off, or no panel offering a trial,
+    // would empty the keyboard.
     const onlyGated = MAIN_MENU_BUTTONS.map((button) => ({
       button: button.id,
-      enabled: button.feature !== null,
+      enabled: mainMenuButtonIsGated(button),
     }));
+    expect(onlyGated.filter((entry) => entry.enabled).map((entry) => entry.button)).toEqual([
+      'trial',
+      'referral',
+    ]);
     expect(mainMenuLayoutSchema.safeParse(onlyGated).success).toBe(false);
+    // F5: the trial button is gated by a panel offer, not by a flag — so a keyboard with
+    // only the trial on is empty whenever no panel offers one, and is refused.
+    expect(mainMenuButton('trial')).toMatchObject({ feature: null, needsTrialOffer: true });
+    const onlyTrial = MAIN_MENU_BUTTONS.map((button) => ({
+      button: button.id,
+      enabled: button.id === 'trial',
+    }));
+    expect(mainMenuLayoutSchema.safeParse(onlyTrial).success).toBe(false);
     // The registry holds it under this schema, with the default in force.
     expect(settingDefinition('bot.main_menu').schema.safeParse(onlyGated).success).toBe(false);
     expect(settingDefinition('bot.main_menu').defaultValue).toEqual(DEFAULT_MAIN_MENU_LAYOUT);
@@ -109,7 +134,7 @@ describe('the main-menu arrangement (bot.main_menu)', () => {
 });
 
 describe('MainMenuLayout — the keyboard and the route table from one object', () => {
-  it('draws the operator’s order, without switched-off buttons, and a gated one only while its flag is on', async () => {
+  it('draws the operator’s order, without switched-off buttons, and a gated one only while its gate is open', async () => {
     const stored: MainMenuLayoutEntry[] = [
       { button: 'referral', enabled: true },
       { button: 'catalog', enabled: true },
@@ -123,7 +148,7 @@ describe('MainMenuLayout — the keyboard and the route table from one object', 
       [CATALOGUE_FA['bot.menu.apps']],
       [CATALOGUE_FA['bot.menu.tickets']],
     ]);
-    const on = layoutWith({ stored, flags: { trials: true, referrals: true } });
+    const on = layoutWith({ stored, flags: { referrals: true }, trialOffered: true });
     expect(await on.rowsFor(scope)).toEqual([
       [CATALOGUE_FA['bot.menu.referral'], CATALOGUE_FA['bot.menu.catalog']],
       [CATALOGUE_FA['bot.menu.trial'], CATALOGUE_FA['bot.menu.wallet']],
@@ -133,9 +158,38 @@ describe('MainMenuLayout — the keyboard and the route table from one object', 
     ]);
   });
 
+  it('draws the trial button exactly while a panel offers a trial, whatever any flag says (F5)', async () => {
+    /*
+     * The owner's F5 rule: per-panel trials are authoritative. Every flag on and no panel
+     * offering a trial draws no trial button; every flag off and a panel offering one
+     * draws it. The trial has no flag to consult.
+     */
+    const everyFlag = Object.fromEntries(
+      ['referrals', 'custom_service', 'customer_link_rotation', 'customer_refund_requests'].map(
+        (key) => [key, true],
+      ),
+    ) as Partial<Record<FeatureFlagKey, boolean>>;
+    const trialLabel = CATALOGUE_FA['bot.menu.trial'];
+    const noOffer = layoutWith({ flags: everyFlag, trialOffered: false });
+    expect((await noOffer.rowsFor(scope)).flat()).not.toContain(trialLabel);
+    const offer = layoutWith({ flags: {}, trialOffered: true });
+    expect((await offer.rowsFor(scope)).flat()).toContain(trialLabel);
+    // The operator's own switch still hides it, and then the offer is not even asked.
+    const reads = { count: 0 };
+    const switchedOff = layoutWith({
+      stored: [{ button: 'trial', enabled: false }],
+      trialOffered: true,
+      offerReads: reads,
+    });
+    expect((await switchedOff.rowsFor(scope)).flat()).not.toContain(trialLabel);
+    expect(reads.count).toBe(0);
+    // A hidden trial button still routes, so a keyboard already in a chat keeps working.
+    expect((await noOffer.routesFor(scope)).get(trialLabel)).toBe('/trial');
+  });
+
   it('labels the keyboard with the tenant’s text, and routes that same text', async () => {
     const layout = layoutWith({
-      flags: { trials: true },
+      trialOffered: true,
       labels: { 'bot.menu.trial': '🎁 تست رایگان' },
     });
     expect((await layout.rowsFor(scope)).flat()).toContain('🎁 تست رایگان');

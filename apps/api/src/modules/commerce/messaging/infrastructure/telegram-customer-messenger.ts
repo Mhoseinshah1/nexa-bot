@@ -10,6 +10,7 @@ import {
   ADMIN_MENU_BUTTON,
   MAIN_MENU_BUTTONS,
   errors,
+  mainMenuButtonIsGated,
   packMainMenuRows,
   templateDefinition,
 } from '@nexa/contracts';
@@ -241,16 +242,16 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
      * labels are the tenant's AND the route table the runtime matches a tap against is
      * built from the same rendering (`MainMenuLayout.routesFor`), so a renamed button
      * routes under its new name. The stand-in fallback draws only the ungated buttons: a
-     * feature-gated one without its flag read would be a promise nobody checked.
+     * gated one without its flag or trial offer read would be a promise nobody checked.
      */
     const customerRows =
       message.keyboard === undefined
         ? undefined
         : this.menu !== undefined
           ? await this.menu.rowsFor(scope)
-          : packMainMenuRows(MAIN_MENU_BUTTONS.filter((button) => button.feature === null)).map(
-              (row) => row.map((button) => CATALOGUE_FA[button.label]),
-            );
+          : packMainMenuRows(
+              MAIN_MENU_BUTTONS.filter((button) => !mainMenuButtonIsGated(button)),
+            ).map((row) => row.map((button) => CATALOGUE_FA[button.label]));
     /*
      * The admin row is APPENDED to the customer rows rather than replacing them.
      *
@@ -298,6 +299,9 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
           chatId: message.chatId,
           text: part,
           html,
+          ...(index === 0 && message.replyToMessageId !== undefined
+            ? { replyToMessageId: message.replyToMessageId }
+            : {}),
           ...(last ? { buttons, ...(keyboard === undefined ? {} : { keyboard }) } : {}),
         }),
       });
@@ -549,6 +553,10 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
     if (token === null) return { outcome: 'REFUSED' };
     const caption = await this.templates.render(scope, message.templateKey, message.values);
     const html = templateDefinition(message.templateKey).format === 'TELEGRAM_HTML';
+    // Round N (F1): a caption that must arrive whole is refused, not cut, over the bound.
+    if (message.whole === true && caption.length > TELEGRAM_CAPTION_MAX) {
+      return { outcome: 'REFUSED', reason: 'CAPTION_OVER_BOUND' };
+    }
     if (caption.length === 0 || (html && caption.length > TELEGRAM_CAPTION_MAX)) {
       return { outcome: 'REFUSED', reason: 'NOT_EDITABLE' };
     }
@@ -675,6 +683,10 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
     const token = await this.bots.tokenForBotInstance(scope, message.botInstanceId);
     if (token === null) return { outcome: 'REFUSED' };
     const text = await this.templates.render(scope, message.templateKey, message.values);
+    // Round N (F1): a body that must arrive whole says WHY it was refused.
+    if (message.whole === true && text.length > TELEGRAM_MESSAGE_MAX) {
+      return { outcome: 'REFUSED', reason: 'TEXT_OVER_BOUND' };
+    }
     if (text.length === 0 || text.length > TELEGRAM_MESSAGE_MAX) {
       return { outcome: 'REFUSED', reason: 'NOT_EDITABLE' };
     }

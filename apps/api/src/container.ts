@@ -10,6 +10,7 @@ import {
   canAdjustDeviceLimit,
   canChangeLocation,
   faqNumberMarker,
+  isSystemContext,
   systemJobActor,
 } from '@nexa/contracts';
 import type {
@@ -171,6 +172,7 @@ import { TrialProductGuard } from './modules/commerce/trials/application/trial-p
 import { MainMenuLayout } from './modules/commerce/messaging/application/main-menu.js';
 import { DrizzlePanelTrialConfigRepository } from './modules/commerce/trials/infrastructure/drizzle-panel-trial-config.repository.js';
 import { PanelTrialService } from './modules/commerce/trials/application/panel-trial.service.js';
+import { trialOffersFor } from './modules/commerce/trials/application/trial-offers.js';
 import { DrizzleTrialGrantRepository } from './modules/commerce/trials/infrastructure/drizzle-trial-grant.repository.js';
 import { DrizzleTrialOverrideRepository } from './modules/commerce/trials/infrastructure/drizzle-trial-override.repository.js';
 import { DrizzleTrialResetRepository } from './modules/commerce/trials/infrastructure/drizzle-trial-reset.repository.js';
@@ -326,6 +328,8 @@ import {
 import { DrizzleResellerRepository } from './modules/commerce/resellers/infrastructure/drizzle-reseller.repository.js';
 import { ResellerService } from './modules/commerce/resellers/application/reseller.service.js';
 import { ResellerAdminService } from './modules/commerce/resellers/application/reseller-admin.service.js';
+import { ResellerMinimumService } from './modules/commerce/resellers/application/reseller-minimum.service.js';
+import { TenantMonthlyPeriods } from './infrastructure/time/monthly-period.js';
 import { DrizzleAuditHistoryReader } from './modules/platform/audit/infrastructure/drizzle-audit-history.reader.js';
 import { DrizzleDiscountRepository } from './modules/commerce/pricing/infrastructure/drizzle-discount.repository.js';
 import {
@@ -667,6 +671,8 @@ export interface Container {
   readonly resellers: ResellerService;
   /** WP9-B: reseller tiers, grants and resellers, as an operator manages them. */
   readonly resellersAdmin: ResellerAdminService;
+  /** Round N R2: the reseller monthly minimum — progress and the optional notices. */
+  readonly resellerMinimums: ResellerMinimumService;
   readonly commercialActions: CommercialActionService;
   /** WP-A6: the operator's configured locations, and a customer's free location change. */
   readonly serviceLocations: ServiceLocationAdminService;
@@ -2822,7 +2828,6 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     panelSales: panelSalesGate,
     provisioning: provisioningService,
     settings: settingsResolver,
-    features: featureFlagResolver,
     guard,
     uow,
     audit,
@@ -2846,7 +2851,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     customers: customerRepository,
     wallet: walletRepository,
     settings: settingsResolver,
-    features: featureFlagResolver,
+    configs: panelTrialConfigRepository,
     guard,
     uow,
     audit,
@@ -2864,7 +2869,6 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   const panelTrials = new PanelTrialService({
     configs: panelTrialConfigRepository,
     panels: panelRepository,
-    features: featureFlagResolver,
     panelSales: panelSalesGate,
     usernames: usernameLane,
     guard,
@@ -2946,6 +2950,25 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     clock,
     ids,
   });
+  /*
+   * Round N R2: the reseller monthly minimum. Readers, not services, for the settings and
+   * flags — the reason `serviceReminderSweep` gives above. Its sales figure is the reports'
+   * own statement (`resellerSalesStatement`) and its months the reports' own resolver.
+   */
+  const resellerMinimumService = new ResellerMinimumService({
+    resellers: resellerRepository,
+    sales: new DrizzleReportingRepository(database.db),
+    periods: new TenantMonthlyPeriods(),
+    presentation: new CachedTenantPresentationReader(tenants, clock),
+    settings: settingsResolver,
+    features: featureFlagResolver,
+    notifier: customerNotifier,
+    guard,
+    scopeActivity: tenants,
+    uow,
+    clock,
+    ids,
+  });
   const customerReminderLoop = new CustomerReminderLoop(
     [
       {
@@ -2961,6 +2984,12 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
         // The service reminder cadence: a fall below a threshold is not a deadline.
         everyMs: SERVICE_REMINDER_INTERVAL_MS,
         runOnce: async (scope) => (await walletLowBalanceSweep.runOnce(scope)).alerts,
+      },
+      {
+        // Round N R2: a month-end reminder is not a deadline to the minute either.
+        name: 'reseller-monthly-minimum',
+        everyMs: SERVICE_REMINDER_INTERVAL_MS,
+        runOnce: async (scope) => resellerMinimumService.runOnce(scope),
       },
     ],
     {
@@ -3254,11 +3283,14 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    * The balance through the ledger's own SUM, gated by the guard's one resolution rule; the
    * labels through the tenant's own template overrides.
    */
+  const receiptReviewFacts = new DrizzleReceiptReviewFactsReader(database.db);
   const receiptReviewCaption = new ReceiptReviewCaption({
-    facts: new DrizzleReceiptReviewFactsReader(database.db),
+    facts: receiptReviewFacts,
     balances: walletRepository,
     guard,
     labels: templateResolver,
+    // F1 (round N): the payment's own wallet movement, for the review message's final record.
+    movements: receiptReviewFacts,
   });
 
   const receiptService = new ReceiptService({
@@ -3320,6 +3352,27 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     settings: settingsResolver,
     features: featureFlagResolver,
     templates: templateResolver,
+    /*
+     * F5: the trial button is drawn while `trialOffersFor` — the evaluator the claim and
+     * the operator's overview use — names at least one panel. The keyboard is a tenant's,
+     * so this is the tenant-wide answer; the claim decides the customer's own allowance.
+     */
+    trials: {
+      // A system scope draws no customer's keyboard, so it offers no trial.
+      anyOffered: async (scope) =>
+        !isSystemContext(scope) &&
+        (
+          await trialOffersFor(
+            {
+              configs: panelTrialConfigRepository,
+              panelSales: panelSalesGate,
+              panels: panelRepository,
+              usernames: usernameLane,
+            },
+            scope,
+          )
+        ).length > 0,
+    },
   });
   const customerMessenger = new TelegramCustomerMessenger(
     // The tenant's own renderer, so an override lands in exactly the messages a
@@ -4556,6 +4609,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     tenantMedia: tenantMediaService,
     resellers: resellerService,
     resellersAdmin: resellerAdminService,
+    resellerMinimums: resellerMinimumService,
     commercialActions: commercialActionService,
     serviceLocations: serviceLocationAdminService,
     locationChanges: locationChangeService,

@@ -100,6 +100,7 @@ import type {
   CustomerSendOutcome,
   CustomerSendResult,
   CustomerMessenger,
+  CustomerMessageRef,
   MainMenuVariant,
   CustomerEditMessage,
 } from '../../modules/commerce/messaging/application/ports.js';
@@ -885,7 +886,13 @@ export const CANCEL_ORDER_CALLBACK_PREFIX = 'f:';
  */
 export const TOPUP_MENU_CALLBACK_PREFIX = 'o:';
 export const TOPUP_PICK_CALLBACK_PREFIX = 'y:';
-/** The wallet screen's invite button (WP9). Matched on the whole string, like the top-up menu. */
+/**
+ * The wallet screen's invite button (WP9). Matched on the whole string, like the top-up menu.
+ *
+ * F5: the wallet no longer draws it — the wallet shows wallet operations only, and the
+ * referral program is its own main-menu action. Still PARSED, so a wallet message drawn
+ * before F5 opens the same referral screen the menu's button does.
+ */
 export const REFERRAL_INVITE_CALLBACK_PREFIX = 'rf:';
 
 export const SERVICE_CALLBACK_PREFIX = 's:';
@@ -2337,6 +2344,10 @@ export const CATEGORY_CALLBACK_PREFIX = 'ck:';
  * id and no figure, because nothing about a trial is the client's to say. Two letters
  * because every single-letter prefix is taken; `t:` is terminate's, and `tr:` does not
  * start with it.
+ *
+ * F5: the catalogue no longer draws it — a trial is its own main-menu action, not a step
+ * of buying. It is still PARSED, so a catalogue message drawn before F5 and still sitting
+ * in a chat answers its tap exactly as the menu's button does (the claim decides).
  */
 export const TRIAL_CALLBACK_DATA = 'tr:';
 /**
@@ -3200,8 +3211,8 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
   /*
    * R1: «🧪 دریافت سرویس تست» and «👥 زیرمجموعه‌گیری». Not registered with
    * `setMyCommands` (see `TRIAL_MENU_COMMAND`); reachable by the button and by typing, and
-   * each answers from its feature's own state — the same two paths the catalogue's trial
-   * button (`tr:`) and the wallet's referral button (`rf:`) already take.
+   * each answers from its feature's own state — the same two paths the pre-F5 catalogue
+   * trial button (`tr:`) and wallet referral button (`rf:`) still take from old messages.
    */
   if (command === `/${TRIAL_MENU_COMMAND}`) {
     return { intent: 'TRIAL_CLAIM', targetId: null, callbackQueryId: null };
@@ -3656,10 +3667,11 @@ export interface BotRuntimeDeps {
   readonly locationChanges?: Pick<LocationChangeService, 'requestFree'>;
   /**
    * The free trial (WP6-A). Optional only so the customer-side unit fixtures need not
-   * build it; the composition root always supplies it, and without it the catalogue
-   * simply offers no trial — which is also what a tenant with the flag off sees.
+   * build it; the composition root always supplies it, and without it every trial tap is
+   * answered unavailable. Only the claim is asked: since F5 no purchase screen offers a
+   * trial, so nothing here reads availability ahead of a tap.
    */
-  readonly trials?: Pick<TrialService, 'availabilityFor' | 'claim'>;
+  readonly trials?: Pick<TrialService, 'claim'>;
   /**
    * Package D — the custom-service flow. Optional for the fixtures that build a runtime
    * without it: then no button is drawn and a stale tap answers the unavailable sentence.
@@ -3683,7 +3695,7 @@ export interface BotRuntimeDeps {
    * `bot.tutorial.<platform>` texts it was before, and a stale `ca:` answers not-found.
    */
   readonly clientApps?: Pick<ClientAppCatalog, 'platformsFor' | 'appsFor' | 'appFor'>;
-  /** The referral program (WP9): its terms, for the wallet button, and the invite. */
+  /** The referral program (WP9): its terms and the invite, for the referral screen. */
   readonly referrals?: Pick<ReferralProgram, 'terms' | 'invite'>;
   readonly orders: OrderService;
   readonly payments: PaymentService;
@@ -3706,7 +3718,7 @@ export interface BotRuntimeDeps {
    */
   readonly receipts: Pick<
     ReceiptService,
-    'submit' | 'reviewQueue' | 'reviewItem' | 'dispositionOf'
+    'submit' | 'reviewQueue' | 'reviewItem' | 'dispositionOf' | 'finalRecord'
   >;
   /**
    * The reviewer's amount capture for the credit-to-wallet disposition (Payment File 02
@@ -5150,11 +5162,11 @@ export class BotRuntime {
      */
     const origin = callbackOriginOf(input.update);
     const state = this.deps.messageState;
-    const repeatedReview =
+    const reviewRecord =
       state !== undefined && origin !== null && REVIEW_TAP_INTENTS.has(command.intent)
-        ? ((await state.findReview(scope, this.refOf(input.botInstanceId, origin)))?.finalisedAt ??
-            null) !== null
-        : false;
+        ? await state.findReview(scope, this.refOf(input.botInstanceId, origin))
+        : null;
+    const repeatedReview = (reviewRecord?.finalisedAt ?? null) !== null;
     const gate = WIZARD_GATES.get(command.intent);
     let claim: TelegramWizardRecord | null = null;
     let staleWizard = false;
@@ -5169,11 +5181,19 @@ export class BotRuntime {
       if (claimed.outcome === 'CLAIMED') claim = claimed.wizard;
       else if (claimed.outcome === 'STALE') staleWizard = true;
     }
+    /*
+     * F1 (round N): a repeated review tap is still answered and nothing else — but with the
+     * truthful notice of what was decided (e.g. «این پرداخت قبلاً تأیید شده است.»).
+     */
+    const repeatToast =
+      repeatedReview && reviewRecord !== null
+        ? await this.repeatedReviewToast(scope, actor, input.telegramUserId, reviewRecord.paymentId)
+        : {};
     let answered: PendingReply;
     try {
       answered =
         repeatedReview || staleWizard
-          ? { key: null, values: {}, buttons: [], orderId: null }
+          ? { key: null, values: {}, buttons: [], orderId: null, ...repeatToast }
           : arrival === 'BLOCKED'
             ? (blockedAdminText ??
               (ADMIN_INTENTS.has(command.intent)
@@ -5257,7 +5277,14 @@ export class BotRuntime {
      * out as it always did.
      */
     if (state !== undefined && origin !== null && reply.review?.outcome !== undefined) {
-      const reviewed = await this.finaliseReview(scope, actor, reply, origin, input.botInstanceId);
+      const reviewed = await this.finaliseReview(
+        scope,
+        actor,
+        reply,
+        origin,
+        input.botInstanceId,
+        input.telegramUserId,
+      );
       if (reviewed !== null) {
         await this.stopSpinner(scope, command, input.botInstanceId);
         return {
@@ -12642,31 +12669,26 @@ export class BotRuntime {
       customer.id,
     );
     /*
-     * The trial, first on the first page and only there — and only when this customer
-     * could take one NOW. A button that answers "no trial for you" is a promise the
-     * keyboard broke; `claimTrial` decides again anyway, because this read is a
-     * courtesy made before the tap and without the lock.
+     * No trial here (F5). A trial is not something a customer buys or browses to: it is
+     * its own main-menu action («🧪 دریافت سرویس تست», `/trial`), drawn while a panel
+     * offers one. The purchase flow — categories, products, plans — sells, and only sells.
+     *
+     * The custom service (Package D), on the first page only: drawn when at least one
+     * location could price this customer now. A courtesy — every step after the tap
+     * decides again. Unlike the trial it IS a way to buy, so it stays.
      */
-    const trial: CustomerButton[] =
-      page === 0 && (await this.trialOffered(scope, actor, customer))
-        ? [{ label: { kind: 'TEMPLATE', key: 'bot.trial.button' }, data: TRIAL_CALLBACK_DATA }]
-        : [];
-    /*
-     * The custom service (Package D), beside the trial and on the first page only: drawn
-     * when at least one location could price this customer now. A courtesy — every step
-     * after the tap decides again.
-     */
+    const leading: CustomerButton[] = [];
     if (page === 0 && (await this.customServiceOffered(scope, actor, customer))) {
-      trial.push({
+      leading.push({
         label: { kind: 'TEMPLATE', key: 'bot.custom_service.button' },
         data: CUSTOM_SERVICE_CALLBACK_DATA,
       });
     }
     if (items.length === 0) {
       if (page > 0) return this.catalogue(scope, actor, 0, customer);
-      return { key: 'bot.catalog.empty', values: {}, buttons: trial, orderId: null };
+      return { key: 'bot.catalog.empty', values: {}, buttons: leading, orderId: null };
     }
-    const buttons: CustomerButton[] = [...trial];
+    const buttons: CustomerButton[] = [...leading];
     buttons.push(
       ...items.map((category) => ({
         // Operator text, exactly as a product title is. The emoji is optional and its
@@ -12814,20 +12836,9 @@ export class BotRuntime {
     }
   }
 
-  /** Whether to draw the trial button for this customer. Never throws a reply away. */
-  private async trialOffered(
-    scope: TenantContext,
-    actor: ActorContext,
-    customer: CustomerRecord,
-  ): Promise<boolean> {
-    if (this.deps.trials === undefined) return false;
-    const availability = await this.deps.trials.availabilityFor(scope, actor, customer.id);
-    return availability.available;
-  }
-
   /**
-   * A customer asked for a trial — the main menu's «🧪 دریافت سرویس تست», `/trial`, or the
-   * catalogue's trial button (R1).
+   * A customer asked for a trial — the main menu's «🧪 دریافت سرویس تست», `/trial`, or a
+   * pre-F5 catalogue message's trial button (R1).
    *
    * Which panels offer one is `TrialService.claim`'s answer, decided with no panel named —
    * enabled, eligible by the one evaluator, able to name the account — and never this
@@ -13533,7 +13544,12 @@ export class BotRuntime {
   ): Promise<PendingReply> {
     const balance = await this.deps.wallet.balanceForCustomer(scope, actor, customer.id);
     const counters = await this.deps.counters.counters(scope, customer.id);
-    const referring = (await this.deps.referrals?.terms(scope))?.active === true;
+    /*
+     * The referral COUNT stays on the account summary: it is a fact about this customer
+     * that Mirza's /wallet shows too (the one referral surface its research VERIFIED). The
+     * referral BUTTON does not (F5): the wallet carries wallet operations only, and the
+     * program is reached from its own main-menu button and `/referral`.
+     */
     const referralCount =
       this.deps.referralGifts === undefined
         ? 0
@@ -13566,14 +13582,6 @@ export class BotRuntime {
               },
             ]
           : []),
-        ...(referring
-          ? [
-              {
-                label: { kind: 'TEMPLATE' as const, key: 'bot.referral.button' as const },
-                data: REFERRAL_INVITE_CALLBACK_PREFIX,
-              },
-            ]
-          : []),
         mainMenuButton(),
       ],
       orderId: null,
@@ -13593,7 +13601,7 @@ export class BotRuntime {
    * nothing is calculated here. Asking records the customer's code the first time, which
    * is why it carries the turn's idempotency key; every other answer is the one
    * unconfigured sentence. Reached from the main menu's «👥 زیرمجموعه‌گیری», `/referral`
-   * and the wallet's referral button alike.
+   * and — from a wallet message drawn before F5 — the wallet's old referral button alike.
    */
   private async referralInvite(
     scope: TenantContext,
@@ -14739,6 +14747,7 @@ export class BotRuntime {
     reply: PendingReply,
     origin: CallbackOrigin,
     botInstanceId: BotInstanceId,
+    telegramUserId: string,
   ): Promise<CustomerSendOutcome | 'NOT_ATTEMPTED' | null> {
     const state = this.deps.messageState;
     const directive = reply.review;
@@ -14770,6 +14779,31 @@ export class BotRuntime {
         await state.unfinaliseReview(scope, actor, id);
       }
     };
+    /*
+     * F1 (round N): a receipt becomes the COMPLETE final record — the outcome's label and the
+     * facts the reviewer decided on — read once, after the decision committed. The wallet
+     * lines go only on this reviewer's own chat: a copy pushed to another reviewer is read by
+     * somebody whose permissions this turn does not know, so theirs carries every fact but
+     * the balance. A record that cannot be read (no administrator behind the tap, a payment
+     * gone) falls back to the outcome's one line, which is still true.
+     */
+    const records = new Map<boolean, { key: TemplateKey; values: TemplateValues }>();
+    const recordFor = async (
+      own: boolean,
+    ): Promise<{ key: TemplateKey; values: TemplateValues }> => {
+      const cached = records.get(own);
+      if (cached !== undefined) return cached;
+      const record = await this.finalReviewRecord(
+        scope,
+        actor,
+        telegramUserId,
+        paymentId,
+        outcome,
+        own,
+      );
+      records.set(own, record);
+      return record;
+    };
     let answer: CustomerSendOutcome | 'NOT_ATTEMPTED' = 'NOT_ATTEMPTED';
     for (const row of stamped) {
       const message = {
@@ -14777,38 +14811,189 @@ export class BotRuntime {
         messageId: row.messageId,
         botInstanceId: row.botInstanceId,
       };
+      const ownChat = row.botInstanceId === ref.botInstanceId && row.chatId === ref.chatId;
       if (same(row)) {
-        // A receipt becomes the outcome's one line; a prompt becomes this reply's sentence.
+        // A receipt becomes the final record; a prompt becomes this reply's sentence.
         const receipt = row.role === 'REVIEW';
-        const edited = await editSent(
-          this.deps.messenger,
-          scope,
-          {
-            ...message,
-            templateKey: receipt ? REVIEW_OUTCOME_KEYS[outcome] : reply.key,
-            values: receipt ? {} : reply.values,
-            buttons: receipt ? [] : reply.buttons,
-          },
-          origin.media,
-        );
+        const record = receipt ? await recordFor(true) : null;
+        const edited =
+          record !== null
+            ? await this.editReviewRecord(scope, message, record, origin.media)
+            : await editSent(
+                this.deps.messenger,
+                scope,
+                {
+                  ...message,
+                  templateKey: reply.key,
+                  values: reply.values,
+                  buttons: reply.buttons,
+                },
+                origin.media,
+              );
         await clearFailed(row.id, edited);
         answer = edited.outcome;
         continue;
       }
+      const record = row.role === 'REVIEW' ? await recordFor(ownChat) : null;
       const other =
-        row.role === 'REVIEW'
-          ? await editSent(
-              this.deps.messenger,
-              scope,
-              { ...message, templateKey: REVIEW_OUTCOME_KEYS[outcome], values: {}, buttons: [] },
-              row.hasMedia,
-            )
+        record !== null
+          ? await this.editReviewRecord(scope, message, record, row.hasMedia)
           : this.deps.messenger.clearButtons === undefined
             ? ({ outcome: 'REFUSED' } as const)
             : await this.deps.messenger.clearButtons(scope, message);
       await clearFailed(row.id, other);
     }
     return answer;
+  }
+
+  /**
+   * F1 (round N, Codex review of #113): ONE review message edited into its final record, and
+   * never into a record that silently lost its end.
+   *
+   * The record is edited in place, WHOLE (`whole`): the normal case, and still no new
+   * message. A receipt FILE is edited through its caption, which Telegram bounds at 1,024
+   * characters, and a tenant's override of the record or of its labels can pass that (a text
+   * message, at 4,096). Cut, the tracking code and the wallet lines at the end would be gone
+   * while the review reads as final. So a record that does not fit is refused by the
+   * messenger before any request, and the one documented fallback is the smallest arrangement
+   * that loses nothing and stays attached to the receipt:
+   *
+   *   1. the message becomes `bot.admin.review_final_short` — the decision and the tracking
+   *      code, and a sentence pointing at the reply (bounded; if a tenant's override of THAT
+   *      is too long it is cut, and nothing is lost, because the record follows);
+   *   2. the complete record is sent as a REPLY to that same message.
+   *
+   * The result is what the stamp logic reads: a refused or rate-limited step — Telegram
+   * definitely did not apply it — unfinalises the message so a later tap finishes it; an
+   * UNKNOWN step is left finalised, since it may have landed. This runs only for a message
+   * `finaliseReviews` stamped in THIS call, and a finalised message is never stamped again,
+   * so a repeated tap never sends the reply a second time.
+   */
+  private async editReviewRecord(
+    scope: TenantContext,
+    message: CustomerMessageRef,
+    record: { readonly key: TemplateKey; readonly values: TemplateValues },
+    media: boolean,
+  ): Promise<CustomerSendResult> {
+    const full = { ...message, templateKey: record.key, values: record.values, buttons: [] };
+    if (record.key !== 'bot.admin.review_final') {
+      return editSent(this.deps.messenger, scope, full, media);
+    }
+    const whole = await editSent(this.deps.messenger, scope, { ...full, whole: true }, media);
+    if (
+      whole.outcome !== 'REFUSED' ||
+      (whole.reason !== 'CAPTION_OVER_BOUND' && whole.reason !== 'TEXT_OVER_BOUND')
+    ) {
+      return whole;
+    }
+    const short = await editSent(
+      this.deps.messenger,
+      scope,
+      {
+        ...message,
+        templateKey: 'bot.admin.review_final_short',
+        values: {
+          outcome: record.values['outcome'] ?? '',
+          reference: record.values['reference'] ?? '',
+        },
+        buttons: [],
+      },
+      media,
+    );
+    if (short.outcome !== 'DELIVERED') return short;
+    const reply = await this.deps.messenger.send(scope, {
+      chatId: message.chatId,
+      botInstanceId: message.botInstanceId,
+      templateKey: record.key,
+      values: record.values,
+      replyToMessageId: message.messageId,
+    });
+    return reply.outcome === 'DELIVERED' ? short : reply;
+  }
+
+  /**
+   * F1 (round N): the final record a receipt review message becomes — `bot.admin.review_final`
+   * with the facts the reviewer decided on, read as the administrator who tapped (the
+   * receipts read charges `receipts.view`, and the wallet lines `users.view`). `GONE`, or a
+   * record that cannot be read, is the outcome's own one line: still true, and never blank.
+   */
+  private async finalReviewRecord(
+    scope: TenantContext,
+    actor: ActorContext,
+    telegramUserId: string,
+    paymentId: string,
+    outcome: TelegramReviewOutcome | 'GONE',
+    wallet: boolean,
+  ): Promise<{ key: TemplateKey; values: TemplateValues }> {
+    const line = { key: REVIEW_OUTCOME_KEYS[outcome], values: {} };
+    if (outcome === 'GONE') return line;
+    try {
+      const reviewer = await this.reviewerActor(scope, actor, telegramUserId);
+      if (reviewer === null) return line;
+      const values = await this.deps.receipts.finalRecord(
+        scope,
+        reviewer,
+        paymentId as PaymentId,
+        outcome,
+        REVIEW_OUTCOME_KEYS[outcome],
+        wallet,
+      );
+      return values === null ? line : { key: 'bot.admin.review_final', values };
+    } catch {
+      // A refused read decides nothing; the one line still says what was decided.
+      return line;
+    }
+  }
+
+  /** The administrator behind a review tap, or null when there is none. */
+  private async reviewerActor(
+    scope: TenantContext,
+    actor: ActorContext,
+    telegramUserId: string,
+  ): Promise<ActorContext | null> {
+    const admins = this.deps.telegramAdmins;
+    if (admins === undefined) return null;
+    const identity = await admins.resolve(scope, telegramUserId, actor.correlationId);
+    return identity === null ? null : identity.actor;
+  }
+
+  /**
+   * F1 (round N): what a tap on a review message ALREADY finalised is answered with — the
+   * callback's own notice, and nothing else. The payment's recorded disposition decides the
+   * sentence; a payment still pending whose message was finalised was finalised by a BLOCK
+   * (the one decision that leaves it in the queue). Nothing is decided, credited, sent or
+   * edited here. A read that cannot be made answers without a notice, as before.
+   */
+  private async repeatedReviewToast(
+    scope: TenantContext,
+    actor: ActorContext,
+    telegramUserId: string,
+    paymentId: string,
+  ): Promise<Pick<PendingReply, 'toast'>> {
+    const toast = (key: TemplateKey): Pick<PendingReply, 'toast'> => ({
+      toast: { key, values: {} },
+    });
+    try {
+      const reviewer = await this.reviewerActor(scope, actor, telegramUserId);
+      if (reviewer === null) return {};
+      const found = await this.deps.receipts.dispositionOf(scope, reviewer, paymentId as PaymentId);
+      if (found !== null) {
+        switch (found.disposition) {
+          case 'APPROVED':
+            return toast('bot.admin.review_repeat_approved');
+          case 'REJECTED':
+            return toast('bot.admin.review_repeat_rejected');
+          case 'CREDITED_TO_WALLET':
+            return toast('bot.admin.review_repeat_credited');
+        }
+      }
+      const pending = await this.deps.receipts.reviewItem(scope, reviewer, paymentId as PaymentId);
+      return toast(
+        pending === null ? 'bot.admin.review_repeat_gone' : 'bot.admin.review_repeat_blocked',
+      );
+    } catch {
+      return {};
+    }
   }
 
   private async stopSpinner(
@@ -15133,7 +15318,24 @@ export function gatewayAttemptScreen(
   if (invoice.creationState === 'CREATING') {
     return screen('bot.payment.gateway_preparing', [check], 'INVOICE_LOADING', true);
   }
+  /*
+   * F3 (round N): each end says what actually happened, and each offers a way on that opens
+   * a NEW attempt — none of these is an open attempt (`findOpenAttempt`), so the retry is
+   * never handed this one back.
+   *
+   * - A create the gateway REFUSED is "unavailable" even while its payment is still PENDING
+   *   (the failure's own write did not land): it was a refusal, never a lost answer.
+   * - An invoice the gateway reported CREATED with no link a customer can open: its answer
+   *   was received, so it is not "the answer was lost".
+   * - Only a create whose answer really was lost (`CREATE_UNKNOWN`) is `gateway_unknown`.
+   */
+  if (invoice.creationState === 'CREATE_FAILED') {
+    return screen('bot.payment.gateway_unavailable', [retry], 'NOTICE');
+  }
   const link = invoice.webInvoiceUrl ?? invoice.invoiceUrl;
+  if (invoice.creationState === 'CREATED' && link === null) {
+    return screen('bot.payment.gateway_no_link', [retry], 'NOTICE');
+  }
   if (invoice.creationState !== 'CREATED' || link === null) {
     return screen('bot.payment.gateway_unknown', [retry], 'NOTICE');
   }

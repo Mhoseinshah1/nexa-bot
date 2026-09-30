@@ -2,20 +2,29 @@ import { Body, Controller, Get, Inject, Param, Post, Query, Req } from '@nestjs/
 import type { FastifyRequest } from 'fastify';
 import {
   API_PREFIX,
+  RESELLER_MINIMUM_ROUTES,
   RESELLER_ROUTES,
   RESELLER_TIER_ROUTES,
   money,
+  resellerGrantOverridesWriteSchema,
   resellerListQuerySchema,
+  resellerMinimumQuerySchema,
+  resellerMinimumWriteSchema,
+  resellerTierMinimumWriteSchema,
   resellerPurchaseQuerySchema,
   resellerRegisterSchema,
   resellerTierGrantsWriteSchema,
   resellerTierWriteSchema,
   resellerUpdateSchema,
   type CurrencyCode,
+  type Money,
   type ResellerCreditResponse,
+  type ResellerGrantKind,
   type ResellerHistoryEntry,
   type ResellerHistoryResponse,
   type ResellerListResponse,
+  type ResellerMinimumReport,
+  type ResellerPolicyResponse,
   type ResellerPurchasePage,
   type ResellerResponse,
   type ResellerSummaryResponse,
@@ -34,7 +43,11 @@ import type {
   ResellerPurchaseRecord,
   ResellerTierListing,
 } from '../../modules/commerce/resellers/application/ports.js';
-import type { ResellerCreditStandingRecord } from '../../modules/commerce/resellers/application/reseller-admin.service.js';
+import type {
+  ResellerCreditStandingRecord,
+  ResellerPolicyRecord,
+} from '../../modules/commerce/resellers/application/reseller-admin.service.js';
+import type { ResellerMinimumReportRecord } from '../../modules/commerce/resellers/application/reseller-minimum.service.js';
 import { effectiveLimitOf } from '../../modules/commerce/resellers/domain/reseller-credit.js';
 import type { AuditHistoryRecord } from '../../modules/platform/audit/application/ports.js';
 
@@ -253,6 +266,89 @@ export class ResellersController {
     return { entries: entries.map(toHistoryEntry) };
   }
 
+  // -- Round N, package D: plan controls and the monthly minimum ------------------------
+
+  @Post('reseller-tiers/:id/monthly-minimum')
+  async setTierMinimum(
+    @Req() request: FastifyRequest,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ): Promise<ResellerTierResponse> {
+    const { scope, actor } = await this.authenticate(request);
+    const command = resellerTierMinimumWriteSchema.parse(body);
+    const tier = await this.container.resellersAdmin.setTierMinimum(scope, actor, {
+      idempotencyKey: command.idempotencyKey,
+      tierId: id,
+      minimum: creditLimitFrom(command.minimum),
+    });
+    return { tier: toTierSummary(tier) };
+  }
+
+  @Post('resellers/:customerId/monthly-minimum')
+  async setMinimum(
+    @Req() request: FastifyRequest,
+    @Param('customerId') customerId: string,
+    @Body() body: unknown,
+  ): Promise<ResellerResponse> {
+    const { scope, actor } = await this.authenticate(request);
+    const command = resellerMinimumWriteSchema.parse(body);
+    const reseller = await this.container.resellersAdmin.setMinimum(scope, actor, {
+      idempotencyKey: command.idempotencyKey,
+      customerId,
+      minimum: creditLimitFrom(command.minimum),
+    });
+    return { reseller: toResellerSummary(reseller) };
+  }
+
+  @Post('resellers/:customerId/grants')
+  async replaceOverrides(
+    @Req() request: FastifyRequest,
+    @Param('customerId') customerId: string,
+    @Body() body: unknown,
+  ): Promise<ResellerPolicyResponse> {
+    const { scope, actor } = await this.authenticate(request);
+    const command = resellerGrantOverridesWriteSchema.parse(body);
+    const policy = await this.container.resellersAdmin.replaceOverrides(scope, actor, {
+      idempotencyKey: command.idempotencyKey,
+      customerId,
+      overrides: command.overrides.map((o) => ({
+        dimension: o.dimension,
+        grants: o.grants.map((g) => ({ kind: g.kind, subject: g.subject })),
+      })),
+    });
+    return { policy: toPolicy(policy) };
+  }
+
+  @Get('resellers/:customerId/policy')
+  async policy(
+    @Req() request: FastifyRequest,
+    @Param('customerId') customerId: string,
+  ): Promise<ResellerPolicyResponse> {
+    const { scope, actor } = await this.authenticate(request);
+    return {
+      policy: toPolicy(await this.container.resellersAdmin.policy(scope, actor, customerId)),
+    };
+  }
+
+  @Get(RESELLER_MINIMUM_ROUTES.progress)
+  async minimums(
+    @Req() request: FastifyRequest,
+    @Query() raw: Record<string, unknown>,
+  ): Promise<ResellerMinimumReport> {
+    const { scope, actor } = await this.authenticate(request);
+    const query = singleValued(raw);
+    const parsed = resellerMinimumQuerySchema.parse({
+      ...(query.period === undefined ? {} : { period: query.period }),
+      ...(query.filter === undefined ? {} : { filter: query.filter }),
+    });
+    return toMinimumReport(
+      await this.container.resellerMinimums.progress(scope, actor, {
+        ...(parsed.period === undefined ? {} : { period: parsed.period }),
+        ...(parsed.filter === undefined ? {} : { filter: parsed.filter }),
+      }),
+    );
+  }
+
   private async authenticate(
     request: FastifyRequest,
   ): Promise<{ scope: TenantContext; actor: ReturnType<typeof adminActor> }> {
@@ -303,6 +399,7 @@ function toTierSummary(tier: ResellerTierListing): ResellerTierSummaryResponse {
     },
     grants: tier.grants.map((g) => ({ kind: g.kind, subject: g.subject })),
     resellerCount: tier.resellerCount,
+    monthlyMinimum: wireMoney(tier.monthlyMinimum),
     createdAt: tier.createdAt.toISOString(),
     updatedAt: tier.updatedAt.toISOString(),
   };
@@ -335,6 +432,78 @@ function toResellerSummary(reseller: ResellerListing): ResellerSummaryResponse {
     },
     createdAt: reseller.createdAt.toISOString(),
     updatedAt: reseller.updatedAt.toISOString(),
+  };
+}
+
+function wireMoney(value: Money | null): { amount: string; currency: CurrencyCode } | null {
+  return value === null ? null : { amount: value.amountMinor.toString(), currency: value.currency };
+}
+
+function toPolicy(policy: ResellerPolicyRecord): ResellerPolicyResponse['policy'] {
+  const grants = (list: readonly { kind: ResellerGrantKind; subject: string | null }[]) =>
+    list.map((g) => ({ kind: g.kind, subject: g.subject }));
+  return {
+    customerId: policy.customerId,
+    status: policy.status,
+    tier: policy.tier,
+    dimensions: policy.dimensions.map((d) => ({
+      dimension: d.dimension,
+      source: d.source,
+      tierGrants: grants(d.tierGrants),
+      overrideGrants: d.overrideGrants === null ? null : grants(d.overrideGrants),
+      effectiveGrants: grants(d.effectiveGrants),
+    })),
+    pricing: { ...policy.pricing },
+    monthlyMinimum: {
+      tier: wireMoney(policy.monthlyMinimum.tier),
+      own: wireMoney(policy.monthlyMinimum.own),
+      effective: wireMoney(policy.monthlyMinimum.effective),
+      source: policy.monthlyMinimum.source,
+    },
+    botBasis: policy.botBasis,
+    products:
+      policy.products === null
+        ? null
+        : policy.products.map((p) => ({
+            productId: p.productId,
+            title: p.title,
+            status: p.status,
+            categoryId: p.categoryId,
+            panelId: p.panelId,
+            allowed: p.decision.allowed,
+            refusedDimension: p.decision.allowed ? null : p.decision.dimension,
+          })),
+    productsComplete: policy.productsComplete,
+  };
+}
+
+function toMinimumReport(report: ResellerMinimumReportRecord): ResellerMinimumReport {
+  return {
+    period: {
+      key: report.period.key,
+      start: report.period.start.toISOString(),
+      end: report.period.end.toISOString(),
+      startLocal: report.period.startLocal,
+      endLocalInclusive: report.period.endLocalInclusive,
+      timezone: report.period.timezone,
+      calendar: report.period.calendar as ResellerMinimumReport['period']['calendar'],
+      running: report.period.running,
+    },
+    rows: report.rows.map((row) => ({
+      customerId: row.customerId,
+      telegramUserId: row.telegramUserId,
+      displayName: row.displayName,
+      tier: row.tier,
+      status: row.status,
+      minimum: wireMoney(row.minimum),
+      source: row.source,
+      achieved: { amount: row.achieved.amountMinor.toString(), currency: row.achieved.currency },
+      remaining: wireMoney(row.remaining),
+      progressBasisPoints: row.progressBasisPoints,
+      state: row.state,
+    })),
+    counts: report.counts,
+    truncated: report.truncated,
   };
 }
 
