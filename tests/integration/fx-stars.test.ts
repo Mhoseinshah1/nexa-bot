@@ -509,6 +509,29 @@ describe('Central FX and the Stars route (packages FX, FX-STARS)', () => {
       expect((await invoiceOf(first.payment.id)).conversion_policy).toBe('CENTRAL_FX');
     });
 
+    it('an open central-rate invoice is handed back again while the feed is unavailable: a repeat is never re-priced (Codex #122)', async () => {
+      await centralStars();
+      const first = await topup(100_000n);
+      const before = await invoiceOf(first.payment.id);
+      // The feature is off now, and the quote is past its stale limit besides.
+      await setFlag(false);
+      await ageQuote(1_000);
+      const again = await topup(100_000n);
+      expect(again.reissued).toBe(true);
+      expect(again.payment.id).toBe(first.payment.id);
+      expect(await invoiceOf(first.payment.id)).toEqual(before);
+      // A different amount is a NEW attempt, and that one the feed's absence refuses.
+      const refused = await topup(200_000n).catch((error: unknown) => error);
+      expect(isNexaError(refused) && refused.details).toMatchObject({
+        reason: FX_UNAVAILABLE_REASON,
+        detail: 'DISABLED',
+      });
+      const [count] = await rows<{ n: string }>(
+        sql`SELECT count(*)::text AS n FROM payments WHERE tenant_id = ${tenantA.tenantId}`,
+      );
+      expect(count?.n).toBe('1');
+    });
+
     it('the worker lane refreshes only when the quote is older than the TTL: one conditional claim, nothing dialled otherwise', async () => {
       await centralStars();
       expect(hits).toHaveLength(1);

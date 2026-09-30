@@ -3273,7 +3273,7 @@ export class PaymentService {
           // An order payment promises no top-up gift (File 02 §17), exactly as the manual path.
           topupCashbackPercent: null,
           customerFeeBasisPoints: route.gateway.customerFeeBasisPoints,
-          conversion: route.conversion,
+          resolveConversion: route.resolveConversion,
           paymentId,
           reference,
           now,
@@ -3351,7 +3351,7 @@ export class PaymentService {
           provider: route.provider,
           topupCashbackPercent: route.gateway.topupCashbackPercent,
           customerFeeBasisPoints: route.gateway.customerFeeBasisPoints,
-          conversion: route.conversion,
+          resolveConversion: route.resolveConversion,
           paymentId,
           reference,
           now,
@@ -3590,7 +3590,7 @@ export class PaymentService {
   ): Promise<{
     readonly provider: PaymentGatewayProvider;
     readonly gateway: PaymentGatewayRecord;
-    readonly conversion: ResolvedConversion;
+    readonly resolveConversion: () => Promise<ResolvedConversion>;
   }> {
     const routes = await this.deps.gateways.routesFor(scope, customerId, purpose, amount, tx);
     const chosen = routes.find((route) => route.provider === provider);
@@ -3624,14 +3624,18 @@ export class PaymentService {
         'That payment route is only offered inside the bot.',
       );
     }
-    const conversion = await this.resolveConversion(
-      scope,
-      descriptor.conversion,
-      chosen.gateway,
-      now,
-      tx,
-    );
-    return { provider: chosen.provider, gateway: chosen.gateway, conversion };
+    /*
+     * Resolved LAZILY: an open attempt for the same order or amount is handed back with
+     * its own snapshot before any conversion is decided, so a repeat tap while the feed
+     * is down or the feature is off is answered with the invoice the customer already
+     * holds rather than refused (Codex review of #122).
+     */
+    return {
+      provider: chosen.provider,
+      gateway: chosen.gateway,
+      resolveConversion: () =>
+        this.resolveConversion(scope, descriptor.conversion, chosen.gateway, now, tx),
+    };
   }
 
   /**
@@ -3721,10 +3725,11 @@ export class PaymentService {
       readonly customerFeeBasisPoints: number;
       /**
        * How the payable becomes the provider's amount (package FX), resolved in this
-       * transaction by `resolveConversion` and snapshotted whole onto the invoice: the
-       * fixed rate (Package A), or the central quote and the unit ratio.
+       * transaction by `resolveConversion` ONLY when a new attempt is opened, and
+       * snapshotted whole onto the invoice: the fixed rate (Package A), or the central
+       * quote and the unit ratio. An open attempt handed back is never re-priced.
        */
-      readonly conversion: ResolvedConversion;
+      readonly resolveConversion: () => Promise<ResolvedConversion>;
       readonly paymentId: PaymentId;
       readonly reference: string;
       readonly now: Date;
@@ -3742,8 +3747,6 @@ export class PaymentService {
     const descriptor = PAYMENT_GATEWAY_DESCRIPTORS[input.provider];
     // The bot the invoice is sent through, for a route that sends it with the bot's token.
     const botInstanceId = descriptor.invoiceCredential === 'BOT_TOKEN' ? scope.botInstanceId : null;
-    const conversionRateMinor =
-      input.conversion.policy === 'FIXED_RATE' ? input.conversion.rateMinor : null;
     const open = await this.deps.gatewayInvoices.findOpenAttempt(
       scope,
       {
@@ -3805,7 +3808,9 @@ export class PaymentService {
        * (package FX). The rounding excess is no figure Nexa holds: every settlement,
        * credit and refund reads the payment's Toman snapshot, never this.
        */
-      const sentAmount = adapter.providerAmountOf(customerFee.payable, input.conversion);
+      const conversion = await input.resolveConversion();
+      const conversionRateMinor = conversion.policy === 'FIXED_RATE' ? conversion.rateMinor : null;
+      const sentAmount = adapter.providerAmountOf(customerFee.payable, conversion);
       if (sentAmount === null) {
         throw errors.conflict(
           COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE,
@@ -3813,17 +3818,14 @@ export class PaymentService {
           { reason: 'AMOUNT_NOT_REPRESENTABLE' },
         );
       }
-      const fx = fxSnapshotOf(input.conversion);
+      const fx = fxSnapshotOf(conversion);
       /*
        * A NEW invoice priced by a quote past its TTL is recorded, in this transaction, so
        * the record and the invoice commit together. An open attempt handed back above
        * records nothing: it was priced when it opened, by whatever it snapshotted then.
        */
-      if (
-        input.conversion.policy === 'CENTRAL_FX' &&
-        input.conversion.quote.state === 'STALE_ALLOWED'
-      ) {
-        await this.deps.fx.recordStaleUse(scope, input.conversion.quote, tx);
+      if (conversion.policy === 'CENTRAL_FX' && conversion.quote.state === 'STALE_ALLOWED') {
+        await this.deps.fx.recordStaleUse(scope, conversion.quote, tx);
       }
       payment = await this.deps.repository.create(
         scope,
@@ -3854,7 +3856,7 @@ export class PaymentService {
           providerUnit: adapter.unit,
           sentAmount,
           conversionRateMinor,
-          conversionPolicy: input.conversion.policy,
+          conversionPolicy: conversion.policy,
           fx,
           botInstanceId,
           now: input.now,
