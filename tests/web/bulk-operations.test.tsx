@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { NAV, navPermitted } from '../../apps/web/src/app';
 import {
@@ -48,6 +48,7 @@ function operation(overrides: Record<string, unknown> = {}): Record<string, unkn
       skipped: 0,
       cancelled: 0,
       notified: 1,
+      notificationQueued: 0,
     },
     progressPercent: 50,
     createdBy: { id: 'x', username: 'owner' },
@@ -145,6 +146,7 @@ describe('mass operations in the Web Admin', () => {
               operationState: 'UNKNOWN',
               failureKind: null,
               notified: false,
+              notificationState: 'PENDING',
               processedAt: '2026-09-20T10:00:00.000Z',
             },
           ],
@@ -156,5 +158,26 @@ describe('mass operations in the Web Admin', () => {
     expect(await screen.findByText('nxabc')).toBeInTheDocument();
     expect(screen.getAllByText('در انتظار بررسی نتیجه روی پنل').length).toBeGreaterThan(1);
     expect(screen.getByRole('button', { name: 'لغو موارد باقی‌مانده' })).toBeInTheDocument();
+    // An enqueued notice reads as queued, never as told (Codex R4).
+    expect(screen.getByText('در صف ارسال')).toBeInTheDocument();
+    expect(screen.getByText('اطلاع‌رسانی در صف ارسال')).toBeInTheDocument();
+  });
+
+  // Codex R7 on PR #117: the items are read again with the detail while running.
+  it('refreshes the items while the operation is running', async () => {
+    const api = stubApi([
+      { url: `/bulk-operations/${ID}`, body: { operation: operation() } },
+      { url: `/bulk-operations/${ID}/items`, body: { items: [], nextCursor: null } },
+    ]);
+    const reads = () => api.calls.filter((call) => call.url.includes('/items')).length;
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      renderPage(<BulkOperationDetailPage id={ID} denied={false} mayWallet={false} mayGrant />);
+      await waitFor(() => expect(reads()).toBe(1));
+      await vi.advanceTimersByTimeAsync(5_500);
+      await waitFor(() => expect(reads()).toBeGreaterThanOrEqual(2));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

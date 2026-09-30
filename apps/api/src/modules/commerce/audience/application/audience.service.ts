@@ -23,6 +23,21 @@ import type { AudienceOptions, AudienceReader, AudienceSummary } from './ports.j
  */
 export const AUDIENCE_PREVIEW_PERMISSION: PermissionKey = 'users.view';
 
+/**
+ * The builder's options are the names a definition is written in — reseller tiers, products
+ * and panels by id and name, and the selling currency — and nothing about a customer. Every
+ * consumer's composer needs them, so they are readable on `users.view` OR on any of the
+ * actions an audience is built for. Least privilege: a role that may run a mass credit is not
+ * thereby given the customer list (`users.view`), only the vocabulary its own form needs.
+ * Codex R1 on PR #117 (a broadcast-only role was refused the options its composer fetches).
+ */
+export const AUDIENCE_OPTIONS_PERMISSIONS: readonly PermissionKey[] = [
+  AUDIENCE_PREVIEW_PERMISSION,
+  'broadcasts.send',
+  'users.wallet.mass',
+  'services.mass.grant',
+];
+
 /** A definition in its one canonical form, with the hash a confirmation binds to. */
 export interface FrozenAudience {
   readonly definition: AudienceDefinition;
@@ -129,7 +144,11 @@ export class AudienceService {
     scope: TenantContext,
     actor: ActorContext,
   ): Promise<AudienceOptions & { readonly currency: CurrencyCode }> {
-    await this.deps.guard.check(scope, actor, AUDIENCE_PREVIEW_PERMISSION);
+    const held = await this.deps.guard.permissionsOf(scope, actor);
+    if (!AUDIENCE_OPTIONS_PERMISSIONS.some((permission) => held.has(permission))) {
+      // The guard's own denial: the same 403 and the same operational event as any refusal.
+      await this.deps.guard.check(scope, actor, AUDIENCE_PREVIEW_PERMISSION);
+    }
     const [options, currency] = await Promise.all([
       this.deps.reader.options(scope),
       this.deps.sellingCurrency(scope),

@@ -161,6 +161,7 @@ describe('a mass traffic grant through the provisioner', () => {
       planned: 1,
       succeeded: 0,
       notified: 0,
+      notificationQueued: 0,
     });
 
     await ctx.container.provisionerLoop.tick();
@@ -169,7 +170,11 @@ describe('a mass traffic grant through the provisioner', () => {
 
     await ctx.container.bulkOperationProcessor.pass(tenantA);
     progress = await ctx.container.bulkOperations.progress(tenantA, owner, [operation.id]);
-    expect(progress.counts.get(operation.id)).toMatchObject({ succeeded: 1, notified: 1 });
+    expect(progress.counts.get(operation.id)).toMatchObject({
+      succeeded: 1,
+      notified: 0,
+      notificationQueued: 1,
+    });
     expect((await ctx.container.bulkOperations.get(tenantA, owner, operation.id)).state).toBe(
       'COMPLETED',
     );

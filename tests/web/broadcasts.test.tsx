@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { BROADCAST_LARGE_AUDIENCE } from '@nexa/contracts';
 import { NAV, navPermitted } from '../../apps/web/src/app';
@@ -203,5 +203,65 @@ describe('broadcast in the Web Admin', () => {
     fireEvent.click(screen.getByRole('button', { name: 'لغو باقی‌ماندهٔ ارسال' }));
     expect(api.calls.some((call) => call.url.endsWith('/cancel'))).toBe(false);
     expect(screen.getByRole('button', { name: 'بله، لغو شود' })).toBeInTheDocument();
+  });
+
+  // Codex R5 on PR #117: a media change bumps the version and remounts the composer, so it
+  // is refused while the composer holds unsaved edits rather than silently dropping them.
+  it('blocks media changes while the composer holds unsaved edits', async () => {
+    stubApi([
+      OPTIONS,
+      {
+        url: `/broadcasts/${ID}`,
+        body: {
+          broadcast: broadcast({
+            contentKind: 'PHOTO',
+            body: '',
+            media: {
+              mimeType: 'image/png',
+              fileName: 'offer.png',
+              byteLength: 10,
+              available: true,
+            },
+          }),
+        },
+      },
+    ]);
+    renderPage(<BroadcastDetailPage id={ID} denied={false} maySend />);
+    const picker = await screen.findByLabelText('انتخاب فایل');
+    const remove = screen.getByRole('button', { name: 'حذف فایل' });
+    expect(picker).not.toBeDisabled();
+    expect(remove).not.toBeDisabled();
+    fireEvent.change(screen.getByLabelText('عنوان (فقط برای مدیران)'), {
+      target: { value: 'Edited' },
+    });
+    expect(picker).toBeDisabled();
+    expect(remove).toBeDisabled();
+    expect(screen.getByText(/ابتدا تغییرات پیش‌نویس را ذخیره کنید/u)).toBeInTheDocument();
+    // Undoing the edit is not dirty any more.
+    fireEvent.change(screen.getByLabelText('عنوان (فقط برای مدیران)'), {
+      target: { value: 'Nowruz' },
+    });
+    expect(picker).not.toBeDisabled();
+  });
+
+  // Codex R6 on PR #117: the recipients are read again with the detail while sending.
+  it('refreshes the recipients while the broadcast is sending', async () => {
+    const api = stubApi([
+      {
+        url: `/broadcasts/${ID}`,
+        body: { broadcast: broadcast({ state: 'SENDING', recipientCount: 2 }) },
+      },
+      { url: `/broadcasts/${ID}/recipients`, body: { recipients: [], nextCursor: null } },
+    ]);
+    const reads = () => api.calls.filter((call) => call.url.includes('/recipients')).length;
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      renderPage(<BroadcastDetailPage id={ID} denied={false} maySend />);
+      await waitFor(() => expect(reads()).toBe(1));
+      await vi.advanceTimersByTimeAsync(5_500);
+      await waitFor(() => expect(reads()).toBeGreaterThanOrEqual(2));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

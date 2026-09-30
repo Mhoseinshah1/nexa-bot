@@ -165,7 +165,12 @@ describe('mass operations', () => {
     expect(done.state).toBe('COMPLETED');
     const progress = await ctx.container.bulkOperations.progress(tenantA, owner, [operation.id]);
     expect(progress.credited.get(operation.id)).toBe(AMOUNT * 3n);
-    expect(progress.counts.get(operation.id)).toMatchObject({ credited: 3, notified: 3 });
+    // Enqueued is not told (Codex R4): nothing is 'notified' until the lane delivers it.
+    expect(progress.counts.get(operation.id)).toMatchObject({
+      credited: 3,
+      notified: 0,
+      notificationQueued: 3,
+    });
     // The customer is told what the ledger holds.
     const notes = await ctx.container.database.db.execute<{ kind: string }>(
       sql`SELECT kind FROM customer_notifications WHERE kind = 'WALLET_MASS_CREDITED'`,
@@ -178,6 +183,39 @@ describe('mass operations', () => {
       ctx.container.database.db,
     ).notificationValues(tenantA, 'WALLET_MASS_CREDITED', subject.rows[0]?.subject_id as string);
     expect(values).toMatchObject({ amountMinor: AMOUNT, currency: 'IRT' });
+
+    // The lane resolves them: one delivered, one failed, one still queued. The report says
+    // exactly that, per operation and per item, read from the lane's own rows.
+    const lane = await ctx.container.database.db.execute<{ id: string; subject_id: string }>(
+      sql`SELECT id, subject_id FROM customer_notifications
+           WHERE kind = 'WALLET_MASS_CREDITED' ORDER BY subject_id`,
+    );
+    const [delivered, failed] = lane.rows;
+    await ctx.container.database.db.execute(
+      sql`UPDATE customer_notifications SET state = 'DELIVERED', resolved_at = now()
+           WHERE id = ${delivered?.id}::uuid`,
+    );
+    await ctx.container.database.db.execute(
+      sql`UPDATE customer_notifications SET state = 'FAILED', resolved_at = now()
+           WHERE id = ${failed?.id}::uuid`,
+    );
+    const after = await ctx.container.bulkOperations.progress(tenantA, owner, [operation.id]);
+    expect(after.counts.get(operation.id)).toMatchObject({ notified: 1, notificationQueued: 1 });
+    const items = await new DrizzleBulkOperationRepository(ctx.container.database.db).items(
+      tenantA,
+      operation.id,
+      { state: null, limit: 10, after: null },
+    );
+    const byItem = new Map(items.map((item) => [item.id, item]));
+    expect(byItem.get(delivered?.subject_id as string)).toMatchObject({
+      notified: true,
+      notificationState: 'DELIVERED',
+    });
+    expect(byItem.get(failed?.subject_id as string)).toMatchObject({
+      notified: false,
+      notificationState: 'FAILED',
+    });
+    expect(items.filter((item) => item.notificationState === 'PENDING')).toHaveLength(1);
   });
 
   it('survives a crash mid-item: the rolled-back credit is written once on resume', async () => {
@@ -395,7 +433,7 @@ describe('mass operations', () => {
       planned: 1,
       awaitingReconciliation: 1,
       succeeded: 1,
-      notified: 1,
+      notificationQueued: 1,
     });
     expect((await ctx.container.bulkOperations.get(tenantA, owner, operation.id)).state).toBe(
       'RUNNING',
@@ -416,7 +454,7 @@ describe('mass operations', () => {
     expect(progress.counts.get(operation.id)).toMatchObject({
       succeeded: 1,
       failed: 1,
-      notified: 1,
+      notificationQueued: 1,
     });
     // Told only of the grant that SUCCEEDED, with what it gave.
     const told = await ctx.container.database.db.execute<{ subject_id: string }>(

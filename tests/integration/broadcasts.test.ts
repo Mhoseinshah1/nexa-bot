@@ -10,6 +10,7 @@ import {
   type AudienceDefinitionInput,
   type Clock,
 } from '@nexa/contracts';
+import { BroadcastService } from '../../apps/api/src/modules/commerce/broadcasts/application/broadcast.service';
 import { BroadcastDispatcher } from '../../apps/api/src/modules/commerce/broadcasts/application/broadcast-dispatcher';
 import type {
   BroadcastDeliverRequest,
@@ -479,5 +480,80 @@ describe('broadcast', () => {
     await launchNow(photo.id);
     await dispatcher.pass(tenantA);
     expect(transport.delivered).toEqual(['881000']);
+  });
+
+  /**
+   * The container's broadcast service with Telegram scripted, the clock stopped and the
+   * scope's activity a switch — what the two Codex R2/R3 regressions need to decide.
+   */
+  function serviceWith(options: { scopeActive: () => boolean }): BroadcastService {
+    const c = ctx.container;
+    return new BroadcastService({
+      repository: new DrizzleBroadcastRepository(c.database.db),
+      audience: c.audience,
+      transport,
+      facts: new DrizzleRecipientFactsReader(c.database.db, async () => 'IRT'),
+      guard: c.guard,
+      uow: c.uow,
+      audit: c.audit,
+      opsLog: c.opsLog,
+      sessions: c.sessions,
+      idempotency: c.idempotency,
+      scopeActivity: { scopeIsActive: async () => options.scopeActive() },
+      outbox: c.outbox,
+      clock,
+      ids: c.ids,
+    });
+  }
+
+  // Codex R2 on PR #117: the test send is the one path that contacts Telegram from a
+  // request, so its final authorization — scope activity included — comes BEFORE the call.
+  it('sends a test only to a scope still accepting work, deciding that before Telegram', async () => {
+    let active = false;
+    const service = serviceWith({ scopeActive: () => active });
+    await fixtures.customer({ telegramUserId: '881500', botInstanceId: SEED_IDS.botA1 });
+    const tester = adminActorFor(
+      await createAdmin(ctx.container, tenantA, {
+        username: 'tester-bc',
+        roleKeys: ['owner'],
+        telegramUserId: '881500',
+      }),
+    );
+    const broadcast = await draft();
+    await expect(service.test(tenantA, tester, broadcast.id)).rejects.toMatchObject({
+      kind: 'CONFLICT',
+    });
+    expect(transport.delivered).toEqual([]);
+
+    active = true;
+    expect(await service.test(tenantA, tester, broadcast.id)).toBe('SENT');
+    expect(transport.delivered).toEqual(['881500']);
+  });
+
+  // Codex R3 on PR #117: a replay of a committed scheduled launch is answered with that
+  // launch, however little lead time is left — time-relative checks follow the replay lookup.
+  it('answers a replayed scheduled launch with the launch, after its lead time has shrunk', async () => {
+    await customers(2);
+    const service = serviceWith({ scopeActive: () => true });
+    const broadcast = await draft();
+    const preview = await service.preview(tenantA, owner, broadcast.id);
+    const input = {
+      idempotencyKey: idem(),
+      mode: 'SCHEDULE' as const,
+      scheduledAt: new Date(clock.now().getTime() + 2 * 60_000),
+      expectedVersion: broadcast.version,
+      expectedDefinitionHash: preview.definitionHash,
+      expectedRecipients: preview.customers,
+      expectedFingerprint: preview.fingerprint,
+      typedCount: null,
+    };
+    const first = await service.launch(tenantA, owner, broadcast.id, input);
+    expect(first.state).toBe('SCHEDULED');
+    clock.advance(90_000); // thirty seconds of lead left: a NEW launch would be refused
+    const replayed = await service.launch(tenantA, owner, broadcast.id, input);
+    expect(replayed).toMatchObject({ id: first.id, state: 'SCHEDULED' });
+    await expect(
+      service.launch(tenantA, owner, broadcast.id, { ...input, idempotencyKey: idem() }),
+    ).rejects.toMatchObject({ code: BROADCAST_ERROR_CODES.SCHEDULE_INVALID });
   });
 });
