@@ -39,6 +39,18 @@ import {
 } from './payment.js';
 import { referralSignupGiftShareSchema } from './customer-ux.js';
 import { DEFAULT_MAIN_MENU_LAYOUT, mainMenuLayoutSchema } from './bot-commands.js';
+import {
+  FX_FRESH_TTL_SECONDS_DEFAULT,
+  FX_FRESH_TTL_SECONDS_MAX,
+  FX_FRESH_TTL_SECONDS_MIN,
+  FX_MAX_STALE_SECONDS_DEFAULT,
+  FX_MAX_STALE_SECONDS_MAX,
+  FX_MAX_STALE_SECONDS_MIN,
+  fxFallbackSourceSchema,
+  fxSourceSchema,
+  starsPerUsdtSchema,
+  starsPricingModeSchema,
+} from './fx.js';
 
 /**
  * The settings registry.
@@ -1081,6 +1093,103 @@ export const SETTINGS = [
     defaultValue: 50,
     configures: 'referral_signup_gift',
     zeroMeaning: 'LITERAL',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  /*
+   * Package FX (round P): the central exchange-rate layer. Four keys parameterise the
+   * `central_fx` flag; two more decide how the Stars route prices. All read by the FX
+   * service and the payment core in the transaction that opens an attempt, so a change
+   * touches only attempts opened after it — every attempt snapshots what it used.
+   */
+  {
+    key: 'fx.primary_source',
+    description:
+      'The public exchange this installation reads the USDT rate from first. Both sources ' +
+      'quote the best BID of their USDT order book (the price a buyer pays the merchant), ' +
+      'which is the side that never undercharges. Nobitex quotes Rial and Wallex Toman; ' +
+      'the service converts to the sales currency exactly (one Toman is ten Rial).',
+    schema: fxSourceSchema,
+    defaultValue: 'NOBITEX',
+    configures: 'central_fx',
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  {
+    key: 'fx.fallback_source',
+    description:
+      'The source asked when the primary fails, rate-limits, or answers with an outlier. ' +
+      'NONE means primary only. The same source as the primary is accepted and means the ' +
+      'same thing as NONE.',
+    schema: fxFallbackSourceSchema,
+    defaultValue: 'WALLEX',
+    configures: 'central_fx',
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  {
+    key: 'fx.fresh_ttl_seconds',
+    description:
+      'How long a fetched quote counts as FRESH. The worker refreshes a quote once it is ' +
+      'older than this; a new attempt priced by a fresh quote records nothing unusual. ' +
+      'FX_FRESH_TTL_SECONDS_MIN and _MAX in fx.ts bound it; the default is inside the ' +
+      'brief’s 30–60 seconds.',
+    schema: z.number().int().min(FX_FRESH_TTL_SECONDS_MIN).max(FX_FRESH_TTL_SECONDS_MAX),
+    defaultValue: FX_FRESH_TTL_SECONDS_DEFAULT,
+    configures: 'central_fx',
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  {
+    key: 'fx.max_stale_seconds',
+    description:
+      'How old the last-known-good quote may be and still price a NEW foreign-denominated ' +
+      'invoice while every source is down (recorded as stale use). Past it, new invoices ' +
+      'through a central-rate route are refused with a customer message; invoices already ' +
+      'issued keep their own snapshot. Floored at fx.fresh_ttl_seconds at read time.',
+    schema: z.number().int().min(FX_MAX_STALE_SECONDS_MIN).max(FX_MAX_STALE_SECONDS_MAX),
+    defaultValue: FX_MAX_STALE_SECONDS_DEFAULT,
+    configures: 'central_fx',
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  {
+    key: 'stars.pricing_mode',
+    description:
+      'How the Telegram Stars route prices a Star. FIXED_RATE (the default, and what every ' +
+      'existing installation keeps) uses the rate set on the route. CENTRAL_FX_RATIO derives ' +
+      'the Toman per Star from the central USDT quote and stars.per_usdt, exactly: ' +
+      'stars = ceil(payable / (rate / ratio)). Switching is refused while the central_fx ' +
+      'flag is off or the ratio is zero; switching back never touches an issued invoice.',
+    schema: starsPricingModeSchema,
+    defaultValue: 'FIXED_RATE',
+    configures: 'central_fx',
+    zeroMeaning: 'NOT_APPLICABLE',
+    mutability: 'RUNTIME',
+    classification: 'PUBLIC',
+    consumer: 'ACTIVE',
+  },
+  {
+    key: 'stars.per_usdt',
+    description:
+      'How many Telegram Stars one USDT buys, as a decimal with up to four fractional ' +
+      'digits. Telegram publishes no canonical Star↔USDT merchant feed (OQ-FX-01), so ' +
+      'this is the operator’s figure. Zero means not set: the CENTRAL_FX_RATIO mode cannot ' +
+      'be chosen and a new central-rate Stars invoice is refused. Snapshotted on every ' +
+      'attempt; a change affects only attempts opened afterwards.',
+    schema: starsPerUsdtSchema,
+    defaultValue: '0',
+    configures: 'central_fx',
+    zeroMeaning: 'DISABLES',
     mutability: 'RUNTIME',
     classification: 'PUBLIC',
     consumer: 'ACTIVE',
