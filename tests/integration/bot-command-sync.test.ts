@@ -164,6 +164,7 @@ describe('round P — the Telegram command-menu sync lane', () => {
         next_attempt_at: Date | null;
         last_error_code: string | null;
         last_synced_at: Date | null;
+        last_attempted_at: Date | null;
         claimed_until: Date | null;
       }>(sql`SELECT * FROM bot_command_syncs WHERE bot_instance_id = ${botId}`)
     ).rows[0] ?? null;
