@@ -200,14 +200,7 @@ describe('R3 — service delivery, connection files and the service card', () =>
    * by the ordinary delivery lane — so the files follow it exactly as they follow a purchase.
    */
   async function trialService(): Promise<ServiceRecord> {
-    await ctx.container.featureFlags.set(tenantA, owner, {
-      key: 'trials',
-      enabled: true,
-      expectedVersion: null,
-      confirmKey: 'trials',
-      reason: 'offer a trial',
-      idempotencyKey: randomUUID(),
-    });
+    // F5: the panel's own trial is the one switch; there is no `trials` flag to turn on.
     const current = await ctx.container.panelTrials.get(tenantA, owner, panelId);
     await ctx.container.panelTrials.update(tenantA, owner, panelId, {
       idempotencyKey: randomUUID(),

@@ -28,11 +28,11 @@ import { hashRequest } from '../../../platform/idempotency/infrastructure/drizzl
 import type { SessionRepository } from '../../../platform/identity/application/ports.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
 import type { SettingsResolver } from '../../../control/settings/application/settings-resolver.js';
-import type { FeatureFlagResolver } from '../../../control/features/application/feature-flags.service.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { CustomerRepository } from '../../customers/application/ports.js';
 import type { WalletRepository } from '../../wallet/application/ports.js';
 import type {
+  PanelTrialConfigRepository,
   TrialGrantRepository,
   TrialOverrideCursor,
   TrialOverrideListRow,
@@ -63,7 +63,8 @@ export interface TrialAdminServiceDeps {
   /** The customer row lock — the one a trial claim decides under. */
   readonly wallet: Pick<WalletRepository, 'lockCustomer'>;
   readonly settings: SettingsResolver;
-  readonly features: FeatureFlagResolver;
+  /** F5: the panels' trials, read by the allowance for whether any is switched on. */
+  readonly configs: Pick<PanelTrialConfigRepository, 'list'>;
   readonly guard: PermissionGuard;
   readonly uow: UnitOfWork<TransactionScope>;
   readonly audit: AuditWriter;

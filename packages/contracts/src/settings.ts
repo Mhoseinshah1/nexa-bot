@@ -865,10 +865,11 @@ export const SETTINGS = [
     key: 'bot.main_menu',
     description:
       'The customer main-menu keyboard: its buttons in the order they are drawn, two to a ' +
-      'row with the long ones on a row of their own, each switched on or off. A button a ' +
-      'feature switch governs (the trial, the referral program) is drawn only while that ' +
-      'feature is on, whatever this says. A button this value does not name is drawn in its ' +
-      'default place. At least one button no feature can hide must stay on.',
+      'row with the long ones on a row of their own, each switched on or off. The referral ' +
+      'button is drawn only while the referral program is on, and the trial button only ' +
+      'while at least one panel offers a trial, whatever this says. A button this value does ' +
+      'not name is drawn in its default place. At least one button nothing else can hide ' +
+      'must stay on.',
     schema: mainMenuLayoutSchema,
     defaultValue: [...DEFAULT_MAIN_MENU_LAYOUT],
     configures: null,
@@ -879,10 +880,12 @@ export const SETTINGS = [
     consumer: 'ACTIVE',
   },
   /*
-   * The trial's configuration. Inert while the `trials` flag is off, which is the default:
-   * a tenant has to turn the flag on AND enable a trial on at least one panel before a
-   * customer is offered anything (R1; `docs/wp6-audit.md` A6 before it). The product key
-   * is retired and kept only so a stored value keeps parsing.
+   * The trial's configuration. What a trial IS — whether it is offered, its traffic and its
+   * hours — is each panel's own (`panel_trial_configs`, R1), and since F5 nothing else
+   * switches it: the `trials` flag is retired, and a tenant is offered a trial exactly when
+   * one of its panels has one enabled. What stays here is the customer's allowance, which
+   * is not a property of any panel. The product key is retired and kept only so a stored
+   * value keeps parsing.
    */
   {
     key: 'trial.product_id',
@@ -906,15 +909,16 @@ export const SETTINGS = [
   {
     key: 'trial.limit_per_customer',
     description:
-      'How many trials each customer may take. A trial whose service could not be created ' +
-      'is given back and does not count. Zero means no trials — never unlimited (ADR-0015). ' +
-      'Inert while the trials flag is off.',
+      'How many trials each customer may take, across every panel. A trial whose service ' +
+      'could not be created is given back and does not count. Zero means no trials — never ' +
+      'unlimited (ADR-0015). Whether a trial is offered at all is decided per panel.',
     schema: z.number().int().min(TRIAL_LIMIT_MIN).max(TRIAL_LIMIT_MAX),
     // One. The number the research and the Phase 4 contract both assumed, and the only
-    // default under which turning the flag on cannot hand a customer more than a tenant
-    // expected. The flag being off is what makes this default safe to have at all.
+    // default under which enabling a panel's trial cannot hand a customer more than a
+    // tenant expected. Every panel's trial being off by default is what makes it safe.
     defaultValue: 1,
-    configures: 'trials',
+    // F5: the `trials` flag it configured is retired; a panel's own trial is the switch.
+    configures: null,
     zeroMeaning: 'LITERAL',
     mutability: 'RUNTIME',
     classification: 'PUBLIC',

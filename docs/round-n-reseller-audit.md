@@ -186,7 +186,7 @@ Contracts (own commit): the two notification kinds, their preconditions, quiet-h
 and templates; two template keys; two feature flags and one setting; the override
 dimension vocabulary; the route shapes and schemas below.
 
-Migration `0144_round_n_reseller_controls`: two nullable minimum pairs, the two override
+Migration `0145_round_n_reseller_controls`: two nullable minimum pairs, the two override
 tables, the notice table, the widened notification-kind CHECK.
 
 | Route                                         | Permission                         | Write?                                                                                                   |

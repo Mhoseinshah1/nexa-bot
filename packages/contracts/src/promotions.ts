@@ -467,9 +467,9 @@ export function referralCommissionMinor(basisMinor: bigint, percent: number): bi
  * Why a trial was refused.
  *
  * `UNCONFIGURED` is listed first because it is the state a tenant is in until they
- * turn the `trials` flag on and choose a trial product, and the honest answer to a
- * customer in that state is "this installation does not offer a trial" — not a
- * zero-traffic service that looks broken.
+ * enable a trial on at least one panel (F5: there is no flag in front of it any more),
+ * and the honest answer to a customer in that state is "this installation does not
+ * offer a trial" — not a zero-traffic service that looks broken.
  *
  * `LIMIT_REACHED` was `ALREADY_TAKEN`, renamed before anything consumed it. ADR-0015
  * makes a trial allowance a LIMIT with a separate USED count, so a customer can be

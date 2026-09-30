@@ -10,6 +10,7 @@ import {
   canAdjustDeviceLimit,
   canChangeLocation,
   faqNumberMarker,
+  isSystemContext,
   systemJobActor,
 } from '@nexa/contracts';
 import type {
@@ -171,6 +172,7 @@ import { TrialProductGuard } from './modules/commerce/trials/application/trial-p
 import { MainMenuLayout } from './modules/commerce/messaging/application/main-menu.js';
 import { DrizzlePanelTrialConfigRepository } from './modules/commerce/trials/infrastructure/drizzle-panel-trial-config.repository.js';
 import { PanelTrialService } from './modules/commerce/trials/application/panel-trial.service.js';
+import { trialOffersFor } from './modules/commerce/trials/application/trial-offers.js';
 import { DrizzleTrialGrantRepository } from './modules/commerce/trials/infrastructure/drizzle-trial-grant.repository.js';
 import { DrizzleTrialOverrideRepository } from './modules/commerce/trials/infrastructure/drizzle-trial-override.repository.js';
 import { DrizzleTrialResetRepository } from './modules/commerce/trials/infrastructure/drizzle-trial-reset.repository.js';
@@ -2826,7 +2828,6 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     panelSales: panelSalesGate,
     provisioning: provisioningService,
     settings: settingsResolver,
-    features: featureFlagResolver,
     guard,
     uow,
     audit,
@@ -2850,7 +2851,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     customers: customerRepository,
     wallet: walletRepository,
     settings: settingsResolver,
-    features: featureFlagResolver,
+    configs: panelTrialConfigRepository,
     guard,
     uow,
     audit,
@@ -2868,7 +2869,6 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   const panelTrials = new PanelTrialService({
     configs: panelTrialConfigRepository,
     panels: panelRepository,
-    features: featureFlagResolver,
     panelSales: panelSalesGate,
     usernames: usernameLane,
     guard,
@@ -3283,11 +3283,14 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    * The balance through the ledger's own SUM, gated by the guard's one resolution rule; the
    * labels through the tenant's own template overrides.
    */
+  const receiptReviewFacts = new DrizzleReceiptReviewFactsReader(database.db);
   const receiptReviewCaption = new ReceiptReviewCaption({
-    facts: new DrizzleReceiptReviewFactsReader(database.db),
+    facts: receiptReviewFacts,
     balances: walletRepository,
     guard,
     labels: templateResolver,
+    // F1 (round N): the payment's own wallet movement, for the review message's final record.
+    movements: receiptReviewFacts,
   });
 
   const receiptService = new ReceiptService({
@@ -3349,6 +3352,27 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     settings: settingsResolver,
     features: featureFlagResolver,
     templates: templateResolver,
+    /*
+     * F5: the trial button is drawn while `trialOffersFor` — the evaluator the claim and
+     * the operator's overview use — names at least one panel. The keyboard is a tenant's,
+     * so this is the tenant-wide answer; the claim decides the customer's own allowance.
+     */
+    trials: {
+      // A system scope draws no customer's keyboard, so it offers no trial.
+      anyOffered: async (scope) =>
+        !isSystemContext(scope) &&
+        (
+          await trialOffersFor(
+            {
+              configs: panelTrialConfigRepository,
+              panelSales: panelSalesGate,
+              panels: panelRepository,
+              usernames: usernameLane,
+            },
+            scope,
+          )
+        ).length > 0,
+    },
   });
   const customerMessenger = new TelegramCustomerMessenger(
     // The tenant's own renderer, so an override lands in exactly the messages a

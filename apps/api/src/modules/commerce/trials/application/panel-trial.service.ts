@@ -46,8 +46,6 @@ export const PANEL_TRIAL_EDIT_PERMISSION: PermissionKey = 'panels.edit';
 export interface PanelTrialServiceDeps extends TrialOfferDeps {
   readonly configs: PanelTrialConfigRepository;
   readonly panels: Pick<PanelRepository, 'find' | 'findMany' | 'lockPanel'>;
-  /** The `trials` switch: while it is off no panel is offered, as the bot answers. */
-  readonly features: { isEnabled(scope: TenantContext, key: 'trials'): Promise<boolean> };
   readonly guard: PermissionGuard;
   readonly audit: AuditWriter;
   readonly opsLog: OperationalEventRecorder;
@@ -91,9 +89,8 @@ export class PanelTrialService {
    */
   async overview(scope: TenantContext, actor: ActorContext): Promise<PanelTrialOverviewResponse> {
     await this.deps.guard.check(scope, actor, PANEL_TRIAL_VIEW_PERMISSION);
+    // No tenant-wide switch since F5: the panel's own trial is the one the claim reads.
     const verdicts = await trialPanelVerdicts(this.deps, scope);
-    // The same switch the claim reads first: with it off, nothing is offered anywhere.
-    const on = await this.deps.features.isEnabled(scope, 'trials');
     return {
       panels: verdicts
         .filter((verdict) => verdict.panelName !== null)
@@ -101,7 +98,7 @@ export class PanelTrialService {
           panelId: verdict.config.panelId,
           panelName: verdict.panelName ?? '',
           trial: toResponse(verdict.config.panelId, verdict.config),
-          offeredNow: on && verdict.offered,
+          offeredNow: verdict.offered,
         })),
     };
   }
