@@ -842,19 +842,10 @@ export class DrizzleReportingRepository implements ReportingRepository {
 
   async failures(scope: TenantContext, window: Window): Promise<FailureTotals> {
     const t = tenant(scope);
-    const [payments] = await this.rows<{
-      failed: number;
-      cancelled: number;
-      expired: number;
-      unknown_now: number;
-    }>(sql`
-      SELECT count(*) FILTER (WHERE p.state = 'FAILED' AND ${within(sql`p.resolved_at`, window)})::int AS failed,
-             count(*) FILTER (WHERE p.state = 'CANCELLED' AND ${within(sql`p.resolved_at`, window)})::int AS cancelled,
-             count(*) FILTER (WHERE p.state = 'EXPIRED' AND ${within(sql`p.resolved_at`, window)})::int AS expired,
-             count(*) FILTER (WHERE p.state = 'UNKNOWN')::int AS unknown_now
-        FROM payments p
-       WHERE p.tenant_id = ${t}
-         AND (p.state = 'UNKNOWN' OR (p.state = ANY(${text(REPORT_FAILED_PAYMENT_STATES)}) AND ${within(sql`p.resolved_at`, window)}))`);
+    const payments = await this.paymentFailures(scope, window);
+    const [unknownPayments] = await this.rows<{ n: number }>(sql`
+      SELECT count(*)::int AS n FROM payments p
+       WHERE p.tenant_id = ${t} AND p.state = 'UNKNOWN'`);
     const operations = await this.rows<{
       type: OperationType;
       state: OperationState;
@@ -874,12 +865,8 @@ export class DrizzleReportingRepository implements ReportingRepository {
       SELECT count(*)::int AS n FROM orders o
        WHERE o.tenant_id = ${t} AND o.state = 'REFUNDED' AND ${within(sql`o.refunded_at`, window)}`);
     return {
-      payments: {
-        failed: payments?.failed ?? 0,
-        cancelled: payments?.cancelled ?? 0,
-        expired: payments?.expired ?? 0,
-      },
-      paymentsUnknownNow: payments?.unknown_now ?? 0,
+      payments,
+      paymentsUnknownNow: unknownPayments?.n ?? 0,
       operations: operations.map((row) => ({
         type: row.type,
         state: row.state,
@@ -889,6 +876,46 @@ export class DrizzleReportingRepository implements ReportingRepository {
       operationsUnknownNow: unknownOps?.n ?? 0,
       ordersRefunded: refunded?.n ?? 0,
     };
+  }
+
+  async paymentFailures(scope: TenantContext, window: Window): Promise<FailureTotals['payments']> {
+    const [row] = await this.rows<{ failed: number; cancelled: number; expired: number }>(sql`
+      SELECT count(*) FILTER (WHERE p.state = 'FAILED')::int AS failed,
+             count(*) FILTER (WHERE p.state = 'CANCELLED')::int AS cancelled,
+             count(*) FILTER (WHERE p.state = 'EXPIRED')::int AS expired
+        FROM payments p
+       WHERE p.tenant_id = ${tenant(scope)}
+         AND p.state = ANY(${text(REPORT_FAILED_PAYMENT_STATES)})
+         AND ${within(sql`p.resolved_at`, window)}`);
+    return { failed: row?.failed ?? 0, cancelled: row?.cancelled ?? 0, expired: row?.expired ?? 0 };
+  }
+
+  async salesTrendByPurpose(
+    scope: TenantContext,
+    boundaries: readonly Date[],
+  ): Promise<ReadonlyMap<number, ReadonlyMap<OrderPurpose, number>>> {
+    if (boundaries.length < 2) return new Map();
+    const bounds = sql`${sql.param(boundaries.map((b) => b.toISOString()))}::timestamptz[]`;
+    const window: Window = {
+      from: boundaries[0] as Date,
+      to: boundaries[boundaries.length - 1] as Date,
+    };
+    // The `sales.count` rows exactly — `trend`'s SALES source — grouped once more by purpose.
+    const rows = await this.rows<{ bucket: number; purpose: OrderPurpose; n: number }>(sql`
+      SELECT width_bucket(o.settled_at, ${bounds}) - 1 AS bucket, o.purpose, count(*)::int AS n
+        FROM orders o
+       WHERE o.tenant_id = ${tenant(scope)} AND o.state = 'PAID'
+         AND o.purpose = ANY(${purposes(SALE_ORDER_PURPOSES)})
+         AND ${within(sql`o.settled_at`, window)}
+       GROUP BY 1, 2`);
+    const out = new Map<number, Map<OrderPurpose, number>>();
+    for (const row of rows) {
+      const bucket = Number(row.bucket);
+      const found = out.get(bucket) ?? new Map<OrderPurpose, number>();
+      found.set(row.purpose, row.n);
+      out.set(bucket, found);
+    }
+    return out;
   }
 
   async orders(

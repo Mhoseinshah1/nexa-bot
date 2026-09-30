@@ -348,6 +348,22 @@ export interface ReportingRepository {
   ): Promise<readonly ResellerRow[]>;
 
   failures(scope: TenantContext, window: Window): Promise<FailureTotals>;
+  /**
+   * The payment half of `failures`: attempts resolved FAILED, CANCELLED or EXPIRED in the
+   * window. One statement, shared by the failure report and the dashboard, so the two
+   * cannot count a failed payment differently.
+   */
+  paymentFailures(scope: TenantContext, window: Window): Promise<FailureTotals['payments']>;
+
+  /**
+   * The `sales.count` rows by bucket AND purpose: bucket index → purpose → count, from
+   * `width_bucket` over `boundaries`, the same way `trend` buckets. The dashboard folds the
+   * purposes into `dashboardSaleKindOf`; the SQL knows nothing about kinds.
+   */
+  salesTrendByPurpose(
+    scope: TenantContext,
+    boundaries: readonly Date[],
+  ): Promise<ReadonlyMap<number, ReadonlyMap<OrderPurpose, number>>>;
 
   /**
    * PAID orders settled in the window, newest first. `purposes` narrows to a set — the
