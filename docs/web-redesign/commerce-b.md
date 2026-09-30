@@ -1,8 +1,8 @@
 # Web Admin redesign — COMM-B (commerce pages, part B)
 
 Round W, Wave 2. Branch `claude/w-commerce-b` (from `main` f465d58).
-Phase 1 of 2: **inventory and mapping only**. No production code has changed on this
-branch yet; Phase 2 starts once FOUND's kit has merged.
+Phase 1 (§0–§6) is the inventory and mapping; **Phase 2 (§7) is the redesign itself**,
+built on FOUND's kit, with the per-route changes and the capability checklist.
 
 Authorities (owner-locked, `w-common.md`): current `main` for function, data and
 security; the reference preview (`refs/reference/preview-v2`, screenshots in the
@@ -746,3 +746,138 @@ them:
 6. `pnpm build`, then `pnpm verify` once; push; report. If the diff is too large for one
    PR I will propose a split at step 2's boundary (catalogue+pricing | messaging+mass
    ops+campaigns | resellers+referrals+reports).
+
+---
+
+## 7. Phase 2 — what changed, and what was kept
+
+Built on FOUND's kit (`ui/kit.tsx`, `ui/charts.tsx`, `ui/unsaved.tsx`). Page CSS is only
+in `styles/pages/commerce-b.css`, every class prefixed (`cb-` for the family's shared
+editor pieces, `products-`, `categories-`, `discounts-`, `bc-`, `bulk-`, `campaign-`,
+`referrals-`, `resellers-`, `tiers-`, `report-`, `aud-`, `custom-`). No kit class is
+restyled; no `style` attribute is written. No backend, contract or route-table change.
+
+### 7.1 Shared pieces added (page level, `pages/editor-layout.tsx`)
+
+- `SectionNav` — the sticky section list beside a long editor. Buttons, not `#hash`
+  links: a hash link is a history entry, which the router treats as a navigation on a
+  dirty page. Hidden below 980px.
+- `FormSection` — one titled section of a sectioned form card (`form-section` +
+  `form-grid`), focusable so the nav can land on it.
+- `SaveBar` — the editor foot: the unsaved marker (`web.unsaved_changes`) while the form
+  differs from what it loaded, then the explicit Save.
+- `CheckField`, `ChipGroup`, `revealField` — a checkbox laid out as a field, a labelled set
+  of chips inside one filter row, and "scroll to and focus" after the click's render.
+
+Every editor now calls `useUnsavedChanges(dirty)`; `dirty` is the form against what it
+loaded or last saved. A save that navigates (new broadcast, new campaign, started bulk
+operation) passes `{ force: true }`, because the work is saved.
+
+### 7.2 Per route
+
+| Route                             | Phase 2                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/products`                       | Head actions (categories, new product → focuses the create form). One card: flush search + two chip rows (status·audience, category incl. «بدون دسته»), dense sticky table — category under the title, duration·traffic in one cell, the catalogue gap as a wrapping dot-and-sentence (a badge held a sentence and pushed columns off the card), price/sort right-aligned. Create form sectioned; rules card muted.                                                                                                                                                                                                       |
+| `/products/:id`                   | Title + status badge in the head, id as meta. Section nav · sectioned edit form (پایه، قیمت‌گذاری، حجم و مدت، پنل و دسته‌بندی، نمایش در ربات) with save bar and leave guard; each `bodyFrom` problem is shown at its field (a pristine create form shows none). Side column: identity facts, the category move card, the status card (danger-toned while ACTIVE).                                                                                                                                                                                                                                                         |
+| `/product-categories`             | List + sticky side form. Row actions: ghost Edit/Activate/Hide, icon move up/down (same accessible names), icon Delete → **ConfirmDialog** (was `window.confirm`). Notes as a list.                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `/extra-devices`                  | Head "add", dense table with kit row actions, form in one 3-column grid with save bar; the max-quantity rule is the field's error (was a banner).                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `/service-locations`              | Label + key in one cell, dense table, **delete now asks** (ConfirmDialog; it asked nothing — D3). Form in three sections (کجا · عرضه و هزینه · محدودیت‌ها); the limit-pair rule is the period field's error.                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `/custom-service`                 | Locations: list + side form. Rules: list then a full-width form. Both deletes via ConfirmDialog; switches as labelled lines; save bars and leave guards.                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `/discounts`                      | Chip sets (kind, status) in a flush filter row, dense tables, code in mono under the label, value/kind as badges, live redemptions with a CSP-safe `Progress` against the total limit. Discount and cashback editors sectioned (کد و مقدار · دامنه · بازه · محدودیت استفاده · اولویت و ترکیب), segmented calculation type, unit addons, save bars, leave guard. Price preview: inputs in one grid, the quote beside the rules it was decided by.                                                                                                                                                                          |
+| `/campaigns`                      | State chips, dense table, action kinds as tags, links to discounts and new.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `/campaigns/new`, edit            | Section nav beside the seven cards (each still a `<section>` with its heading), sticky save bar, leave guard. **Every input has an id and `htmlFor`**, purposes a legend (D2).                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `/campaigns/:id`                  | State badge in the head; main: actions, preview-and-confirm (figures as stat cards, typed counts, reviewed box, Confirm), results; side: summary, the command card (danger-toned). Cancel asks through ConfirmDialog with its existing words.                                                                                                                                                                                                                                                                                                                                                                             |
+| `/broadcasts`                     | Dense table, state badge with a live dot while sending, progress bar + %.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `/broadcasts/new`, `/:id` (DRAFT) | Composer sectioned (محتوا · دکمه‌ها · مخاطبان) with the message in a chat bubble beside the fields (the bot's own `renderTemplateBody`), save bar, leave guard. Media and launch cards; launch keeps count → mode → checkbox → typed count, and **adds a final ConfirmDialog** before anything is sent or scheduled.                                                                                                                                                                                                                                                                                                      |
+| `/broadcasts/:id` (sent)          | Head badge; report as stat cards + progress + the remaining counts inline; steering buttons with cancel through ConfirmDialog; recipients with a toolbar filter and state badges; summary card at the side.                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `/bulk-operations`                | As broadcasts. New: grant grid, audience, preview as stat cards, the danger block (reason, typed count, checkbox) and **a final ConfirmDialog** before Execute. Detail: head badge, stat strip, report card, summary and an isolated steering card; cancel through ConfirmDialog.                                                                                                                                                                                                                                                                                                                                         |
+| Audience builder                  | "Who" as selectable tiles, filters grouped (ویژگی‌های کاربر · زمان عضویت و خرید · موجودی کیف پول) in three-column grids, the service filter as a framed block, the count beside its button. Same ids.                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `/referrals`                      | Compact referrer filter bar, dense tables, money right-aligned, commission state chips, banner card beside the rules. Owner analytics as stat cards + ranking chips.                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `/resellers`                      | Head actions (tiers, plans, register). Search + tier select + status chips; initials avatar, tier tag, row actions; opened row highlighted. **Standing** (decision D-A: kept inline, no new route): DetailHead (who, tier, status, terms strip, close) then edit form, policy, purchases and history beside the credit card, which gains an in-use `Meter`.                                                                                                                                                                                                                                                               |
+| `/reseller-tiers`                 | Row actions, opened grants/history scrolled to, grants summary in two columns, tier form with save bar and leave guard beside the rules.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `/reseller-plans`                 | Row actions; minimum progress with chip sets, stat cards and the kit `Progress` (replacing the private `ProgressBar`); rules as a list.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `/reports`                        | Range as a segmented control of the eight ranges (custom still applies on submit), KPIs as kit stat cards with the change as a **neutral** delta (never judged, spec §23) and the definition as the tile tooltip; trend in a `ChartCard` with metric chips and a current/previous legend (`TrendChart` and its readout unchanged); chips for rankings and the drill-down purpose; dense tables. New charts from rows already fetched: services orders per purpose (`BarChart`, current vs previous), payments confirmed per method (`Donut`); the tables stay. Resellers report links go to `/users/<id>` (**D1 fixed**). |
+
+### 7.3 Decisions taken without the lead (§5)
+
+- **D-A** option 2: the standing stays inline, now a detail panel; no route added
+  (`app.tsx` untouched). D1 is fixed instead by linking the report to the customer page.
+- **D-B** `BusinessOverview` keeps its export and signature; it inherits the new KPI cards.
+- **D-C** side card for the short editors (categories, custom-service locations); a
+  full-width form under the list where the table is wide (extra devices, locations, rules).
+- **D-D** inline cancel confirmations moved to ConfirmDialog with the **same** labels.
+
+### 7.4 Capability checklist
+
+Each line is §1's inventory item, checked against the Phase 2 code and the suite.
+
+- [x] 1.1 products: both queries and gates; four URL filters incl. `none`; draft follows the
+      applied title; signature-keyed ascending trail (newer/older); search vs catalogue empty;
+      nine catalogue gaps in server order; unpriced as a dash; create + created-inactive note;
+      scope card and owner revision 10. _(products-and-orders, products-display)_
+- [x] 1.2 product detail: gap banner; every identity fact; category move (no blank option,
+      disabled until changed); activate/deactivate + note; every field, bound and problem of
+      `bodyFrom`; panel/category typed fallbacks and hints; currencies from
+      `SALES_CURRENCY_CODES`; ordered display lists; keyed by id. **+ leave guard.**
+- [x] 1.3 categories: status and visibility routes kept apart; whole-order reorder; delete
+      refusal count in its own banner; form outside the StateSwitch. Delete now ConfirmDialog.
+- [x] 1.4 extra devices: capability banner; scope lists via `everyPage`; unsupported suffix;
+      local trail; validation gates Save. **+ leave guard.**
+- [x] 1.5 service locations: typed panel/product without `panels.view`; product cleared on
+      panel change; the three rules; seven refusal messages; saved/unchanged toasts.
+      Delete now asks (D3).
+- [x] 1.6 custom service: flag banner; locations incl. unlisted panels; rule bounds, audience
+      kinds, panel incl. no-longer-listed id; overlap and field errors; specificity order;
+      edit-denied cards. Deletes via ConfirmDialog.
+- [x] 1.7 discounts: separate edit keys; local kind/status filters (status is still the
+      second group); trail per filter; kind/code read-only on edit and sent back; every
+      bound; cashback list and form; preview with verdict and outcomes. _(discounts)_
+- [x] 1.8–1.9 campaigns: `?state=` with replace; semantics banner; per-action permission
+      (`NotPermitted`, no checkbox); presentation before the form; `campaignBodyOf`; confirm
+      binding reset on a new preview; typed counts; commands and cancel wording; results as
+      facts. **+ labels (D2), leave guard.** _(campaigns)_
+- [x] 1.10 broadcasts: `?cursor=`; composer create/update with version; sourced kinds;
+      placeholders and bot-renderer preview; media blocked while dirty; test, count, mode,
+      schedule, freeze note, checkbox, typed count, bindings; report counts incl. pins;
+      steering; recipients filter; 5 s polling of detail and recipients. **+ final dialog.**
+- [x] 1.11 bulk: kinds per key; grant inputs reset the preview; preview figures and sample;
+      reason, typed count, checkbox, bindings; detail counts incl. awaiting reconciliation;
+      pause/resume/cancel per kind key; items filter; 5 s polling. **+ final dialog.**
+- [x] 1.12 audience builder: every `aud-*` id and field; count; `describeAudience`.
+- [x] 1.13 referrals: referrer filter (uuid error, Clear), both lists narrowed, default-label
+      pagers, commission chips, dashes for unset earned/settled, unrecovered banner, banner
+      metadata/upload/clear on `settings.*`, owner analytics. _(referrals, referral-banner×2)_
+- [x] 1.14 resellers: `?search=`, `?register=`, status/tier filters, trail; register/edit
+      with debt acknowledgement; the four standing cards on their own keys. _(resellers,
+      reseller-standing)_
+- [x] 1.15 tiers: grants editor/read-only, `grantsBodyFrom`, tier history on `audit.view`,
+      tier form. 1.16 plans: minimum form, progress (period/filter sent to the server,
+      truncated warning, floored %), policy + override editor. _(reseller-plans)_
+- [x] 1.17–1.18 reports: owner-only gate fetching nothing; `mayExport` links; 8 ranges,
+      custom form, disabled queries until complete; 8 tabs; 300 s polling and Refresh; every
+      report's figures and exports; referral analytics. _(reports)_
+
+### 7.5 Tests
+
+Updated where the markup legitimately changed, assertions kept: the two `window.confirm`
+stubs (categories, custom service ×2) now answer the dialog; broadcast launch and bulk
+execute click the new final dialog's yes. New `tests/web/commerce-b-redesign.test.tsx`
+pins the product editor's guard and marker, the section nav, problems-at-field on a
+pristine form, the location delete dialog, a declined broadcast send, campaign labels (D2)
+and the report link (D1) — the guard and the link were mutation-checked.
+
+### 7.6 Screenshots
+
+`pnpm web:shots` fixtures for every route above are in `tests/web/shots/fixtures/commerce-b.ts`
+(the reseller standing is reached with `--click '.tbl tbody tr:first-child .row-actions
+button'`). All 30 route captures report `ok` (dark 1440), plus light and 900/390 px for
+products, product detail, discounts, a campaign, a broadcast, resellers and reports.
+
+### 7.7 Not changed, on purpose
+
+- No kit component added or restyled; the family's pieces live in `editor-layout.tsx`.
+- No reseller detail route (D-A); no URL for the opened standing.
+- Deactivating a product, a discount or an add-on still has no confirmation — they are
+  reversible and asked nothing before.
+- D5 (single-cursor broadcast/bulk list paging) left as it was.
+- Reference-only content listed in §2 ("not carried over") is still not added.
