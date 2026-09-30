@@ -104,6 +104,15 @@ the grant needs, and still held (`audience.frozen_not_found` / `frozen_released`
 `frozen_kind_mismatch`). The record stores the id (`bulk_operations.frozen_audience_id`,
 `broadcasts.frozen_audience_id`).
 
+A SERVICES set is bound to the GRANT it was selected for (`frozen_audiences.grant_kind`,
+`SERVICE_TRAFFIC` or `SERVICE_TIME`, NOT NULL exactly for SERVICES by CHECK): its members
+were written by that grant's own eligibility rule — the panels that can `ADD_TRAFFIC` are
+not the panels that can `ADD_TIME` — so a set frozen for a traffic grant seeds no time
+grant, and the reverse, `frozen_kind_mismatch` (review finding 6). A frozen draft's preview
+reports the set's `reachable` part from the member rows held (a member with a bot
+recorded), not its count, because the launch writes the rest `UNREACHABLE` and the
+confirmation should say so first (finding 3).
+
 **The hand-over retry.** `CampaignService.handOver` passes the action's frozen id, so a retry
 after an interruption — the confirmation replayed, or «سپردن دوبارهٔ اقدامات در انتظار» —
 seeds the engine from the same members whatever the live audience did in between. An action
@@ -120,7 +129,12 @@ outcome with a reason and never a credit.
 header something names. The member rows are released by a sweep (`releaseUnreferenced`, run
 by the campaign lane beside its two edges as `releaseOnce`) only when EVERY campaign action's
 campaign, mass operation and broadcast naming the audience has ended (COMPLETED/CANCELLED)
-and the audience is at least `FROZEN_AUDIENCE_RELEASE_AFTER_DAYS` (1) old. Never by age
+and the audience is at least `FROZEN_AUDIENCE_RELEASE_AFTER_DAYS` (1) old. A DRAFT
+broadcast holds nothing: the hand-over creates the announcement's draft and launches it in
+two commits, and a draft the process died between (or one an operator abandoned) would
+otherwise hold its members for ever once the campaign ended (finding 7). The launch reads
+the header again and refuses a released set (`frozen_released`), so a draft that outlived
+its set is refused, never sent blind. Never by age
 alone: a campaign confirmed fifty-nine days ahead keeps its members. The header, with its
 count, fingerprint, definition and hash, is never deleted: it is the record of what was
 confirmed. A released audience seeds nothing (`frozen_released`).
@@ -153,6 +167,13 @@ naming its `from` states (`transition`, `cancel`).
   `steerEngines` the announcement uses (#118), so a replayed campaign command, or an operation
   resumed by hand on its own page, is left alone rather than fought. The campaign page and
   the campaigns audit no longer say a paused campaign's gift keeps processing.
+- **A hand-over retried under a paused campaign lands paused.** `launchPending` is
+  callable while the campaign is PAUSED, and a pause that committed before the engine record
+  existed found nothing to stop. After the link commits, `reconcile` reads the campaign and
+  the action AGAIN — only then, so every edge that commits from there on sees the link and
+  propagates itself, and every edge that committed before is seen here — and pauses a
+  RUNNING operation or a SENDING broadcast exactly as `pause` would, or cancels them for an
+  action CANCELLED meanwhile (finding 4; the cancel half is what `compensate` did).
 
 ## C. Forward, copy and pin
 
@@ -169,9 +190,12 @@ and the `MessageId` answer.
 
 **Validation by a real preview.** There is no read-by-id, so `POST /broadcasts/:id/test`
 performs the broadcast's own forward or copy to the operator's linked Telegram through the
-bot they wrote to. A test that reached them stamps `source_verified_at`; a draft edit that
-changes the source clears it; a launch of a sourced kind refuses `SOURCE_UNVERIFIED` until
-one has. The page says so, and withholds the launch button until the stamp is there.
+bot they wrote to. A test that reached them stamps `source_verified_at` — bound to the draft
+that was TESTED: the stamp is a conditional UPDATE naming the version, kind and source the
+test read, so an edit committed while the send was in flight leaves the edited draft
+unverified (finding 2). A draft edit that changes the source OR the kind clears it — a
+COPY turned FORWARD is a different request to Telegram (finding 1); a launch of a sourced
+kind refuses `SOURCE_UNVERIFIED` until one has. The page says so, and withholds the launch button until the stamp is there.
 
 **Same lane.** Frozen audience, scheduling, pause, cancel, pacing, the 429 hold, the
 blocked-customer and opt-out skips, the report and the recipients page are the ones every
@@ -213,8 +237,13 @@ opted-out are excluded at the COUNT and the MATERIALISATION (`excludeMarketingOp
 the evaluation, applied to the preview and the launch alike so the count confirmed is the
 count frozen); a frozen-seeded MARKETING launch writes an opted-out member `SKIPPED
 broadcast.marketing_opted_out` rather than dropping it from the confirmed count; and the
-dispatcher re-reads the preference before the stamp. A SERVICE_ANNOUNCEMENT asks nothing of
-it. The exclusion is not part of the definition or its hash: it is a fact about the send.
+STAMP re-reads the preference — in the stamping transaction, under the customer's row lock
+(`FOR SHARE`), so an opt-out in flight commits first and is seen, or waits and lands after
+a send already decided; read before the stamp and outside it, the same fact could commit
+between the two (finding 5). A SERVICE_ANNOUNCEMENT asks nothing of it. A BLOCKED
+customer's `/stop` is still their preference: blocking stops what they can buy, and a
+MARKETING send to an audience that admits blocked customers reads this row, so the two
+intents are routed past the blocked gate (finding 8). The exclusion is not part of the definition or its hash: it is a fact about the send.
 
 **What it does not touch.** ADR-0030's lane has no dependency on the preference and reads
 no such column — a payment, service, ticket or wallet notice is a fact about the customer's
@@ -227,7 +256,8 @@ sentence that the customer decides it. No operator override is built (§7).
 
 ## 5. Regressions and mutation evidence
 
-`tests/integration/round-n-close.test.ts` (11 cases) and the rewritten
+`tests/integration/round-n-close.test.ts` (17 cases), `tests/integration/customer-block-surface.test.ts
+› a blocked customer's /stop still records their preference…`, and the rewritten
 `tests/integration/campaigns.test.ts › a delayed hand-over gifts exactly the confirmed set,
 however the audience moved since`; `tests/unit/broadcast-transport.test.ts` (the Bot API
 bodies, `classifyPin`); `tests/unit/marketing-opt-out.test.ts`.
@@ -246,9 +276,9 @@ bodies, `classifyPin`); `tests/unit/marketing-opt-out.test.ts`.
 | pin failure separated from the send result            | «records the pin apart from the send…and a pin is attempted once»                                                                                 |
 | cleanup only when nothing references the frozen set   | «releases a frozen audience only once nothing live names it, and never its header»                                                                |
 
-**Mutations** (`scratchpad/mutate.py`: each rule reverted in place, the named test run, the
-file restored with `git checkout`; every row below FAILED under its mutation and passed
-restored):
+**Mutations** (`scratchpad/mutate.py`, `mutate-nc.py`: each rule reverted in place, the
+named test run, the file restored with `git checkout`; every row below FAILED under its
+mutation and passed restored):
 
 | #   | Rule reverted                                                             | Test that failed                                             |
 | --- | ------------------------------------------------------------------------- | ------------------------------------------------------------ |
@@ -258,7 +288,7 @@ restored):
 | M4  | hand-over passes `frozenAudienceId: null`                                 | campaigns: gifts exactly the confirmed set                   |
 | M5  | a frozen create re-selects the live definition instead of copying members | never a newcomer                                             |
 | M6a | the opt-out predicate dropped from the one audience query                 | excludes an opted-out customer                               |
-| M6b | the dispatcher's live opt-out re-read removed                             | excludes an opted-out customer                               |
+| M6b | the stamp's in-transaction opt-out read removed (`marketing: false`)      | excludes an opted-out customer; an opt-out that lands after… |
 | M7  | a frozen-seeded MARKETING launch writes an opted-out member PENDING       | seeded from a frozen audience                                |
 | M8a | `classifyPin` answers PINNED for a refusal                                | unit: three outcomes apart                                   |
 | M8b | stranded pins never reaped                                                | records the pin apart                                        |
@@ -268,11 +298,33 @@ restored):
 | M12 | reconciliation waits for a resume (`settlePlanned` restricted to RUNNING) | ambiguous provider write                                     |
 | M13 | a campaign pause no longer reaches its gift                               | propagate to its gift                                        |
 | M14 | the pin is never requested after the stamp                                | records the pin apart                                        |
+| M15 | `updateDraft` keeps a verification when only the kind changes             | a verification names the kind                                |
+| M16 | a frozen draft's preview reports the count as reachable                   | counts the reachable part                                    |
+| M17 | a SERVICES set seeds a grant of the other kind                            | bound to the grant                                           |
+| M18 | the release sweep treats a DRAFT broadcast as live                        | a draft the hand-over left behind                            |
+| M19 | a hand-over linked under a PAUSED campaign is not paused                  | lands paused                                                 |
+| M20 | `markSourceVerified` stamps whatever draft is there now                   | a verification names the kind (the in-flight edit)           |
+| M21 | a blocked customer's `/stop` answered `bot.blocked`, recording nothing    | block-surface: a blocked customer's /stop                    |
 
 M2 and M11 were green on the first run; each named a missing case (a paused operation whose
 last item settles; an audience named by a campaign action alone, before its hand-over), and
 the cases were added before the rule was counted as tested. M8a is reachable only through the
 transport unit test, which the driver now runs.
+
+### 5.1 Review findings on PR #120 (Codex review 5364415850)
+
+Each was validated against the code before anything was changed; all eight were confirmed.
+
+| #   | Finding                                                                      | Verdict and fix                                                                                                                                                   |
+| --- | ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | `updateDraft` kept `source_verified_at` when only `content_kind` changed     | CONFIRMED: the CASE compared chat and message only. Now `content_kind` too (M15).                                                                                 |
+| 2   | `markSourceVerified` stamped unconditionally after the test send             | CONFIRMED: an edit committed during the send was verified by a test of the draft before it. The stamp names version, kind and source as tested (M20).             |
+| 3   | a frozen draft's preview reported `reachable: frozen.count`                  | CONFIRMED: a member with no bot is written UNREACHABLE by the launch. `reachable` is read from the rows held (M16).                                               |
+| 4   | `launchPending` linked an engine under a PAUSED campaign and left it running | CONFIRMED: `pause` had found nothing to stop. `reconcile` re-reads the campaign after the link and pauses, or cancels, what it made (M19).                        |
+| 5   | the opt-out re-read ran outside the stamping transaction                     | CONFIRMED: an opt-out committing between the read and the stamp was sent to. The stamp reads it in its own transaction under `FOR SHARE` (M6b, re-cut).           |
+| 6   | a frozen SERVICES set was not bound to the grant subtype                     | CONFIRMED: traffic and time eligibility differ per panel. `grant_kind` on the header, CHECKed, refused on mismatch (M17; contract `FROZEN_AUDIENCE_GRANT_KINDS`). |
+| 7   | a DRAFT the hand-over left behind held the audience for ever                 | CONFIRMED: `NOT IN ('COMPLETED','CANCELLED')` counted DRAFT as live. A draft holds nothing; the launch refuses a released set (M18).                              |
+| 8   | a BLOCKED customer could not opt out                                         | CONFIRMED: the blocked gate answered `bot.blocked` before `act`. The two intents are routed to `marketingPreference` from the gate (M21).                         |
 
 ## 6. What still needs real acceptance
 
