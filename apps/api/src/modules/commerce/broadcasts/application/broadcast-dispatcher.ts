@@ -227,27 +227,6 @@ export class BroadcastDispatcher {
       if (content === null || content.state !== 'SENDING') return 'lost';
 
       /*
-       * Round N close (§D): the second live fact a MARKETING send re-reads — a customer who
-       * opted out of promotions since the recipients were materialised. Skipped before the
-       * stamp, so nothing looks sent; a service announcement asks nothing here.
-       */
-      if (
-        content.purpose === 'MARKETING' &&
-        (await this.deps.repository.customerMarketingOptedOut(scope, recipient.customerId))
-      ) {
-        const moved = await this.deps.uow.run(scope, (tx) =>
-          this.deps.repository.skip(
-            scope,
-            recipient,
-            'broadcast.marketing_opted_out',
-            this.deps.clock.now(),
-            tx,
-          ),
-        );
-        return moved ? 'skipped' : 'lost';
-      }
-
-      /*
        * The one LIVE eligibility fact a broadcast re-checks: a customer an operator blocked
        * after launch, when the audience asked for active customers only. Skipped, not
        * failed — nothing was attempted — and before the stamp, so nothing looks sent.
@@ -289,16 +268,27 @@ export class BroadcastDispatcher {
             recipient.botInstanceId,
           );
 
+      /*
+       * Round N close (§D): the second live fact a MARKETING send re-reads — a customer who
+       * opted out of promotions since the recipients were materialised — is decided by the
+       * stamp itself, in its transaction and under the customer's lock (`stamp`): SKIPPED
+       * before anything looks sent. A service announcement asks nothing of it.
+       */
       const stampedAt = this.deps.clock.now();
       const stamped = await this.deps.uow.run(scope, (tx) =>
         this.deps.repository.stamp(
           scope,
           recipient,
-          { now: stampedAt, leaseUntil: new Date(stampedAt.getTime() + BROADCAST_LEASE_MS) },
+          {
+            now: stampedAt,
+            leaseUntil: new Date(stampedAt.getTime() + BROADCAST_LEASE_MS),
+            marketing: content.purpose === 'MARKETING',
+          },
           tx,
         ),
       );
-      if (!stamped) return 'lost';
+      if (stamped === 'SKIPPED') return 'skipped';
+      if (stamped === 'MOVED') return 'lost';
 
       if (!rendered.ok || (isMedia && media === null)) {
         const errorCode = rendered.ok ? 'broadcast.media_unavailable' : rendered.errorCode;

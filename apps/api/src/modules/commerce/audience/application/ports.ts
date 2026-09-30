@@ -1,6 +1,7 @@
 import type {
   AudienceDefinition,
   AudienceSampleCustomer,
+  FrozenAudienceGrantKind,
   FrozenAudienceKind,
   TenantContext,
 } from '@nexa/contracts';
@@ -55,13 +56,24 @@ export interface AudienceReader {
 // --- Frozen audiences (round N close, `docs/round-n-close-audit.md` §A) -----------------
 
 /** A frozen audience's header, as the application reads it. Members are never loaded. */
+/** What the member rows written say: how many, how many with a bot to reach, and their fingerprint. */
+export interface FrozenMembersSummary {
+  readonly count: number;
+  readonly reachable: number;
+  readonly fingerprint: string;
+}
+
 export interface FrozenAudienceRecord {
   readonly id: string;
   readonly kind: FrozenAudienceKind;
+  /** The grant a SERVICES set was selected for; null for CUSTOMERS. */
+  readonly grantKind: FrozenAudienceGrantKind | null;
   readonly definition: AudienceDefinition;
   readonly definitionHash: string;
   readonly asOf: Date;
   readonly count: number;
+  /** Members with a bot to reach them through (`bot_instance_id` set), from the rows held. */
+  readonly reachable: number;
   readonly fingerprint: string;
   readonly createdAt: Date;
   readonly releasedAt: Date | null;
@@ -88,16 +100,17 @@ export interface FrozenAudienceRepository {
       readonly now: Date;
     },
     tx: TransactionScope,
-  ): Promise<{ readonly count: number; readonly fingerprint: string }>;
+  ): Promise<FrozenMembersSummary>;
   /**
-   * A SERVICES header with no members yet. The member rows are written by the engine that
-   * owns the eligibility rule (the mass-action repository), and `stampMembers` then seals
-   * the header from what was written.
+   * A SERVICES header with no members yet, naming the grant whose rule selects them. The
+   * member rows are written by the engine that owns the eligibility rule (the mass-action
+   * repository), and `stampMembers` then seals the header from what was written.
    */
   insertServicesHeader(
     scope: TenantContext,
     input: {
       readonly id: string;
+      readonly grantKind: FrozenAudienceGrantKind;
       readonly definitionJson: string;
       readonly definitionHash: string;
       readonly asOf: Date;
@@ -106,13 +119,13 @@ export interface FrozenAudienceRepository {
     },
     tx: TransactionScope,
   ): Promise<void>;
-  /** Count and fingerprint from the member rows, written onto the header. */
+  /** Count, reachable and fingerprint from the member rows; count and fingerprint written onto the header. */
   stampMembers(
     scope: TenantContext,
     id: string,
     subject: 'CUSTOMER' | 'SERVICE',
     tx: TransactionScope,
-  ): Promise<{ readonly count: number; readonly fingerprint: string }>;
+  ): Promise<FrozenMembersSummary>;
   find(scope: TenantContext, id: string, tx?: unknown): Promise<FrozenAudienceRecord | null>;
   /**
    * Releases the member rows of audiences frozen before `before` that no live record needs

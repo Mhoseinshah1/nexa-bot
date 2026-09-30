@@ -217,6 +217,7 @@ import {
   BULK_NOTE_MAX_LENGTH,
   BULK_OPERATION_KINDS,
   BULK_OPERATION_STATES,
+  FROZEN_AUDIENCE_GRANT_KINDS,
   FROZEN_AUDIENCE_KINDS,
   BULK_SKIP_REASONS,
 } from '@nexa/contracts';
@@ -9794,6 +9795,8 @@ export const frozenAudiences = pgTable(
       .notNull()
       .references(() => tenants.id),
     kind: text('kind').notNull(),
+    /** The grant a SERVICES audience was selected for (its eligibility rule); null for CUSTOMERS. */
+    grantKind: text('grant_kind'),
     definition: jsonb('definition').notNull(),
     definitionHash: text('definition_hash').notNull(),
     asOf: timestamptz('as_of').notNull(),
@@ -9805,6 +9808,12 @@ export const frozenAudiences = pgTable(
   },
   (table) => [
     unique('frozen_audiences_tenant_id_key').on(table.tenantId, table.id),
+    check(
+      'frozen_audiences_grant_kind_check',
+      sql`grant_kind IS NULL OR ${enumCheck('grant_kind', FROZEN_AUDIENCE_GRANT_KINDS)}`,
+    ),
+    /** A SERVICES set names the grant whose rule selected it; a CUSTOMERS set names none. */
+    check('frozen_audiences_grant_check', sql`(kind = 'SERVICES') = (grant_kind IS NOT NULL)`),
     /** The release sweep's question: which held audiences are old enough to consider. */
     index('frozen_audiences_held_idx')
       .on(table.tenantId, table.createdAt)

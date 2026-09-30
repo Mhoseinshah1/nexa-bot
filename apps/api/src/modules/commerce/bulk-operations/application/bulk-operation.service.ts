@@ -558,9 +558,12 @@ export class BulkOperationService {
     const kind = grant.kind;
     return this.deps.audience.freezeServices(
       scope,
-      input.definition,
-      input.asOf,
-      adminIdOf(actor),
+      {
+        definition: input.definition,
+        asOf: input.asOf,
+        createdByAdminId: adminIdOf(actor),
+        grantKind: kind,
+      },
       tx,
       async (frozenAudienceId, evaluation) => {
         const eligibility = await this.eligibility(scope, evaluation, kind, tx);
@@ -667,6 +670,19 @@ export class BulkOperationService {
         AUDIENCE_ERROR_CODES.FROZEN_KIND_MISMATCH,
         `This grant needs a ${needed} audience.`,
         { kind: source.kind },
+      );
+    }
+    /*
+     * A SERVICES set was selected by ONE grant's eligibility rule — the panels that can
+     * ADD_TRAFFIC are not the panels that can ADD_TIME — so a set frozen for a traffic
+     * grant seeds no time grant: it would carry services the rule for this grant never
+     * admitted, and the processor would find out one item at a time.
+     */
+    if (needed === 'SERVICES' && source.grantKind !== kind) {
+      throw errors.validation(
+        AUDIENCE_ERROR_CODES.FROZEN_KIND_MISMATCH,
+        `This frozen audience was selected for a ${String(source.grantKind)} grant.`,
+        { kind: source.kind, grantKind: source.grantKind },
       );
     }
     if (source.definitionHash !== audience.hash) {

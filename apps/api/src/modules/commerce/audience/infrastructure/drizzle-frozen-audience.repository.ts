@@ -1,6 +1,7 @@
 import { sql, type SQL } from 'drizzle-orm';
 import {
   canonicalAudienceDefinition,
+  type FrozenAudienceGrantKind,
   type FrozenAudienceKind,
   type TenantContext,
 } from '@nexa/contracts';
@@ -18,10 +19,12 @@ const date = (value: Instant): Date => (value instanceof Date ? value : new Date
 interface HeaderRow {
   id: string;
   kind: FrozenAudienceKind;
+  grant_kind: FrozenAudienceGrantKind | null;
   definition: unknown;
   definition_hash: string;
   as_of: Instant;
   member_count: number;
+  reachable: number;
   fingerprint: string;
   created_at: Instant;
   released_at: Instant | null;
@@ -68,6 +71,7 @@ export class DrizzleFrozenAudienceRepository implements FrozenAudienceRepository
       {
         id: input.id,
         kind: 'CUSTOMERS',
+        grantKind: null,
         definitionJson: input.definitionJson,
         definitionHash: input.definitionHash,
         asOf: input.evaluation.asOf,
@@ -88,6 +92,7 @@ export class DrizzleFrozenAudienceRepository implements FrozenAudienceRepository
     scope: TenantContext,
     input: {
       readonly id: string;
+      readonly grantKind: FrozenAudienceGrantKind;
       readonly definitionJson: string;
       readonly definitionHash: string;
       readonly asOf: Date;
@@ -104,6 +109,7 @@ export class DrizzleFrozenAudienceRepository implements FrozenAudienceRepository
     input: {
       readonly id: string;
       readonly kind: FrozenAudienceKind;
+      readonly grantKind: FrozenAudienceGrantKind | null;
       readonly definitionJson: string;
       readonly definitionHash: string;
       readonly asOf: Date;
@@ -115,11 +121,13 @@ export class DrizzleFrozenAudienceRepository implements FrozenAudienceRepository
     // The count and fingerprint are provisional until `stampMembers` seals them from the
     // rows written; an empty fingerprint is md5 of the empty string, as `fingerprintOf` gives.
     await this.exec(tx).execute(sql`
-      INSERT INTO frozen_audiences (id, tenant_id, kind, definition, definition_hash, as_of,
-                                    member_count, fingerprint, created_by_admin_id, created_at)
-      VALUES (${input.id}::uuid, ${tenantId}::uuid, ${input.kind}, ${input.definitionJson}::jsonb,
-              ${input.definitionHash}, ${input.asOf.toISOString()}::timestamptz, 0,
-              md5(''), ${input.createdByAdminId}::uuid, ${input.now.toISOString()}::timestamptz)`);
+      INSERT INTO frozen_audiences (id, tenant_id, kind, grant_kind, definition, definition_hash,
+                                    as_of, member_count, fingerprint, created_by_admin_id,
+                                    created_at)
+      VALUES (${input.id}::uuid, ${tenantId}::uuid, ${input.kind}, ${input.grantKind},
+              ${input.definitionJson}::jsonb, ${input.definitionHash},
+              ${input.asOf.toISOString()}::timestamptz, 0, md5(''),
+              ${input.createdByAdminId}::uuid, ${input.now.toISOString()}::timestamptz)`);
   }
 
   async stampMembers(
@@ -130,36 +138,48 @@ export class DrizzleFrozenAudienceRepository implements FrozenAudienceRepository
   ) {
     const tenantId = requireTenantId(scope);
     const column = subject === 'CUSTOMER' ? sql`m.customer_id` : sql`m.service_id`;
-    const [row] = await this.rows<{ count: number; fingerprint: string }>(
-      sql`SELECT count(*)::int AS count, ${fingerprintOf(column)} AS fingerprint
+    const [row] = await this.rows<{ count: number; reachable: number; fingerprint: string }>(
+      sql`SELECT count(*)::int AS count,
+                 count(m.bot_instance_id)::int AS reachable,
+                 ${fingerprintOf(column)} AS fingerprint
             FROM frozen_audience_members m
            WHERE m.tenant_id = ${tenantId}::uuid AND m.frozen_audience_id = ${id}::uuid`,
       tx,
     );
     const count = row?.count ?? 0;
+    const reachable = row?.reachable ?? 0;
     const fingerprint = row?.fingerprint ?? '';
     await this.exec(tx).execute(sql`
       UPDATE frozen_audiences SET member_count = ${count}, fingerprint = ${fingerprint}
        WHERE tenant_id = ${tenantId}::uuid AND id = ${id}::uuid`);
-    return { count, fingerprint };
+    return { count, reachable, fingerprint };
   }
 
   async find(scope: TenantContext, id: string, tx?: unknown): Promise<FrozenAudienceRecord | null> {
     const tenantId = requireTenantId(scope);
+    /*
+     * `reachable` is read from the member rows, never stored: the part of the set a
+     * broadcast can actually reach (a bot recorded for the customer), the figure the launch
+     * confirmation's preview shows next to the count. Zero once the rows are released.
+     */
     const [row] = await this.rows<HeaderRow>(
-      sql`SELECT id, kind, definition, definition_hash, as_of, member_count, fingerprint, created_at,
-                 released_at
-            FROM frozen_audiences WHERE tenant_id = ${tenantId}::uuid AND id = ${id}::uuid`,
+      sql`SELECT f.id, f.kind, f.grant_kind, f.definition, f.definition_hash, f.as_of,
+                 f.member_count, f.fingerprint, f.created_at, f.released_at,
+                 (SELECT count(m.bot_instance_id)::int FROM frozen_audience_members m
+                   WHERE m.tenant_id = f.tenant_id AND m.frozen_audience_id = f.id) AS reachable
+            FROM frozen_audiences f WHERE f.tenant_id = ${tenantId}::uuid AND f.id = ${id}::uuid`,
       tx,
     );
     if (row === undefined) return null;
     return {
       id: row.id,
       kind: row.kind,
+      grantKind: row.grant_kind,
       definition: canonicalAudienceDefinition(row.definition),
       definitionHash: row.definition_hash,
       asOf: date(row.as_of),
       count: row.member_count,
+      reachable: row.reachable,
       fingerprint: row.fingerprint,
       createdAt: date(row.created_at),
       releasedAt: row.released_at === null ? null : date(row.released_at),
@@ -178,6 +198,12 @@ export class DrizzleFrozenAudienceRepository implements FrozenAudienceRepository
      * it has ended. A COMPLETED broadcast may still be re-opened to re-queue refusals, but
      * that re-uses its recipient rows and needs no member; a COMPLETED or CANCELLED mass
      * operation is terminal. The header row is kept whatever happens.
+     *
+     * A DRAFT broadcast holds nothing either. A campaign hand-over creates the draft and
+     * launches it in two commits, and a draft the process died between — or one an
+     * operator composed and abandoned — would otherwise hold its members for ever. The
+     * launch re-reads the header under its own transaction and refuses a released audience
+     * (`FROZEN_RELEASED`), so a draft that outlives its set is refused, never sent blind.
      */
     const released = await this.rows<{ id: string }>(
       sql`UPDATE frozen_audiences f
@@ -196,7 +222,7 @@ export class DrizzleFrozenAudienceRepository implements FrozenAudienceRepository
              AND NOT EXISTS (
                SELECT 1 FROM broadcasts b
                 WHERE b.tenant_id = f.tenant_id AND b.frozen_audience_id = f.id
-                  AND b.state NOT IN ('COMPLETED', 'CANCELLED'))
+                  AND b.state NOT IN ('DRAFT', 'COMPLETED', 'CANCELLED'))
        RETURNING f.id`,
       tx,
     );

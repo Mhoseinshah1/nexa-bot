@@ -168,13 +168,23 @@ export interface BroadcastRepository {
     input: Omit<BroadcastDraftInput, 'id' | 'createdByAdminId' | 'frozenAudienceId'>,
     tx: TransactionScope,
   ): Promise<boolean>;
-  /** Round N close (§C): a real preview reached the operator from the draft's source. */
+  /**
+   * Round N close (§C): a real preview reached the operator from the draft's source. The
+   * stamp is bound to the draft that was TESTED — its version, kind and source — so an
+   * edit that committed while the test was in flight leaves the edited draft unverified.
+   * True when the stamp was written.
+   */
   markSourceVerified(
     scope: TenantContext,
     id: string,
+    tested: {
+      readonly version: number;
+      readonly contentKind: BroadcastContentKind;
+      readonly source: BroadcastSource;
+    },
     now: Date,
     tx: TransactionScope,
-  ): Promise<void>;
+  ): Promise<boolean>;
   /** Removes the media row when its kind no longer matches the draft's. */
   dropMismatchedMedia(scope: TenantContext, id: string, tx: TransactionScope): Promise<void>;
   /** Bytes the tenant holds undelivered, excluding one broadcast's own row. */
@@ -311,8 +321,6 @@ export interface BroadcastRepository {
   ): Promise<readonly ClaimedRecipient[]>;
   content(scope: TenantContext, id: string): Promise<BroadcastContent | null>;
   customerStatus(scope: TenantContext, customerId: string): Promise<string | null>;
-  /** Round N close (§D): whether the customer has opted out of promotional broadcasts NOW. */
-  customerMarketingOptedOut(scope: TenantContext, customerId: string): Promise<boolean>;
   /** PENDING → SKIPPED, for a customer a live fact excludes. */
   skip(
     scope: TenantContext,
@@ -323,14 +331,17 @@ export interface BroadcastRepository {
   ): Promise<boolean>;
   /**
    * The stamp: PENDING → SENDING, only for the lease this pass holds and only while the
-   * broadcast is SENDING. False means do not send.
+   * broadcast is SENDING. For a MARKETING send (`marketing`) the customer's opt-out is read
+   * in this same transaction, under the customer's row lock: one that holds moves the row
+   * PENDING → SKIPPED instead (`SKIPPED`). `MOVED` means the row was no longer this pass's
+   * to stamp — do not send.
    */
   stamp(
     scope: TenantContext,
     recipient: ClaimedRecipient,
-    input: { readonly now: Date; readonly leaseUntil: Date },
+    input: { readonly now: Date; readonly leaseUntil: Date; readonly marketing: boolean },
     tx: TransactionScope,
-  ): Promise<boolean>;
+  ): Promise<'STAMPED' | 'SKIPPED' | 'MOVED'>;
   /** Records the outcome of the send this pass stamped. False when the row had moved. */
   record(
     scope: TenantContext,

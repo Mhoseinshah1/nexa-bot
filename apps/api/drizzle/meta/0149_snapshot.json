@@ -1,5 +1,5 @@
 {
-  "id": "71db1ba0-c845-4cc7-8d25-c63d5496ab56",
+  "id": "e7157226-9d47-426f-9910-5adc1aaf5394",
   "prevId": "276b9bbd-1957-4175-9e7b-98981c3db9b8",
   "version": "7",
   "dialect": "postgresql",
@@ -6852,6 +6852,12 @@
           "primaryKey": false,
           "notNull": true
         },
+        "grant_kind": {
+          "name": "grant_kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "definition": {
           "name": "definition",
           "type": "jsonb",
@@ -6967,6 +6973,14 @@
       },
       "policies": {},
       "checkConstraints": {
+        "frozen_audiences_grant_kind_check": {
+          "name": "frozen_audiences_grant_kind_check",
+          "value": "grant_kind IS NULL OR grant_kind IN ('SERVICE_TRAFFIC', 'SERVICE_TIME')"
+        },
+        "frozen_audiences_grant_check": {
+          "name": "frozen_audiences_grant_check",
+          "value": "(kind = 'SERVICES') = (grant_kind IS NOT NULL)"
+        },
         "frozen_audiences_kind_check": {
           "name": "frozen_audiences_kind_check",
           "value": "kind IN ('CUSTOMERS', 'SERVICES')"

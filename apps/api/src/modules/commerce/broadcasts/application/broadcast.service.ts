@@ -496,7 +496,9 @@ export class BroadcastService {
         definition: frozen.definition,
         definitionHash: frozen.definitionHash,
         customers: frozen.count,
-        reachable: frozen.count,
+        // The reachable part is read from the rows held: a member with no bot recorded is
+        // written UNREACHABLE by the launch, and the confirmation should say so first.
+        reachable: frozen.reachable,
         fingerprint: frozen.fingerprint,
         sample: [],
       };
@@ -612,14 +614,23 @@ export class BroadcastService {
          * Round N close (§C): the preview IS the source's validation. The Bot API offers no
          * way to read a message by id, so a `copyMessage`/`forwardMessage` that reached the
          * operator is the one proof the bot can reach the source; the launch requires it.
-         * A draft still: an edit of the source clears the stamp (`updateDraft`).
+         * The stamp names the draft that was TESTED — version, kind and source as read
+         * above — so an edit committed while the test was in flight is not verified by it;
+         * and an edit of the source or the kind afterwards clears it (`updateDraft`).
          */
         if (
           result.outcome === 'SENT' &&
           isSourcedBroadcastKind(record.contentKind) &&
-          record.state === 'DRAFT'
+          record.state === 'DRAFT' &&
+          record.source !== null
         ) {
-          await this.deps.repository.markSourceVerified(scope, id, this.deps.clock.now(), tx);
+          await this.deps.repository.markSourceVerified(
+            scope,
+            id,
+            { version: record.version, contentKind: record.contentKind, source: record.source },
+            this.deps.clock.now(),
+            tx,
+          );
         }
         await this.deps.audit.record(
           scope,

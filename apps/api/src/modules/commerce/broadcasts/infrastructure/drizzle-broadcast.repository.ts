@@ -236,10 +236,12 @@ export class DrizzleBroadcastRepository implements BroadcastRepository {
              SET title = ${input.title}, content_kind = ${input.contentKind}, body = ${input.body},
                  buttons = ${JSON.stringify(input.buttons)}::jsonb,
                  purpose = ${input.purpose}, pin = ${input.pin},
-                 -- A verification is bound to the message it reached: a changed source is unverified.
+                 -- A verification is bound to the message it reached AND the way it was sent:
+                 -- a changed source, or a COPY turned FORWARD, is unverified.
                  source_verified_at = CASE
                    WHEN source_chat_id IS NOT DISTINCT FROM ${chatId}
                     AND source_message_id IS NOT DISTINCT FROM ${messageId}::bigint
+                    AND content_kind = ${input.contentKind}
                    THEN source_verified_at ELSE NULL END,
                  source_chat_id = ${chatId}, source_message_id = ${messageId}::bigint,
                  audience_definition = ${input.audienceJson}::jsonb,
@@ -253,11 +255,29 @@ export class DrizzleBroadcastRepository implements BroadcastRepository {
     return rows.length === 1;
   }
 
-  async markSourceVerified(scope: TenantContext, id: string, now: Date, tx: TransactionScope) {
+  async markSourceVerified(
+    scope: TenantContext,
+    id: string,
+    tested: {
+      readonly version: number;
+      readonly contentKind: BroadcastContentKind;
+      readonly source: BroadcastSource;
+    },
+    now: Date,
+    tx: TransactionScope,
+  ) {
     const tenantId = requireTenantId(scope);
-    await this.exec(tx).execute(sql`
-      UPDATE broadcasts SET source_verified_at = ${now.toISOString()}::timestamptz
-       WHERE tenant_id = ${tenantId}::uuid AND id = ${id}::uuid AND source_chat_id IS NOT NULL`);
+    // The draft as it was tested, or nothing: `updateDraft` bumps `version` on every edit.
+    const rows = await this.rows<{ id: string }>(
+      sql`UPDATE broadcasts SET source_verified_at = ${now.toISOString()}::timestamptz
+           WHERE tenant_id = ${tenantId}::uuid AND id = ${id}::uuid AND state = 'DRAFT'
+             AND version = ${tested.version} AND content_kind = ${tested.contentKind}
+             AND source_chat_id = ${tested.source.chatId}
+             AND source_message_id = ${tested.source.messageId}::bigint
+       RETURNING id`,
+      tx,
+    );
+    return rows.length === 1;
   }
 
   async dropMismatchedMedia(scope: TenantContext, id: string, tx: TransactionScope) {
@@ -843,15 +863,6 @@ export class DrizzleBroadcastRepository implements BroadcastRepository {
     };
   }
 
-  async customerMarketingOptedOut(scope: TenantContext, customerId: string) {
-    const tenantId = requireTenantId(scope);
-    const [row] = await this.rows<{ opted_out: boolean }>(
-      sql`SELECT (marketing_opt_out_at IS NOT NULL) AS opted_out FROM customers
-           WHERE tenant_id = ${tenantId}::uuid AND id = ${customerId}::uuid`,
-    );
-    return row?.opted_out === true;
-  }
-
   async customerStatus(scope: TenantContext, customerId: string) {
     const tenantId = requireTenantId(scope);
     const [row] = await this.rows<{ status: string }>(
@@ -888,11 +899,40 @@ export class DrizzleBroadcastRepository implements BroadcastRepository {
   async stamp(
     scope: TenantContext,
     recipient: ClaimedRecipient,
-    input: { readonly now: Date; readonly leaseUntil: Date },
+    input: { readonly now: Date; readonly leaseUntil: Date; readonly marketing: boolean },
     tx: TransactionScope,
-  ) {
+  ): Promise<'STAMPED' | 'SKIPPED' | 'MOVED'> {
     const tenantId = requireTenantId(scope);
     const at = sql`${input.now.toISOString()}::timestamptz`;
+    const mine = sql`r.tenant_id = ${tenantId}::uuid AND r.broadcast_id = ${recipient.broadcastId}::uuid
+                     AND r.customer_id = ${recipient.customerId}::uuid AND r.state = 'PENDING'
+                     AND r.lease_until = ${recipient.leaseUntil.toISOString()}::timestamptz`;
+    /*
+     * Round N close (§D): a MARKETING send decides the opt-out HERE, in the transaction that
+     * stamps, and under the customer's row lock (`FOR SHARE`): an opt-out in flight commits
+     * first and is seen, or waits for this stamp and lands after a send that was already
+     * decided. Read before the stamp and outside it, the same fact could commit between the
+     * two, and the customer would be told something they had just asked not to be told.
+     */
+    if (input.marketing) {
+      const [customer] = await this.rows<{ opted_out: boolean }>(
+        sql`SELECT (marketing_opt_out_at IS NOT NULL) AS opted_out FROM customers
+             WHERE tenant_id = ${tenantId}::uuid AND id = ${recipient.customerId}::uuid
+             FOR SHARE`,
+        tx,
+      );
+      if (customer?.opted_out === true) {
+        const skipped = await this.rows<{ customer_id: string }>(
+          sql`UPDATE broadcast_recipients r
+                 SET state = 'SKIPPED', resolved_at = ${at}, lease_until = NULL,
+                     error_code = 'broadcast.marketing_opted_out', updated_at = ${at}
+               WHERE ${mine}
+           RETURNING r.customer_id`,
+          tx,
+        );
+        return skipped.length === 1 ? 'SKIPPED' : 'MOVED';
+      }
+    }
     /*
      * Only the lease THIS pass took, only while still PENDING, and only while the broadcast
      * is SENDING — so a pause or a cancel that committed after the claim stops the send
@@ -902,16 +942,14 @@ export class DrizzleBroadcastRepository implements BroadcastRepository {
       sql`UPDATE broadcast_recipients r
              SET state = 'SENDING', send_started_at = ${at},
                  lease_until = ${input.leaseUntil.toISOString()}::timestamptz, updated_at = ${at}
-           WHERE r.tenant_id = ${tenantId}::uuid AND r.broadcast_id = ${recipient.broadcastId}::uuid
-             AND r.customer_id = ${recipient.customerId}::uuid AND r.state = 'PENDING'
-             AND r.lease_until = ${recipient.leaseUntil.toISOString()}::timestamptz
+           WHERE ${mine}
              AND EXISTS (SELECT 1 FROM broadcasts b
                           WHERE b.tenant_id = r.tenant_id AND b.id = r.broadcast_id
                             AND b.state = 'SENDING')
        RETURNING r.customer_id`,
       tx,
     );
-    return rows.length === 1;
+    return rows.length === 1 ? 'STAMPED' : 'MOVED';
   }
 
   async record(

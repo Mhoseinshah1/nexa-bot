@@ -812,8 +812,8 @@ export class CampaignService {
         await this.recordHandOver(scope, actor, action, { failedCode: error.code });
         continue;
       }
-      const linked = await this.recordHandOver(scope, actor, action, { launched });
-      if (!linked) await this.compensate(scope, actor, action, launched);
+      await this.recordHandOver(scope, actor, action, { launched });
+      await this.reconcile(scope, actor, action, launched);
     }
     return this.detailOf(scope, id);
   }
@@ -866,29 +866,42 @@ export class CampaignService {
   }
 
   /**
-   * The campaign was cancelled while its action was being handed over: the cancel found no
-   * engine record to stop, and the engine has just made one. Stop it now — before the start
-   * a cancel credits, grants and sends nothing. An action that is LAUNCHED already (a
-   * concurrent hand-over linked it) needs nothing.
+   * The engine record was made AFTER the campaign's own edges looked for one. A cancel or a
+   * pause that committed before the link found no engine record to stop, and the engine has
+   * just made one — RUNNING, or SENDING — under a campaign that is no longer running. The
+   * campaign is read again only now, after the link committed, so every edge that commits
+   * from here on sees the link and propagates itself; and every edge that committed before
+   * is seen here. An action CANCELLED meanwhile stops its engine — before the start a cancel
+   * credits, grants and sends nothing; a campaign PAUSED meanwhile pauses it, exactly as
+   * `pause` would have (a RUNNING operation, a SENDING broadcast). An action LAUNCHED by a
+   * concurrent hand-over, or a campaign still running, needs nothing.
    */
-  private async compensate(
+  private async reconcile(
     scope: TenantContext,
     actor: ActorContext,
     action: CampaignActionRecord,
     launched: { broadcastId?: string; bulkOperationId?: string },
   ): Promise<void> {
+    const campaign = await this.deps.campaigns.findById(scope, action.campaignId);
     const current = (await this.deps.campaigns.actionsOf(scope, action.campaignId)).find(
       (a) => a.id === action.id,
     );
-    if (current?.state !== 'CANCELLED') return;
-    if (launched.bulkOperationId !== undefined) {
-      await ignoringStateConflict(
-        this.deps.massActions.cancel(scope, actor, launched.bulkOperationId),
-      );
+    if (current?.state === 'CANCELLED') {
+      if (launched.bulkOperationId !== undefined) {
+        await ignoringStateConflict(
+          this.deps.massActions.cancel(scope, actor, launched.bulkOperationId),
+        );
+      }
+      if (launched.broadcastId !== undefined) {
+        await ignoringStateConflict(
+          this.deps.broadcasts.cancel(scope, actor, launched.broadcastId),
+        );
+      }
+      return;
     }
-    if (launched.broadcastId !== undefined) {
-      await ignoringStateConflict(this.deps.broadcasts.cancel(scope, actor, launched.broadcastId));
-    }
+    if (campaign?.state !== 'PAUSED' || current === undefined) return;
+    await this.forEachBroadcast(scope, actor, [current], 'SENDING', 'pause');
+    await this.forEachBulkOperation(scope, actor, [current], 'RUNNING', 'pause');
   }
 
   /** One action to its engine. Returns the engine record's id. */

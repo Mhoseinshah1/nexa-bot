@@ -5229,6 +5229,18 @@ export class BotRuntime {
               (ADMIN_INTENTS.has(command.intent)
                 ? await this.adminTurn(scope, actor, command, input)
                 : null) ??
+              // Round N close (§D): a blocked customer's /stop is still their preference.
+              // Blocking stops what they can BUY; it does not make a promotion welcome, and
+              // a MARKETING send to an audience that admits blocked customers reads this row.
+              (command.intent === 'MARKETING_OPT_OUT' || command.intent === 'MARKETING_OPT_IN'
+                ? await this.marketingPreference(
+                    scope,
+                    actor,
+                    customer,
+                    command.intent === 'MARKETING_OPT_OUT',
+                    input.idempotencyKey,
+                  )
+                : null) ??
               blocked)
             : await this.guardedAct(scope, actor, command, customer, arrival, input);
     } catch (error) {
@@ -12575,8 +12587,10 @@ export class BotRuntime {
     optedOut: boolean,
     idempotencyKey: string,
   ): Promise<PendingReply> {
+    // The update's key is already spent by `resolveFromUpdate` under this surface: the
+    // preference is a second command of the same turn, so it takes the turn's sub-key.
     await this.deps.customers.setMarketingOptOut(scope, actor, {
-      idempotencyKey,
+      idempotencyKey: `${idempotencyKey}:marketing`,
       customerId: customer.id,
       optedOut,
     });

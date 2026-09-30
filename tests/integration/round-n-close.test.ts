@@ -85,6 +85,8 @@ class ScriptedTransport implements BroadcastTransport {
   private readonly pinScripts = new Map<string, BroadcastPinResult[]>();
   crashOn: string | null = null;
   crashOnPin: string | null = null;
+  /** Runs between the caller's reads and its send: what another operator commits meanwhile. */
+  beforeDeliver: (() => Promise<void>) | null = null;
 
   script(chatId: string, ...results: BroadcastSendResult[]): void {
     this.scripts.set(chatId, results);
@@ -107,6 +109,7 @@ class ScriptedTransport implements BroadcastTransport {
   }
 
   async deliver(_scope: unknown, request: BroadcastDeliverRequest): Promise<BroadcastSendResult> {
+    if (this.beforeDeliver !== null) await this.beforeDeliver();
     this.delivered.push(request.chatId);
     this.requests.push(request);
     if (this.crashOn === request.chatId) throw new Error('worker died mid-send');
@@ -333,10 +336,11 @@ describe('round N close', () => {
 
   /**
    * A campaign service whose engines are unreachable for the FIRST hand-over only: the
-   * confirmation commits, the hand-over that follows it throws at its first engine call,
-   * and every later call goes through.
+   * confirmation commits, the hand-over that follows it throws at its first engine call
+   * (`stage`: the engine's create, or — for the announcement — the launch AFTER a create
+   * that committed), and every later call goes through.
    */
-  function withEnginesDownOnce(): CampaignService {
+  function withEnginesDownOnce(stage: 'create' | 'launch' = 'create'): CampaignService {
     let down = true;
     const fail = () => {
       down = false;
@@ -354,16 +358,19 @@ describe('round N close', () => {
         pause: bulk.pause.bind(bulk),
         resume: bulk.resume.bind(bulk),
         freezeServiceAudience: bulk.freezeServiceAudience.bind(bulk),
-        create: (...args: Parameters<typeof bulk.create>) => (down ? fail() : bulk.create(...args)),
+        create: (...args: Parameters<typeof bulk.create>) =>
+          down && stage === 'create' ? fail() : bulk.create(...args),
       },
       broadcasts: {
-        launch: bc.launch.bind(bc),
+        launch: (...args: Parameters<typeof bc.launch>) =>
+          down && stage === 'launch' ? fail() : bc.launch(...args),
         pause: bc.pause.bind(bc),
         resume: bc.resume.bind(bc),
         cancel: bc.cancel.bind(bc),
         get: bc.get.bind(bc),
         counts: bc.counts.bind(bc),
-        create: (...args: Parameters<typeof bc.create>) => (down ? fail() : bc.create(...args)),
+        create: (...args: Parameters<typeof bc.create>) =>
+          down && stage === 'create' ? fail() : bc.create(...args),
       },
     });
   }
@@ -536,6 +543,128 @@ describe('round N close', () => {
           }),
         ),
       ).toBe(AUDIENCE_ERROR_CODES.FROZEN_RELEASED);
+    });
+
+    it('a draft the hand-over left behind holds nothing: the audience is released, and the draft refuses', async () => {
+      await customers(2);
+      // The announcement's draft commits; the process dies before its launch.
+      const service = withEnginesDownOnce('launch');
+      const id = await draftCampaign(service, [
+        { kind: 'ANNOUNCEMENT', terms: { body: 'سلام', buttons: [], purpose: 'MARKETING' } },
+      ]);
+      await expect(confirmCampaign(service, id)).rejects.toThrow('unreachable');
+      const [draft] = await rows<{ id: string; state: string; frozen_audience_id: string }>(
+        sql`SELECT id, state, frozen_audience_id FROM broadcasts`,
+      );
+      expect(draft).toMatchObject({ state: 'DRAFT' });
+      const frozenId = draft?.frozen_audience_id as string;
+      const actor = telegramActor('sweep');
+      // The campaign still names the set: held.
+      clock.advance(2 * DAY);
+      expect(await service.releaseFrozenAudiences(tenantA, actor)).toBe(0);
+      // The campaign ends with the action never linked: the DRAFT is all that names the
+      // set, and a draft holds nothing.
+      await campaigns.cancel(tenantA, owner, { idempotencyKey: key(), campaignId: id });
+      expect(await service.releaseFrozenAudiences(tenantA, actor)).toBe(1);
+      expect(
+        await rows(
+          sql`SELECT id FROM frozen_audience_members WHERE frozen_audience_id = ${frozenId}`,
+        ),
+      ).toHaveLength(0);
+      // The draft outlived its set: refused, never sent to a set nobody holds.
+      expect((await broadcasts.get(tenantA, owner, draft?.id as string)).state).toBe('DRAFT');
+      expect(await refusal(broadcasts.preview(tenantA, owner, draft?.id as string))).toBe(
+        AUDIENCE_ERROR_CODES.FROZEN_RELEASED,
+      );
+    });
+
+    it('a frozen draft’s preview counts the reachable part of the set it holds', async () => {
+      const [withBot] = await customers(1);
+      const noBot = await fixtures.customer({ telegramUserId: '772000', botInstanceId: null });
+      const frozen = await ctx.container.uow.run(tenantA, (tx) =>
+        ctx.container.audience.freeze(tenantA, { version: 1 }, clock.now(), null, tx),
+      );
+      expect(frozen).toMatchObject({ count: 2, reachable: 1 });
+      const draft = await broadcasts.create(tenantA, owner, {
+        idempotencyKey: key(),
+        title: 'notice',
+        contentKind: 'TEXT',
+        body: 'سلام',
+        buttons: [],
+        audience: { version: 1 },
+        purpose: 'SERVICE_ANNOUNCEMENT',
+        frozenAudienceId: frozen.id,
+      });
+      const preview = await broadcasts.preview(tenantA, owner, draft.id);
+      expect(preview).toMatchObject({
+        customers: 2,
+        reachable: 1,
+        fingerprint: frozen.fingerprint,
+      });
+      // What the preview said is what the launch writes: one to send, one UNREACHABLE.
+      await broadcasts.launch(tenantA, owner, draft.id, {
+        idempotencyKey: key(),
+        mode: 'NOW',
+        scheduledAt: null,
+        expectedVersion: draft.version,
+        expectedDefinitionHash: preview.definitionHash,
+        expectedRecipients: preview.customers,
+        expectedFingerprint: preview.fingerprint,
+        typedCount: null,
+      });
+      const recipients = await rows<{ customer_id: string; state: string }>(
+        sql`SELECT customer_id, state FROM broadcast_recipients`,
+      );
+      expect(Object.fromEntries(recipients.map((r) => [r.customer_id, r.state]))).toEqual({
+        [withBot as string]: 'PENDING',
+        [noBot]: 'UNREACHABLE',
+      });
+    });
+
+    it('a frozen SERVICES set is bound to the grant it was selected for', async () => {
+      const panel = await fixtures.panel('grant');
+      await makePanelSellable(ctx.container, tenantA, panel);
+      const [a] = await customers(1);
+      await fixtures.service({ customerId: a as string, panelId: panel });
+      const traffic: BulkGrant = { kind: 'SERVICE_TRAFFIC', trafficGb: '10' };
+      const time: BulkGrant = { kind: 'SERVICE_TIME', durationDays: 7 };
+      const definition = { version: 1, service: {} };
+      const frozen = await ctx.container.uow.run(tenantA, (tx) =>
+        ctx.container.bulkOperations.freezeServiceAudience(
+          tenantA,
+          owner,
+          { grant: traffic, definition, asOf: clock.now() },
+          tx,
+        ),
+      );
+      expect(frozen).toMatchObject({ kind: 'SERVICES', grantKind: 'SERVICE_TRAFFIC', count: 1 });
+      expect(
+        await rows(sql`SELECT id FROM frozen_audiences WHERE grant_kind = 'SERVICE_TRAFFIC'`),
+      ).toHaveLength(1);
+      const create = async (grant: BulkGrant) => {
+        const preview = await ctx.container.bulkOperations.preview(tenantA, owner, {
+          grant,
+          definition,
+        });
+        return ctx.container.bulkOperations.create(tenantA, owner, {
+          idempotencyKey: key(),
+          grant,
+          definition,
+          notify: false,
+          note: 'bound',
+          expectedDefinitionHash: preview.definitionHash,
+          expectedCount: 1,
+          expectedFingerprint: preview.fingerprint,
+          expectedTotalMinor: null,
+          typedCount: null,
+          notBefore: null,
+          frozenAudienceId: frozen.id,
+        });
+      };
+      // The same definition, the same services today — and still not the set a time
+      // grant's rule selected: refused.
+      expect(await refusal(create(time))).toBe(AUDIENCE_ERROR_CODES.FROZEN_KIND_MISMATCH);
+      expect((await create(traffic)).frozenAudienceId).toBe(frozen.id);
     });
   });
 
@@ -723,6 +852,39 @@ describe('round N close', () => {
       expect(await opState()).toBe('RUNNING');
       expect(await massCredits()).toHaveLength(0);
     });
+
+    it('a hand-over retried under a paused campaign lands paused, and the resume releases it', async () => {
+      await customers(2);
+      const service = withEnginesDownOnce();
+      const id = await draftCampaign(service, [
+        { kind: 'WALLET_GIFT', terms: { amountMinor: '5000', currency: 'IRT', notify: false } },
+        { kind: 'ANNOUNCEMENT', terms: { body: 'سلام', buttons: [], purpose: 'MARKETING' } },
+      ]);
+      await expect(confirmCampaign(service, id)).rejects.toThrow('unreachable');
+      await ctx.container.database.db.execute(
+        sql`UPDATE campaigns SET state = 'ACTIVE', started_at = now() WHERE id = ${id}`,
+      );
+      // The pause finds no engine record to stop: nothing was handed over yet.
+      await campaigns.pause(tenantA, owner, { idempotencyKey: key(), campaignId: id });
+      expect(await rows(sql`SELECT id FROM bulk_operations`)).toHaveLength(0);
+
+      // The retry: the engines take the work — under a campaign that is PAUSED.
+      const detail = await service.launchPending(tenantA, owner, id);
+      const opId = detail.actions.find((x) => x.kind === 'WALLET_GIFT')?.bulkOperationId as string;
+      const bcId = detail.actions.find((x) => x.kind === 'ANNOUNCEMENT')?.broadcastId as string;
+      expect((await ctx.container.bulkOperations.get(tenantA, owner, opId)).state).toBe('PAUSED');
+      expect((await broadcasts.get(tenantA, owner, bcId)).state).toBe('PAUSED');
+      await processor().pass(tenantA);
+      await dispatcher.pass(tenantA);
+      expect(await massCredits()).toHaveLength(0);
+      expect(transport.delivered).toEqual([]);
+
+      await campaigns.resume(tenantA, owner, { idempotencyKey: key(), campaignId: id });
+      expect((await ctx.container.bulkOperations.get(tenantA, owner, opId)).state).toBe('RUNNING');
+      expect((await broadcasts.get(tenantA, owner, bcId)).state).toBe('SENDING');
+      await processor().pass(tenantA);
+      expect(await massCredits()).toHaveLength(2);
+    });
   });
 
   describe('D — the promotional opt-out', () => {
@@ -841,6 +1003,38 @@ describe('round N close', () => {
       });
       await dispatcher.pass(tenantA);
       expect(transport.delivered).toEqual(['771000']);
+      expect(a).toBeTruthy();
+    });
+
+    it('an opt-out that lands after the pass’s reads and before the stamp is honoured by the stamp', async () => {
+      const [a] = await customers(1);
+      // A worker whose reads are done and whose stamp has not happened: the opt-out commits
+      // in between. The stamp decides under the customer's lock, so it is seen.
+      const facts = new DrizzleRecipientFactsReader(ctx.container.database.db, async () => 'IRT');
+      const racing = new BroadcastDispatcher({
+        repository: new DrizzleBroadcastRepository(ctx.container.database.db),
+        transport,
+        facts: {
+          factsFor: async (scope, customerId, options) => {
+            await optOut(customerId, true);
+            return facts.factsFor(scope, customerId, options);
+          },
+        },
+        outbox: ctx.container.outbox,
+        uow: ctx.container.uow,
+        clock,
+        ids: ctx.container.ids,
+        scopeIsActive: async () => true,
+        logger: { info: () => undefined, error: () => undefined },
+      });
+      const marketing = await draft('MARKETING');
+      await launch(marketing.id);
+      expect(await states(marketing.id)).toEqual({ '771000': 'PENDING' });
+      await racing.pass(tenantA);
+      expect(await states(marketing.id)).toEqual({
+        '771000': 'SKIPPED:broadcast.marketing_opted_out',
+      });
+      expect(transport.delivered).toEqual([]);
       expect(a).toBeTruthy();
     });
 
@@ -1053,6 +1247,49 @@ describe('round N close', () => {
         contentKind: 'FORWARD',
         source: SOURCE,
       });
+    });
+
+    it('a verification names the kind it was sent as and the draft that was tested', async () => {
+      await customers(1);
+      const operator = await tester();
+      const copy = await sourced('COPY');
+      expect(await broadcasts.test(tenantA, operator, copy.id)).toBe('SENT');
+      const verified = await broadcasts.get(tenantA, owner, copy.id);
+      expect(verified.sourceVerifiedAt).not.toBeNull();
+
+      // The same source sent the other way is a different request to Telegram: unverified.
+      const asForward = await broadcasts.update(tenantA, owner, copy.id, {
+        expectedVersion: verified.version,
+        title: 'FORWARD',
+        contentKind: 'FORWARD',
+        body: '',
+        buttons: [],
+        audience: { version: 1 },
+        source: SOURCE,
+      });
+      expect(asForward.sourceVerifiedAt).toBeNull();
+
+      // A test whose send is in flight while another operator edits the draft: the stamp
+      // names the draft that was tested, and the edited one stays unverified.
+      transport.beforeDeliver = async () => {
+        await broadcasts.update(tenantA, owner, copy.id, {
+          expectedVersion: asForward.version,
+          title: 'FORWARD, edited',
+          contentKind: 'FORWARD',
+          body: '',
+          buttons: [],
+          audience: { version: 1 },
+          source: { ...SOURCE, messageId: 43 },
+        });
+      };
+      expect(await broadcasts.test(tenantA, operator, copy.id)).toBe('SENT');
+      transport.beforeDeliver = null;
+      const edited = await broadcasts.get(tenantA, owner, copy.id);
+      expect(edited.source).toEqual({ ...SOURCE, messageId: 43 });
+      expect(edited.sourceVerifiedAt).toBeNull();
+      // Tested as it now stands: verified.
+      expect(await broadcasts.test(tenantA, operator, copy.id)).toBe('SENT');
+      expect((await broadcasts.get(tenantA, owner, copy.id)).sourceVerifiedAt).not.toBeNull();
     });
 
     it('records the pin apart from the send: delivered stays delivered whatever the pin did, and a pin is attempted once', async () => {

@@ -11,6 +11,7 @@ import {
   type AudienceSampleCustomer,
   type Clock,
   type CurrencyCode,
+  type FrozenAudienceGrantKind,
   type IdGenerator,
   type PermissionKey,
   type TenantContext,
@@ -203,10 +204,12 @@ export class AudienceService {
     return {
       id,
       kind: 'CUSTOMERS',
+      grantKind: null,
       definition: audience.definition,
       definitionHash: audience.hash,
       asOf,
       count: frozen.count,
+      reachable: frozen.reachable,
       fingerprint: frozen.fingerprint,
       createdAt: now,
       releasedAt: null,
@@ -220,19 +223,25 @@ export class AudienceService {
    */
   async freezeServices(
     scope: TenantContext,
-    input: unknown,
-    asOf: Date,
-    createdByAdminId: string | null,
+    input: {
+      readonly definition: unknown;
+      readonly asOf: Date;
+      readonly createdByAdminId: string | null;
+      /** The grant whose eligibility rule `writeMembers` selects by: the set is bound to it. */
+      readonly grantKind: FrozenAudienceGrantKind;
+    },
     tx: TransactionScope,
     writeMembers: (frozenAudienceId: string, evaluation: AudienceEvaluation) => Promise<void>,
   ): Promise<FrozenAudienceRecord> {
-    const audience = freezeAudience(input);
+    const audience = freezeAudience(input.definition);
+    const { asOf, createdByAdminId, grantKind } = input;
     const id = this.deps.ids.uuid();
     const now = this.deps.clock.now();
     await this.deps.frozen.insertServicesHeader(
       scope,
       {
         id,
+        grantKind,
         definitionJson: audience.json,
         definitionHash: audience.hash,
         asOf,
@@ -250,10 +259,12 @@ export class AudienceService {
     return {
       id,
       kind: 'SERVICES',
+      grantKind,
       definition: audience.definition,
       definitionHash: audience.hash,
       asOf,
       count: frozen.count,
+      reachable: frozen.reachable,
       fingerprint: frozen.fingerprint,
       createdAt: now,
       releasedAt: null,
