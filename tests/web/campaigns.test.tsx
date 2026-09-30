@@ -243,6 +243,53 @@ describe('one campaign', () => {
     });
   });
 
+  it('starts the confirmation over when the preview comes back different', async () => {
+    const previewRoute = { url: `/campaigns/${CAMPAIGN_ID}/preview`, body: preview as unknown };
+    stubApi([
+      previewRoute,
+      {
+        url: `/campaigns/${CAMPAIGN_ID}/schedule`,
+        status: 409,
+        body: {
+          error: {
+            kind: 'conflict',
+            code: 'audience.changed',
+            message: 'moved',
+            correlationId: 'test',
+          },
+        },
+      },
+      { url: `/campaigns/${CAMPAIGN_ID}`, body: detail() },
+    ]);
+    renderPage(<CampaignDetailPage id={CAMPAIGN_ID} denied={false} mayManage />);
+    await screen.findByText('تعهد مالی کل هدیهٔ کیف پول');
+    const typedBox = () =>
+      screen.getByLabelText('برای تأیید، تعداد را تایپ کنید') as HTMLInputElement;
+    const reviewedBox = () => screen.getByLabelText(/پیش‌نمایش را بررسی کردم/) as HTMLInputElement;
+    fireEvent.change(typedBox(), { target: { value: '3' } });
+    fireEvent.click(reviewedBox());
+    expect(reviewedBox().checked).toBe(true);
+
+    // The server refuses (the audience moved) and the refetched preview is a new set.
+    previewRoute.body = {
+      ...preview,
+      audience: { ...preview.audience, customers: 4, fingerprint: 'd'.repeat(32) },
+      walletGift: {
+        ...preview.walletGift,
+        count: 4,
+        customers: 4,
+        fingerprint: 'e'.repeat(32),
+        totalLiability: { amountMinor: '200000', currency: 'IRT' },
+      },
+    };
+    fireEvent.click(screen.getByRole('button', { name: 'تأیید و زمان‌بندی' }));
+    await screen.findByText('200,000');
+    // The tick and the typed count were for the old figures: both start over.
+    expect(reviewedBox().checked).toBe(false);
+    expect(typedBox().value).toBe('');
+    expect(screen.getByRole('button', { name: 'تأیید و زمان‌بندی' })).toBeDisabled();
+  });
+
   it('asks before a cancel, and says a cancel undoes nothing already done', async () => {
     const api = stubApi([
       { url: `/campaigns/${CAMPAIGN_ID}/results`, body: results() },

@@ -1464,13 +1464,22 @@ function ConfirmCard({ campaign }: { campaign: CampaignDetail }) {
     queryKey: [CAMPAIGNS_KEY, 'preview', campaign.id, campaign.updatedAt],
     queryFn: () => fetchCampaignPreview(campaign.id),
   });
-  const [reviewed, setReviewed] = useState(false);
-  const [typed, setTyped] = useState({
-    audience: '',
-    walletGift: '',
-    trafficGift: '',
-    timeGift: '',
-  });
+  /*
+   * The operator's "I reviewed this" and the counts they typed are about ONE preview. They
+   * are keyed to its binding — the definition hash and every set's fingerprint and count —
+   * and start over whenever a refetched preview differs, so a tick given to yesterday's
+   * figures can never confirm today's. Derived rather than reset in an effect, so there is
+   * no render in which the old tick meets the new figures.
+   */
+  const binding = bindingKeyOf(preview.data);
+  const EMPTY_TYPED = { audience: '', walletGift: '', trafficGift: '', timeGift: '' };
+  const [answers, setAnswers] = useState({ binding, reviewed: false, typed: EMPTY_TYPED });
+  const current =
+    answers.binding === binding ? answers : { binding, reviewed: false, typed: EMPTY_TYPED };
+  const reviewed = current.reviewed;
+  const typed = current.typed;
+  const setReviewed = (next: boolean) => setAnswers({ ...current, reviewed: next });
+  const setTyped = (next: typeof EMPTY_TYPED) => setAnswers({ ...current, typed: next });
 
   const confirm = useMutation({
     mutationFn: (p: CampaignPreviewResponse) => {
@@ -1622,6 +1631,21 @@ function ConfirmCard({ campaign }: { campaign: CampaignDetail }) {
       </StateSwitch>
     </Card>
   );
+}
+
+/** Everything a confirmation binds to, as one string: a change in any of it is a new preview. */
+function bindingKeyOf(preview: CampaignPreviewResponse | undefined): string {
+  if (preview === undefined) return '';
+  const gift = (g: CampaignPreviewResponse['walletGift']) =>
+    g === null ? '-' : `${String(g.count)}/${g.fingerprint}/${g.totalLiability?.amountMinor ?? ''}`;
+  return [
+    preview.audience.definitionHash,
+    preview.audience.fingerprint,
+    String(preview.audience.customers),
+    gift(preview.walletGift),
+    gift(preview.trafficGift),
+    gift(preview.timeGift),
+  ].join('|');
 }
 
 function CommandsCard({ campaign }: { campaign: CampaignDetail }) {
