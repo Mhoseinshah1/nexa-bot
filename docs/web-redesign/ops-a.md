@@ -1,6 +1,6 @@
 # Web redesign — OPS-A (infrastructure and bot/config pages, part A)
 
-Phase 1 deliverable: an exact inventory of what each page does on `main` (`f465d58`), the
+Phase 1 deliverable (Phase 2 record in §14): an exact inventory of what each page does on `main` (`f465d58`), the
 mapping onto the reference preview (`refs/reference/preview-v2`), and the kit components
 the rebuild needs. No code changes yet; Phase 2 starts after WEB-FOUNDATION merges.
 
@@ -68,16 +68,17 @@ other (sidebar navigation to `/panels` drops the query without the filter's onCh
 
 **Columns** (every one from the response; owner rev. 19 removed location, users, load,
 sales — none exist in `panelSummarySchema`):
-| column | render |
-|---|---|
-| name | link to `/panels/:id` (`onLink`) |
-| provider | `providerName` |
-| health | `HealthBadge`: state badge (`HEALTH_TONES` from dashboard) + separate `stale` warn badge with hint title |
-| failure | `FailureBadge`: LTR code; warn if `PROVIDER_FAILURE_RETRYABLE`, danger otherwise; title retryable/permanent; `—` when null |
-| last check | `formatTimestamp(checkedAt)` or `—` |
-| latency | `Num` + `ms`, end-aligned, `—` when null |
-| capacity | `used / max` (`∞` with title when uncapped) + `(reservations)` only when > 0 |
-| status | ACTIVE ok / DISABLED neutral / ARCHIVED neutral badge |
+
+| column     | render                                                                                                                     |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------- |
+| name       | link to `/panels/:id` (`onLink`)                                                                                           |
+| provider   | `providerName`                                                                                                             |
+| health     | `HealthBadge`: state badge (`HEALTH_TONES` from dashboard) + separate `stale` warn badge with hint title                   |
+| failure    | `FailureBadge`: LTR code; warn if `PROVIDER_FAILURE_RETRYABLE`, danger otherwise; title retryable/permanent; `—` when null |
+| last check | `formatTimestamp(checkedAt)` or `—`                                                                                        |
+| latency    | `Num` + `ms`, end-aligned, `—` when null                                                                                   |
+| capacity   | `used / max` (`∞` with title when uncapped) + `(reservations)` only when > 0                                               |
+| status     | ACTIVE ok / DISABLED neutral / ARCHIVED neutral badge                                                                      |
 
 **Toolbar.** `Pills` live/archived; hidden unless `mayRequest(panels, denied)` (tests
 query `.toolbar` at lines 158 and 222 — switch to a role/label query).
@@ -88,6 +89,7 @@ permission refusal distinct from empty (StateSwitch).
 **Head action.** "پنل جدید" link to `/panels/new` when `mayEdit`.
 
 **Reference mapping (`dark-panels`, `mobile-panels`).**
+
 - Take: PageHead with subtitle and primary "افزودن پنل" action; dense table in a card
   with the toolbar row above it and filter chips row; two-line name cell (`cell-main`:
   name + LTR `baseUrl` host) — `baseUrl` is in `panelSummarySchema` and already shown on
@@ -160,6 +162,7 @@ unmounted — keeps the draft, basis and written revision across tab clicks), wo
 health, credentials, capabilities, trial.
 
 ### 3.1 Overview tab
+
 - **Identity KV:** id (`Copyable`), provider name + LTR type, status badge, created,
   updated.
 - **Sellability card:** sellable yes/no, activation complete, connection validated
@@ -191,6 +194,7 @@ health, credentials, capabilities, trial.
   only the name when one was sent; archive hint text.
 
 ### 3.2 Health tab
+
 Info banner "latest state only"; warn banner when not probeable; `DiagnosticsCard`
 (advanced query `['panel', id, 'advanced']`, poll 90 s: overall badge, checks table with
 Persian verdicts, failure with remedy, last check, last success, missing fields, required
@@ -199,6 +203,7 @@ upstream HTTP status LTR, provider version LTR, last healthy, freshness window f
 `PANEL_HEALTH_FRESH_FOR_MS`). No chart.
 
 ### 3.3 Credentials tab
+
 One-way warn banner; "unsupported field" hint only when a field is missing; "stored but
 unusable" hint; `Secret` rows for `shows(field)` (accepted OR configured) with meta
 (`lastReplacedAt`, "unusable") and a labelled Remove (`mayWrite = mayRotate && !ARCHIVED`)
@@ -206,12 +211,14 @@ sending `{field: null}`; replace form (`mayWrite`) with only accepted fields, al
 cleared on success; nothing-to-do warn toast; key owned by the page.
 
 ### 3.4 Workload tab
+
 Products (`fetchProducts({ panelId, limit: 10 })`) and services (`fetchServices({ panelId, limit: 10 })`)
 first pages, links to `/products/:id` and `/services/:id`, status badges from the owning
 pages' maps, "there is more" only when `nextCursor` is non-null, empty vs failed distinct,
 no subscription URL/ref/client id.
 
 ### 3.5 Capabilities tab (`panel-advanced.tsx`)
+
 `['panel', id, 'advanced']`. Registry table (capability + hint title, supported/gap,
 customer availability/blocker, operator-only note). Policy card: per supported customer
 action a "customer enabled" checkbox (aria-labelled per action) and its knob (cooldown
@@ -225,6 +232,7 @@ location note). Technical card only with `panels.technical.view`: show/hide togg
 query, JSON `<pre dir="ltr">`; refetched after a policy save.
 
 ### 3.6 Trial tab (`panel-trial.tsx`)
+
 `['panel-trial', id]`; form keyed by revision; unconfigured banner (starts from 100 MB /
 72 h); `Switch` enabled; traffic amount + unit (GB/MB) input group; hours (min/max) with
 unit; label (maxLength); client-side `updatePanelTrialRequestSchema` check → invalid
@@ -234,6 +242,7 @@ refetch; invalidates `['trial-panels']`; read-only without edit or on ARCHIVED.
 
 **Reference mapping for the detail (`dark-panel-detail-overview/health/sanaei`,
 `light-…`, `mobile-…`).**
+
 - Take: PageHead with the **status badge and health badge beside the title**, subtitle
   `ProviderBadge + version · LTR baseUrl · LTR id`; Test connection as the primary head
   action; a **stat strip** above the tabs; tabs underline style; `two-col` layouts inside
@@ -280,10 +289,12 @@ settings.edit` (stop, start, live check), `mayReplaceToken = settings.destructiv
 (passed separately; a destructive-only role gets the token form without edit).
 
 **Query.** `['bots']` → `fetchBots` (`BOT_ROUTES.list`), `enabled: !denied`, no polling. Empty → `bots_empty`
-+ hint. A static card records the add-flow decision (no add, no move, no webhook
-register — there is no "add bot" button, and a test asserts none).
+
+- hint. A static card records the add-flow decision (no add, no move, no webhook
+  register — there is no "add bot" button, and a test asserts none).
 
 **Per bot (currently one card each):**
+
 - Header: `@username`; status badge (ACTIVE ok / STOPPED warn / DISABLED danger);
   readiness badge (REGISTERED / NOT_REGISTERED / HELD).
 - KV: tenant display name + LTR slug + "fixed" note; Telegram bot id (LTR) or unknown;
@@ -309,8 +320,10 @@ register — there is no "add bot" button, and a test asserts none).
 **Reference mapping (`dark-bots`, `dark-bot-detail`).** Reference = a list table plus a
 `/bots/:id` detail page (PageHead with status badge, sub `@username · tenant`, head
 actions, 4 stat cards, tabs overview / webhook & token / errors / settings, two-col KV
-+ events).
-- **Decision needed (lead):** (A) keep the single `/bots` route and render each bot as a
+
+- events).
+
+* **Decision needed (lead):** (A) keep the single `/bots` route and render each bot as a
   detail-composed section (head row with badges and actions, KV card + webhook card in
   two columns, token card, diagnostics), preceded by a compact summary table when there
   is more than one bot; or (B) add `/bots/:id` in `app.tsx` (not in nav, crumbs
@@ -320,13 +333,13 @@ actions, 4 stat cards, tabs overview / webhook & token / errors / settings, two-
   query (no new endpoint). **Recommendation: (A).** An installation has one bot in the
   common case, B adds a click to every operation, adds a hot-file route, and moves all
   16 tests to a new page for no capability gain. B is the closer visual match.
-- Reference-only, NOT added under either option: owner/kind (reseller bots), updates/
+* Reference-only, NOT added under either option: owner/kind (reseller bots), updates/
   errors/users 24h, pending-updates column, sparkline, events timeline, "open in
   Telegram", "reset webhook", delete, disable, settings tab toggles (new-user
   acceptance, forced join, maintenance), add-bot modal, "check all webhooks".
-- Real data that CAN fill a stat strip: status, readiness, webhook registered-at,
+* Real data that CAN fill a stat strip: status, readiness, webhook registered-at,
   command-menu state. Pending update count exists only inside a live check result.
-- Stop confirmation may move from the inline banner to the kit `ConfirmDialog`
+* Stop confirmation may move from the inline banner to the kit `ConfirmDialog`
   (labelled confirm/cancel, focus returns). Tests click the last "توقف" button; they
   would switch to the dialog's role query while asserting the same thing (no stop on the
   first press).
@@ -391,8 +404,9 @@ only for a stored row; per-row error banner (`appearanceMessageFor`). Viewer: no
 press.
 **Test card:** each bot with its last test outcome badge, time, Persian error; with
 `mayEdit`: not-bound warn, nothing-configured info, no-active-bot warn; bot select when
+
 > 1 active; Send disabled while pending / no bot / unbound / nothing configured; toast
-tone per outcome with the decorated slot count; error banner.
+> tone per outcome with the decorated slot count; error banner.
 
 **Reference mapping.** No dedicated reference screen; nearest is the designer's custom
 emoji library table. Composition: settings-type page — PageHead, the slots as a dense
@@ -512,24 +526,25 @@ Present on `main` and reused: `PageHead`, `Card`, `Badge`, `Banner`, `KV`, `Tabs
 `ConfirmDialog`, `Icon`.
 
 Needed from WEB-FOUNDATION (in the brief's list; flagged if the current kit lacks it):
-| need | used by | current kit |
-|---|---|---|
-| `PageHead` with a **badge slot beside the title** and a ReactNode subtitle (provider badge · LTR url · LTR id) | panel detail, bots | title/subtitle strings only — **missing** |
-| `StatCard` (label, value, unit, sub line, `alert`/`warnish` tone) and a stat grid (4/6 columns, reflowing) | panel detail, bots, FX, optional panel list | `Stat` exists; grid — check |
-| `Card` with `actions` in the head and a `tight` variant (table flush to the edges) | all | actions yes, tight — **missing** |
-| two-column content layout (`two-col`, collapses on tablet) | panel detail tabs, bot-buttons, appearance, client-apps | **missing** |
-| `Badge` dot and outline variants; `StatusDot` | health/status everywhere | **missing** |
-| `DataTable`: dense rows, sticky head, `cell-main` two-line cell, toolbar and filter-chip slots, row link | panels, providers, gateways, accounts, apps | dense/two-line — **missing** |
-| `Chip`/`FilterBar` | panels live/archived (or keep `Pills`) | `Pills` only |
-| `Tabs` with an optional count | panel detail | **missing** |
-| `Banner` with an action slot | panel detail (failure → Health tab) | **missing** (title, body, icon, role only) |
-| accessible `Modal`/`Dialog` (focus trap, Escape, return focus) | gateway edit/API key, account form (optional) | only `ConfirmDialog` — **missing** |
-| `ToggleRow` (title + description + switch) | trial, gateway purposes, policy | **missing** |
-| `CodeBlock` for technical JSON | panel technical view | **missing** (plain `<pre>`) |
-| `TelegramPreview` (phone frame, message bubble, reply-keyboard rows) | bot-buttons preview, client-apps preview | **missing** — reference kit has one; OPS-A can ADD it if FOUND does not |
-| `ProviderBadge` (outlined, LTR name + version) | panels, providers | page-level widget; may live in the family file |
-| CSP-safe meter (SVG geometry, no `style`) | optional capacity bar | **missing** (dashboard uses `svg.bar`) |
-| icons: `pause`, `play`, `refresh`, `edit`, `external`, `activity` | head actions | **missing** from `ui/icons.tsx` |
+
+| need                                                                                                           | used by                                                 | current kit                                                             |
+| -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `PageHead` with a **badge slot beside the title** and a ReactNode subtitle (provider badge · LTR url · LTR id) | panel detail, bots                                      | title/subtitle strings only — **missing**                               |
+| `StatCard` (label, value, unit, sub line, `alert`/`warnish` tone) and a stat grid (4/6 columns, reflowing)     | panel detail, bots, FX, optional panel list             | `Stat` exists; grid — check                                             |
+| `Card` with `actions` in the head and a `tight` variant (table flush to the edges)                             | all                                                     | actions yes, tight — **missing**                                        |
+| two-column content layout (`two-col`, collapses on tablet)                                                     | panel detail tabs, bot-buttons, appearance, client-apps | **missing**                                                             |
+| `Badge` dot and outline variants; `StatusDot`                                                                  | health/status everywhere                                | **missing**                                                             |
+| `DataTable`: dense rows, sticky head, `cell-main` two-line cell, toolbar and filter-chip slots, row link       | panels, providers, gateways, accounts, apps             | dense/two-line — **missing**                                            |
+| `Chip`/`FilterBar`                                                                                             | panels live/archived (or keep `Pills`)                  | `Pills` only                                                            |
+| `Tabs` with an optional count                                                                                  | panel detail                                            | **missing**                                                             |
+| `Banner` with an action slot                                                                                   | panel detail (failure → Health tab)                     | **missing** (title, body, icon, role only)                              |
+| accessible `Modal`/`Dialog` (focus trap, Escape, return focus)                                                 | gateway edit/API key, account form (optional)           | only `ConfirmDialog` — **missing**                                      |
+| `ToggleRow` (title + description + switch)                                                                     | trial, gateway purposes, policy                         | **missing**                                                             |
+| `CodeBlock` for technical JSON                                                                                 | panel technical view                                    | **missing** (plain `<pre>`)                                             |
+| `TelegramPreview` (phone frame, message bubble, reply-keyboard rows)                                           | bot-buttons preview, client-apps preview                | **missing** — reference kit has one; OPS-A can ADD it if FOUND does not |
+| `ProviderBadge` (outlined, LTR name + version)                                                                 | panels, providers                                       | page-level widget; may live in the family file                          |
+| CSP-safe meter (SVG geometry, no `style`)                                                                      | optional capacity bar                                   | **missing** (dashboard uses `svg.bar`)                                  |
+| icons: `pause`, `play`, `refresh`, `edit`, `external`, `activity`                                              | head actions                                            | **missing** from `ui/icons.tsx`                                         |
 
 ## 12. Test impact (none weakened)
 
@@ -560,5 +575,158 @@ Needed from WEB-FOUNDATION (in the brief's list; flagged if the current kit lack
 
 ## 14. Phase 2 record
 
-(Filled in after the rebuild: routes migrated, capability checklist per page, what was
-intentionally left unchanged and why, screenshot paths.)
+Built on the WEB-FOUNDATION kit (`apps/web/src/ui/`), page CSS only in
+`apps/web/src/styles/pages/ops-a.css` (page-prefixed classes: `panels-*`, `panel-*`,
+`providers-*`, `bot-*`, `bot-buttons-*`, `appearance-*`, `gateways-*`, `fx-*`,
+`accounts-*`, `client-apps-*`, and the shared phone frame `tg-phone*`), no `style`
+attribute anywhere, no contract or backend change.
+
+### 14.1 Decisions taken (the §13 open questions)
+
+No lead answer arrived before Phase 2, so the Phase 1 recommendations were applied:
+
+1. **Bots: option A.** `/bots` stays one route; each bot renders as a detail-composed
+   section (`DetailHead` + stats strip, causes banner, two-column details / token). No
+   `/bots/:id`, no route-table change.
+2. **Panel lifecycle stays in the Overview tab**, as an isolated danger-zone card
+   (`Card tone="danger"`). Only Test connection moved into the head. Moving
+   Disable/Enable/Archive/Restore would lift the restore-with-rename fold into `basis`
+   and the two-press archive out of `OverviewTab`; ~20 tests pin that interplay.
+3. **Panel list KPI strip: omitted.** Fleet counts do not exist; a per-page count is the
+   RSV2-BR-021 defect.
+4. **Forms stay inline cards, not `Modal`s.** A modal closed by Escape or the backdrop
+   would silently drop a dirty form; inline cards keep `useUnsavedChanges` the single
+   guard. (So `payment-gateways.test.tsx`'s `container` password query stays valid.)
+5. **`TelegramPhone` is page-level** (`apps/web/src/pages/telegram-phone.tsx`), shared
+   by bot-buttons and client-apps; no kit API change.
+
+Panel detail tabs: `?tab=` per D1, but through `Tabs` + `TabPanel` + `navigate()`
+rather than `RoutedTabs`, because Overview must stay **hidden, not unmounted** (its
+draft, basis and written revision) and a tab switch must therefore not be guarded.
+Leaving the page is guarded by the Overview form itself.
+
+### 14.2 Per route — what changed
+
+| Route                  | Presentation now                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `/panels`              | Primary "افزودن پنل" with icon; flush dense table; name over LTR host (`CellMain`); outlined provider badge + probed version; dot health badge + outlined stale badge; failure badge; small last-check; latency; capacity fraction + CSP-safe `Progress` bar (capped panels only); status dot badge with the server's "قابل فروش نیست" marker beneath (reason as title; not on archived rows). Live/archived as `FilterChip`s in the gated `FilterBar` (`.toolbar`, `hidden` rule unchanged). Archived empty state uses the archive glyph. |
+| `/panels/new`          | Two columns: sectioned form (identity; initial credentials only when `mayRotate` and the shape accepts them) beside a provider card (shape, required activation fields, a sentence when the actor cannot write credentials). Still one route, one submit.                                                                                                                                                                                                                                                                                  |
+| `/panels/:id`          | `DetailHead`: name with status and health (+stale) badges, meta = provider badge · version · LTR base URL, Test connection as primary action, strip of six response fields (health + check time, latency, last healthy, sellable + reason, capacity + bar, services). Banners above the tabs: last failure with its remedy (`FAILURE_LABELS`) and an "open Health" action; server staleness. Tabs in `?tab=`.                                                                                                                              |
+| — Overview             | Two columns: sectioned configuration form (connection & capacity, provider activation, username policy, foot with changed-elsewhere notice, Save and an unsaved hint, or a read-only sentence) beside identity, sellability and capacity (now with a `Meter`). Lifecycle card isolated as the danger zone. Dirty form guards leaving.                                                                                                                                                                                                      |
+| — Health               | Latest-state banner; not-probeable banner; diagnostics (main) beside the latest-state KV card with a "بدون روند" chip. Still no chart.                                                                                                                                                                                                                                                                                                                                                                                                     |
+| — Credentials          | One-way banner and hints unchanged; presence card beside the replace form.                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| — Workload             | Products and services cards side by side.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| — Capabilities / Trial | Unchanged components inside the new frame (Marzban protocol checkboxes spaced).                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `/providers`           | Flush dense table; provider as outlined badge; capabilities as wrapping dot badges.                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `/bots`                | Per bot: `DetailHead` (@username LTR, status + readiness badges, tenant meta, actions Live check / Start / Stop with icons, strip: webhook registered-at, secret state, menu state, Telegram id); causes as a banner; failure banner; details card (+ diagnostic card after a live check) beside the token card. **Stop asks through `ConfirmDialog`**. Add-flow card muted. Viewer gets a read-only sentence.                                                                                                                             |
+| `/bot-buttons`         | Designer layout: order table (dense, gate notes wrap, icon up/down moves with the same per-button names) with Restore defaults and Save in the card head; side column = phone-frame preview (`.menu-preview` as the reply keyboard, bot @username in the title bar) and a rules card. Commands and sync side by side; labels card last. Unsaved arrangement guards leaving.                                                                                                                                                                |
+| `/appearance`          | Dense slots table; custom-id cell is a labelled (visually hidden) LTR input with inline error; shared hint under the table; row actions; per-row dirty guard; test card below.                                                                                                                                                                                                                                                                                                                                                             |
+| `/payment-gateways`    | Dense table: name + default badge over "last changed"; status over purposes; both bounds in one named cell; eligibility; gift / fee / Stars rate in one named cell; credential state; wrapping actions. Key card and a sectioned edit card (display, amounts, eligibility, money, purposes as `ToggleRow`s, **advanced disclosure** for sort order, foot with error, Save/Cancel, unsaved hint). Dirty guard for the form and a typed key.                                                                                                 |
+| — FX                   | Card with Refresh (icon) in its head; error banner first; **four-figure strip** (state badge, current rate LTR + currency, age, last refresh); two-column KV (sources & windows / Stars); sources table; **technical disclosure** holding last error code, quote id and policy version.                                                                                                                                                                                                                                                    |
+| `/payment-accounts`    | Dense table (label + default badge, masked card LTR, dot state, row actions); form card below with a two-column grid, make-default `Checkbox`, sort order under an advanced disclosure. Dirty guard.                                                                                                                                                                                                                                                                                                                                       |
+| `/client-apps`         | Dense table, "+" new button in the card head, row actions, delete through **`ConfirmDialog`** (was `window.confirm`). Editor = two columns: sectioned form (app, links, guide, compatibility in three columns, advanced disclosure for order, foot) beside the phone-frame preview (stored image, text bubble with `data-testid="client-app-preview"`, inline button captions) and the image card. Dirty guard.                                                                                                                            |
+
+### 14.3 Capability checklist (every §1–§10 item)
+
+Legend: ✅ preserved and exercised by a test; ✅◦ preserved, structural (no dedicated test
+beyond the page suite passing).
+
+**Rules (§0)** — 1 credentials one-way: ✅ (panel secrets, bot token, TonPays key inputs
+unchanged; `panels` "never renders a credential value", "starts every replace field
+empty", bots token test, gateways key test). 2 health is a projection: ✅ (no chart
+test; stale badge + new stale banner are the server's flag). 3 enable requires
+validation: ✅◦ (no pre-check added). 4 buttons from permissions: ✅ (all gates kept;
+new `bot_read_only` case). 5 CSP: ✅ (`csp.test.tsx` walks every route; `Progress`/
+`Meter` are SVG). 6 idempotency: ✅ (no key handling changed; panel test/credential keys
+still page-level). 7 money/numbers/times/LTR: ✅◦.
+
+**/panels** — query key, cursor trail per mode, `?archived=only` via `setQuery`,
+90 s poll ✅; every column from the response ✅ ("renders no location column",
+"renders every column…"); stale as own fact ✅; failure badge ✅◦; capacity with
+reservations/∞ ✅◦; status ✅; toolbar hidden on refusal ✅ (both `.toolbar` tests);
+empty vs error ✅; pager newer/older + gated ✅; head action on `mayEdit` ✅◦. New:
+host + not-sellable marker ✅, chip group ✅.
+
+**/panels/new** — denied lock, `mayView` navigation vs banner, `mayRotate` fields,
+provider StateSwitch (503 ≠ empty), shape/activation banners, only accepted non-empty
+credentials sent ✅ (new-panel suite unchanged, 100 %).
+
+**/panels/:id** — keyed by id ✅◦ (`app.tsx` untouched); `shownData` head ✅ (refusal
+tests); Test connection gate + replay toast ✅; tabs ✅ (now `?tab=`: new tests); Overview
+hidden-not-unmounted ✅ ("keeps the draft and the revision across a tab click");
+identity/sellability/capacity cards ✅ (sellability suite, scoped to the card); config
+form: changed-fields-only, cap text, activation schema, policy validator/preview,
+concurrent-change notice with three wordings and reload ✅ (≈40 cases unchanged);
+lifecycle Disable/Enable/two-press Archive with services count/Restore + rename ✅
+(unchanged, incl. `closest('div.stack')`); Health tab banners, diagnostics poll, KV,
+no chart ✅; Credentials tab presence/remove/replace/nothing-to-do/key at page level ✅;
+Workload first pages + "more" ✅; Capabilities registry/policy/rules/technical ✅;
+Trial ✅ (bot-buttons suite). New: failure/stale banners, head strip, leave guard ✅.
+
+**/providers** — no permission, info banner, Persian columns, StateSwitch ✅◦.
+
+**/bots** — denied, operate/destructive split, no add control ✅; per-bot KV incl. secret
+and menu state, `bot-causes-<id>` testid, Stop confirm (now dialog; same "nothing sent
+until confirmed"), Start, Live check (ACTIVE only), token form (password, cleared
+`onSettled`, two toasts), diagnostic (`bot-diagnostic`, `bot-verdict`, cleared on status
+change), failure + `bot-replacement-failure` ✅ (16 cases unchanged). New: dialog
+cancel/Escape send nothing ✅.
+
+**/bot-buttons** — queries and gates ✅; layout keyed by version, `tr[data-button]`,
+invalid banner, slot select, shown switch, up/down (names unchanged), Save
+(valid+dirty, `expectedVersion`), Restore defaults, saved/unchanged, `ErrorReport` ✅;
+preview `.menu-preview` gated by open gates ✅; commands `tr[data-command]` + hash ✅;
+sync card (`bot-menu-sync`, bot select, actions on ACTIVE, results, `bot-menu-check`) ✅;
+labels `<details>` + `TemplateCard` + denied banner ✅ (15 cases unchanged). New: leave
+guard ✅.
+
+**/appearance** — `tr[data-slot]` per slot, fallback, id input with inline error
+(`role="alert"`), switch, preview badge, Save/Reset with `expectedVersion`, viewer sees
+no controls, test card with bot select and outcome toasts ✅ (6 cases unchanged).
+
+**/payment-gateways** — no create, name/default badge, state, bounds (`0` = none),
+eligibility, gift %, fee bp (GATEWAY routes only), Stars rate + missing badge, purposes +
+"none" badge, credential state without value, updated, Edit / Replace key / toggle on
+`mayEdit`, callback URL card, key card (empty, cleared, save disabled while empty),
+toggle error banner, edit form with every field and inline errors, server refusals as a
+banner ✅ (28 cases unchanged). **FX** (Phase 1 had no tests): strip + tone, technical
+disclosure, unavailable state, refresh only with edit and its outcome toast, outage
+leaves the routes table ✅ (5 new cases). New: dirty guards ✅.
+
+**/payment-accounts** — form outside the StateSwitch (edit-only role), limit banner +
+create disabled, masked card LTR, default badge, Edit / Make default / Enable-Disable
+rules, one create-or-edit form with its fields, make-default on create only, editing id
+`Copyable`, error banner ✅ (5 cases unchanged). New: dirty guard ✅.
+
+**/client-apps** — one write in flight (`client-app-write`), columns, Edit, toggle with
+`expectedVersion`, delete with `expectedVersion` only after confirmation (dialog now) ✅;
+editor validation after first submit, preview as TEXT (`client-app-preview`, no
+markup, no link), buttons, changed-elsewhere + reload, faults ✅; image card (save first,
+stored/picked previews, upload/clear with version, ticket against out-of-order reads) ✅
+(26 cases; one updated from `window.confirm` to the dialog, now also asserting exactly
+one delete). New: dirty guard ✅.
+
+### 14.4 Tests
+
+- New: `tests/web/ops-a-redesign.test.tsx` (21 cases).
+- Changed where markup legitimately changed, no assertion weakened:
+  `panels.test.tsx` resets the address before each case (the tab is in the URL now) and
+  asks two sellability questions of the sellability card, because the head strip
+  repeats the verdict; `client-apps.test.tsx` drives the dialog instead of spying on
+  `window.confirm`.
+- Mutation spot-checks: removing the accounts page's `useUnsavedChanges` and
+  guarding the panel tab switch each fail their new test.
+- Shots fixtures (`tests/web/shots/fixtures/ops-a.ts`): panels (incl. a sellable one and
+  a failing one), the advanced read, trial, workload lists, bots, bot menu + templates,
+  appearance, gateways, FX, accounts, client apps — every OPS-A route shoots with no
+  WARN.
+
+### 14.5 Intentionally unchanged
+
+- `app.tsx`, the route table and permissions: untouched (the detail reads its tab with
+  `useRoute()`).
+- Mobile lists stay scrollable tables (kit `DataTable`) rather than the reference's
+  card lists; a per-row card renderer is a kit feature, not a page one.
+- Reference-only items listed in §1–§10 (fleet KPI cards, monitor schedule, bot
+  owner/kind, inline/reply designer, emoji library, add-bot, add-panel wizard, …) remain
+  out: no contract field backs them.
