@@ -1065,6 +1065,13 @@
       "when": 1790772195788,
       "tag": "0151_premium_ui_appearance",
       "breakpoints": true
+    },
+    {
+      "idx": 152,
+      "version": "7",
+      "when": 1790773391042,
+      "tag": "0152_round_n_close",
+      "breakpoints": true
     }
   ]
 }

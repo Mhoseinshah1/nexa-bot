@@ -1582,7 +1582,7 @@ Nothing needs doing before rolling back past C1.
 
 Round N close (`docs/round-n-close-audit.md`) adds frozen audiences, a PAUSED state on
 mass operations, FORWARD/COPY broadcasts with a per-recipient pin, a broadcast purpose and
-the customers' promotional opt-out (migration `0149_round_n_close`, expand-only: two tables
+the customers' promotional opt-out (migration `0152_round_n_close`, expand-only: two tables
 — `frozen_audiences` with its `grant_kind` — and new nullable or defaulted columns; the
 CHECKs on `content_kind` and `state` are widened, never narrowed). While the release before it runs on this schema:
 
