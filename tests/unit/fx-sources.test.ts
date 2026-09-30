@@ -128,6 +128,20 @@ describe('Nobitex (primary)', () => {
     expect(outcome.kind === 'READ' && outcome.reading.rate.mantissa).toBe(277_960n);
   });
 
+  it('reads a book time Date cannot hold as absent, never as an invalid Date (Codex #122)', async () => {
+    const at = async (lastUpdate: string) => {
+      const body = NOBITEX_BODY.replace('1644991767392', lastUpdate);
+      const outcome = await new NobitexFxSource(client(() => ok(body))).read('USDT');
+      expect(outcome.kind).toBe('READ');
+      return outcome.kind === 'READ' ? outcome.reading.sourceAt : undefined;
+    };
+    // Sixteen digits pass the shape and are past the range a Date represents.
+    expect(await at('9999999999999999')).toBeNull();
+    // A book time inside the range is still read; a non-numeric one is absent.
+    expect(await at('1700000000000')).toEqual(new Date(1_700_000_000_000));
+    expect(await at('"soon"')).toBeNull();
+  });
+
   it('maps a 429 to RATE_LIMITED and everything else unusable to UNAVAILABLE with a machine code', async () => {
     const cases: [ProviderHttpResult, { kind: string; code: string }][] = [
       [ok('{}', 429), { kind: 'RATE_LIMITED', code: 'nobitex.rate_limited' }],

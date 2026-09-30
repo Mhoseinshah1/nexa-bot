@@ -7,6 +7,7 @@ import {
   parseExactJson,
   priceOf,
   transportOutcome,
+  type ExactJson,
 } from './fx-source-parsing.js';
 
 /**
@@ -61,16 +62,28 @@ export class NobitexFxSource implements FxSourceAdapter {
     if (!Array.isArray(bids)) return { kind: 'UNAVAILABLE', code: 'nobitex.no_bids' };
     const best = bestBid(bids.map((level) => (Array.isArray(level) ? priceOf(level[0]) : null)));
     if (best === null) return { kind: 'UNAVAILABLE', code: 'nobitex.no_bids' };
-    const lastUpdate = body['lastUpdate'];
-    const sourceAt =
-      typeof lastUpdate === 'string' && /^[0-9]{1,16}$/u.test(lastUpdate)
-        ? new Date(Number(lastUpdate))
-        : null;
     return {
       kind: 'READ',
-      reading: { source: this.source, rate: best, currency: 'IRR', sourceAt },
+      reading: {
+        source: this.source,
+        rate: best,
+        currency: 'IRR',
+        sourceAt: bookTimeOf(body['lastUpdate']),
+      },
     };
   }
+}
+
+/**
+ * The book's `lastUpdate` as a Date, or null when it is absent or not one. The time is
+ * optional metadata on the quote (the Wallex depth has none), so a figure the shape admits
+ * but `Date` cannot hold — sixteen digits is past the range — is read as ABSENT, never as an
+ * invalid Date that the persist would throw on (Codex review of #122).
+ */
+function bookTimeOf(value: ExactJson | undefined): Date | null {
+  if (typeof value !== 'string' || !/^[0-9]{1,16}$/u.test(value)) return null;
+  const at = new Date(Number(value));
+  return Number.isFinite(at.getTime()) ? at : null;
 }
 
 function statusWord(value: unknown): string {
