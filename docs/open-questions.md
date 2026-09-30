@@ -2625,4 +2625,34 @@ SUCCEEDS with exactly the confirmed set would need the mass-action and Broadcast
 accept a frozen member list; their `customerIds` definition is capped at 100
 (`AUDIENCE_CUSTOMER_IDS_MAX`), so that is a contract change on E's side.
 
-UNRESOLVED. Safe (never a different set), not live, in that one failure case.
+RESOLVED by round N close (`docs/round-n-close-audit.md` §A). The confirmation now freezes
+the exact member identities (`frozen_audiences`, `frozen_audience_members`) in its own
+transaction, and the hand-over seeds each engine from that frozen set by id — with no size
+cap, because a frozen audience is a row set and not a request body. A retry after the live
+set moved therefore succeeds with exactly the confirmed members; the newcomer gets nothing,
+and live safety (a blocked customer, a service no longer active, an opted-out customer) is
+still decided at the write. `tests/integration/campaigns.test.ts › a delayed hand-over gifts
+exactly the confirmed set, however the audience moved since`.
+
+## OQ-NC-01 — forward, copy and pin on a real bot, and a source only some bots can reach
+
+Round N close builds `FORWARD` and `COPY` broadcasts on `forwardMessage` / `copyMessage` and
+the per-recipient pin on `pinChatMessage`, from the Bot API 10.3 text
+(`docs/round-n-close-audit.md` §2). What only a real bot answers: the exact refusals for a
+source the sending bot cannot reach (recorded per recipient as `FAILED
+telegram.rejected.400`, re-queueable), the kinds the spec says cannot be copied, a pin in a
+private chat, a 429 on a pin, and a tenant whose customers wrote to different bots where one
+bot administers the source channel and another does not — those recipients fail, the rest
+are sent. The source is validated by a real `copyMessage`/`forwardMessage` to the operator's
+own chat through the bot they wrote to, because the Bot API cannot read a message by id.
+
+UNRESOLVED until run against a real bot (`docs/round-n-close-audit.md` §6).
+
+## OQ-NC-02 — an operator override of a customer's promotional opt-out
+
+The opt-out is the customer's own decision on Telegram (`/stop` and the buttons), shown
+read-only in the Web Admin. The brief asks for an audited privileged override "only if such
+override is implemented"; none is. Whether support should be able to opt a customer out on
+their behalf (a customer who asks by ticket) is a product decision.
+
+UNRESOLVED. Not built.
