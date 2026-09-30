@@ -1,0 +1,29 @@
+/*
+ * Page family: DASHBOARD — `/` (pages/dashboard.tsx).
+ *
+ * Owned by the dashboard agent. Rules here are scoped to the dashboard's own
+ * classes; shared components are styled in `kit.css` and are not restyled here.
+ */
+
+/* The dashboard's side list of recent attention items. */
+.side-list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.side-list > * {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+.side-list > *:last-child {
+  border-bottom: none;
+}
+
+/* A strip of figures inside a card. */
+.stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 24px;
+}

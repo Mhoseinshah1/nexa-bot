@@ -1,0 +1,548 @@
+/*
+ * The application shell: sidebar, topbar, content frame, and the three
+ * screens that live outside it (sign-in, the session-unavailable card, the
+ * not-found page).
+ *
+ * The sidebar sits on the RIGHT because the document is RTL and the grid's
+ * first column is the inline-start one. Its width is a token pair; collapsing
+ * swaps the variable, and the grid transition animates between them.
+ */
+
+.app {
+  display: grid;
+  grid-template-columns: var(--sidebar-w, var(--sidebar-w-full)) minmax(0, 1fr);
+  height: 100%;
+  transition: grid-template-columns 0.18s ease;
+}
+.app.collapsed {
+  --sidebar-w: var(--sidebar-w-rail);
+}
+
+.sidebar {
+  background: var(--bg-1);
+  border-inline-end: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: var(--topbar-h);
+  padding-inline: 14px;
+  border-bottom: 1px solid var(--line);
+  flex: none;
+  min-width: 0;
+}
+.brand-mark {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-ctl);
+  background: linear-gradient(135deg, var(--brand-from), var(--brand-to));
+  color: var(--on-solid);
+  display: grid;
+  place-items: center;
+  font-weight: 800;
+  font-size: 15px;
+  flex: none;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+}
+.brand-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+  min-width: 0;
+}
+.brand-text strong {
+  font-size: 14px;
+}
+.brand-text span {
+  font-size: 11px;
+  color: var(--fg-3);
+}
+
+/*
+ * The installation identity card — what this console is connected to, from
+ * the build the server reports. It is not a switcher: the session carries one
+ * tenant and no way to change it, so nothing here is pressable.
+ */
+.identity {
+  margin: 10px 10px 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg-2);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: none;
+}
+.identity .dot {
+  flex: none;
+}
+.identity-text {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.35;
+}
+.identity-name {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.identity-env {
+  font-size: 10.5px;
+  color: var(--fg-3);
+}
+
+.nav {
+  flex: 1;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 4px 10px 12px;
+  scrollbar-width: thin;
+}
+.nav-group {
+  margin-top: 10px;
+}
+.nav-group-label {
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--fg-3);
+  padding: 4px 10px;
+}
+.nav a {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border-radius: var(--radius-ctl);
+  color: var(--fg-2);
+  font-size: 13px;
+  font-weight: 500;
+  min-width: 0;
+  position: relative;
+}
+.nav a + a {
+  margin-top: 1px;
+}
+.nav a:hover {
+  background: var(--bg-3);
+  color: var(--fg);
+  text-decoration: none;
+}
+.nav a[aria-current='page'] {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.nav a[aria-current='page']::before {
+  content: '';
+  position: absolute;
+  inset-inline-start: -10px;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-start-end-radius: 3px;
+  border-end-end-radius: 3px;
+  background: var(--accent);
+}
+.nav a .ico {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  opacity: 0.9;
+}
+.nav a .lbl {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nav a .cnt {
+  font-size: 11px;
+  color: var(--fg-3);
+  background: var(--bg-3);
+  border-radius: 10px;
+  padding: 0 6px;
+  font-variant-numeric: tabular-nums;
+}
+.nav a .cnt.warn {
+  color: var(--warn);
+  background: var(--warn-soft);
+}
+.nav a .cnt.danger {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+.nav a[aria-current='page'] .cnt {
+  background: transparent;
+  color: var(--accent);
+}
+
+.sidebar-foot {
+  border-top: 1px solid var(--line);
+  padding: 8px 10px;
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  flex: none;
+  min-width: 0;
+}
+.build-id {
+  margin-inline-start: auto;
+  font-size: 11px;
+  color: var(--fg-3);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --- Collapsed rail ----------------------------------------------------------- */
+
+.collapsed .brand {
+  justify-content: center;
+  padding-inline: 0;
+}
+.collapsed .brand-text,
+.collapsed .identity-text,
+.collapsed .build-id {
+  display: none;
+}
+.collapsed .identity {
+  justify-content: center;
+  padding: 8px 0;
+}
+.collapsed .nav-group-label {
+  height: 1px;
+  background: var(--line);
+  margin: 8px 12px;
+  padding: 0;
+  overflow: hidden;
+  font-size: 0;
+}
+.collapsed .nav a {
+  justify-content: center;
+  padding-inline: 0;
+}
+.collapsed .nav a .lbl,
+.collapsed .nav a .cnt {
+  display: none;
+}
+.collapsed .sidebar-foot {
+  flex-direction: column;
+}
+
+/* --- Main column -------------------------------------------------------------- */
+
+.sidebar {
+  grid-column: 1;
+  grid-row: 1;
+}
+.main {
+  grid-column: 2;
+  grid-row: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.topbar {
+  height: var(--topbar-h);
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-inline: 20px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-1);
+  min-width: 0;
+}
+.topbar .spacer {
+  flex: 1;
+}
+.topbar .menu-toggle {
+  display: none;
+}
+.crumbs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--fg-3);
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.crumbs > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.crumbs a {
+  color: var(--fg-2);
+}
+.crumbs .sep {
+  opacity: 0.5;
+}
+.crumbs .cur {
+  color: var(--fg);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.search-trigger {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: var(--ctl-h);
+  padding-inline: 10px;
+  border: 1px solid var(--line);
+  background: var(--bg-2);
+  border-radius: var(--radius-ctl);
+  color: var(--fg-3);
+  cursor: pointer;
+  min-width: 240px;
+  font-size: 12.5px;
+}
+.search-trigger:hover {
+  border-color: var(--line-2);
+  color: var(--fg-2);
+}
+.search-trigger kbd {
+  margin-inline-start: auto;
+  font-family: inherit;
+  font-size: var(--fs-2xs);
+  border: 1px solid var(--line-2);
+  border-radius: 4px;
+  padding: 0 5px;
+  direction: ltr;
+}
+.user-trigger {
+  gap: 8px;
+  padding-inline: 6px 8px;
+}
+.user-trigger .avatar {
+  width: 24px;
+  height: 24px;
+  font-size: 10.5px;
+}
+.user-trigger .who-name {
+  font-size: var(--fs-sm);
+  color: var(--fg);
+  max-width: 14rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.content {
+  flex: 1;
+  overflow: auto;
+  padding: 20px 24px 40px;
+  scrollbar-width: thin;
+  /*
+   * A containing block, so that `overflow: auto` above actually clips
+   * everything inside it. `overflow` does not clip an absolutely positioned
+   * descendant unless the clipping element is also its containing block; the
+   * screen-reader-only labels are `position: absolute`, and on a long page
+   * they escaped, extended the document and scrolled the WINDOW — carrying the
+   * sidebar and topbar off the screen while this element never scrolled.
+   */
+  position: relative;
+}
+.content-inner {
+  max-width: 1440px;
+}
+
+/* The scrim behind the sidebar drawer on a narrow screen. */
+.sidebar-scrim {
+  display: none;
+}
+
+/* --- Screens outside the shell -------------------------------------------------- */
+
+.screen {
+  min-height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 24px 16px;
+}
+.screen-card {
+  width: 100%;
+  max-width: 380px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--shadow-sm);
+  padding: 24px;
+}
+.screen-card .brand {
+  height: auto;
+  padding: 0 0 18px;
+  border-bottom: none;
+}
+.screen-card .brand-text h1 {
+  font-size: 16px;
+}
+.screen-card form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.screen-card .field > .input {
+  width: 100%;
+}
+.screen-card .btn.primary {
+  width: 100%;
+  height: 36px;
+  margin-top: 4px;
+}
+.screen-card > p + p,
+.screen-card > p + .btn {
+  margin-top: 12px;
+}
+.screen-loading {
+  color: var(--fg-3);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.not-found {
+  margin-top: 60px;
+}
+.planned-page {
+  max-width: 62rem;
+}
+.planned-why {
+  display: grid;
+  gap: 10px;
+}
+.planned-why > div {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+.planned-why .ico {
+  color: var(--fg-3);
+  flex: none;
+  margin-top: 2px;
+}
+
+/* --- Responsive ------------------------------------------------------------------ */
+
+@media (max-width: 1200px) {
+  .grid.c6 {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .grid.c4 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .three-col {
+    grid-template-columns: 200px minmax(0, 1fr);
+  }
+  .three-col > :last-child {
+    grid-column: 1 / -1;
+  }
+}
+
+/*
+ * Below 980px the sidebar is a rail, and expanding it opens a DRAWER over the
+ * content rather than squeezing the page: a 248px column is a third of a
+ * tablet. The grid keeps the rail's width either way, so the content never
+ * reflows when the drawer opens.
+ */
+@media (max-width: 980px) {
+  .app,
+  .app.collapsed {
+    grid-template-columns: var(--sidebar-w-rail) minmax(0, 1fr);
+  }
+  .app:not(.collapsed) .sidebar {
+    position: fixed;
+    inset-block: 0;
+    inset-inline-start: 0;
+    width: var(--sidebar-w-full);
+    z-index: 45;
+    box-shadow: var(--shadow);
+  }
+  .app:not(.collapsed) .sidebar-scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 44;
+    background: var(--overlay);
+  }
+  .two-col,
+  .list-split,
+  .grid.c3,
+  .grid.c2,
+  .grid-2 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .search-trigger {
+    min-width: 0;
+  }
+  .search-trigger span,
+  .search-trigger kbd {
+    display: none;
+  }
+  .user-trigger .who-name {
+    display: none;
+  }
+  .topbar {
+    padding-inline: 14px;
+    gap: 8px;
+  }
+  .content {
+    padding: 16px;
+  }
+  .form-grid,
+  .form-grid.c3 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* A phone: the rail disappears and the menu button opens the drawer. */
+@media (max-width: 640px) {
+  .app,
+  .app.collapsed {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .app.collapsed .sidebar {
+    display: none;
+  }
+  .main {
+    grid-column: 1;
+  }
+  .topbar .menu-toggle {
+    display: inline-flex;
+  }
+  .grid.c6,
+  .grid.c4 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .stat .val {
+    font-size: 18px;
+  }
+  .head-stats > div {
+    min-width: 50%;
+  }
+  .page-head .actions {
+    width: 100%;
+  }
+  .crumbs > span:not(:last-child) {
+    display: none;
+  }
+}
+
+/* The sign-in form spaces its fields with its own gap, not the plain-form margin. */
+.screen-card form > * + * {
+  margin-top: 0;
+}

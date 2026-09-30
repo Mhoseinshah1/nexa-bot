@@ -554,7 +554,9 @@ describe('the shell in the states a pure function cannot see', () => {
         },
       },
     ]);
-    fireEvent.click(screen.getByRole('button', { name: 'خروج' }));
+    // Sign-out lives in the account menu the topbar draws (round W): open it, then choose.
+    fireEvent.click(screen.getByRole('button', { name: 'حساب کاربری' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'خروج' }));
     // Waited on the PASSWORD field, which only the sign-in screen has. `نام کاربری`
     // is also the users list's own search label, so waiting on that one resolved
     // instantly against the page we were trying to leave and the test proved nothing.
@@ -642,7 +644,9 @@ describe('the shell in the states a pure function cannot see', () => {
         },
       },
     ]);
-    fireEvent.click(screen.getByRole('button', { name: 'خروج' }));
+    // Sign-out lives in the account menu the topbar draws (round W): open it, then choose.
+    fireEvent.click(screen.getByRole('button', { name: 'حساب کاربری' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'خروج' }));
 
     expect(await screen.findByLabelText('نام کاربری')).toBeInTheDocument();
     expect(screen.queryByText('مدیر اصلی')).toBeNull();
@@ -716,7 +720,9 @@ describe('the shell in the states a pure function cannot see', () => {
     });
     window.dispatchEvent(new Event('visibilitychange'));
 
-    fireEvent.click(screen.getByRole('button', { name: 'خروج' }));
+    // Sign-out lives in the account menu the topbar draws (round W): open it, then choose.
+    fireEvent.click(screen.getByRole('button', { name: 'حساب کاربری' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'خروج' }));
     await screen.findByLabelText('نام کاربری');
 
     // The in-flight lookup now answers, with the session it was granted before
