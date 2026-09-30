@@ -56,11 +56,14 @@ describe('the conversion (A1)', () => {
     expect(telegramStarsFor(100n, 0n)).toBeNull();
   });
 
-  it('the adapter converts only with a rate', () => {
+  it('the adapter converts only under a rate-bearing policy', () => {
     const adapter = new TelegramStarsAdapter({ apiBaseUrl: 'https://t.invalid', timeoutMs: 10 });
     const payable = money(105_000n, 'IRT');
-    expect(adapter.providerAmountOf(payable, 1_300n)).toBe(81n);
-    expect(adapter.providerAmountOf(payable, null)).toBeNull();
+    expect(adapter.providerAmountOf(payable, { policy: 'FIXED_RATE', rateMinor: 1_300n })).toBe(
+      81n,
+    );
+    // A Star is never billed in the sales currency (package FX): no rate, no amount.
+    expect(adapter.providerAmountOf(payable, { policy: 'SAME_UNIT' })).toBeNull();
   });
 
   it('the descriptor says how Stars are sent, approved and priced', () => {
@@ -70,7 +73,13 @@ describe('the conversion (A1)', () => {
       requiresCredentials: false,
       invoiceCredential: 'BOT_TOKEN',
       approval: 'RECORDED_PAYMENT',
-      conversion: 'FIXED_RATE',
+      // Package FX: the fixed rate stays first and default; the central rate is opt-in.
+      conversion: {
+        policies: ['FIXED_RATE', 'CENTRAL_FX'],
+        fxBaseAsset: 'USDT',
+        modeSetting: 'stars.pricing_mode',
+        unitRatioSetting: 'stars.per_usdt',
+      },
     });
     expect(PAYMENT_GATEWAY_DESCRIPTORS.TONPAYS.approval).toBe('INQUIRY');
   });
