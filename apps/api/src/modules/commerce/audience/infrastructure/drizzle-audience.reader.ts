@@ -5,7 +5,12 @@ import {
   requireTenantId,
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
-import type { AudienceOptions, AudienceReader, AudienceSummary } from '../application/ports.js';
+import type {
+  AudienceEvaluationOptions,
+  AudienceOptions,
+  AudienceReader,
+  AudienceSummary,
+} from '../application/ports.js';
 import { audienceCustomersQuery, fingerprintOf } from './audience-sql.js';
 
 export class DrizzleAudienceReader implements AudienceReader {
@@ -25,13 +30,14 @@ export class DrizzleAudienceReader implements AudienceReader {
     definition: AudienceDefinition,
     asOf: Date,
     tx?: unknown,
+    options: AudienceEvaluationOptions = {},
   ): Promise<AudienceSummary> {
     const tenantId = requireTenantId(scope);
     const [row] = await this.rows<{ customers: number; reachable: number; fingerprint: string }>(
       sql`SELECT count(*)::int AS customers,
                  count(*) FILTER (WHERE a.bot_instance_id IS NOT NULL)::int AS reachable,
                  ${fingerprintOf(sql`a.customer_id`)} AS fingerprint
-            FROM (${audienceCustomersQuery({ tenantId, definition, asOf })}) a`,
+            FROM (${audienceCustomersQuery({ tenantId, definition, asOf, ...options })}) a`,
       tx,
     );
     return {
@@ -47,6 +53,7 @@ export class DrizzleAudienceReader implements AudienceReader {
     asOf: Date,
     limit: number,
     tx?: unknown,
+    options: AudienceEvaluationOptions = {},
   ): Promise<readonly AudienceSampleCustomer[]> {
     const tenantId = requireTenantId(scope);
     const rows = await this.rows<{
@@ -56,7 +63,7 @@ export class DrizzleAudienceReader implements AudienceReader {
       telegram_user_id: string;
     }>(
       sql`SELECT c.id, c.first_name, c.username, c.telegram_user_id
-            FROM (${audienceCustomersQuery({ tenantId, definition, asOf })}) a
+            FROM (${audienceCustomersQuery({ tenantId, definition, asOf, ...options })}) a
             JOIN customers c ON c.tenant_id = ${tenantId}::uuid AND c.id = a.customer_id
            ORDER BY c.created_at DESC, c.id DESC
            LIMIT ${limit}`,

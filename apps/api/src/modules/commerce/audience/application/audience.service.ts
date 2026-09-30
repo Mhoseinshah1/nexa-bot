@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import {
   AUDIENCE_ERROR_CODES,
   AUDIENCE_SAMPLE_SIZE,
+  FROZEN_AUDIENCE_RELEASE_AFTER_DAYS,
   canonicalAudienceDefinition,
   errors,
   type ActorContext,
@@ -10,11 +11,21 @@ import {
   type AudienceSampleCustomer,
   type Clock,
   type CurrencyCode,
+  type IdGenerator,
   type PermissionKey,
   type TenantContext,
 } from '@nexa/contracts';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
-import type { AudienceOptions, AudienceReader, AudienceSummary } from './ports.js';
+import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
+import type { AudienceEvaluation } from '../infrastructure/audience-sql.js';
+import type {
+  AudienceEvaluationOptions,
+  AudienceOptions,
+  AudienceReader,
+  AudienceSummary,
+  FrozenAudienceRecord,
+  FrozenAudienceRepository,
+} from './ports.js';
 
 /**
  * Reading an audience is reading customers: a count, and a sample that names ten of them.
@@ -57,10 +68,13 @@ export interface AudienceEvaluationResult extends AudienceSummary {
 
 export interface AudienceServiceDeps {
   readonly reader: AudienceReader;
+  /** Round N close (§A): durable member sets a confirmation freezes. */
+  readonly frozen: FrozenAudienceRepository;
   readonly guard: PermissionGuard;
   readonly clock: Clock;
   /** The currency a balance range is written in: the tenant's `sales.currency`. */
   readonly sellingCurrency: (scope: TenantContext) => Promise<CurrencyCode>;
+  readonly ids: IdGenerator;
 }
 
 /**
@@ -105,30 +119,36 @@ export class AudienceService {
     scope: TenantContext,
     actor: ActorContext,
     input: unknown,
+    options: AudienceEvaluationOptions = {},
   ): Promise<AudiencePreview> {
     await this.deps.guard.check(scope, actor, AUDIENCE_PREVIEW_PERMISSION);
-    const result = await this.evaluate(scope, input);
+    const result = await this.evaluate(scope, input, undefined, undefined, options);
     const sample = await this.deps.reader.sample(
       scope,
       result.audience.definition,
       result.asOf,
       AUDIENCE_SAMPLE_SIZE,
+      undefined,
+      options,
     );
     return toPreview(result, sample);
   }
 
   /**
    * Evaluates a definition at `asOf` (the clock's now by default), optionally inside the
-   * caller's transaction. No permission: the caller charged its own.
+   * caller's transaction. No permission: the caller charged its own. `options` narrows
+   * beyond the definition (round N close: a MARKETING send leaves out opted-out customers)
+   * and is applied by the consumer's materialisation with the same flag.
    */
   async evaluate(
     scope: TenantContext,
     input: unknown,
     asOf: Date = this.deps.clock.now(),
     tx?: unknown,
+    options: AudienceEvaluationOptions = {},
   ): Promise<AudienceEvaluationResult> {
     const audience = freezeAudience(input);
-    const summary = await this.deps.reader.summarise(scope, audience.definition, asOf, tx);
+    const summary = await this.deps.reader.summarise(scope, audience.definition, asOf, tx, options);
     return { ...summary, audience, asOf };
   }
 
@@ -137,8 +157,128 @@ export class AudienceService {
     scope: TenantContext,
     definition: AudienceDefinition,
     asOf: Date,
+    options: AudienceEvaluationOptions = {},
   ): Promise<readonly AudienceSampleCustomer[]> {
-    return this.deps.reader.sample(scope, definition, asOf, AUDIENCE_SAMPLE_SIZE);
+    return this.deps.reader.sample(
+      scope,
+      definition,
+      asOf,
+      AUDIENCE_SAMPLE_SIZE,
+      undefined,
+      options,
+    );
+  }
+
+  // --- Frozen audiences (round N close, §A) --------------------------------------------
+
+  /**
+   * Freezes the CUSTOMERS a definition selects at `asOf`, in the caller's transaction:
+   * the exact member identities, durably, named by an id the confirming record stores.
+   * No permission: the caller charged the action it is confirming. Returns the header,
+   * whose count and fingerprint are computed from the rows written — so a caller that
+   * compares them with a preview compares what is actually frozen.
+   */
+  async freeze(
+    scope: TenantContext,
+    input: unknown,
+    asOf: Date,
+    createdByAdminId: string | null,
+    tx: TransactionScope,
+  ): Promise<FrozenAudienceRecord> {
+    const audience = freezeAudience(input);
+    const id = this.deps.ids.uuid();
+    const now = this.deps.clock.now();
+    const frozen = await this.deps.frozen.freezeCustomers(
+      scope,
+      {
+        id,
+        evaluation: { tenantId: scope.tenantId as string, definition: audience.definition, asOf },
+        definitionJson: audience.json,
+        definitionHash: audience.hash,
+        createdByAdminId,
+        now,
+      },
+      tx,
+    );
+    return {
+      id,
+      kind: 'CUSTOMERS',
+      definition: audience.definition,
+      definitionHash: audience.hash,
+      asOf,
+      count: frozen.count,
+      fingerprint: frozen.fingerprint,
+      createdAt: now,
+      releasedAt: null,
+    };
+  }
+
+  /**
+   * Freezes a SERVICES audience: the header here, the member rows by `writeMembers` — the
+   * engine that owns the eligibility rule (a traffic or time grant's) writes them from its
+   * own query, in the same transaction — and the count and fingerprint from what it wrote.
+   */
+  async freezeServices(
+    scope: TenantContext,
+    input: unknown,
+    asOf: Date,
+    createdByAdminId: string | null,
+    tx: TransactionScope,
+    writeMembers: (frozenAudienceId: string, evaluation: AudienceEvaluation) => Promise<void>,
+  ): Promise<FrozenAudienceRecord> {
+    const audience = freezeAudience(input);
+    const id = this.deps.ids.uuid();
+    const now = this.deps.clock.now();
+    await this.deps.frozen.insertServicesHeader(
+      scope,
+      {
+        id,
+        definitionJson: audience.json,
+        definitionHash: audience.hash,
+        asOf,
+        createdByAdminId,
+        now,
+      },
+      tx,
+    );
+    await writeMembers(id, {
+      tenantId: scope.tenantId as string,
+      definition: audience.definition,
+      asOf,
+    });
+    const frozen = await this.deps.frozen.stampMembers(scope, id, 'SERVICE', tx);
+    return {
+      id,
+      kind: 'SERVICES',
+      definition: audience.definition,
+      definitionHash: audience.hash,
+      asOf,
+      count: frozen.count,
+      fingerprint: frozen.fingerprint,
+      createdAt: now,
+      releasedAt: null,
+    };
+  }
+
+  /** A frozen audience's header, or null. No permission: the caller charged its own. */
+  async frozen(
+    scope: TenantContext,
+    id: string,
+    tx?: unknown,
+  ): Promise<FrozenAudienceRecord | null> {
+    return this.deps.frozen.find(scope, id, tx);
+  }
+
+  /**
+   * The release sweep: member rows of audiences nothing live names any more, frozen at
+   * least `FROZEN_AUDIENCE_RELEASE_AFTER_DAYS` ago. The header stays for ever.
+   */
+  async releaseFrozen(scope: TenantContext, now: Date, tx: TransactionScope): Promise<number> {
+    return this.deps.frozen.releaseUnreferenced(
+      scope,
+      { before: new Date(now.getTime() - FROZEN_AUDIENCE_RELEASE_AFTER_DAYS * 86_400_000), now },
+      tx,
+    );
   }
 
   /** The names a builder offers, and the currency a balance range is written in. */
