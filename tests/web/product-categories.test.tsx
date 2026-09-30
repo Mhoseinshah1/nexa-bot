@@ -173,8 +173,12 @@ describe('deleting a category', () => {
     renderPage(<ProductCategoriesPage denied={false} mayEdit />);
 
     await screen.findByText('عمومی');
-    window.confirm = () => true;
     fireEvent.click(within(rowFor('عمومی')).getByRole('button', { name: 'حذف' }));
+    // Asked in the page's own dialog, whose buttons say what they do.
+    expect(api.calls.some((call) => call.method === 'DELETE')).toBe(false);
+    fireEvent.click(
+      within(screen.getByRole('alertdialog')).getByRole('button', { name: 'بله، حذف شود' }),
+    );
 
     /*
      * The count is asserted INSIDE the banner, not anywhere on the page — the table
@@ -191,9 +195,12 @@ describe('deleting a category', () => {
     renderPage(<ProductCategoriesPage denied={false} mayEdit />);
 
     await screen.findByText('عمومی');
-    window.confirm = () => false;
     fireEvent.click(within(rowFor('عمومی')).getByRole('button', { name: 'حذف' }));
+    fireEvent.click(
+      within(screen.getByRole('alertdialog')).getByRole('button', { name: 'انصراف' }),
+    );
 
+    expect(screen.queryByRole('alertdialog')).toBeNull();
     expect(api.calls.some((call) => call.method === 'DELETE')).toBe(false);
   });
 });

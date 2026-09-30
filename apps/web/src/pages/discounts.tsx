@@ -65,12 +65,21 @@ import {
   Money,
   Num,
   PageHead,
-  Pills,
+  Progress,
+  RowActions,
   StateSwitch,
+  ButtonGroup,
+  Button,
+  CellMain,
+  ChipDivider,
+  FilterChip,
   useToast,
+  useUnsavedChanges,
   type Column,
   type Tone,
 } from '../ui/kit';
+import { Icon } from '../ui/icons';
+import { CheckField, ChipGroup, FormSection, SaveBar, revealField } from './editor-layout';
 
 /**
  * Discounts, cashback rules and the price preview (WP8).
@@ -111,20 +120,29 @@ export function DiscountsPage({
   mayEditCashback: boolean;
 }) {
   const options = useScopeOptions(!denied);
+  const onLink = useLinkHandler();
   return (
     <>
       <PageHead
         title={t('web.discounts_title')}
         subtitle={t('web.discounts_intro')}
         maturity="now"
+        actions={
+          <a className="btn" href="/campaigns" onClick={onLink}>
+            <Icon name="megaphone" />
+            {t('web.nav_campaigns')}
+          </a>
+        }
       />
       <DiscountRules denied={denied} mayEdit={mayEditDiscounts} options={options} />
       <CashbackRules denied={denied} mayEdit={mayEditCashback} options={options} />
       <PricePreview denied={denied} options={options} />
-      <Card title={t('web.discounts_scope_title')}>
-        <p className="muted">{t('web.discounts_rule_no_delete')}</p>
-        <p className="muted">{t('web.discounts_rule_usage')}</p>
-        <p className="muted">{t('web.discounts_rule_cashback')}</p>
+      <Card title={t('web.discounts_scope_title')} tone="muted">
+        <ul className="cb-notes">
+          <li>{t('web.discounts_rule_no_delete')}</li>
+          <li>{t('web.discounts_rule_usage')}</li>
+          <li>{t('web.discounts_rule_cashback')}</li>
+        </ul>
       </Card>
     </>
   );
@@ -313,7 +331,66 @@ function WindowCell({ startsAt, endsAt }: { startsAt: string | null; endsAt: str
 }
 
 function StatusBadge({ value }: { value: DiscountStatus }) {
-  return <Badge tone={STATUS_TONES[value]}>{t(STATUS_LABELS[value])}</Badge>;
+  return (
+    <Badge tone={STATUS_TONES[value]} dot>
+      {t(STATUS_LABELS[value])}
+    </Badge>
+  );
+}
+
+/** The two filter chips a rule list offers for its status, as one labelled set. */
+function StatusChips({
+  value,
+  onChange,
+}: {
+  value: StatusFilter;
+  onChange: (next: StatusFilter) => void;
+}) {
+  return (
+    <ChipGroup label={t('web.status')}>
+      {(
+        [
+          ['ALL', 'web.rule_status_all'],
+          ['ACTIVE', 'web.rule_status_active'],
+          ['INACTIVE', 'web.rule_status_inactive'],
+        ] as const
+      ).map(([id, label]) => (
+        <FilterChip key={id} pressed={value === id} onClick={() => onChange(id)}>
+          {t(label)}
+        </FilterChip>
+      ))}
+    </ChipGroup>
+  );
+}
+
+/** Edit, and the activate/deactivate command, for one rule row. */
+function RuleRowActions({
+  status,
+  busy,
+  onEdit,
+  onTransition,
+}: {
+  status: DiscountStatus;
+  busy: boolean;
+  onEdit: () => void;
+  onTransition: () => void;
+}) {
+  return (
+    <RowActions>
+      <Button size="sm" variant="ghost" icon="edit" disabled={busy} onClick={onEdit}>
+        {t('web.rule_edit')}
+      </Button>
+      <Button
+        size="sm"
+        variant={status === 'ACTIVE' ? 'danger' : 'default'}
+        icon={status === 'ACTIVE' ? 'pause' : 'play'}
+        disabled={busy}
+        onClick={onTransition}
+      >
+        {t(status === 'ACTIVE' ? 'web.rule_deactivate' : 'web.rule_activate')}
+      </Button>
+    </RowActions>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -405,25 +482,37 @@ function DiscountRules({
       key: 'label',
       header: t('web.rule_label'),
       render: (row) => (
-        <div>
-          <strong>{row.label}</strong>
-          {row.code !== null && (
-            <div>
-              <Ltr>{row.code}</Ltr>
-            </div>
-          )}
-        </div>
+        <CellMain
+          primary={<span className="strong">{row.label}</span>}
+          {...(row.code === null
+            ? {}
+            : {
+                secondary: (
+                  <span className="discounts-code">
+                    <Ltr>{row.code}</Ltr>
+                  </span>
+                ),
+              })}
+        />
       ),
     },
     {
       key: 'kind',
       header: t('web.discount_kind'),
-      render: (row) => <Badge tone="neutral">{t(KIND_LABELS[row.kind])}</Badge>,
+      render: (row) => (
+        <Badge tone={row.kind === 'CODE' ? 'violet' : 'teal'} outline>
+          {t(KIND_LABELS[row.kind])}
+        </Badge>
+      ),
     },
     {
       key: 'value',
       header: t('web.discount_value'),
-      render: (row) => <DiscountValue row={row} />,
+      render: (row) => (
+        <Badge tone="info">
+          <DiscountValue row={row} />
+        </Badge>
+      ),
     },
     {
       key: 'scope',
@@ -471,7 +560,7 @@ function DiscountRules({
        * code whose orders mostly expired.
        */
       render: (row) => (
-        <div className="small">
+        <div className="small discounts-usage">
           <div className="nowrap">
             <Num value={row.liveRedemptions} /> {t('web.discount_usage_of')}{' '}
             {row.totalRedemptionsLimit === null ? (
@@ -480,6 +569,13 @@ function DiscountRules({
               <Num value={row.totalRedemptionsLimit} />
             )}
           </div>
+          {row.totalRedemptionsLimit !== null && (
+            <Progress
+              value={row.liveRedemptions}
+              max={row.totalRedemptionsLimit}
+              label={t('web.discount_usage')}
+            />
+          )}
           <div className="muted nowrap">
             {t('web.discount_per_customer')}:{' '}
             {row.perCustomerLimit === null ? (
@@ -495,8 +591,8 @@ function DiscountRules({
       key: 'priority',
       header: t('web.discount_priority'),
       render: (row) => (
-        <div>
-          <Num value={row.priority} />{' '}
+        <div className="row">
+          <Num value={row.priority} />
           <Badge tone={row.stackable ? 'teal' : 'neutral'}>
             {t(row.stackable ? 'web.discount_stackable' : 'web.discount_exclusive')}
           </Badge>
@@ -515,57 +611,65 @@ function DiscountRules({
       // Nothing for a reader. The header stays, so two operators describe one table.
       render: (row) =>
         !mayEdit ? null : (
-          <div className="toolbar">
-            <button
-              type="button"
-              className="btn sm"
-              disabled={transition.isPending}
-              onClick={() => setEditing(row)}
-            >
-              {t('web.rule_edit')}
-            </button>
-            <button
-              type="button"
-              className={row.status === 'ACTIVE' ? 'btn danger sm' : 'btn primary sm'}
-              disabled={transition.isPending}
-              onClick={() =>
-                transition.mutate({
-                  id: row.id,
-                  which: row.status === 'ACTIVE' ? 'deactivate' : 'activate',
-                })
-              }
-            >
-              {t(row.status === 'ACTIVE' ? 'web.rule_deactivate' : 'web.rule_activate')}
-            </button>
-          </div>
+          <RuleRowActions
+            status={row.status}
+            busy={transition.isPending}
+            onEdit={() => {
+              setEditing(row);
+              revealField('discount-edit-label');
+            }}
+            onTransition={() =>
+              transition.mutate({
+                id: row.id,
+                which: row.status === 'ACTIVE' ? 'deactivate' : 'activate',
+              })
+            }
+          />
         ),
     },
   ];
 
   return (
     <>
-      <Card title={t('web.discounts_rules_title')} hint={t('web.discounts_rules_hint')}>
+      <Card
+        title={t('web.discounts_rules_title')}
+        hint={t('web.discounts_rules_hint')}
+        {...(mayEdit
+          ? {
+              actions: (
+                <Button
+                  variant="primary"
+                  size="sm"
+                  icon="plus"
+                  onClick={() => {
+                    setEditing(null);
+                    revealField('discount-create-kind');
+                  }}
+                >
+                  {t('web.cb_add')}
+                </Button>
+              ),
+            }
+          : {})}
+      >
         {/* Hidden while the list cannot answer: a filter mints a request the server has
             just refused. */}
-        <div className="toolbar" hidden={!mayRequest(discounts, denied)}>
-          <Pills
-            value={kind}
-            onChange={setKind}
-            items={[
-              { id: 'ALL' as const, label: t('web.discount_kind_all') },
-              { id: 'CODE' as const, label: t('web.discount_kind_code') },
-              { id: 'AUTOMATIC' as const, label: t('web.discount_kind_automatic') },
-            ]}
-          />
-          <Pills
-            value={status}
-            onChange={setStatus}
-            items={[
-              { id: 'ALL' as const, label: t('web.rule_status_all') },
-              { id: 'ACTIVE' as const, label: t('web.rule_status_active') },
-              { id: 'INACTIVE' as const, label: t('web.rule_status_inactive') },
-            ]}
-          />
+        <div className="filter-row" hidden={!mayRequest(discounts, denied)}>
+          <ChipGroup label={t('web.discount_kind')}>
+            {(
+              [
+                ['ALL', 'web.discount_kind_all'],
+                ['CODE', 'web.discount_kind_code'],
+                ['AUTOMATIC', 'web.discount_kind_automatic'],
+              ] as const
+            ).map(([id, label]) => (
+              <FilterChip key={id} pressed={kind === id} onClick={() => setKind(id)}>
+                {t(label)}
+              </FilterChip>
+            ))}
+          </ChipGroup>
+          <ChipDivider />
+          <StatusChips value={status} onChange={setStatus} />
         </div>
 
         <StateSwitch
@@ -589,6 +693,7 @@ function DiscountRules({
             columns={columns}
             rows={rows}
             rowKey={(row) => row.id}
+            dense
           />
           <CursorPager
             shown={rows.length}
@@ -802,25 +907,27 @@ function ScopeFields({
 
   return (
     <>
-      <fieldset className="field">
-        <legend>{t('web.rule_applies_to')}</legend>
-        {DISCOUNTABLE_PURPOSES.map((purpose) => (
-          <label key={purpose} className="nowrap">
-            <input
-              type="checkbox"
-              checked={state.appliesTo.includes(purpose)}
-              onChange={(event) =>
-                set(
-                  'appliesTo',
-                  event.target.checked
-                    ? [...state.appliesTo, purpose]
-                    : state.appliesTo.filter((one) => one !== purpose),
-                )
-              }
-            />{' '}
-            {t(PURPOSE_LABELS[purpose])}
-          </label>
-        ))}
+      <fieldset className="field cb-fieldset full">
+        <legend className="field-label">{t('web.rule_applies_to')}</legend>
+        <div className="checks">
+          {DISCOUNTABLE_PURPOSES.map((purpose) => (
+            <label key={purpose} className="check nowrap">
+              <input
+                type="checkbox"
+                checked={state.appliesTo.includes(purpose)}
+                onChange={(event) =>
+                  set(
+                    'appliesTo',
+                    event.target.checked
+                      ? [...state.appliesTo, purpose]
+                      : state.appliesTo.filter((one) => one !== purpose),
+                  )
+                }
+              />{' '}
+              {t(PURPOSE_LABELS[purpose])}
+            </label>
+          ))}
+        </div>
       </fieldset>
 
       <Field
@@ -898,7 +1005,24 @@ function ScopeFields({
           )}
         </Field>
       )}
+    </>
+  );
+}
 
+/** The rule's window: when it starts and ends applying, in the operator's local time. */
+function WindowFields({
+  prefix,
+  value: state,
+  onChange,
+}: {
+  prefix: string;
+  value: ScopeState;
+  onChange: (next: ScopeState) => void;
+}) {
+  const set = <K extends keyof ScopeState>(key: K, value: ScopeState[K]) =>
+    onChange({ ...state, [key]: value });
+  return (
+    <>
       <Field
         label={t('web.rule_starts_at')}
         hint={t('web.rule_window_hint')}
@@ -1109,6 +1233,10 @@ function DiscountForm({
   );
   const set = <K extends keyof DiscountFormState>(key: K, value: DiscountFormState[K]) =>
     setState((current) => ({ ...current, [key]: value }));
+  const dirty =
+    JSON.stringify(state) !==
+    JSON.stringify(rule === undefined ? BLANK_DISCOUNT : discountStateOf(rule));
+  useUnsavedChanges(dirty);
 
   const checked = discountBodyFrom(state, rule);
   const problem = 'problem' in checked ? checked.problem : null;
@@ -1145,231 +1273,276 @@ function DiscountForm({
   );
 
   return (
-    <Card title={mode === 'create' ? t('web.discount_new_title') : t('web.discount_edit_title')}>
-      {rule === undefined ? (
-        <>
-          <Field
-            label={t('web.discount_kind')}
-            hint={t('web.discount_kind_hint')}
-            htmlFor={`${prefix}-kind`}
+    <Card
+      className="cb-editor-card"
+      title={mode === 'create' ? t('web.discount_new_title') : t('web.discount_edit_title')}
+      tight
+      foot={
+        <SaveBar dirty={dirty}>
+          {mode === 'create' && (
+            <span className="muted small">{t('web.rule_created_inactive')}</span>
+          )}
+          {mode === 'edit' && (
+            <Button disabled={save.isPending} onClick={onDone}>
+              {t('web.rule_cancel_edit')}
+            </Button>
+          )}
+          <Button
+            variant="primary"
+            icon="check"
+            disabled={problem !== null || save.isPending}
+            onClick={() => save.mutate()}
           >
-            <select
-              id={`${prefix}-kind`}
-              value={state.kind}
-              onChange={(event) => set('kind', event.target.value as DiscountKind)}
+            {mode === 'create' ? t('web.discount_create') : t('web.rule_save')}
+          </Button>
+        </SaveBar>
+      }
+    >
+      <FormSection id={`${prefix}-section-value`} title={t('web.cb_section_code_value')}>
+        {rule === undefined ? (
+          <>
+            <Field
+              label={t('web.discount_kind')}
+              hint={t('web.discount_kind_hint')}
+              htmlFor={`${prefix}-kind`}
             >
-              <option value="CODE">{t('web.discount_kind_code')}</option>
-              <option value="AUTOMATIC">{t('web.discount_kind_automatic')}</option>
+              <select
+                id={`${prefix}-kind`}
+                value={state.kind}
+                onChange={(event) => set('kind', event.target.value as DiscountKind)}
+              >
+                <option value="CODE">{t('web.discount_kind_code')}</option>
+                <option value="AUTOMATIC">{t('web.discount_kind_automatic')}</option>
+              </select>
+            </Field>
+            {state.kind === 'CODE' ? (
+              <Field
+                label={t('web.discount_code')}
+                hint={t('web.discount_code_hint')}
+                htmlFor={`${prefix}-code`}
+              >
+                <input
+                  id={`${prefix}-code`}
+                  dir="ltr"
+                  className="mono"
+                  value={state.code}
+                  maxLength={DISCOUNT_CODE_MAX_LENGTH}
+                  onChange={(event) => set('code', event.target.value)}
+                />
+              </Field>
+            ) : (
+              <span />
+            )}
+          </>
+        ) : (
+          /*
+           * TEXT, not a disabled input. A disabled control says "you may not change this
+           * now"; the truth is that nobody ever may, and the sentence below says why.
+           */
+          <div className="full stack-sm">
+            <KV
+              inline
+              items={[
+                [t('web.discount_kind'), t(KIND_LABELS[rule.kind])],
+                [
+                  t('web.discount_code'),
+                  rule.code === null ? <Dash key="c" /> : <Ltr key="c">{rule.code}</Ltr>,
+                ],
+              ]}
+            />
+            <p className="muted small">{t('web.discount_kind_locked')}</p>
+          </div>
+        )}
+
+        <div className="full">
+          <Field
+            label={t('web.rule_label')}
+            hint={t('web.rule_label_hint')}
+            htmlFor={`${prefix}-label`}
+          >
+            <input
+              id={`${prefix}-label`}
+              value={state.label}
+              maxLength={DISCOUNT_LABEL_MAX_LENGTH}
+              onChange={(event) => set('label', event.target.value)}
+            />
+          </Field>
+        </div>
+
+        <div className="field">
+          <span className="field-label">{t('web.discount_type')}</span>
+          <ButtonGroup segmented label={t('web.discount_type')}>
+            {(
+              [
+                ['PERCENTAGE', 'web.discount_type_percentage'],
+                ['FIXED_AMOUNT', 'web.discount_type_fixed'],
+              ] as const
+            ).map(([type, label]) => (
+              <button
+                key={type}
+                type="button"
+                className={state.type === type ? 'btn sm on' : 'btn sm'}
+                aria-pressed={state.type === type}
+                onClick={() => set('type', type)}
+              >
+                {t(label)}
+              </button>
+            ))}
+          </ButtonGroup>
+        </div>
+
+        <Field
+          label={t('web.discount_value')}
+          hint={t(
+            state.type === 'PERCENTAGE'
+              ? 'web.discount_value_hint_percentage'
+              : 'web.discount_value_hint_fixed',
+          )}
+          htmlFor={`${prefix}-value`}
+        >
+          {state.type === 'PERCENTAGE' ? (
+            <div className="input-group">
+              <input
+                id={`${prefix}-value`}
+                dir="ltr"
+                inputMode="numeric"
+                value={state.value}
+                onChange={(event) => set('value', event.target.value.trim())}
+              />
+              <span className="addon">{t('web.discount_percent_unit')}</span>
+            </div>
+          ) : (
+            <input
+              id={`${prefix}-value`}
+              dir="ltr"
+              inputMode="numeric"
+              value={state.value}
+              onChange={(event) => set('value', event.target.value.trim())}
+            />
+          )}
+        </Field>
+
+        {state.type === 'FIXED_AMOUNT' && (
+          <Field label={t('web.discount_currency')} htmlFor={`${prefix}-currency`}>
+            <select
+              id={`${prefix}-currency`}
+              value={state.currency}
+              onChange={(event) => set('currency', event.target.value as CurrencyCode)}
+            >
+              {currencies.map((code) => (
+                <option key={code} value={code}>
+                  {code}
+                </option>
+              ))}
             </select>
           </Field>
-          {state.kind === 'CODE' && (
-            <Field
-              label={t('web.discount_code')}
-              hint={t('web.discount_code_hint')}
-              htmlFor={`${prefix}-code`}
-            >
-              <input
-                id={`${prefix}-code`}
-                dir="ltr"
-                value={state.code}
-                maxLength={DISCOUNT_CODE_MAX_LENGTH}
-                onChange={(event) => set('code', event.target.value)}
-              />
-            </Field>
-          )}
-        </>
-      ) : (
-        /*
-         * TEXT, not a disabled input. A disabled control says "you may not change this
-         * now"; the truth is that nobody ever may, and the sentence below says why.
-         */
-        <>
-          <KV
-            items={[
-              [t('web.discount_kind'), t(KIND_LABELS[rule.kind])],
-              [
-                t('web.discount_code'),
-                rule.code === null ? <Dash key="c" /> : <Ltr key="c">{rule.code}</Ltr>,
-              ],
-            ]}
+        )}
+      </FormSection>
+
+      <FormSection id={`${prefix}-section-scope`} title={t('web.rule_scope')}>
+        <ScopeFields
+          prefix={prefix}
+          value={state.scope}
+          onChange={(next) => set('scope', next)}
+          options={options}
+        />
+
+        <Field
+          label={t('web.discount_customer')}
+          hint={t('web.discount_customer_hint')}
+          htmlFor={`${prefix}-customer`}
+        >
+          <input
+            id={`${prefix}-customer`}
+            dir="ltr"
+            value={state.customerId}
+            onChange={(event) => set('customerId', event.target.value.trim())}
           />
-          <p className="muted small">{t('web.discount_kind_locked')}</p>
-        </>
-      )}
-
-      <Field
-        label={t('web.rule_label')}
-        hint={t('web.rule_label_hint')}
-        htmlFor={`${prefix}-label`}
-      >
-        <input
-          id={`${prefix}-label`}
-          value={state.label}
-          maxLength={DISCOUNT_LABEL_MAX_LENGTH}
-          onChange={(event) => set('label', event.target.value)}
-        />
-      </Field>
-
-      <Field label={t('web.discount_type')} htmlFor={`${prefix}-type`}>
-        <select
-          id={`${prefix}-type`}
-          value={state.type}
-          onChange={(event) => set('type', event.target.value as DiscountType)}
-        >
-          <option value="PERCENTAGE">{t('web.discount_type_percentage')}</option>
-          <option value="FIXED_AMOUNT">{t('web.discount_type_fixed')}</option>
-        </select>
-      </Field>
-
-      <Field
-        label={t('web.discount_value')}
-        hint={t(
-          state.type === 'PERCENTAGE'
-            ? 'web.discount_value_hint_percentage'
-            : 'web.discount_value_hint_fixed',
-        )}
-        htmlFor={`${prefix}-value`}
-      >
-        <input
-          id={`${prefix}-value`}
-          dir="ltr"
-          inputMode="numeric"
-          value={state.value}
-          onChange={(event) => set('value', event.target.value.trim())}
-        />
-      </Field>
-
-      {state.type === 'FIXED_AMOUNT' && (
-        <Field label={t('web.discount_currency')} htmlFor={`${prefix}-currency`}>
-          <select
-            id={`${prefix}-currency`}
-            value={state.currency}
-            onChange={(event) => set('currency', event.target.value as CurrencyCode)}
-          >
-            {currencies.map((code) => (
-              <option key={code} value={code}>
-                {code}
-              </option>
-            ))}
-          </select>
         </Field>
-      )}
 
-      <ScopeFields
-        prefix={prefix}
-        value={state.scope}
-        onChange={(next) => set('scope', next)}
-        options={options}
-      />
-
-      <Field
-        label={t('web.discount_customer')}
-        hint={t('web.discount_customer_hint')}
-        htmlFor={`${prefix}-customer`}
-      >
-        <input
-          id={`${prefix}-customer`}
-          dir="ltr"
-          value={state.customerId}
-          onChange={(event) => set('customerId', event.target.value.trim())}
-        />
-      </Field>
-
-      <Field
-        label={t('web.discount_first_purchase')}
-        hint={t('web.discount_first_purchase_hint')}
-        htmlFor={`${prefix}-first`}
-      >
-        <input
-          id={`${prefix}-first`}
-          type="checkbox"
-          checked={state.firstPurchaseOnly}
-          onChange={(event) => set('firstPurchaseOnly', event.target.checked)}
-        />
-      </Field>
-
-      <Field
-        label={t('web.discount_minimum')}
-        hint={t('web.discount_minimum_hint')}
-        htmlFor={`${prefix}-minimum`}
-      >
-        <input
-          id={`${prefix}-minimum`}
-          dir="ltr"
-          inputMode="numeric"
-          value={state.minimumSubtotal}
-          onChange={(event) => set('minimumSubtotal', event.target.value.trim())}
-        />
-      </Field>
-
-      <Field
-        label={t('web.discount_total_limit')}
-        hint={t('web.discount_limit_hint')}
-        htmlFor={`${prefix}-total-limit`}
-      >
-        <input
-          id={`${prefix}-total-limit`}
-          dir="ltr"
-          inputMode="numeric"
-          value={state.totalLimit}
-          onChange={(event) => set('totalLimit', event.target.value.trim())}
-        />
-      </Field>
-      <Field label={t('web.discount_per_customer_limit')} htmlFor={`${prefix}-customer-limit`}>
-        <input
-          id={`${prefix}-customer-limit`}
-          dir="ltr"
-          inputMode="numeric"
-          value={state.perCustomerLimit}
-          onChange={(event) => set('perCustomerLimit', event.target.value.trim())}
-        />
-      </Field>
-
-      <Field
-        label={t('web.discount_priority')}
-        hint={t('web.discount_priority_hint')}
-        htmlFor={`${prefix}-priority`}
-      >
-        <input
-          id={`${prefix}-priority`}
-          dir="ltr"
-          inputMode="numeric"
-          value={state.priority}
-          onChange={(event) => set('priority', event.target.value.trim())}
-        />
-      </Field>
-      <Field
-        label={t('web.discount_stackable')}
-        hint={t('web.discount_stackable_hint')}
-        htmlFor={`${prefix}-stackable`}
-      >
-        <input
-          id={`${prefix}-stackable`}
-          type="checkbox"
-          checked={state.stackable}
-          onChange={(event) => set('stackable', event.target.checked)}
-        />
-      </Field>
-
-      {problem !== null && <Banner tone="warn">{t(problem)}</Banner>}
-
-      <div className="toolbar">
-        <button
-          type="button"
-          className="btn primary sm"
-          disabled={problem !== null || save.isPending}
-          onClick={() => save.mutate()}
+        <Field
+          label={t('web.discount_minimum')}
+          hint={t('web.discount_minimum_hint')}
+          htmlFor={`${prefix}-minimum`}
         >
-          {mode === 'create' ? t('web.discount_create') : t('web.rule_save')}
-        </button>
-        {mode === 'edit' && (
-          <button type="button" className="btn sm" disabled={save.isPending} onClick={onDone}>
-            {t('web.rule_cancel_edit')}
-          </button>
-        )}
-      </div>
-      {mode === 'create' && <p className="muted small">{t('web.rule_created_inactive')}</p>}
-      {save.error !== null && <Banner tone="danger">{messageFor(save.error)}</Banner>}
+          <input
+            id={`${prefix}-minimum`}
+            dir="ltr"
+            inputMode="numeric"
+            value={state.minimumSubtotal}
+            onChange={(event) => set('minimumSubtotal', event.target.value.trim())}
+          />
+        </Field>
+
+        <div className="full">
+          <CheckField
+            id={`${prefix}-first`}
+            label={t('web.discount_first_purchase')}
+            hint={t('web.discount_first_purchase_hint')}
+            checked={state.firstPurchaseOnly}
+            onChange={(next) => set('firstPurchaseOnly', next)}
+          />
+        </div>
+      </FormSection>
+
+      <FormSection id={`${prefix}-section-window`} title={t('web.rule_window')}>
+        <WindowFields prefix={prefix} value={state.scope} onChange={(next) => set('scope', next)} />
+      </FormSection>
+
+      <FormSection id={`${prefix}-section-limits`} title={t('web.cb_section_limits')}>
+        <Field
+          label={t('web.discount_total_limit')}
+          hint={t('web.discount_limit_hint')}
+          htmlFor={`${prefix}-total-limit`}
+        >
+          <input
+            id={`${prefix}-total-limit`}
+            dir="ltr"
+            inputMode="numeric"
+            value={state.totalLimit}
+            onChange={(event) => set('totalLimit', event.target.value.trim())}
+          />
+        </Field>
+        <Field label={t('web.discount_per_customer_limit')} htmlFor={`${prefix}-customer-limit`}>
+          <input
+            id={`${prefix}-customer-limit`}
+            dir="ltr"
+            inputMode="numeric"
+            value={state.perCustomerLimit}
+            onChange={(event) => set('perCustomerLimit', event.target.value.trim())}
+          />
+        </Field>
+      </FormSection>
+
+      <FormSection id={`${prefix}-section-priority`} title={t('web.cb_section_priority')}>
+        <Field
+          label={t('web.discount_priority')}
+          hint={t('web.discount_priority_hint')}
+          htmlFor={`${prefix}-priority`}
+        >
+          <input
+            id={`${prefix}-priority`}
+            dir="ltr"
+            inputMode="numeric"
+            value={state.priority}
+            onChange={(event) => set('priority', event.target.value.trim())}
+          />
+        </Field>
+        <CheckField
+          id={`${prefix}-stackable`}
+          label={t('web.discount_stackable')}
+          hint={t('web.discount_stackable_hint')}
+          checked={state.stackable}
+          onChange={(next) => set('stackable', next)}
+        />
+      </FormSection>
+
+      {(problem !== null || save.error !== null) && (
+        <div className="cb-form-error stack-sm">
+          {problem !== null && <Banner tone="warn">{t(problem)}</Banner>}
+          {save.error !== null && <Banner tone="danger">{messageFor(save.error)}</Banner>}
+        </div>
+      )}
     </Card>
   );
 }
@@ -1424,14 +1597,20 @@ function CashbackRules({
   });
 
   const columns: readonly Column<CashbackRuleSummaryResponse>[] = [
-    { key: 'label', header: t('web.rule_label'), render: (row) => <strong>{row.label}</strong> },
+    {
+      key: 'label',
+      header: t('web.rule_label'),
+      render: (row) => <span className="strong">{row.label}</span>,
+    },
     {
       key: 'percent',
       header: t('web.cashback_percent'),
       render: (row) => (
-        <span className="nowrap">
-          <Ltr>{String(row.percent)}</Ltr> {t('web.discount_percent_unit')}
-        </span>
+        <Badge tone="teal">
+          <span className="nowrap">
+            <Ltr>{String(row.percent)}</Ltr> {t('web.discount_percent_unit')}
+          </span>
+        </Badge>
       ),
     },
     {
@@ -1458,46 +1637,49 @@ function CashbackRules({
       align: 'end',
       render: (row) =>
         !mayEdit ? null : (
-          <div className="toolbar">
-            <button
-              type="button"
-              className="btn sm"
-              disabled={transition.isPending}
-              onClick={() => setEditing(row)}
-            >
-              {t('web.rule_edit')}
-            </button>
-            <button
-              type="button"
-              className={row.status === 'ACTIVE' ? 'btn danger sm' : 'btn primary sm'}
-              disabled={transition.isPending}
-              onClick={() =>
-                transition.mutate({
-                  id: row.id,
-                  which: row.status === 'ACTIVE' ? 'deactivate' : 'activate',
-                })
-              }
-            >
-              {t(row.status === 'ACTIVE' ? 'web.rule_deactivate' : 'web.rule_activate')}
-            </button>
-          </div>
+          <RuleRowActions
+            status={row.status}
+            busy={transition.isPending}
+            onEdit={() => {
+              setEditing(row);
+              revealField('cashback-edit-label');
+            }}
+            onTransition={() =>
+              transition.mutate({
+                id: row.id,
+                which: row.status === 'ACTIVE' ? 'deactivate' : 'activate',
+              })
+            }
+          />
         ),
     },
   ];
 
   return (
     <>
-      <Card title={t('web.cashback_rules_title')} hint={t('web.cashback_rules_hint')}>
-        <div className="toolbar" hidden={!mayRequest(rules, denied)}>
-          <Pills
-            value={status}
-            onChange={setStatus}
-            items={[
-              { id: 'ALL' as const, label: t('web.rule_status_all') },
-              { id: 'ACTIVE' as const, label: t('web.rule_status_active') },
-              { id: 'INACTIVE' as const, label: t('web.rule_status_inactive') },
-            ]}
-          />
+      <Card
+        title={t('web.cashback_rules_title')}
+        hint={t('web.cashback_rules_hint')}
+        {...(mayEdit
+          ? {
+              actions: (
+                <Button
+                  variant="primary"
+                  size="sm"
+                  icon="plus"
+                  onClick={() => {
+                    setEditing(null);
+                    revealField('cashback-create-label');
+                  }}
+                >
+                  {t('web.cb_add')}
+                </Button>
+              ),
+            }
+          : {})}
+      >
+        <div className="filter-row" hidden={!mayRequest(rules, denied)}>
+          <StatusChips value={status} onChange={setStatus} />
         </div>
 
         <StateSwitch
@@ -1517,6 +1699,7 @@ function CashbackRules({
             columns={columns}
             rows={rows}
             rowKey={(row) => row.id}
+            dense
           />
           <CursorPager
             shown={rows.length}
@@ -1587,11 +1770,13 @@ function CashbackForm({
   const notify = useToast();
   const queries = useQueryClient();
   const submission = useSubmissionKey();
-  const [state, setState] = useState<CashbackFormState>(
+  const loaded: CashbackFormState =
     rule === undefined
       ? BLANK_CASHBACK
-      : { label: rule.label, percent: String(rule.percent), scope: scopeStateOf(rule) },
-  );
+      : { label: rule.label, percent: String(rule.percent), scope: scopeStateOf(rule) };
+  const [state, setState] = useState<CashbackFormState>(loaded);
+  const dirty = JSON.stringify(state) !== JSON.stringify(loaded);
+  useUnsavedChanges(dirty);
 
   const checked = cashbackBodyFrom(state, rule);
   const problem = 'problem' in checked ? checked.problem : null;
@@ -1618,58 +1803,83 @@ function CashbackForm({
   });
 
   return (
-    <Card title={mode === 'create' ? t('web.cashback_new_title') : t('web.cashback_edit_title')}>
-      <Field
-        label={t('web.rule_label')}
-        hint={t('web.rule_label_hint')}
-        htmlFor={`${prefix}-label`}
-      >
-        <input
-          id={`${prefix}-label`}
-          value={state.label}
-          maxLength={DISCOUNT_LABEL_MAX_LENGTH}
-          onChange={(event) => setState({ ...state, label: event.target.value })}
-        />
-      </Field>
-      <Field
-        label={t('web.cashback_percent')}
-        hint={t('web.cashback_percent_hint')}
-        htmlFor={`${prefix}-percent`}
-      >
-        <input
-          id={`${prefix}-percent`}
-          dir="ltr"
-          inputMode="numeric"
-          value={state.percent}
-          onChange={(event) => setState({ ...state, percent: event.target.value.trim() })}
-        />
-      </Field>
-      <ScopeFields
-        prefix={prefix}
-        value={state.scope}
-        onChange={(next) => setState({ ...state, scope: next })}
-        options={options}
-      />
-
-      {problem !== null && <Banner tone="warn">{t(problem)}</Banner>}
-
-      <div className="toolbar">
-        <button
-          type="button"
-          className="btn primary sm"
-          disabled={problem !== null || save.isPending}
-          onClick={() => save.mutate()}
+    <Card
+      className="cb-editor-card"
+      title={mode === 'create' ? t('web.cashback_new_title') : t('web.cashback_edit_title')}
+      tight
+      foot={
+        <SaveBar dirty={dirty}>
+          {mode === 'create' && (
+            <span className="muted small">{t('web.rule_created_inactive')}</span>
+          )}
+          {mode === 'edit' && (
+            <Button disabled={save.isPending} onClick={onDone}>
+              {t('web.rule_cancel_edit')}
+            </Button>
+          )}
+          <Button
+            variant="primary"
+            icon="check"
+            disabled={problem !== null || save.isPending}
+            onClick={() => save.mutate()}
+          >
+            {mode === 'create' ? t('web.cashback_create') : t('web.rule_save')}
+          </Button>
+        </SaveBar>
+      }
+    >
+      <FormSection id={`${prefix}-section-value`} title={t('web.cb_section_basic')}>
+        <Field
+          label={t('web.rule_label')}
+          hint={t('web.rule_label_hint')}
+          htmlFor={`${prefix}-label`}
         >
-          {mode === 'create' ? t('web.cashback_create') : t('web.rule_save')}
-        </button>
-        {mode === 'edit' && (
-          <button type="button" className="btn sm" disabled={save.isPending} onClick={onDone}>
-            {t('web.rule_cancel_edit')}
-          </button>
-        )}
-      </div>
-      {mode === 'create' && <p className="muted small">{t('web.rule_created_inactive')}</p>}
-      {save.error !== null && <Banner tone="danger">{messageFor(save.error)}</Banner>}
+          <input
+            id={`${prefix}-label`}
+            value={state.label}
+            maxLength={DISCOUNT_LABEL_MAX_LENGTH}
+            onChange={(event) => setState({ ...state, label: event.target.value })}
+          />
+        </Field>
+        <Field
+          label={t('web.cashback_percent')}
+          hint={t('web.cashback_percent_hint')}
+          htmlFor={`${prefix}-percent`}
+        >
+          <div className="input-group">
+            <input
+              id={`${prefix}-percent`}
+              dir="ltr"
+              inputMode="numeric"
+              value={state.percent}
+              onChange={(event) => setState({ ...state, percent: event.target.value.trim() })}
+            />
+            <span className="addon">{t('web.discount_percent_unit')}</span>
+          </div>
+        </Field>
+      </FormSection>
+      <FormSection id={`${prefix}-section-scope`} title={t('web.rule_scope')}>
+        <ScopeFields
+          prefix={prefix}
+          value={state.scope}
+          onChange={(next) => setState({ ...state, scope: next })}
+          options={options}
+        />
+      </FormSection>
+      <FormSection id={`${prefix}-section-window`} title={t('web.rule_window')}>
+        <WindowFields
+          prefix={prefix}
+          value={state.scope}
+          onChange={(next) => setState({ ...state, scope: next })}
+        />
+      </FormSection>
+
+      {(problem !== null || save.error !== null) && (
+        <div className="cb-form-error stack-sm">
+          {problem !== null && <Banner tone="warn">{t(problem)}</Banner>}
+          {save.error !== null && <Banner tone="danger">{messageFor(save.error)}</Banner>}
+        </div>
+      )}
     </Card>
   );
 }
@@ -1743,95 +1953,101 @@ function PricePreview({ denied, options }: { denied: boolean; options: ScopeOpti
   }
 
   return (
-    <Card title={t('web.preview_title')} hint={t('web.preview_hint')}>
-      <Field label={t('web.preview_purpose')} htmlFor="preview-purpose">
-        <select
-          id="preview-purpose"
-          value={purpose}
-          onChange={(event) => setPurpose(event.target.value as PreviewPurpose)}
-        >
-          {/*
-           * WP-A6: a location change is priced from a configured location, which this
-           * preview cannot name — it asks for a product or an add-on — so it is not offered
-           * here rather than offered and always refused.
-           */}
-          {RESELLER_GRANTABLE_OPERATIONS.filter((one) => one !== 'CHANGE_LOCATION').map((one) => (
-            <option key={one} value={one}>
-              {t(PURPOSE_LABELS[one])}
-            </option>
-          ))}
-        </select>
-      </Field>
-
-      {pricedFromProduct(purpose) ? (
-        <Field
-          label={t('web.preview_product')}
-          htmlFor="preview-product"
-          {...(options.products === null ? { hint: t('web.rule_product_unreadable') } : {})}
-        >
-          {options.products === null ? (
-            <input
-              id="preview-product"
-              dir="ltr"
-              value={productId}
-              onChange={(event) => setProductId(event.target.value.trim())}
-            />
-          ) : (
-            <select
-              id="preview-product"
-              value={productId}
-              onChange={(event) => setProductId(event.target.value)}
-            >
-              <option value="" />
-              {options.products.map((row) => (
-                <option key={row.id} value={row.id}>
-                  {row.title}
-                </option>
-              ))}
-            </select>
-          )}
+    <Card title={t('web.preview_title')} hint={t('web.preview_hint')} className="discounts-preview">
+      <div className="form-grid discounts-preview-inputs">
+        <Field label={t('web.preview_purpose')} htmlFor="preview-purpose">
+          <select
+            id="preview-purpose"
+            value={purpose}
+            onChange={(event) => setPurpose(event.target.value as PreviewPurpose)}
+          >
+            {/*
+             * WP-A6: a location change is priced from a configured location, which this
+             * preview cannot name — it asks for a product or an add-on — so it is not offered
+             * here rather than offered and always refused.
+             */}
+            {RESELLER_GRANTABLE_OPERATIONS.filter((one) => one !== 'CHANGE_LOCATION').map((one) => (
+              <option key={one} value={one}>
+                {t(PURPOSE_LABELS[one])}
+              </option>
+            ))}
+          </select>
         </Field>
-      ) : (
+
+        {pricedFromProduct(purpose) ? (
+          <Field
+            label={t('web.preview_product')}
+            htmlFor="preview-product"
+            {...(options.products === null ? { hint: t('web.rule_product_unreadable') } : {})}
+          >
+            {options.products === null ? (
+              <input
+                id="preview-product"
+                dir="ltr"
+                value={productId}
+                onChange={(event) => setProductId(event.target.value.trim())}
+              />
+            ) : (
+              <select
+                id="preview-product"
+                value={productId}
+                onChange={(event) => setProductId(event.target.value)}
+              >
+                <option value="" />
+                {options.products.map((row) => (
+                  <option key={row.id} value={row.id}>
+                    {row.title}
+                  </option>
+                ))}
+              </select>
+            )}
+          </Field>
+        ) : (
+          <Field
+            label={t('web.preview_addon')}
+            hint={t('web.preview_addon_hint')}
+            htmlFor="preview-addon"
+          >
+            <input
+              id="preview-addon"
+              dir="ltr"
+              value={addonId}
+              onChange={(event) => setAddonId(event.target.value.trim())}
+            />
+          </Field>
+        )}
+
         <Field
-          label={t('web.preview_addon')}
-          hint={t('web.preview_addon_hint')}
-          htmlFor="preview-addon"
+          label={t('web.preview_customer')}
+          hint={t('web.preview_customer_hint')}
+          htmlFor="preview-customer"
         >
           <input
-            id="preview-addon"
+            id="preview-customer"
             dir="ltr"
-            value={addonId}
-            onChange={(event) => setAddonId(event.target.value.trim())}
+            value={customerId}
+            onChange={(event) => setCustomerId(event.target.value.trim())}
           />
         </Field>
-      )}
+        <Field
+          label={t('web.preview_code')}
+          hint={t('web.preview_code_hint')}
+          htmlFor="preview-code"
+        >
+          <input
+            id="preview-code"
+            dir="ltr"
+            value={code}
+            maxLength={DISCOUNT_CODE_MAX_LENGTH}
+            onChange={(event) => setCode(event.target.value)}
+          />
+        </Field>
+      </div>
 
-      <Field
-        label={t('web.preview_customer')}
-        hint={t('web.preview_customer_hint')}
-        htmlFor="preview-customer"
-      >
-        <input
-          id="preview-customer"
-          dir="ltr"
-          value={customerId}
-          onChange={(event) => setCustomerId(event.target.value.trim())}
-        />
-      </Field>
-      <Field label={t('web.preview_code')} hint={t('web.preview_code_hint')} htmlFor="preview-code">
-        <input
-          id="preview-code"
-          dir="ltr"
-          value={code}
-          maxLength={DISCOUNT_CODE_MAX_LENGTH}
-          onChange={(event) => setCode(event.target.value)}
-        />
-      </Field>
-
-      <div className="toolbar">
-        <button type="button" className="btn primary sm" disabled={problem !== null} onClick={run}>
+      <div className="form-actions">
+        <Button variant="primary" icon="zap" disabled={problem !== null} onClick={run}>
           {t('web.preview_run')}
-        </button>
+        </Button>
       </div>
 
       {asked !== null && (
@@ -1856,7 +2072,9 @@ function PreviewResult({ result }: { result: PricePreviewResponse }) {
       key: 'outcome',
       header: t('web.preview_outcome'),
       render: (row) => (
-        <Badge tone={OUTCOME_TONES[row.outcome]}>{t(OUTCOME_LABELS[row.outcome])}</Badge>
+        <Badge tone={OUTCOME_TONES[row.outcome]} dot>
+          {t(OUTCOME_LABELS[row.outcome])}
+        </Badge>
       ),
     },
     {
@@ -1867,75 +2085,80 @@ function PreviewResult({ result }: { result: PricePreviewResponse }) {
   ];
 
   return (
-    <>
-      <KV
-        items={[
-          [
-            t('web.order_subtotal'),
-            <Money
-              key="s"
-              value={{ amountMinor: result.subtotalAmount, currency: result.currency }}
-            />,
-          ],
-          [
-            t('web.order_discount'),
-            <Money
-              key="d"
-              value={{ amountMinor: result.discountAmount, currency: result.currency }}
-            />,
-          ],
-          [
-            t('web.order_total'),
-            <Money
-              key="t"
-              value={{ amountMinor: result.totalAmount, currency: result.currency }}
-            />,
-          ],
-          [
-            t('web.preview_cashback'),
-            cashback === undefined ? (
-              <span key="c" className="muted">
-                {t('web.preview_no_cashback')}
-              </span>
-            ) : (
-              <span key="c">
-                {cashback.ruleLabel} — <Ltr>{String(cashback.percent)}</Ltr>{' '}
-                {t('web.discount_percent_unit')} — <Money value={cashback.amount} />
-              </span>
-            ),
-          ],
-          ...(result.code === null
-            ? []
-            : [
-                [
-                  t('web.preview_code_verdict'),
-                  <span key="v">
-                    <Badge tone={result.code.accepted ? 'ok' : 'danger'}>
-                      {t(
-                        result.code.accepted
-                          ? 'web.preview_code_accepted'
-                          : 'web.preview_code_refused',
-                      )}
-                    </Badge>
-                    {result.code.reason !== null && <> {t(REASON_LABELS[result.code.reason])}</>}
-                  </span>,
-                ] as [ReactNode, ReactNode],
-              ]),
-        ]}
-      />
-
-      <h3>{t('web.preview_rules_title')}</h3>
-      {result.rules.length === 0 ? (
-        <Empty title={t('web.preview_rules_empty')} />
-      ) : (
-        <DataTable
-          caption={t('web.preview_rules_title')}
-          columns={columns}
-          rows={result.rules}
-          rowKey={(row) => row.discountId}
+    <div className="discounts-preview-result">
+      <div className="discounts-quote">
+        <KV
+          items={[
+            [
+              t('web.order_subtotal'),
+              <Money
+                key="s"
+                value={{ amountMinor: result.subtotalAmount, currency: result.currency }}
+              />,
+            ],
+            [
+              t('web.order_discount'),
+              <Money
+                key="d"
+                value={{ amountMinor: result.discountAmount, currency: result.currency }}
+              />,
+            ],
+            [
+              t('web.order_total'),
+              <Money
+                key="t"
+                value={{ amountMinor: result.totalAmount, currency: result.currency }}
+              />,
+            ],
+            [
+              t('web.preview_cashback'),
+              cashback === undefined ? (
+                <span key="c" className="muted">
+                  {t('web.preview_no_cashback')}
+                </span>
+              ) : (
+                <span key="c">
+                  {cashback.ruleLabel} — <Ltr>{String(cashback.percent)}</Ltr>{' '}
+                  {t('web.discount_percent_unit')} — <Money value={cashback.amount} />
+                </span>
+              ),
+            ],
+            ...(result.code === null
+              ? []
+              : [
+                  [
+                    t('web.preview_code_verdict'),
+                    <span key="v">
+                      <Badge tone={result.code.accepted ? 'ok' : 'danger'}>
+                        {t(
+                          result.code.accepted
+                            ? 'web.preview_code_accepted'
+                            : 'web.preview_code_refused',
+                        )}
+                      </Badge>
+                      {result.code.reason !== null && <> {t(REASON_LABELS[result.code.reason])}</>}
+                    </span>,
+                  ] as [ReactNode, ReactNode],
+                ]),
+          ]}
         />
-      )}
-      <p className="muted small">{t('web.preview_reason_note')}</p>
-    </>
+      </div>
+
+      <div className="stack-sm">
+        <h3>{t('web.preview_rules_title')}</h3>
+        {result.rules.length === 0 ? (
+          <Empty title={t('web.preview_rules_empty')} variant="compact" />
+        ) : (
+          <DataTable
+            caption={t('web.preview_rules_title')}
+            columns={columns}
+            rows={result.rules}
+            rowKey={(row) => row.discountId}
+            dense
+          />
+        )}
+        <p className="muted small">{t('web.preview_reason_note')}</p>
+      </div>
+    </div>
   );
 }

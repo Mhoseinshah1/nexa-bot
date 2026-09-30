@@ -65,12 +65,20 @@ import {
   Money,
   Num,
   PageHead,
-  Pills,
   StateSwitch,
+  Button,
+  ConfirmDialog,
+  FilterChip,
+  FilterChips,
+  StatCard,
+  TwoColumn,
   useToast,
+  useUnsavedChanges,
   type Column,
   type Tone,
 } from '../ui/kit';
+import { Icon } from '../ui/icons';
+import { SaveBar, SectionNav } from './editor-layout';
 
 /**
  * Campaigns — «کمپین‌ها» (round N, C1; `docs/round-n-campaigns-audit.md`).
@@ -144,7 +152,25 @@ const TALLY_STATE_LABELS: Readonly<Record<string, WebKey>> = {
 };
 
 function StateBadge({ value }: { value: CampaignState }) {
-  return <Badge tone={STATE_TONES[value]}>{t(CAMPAIGN_STATE_LABELS[value])}</Badge>;
+  return (
+    <Badge tone={STATE_TONES[value]} dot pulse={value === 'ACTIVE'}>
+      {t(CAMPAIGN_STATE_LABELS[value])}
+    </Badge>
+  );
+}
+
+/** A campaign's action kinds as small outlined tags, or the word for none. */
+function KindTags({ kinds }: { kinds: readonly CampaignActionKind[] }) {
+  if (kinds.length === 0) return <span className="muted">{t('web.campaign_no_actions')}</span>;
+  return (
+    <span className="campaign-kinds">
+      {kinds.map((kind) => (
+        <Badge key={kind} tone="violet" outline>
+          {t(CAMPAIGN_ACTION_LABELS[kind])}
+        </Badge>
+      ))}
+    </span>
+  );
 }
 
 function Moment({ value }: { value: { date: string; time: string } }) {
@@ -224,7 +250,7 @@ export function CampaignsPage({
       key: 'name',
       header: t('web.campaign_name'),
       render: (row) => (
-        <a href={`/campaigns/${row.id}`} onClick={onLink}>
+        <a href={`/campaigns/${row.id}`} onClick={onLink} className="strong">
           {row.name}
         </a>
       ),
@@ -234,7 +260,7 @@ export function CampaignsPage({
       key: 'window',
       header: t('web.campaign_window'),
       render: (row) => (
-        <span className="small">
+        <span className="small muted nowrap">
           <Moment value={row.startLocal} /> ← <Moment value={row.endLocal} />
         </span>
       ),
@@ -242,7 +268,7 @@ export function CampaignsPage({
     {
       key: 'actions',
       header: t('web.campaign_actions'),
-      render: (row) => kindsText(row.actionKinds),
+      render: (row) => <KindTags kinds={row.actionKinds} />,
     },
     {
       key: 'audience',
@@ -265,9 +291,16 @@ export function CampaignsPage({
         maturity="now"
         actions={
           mayManage && !denied ? (
-            <a className="btn primary" href="/campaigns/new" onClick={onLink}>
-              {t('web.campaign_new')}
-            </a>
+            <>
+              <a className="btn" href="/discounts" onClick={onLink}>
+                <Icon name="discounts" />
+                {t('web.nav_discounts')}
+              </a>
+              <a className="btn primary" href="/campaigns/new" onClick={onLink}>
+                <Icon name="plus" />
+                {t('web.campaign_new')}
+              </a>
+            </>
           ) : undefined
         }
       />
@@ -277,20 +310,28 @@ export function CampaignsPage({
         <p>{t('web.campaign_semantics_results')}</p>
       </Banner>
       <Card>
-        <Pills<StateFilter>
-          value={filter}
-          onChange={(next) => {
-            const suffix = next === 'ALL' ? '' : `?state=${next}`;
-            navigate(`/campaigns${suffix}`, { replace: true });
-          }}
-          items={[
-            { id: 'ALL', label: t('web.campaign_filter_all') },
-            ...CAMPAIGN_STATES.map((state) => ({
-              id: state,
-              label: t(CAMPAIGN_STATE_LABELS[state]),
-            })),
-          ]}
-        />
+        <FilterChips label={t('web.status')}>
+          {(
+            [
+              { id: 'ALL', label: t('web.campaign_filter_all') },
+              ...CAMPAIGN_STATES.map((state) => ({
+                id: state,
+                label: t(CAMPAIGN_STATE_LABELS[state]),
+              })),
+            ] as { id: StateFilter; label: string }[]
+          ).map((item) => (
+            <FilterChip
+              key={item.id}
+              pressed={filter === item.id}
+              onClick={() => {
+                const suffix = item.id === 'ALL' ? '' : `?state=${item.id}`;
+                navigate(`/campaigns${suffix}`, { replace: true });
+              }}
+            >
+              {item.label}
+            </FilterChip>
+          ))}
+        </FilterChips>
         <StateSwitch
           query={list}
           denied={denied}
@@ -302,6 +343,7 @@ export function CampaignsPage({
             rows={rows}
             rowKey={(row) => row.id}
             caption={t('web.campaigns_title')}
+            dense
           />
           <CursorPager
             onPrevious={() => setCursors({ filter, trail: trail.slice(0, -1) })}
@@ -641,7 +683,7 @@ function Toggle({
   label: string;
 }) {
   return (
-    <label>
+    <label className="check">
       <input type="checkbox" checked={on} onChange={(event) => onChange(event.target.checked)} />{' '}
       {label}
     </label>
@@ -672,6 +714,7 @@ function PurposeChecks({
 }
 
 function ScopePicker({
+  prefix,
   kind,
   productId,
   categoryId,
@@ -679,6 +722,8 @@ function ScopePicker({
   products,
   categories,
 }: {
+  /** Distinguishes the two pickers' control ids (discount, cashback). */
+  prefix: string;
   kind: ScopeKind;
   productId: string;
   categoryId: string;
@@ -688,8 +733,9 @@ function ScopePicker({
 }) {
   return (
     <div className="grid-2">
-      <Field label={t('web.campaign_scope')}>
+      <Field label={t('web.campaign_scope')} htmlFor={`${prefix}-scope`}>
         <select
+          id={`${prefix}-scope`}
           value={kind}
           onChange={(event) =>
             onChange({ kind: event.target.value as ScopeKind, productId, categoryId })
@@ -701,8 +747,9 @@ function ScopePicker({
         </select>
       </Field>
       {kind === 'PRODUCT' && (
-        <Field label={t('web.campaign_scope_product')}>
+        <Field label={t('web.campaign_scope_product')} htmlFor={`${prefix}-product`}>
           <select
+            id={`${prefix}-product`}
             value={productId}
             onChange={(event) => onChange({ kind, productId: event.target.value, categoryId })}
           >
@@ -716,8 +763,9 @@ function ScopePicker({
         </Field>
       )}
       {kind === 'CATEGORY' && (
-        <Field label={t('web.campaign_scope_category')}>
+        <Field label={t('web.campaign_scope_category')} htmlFor={`${prefix}-category`}>
           <select
+            id={`${prefix}-category`}
             value={categoryId}
             onChange={(event) => onChange({ kind, productId, categoryId: event.target.value })}
           >
@@ -751,6 +799,8 @@ function CampaignForm({
   const submission = useSubmissionKey();
   const [state, setState] = useState<FormState>(initial);
   const [problem, setProblem] = useState<WebKey | null>(null);
+  const dirty = JSON.stringify(state) !== JSON.stringify(initial);
+  useUnsavedChanges(dirty);
   const set = <K extends keyof FormState>(key: K, value: FormState[K]) =>
     setState((current) => ({ ...current, [key]: value }));
 
@@ -781,7 +831,8 @@ function CampaignForm({
       setProblem(null);
       void client.invalidateQueries({ queryKey: [CAMPAIGNS_KEY] });
       notify({ tone: 'ok', message: t('web.campaign_saved') });
-      navigate(`/campaigns/${response.campaign.id}`);
+      // Saved: opening the campaign is not leaving unsaved work.
+      navigate(`/campaigns/${response.campaign.id}`, { force: true });
     },
     onError: (error) => {
       if (error instanceof ProblemError) {
@@ -805,431 +856,527 @@ function CampaignForm({
   )} · ${presentation.timezone}`;
 
   return (
-    <form onSubmit={onSubmit}>
-      <Card title={t('web.campaign_section_identity')}>
-        <div className="grid-2">
-          <Field label={t('web.campaign_name')}>
-            <input
-              value={state.name}
-              maxLength={CAMPAIGN_NAME_MAX_LENGTH}
-              onChange={(event) => set('name', event.target.value)}
-            />
-          </Field>
-          <Field label={t('web.campaign_description')} hint={t('web.campaign_description_hint')}>
-            <textarea
-              value={state.description}
-              maxLength={CAMPAIGN_DESCRIPTION_MAX_LENGTH}
-              onChange={(event) => set('description', event.target.value)}
-            />
-          </Field>
-        </div>
-      </Card>
-
-      <Card title={t('web.campaign_window')} hint={calendarHint}>
-        <div className="grid-2">
-          <Field label={t('web.campaign_start')} hint={t('web.campaign_date_format')}>
-            <div className="toolbar">
+    <form onSubmit={onSubmit} className="cb-editor no-side">
+      <SectionNav
+        items={[
+          { id: 'campaign-section-identity', label: t('web.campaign_section_identity') },
+          { id: 'campaign-section-window', label: t('web.campaign_window') },
+          { id: 'campaign-section-audience', label: t('web.campaign_section_audience') },
+          { id: 'campaign-section-discount', label: t('web.campaign_action_discount') },
+          { id: 'campaign-section-cashback', label: t('web.campaign_action_cashback') },
+          { id: 'campaign-section-gifts', label: t('web.campaign_section_gifts') },
+          { id: 'campaign-section-announcement', label: t('web.campaign_action_announcement') },
+        ]}
+      />
+      <div className="cb-editor-main stack">
+        <Card id="campaign-section-identity" title={t('web.campaign_section_identity')}>
+          <div className="grid-2">
+            <Field label={t('web.campaign_name')} htmlFor="campaign-name">
               <input
-                dir="ltr"
-                placeholder="1405-07-10"
-                value={state.startDate}
-                onChange={(event) => set('startDate', event.target.value.trim())}
-              />
-              <input
-                dir="ltr"
-                type="time"
-                value={state.startTime}
-                onChange={(event) => set('startTime', event.target.value)}
-              />
-            </div>
-          </Field>
-          <Field label={t('web.campaign_end')} hint={t('web.campaign_date_format')}>
-            <div className="toolbar">
-              <input
-                dir="ltr"
-                placeholder="1405-07-20"
-                value={state.endDate}
-                onChange={(event) => set('endDate', event.target.value.trim())}
-              />
-              <input
-                dir="ltr"
-                type="time"
-                value={state.endTime}
-                onChange={(event) => set('endTime', event.target.value)}
-              />
-            </div>
-          </Field>
-        </div>
-      </Card>
-
-      <Card title={t('web.campaign_section_audience')} hint={t('web.campaign_audience_hint')}>
-        <AudienceBuilder value={state.audience} onChange={(next) => set('audience', next)} />
-      </Card>
-
-      <Card title={t('web.campaign_action_discount')} hint={t('web.campaign_discount_hint')}>
-        {may.discount ? (
-          <Toggle
-            on={state.discountOn}
-            onChange={(on) => set('discountOn', on)}
-            label={t('web.campaign_action_on')}
-          />
-        ) : (
-          <NotPermitted label={t('web.campaign_action_on')} />
-        )}
-        {may.discount && state.discountOn && (
-          <>
-            <div className="grid-2">
-              <Field label={t('web.campaign_discount_kind')}>
-                <select
-                  value={state.discountKind}
-                  onChange={(event) =>
-                    set('discountKind', event.target.value as FormState['discountKind'])
-                  }
-                >
-                  <option value="AUTOMATIC">{t('web.campaign_discount_automatic')}</option>
-                  <option value="CODE">{t('web.campaign_discount_code')}</option>
-                </select>
-              </Field>
-              {state.discountKind === 'CODE' && (
-                <Field label={t('web.campaign_discount_code')} hint={t('web.campaign_code_hint')}>
-                  <input
-                    dir="ltr"
-                    value={state.discountCode}
-                    onChange={(event) => set('discountCode', event.target.value)}
-                  />
-                </Field>
-              )}
-              <Field label={t('web.campaign_discount_type')}>
-                <select
-                  value={state.discountType}
-                  onChange={(event) =>
-                    set('discountType', event.target.value as FormState['discountType'])
-                  }
-                >
-                  <option value="PERCENTAGE">{t('web.campaign_discount_percentage')}</option>
-                  <option value="FIXED_AMOUNT">{t('web.campaign_discount_fixed')}</option>
-                </select>
-              </Field>
-              <Field
-                label={t('web.campaign_discount_value')}
-                hint={
-                  state.discountType === 'PERCENTAGE'
-                    ? t('web.campaign_percent_hint')
-                    : `${t('web.campaign_amount_hint')} ${currency}`
-                }
-              >
-                <input
-                  dir="ltr"
-                  inputMode="numeric"
-                  value={state.discountValue}
-                  onChange={(event) => set('discountValue', event.target.value.trim())}
-                />
-              </Field>
-            </div>
-            <Field label={t('web.campaign_purposes')}>
-              <PurposeChecks
-                value={state.discountPurposes}
-                onChange={(next) => set('discountPurposes', next)}
+                id="campaign-name"
+                value={state.name}
+                maxLength={CAMPAIGN_NAME_MAX_LENGTH}
+                onChange={(event) => set('name', event.target.value)}
               />
             </Field>
-            <ScopePicker
-              kind={state.discountScope}
-              productId={state.discountProductId}
-              categoryId={state.discountCategoryId}
-              products={productRows}
-              categories={categoryRows}
-              onChange={(next) =>
-                setState((current) => ({
-                  ...current,
-                  discountScope: next.kind,
-                  discountProductId: next.productId,
-                  discountCategoryId: next.categoryId,
-                }))
-              }
+            <Field
+              label={t('web.campaign_description')}
+              htmlFor="campaign-description"
+              hint={t('web.campaign_description_hint')}
+            >
+              <textarea
+                id="campaign-description"
+                value={state.description}
+                maxLength={CAMPAIGN_DESCRIPTION_MAX_LENGTH}
+                onChange={(event) => set('description', event.target.value)}
+              />
+            </Field>
+          </div>
+        </Card>
+
+        <Card id="campaign-section-window" title={t('web.campaign_window')} hint={calendarHint}>
+          <div className="grid-2">
+            <Field
+              label={t('web.campaign_start')}
+              hint={t('web.campaign_date_format')}
+              htmlFor="campaign-start-date"
+            >
+              <div className="campaign-moment">
+                <input
+                  id="campaign-start-date"
+                  dir="ltr"
+                  placeholder="1405-07-10"
+                  value={state.startDate}
+                  onChange={(event) => set('startDate', event.target.value.trim())}
+                />
+                <input
+                  dir="ltr"
+                  type="time"
+                  aria-label={`${t('web.campaign_start')} — ${t('web.cb_time')}`}
+                  value={state.startTime}
+                  onChange={(event) => set('startTime', event.target.value)}
+                />
+              </div>
+            </Field>
+            <Field
+              label={t('web.campaign_end')}
+              hint={t('web.campaign_date_format')}
+              htmlFor="campaign-end-date"
+            >
+              <div className="campaign-moment">
+                <input
+                  id="campaign-end-date"
+                  dir="ltr"
+                  placeholder="1405-07-20"
+                  value={state.endDate}
+                  onChange={(event) => set('endDate', event.target.value.trim())}
+                />
+                <input
+                  dir="ltr"
+                  type="time"
+                  aria-label={`${t('web.campaign_end')} — ${t('web.cb_time')}`}
+                  value={state.endTime}
+                  onChange={(event) => set('endTime', event.target.value)}
+                />
+              </div>
+            </Field>
+          </div>
+        </Card>
+
+        <Card
+          id="campaign-section-audience"
+          title={t('web.campaign_section_audience')}
+          hint={t('web.campaign_audience_hint')}
+        >
+          <AudienceBuilder value={state.audience} onChange={(next) => set('audience', next)} />
+        </Card>
+
+        <Card
+          id="campaign-section-discount"
+          title={t('web.campaign_action_discount')}
+          hint={t('web.campaign_discount_hint')}
+        >
+          {may.discount ? (
+            <Toggle
+              on={state.discountOn}
+              onChange={(on) => set('discountOn', on)}
+              label={t('web.campaign_action_on')}
             />
+          ) : (
+            <NotPermitted label={t('web.campaign_action_on')} />
+          )}
+          {may.discount && state.discountOn && (
+            <>
+              <div className="grid-2">
+                <Field label={t('web.campaign_discount_kind')} htmlFor="campaign-discount-kind">
+                  <select
+                    id="campaign-discount-kind"
+                    value={state.discountKind}
+                    onChange={(event) =>
+                      set('discountKind', event.target.value as FormState['discountKind'])
+                    }
+                  >
+                    <option value="AUTOMATIC">{t('web.campaign_discount_automatic')}</option>
+                    <option value="CODE">{t('web.campaign_discount_code')}</option>
+                  </select>
+                </Field>
+                {state.discountKind === 'CODE' && (
+                  <Field
+                    label={t('web.campaign_discount_code')}
+                    htmlFor="campaign-discount-code"
+                    hint={t('web.campaign_code_hint')}
+                  >
+                    <input
+                      id="campaign-discount-code"
+                      dir="ltr"
+                      value={state.discountCode}
+                      onChange={(event) => set('discountCode', event.target.value)}
+                    />
+                  </Field>
+                )}
+                <Field label={t('web.campaign_discount_type')} htmlFor="campaign-discount-type">
+                  <select
+                    id="campaign-discount-type"
+                    value={state.discountType}
+                    onChange={(event) =>
+                      set('discountType', event.target.value as FormState['discountType'])
+                    }
+                  >
+                    <option value="PERCENTAGE">{t('web.campaign_discount_percentage')}</option>
+                    <option value="FIXED_AMOUNT">{t('web.campaign_discount_fixed')}</option>
+                  </select>
+                </Field>
+                <Field
+                  label={t('web.campaign_discount_value')}
+                  htmlFor="campaign-discount-value"
+                  hint={
+                    state.discountType === 'PERCENTAGE'
+                      ? t('web.campaign_percent_hint')
+                      : `${t('web.campaign_amount_hint')} ${currency}`
+                  }
+                >
+                  <input
+                    id="campaign-discount-value"
+                    dir="ltr"
+                    inputMode="numeric"
+                    value={state.discountValue}
+                    onChange={(event) => set('discountValue', event.target.value.trim())}
+                  />
+                </Field>
+              </div>
+              <fieldset className="field cb-fieldset">
+                <legend className="field-label">{t('web.campaign_purposes')}</legend>
+                <PurposeChecks
+                  value={state.discountPurposes}
+                  onChange={(next) => set('discountPurposes', next)}
+                />
+              </fieldset>
+              <ScopePicker
+                prefix="campaign-discount"
+                kind={state.discountScope}
+                productId={state.discountProductId}
+                categoryId={state.discountCategoryId}
+                products={productRows}
+                categories={categoryRows}
+                onChange={(next) =>
+                  setState((current) => ({
+                    ...current,
+                    discountScope: next.kind,
+                    discountProductId: next.productId,
+                    discountCategoryId: next.categoryId,
+                  }))
+                }
+              />
+              <div className="grid-2">
+                <Field
+                  label={t('web.campaign_discount_minimum')}
+                  htmlFor="campaign-discount-minimum"
+                  hint={`${t('web.campaign_amount_hint')} ${currency}`}
+                >
+                  <input
+                    id="campaign-discount-minimum"
+                    dir="ltr"
+                    inputMode="numeric"
+                    value={state.discountMinimum}
+                    onChange={(event) => set('discountMinimum', event.target.value.trim())}
+                  />
+                </Field>
+                <Field
+                  label={t('web.campaign_discount_total_limit')}
+                  htmlFor="campaign-discount-total-limit"
+                  hint={t('web.campaign_limit_hint')}
+                >
+                  <input
+                    id="campaign-discount-total-limit"
+                    dir="ltr"
+                    inputMode="numeric"
+                    value={state.discountTotalLimit}
+                    onChange={(event) => set('discountTotalLimit', event.target.value.trim())}
+                  />
+                </Field>
+                <Field
+                  label={t('web.campaign_discount_per_customer')}
+                  htmlFor="campaign-discount-per-customer"
+                  hint={t('web.campaign_limit_hint')}
+                >
+                  <input
+                    id="campaign-discount-per-customer"
+                    dir="ltr"
+                    inputMode="numeric"
+                    value={state.discountPerCustomer}
+                    onChange={(event) => set('discountPerCustomer', event.target.value.trim())}
+                  />
+                </Field>
+              </div>
+              <Toggle
+                on={state.discountFirstPurchase}
+                onChange={(on) => set('discountFirstPurchase', on)}
+                label={t('web.campaign_discount_first_purchase')}
+              />
+              <Toggle
+                on={state.discountStackable}
+                onChange={(on) => set('discountStackable', on)}
+                label={t('web.campaign_discount_stackable')}
+              />
+            </>
+          )}
+        </Card>
+
+        <Card
+          id="campaign-section-cashback"
+          title={t('web.campaign_action_cashback')}
+          hint={t('web.campaign_cashback_hint')}
+        >
+          {may.cashback ? (
+            <Toggle
+              on={state.cashbackOn}
+              onChange={(on) => set('cashbackOn', on)}
+              label={t('web.campaign_action_on')}
+            />
+          ) : (
+            <NotPermitted label={t('web.campaign_action_on')} />
+          )}
+          {may.cashback && state.cashbackOn && (
+            <>
+              <Field
+                label={t('web.campaign_cashback_percent')}
+                htmlFor="campaign-cashback-percent"
+                hint={t('web.campaign_percent_hint')}
+              >
+                <input
+                  id="campaign-cashback-percent"
+                  dir="ltr"
+                  inputMode="numeric"
+                  value={state.cashbackPercent}
+                  onChange={(event) => set('cashbackPercent', event.target.value.trim())}
+                />
+              </Field>
+              <fieldset className="field cb-fieldset">
+                <legend className="field-label">{t('web.campaign_purposes')}</legend>
+                <PurposeChecks
+                  value={state.cashbackPurposes}
+                  onChange={(next) => set('cashbackPurposes', next)}
+                />
+              </fieldset>
+              <ScopePicker
+                prefix="campaign-cashback"
+                kind={state.cashbackScope}
+                productId={state.cashbackProductId}
+                categoryId={state.cashbackCategoryId}
+                products={productRows}
+                categories={categoryRows}
+                onChange={(next) =>
+                  setState((current) => ({
+                    ...current,
+                    cashbackScope: next.kind,
+                    cashbackProductId: next.productId,
+                    cashbackCategoryId: next.categoryId,
+                  }))
+                }
+              />
+            </>
+          )}
+        </Card>
+
+        <Card
+          id="campaign-section-gifts"
+          title={t('web.campaign_section_gifts')}
+          hint={t('web.campaign_gifts_hint')}
+        >
+          {may.walletGift ? (
+            <Toggle
+              on={state.walletOn}
+              onChange={(on) => set('walletOn', on)}
+              label={t('web.campaign_action_wallet_gift')}
+            />
+          ) : (
+            <NotPermitted label={t('web.campaign_action_wallet_gift')} />
+          )}
+          {may.walletGift && state.walletOn && (
             <div className="grid-2">
               <Field
-                label={t('web.campaign_discount_minimum')}
+                label={t('web.campaign_wallet_amount')}
+                htmlFor="campaign-wallet-amount"
                 hint={`${t('web.campaign_amount_hint')} ${currency}`}
               >
                 <input
+                  id="campaign-wallet-amount"
                   dir="ltr"
                   inputMode="numeric"
-                  value={state.discountMinimum}
-                  onChange={(event) => set('discountMinimum', event.target.value.trim())}
+                  value={state.walletAmount}
+                  onChange={(event) => set('walletAmount', event.target.value.trim())}
                 />
               </Field>
-              <Field
-                label={t('web.campaign_discount_total_limit')}
-                hint={t('web.campaign_limit_hint')}
-              >
-                <input
-                  dir="ltr"
-                  inputMode="numeric"
-                  value={state.discountTotalLimit}
-                  onChange={(event) => set('discountTotalLimit', event.target.value.trim())}
-                />
-              </Field>
-              <Field
-                label={t('web.campaign_discount_per_customer')}
-                hint={t('web.campaign_limit_hint')}
-              >
-                <input
-                  dir="ltr"
-                  inputMode="numeric"
-                  value={state.discountPerCustomer}
-                  onChange={(event) => set('discountPerCustomer', event.target.value.trim())}
-                />
-              </Field>
+              <Toggle
+                on={state.walletNotify}
+                onChange={(on) => set('walletNotify', on)}
+                label={t('web.campaign_notify')}
+              />
             </div>
+          )}
+          {may.serviceGift ? (
             <Toggle
-              on={state.discountFirstPurchase}
-              onChange={(on) => set('discountFirstPurchase', on)}
-              label={t('web.campaign_discount_first_purchase')}
+              on={state.trafficOn}
+              onChange={(on) => set('trafficOn', on)}
+              label={t('web.campaign_action_traffic_gift')}
             />
-            <Toggle
-              on={state.discountStackable}
-              onChange={(on) => set('discountStackable', on)}
-              label={t('web.campaign_discount_stackable')}
-            />
-          </>
-        )}
-      </Card>
-
-      <Card title={t('web.campaign_action_cashback')} hint={t('web.campaign_cashback_hint')}>
-        {may.cashback ? (
-          <Toggle
-            on={state.cashbackOn}
-            onChange={(on) => set('cashbackOn', on)}
-            label={t('web.campaign_action_on')}
-          />
-        ) : (
-          <NotPermitted label={t('web.campaign_action_on')} />
-        )}
-        {may.cashback && state.cashbackOn && (
-          <>
-            <Field label={t('web.campaign_cashback_percent')} hint={t('web.campaign_percent_hint')}>
-              <input
-                dir="ltr"
-                inputMode="numeric"
-                value={state.cashbackPercent}
-                onChange={(event) => set('cashbackPercent', event.target.value.trim())}
-              />
-            </Field>
-            <Field label={t('web.campaign_purposes')}>
-              <PurposeChecks
-                value={state.cashbackPurposes}
-                onChange={(next) => set('cashbackPurposes', next)}
-              />
-            </Field>
-            <ScopePicker
-              kind={state.cashbackScope}
-              productId={state.cashbackProductId}
-              categoryId={state.cashbackCategoryId}
-              products={productRows}
-              categories={categoryRows}
-              onChange={(next) =>
-                setState((current) => ({
-                  ...current,
-                  cashbackScope: next.kind,
-                  cashbackProductId: next.productId,
-                  cashbackCategoryId: next.categoryId,
-                }))
-              }
-            />
-          </>
-        )}
-      </Card>
-
-      <Card title={t('web.campaign_section_gifts')} hint={t('web.campaign_gifts_hint')}>
-        {may.walletGift ? (
-          <Toggle
-            on={state.walletOn}
-            onChange={(on) => set('walletOn', on)}
-            label={t('web.campaign_action_wallet_gift')}
-          />
-        ) : (
-          <NotPermitted label={t('web.campaign_action_wallet_gift')} />
-        )}
-        {may.walletGift && state.walletOn && (
-          <div className="grid-2">
-            <Field
-              label={t('web.campaign_wallet_amount')}
-              hint={`${t('web.campaign_amount_hint')} ${currency}`}
-            >
-              <input
-                dir="ltr"
-                inputMode="numeric"
-                value={state.walletAmount}
-                onChange={(event) => set('walletAmount', event.target.value.trim())}
-              />
-            </Field>
-            <Toggle
-              on={state.walletNotify}
-              onChange={(on) => set('walletNotify', on)}
-              label={t('web.campaign_notify')}
-            />
-          </div>
-        )}
-        {may.serviceGift ? (
-          <Toggle
-            on={state.trafficOn}
-            onChange={(on) => set('trafficOn', on)}
-            label={t('web.campaign_action_traffic_gift')}
-          />
-        ) : (
-          <NotPermitted label={t('web.campaign_action_traffic_gift')} />
-        )}
-        {may.serviceGift && state.trafficOn && (
-          <div className="grid-2">
-            <Field label={t('web.campaign_traffic_gb')} hint={t('web.campaign_traffic_hint')}>
-              <input
-                dir="ltr"
-                inputMode="decimal"
-                value={state.trafficGb}
-                onChange={(event) => set('trafficGb', event.target.value.trim())}
-              />
-            </Field>
-            <Toggle
-              on={state.trafficNotify}
-              onChange={(on) => set('trafficNotify', on)}
-              label={t('web.campaign_notify')}
-            />
-          </div>
-        )}
-        {may.serviceGift ? (
-          <Toggle
-            on={state.timeOn}
-            onChange={(on) => set('timeOn', on)}
-            label={t('web.campaign_action_time_gift')}
-          />
-        ) : (
-          <NotPermitted label={t('web.campaign_action_time_gift')} />
-        )}
-        {may.serviceGift && state.timeOn && (
-          <div className="grid-2">
-            <Field label={t('web.campaign_time_days')}>
-              <input
-                dir="ltr"
-                inputMode="numeric"
-                value={state.timeDays}
-                onChange={(event) => set('timeDays', event.target.value.trim())}
-              />
-            </Field>
-            <Toggle
-              on={state.timeNotify}
-              onChange={(on) => set('timeNotify', on)}
-              label={t('web.campaign_notify')}
-            />
-          </div>
-        )}
-        {(state.trafficOn || state.timeOn) && (
-          <p className="muted small">{t('web.campaign_service_gift_hint')}</p>
-        )}
-      </Card>
-
-      <Card
-        title={t('web.campaign_action_announcement')}
-        hint={t('web.campaign_announcement_hint')}
-      >
-        {may.announcement ? (
-          <Toggle
-            on={state.announcementOn}
-            onChange={(on) => set('announcementOn', on)}
-            label={t('web.campaign_action_on')}
-          />
-        ) : (
-          <NotPermitted label={t('web.campaign_action_on')} />
-        )}
-        {may.announcement && state.announcementOn && (
-          <>
-            <Field
-              label={t('web.campaign_announcement_body')}
-              hint={t('web.campaign_placeholders')}
-            >
-              <textarea
-                rows={6}
-                value={state.announcementBody}
-                onChange={(event) => set('announcementBody', event.target.value)}
-              />
-            </Field>
-            <Field label={t('web.campaign_announcement_purpose')} hint={t('web.bc_purpose_hint')}>
-              <select
-                value={state.announcementPurpose}
-                onChange={(event) =>
-                  set('announcementPurpose', event.target.value as BroadcastPurpose)
-                }
+          ) : (
+            <NotPermitted label={t('web.campaign_action_traffic_gift')} />
+          )}
+          {may.serviceGift && state.trafficOn && (
+            <div className="grid-2">
+              <Field
+                label={t('web.campaign_traffic_gb')}
+                htmlFor="campaign-traffic-gb"
+                hint={t('web.campaign_traffic_hint')}
               >
-                <option value="MARKETING">{t('web.bc_purpose_marketing')}</option>
-                <option value="SERVICE_ANNOUNCEMENT">{t('web.bc_purpose_service')}</option>
-              </select>
-            </Field>
-            {state.buttons.map((button, index) => (
-              <div className="grid-2" key={index}>
-                <Field label={t('web.campaign_button_label')}>
-                  <input
-                    value={button.label}
-                    onChange={(event) =>
+                <input
+                  id="campaign-traffic-gb"
+                  dir="ltr"
+                  inputMode="decimal"
+                  value={state.trafficGb}
+                  onChange={(event) => set('trafficGb', event.target.value.trim())}
+                />
+              </Field>
+              <Toggle
+                on={state.trafficNotify}
+                onChange={(on) => set('trafficNotify', on)}
+                label={t('web.campaign_notify')}
+              />
+            </div>
+          )}
+          {may.serviceGift ? (
+            <Toggle
+              on={state.timeOn}
+              onChange={(on) => set('timeOn', on)}
+              label={t('web.campaign_action_time_gift')}
+            />
+          ) : (
+            <NotPermitted label={t('web.campaign_action_time_gift')} />
+          )}
+          {may.serviceGift && state.timeOn && (
+            <div className="grid-2">
+              <Field label={t('web.campaign_time_days')} htmlFor="campaign-time-days">
+                <input
+                  id="campaign-time-days"
+                  dir="ltr"
+                  inputMode="numeric"
+                  value={state.timeDays}
+                  onChange={(event) => set('timeDays', event.target.value.trim())}
+                />
+              </Field>
+              <Toggle
+                on={state.timeNotify}
+                onChange={(on) => set('timeNotify', on)}
+                label={t('web.campaign_notify')}
+              />
+            </div>
+          )}
+          {(state.trafficOn || state.timeOn) && (
+            <p className="muted small">{t('web.campaign_service_gift_hint')}</p>
+          )}
+        </Card>
+
+        <Card
+          id="campaign-section-announcement"
+          title={t('web.campaign_action_announcement')}
+          hint={t('web.campaign_announcement_hint')}
+        >
+          {may.announcement ? (
+            <Toggle
+              on={state.announcementOn}
+              onChange={(on) => set('announcementOn', on)}
+              label={t('web.campaign_action_on')}
+            />
+          ) : (
+            <NotPermitted label={t('web.campaign_action_on')} />
+          )}
+          {may.announcement && state.announcementOn && (
+            <>
+              <Field
+                label={t('web.campaign_announcement_body')}
+                htmlFor="campaign-announcement-body"
+                hint={t('web.campaign_placeholders')}
+              >
+                <textarea
+                  id="campaign-announcement-body"
+                  rows={6}
+                  value={state.announcementBody}
+                  onChange={(event) => set('announcementBody', event.target.value)}
+                />
+              </Field>
+              <Field
+                label={t('web.campaign_announcement_purpose')}
+                htmlFor="campaign-announcement-purpose"
+                hint={t('web.bc_purpose_hint')}
+              >
+                <select
+                  id="campaign-announcement-purpose"
+                  value={state.announcementPurpose}
+                  onChange={(event) =>
+                    set('announcementPurpose', event.target.value as BroadcastPurpose)
+                  }
+                >
+                  <option value="MARKETING">{t('web.bc_purpose_marketing')}</option>
+                  <option value="SERVICE_ANNOUNCEMENT">{t('web.bc_purpose_service')}</option>
+                </select>
+              </Field>
+              {state.buttons.map((button, index) => (
+                <div className="grid-2" key={index}>
+                  <Field
+                    label={t('web.campaign_button_label')}
+                    htmlFor={`campaign-button-label-${String(index)}`}
+                  >
+                    <input
+                      id={`campaign-button-label-${String(index)}`}
+                      value={button.label}
+                      onChange={(event) =>
+                        set(
+                          'buttons',
+                          state.buttons.map((b, i) =>
+                            i === index ? { ...b, label: event.target.value } : b,
+                          ),
+                        )
+                      }
+                    />
+                  </Field>
+                  <Field
+                    label={t('web.campaign_button_url')}
+                    htmlFor={`campaign-button-url-${String(index)}`}
+                  >
+                    <input
+                      id={`campaign-button-url-${String(index)}`}
+                      dir="ltr"
+                      value={button.url}
+                      onChange={(event) =>
+                        set(
+                          'buttons',
+                          state.buttons.map((b, i) =>
+                            i === index ? { ...b, url: event.target.value } : b,
+                          ),
+                        )
+                      }
+                    />
+                  </Field>
+                  <button
+                    type="button"
+                    className="btn sm"
+                    onClick={() =>
                       set(
                         'buttons',
-                        state.buttons.map((b, i) =>
-                          i === index ? { ...b, label: event.target.value } : b,
-                        ),
+                        state.buttons.filter((_, i) => i !== index),
                       )
                     }
-                  />
-                </Field>
-                <Field label={t('web.campaign_button_url')}>
-                  <input
-                    dir="ltr"
-                    value={button.url}
-                    onChange={(event) =>
-                      set(
-                        'buttons',
-                        state.buttons.map((b, i) =>
-                          i === index ? { ...b, url: event.target.value } : b,
-                        ),
-                      )
-                    }
-                  />
-                </Field>
+                  >
+                    {t('web.campaign_button_remove')}
+                  </button>
+                </div>
+              ))}
+              {state.buttons.length < BROADCAST_BUTTONS_MAX && (
                 <button
                   type="button"
                   className="btn sm"
-                  onClick={() =>
-                    set(
-                      'buttons',
-                      state.buttons.filter((_, i) => i !== index),
-                    )
-                  }
+                  onClick={() => set('buttons', [...state.buttons, { label: '', url: 'https://' }])}
                 >
-                  {t('web.campaign_button_remove')}
+                  {t('web.campaign_button_add')}
                 </button>
-              </div>
-            ))}
-            {state.buttons.length < BROADCAST_BUTTONS_MAX && (
-              <button
-                type="button"
-                className="btn sm"
-                onClick={() => set('buttons', [...state.buttons, { label: '', url: 'https://' }])}
-              >
-                {t('web.campaign_button_add')}
-              </button>
-            )}
-          </>
-        )}
-      </Card>
+              )}
+            </>
+          )}
+        </Card>
 
-      <Card>
         <Banner tone="info">{t('web.campaign_referral_note')}</Banner>
-        {problem !== null && <Banner tone="danger">{t(problem)}</Banner>}
-        <div className="btn-group">
-          <button type="submit" className="btn primary" disabled={save.isPending}>
-            {t('web.campaign_save_draft')}
-          </button>
-          <span className="muted small">{t('web.campaign_save_hint')}</span>
-        </div>
-      </Card>
+        <Card className="campaign-savebar">
+          {problem !== null && <Banner tone="danger">{t(problem)}</Banner>}
+          <SaveBar dirty={dirty}>
+            <span className="muted small">{t('web.campaign_save_hint')}</span>
+            <button type="submit" className="btn primary" disabled={save.isPending}>
+              <Icon name="check" />
+              {t('web.campaign_save_draft')}
+            </button>
+          </SaveBar>
+        </Card>
+      </div>
     </form>
   );
 }
@@ -1331,12 +1478,13 @@ export function CampaignDetailPage({
         <>
           <PageHead
             title={campaign.name}
+            badge={<StateBadge value={campaign.state} />}
             {...(campaign.description === '' ? {} : { subtitle: campaign.description })}
             actions={
               mayManage && campaign.state === 'DRAFT' && !editing ? (
-                <button type="button" className="btn" onClick={() => setEditing(true)}>
+                <Button icon="edit" onClick={() => setEditing(true)}>
                   {t('web.campaign_edit')}
-                </button>
+                </Button>
               ) : undefined
             }
           />
@@ -1348,13 +1496,21 @@ export function CampaignDetailPage({
               may={may}
             />
           ) : (
-            <>
-              <SummaryCard campaign={campaign} />
-              <ActionsCard campaign={campaign} />
-              {campaign.state === 'DRAFT' && mayManage && <ConfirmCard campaign={campaign} />}
-              {mayManage && <CommandsCard campaign={campaign} />}
-              {campaign.state !== 'DRAFT' && <ResultsCard id={campaign.id} />}
-            </>
+            <TwoColumn
+              main={
+                <>
+                  <ActionsCard campaign={campaign} />
+                  {campaign.state === 'DRAFT' && mayManage && <ConfirmCard campaign={campaign} />}
+                  {campaign.state !== 'DRAFT' && <ResultsCard id={campaign.id} />}
+                </>
+              }
+              side={
+                <>
+                  <SummaryCard campaign={campaign} />
+                  {mayManage && <CommandsCard campaign={campaign} />}
+                </>
+              }
+            />
           )}
         </>
       )}
@@ -1415,6 +1571,7 @@ function ActionsCard({ campaign }: { campaign: CampaignDetail }) {
         caption={t('web.campaign_actions')}
         rows={campaign.actions}
         rowKey={(row) => row.kind}
+        dense
         columns={[
           {
             key: 'kind',
@@ -1426,6 +1583,7 @@ function ActionsCard({ campaign }: { campaign: CampaignDetail }) {
             header: t('web.status'),
             render: (row) => (
               <Badge
+                dot
                 tone={
                   row.state === 'FAILED' ? 'danger' : row.state === 'LAUNCHED' ? 'ok' : 'neutral'
                 }
@@ -1644,52 +1802,57 @@ function ConfirmCard({ campaign }: { campaign: CampaignDetail }) {
       <StateSwitch query={preview}>
         {p !== undefined && (
           <>
-            <KV
-              items={[
-                [t('web.campaign_preview_audience'), <Num key="a" value={p.audience.customers} />],
-                [t('web.campaign_preview_reachable'), <Num key="r" value={p.audience.reachable} />],
-                [
-                  t('web.campaign_preview_discount_max'),
+            <div className="stat-grid cb-stat-row">
+              <StatCard
+                label={t('web.campaign_preview_audience')}
+                value={<Num value={p.audience.customers} />}
+              />
+              <StatCard
+                label={t('web.campaign_preview_reachable')}
+                value={<Num value={p.audience.reachable} />}
+              />
+              <StatCard
+                label={t('web.campaign_preview_discount_max')}
+                value={
                   p.discountMaxLiability === null ? (
-                    t('web.campaign_not_determinable')
+                    <span className="cb-stat-note">{t('web.campaign_not_determinable')}</span>
                   ) : (
-                    <Money key="d" value={p.discountMaxLiability} />
-                  ),
-                ],
-                ...(p.walletGift === null
-                  ? []
-                  : ([
-                      [
-                        t('web.campaign_preview_wallet_count'),
-                        <Num key="wc" value={p.walletGift.count} />,
-                      ],
-                      [
-                        t('web.campaign_preview_wallet_total'),
-                        p.walletGift.totalLiability === null ? (
-                          '—'
-                        ) : (
-                          <Money key="wt" value={p.walletGift.totalLiability} />
-                        ),
-                      ],
-                    ] as [ReactNode, ReactNode][])),
-                ...(p.trafficGift === null
-                  ? []
-                  : ([
-                      [
-                        t('web.campaign_preview_traffic_count'),
-                        <Num key="tc" value={p.trafficGift.count} />,
-                      ],
-                    ] as [ReactNode, ReactNode][])),
-                ...(p.timeGift === null
-                  ? []
-                  : ([
-                      [
-                        t('web.campaign_preview_time_count'),
-                        <Num key="dc" value={p.timeGift.count} />,
-                      ],
-                    ] as [ReactNode, ReactNode][])),
-              ]}
-            />
+                    <Money value={p.discountMaxLiability} />
+                  )
+                }
+              />
+              {p.walletGift !== null && (
+                <>
+                  <StatCard
+                    label={t('web.campaign_preview_wallet_count')}
+                    value={<Num value={p.walletGift.count} />}
+                  />
+                  <StatCard
+                    label={t('web.campaign_preview_wallet_total')}
+                    value={
+                      p.walletGift.totalLiability === null ? (
+                        '—'
+                      ) : (
+                        <Money value={p.walletGift.totalLiability} />
+                      )
+                    }
+                    tone="warn"
+                  />
+                </>
+              )}
+              {p.trafficGift !== null && (
+                <StatCard
+                  label={t('web.campaign_preview_traffic_count')}
+                  value={<Num value={p.trafficGift.count} />}
+                />
+              )}
+              {p.timeGift !== null && (
+                <StatCard
+                  label={t('web.campaign_preview_time_count')}
+                  value={<Num value={p.timeGift.count} />}
+                />
+              )}
+            </div>
             {announcement !== undefined && (
               <Field label={t('web.campaign_announcement_body')}>
                 <p className="bot-preview">{announcement}</p>
@@ -1714,15 +1877,15 @@ function ConfirmCard({ campaign }: { campaign: CampaignDetail }) {
               p.timeGift !== null &&
               typedInput('timeGift', p.timeGift.count)}
             <Toggle on={reviewed} onChange={setReviewed} label={t('web.campaign_reviewed')} />
-            <div className="btn-group">
-              <button
-                type="button"
-                className="btn primary"
+            <div className="form-actions">
+              <Button
+                variant="primary"
+                icon="check"
                 disabled={!reviewed || confirm.isPending}
                 onClick={() => confirm.mutate(p)}
               >
                 {t('web.campaign_confirm')}
-              </button>
+              </Button>
             </div>
           </>
         )}
@@ -1773,42 +1936,46 @@ function CommandsCard({ campaign }: { campaign: CampaignDetail }) {
   const live = ['SCHEDULED', 'ACTIVE', 'PAUSED'].includes(campaign.state);
   const cancellable = campaign.state !== 'COMPLETED' && campaign.state !== 'CANCELLED';
   return (
-    <Card title={t('web.campaign_section_commands')} hint={t('web.campaign_cancel_hint')}>
+    <Card
+      title={t('web.campaign_section_commands')}
+      hint={t('web.campaign_cancel_hint')}
+      tone="danger"
+    >
       <p className="muted small">{t('web.campaign_frozen_note')}</p>
-      <div className="btn-group">
+      <div className="form-actions">
         {campaign.state === 'ACTIVE' && (
-          <button type="button" className="btn" onClick={() => run.mutate('pause')}>
+          <Button size="sm" icon="pause" onClick={() => run.mutate('pause')}>
             {t('web.campaign_pause')}
-          </button>
+          </Button>
         )}
         {campaign.state === 'PAUSED' && (
-          <button type="button" className="btn" onClick={() => run.mutate('resume')}>
+          <Button size="sm" icon="play" onClick={() => run.mutate('resume')}>
             {t('web.campaign_resume')}
-          </button>
+          </Button>
         )}
         {live && pendingLaunch && (
-          <button type="button" className="btn" onClick={() => run.mutate('launch')}>
+          <Button size="sm" icon="send" onClick={() => run.mutate('launch')}>
             {t('web.campaign_launch_pending')}
-          </button>
+          </Button>
         )}
-        {cancellable && !confirming && (
-          <button type="button" className="btn danger" onClick={() => setConfirming(true)}>
+        {cancellable && (
+          <Button size="sm" variant="danger" onClick={() => setConfirming(true)}>
             {t('web.campaign_cancel')}
-          </button>
+          </Button>
         )}
       </div>
       {confirming && (
-        <Banner tone="warn" title={t('web.campaign_cancel_confirm_title')}>
-          <p>{t('web.campaign_cancel_confirm_body')}</p>
-          <div className="btn-group">
-            <button type="button" className="btn danger" onClick={() => run.mutate('cancel')}>
-              {t('web.campaign_cancel_confirm')}
-            </button>
-            <button type="button" className="btn" onClick={() => setConfirming(false)}>
-              {t('web.campaign_cancel_keep')}
-            </button>
-          </div>
-        </Banner>
+        <ConfirmDialog
+          title={t('web.campaign_cancel_confirm_title')}
+          question={t('web.campaign_cancel_confirm_body')}
+          confirmLabel={t('web.campaign_cancel_confirm')}
+          cancelLabel={t('web.campaign_cancel_keep')}
+          onConfirm={() => {
+            setConfirming(false);
+            run.mutate('cancel');
+          }}
+          onCancel={() => setConfirming(false)}
+        />
       )}
     </Card>
   );

@@ -45,23 +45,30 @@ import { messageFor } from './settings';
 import {
   Badge,
   Banner,
+  Button,
   Card,
+  CellMain,
+  ChipDivider,
   Copyable,
   CursorPager,
   DataTable,
   Empty,
   Field,
+  FilterChip,
+  FilterChips,
   KV,
   ListEditor,
   Ltr,
   Money,
   PageHead,
-  Pills,
   StateSwitch,
   useToast,
+  useUnsavedChanges,
   type Column,
   type Tone,
 } from '../ui/kit';
+import { Icon } from '../ui/icons';
+import { FormSection, SaveBar, SectionNav, revealField } from './editor-layout';
 
 /**
  * Products — the tenant's catalogue, as the operator curates it.
@@ -204,7 +211,15 @@ function CatalogueBadge({
   // holding its link, which is what the audience means — and a HIDDEN category means
   // the same. The others are configuration — `RESELLERS` included, because what makes
   // that one sellable is a reseller tier's grants, not a link.
-  return <Badge tone={isUnlistedGap(gap) ? 'warn' : 'neutral'}>{t(GAP_LABELS[gap])}</Badge>;
+  //
+  // A sentence, not a badge: it says WHICH condition fails, and a badge that holds a
+  // sentence would not wrap — it pushed every column after it off a dense list.
+  return (
+    <span className={`products-gap ${isUnlistedGap(gap) ? 'warn' : 'neutral'}`}>
+      <i className="dot" aria-hidden="true" />
+      <span>{t(GAP_LABELS[gap])}</span>
+    </span>
+  );
 }
 
 function Dash() {
@@ -367,17 +382,42 @@ export function ProductsPage({
     {
       key: 'title',
       header: t('web.product_title'),
-      render: (row) => (
-        <a href={`/products/${encodeURIComponent(row.id)}`} onClick={onLink} className="strong">
-          {row.title}
-        </a>
-      ),
+      render: (row) => {
+        // The category rides under the title, as the reference lists a plan. Null is
+        // UNCATEGORISED and is SHOWN, because such a product is refused at checkout —
+        // hiding the absence would hide the reason a plan cannot be sold.
+        const name = row.categoryId === null ? undefined : categoryNames.get(row.categoryId);
+        return (
+          <CellMain
+            primary={
+              <a
+                href={`/products/${encodeURIComponent(row.id)}`}
+                onClick={onLink}
+                className="strong"
+              >
+                {row.title}
+              </a>
+            }
+            secondary={
+              row.categoryId === null ? (
+                <Badge tone="warn">{t('web.product_category_unset')}</Badge>
+              ) : name === undefined ? (
+                <Dash />
+              ) : (
+                <span>{name}</span>
+              )
+            }
+          />
+        );
+      },
     },
     {
       key: 'status',
       header: t('web.status'),
       render: (row) => (
-        <Badge tone={STATUS_TONES[row.status]}>{t(STATUS_LABELS[row.status])}</Badge>
+        <Badge tone={STATUS_TONES[row.status]} dot>
+          {t(STATUS_LABELS[row.status])}
+        </Badge>
       ),
     },
     {
@@ -388,70 +428,90 @@ export function ProductsPage({
       ),
     },
     {
-      key: 'category',
-      header: t('web.product_category'),
-      render: (row) => {
-        // Null is UNCATEGORISED and is SHOWN, because such a product is refused at
-        // checkout — hiding the absence would hide the reason a plan cannot be sold.
-        if (row.categoryId === null) {
-          return <Badge tone="warn">{t('web.product_category_unset')}</Badge>;
-        }
-        const name = categoryNames.get(row.categoryId);
-        return name === undefined ? <Dash /> : <span>{name}</span>;
-      },
-    },
-    {
       key: 'audience',
       header: t('web.product_audience'),
-      render: (row) => <span>{t(AUDIENCE_LABELS[row.audience])}</span>,
-    },
-    { key: 'price', header: t('web.product_price'), render: (row) => <Price row={row} /> },
-    {
-      key: 'duration',
-      header: t('web.product_duration'),
-      render: (row) => <Duration days={row.durationDays} />,
+      render: (row) => <span className="muted">{t(AUDIENCE_LABELS[row.audience])}</span>,
     },
     {
-      key: 'traffic',
-      header: t('web.product_traffic'),
-      render: (row) => <Traffic bytes={row.trafficBytes} />,
+      key: 'specs',
+      header: t('web.cb_section_volume'),
+      render: (row) => (
+        <span className="cb-specs">
+          <Duration days={row.durationDays} />
+          <span className="faint" aria-hidden="true">
+            ·
+          </span>
+          <Traffic bytes={row.trafficBytes} />
+        </span>
+      ),
+    },
+    {
+      key: 'price',
+      header: t('web.product_price'),
+      align: 'end',
+      render: (row) => <Price row={row} />,
     },
     {
       key: 'sort',
       header: t('web.product_sort_order'),
+      align: 'end',
       render: (row) => <Ltr>{formatNumber(row.sortOrder)}</Ltr>,
     },
   ];
 
   return (
     <>
-      <PageHead title={t('web.products_title')} subtitle={t('web.products_intro')} maturity="now" />
+      <PageHead
+        title={t('web.products_title')}
+        subtitle={t('web.products_intro')}
+        maturity="now"
+        actions={
+          <>
+            <a className="btn" href="/product-categories" onClick={onLink}>
+              <Icon name="folder" />
+              {t('web.nav_product_categories')}
+            </a>
+            {mayEdit && (
+              <Button
+                variant="primary"
+                icon="plus"
+                onClick={() => revealField('product-title-create')}
+              >
+                {t('web.cb_product_new')}
+              </Button>
+            )}
+          </>
+        }
+      />
 
       <Card>
         {/* Hidden while the card below cannot answer: a control that mints a new query
             key is a fresh request against a question the server has just refused. */}
-        <div hidden={!mayRequest(products, denied)}>
+        <div className="cb-filters" hidden={!mayRequest(products, denied)}>
           <form className="toolbar" onSubmit={apply}>
-            <Field
-              label={t('web.products_search_title')}
-              hint={t('web.products_search_title_hint')}
-              htmlFor="products-title"
-            >
+            <div className="search cb-search">
+              <label className="visually-hidden" htmlFor="products-title">
+                {t('web.products_search_title')}
+              </label>
+              <Icon name="search" size={14} />
               <input
                 id="products-title"
+                className="input"
+                type="search"
                 value={draftTitle}
                 maxLength={PRODUCT_TITLE_MAX_LENGTH}
+                placeholder={t('web.products_search_title_hint')}
                 onChange={(event) =>
                   setDraft({ signature: appliedTitle, title: event.target.value })
                 }
               />
-            </Field>
+            </div>
             <button type="submit" className="btn primary sm">
               {t('web.users_search_apply')}
             </button>
             <button
               type="button"
-              className="btn sm"
+              className="btn sm ghost"
               disabled={!clearable}
               onClick={() => {
                 setDraft({ signature: appliedTitle, title: '' });
@@ -462,44 +522,62 @@ export function ProductsPage({
             </button>
           </form>
 
-          <div className="toolbar">
-            <Pills
-              value={appliedStatus ?? 'ALL'}
-              onChange={(next) => setQuery(route, 'status', next === 'ALL' ? null : next)}
-              items={[
-                { id: 'ALL' as const, label: t('web.users_filter_all') },
-                { id: 'ACTIVE' as const, label: t('web.product_status_active') },
-                { id: 'INACTIVE' as const, label: t('web.product_status_inactive') },
-              ]}
-            />
-            <Pills
-              value={appliedAudience ?? 'ALL'}
-              onChange={(next) => setQuery(route, 'audience', next === 'ALL' ? null : next)}
-              items={[
-                { id: 'ALL' as const, label: t('web.product_audience_all') },
-                { id: 'EVERYONE' as const, label: t('web.product_audience_everyone') },
-                { id: 'RESELLERS_ONLY' as const, label: t('web.product_audience_resellers') },
-                { id: 'HIDDEN' as const, label: t('web.product_audience_hidden') },
-              ]}
-            />
-            {/*
-              Categories as pills rather than a select, matching the two filters beside
-              it. `none` is offered explicitly because it is the operator's most useful
-              view — the plans that cannot be sold yet.
-            */}
-            <Pills
-              value={appliedCategory === '' ? 'ALL' : appliedCategory}
-              onChange={(next) => setQuery(route, 'categoryId', next === 'ALL' ? null : next)}
-              items={[
-                { id: 'ALL', label: t('web.category_filter_all') },
-                { id: 'none', label: t('web.category_filter_none') },
-                ...(categories.data?.categories ?? []).map((category) => ({
-                  id: category.id,
-                  label: category.name,
-                })),
-              ]}
-            />
-          </div>
+          <FilterChips label={t('web.status')}>
+            {(
+              [
+                ['ALL', 'web.users_filter_all'],
+                ['ACTIVE', 'web.product_status_active'],
+                ['INACTIVE', 'web.product_status_inactive'],
+              ] as const
+            ).map(([id, label]) => (
+              <FilterChip
+                key={id}
+                pressed={(appliedStatus ?? 'ALL') === id}
+                onClick={() => setQuery(route, 'status', id === 'ALL' ? null : id)}
+              >
+                {t(label)}
+              </FilterChip>
+            ))}
+            <ChipDivider />
+            {(
+              [
+                ['ALL', 'web.product_audience_all'],
+                ['EVERYONE', 'web.product_audience_everyone'],
+                ['RESELLERS_ONLY', 'web.product_audience_resellers'],
+                ['HIDDEN', 'web.product_audience_hidden'],
+              ] as const
+            ).map(([id, label]) => (
+              <FilterChip
+                key={id}
+                pressed={(appliedAudience ?? 'ALL') === id}
+                onClick={() => setQuery(route, 'audience', id === 'ALL' ? null : id)}
+              >
+                {t(label)}
+              </FilterChip>
+            ))}
+          </FilterChips>
+          {/*
+            Categories as chips on their own row. `none` is offered explicitly because it
+            is the operator's most useful view — the plans that cannot be sold yet.
+          */}
+          <FilterChips label={t('web.product_category')}>
+            {[
+              { id: 'ALL', label: t('web.category_filter_all') },
+              { id: 'none', label: t('web.category_filter_none') },
+              ...(categories.data?.categories ?? []).map((category) => ({
+                id: category.id,
+                label: category.name,
+              })),
+            ].map((item) => (
+              <FilterChip
+                key={item.id}
+                pressed={(appliedCategory === '' ? 'ALL' : appliedCategory) === item.id}
+                onClick={() => setQuery(route, 'categoryId', item.id === 'ALL' ? null : item.id)}
+              >
+                {item.label}
+              </FilterChip>
+            ))}
+          </FilterChips>
         </div>
 
         <StateSwitch
@@ -527,6 +605,8 @@ export function ProductsPage({
             columns={columns}
             rows={rows}
             rowKey={(row) => row.id}
+            dense
+            sticky
           />
         </StateSwitch>
 
@@ -555,7 +635,7 @@ export function ProductsPage({
         </Card>
       )}
 
-      <Card title={t('web.products_scope_title')}>
+      <Card title={t('web.products_scope_title')} tone="muted">
         <p className="muted">{t('web.products_scope_body')}</p>
         {/* Owner revision 10, which used to live on the planned page this route
             replaced. A decision recorded only on a screen nobody can open is a decision
@@ -773,6 +853,30 @@ export function bodyFrom(
   };
 }
 
+type ProblemField =
+  | 'title'
+  | 'sort'
+  | 'duration'
+  | 'traffic'
+  | 'devices'
+  | 'price'
+  | 'locations'
+  | 'features'
+  | 'label';
+
+/** Which field each of `bodyFrom`'s problems belongs to, so it is said there. */
+const PROBLEM_FIELDS: Partial<Record<WebKey, ProblemField>> = {
+  'web.product_problem_title': 'title',
+  'web.product_problem_sort': 'sort',
+  'web.product_problem_duration': 'duration',
+  'web.product_problem_traffic': 'traffic',
+  'web.product_problem_devices': 'devices',
+  'web.product_problem_price': 'price',
+  'web.product_display_problem_locations': 'locations',
+  'web.product_display_problem_features': 'features',
+  'web.product_display_problem_label': 'label',
+};
+
 function ProductForm({
   mode,
   product,
@@ -834,8 +938,28 @@ function ProductForm({
   const checked = bodyFrom(state);
   const problem = 'problem' in checked ? checked.problem : null;
 
+  /*
+   * What the form was loaded with, or last saved as. The difference is what the leave
+   * guard protects and what the save bar calls unsaved.
+   */
+  const [baseline, setBaseline] = useState<FormState>(() =>
+    product === undefined ? BLANK : stateOf(product),
+  );
+  const dirty = JSON.stringify(state) !== JSON.stringify(baseline);
+  useUnsavedChanges(dirty);
+
+  /*
+   * The problem is shown AT its field. A pristine create form is not an error — its
+   * empty title is where the operator starts — so a new form only speaks once touched;
+   * an edit form always does, because what it loaded should already be sendable.
+   */
+  const showProblem = problem !== null && (mode === 'edit' || dirty);
+  const problemField = problem === null ? undefined : PROBLEM_FIELDS[problem];
+  const errorAt = (field: ProblemField): { error?: string } =>
+    showProblem && problem !== null && problemField === field ? { error: t(problem) } : {};
+
   const mutate = useMutation({
-    mutationFn: () => {
+    mutationFn: (_snapshot: FormState) => {
       if ('problem' in checked) throw new Error('unreachable: guarded by the submit button');
       // The payload is the fingerprint the held key is bound to, so an edited field and
       // a second press is a NEW command rather than a replay the store would refuse.
@@ -844,13 +968,18 @@ function ProductForm({
         ? createProduct({ ...checked.body, idempotencyKey })
         : updateProduct({ ...checked.body, id: product?.id ?? '', idempotencyKey });
     },
-    onSuccess: (response) => {
+    onSuccess: (response, snapshot) => {
       submission.settle();
       notify({
         tone: 'ok',
         message: mode === 'create' ? t('web.product_created') : t('web.product_saved'),
       });
-      if (mode === 'create') setState(BLANK);
+      if (mode === 'create') {
+        setState(BLANK);
+        setBaseline(BLANK);
+      } else {
+        setBaseline(snapshot);
+      }
       queries.setQueryData(['product', response.product.id], response);
       void queries.invalidateQueries({ queryKey: ['products'] });
     },
@@ -860,207 +989,267 @@ function ProductForm({
   });
 
   return (
-    <Card title={mode === 'create' ? t('web.product_new_title') : t('web.product_edit_title')}>
-      <Field label={t('web.product_title')} htmlFor={`product-title-${mode}`}>
-        <input
-          id={`product-title-${mode}`}
-          value={state.title}
-          maxLength={PRODUCT_TITLE_MAX_LENGTH}
-          onChange={(event) => set('title', event.target.value)}
-        />
-      </Field>
-
-      <Field
-        label={t('web.product_description')}
-        hint={t('web.product_description_hint')}
-        htmlFor={`product-description-${mode}`}
-      >
-        <textarea
-          id={`product-description-${mode}`}
-          rows={2}
-          value={state.description}
-          maxLength={PRODUCT_DESCRIPTION_MAX_LENGTH}
-          onChange={(event) => set('description', event.target.value)}
-        />
-      </Field>
-
-      <Field
-        label={t('web.product_audience')}
-        hint={t('web.product_audience_hint')}
-        htmlFor={`product-audience-${mode}`}
-      >
-        <select
-          id={`product-audience-${mode}`}
-          value={state.audience}
-          onChange={(event) => set('audience', event.target.value as ProductAudience)}
-        >
-          <option value="EVERYONE">{t('web.product_audience_everyone')}</option>
-          <option value="RESELLERS_ONLY">{t('web.product_audience_resellers')}</option>
-          <option value="HIDDEN">{t('web.product_audience_hidden')}</option>
-        </select>
-      </Field>
-
-      <Field
-        label={t('web.product_panel')}
-        hint={
-          panelsReadable
-            ? t('web.product_panel_hint')
-            : queryState(panels) === 'ready'
-              ? t('web.product_panel_too_many')
-              : t('web.product_panel_denied')
-        }
-        htmlFor={`product-panel-${mode}`}
-      >
-        {panelsReadable ? (
-          <select
-            id={`product-panel-${mode}`}
-            value={state.panelId}
-            onChange={(event) => set('panelId', event.target.value)}
+    <Card
+      className="cb-editor-card"
+      title={mode === 'create' ? t('web.product_new_title') : t('web.product_edit_title')}
+      tight
+      foot={
+        <SaveBar dirty={dirty}>
+          {/* The one thing about this form that surprises: creating does not publish.
+              Said once, beside the button that does it. */}
+          {mode === 'create' && (
+            <span className="muted small">{t('web.product_created_inactive')}</span>
+          )}
+          <Button
+            variant="primary"
+            icon="check"
+            disabled={problem !== null || mutate.isPending}
+            onClick={() => mutate.mutate(state)}
           >
-            <option value="">{t('web.product_panel_none')}</option>
-            {panelOptions.map((panel) => (
-              <option key={panel.id} value={panel.id}>
-                {panel.name}
+            {mode === 'create' ? t('web.product_create') : t('web.product_save')}
+          </Button>
+        </SaveBar>
+      }
+    >
+      <FormSection id={`product-${mode}-basic`} title={t('web.cb_section_basic')}>
+        <Field
+          label={t('web.product_title')}
+          htmlFor={`product-title-${mode}`}
+          {...errorAt('title')}
+        >
+          <input
+            id={`product-title-${mode}`}
+            value={state.title}
+            maxLength={PRODUCT_TITLE_MAX_LENGTH}
+            onChange={(event) => set('title', event.target.value)}
+          />
+        </Field>
+
+        <Field
+          label={t('web.product_audience')}
+          hint={t('web.product_audience_hint')}
+          htmlFor={`product-audience-${mode}`}
+        >
+          <select
+            id={`product-audience-${mode}`}
+            value={state.audience}
+            onChange={(event) => set('audience', event.target.value as ProductAudience)}
+          >
+            <option value="EVERYONE">{t('web.product_audience_everyone')}</option>
+            <option value="RESELLERS_ONLY">{t('web.product_audience_resellers')}</option>
+            <option value="HIDDEN">{t('web.product_audience_hidden')}</option>
+          </select>
+        </Field>
+
+        <div className="full">
+          <Field
+            label={t('web.product_description')}
+            hint={t('web.product_description_hint')}
+            htmlFor={`product-description-${mode}`}
+          >
+            <textarea
+              id={`product-description-${mode}`}
+              rows={2}
+              value={state.description}
+              maxLength={PRODUCT_DESCRIPTION_MAX_LENGTH}
+              onChange={(event) => set('description', event.target.value)}
+            />
+          </Field>
+        </div>
+
+        <Field
+          label={t('web.product_sort_order')}
+          hint={t('web.product_sort_hint')}
+          htmlFor={`product-sort-${mode}`}
+          {...errorAt('sort')}
+        >
+          <input
+            id={`product-sort-${mode}`}
+            dir="ltr"
+            inputMode="numeric"
+            value={state.sortOrder}
+            onChange={(event) => set('sortOrder', event.target.value.trim())}
+          />
+        </Field>
+      </FormSection>
+
+      <FormSection id={`product-${mode}-pricing`} title={t('web.cb_section_pricing')}>
+        <Field
+          label={t('web.product_price')}
+          hint={t('web.product_price_hint')}
+          htmlFor={`product-price-${mode}`}
+          {...errorAt('price')}
+        >
+          <input
+            id={`product-price-${mode}`}
+            dir="ltr"
+            inputMode="numeric"
+            value={state.priceAmount}
+            onChange={(event) => set('priceAmount', event.target.value.trim())}
+          />
+        </Field>
+
+        {/*
+          `SALES_CURRENCY_CODES`, NOT the whole money catalogue.
+
+          This offered all five until the Codex review of this branch, three of which no
+          store can sell in: USD, EUR and USDT exist in `CURRENCY_CODES` because a
+          CONVERTED payment quote will need them, which is a different question from what
+          a shop prices in. Offering them made a refusal the only way to discover they
+          were not real options. The hint names the setting that decides which of the two
+          is right, because that is where an operator changes it.
+        */}
+        <Field
+          label={t('web.product_currency')}
+          hint={t('web.product_currency_hint')}
+          htmlFor={`product-currency-${mode}`}
+        >
+          <select
+            id={`product-currency-${mode}`}
+            value={state.priceCurrency}
+            onChange={(event) => set('priceCurrency', event.target.value as CurrencyCode)}
+          >
+            {SALES_CURRENCY_CODES.map((code) => (
+              <option key={code} value={code}>
+                {code}
               </option>
             ))}
           </select>
-        ) : (
-          <input
-            id={`product-panel-${mode}`}
-            dir="ltr"
-            value={state.panelId}
-            onChange={(event) => set('panelId', event.target.value.trim())}
-          />
-        )}
-      </Field>
+        </Field>
+      </FormSection>
 
-      <Field
-        label={t('web.product_category')}
-        hint={
-          categoriesReadable ? t('web.product_category_hint') : t('web.product_category_unreadable')
-        }
-        htmlFor={`product-category-${mode}`}
-      >
-        {categoriesReadable ? (
-          <select
-            id={`product-category-${mode}`}
-            value={state.categoryId}
-            onChange={(event) => set('categoryId', event.target.value)}
-          >
-            {/*
-              "None" is a choice and stays on the list: an operator may stage a product
-              before filing it. It is not a silent default — the catalogue badge on the
-              row names what it costs.
-            */}
-            <option value="">{t('web.product_category_unset')}</option>
-            {(categories.data?.categories ?? []).map((category) => (
-              <option key={category.id} value={category.id}>
-                {category.emoji === null ? category.name : `${category.emoji} ${category.name}`}
-              </option>
-            ))}
-          </select>
-        ) : (
-          <input
-            id={`product-category-${mode}`}
-            dir="ltr"
-            value={state.categoryId}
-            onChange={(event) => set('categoryId', event.target.value.trim())}
-          />
-        )}
-      </Field>
-
-      <Field
-        label={t('web.product_duration')}
-        hint={t('web.product_duration_hint')}
-        htmlFor={`product-duration-${mode}`}
-      >
-        <input
-          id={`product-duration-${mode}`}
-          dir="ltr"
-          inputMode="numeric"
-          value={state.durationDays}
-          onChange={(event) => set('durationDays', event.target.value.trim())}
-        />
-      </Field>
-
-      <Field
-        label={t('web.product_traffic_gb')}
-        hint={t('web.product_traffic_hint')}
-        htmlFor={`product-traffic-${mode}`}
-      >
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={state.trafficUnlimited}
-            onChange={(event) => set('trafficUnlimited', event.target.checked)}
-          />{' '}
-          {t('web.product_traffic_unlimited')}
-        </label>
-        <input
-          id={`product-traffic-${mode}`}
-          dir="ltr"
-          inputMode="decimal"
-          disabled={state.trafficUnlimited}
-          value={state.trafficGb}
-          onChange={(event) => set('trafficGb', event.target.value.trim())}
-        />
-      </Field>
-
-      <Field
-        label={t('web.product_device_limit')}
-        hint={t('web.product_device_limit_hint')}
-        htmlFor={`product-devices-${mode}`}
-      >
-        <input
-          id={`product-devices-${mode}`}
-          dir="ltr"
-          inputMode="numeric"
-          value={state.deviceLimit}
-          onChange={(event) => set('deviceLimit', event.target.value.trim())}
-        />
-      </Field>
-
-      <Field
-        label={t('web.product_price')}
-        hint={t('web.product_price_hint')}
-        htmlFor={`product-price-${mode}`}
-      >
-        <input
-          id={`product-price-${mode}`}
-          dir="ltr"
-          inputMode="numeric"
-          value={state.priceAmount}
-          onChange={(event) => set('priceAmount', event.target.value.trim())}
-        />
-      </Field>
-
-      {/*
-        `SALES_CURRENCY_CODES`, NOT the whole money catalogue.
-
-        This offered all five until the Codex review of this branch, three of which no
-        store can sell in: USD, EUR and USDT exist in `CURRENCY_CODES` because a
-        CONVERTED payment quote will need them, which is a different question from what
-        a shop prices in. Offering them made a refusal the only way to discover they
-        were not real options. The hint names the setting that decides which of the two
-        is right, because that is where an operator changes it.
-      */}
-      <Field
-        label={t('web.product_currency')}
-        hint={t('web.product_currency_hint')}
-        htmlFor={`product-currency-${mode}`}
-      >
-        <select
-          id={`product-currency-${mode}`}
-          value={state.priceCurrency}
-          onChange={(event) => set('priceCurrency', event.target.value as CurrencyCode)}
+      <FormSection id={`product-${mode}-volume`} title={t('web.cb_section_volume')}>
+        <Field
+          label={t('web.product_duration')}
+          hint={t('web.product_duration_hint')}
+          htmlFor={`product-duration-${mode}`}
+          {...errorAt('duration')}
         >
-          {SALES_CURRENCY_CODES.map((code) => (
-            <option key={code} value={code}>
-              {code}
-            </option>
-          ))}
-        </select>
-      </Field>
+          <input
+            id={`product-duration-${mode}`}
+            dir="ltr"
+            inputMode="numeric"
+            value={state.durationDays}
+            onChange={(event) => set('durationDays', event.target.value.trim())}
+          />
+        </Field>
+
+        <Field
+          label={t('web.product_device_limit')}
+          hint={t('web.product_device_limit_hint')}
+          htmlFor={`product-devices-${mode}`}
+          {...errorAt('devices')}
+        >
+          <input
+            id={`product-devices-${mode}`}
+            dir="ltr"
+            inputMode="numeric"
+            value={state.deviceLimit}
+            onChange={(event) => set('deviceLimit', event.target.value.trim())}
+          />
+        </Field>
+
+        <div className="full">
+          <Field
+            label={t('web.product_traffic_gb')}
+            hint={t('web.product_traffic_hint')}
+            htmlFor={`product-traffic-${mode}`}
+            {...errorAt('traffic')}
+          >
+            <div className="cb-inline-controls">
+              <label className="check">
+                <input
+                  type="checkbox"
+                  checked={state.trafficUnlimited}
+                  onChange={(event) => set('trafficUnlimited', event.target.checked)}
+                />{' '}
+                {t('web.product_traffic_unlimited')}
+              </label>
+              <input
+                id={`product-traffic-${mode}`}
+                dir="ltr"
+                inputMode="decimal"
+                disabled={state.trafficUnlimited}
+                value={state.trafficGb}
+                onChange={(event) => set('trafficGb', event.target.value.trim())}
+              />
+            </div>
+          </Field>
+        </div>
+      </FormSection>
+
+      <FormSection id={`product-${mode}-placement`} title={t('web.cb_section_placement')}>
+        <Field
+          label={t('web.product_panel')}
+          hint={
+            panelsReadable
+              ? t('web.product_panel_hint')
+              : queryState(panels) === 'ready'
+                ? t('web.product_panel_too_many')
+                : t('web.product_panel_denied')
+          }
+          htmlFor={`product-panel-${mode}`}
+        >
+          {panelsReadable ? (
+            <select
+              id={`product-panel-${mode}`}
+              value={state.panelId}
+              onChange={(event) => set('panelId', event.target.value)}
+            >
+              <option value="">{t('web.product_panel_none')}</option>
+              {panelOptions.map((panel) => (
+                <option key={panel.id} value={panel.id}>
+                  {panel.name}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <input
+              id={`product-panel-${mode}`}
+              dir="ltr"
+              value={state.panelId}
+              onChange={(event) => set('panelId', event.target.value.trim())}
+            />
+          )}
+        </Field>
+
+        <Field
+          label={t('web.product_category')}
+          hint={
+            categoriesReadable
+              ? t('web.product_category_hint')
+              : t('web.product_category_unreadable')
+          }
+          htmlFor={`product-category-${mode}`}
+        >
+          {categoriesReadable ? (
+            <select
+              id={`product-category-${mode}`}
+              value={state.categoryId}
+              onChange={(event) => set('categoryId', event.target.value)}
+            >
+              {/*
+                "None" is a choice and stays on the list: an operator may stage a product
+                before filing it. It is not a silent default — the catalogue badge on the
+                row names what it costs.
+              */}
+              <option value="">{t('web.product_category_unset')}</option>
+              {(categories.data?.categories ?? []).map((category) => (
+                <option key={category.id} value={category.id}>
+                  {category.emoji === null ? category.name : `${category.emoji} ${category.name}`}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <input
+              id={`product-category-${mode}`}
+              dir="ltr"
+              value={state.categoryId}
+              onChange={(event) => set('categoryId', event.target.value.trim())}
+            />
+          )}
+        </Field>
+      </FormSection>
 
       {/*
         The display lists (customer UX completion §C), as ORDERED editors.
@@ -1071,107 +1260,91 @@ function ProductForm({
         channels use, position-keyed for the same reason. Nothing here is routing — the
         panel field above is — and the hint says so where the operator is typing.
       */}
-      <Field
-        label={t('web.product_display_locations')}
-        hint={t('web.product_display_locations_hint')}
-      >
-        <ListEditor
-          items={state.displayLocations}
-          onChange={(next) => set('displayLocations', next)}
-          addLabel={t('web.product_display_add_location')}
-          emptyHint={t('web.product_display_locations_empty')}
-          onAdd={() => ''}
-          renderRow={(item, index, update) => (
-            <>
-              <label className="visually-hidden" htmlFor={`product-location-${mode}-${index}`}>
-                {`${t('web.product_display_location_n')} ${formatNumber(index + 1)}`}
-              </label>
-              <input
-                id={`product-location-${mode}-${index}`}
-                className="input"
-                value={item}
-                maxLength={PRODUCT_DISPLAY_LOCATION_MAX_LENGTH}
-                onChange={(event) => update(event.target.value)}
-              />
-            </>
-          )}
-        />
-      </Field>
-
-      <Field
-        label={t('web.product_display_features')}
-        hint={t('web.product_display_features_hint')}
-      >
-        <ListEditor
-          items={state.displayFeatures}
-          onChange={(next) => set('displayFeatures', next)}
-          addLabel={t('web.product_display_add_feature')}
-          emptyHint={t('web.product_display_features_empty')}
-          onAdd={() => ''}
-          renderRow={(item, index, update) => (
-            <>
-              <label className="visually-hidden" htmlFor={`product-feature-${mode}-${index}`}>
-                {`${t('web.product_display_feature_n')} ${formatNumber(index + 1)}`}
-              </label>
-              <input
-                id={`product-feature-${mode}-${index}`}
-                className="input"
-                value={item}
-                maxLength={PRODUCT_DISPLAY_FEATURE_MAX_LENGTH}
-                onChange={(event) => update(event.target.value)}
-              />
-            </>
-          )}
-        />
-      </Field>
-
-      <Field
-        label={t('web.product_display_location_label')}
-        hint={t('web.product_display_location_label_hint')}
-        htmlFor={`product-location-label-${mode}`}
-      >
-        <input
-          id={`product-location-label-${mode}`}
-          value={state.serviceLocationLabel}
-          maxLength={PRODUCT_SERVICE_LOCATION_LABEL_MAX_LENGTH}
-          onChange={(event) => set('serviceLocationLabel', event.target.value)}
-        />
-      </Field>
-
-      <Field
-        label={t('web.product_sort_order')}
-        hint={t('web.product_sort_hint')}
-        htmlFor={`product-sort-${mode}`}
-      >
-        <input
-          id={`product-sort-${mode}`}
-          dir="ltr"
-          inputMode="numeric"
-          value={state.sortOrder}
-          onChange={(event) => set('sortOrder', event.target.value.trim())}
-        />
-      </Field>
-
-      {problem !== null && <Banner tone="warn">{t(problem)}</Banner>}
-
-      <div className="toolbar">
-        <button
-          type="button"
-          className="btn primary sm"
-          disabled={problem !== null || mutate.isPending}
-          onClick={() => mutate.mutate()}
+      <FormSection id={`product-${mode}-display`} title={t('web.cb_section_display')}>
+        <Field
+          label={t('web.product_display_locations')}
+          hint={t('web.product_display_locations_hint')}
+          {...errorAt('locations')}
         >
-          {mode === 'create' ? t('web.product_create') : t('web.product_save')}
-        </button>
-      </div>
+          <ListEditor
+            items={state.displayLocations}
+            onChange={(next) => set('displayLocations', next)}
+            addLabel={t('web.product_display_add_location')}
+            emptyHint={t('web.product_display_locations_empty')}
+            onAdd={() => ''}
+            renderRow={(item, index, update) => (
+              <>
+                <label className="visually-hidden" htmlFor={`product-location-${mode}-${index}`}>
+                  {`${t('web.product_display_location_n')} ${formatNumber(index + 1)}`}
+                </label>
+                <input
+                  id={`product-location-${mode}-${index}`}
+                  className="input"
+                  value={item}
+                  maxLength={PRODUCT_DISPLAY_LOCATION_MAX_LENGTH}
+                  onChange={(event) => update(event.target.value)}
+                />
+              </>
+            )}
+          />
+        </Field>
 
-      {mode === 'create' && (
-        // Stated where the button is, because it is the one thing about this form that
-        // surprises: creating a product does NOT publish it.
-        <p className="muted small">{t('web.product_created_inactive')}</p>
+        <Field
+          label={t('web.product_display_features')}
+          hint={t('web.product_display_features_hint')}
+          {...errorAt('features')}
+        >
+          <ListEditor
+            items={state.displayFeatures}
+            onChange={(next) => set('displayFeatures', next)}
+            addLabel={t('web.product_display_add_feature')}
+            emptyHint={t('web.product_display_features_empty')}
+            onAdd={() => ''}
+            renderRow={(item, index, update) => (
+              <>
+                <label className="visually-hidden" htmlFor={`product-feature-${mode}-${index}`}>
+                  {`${t('web.product_display_feature_n')} ${formatNumber(index + 1)}`}
+                </label>
+                <input
+                  id={`product-feature-${mode}-${index}`}
+                  className="input"
+                  value={item}
+                  maxLength={PRODUCT_DISPLAY_FEATURE_MAX_LENGTH}
+                  onChange={(event) => update(event.target.value)}
+                />
+              </>
+            )}
+          />
+        </Field>
+
+        <div className="full">
+          <Field
+            label={t('web.product_display_location_label')}
+            hint={t('web.product_display_location_label_hint')}
+            htmlFor={`product-location-label-${mode}`}
+            {...errorAt('label')}
+          >
+            <input
+              id={`product-location-label-${mode}`}
+              value={state.serviceLocationLabel}
+              maxLength={PRODUCT_SERVICE_LOCATION_LABEL_MAX_LENGTH}
+              onChange={(event) => set('serviceLocationLabel', event.target.value)}
+            />
+          </Field>
+        </div>
+      </FormSection>
+
+      {problem !== null && showProblem && problemField === undefined && (
+        <div className="cb-form-error">
+          <Banner tone="warn">{t(problem)}</Banner>
+        </div>
       )}
 
-      {mutate.error !== null && <Banner tone="danger">{messageFor(mutate.error)}</Banner>}
+      {mutate.error !== null && (
+        <div className="cb-form-error">
+          <Banner tone="danger">{messageFor(mutate.error)}</Banner>
+        </div>
+      )}
     </Card>
   );
 }
@@ -1262,23 +1435,28 @@ export function ProductDetailPage({
   return (
     <>
       <PageHead
-        title={t('web.product_detail')}
-        {...(row === undefined ? {} : { subtitle: row.title })}
-        maturity="now"
+        title={row?.title ?? t('web.product_detail')}
+        {...(row === undefined
+          ? {}
+          : {
+              badge: (
+                <Badge tone={STATUS_TONES[row.status]} dot>
+                  {t(STATUS_LABELS[row.status])}
+                </Badge>
+              ),
+              subtitle: (
+                <span className="cb-meta">
+                  <span>{t('web.product_detail')}</span>
+                  <Ltr>{row.id}</Ltr>
+                </span>
+              ),
+            })}
       />
 
       <StateSwitch query={product} denied={denied}>
         {row === undefined ? null : (
           <>
             {gap !== null && (
-              /*
-               * Why a customer cannot see this, said once and plainly.
-               *
-               * The legacy system has no equivalent: an operator publishes a plan, sees
-               * it in their own list, and finds out it was invisible when nobody buys
-               * it. `UNLISTED` is INFO rather than a warning — a hidden product is
-               * hidden on purpose and is still orderable by link.
-               */
               <Banner
                 tone={isUnlistedGap(gap) ? 'info' : 'warn'}
                 title={t('web.product_gap_banner_title')}
@@ -1287,175 +1465,192 @@ export function ProductDetailPage({
               </Banner>
             )}
 
-            <Card title={t('web.product_identity_title')}>
-              <KV
-                items={[
-                  [t('web.product_title'), row.title],
-                  [t('web.product_description'), row.description ?? <Dash key="d" />],
-                  [
-                    t('web.status'),
-                    <Badge key="s" tone={STATUS_TONES[row.status]}>
-                      {t(STATUS_LABELS[row.status])}
-                    </Badge>,
-                  ],
-                  [
-                    t('web.product_catalogue'),
-                    <CatalogueBadge key="c" row={row} category={facts} />,
-                  ],
-                  [
-                    t('web.product_category'),
-                    // Absence is shown as a warning rather than a dash: an uncategorised
-                    // product is refused at checkout, which is a state an operator has
-                    // to act on rather than merely notice.
-                    row.categoryId === null ? (
-                      <Badge key="cat" tone="warn">
-                        {t('web.product_category_unset')}
-                      </Badge>
-                    ) : (
-                      (categoryList.find((c) => c.id === row.categoryId)?.name ?? (
-                        <Dash key="cat" />
-                      ))
-                    ),
-                  ],
-                  [t('web.product_audience'), t(AUDIENCE_LABELS[row.audience])],
-                  [t('web.product_price'), <Price key="p" row={row} />],
-                  [t('web.product_duration'), <Duration key="dur" days={row.durationDays} />],
-                  [t('web.product_traffic'), <Traffic key="tr" bytes={row.trafficBytes} />],
-                  [
-                    t('web.product_device_limit'),
-                    row.deviceLimit === null ? (
-                      <span key="dl">{t('web.product_devices_provider_default')}</span>
-                    ) : (
-                      <Ltr key="dl">{formatNumber(row.deviceLimit)}</Ltr>
-                    ),
-                  ],
-                  [t('web.product_sort_order'), <Ltr key="so">{formatNumber(row.sortOrder)}</Ltr>],
-                  [
-                    t('web.product_panel'),
-                    row.panelId === null ? (
-                      <Dash key="pa" />
-                    ) : (
-                      <Copyable key="pa" value={row.panelId} />
-                    ),
-                  ],
-                  /*
-                   * The display data, shown as the ordered lists they are. An empty list
-                   * is a dash rather than an empty section, which is also what the
-                   * pre-invoice does with it.
-                   */
-                  [
-                    t('web.product_display_locations'),
-                    <DisplayList key="dloc" lines={row.displayLocations} />,
-                  ],
-                  [
-                    t('web.product_display_features'),
-                    <DisplayList key="dfeat" lines={row.displayFeatures} />,
-                  ],
-                  [
-                    t('web.product_display_location_label'),
-                    row.serviceLocationLabel === null ? (
-                      <Dash key="dlabel" />
-                    ) : (
-                      <span key="dlabel">{row.serviceLocationLabel}</span>
-                    ),
-                  ],
-                  [t('web.product_created_at'), formatTimestamp(row.createdAt)],
-                  [t('web.updated_at'), formatTimestamp(row.updatedAt)],
-                ]}
-              />
-            </Card>
+            <div className={mayEdit ? 'cb-editor' : 'cb-editor no-nav'}>
+              {mayEdit && (
+                <SectionNav
+                  items={[
+                    { id: 'product-edit-basic', label: t('web.cb_section_basic') },
+                    { id: 'product-edit-pricing', label: t('web.cb_section_pricing') },
+                    { id: 'product-edit-volume', label: t('web.cb_section_volume') },
+                    { id: 'product-edit-placement', label: t('web.cb_section_placement') },
+                    { id: 'product-edit-display', label: t('web.cb_section_display') },
+                  ]}
+                />
+              )}
 
-            {mayEdit ? (
-              <>
-                {/*
-                  Moving a product between categories, on its OWN card.
-                  A reassignment is not an edit of the product's properties: it writes a
-                  different column, takes the destination category's row lock, and leaves
-                  an audit row naming where it moved FROM. Folding it into the edit form
-                  would make "who moved this plan" answerable only by diffing payloads —
-                  the defect `payment-accounts.tsx` records from the other end.
-                */}
-                <Card
-                  title={t('web.product_category_assign')}
-                  hint={t('web.product_category_assign_hint')}
-                >
-                  <Field label={t('web.product_category')} htmlFor="pd-category">
-                    <select
-                      id="pd-category"
-                      value={chosen}
-                      onChange={(event) => setMoveTo(event.target.value)}
+              <div className="cb-editor-main">
+                {mayEdit ? (
+                  // KEYED BY THE PRODUCT ID: React reconciles by position and type, so
+                  // navigating between two product URLs would keep one instance mounted
+                  // and every `useState` initialiser would hold the previous product's
+                  // values — which here are the fields about to be written.
+                  <ProductForm key={row.id} mode="edit" product={row} />
+                ) : (
+                  <Card title={t('web.product_edit_title')}>
+                    <Banner tone="info">{t('web.product_edit_denied')}</Banner>
+                  </Card>
+                )}
+              </div>
+
+              <div className="cb-editor-side stack">
+                <Card title={t('web.product_identity_title')}>
+                  <KV
+                    items={[
+                      [t('web.product_title'), row.title],
+                      [t('web.product_description'), row.description ?? <Dash key="d" />],
+                      [
+                        t('web.product_catalogue'),
+                        <CatalogueBadge key="c" row={row} category={facts} />,
+                      ],
+                      [
+                        t('web.product_category'),
+                        row.categoryId === null ? (
+                          <Badge key="cat" tone="warn">
+                            {t('web.product_category_unset')}
+                          </Badge>
+                        ) : (
+                          (categoryList.find((c) => c.id === row.categoryId)?.name ?? (
+                            <Dash key="cat" />
+                          ))
+                        ),
+                      ],
+                      [t('web.product_audience'), t(AUDIENCE_LABELS[row.audience])],
+                      [t('web.product_price'), <Price key="p" row={row} />],
+                      [t('web.product_duration'), <Duration key="dur" days={row.durationDays} />],
+                      [t('web.product_traffic'), <Traffic key="tr" bytes={row.trafficBytes} />],
+                      [
+                        t('web.product_device_limit'),
+                        row.deviceLimit === null ? (
+                          <span key="dl">{t('web.product_devices_provider_default')}</span>
+                        ) : (
+                          <Ltr key="dl">{formatNumber(row.deviceLimit)}</Ltr>
+                        ),
+                      ],
+                      [
+                        t('web.product_sort_order'),
+                        <Ltr key="so">{formatNumber(row.sortOrder)}</Ltr>,
+                      ],
+                      [
+                        t('web.product_panel'),
+                        row.panelId === null ? (
+                          <Dash key="pa" />
+                        ) : (
+                          <Copyable key="pa" value={row.panelId} />
+                        ),
+                      ],
+                      [
+                        t('web.product_display_locations'),
+                        <DisplayList key="dloc" lines={row.displayLocations} />,
+                      ],
+                      [
+                        t('web.product_display_features'),
+                        <DisplayList key="dfeat" lines={row.displayFeatures} />,
+                      ],
+                      [
+                        t('web.product_display_location_label'),
+                        row.serviceLocationLabel === null ? (
+                          <Dash key="dlabel" />
+                        ) : (
+                          <span key="dlabel">{row.serviceLocationLabel}</span>
+                        ),
+                      ],
+                      [t('web.product_created_at'), formatTimestamp(row.createdAt)],
+                      [t('web.updated_at'), formatTimestamp(row.updatedAt)],
+                    ]}
+                  />
+                </Card>
+
+                {mayEdit && (
+                  <>
+                    {/*
+                      Moving a product between categories, on its OWN card.
+
+                      A reassignment is not an edit of the product's properties: it writes
+                      a different column, takes the destination category's row lock, and
+                      leaves an audit row naming where it moved FROM. Folding it into the
+                      edit form would make "who moved this plan" answerable only by
+                      diffing payloads — the defect `payment-accounts.tsx` records from
+                      the other end.
+                    */}
+                    <Card
+                      title={t('web.product_category_assign')}
+                      hint={t('web.product_category_assign_hint')}
                     >
-                      {/*
-                        No blank option. Every sellable product belongs to exactly one
-                        category, so "move to nothing" is not an operation this offers —
-                        the product would become unsellable and nothing would say why.
-                      */}
-                      {row.categoryId === null && (
-                        <option value="">{t('web.product_category_unset')}</option>
+                      <Field label={t('web.product_category')} htmlFor="pd-category">
+                        <select
+                          id="pd-category"
+                          value={chosen}
+                          onChange={(event) => setMoveTo(event.target.value)}
+                        >
+                          {/*
+                            No blank option. Every sellable product belongs to exactly one
+                            category, so "move to nothing" is not an operation this offers —
+                            the product would become unsellable and nothing would say why.
+                          */}
+                          {row.categoryId === null && (
+                            <option value="">{t('web.product_category_unset')}</option>
+                          )}
+                          {categoryList.map((category) => (
+                            <option key={category.id} value={category.id}>
+                              {category.name}
+                            </option>
+                          ))}
+                        </select>
+                      </Field>
+                      <div className="form-actions">
+                        <Button
+                          variant="primary"
+                          size="sm"
+                          disabled={assign.isPending || chosen === '' || chosen === row.categoryId}
+                          onClick={() => assign.mutate(chosen)}
+                        >
+                          {t('web.product_category_assign')}
+                        </Button>
+                      </div>
+                      {assign.error != null && (
+                        <Banner tone="danger">{messageFor(assign.error)}</Banner>
                       )}
-                      {categoryList.map((category) => (
-                        <option key={category.id} value={category.id}>
-                          {category.name}
-                        </option>
-                      ))}
-                    </select>
-                  </Field>
-                  <div className="toolbar">
-                    <button
-                      type="button"
-                      className="btn primary sm"
-                      disabled={assign.isPending || chosen === '' || chosen === row.categoryId}
-                      onClick={() => assign.mutate(chosen)}
+                    </Card>
+
+                    <Card
+                      title={t('web.product_status_title')}
+                      hint={t('web.product_status_hint')}
+                      {...(row.status === 'ACTIVE' ? { tone: 'danger' as const } : {})}
                     >
-                      {t('web.product_category_assign')}
-                    </button>
-                  </div>
-                  {assign.error != null && (
-                    <Banner tone="danger">{messageFor(assign.error)}</Banner>
-                  )}
-                </Card>
-
-                <Card title={t('web.product_status_title')} hint={t('web.product_status_hint')}>
-                  <div className="toolbar">
-                    {row.status === 'INACTIVE' ? (
-                      <button
-                        type="button"
-                        className="btn primary sm"
-                        disabled={status.isPending}
-                        onClick={() => status.mutate('ACTIVE')}
-                      >
-                        {t('web.product_activate')}
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        className="btn danger sm"
-                        disabled={status.isPending}
-                        onClick={() => status.mutate('INACTIVE')}
-                      >
-                        {t('web.product_deactivate')}
-                      </button>
-                    )}
-                  </div>
-                  {/* The sentence that stops a withdrawal being feared: it changes what
-                      can be bought NEXT and nothing about what was bought. */}
-                  <p className="muted small">{t('web.product_deactivate_note')}</p>
-                  {status.error !== null && (
-                    <Banner tone="danger">{messageFor(status.error)}</Banner>
-                  )}
-                </Card>
-
-                {/* KEYED BY THE PRODUCT ID: React reconciles by position and type, so
-                    navigating between two product URLs would keep one instance mounted
-                    and every `useState` initialiser would hold the previous product's
-                    values — which here are the fields about to be written. */}
-                <ProductForm key={row.id} mode="edit" product={row} />
-              </>
-            ) : (
-              <Card title={t('web.product_edit_title')}>
-                <Banner tone="info">{t('web.product_edit_denied')}</Banner>
-              </Card>
-            )}
+                      <div className="form-actions">
+                        {row.status === 'INACTIVE' ? (
+                          <Button
+                            variant="primary"
+                            size="sm"
+                            icon="play"
+                            disabled={status.isPending}
+                            onClick={() => status.mutate('ACTIVE')}
+                          >
+                            {t('web.product_activate')}
+                          </Button>
+                        ) : (
+                          <Button
+                            variant="danger"
+                            size="sm"
+                            icon="pause"
+                            disabled={status.isPending}
+                            onClick={() => status.mutate('INACTIVE')}
+                          >
+                            {t('web.product_deactivate')}
+                          </Button>
+                        )}
+                      </div>
+                      {/* The sentence that stops a withdrawal being feared: it changes what
+                          can be bought NEXT and nothing about what was bought. */}
+                      <p className="muted small">{t('web.product_deactivate_note')}</p>
+                      {status.error !== null && (
+                        <Banner tone="danger">{messageFor(status.error)}</Banner>
+                      )}
+                    </Card>
+                  </>
+                )}
+              </div>
+            </div>
           </>
         )}
       </StateSwitch>

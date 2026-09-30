@@ -285,12 +285,19 @@ describe('writing a price rule', () => {
     await screen.findByText('Bulk volume');
     const remove = within(rowOf('Bulk volume')).getByRole('button', { name: 'حذف' });
 
-    window.confirm = () => false;
+    // Asked in the page's own dialog: declining sends nothing…
     fireEvent.click(remove);
+    fireEvent.click(
+      within(screen.getByRole('alertdialog')).getByRole('button', { name: 'انصراف' }),
+    );
     expect(posts(api, '/delete')).toHaveLength(0);
 
-    window.confirm = () => true;
+    // …and only the dialog's own yes deletes.
     fireEvent.click(remove);
+    expect(posts(api, '/delete')).toHaveLength(0);
+    fireEvent.click(
+      within(screen.getByRole('alertdialog')).getByRole('button', { name: 'بله، حذف شود' }),
+    );
     await waitFor(() =>
       expect(posts(api, `/custom-service/rules/${VOLUME_RULE_ID}/delete`)).toHaveLength(1),
     );
@@ -393,10 +400,13 @@ describe('locations', () => {
         extra: [{ url: `/custom-service/locations/${PANEL_ID}/delete`, body: { deleted: true } }],
       }),
     );
-    window.confirm = () => true;
     render();
     await screen.findByText('🇩🇪 آلمان');
     fireEvent.click(within(rowOf('🇩🇪 آلمان')).getByRole('button', { name: 'حذف' }));
+    expect(posts(api, `/custom-service/locations/${PANEL_ID}/delete`)).toHaveLength(0);
+    fireEvent.click(
+      within(screen.getByRole('alertdialog')).getByRole('button', { name: 'بله، حذف شود' }),
+    );
     await waitFor(() =>
       expect(posts(api, `/custom-service/locations/${PANEL_ID}/delete`)).toHaveLength(1),
     );

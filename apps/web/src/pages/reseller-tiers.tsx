@@ -53,9 +53,14 @@ import {
   Num,
   PageHead,
   StateSwitch,
+  Button,
+  RowActions,
+  useUnsavedChanges,
   useToast,
   type Column,
 } from '../ui/kit';
+import { Icon } from '../ui/icons';
+import { SaveBar, revealField } from './editor-layout';
 import { TierHistoryCard } from './reseller-standing';
 
 /**
@@ -368,7 +373,7 @@ export function ResellerTiersPage({
     {
       key: 'name',
       header: t('web.reseller_tier_name'),
-      render: (row) => <strong>{row.name}</strong>,
+      render: (row) => <span className="strong">{row.name}</span>,
     },
     {
       key: 'pricing',
@@ -388,6 +393,7 @@ export function ResellerTiersPage({
     {
       key: 'count',
       header: t('web.reseller_tier_count'),
+      align: 'end',
       render: (row) => <Num value={row.resellerCount} />,
     },
     {
@@ -400,25 +406,43 @@ export function ResellerTiersPage({
       header: t('web.rule_actions'),
       align: 'end',
       render: (row) => (
-        <div className="toolbar">
+        <RowActions>
           {mayEdit && (
-            <button
-              type="button"
-              className="btn sm"
+            <Button
+              size="sm"
+              variant="ghost"
+              icon="edit"
               onClick={() => {
                 setEditingId(row.id);
+                revealField('tier-edit-name');
               }}
             >
               {t('web.rule_edit')}
-            </button>
+            </Button>
           )}
-          <button type="button" className="btn sm" onClick={() => setGrantsId(row.id)}>
+          <Button
+            size="sm"
+            variant="ghost"
+            icon="shield"
+            onClick={() => {
+              setGrantsId(row.id);
+              revealField('tier-grants');
+            }}
+          >
             {t('web.reseller_grants_open')}
-          </button>
-          <button type="button" className="btn sm" onClick={() => setHistoryId(row.id)}>
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            icon="clock"
+            onClick={() => {
+              setHistoryId(row.id);
+              revealField('tier-history');
+            }}
+          >
             {t('web.history_open')}
-          </button>
-        </div>
+          </Button>
+        </RowActions>
       ),
     },
   ];
@@ -429,6 +453,18 @@ export function ResellerTiersPage({
         title={t('web.reseller_tiers_title')}
         subtitle={t('web.reseller_tiers_intro')}
         maturity="now"
+        actions={
+          <>
+            <a className="btn" href="/resellers" onClick={onLink}>
+              <Icon name="resellers" />
+              {t('web.nav_resellers')}
+            </a>
+            <a className="btn" href="/reseller-plans" onClick={onLink}>
+              <Icon name="target" />
+              {t('web.nav_reseller_plans')}
+            </a>
+          </>
+        }
       />
 
       <Card title={t('web.reseller_tiers_list_title')} hint={t('web.reseller_tiers_list_hint')}>
@@ -449,10 +485,14 @@ export function ResellerTiersPage({
             columns={columns}
             rows={rows}
             rowKey={(row) => row.id}
+            rowClassName={(row) =>
+              row.id === grantsId || row.id === editingId ? 'selected' : undefined
+            }
           />
         </StateSwitch>
       </Card>
 
+      <div id="tier-grants" className="tiers-anchor" tabIndex={-1} />
       {granting !== undefined &&
         (mayEdit ? (
           // KEYED BY THE TIER: the editor's state is initialised from the tier now open.
@@ -467,31 +507,36 @@ export function ResellerTiersPage({
           <GrantsReadOnly tier={granting} names={names} onClose={() => setGrantsId(null)} />
         ))}
 
+      <div id="tier-history" className="tiers-anchor" tabIndex={-1} />
       {denied || historyId === null ? null : (
         <TierHistoryCard key={historyId} tierId={historyId} mayViewAudit={mayViewAudit} />
       )}
 
-      {denied ? null : !mayEdit ? (
-        <Card title={t('web.reseller_tier_new_title')}>
-          <Banner tone="info">{t('web.reseller_tier_edit_denied')}</Banner>
-        </Card>
-      ) : editing !== undefined ? (
-        <TierForm key={editing.id} tier={editing} onDone={() => setEditingId(null)} />
-      ) : (
-        <TierForm onDone={() => undefined} />
-      )}
+      <div className="grid-2 tiers-foot">
+        {denied ? null : !mayEdit ? (
+          <Card title={t('web.reseller_tier_new_title')}>
+            <Banner tone="info">{t('web.reseller_tier_edit_denied')}</Banner>
+          </Card>
+        ) : editing !== undefined ? (
+          <TierForm key={editing.id} tier={editing} onDone={() => setEditingId(null)} />
+        ) : (
+          <TierForm onDone={() => undefined} />
+        )}
 
-      <Card title={t('web.reseller_tiers_scope_title')}>
-        <p className="muted">{t('web.reseller_tiers_rule_deny')}</p>
-        <p className="muted">{t('web.reseller_tiers_rule_four')}</p>
-        <p className="muted">{t('web.reseller_tiers_rule_no_delete')}</p>
-        <p className="muted">{t('web.reseller_tiers_rule_future')}</p>
-        <p>
-          <a href="/resellers" onClick={onLink}>
-            {t('web.reseller_tiers_resellers_link')}
-          </a>
-        </p>
-      </Card>
+        <Card title={t('web.reseller_tiers_scope_title')} tone="muted">
+          <ul className="cb-notes">
+            <li>{t('web.reseller_tiers_rule_deny')}</li>
+            <li>{t('web.reseller_tiers_rule_four')}</li>
+            <li>{t('web.reseller_tiers_rule_no_delete')}</li>
+            <li>{t('web.reseller_tiers_rule_future')}</li>
+          </ul>
+          <p>
+            <a href="/resellers" onClick={onLink}>
+              {t('web.reseller_tiers_resellers_link')}
+            </a>
+          </p>
+        </Card>
+      </div>
     </>
   );
 }
@@ -501,10 +546,10 @@ function GrantsSummary({ grants }: { grants: readonly ResellerTierGrant[] }) {
   const state = grantsStateOf(grants);
   const blocked = blockedDimensions(modesOf(state));
   return (
-    <div className="small">
+    <div className="small tiers-grants">
       {RESELLER_GRANT_KINDS.map((kind) => (
         <div key={kind} className="nowrap">
-          {t(GRANT_KIND_LABELS[kind])}:{' '}
+          <span className="muted">{t(GRANT_KIND_LABELS[kind])}:</span>{' '}
           <KindBadge entry={state[kind].mode} count={state[kind].subjects.length} />
         </div>
       ))}
@@ -633,15 +678,16 @@ export function GrantsEditor({
       ))}
 
       {problem !== null && <Banner tone="warn">{t(problem)}</Banner>}
-      <div className="toolbar">
-        <button
-          type="button"
-          className="btn primary sm"
+      <div className="form-actions">
+        <Button
+          variant="primary"
+          size="sm"
+          icon="check"
           disabled={problem !== null || save.isPending}
           onClick={() => save.mutate()}
         >
           {t('web.reseller_grants_save')}
-        </button>
+        </Button>
       </div>
       <p className="muted small">{t('web.reseller_grants_replace_note')}</p>
       {save.error !== null && <Banner tone="danger">{messageFor(save.error)}</Banner>}
@@ -824,6 +870,9 @@ function TierForm({ tier, onDone }: { tier?: ResellerTierSummaryResponse; onDone
   const [state, setState] = useState<TierFormState>(
     tier === undefined ? BLANK_TIER : tierStateOf(tier),
   );
+  const dirty =
+    JSON.stringify(state) !== JSON.stringify(tier === undefined ? BLANK_TIER : tierStateOf(tier));
+  useUnsavedChanges(dirty);
   const set = <K extends keyof TierFormState>(key: K, value: TierFormState[K]) =>
     setState((current) => ({ ...current, [key]: value }));
 
@@ -934,22 +983,25 @@ function TierForm({ tier, onDone }: { tier?: ResellerTierSummaryResponse; onDone
       </Field>
 
       {problem !== null && <Banner tone="warn">{t(problem)}</Banner>}
-      <div className="toolbar">
-        <button
-          type="button"
-          className="btn primary sm"
+      <SaveBar dirty={dirty}>
+        {mode === 'create' && (
+          <span className="muted small">{t('web.reseller_tier_created_empty')}</span>
+        )}
+        {mode === 'edit' && (
+          <Button size="sm" disabled={save.isPending} onClick={onDone}>
+            {t('web.rule_cancel_edit')}
+          </Button>
+        )}
+        <Button
+          variant="primary"
+          size="sm"
+          icon="check"
           disabled={problem !== null || save.isPending}
           onClick={() => save.mutate()}
         >
           {mode === 'create' ? t('web.reseller_tier_create') : t('web.rule_save')}
-        </button>
-        {mode === 'edit' && (
-          <button type="button" className="btn sm" disabled={save.isPending} onClick={onDone}>
-            {t('web.rule_cancel_edit')}
-          </button>
-        )}
-      </div>
-      {mode === 'create' && <p className="muted small">{t('web.reseller_tier_created_empty')}</p>}
+        </Button>
+      </SaveBar>
       {save.error !== null && <Banner tone="danger">{messageFor(save.error)}</Banner>}
     </Card>
   );
