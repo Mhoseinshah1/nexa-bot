@@ -8,6 +8,7 @@
  *   pnpm web:shots /settings --width 900 --collapsed
  *   pnpm web:shots / --full --no-build --out /tmp/shots
  *   pnpm web:shots /panels/<id> --click '[role=tab]:nth-child(3)'   a state reached by clicking
+ *   pnpm web:shots / --signed-out                  the sign-in screen (the session answers 401)
  *
  * What it does, and why each part is there:
  *
@@ -65,6 +66,7 @@ function parseArgs(argv) {
     out: join(ROOT, '.web-shots'),
     timeoutMs: 15_000,
     clicks: [],
+    signedOut: false,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -84,6 +86,7 @@ function parseArgs(argv) {
     else if (arg === '--out') options.out = resolve(value());
     else if (arg === '--timeout') options.timeoutMs = Number(value());
     else if (arg === '--click') options.clicks.push(value());
+    else if (arg === '--signed-out') options.signedOut = true;
     else if (arg === '--help' || arg === '-h') {
       console.log(readFileSync(fileURLToPath(import.meta.url), 'utf8').split('*/')[0]);
       process.exit(0);
@@ -151,6 +154,20 @@ async function main() {
   const server = createServer(async (request, response) => {
     const url = new URL(request.url ?? '/', 'http://localhost');
     const method = request.method ?? 'GET';
+    if (options.signedOut && url.pathname === `${API_PREFIX}/auth/session`) {
+      response.writeHead(401, { 'content-type': 'application/json' });
+      response.end(
+        JSON.stringify({
+          error: {
+            kind: 'UNAUTHENTICATED',
+            code: 'auth.no_session',
+            message: 'no',
+            correlationId: 'shots',
+          },
+        }),
+      );
+      return;
+    }
     if (url.pathname.startsWith(API_PREFIX) || url.pathname.startsWith('/health/')) {
       const found = findFixture(FIXTURES, method, url.pathname, url.searchParams, API_PREFIX);
       if (found === undefined) {
@@ -291,6 +308,7 @@ function shotName(route, theme, options) {
     options.collapsed ? 'collapsed' : null,
     options.full ? 'full' : null,
     options.clicks.length > 0 ? `click${options.clicks.length}` : null,
+    options.signedOut ? 'signed-out' : null,
   ]
     .filter(Boolean)
     .join('--');
@@ -322,8 +340,10 @@ async function shoot(cdp, shot) {
           message.params.exceptionDetails.text,
       );
     } else if (message.method === 'Log.entryAdded' && message.params.entry.level === 'error') {
-      // A 404 for an unfixtured request is reported separately, by name.
-      if (!/status of 404/.test(message.params.entry.text)) errors.push(message.params.entry.text);
+      // A 404 for an unfixtured request is reported separately, by name; a 401 is
+      // the signed-out session a --signed-out shot asks for.
+      if (!/status of (404|401)/.test(message.params.entry.text))
+        errors.push(message.params.entry.text);
     }
   });
 

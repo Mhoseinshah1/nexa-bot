@@ -318,3 +318,30 @@ form:not([class]) > * + * {
     transition-duration: 0.01ms !important;
   }
 }
+
+/*
+ * Sibling sections anywhere keep the page's rhythm, whatever wraps them — a
+ * tab's own `<div>`, a query's fragment. Zero specificity, so any layout that
+ * places its children itself (the grids below, or a class of a page's own)
+ * wins; the grids reset it explicitly because a top margin on a grid item
+ * misaligns its row.
+ */
+:where(.card, .banner, .notice, .grid, .grid-2, .two-col, .kv)
+  + :where(.card, .banner, .notice, .grid, .grid-2, .two-col) {
+  margin-top: var(--gap);
+}
+:where(
+    .grid,
+    .grid-2,
+    .two-col,
+    .list-split,
+    .three-col,
+    .stat-grid,
+    .kpi-grid,
+    .row,
+    .head-stats,
+    .toolbar
+  )
+  > * {
+  margin-top: 0;
+}

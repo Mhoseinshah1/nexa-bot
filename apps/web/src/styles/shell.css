@@ -541,3 +541,8 @@
     display: none;
   }
 }
+
+/* The sign-in form spaces its fields with its own gap, not the plain-form margin. */
+.screen-card form > * + * {
+  margin-top: 0;
+}
