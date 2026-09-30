@@ -17,6 +17,7 @@ import {
   systemJobActor,
 } from '@nexa/contracts';
 import type {
+  AdminId,
   AuditWriter,
   TelegramChannel,
   Clock,
@@ -481,6 +482,12 @@ import {
 } from './modules/control/ops-group/application/ops-group-maintainer.js';
 import { OpsTopicProvisioner } from './modules/control/ops-group/application/topic-provisioner.js';
 import { DrizzleOpsGroupRepository } from './modules/control/ops-group/infrastructure/drizzle-ops-group.repository.js';
+// Premium UI: appearance slots, the messenger's decoration reader and the page's service.
+import {
+  CachedAppearanceReader,
+  DrizzleAppearanceRepository,
+} from './modules/control/appearance/infrastructure/drizzle-appearance.repository.js';
+import { AppearanceService } from './modules/control/appearance/application/appearance.service.js';
 import {
   OpsGroupBotSource,
   TelegramOpsGroup,
@@ -899,6 +906,8 @@ export interface Container {
   readonly notificationRepository: DrizzleNotificationRepository;
   readonly notificationDispatcher: NotificationDispatcher;
   readonly notificationTransport: NotificationTransport;
+  /** Premium UI: «ظاهر ربات» — appearance slots and the per-bot custom emoji test. */
+  readonly appearance: AppearanceService;
   /** WP-A4: the Nexa-managed operations log group, and the worker pass that keeps it. */
   readonly opsGroups: OpsGroupService;
   readonly opsGroupMaintainer: OpsGroupMaintainer;
@@ -3628,6 +3637,13 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     },
   });
   /*
+   * Premium UI: the slot rows and each bot's test verdict, as the messenger reads them —
+   * cached per bot for thirty seconds, forgotten at once by this process on a save or a
+   * test (`AppearanceService.invalidate`).
+   */
+  const appearanceRepository = new DrizzleAppearanceRepository(database.db);
+  const appearanceReader = new CachedAppearanceReader(appearanceRepository, clock);
+  /*
    * Round P: the Web Admin's view of the whole menu — the items with the keyboard's own
    * decision about each, the desired command list, and every bot's sync state — and the
    * two actions on that state. Reads `MainMenuLayout` (one evaluator) and writes the
@@ -3668,7 +3684,30 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     config.TELEGRAM_API_BASE_URL,
     config.NOTIFICATION_SEND_TIMEOUT_MS,
     mainMenuLayout,
+    appearanceReader,
   );
+  const appearance = new AppearanceService({
+    repository: appearanceRepository,
+    // The SAME messenger every customer message goes through: the test message is decorated
+    // by the same renderer, sent by the same transport, and read by the same classification.
+    probe: customerMessenger,
+    admins: {
+      telegramUserIdOf: async (scope, adminId) =>
+        (await admins.findById(scope, adminId as AdminId))?.telegramUserId ?? null,
+    },
+    guard,
+    uow,
+    audit,
+    opsLog: opsLogWriter,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    // The condition rows, read from the database as the messenger reads them.
+    conditions: new DrizzleOperationalConditionReader(database.db),
+    clock,
+    ids,
+    invalidate: (scope) => appearanceReader.forget(scope),
+  });
   /*
    * R2 (items 4 and 11): the invoice screens the gateway worker and the turn both edit, and
    * the renewal's payment screens the notification lane closes before the result.
@@ -5285,6 +5324,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     notificationRepository,
     notificationDispatcher,
     notificationTransport,
+    appearance,
     opsGroups,
     opsGroupMaintainer,
     opsLogService,

@@ -1,4 +1,6 @@
 import type {
+  AppearanceTestErrorCode,
+  AppearanceTestOutcome,
   BotInstanceId,
   CustomerNotificationKind,
   CustomerNotificationState,
@@ -12,6 +14,7 @@ import type {
 } from '@nexa/contracts';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { CaptionEntity } from './caption-markup.js';
+import type { AppearanceDecoration } from './appearance-render.js';
 
 /**
  * What a button says.
@@ -493,6 +496,55 @@ export interface CustomerMessenger {
  */
 export interface CustomerSendConditionReader {
   conditionIsOpen(scope: TenantContext, dedupeKey: string): Promise<boolean>;
+}
+
+/**
+ * Premium UI: what the messenger may decorate a message with (`appearance-render.ts`).
+ *
+ * Declared here, by the consumer, as narrowly as `CustomerSendConditionReader` is: the
+ * messenger needs three answers and must not be able to browse or edit a tenant's
+ * appearance. The appearance module implements it over the slot rows and the bot's own
+ * test result, behind a short cache.
+ */
+export interface AppearanceReader {
+  /**
+   * The decoration for a message THIS bot sends: the configured, switched-on slots — and
+   * only when the bot's last eligibility test answered `SENT`. Anything else is
+   * `NO_DECORATION`, so a bot nobody has tested draws the fallback emoji, never assumed.
+   */
+  decorationFor(scope: TenantContext, botInstanceId: BotInstanceId): Promise<AppearanceDecoration>;
+  /**
+   * Every configured, switched-on slot, whatever any bot's test said: what the test
+   * message itself carries, because the test is how a bot's answer is found out.
+   */
+  configuredDecoration(scope: TenantContext): Promise<AppearanceDecoration>;
+  /**
+   * Telegram refused a decorated message from this bot and then accepted the same message
+   * undecorated: the decoration was the cause. Recorded on the bot as a `REJECTED` test,
+   * so decoration stops for it at once rather than costing every later message a refused
+   * request and a retry — until an operator re-tests.
+   */
+  recordRuntimeRefusal(scope: TenantContext, botInstanceId: BotInstanceId): Promise<void>;
+}
+
+/**
+ * Premium UI: what «ارسال پیام آزمایشی» found (`AppearanceService.sendTest`).
+ *
+ * Telegram's answer to a message that carried the tenant's configured custom emoji, as the
+ * closed vocabulary the bot row stores — never the description, which can quote a chat id.
+ * `decoratedSlots` is how many custom emoji the message carried; zero means the answer
+ * proves nothing about eligibility, and the service refuses to send such a test.
+ */
+export interface AppearanceProbeResult {
+  readonly outcome: AppearanceTestOutcome;
+  readonly errorCode: AppearanceTestErrorCode | null;
+  readonly decoratedSlots: number;
+}
+
+export interface AppearanceProbeMessage {
+  readonly chatId: string;
+  readonly botInstanceId: BotInstanceId;
+  readonly templateKey: TemplateKey;
 }
 
 /**

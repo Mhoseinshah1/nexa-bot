@@ -1578,6 +1578,36 @@ composed. So while a release without campaigns runs:
 
 Nothing needs doing before rolling back past C1.
 
+### What a rollback leaves as text: appearance markers (round P, Premium UI)
+
+The Premium UI release puts `{icon:…}` markers into the DEFAULT bodies of about forty
+customer templates and renders them at send time into an emoji (or a custom emoji
+entity) through the messenger. The default bodies ship with the code, so a rollback
+takes the markers away with the release that reads them; nothing in the database holds
+one — except a tenant's own override, if an operator copied a marker into it.
+
+- **An override carrying `{icon:…}` is sent literally by the old release.** The old
+  renderer leaves an undeclared braced expression as written, so a customer reads
+  `{icon:payment}`. Before rolling back, list them:
+
+  ```bash
+  docker compose --env-file /etc/nexa/deploy.env -f /opt/nexa/deploy/compose.yml \
+    exec -T postgres psql -U nexa -d nexa -c \
+    "SELECT tenant_id, template_key FROM template_overrides WHERE body LIKE '%{icon:%'"
+  ```
+
+  and either revert those keys to the default from the texts page, or edit the marker
+  into the emoji you want, before the rollback. The old release's editor refuses nothing
+  here (it does not know the marker), so this is the operator's check.
+
+- **The two new columns and the new table are ignored** by the old release:
+  `bot_appearance_slots` and `bot_instances.custom_emoji_*` are additive, and nothing in
+  it reads them. A later roll-forward finds every slot and every bot's verdict as they
+  were.
+- **Nothing was ever decorated by the old release**, so the customer-facing effect of a
+  rollback is only the emoji returning to the literal ones the old bodies carried — and
+  the literal marker in an override, above.
+
 ### What a rollback leaves queued: the command-menu sync (round P)
 
 Round P (`docs/command-menu-audit.md`) adds one table, `bot_command_syncs` (migration

@@ -327,6 +327,14 @@ import {
   type OpsGroupRequeueResponse,
   type OpsGroupTestResponse,
   type OpsLogGroupResponse,
+  // Premium UI: «ظاهر ربات».
+  APPEARANCE_ROUTES,
+  appearanceResponseSchema,
+  appearanceSlotMutationResponseSchema,
+  appearanceTestResponseSchema,
+  type AppearanceResponse,
+  type AppearanceSlotMutationResponse,
+  type AppearanceTestResponse,
   botDiagnosticResponseSchema,
   botListResponseSchema,
   botMutationResponseSchema,
@@ -3072,6 +3080,46 @@ export function testOpsGroup(idempotencyKey: string): Promise<OpsGroupTestRespon
 /** Put the preserved, unsent reports back in the queue. */
 export function requeueOpsGroup(idempotencyKey: string): Promise<OpsGroupRequeueResponse> {
   return post(OPS_GROUP_ROUTES.requeue, { idempotencyKey }, opsGroupRequeueResponseSchema);
+}
+
+// --- Bot appearance (Premium UI) ------------------------------------------------
+
+/** Every appearance slot as the tenant has it, the bots and their last custom emoji test. */
+export function fetchAppearance(): Promise<AppearanceResponse> {
+  return authedGet(APPEARANCE_ROUTES.view, appearanceResponseSchema);
+}
+
+/** Set one slot's custom emoji id and switch, against the version it was read at. */
+export function saveAppearanceSlot(input: {
+  slot: string;
+  idempotencyKey: string;
+  customEmojiId: string | null;
+  enabled: boolean;
+  expectedVersion: number | null;
+}): Promise<AppearanceSlotMutationResponse> {
+  const { slot, ...body } = input;
+  return post(APPEARANCE_ROUTES.slot(slot), body, appearanceSlotMutationResponseSchema);
+}
+
+/** Put one slot back to the catalogue's fallback emoji. */
+export function resetAppearanceSlot(input: {
+  slot: string;
+  idempotencyKey: string;
+  expectedVersion: number | null;
+}): Promise<AppearanceSlotMutationResponse> {
+  const { slot, ...body } = input;
+  return post(APPEARANCE_ROUTES.slotReset(slot), body, appearanceSlotMutationResponseSchema);
+}
+
+/**
+ * Send the test message through one bot to the signed-in administrator's own Telegram chat,
+ * and record what Telegram answered on that bot.
+ */
+export function testAppearance(input: {
+  idempotencyKey: string;
+  botInstanceId: string;
+}): Promise<AppearanceTestResponse> {
+  return post(APPEARANCE_ROUTES.test, input, appearanceTestResponseSchema);
 }
 
 // ---------------------------------------------------------------------------

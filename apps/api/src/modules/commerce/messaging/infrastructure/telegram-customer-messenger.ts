@@ -13,10 +13,14 @@ import {
   mainMenuButtonIsGated,
   packMainMenuRows,
   templateDefinition,
+  APPEARANCE_SLOTS,
+  appearanceMarker,
+  type AppearanceTestErrorCode,
 } from '@nexa/contracts';
 import { CATALOGUE_FA, formatMoney } from '@nexa/i18n';
 import {
   callbackAnswerBody,
+  chatAccessProblemOf,
   editMessageBody,
   isMessageNotModified,
   fileMessageBody,
@@ -38,8 +42,26 @@ import {
   TELEGRAM_MESSAGE_MAX,
   worstOutcome,
 } from '../application/message-split.js';
-import { placeCaptionEntities, type CaptionEntity } from '../application/caption-markup.js';
+import { placeCaptionEntities } from '../application/caption-markup.js';
+import {
+  NO_DECORATION,
+  appearanceFallbackText,
+  decorateAppearance,
+  entitiesWithin,
+  maskAppearanceMarkers,
+  undoHtmlDecoration,
+  type CustomEmojiEntity,
+} from '../application/appearance-render.js';
+import {
+  APPEARANCE_DECORATION_FAILED_CODE,
+  APPEARANCE_DECORATION_OK_CODE,
+  appearanceDecorationConditionKey,
+} from '../application/appearance-conditions.js';
+import type { TelegramMessageEntity } from '../../../../infrastructure/telegram/send-message.js';
 import type {
+  AppearanceProbeMessage,
+  AppearanceProbeResult,
+  AppearanceReader,
   CustomerButton,
   CustomerButtonLabel,
   CustomerCaption,
@@ -110,6 +132,42 @@ export function customerSendConditionKey(botInstanceId: BotInstanceId): string {
   return `${CUSTOMER_SEND_FAILED_CODE}:${botInstanceId}`;
 }
 
+/*
+ * Premium UI: the decoration-failure condition's codes live in
+ * `appearance-conditions.ts` (application), because the appearance service closes the
+ * condition too; re-exported here for the callers that learned them from this file.
+ */
+export {
+  APPEARANCE_DECORATION_FAILED_CODE,
+  APPEARANCE_DECORATION_OK_CODE,
+  appearanceDecorationConditionKey,
+};
+
+/**
+ * A refusal of a custom-emoji test, as the closed vocabulary the bot row stores.
+ *
+ * Read from Telegram's description ONCE, here, and never stored: the description can quote
+ * a chat id. The custom-emoji wording is matched broadly ("custom emoji", `CUSTOM_EMOJI_…`,
+ * "entity"/"entities") because the exact sentence an ineligible bot receives is not
+ * documented; a chat the operator never opened with the bot is the other likely refusal
+ * and is named as such so the page can say "start the bot first".
+ */
+/** Every slot's marker, one line, space-separated: the block the probe decorates. */
+export const APPEARANCE_PROBE_BLOCK = APPEARANCE_SLOTS.map(appearanceMarker).join(' ');
+
+export function classifyProbeRefusal(description: string): AppearanceTestErrorCode {
+  if (/custom.?emoji|CUSTOM_EMOJI|entit(?:y|ies)/i.test(description)) {
+    return 'appearance.custom_emoji_refused';
+  }
+  if (
+    chatAccessProblemOf(description) !== null ||
+    /chat not found|user not found|PEER_ID_INVALID|USER_ID_INVALID/i.test(description)
+  ) {
+    return 'appearance.chat_unavailable';
+  }
+  return 'appearance.telegram_rejected';
+}
+
 /** A button's row, as a spreadable fragment, so `exactOptionalPropertyTypes` stays satisfied. */
 function rowOf(button: { readonly row?: CustomerButtonRow }): { row?: number } {
   return button.row === undefined ? {} : { row: button.row };
@@ -122,6 +180,21 @@ type SendFailureReason = 'NO_BOT' | 'UNCERTAIN' | 'REFUSED';
 interface ClassifiedOutcome {
   readonly sent: CustomerSendResult;
   readonly errorCode: string | null;
+}
+
+/**
+ * A caption as it goes on the wire, and the same caption with its decoration undone —
+ * the one retry a refused decorated send is allowed (`deliverDecorated`).
+ */
+interface RenderedCaption {
+  readonly caption: string;
+  readonly html: boolean;
+  readonly entities: readonly TelegramMessageEntity[];
+  readonly decorated: boolean;
+  readonly fallback: {
+    readonly caption: string;
+    readonly entities: readonly TelegramMessageEntity[];
+  };
 }
 
 /**
@@ -203,6 +276,12 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
      * ungated buttons from the shared catalogue, as every keyboard was drawn before R1.
      */
     private readonly menu?: { rowsFor(scope: ScopeContext): Promise<string[][]> },
+    /**
+     * Premium UI: what a bot may decorate its messages with. Absent in a stand-in, which
+     * draws every marker as its fallback emoji — exactly what a bot that never proved its
+     * eligibility gets.
+     */
+    private readonly appearance?: AppearanceReader,
   ) {}
 
   async send(scope: TenantContext, message: CustomerMessage): Promise<CustomerSendResult> {
@@ -283,28 +362,57 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
      * refuse. A body within the bound — including an empty one, which Telegram refuses
      * and which is reported as it always was — is one part and takes the same path.
      */
+    /*
+     * Premium UI (`appearance-render.ts`): the body is cut with its `{icon:…}` markers
+     * MASKED — one atomic stand-in each, never wider than the emoji it becomes — and each
+     * part is decorated on its own after the cut. So a marker is never split, the bound is
+     * measured on what Telegram counts ("characters after entities parsing", never the
+     * `<tg-emoji>` tags a decoration adds), and every entity's offset is relative to the
+     * part it is sent in. A part Telegram refuses with its decoration is re-sent once
+     * without (`deliverDecorated`), and every later part is rendered with NO decoration at
+     * all — tags and entities alike (Codex, PR #121, findings 1 and 2).
+     */
+    const decoration = await this.decorationFor(scope, message.botInstanceId);
+    const format = templateDefinition(message.templateKey).format;
+    const { masked, restore } = maskAppearanceMarkers(text);
     const parts =
-      text.length <= TELEGRAM_MESSAGE_MAX ? [text] : splitMessageBody(text, TELEGRAM_MESSAGE_MAX);
-    const sequence = parts.length === 0 ? [text] : parts;
+      masked.length <= TELEGRAM_MESSAGE_MAX
+        ? [masked]
+        : splitMessageBody(masked, TELEGRAM_MESSAGE_MAX);
+    const sequence = parts.length === 0 ? [masked] : parts;
     let worst: ClassifiedOutcome = { sent: { outcome: 'DELIVERED' }, errorCode: null };
     // R2: the id of the part that carries the keyboard, so a later turn can edit it.
     let lastMessageId: number | null = null;
-    for (const [index, part] of sequence.entries()) {
+    let decorationRefused = false;
+    for (const [index, maskedPart] of sequence.entries()) {
       const last = index === sequence.length - 1;
-      const raw = await telegramSend({
+      const decorated = decorateAppearance(
+        restore(maskedPart),
+        format,
+        decorationRefused ? NO_DECORATION : decoration,
+      );
+      const part = decorated.text;
+      const entities = decorated.entities;
+      const plainText = html ? undoHtmlDecoration(part) : part;
+      const isDecorated = decorated.decorated > 0;
+      const request = (plain: boolean): TelegramRequest => ({
         token,
         apiBaseUrl: this.apiBaseUrl,
         timeoutMs: this.timeoutMs,
         body: textMessageBody({
           chatId: message.chatId,
-          text: part,
+          text: plain ? plainText : part,
           html,
+          entities: plain ? [] : entities,
           ...(index === 0 && message.replyToMessageId !== undefined
             ? { replyToMessageId: message.replyToMessageId }
             : {}),
           ...(last ? { buttons, ...(keyboard === undefined ? {} : { keyboard }) } : {}),
         }),
       });
+      const attempt = await this.deliverDecorated(scope, message, isDecorated, request);
+      if (attempt.decorationRefused) decorationRefused = true;
+      const raw = attempt.raw;
       if (last && raw.outcome === 'SUCCEEDED') lastMessageId = raw.messageId;
       const answer = this.classify(raw);
       if (worstOutcome(worst.sent.outcome, answer.sent.outcome) !== worst.sent.outcome) {
@@ -405,7 +513,9 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
     if (token === null) return { outcome: 'REFUSED' };
 
     const rendered =
-      message.caption === undefined ? undefined : await this.renderCaption(scope, message.caption);
+      message.caption === undefined
+        ? undefined
+        : await this.renderCaption(scope, message.caption, message.botInstanceId);
     const caption = rendered?.caption;
     const html = rendered?.html === true;
     /*
@@ -426,28 +536,31 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
     const buttons = await this.labelButtons(scope, message.buttons ?? []);
 
     const method = message.kind === 'PHOTO' ? 'sendPhoto' : 'sendDocument';
-    const content = {
-      chatId: message.chatId,
-      kind: message.kind,
-      ...(caption === undefined ? {} : { caption, html }),
-      ...(rendered === undefined || rendered.entities.length === 0
-        ? {}
-        : { captionEntities: rendered.entities }),
-      buttons,
+    const content = (plain: boolean) => {
+      const wire = plain ? rendered?.fallback : rendered;
+      return {
+        chatId: message.chatId,
+        kind: message.kind,
+        ...(wire === undefined ? {} : { caption: wire.caption, html }),
+        ...(wire === undefined || wire.entities.length === 0
+          ? {}
+          : { captionEntities: wire.entities }),
+        buttons,
+      };
     };
     /*
      * The two sources are two request shapes and ONE transport call. A `file_id` is a
      * JSON body exactly as before; bytes go up as multipart, and `telegramSend` gives
      * both the same timeout, the same redirect refusal and the same outcome taxonomy.
      */
-    const request: TelegramRequest =
+    const request = (plain: boolean): TelegramRequest =>
       message.source.kind === 'FILE_ID'
         ? {
             token,
             apiBaseUrl: this.apiBaseUrl,
             timeoutMs: this.timeoutMs,
             method,
-            body: fileMessageBody({ ...content, fileId: message.source.fileId }),
+            body: fileMessageBody({ ...content(plain), fileId: message.source.fileId }),
           }
         : {
             token,
@@ -455,7 +568,7 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
             timeoutMs: this.timeoutMs,
             method,
             multipart: fileUploadBody({
-              ...content,
+              ...content(plain),
               bytes: message.source.bytes,
               fileName: message.source.fileName,
               mimeType: message.source.mimeType,
@@ -468,7 +581,15 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
      * arrived, and a failed re-send must not make an operator's "the bot is not
      * replying" alarm fire for a bot that is replying.
      */
-    const outcome = await telegramSend(request);
+    const { raw: outcome } = await this.deliverDecorated(
+      scope,
+      {
+        botInstanceId: message.botInstanceId,
+        ...(message.caption === undefined ? {} : { templateKey: message.caption.templateKey }),
+      },
+      rendered?.decorated === true,
+      request,
+    );
     const sent = this.classify(outcome).sent;
     if (outcome.outcome !== 'SUCCEEDED') return sent;
     // HF-A7: the handle Telegram gave the delivered file, so an upload's bytes can be let go.
@@ -493,30 +614,43 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
   ): Promise<CustomerSendResult> {
     const token = await this.bots.tokenForBotInstance(scope, message.botInstanceId);
     if (token === null) return { outcome: 'REFUSED' };
-    const items = [];
+    const rendered: (RenderedCaption | undefined)[] = [];
     for (const item of message.items) {
-      const rendered =
-        item.caption === undefined ? undefined : await this.renderCaption(scope, item.caption);
+      const one =
+        item.caption === undefined
+          ? undefined
+          : await this.renderCaption(scope, item.caption, message.botInstanceId);
       // An album carries no parse mode per item here: an HTML caption is refused, not sent raw.
-      if (rendered !== undefined && rendered.html) return { outcome: 'REFUSED' };
-      items.push({
-        kind: item.kind,
-        bytes: item.source.bytes,
-        fileName: item.source.fileName,
-        mimeType: item.source.mimeType,
-        ...(rendered === undefined ? {} : { caption: rendered.caption }),
-        ...(rendered === undefined || rendered.entities.length === 0
-          ? {}
-          : { captionEntities: rendered.entities }),
-      });
+      if (one !== undefined && one.html) return { outcome: 'REFUSED' };
+      rendered.push(one);
     }
-    const outcome = await telegramSend({
-      token,
-      apiBaseUrl: this.apiBaseUrl,
-      timeoutMs: this.timeoutMs,
-      method: 'sendMediaGroup',
-      multipart: mediaGroupUploadBody({ chatId: message.chatId, items }),
-    });
+    const items = (plain: boolean) =>
+      message.items.map((item, index) => {
+        const one = rendered[index];
+        const wire = plain ? one?.fallback : one;
+        return {
+          kind: item.kind,
+          bytes: item.source.bytes,
+          fileName: item.source.fileName,
+          mimeType: item.source.mimeType,
+          ...(wire === undefined ? {} : { caption: wire.caption }),
+          ...(wire === undefined || wire.entities.length === 0
+            ? {}
+            : { captionEntities: wire.entities }),
+        };
+      });
+    const { raw: outcome } = await this.deliverDecorated(
+      scope,
+      { botInstanceId: message.botInstanceId },
+      rendered.some((one) => one?.decorated === true),
+      (plain) => ({
+        token,
+        apiBaseUrl: this.apiBaseUrl,
+        timeoutMs: this.timeoutMs,
+        method: 'sendMediaGroup',
+        multipart: mediaGroupUploadBody({ chatId: message.chatId, items: items(plain) }),
+      }),
+    );
     return this.classify(outcome).sent;
   }
 
@@ -528,14 +662,48 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
   private async renderCaption(
     scope: TenantContext,
     caption: CustomerCaption,
-  ): Promise<{ caption: string; html: boolean; entities: readonly CaptionEntity[] }> {
+    botInstanceId: BotInstanceId,
+  ): Promise<RenderedCaption> {
     const text = await this.templates.render(scope, caption.templateKey, caption.values);
-    const html = templateDefinition(caption.templateKey).format === 'TELEGRAM_HTML';
-    if (html || caption.markup === undefined) return { caption: text, html, entities: [] };
-    const value = caption.values[caption.markup.token];
-    if (typeof value !== 'string') return { caption: text, html, entities: [] };
-    const placed = placeCaptionEntities(text, value, caption.markup.entities);
-    return { caption: placed.caption, html, entities: placed.entities };
+    const format = templateDefinition(caption.templateKey).format;
+    const html = format === 'TELEGRAM_HTML';
+    /*
+     * Premium UI: the markers are decorated FIRST, on the rendered text, and the provider's
+     * entities are placed on the result — a marker is shorter than its emoji only in one
+     * direction, and placing before decorating would move every provider offset after it.
+     * The custom entities are then bounded with the caption: one that no longer lies whole
+     * inside it is dropped, never clipped.
+     */
+    const decoration = await this.decorationFor(scope, botInstanceId);
+    const decorated = decorateAppearance(text, format, decoration);
+    const plain = decorateAppearance(text, format, NO_DECORATION);
+    const provider =
+      html || caption.markup === undefined
+        ? undefined
+        : { value: caption.values[caption.markup.token], entities: caption.markup.entities };
+    const place = (body: string, custom: readonly CustomEmojiEntity[]) => {
+      if (html) return { caption: body, entities: [] as readonly TelegramMessageEntity[] };
+      /*
+       * Without provider markup the caption is NOT bounded here: `sendFile` still has to see
+       * a caption over the bound to refuse a `captionWhole` one, and the body builders cut a
+       * plain caption (`boundCaption`) and drop the entities past the cut themselves.
+       */
+      const placed =
+        provider === undefined || typeof provider.value !== 'string'
+          ? { caption: body, entities: [] as readonly TelegramMessageEntity[] }
+          : placeCaptionEntities(body, provider.value, provider.entities);
+      const entities: TelegramMessageEntity[] = [
+        ...placed.entities,
+        ...entitiesWithin(custom, 0, placed.caption.length),
+      ].sort((a, b) => a.offset - b.offset || b.length - a.length);
+      return { caption: placed.caption, entities };
+    };
+    return {
+      ...place(decorated.text, decorated.entities),
+      html,
+      decorated: decorated.decorated > 0,
+      fallback: place(plain.text, []),
+    };
   }
 
   /**
@@ -551,8 +719,16 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
   ): Promise<CustomerSendResult> {
     const token = await this.bots.tokenForBotInstance(scope, message.botInstanceId);
     if (token === null) return { outcome: 'REFUSED' };
-    const caption = await this.templates.render(scope, message.templateKey, message.values);
-    const html = templateDefinition(message.templateKey).format === 'TELEGRAM_HTML';
+    const rendered = await this.templates.render(scope, message.templateKey, message.values);
+    const format = templateDefinition(message.templateKey).format;
+    const html = format === 'TELEGRAM_HTML';
+    // Premium UI: the same decoration a fresh send of this key would get, by the same path.
+    const decorated = decorateAppearance(
+      rendered,
+      format,
+      await this.decorationFor(scope, message.botInstanceId),
+    );
+    const caption = decorated.text;
     // Round N (F1): a caption that must arrive whole is refused, not cut, over the bound.
     if (message.whole === true && caption.length > TELEGRAM_CAPTION_MAX) {
       return { outcome: 'REFUSED', reason: 'CAPTION_OVER_BOUND' };
@@ -561,19 +737,26 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
       return { outcome: 'REFUSED', reason: 'NOT_EDITABLE' };
     }
     const buttons = await this.labelButtons(scope, message.buttons);
-    const outcome = await telegramSend({
-      token,
-      apiBaseUrl: this.apiBaseUrl,
-      timeoutMs: this.timeoutMs,
-      method: 'editMessageCaption',
-      body: editCaptionBody({
-        chatId: message.chatId,
-        messageId: message.messageId,
-        caption,
-        html,
-        buttons,
+    const plainCaption = html ? undoHtmlDecoration(caption) : caption;
+    const { raw: outcome } = await this.deliverDecorated(
+      scope,
+      message,
+      decorated.decorated > 0,
+      (plain) => ({
+        token,
+        apiBaseUrl: this.apiBaseUrl,
+        timeoutMs: this.timeoutMs,
+        method: 'editMessageCaption',
+        body: editCaptionBody({
+          chatId: message.chatId,
+          messageId: message.messageId,
+          caption: plain ? plainCaption : caption,
+          html,
+          buttons,
+          captionEntities: plain ? [] : decorated.entities,
+        }),
       }),
-    });
+    );
     if (isMessageNotModified(outcome)) return { outcome: 'DELIVERED' };
     const sent = this.classify(outcome).sent;
     return sent.outcome === 'REFUSED' ? { outcome: 'REFUSED', reason: 'NOT_EDITABLE' } : sent;
@@ -655,7 +838,10 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
     const text =
       input.toast === undefined
         ? undefined
-        : await this.templates.render(scope, input.toast.templateKey, input.toast.values);
+        : // A toast carries no entities either: the fallback emoji, like a button label.
+          appearanceFallbackText(
+            await this.templates.render(scope, input.toast.templateKey, input.toast.values),
+          );
     await telegramSend({
       token,
       apiBaseUrl: this.apiBaseUrl,
@@ -682,7 +868,20 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
   async edit(scope: TenantContext, message: CustomerEditMessage): Promise<CustomerSendResult> {
     const token = await this.bots.tokenForBotInstance(scope, message.botInstanceId);
     if (token === null) return { outcome: 'REFUSED' };
-    const text = await this.templates.render(scope, message.templateKey, message.values);
+    const rendered = await this.templates.render(scope, message.templateKey, message.values);
+    const format = templateDefinition(message.templateKey).format;
+    const html = format === 'TELEGRAM_HTML';
+    /*
+     * Premium UI: the SAME renderer and the same decoration `send` uses, so a card edited
+     * in place and the same card sent fresh carry the same text and the same entities
+     * (`telegram-messenger-appearance.test.ts` asserts the parity).
+     */
+    const decorated = decorateAppearance(
+      rendered,
+      format,
+      await this.decorationFor(scope, message.botInstanceId),
+    );
+    const text = decorated.text;
     // Round N (F1): a body that must arrive whole says WHY it was refused.
     if (message.whole === true && text.length > TELEGRAM_MESSAGE_MAX) {
       return { outcome: 'REFUSED', reason: 'TEXT_OVER_BOUND' };
@@ -690,21 +889,27 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
     if (text.length === 0 || text.length > TELEGRAM_MESSAGE_MAX) {
       return { outcome: 'REFUSED', reason: 'NOT_EDITABLE' };
     }
-    const html = templateDefinition(message.templateKey).format === 'TELEGRAM_HTML';
     const buttons = await this.labelButtons(scope, message.buttons);
-    const outcome = await telegramSend({
-      token,
-      apiBaseUrl: this.apiBaseUrl,
-      timeoutMs: this.timeoutMs,
-      method: 'editMessageText',
-      body: editMessageBody({
-        chatId: message.chatId,
-        messageId: message.messageId,
-        text,
-        html,
-        buttons,
+    const plainText = html ? undoHtmlDecoration(text) : text;
+    const { raw: outcome } = await this.deliverDecorated(
+      scope,
+      message,
+      decorated.decorated > 0,
+      (plain) => ({
+        token,
+        apiBaseUrl: this.apiBaseUrl,
+        timeoutMs: this.timeoutMs,
+        method: 'editMessageText',
+        body: editMessageBody({
+          chatId: message.chatId,
+          messageId: message.messageId,
+          text: plain ? plainText : text,
+          html,
+          buttons,
+          entities: plain ? [] : decorated.entities,
+        }),
       }),
-    });
+    );
     if (isMessageNotModified(outcome)) return { outcome: 'DELIVERED' };
     const sent = this.classify(outcome).sent;
     return sent.outcome === 'REFUSED' ? { outcome: 'REFUSED', reason: 'NOT_EDITABLE' } : sent;
@@ -718,7 +923,10 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
    */
   private async labelText(scope: ScopeContext, label: CustomerButtonLabel): Promise<string> {
     if (label.kind === 'TEMPLATE') {
-      return this.templates.render(scope, label.key, label.values ?? {});
+      // A button carries no entities, so a marker on a label is always its fallback emoji.
+      return appearanceFallbackText(
+        await this.templates.render(scope, label.key, label.values ?? {}),
+      );
     }
     if (label.kind === 'AMOUNT') return formatMoney(label.amount);
     return label.amount === undefined ? label.text : `${label.text} — ${formatMoney(label.amount)}`;
@@ -765,6 +973,146 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
    * and the alternative — taking a transaction around a send — is the rule in
    * `docs/conventions.md` that forbids network calls inside one.
    */
+  /**
+   * Premium UI: «ارسال پیام آزمایشی» — the test message, with EVERY configured slot decorated
+   * whatever this bot's earlier test said, because the test is how that answer is found.
+   * One request, never split, never retried plain: the point is Telegram's verdict on the
+   * decoration, read into the closed vocabulary the bot row stores. A `SENT` closes the
+   * bot's open decoration-failure condition, if any — the one place it can honestly end.
+   */
+  async sendAppearanceProbe(
+    scope: TenantContext,
+    message: AppearanceProbeMessage,
+  ): Promise<AppearanceProbeResult> {
+    const token = await this.bots.tokenForBotInstance(scope, message.botInstanceId);
+    if (token === null) {
+      return { outcome: 'REJECTED', errorCode: 'appearance.telegram_rejected', decoratedSlots: 0 };
+    }
+    /*
+     * The human-readable part is the tenant's editable template, rendered with its markers
+     * as FALLBACK only; the decoration goes on a fixed block naming EVERY slot, appended
+     * here, so an override that omits a marker cannot make a `SENT` vouch for a slot the
+     * message never carried (Codex, PR #121, finding 6). `decoratedSlots` is therefore
+     * exactly the number of configured, switched-on slots.
+     */
+    const rendered = appearanceFallbackText(
+      await this.templates.render(scope, message.templateKey, {}),
+    );
+    const format = templateDefinition(message.templateKey).format;
+    const decoration =
+      this.appearance === undefined
+        ? NO_DECORATION
+        : await this.appearance.configuredDecoration(scope);
+    const decorated = decorateAppearance(
+      `${rendered}\n\n${APPEARANCE_PROBE_BLOCK}`,
+      format,
+      decoration,
+    );
+    if (decorated.text.length === 0 || decorated.text.length > TELEGRAM_MESSAGE_MAX) {
+      return {
+        outcome: 'REJECTED',
+        errorCode: 'appearance.telegram_rejected',
+        decoratedSlots: decorated.decorated,
+      };
+    }
+    const raw = await telegramSend({
+      token,
+      apiBaseUrl: this.apiBaseUrl,
+      timeoutMs: this.timeoutMs,
+      body: textMessageBody({
+        chatId: message.chatId,
+        text: decorated.text,
+        html: format === 'TELEGRAM_HTML',
+        entities: decorated.entities,
+      }),
+    });
+    const decoratedSlots = decorated.decorated;
+    if (raw.outcome === 'SUCCEEDED') {
+      await this.recordDecorationRecovery(scope, message.botInstanceId);
+      return { outcome: 'SENT', errorCode: null, decoratedSlots };
+    }
+    if (raw.outcome === 'FAILED_RETRYABLE') {
+      return raw.errorCode === 'telegram.rate_limited'
+        ? { outcome: 'RATE_LIMITED', errorCode: 'appearance.rate_limited', decoratedSlots }
+        : {
+            outcome: 'UNREACHABLE',
+            errorCode: 'appearance.telegram_unreachable',
+            decoratedSlots,
+          };
+    }
+    return {
+      outcome: 'REJECTED',
+      errorCode: classifyProbeRefusal(raw.errorMessage),
+      decoratedSlots,
+    };
+  }
+
+  /** The decoration for one bot's messages; a stand-in without a reader decorates nothing. */
+  private async decorationFor(scope: TenantContext, botInstanceId: BotInstanceId) {
+    return this.appearance === undefined
+      ? NO_DECORATION
+      : this.appearance.decorationFor(scope, botInstanceId);
+  }
+
+  /**
+   * ONE Telegram call for a message that MAY carry decoration, and the one retry the
+   * decoration is allowed.
+   *
+   * A definite refusal (4xx) of a decorated request is answered by the SAME request with
+   * `plain = true` — the same text minus the custom emoji — exactly once. If that lands,
+   * the decoration was the cause: the customer has their message, the condition is
+   * recorded for the operator, and the bot's decoration is switched off until re-tested.
+   * If that is refused too, the decoration was not the cause and the second answer is the
+   * message's. An UNKNOWN outcome (timeout, 5xx) is never retried: Telegram may have
+   * delivered the first request, and a second would be the duplicate every rule in this
+   * file exists to prevent. "Message is not modified" is success and needs no retry.
+   */
+  private async deliverDecorated(
+    scope: TenantContext,
+    message: { readonly botInstanceId: BotInstanceId; readonly templateKey?: TemplateKey },
+    decorated: boolean,
+    request: (plain: boolean) => TelegramRequest,
+  ): Promise<{ readonly raw: TelegramSendOutcome; readonly decorationRefused: boolean }> {
+    const first = await telegramSend(request(false));
+    if (!decorated || first.outcome !== 'FAILED_PERMANENT' || isMessageNotModified(first)) {
+      return { raw: first, decorationRefused: false };
+    }
+    const second = await telegramSend(request(true));
+    if (second.outcome !== 'SUCCEEDED') return { raw: second, decorationRefused: false };
+    await this.opsLog.record(scope, {
+      code: APPEARANCE_DECORATION_FAILED_CODE,
+      severity: 'WARN',
+      message:
+        'Telegram refused a message decorated with custom emoji and accepted it undecorated; ' +
+        'this bot\u2019s custom emoji are off until it is tested again.',
+      dedupeKey: appearanceDecorationConditionKey(message.botInstanceId),
+      context: {
+        botInstanceId: message.botInstanceId,
+        ...(message.templateKey === undefined ? {} : { templateKey: message.templateKey }),
+        errorCode: first.errorCode,
+      },
+    });
+    await this.appearance?.recordRuntimeRefusal(scope, message.botInstanceId);
+    return { raw: second, decorationRefused: true };
+  }
+
+  /** Closes the decoration-failure condition, and only when there is one to close. */
+  private async recordDecorationRecovery(
+    scope: TenantContext,
+    botInstanceId: BotInstanceId,
+  ): Promise<void> {
+    const dedupeKey = appearanceDecorationConditionKey(botInstanceId);
+    if (!(await this.conditions.conditionIsOpen(scope, dedupeKey))) return;
+    await this.opsLog.record(scope, {
+      code: APPEARANCE_DECORATION_OK_CODE,
+      severity: 'INFO',
+      message: 'A test message with custom emoji was accepted through this bot again.',
+      context: { botInstanceId },
+      recoversCode: APPEARANCE_DECORATION_FAILED_CODE,
+      recoversDedupeKey: dedupeKey,
+    });
+  }
+
   private async recordRecovery(scope: TenantContext, botInstanceId: BotInstanceId): Promise<void> {
     const dedupeKey = customerSendConditionKey(botInstanceId);
     if (!(await this.conditions.conditionIsOpen(scope, dedupeKey))) return;

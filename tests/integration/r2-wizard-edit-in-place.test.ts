@@ -14,6 +14,7 @@ import {
   type UserId,
 } from '@nexa/contracts';
 import { CATALOGUE_FA } from '@nexa/i18n';
+import { appearanceFallbackText as plain } from '../../apps/api/src/modules/commerce/messaging/application/appearance-render';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
 import { DrizzleServiceRepository } from '../../apps/api/src/modules/commerce/provisioning/infrastructure/drizzle-service.repository';
 import { startFakeMarzban, type FakeMarzban } from '../support/fake-marzban';
@@ -307,12 +308,12 @@ describe('the wizard is one message, edited in place', () => {
 
     await tapOn(wizard, `w:${order.id}`);
     // The wizard closes in place with no buttons; what follows is a NEW message.
-    expect(edited(wizard)[0]?.body['text']).toBe(CATALOGUE_FA['bot.order.settled']);
+    expect(edited(wizard)[0]?.body['text']).toBe(plain(CATALOGUE_FA['bot.order.settled']));
     expect(buttonsOf(edited(wizard)[0])).toEqual([]);
     expect(edited(wizard)[0]?.body['reply_markup']).toEqual({ inline_keyboard: [] });
     const after = calls.filter((call) => call.method === 'sendMessage');
     expect(after.map((call) => call.body['text'])).toEqual([
-      CATALOGUE_FA['bot.service.provisioning'],
+      plain(CATALOGUE_FA['bot.service.provisioning']),
     ]);
     expect(await debits()).toBe(1);
   });
@@ -540,8 +541,8 @@ describe('the wizard is one message, edited in place', () => {
 
     await tapOn(quoteId, renewal);
     // Closed in place, with no buttons and no «order paid» sentence.
-    expect(edited(quoteId)[0]?.body['text']).toBe(CATALOGUE_FA['bot.service.renew_paid']);
-    expect(edited(quoteId)[0]?.body['text']).not.toBe(CATALOGUE_FA['bot.order.settled']);
+    expect(edited(quoteId)[0]?.body['text']).toBe(plain(CATALOGUE_FA['bot.service.renew_paid']));
+    expect(edited(quoteId)[0]?.body['text']).not.toBe(plain(CATALOGUE_FA['bot.order.settled']));
     expect(buttonsOf(edited(quoteId)[0])).toEqual([]);
 
     await ctx.container.provisionerLoop.tick();

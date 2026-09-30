@@ -59,6 +59,8 @@ export * from './menu-appearance.js';
 export * from './bot-commands.js';
 export * from './bot-menu.js';
 export * from './bot-management.js';
+// Premium UI: appearance slots and custom emoji.
+export * from './appearance.js';
 export * from './payment.js';
 export * from './payment-accounts.js';
 export * from './payment-gateways.js';

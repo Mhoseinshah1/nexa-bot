@@ -17,6 +17,7 @@ import { ContentPage } from './pages/content';
 import { RemindersPage } from './pages/reminders';
 import { AlertsPage, NotificationsPage } from './pages/alerts';
 import { OpsGroupPage } from './pages/ops-group';
+import { AppearancePage } from './pages/appearance';
 import { SystemPage } from './pages/system';
 import { RecoveryPage } from './pages/recovery';
 import { PlannedPage, PLANNED_SURFACES, type PlannedKey } from './pages/planned';
@@ -528,6 +529,16 @@ export const NAV: readonly NavEntry[] = [
     id: 'bot-buttons',
     path: '/bot-buttons',
     label: 'web.nav_bot_buttons',
+    icon: 'bots',
+    permission: 'settings.view',
+    group: 'web.navgroup_config',
+  },
+  {
+    // Premium UI: «ظاهر ربات» — custom emoji per semantic slot. Read with `settings.view`,
+    // edited and tested with `settings.edit`, the bot-buttons pair.
+    id: 'appearance',
+    path: '/appearance',
+    label: 'web.nav_appearance',
     icon: 'bots',
     permission: 'settings.view',
     group: 'web.navgroup_config',
@@ -1441,6 +1452,14 @@ export function resolve(
       element: <NotificationsPage mayTest={may('settings.edit')} denied={!may('opslog.view')} />,
       crumbs: [{ label: t('web.nav_notifications') }],
       title: t('web.nav_notifications'),
+    };
+  }
+
+  if (route.path === '/appearance') {
+    return {
+      element: <AppearancePage denied={!may('settings.view')} mayEdit={may('settings.edit')} />,
+      crumbs: [{ label: t('web.nav_appearance') }],
+      title: t('web.appearance_title'),
     };
   }
 
