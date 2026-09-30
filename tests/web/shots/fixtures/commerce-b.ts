@@ -1,4 +1,11 @@
 import {
+  audienceOptionsResponseSchema,
+  broadcastListResponseSchema,
+  broadcastRecipientListResponseSchema,
+  broadcastResponseSchema,
+  bulkItemListResponseSchema,
+  bulkOperationListResponseSchema,
+  bulkOperationResponseSchema,
   cashbackRuleListResponseSchema,
   customServiceLocationListResponseSchema,
   discountListResponseSchema,
@@ -389,7 +396,248 @@ const CASHBACK_RULES: readonly Json[] = [
   },
 ];
 
+/* ------------------------------------------- broadcasts and bulk operations --- */
+
+const HASH = 'a'.repeat(64);
+
+const EMPTY_COUNTS = {
+  total: 0,
+  pending: 0,
+  sending: 0,
+  sent: 0,
+  unconfirmed: 0,
+  failed: 0,
+  unreachable: 0,
+  skipped: 0,
+  cancelled: 0,
+  pinned: 0,
+  pinFailed: 0,
+};
+
+function broadcast(index: number, title: string, over: Json = {}): Json {
+  return {
+    id: `0192c0de-0000-7000-8000-0000000008${String(index).padStart(2, '0')}`,
+    title,
+    state: 'DRAFT',
+    pauseReason: null,
+    contentKind: 'TEXT',
+    body: 'سلام {firstName} 👋\nتخفیف ۲۰٪ پاییزه برای تمدید سرویس شما فعال شد.\nکد: MEHR20',
+    buttons: [{ label: 'خرید با تخفیف', url: 'https://t.me/nexa_bot?start=mehr' }],
+    media: null,
+    purpose: 'MARKETING',
+    source: null,
+    sourceVerifiedAt: null,
+    pin: false,
+    frozenAudienceId: null,
+    audience: { version: 1, customerStatus: 'ACTIVE', purchase: 'PURCHASED' },
+    audienceHash: HASH,
+    audienceAsOf: null,
+    recipientCount: null,
+    fingerprint: null,
+    scheduledAt: null,
+    counts: EMPTY_COUNTS,
+    progressPercent: null,
+    version: 3,
+    createdBy: { id: 'x', username: 'owner' },
+    launchedBy: null,
+    createdAt: ago(60 * 24 * index),
+    launchedAt: null,
+    startedAt: null,
+    completedAt: null,
+    cancelledAt: null,
+    ...over,
+  };
+}
+
+const SENDING_BROADCAST = broadcast(2, 'اطلاع‌رسانی به‌روزرسانی سرورها', {
+  state: 'SENDING',
+  purpose: 'SERVICE_ANNOUNCEMENT',
+  pin: true,
+  recipientCount: 1240,
+  fingerprint: 'b'.repeat(32),
+  audienceAsOf: ago(90),
+  progressPercent: 62,
+  launchedBy: { id: 'x', username: 'owner' },
+  launchedAt: ago(80),
+  startedAt: ago(80),
+  counts: {
+    ...EMPTY_COUNTS,
+    total: 1240,
+    pending: 420,
+    sending: 12,
+    sent: 760,
+    failed: 21,
+    unreachable: 18,
+    unconfirmed: 9,
+    pinned: 740,
+    pinFailed: 20,
+  },
+});
+
+const BROADCASTS: readonly Json[] = [
+  broadcast(1, 'تخفیف پاییزه — مشتریان فعال'),
+  SENDING_BROADCAST,
+  broadcast(3, 'یادآوری تمدید', {
+    state: 'COMPLETED',
+    recipientCount: 380,
+    progressPercent: 100,
+    counts: { ...EMPTY_COUNTS, total: 380, sent: 371, unreachable: 9 },
+    completedAt: ago(60 * 24 * 2),
+  }),
+  broadcast(4, 'معرفی پلن نامحدود', {
+    state: 'SCHEDULED',
+    contentKind: 'PHOTO',
+    recipientCount: 2100,
+    scheduledAt: ago(-60 * 20),
+    progressPercent: 0,
+  }),
+  broadcast(5, 'پیام تست کانال', { state: 'CANCELLED', contentKind: 'FORWARD', body: '' }),
+];
+
+const RECIPIENT_STATES = ['SENT', 'SENT', 'PENDING', 'FAILED', 'SENT', 'UNREACHABLE', 'SENT'];
+
+const RECIPIENTS: readonly Json[] = RECIPIENT_STATES.map((state, index) => ({
+  customerId: `019210ab-cdef-7012-8345-${String(6789 + index).padStart(4, '0')}abcdef01`,
+  firstName: ['علی', 'مریم', 'سارا', 'حامد', 'مهدی', 'نگار', 'زهرا'][index] ?? null,
+  username: `user_${String(index)}`,
+  state,
+  attempts: state === 'PENDING' ? 0 : state === 'FAILED' ? 3 : 1,
+  errorCode: state === 'FAILED' ? 'TELEGRAM_429' : state === 'UNREACHABLE' ? 'BOT_BLOCKED' : null,
+  resolvedAt: state === 'PENDING' ? null : ago(70 - index),
+  pinState: state === 'SENT' ? 'PINNED' : null,
+  pinErrorCode: null,
+}));
+
+function bulk(index: number, over: Json = {}): Json {
+  return {
+    id: `0192c0de-0000-7000-8000-0000000009${String(index).padStart(2, '0')}`,
+    kind: 'WALLET_CREDIT',
+    state: 'COMPLETED',
+    amount: { amountMinor: '50000', currency: 'IRT' },
+    trafficBytes: null,
+    durationDays: null,
+    notify: true,
+    note: 'هدیهٔ نوروزی',
+    audience: { version: 1, customerStatus: 'ACTIVE', purchase: 'PURCHASED' },
+    audienceHash: HASH,
+    audienceAsOf: ago(60 * 24 * index + 5),
+    notBefore: null,
+    frozenAudienceId: null,
+    itemCount: 320,
+    fingerprint: 'b'.repeat(32),
+    totalLiability: { amountMinor: '16000000', currency: 'IRT' },
+    creditedTotal: { amountMinor: '16000000', currency: 'IRT' },
+    counts: {
+      total: 320,
+      pending: 0,
+      credited: 320,
+      planned: 0,
+      awaitingReconciliation: 0,
+      succeeded: 0,
+      failed: 0,
+      skipped: 0,
+      cancelled: 0,
+      notified: 318,
+      notificationQueued: 2,
+    },
+    progressPercent: 100,
+    createdBy: { id: 'x', username: 'owner' },
+    createdAt: ago(60 * 24 * index),
+    pausedAt: null,
+    completedAt: ago(60 * 24 * index - 30),
+    cancelledAt: null,
+    ...over,
+  };
+}
+
+const RUNNING_BULK = bulk(1, {
+  kind: 'SERVICE_TRAFFIC',
+  state: 'RUNNING',
+  amount: null,
+  trafficBytes: String(10n * GIB),
+  note: 'جبران قطعی سرور فرانکفورت',
+  itemCount: 540,
+  totalLiability: null,
+  creditedTotal: null,
+  counts: {
+    total: 540,
+    pending: 210,
+    credited: 0,
+    planned: 4,
+    awaitingReconciliation: 1,
+    succeeded: 318,
+    failed: 3,
+    skipped: 5,
+    cancelled: 0,
+    notified: 300,
+    notificationQueued: 18,
+  },
+  progressPercent: 61,
+  completedAt: null,
+});
+
+const BULK_OPERATIONS: readonly Json[] = [
+  RUNNING_BULK,
+  bulk(3),
+  bulk(9, {
+    kind: 'SERVICE_TIME',
+    amount: null,
+    durationDays: 7,
+    totalLiability: null,
+    creditedTotal: null,
+    state: 'CANCELLED',
+    progressPercent: 40,
+    itemCount: 100,
+  }),
+];
+
+const BULK_ITEMS: readonly Json[] = RECIPIENTS.slice(0, 6).map((recipient, index) => ({
+  id: `0192c0de-0000-7000-8000-00000000a${String(index).padStart(3, '0')}`,
+  customerId: recipient['customerId'],
+  firstName: recipient['firstName'],
+  username: recipient['username'],
+  serviceId: `0192c0de-0000-7000-8000-00000000b${String(index).padStart(3, '0')}`,
+  serviceLabel: `nx${String(4812 + index * 37)}`,
+  state: ['SUCCEEDED', 'SUCCEEDED', 'PENDING', 'FAILED', 'SKIPPED', 'PLANNED'][index],
+  skipReason: index === 4 ? 'UNLIMITED' : null,
+  operationState: index === 5 ? 'UNKNOWN' : null,
+  failureKind: index === 3 ? 'PROVIDER_TIMEOUT' : null,
+  notified: index < 2,
+  notificationState: index < 2 ? 'DELIVERED' : index === 2 ? null : 'PENDING',
+  processedAt: index === 2 ? null : ago(30 - index),
+}));
+
 export const COMMERCE_B: readonly ShotFixture[] = [
+  fixture('/audience/options', audienceOptionsResponseSchema, {
+    currency: 'IRT',
+    resellerTiers: [
+      { id: '0192c0de-0000-7000-8000-000000000402', name: 'نقره‌ای' },
+      { id: '0192c0de-0000-7000-8000-000000000403', name: 'طلایی' },
+    ],
+    products: PRODUCTS.slice(0, 5).map((row) => ({ id: row['id'], title: row['title'] })),
+    panels: [
+      { id: PANEL_A, name: 'Frankfurt A' },
+      { id: PANEL_B, name: 'Frankfurt B' },
+    ],
+  }),
+  fixture('/broadcasts', broadcastListResponseSchema, { broadcasts: BROADCASTS, nextCursor: null }),
+  fixture('/broadcasts/:id', broadcastResponseSchema, { broadcast: BROADCASTS[0] }),
+  fixture('/broadcasts/0192c0de-0000-7000-8000-000000000802', broadcastResponseSchema, {
+    broadcast: SENDING_BROADCAST,
+  }),
+  fixture('/broadcasts/:id/recipients', broadcastRecipientListResponseSchema, {
+    recipients: RECIPIENTS,
+    nextCursor: null,
+  }),
+  fixture('/bulk-operations', bulkOperationListResponseSchema, {
+    operations: BULK_OPERATIONS,
+    nextCursor: null,
+  }),
+  fixture('/bulk-operations/:id', bulkOperationResponseSchema, { operation: RUNNING_BULK }),
+  fixture('/bulk-operations/:id/items', bulkItemListResponseSchema, {
+    items: BULK_ITEMS,
+    nextCursor: null,
+  }),
   fixture('/discounts', discountListResponseSchema, { discounts: DISCOUNTS, nextCursor: null }),
   fixture('/cashback-rules', cashbackRuleListResponseSchema, {
     rules: CASHBACK_RULES,

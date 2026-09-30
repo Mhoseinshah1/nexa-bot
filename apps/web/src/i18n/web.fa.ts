@@ -2197,6 +2197,18 @@ export const WEB_FA = {
   'web.cb_section_code_value': 'کد و مقدار',
   'web.cb_section_limits': 'محدودیت استفاده',
   'web.cb_section_priority': 'اولویت و ترکیب',
+  'web.cb_aud_profile': 'ویژگی‌های کاربر',
+  'web.cb_aud_dates': 'زمان عضویت و خرید',
+  'web.cb_aud_wallet': 'موجودی کیف پول',
+  'web.cb_section_content': 'محتوا',
+  'web.cb_bc_send_question': 'پیام همین حالا برای {count} گیرنده ارسال شود؟',
+  'web.cb_bc_schedule_question': 'ارسال برای {count} گیرنده در زمان انتخاب‌شده ثبت شود؟',
+  'web.cb_bc_send_yes': 'بله، ارسال شود',
+  'web.cb_bc_schedule_yes': 'بله، زمان‌بندی شود',
+  'web.cb_bulk_run_question':
+    'این عملیات برای {count} مورد اجرا شود؟ پس از شروع، فقط موارد انجام‌نشده را می‌توان لغو کرد.',
+  'web.cb_bulk_run_yes': 'بله، اجرا شود',
+  'web.cb_steering': 'کنترل اجرا',
   'web.cb_delete_yes': 'بله، حذف شود',
 
   'web.products_intro': 'سرویس‌هایی که مشتری می‌تواند بخرد، و آنهایی که هنوز نمی‌تواند.',

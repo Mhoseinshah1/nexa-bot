@@ -364,3 +364,154 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* --- The audience builder (broadcasts, bulk operations, campaigns) ---------------- */
+
+.audience-builder > * + * {
+  margin-top: 14px;
+}
+.aud-section > * + * {
+  margin-top: 8px;
+}
+.aud-section > .field-group-head:first-child {
+  margin-top: 0;
+}
+/* Who: each segment as a selectable tile, the way the reference lists recipients. */
+.aud-segments {
+  gap: 8px;
+}
+.aud-segment {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-ctl);
+  background: var(--bg-1);
+  cursor: pointer;
+}
+.aud-segment:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.aud-service-toggle {
+  font-weight: 500;
+}
+.audience-service {
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  background: var(--bg-1);
+}
+.audience-service > * + * {
+  margin-top: 8px;
+}
+.audience-service h4 {
+  font-size: var(--fs-sm);
+  color: var(--fg-2);
+}
+/* The count, and what it found, on one line. */
+.aud-count {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 20px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--line);
+}
+
+/* --- Figures shared by broadcasts, bulk operations and campaigns ------------------- */
+
+.cb-stat-row {
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+}
+.cb-progress-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 130px;
+}
+.cb-progress-cell > svg {
+  flex: 1;
+  min-width: 70px;
+}
+.cb-progress-line {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.cb-progress-line > svg {
+  flex: 1;
+}
+
+/* --- /broadcasts: the composer and its live preview -------------------------------- */
+
+.bc-compose {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 20px;
+  align-items: start;
+}
+.bc-preview-pane {
+  position: sticky;
+  top: 12px;
+}
+.bc-preview-pane > * + * {
+  margin-top: 8px;
+}
+/* A chat backdrop, the bubble the bot sends, and its inline buttons beneath. */
+.bc-phone {
+  padding: 14px;
+  border-radius: var(--radius-card);
+  border: 1px solid var(--line);
+  background: var(--bg-0);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.bc-bubble {
+  border-radius: 12px 12px 12px 4px;
+  background: var(--bg-3);
+  border-color: transparent;
+  box-shadow: var(--shadow-sm);
+}
+.bc-inline-button {
+  padding: 7px 10px;
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  text-align: center;
+  font-size: var(--fs-sm);
+}
+.bc-file {
+  max-width: 100%;
+  font-size: var(--fs-sm);
+}
+@media (max-width: 1200px) {
+  .bc-compose {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .bc-preview-pane {
+    position: static;
+  }
+}
+
+/* --- /bulk-operations --------------------------------------------------------------- */
+
+/* The confirmation that starts a mass grant, set apart as the reference sets a danger zone. */
+.bulk-danger {
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--danger) 40%, var(--line));
+  border-radius: var(--radius-card);
+  background: color-mix(in srgb, var(--danger-soft) 40%, transparent);
+}
+/* Inside the bubble the text is the message, not a code block. */
+.bc-bubble .preview-text {
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  font-family: var(--font-ui);
+  font-size: var(--fs-body);
+  line-height: 1.7;
+}

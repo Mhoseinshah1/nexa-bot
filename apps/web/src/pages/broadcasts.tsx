@@ -44,7 +44,9 @@ import { useSubmissionKey } from '../submission-key';
 import {
   Badge,
   Banner,
+  Button,
   Card,
+  ConfirmDialog,
   CursorPager,
   DataTable,
   Empty,
@@ -52,11 +54,17 @@ import {
   KV,
   Ltr,
   PageHead,
+  Progress,
+  StatCard,
   StateSwitch,
+  TwoColumn,
   useToast,
+  useUnsavedChanges,
   type Column,
   type Tone,
 } from '../ui/kit';
+import { Icon } from '../ui/icons';
+import { CheckField, FormSection, SaveBar } from './editor-layout';
 import { messageFor } from './settings';
 import {
   AudienceBuilder,
@@ -93,6 +101,15 @@ const STATE_TONES: Readonly<Record<BroadcastState, Tone>> = {
   COMPLETED: 'ok',
   CANCELLED: 'neutral',
 };
+/** A broadcast's state, with a moving dot while it is sending. */
+function BroadcastStateBadge({ state }: { state: BroadcastState }) {
+  return (
+    <Badge tone={STATE_TONES[state]} dot pulse={state === 'SENDING'}>
+      {t(BROADCAST_STATE_LABELS[state])}
+    </Badge>
+  );
+}
+
 const KIND_LABELS: Readonly<Record<BroadcastContentKind, WebKey>> = {
   TEXT: 'web.bc_kind_text',
   PHOTO: 'web.bc_kind_photo',
@@ -101,6 +118,16 @@ const KIND_LABELS: Readonly<Record<BroadcastContentKind, WebKey>> = {
   // Round N close (§C): an existing Telegram message, with or without its attribution.
   FORWARD: 'web.bc_kind_forward',
   COPY: 'web.bc_kind_copy',
+};
+const RECIPIENT_TONES: Readonly<Record<BroadcastRecipientState, Tone>> = {
+  PENDING: 'neutral',
+  SENDING: 'info',
+  SENT: 'ok',
+  UNCONFIRMED: 'warn',
+  FAILED: 'danger',
+  UNREACHABLE: 'warn',
+  SKIPPED: 'neutral',
+  CANCELLED: 'neutral',
 };
 const PURPOSE_LABELS: Readonly<Record<BroadcastPurpose, WebKey>> = {
   MARKETING: 'web.bc_purpose_marketing',
@@ -173,7 +200,7 @@ export function BroadcastsPage({
       key: 'title',
       header: t('web.bc_title'),
       render: (row) => (
-        <a href={`/broadcasts/${encodeURIComponent(row.id)}`} onClick={onLink}>
+        <a href={`/broadcasts/${encodeURIComponent(row.id)}`} onClick={onLink} className="strong">
           {row.title}
         </a>
       ),
@@ -181,26 +208,49 @@ export function BroadcastsPage({
     {
       key: 'state',
       header: t('web.bc_state'),
+      render: (row) => <BroadcastStateBadge state={row.state} />,
+    },
+    {
+      key: 'kind',
+      header: t('web.bc_kind'),
       render: (row) => (
-        <Badge tone={STATE_TONES[row.state]}>{t(BROADCAST_STATE_LABELS[row.state])}</Badge>
+        <Badge tone="neutral" outline>
+          {t(KIND_LABELS[row.contentKind])}
+        </Badge>
       ),
     },
-    { key: 'kind', header: t('web.bc_kind'), render: (row) => t(KIND_LABELS[row.contentKind]) },
     {
       key: 'recipients',
       header: t('web.bc_recipients'),
-      render: (row) => (row.recipientCount === null ? '—' : formatNumber(row.recipientCount)),
+      align: 'end',
+      render: (row) => (
+        <span className="num">
+          {row.recipientCount === null ? '—' : formatNumber(row.recipientCount)}
+        </span>
+      ),
     },
     {
       key: 'progress',
       header: t('web.bc_progress'),
       render: (row) =>
-        row.progressPercent === null ? '—' : `${formatNumber(row.progressPercent)}%`,
+        row.progressPercent === null ? (
+          '—'
+        ) : (
+          <span className="cb-progress-cell">
+            <Progress
+              value={row.progressPercent}
+              max={100}
+              label={t('web.bc_progress')}
+              tone={row.state === 'COMPLETED' ? 'ok' : 'info'}
+            />
+            <span className="num small">{`${formatNumber(row.progressPercent)}%`}</span>
+          </span>
+        ),
     },
     {
       key: 'created',
       header: t('web.bc_created'),
-      render: (row) => <span className="nowrap">{formatTimestamp(row.createdAt)}</span>,
+      render: (row) => <span className="nowrap muted small">{formatTimestamp(row.createdAt)}</span>,
     },
   ];
   return (
@@ -211,7 +261,8 @@ export function BroadcastsPage({
         maturity="now"
         actions={
           maySend ? (
-            <a className="btn primary sm" href="/broadcasts/new" onClick={onLink}>
+            <a className="btn primary" href="/broadcasts/new" onClick={onLink}>
+              <Icon name="plus" />
               {t('web.bc_new')}
             </a>
           ) : undefined
@@ -220,7 +271,7 @@ export function BroadcastsPage({
       <Card>
         <StateSwitch query={list} denied={denied}>
           {list.data === undefined ? null : list.data.broadcasts.length === 0 ? (
-            <Empty title={t('web.bc_empty')} />
+            <Empty title={t('web.bc_empty')} icon="send" />
           ) : (
             <>
               <DataTable
@@ -228,6 +279,7 @@ export function BroadcastsPage({
                 columns={columns}
                 rows={list.data.broadcasts}
                 rowKey={(row) => row.id}
+                dense
               />
               <CursorPager
                 shown={list.data.broadcasts.length}
@@ -331,6 +383,7 @@ function Composer({
   // it, and the edits would be dropped (Codex R5 on PR #117).
   const dirty = JSON.stringify(state) !== JSON.stringify(initial(record));
   useEffect(() => onDirtyChange?.(dirty), [dirty, onDirtyChange]);
+  useUnsavedChanges(dirty);
   const toast = useToast();
   const client = useQueryClient();
   const submission = useSubmissionKey();
@@ -366,197 +419,230 @@ function Composer({
       toast({ tone: 'ok', message: t('web.bc_saved') });
       void client.invalidateQueries({ queryKey: ['broadcasts'] });
       void client.invalidateQueries({ queryKey: ['broadcast', response.broadcast.id] });
-      if (record === null) navigate(`/broadcasts/${encodeURIComponent(response.broadcast.id)}`);
+      // Saved, so leaving for the new draft is not leaving unsaved work.
+      if (record === null) {
+        navigate(`/broadcasts/${encodeURIComponent(response.broadcast.id)}`, { force: true });
+      }
     },
     onError: (error) => submission.settleOn(error),
   });
 
+  const saveDisabled =
+    save.isPending ||
+    state.title.trim() === '' ||
+    (isSourcedBroadcastKind(state.contentKind) && sourceOf(state) === null);
   return (
-    <Card title={t('web.bc_composer')}>
-      <div className="grid-2">
-        <Field label={t('web.bc_title')} htmlFor="bc-title" hint={t('web.bc_title_hint')}>
-          <input
-            id="bc-title"
-            value={state.title}
-            maxLength={BROADCAST_TITLE_MAX_LENGTH}
-            onChange={(event) => set({ title: event.target.value })}
-          />
-        </Field>
-        <Field label={t('web.bc_kind')} htmlFor="bc-kind">
-          <select
-            id="bc-kind"
-            value={state.contentKind}
-            onChange={(event) => set({ contentKind: event.target.value as BroadcastContentKind })}
+    <Card
+      title={t('web.bc_composer')}
+      className="cb-editor-card"
+      tight
+      foot={
+        <SaveBar dirty={dirty}>
+          <Button
+            variant="primary"
+            icon="check"
+            disabled={saveDisabled}
+            onClick={() => save.mutate()}
           >
-            {BROADCAST_CONTENT_KINDS.map((kind) => (
-              <option key={kind} value={kind}>
-                {t(KIND_LABELS[kind])}
-              </option>
-            ))}
-          </select>
-        </Field>
-      </div>
-      <Field label={t('web.bc_purpose')} htmlFor="bc-purpose" hint={t('web.bc_purpose_hint')}>
-        <select
-          id="bc-purpose"
-          value={state.purpose}
-          onChange={(event) => set({ purpose: event.target.value as BroadcastPurpose })}
-        >
-          {BROADCAST_PURPOSES.map((purpose) => (
-            <option key={purpose} value={purpose}>
-              {t(PURPOSE_LABELS[purpose])}
-            </option>
-          ))}
-        </select>
-      </Field>
-      {isSourcedBroadcastKind(state.contentKind) ? (
-        <>
-          <Banner tone="info">{t('web.bc_forward_note')}</Banner>
-          <div className="grid-2">
-            <Field
-              label={t('web.bc_source_chat')}
-              htmlFor="bc-source-chat"
-              hint={t('web.bc_source_hint')}
-            >
-              <input
-                id="bc-source-chat"
-                dir="ltr"
-                value={state.sourceChatId}
-                onChange={(event) => set({ sourceChatId: event.target.value })}
-              />
-            </Field>
-            <Field label={t('web.bc_source_message')} htmlFor="bc-source-message">
-              <input
-                id="bc-source-message"
-                dir="ltr"
-                inputMode="numeric"
-                value={state.sourceMessageId}
-                onChange={(event) => set({ sourceMessageId: event.target.value })}
-              />
-            </Field>
-          </div>
-        </>
-      ) : (
-        <>
-          <Field
-            label={state.contentKind === 'TEXT' ? t('web.bc_body') : t('web.bc_caption')}
-            htmlFor="bc-body"
-            hint={t('web.bc_placeholders_hint')}
-          >
-            <textarea
-              id="bc-body"
-              rows={6}
-              dir="auto"
-              value={state.body}
-              maxLength={max}
-              onChange={(event) => set({ body: event.target.value })}
-            />
-          </Field>
-          <p className="muted small">
-            {t('web.bc_placeholders')}: <code>{'{firstName}'}</code> {t('web.bc_ph_first_name')} ·{' '}
-            <code>{'{username}'}</code> {t('web.bc_ph_username')} · <code>{'{walletBalance}'}</code>{' '}
-            {t('web.bc_ph_wallet')}
-          </p>
-        </>
-      )}
-      <label className="checks">
-        <input type="checkbox" checked={state.pin} onChange={() => set({ pin: !state.pin })} />{' '}
-        {t('web.bc_pin')}
-      </label>
-      <p className="muted small">{t('web.bc_pin_hint')}</p>
-      {state.contentKind !== 'FORWARD' && <h3>{t('web.bc_buttons')}</h3>}
-      {state.contentKind !== 'FORWARD' &&
-        state.buttons.map((button, index) => (
-          <div className="grid-2" key={index}>
-            <Field label={t('web.bc_button_label')} htmlFor={`bc-btn-label-${String(index)}`}>
-              <input
-                id={`bc-btn-label-${String(index)}`}
-                value={button.label}
-                maxLength={BROADCAST_BUTTON_LABEL_MAX_LENGTH}
-                onChange={(event) =>
-                  set({
-                    buttons: state.buttons.map((item, at) =>
-                      at === index ? { ...item, label: event.target.value } : item,
-                    ),
-                  })
-                }
-              />
-            </Field>
-            <Field label={t('web.bc_button_url')} htmlFor={`bc-btn-url-${String(index)}`}>
-              <input
-                id={`bc-btn-url-${String(index)}`}
-                dir="ltr"
-                value={button.url}
-                onChange={(event) =>
-                  set({
-                    buttons: state.buttons.map((item, at) =>
-                      at === index ? { ...item, url: event.target.value } : item,
-                    ),
-                  })
-                }
-              />
-            </Field>
-          </div>
-        ))}
-      <div className="toolbar">
-        <button
-          type="button"
-          className="btn sm"
-          disabled={
-            state.buttons.length >= BROADCAST_BUTTONS_MAX || state.contentKind === 'FORWARD'
-          }
-          onClick={() => set({ buttons: [...state.buttons, { label: '', url: 'https://' }] })}
-        >
-          {t('web.bc_button_add')}
-        </button>
-        {state.buttons.length > 0 && (
-          <button
-            type="button"
-            className="btn sm"
-            onClick={() => set({ buttons: state.buttons.slice(0, -1) })}
-          >
-            {t('web.bc_button_remove')}
-          </button>
-        )}
-      </div>
-
-      <h3>{t('web.bc_preview')}</h3>
-      <div className="broadcast-preview" dir="auto">
-        {isSourcedBroadcastKind(state.contentKind) ? (
-          <span className="faint">{t(KIND_LABELS[state.contentKind])}</span>
-        ) : state.body.trim() === '' ? (
-          <span className="faint">{t('web.bc_preview_empty')}</span>
-        ) : (
-          <pre className="preview-text">{renderBroadcastPreview(state.body)}</pre>
-        )}
-        {state.buttons
-          .filter((button) => button.label.trim() !== '')
-          .map((button, index) => (
-            <div className="btn sm" key={index}>
-              {button.label}
+            {record === null ? t('web.bc_create') : t('web.bc_save')}
+          </Button>
+        </SaveBar>
+      }
+    >
+      <FormSection id="bc-section-content" title={t('web.cb_section_content')} grid={false}>
+        <div className="bc-compose">
+          <div className="stack-sm">
+            <div className="form-grid">
+              <Field label={t('web.bc_title')} htmlFor="bc-title" hint={t('web.bc_title_hint')}>
+                <input
+                  id="bc-title"
+                  value={state.title}
+                  maxLength={BROADCAST_TITLE_MAX_LENGTH}
+                  onChange={(event) => set({ title: event.target.value })}
+                />
+              </Field>
+              <Field label={t('web.bc_kind')} htmlFor="bc-kind">
+                <select
+                  id="bc-kind"
+                  value={state.contentKind}
+                  onChange={(event) =>
+                    set({ contentKind: event.target.value as BroadcastContentKind })
+                  }
+                >
+                  {BROADCAST_CONTENT_KINDS.map((kind) => (
+                    <option key={kind} value={kind}>
+                      {t(KIND_LABELS[kind])}
+                    </option>
+                  ))}
+                </select>
+              </Field>
             </div>
-          ))}
-      </div>
-      <p className="muted small">{t('web.bc_preview_hint')}</p>
+            <Field label={t('web.bc_purpose')} htmlFor="bc-purpose" hint={t('web.bc_purpose_hint')}>
+              <select
+                id="bc-purpose"
+                value={state.purpose}
+                onChange={(event) => set({ purpose: event.target.value as BroadcastPurpose })}
+              >
+                {BROADCAST_PURPOSES.map((purpose) => (
+                  <option key={purpose} value={purpose}>
+                    {t(PURPOSE_LABELS[purpose])}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            {isSourcedBroadcastKind(state.contentKind) ? (
+              <>
+                <Banner tone="info">{t('web.bc_forward_note')}</Banner>
+                <div className="form-grid">
+                  <Field
+                    label={t('web.bc_source_chat')}
+                    htmlFor="bc-source-chat"
+                    hint={t('web.bc_source_hint')}
+                  >
+                    <input
+                      id="bc-source-chat"
+                      dir="ltr"
+                      value={state.sourceChatId}
+                      onChange={(event) => set({ sourceChatId: event.target.value })}
+                    />
+                  </Field>
+                  <Field label={t('web.bc_source_message')} htmlFor="bc-source-message">
+                    <input
+                      id="bc-source-message"
+                      dir="ltr"
+                      inputMode="numeric"
+                      value={state.sourceMessageId}
+                      onChange={(event) => set({ sourceMessageId: event.target.value })}
+                    />
+                  </Field>
+                </div>
+              </>
+            ) : (
+              <>
+                <Field
+                  label={state.contentKind === 'TEXT' ? t('web.bc_body') : t('web.bc_caption')}
+                  htmlFor="bc-body"
+                  hint={t('web.bc_placeholders_hint')}
+                >
+                  <textarea
+                    id="bc-body"
+                    rows={7}
+                    dir="auto"
+                    value={state.body}
+                    maxLength={max}
+                    onChange={(event) => set({ body: event.target.value })}
+                  />
+                </Field>
+                <p className="muted small">
+                  {t('web.bc_placeholders')}: <code>{'{firstName}'}</code>{' '}
+                  {t('web.bc_ph_first_name')} · <code>{'{username}'}</code>{' '}
+                  {t('web.bc_ph_username')} · <code>{'{walletBalance}'}</code>{' '}
+                  {t('web.bc_ph_wallet')}
+                </p>
+              </>
+            )}
+            <CheckField
+              id="bc-pin"
+              label={t('web.bc_pin')}
+              hint={t('web.bc_pin_hint')}
+              checked={state.pin}
+              onChange={(pin) => set({ pin })}
+            />
+          </div>
 
-      <h3>{t('web.bc_audience')}</h3>
-      <AudienceBuilder value={state.audience} onChange={(audience) => set({ audience })} />
+          {/* The message as the bot will send it, through the bot's own renderer. */}
+          <aside className="bc-preview-pane" aria-label={t('web.bc_preview')}>
+            <h4 className="field-group-head">{t('web.bc_preview')}</h4>
+            <div className="bc-phone">
+              <div className="broadcast-preview bc-bubble" dir="auto">
+                {isSourcedBroadcastKind(state.contentKind) ? (
+                  <span className="faint">{t(KIND_LABELS[state.contentKind])}</span>
+                ) : state.body.trim() === '' ? (
+                  <span className="faint">{t('web.bc_preview_empty')}</span>
+                ) : (
+                  <pre className="preview-text">{renderBroadcastPreview(state.body)}</pre>
+                )}
+              </div>
+              {state.buttons
+                .filter((button) => button.label.trim() !== '')
+                .map((button, index) => (
+                  <div className="bc-inline-button" key={index}>
+                    {button.label}
+                  </div>
+                ))}
+            </div>
+            <p className="muted small">{t('web.bc_preview_hint')}</p>
+          </aside>
+        </div>
+      </FormSection>
 
-      <div className="toolbar">
-        <button
-          type="button"
-          className="btn primary"
-          disabled={
-            save.isPending ||
-            state.title.trim() === '' ||
-            (isSourcedBroadcastKind(state.contentKind) && sourceOf(state) === null)
-          }
-          onClick={() => save.mutate()}
-        >
-          {record === null ? t('web.bc_create') : t('web.bc_save')}
-        </button>
-      </div>
-      {save.error !== null && <Banner tone="danger">{broadcastMessage(save.error)}</Banner>}
+      {state.contentKind !== 'FORWARD' && (
+        <FormSection id="bc-section-buttons" title={t('web.bc_buttons')} grid={false}>
+          <div className="stack-sm">
+            {state.buttons.map((button, index) => (
+              <div className="form-grid" key={index}>
+                <Field label={t('web.bc_button_label')} htmlFor={`bc-btn-label-${String(index)}`}>
+                  <input
+                    id={`bc-btn-label-${String(index)}`}
+                    value={button.label}
+                    maxLength={BROADCAST_BUTTON_LABEL_MAX_LENGTH}
+                    onChange={(event) =>
+                      set({
+                        buttons: state.buttons.map((item, at) =>
+                          at === index ? { ...item, label: event.target.value } : item,
+                        ),
+                      })
+                    }
+                  />
+                </Field>
+                <Field label={t('web.bc_button_url')} htmlFor={`bc-btn-url-${String(index)}`}>
+                  <input
+                    id={`bc-btn-url-${String(index)}`}
+                    dir="ltr"
+                    value={button.url}
+                    onChange={(event) =>
+                      set({
+                        buttons: state.buttons.map((item, at) =>
+                          at === index ? { ...item, url: event.target.value } : item,
+                        ),
+                      })
+                    }
+                  />
+                </Field>
+              </div>
+            ))}
+            <div className="form-actions">
+              <Button
+                size="sm"
+                icon="plus"
+                disabled={state.buttons.length >= BROADCAST_BUTTONS_MAX}
+                onClick={() => set({ buttons: [...state.buttons, { label: '', url: 'https://' }] })}
+              >
+                {t('web.bc_button_add')}
+              </Button>
+              {state.buttons.length > 0 && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => set({ buttons: state.buttons.slice(0, -1) })}
+                >
+                  {t('web.bc_button_remove')}
+                </Button>
+              )}
+            </div>
+          </div>
+        </FormSection>
+      )}
+
+      <FormSection id="bc-section-audience" title={t('web.bc_audience')} grid={false}>
+        <AudienceBuilder value={state.audience} onChange={(audience) => set({ audience })} />
+      </FormSection>
+
+      {save.error !== null && (
+        <div className="cb-form-error">
+          <Banner tone="danger">{broadcastMessage(save.error)}</Banner>
+        </div>
+      )}
     </Card>
   );
 }
@@ -631,26 +717,30 @@ function MediaCard({
         />
       )}
       {blocked && <Banner tone="warn">{t('web.bc_media_save_first')}</Banner>}
-      <input
-        type="file"
-        aria-label={t('web.bc_media_pick')}
-        accept={accept}
-        disabled={blocked || upload.isPending}
-        onChange={(event) => {
-          const file = event.target.files?.[0];
-          if (file !== undefined) upload.mutate(file);
-        }}
-      />
-      {record.media !== null && (
-        <button
-          type="button"
-          className="btn sm"
-          disabled={blocked || remove.isPending}
-          onClick={() => remove.mutate()}
-        >
-          {t('web.bc_media_remove')}
-        </button>
-      )}
+      <div className="form-actions">
+        <input
+          type="file"
+          className="bc-file"
+          aria-label={t('web.bc_media_pick')}
+          accept={accept}
+          disabled={blocked || upload.isPending}
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            if (file !== undefined) upload.mutate(file);
+          }}
+        />
+        {record.media !== null && (
+          <Button
+            size="sm"
+            variant="danger"
+            icon="trash"
+            disabled={blocked || remove.isPending}
+            onClick={() => remove.mutate()}
+          >
+            {t('web.bc_media_remove')}
+          </Button>
+        )}
+      </div>
       {rejected && <Banner tone="danger">{t('web.bc_error_media_refused')}</Banner>}
       {upload.error !== null && <Banner tone="danger">{broadcastMessage(upload.error)}</Banner>}
     </Card>
@@ -666,6 +756,8 @@ function LaunchCard({ record }: { record: BroadcastResponseItem }) {
   const [typed, setTyped] = useState('');
   const [mode, setMode] = useState<'NOW' | 'SCHEDULE'>('NOW');
   const [scheduledAt, setScheduledAt] = useState('');
+  /** The last question before a send: asked in a dialog, answered once. */
+  const [asking, setAsking] = useState(false);
   const count = useMutation({
     mutationFn: () => previewBroadcast(record.id),
     onSuccess: (response) => {
@@ -721,7 +813,7 @@ function LaunchCard({ record }: { record: BroadcastResponseItem }) {
     (!isSourcedBroadcastKind(record.contentKind) || record.sourceVerifiedAt !== null);
   const sourced = isSourcedBroadcastKind(record.contentKind);
   return (
-    <Card title={t('web.bc_launch')} hint={t('web.bc_launch_hint')}>
+    <Card title={t('web.bc_launch')} hint={t('web.bc_launch_hint')} tone="danger">
       {sourced && (
         <Banner tone={record.sourceVerifiedAt === null ? 'warn' : 'ok'}>
           {record.sourceVerifiedAt === null
@@ -729,61 +821,57 @@ function LaunchCard({ record }: { record: BroadcastResponseItem }) {
             : t('web.bc_source_verified_yes')}
         </Banner>
       )}
-      <div className="toolbar">
-        <button
-          type="button"
-          className="btn sm"
-          disabled={test.isPending}
-          onClick={() => test.mutate()}
-        >
+      <div className="form-actions">
+        <Button size="sm" icon="send" disabled={test.isPending} onClick={() => test.mutate()}>
           {t('web.bc_test')}
-        </button>
-        <button
-          type="button"
-          className="btn sm"
-          disabled={count.isPending}
-          onClick={() => count.mutate()}
-        >
+        </Button>
+        <Button size="sm" icon="users" disabled={count.isPending} onClick={() => count.mutate()}>
           {t('web.bc_count')}
-        </button>
+        </Button>
       </div>
       {test.error !== null && <Banner tone="danger">{broadcastMessage(test.error)}</Banner>}
       {count.error !== null && <Banner tone="danger">{broadcastMessage(count.error)}</Banner>}
       {preview !== null && (
         <>
-          <KV
-            items={[
-              [t('web.bc_recipients'), formatNumber(preview.customers)],
-              [t('web.aud_count_reachable'), formatNumber(preview.reachable)],
-              [t('web.bc_as_of'), formatTimestamp(preview.asOf)],
-            ]}
-          />
+          <div className="stat-grid cb-stat-row">
+            <StatCard label={t('web.bc_recipients')} value={formatNumber(preview.customers)} />
+            <StatCard
+              label={t('web.aud_count_reachable')}
+              value={formatNumber(preview.reachable)}
+            />
+            <StatCard
+              label={t('web.bc_as_of')}
+              value={<span className="small">{formatTimestamp(preview.asOf)}</span>}
+            />
+          </div>
           {preview.customers === 0 ? (
             <Banner tone="info">{t('web.aud_error_empty')}</Banner>
           ) : (
             <>
-              <Field label={t('web.bc_mode')} htmlFor="bc-mode">
-                <select
-                  id="bc-mode"
-                  value={mode}
-                  onChange={(event) => setMode(event.target.value as 'NOW' | 'SCHEDULE')}
-                >
-                  <option value="NOW">{t('web.bc_mode_now')}</option>
-                  <option value="SCHEDULE">{t('web.bc_mode_schedule')}</option>
-                </select>
-              </Field>
-              {mode === 'SCHEDULE' && (
-                <Field label={t('web.bc_schedule_at')} htmlFor="bc-at">
-                  <input
-                    id="bc-at"
-                    type="datetime-local"
-                    value={scheduledAt}
-                    onChange={(event) => setScheduledAt(event.target.value)}
-                  />
+              <div className="form-grid">
+                <Field label={t('web.bc_mode')} htmlFor="bc-mode">
+                  <select
+                    id="bc-mode"
+                    value={mode}
+                    onChange={(event) => setMode(event.target.value as 'NOW' | 'SCHEDULE')}
+                  >
+                    <option value="NOW">{t('web.bc_mode_now')}</option>
+                    <option value="SCHEDULE">{t('web.bc_mode_schedule')}</option>
+                  </select>
                 </Field>
-              )}
+                {mode === 'SCHEDULE' && (
+                  <Field label={t('web.bc_schedule_at')} htmlFor="bc-at">
+                    <input
+                      id="bc-at"
+                      type="datetime-local"
+                      value={scheduledAt}
+                      onChange={(event) => setScheduledAt(event.target.value)}
+                    />
+                  </Field>
+                )}
+              </div>
               <Banner tone="warn">{t('web.bc_freeze_note')}</Banner>
-              <label className="checks">
+              <label className="check">
                 <input
                   type="checkbox"
                   checked={confirmed}
@@ -801,16 +889,35 @@ function LaunchCard({ record }: { record: BroadcastResponseItem }) {
                   />
                 </Field>
               )}
-              <div className="toolbar">
-                <button
-                  type="button"
-                  className="btn danger"
+              <div className="form-actions">
+                <Button
+                  variant="danger-solid"
+                  icon="send"
                   disabled={!ready || launch.isPending}
-                  onClick={() => launch.mutate()}
+                  onClick={() => setAsking(true)}
                 >
                   {mode === 'NOW' ? t('web.bc_send_now') : t('web.bc_schedule')}
-                </button>
+                </Button>
               </div>
+              {asking && (
+                <ConfirmDialog
+                  title={record.title}
+                  question={(mode === 'NOW'
+                    ? t('web.cb_bc_send_question')
+                    : t('web.cb_bc_schedule_question')
+                  ).replace('{count}', formatNumber(preview.customers))}
+                  detail={t('web.bc_freeze_note')}
+                  confirmLabel={
+                    mode === 'NOW' ? t('web.cb_bc_send_yes') : t('web.cb_bc_schedule_yes')
+                  }
+                  cancelLabel={t('web.cb_cancel')}
+                  onConfirm={() => {
+                    setAsking(false);
+                    launch.mutate();
+                  }}
+                  onCancel={() => setAsking(false)}
+                />
+              )}
             </>
           )}
         </>
@@ -831,76 +938,84 @@ function ReportCard({ record, maySend }: { record: BroadcastResponseItem; maySen
   const c = record.counts;
   return (
     <Card title={t('web.bc_report')}>
-      <div className="stats">
-        <KV
-          items={[
-            [t('web.bc_total'), formatNumber(c.total)],
-            [t('web.bc_r_pending'), formatNumber(c.pending + c.sending)],
-            [t('web.bc_r_sent'), formatNumber(c.sent)],
-            [t('web.bc_r_failed'), formatNumber(c.failed)],
-            [t('web.bc_r_unreachable'), formatNumber(c.unreachable)],
-            [t('web.bc_r_unconfirmed'), formatNumber(c.unconfirmed)],
-            [t('web.bc_r_skipped'), formatNumber(c.skipped)],
-            [t('web.bc_r_cancelled'), formatNumber(c.cancelled)],
-            [
-              t('web.bc_progress'),
-              record.progressPercent === null ? '—' : `${formatNumber(record.progressPercent)}%`,
-            ],
-            ...(record.pin
-              ? ([
-                  [t('web.bc_pinned'), formatNumber(c.pinned)],
-                  [t('web.bc_pin_failed'), formatNumber(c.pinFailed)],
-                ] as [string, string][])
-              : []),
-          ]}
+      <div className="stat-grid cb-stat-row">
+        <StatCard label={t('web.bc_total')} value={formatNumber(c.total)} />
+        <StatCard label={t('web.bc_r_sent')} value={formatNumber(c.sent)} />
+        <StatCard label={t('web.bc_r_pending')} value={formatNumber(c.pending + c.sending)} />
+        <StatCard
+          label={t('web.bc_r_failed')}
+          value={formatNumber(c.failed)}
+          {...(c.failed > 0 ? { tone: 'alert' as const } : {})}
         />
       </div>
-      <progress max={100} value={record.progressPercent ?? 0} aria-label={t('web.bc_progress')} />
+      <div className="cb-progress-line">
+        <Progress
+          value={record.progressPercent ?? 0}
+          max={100}
+          label={t('web.bc_progress')}
+          tone={record.state === 'COMPLETED' ? 'ok' : 'info'}
+          size="lg"
+        />
+        <span className="num">
+          {record.progressPercent === null ? '—' : `${formatNumber(record.progressPercent)}%`}
+        </span>
+      </div>
+      <KV
+        inline
+        items={[
+          [t('web.bc_r_unreachable'), formatNumber(c.unreachable)],
+          [t('web.bc_r_unconfirmed'), formatNumber(c.unconfirmed)],
+          [t('web.bc_r_skipped'), formatNumber(c.skipped)],
+          [t('web.bc_r_cancelled'), formatNumber(c.cancelled)],
+          ...(record.pin
+            ? ([
+                [t('web.bc_pinned'), formatNumber(c.pinned)],
+                [t('web.bc_pin_failed'), formatNumber(c.pinFailed)],
+              ] as [string, string][])
+            : []),
+        ]}
+      />
       {record.state === 'PAUSED' && record.pauseReason === 'BOT_UNAVAILABLE' && (
         <Banner tone="danger">{t('web.bc_paused_bot')}</Banner>
       )}
       <p className="muted small">{t('web.bc_unconfirmed_hint')}</p>
       {maySend && (
-        <div className="toolbar">
+        <div className="form-actions">
           {record.state === 'SENDING' && (
-            <button type="button" className="btn sm" onClick={() => steer.mutate('pause')}>
+            <Button size="sm" icon="pause" onClick={() => steer.mutate('pause')}>
               {t('web.bc_pause')}
-            </button>
+            </Button>
           )}
           {record.state === 'PAUSED' && (
-            <button type="button" className="btn sm" onClick={() => steer.mutate('resume')}>
+            <Button size="sm" icon="play" onClick={() => steer.mutate('resume')}>
               {t('web.bc_resume')}
-            </button>
+            </Button>
           )}
           {c.failed > 0 && ['SENDING', 'PAUSED', 'COMPLETED'].includes(record.state) && (
-            <button type="button" className="btn sm" onClick={() => steer.mutate('retryFailed')}>
+            <Button size="sm" icon="refresh" onClick={() => steer.mutate('retryFailed')}>
               {t('web.bc_retry_failed')}
-            </button>
+            </Button>
           )}
-          {['SCHEDULED', 'SENDING', 'PAUSED'].includes(record.state) &&
-            (cancelAsked ? (
-              <>
-                <span className="small">{t('web.bc_cancel_question')}</span>
-                <button
-                  type="button"
-                  className="btn danger sm"
-                  onClick={() => {
-                    setCancelAsked(false);
-                    steer.mutate('cancel');
-                  }}
-                >
-                  {t('web.bc_cancel_confirm')}
-                </button>
-                <button type="button" className="btn sm" onClick={() => setCancelAsked(false)}>
-                  {t('web.bc_back')}
-                </button>
-              </>
-            ) : (
-              <button type="button" className="btn danger sm" onClick={() => setCancelAsked(true)}>
-                {t('web.bc_cancel')}
-              </button>
-            ))}
+          <span className="spacer" />
+          {['SCHEDULED', 'SENDING', 'PAUSED'].includes(record.state) && (
+            <Button size="sm" variant="danger" onClick={() => setCancelAsked(true)}>
+              {t('web.bc_cancel')}
+            </Button>
+          )}
         </div>
+      )}
+      {cancelAsked && (
+        <ConfirmDialog
+          title={record.title}
+          question={t('web.bc_cancel_question')}
+          confirmLabel={t('web.bc_cancel_confirm')}
+          cancelLabel={t('web.bc_back')}
+          onConfirm={() => {
+            setCancelAsked(false);
+            steer.mutate('cancel');
+          }}
+          onCancel={() => setCancelAsked(false)}
+        />
       )}
       {steer.error !== null && <Banner tone="danger">{broadcastMessage(steer.error)}</Banner>}
     </Card>
@@ -935,23 +1050,25 @@ function RecipientsCard({ id, broadcastState }: { id: string; broadcastState: Br
   }, [broadcastState, client, id]);
   return (
     <Card title={t('web.bc_recipients')}>
-      <Field label={t('web.bc_state')} htmlFor="bc-r-state">
-        <select
-          id="bc-r-state"
-          value={state}
-          onChange={(event) => {
-            setState(event.target.value as BroadcastRecipientState | '');
-            setTrail([]);
-          }}
-        >
-          <option value="">{t('web.aud_any')}</option>
-          {BROADCAST_RECIPIENT_STATES.map((option) => (
-            <option key={option} value={option}>
-              {t(RECIPIENT_LABELS[option])}
-            </option>
-          ))}
-        </select>
-      </Field>
+      <div className="toolbar">
+        <Field label={t('web.bc_state')} htmlFor="bc-r-state" compact>
+          <select
+            id="bc-r-state"
+            value={state}
+            onChange={(event) => {
+              setState(event.target.value as BroadcastRecipientState | '');
+              setTrail([]);
+            }}
+          >
+            <option value="">{t('web.aud_any')}</option>
+            {BROADCAST_RECIPIENT_STATES.map((option) => (
+              <option key={option} value={option}>
+                {t(RECIPIENT_LABELS[option])}
+              </option>
+            ))}
+          </select>
+        </Field>
+      </div>
       <StateSwitch query={rows}>
         {rows.data === undefined ? null : (
           <>
@@ -966,7 +1083,11 @@ function RecipientsCard({ id, broadcastState }: { id: string; broadcastState: Br
                 {
                   key: 'state',
                   header: t('web.bc_state'),
-                  render: (row) => t(RECIPIENT_LABELS[row.state]),
+                  render: (row) => (
+                    <Badge tone={RECIPIENT_TONES[row.state]} dot>
+                      {t(RECIPIENT_LABELS[row.state])}
+                    </Badge>
+                  ),
                 },
                 {
                   key: 'attempts',
@@ -1002,6 +1123,7 @@ function RecipientsCard({ id, broadcastState }: { id: string; broadcastState: Br
               ]}
               rows={rows.data.recipients}
               rowKey={(row) => row.customerId}
+              dense
             />
             <CursorPager
               shown={rows.data.recipients.length}
@@ -1017,6 +1139,74 @@ function RecipientsCard({ id, broadcastState }: { id: string; broadcastState: Br
           </>
         )}
       </StateSwitch>
+    </Card>
+  );
+}
+
+/** What the broadcast is and whom it goes to, as saved. */
+function BroadcastSummary({ record }: { record: BroadcastResponseItem }) {
+  return (
+    <Card title={t('web.bc_summary')}>
+      <KV
+        items={[
+          [t('web.bc_state'), t(BROADCAST_STATE_LABELS[record.state])],
+          [t('web.bc_kind'), t(KIND_LABELS[record.contentKind])],
+          [t('web.bc_purpose'), t(PURPOSE_LABELS[record.purpose])],
+          [t('web.bc_pin'), record.pin ? t('web.bc_pin_yes') : t('web.bc_pin_no')],
+          ...(record.source === null
+            ? []
+            : ([
+                [
+                  t('web.bc_source'),
+                  <Ltr key="src">{`${record.source.chatId} / ${String(record.source.messageId)}`}</Ltr>,
+                ],
+                [
+                  t('web.bc_source_verified'),
+                  record.sourceVerifiedAt === null
+                    ? t('web.bc_source_verified_no')
+                    : formatTimestamp(record.sourceVerifiedAt),
+                ],
+              ] as [ReactNode, ReactNode][])),
+          [t('web.bc_created_by'), record.createdBy?.username ?? '—'],
+          [t('web.bc_launched_by'), record.launchedBy?.username ?? '—'],
+          [t('web.bc_created'), formatTimestamp(record.createdAt)],
+          [
+            t('web.bc_scheduled_at'),
+            record.scheduledAt === null ? '—' : formatTimestamp(record.scheduledAt),
+          ],
+          [
+            t('web.bc_started'),
+            record.startedAt === null ? '—' : formatTimestamp(record.startedAt),
+          ],
+          [
+            t('web.bc_completed'),
+            record.completedAt === null ? '—' : formatTimestamp(record.completedAt),
+          ],
+          [
+            t('web.bc_as_of'),
+            record.audienceAsOf === null ? '—' : formatTimestamp(record.audienceAsOf),
+          ],
+        ]}
+      />
+      <h3>{t('web.bc_filters')}</h3>
+      {record.frozenAudienceId !== null && (
+        <p className="muted small">{t('web.bc_frozen_audience')}</p>
+      )}
+      <ul className="small">
+        {describeAudience(record.audience).map((line) => (
+          <li key={line}>{line}</li>
+        ))}
+      </ul>
+      {!isSourcedBroadcastKind(record.contentKind) && (
+        <>
+          <h3>{t('web.bc_preview')}</h3>
+          <div className="bc-phone">
+            <div className="broadcast-preview bc-bubble" dir="auto">
+              <pre className="preview-text">{renderBroadcastPreview(record.body)}</pre>
+            </div>
+          </div>
+        </>
+      )}
     </Card>
   );
 }
@@ -1039,88 +1229,42 @@ export function BroadcastDetailPage({
   });
   const record = detail.data?.broadcast;
   const [composerDirty, setComposerDirty] = useState(false);
+  const summary = record === undefined ? null : <BroadcastSummary record={record} />;
   return (
     <StateSwitch query={detail} denied={denied}>
       {record === undefined ? null : (
         <>
           <PageHead
             title={record.title}
-            subtitle={t(BROADCAST_STATE_LABELS[record.state])}
-            maturity="now"
+            badge={<BroadcastStateBadge state={record.state} />}
+            subtitle={
+              <span className="cb-meta">
+                <span>{t(KIND_LABELS[record.contentKind])}</span>
+                <span>{t(PURPOSE_LABELS[record.purpose])}</span>
+              </span>
+            }
           />
-          <Card title={t('web.bc_summary')}>
-            <KV
-              items={[
-                [t('web.bc_state'), t(BROADCAST_STATE_LABELS[record.state])],
-                [t('web.bc_kind'), t(KIND_LABELS[record.contentKind])],
-                [t('web.bc_purpose'), t(PURPOSE_LABELS[record.purpose])],
-                [t('web.bc_pin'), record.pin ? t('web.bc_pin_yes') : t('web.bc_pin_no')],
-                ...(record.source === null
-                  ? []
-                  : ([
-                      [
-                        t('web.bc_source'),
-                        <Ltr key="src">{`${record.source.chatId} / ${String(record.source.messageId)}`}</Ltr>,
-                      ],
-                      [
-                        t('web.bc_source_verified'),
-                        record.sourceVerifiedAt === null
-                          ? t('web.bc_source_verified_no')
-                          : formatTimestamp(record.sourceVerifiedAt),
-                      ],
-                    ] as [ReactNode, ReactNode][])),
-                [t('web.bc_created_by'), record.createdBy?.username ?? '—'],
-                [t('web.bc_launched_by'), record.launchedBy?.username ?? '—'],
-                [t('web.bc_created'), formatTimestamp(record.createdAt)],
-                [
-                  t('web.bc_scheduled_at'),
-                  record.scheduledAt === null ? '—' : formatTimestamp(record.scheduledAt),
-                ],
-                [
-                  t('web.bc_started'),
-                  record.startedAt === null ? '—' : formatTimestamp(record.startedAt),
-                ],
-                [
-                  t('web.bc_completed'),
-                  record.completedAt === null ? '—' : formatTimestamp(record.completedAt),
-                ],
-                [
-                  t('web.bc_as_of'),
-                  record.audienceAsOf === null ? '—' : formatTimestamp(record.audienceAsOf),
-                ],
-              ]}
-            />
-            <h3>{t('web.bc_filters')}</h3>
-            {record.frozenAudienceId !== null && (
-              <p className="muted small">{t('web.bc_frozen_audience')}</p>
-            )}
-            <ul className="small">
-              {describeAudience(record.audience).map((line) => (
-                <li key={line}>{line}</li>
-              ))}
-            </ul>
-            {!isSourcedBroadcastKind(record.contentKind) && (
-              <>
-                <h3>{t('web.bc_preview')}</h3>
-                <pre className="preview-text" dir="auto">
-                  {renderBroadcastPreview(record.body)}
-                </pre>
-              </>
-            )}
-          </Card>
           {record.state === 'DRAFT' ? (
-            maySend ? (
-              <>
-                <Composer key={record.version} record={record} onDirtyChange={setComposerDirty} />
-                <MediaCard record={record} blocked={composerDirty} />
-                <LaunchCard record={record} />
-              </>
-            ) : null
-          ) : (
             <>
-              <ReportCard record={record} maySend={maySend} />
-              <RecipientsCard id={record.id} broadcastState={record.state} />
+              {maySend && (
+                <>
+                  <Composer key={record.version} record={record} onDirtyChange={setComposerDirty} />
+                  <MediaCard record={record} blocked={composerDirty} />
+                  <LaunchCard record={record} />
+                </>
+              )}
+              {summary}
             </>
+          ) : (
+            <TwoColumn
+              main={
+                <>
+                  <ReportCard record={record} maySend={maySend} />
+                  <RecipientsCard id={record.id} broadcastState={record.state} />
+                </>
+              }
+              side={summary}
+            />
           )}
         </>
       )}
