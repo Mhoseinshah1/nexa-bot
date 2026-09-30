@@ -392,6 +392,9 @@ describe('one campaign', () => {
     expect(card.textContent).toContain('جمع کش‌بک به تفکیک ارز');
     expect(card.textContent).toContain('8,000');
     expect(card.textContent).not.toContain('9,200');
+    // A gift's notice counts as told only once the lane DELIVERED it; the rest is queued.
+    expect(card.textContent).toContain('اطلاع‌رسانی تحویل‌شده 1');
+    expect(card.textContent).toContain('اطلاع‌رسانی در صف ارسال 2');
     // Without campaigns.manage there is nothing to press.
     expect(screen.queryByRole('button', { name: 'لغو کمپین' })).toBeNull();
   });
@@ -408,7 +411,9 @@ function results() {
     failed: 0,
     skipped: 0,
     cancelled: 0,
-    notified: 3,
+    // One notice delivered, two still in the lane: only the first is a told customer.
+    notified: 1,
+    notificationQueued: 2,
   };
   return {
     targeted: 3,

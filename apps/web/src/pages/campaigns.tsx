@@ -1837,7 +1837,10 @@ function BulkTally({ counts }: { counts: BulkCounts }) {
       <Num value={counts.skipped} /> · {t('web.campaign_unconfirmed')}{' '}
       <Num value={counts.awaitingReconciliation} /> · {t('web.campaign_pending')}{' '}
       <Num value={counts.pending + counts.planned - counts.awaitingReconciliation} /> ·{' '}
-      {t('web.campaign_cancelled_count')} <Num value={counts.cancelled} />
+      {t('web.campaign_cancelled_count')} <Num value={counts.cancelled} /> ·{' '}
+      {/* Told means DELIVERED by the lane; an enqueued notice is only queued (E's #117 R4). */}
+      {t('web.bulk_notified')} <Num value={counts.notified} /> · {t('web.bulk_notice_queued')}{' '}
+      <Num value={counts.notificationQueued} />
     </span>
   );
 }
