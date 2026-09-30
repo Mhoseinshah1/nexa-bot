@@ -1,4 +1,10 @@
 import {
+  resellerCreditResponseSchema,
+  resellerHistoryResponseSchema,
+  resellerListResponseSchema,
+  resellerMinimumReportSchema,
+  resellerPolicyResponseSchema,
+  resellerPurchasePageSchema,
   referralCommissionListResponseSchema,
   referralListResponseSchema,
   tenantMediaStateSchema,
@@ -250,9 +256,17 @@ function tier(
     pricingMode,
     discountPercentage,
     creditLimit: { amount: credit, currency: 'IRT' },
-    grants: [],
+    grants:
+      index === 1
+        ? []
+        : [
+            { kind: 'OPERATION', subject: null },
+            { kind: 'PRODUCT', subject: null },
+            { kind: 'PANEL', subject: index === 3 ? null : PANEL_A },
+            { kind: 'BOT', subject: null },
+          ],
     resellerCount,
-    monthlyMinimum: null,
+    monthlyMinimum: index === 3 ? { amount: '20000000', currency: 'IRT' } : null,
     createdAt: ago(60 * 24 * 200),
     updatedAt: ago(60 * 24 * 20),
   };
@@ -763,7 +777,209 @@ const COMMISSIONS: readonly Json[] = COMMISSION_STATES.map((state, index) => ({
   voidedAt: state === 'VOID' ? ago(60 * 24 * index * 2) : null,
 }));
 
+/* --------------------------------------------------------------- resellers --- */
+
+const IRT = (amount: string): Json => ({ amount, currency: 'IRT' });
+
+function resellerRow(index: number, name: string | null, tierIndex: number, over: Json = {}): Json {
+  const tier = TIERS[tierIndex] ?? {};
+  return {
+    customerId: `019210ab-cdef-7012-8345-${String(6789 + index).padStart(4, '0')}abcdef01`,
+    telegramUserId: String(5551234567 + index * 7919),
+    displayName: name,
+    tier: { id: tier['id'], name: tier['name'] },
+    status: 'ACTIVE',
+    pricingMode: 'TIER',
+    discountPercentage: null,
+    creditLimit: null,
+    effectiveCreditLimit: tier['creditLimit'],
+    createdAt: ago(60 * 24 * (120 - index * 7)),
+    updatedAt: ago(60 * 24 * index),
+    ...over,
+  };
+}
+
+const RESELLERS: readonly Json[] = [
+  resellerRow(3, 'حامد کریمی', 2, { pricingMode: 'PERCENTAGE_DISCOUNT', discountPercentage: 25 }),
+  resellerRow(8, 'الهام احمدی', 1),
+  resellerRow(9, null, 1, { creditLimit: IRT('8000000'), effectiveCreditLimit: IRT('8000000') }),
+  resellerRow(11, 'رضا نادری', 0, { status: 'SUSPENDED' }),
+  resellerRow(12, 'بهنام زارعی', 2),
+];
+
+const FIRST_RESELLER = RESELLERS[0]?.['customerId'] as string;
+
+const RESELLER_POLICY: Json = {
+  customerId: FIRST_RESELLER,
+  status: 'ACTIVE',
+  tier: { id: TIERS[2]?.['id'], name: TIERS[2]?.['name'] },
+  dimensions: [
+    {
+      dimension: 'OPERATION',
+      source: 'TIER',
+      tierGrants: [{ kind: 'OPERATION', subject: null }],
+      overrideGrants: null,
+      effectiveGrants: [{ kind: 'OPERATION', subject: null }],
+    },
+    {
+      dimension: 'CATALOGUE',
+      source: 'RESELLER',
+      tierGrants: [{ kind: 'PRODUCT', subject: null }],
+      overrideGrants: [{ kind: 'PRODUCT', subject: PRODUCTS[2]?.['id'] }],
+      effectiveGrants: [{ kind: 'PRODUCT', subject: PRODUCTS[2]?.['id'] }],
+    },
+    {
+      dimension: 'PANEL',
+      source: 'TIER',
+      tierGrants: [{ kind: 'PANEL', subject: PANEL_A }],
+      overrideGrants: null,
+      effectiveGrants: [{ kind: 'PANEL', subject: PANEL_A }],
+    },
+    {
+      dimension: 'BOT',
+      source: 'TIER',
+      tierGrants: [{ kind: 'BOT', subject: null }],
+      overrideGrants: null,
+      effectiveGrants: [{ kind: 'BOT', subject: null }],
+    },
+  ],
+  pricing: {
+    tierMode: 'PERCENTAGE_DISCOUNT',
+    tierPercent: 20,
+    overrideMode: 'PERCENTAGE_DISCOUNT',
+    overridePercent: 25,
+    layer: 'OVERRIDE',
+    percent: 25,
+  },
+  monthlyMinimum: {
+    tier: IRT('20000000'),
+    own: null,
+    effective: IRT('20000000'),
+    source: 'TIER',
+  },
+  botBasis: 'ANY_BOT',
+  products: [
+    {
+      productId: PRODUCTS[2]?.['id'],
+      title: PRODUCTS[2]?.['title'],
+      status: 'ACTIVE',
+      categoryId: PRODUCTS[2]?.['categoryId'],
+      panelId: PANEL_A,
+      allowed: true,
+      refusedDimension: null,
+    },
+    {
+      productId: PRODUCTS[1]?.['id'],
+      title: PRODUCTS[1]?.['title'],
+      status: 'ACTIVE',
+      categoryId: PRODUCTS[1]?.['categoryId'],
+      panelId: PANEL_A,
+      allowed: false,
+      refusedDimension: 'CATALOGUE',
+    },
+  ],
+  productsComplete: true,
+};
+
+function minimumRow(reseller: Json, over: Json): Json {
+  return {
+    customerId: reseller['customerId'],
+    telegramUserId: reseller['telegramUserId'],
+    displayName: reseller['displayName'],
+    tier: reseller['tier'],
+    status: reseller['status'],
+    minimum: IRT('20000000'),
+    source: 'TIER',
+    achieved: IRT('12400000'),
+    remaining: IRT('7600000'),
+    progressBasisPoints: 6_200,
+    state: 'BELOW',
+    ...over,
+  };
+}
+
 export const COMMERCE_B: readonly ShotFixture[] = [
+  fixture('/resellers', resellerListResponseSchema, { resellers: RESELLERS, nextCursor: null }),
+  fixture('/resellers/:id/credit', resellerCreditResponseSchema, {
+    credit: {
+      customerId: FIRST_RESELLER,
+      status: 'ACTIVE',
+      effectiveLimit: IRT('20000000'),
+      limitSource: 'TIER',
+      sellingCurrency: 'IRT',
+      credit: 'CREDIT_APPLIES',
+      balance: IRT('-3200000'),
+      allowance: IRT('20000000'),
+      creditInUse: IRT('3200000'),
+      availableToSpend: IRT('16800000'),
+      overLimitBy: IRT('0'),
+    },
+  }),
+  fixture('/resellers/:id/purchases', resellerPurchasePageSchema, {
+    purchases: [0, 1, 2].map((index) => ({
+      orderId: `0192c0de-0000-7000-8000-0000000014${String(index).padStart(2, '0')}`,
+      orderState: index === 2 ? 'AWAITING_PAYMENT' : 'PAID',
+      purpose: index === 1 ? 'RENEW' : 'NEW_SERVICE',
+      confirmedAt: ago(60 * 24 * (index + 1)),
+      tierName: TIERS[2]?.['name'],
+      layer: 'OVERRIDE',
+      percent: 25,
+      listAmount: '219000',
+      costAmount: '164250',
+      promotionAmount: '0',
+      saleAmount: '164250',
+      currency: 'IRT',
+    })),
+    nextCursor: null,
+  }),
+  fixture('/resellers/:id/history', resellerHistoryResponseSchema, {
+    entries: [
+      {
+        id: '0192c0de-0000-7000-8000-000000001501',
+        action: 'reseller.update',
+        actorType: 'WEB_ADMIN',
+        actorLabel: 'owner',
+        surface: 'WEB',
+        result: 'SUCCESS',
+        occurredAt: ago(60 * 24 * 3),
+        before: { pricingMode: 'TIER', discountPercentage: null },
+        after: { pricingMode: 'PERCENTAGE_DISCOUNT', discountPercentage: 25 },
+      },
+    ],
+  }),
+  fixture('/resellers/:id/policy', resellerPolicyResponseSchema, { policy: RESELLER_POLICY }),
+  fixture('/reseller-tiers/:id/history', resellerHistoryResponseSchema, { entries: [] }),
+  fixture('/reseller-minimums', resellerMinimumReportSchema, {
+    period: {
+      key: 'THIS_MONTH',
+      start: '2026-08-22T20:30:00.000Z',
+      end: '2026-09-22T20:30:00.000Z',
+      startLocal: '1405/06/01',
+      endLocalInclusive: '1405/06/31',
+      timezone: 'Asia/Tehran',
+      calendar: 'jalali',
+      running: true,
+    },
+    rows: [
+      minimumRow(RESELLERS[0] as Json, {}),
+      minimumRow(RESELLERS[4] as Json, {
+        achieved: IRT('23100000'),
+        remaining: IRT('0'),
+        progressBasisPoints: 11_550,
+        state: 'ACHIEVED',
+      }),
+      minimumRow(RESELLERS[1] as Json, {
+        minimum: null,
+        source: 'NONE',
+        achieved: IRT('3400000'),
+        remaining: null,
+        progressBasisPoints: null,
+        state: 'NO_MINIMUM',
+      }),
+    ],
+    counts: { achieved: 1, below: 1, noMinimum: 1, notActive: 1 },
+    truncated: false,
+  }),
   fixture('/referrals', referralListResponseSchema, { referrals: REFERRALS, nextCursor: null }),
   fixture('/referral-commissions', referralCommissionListResponseSchema, {
     commissions: COMMISSIONS,

@@ -564,3 +564,44 @@
 .referrals-foot {
   align-items: start;
 }
+
+/* --- /resellers ------------------------------------------------------------------- */
+
+.resellers-who {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.resellers-badges {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+.resellers-foot {
+  align-items: start;
+}
+.resellers-standing:focus {
+  outline: none;
+}
+
+/* --- /reseller-tiers -------------------------------------------------------------- */
+
+/* A scroll target for an opened panel; takes no room. */
+.tiers-anchor {
+  height: 0;
+  margin: 0 !important;
+}
+.tiers-anchor:focus {
+  outline: none;
+}
+.tiers-grants {
+  display: grid;
+  grid-template-columns: repeat(2, max-content);
+  gap: 2px 14px;
+}
+.tiers-grants > .danger {
+  grid-column: 1 / -1;
+}
+.tiers-foot {
+  align-items: start;
+}

@@ -21,11 +21,15 @@ export interface SectionLink {
  * to it, so a keyboard user lands there too.
  */
 export function revealField(id: string): void {
-  const target = document.getElementById(id);
-  if (target === null) return;
-  // Not in jsdom; in a browser, the reduced-motion preference is honoured by CSS.
-  if (typeof target.scrollIntoView === 'function') target.scrollIntoView({ block: 'start' });
-  target.focus({ preventScroll: true });
+  // After the render the click caused: the form or panel being revealed may be the one
+  // the same click opened, and it is not in the document until then.
+  window.setTimeout(() => {
+    const target = document.getElementById(id);
+    if (target === null) return;
+    // Not in jsdom; in a browser, the reduced-motion preference is honoured by CSS.
+    if (typeof target.scrollIntoView === 'function') target.scrollIntoView({ block: 'start' });
+    target.focus({ preventScroll: true });
+  }, 0);
 }
 
 /** The sticky list of an editor's sections, beside the form. */

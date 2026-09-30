@@ -43,12 +43,20 @@ import {
   Ltr,
   Money,
   PageHead,
-  Pills,
   StateSwitch,
+  Button,
+  DetailHead,
+  FilterChip,
+  FilterChips,
+  RowActions,
+  TwoColumn,
+  useUnsavedChanges,
   useToast,
   type Column,
   type Tone,
 } from '../ui/kit';
+import { Icon } from '../ui/icons';
+import { CheckField, SaveBar, revealField } from './editor-layout';
 import {
   ResellerCreditCard,
   ResellerHistoryCard,
@@ -136,7 +144,17 @@ export const PRICE_LAYER_STEPS: Readonly<Record<ResellerPriceLayer, PricingStep 
 };
 
 export function ResellerStatusBadge({ value }: { value: ResellerStatus }) {
-  return <Badge tone={RESELLER_STATUS_TONES[value]}>{t(RESELLER_STATUS_LABELS[value])}</Badge>;
+  return (
+    <Badge tone={RESELLER_STATUS_TONES[value]} dot>
+      {t(RESELLER_STATUS_LABELS[value])}
+    </Badge>
+  );
+}
+
+/** One or two letters for a reseller's avatar tile: the name's, else the Telegram id's. */
+function initialOf(reseller: ResellerSummaryResponse): string {
+  const name = reseller.displayName?.trim() ?? '';
+  return name === '' ? reseller.telegramUserId.slice(-2) : name.slice(0, 1);
 }
 
 /** A pricing mode and, when it carries one, its percentage. */
@@ -187,15 +205,24 @@ function Dash() {
 function ResellerCell({ reseller }: { reseller: ResellerSummaryResponse }) {
   const onLink = useLinkHandler();
   return (
-    <div>
-      <a href={`/users/${encodeURIComponent(reseller.customerId)}`} onClick={onLink}>
-        {reseller.displayName ?? <Ltr>{reseller.telegramUserId}</Ltr>}
-      </a>
-      {reseller.displayName !== null && (
-        <div className="muted small">
-          <Ltr>{reseller.telegramUserId}</Ltr>
-        </div>
-      )}
+    <div className="resellers-who">
+      <span className="avatar" aria-hidden="true">
+        {initialOf(reseller)}
+      </span>
+      <div>
+        <a
+          href={`/users/${encodeURIComponent(reseller.customerId)}`}
+          onClick={onLink}
+          className="strong"
+        >
+          {reseller.displayName ?? <Ltr>{reseller.telegramUserId}</Ltr>}
+        </a>
+        {reseller.displayName !== null && (
+          <div className="muted small">
+            <Ltr>{reseller.telegramUserId}</Ltr>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -328,7 +355,15 @@ export function ResellersPage({
       header: t('web.reseller_customer'),
       render: (row) => <ResellerCell reseller={row} />,
     },
-    { key: 'tier', header: t('web.reseller_tier'), render: (row) => row.tier.name },
+    {
+      key: 'tier',
+      header: t('web.reseller_tier'),
+      render: (row) => (
+        <Badge tone="violet" outline>
+          {row.tier.name}
+        </Badge>
+      ),
+    },
     {
       key: 'status',
       header: t('web.status'),
@@ -352,26 +387,33 @@ export function ResellersPage({
       align: 'end',
       // Nothing for a reader. The header stays, so two operators describe one table.
       render: (row) => (
-        <span className="nowrap">
-          <button type="button" className="btn sm" onClick={() => setViewing(row.customerId)}>
+        <RowActions>
+          <Button
+            size="sm"
+            variant="ghost"
+            icon="eye"
+            onClick={() => {
+              setViewing(row.customerId);
+              revealField('reseller-standing');
+            }}
+          >
             {t('web.reseller_standing_open')}
-          </button>
-          {!mayEdit ? null : (
-            <>
-              {' '}
-              <button
-                type="button"
-                className="btn sm"
-                onClick={() => {
-                  setEditing(row);
-                  setViewing(row.customerId);
-                }}
-              >
-                {t('web.rule_edit')}
-              </button>
-            </>
+          </Button>
+          {mayEdit && (
+            <Button
+              size="sm"
+              variant="ghost"
+              icon="edit"
+              onClick={() => {
+                setEditing(row);
+                setViewing(row.customerId);
+                revealField('reseller-standing');
+              }}
+            >
+              {t('web.rule_edit')}
+            </Button>
           )}
-        </span>
+        </RowActions>
       ),
     },
   ];
@@ -382,47 +424,62 @@ export function ResellersPage({
         title={t('web.resellers_title')}
         subtitle={t('web.resellers_intro')}
         maturity="now"
+        actions={
+          <>
+            <a className="btn" href="/reseller-tiers" onClick={onLink}>
+              <Icon name="layers" />
+              {t('web.nav_reseller_tiers')}
+            </a>
+            <a className="btn" href="/reseller-plans" onClick={onLink}>
+              <Icon name="target" />
+              {t('web.nav_reseller_plans')}
+            </a>
+            {mayEdit && !denied && (
+              <Button
+                variant="primary"
+                icon="userPlus"
+                onClick={() => {
+                  setEditing(null);
+                  revealField('reseller-register-customer');
+                }}
+              >
+                {t('web.cb_reseller_new')}
+              </Button>
+            )}
+          </>
+        }
       />
 
       <Card title={t('web.resellers_list_title')} hint={t('web.resellers_list_hint')}>
         {/* Hidden while the list cannot answer: a filter mints a request the server has
             just refused. */}
-        <div hidden={!mayRequest(resellers, denied)}>
+        <div className="cb-filters" hidden={!mayRequest(resellers, denied)}>
           <form className="toolbar" onSubmit={apply}>
-            <Field
-              label={t('web.resellers_search')}
-              hint={t('web.resellers_search_hint')}
-              htmlFor="resellers-search"
-            >
+            <div className="search cb-search">
+              <label className="visually-hidden" htmlFor="resellers-search">
+                {t('web.resellers_search')}
+              </label>
+              <Icon name="search" size={14} />
               <input
                 id="resellers-search"
+                className="input"
+                type="search"
                 value={draft.value}
                 maxLength={64}
+                placeholder={t('web.resellers_search_hint')}
                 onChange={(event) => setDraft({ applied, value: event.target.value })}
               />
-            </Field>
-            <button type="submit" className="btn sm">
+            </div>
+            <Button type="submit" size="sm" variant="primary">
               {t('web.referrals_filter_apply')}
-            </button>
+            </Button>
             {applied !== '' && (
-              <a href="/resellers" onClick={onLink}>
+              <a className="btn sm ghost" href="/resellers" onClick={onLink}>
                 {t('web.referrals_filter_clear')}
               </a>
             )}
-          </form>
-          <div className="toolbar">
-            <Pills
-              value={status}
-              onChange={setStatus}
-              items={[
-                { id: 'ALL' as const, label: t('web.reseller_status_all') },
-                ...RESELLER_STATUSES.map((one) => ({
-                  id: one,
-                  label: t(RESELLER_STATUS_LABELS[one]),
-                })),
-              ]}
-            />
-            <Field label={t('web.reseller_tier')} htmlFor="resellers-tier">
+            <span className="spacer" />
+            <Field label={t('web.reseller_tier')} htmlFor="resellers-tier" compact>
               <select
                 id="resellers-tier"
                 value={tierId}
@@ -436,7 +493,26 @@ export function ResellersPage({
                 ))}
               </select>
             </Field>
-          </div>
+          </form>
+          <FilterChips>
+            {(
+              [
+                { id: 'ALL', label: t('web.reseller_status_all') },
+                ...RESELLER_STATUSES.map((one) => ({
+                  id: one,
+                  label: t(RESELLER_STATUS_LABELS[one]),
+                })),
+              ] as { id: StatusFilter; label: string }[]
+            ).map((item) => (
+              <FilterChip
+                key={item.id}
+                pressed={status === item.id}
+                onClick={() => setStatus(item.id)}
+              >
+                {item.label}
+              </FilterChip>
+            ))}
+          </FilterChips>
         </div>
 
         <StateSwitch
@@ -460,6 +536,8 @@ export function ResellersPage({
             columns={columns}
             rows={rows}
             rowKey={(row) => row.customerId}
+            rowClassName={(row) => (row.customerId === viewing ? 'selected' : undefined)}
+            dense
           />
           {/* Default labels: `GET /resellers` pages newest to oldest. */}
           <CursorPager
@@ -472,62 +550,168 @@ export function ResellersPage({
         </StateSwitch>
       </Card>
 
-      {denied ? null : !mayEdit ? (
-        <Card title={t('web.reseller_register_title')}>
-          <Banner tone="info">{t('web.reseller_edit_denied')}</Banner>
-        </Card>
-      ) : editing !== null ? (
-        // KEYED BY THE CUSTOMER: every `useState` initialiser must read the reseller now
-        // open, not the one open before it.
-        <ResellerForm
-          key={`edit-${editing.customerId}`}
-          reseller={editing}
-          tiers={tierRows}
-          mayViewWallet={mayViewWallet}
-          onDone={() => setEditing(null)}
-        />
-      ) : (
-        // Keyed by the handed-over customer, so following a second "register" link
-        // re-reads it rather than keeping the first one's draft.
-        <ResellerForm
-          key={`register-${registering}`}
-          initialCustomerId={registering}
-          tiers={tierRows}
-          onDone={() => undefined}
-        />
-      )}
-
       {denied || viewing === null ? null : (
         // Keyed by the customer, so a second reseller's cards never show the first's pages.
-        <div key={`standing-${viewing}`}>
-          <ResellerCreditCard customerId={viewing} mayViewWallet={mayViewWallet} />
-          <ResellerPurchasesCard customerId={viewing} mayViewOrders={mayViewOrders} />
-          <ResellerHistoryCard customerId={viewing} mayViewAudit={mayViewAudit} />
-          {/* Round N: what this reseller may sell, inherited or their own, and the minimum. */}
-          <ResellerPolicyCard
+        <div
+          key={`standing-${viewing}`}
+          id="reseller-standing"
+          className="stack resellers-standing"
+          tabIndex={-1}
+        >
+          <StandingHead
             customerId={viewing}
-            mayEdit={mayEdit}
-            mayViewCatalog={mayViewCatalog}
-            mayViewPanels={mayViewPanels}
+            row={rows.find((row) => row.customerId === viewing)}
+            onClose={() => {
+              setViewing(null);
+              setEditing(null);
+            }}
+          />
+          <TwoColumn
+            main={
+              <>
+                {mayEdit && editing !== null && editing.customerId === viewing && (
+                  // KEYED BY THE CUSTOMER: every `useState` initialiser must read the
+                  // reseller now open, not the one open before it.
+                  <ResellerForm
+                    key={`edit-${editing.customerId}`}
+                    reseller={editing}
+                    tiers={tierRows}
+                    mayViewWallet={mayViewWallet}
+                    onDone={() => setEditing(null)}
+                  />
+                )}
+                {/* Round N: what this reseller may sell, inherited or their own, and the minimum. */}
+                <ResellerPolicyCard
+                  customerId={viewing}
+                  mayEdit={mayEdit}
+                  mayViewCatalog={mayViewCatalog}
+                  mayViewPanels={mayViewPanels}
+                />
+                <ResellerPurchasesCard customerId={viewing} mayViewOrders={mayViewOrders} />
+                <ResellerHistoryCard customerId={viewing} mayViewAudit={mayViewAudit} />
+              </>
+            }
+            side={<ResellerCreditCard customerId={viewing} mayViewWallet={mayViewWallet} />}
           />
         </div>
       )}
 
-      <Card title={t('web.resellers_scope_title')}>
-        <p className="muted">{t('web.resellers_rule_identity')}</p>
-        <p className="muted">{t('web.resellers_rule_credit')}</p>
-        <p className="muted">{t('web.resellers_rule_suspend')}</p>
-        <p>
-          <a href="/reseller-tiers" onClick={onLink}>
-            {t('web.resellers_tiers_link')}
-          </a>
-          {t('web.list_separator')}
-          <a href="/reseller-plans" onClick={onLink}>
-            {t('web.reseller_plans_title')}
-          </a>
-        </p>
-      </Card>
+      <div className="grid-2 resellers-foot">
+        {denied ? null : !mayEdit ? (
+          <Card title={t('web.reseller_register_title')}>
+            <Banner tone="info">{t('web.reseller_edit_denied')}</Banner>
+          </Card>
+        ) : editing !== null && editing.customerId !== viewing ? (
+          // An edit opened for a reseller whose standing is not shown (never, today):
+          // still the form, rather than nothing.
+          <ResellerForm
+            key={`edit-${editing.customerId}`}
+            reseller={editing}
+            tiers={tierRows}
+            mayViewWallet={mayViewWallet}
+            onDone={() => setEditing(null)}
+          />
+        ) : editing === null ? (
+          // Keyed by the handed-over customer, so following a second "register" link
+          // re-reads it rather than keeping the first one's draft.
+          <ResellerForm
+            key={`register-${registering}`}
+            initialCustomerId={registering}
+            tiers={tierRows}
+            onDone={() => undefined}
+          />
+        ) : null}
+
+        <Card title={t('web.resellers_scope_title')} tone="muted">
+          <ul className="cb-notes">
+            <li>{t('web.resellers_rule_identity')}</li>
+            <li>{t('web.resellers_rule_credit')}</li>
+            <li>{t('web.resellers_rule_suspend')}</li>
+          </ul>
+          <p>
+            <a href="/reseller-tiers" onClick={onLink}>
+              {t('web.resellers_tiers_link')}
+            </a>
+            {t('web.list_separator')}
+            <a href="/reseller-plans" onClick={onLink}>
+              {t('web.reseller_plans_title')}
+            </a>
+          </p>
+        </Card>
+      </div>
     </>
+  );
+}
+
+/**
+ * The head of an opened reseller's standing: who, their tier and status, their terms as
+ * a strip of figures, and the way back to the list. Read from the list row already held
+ * — no request of its own; when the row has paged away, the customer id stands in.
+ */
+function StandingHead({
+  customerId,
+  row,
+  onClose,
+}: {
+  customerId: string;
+  row: ResellerSummaryResponse | undefined;
+  onClose: () => void;
+}) {
+  return (
+    <DetailHead
+      title={
+        row === undefined ? (
+          <Ltr>{customerId}</Ltr>
+        ) : (
+          (row.displayName ?? <Ltr>{row.telegramUserId}</Ltr>)
+        )
+      }
+      {...(row === undefined
+        ? {}
+        : {
+            initial: initialOf(row),
+            badge: (
+              <span className="resellers-badges">
+                <Badge tone="violet">{row.tier.name}</Badge>
+                <ResellerStatusBadge value={row.status} />
+              </span>
+            ),
+            meta: (
+              <>
+                <Ltr>{row.telegramUserId}</Ltr>
+                <span>{t('web.cb_reseller_standing')}</span>
+              </>
+            ),
+            stats: [
+              {
+                label: t('web.reseller_pricing'),
+                value: (
+                  <PricingText
+                    label={OVERRIDE_LABELS[row.pricingMode]}
+                    percent={row.discountPercentage}
+                  />
+                ),
+              },
+              {
+                label: t('web.reseller_credit_limit_effective'),
+                value: <Money value={limitWire(row.effectiveCreditLimit)} />,
+              },
+              {
+                label: t('web.reseller_credit_limit'),
+                value: t(
+                  row.creditLimit === null
+                    ? 'web.reseller_credit_from_tier'
+                    : 'web.reseller_credit_own',
+                ),
+              },
+            ],
+          })}
+      actions={
+        <Button size="sm" variant="ghost" icon="x" onClick={onClose}>
+          {t('web.close')}
+        </Button>
+      }
+    />
   );
 }
 
@@ -693,6 +877,10 @@ function ResellerForm({
   );
   /** The operator has read the debt warning for the terms as they are NOW. */
   const [acknowledged, setAcknowledged] = useState(false);
+  const dirty =
+    JSON.stringify(state) !==
+    JSON.stringify(reseller === undefined ? blankState(initialCustomerId) : stateOf(reseller));
+  useUnsavedChanges(dirty);
   const set = <K extends keyof ResellerFormState>(key: K, value: ResellerFormState[K]) => {
     setAcknowledged(false);
     setState((current) => ({ ...current, [key]: value }));
@@ -878,18 +1066,13 @@ function ResellerForm({
         </Field>
       )}
 
-      <Field
+      <CheckField
+        id={`${prefix}-own-limit`}
         label={t('web.reseller_own_limit')}
         hint={t('web.reseller_own_limit_hint')}
-        htmlFor={`${prefix}-own-limit`}
-      >
-        <input
-          id={`${prefix}-own-limit`}
-          type="checkbox"
-          checked={state.ownLimit}
-          onChange={(event) => set('ownLimit', event.target.checked)}
-        />
-      </Field>
+        checked={state.ownLimit}
+        onChange={(next) => set('ownLimit', next)}
+      />
 
       {!state.ownLimit ? (
         <p className="muted small">
@@ -944,21 +1127,22 @@ function ResellerForm({
         </Banner>
       )}
 
-      <div className="toolbar">
-        <button
-          type="button"
-          className="btn primary sm"
+      <SaveBar dirty={dirty}>
+        {mode === 'update' && (
+          <Button size="sm" disabled={save.isPending} onClick={onDone}>
+            {t('web.rule_cancel_edit')}
+          </Button>
+        )}
+        <Button
+          variant="primary"
+          size="sm"
+          icon="check"
           disabled={problem !== null || (warning !== null && !acknowledged) || save.isPending}
           onClick={() => save.mutate()}
         >
           {mode === 'register' ? t('web.reseller_register') : t('web.rule_save')}
-        </button>
-        {mode === 'update' && (
-          <button type="button" className="btn sm" disabled={save.isPending} onClick={onDone}>
-            {t('web.rule_cancel_edit')}
-          </button>
-        )}
-      </div>
+        </Button>
+      </SaveBar>
       {save.error !== null && <Banner tone="danger">{messageFor(save.error)}</Banner>}
     </Card>
   );

@@ -2210,6 +2210,8 @@ export const WEB_FA = {
   'web.cb_bulk_run_yes': 'بله، اجرا شود',
   'web.cb_steering': 'کنترل اجرا',
   'web.cb_time': 'ساعت',
+  'web.cb_reseller_new': 'ثبت نماینده جدید',
+  'web.cb_reseller_standing': 'اعتبار، سیاست فروش، خریدها و تاریخچه',
   'web.cb_delete_yes': 'بله، حذف شود',
 
   'web.products_intro': 'سرویس‌هایی که مشتری می‌تواند بخرد، و آنهایی که هنوز نمی‌تواند.',
