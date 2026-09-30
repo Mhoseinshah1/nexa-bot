@@ -29,6 +29,11 @@ import {
   CALENDARS,
   CURRENCY_CODES,
   GATEWAY_PROVIDER_UNITS,
+  FX_BASE_ASSETS,
+  FX_SOURCES,
+  FX_USABLE_QUOTE_STATES,
+  GATEWAY_CONVERSION_POLICIES,
+  SALES_CURRENCY_CODES,
   DELIVERY_OUTCOMES,
   NOTIFICATION_KINDS,
   NOTIFICATION_STATUSES,
@@ -3887,6 +3892,35 @@ export const gatewayInvoices = pgTable(
      * tenant, and written once: one charge can settle one attempt, never two.
      */
     providerChargeId: text('provider_charge_id'),
+    /**
+     * How `sent_amount` was derived from the payable (package FX, `fx.ts`). The previous
+     * release's rows are backfilled by migration 0149: `FIXED_RATE` where a rate is
+     * snapshotted, `SAME_UNIT` otherwise. Frozen by the snapshot guard.
+     */
+    conversionPolicy: text('conversion_policy').notNull().default('SAME_UNIT'),
+    /*
+     * The central-rate snapshot of a `CENTRAL_FX` attempt: the quote as it was read
+     * (mantissa / 10^scale of the sales currency's minor units per base unit), where and
+     * when it came from, the state it was in, the policy version, the unit ratio the
+     * route was configured with, and the exact effective figure per provider unit as a
+     * reduced fraction. All null for any other policy; all set for `CENTRAL_FX`
+     * (`gateway_invoices_fx_snapshot_check`), and every one of them frozen by the
+     * snapshot guard: an issued invoice is never recomputed from a newer quote.
+     */
+    fxQuoteId: text('fx_quote_id'),
+    fxSource: text('fx_source'),
+    fxBaseAsset: text('fx_base_asset'),
+    fxQuoteCurrency: text('fx_quote_currency'),
+    fxRateMantissa: bigint('fx_rate_mantissa', { mode: 'bigint' }),
+    fxRateScale: integer('fx_rate_scale'),
+    fxSourceAt: timestamptz('fx_source_at'),
+    fxFetchedAt: timestamptz('fx_fetched_at'),
+    fxQuoteState: text('fx_quote_state'),
+    fxPolicyVersion: integer('fx_policy_version'),
+    fxUnitRatioMantissa: bigint('fx_unit_ratio_mantissa', { mode: 'bigint' }),
+    fxUnitRatioScale: integer('fx_unit_ratio_scale'),
+    fxEffectiveRateNumerator: bigint('fx_effective_rate_numerator', { mode: 'bigint' }),
+    fxEffectiveRateDenominator: bigint('fx_effective_rate_denominator', { mode: 'bigint' }),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
@@ -3896,6 +3930,48 @@ export const gatewayInvoices = pgTable(
       foreignColumns: [payments.tenantId, payments.id],
       name: 'gateway_invoices_payment_fk',
     }),
+    check(
+      'gateway_invoices_conversion_policy_check',
+      enumCheck('conversion_policy', GATEWAY_CONVERSION_POLICIES),
+    ),
+    check('gateway_invoices_fx_source_check', nullableEnumCheck('fx_source', FX_SOURCES)),
+    check(
+      'gateway_invoices_fx_base_asset_check',
+      nullableEnumCheck('fx_base_asset', FX_BASE_ASSETS),
+    ),
+    check(
+      'gateway_invoices_fx_quote_currency_check',
+      nullableEnumCheck('fx_quote_currency', SALES_CURRENCY_CODES),
+    ),
+    check(
+      'gateway_invoices_fx_quote_state_check',
+      nullableEnumCheck('fx_quote_state', FX_USABLE_QUOTE_STATES),
+    ),
+    /** A fixed-rate attempt carries its rate and nothing of the feed; a central-rate one the whole snapshot. */
+    check(
+      'gateway_invoices_fx_snapshot_check',
+      sql`(conversion_policy = 'FIXED_RATE') = (conversion_rate_minor IS NOT NULL)
+          AND (conversion_policy = 'CENTRAL_FX') = (fx_quote_id IS NOT NULL)
+          AND (fx_quote_id IS NULL) = (fx_source IS NULL)
+          AND (fx_quote_id IS NULL) = (fx_base_asset IS NULL)
+          AND (fx_quote_id IS NULL) = (fx_quote_currency IS NULL)
+          AND (fx_quote_id IS NULL) = (fx_rate_mantissa IS NULL)
+          AND (fx_quote_id IS NULL) = (fx_rate_scale IS NULL)
+          AND (fx_quote_id IS NULL) = (fx_fetched_at IS NULL)
+          AND (fx_quote_id IS NULL) = (fx_quote_state IS NULL)
+          AND (fx_quote_id IS NULL) = (fx_policy_version IS NULL)
+          AND (fx_quote_id IS NULL) = (fx_unit_ratio_mantissa IS NULL)
+          AND (fx_quote_id IS NULL) = (fx_unit_ratio_scale IS NULL)
+          AND (fx_quote_id IS NULL) = (fx_effective_rate_numerator IS NULL)
+          AND (fx_quote_id IS NULL) = (fx_effective_rate_denominator IS NULL)
+          AND (fx_rate_mantissa IS NULL OR fx_rate_mantissa > 0)
+          AND (fx_rate_scale IS NULL OR fx_rate_scale BETWEEN 0 AND 8)
+          AND (fx_unit_ratio_mantissa IS NULL OR fx_unit_ratio_mantissa > 0)
+          AND (fx_unit_ratio_scale IS NULL OR fx_unit_ratio_scale BETWEEN 0 AND 4)
+          AND (fx_effective_rate_numerator IS NULL OR fx_effective_rate_numerator > 0)
+          AND (fx_effective_rate_denominator IS NULL OR fx_effective_rate_denominator > 0)
+          AND (fx_quote_id IS NULL OR length(fx_quote_id) BETWEEN 1 AND 96)`,
+    ),
     uniqueIndex('gateway_invoices_charge_id_key')
       .on(table.tenantId, table.provider, table.providerChargeId)
       .where(sql`provider_charge_id IS NOT NULL`),
@@ -3932,10 +4008,13 @@ export const gatewayInvoices = pgTable(
       'gateway_invoices_charge_id_length_check',
       sql`provider_charge_id IS NULL OR length(provider_charge_id) BETWEEN 1 AND 255`,
     ),
-    /** A Stars attempt names its bot and its rate; the invoice cannot be sent or checked without both. */
+    /**
+     * A Stars attempt names its bot and is priced by a rate — the operator's fixed one or
+     * the central one (package FX); the invoice cannot be sent or checked without both.
+     */
     check(
       'gateway_invoices_stars_snapshot_check',
-      sql`provider <> 'TELEGRAM_STARS' OR (bot_instance_id IS NOT NULL AND conversion_rate_minor IS NOT NULL AND provider_unit = 'XTR')`,
+      sql`provider <> 'TELEGRAM_STARS' OR (bot_instance_id IS NOT NULL AND conversion_policy IN ('FIXED_RATE', 'CENTRAL_FX') AND provider_unit = 'XTR')`,
     ),
     check('gateway_invoices_sent_amount_check', sql`sent_amount > 0`),
     check(
@@ -4343,6 +4422,106 @@ export const paymentGatewayCallBudgets = pgTable(
       enumCheck('provider', PAYMENT_GATEWAY_PROVIDERS),
     ),
     check('payment_gateway_call_budgets_used_check', sql`used >= 0`),
+  ],
+);
+
+/**
+ * The central exchange rate's last-known-good quote, per tenant and pair (package FX,
+ * `docs/fx-audit.md` §3).
+ *
+ * ## Why a row and not a Redis key
+ *
+ * The quote prices invoices, so it is financial state: the rule `redis.ts` states is
+ * that Redis is never the source of truth for anything financial or auditable, and the
+ * "platform cache pattern" this installation actually has for a durable, per-tenant,
+ * replica-shared value is a Postgres row with conditional writes — the gateway call
+ * budget above and the panel probe claim. So the quote lives here, the refresh claim
+ * is a conditional UPDATE on this row (two worker replicas is the normal case on every
+ * rolling update), and a newer quote replaces an older one and never the reverse.
+ *
+ * Latest state only. History is on the invoices: every attempt priced by a quote
+ * snapshots it, which is the record an operator explains a figure from.
+ *
+ * The quote columns are null as a group before the first successful fetch; the row
+ * exists from the first refresh attempt so the claim has something to lock.
+ */
+export const fxQuotes = pgTable(
+  'fx_quotes',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    baseAsset: text('base_asset').notNull(),
+    quoteCurrency: text('quote_currency').notNull(),
+    /** Quote-currency minor units per ONE base unit: `mantissa / 10^scale`. */
+    rateMantissa: bigint('rate_mantissa', { mode: 'bigint' }),
+    rateScale: integer('rate_scale'),
+    source: text('source'),
+    /** The provider's own timestamp for the figure, when it supplies one. */
+    sourceAt: timestamptz('source_at'),
+    fetchedAt: timestamptz('fetched_at'),
+    quoteId: text('quote_id'),
+    policyVersion: integer('policy_version'),
+    /** The refresh in flight, if any: a replica that claimed the row and the lease it holds. */
+    refreshClaimedUntil: timestamptz('refresh_claimed_until'),
+    /** The last refresh ATTEMPT, whatever it produced, and the machine code of its failure. */
+    lastAttemptAt: timestamptz('last_attempt_at'),
+    lastErrorCode: text('last_error_code'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({
+      name: 'fx_quotes_pk',
+      columns: [table.tenantId, table.baseAsset, table.quoteCurrency],
+    }),
+    check('fx_quotes_base_asset_check', enumCheck('base_asset', FX_BASE_ASSETS)),
+    check('fx_quotes_quote_currency_check', enumCheck('quote_currency', SALES_CURRENCY_CODES)),
+    check('fx_quotes_source_check', nullableEnumCheck('source', FX_SOURCES)),
+    /** The quote is present whole or absent whole, and a present rate is positive. */
+    check(
+      'fx_quotes_quote_check',
+      sql`(quote_id IS NULL) = (rate_mantissa IS NULL)
+          AND (quote_id IS NULL) = (rate_scale IS NULL)
+          AND (quote_id IS NULL) = (source IS NULL)
+          AND (quote_id IS NULL) = (fetched_at IS NULL)
+          AND (quote_id IS NULL) = (policy_version IS NULL)
+          AND (rate_mantissa IS NULL OR rate_mantissa > 0)
+          AND (rate_scale IS NULL OR rate_scale BETWEEN 0 AND 8)
+          AND (quote_id IS NULL OR length(quote_id) BETWEEN 1 AND 96)
+          AND (last_error_code IS NULL OR length(last_error_code) BETWEEN 1 AND 64)`,
+    ),
+  ],
+);
+
+/**
+ * What each FX source last did for a tenant (package FX): for the operator's
+ * diagnostics, and for the one decision shared across replicas — a source that
+ * answered "rate limited" is not asked again before `retry_after`, whichever replica
+ * asks. Latest state only; the events that describe outages are in the operational log.
+ */
+export const fxSourceStates = pgTable(
+  'fx_source_states',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    source: text('source').notNull(),
+    lastSuccessAt: timestamptz('last_success_at'),
+    lastFailureAt: timestamptz('last_failure_at'),
+    lastFailureCode: text('last_failure_code'),
+    retryAfter: timestamptz('retry_after'),
+    consecutiveFailures: integer('consecutive_failures').notNull().default(0),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({ name: 'fx_source_states_pk', columns: [table.tenantId, table.source] }),
+    check('fx_source_states_source_check', enumCheck('source', FX_SOURCES)),
+    check('fx_source_states_failures_check', sql`consecutive_failures >= 0`),
+    check(
+      'fx_source_states_failure_code_check',
+      sql`last_failure_code IS NULL OR length(last_failure_code) BETWEEN 1 AND 64`,
+    ),
   ],
 );
 
