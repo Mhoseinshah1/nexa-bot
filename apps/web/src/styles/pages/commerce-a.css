@@ -34,3 +34,277 @@
   /* The image is untrusted content from a customer; nothing about it is a control. */
   pointer-events: none;
 }
+
+/* --- Lists ------------------------------------------------------------------ */
+
+/* One filter axis inside the shared chip row; axes are split by `ChipDivider`. */
+.ca-chips {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+/*
+ * The exact-match search of a list, drawn as the reference's toolbar: the
+ * labelled boxes on one line, the two actions at the end. The hints stay
+ * visible under each box, because each says what "exact" means for it.
+ */
+.ca-search > .field {
+  flex: 1 1 200px;
+  max-width: 300px;
+}
+.ca-search-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-inline-start: auto;
+  align-self: flex-start;
+  padding-top: 20px;
+}
+
+/* --- Detail heads ------------------------------------------------------------ */
+
+/* One labelled fact on a detail head's meta line: «شناسهٔ تلگرام 5551234567». */
+.ca-meta {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  color: var(--fg-2);
+}
+
+/* A sub-section heading inside a card (the wallet's ledger, its adjust form). */
+.ca-subhead {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--fg-2);
+}
+
+/* --- Money ------------------------------------------------------------------- */
+
+.ca-amount {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.ca-amount.credit {
+  color: var(--ok);
+}
+.ca-amount.debit,
+.ca-amount.negative {
+  color: var(--danger);
+}
+.ca-balance .ca-amount {
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+/* A form inside a card that is disabled as a whole until what it needs has loaded. */
+.ca-fieldset {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+}
+
+/* A technical identity as a page title (a username, a reference), with its copy button. */
+.ca-title-id {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+/* Two or three status badges beside a title: never merged into one state. */
+.ca-badges {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+/* The standing rules a list obeys, as a quiet list under it. */
+.ca-notes {
+  margin: 0;
+  padding-inline-start: 18px;
+  display: grid;
+  gap: 6px;
+  color: var(--fg-2);
+  font-size: var(--fs-sm);
+}
+
+/* Why each unavailable action is unavailable: action name, then the sentence. */
+.ca-blockers dd {
+  color: var(--fg-2);
+  font-size: var(--fs-sm);
+}
+
+/* The secondary lines of a summary card: «سقف ۵۰ گیگابایت», «آخرین خواندن …». */
+.ca-stat-line {
+  display: inline-flex;
+  gap: 6px;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+.ca-stat-line.faint {
+  font-size: var(--fs-xs);
+}
+/* A sentence where the figure would be, when the absence IS the answer. */
+.ca-stat-sentence {
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  color: var(--fg-2);
+}
+
+/* The typed confirmation phrase, shown as the thing to copy. */
+.ca-phrase {
+  font-weight: 600;
+  color: var(--danger);
+}
+.ca-terminate {
+  display: grid;
+  gap: 10px;
+  max-width: 420px;
+}
+
+/* A refund request's decision: approve (destructive) beside reject. */
+.ca-decision {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+}
+.ca-decision > .banner {
+  grid-column: 1 / -1;
+}
+.ca-decision-part {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  background: var(--bg-1);
+}
+.ca-decision-approve {
+  border-color: color-mix(in srgb, var(--danger) 40%, var(--line));
+}
+
+/* A detail page's summary strip: four figures across, two on a narrow screen. */
+.ca-stats {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+@media (max-width: 1100px) {
+  .ca-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 520px) {
+  .ca-stats {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* A detail page's subtitle: a few facts, separated by a dot drawn here, not typed. */
+.ca-subline {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px 0;
+  align-items: baseline;
+}
+.ca-subline > * + *::before {
+  content: '·';
+  margin-inline: 8px;
+  color: var(--fg-3);
+}
+
+/* An order's three figures, as the foot of the order's items. */
+.ca-totals {
+  margin: 0;
+  display: grid;
+  gap: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ctl);
+  overflow: hidden;
+}
+.ca-totals > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.ca-totals > div:last-child {
+  border-bottom: none;
+}
+.ca-totals dt {
+  color: var(--fg-3);
+  font-size: var(--fs-sm);
+}
+.ca-totals dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+.ca-totals > .total {
+  background: var(--bg-1);
+  font-weight: 600;
+}
+.ca-totals > .total dt {
+  color: var(--fg);
+}
+
+/* A short list of linked records, one per line: reference, state, amount. */
+.ca-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+}
+.ca-rows > li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+  flex-wrap: wrap;
+}
+.ca-rows > li:last-child {
+  border-bottom: none;
+}
+.ca-rows > li > :last-child {
+  margin-inline-start: auto;
+}
+
+/* A list's standing sentence under its filters, inset like the rows beneath it. */
+.ca-list-note {
+  padding-inline: 0;
+}
+
+/* A control with its helper button on the same line (an amount and «all of it»). */
+.ca-inline-control {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.ca-inline-control > .input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Technical provider detail, collapsed until asked for. */
+.ca-tech > summary {
+  cursor: pointer;
+  color: var(--accent);
+  font-size: var(--fs-sm);
+  width: max-content;
+}
+.ca-tech[open] > summary {
+  margin-bottom: 10px;
+}
+
+/* One event of a payment's history: its dot and its name. */
+.ca-event {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+}

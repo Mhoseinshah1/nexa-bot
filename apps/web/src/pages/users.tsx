@@ -51,22 +51,28 @@ import {
 } from './services';
 import { PartyCell, TriggerBadge } from './referrals';
 import { CreditLimitCell, OVERRIDE_LABELS, PricingText, ResellerStatusBadge } from './resellers';
+import { ChipGroup } from './commerce-parts';
 import {
   Badge,
   Banner,
+  Button,
   Card,
   Copyable,
   CursorPager,
   DataTable,
+  DetailHead,
   Empty,
   Field,
+  Input,
   KV,
   Ltr,
+  Modal,
   Money,
   Num,
   PageHead,
-  Pills,
   StateSwitch,
+  TwoColumn,
+  useUnsavedChanges,
   useToast,
   type Column,
   type Tone,
@@ -109,7 +115,11 @@ const STATUS_TONES: Readonly<Record<CustomerStatus, Tone>> = {
 };
 
 function StatusBadge({ status }: { status: CustomerStatus }) {
-  return <Badge tone={STATUS_TONES[status]}>{t(STATUS_LABELS[status])}</Badge>;
+  return (
+    <Badge tone={STATUS_TONES[status]} dot>
+      {t(STATUS_LABELS[status])}
+    </Badge>
+  );
 }
 
 /** The display name, from the two parts Telegram gives, or nothing at all. */
@@ -123,6 +133,11 @@ function displayName(row: CustomerSummaryResponse): string | null {
 
 function Dash() {
   return <span className="faint">—</span>;
+}
+
+/** The first letter of a display name, for the avatar tile beside it. Decorative. */
+function initialOf(name: string): string {
+  return Array.from(name.trim())[0] ?? '';
 }
 
 // ---------------------------------------------------------------------------
@@ -317,7 +332,16 @@ export function UsersPage({
       header: t('web.user_name'),
       render: (row) => {
         const name = displayName(row);
-        return name === null ? <Dash /> : <span>{name}</span>;
+        return name === null ? (
+          <Dash />
+        ) : (
+          <span className="who">
+            <span className="avatar" aria-hidden="true">
+              {initialOf(name)}
+            </span>
+            <span>{name}</span>
+          </span>
+        );
       },
     },
     {
@@ -337,91 +361,96 @@ export function UsersPage({
     },
   ];
 
+  /*
+   * The toolbar is hidden while the list cannot answer — the rule the panels
+   * toolbar and the alerts toolbar follow: a control that mints a new query key
+   * is a fresh request against a question the server has just refused. Each
+   * row carries the attribute itself, rather than one wrapper around both, so
+   * the card can draw them flush with its edges as the reference's lists are.
+   */
+  const toolbarHidden = !mayRequest(customers, denied);
+
   return (
     <>
       <PageHead title={t('web.users_title')} subtitle={t('web.users_intro')} maturity="now" />
 
-      <Card>
-        {/*
-          The toolbar is hidden while the card below cannot answer — the rule the
-          panels toolbar and the alerts toolbar follow: a control that mints a
-          new query key is a fresh request against a question the server has
-          just refused.
-        */}
-        <div hidden={!mayRequest(customers, denied)}>
-          {maySearch ? (
-            <form className="toolbar" onSubmit={apply}>
-              <Field
-                label={t('web.users_search_telegram')}
-                hint={t('web.users_search_telegram_hint')}
-                htmlFor="users-telegram-id"
-                {...(telegramIdProblem === undefined ? {} : { error: telegramIdProblem })}
-              >
-                <input
-                  id="users-telegram-id"
-                  dir="ltr"
-                  inputMode="numeric"
-                  value={draftTelegramId}
-                  onChange={(event) => setDraftTelegramId(event.target.value.trim())}
-                />
-              </Field>
-              <Field
-                label={t('web.users_search_username')}
-                hint={t('web.users_search_username_hint')}
-                htmlFor="users-username"
-              >
-                <input
-                  id="users-username"
-                  dir="ltr"
-                  value={draftUsername}
-                  onChange={(event) => setDraftUsername(event.target.value.trim())}
-                />
-              </Field>
-              <button
+      <Card className="ca-list">
+        {maySearch ? (
+          <form className="toolbar ca-search" onSubmit={apply} hidden={toolbarHidden}>
+            <Field
+              compact
+              label={t('web.users_search_telegram')}
+              hint={t('web.users_search_telegram_hint')}
+              htmlFor="users-telegram-id"
+              {...(telegramIdProblem === undefined ? {} : { error: telegramIdProblem })}
+            >
+              <Input
+                id="users-telegram-id"
+                size="sm"
+                dir="ltr"
+                inputMode="numeric"
+                aria-invalid={telegramIdProblem !== undefined}
+                value={draftTelegramId}
+                onChange={(event) => setDraftTelegramId(event.target.value.trim())}
+              />
+            </Field>
+            <Field
+              compact
+              label={t('web.users_search_username')}
+              hint={t('web.users_search_username_hint')}
+              htmlFor="users-username"
+            >
+              <Input
+                id="users-username"
+                size="sm"
+                dir="ltr"
+                value={draftUsername}
+                onChange={(event) => setDraftUsername(event.target.value.trim())}
+              />
+            </Field>
+            <div className="ca-search-actions">
+              <Button
                 type="submit"
-                className="btn primary sm"
+                variant="primary"
+                size="sm"
+                icon="search"
                 disabled={telegramIdProblem !== undefined}
               >
                 {t('web.users_search_apply')}
-              </button>
-              <button type="button" className="btn sm" onClick={clear} disabled={!clearable}>
+              </Button>
+              <Button variant="ghost" size="sm" onClick={clear} disabled={!clearable}>
                 {t('web.users_search_clear')}
-              </button>
-            </form>
-          ) : (
-            /*
-              No search form for an actor without `users.search`, and a sentence
-              rather than a disabled box.
-
-              The server refuses the search and serves the list, so this is not
-              the UI inventing a boundary: it states the one that exists, and
-              names the permission. A disabled input would say "this exists and
-              you lack permission" without saying which permission, which is the
-              half an operator needs in order to ask for it.
-            */
+              </Button>
+            </div>
+          </form>
+        ) : (
+          /*
+            No search form for an actor without `users.search`, and a sentence
+            rather than a disabled box. The server refuses the search and serves
+            the list, so this states the boundary that exists and names the
+            permission — the half an operator needs in order to ask for it.
+          */
+          <div className="toolbar" hidden={toolbarHidden}>
             <Banner tone="info">{t('web.users_search_denied')}</Banner>
-          )}
-
-          {/*
-            The status filter is NOT gated on `users.search`.
-
-            The server charges `users.search` for a Telegram-id or username
-            lookup and not for a status filter — narrowing a tenant's own list to
-            the blocked half is the same question the unfiltered list answers.
-            Gating it here would hide a capability the server permits, which is
-            the defect the navigation's own permission rule was written for.
-          */}
-          <div className="toolbar">
-            <Pills
-              value={appliedStatus ?? 'ALL'}
-              onChange={(next) => setQuery(route, 'status', next === 'ALL' ? null : next)}
-              items={[
-                { id: 'ALL' as const, label: t('web.users_filter_all') },
-                { id: 'ACTIVE' as const, label: t('web.user_status_active') },
-                { id: 'BLOCKED' as const, label: t('web.user_status_blocked') },
-              ]}
-            />
           </div>
+        )}
+
+        {/*
+          The status filter is NOT gated on `users.search`: the server charges
+          that permission for an id or username lookup, not for narrowing the
+          tenant's own list to its blocked half.
+        */}
+        <div className="filter-row" hidden={toolbarHidden}>
+          <ChipGroup
+            label={t('web.status')}
+            value={appliedStatus ?? 'ALL'}
+            onChange={(next) => setQuery(route, 'status', next === 'ALL' ? null : next)}
+            items={[
+              { id: 'ALL' as const, label: t('web.users_filter_all') },
+              { id: 'ACTIVE' as const, label: t('web.user_status_active') },
+              { id: 'BLOCKED' as const, label: t('web.user_status_blocked') },
+            ]}
+          />
         </div>
 
         <StateSwitch
@@ -445,6 +474,8 @@ export function UsersPage({
             columns={columns}
             rows={rows}
             rowKey={(row) => row.id}
+            dense
+            sticky
           />
         </StateSwitch>
 
@@ -467,8 +498,8 @@ export function UsersPage({
         )}
       </Card>
 
-      <Card title={t('web.users_scope_title')}>
-        <p className="muted">{t('web.users_scope_body')}</p>
+      <Card tone="muted" title={t('web.users_scope_title')}>
+        <p className="muted small">{t('web.users_scope_body')}</p>
       </Card>
     </>
   );
@@ -585,224 +616,304 @@ export function UserDetailPage({
     onError: (error) => submission.settleOn(error),
   });
 
+  const cancelStep = () => {
+    if (mutate.isPending) return;
+    setPending(null);
+    setReason('');
+    mutate.reset();
+  };
+
   return (
     <>
-      <PageHead
-        title={t('web.user_detail')}
-        {...(row === undefined ? {} : { subtitle: row.telegramUserId })}
-        maturity="now"
-      />
-
       <StateSwitch query={customer} denied={denied}>
         {row === undefined ? null : (
           <>
+            <UserHead
+              row={row}
+              mayViewWallet={mayViewWallet}
+              actions={
+                mayBlock ? (
+                  row.status === 'ACTIVE' ? (
+                    <Button
+                      variant="danger"
+                      size="sm"
+                      icon="lock"
+                      disabled={mutate.isPending}
+                      onClick={() => setPending('BLOCK')}
+                    >
+                      {t('web.user_block')}
+                    </Button>
+                  ) : (
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      icon="check"
+                      disabled={mutate.isPending}
+                      onClick={() => setPending('UNBLOCK')}
+                    >
+                      {t('web.user_unblock')}
+                    </Button>
+                  )
+                ) : undefined
+              }
+            />
+
             {row.status === 'BLOCKED' && (
               <Banner tone="danger" title={t('web.user_blocked_banner_title')}>
                 {t('web.user_blocked_banner_body')}
               </Banner>
             )}
 
-            <Card title={t('web.user_identity_title')}>
-              <KV
-                items={[
-                  [t('web.user_telegram_id'), <Copyable key="tg" value={row.telegramUserId} />],
-                  [
-                    t('web.user_username'),
-                    row.username === null ? (
-                      <Dash key="u" />
-                    ) : (
-                      <Ltr key="u" mono={false}>{`@${row.username}`}</Ltr>
-                    ),
-                  ],
-                  [t('web.user_name'), displayName(row) ?? <Dash key="n" />],
-                  [
-                    t('web.user_language'),
-                    row.languageCode === null ? (
-                      <Dash key="l" />
-                    ) : (
-                      <Ltr key="l" mono={false}>
-                        {row.languageCode}
-                      </Ltr>
-                    ),
-                  ],
-                  [t('web.user_first_seen'), formatTimestamp(row.firstSeenAt)],
-                  [t('web.user_last_seen'), formatTimestamp(row.lastSeenAt)],
-                ]}
-              />
-            </Card>
-
-            <Card title={t('web.user_access_title')}>
-              <KV
-                items={[
-                  [t('web.status'), <StatusBadge key="s" status={row.status} />],
-                  [
-                    t('web.user_blocked_at'),
-                    row.blockedAt === null ? <Dash key="b" /> : formatTimestamp(row.blockedAt),
-                  ],
-                  [
-                    t('web.user_blocked_reason'),
-                    row.blockedReason === null ? <Dash key="r" /> : row.blockedReason,
-                  ],
-                  ...(row.status === 'BLOCKED' && row.blockedReason !== null
-                    ? ([
-                        [
-                          t('web.user_blocked_reason_shown'),
-                          row.blockedReasonShown
-                            ? t('web.user_blocked_reason_shown_yes')
-                            : t('web.user_blocked_reason_shown_no'),
-                        ],
-                      ] as [ReactNode, ReactNode][])
-                    : []),
-                  // Round N close (§D): the customer's own promotional opt-out, read-only here.
-                  [
-                    t('web.user_marketing'),
-                    row.marketingOptOutAt === null
-                      ? t('web.user_marketing_in')
-                      : t('web.user_marketing_out'),
-                  ],
-                  ...(row.marketingOptOutAt === null
-                    ? []
-                    : ([
-                        [t('web.user_marketing_since'), formatTimestamp(row.marketingOptOutAt)],
-                      ] as [ReactNode, ReactNode][])),
-                ]}
-              />
-              <p className="muted small">{t('web.user_marketing_hint')}</p>
-
-              {mayBlock ? (
+            {/*
+              Step two of a block or an unblock, never one click (WP10G, closing
+              OQ-WP10F-03): the confirmation — with the MANDATORY reason for a
+              block — and only its confirm button sends anything. The server
+              holds the rule (a block without a reason is a 400); the disabled
+              button is the courtesy.
+            */}
+            <Modal
+              open={mayBlock && pending !== null}
+              onClose={cancelStep}
+              danger={pending === 'BLOCK'}
+              title={
+                pending === 'BLOCK'
+                  ? t('web.user_block_confirm_title')
+                  : t('web.user_unblock_confirm_title')
+              }
+              foot={
+                pending === 'BLOCK' ? (
+                  <>
+                    <Button
+                      variant="danger-solid"
+                      size="sm"
+                      disabled={mutate.isPending || trimmedReason === '' || reasonTooLong}
+                      onClick={() => mutate.mutate({ to: 'BLOCKED', reason: trimmedReason })}
+                    >
+                      {t('web.user_block_confirm')}
+                    </Button>
+                    <Button size="sm" disabled={mutate.isPending} onClick={cancelStep}>
+                      {t('web.user_action_cancel')}
+                    </Button>
+                  </>
+                ) : (
+                  <>
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      disabled={mutate.isPending}
+                      onClick={() => mutate.mutate({ to: 'ACTIVE', reason: '' })}
+                    >
+                      {t('web.user_unblock_confirm')}
+                    </Button>
+                    <Button size="sm" disabled={mutate.isPending} onClick={cancelStep}>
+                      {t('web.user_action_cancel')}
+                    </Button>
+                  </>
+                )
+              }
+            >
+              {pending === 'BLOCK' ? (
                 <>
-                  {pending === null && (
-                    <div className="toolbar">
-                      {row.status === 'ACTIVE' ? (
-                        <button
-                          type="button"
-                          className="btn danger sm"
-                          disabled={mutate.isPending}
-                          onClick={() => setPending('BLOCK')}
-                        >
-                          {t('web.user_block')}
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          className="btn primary sm"
-                          disabled={mutate.isPending}
-                          onClick={() => setPending('UNBLOCK')}
-                        >
-                          {t('web.user_unblock')}
-                        </button>
-                      )}
-                    </div>
-                  )}
-                  {pending === 'BLOCK' && (
-                    <>
-                      <Banner tone="warn" title={t('web.user_block_confirm_title')}>
-                        {t('web.user_block_confirm_body')}
-                      </Banner>
-                      <Field
-                        label={t('web.user_block_reason_label')}
-                        hint={t('web.user_block_reason_hint')}
-                        htmlFor="user-block-reason"
-                        {...(reason !== '' && trimmedReason === ''
-                          ? { error: t('web.user_block_reason_required') }
-                          : reasonTooLong
-                            ? { error: t('web.user_block_reason_too_long') }
-                            : {})}
-                      >
-                        <input
-                          id="user-block-reason"
-                          value={reason}
-                          onChange={(event) => setReason(event.target.value)}
-                        />
-                      </Field>
-                      <div className="toolbar">
-                        <button
-                          type="button"
-                          className="btn danger sm"
-                          disabled={mutate.isPending || trimmedReason === '' || reasonTooLong}
-                          onClick={() => mutate.mutate({ to: 'BLOCKED', reason: trimmedReason })}
-                        >
-                          {t('web.user_block_confirm')}
-                        </button>
-                        <button
-                          type="button"
-                          className="btn sm"
-                          disabled={mutate.isPending}
-                          onClick={() => {
-                            setPending(null);
-                            setReason('');
-                          }}
-                        >
-                          {t('web.user_action_cancel')}
-                        </button>
-                      </div>
-                    </>
-                  )}
-                  {pending === 'UNBLOCK' && (
-                    <>
-                      <Banner tone="warn" title={t('web.user_unblock_confirm_title')}>
-                        {t('web.user_unblock_confirm_body')}
-                      </Banner>
-                      <div className="toolbar">
-                        <button
-                          type="button"
-                          className="btn primary sm"
-                          disabled={mutate.isPending}
-                          onClick={() => mutate.mutate({ to: 'ACTIVE', reason: '' })}
-                        >
-                          {t('web.user_unblock_confirm')}
-                        </button>
-                        <button
-                          type="button"
-                          className="btn sm"
-                          disabled={mutate.isPending}
-                          onClick={() => setPending(null)}
-                        >
-                          {t('web.user_action_cancel')}
-                        </button>
-                      </div>
-                    </>
-                  )}
-                  {mutate.error !== null && (
-                    <Banner tone="danger">{messageFor(mutate.error)}</Banner>
-                  )}
+                  <Banner tone="warn">{t('web.user_block_confirm_body')}</Banner>
+                  <Field
+                    label={t('web.user_block_reason_label')}
+                    hint={t('web.user_block_reason_hint')}
+                    htmlFor="user-block-reason"
+                    {...(reason !== '' && trimmedReason === ''
+                      ? { error: t('web.user_block_reason_required') }
+                      : reasonTooLong
+                        ? { error: t('web.user_block_reason_too_long') }
+                        : {})}
+                  >
+                    <Input
+                      id="user-block-reason"
+                      value={reason}
+                      aria-invalid={(reason !== '' && trimmedReason === '') || reasonTooLong}
+                      onChange={(event) => setReason(event.target.value)}
+                    />
+                  </Field>
                 </>
               ) : (
-                // No disabled button. A disabled control and this sentence make
-                // the same claim, and only one of them names the permission.
-                <Banner tone="info">{t('web.user_block_denied')}</Banner>
+                <Banner tone="warn">{t('web.user_unblock_confirm_body')}</Banner>
               )}
-            </Card>
+              {mutate.error !== null && <Banner tone="danger">{messageFor(mutate.error)}</Banner>}
+            </Modal>
 
-            <TrialCard customerId={id} mayEdit={mayEditTrial} />
+            <TwoColumn
+              main={
+                <>
+                  <CustomerServicesCard customerId={id} mayView={mayViewServices} />
+                  <CustomerOrdersCard customerId={id} mayView={mayViewOrders} />
+                  <WalletCard
+                    customerId={id}
+                    mayView={mayViewWallet}
+                    mayCredit={mayCredit}
+                    mayDebit={mayDebit}
+                  />
+                </>
+              }
+              side={
+                <>
+                  <Card title={t('web.user_access_title')}>
+                    <KV
+                      items={[
+                        [t('web.status'), <StatusBadge key="s" status={row.status} />],
+                        [
+                          t('web.user_blocked_at'),
+                          row.blockedAt === null ? (
+                            <Dash key="b" />
+                          ) : (
+                            formatTimestamp(row.blockedAt)
+                          ),
+                        ],
+                        [
+                          t('web.user_blocked_reason'),
+                          row.blockedReason === null ? <Dash key="r" /> : row.blockedReason,
+                        ],
+                        ...(row.status === 'BLOCKED' && row.blockedReason !== null
+                          ? ([
+                              [
+                                t('web.user_blocked_reason_shown'),
+                                row.blockedReasonShown
+                                  ? t('web.user_blocked_reason_shown_yes')
+                                  : t('web.user_blocked_reason_shown_no'),
+                              ],
+                            ] as [ReactNode, ReactNode][])
+                          : []),
+                        // Round N close (§D): the customer's own promotional opt-out, read-only.
+                        [
+                          t('web.user_marketing'),
+                          row.marketingOptOutAt === null
+                            ? t('web.user_marketing_in')
+                            : t('web.user_marketing_out'),
+                        ],
+                        ...(row.marketingOptOutAt === null
+                          ? []
+                          : ([
+                              [
+                                t('web.user_marketing_since'),
+                                formatTimestamp(row.marketingOptOutAt),
+                              ],
+                            ] as [ReactNode, ReactNode][])),
+                      ]}
+                    />
+                    <p className="muted small">{t('web.user_marketing_hint')}</p>
+                    {/* No disabled button. A disabled control and this sentence make
+                        the same claim, and only one of them names the permission. */}
+                    {!mayBlock && <Banner tone="info">{t('web.user_block_denied')}</Banner>}
+                  </Card>
 
-            <ResellerCard
-              customerId={id}
-              telegramUserId={row.telegramUserId}
-              mayView={mayViewReseller}
-              mayEdit={mayEditReseller}
+                  <TrialCard customerId={id} mayEdit={mayEditTrial} />
+
+                  <ResellerCard
+                    customerId={id}
+                    telegramUserId={row.telegramUserId}
+                    mayView={mayViewReseller}
+                    mayEdit={mayEditReseller}
+                  />
+
+                  <CustomerReferralCard customerId={id} mayView={mayViewReferrals} />
+
+                  <Card tone="muted" title={t('web.users_scope_title')}>
+                    <p className="muted small">{t('web.users_scope_body')}</p>
+                  </Card>
+                </>
+              }
             />
-
-            <WalletCard
-              customerId={id}
-              mayView={mayViewWallet}
-              mayCredit={mayCredit}
-              mayDebit={mayDebit}
-            />
-
-            <CustomerOrdersCard customerId={id} mayView={mayViewOrders} />
-
-            <CustomerServicesCard customerId={id} mayView={mayViewServices} />
-
-            <CustomerReferralCard customerId={id} mayView={mayViewReferrals} />
-
-            <Card title={t('web.users_scope_title')}>
-              <p className="muted">{t('web.users_scope_body')}</p>
-            </Card>
           </>
         )}
       </StateSwitch>
     </>
+  );
+}
+
+/**
+ * The head of a customer's page: who they are, where they stand, and the one
+ * action taken FROM the head (block or unblock).
+ *
+ * Every figure in the strip is a field the server sent, read through the SAME
+ * query key its card below uses — so the strip adds no request, and it can
+ * never disagree with the card beside it. Nothing here is counted from a page
+ * of rows: a total spent or an order count would be a number no endpoint
+ * returns (owner decision, recorded on the list above).
+ */
+function UserHead({
+  row,
+  mayViewWallet,
+  actions,
+}: {
+  row: CustomerSummaryResponse;
+  mayViewWallet: boolean;
+  actions: ReactNode;
+}) {
+  const wallet = useQuery({
+    queryKey: ['wallet', row.id],
+    queryFn: () => fetchWallet(row.id),
+    enabled: mayViewWallet,
+  });
+  const trial = useQuery({
+    queryKey: ['customer-trial', row.id],
+    queryFn: () => fetchCustomerTrial(row.id),
+  });
+  const name = displayName(row);
+  const balance = wallet.data?.wallet;
+  const remaining = trial.data?.trial.remaining;
+
+  return (
+    <DetailHead
+      initial={initialOf(name ?? row.username ?? '#')}
+      title={
+        name ??
+        (row.username === null ? (
+          t('web.user_detail')
+        ) : (
+          <Ltr mono={false}>{`@${row.username}`}</Ltr>
+        ))
+      }
+      badge={<StatusBadge status={row.status} />}
+      meta={
+        <>
+          {name !== null && row.username !== null && (
+            <span className="ca-meta">
+              <span className="faint">{t('web.user_username')}</span>
+              <Ltr mono={false}>{`@${row.username}`}</Ltr>
+            </span>
+          )}
+          <span className="ca-meta">
+            <span className="faint">{t('web.user_telegram_id')}</span>
+            <Copyable value={row.telegramUserId} />
+          </span>
+          <span className="ca-meta">
+            <span className="faint">{t('web.user_language')}</span>
+            {row.languageCode === null ? <Dash /> : <Ltr mono={false}>{row.languageCode}</Ltr>}
+          </span>
+        </>
+      }
+      {...(actions === undefined ? {} : { actions })}
+      stats={[
+        { label: t('web.user_first_seen'), value: formatTimestamp(row.firstSeenAt) },
+        { label: t('web.user_last_seen'), value: formatTimestamp(row.lastSeenAt) },
+        ...(mayViewWallet
+          ? [
+              {
+                label: t('web.wallet_balance'),
+                value:
+                  balance === undefined ? (
+                    <Dash />
+                  ) : (
+                    <Money
+                      value={{ amountMinor: balance.balanceAmount, currency: balance.currency }}
+                    />
+                  ),
+              },
+            ]
+          : []),
+        {
+          label: t('web.user_stat_trial_remaining'),
+          value: remaining === undefined ? <Dash /> : <Num value={remaining} />,
+        },
+      ]}
+    />
   );
 }
 
@@ -922,7 +1033,9 @@ function CustomerOrdersCard({ customerId, mayView }: { customerId: string; mayVi
       key: 'state',
       header: t('web.status'),
       render: (row) => (
-        <Badge tone={ORDER_STATE_TONES[row.state]}>{t(ORDER_STATE_LABELS[row.state])}</Badge>
+        <Badge tone={ORDER_STATE_TONES[row.state]} dot>
+          {t(ORDER_STATE_LABELS[row.state])}
+        </Badge>
       ),
     },
     {
@@ -938,7 +1051,15 @@ function CustomerOrdersCard({ customerId, mayView }: { customerId: string; mayVi
   ];
 
   return (
-    <Card title={t('web.user_orders_title')}>
+    <Card
+      title={t('web.user_orders_title')}
+      hint={t('web.user_orders_hint')}
+      actions={
+        <a href={`/orders?customerId=${encodeURIComponent(customerId)}`} onClick={onLink}>
+          {t('web.user_orders_all')}
+        </a>
+      }
+    >
       <StateSwitch query={orders}>
         {orders.data === undefined ? null : orders.data.orders.length === 0 ? (
           <Empty title={t('web.user_orders_empty')} />
@@ -949,6 +1070,7 @@ function CustomerOrdersCard({ customerId, mayView }: { customerId: string; mayVi
               columns={columns}
               rows={orders.data.orders}
               rowKey={(row) => row.id}
+              dense
             />
             {/*
               The labels are SWAPPED, exactly as on `/orders`.
@@ -968,10 +1090,6 @@ function CustomerOrdersCard({ customerId, mayView }: { customerId: string; mayVi
           </>
         )}
       </StateSwitch>
-      <p className="muted">{t('web.user_orders_hint')}</p>
-      <a href={`/orders?customerId=${encodeURIComponent(customerId)}`} onClick={onLink}>
-        {t('web.user_orders_all')}
-      </a>
     </Card>
   );
 }
@@ -1032,7 +1150,9 @@ function CustomerServicesCard({ customerId, mayView }: { customerId: string; may
       key: 'state',
       header: t('web.service_state'),
       render: (row) => (
-        <Badge tone={SERVICE_STATE_TONES[row.state]}>{t(SERVICE_STATE_LABELS[row.state])}</Badge>
+        <Badge tone={SERVICE_STATE_TONES[row.state]} dot>
+          {t(SERVICE_STATE_LABELS[row.state])}
+        </Badge>
       ),
     },
     {
@@ -1057,7 +1177,15 @@ function CustomerServicesCard({ customerId, mayView }: { customerId: string; may
   ];
 
   return (
-    <Card title={t('web.user_services_title')}>
+    <Card
+      title={t('web.user_services_title')}
+      hint={t('web.user_services_hint')}
+      actions={
+        <a href={`/services?customerId=${encodeURIComponent(customerId)}`} onClick={onLink}>
+          {t('web.user_services_all')}
+        </a>
+      }
+    >
       <StateSwitch query={services}>
         {services.data === undefined ? null : services.data.services.length === 0 ? (
           <Empty title={t('web.user_services_empty')} />
@@ -1068,6 +1196,7 @@ function CustomerServicesCard({ customerId, mayView }: { customerId: string; may
               columns={columns}
               rows={services.data.services}
               rowKey={(row) => row.id}
+              dense
             />
             {/* Default labels: this traversal runs newest to oldest. */}
             <CursorPager
@@ -1080,10 +1209,6 @@ function CustomerServicesCard({ customerId, mayView }: { customerId: string; may
           </>
         )}
       </StateSwitch>
-      <p className="muted">{t('web.user_services_hint')}</p>
-      <a href={`/services?customerId=${encodeURIComponent(customerId)}`} onClick={onLink}>
-        {t('web.user_services_all')}
-      </a>
     </Card>
   );
 }
@@ -1242,6 +1367,8 @@ function WalletCard({
     // be a SECOND movement of somebody's money.
     onError: (error) => submission.settleOn(error),
   });
+  // A typed movement is lost by navigating away; the guard asks first.
+  useUnsavedChanges(mayView && (amount.trim() !== '' || note.trim() !== ''));
 
   if (!mayView) {
     return (
@@ -1264,9 +1391,17 @@ function WalletCard({
       header: t('web.wallet_balance'),
       // Positive, always, with the sign carried by the direction beside it — the
       // ledger's own shape, preserved to the screen.
-      render: (row) => <Money value={{ amountMinor: row.amount, currency: row.currency }} />,
+      render: (row) => (
+        <span className={row.direction === 'CREDIT' ? 'ca-amount credit' : 'ca-amount debit'}>
+          <Money value={{ amountMinor: row.amount, currency: row.currency }} />
+        </span>
+      ),
     },
-    { key: 'reason', header: t('web.wallet_reason'), render: (row) => row.reason },
+    {
+      key: 'reason',
+      header: t('web.wallet_reason'),
+      render: (row) => <Ltr>{row.reason}</Ltr>,
+    },
     {
       key: 'actor',
       header: t('web.wallet_actor'),
@@ -1274,7 +1409,7 @@ function WalletCard({
         row.actorAdminId === null ? (
           <span className="faint">{t('web.wallet_actor_system')}</span>
         ) : (
-          <Copyable value={row.actorAdminId} />
+          <Copyable value={row.actorAdminId} display={row.actorAdminId.slice(0, 8)} />
         ),
     },
     {
@@ -1285,7 +1420,7 @@ function WalletCard({
     {
       key: 'createdAt',
       header: t('web.wallet_created_at'),
-      render: (row) => formatTimestamp(row.createdAt),
+      render: (row) => <span className="nowrap">{formatTimestamp(row.createdAt)}</span>,
     },
   ];
 
@@ -1299,39 +1434,41 @@ function WalletCard({
   const negative = balance?.balanceAmount.startsWith('-') ?? false;
 
   return (
-    <Card title={t('web.wallet_title')}>
+    <Card title={t('web.wallet_title')} hint={t('web.wallet_balance_hint')}>
       <StateSwitch query={wallet}>
         {balance === undefined ? null : (
           <>
-            <KV
-              items={[
-                [
-                  t('web.wallet_balance'),
-                  <span key="b">
-                    <Money
-                      value={{ amountMinor: balance.balanceAmount, currency: balance.currency }}
-                    />
-                    {negative && (
-                      <>
-                        {' '}
-                        <Badge tone="warn">{t('web.wallet_balance_negative')}</Badge>
-                      </>
-                    )}
-                  </span>,
-                ],
-                [t('web.wallet_entry_count'), String(balance.entryCount)],
-              ]}
-            />
+            <div className="ca-balance">
+              <KV
+                inline
+                items={[
+                  [
+                    t('web.wallet_balance'),
+                    <span key="b" className={negative ? 'ca-amount negative' : 'ca-amount'}>
+                      <Money
+                        value={{ amountMinor: balance.balanceAmount, currency: balance.currency }}
+                      />
+                      {negative && (
+                        <>
+                          {' '}
+                          <Badge tone="warn">{t('web.wallet_balance_negative')}</Badge>
+                        </>
+                      )}
+                    </span>,
+                  ],
+                  [t('web.wallet_entry_count'), String(balance.entryCount)],
+                ]}
+              />
+            </div>
             {negative && <Banner tone="warn">{t('web.wallet_balance_negative_hint')}</Banner>}
           </>
         )}
       </StateSwitch>
-      <p className="muted">{t('web.wallet_balance_hint')}</p>
 
-      <h3>{t('web.wallet_history_title')}</h3>
+      <h3 className="ca-subhead">{t('web.wallet_history_title')}</h3>
       <StateSwitch query={entries}>
         {entries.data === undefined ? null : entries.data.entries.length === 0 ? (
-          <Empty title={t('web.wallet_history_empty')} />
+          <Empty variant="compact" title={t('web.wallet_history_empty')} />
         ) : (
           <>
             <DataTable
@@ -1339,6 +1476,7 @@ function WalletCard({
               columns={columns}
               rows={entries.data.entries}
               rowKey={(row) => row.id}
+              dense
             />
             <CursorPager
               shown={entries.data.entries.length}
@@ -1350,7 +1488,7 @@ function WalletCard({
           </>
         )}
       </StateSwitch>
-      <p className="muted">{t('web.wallet_immutable')}</p>
+      <p className="muted small">{t('web.wallet_immutable')}</p>
 
       {mayCredit || mayDebit ? (
         /*
@@ -1362,45 +1500,49 @@ function WalletCard({
          * the fieldset the buttons were live while `wallet.data` was undefined, and
          * the request went out under a hard-coded fallback currency.
          */
-        <fieldset disabled={walletReady === false}>
-          <h3>{t('web.wallet_adjust_title')}</h3>
-          <p className="muted">{t('web.wallet_adjust_hint')}</p>
-          <Field label={t('web.wallet_adjust_amount')} htmlFor="wallet-amount">
-            <input
-              id="wallet-amount"
-              inputMode="numeric"
-              value={amount}
-              onChange={(event) => setAmount(event.target.value)}
-            />
-          </Field>
-          <Field label={t('web.wallet_adjust_note')} htmlFor="wallet-note">
-            <input
-              id="wallet-note"
-              value={note}
-              maxLength={500}
-              onChange={(event) => setNote(event.target.value)}
-            />
-          </Field>
-          <div className="toolbar">
+        <fieldset className="ca-fieldset" disabled={walletReady === false}>
+          <h3 className="ca-subhead">{t('web.wallet_adjust_title')}</h3>
+          <p className="muted small">{t('web.wallet_adjust_hint')}</p>
+          <div className="form-grid">
+            <Field label={t('web.wallet_adjust_amount')} htmlFor="wallet-amount">
+              <Input
+                id="wallet-amount"
+                inputMode="numeric"
+                dir="ltr"
+                value={amount}
+                onChange={(event) => setAmount(event.target.value)}
+              />
+            </Field>
+            <Field label={t('web.wallet_adjust_note')} htmlFor="wallet-note">
+              <Input
+                id="wallet-note"
+                value={note}
+                maxLength={500}
+                onChange={(event) => setNote(event.target.value)}
+              />
+            </Field>
+          </div>
+          <div className="form-actions">
             {mayCredit && (
-              <button
-                type="button"
-                className="btn primary sm"
+              <Button
+                variant="primary"
+                size="sm"
+                icon="plus"
                 disabled={adjust.isPending}
                 onClick={() => adjust.mutate({ direction: 'CREDIT' })}
               >
                 {t('web.wallet_credit')}
-              </button>
+              </Button>
             )}
             {mayDebit && (
-              <button
-                type="button"
-                className="btn danger sm"
+              <Button
+                variant="danger"
+                size="sm"
                 disabled={adjust.isPending}
                 onClick={() => adjust.mutate({ direction: 'DEBIT' })}
               >
                 {t('web.wallet_debit')}
-              </button>
+              </Button>
             )}
           </div>
           {adjust.error !== null && <Banner tone="danger">{messageFor(adjust.error)}</Banner>}
@@ -1478,6 +1620,9 @@ function TrialCard({ customerId, mayEdit }: { customerId: string; mayEdit: boole
     onError: (error) => submission.settleOn(error),
   });
 
+  // A typed override is lost by navigating away; the guard asks first.
+  useUnsavedChanges(mayEdit && (limit.trim() !== '' || reason.trim() !== ''));
+
   const row = trial.data?.trial;
   return (
     <Card title={t('web.trial_card_title')}>
@@ -1497,43 +1642,47 @@ function TrialCard({ customerId, mayEdit }: { customerId: string; mayEdit: boole
                 [t('web.trial_remaining'), String(row.remaining)],
               ]}
             />
-            <p className="muted">{t('web.trial_zero_hint')}</p>
+            <p className="muted small">{t('web.trial_zero_hint')}</p>
             {mayEdit ? (
               <>
-                <Field label={t('web.trial_override_label')} htmlFor="trial-limit">
-                  <input
-                    id="trial-limit"
-                    inputMode="numeric"
-                    value={limit}
-                    onChange={(event) => setLimit(event.target.value)}
-                  />
-                </Field>
-                <Field label={t('web.trial_reason_label')} htmlFor="trial-reason">
-                  <input
-                    id="trial-reason"
-                    value={reason}
-                    maxLength={TRIAL_ADMIN_REASON_MAX_LENGTH}
-                    onChange={(event) => setReason(event.target.value)}
-                  />
-                </Field>
-                <div className="toolbar">
-                  <button
-                    type="button"
-                    className="btn primary sm"
+                <div className="form-grid">
+                  <Field label={t('web.trial_override_label')} htmlFor="trial-limit">
+                    <Input
+                      id="trial-limit"
+                      size="sm"
+                      inputMode="numeric"
+                      dir="ltr"
+                      value={limit}
+                      onChange={(event) => setLimit(event.target.value)}
+                    />
+                  </Field>
+                  <Field label={t('web.trial_reason_label')} htmlFor="trial-reason">
+                    <Input
+                      id="trial-reason"
+                      size="sm"
+                      value={reason}
+                      maxLength={TRIAL_ADMIN_REASON_MAX_LENGTH}
+                      onChange={(event) => setReason(event.target.value)}
+                    />
+                  </Field>
+                </div>
+                <div className="form-actions">
+                  <Button
+                    variant="primary"
+                    size="sm"
                     disabled={write.isPending || limit.trim() === ''}
                     onClick={() => write.mutate({ remove: false })}
                   >
                     {t('web.trial_override_set')}
-                  </button>
+                  </Button>
                   {row.override !== null && (
-                    <button
-                      type="button"
-                      className="btn sm"
+                    <Button
+                      size="sm"
                       disabled={write.isPending}
                       onClick={() => write.mutate({ remove: true })}
                     >
                       {t('web.trial_override_remove')}
-                    </button>
+                    </Button>
                   )}
                 </div>
                 {write.error !== null && <Banner tone="danger">{messageFor(write.error)}</Banner>}
@@ -1592,11 +1741,22 @@ function ResellerCard({
 
   const found = reseller.data?.reseller;
   return (
-    <Card title={t('web.user_reseller_title')}>
+    <Card
+      title={t('web.user_reseller_title')}
+      {...(found === undefined
+        ? {}
+        : {
+            actions: (
+              <a href={`/resellers?search=${encodeURIComponent(telegramUserId)}`} onClick={onLink}>
+                {t('web.user_reseller_manage')}
+              </a>
+            ),
+          })}
+    >
       <StateSwitch query={reseller}>
         {reseller.data === undefined ? null : found === undefined ? (
           <>
-            <p className="muted">{t('web.user_reseller_none')}</p>
+            <p className="muted small">{t('web.user_reseller_none')}</p>
             {mayEdit && (
               <a href={`/resellers?register=${encodeURIComponent(customerId)}`} onClick={onLink}>
                 {t('web.user_reseller_register')}
@@ -1626,9 +1786,6 @@ function ResellerCard({
             {found.status === 'SUSPENDED' && (
               <Banner tone="warn">{t('web.user_reseller_suspended')}</Banner>
             )}
-            <a href={`/resellers?search=${encodeURIComponent(telegramUserId)}`} onClick={onLink}>
-              {t('web.user_reseller_manage')}
-            </a>
           </>
         )}
       </StateSwitch>
@@ -1667,7 +1824,14 @@ function CustomerReferralCard({ customerId, mayView }: { customerId: string; may
 
   const row = referral.data;
   return (
-    <Card title={t('web.user_referral_title')}>
+    <Card
+      title={t('web.user_referral_title')}
+      actions={
+        <a href={`/referrals?referrerId=${encodeURIComponent(customerId)}`} onClick={onLink}>
+          {t('web.user_referral_all')}
+        </a>
+      }
+    >
       <StateSwitch query={referral}>
         {row === undefined ? null : (
           <>
@@ -1710,14 +1874,12 @@ function CustomerReferralCard({ customerId, mayView }: { customerId: string; may
                 columns={REFERRAL_TOTAL_COLUMNS}
                 rows={row.totals}
                 rowKey={(total) => total.currency}
+                dense
               />
             )}
           </>
         )}
       </StateSwitch>
-      <a href={`/referrals?referrerId=${encodeURIComponent(customerId)}`} onClick={onLink}>
-        {t('web.user_referral_all')}
-      </a>
     </Card>
   );
 }

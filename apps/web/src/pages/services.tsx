@@ -25,21 +25,29 @@ import { useSubmissionKey } from '../submission-key';
 import { mayRequest, queryState } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
 import { setQueries, setQuery, useLinkHandler, type Route } from '../router';
+import { ChipGroup } from './commerce-parts';
 import {
   Badge,
   Banner,
+  Button,
+  ButtonGroup,
   Card,
+  ChipDivider,
+  CopyButton,
   Copyable,
   CursorPager,
   DataTable,
   Empty,
   Field,
+  Input,
   KV,
   Ltr,
   Num,
   PageHead,
-  Pills,
+  Progress,
+  StatCard,
   StateSwitch,
+  TwoColumn,
   useToast,
   type Column,
   type Tone,
@@ -177,11 +185,19 @@ export const OPERATION_STATE_TONES: Readonly<Record<OperationState, Tone>> = {
 };
 
 function StateBadge({ value }: { value: ServiceState }) {
-  return <Badge tone={STATE_TONES[value]}>{t(STATE_LABELS[value])}</Badge>;
+  return (
+    <Badge tone={STATE_TONES[value]} dot>
+      {t(STATE_LABELS[value])}
+    </Badge>
+  );
 }
 
 function DeliveryBadge({ value }: { value: ServiceDeliveryState }) {
-  return <Badge tone={DELIVERY_TONES[value]}>{t(DELIVERY_LABELS[value])}</Badge>;
+  return (
+    <Badge tone={DELIVERY_TONES[value]} outline>
+      {t(DELIVERY_LABELS[value])}
+    </Badge>
+  );
 }
 
 function Dash() {
@@ -381,15 +397,78 @@ export function ServicesPage({
     },
   ];
 
+  // Hidden while the list cannot answer: a control that mints a new query key is
+  // a fresh request against a question the server has just refused.
+  const toolbarHidden = !mayRequest(services, denied);
+
   return (
     <>
       <PageHead title={t('web.services_title')} subtitle={t('web.services_intro')} maturity="now" />
       {/* Its own permission, not the list's: `refunds.view` alone reaches the queue (WP19). */}
       {mayViewRefundRequests && <OpenServiceRefundRequestsCard />}
 
-      <Card>
-        <div hidden={!mayRequest(services, denied)}>
-          <Pills
+      <Card className="ca-list">
+        <form className="toolbar ca-search" onSubmit={apply} hidden={toolbarHidden}>
+          <Field
+            compact
+            label={t('web.service_username')}
+            hint={t('web.services_filter_username_hint')}
+            htmlFor="services-username"
+            {...(usernameProblemText === undefined ? {} : { error: usernameProblemText })}
+          >
+            <Input
+              id="services-username"
+              size="sm"
+              dir="ltr"
+              aria-invalid={usernameProblemText !== undefined}
+              value={draft.providerUsername}
+              onChange={(event) =>
+                setDraft({ ...draft, providerUsername: event.target.value.trim() })
+              }
+            />
+          </Field>
+          <Field
+            compact
+            label={t('web.service_customer')}
+            hint={t('web.services_filter_customer_hint')}
+            htmlFor="services-customer"
+            {...(customerProblem === undefined ? {} : { error: customerProblem })}
+          >
+            <Input
+              id="services-customer"
+              size="sm"
+              dir="ltr"
+              aria-invalid={customerProblem !== undefined}
+              value={draft.customerId}
+              onChange={(event) => setDraft({ ...draft, customerId: event.target.value.trim() })}
+            />
+          </Field>
+          <Field
+            compact
+            label={t('web.service_panel')}
+            hint={t('web.services_filter_panel_hint')}
+            htmlFor="services-panel"
+            {...(panelProblem === undefined ? {} : { error: panelProblem })}
+          >
+            <Input
+              id="services-panel"
+              size="sm"
+              dir="ltr"
+              aria-invalid={panelProblem !== undefined}
+              value={draft.panelId}
+              onChange={(event) => setDraft({ ...draft, panelId: event.target.value.trim() })}
+            />
+          </Field>
+          <div className="ca-search-actions">
+            <Button type="submit" variant="primary" size="sm" icon="search">
+              {t('web.services_search_apply')}
+            </Button>
+          </div>
+        </form>
+
+        <div className="filter-row" hidden={toolbarHidden}>
+          <ChipGroup
+            label={t('web.service_state')}
             value={state ?? 'ALL'}
             onChange={(next) =>
               setQueries(route, [
@@ -399,13 +478,12 @@ export function ServicesPage({
             }
             items={[
               { id: 'ALL', label: t('web.services_filter_all') },
-              // Over the FROZEN vocabulary, so a state added to the contract without a
-              // filter here is a compile error rather than an option nobody notices is
-              // missing. The shape `/orders` and `/payments` both use.
               ...SERVICE_STATES.map((one) => ({ id: one, label: t(STATE_LABELS[one]) })),
             ]}
           />
-          <Pills
+          <ChipDivider />
+          <ChipGroup
+            label={t('web.service_delivery')}
             value={delivery ?? 'ALL'}
             onChange={(next) =>
               setQueries(route, [
@@ -421,52 +499,6 @@ export function ServicesPage({
               })),
             ]}
           />
-          <form className="toolbar" onSubmit={apply}>
-            <Field
-              label={t('web.service_customer')}
-              hint={t('web.services_filter_customer_hint')}
-              htmlFor="services-customer"
-              {...(customerProblem === undefined ? {} : { error: customerProblem })}
-            >
-              <input
-                id="services-customer"
-                dir="ltr"
-                value={draft.customerId}
-                onChange={(event) => setDraft({ ...draft, customerId: event.target.value.trim() })}
-              />
-            </Field>
-            <Field
-              label={t('web.service_panel')}
-              hint={t('web.services_filter_panel_hint')}
-              htmlFor="services-panel"
-              {...(panelProblem === undefined ? {} : { error: panelProblem })}
-            >
-              <input
-                id="services-panel"
-                dir="ltr"
-                value={draft.panelId}
-                onChange={(event) => setDraft({ ...draft, panelId: event.target.value.trim() })}
-              />
-            </Field>
-            <Field
-              label={t('web.service_username')}
-              hint={t('web.services_filter_username_hint')}
-              htmlFor="services-username"
-              {...(usernameProblemText === undefined ? {} : { error: usernameProblemText })}
-            >
-              <input
-                id="services-username"
-                dir="ltr"
-                value={draft.providerUsername}
-                onChange={(event) =>
-                  setDraft({ ...draft, providerUsername: event.target.value.trim() })
-                }
-              />
-            </Field>
-            <button type="submit" className="btn sm">
-              {t('web.services_search_apply')}
-            </button>
-          </form>
         </div>
 
         <StateSwitch query={services} denied={denied}>
@@ -479,18 +511,17 @@ export function ServicesPage({
                 columns={columns}
                 rows={services.data.services}
                 rowKey={(row) => row.id}
+                dense
+                sticky
               />
               {/*
                 `CursorPager`'s DEFAULT labels, and that is the difference from
-                `/users`, `/orders` and `/products`.
+                `/users`, `/orders` and `/products`: `GET /services` pages a
+                DESCENDING keyset, newest service first (owner revision 13), so
+                "next" here really is the older page. The three ascending lists
+                pass the opposite pair explicitly for the opposite reason.
 
-                Its defaults are `next = web.older` and `previous = web.newer`, which is
-                the descending orientation — and `GET /services` pages a descending
-                keyset, newest service first, owner revision 13. So "next" here really
-                is the older page. The three ascending lists pass the opposite pair
-                explicitly for the opposite reason; copying their `nextLabel="web.newer"`
-                would have told an operator that paging forward went forwards in time
-                while it went backwards.
+                The cursor lives in the URL, so Previous returns to the first page.
               */}
               <CursorPager
                 shown={services.data.services.length}
@@ -508,11 +539,13 @@ export function ServicesPage({
           Revision 13 is DELIVERED — the repository pages descending because of it — and
           the other two are still absences. A decision recorded only on a screen nobody
           can open is a decision nobody reads before breaking it. */}
-      <Card title={t('web.services_rules_title')}>
-        <p className="muted">{t('web.services_rule_no_protocol')}</p>
-        <p className="muted">{t('web.services_rule_ordering')}</p>
-        <p className="muted">{t('web.services_rule_plan_filter')}</p>
-        <p className="muted">{t('web.services_transfer_absent')}</p>
+      <Card tone="muted" title={t('web.services_rules_title')}>
+        <ul className="ca-notes">
+          <li>{t('web.services_rule_no_protocol')}</li>
+          <li>{t('web.services_rule_ordering')}</li>
+          <li>{t('web.services_rule_plan_filter')}</li>
+          <li>{t('web.services_transfer_absent')}</li>
+        </ul>
       </Card>
     </>
   );
@@ -570,53 +603,39 @@ const ACTION_NEEDS_TERMINATE: Readonly<Record<ServiceOperatorAction, boolean>> =
 };
 
 /**
- * The eight actions, drawn from the server's own verdicts.
+ * The eight actions, drawn from the server's own verdicts, and the one mutation
+ * every one of them goes through.
  *
- * Terminate is separated out below the other seven because it is the only one that
- * deletes an account on somebody's panel and the only one that costs a typed phrase.
- * The other seven are one press each: the request is idempotent under a key held by
- * `useSubmissionKey`, so pressing twice asks the same question rather than planning a
- * second operation.
+ * The ordinary actions are the page head's button group; terminate is isolated in
+ * its own danger card at the foot of the page, because it is the only one that
+ * deletes an account on somebody's panel and the only one that costs a typed
+ * phrase. Every press is idempotent under a key held by `useSubmissionKey`, so
+ * pressing twice asks the same question rather than planning a second operation.
  *
  * Nothing here decides availability. `entry.available` and `entry.blocker` come from
- * the response, and a permission the session lacks is reported as a sentence instead of
- * removing the section — an absent control says nothing about why.
+ * the response, and a permission the session lacks is reported as a sentence instead
+ * of removing the section — an absent control says nothing about why.
  */
-function ServiceActions({
-  id,
-  actions,
-  mayEdit,
-  mayTerminate,
-  onActed,
-}: {
-  id: string;
-  actions: readonly ServiceActionAvailability[];
-  mayEdit: boolean;
-  mayTerminate: boolean;
-  onActed: () => void;
-}) {
+function useServiceAction(id: string, onActed: () => void, onTerminated: () => void) {
   const toast = useToast();
   const submission = useSubmissionKey();
-  const [phrase, setPhrase] = useState('');
-
-  const act = useMutation({
+  return useMutation({
     mutationFn: (input: { action: ServiceOperatorAction; confirm?: string }) =>
       actOnService({
         id,
         action: input.action,
+        // One command per (service, action): pressing the same button twice — or
+        // retrying after a lost response — replays rather than planning twice.
         idempotencyKey: submission.current({ command: 'services.act', id, action: input.action }),
         ...(input.confirm === undefined ? {} : { confirm: input.confirm }),
       }),
     onSuccess: (result, input) => {
       submission.settle();
-      if (input.action === 'TERMINATE') setPhrase('');
+      if (input.action === 'TERMINATE') onTerminated();
       /*
-       * "Recorded", never "done" — for the six that plan an operation.
-       *
-       * The response carries the operation in `PLANNED`: no provider has been called
-       * yet. Reporting success would be the legacy "✅ updated" for a write whose
-       * effect has not happened, and the difference matters most for the action that
-       * deletes an account.
+       * "Planned", never "done". The operation is recorded and the provisioner runs
+       * it; the history card is where its outcome appears. A resend plans no
+       * operation at all, and says so.
        */
       toast({
         tone: 'ok',
@@ -632,78 +651,144 @@ function ServiceActions({
       toast({ tone: 'danger', message: messageFor(error) });
     },
   });
+}
 
+type ServiceAct = ReturnType<typeof useServiceAction>;
+
+/** The ordinary actions, one button each, in `SERVICE_OPERATOR_ACTIONS` order. */
+function ActionButtons({
+  actions,
+  mayEdit,
+  act,
+}: {
+  actions: readonly ServiceActionAvailability[];
+  mayEdit: boolean;
+  act: ServiceAct;
+}) {
   const byAction = new Map(actions.map((entry) => [entry.action, entry]));
   const ordinary = SERVICE_OPERATOR_ACTIONS.filter((action) => !ACTION_NEEDS_TERMINATE[action]);
-  const phraseMatches = phrase.trim() === SERVICE_TERMINATE_CONFIRMATION;
-  const terminate = byAction.get('TERMINATE');
+  return (
+    <ButtonGroup label={t('web.service_actions_title')}>
+      {ordinary.map((action) => {
+        const entry = byAction.get(action);
+        if (entry === undefined) return null;
+        const why = !entry.available && entry.blocker !== null;
+        return (
+          <Button
+            key={action}
+            size="sm"
+            disabled={!mayEdit || !entry.available || act.isPending}
+            {...(why ? { 'aria-describedby': `service-blocker-${action}` } : {})}
+            onClick={() => act.mutate({ action })}
+          >
+            {t(ACTION_LABELS[action])}
+          </Button>
+        );
+      })}
+    </ButtonGroup>
+  );
+}
 
+/**
+ * Why each unavailable action is unavailable, in words, and whether this session
+ * may press any of them. A greyed-out control with no reason is the legacy
+ * panel's entire style of refusal; each blocker sentence sends an operator
+ * somewhere different.
+ */
+function ActionNotes({
+  actions,
+  mayEdit,
+}: {
+  actions: readonly ServiceActionAvailability[];
+  mayEdit: boolean;
+}) {
+  const byAction = new Map(actions.map((entry) => [entry.action, entry]));
+  const blocked = SERVICE_OPERATOR_ACTIONS.filter((action) => {
+    const entry = byAction.get(action);
+    return (
+      !ACTION_NEEDS_TERMINATE[action] &&
+      entry !== undefined &&
+      !entry.available &&
+      entry.blocker !== null
+    );
+  });
   return (
     <Card title={t('web.service_actions_title')} hint={t('web.service_actions_hint')}>
       {!mayEdit && <Banner tone="neutral">{t('web.service_action_denied_edit')}</Banner>}
-
-      <div className="stack">
-        {ordinary.map((action) => {
-          const entry = byAction.get(action);
-          if (entry === undefined) return null;
-          return (
-            <div key={action} className="stack tight">
-              <div className="btn-group">
-                <button
-                  type="button"
-                  className="btn sm"
-                  disabled={!mayEdit || !entry.available || act.isPending}
-                  onClick={() => act.mutate({ action })}
-                >
-                  {t(ACTION_LABELS[action])}
-                </button>
+      {blocked.length > 0 && (
+        <dl className="kv ca-blockers">
+          {blocked.map((action) => {
+            const blocker = byAction.get(action)?.blocker;
+            return (
+              <div key={action}>
+                <dt>{t(ACTION_LABELS[action])}</dt>
+                <dd id={`service-blocker-${action}`}>
+                  {blocker === null || blocker === undefined ? null : t(BLOCKER_LABELS[blocker])}
+                </dd>
               </div>
-              {!entry.available && entry.blocker !== null && (
-                <p className="muted small">{t(BLOCKER_LABELS[entry.blocker])}</p>
-              )}
-            </div>
-          );
-        })}
-      </div>
+            );
+          })}
+        </dl>
+      )}
+    </Card>
+  );
+}
 
-      {terminate !== undefined && (
-        <div className="stack">
-          <Banner tone="danger" title={t('web.service_terminate_title')}>
-            {t('web.service_terminate_danger')}
-          </Banner>
-          {!mayTerminate ? (
-            <Banner tone="neutral">{t('web.service_action_denied_terminate')}</Banner>
-          ) : !terminate.available && terminate.blocker !== null ? (
-            <p className="muted small">{t(BLOCKER_LABELS[terminate.blocker])}</p>
-          ) : (
-            <>
-              <label className="field">
-                <span className="field-label">{t('web.service_terminate_confirm_label')}</span>
-                <Ltr>{SERVICE_TERMINATE_CONFIRMATION}</Ltr>
-                <input
-                  type="text"
-                  value={phrase}
-                  dir="ltr"
-                  autoComplete="off"
-                  spellCheck={false}
-                  onChange={(event) => setPhrase(event.currentTarget.value)}
-                />
-              </label>
-              {phrase !== '' && !phraseMatches && (
-                <Banner tone="warn">{t('web.service_terminate_confirm_wrong')}</Banner>
-              )}
-              <div className="btn-group">
-                <button
-                  type="button"
-                  className="btn danger"
-                  disabled={!phraseMatches || act.isPending}
-                  onClick={() => act.mutate({ action: 'TERMINATE', confirm: phrase })}
-                >
-                  {t('web.service_terminate_button')}
-                </button>
-              </div>
-            </>
-          )}
+/** Terminate, isolated: its own permission, its own blocker, its own typed phrase. */
+function TerminateCard({
+  entry,
+  mayTerminate,
+  act,
+  phrase,
+  setPhrase,
+}: {
+  entry: ServiceActionAvailability;
+  mayTerminate: boolean;
+  act: ServiceAct;
+  phrase: string;
+  setPhrase: (next: string) => void;
+}) {
+  const phraseMatches = phrase.trim() === SERVICE_TERMINATE_CONFIRMATION;
+  return (
+    <Card tone="danger" title={t('web.service_terminate_title')}>
+      <p className="muted small">{t('web.service_terminate_danger')}</p>
+      {!mayTerminate ? (
+        <Banner tone="neutral">{t('web.service_action_denied_terminate')}</Banner>
+      ) : !entry.available && entry.blocker !== null ? (
+        <p className="muted small">{t(BLOCKER_LABELS[entry.blocker])}</p>
+      ) : (
+        <div className="ca-terminate">
+          <Field
+            label={t('web.service_terminate_confirm_label')}
+            htmlFor="service-terminate-phrase"
+            {...(phrase !== '' && !phraseMatches
+              ? { error: t('web.service_terminate_confirm_wrong') }
+              : {})}
+          >
+            <span className="ca-phrase">
+              <Ltr>{SERVICE_TERMINATE_CONFIRMATION}</Ltr>
+            </span>
+            <Input
+              id="service-terminate-phrase"
+              type="text"
+              value={phrase}
+              dir="ltr"
+              autoComplete="off"
+              spellCheck={false}
+              aria-invalid={phrase !== '' && !phraseMatches}
+              onChange={(event) => setPhrase(event.currentTarget.value)}
+            />
+          </Field>
+          <div className="form-actions">
+            <Button
+              variant="danger-solid"
+              icon="trash"
+              disabled={!phraseMatches || act.isPending}
+              onClick={() => act.mutate({ action: 'TERMINATE', confirm: phrase })}
+            >
+              {t('web.service_terminate_button')}
+            </Button>
+          </div>
         </div>
       )}
     </Card>
@@ -731,7 +816,6 @@ export function ServiceDetailPage({
   /** `refunds.issue` AND `services.terminate`: deciding one. A courtesy; the server decides. */
   mayDecideRefundRequests?: boolean;
 }) {
-  const onLink = useLinkHandler();
   const client = useQueryClient();
 
   /*
@@ -770,75 +854,52 @@ export function ServiceDetailPage({
     enabled: !denied,
   });
 
-  const operationColumns: readonly Column<ServiceOperationResponse>[] = [
-    {
-      key: 'type',
-      header: t('web.operation_type'),
-      render: (op) => t(OPERATION_TYPE_LABELS[op.type]),
-    },
-    {
-      key: 'state',
-      header: t('web.operation_state'),
-      render: (op) => (
-        <Badge tone={OPERATION_STATE_TONES[op.state]}>{t(OPERATION_STATE_LABELS[op.state])}</Badge>
-      ),
-    },
-    {
-      key: 'attempts',
-      header: t('web.operation_attempts'),
-      render: (op) => <Ltr>{formatNumber(op.attempts)}</Ltr>,
-    },
-    {
-      key: 'created',
-      header: t('web.operation_created_at'),
-      render: (op) => <span className="nowrap">{formatTimestamp(op.createdAt)}</span>,
-    },
-    {
-      /*
-       * WHEN the next attempt is due, which is the question a stuck operation raises.
-       *
-       * `holdOff` writes it on a retryable failure, so a `FAILED` row with a future
-       * `scheduledAt` is waiting rather than abandoned — and those two look identical
-       * without this column.
-       */
-      key: 'scheduled',
-      header: t('web.operation_scheduled_at'),
-      render: (op) =>
-        op.scheduledAt === null ? (
-          <Dash />
-        ) : (
-          <span className="nowrap">{formatTimestamp(op.scheduledAt)}</span>
-        ),
-    },
-    {
-      key: 'completed',
-      header: t('web.operation_completed_at'),
-      render: (op) =>
-        op.completedAt === null ? (
-          <Dash />
-        ) : (
-          <span className="nowrap">{formatTimestamp(op.completedAt)}</span>
-        ),
-    },
-    {
-      key: 'failure',
-      header: t('web.operation_failure'),
-      // The adapter's own words. It is what tells a panel refusing a duplicate apart
-      // from a panel that was unreachable, and the adapters put no response body in it.
-      render: (op) => (op.failureMessage === null ? <Dash /> : <span>{op.failureMessage}</span>),
-    },
-  ];
+  const [phrase, setPhrase] = useState('');
+  const act = useServiceAction(id, refresh, () => setPhrase(''));
+
+  /*
+   * The refund requests are drawn whatever the service query says: a finance
+   * reviewer holding `refunds.view` reaches this service's requests even where the
+   * service itself is refused (WP19).
+   */
+  const refundRequests = mayViewRefundRequests ? (
+    <ServiceRefundRequestsCard serviceId={id} mayDecide={mayDecideRefundRequests} />
+  ) : null;
 
   return (
     <>
-      <PageHead title={t('web.service_detail')} subtitle={t('web.services_intro')} maturity="now" />
-      {mayViewRefundRequests && (
-        <ServiceRefundRequestsCard serviceId={id} mayDecide={mayDecideRefundRequests} />
+      {row === undefined && (
+        <>
+          <PageHead
+            title={t('web.service_detail')}
+            subtitle={t('web.services_intro')}
+            maturity="now"
+          />
+          {refundRequests}
+        </>
       )}
 
       <StateSwitch query={service} denied={denied}>
         {row === undefined ? null : (
           <>
+            <PageHead
+              title={
+                <span className="ca-title-id">
+                  <Ltr>{row.providerUsername}</Ltr>
+                  <CopyButton value={row.providerUsername} />
+                </span>
+              }
+              badge={
+                <span className="ca-badges">
+                  <StateBadge value={row.state} />
+                  <DeliveryBadge value={row.deliveryState} />
+                  {row.isTrial && <Badge tone="info">{t('web.service_trial_badge')}</Badge>}
+                </span>
+              }
+              subtitle={t('web.service_detail')}
+              actions={<ActionButtons actions={row.actions} mayEdit={mayEdit} act={act} />}
+            />
+
             {row.state === 'UNRECONCILED' && (
               <Banner tone="warn">{t('web.service_unreconciled_banner')}</Banner>
             )}
@@ -849,195 +910,38 @@ export function ServiceDetailPage({
               <Banner tone="danger">{t('web.service_delivery_failed_banner')}</Banner>
             )}
 
-            <Card title={t('web.service_detail')}>
-              <KV
-                items={[
-                  [t('web.service_state'), <StateBadge key="s" value={row.state} />],
-                  [t('web.service_username'), <Copyable key="u" value={row.providerUsername} />],
-                  [
-                    t('web.service_provider_user_id'),
-                    row.providerUserId === null ? (
-                      <Dash key="pu" />
-                    ) : (
-                      <Copyable key="pu" value={row.providerUserId} />
-                    ),
-                  ],
-                  [
-                    t('web.service_customer'),
-                    <a
-                      key="c"
-                      href={`/users/${encodeURIComponent(row.customerId)}`}
-                      onClick={onLink}
-                    >
-                      <Ltr>{row.customerId}</Ltr>
-                    </a>,
-                  ],
-                  [
-                    t('web.service_order'),
-                    <a key="o" href={`/orders/${encodeURIComponent(row.orderId)}`} onClick={onLink}>
-                      <Ltr>{row.orderId}</Ltr>
-                    </a>,
-                  ],
-                  [
-                    t('web.service_panel'),
-                    <a key="p" href={`/panels/${encodeURIComponent(row.panelId)}`} onClick={onLink}>
-                      <Ltr>{row.panelId}</Ltr>
-                    </a>,
-                  ],
-                  [
-                    t('web.service_product'),
-                    // A custom service (Package D) has no product to link to.
-                    row.productId === null ? (
-                      <span key="pr" className="muted">
-                        {t('web.purpose_custom_service')}
-                      </span>
-                    ) : (
-                      <a
-                        key="pr"
-                        href={`/products/${encodeURIComponent(row.productId)}`}
-                        onClick={onLink}
-                      >
-                        <Ltr>{row.productId}</Ltr>
-                      </a>
-                    ),
-                  ],
-                  [
-                    t('web.service_expires_at'),
-                    row.expiresAt === null ? <Dash key="e" /> : formatTimestamp(row.expiresAt),
-                  ],
-                  [t('web.service_created_at'), formatTimestamp(row.createdAt)],
-                  [t('web.service_updated_at'), formatTimestamp(row.updatedAt)],
-                ]}
-              />
-              <p className="muted small">{t('web.service_username_hint')}</p>
-            </Card>
+            <ServiceStats row={row} />
 
-            {/*
-              Traffic, and WHEN it was last read back from the panel.
+            {refundRequests}
 
-              The counter without its freshness is the legacy statistics screen: a
-              number that looks live and was written days ago. `usageSyncedAt` null is
-              rendered as a SENTENCE rather than a dash, because "never read" is the
-              answer rather than a missing value.
-            */}
-            <Card title={t('web.service_traffic_used')}>
-              <KV
-                items={[
-                  [
-                    t('web.service_traffic_limit'),
-                    <TrafficLimit key="l" bytes={row.trafficLimitBytes} />,
-                  ],
-                  [
-                    t('web.service_traffic_used'),
-                    <Bytes key="u" bytes={BigInt(row.trafficUsedBytes)} />,
-                  ],
-                  // WP-A5: the device limit the service is entitled to, extra users included.
-                  [
-                    t('web.service_device_limit'),
-                    row.deviceLimit === null ? (
-                      <span key="d" className="muted small">
-                        {t('web.service_device_limit_none')}
-                      </span>
-                    ) : (
-                      String(row.deviceLimit)
-                    ),
-                  ],
-                  [
-                    t('web.service_usage_synced_at'),
-                    row.usageSyncedAt === null ? (
-                      <span key="n" className="muted small">
-                        {t('web.service_usage_never')}
-                      </span>
-                    ) : (
-                      formatTimestamp(row.usageSyncedAt)
-                    ),
-                  ],
-                ]}
-              />
-            </Card>
-
-            {/*
-              Delivery, on its own, with the subscription reduced to a yes or a no.
-
-              `hasSubscription` is a boolean in the CONTRACT for the reason
-              `archiveAvailable` is one on a backup run: the surface needs to know
-              whether the thing exists, and nothing about the operator's job needs its
-              value. The sentence below says it is withheld rather than absent.
-            */}
-            <Card title={t('web.service_delivery')}>
-              <KV
-                items={[
-                  [t('web.service_delivery'), <DeliveryBadge key="d" value={row.deliveryState} />],
-                  [
-                    t('web.service_subscription'),
-                    row.hasSubscription
-                      ? t('web.service_subscription_present')
-                      : t('web.service_subscription_absent'),
-                  ],
-                  [
-                    t('web.service_delivery_attempts'),
-                    <Ltr key="a">{formatNumber(row.deliveryAttempts)}</Ltr>,
-                  ],
-                  [
-                    t('web.service_delivery_next_attempt'),
-                    row.deliveryNextAttemptAt === null ? (
-                      <Dash key="na" />
-                    ) : (
-                      formatTimestamp(row.deliveryNextAttemptAt)
-                    ),
-                  ],
-                  [
-                    t('web.service_delivered_at'),
-                    row.deliveredAt === null ? <Dash key="da" /> : formatTimestamp(row.deliveredAt),
-                  ],
-                  [
-                    t('web.service_provisioned_at'),
-                    row.provisionedAt === null ? (
-                      <Dash key="pa" />
-                    ) : (
-                      formatTimestamp(row.provisionedAt)
-                    ),
-                  ],
-                  [
-                    t('web.service_terminated_at'),
-                    row.terminatedAt === null ? (
-                      <Dash key="ta" />
-                    ) : (
-                      formatTimestamp(row.terminatedAt)
-                    ),
-                  ],
-                ]}
-              />
-              <p className="muted small">{t('web.service_subscription_withheld')}</p>
-            </Card>
-
-            <ServiceActions
-              id={id}
-              actions={row.actions}
-              mayEdit={mayEdit}
-              mayTerminate={mayTerminate}
-              onActed={refresh}
+            <TwoColumn
+              main={<ServiceIdentity row={row} />}
+              side={
+                <>
+                  <ActionNotes actions={row.actions} mayEdit={mayEdit} />
+                  <ServiceDelivery row={row} />
+                </>
+              }
             />
 
             <Card title={t('web.service_operations_title')} hint={t('web.service_operations_hint')}>
               <StateSwitch query={operations} denied={denied}>
                 {operations.data === undefined ? null : operations.data.operations.length === 0 ? (
-                  <Empty title={t('web.service_operations_empty')} />
+                  <Empty variant="compact" title={t('web.service_operations_empty')} />
                 ) : (
                   <>
                     <DataTable
                       caption={t('web.service_operations_title')}
-                      columns={operationColumns}
+                      columns={OPERATION_COLUMNS}
                       rows={operations.data.operations}
                       rowKey={(op) => op.id}
+                      dense
                     />
                     {/*
-                      Printed only when the server says the history was CUT, and
-                      with the server's own bound. `operations.length === limit`
-                      is the wrong test and is why the response carries
-                      `hasMore`: a service with exactly fifty operations has a
-                      full page and nothing behind it, and a notice there would
-                      send an operator looking for rows that do not exist.
+                      Printed only when the server says the history was CUT, and with the
+                      server's own bound. `operations.length === limit` is the wrong test
+                      and is why the response carries `hasMore`: a service with exactly
+                      fifty operations has a full page and nothing behind it.
                     */}
                     {operations.data.hasMore && (
                       <p className="muted small">
@@ -1050,15 +954,249 @@ export function ServiceDetailPage({
               </StateSwitch>
             </Card>
 
-            <Card>
-              <p className="muted">{t('web.services_transfer_absent')}</p>
+            <Card tone="muted">
+              <p className="muted small">{t('web.services_transfer_absent')}</p>
             </Card>
+
+            {(() => {
+              const terminate = row.actions.find((entry) => entry.action === 'TERMINATE');
+              return terminate === undefined ? null : (
+                <TerminateCard
+                  entry={terminate}
+                  mayTerminate={mayTerminate}
+                  act={act}
+                  phrase={phrase}
+                  setPhrase={setPhrase}
+                />
+              );
+            })()}
           </>
         )}
       </StateSwitch>
     </>
   );
 }
+
+type ServiceDetail = NonNullable<Awaited<ReturnType<typeof fetchService>>['service']>;
+
+/**
+ * The summary strip: traffic, expiry, delivery attempts and devices — each a field
+ * the server sent, each drawn once. The counter carries its freshness beside it:
+ * a number that looks live and was written days ago is the legacy statistics
+ * screen, so `usageSyncedAt` null is a SENTENCE ("never read"), not a dash.
+ */
+function ServiceStats({ row }: { row: ServiceDetail }) {
+  const limit = BigInt(row.trafficLimitBytes);
+  const used = BigInt(row.trafficUsedBytes);
+  const unlimited = limit === UNLIMITED_TRAFFIC_BYTES;
+  return (
+    <div className="ca-stats">
+      <StatCard
+        icon="activity"
+        label={t('web.service_traffic_used')}
+        value={<Ltr>{formatTrafficGbText(used)}</Ltr>}
+        unit={t('web.unit_gib')}
+        hint={
+          <span className="ca-stat-line">
+            <span>{t('web.service_traffic_limit')}</span>
+            <TrafficLimit bytes={row.trafficLimitBytes} />
+          </span>
+        }
+      >
+        {!unlimited && <Progress value={used} max={limit} label={t('web.service_traffic_used')} />}
+        <span className="ca-stat-line faint">
+          <span>{t('web.service_usage_synced_at')}</span>
+          {row.usageSyncedAt === null ? (
+            <span>{t('web.service_usage_never')}</span>
+          ) : (
+            <span>{formatTimestamp(row.usageSyncedAt)}</span>
+          )}
+        </span>
+      </StatCard>
+      <StatCard
+        icon="calendar"
+        label={t('web.service_expires_at')}
+        value={row.expiresAt === null ? <Dash /> : formatTimestamp(row.expiresAt)}
+      />
+      <StatCard
+        icon="send"
+        label={t('web.service_delivery_attempts')}
+        value={<Ltr>{formatNumber(row.deliveryAttempts)}</Ltr>}
+        hint={
+          <span className="ca-stat-line">
+            <span>{t('web.service_delivery_next_attempt')}</span>
+            {row.deliveryNextAttemptAt === null ? (
+              <Dash />
+            ) : (
+              <span>{formatTimestamp(row.deliveryNextAttemptAt)}</span>
+            )}
+          </span>
+        }
+      />
+      <StatCard
+        icon="devices"
+        label={t('web.service_device_limit')}
+        value={
+          row.deviceLimit === null ? (
+            <span className="ca-stat-sentence">{t('web.service_device_limit_none')}</span>
+          ) : (
+            <Ltr>{formatNumber(row.deviceLimit)}</Ltr>
+          )
+        }
+      />
+    </div>
+  );
+}
+
+/** Who and what this service belongs to, as full-id links. */
+function ServiceIdentity({ row }: { row: ServiceDetail }) {
+  const onLink = useLinkHandler();
+  return (
+    <Card title={t('web.service_identity_title')}>
+      <KV
+        items={[
+          [
+            t('web.service_provider_user_id'),
+            row.providerUserId === null ? (
+              <Dash key="pu" />
+            ) : (
+              <Copyable key="pu" value={row.providerUserId} />
+            ),
+          ],
+          [
+            t('web.service_customer'),
+            <a key="c" href={`/users/${encodeURIComponent(row.customerId)}`} onClick={onLink}>
+              <Ltr>{row.customerId}</Ltr>
+            </a>,
+          ],
+          [
+            t('web.service_order'),
+            <a key="o" href={`/orders/${encodeURIComponent(row.orderId)}`} onClick={onLink}>
+              <Ltr>{row.orderId}</Ltr>
+            </a>,
+          ],
+          [
+            t('web.service_panel'),
+            <a key="p" href={`/panels/${encodeURIComponent(row.panelId)}`} onClick={onLink}>
+              <Ltr>{row.panelId}</Ltr>
+            </a>,
+          ],
+          [
+            t('web.service_product'),
+            // Package D: a custom service has no product, and says so rather than
+            // linking to one that does not exist.
+            row.productId === null ? (
+              <span key="pr" className="muted">
+                {t('web.purpose_custom_service')}
+              </span>
+            ) : (
+              <a key="pr" href={`/products/${encodeURIComponent(row.productId)}`} onClick={onLink}>
+                <Ltr>{row.productId}</Ltr>
+              </a>
+            ),
+          ],
+          [t('web.service_created_at'), formatTimestamp(row.createdAt)],
+          [t('web.service_updated_at'), formatTimestamp(row.updatedAt)],
+        ]}
+      />
+      <p className="muted small">{t('web.service_username_hint')}</p>
+    </Card>
+  );
+}
+
+/**
+ * Delivery, on its own, with the subscription reduced to a yes or a no.
+ *
+ * `hasSubscription` is a boolean in the CONTRACT: the surface needs to know whether
+ * the thing exists, and nothing about the operator's job needs its value. The
+ * sentence below says it is withheld rather than absent.
+ */
+function ServiceDelivery({ row }: { row: ServiceDetail }) {
+  return (
+    <Card title={t('web.service_delivery')}>
+      <KV
+        items={[
+          [
+            t('web.service_subscription'),
+            row.hasSubscription
+              ? t('web.service_subscription_present')
+              : t('web.service_subscription_absent'),
+          ],
+          [
+            t('web.service_delivered_at'),
+            row.deliveredAt === null ? <Dash key="da" /> : formatTimestamp(row.deliveredAt),
+          ],
+          [
+            t('web.service_provisioned_at'),
+            row.provisionedAt === null ? <Dash key="pa" /> : formatTimestamp(row.provisionedAt),
+          ],
+          [
+            t('web.service_terminated_at'),
+            row.terminatedAt === null ? <Dash key="ta" /> : formatTimestamp(row.terminatedAt),
+          ],
+        ]}
+      />
+      <p className="muted small">{t('web.service_subscription_withheld')}</p>
+    </Card>
+  );
+}
+
+const OPERATION_COLUMNS: readonly Column<ServiceOperationResponse>[] = [
+  {
+    key: 'type',
+    header: t('web.operation_type'),
+    render: (op) => <span className="strong">{t(OPERATION_TYPE_LABELS[op.type])}</span>,
+  },
+  {
+    key: 'state',
+    header: t('web.operation_state'),
+    render: (op) => (
+      <Badge tone={OPERATION_STATE_TONES[op.state]} dot>
+        {t(OPERATION_STATE_LABELS[op.state])}
+      </Badge>
+    ),
+  },
+  {
+    key: 'attempts',
+    header: t('web.operation_attempts'),
+    align: 'end',
+    render: (op) => <Ltr>{formatNumber(op.attempts)}</Ltr>,
+  },
+  {
+    key: 'created',
+    header: t('web.operation_created_at'),
+    render: (op) => <span className="nowrap">{formatTimestamp(op.createdAt)}</span>,
+  },
+  {
+    key: 'scheduled',
+    header: t('web.operation_scheduled_at'),
+    render: (op) =>
+      op.scheduledAt === null ? (
+        <Dash />
+      ) : (
+        <span className="nowrap">{formatTimestamp(op.scheduledAt)}</span>
+      ),
+  },
+  {
+    key: 'completed',
+    header: t('web.operation_completed_at'),
+    render: (op) =>
+      op.completedAt === null ? (
+        <Dash />
+      ) : (
+        <span className="nowrap">{formatTimestamp(op.completedAt)}</span>
+      ),
+  },
+  {
+    key: 'failure',
+    header: t('web.operation_failure'),
+    wrap: true,
+    // The adapter's own words, verbatim: the one place an operator learns what the
+    // panel actually said.
+    render: (op) =>
+      op.failureMessage === null ? <Dash /> : <Ltr mono={false}>{op.failureMessage}</Ltr>,
+  },
+];
 
 /** Re-exported so the shell can read a query's state without importing the page's guts. */
 export { queryState };
