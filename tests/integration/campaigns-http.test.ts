@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   API_PREFIX,
@@ -239,5 +240,24 @@ describe('campaigns HTTP surface', () => {
 
     // Another tenant's owner cannot see it at all.
     expect((await get(CAMPAIGN_ROUTES.one(id), foreignCookie)).statusCode).toBe(404);
+  });
+
+  it('lets a campaign planner load the shared audience builder’s options', async () => {
+    // Nothing but the campaign keys and the discount key: no users.view, no broadcast or
+    // mass-action key. The form's audience builder still has to load its options.
+    const planner = await createAdmin(api.container, tenantA, {
+      username: 'planner',
+      password: 'the-planner-password',
+      roleKeys: [],
+    });
+    await api.container.database.db.execute(sql`
+      INSERT INTO admin_permission_overrides (tenant_id, admin_id, permission_key, effect, reason)
+      VALUES
+        (${tenantA.tenantId}, ${planner.id}, 'campaigns.view', 'GRANT', 'Plans campaigns.'),
+        (${tenantA.tenantId}, ${planner.id}, 'campaigns.manage', 'GRANT', 'Plans campaigns.'),
+        (${tenantA.tenantId}, ${planner.id}, 'catalog.discounts.edit', 'GRANT', 'Plans campaigns.')`);
+    const cookie = await cookieFor('planner');
+    const options = await get('/audience/options', cookie);
+    expect(options.statusCode, options.body).toBe(200);
   });
 });

@@ -36,6 +36,8 @@ export const AUDIENCE_OPTIONS_PERMISSIONS: readonly PermissionKey[] = [
   'broadcasts.send',
   'users.wallet.mass',
   'services.mass.grant',
+  // Round N, C1: the campaign form edits its audience with the same builder.
+  'campaigns.manage',
 ];
 
 /** A definition in its one canonical form, with the hash a confirmation binds to. */
