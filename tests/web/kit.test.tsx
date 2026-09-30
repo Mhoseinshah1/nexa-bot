@@ -372,6 +372,41 @@ describe('charts', () => {
     expect(noStyle(container)).toBe(0);
   });
 
+  it('shows a supplied exact text for a value instead of its formatted coordinate', () => {
+    const format = (value: number) => `~${value}`;
+    const { container } = renderPage(
+      <>
+        <LineChart
+          caption="خط"
+          labels={['a', 'b']}
+          format={format}
+          series={[{ name: 'جاری', values: [1, 2], texts: ['exact-1', null] }]}
+        />
+        <BarChart
+          caption="ستون"
+          labels={['a', 'b']}
+          format={format}
+          series={[{ name: 'x', values: [3, 4], texts: [null, 'exact-4'] }]}
+        />
+      </>,
+    );
+    const [line, bar] = [...container.querySelectorAll('figure')] as HTMLElement[];
+    for (const [figure, exact, fallback, index] of [
+      [line, 'exact-1', '~2', 0],
+      [bar, 'exact-4', '~3', 1],
+    ] as const) {
+      const table = figure?.querySelector('table.visually-hidden')?.textContent ?? '';
+      expect(table).toContain(exact);
+      // A slot with no text falls back to the formatter; the texted one never uses it.
+      expect(table).toContain(fallback);
+      expect(table).not.toContain(exact === 'exact-1' ? '~1' : '~4');
+      const hit = figure?.querySelectorAll('rect.hit')[index] as Element;
+      expect(hit.getAttribute('aria-label')).toContain(exact);
+      fireEvent.focus(hit);
+      expect(figure?.querySelector('.chart-readout')?.textContent).toContain(exact);
+    }
+  });
+
   it('draws nothing it would have to invent', () => {
     const { container } = renderPage(
       <>

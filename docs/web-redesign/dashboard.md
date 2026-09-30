@@ -260,8 +260,10 @@ polls faster than its constant, and every poll stops on a final answer (`pollUnl
 - **The yesterday / previous-month / this-year ranges** on this control — the reference's five
   presets only; `/reports` keeps all eight. A URL naming another range falls back to 30 days
   rather than drawing figures for a period no pressed button names.
-- **`/services` badge capping** — a counter is at most `COUNTER_CAP`; the sidebar draws the
-  number, which the §3 note already defines as "that many or more".
+- **An exact sidebar count past the cap** — a counter is at most `COUNTER_CAP`; the sidebar
+  draws one at the cap, and a services badge with a capped part, as a lower bound: `1,000+`,
+  described as "1,000 or more". The dashboard's own unreconciled-services gauge is NOT capped
+  — it sits beside the uncapped queued and unknown totals and is read as exact.
 
 ### What moved
 
