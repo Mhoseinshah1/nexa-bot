@@ -1,0 +1,2351 @@
+/*
+ * The shared UI kit — every rule a component in `src/ui/` emits, and the
+ * generic classes pages compose with (`btn`, `input`, `toolbar`, `badge`…).
+ *
+ * Page-family stylesheets never restyle these; a page that needs something
+ * the kit does not offer adds a component here (with the lead's say-so) or a
+ * page-scoped class in its own family file.
+ */
+
+/* --- Buttons --------------------------------------------------------------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: var(--ctl-h);
+  padding-inline: 12px;
+  border-radius: var(--radius-ctl);
+  border: 1px solid var(--line-2);
+  background: var(--bg-2);
+  color: var(--fg);
+  font-size: var(--fs-ui);
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  white-space: nowrap;
+  text-decoration: none;
+  transition:
+    background 0.12s,
+    border-color 0.12s,
+    color 0.12s;
+}
+.btn:hover {
+  background: var(--bg-3);
+  text-decoration: none;
+}
+.btn:disabled,
+.btn[aria-disabled='true'] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-fg);
+}
+.btn.primary:hover:not(:disabled) {
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
+}
+.btn.danger {
+  background: var(--danger-soft);
+  border-color: transparent;
+  color: var(--danger);
+}
+.btn.danger:hover:not(:disabled) {
+  background: var(--danger);
+  color: var(--on-solid);
+}
+.btn.danger.solid {
+  background: var(--danger);
+  color: var(--on-solid);
+}
+.btn.ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--fg-2);
+}
+.btn.ghost:hover:not(:disabled) {
+  background: var(--bg-3);
+  color: var(--fg);
+}
+.btn.ghost.danger {
+  color: var(--danger);
+}
+.btn.ghost.danger:hover:not(:disabled) {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+.btn.sm {
+  height: var(--ctl-h-sm);
+  padding-inline: 8px;
+  font-size: var(--fs-sm);
+}
+.btn.icon {
+  width: var(--ctl-h);
+  padding: 0;
+}
+.btn.icon.sm {
+  width: var(--ctl-h-sm);
+}
+.btn svg {
+  width: 15px;
+  height: 15px;
+  flex: none;
+}
+.btn.sm svg {
+  width: 13px;
+  height: 13px;
+}
+.btn.block {
+  width: 100%;
+}
+
+/* A group of related actions. Segmented when every child is a `.btn`. */
+.btn-group {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.btn-group.segmented {
+  flex-wrap: nowrap;
+  gap: 0;
+}
+.btn-group.segmented .btn {
+  border-radius: 0;
+}
+.btn-group.segmented .btn:first-child {
+  border-start-start-radius: var(--radius-ctl);
+  border-end-start-radius: var(--radius-ctl);
+}
+.btn-group.segmented .btn:last-child {
+  border-start-end-radius: var(--radius-ctl);
+  border-end-end-radius: var(--radius-ctl);
+}
+.btn-group.segmented .btn + .btn {
+  margin-inline-start: -1px;
+}
+.btn-group .btn.on,
+.btn-group .btn[aria-pressed='true'] {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: var(--accent);
+  position: relative;
+  z-index: 1;
+}
+
+/* Inline link-buttons: a button that reads as a link inside its sentence. */
+.link {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: var(--accent);
+  text-decoration: underline;
+  cursor: pointer;
+}
+.link:hover {
+  color: var(--accent-strong);
+}
+.link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* --- Badges, dots, tags ------------------------------------------------------ */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 20px;
+  padding-inline: 7px;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  white-space: nowrap;
+  background: var(--bg-4);
+  color: var(--fg-2);
+  line-height: 1;
+  vertical-align: middle;
+}
+.badge .dot {
+  width: 6px;
+  height: 6px;
+}
+.badge.ok {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+.badge.warn {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+.badge.danger {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+.badge.info {
+  background: var(--info-soft);
+  color: var(--info);
+}
+.badge.violet {
+  background: var(--violet-soft);
+  color: var(--violet);
+}
+.badge.teal {
+  background: var(--teal-soft);
+  color: var(--teal);
+}
+.badge.outline {
+  background: transparent;
+  border: 1px solid var(--line-2);
+}
+.badge.pulse .dot {
+  animation: pulse 1.8s infinite;
+}
+@keyframes pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 50%, transparent);
+  }
+  70% {
+    box-shadow: 0 0 0 5px transparent;
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+
+.dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--fg-3);
+  flex: none;
+}
+.badge .dot {
+  background: currentColor;
+}
+.dot.ok {
+  background: var(--ok);
+}
+.dot.warn {
+  background: var(--warn);
+}
+.dot.danger {
+  background: var(--danger);
+}
+.dot.info {
+  background: var(--info);
+}
+.dot.violet {
+  background: var(--violet);
+}
+.dot.teal {
+  background: var(--teal);
+}
+.status-dot {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding-inline: 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  background: var(--bg-4);
+  color: var(--fg-2);
+  border: 1px solid var(--line);
+}
+
+/*
+ * The maturity vocabulary that keeps this admin honest. A control the backend
+ * cannot execute is never drawn as an ordinary control: it carries one of
+ * these, and `.inert` makes it inert to the eye as well as to the pointer.
+ */
+.maturity {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 20px;
+  padding-inline: 7px;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  border: 1px solid transparent;
+  vertical-align: middle;
+}
+.maturity.now {
+  background: var(--ok-soft);
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 45%, transparent);
+}
+.maturity.ready {
+  background: var(--info-soft);
+  color: var(--info);
+  border-color: color-mix(in srgb, var(--info) 45%, transparent);
+}
+.maturity.planned {
+  background: var(--bg-3);
+  color: var(--fg-3);
+  border-color: var(--line-2);
+}
+.maturity.unsupported {
+  background: var(--warn-soft);
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 45%, transparent);
+}
+
+/* A control that exists to be READ, never pressed. */
+.inert {
+  opacity: 0.55;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+/* --- Page head --------------------------------------------------------------- */
+
+.page-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 18px;
+  flex-wrap: wrap;
+}
+.page-head .titles {
+  flex: 1;
+  min-width: 240px;
+}
+.page-head h1 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.page-head .sub {
+  color: var(--fg-2);
+  font-size: 12.5px;
+  margin-top: 3px;
+  max-width: 72ch;
+}
+.page-head .actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+/* --- Cards ------------------------------------------------------------------- */
+
+.card {
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  min-width: 0;
+}
+.card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
+  flex-wrap: wrap;
+}
+.card-head > .titles {
+  flex: 1;
+  min-width: 0;
+}
+.card-head h2,
+.card-head h3 {
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+.card-head .hint,
+.card-subtitle {
+  color: var(--fg-3);
+  font-size: var(--fs-sm);
+  margin-top: 2px;
+}
+.card-head .actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.card-body {
+  padding: 16px;
+}
+.card-body.tight {
+  padding: 0;
+}
+/* Content flows with a steady gap inside a card, as it does on the page. */
+.card-body > * + * {
+  margin-top: 12px;
+}
+/*
+ * A table, a toolbar or a filter row directly inside a card sits flush with
+ * its edges, as the reference draws every list: the card is the table's frame.
+ */
+.card-body > .tbl-wrap,
+.card-body > .toolbar,
+.card-body > .filter-row,
+.card-body > .tbl-foot,
+.card-body > .pager {
+  margin-inline: -16px;
+}
+.card-body > .tbl-wrap:first-child,
+.card-body > .toolbar:first-child,
+.card-body > .filter-row:first-child {
+  margin-top: -16px;
+}
+.card-body > .tbl-wrap:last-child,
+.card-body > .pager:last-child,
+.card-body > .tbl-foot:last-child {
+  margin-bottom: -16px;
+}
+.card-body > .tbl-wrap + *,
+.card-body > .toolbar + *,
+.card-body > .filter-row + * {
+  margin-top: 0;
+}
+.card-body > .toolbar + :not(.tbl-wrap, .filter-row),
+.card-body > .filter-row + :not(.tbl-wrap),
+.card-body > .tbl-wrap + :not(.pager, .tbl-foot) {
+  margin-top: 14px;
+}
+.card-foot {
+  padding: 10px 16px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+.card.danger-zone {
+  border-color: color-mix(in srgb, var(--danger) 40%, var(--line));
+}
+.card.danger-zone > .card-head h2 {
+  color: var(--danger);
+}
+.card.muted-card {
+  background: var(--bg-1);
+}
+.card.muted-card > .card-head h2 {
+  color: var(--fg-2);
+}
+
+/* Detail-page head card: identity on one side, quick actions on the other, stats below. */
+.head-card {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  padding: 16px 18px;
+  flex-wrap: wrap;
+}
+.head-card .ident-block {
+  flex: 1;
+  min-width: 240px;
+}
+.head-card .ident-block h1,
+.head-card .ident-block h2 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.head-card .meta {
+  color: var(--fg-3);
+  font-size: var(--fs-sm);
+  margin-top: 2px;
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.head-card .quick {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+.head-stats {
+  display: flex;
+  flex-wrap: wrap;
+  border-top: 1px solid var(--line);
+  margin: 0;
+}
+.head-stats > div {
+  padding: 10px 18px;
+  border-inline-end: 1px solid var(--line);
+  min-width: 140px;
+}
+.head-stats > div:last-child {
+  border-inline-end: none;
+}
+.head-stats .l,
+.head-stats dt {
+  font-size: var(--fs-xs);
+  color: var(--fg-3);
+}
+.head-stats .v,
+.head-stats dd {
+  margin: 0;
+  font-weight: 600;
+  font-size: 14.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- Stats / KPI cards ------------------------------------------------------- */
+
+.stat {
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.stat .lbl {
+  font-size: var(--fs-sm);
+  color: var(--fg-2);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.stat .lbl svg {
+  color: var(--fg-3);
+}
+.stat .val {
+  font-size: 20px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+}
+.stat .val small,
+.stat .val .unit {
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  color: var(--fg-3);
+  margin-inline-start: 4px;
+}
+.stat .val.ok {
+  color: var(--ok);
+}
+.stat .val.warn {
+  color: var(--warn);
+}
+.stat .val.danger {
+  color: var(--danger);
+}
+.stat .delta,
+.stat .foot {
+  font-size: var(--fs-xs);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--fg-3);
+  flex-wrap: wrap;
+}
+.stat .delta b {
+  font-weight: 600;
+}
+.stat .delta.good b {
+  color: var(--ok);
+}
+.stat .delta.bad b {
+  color: var(--danger);
+}
+.stat .spark {
+  margin-top: 4px;
+  height: 28px;
+}
+.stat.alert {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--line));
+}
+.stat.warnish {
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--line));
+}
+.stat.alert .lbl svg {
+  color: var(--danger);
+}
+.stat.warnish .lbl svg {
+  color: var(--warn);
+}
+.stat-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+}
+
+/* A labelled figure, inline: «۱۲ سرویس» with its caption above. */
+.metric {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.metric .l {
+  font-size: var(--fs-xs);
+  color: var(--fg-3);
+}
+.metric .v {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- Progress ------------------------------------------------------------------ */
+
+.progress {
+  display: block;
+  width: 100%;
+  height: 6px;
+  min-width: 60px;
+  border-radius: 3px;
+  background: var(--bg-4);
+  overflow: hidden;
+}
+.progress.lg {
+  height: 10px;
+}
+.progress rect {
+  fill: var(--accent);
+}
+.progress.ok rect {
+  fill: var(--ok);
+}
+.progress.warn rect {
+  fill: var(--warn);
+}
+.progress.danger rect {
+  fill: var(--danger);
+}
+.meter {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 130px;
+}
+.meter .lbl,
+.traffic .lbl {
+  font-size: 11px;
+  color: var(--fg-3);
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+.traffic {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 130px;
+}
+
+/* --- Key/value ------------------------------------------------------------------ */
+
+.kv {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 8px 18px;
+  font-size: var(--fs-ui);
+  align-items: baseline;
+  margin: 0;
+}
+.kv > div {
+  display: contents;
+}
+.kv dt {
+  color: var(--fg-3);
+  white-space: nowrap;
+}
+.kv dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.kv.inline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 22px;
+}
+.kv.inline > div {
+  display: flex;
+  gap: 6px;
+}
+
+/* --- Tables ------------------------------------------------------------------ */
+
+.tbl-wrap {
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+.tbl-wrap.sticky {
+  max-height: 70vh;
+  overflow: auto;
+}
+.tbl {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: var(--fs-ui);
+}
+.tbl th,
+.tbl td {
+  text-align: start;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: middle;
+  white-space: nowrap;
+}
+.tbl th {
+  background: var(--bg-2);
+  color: var(--fg-3);
+  font-weight: 600;
+  font-size: var(--fs-xs);
+  height: 36px;
+  user-select: none;
+}
+.tbl-wrap.sticky .tbl th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.tbl td {
+  font-variant-numeric: tabular-nums;
+}
+.tbl td.wrap,
+.tbl th.wrap {
+  white-space: normal;
+  min-width: 14rem;
+}
+.tbl tbody tr {
+  transition: background 0.1s;
+}
+.tbl tbody tr:hover {
+  background: var(--bg-3);
+}
+.tbl tbody tr.selected {
+  background: var(--accent-soft);
+}
+.tbl tbody tr:last-child td {
+  border-bottom: none;
+}
+.tbl td.num,
+.tbl th.num {
+  text-align: end;
+}
+.tbl .cell-main {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.3;
+  min-width: 0;
+}
+.tbl .cell-main > span + span {
+  font-size: var(--fs-xs);
+  color: var(--fg-3);
+  unicode-bidi: plaintext;
+}
+.tbl .row-actions {
+  display: inline-flex;
+  gap: 4px;
+  justify-content: flex-end;
+}
+.tbl td.actions {
+  text-align: end;
+  width: 1%;
+}
+.tbl.dense th,
+.tbl.dense td,
+.tbl.compact th,
+.tbl.compact td {
+  padding: 5px 10px;
+  font-size: 12.25px;
+}
+.tbl.dense th,
+.tbl.compact th {
+  height: 30px;
+}
+
+/*
+ * CSP-safe alignment. The production document policy is `style-src 'self'`,
+ * which blocks element `style` attributes outright, so a column's alignment
+ * is a class and never an inline style. A test asserts no `style=` attribute
+ * survives in the rendered app, because this is invisible in jsdom and in the
+ * build — it only fails in production.
+ */
+.tbl th.al-start,
+.tbl td.al-start {
+  text-align: start;
+}
+.tbl th.al-end,
+.tbl td.al-end {
+  text-align: end;
+}
+
+.tbl-foot {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--line);
+  font-size: var(--fs-sm);
+  color: var(--fg-2);
+  flex-wrap: wrap;
+}
+
+/* Keyset paging: «showing N» and the two directions, nothing numbered. */
+.pager {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--line);
+  font-size: var(--fs-sm);
+  color: var(--fg-2);
+  flex-wrap: wrap;
+}
+.pager .spacer {
+  flex: 1;
+}
+
+/* The identity cell: a name, then the technical handles beside it. */
+.who {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: inline-grid;
+  place-items: center;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--accent);
+  background: var(--accent-soft);
+  flex: none;
+}
+.avatar.lg {
+  width: 44px;
+  height: 44px;
+  font-size: 17px;
+  border-radius: 12px;
+}
+.ident {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+.ident .sep {
+  color: var(--fg-3);
+  flex: none;
+}
+.ident .id {
+  color: var(--fg-2);
+}
+.ident-cell {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.35;
+  min-width: 0;
+}
+.ident-cell .name {
+  color: var(--fg);
+  font-weight: 500;
+}
+.ident-cell .handles {
+  display: flex;
+  gap: 8px;
+  font-size: var(--fs-xs);
+  color: var(--fg-3);
+}
+
+/* --- Toolbar, filters, chips, search ----------------------------------------- */
+
+.toolbar {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  flex-wrap: wrap;
+}
+.toolbar .spacer {
+  flex: 1;
+}
+.toolbar > .btn,
+.toolbar > .btn-group {
+  margin-bottom: 0;
+}
+.toolbar .field {
+  min-width: 140px;
+}
+.toolbar .field .hint,
+.toolbar .field > .muted.small {
+  font-size: 11px;
+}
+.filter-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  align-items: center;
+}
+.filter-row .divider {
+  width: 1px;
+  align-self: stretch;
+  background: var(--line-2);
+  margin-inline: 4px;
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding-inline: 10px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--line-2);
+  background: var(--bg-2);
+  font-size: var(--fs-sm);
+  color: var(--fg-2);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.chip:hover {
+  color: var(--fg);
+}
+.chip.on,
+.chip[aria-pressed='true'] {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.chip .x {
+  opacity: 0.7;
+}
+.chip .cnt {
+  font-size: 11px;
+  color: inherit;
+  opacity: 0.8;
+}
+.search {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  min-width: 220px;
+}
+.search > svg {
+  position: absolute;
+  inset-inline-start: 9px;
+  color: var(--fg-3);
+  pointer-events: none;
+}
+.search > .input {
+  width: 100%;
+  padding-inline-start: 30px;
+}
+
+/* --- Form controls ------------------------------------------------------------ */
+
+/*
+ * `.input` and the bare native controls look the same. Many forms render a
+ * plain `<input>` inside a `Field`, so the base styling is attached to the
+ * elements through `:where()` (zero specificity) and the class can still
+ * override it.
+ */
+.input,
+:where(
+  input:not([type]),
+  input[type='text'],
+  input[type='search'],
+  input[type='number'],
+  input[type='password'],
+  input[type='email'],
+  input[type='url'],
+  input[type='tel'],
+  input[type='date'],
+  input[type='datetime-local'],
+  input[type='time'],
+  input[type='month'],
+  select,
+  textarea
+) {
+  height: var(--ctl-h);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-ctl);
+  background: var(--bg-1);
+  padding-inline: 10px;
+  color: var(--fg);
+  font-size: var(--fs-ui);
+  min-width: 0;
+  max-width: 100%;
+  outline: none;
+  transition:
+    border-color 0.12s,
+    box-shadow 0.12s;
+}
+.input:focus,
+:where(input, select, textarea):focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.input:disabled,
+:where(input, select, textarea):disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.input[aria-invalid='true'],
+:where(input, select, textarea)[aria-invalid='true'] {
+  border-color: var(--danger);
+}
+.input.sm {
+  height: 28px;
+  font-size: var(--fs-sm);
+}
+.input.search {
+  min-width: 220px;
+}
+.input.block {
+  width: 100%;
+}
+select.input,
+:where(select) {
+  appearance: none;
+  padding-inline-end: 26px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: left 8px center;
+}
+select[multiple] {
+  height: auto;
+  background-image: none;
+  padding-block: 4px;
+}
+textarea.input,
+:where(textarea) {
+  height: auto;
+  min-height: 90px;
+  padding: 8px 10px;
+  resize: vertical;
+  line-height: 1.6;
+}
+:where(input[type='file']) {
+  font-size: var(--fs-sm);
+  color: var(--fg-2);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+.field > label,
+.field-label {
+  font-size: 12.25px;
+  font-weight: 500;
+  color: var(--fg-2);
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.field > .muted.small,
+.field .hint {
+  font-size: var(--fs-xs);
+  color: var(--fg-3);
+}
+.field > .danger.small,
+.field .err {
+  font-size: var(--fs-xs);
+  color: var(--danger);
+}
+.field.invalid .input {
+  border-color: var(--danger);
+}
+.field.compact {
+  gap: 3px;
+}
+.field.compact > label {
+  font-size: 11.5px;
+}
+/*
+ * A heading INSIDE a form, for a group of fields that belong together.
+ *
+ * Not a nested `Card`: a card is a section of the page, and a heading that
+ * implied its own save control would tell the operator something untrue about
+ * what pressing Save does.
+ */
+.field-group-head {
+  margin: 14px 0 0;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--fg-2);
+}
+.field-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: flex-end;
+}
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px 16px;
+}
+.form-grid.c3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.form-grid .full {
+  grid-column: 1 / -1;
+}
+.form-section {
+  padding: 18px 20px;
+  border-bottom: 1px solid var(--line);
+}
+.form-section:last-child {
+  border-bottom: none;
+}
+.form-section > h3 {
+  margin-bottom: 4px;
+}
+.form-section > .desc {
+  color: var(--fg-3);
+  font-size: var(--fs-sm);
+  margin-bottom: 14px;
+}
+.form-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.input-group {
+  display: flex;
+}
+.input-group .input,
+.input-group > input {
+  flex: 1;
+  border-start-end-radius: 0;
+  border-end-end-radius: 0;
+}
+.input-group .addon {
+  display: flex;
+  align-items: center;
+  padding-inline: 10px;
+  border: 1px solid var(--line-2);
+  border-inline-start: none;
+  border-start-end-radius: var(--radius-ctl);
+  border-end-end-radius: var(--radius-ctl);
+  background: var(--bg-3);
+  color: var(--fg-3);
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+}
+
+.switch {
+  position: relative;
+  width: 34px;
+  height: 20px;
+  border-radius: 10px;
+  background: var(--bg-4);
+  border: 1px solid var(--line-2);
+  cursor: pointer;
+  flex: none;
+  transition: background 0.15s;
+  padding: 0;
+}
+.switch::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  inset-inline-start: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--fg-2);
+  transition:
+    transform 0.15s,
+    background 0.15s;
+}
+.switch > span {
+  display: none;
+}
+.switch[aria-checked='true'] {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.switch[aria-checked='true']::after {
+  background: var(--on-solid);
+  transform: translateX(-14px);
+}
+.switch.danger[aria-checked='true'] {
+  background: var(--danger);
+  border-color: var(--danger);
+}
+.switch:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+/* Holds a feature's switch so focus can be handed back to it; adds no box. */
+.switch-slot {
+  display: contents;
+}
+.toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+.toggle-row:last-child {
+  border-bottom: none;
+}
+.toggle-row .txt {
+  flex: 1;
+  min-width: 0;
+}
+.toggle-row .txt b {
+  font-weight: 500;
+  display: block;
+  font-size: var(--fs-ui);
+}
+.toggle-row .txt span {
+  color: var(--fg-3);
+  font-size: 11.75px;
+}
+
+.check,
+.checkbox,
+.radio {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--fs-ui);
+  cursor: pointer;
+}
+:where(input[type='checkbox'], input[type='radio']) {
+  accent-color: var(--accent);
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  flex: none;
+}
+.check input:disabled + span,
+.checkbox input:disabled + span {
+  opacity: 0.6;
+}
+
+/* A configured credential: presence, never a value. */
+.secret {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ctl);
+  background: var(--bg-1);
+}
+.secret + .secret {
+  margin-top: 8px;
+}
+
+/* A technical value on its own line: a URL, a hash, a command. */
+.code {
+  display: block;
+  background: var(--bg-0);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ctl);
+  padding: 8px 10px;
+  font-family: var(--font-mono);
+  font-size: 11.75px;
+  direction: ltr;
+  unicode-bidi: isolate;
+  text-align: left;
+  overflow-x: auto;
+  white-space: pre;
+  color: var(--fg-2);
+  scrollbar-width: thin;
+}
+.code.wrap {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.code-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.code-field > .code {
+  flex: 1;
+  min-width: 0;
+}
+
+/* --- Tabs, pills, segmented -------------------------------------------------- */
+
+.tabs {
+  display: flex;
+  gap: 2px;
+  border-bottom: 1px solid var(--line);
+  overflow-x: auto;
+  scrollbar-width: none;
+  margin-bottom: 16px;
+}
+.tabs button {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 8px 12px;
+  color: var(--fg-2);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  margin-bottom: -1px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.tabs button:hover {
+  color: var(--fg);
+}
+.tabs button.on {
+  color: var(--fg);
+  border-bottom-color: var(--accent);
+}
+.tabs button .cnt {
+  font-size: 11px;
+  background: var(--bg-4);
+  border-radius: 9px;
+  padding: 0 6px;
+  color: var(--fg-3);
+}
+.tabs.vertical {
+  flex-direction: column;
+  border-bottom: none;
+  border-inline-end: 1px solid var(--line);
+  margin-bottom: 0;
+  gap: 2px;
+  padding-inline-end: 8px;
+  min-width: 180px;
+}
+.tabs.vertical button {
+  text-align: start;
+  border: none;
+  border-radius: 6px;
+  margin: 0;
+}
+.tabs.vertical button.on {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+[role='tabpanel']:focus-visible {
+  outline-offset: 4px;
+}
+.pills {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  background: var(--bg-3);
+  padding: 3px;
+  border-radius: 8px;
+}
+.pills button {
+  border: none;
+  background: transparent;
+  border-radius: 6px;
+  padding: 4px 10px;
+  color: var(--fg-2);
+  cursor: pointer;
+  font-size: var(--fs-sm);
+  font-weight: 500;
+}
+.pills button:hover {
+  color: var(--fg);
+}
+.pills button.on {
+  background: var(--bg-1);
+  color: var(--fg);
+  box-shadow: var(--shadow-sm);
+}
+
+/* The period control: a segmented set of presets and a comparison switch. */
+.period {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.period .custom {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+
+/* --- Banners and notices --------------------------------------------------- */
+
+.banner,
+.notice {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--line-2);
+  background: var(--bg-3);
+  color: var(--fg-2);
+  font-size: var(--fs-ui);
+}
+.banner > svg {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  margin-top: 3px;
+}
+.banner > div {
+  flex: 1;
+  min-width: 0;
+}
+/*
+ * A banner's TITLE is a line of its own. `Banner` renders `<strong>{title}</strong>
+ * {children}` into one flex child, and without this every banner that carries both
+ * read as one run-on sentence with a bold prefix.
+ */
+.banner strong {
+  display: block;
+  margin-bottom: 2px;
+  font-weight: 600;
+}
+.banner.warn {
+  background: var(--warn-soft);
+  border-color: color-mix(in srgb, var(--warn) 40%, transparent);
+}
+.banner.warn > svg,
+.banner.warn strong {
+  color: var(--warn);
+}
+.banner.danger {
+  background: var(--danger-soft);
+  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+}
+.banner.danger > svg,
+.banner.danger strong {
+  color: var(--danger);
+}
+.banner.info {
+  background: var(--info-soft);
+  border-color: color-mix(in srgb, var(--info) 40%, transparent);
+}
+.banner.info > svg,
+.banner.info strong {
+  color: var(--info);
+}
+.banner.ok {
+  background: var(--ok-soft);
+  border-color: color-mix(in srgb, var(--ok) 40%, transparent);
+}
+.banner.ok > svg,
+.banner.ok strong {
+  color: var(--ok);
+}
+.banner.violet {
+  background: var(--violet-soft);
+  border-color: color-mix(in srgb, var(--violet) 40%, transparent);
+}
+.banner.violet > svg,
+.banner.violet strong {
+  color: var(--violet);
+}
+.banner.teal {
+  background: var(--teal-soft);
+  border-color: color-mix(in srgb, var(--teal) 40%, transparent);
+}
+.banner.teal > svg,
+.banner.teal strong {
+  color: var(--teal);
+}
+.banner.neutral > svg {
+  color: var(--fg-3);
+}
+.banner p + p {
+  margin-top: 4px;
+}
+.notice {
+  display: block;
+}
+
+/* --- States ------------------------------------------------------------------ */
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 40px 20px;
+  gap: 8px;
+  color: var(--fg-2);
+}
+.empty > svg {
+  color: var(--fg-3);
+  opacity: 0.75;
+}
+.empty > strong,
+.empty h3 {
+  color: var(--fg);
+  font-weight: 600;
+}
+.empty p {
+  font-size: 12.5px;
+  max-width: 420px;
+}
+.empty.error > svg,
+.empty.error > strong {
+  color: var(--danger);
+}
+.empty.denied > svg {
+  color: var(--warn);
+}
+.empty.compact {
+  padding: 20px 12px;
+}
+
+/*
+ * The loading placeholder. `.skel` is the CONTAINER the tests look for (a
+ * page is "loaded" when none is left), so the shimmer is on its cells.
+ */
+.skel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px 2px;
+}
+.skel > div {
+  display: flex;
+  gap: 14px;
+}
+.skel span {
+  flex: 1;
+  height: 12px;
+  border-radius: 5px;
+  background: linear-gradient(90deg, var(--bg-3) 25%, var(--bg-4) 50%, var(--bg-3) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s infinite;
+}
+.skel span:first-child {
+  flex: 2;
+}
+.skel > div:nth-child(n + 4) span {
+  opacity: 0.6;
+}
+@keyframes shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+.loading-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 32px 16px;
+  color: var(--fg-3);
+}
+
+/* --- Money, numbers, copy ---------------------------------------------------- */
+
+.money {
+  font-variant-numeric: tabular-nums;
+  unicode-bidi: isolate;
+  white-space: nowrap;
+}
+.money .unit {
+  color: var(--fg-2);
+  margin-inline-start: 4px;
+  font-size: 0.9em;
+}
+.copyable {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  max-width: 100%;
+  min-width: 0;
+}
+.copyable > .val {
+  max-width: 22rem;
+}
+
+/* The reorder chevron's flip — a class, because an inline transform is dropped by the CSP. */
+.flip {
+  display: inline-flex;
+  transform: rotate(180deg);
+}
+
+/* --- Distribution (share-of-total bars) -------------------------------------- */
+/*
+ * A dynamic width cannot become a class, so the bar is an SVG `rect`: its
+ * geometry is a presentation ATTRIBUTE, which `style-src` does not govern.
+ */
+.dist {
+  display: grid;
+  gap: 10px;
+}
+.dist-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 12px;
+  align-items: center;
+  font-size: 12.5px;
+}
+.dist-row svg.bar {
+  grid-column: 1 / -1;
+  display: block;
+  width: 100%;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--bg-4);
+  overflow: hidden;
+}
+.dist-row svg.bar rect.ok {
+  fill: var(--ok);
+}
+.dist-row svg.bar rect.warn {
+  fill: var(--warn);
+}
+.dist-row svg.bar rect.danger {
+  fill: var(--danger);
+}
+.dist-row svg.bar rect.info {
+  fill: var(--accent);
+}
+.dist-row svg.bar rect.violet {
+  fill: var(--violet);
+}
+.dist-row svg.bar rect.teal {
+  fill: var(--teal);
+}
+.dist-row svg.bar rect.neutral {
+  fill: var(--fg-3);
+}
+
+/* --- Repeatable list editor ---------------------------------------------------- */
+.list-editor {
+  display: grid;
+  gap: 8px;
+}
+.list-editor-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg-1);
+}
+.list-editor-row .grow {
+  flex: 1;
+  min-width: 0;
+}
+.list-editor-row .ord {
+  color: var(--fg-3);
+  font-variant-numeric: tabular-nums;
+  width: 1.5rem;
+  text-align: center;
+  flex: none;
+}
+
+/* --- Timeline ------------------------------------------------------------------ */
+.timeline {
+  position: relative;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  padding-inline-start: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.timeline::before {
+  content: '';
+  position: absolute;
+  inset-inline-start: 5px;
+  top: 6px;
+  bottom: 6px;
+  width: 1px;
+  background: var(--line-2);
+}
+.timeline > li {
+  position: relative;
+  font-size: var(--fs-ui);
+}
+.timeline > li::before {
+  content: '';
+  position: absolute;
+  inset-inline-start: -17px;
+  top: 6px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--bg-2);
+  border: 2px solid var(--fg-3);
+}
+.timeline > li.ok::before {
+  border-color: var(--ok);
+}
+.timeline > li.warn::before {
+  border-color: var(--warn);
+}
+.timeline > li.danger::before {
+  border-color: var(--danger);
+}
+.timeline > li.info::before {
+  border-color: var(--accent);
+}
+.timeline .t {
+  font-size: 11px;
+  color: var(--fg-3);
+}
+.timeline .d {
+  color: var(--fg-2);
+  font-size: var(--fs-sm);
+}
+
+/* --- Overlays: modal, drawer, confirmation, menu ------------------------------ */
+
+.overlay,
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  background: var(--overlay);
+  z-index: 40;
+  animation: fade 0.12s ease;
+}
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes pop {
+  from {
+    transform: translateY(6px);
+    opacity: 0;
+  }
+}
+@keyframes slide-in {
+  from {
+    transform: translateX(-24px);
+    opacity: 0;
+  }
+}
+@keyframes pop-up {
+  from {
+    transform: translateY(8px);
+    opacity: 0;
+  }
+}
+
+/* A dialog is centred by its backdrop, so no transform positions it (the CSP forbids inline ones anyway). */
+.modal-layer,
+.dialog-backdrop {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 12vh 16px 16px;
+  z-index: 100;
+}
+.modal-layer {
+  position: fixed;
+  inset: 0;
+  background: var(--overlay);
+  animation: fade 0.12s ease;
+}
+.modal,
+.dialog {
+  width: 100%;
+  max-width: 520px;
+  max-height: 76vh;
+  background: var(--bg-1);
+  border: 1px solid var(--line-2);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  animation: pop 0.14s ease;
+}
+.modal.lg {
+  max-width: 760px;
+}
+.dialog {
+  max-width: 440px;
+  padding: 18px;
+  display: block;
+}
+.dialog h2 {
+  margin: 0 0 8px;
+  font-size: 15px;
+}
+.dialog p {
+  margin: 0 0 8px;
+}
+.dialog-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-start;
+  margin-top: 14px;
+}
+.drawer-head,
+.modal-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--line);
+}
+.drawer-head h2,
+.modal-head h2 {
+  flex: 1;
+  min-width: 0;
+  font-size: 15px;
+}
+.drawer-body,
+.modal-body {
+  padding: 18px;
+  overflow: auto;
+  flex: 1;
+}
+.drawer-body > * + *,
+.modal-body > * + * {
+  margin-top: 12px;
+}
+.drawer-foot,
+.modal-foot {
+  padding: 12px 18px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  align-items: center;
+}
+.modal.danger .modal-head {
+  color: var(--danger);
+}
+.drawer-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: var(--overlay);
+  animation: fade 0.12s ease;
+}
+.drawer {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  inset-inline-end: 0;
+  width: min(560px, 92vw);
+  background: var(--bg-1);
+  border-inline-start: 1px solid var(--line);
+  z-index: 101;
+  display: flex;
+  flex-direction: column;
+  box-shadow: var(--shadow);
+  animation: slide-in 0.18s ease;
+}
+.drawer.wide {
+  width: min(760px, 94vw);
+}
+
+.menu-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  inset-inline-end: 0;
+  min-width: 200px;
+  background: var(--bg-1);
+  border: 1px solid var(--line-2);
+  border-radius: 9px;
+  box-shadow: var(--shadow);
+  padding: 4px;
+  z-index: 30;
+  animation: pop-up 0.12s ease;
+}
+.menu.up {
+  top: auto;
+  bottom: calc(100% + 4px);
+}
+.menu.start {
+  inset-inline-end: auto;
+  inset-inline-start: 0;
+}
+.menu button,
+.menu a {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border: none;
+  background: none;
+  color: var(--fg);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: var(--fs-ui);
+  text-align: start;
+}
+.menu button:hover,
+.menu a:hover,
+.menu button:focus-visible,
+.menu a:focus-visible {
+  background: var(--bg-3);
+  text-decoration: none;
+  outline: none;
+}
+.menu button[aria-checked='true'] {
+  color: var(--accent);
+}
+.menu .sep {
+  height: 1px;
+  background: var(--line);
+  margin: 4px 0;
+}
+.menu button.danger {
+  color: var(--danger);
+}
+.menu .head {
+  padding: 6px 10px 4px;
+  font-size: 11px;
+  color: var(--fg-3);
+}
+
+/* --- Toasts ------------------------------------------------------------------ */
+
+.toasts {
+  position: fixed;
+  bottom: 18px;
+  inset-inline-start: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 160;
+  pointer-events: none;
+}
+.toast {
+  background: var(--bg-3);
+  border: 1px solid var(--line-2);
+  border-inline-start-width: 3px;
+  border-radius: 9px;
+  padding: 10px 14px;
+  min-width: 260px;
+  max-width: 380px;
+  box-shadow: var(--shadow);
+  font-size: var(--fs-ui);
+  animation: pop-up 0.18s ease;
+  pointer-events: auto;
+}
+.toast.ok {
+  border-inline-start-color: var(--ok);
+}
+.toast.danger {
+  border-inline-start-color: var(--danger);
+}
+.toast.warn {
+  border-inline-start-color: var(--warn);
+}
+.toast.info {
+  border-inline-start-color: var(--info);
+}
+
+/* --- Charts ------------------------------------------------------------------ */
+/*
+ * Hand-rolled SVG, coloured by class from the chart tokens. The time axis runs
+ * left to right as the reference draws it, so the svg itself is LTR while
+ * every label and legend around it stays in the document's direction.
+ */
+.chart {
+  width: 100%;
+  height: auto;
+  display: block;
+  direction: ltr;
+  overflow: visible;
+}
+.chart text {
+  font-family: inherit;
+  fill: var(--fg-3);
+  font-size: 10.5px;
+}
+.chart .grid-line {
+  stroke: var(--chart-grid);
+  stroke-dasharray: 2 4;
+}
+.chart .axis {
+  stroke: var(--line-2);
+}
+.chart .s1 {
+  fill: var(--chart-1);
+  stroke: var(--chart-1);
+}
+.chart .s2 {
+  fill: var(--chart-2);
+  stroke: var(--chart-2);
+}
+.chart .s3 {
+  fill: var(--chart-3);
+  stroke: var(--chart-3);
+}
+.chart .s4 {
+  fill: var(--chart-4);
+  stroke: var(--chart-4);
+}
+.chart .s5 {
+  fill: var(--chart-5);
+  stroke: var(--chart-5);
+}
+.chart .s6 {
+  fill: var(--chart-6);
+  stroke: var(--chart-6);
+}
+.chart .muted-series {
+  fill: var(--fg-3);
+  stroke: var(--fg-3);
+}
+.chart .line {
+  fill: none;
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+.chart .line.dashed {
+  stroke-width: 1.4;
+  stroke-dasharray: 4 4;
+}
+.chart .area {
+  stroke: none;
+  opacity: 0.12;
+}
+.chart rect.bar {
+  stroke: none;
+}
+.chart .hit {
+  fill: transparent;
+  stroke: none;
+  outline: none;
+  cursor: default;
+}
+.chart .hit:hover,
+.chart .hit:focus-visible {
+  fill: var(--accent-soft);
+}
+.chart .cursor {
+  stroke: var(--line-2);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+.chart .donut-track {
+  fill: none;
+  stroke: var(--bg-4);
+}
+.chart .donut-seg {
+  fill: none;
+}
+.chart .donut-total {
+  fill: var(--fg);
+  font-size: 13px;
+  font-weight: 600;
+}
+.spark {
+  display: block;
+  width: 100%;
+  height: 28px;
+  direction: ltr;
+}
+.spark .line {
+  fill: none;
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+.spark .area {
+  opacity: 0.14;
+  stroke: none;
+}
+.spark .s1 {
+  fill: var(--chart-1);
+  stroke: var(--chart-1);
+}
+.spark .s2 {
+  fill: var(--chart-2);
+  stroke: var(--chart-2);
+}
+.spark .s3 {
+  fill: var(--chart-3);
+  stroke: var(--chart-3);
+}
+.spark .s6 {
+  fill: var(--chart-6);
+  stroke: var(--chart-6);
+}
+.legend {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  font-size: 11.75px;
+  color: var(--fg-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.legend li,
+.legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.legend .key {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  display: inline-block;
+  background: var(--chart-1);
+}
+.legend .key.s2 {
+  background: var(--chart-2);
+}
+.legend .key.s3 {
+  background: var(--chart-3);
+}
+.legend .key.s4 {
+  background: var(--chart-4);
+}
+.legend .key.s5 {
+  background: var(--chart-5);
+}
+.legend .key.s6 {
+  background: var(--chart-6);
+}
+.legend .key.dashed {
+  height: 0;
+  width: 14px;
+  border-radius: 0;
+  background: none;
+  border-top: 2px dashed var(--fg-3);
+}
+.chart-readout {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  min-height: 22px;
+  margin-top: 6px;
+  font-size: var(--fs-sm);
+  color: var(--fg-2);
+}
+.chart-card .card-body {
+  padding-top: 12px;
+}
+.chart-card .card-head .legend {
+  margin-inline-start: auto;
+}
+.chart-empty {
+  display: grid;
+  place-items: center;
+  min-height: 160px;
+  color: var(--fg-3);
+  font-size: var(--fs-sm);
+}
+
+/* The business trend chart (`ui/trend-chart.tsx`). */
+.trend {
+  margin: 10px 0 0;
+}
+.trend-svg {
+  width: 100%;
+  height: 220px;
+  display: block;
+  direction: ltr;
+}
+.trend-axis {
+  stroke: var(--line-2);
+  stroke-width: 1;
+}
+.trend-line {
+  fill: none;
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+.trend-line.current {
+  stroke: var(--chart-1);
+}
+.trend-line.previous {
+  stroke: var(--fg-3);
+  stroke-dasharray: 5 4;
+}
+.trend-cursor {
+  stroke: var(--line-2);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+.trend-hit {
+  fill: transparent;
+  outline: none;
+}
+.trend-hit:focus-visible {
+  fill: var(--accent-soft);
+}
+.trend-legend {
+  display: flex;
+  gap: 14px;
+  font-size: var(--fs-sm);
+  color: var(--fg-2);
+  margin-top: 6px;
+}
+.trend-key::before {
+  content: '';
+  display: inline-block;
+  width: 14px;
+  height: 0;
+  margin-inline-end: 6px;
+  vertical-align: middle;
+  border-top: 2px solid var(--chart-1);
+}
+.trend-key.previous::before {
+  border-top: 2px dashed var(--fg-3);
+}
+.trend-readout {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  min-height: 22px;
+  margin-top: 6px;
+  font-size: 13px;
+}
+
+/* --- Command palette ----------------------------------------------------------- */
+
+.palette {
+  width: 100%;
+  max-width: 600px;
+  background: var(--bg-1);
+  border: 1px solid var(--line-2);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+  animation: pop 0.14s ease;
+}
+.palette .in {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
+  color: var(--fg-3);
+}
+.palette .in input {
+  flex: 1;
+  height: auto;
+  background: none;
+  border: none;
+  outline: none;
+  box-shadow: none;
+  padding: 0;
+  font-size: 15px;
+  color: var(--fg);
+}
+.palette kbd {
+  font-size: 10.5px;
+  border: 1px solid var(--line-2);
+  border-radius: 4px;
+  padding: 0 5px;
+  color: var(--fg-3);
+}
+.palette .list {
+  max-height: 380px;
+  overflow: auto;
+  padding: 6px;
+  margin: 0;
+  list-style: none;
+}
+.palette .list .head {
+  font-size: 11px;
+  color: var(--fg-3);
+  padding: 8px 10px 4px;
+}
+.palette .list a {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 7px;
+  color: var(--fg);
+  font-size: 13px;
+}
+.palette .list a:hover,
+.palette .list a[aria-selected='true'] {
+  background: var(--bg-3);
+  text-decoration: none;
+}
+.palette .list a svg {
+  color: var(--fg-3);
+  flex: none;
+}
+.palette .list a .sub {
+  margin-inline-start: auto;
+  font-size: var(--fs-xs);
+  color: var(--fg-3);
+}
+.palette .none {
+  padding: 24px;
+  text-align: center;
+  color: var(--fg-3);
+}
+
+.chart-figure {
+  margin: 0;
+}
+.donut .row {
+  gap: 18px;
+  flex-wrap: nowrap;
+  align-items: center;
+}
+.donut-svg {
+  width: 150px;
+  height: 150px;
+  flex: none;
+}
+.donut-legend {
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+.donut-legend li {
+  display: flex;
+  gap: 8px;
+}
+.donut-legend b {
+  margin-inline-start: auto;
+  font-weight: 600;
+}
+.menu button svg.end {
+  margin-inline-start: auto;
+}

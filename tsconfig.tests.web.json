@@ -15,6 +15,9 @@
     "module": "preserve",
     "moduleResolution": "bundler",
     "jsx": "react-jsx",
+    // The screenshot fixtures (tests/web/shots) are also loaded by Node itself,
+    // through its TypeScript type stripping, which needs the real `.ts` specifier.
+    "allowImportingTsExtensions": true,
     "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "types": ["node"]
   },

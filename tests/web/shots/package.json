@@ -1,0 +1,5 @@
+{
+  "private": true,
+  "type": "module",
+  "description": "Marks the screenshot fixtures as ES modules for Node's TypeScript type stripping (scripts/web-shots)."
+}
