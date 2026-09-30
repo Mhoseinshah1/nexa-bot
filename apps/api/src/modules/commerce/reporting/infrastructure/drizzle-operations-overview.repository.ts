@@ -81,13 +81,10 @@ export class DrizzleOperationsOverviewRepository implements OperationsOverviewRe
     return { queued: row?.queued ?? 0, unknown: row?.unknown ?? 0 };
   }
 
-  async unreconciledServices(scope: TenantContext, cap: number): Promise<number> {
-    return this.count(
-      capped(
-        sql`SELECT 1 FROM services s WHERE s.tenant_id = ${tenant(scope)} AND s.state = 'UNRECONCILED'`,
-        cap,
-      ),
-    );
+  async unreconciledServices(scope: TenantContext): Promise<number> {
+    return this.count(sql`
+      SELECT count(*)::int AS n FROM services s
+       WHERE s.tenant_id = ${tenant(scope)} AND s.state = 'UNRECONCILED'`);
   }
 
   /**
@@ -142,7 +139,12 @@ export class DrizzleOperationsOverviewRepository implements OperationsOverviewRe
           ),
         );
       case 'unreconciledServices':
-        return this.unreconciledServices(scope, cap);
+        return this.count(
+          capped(
+            sql`SELECT 1 FROM services s WHERE s.tenant_id = ${t} AND s.state = 'UNRECONCILED'`,
+            cap,
+          ),
+        );
       case 'refundRequestsAwaiting':
         return this.count(
           capped(

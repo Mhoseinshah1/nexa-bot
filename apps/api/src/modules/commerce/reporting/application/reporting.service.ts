@@ -192,10 +192,8 @@ export class ReportingService {
       currency: chosen,
       currencies: money
         ? [
-            ...(await repo.revenueCurrencies(scope, [
-              { from: r.period.current.start, to: r.period.current.end },
-              { from: r.period.previous.start, to: r.period.previous.end },
-            ])),
+            // The effective windows, like every figure: a nominal end reaches past the cut.
+            ...(await repo.revenueCurrencies(scope, [r.current, r.previous])),
           ]
         : [],
       current: await series(r.period.current),
@@ -256,10 +254,10 @@ export class ReportingService {
       addAmounts(found.amounts, group.confirmedAmount);
       methods.set(group.method, found);
     }
-    const windows = [r, today, month].flatMap((w) => [
-      { from: w.period.current.start, to: w.period.current.end },
-      { from: w.period.previous.start, to: w.period.previous.end },
-    ]);
+    // Discovered over the EFFECTIVE windows every total and series runs over. A nominal end
+    // reaches past a running period's like-for-like cut, and would name a currency that no
+    // figure on the page contains.
+    const windows = [r, today, month].flatMap((w) => [w.current, w.previous]);
 
     return {
       period: r.wire,

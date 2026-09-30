@@ -698,6 +698,13 @@ describe('Round W dashboard', () => {
     expect(body.month.series[9]?.value).toBe('145000');
     expect(body.month.series[10]?.value).toBeNull();
 
+    // The IRR sale settled at 16:00, past the 15:00 cut: inside today's and this month's
+    // NOMINAL end, outside every effective window, so no figure contains it and the list of
+    // currencies must not offer it either. Nor may the trend's, over the same cut.
+    expect(body.currencies).toEqual(['IRT']);
+    const trend = await service.trend(tenantA, owner, { range: 'TODAY' }, 'REVENUE');
+    expect(trend.currencies).toEqual(['IRT']);
+
     // The selected period on the same clock is TODAY, so its figures are today's.
     expect(body.selected.sales).toEqual(body.today.sales);
     expect(body.selected.salesByKind[15]?.counts).toBeNull();
@@ -882,6 +889,23 @@ describe('Round W dashboard', () => {
     const repository = new DrizzleOperationsOverviewRepository(api.container.database.db);
     expect(await repository.navCounter(tenantA, 'paymentsUnknown', 10)).toBe(3);
     expect(await repository.navCounter(tenantA, 'paymentsUnknown', 2)).toBe(2);
+  });
+
+  it('bounds the unreconciled badge, and counts the dashboard’s unreconciled gauge in full', async () => {
+    for (let i = 0; i < 2; i += 1) {
+      const orderId = await order({
+        customerId: ids.c0,
+        purpose: 'NEW_SERVICE',
+        subtotal: 1_000,
+        settledAt: at(6, i),
+      });
+      await service({ orderId, customerId: ids.c0, state: 'UNRECONCILED' });
+    }
+    const repository = new DrizzleOperationsOverviewRepository(api.container.database.db);
+    // Three in tenant A: the badge stops at its cap, the gauge does not.
+    expect(await repository.navCounter(tenantA, 'unreconciledServices', 2)).toBe(2);
+    expect(await repository.unreconciledServices(tenantA)).toBe(3);
+    expect(await repository.unreconciledServices(tenantB)).toBe(0);
   });
 
   async function denials(): Promise<number> {
