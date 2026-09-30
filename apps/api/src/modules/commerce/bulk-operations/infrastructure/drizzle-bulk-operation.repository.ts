@@ -52,9 +52,11 @@ interface OperationRow {
   item_count: number;
   audience_fingerprint: string;
   not_before: Instant | null;
+  frozen_audience_id: string | null;
   created_by_id: string | null;
   created_by_username: string | null;
   created_at: Instant;
+  paused_at: Instant | null;
   completed_at: Instant | null;
   cancelled_at: Instant | null;
 }
@@ -76,11 +78,13 @@ function toRecord(row: OperationRow): BulkOperationRecord {
     itemCount: row.item_count,
     audienceFingerprint: row.audience_fingerprint,
     notBefore: maybeDate(row.not_before),
+    frozenAudienceId: row.frozen_audience_id,
     createdBy:
       row.created_by_id === null
         ? null
         : { id: row.created_by_id, username: row.created_by_username ?? '' },
     createdAt: date(row.created_at),
+    pausedAt: maybeDate(row.paused_at),
     completedAt: maybeDate(row.completed_at),
     cancelledAt: maybeDate(row.cancelled_at),
   };
@@ -144,9 +148,9 @@ export class DrizzleBulkOperationRepository implements BulkOperationRepository {
     return sql`SELECT o.id, o.kind, o.state, o.amount_minor::text AS amount_minor, o.currency,
                       o.traffic_bytes::text AS traffic_bytes, o.duration_days, o.notify, o.note,
                       o.audience_definition, o.audience_hash, o.audience_as_of, o.item_count,
-                      o.audience_fingerprint, o.not_before,
+                      o.audience_fingerprint, o.not_before, o.frozen_audience_id,
                       o.created_by_admin_id AS created_by_id, a.username AS created_by_username,
-                      o.created_at, o.completed_at, o.cancelled_at
+                      o.created_at, o.paused_at, o.completed_at, o.cancelled_at
                  FROM bulk_operations o
                  LEFT JOIN admins a ON a.id = o.created_by_admin_id
                 WHERE ${where} ${suffix}`;
@@ -159,13 +163,14 @@ export class DrizzleBulkOperationRepository implements BulkOperationRepository {
       INSERT INTO bulk_operations (id, tenant_id, kind, state, amount_minor, currency, traffic_bytes,
                                    duration_days, notify, note, audience_definition, audience_hash,
                                    audience_as_of, item_count, audience_fingerprint, not_before,
-                                   created_by_admin_id, created_at, updated_at)
+                                   frozen_audience_id, created_by_admin_id, created_at, updated_at)
       VALUES (${draft.id}::uuid, ${tenantId}::uuid, ${draft.kind}, 'RUNNING',
               ${draft.amountMinor?.toString() ?? null}::bigint, ${draft.currency},
               ${draft.trafficBytes?.toString() ?? null}::bigint, ${draft.durationDays},
               ${draft.notify}, ${draft.note}, ${draft.audienceJson}::jsonb, ${draft.audienceHash},
               ${draft.audienceAsOf.toISOString()}::timestamptz, ${draft.itemCount},
               ${draft.fingerprint}, ${draft.notBefore?.toISOString() ?? null}::timestamptz,
+              ${draft.frozenAudienceId}::uuid,
               ${draft.createdByAdminId}::uuid, ${at}::timestamptz, ${at}::timestamptz)`);
   }
 
@@ -463,12 +468,87 @@ export class DrizzleBulkOperationRepository implements BulkOperationRepository {
     };
   }
 
+  async materialiseFromFrozen(
+    scope: TenantContext,
+    id: string,
+    frozenAudienceId: string,
+    kind: BulkOperationKind,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<FrozenItems> {
+    const tenantId = requireTenantId(scope);
+    const at = now.toISOString();
+    /*
+     * A COPY of the frozen members, never a re-selection: a customer who joined the
+     * definition since the freeze is not an item, and one who left it still is. Live
+     * safety is the processor's (a blocked customer, a service no longer eligible).
+     */
+    await this.exec(tx).execute(sql`
+      INSERT INTO bulk_operation_items (id, tenant_id, bulk_operation_id, customer_id, service_id,
+                                        created_at, updated_at)
+      SELECT gen_random_uuid(), ${tenantId}::uuid, ${id}::uuid, m.customer_id,
+             ${kind === 'WALLET_CREDIT' ? sql`NULL::uuid` : sql`m.service_id`},
+             ${at}::timestamptz, ${at}::timestamptz
+        FROM frozen_audience_members m
+       WHERE m.tenant_id = ${tenantId}::uuid AND m.frozen_audience_id = ${frozenAudienceId}::uuid
+         AND ${kind === 'WALLET_CREDIT' ? sql`m.service_id IS NULL` : sql`m.service_id IS NOT NULL`}`);
+    return this.frozen(
+      tenantId,
+      id,
+      kind === 'WALLET_CREDIT' ? sql`i.customer_id` : sql`i.service_id`,
+      tx,
+    );
+  }
+
+  async freezeServiceMembers(
+    scope: TenantContext,
+    frozenAudienceId: string,
+    evaluation: AudienceEvaluation,
+    rule: GrantEligibility,
+    tx: TransactionScope,
+  ): Promise<void> {
+    const tenantId = requireTenantId(scope);
+    // The SAME query the preview counted and the live materialisation would copy.
+    await this.exec(tx).execute(sql`
+      INSERT INTO frozen_audience_members (tenant_id, frozen_audience_id, customer_id, service_id,
+                                           bot_instance_id, chat_id)
+      SELECT ${tenantId}::uuid, ${frozenAudienceId}::uuid, a.customer_id, a.service_id,
+             c.first_bot_instance_id, c.telegram_user_id
+        FROM (${audienceServicesQuery(evaluation, eligibility(rule))}) a
+        JOIN customers c ON c.tenant_id = ${tenantId}::uuid AND c.id = a.customer_id`);
+  }
+
+  async transition(
+    scope: TenantContext,
+    id: string,
+    from: readonly BulkOperationState[],
+    to: 'RUNNING' | 'PAUSED',
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const at = sql`${now.toISOString()}::timestamptz`;
+    const rows = await this.rows<{ id: string }>(
+      sql`UPDATE bulk_operations
+             SET state = ${to},
+                 paused_at = CASE WHEN ${to} = 'PAUSED' THEN ${at} ELSE NULL END,
+                 updated_at = ${at}
+           WHERE tenant_id = ${tenantId}::uuid AND id = ${id}::uuid
+             AND state = ANY(${sql.param([...from])}::text[])
+       RETURNING id`,
+      tx,
+    );
+    return rows.length === 1;
+  }
+
   async cancel(scope: TenantContext, id: string, now: Date, tx: TransactionScope) {
     const tenantId = requireTenantId(scope);
     const at = sql`${now.toISOString()}::timestamptz`;
     const moved = await this.rows<{ id: string }>(
-      sql`UPDATE bulk_operations SET state = 'CANCELLED', cancelled_at = ${at}, updated_at = ${at}
-           WHERE tenant_id = ${tenantId}::uuid AND id = ${id}::uuid AND state = 'RUNNING'
+      sql`UPDATE bulk_operations
+             SET state = 'CANCELLED', cancelled_at = ${at}, paused_at = NULL, updated_at = ${at}
+           WHERE tenant_id = ${tenantId}::uuid AND id = ${id}::uuid
+             AND state IN ('RUNNING', 'PAUSED')
        RETURNING id`,
       tx,
     );
