@@ -1298,11 +1298,7 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
    */
   'bot.appearance.test_message':
     'پیام آزمایشی ظاهر ربات\n\n' +
-    '{icon:success} موفقیت\n{icon:error} خطا\n{icon:warning} هشدار\n{icon:info} اطلاع\n' +
-    '{icon:payment} پرداخت\n{icon:wallet} کیف پول\n{icon:purchase} خرید\n{icon:service} سرویس\n' +
-    '{icon:trial} سرویس تست\n{icon:referral} معرفی دوستان\n{icon:support} پشتیبانی\n{icon:ticket} تیکت\n' +
-    '{icon:renewal} تمدید\n{icon:traffic} حجم\n{icon:time} زمان\n{icon:date} تاریخ\n{icon:link} لینک\n' +
-    '{icon:user} کاربر\n{icon:location} لوکیشن\n{icon:active} فعال\n{icon:inactive} غیرفعال\n\n' +
+    'در خط زیر، هر جایگاهی که ایموجی سفارشی برایش تنظیم شده با همان ایموجی فرستاده شده و بقیه با ایموجی پیش‌فرض. ' +
     'اگر آیکون‌های سفارشی را می‌بینید، این ربات می‌تواند از ایموجی سفارشی استفاده کند.',
   'ops.support.customer_replied':
     '💬 پیام تازهٔ کاربر در تیکت #{number}\n\n📂 موضوع: {category}\n👤 کاربر: {displayName} | {username} | {telegramId}\n🕒 زمان: {at}\n\nبرای دیدن گفتگو و پاسخ، بخش «تیکت‌های پشتیبانی» پنل مدیریت را باز کنید.',

@@ -152,26 +152,41 @@ export function entitiesWithin(
 }
 
 /**
- * Where each part of a split body sits in the text it was cut from.
+ * The markers of a body replaced by one atomic stand-in each, so the SPLITTER can cut the
+ * body without cutting a marker — and so a length measured on the masked text is never
+ * less than the visible text Telegram counts (Codex, PR #121, finding 2).
  *
- * `splitMessageBody` returns the parts in order, each an exact substring, dropping only
- * the separators it cut on and parts that were blank; so the first occurrence of each part
- * at or after the previous part's end is its position. A part that cannot be found — which
- * the splitter's contract rules out — yields null, and the caller sends the text plain:
- * an entity at a guessed offset is the one mistake this file exists to make impossible.
+ * Each stand-in is one code point of the supplementary private-use plane, two UTF-16 code
+ * units: `splitMessageBody` never cuts inside a surrogate pair, and every fallback emoji is
+ * at most two units, so a masked part within the bound is a rendered part within it. The
+ * HTML tags a decoration writes are NOT counted — Telegram's limit is "characters after
+ * entities parsing" — and cannot be cut, because the part is decorated only after it is
+ * cut (`restore`, then `decorateAppearance`).
+ *
+ * A body a customer typed cannot contain these code points by accident: they are unassigned
+ * private use, and a message that did carry one would only have that marker restored in
+ * its place — the same literal text, never a different customer's.
  */
-export function locateParts(
-  text: string,
-  parts: readonly string[],
-): readonly { readonly start: number; readonly end: number }[] | null {
-  const located: { start: number; end: number }[] = [];
-  let cursor = 0;
-  for (const part of parts) {
-    const start = text.indexOf(part, cursor);
-    if (start === -1) return null;
-    const end = start + part.length;
-    located.push({ start, end });
-    cursor = end;
-  }
-  return located;
+export function maskAppearanceMarkers(rendered: string): {
+  readonly masked: string;
+  /** The markers of one masked part put back, in the order they were masked. */
+  readonly restore: (part: string) => string;
+} {
+  const markers: string[] = [];
+  const masked = rendered.replace(new RegExp(APPEARANCE_MARKER_EXPRESSION_SOURCE, 'g'), (match) => {
+    markers.push(match);
+    return String.fromCodePoint(MASK_BASE + markers.length - 1);
+  });
+  return {
+    masked,
+    restore: (part) =>
+      part.replace(
+        MASK,
+        (stand) => markers[(stand.codePointAt(0) ?? MASK_BASE) - MASK_BASE] ?? stand,
+      ),
+  };
 }
+
+/** Plane 15 private use: U+F0000 … U+FFFFD, each a surrogate pair in UTF-16. */
+const MASK_BASE = 0xf0000;
+const MASK = /[\uDB80-\uDBBF][\uDC00-\uDFFF]/g;

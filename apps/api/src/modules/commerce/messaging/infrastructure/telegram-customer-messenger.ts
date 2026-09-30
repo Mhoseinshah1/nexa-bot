@@ -13,6 +13,8 @@ import {
   mainMenuButtonIsGated,
   packMainMenuRows,
   templateDefinition,
+  APPEARANCE_SLOTS,
+  appearanceMarker,
   type AppearanceTestErrorCode,
 } from '@nexa/contracts';
 import { CATALOGUE_FA, formatMoney } from '@nexa/i18n';
@@ -46,10 +48,15 @@ import {
   appearanceFallbackText,
   decorateAppearance,
   entitiesWithin,
-  locateParts,
+  maskAppearanceMarkers,
   undoHtmlDecoration,
   type CustomEmojiEntity,
 } from '../application/appearance-render.js';
+import {
+  APPEARANCE_DECORATION_FAILED_CODE,
+  APPEARANCE_DECORATION_OK_CODE,
+  appearanceDecorationConditionKey,
+} from '../application/appearance-conditions.js';
 import type { TelegramMessageEntity } from '../../../../infrastructure/telegram/send-message.js';
 import type {
   AppearanceProbeMessage,
@@ -125,20 +132,16 @@ export function customerSendConditionKey(botInstanceId: BotInstanceId): string {
   return `${CUSTOMER_SEND_FAILED_CODE}:${botInstanceId}`;
 }
 
-/**
- * Premium UI: Telegram refused a message decorated with custom emoji and then accepted the
- * same message undecorated. ONE deduplicated WARN per bot — the decoration is the cause,
- * the customer still got their message, and the bot's decoration is switched off by
- * `AppearanceReader.recordRuntimeRefusal` until an operator re-tests it. Resolved by the
- * next successful test (`sendAppearanceProbe`), which is the one place the condition can
- * honestly be said to have ended.
+/*
+ * Premium UI: the decoration-failure condition's codes live in
+ * `appearance-conditions.ts` (application), because the appearance service closes the
+ * condition too; re-exported here for the callers that learned them from this file.
  */
-export const APPEARANCE_DECORATION_FAILED_CODE = 'telegram.appearance_decoration_failed';
-export const APPEARANCE_DECORATION_OK_CODE = 'telegram.appearance_decoration_ok';
-
-export function appearanceDecorationConditionKey(botInstanceId: BotInstanceId): string {
-  return `${APPEARANCE_DECORATION_FAILED_CODE}:${botInstanceId}`;
-}
+export {
+  APPEARANCE_DECORATION_FAILED_CODE,
+  APPEARANCE_DECORATION_OK_CODE,
+  appearanceDecorationConditionKey,
+};
 
 /**
  * A refusal of a custom-emoji test, as the closed vocabulary the bot row stores.
@@ -149,6 +152,9 @@ export function appearanceDecorationConditionKey(botInstanceId: BotInstanceId): 
  * documented; a chat the operator never opened with the bot is the other likely refusal
  * and is named as such so the page can say "start the bot first".
  */
+/** Every slot's marker, one line, space-separated: the block the probe decorates. */
+export const APPEARANCE_PROBE_BLOCK = APPEARANCE_SLOTS.map(appearanceMarker).join(' ');
+
 export function classifyProbeRefusal(description: string): AppearanceTestErrorCode {
   if (/custom.?emoji|CUSTOM_EMOJI|entit(?:y|ies)/i.test(description)) {
     return 'appearance.custom_emoji_refused';
@@ -357,37 +363,38 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
      * and which is reported as it always was — is one part and takes the same path.
      */
     /*
-     * Premium UI (`appearance-render.ts`): every `{icon:…}` becomes its emoji — and, for a
-     * bot that has proved it may, a custom emoji entity — ONCE, on the whole rendered body,
-     * BEFORE it is cut. The parts are then located in the decorated text and each takes
-     * the entities that lie wholly inside it. A part Telegram refuses with its decoration
-     * is re-sent once without (`deliverDecorated`), and the rest of the sequence goes
-     * plain: the customer's message is the point, the icons are not.
+     * Premium UI (`appearance-render.ts`): the body is cut with its `{icon:…}` markers
+     * MASKED — one atomic stand-in each, never wider than the emoji it becomes — and each
+     * part is decorated on its own after the cut. So a marker is never split, the bound is
+     * measured on what Telegram counts ("characters after entities parsing", never the
+     * `<tg-emoji>` tags a decoration adds), and every entity's offset is relative to the
+     * part it is sent in. A part Telegram refuses with its decoration is re-sent once
+     * without (`deliverDecorated`), and every later part is rendered with NO decoration at
+     * all — tags and entities alike (Codex, PR #121, findings 1 and 2).
      */
     const decoration = await this.decorationFor(scope, message.botInstanceId);
-    const decorated = decorateAppearance(
-      text,
-      templateDefinition(message.templateKey).format,
-      decoration,
-    );
-    const body = decorated.text;
+    const format = templateDefinition(message.templateKey).format;
+    const { masked, restore } = maskAppearanceMarkers(text);
     const parts =
-      body.length <= TELEGRAM_MESSAGE_MAX ? [body] : splitMessageBody(body, TELEGRAM_MESSAGE_MAX);
-    const sequence = parts.length === 0 ? [body] : parts;
-    const located = locateParts(body, sequence);
+      masked.length <= TELEGRAM_MESSAGE_MAX
+        ? [masked]
+        : splitMessageBody(masked, TELEGRAM_MESSAGE_MAX);
+    const sequence = parts.length === 0 ? [masked] : parts;
     let worst: ClassifiedOutcome = { sent: { outcome: 'DELIVERED' }, errorCode: null };
     // R2: the id of the part that carries the keyboard, so a later turn can edit it.
     let lastMessageId: number | null = null;
     let decorationRefused = false;
-    for (const [index, part] of sequence.entries()) {
+    for (const [index, maskedPart] of sequence.entries()) {
       const last = index === sequence.length - 1;
-      const span = located?.[index];
-      const entities =
-        span === undefined || decorationRefused
-          ? []
-          : entitiesWithin(decorated.entities, span.start, span.end);
-      const plainText = html && !decorationRefused ? undoHtmlDecoration(part) : part;
-      const isDecorated = html ? plainText !== part : entities.length > 0;
+      const decorated = decorateAppearance(
+        restore(maskedPart),
+        format,
+        decorationRefused ? NO_DECORATION : decoration,
+      );
+      const part = decorated.text;
+      const entities = decorated.entities;
+      const plainText = html ? undoHtmlDecoration(part) : part;
+      const isDecorated = decorated.decorated > 0;
       const request = (plain: boolean): TelegramRequest => ({
         token,
         apiBaseUrl: this.apiBaseUrl,
@@ -981,13 +988,26 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
     if (token === null) {
       return { outcome: 'REJECTED', errorCode: 'appearance.telegram_rejected', decoratedSlots: 0 };
     }
-    const rendered = await this.templates.render(scope, message.templateKey, {});
+    /*
+     * The human-readable part is the tenant's editable template, rendered with its markers
+     * as FALLBACK only; the decoration goes on a fixed block naming EVERY slot, appended
+     * here, so an override that omits a marker cannot make a `SENT` vouch for a slot the
+     * message never carried (Codex, PR #121, finding 6). `decoratedSlots` is therefore
+     * exactly the number of configured, switched-on slots.
+     */
+    const rendered = appearanceFallbackText(
+      await this.templates.render(scope, message.templateKey, {}),
+    );
     const format = templateDefinition(message.templateKey).format;
     const decoration =
       this.appearance === undefined
         ? NO_DECORATION
         : await this.appearance.configuredDecoration(scope);
-    const decorated = decorateAppearance(rendered, format, decoration);
+    const decorated = decorateAppearance(
+      `${rendered}\n\n${APPEARANCE_PROBE_BLOCK}`,
+      format,
+      decoration,
+    );
     if (decorated.text.length === 0 || decorated.text.length > TELEGRAM_MESSAGE_MAX) {
       return {
         outcome: 'REJECTED',

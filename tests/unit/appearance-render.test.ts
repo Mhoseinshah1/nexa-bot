@@ -16,7 +16,7 @@ import {
   appearanceFallbackText,
   decorateAppearance,
   entitiesWithin,
-  locateParts,
+  maskAppearanceMarkers,
   undoHtmlDecoration,
 } from '../../apps/api/src/modules/commerce/messaging/application/appearance-render';
 import { splitMessageBody } from '../../apps/api/src/modules/commerce/messaging/application/message-split';
@@ -62,6 +62,20 @@ describe('the slot catalogue', () => {
       validateTemplateBody(definition, APPEARANCE_SLOTS.map(appearanceMarker).join(' ')),
     ).toEqual([]);
     expect(appearanceMarkersIn('{icon:a} {b} {icon:success}')).toEqual(['a', 'success']);
+  });
+
+  it('sees a malformed marker — wrong case, a digit, a space — and refuses it rather than passing it to a customer', () => {
+    const definition = templateDefinition('bot.order.settled');
+    for (const bad of ['{icon:success1}', '{icon:Payment}', '{icon: payment}', '{icon:}']) {
+      expect(
+        validateTemplateBody(definition, `x ${bad} y`).map((issue) => issue.kind),
+        bad,
+      ).toEqual(['UNKNOWN_ICON']);
+      // And the renderer leaves it literal: it names no slot.
+      expect(decorateAppearance(`x ${bad} y`, 'PLAIN_TEXT', decoration({ payment: ID })).text).toBe(
+        `x ${bad} y`,
+      );
+    }
   });
 
   it('is what every system-owned default body names — no marker in the catalogue is unknown', () => {
@@ -195,24 +209,33 @@ describe('entities across a split body', () => {
     ]);
   });
 
-  it('locates the splitter’s parts in the decorated text so every entity keeps its emoji', () => {
-    const line = `{icon:payment} ${'x'.repeat(30)}`;
+  it('masks every marker as one atomic stand-in the splitter cannot cut, and restores it per part', () => {
+    const line = `{icon:payment} ${'x'.repeat(30)} {icon:success}`;
     const body = Array.from({ length: 6 }, () => line).join('\n\n');
-    const out = decorateAppearance(body, 'PLAIN_TEXT', decoration({ payment: ID }));
-    const parts = splitMessageBody(out.text, 80);
+    const { masked, restore } = maskAppearanceMarkers(body);
+    expect(masked).not.toContain('{icon:');
+    // A stand-in is a surrogate pair: never wider than the fallback it stands for.
+    expect(masked.length).toBe(
+      body.length - 6 * ('{icon:payment}'.length + '{icon:success}'.length) + 6 * 4,
+    );
+    const parts = splitMessageBody(masked, 40);
     expect(parts.length).toBeGreaterThan(1);
-    const located = locateParts(out.text, parts);
-    expect(located).not.toBeNull();
     let seen = 0;
-    for (const [index, part] of parts.entries()) {
-      const span = located![index]!;
-      expect(out.text.slice(span.start, span.end)).toBe(part);
-      for (const entity of entitiesWithin(out.entities, span.start, span.end)) {
-        expect(part.slice(entity.offset, entity.offset + entity.length)).toBe('💳');
+    for (const part of parts) {
+      const restored = restore(part);
+      expect(restored).not.toMatch(/\{icon:[a-z]*$|^[a-z]*\}/);
+      const out = decorateAppearance(restored, 'PLAIN_TEXT', decoration({ payment: ID }));
+      for (const entity of out.entities) {
+        expect(out.text.slice(entity.offset, entity.offset + entity.length)).toBe('💳');
         seen += 1;
       }
     }
     expect(seen).toBe(6);
-    expect(locateParts('abc', ['zzz'])).toBeNull();
+    // A malformed marker is masked too, so a cut never leaves half of one behind.
+    expect(
+      maskAppearanceMarkers('a {icon:Payment} b').restore(
+        maskAppearanceMarkers('a {icon:Payment} b').masked,
+      ),
+    ).toBe('a {icon:Payment} b');
   });
 });

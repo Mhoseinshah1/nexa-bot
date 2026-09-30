@@ -5,9 +5,11 @@ import type { AppearanceReader } from '../../apps/api/src/modules/commerce/messa
 import {
   APPEARANCE_DECORATION_FAILED_CODE,
   APPEARANCE_DECORATION_OK_CODE,
+  APPEARANCE_PROBE_BLOCK,
   TelegramCustomerMessenger,
   classifyProbeRefusal,
 } from '../../apps/api/src/modules/commerce/messaging/infrastructure/telegram-customer-messenger';
+import { appearanceFallbackText } from '../../apps/api/src/modules/commerce/messaging/application/appearance-render';
 
 /**
  * Premium UI in the messenger: one renderer for `sendMessage`, `editMessageText` and the
@@ -241,6 +243,73 @@ describe('fallback', () => {
     expect(refused).toEqual([botA]);
   });
 
+  it('sends every later part of a refused HTML message with NO tag, and no second retry', async () => {
+    const line = `{icon:payment} ${'x'.repeat(3000)}`;
+    const { appearance } = reader([botA], { payment: ID });
+    const { messenger, calls, respondWith } = harness(
+      { [HTML_KEY]: `${line}\n\n${line}` },
+      appearance,
+    );
+    respondWith([BAD, OK, OK]);
+    const result = await messenger.send(scope, {
+      chatId: '42',
+      botInstanceId: botA,
+      templateKey: HTML_KEY,
+      values: {},
+    });
+    expect(result).toEqual({ outcome: 'DELIVERED', messageId: 7 });
+    // Part one decorated and refused, part one plain, part two plain: three calls, not four.
+    expect(calls).toHaveLength(3);
+    expect(String(calls[0]?.body['text'])).toContain('<tg-emoji');
+    expect(String(calls[1]?.body['text'])).not.toContain('<tg-emoji');
+    expect(String(calls[2]?.body['text'])).not.toContain('<tg-emoji');
+    expect(String(calls[2]?.body['text']).startsWith('💳 ')).toBe(true);
+  });
+
+  it('measures an HTML body on what Telegram counts, never on the tags it adds, and never cuts a tag', async () => {
+    const { appearance } = reader([botA], { payment: ID });
+    // Visible: 10 emoji (20 units) + 4070 x = 4090 ≤ 4096; with tags it would be far over.
+    const short = `${'{icon:payment}'.repeat(10)}${'x'.repeat(4070)}`;
+    const one = harness({ [HTML_KEY]: short }, appearance);
+    one.respondWith([OK]);
+    await one.messenger.send(scope, {
+      chatId: '42',
+      botInstanceId: botA,
+      templateKey: HTML_KEY,
+      values: {},
+    });
+    expect(one.calls).toHaveLength(1);
+    expect(
+      (String(one.calls[0]?.body['text']).match(/<tg-emoji emoji-id="\d+">💳<\/tg-emoji>/g) ?? [])
+        .length,
+    ).toBe(10);
+    expect(String(one.calls[0]?.body['text']).length).toBeGreaterThan(TELEGRAM_MESSAGE_MAX);
+
+    vi.unstubAllGlobals();
+    // One line far over the bound, cut between characters: every part's tags stay whole.
+    const long = `${'{icon:payment}y'.repeat(2000)}`;
+    const many = harness({ [HTML_KEY]: long }, appearance);
+    many.respondWith([OK]);
+    await many.messenger.send(scope, {
+      chatId: '42',
+      botInstanceId: botA,
+      templateKey: HTML_KEY,
+      values: {},
+    });
+    expect(many.calls.length).toBeGreaterThan(1);
+    let tags = 0;
+    for (const call of many.calls) {
+      const text = String(call.body['text']);
+      const opened = (text.match(/<tg-emoji/g) ?? []).length;
+      const closed = (text.match(/<\/tg-emoji>/g) ?? []).length;
+      expect(opened).toBe(closed);
+      expect(text).not.toMatch(/<tg-emoj$|<tg-emoji [^>]*$|<\/tg-emo$/);
+      expect(text).not.toContain('{icon');
+      tags += opened;
+    }
+    expect(tags).toBe(2000);
+  });
+
   it('does the same for an HTML body: the tag is undone, the text is otherwise untouched', async () => {
     const { appearance } = reader([botA], { payment: ID });
     const { messenger, calls, respondWith } = harness(
@@ -349,6 +418,10 @@ describe('the eligibility probe', () => {
     });
     expect(sent).toEqual({ outcome: 'SENT', errorCode: null, decoratedSlots: 2 });
     expect(calls[0]?.body['entities']).toHaveLength(2);
+    // The editable copy renders as fallback; the decoration rides on the fixed block after it.
+    const probeText = String(calls[0]?.body['text']);
+    expect(probeText.endsWith(appearanceFallbackText(APPEARANCE_PROBE_BLOCK))).toBe(true);
+    expect(probeText.startsWith('پرداخت 🧪 💳 انجام شد ✅')).toBe(true);
     // A `SENT` closes the bot's open decoration-failure condition.
     expect(events.map((event) => event.code)).toEqual([APPEARANCE_DECORATION_OK_CODE]);
 
@@ -388,6 +461,26 @@ describe('the eligibility probe', () => {
         })
       ).errorCode,
     ).toBe('appearance.telegram_unreachable');
+  });
+
+  it('exercises every configured slot even when the tenant’s copy names none of them', async () => {
+    const { appearance } = reader([], { payment: ID, success: '2', wallet: '3' });
+    const { messenger, calls, respondWith } = harness(
+      { [PLAIN_KEY]: 'متن بدون نشانگر' },
+      appearance,
+    );
+    respondWith([OK]);
+    const sent = await messenger.sendAppearanceProbe(scope, {
+      chatId: '42',
+      botInstanceId: botB,
+      templateKey: PLAIN_KEY,
+    });
+    expect(sent).toEqual({ outcome: 'SENT', errorCode: null, decoratedSlots: 3 });
+    const entities = calls[0]?.body['entities'] as { custom_emoji_id: string }[];
+    expect(entities.map((entity) => entity.custom_emoji_id).sort()).toEqual([ID, '2', '3'].sort());
+    expect(String(calls[0]?.body['text'])).toBe(
+      `متن بدون نشانگر\n\n${appearanceFallbackText(APPEARANCE_PROBE_BLOCK)}`,
+    );
   });
 
   it('names a chat the operator never opened, and everything else, as their own codes', () => {
