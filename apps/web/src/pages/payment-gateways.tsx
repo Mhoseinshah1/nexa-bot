@@ -33,7 +33,6 @@ import {
   Field,
   Ltr,
   PageHead,
-  RowActions,
   StateSwitch,
   ToggleRow,
   useToast,
@@ -454,13 +453,40 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
     {
       key: 'state',
       header: t('web.payment_gateway_state'),
-      render: (row) => (
-        <Badge tone={row.status === 'ACTIVE' ? 'ok' : 'neutral'} dot>
-          {t(
-            row.status === 'ACTIVE' ? 'web.payment_gateway_active' : 'web.payment_gateway_disabled',
-          )}
-        </Badge>
-      ),
+      /*
+       * The switch, and beneath it which purposes the route is on for. A route ACTIVE
+       * with both purposes off is offered for nothing, and that is said in amber rather
+       * than shown as an empty line an operator would read as "no restriction".
+       */
+      render: (row) => {
+        const on = [
+          row.allowServicePurchase ? t('web.gateway_allow_service_purchase') : null,
+          row.allowWalletTopup ? t('web.gateway_allow_wallet_topup') : null,
+        ].filter((label): label is string => label !== null);
+        return (
+          <CellMain
+            primary={
+              <Badge tone={row.status === 'ACTIVE' ? 'ok' : 'neutral'} dot>
+                {t(
+                  row.status === 'ACTIVE'
+                    ? 'web.payment_gateway_active'
+                    : 'web.payment_gateway_disabled',
+                )}
+              </Badge>
+            }
+            secondary={
+              on.length === 0 ? (
+                <Badge tone="warn">{t('web.gateway_allow_none')}</Badge>
+              ) : (
+                <span>
+                  <span className="muted">{t('web.gateway_allow_column')}:</span>{' '}
+                  <span>{on.join(' · ')}</span>
+                </span>
+              )
+            }
+          />
+        );
+      },
     },
     {
       key: 'amounts',
@@ -539,26 +565,6 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
       },
     },
     {
-      key: 'purposes',
-      header: t('web.gateway_allow_column'),
-      /*
-       * Which purposes the route is on for. A route ACTIVE with both switches off is
-       * offered for nothing, and that is said in amber rather than shown as an empty
-       * cell an operator would read as "no restriction".
-       */
-      render: (row) => {
-        const on = [
-          row.allowServicePurchase ? t('web.gateway_allow_service_purchase') : null,
-          row.allowWalletTopup ? t('web.gateway_allow_wallet_topup') : null,
-        ].filter((label): label is string => label !== null);
-        return on.length === 0 ? (
-          <Badge tone="warn">{t('web.gateway_allow_none')}</Badge>
-        ) : (
-          on.join(' · ')
-        );
-      },
-    },
-    {
       key: 'credential',
       header: t('web.payment_gateway_credential'),
       /*
@@ -585,7 +591,8 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
       // whose columns depend on the reader is a table two operators describe differently.
       render: (row) =>
         !mayEdit ? null : (
-          <RowActions>
+          // Wrapping, so three actions never push the table wider than its card.
+          <span className="gateways-actions">
             <button
               type="button"
               className="btn sm"
@@ -627,7 +634,7 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
                   : 'web.payment_gateway_enable',
               )}
             </button>
-          </RowActions>
+          </span>
         ),
     },
   ];
