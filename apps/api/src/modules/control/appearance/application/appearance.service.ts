@@ -39,6 +39,12 @@ import { hashRequest } from '../../../platform/idempotency/infrastructure/drizzl
 import type { SessionRepository } from '../../../platform/identity/application/ports.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
+import {
+  APPEARANCE_DECORATION_FAILED_CODE,
+  APPEARANCE_DECORATION_OK_CODE,
+  appearanceDecorationConditionKey,
+} from '../../../commerce/messaging/application/appearance-conditions.js';
+import type { CustomerSendConditionReader } from '../../../commerce/messaging/application/ports.js';
 import type {
   AppearanceAdminReader,
   AppearanceBotRecord,
@@ -62,6 +68,8 @@ export interface AppearanceServiceDeps {
   readonly sessions: SessionRepository;
   readonly idempotency: IdempotencyStore;
   readonly scopeActivity: ScopeActivityReader;
+  /** Whether a bot's decoration-failure condition is still open, read from the row. */
+  readonly conditions: CustomerSendConditionReader;
   readonly clock: Clock;
   readonly ids: IdGenerator;
   /**
@@ -153,18 +161,38 @@ export class AppearanceService {
           await this.remember(scope, actor, command.idempotencyKey, requestHash, answer, tx);
           return answer;
         }
-        const after = await this.deps.repository.upsertSlot(
-          scope,
-          {
-            id: this.deps.ids.uuid(),
-            slot,
-            customEmojiId: command.customEmojiId,
-            enabled: command.enabled,
-            now,
-            updatedByAdminId: actor.type === 'WEB_ADMIN' ? actor.id : null,
-          },
-          tx,
-        );
+        /*
+         * The write carries its own predicate: an insert that DOES NOTHING on conflict, an
+         * update WHERE the version is still the one read. A row that did not exist locks
+         * nothing above, so two first saves both pass the check and meet here — the second
+         * is a conflict, never an overwrite (Codex, PR #121, finding 3).
+         */
+        const fields = {
+          slot,
+          customEmojiId: command.customEmojiId,
+          enabled: command.enabled,
+          now,
+          updatedByAdminId: actor.type === 'WEB_ADMIN' ? actor.id : null,
+        };
+        const after =
+          before === null
+            ? await this.deps.repository.insertSlot(
+                scope,
+                { id: this.deps.ids.uuid(), ...fields },
+                tx,
+              )
+            : await this.deps.repository.updateSlot(
+                scope,
+                { expectedVersion: before.version, ...fields },
+                tx,
+              );
+        if (after === null) {
+          throw errors.conflict(
+            CONTROL_ERROR_CODES.VERSION_CONFLICT,
+            `The ${slot} icon was changed by another request. Reload and reapply your change.`,
+            { slot, expectedVersion: command.expectedVersion },
+          );
+        }
         await this.deps.audit.record(
           scope,
           actor,
@@ -184,6 +212,7 @@ export class AppearanceService {
       },
     );
     this.deps.invalidate?.(scope);
+    await this.closeConditionsWhenNothingIsConfigured(scope);
     return result;
   }
 
@@ -201,7 +230,11 @@ export class AppearanceService {
     };
     await this.authorize(scope, actor, APPEARANCE_EDIT_PERMISSION, denial);
     const command = resetAppearanceSlotRequestSchema.parse(input);
-    const requestHash = hashRequest({ slot, reset: true });
+    const requestHash = hashRequest({
+      slot,
+      reset: true,
+      expectedVersion: command.expectedVersion,
+    });
     const replayed = await this.findReplay<AppearanceSlotMutationResponse>(
       scope,
       actor,
@@ -219,8 +252,26 @@ export class AppearanceService {
       async (tx) => {
         await this.assertScopeActive(scope, tx);
         const before = await this.deps.repository.findSlot(scope, slot, tx, true);
+        // The version the operator read, or a stale reset would delete a colleague's newer
+        // row (Codex, PR #121, finding 5). The delete carries the same predicate.
+        if ((before?.version ?? null) !== command.expectedVersion) {
+          throw errors.conflict(
+            CONTROL_ERROR_CODES.VERSION_CONFLICT,
+            `The ${slot} icon changed while you were editing it. Reload and reapply your change.`,
+            { slot, expectedVersion: command.expectedVersion },
+          );
+        }
         const changed =
-          before === null ? false : await this.deps.repository.deleteSlot(scope, slot, tx);
+          before === null
+            ? false
+            : await this.deps.repository.deleteSlot(scope, slot, before.version, tx);
+        if (before !== null && !changed) {
+          throw errors.conflict(
+            CONTROL_ERROR_CODES.VERSION_CONFLICT,
+            `The ${slot} icon was changed by another request. Reload and reapply your change.`,
+            { slot, expectedVersion: command.expectedVersion },
+          );
+        }
         if (changed && before !== null) {
           await this.deps.audit.record(
             scope,
@@ -242,6 +293,7 @@ export class AppearanceService {
       },
     );
     this.deps.invalidate?.(scope);
+    await this.closeConditionsWhenNothingIsConfigured(scope);
     return result;
   }
 
@@ -351,6 +403,19 @@ export class AppearanceService {
       APPEARANCE_EDIT_PERMISSION,
       { ...denial, entityId: botInstanceId },
       async (tx) => {
+        /*
+         * The verdict this write replaces is read UNDER THE LOCK, here — not the `bot` read
+         * before the claim and the Telegram call, which another test or a runtime refusal
+         * may have moved on since (Codex, PR #121, finding 7).
+         */
+        const locked = await this.deps.repository.lockBot(scope, botInstanceId, tx);
+        if (locked === null) {
+          throw errors.preconditionFailed(
+            APPEARANCE_ERROR_CODES.BOT_NOT_ACTIVE,
+            'The bot is no longer this tenant\u2019s.',
+            { botInstanceId },
+          );
+        }
         await this.deps.repository.recordTest(scope, botInstanceId, { testedAt, ...outcome }, tx);
         await this.deps.audit.record(
           scope,
@@ -360,23 +425,20 @@ export class AppearanceService {
             entityType: denial.entityType,
             entityId: botInstanceId,
             before:
-              bot.test === null
+              locked.test === null
                 ? null
                 : {
-                    outcome: bot.test.outcome,
-                    errorCode: bot.test.errorCode,
-                    testedAt: bot.test.testedAt.toISOString(),
+                    outcome: locked.test.outcome,
+                    errorCode: locked.test.errorCode,
+                    testedAt: locked.test.testedAt.toISOString(),
                   },
             after: { ...outcome, testedAt: testedAt.toISOString() },
             result: outcome.outcome === 'SENT' ? 'SUCCESS' : 'FAILED',
           },
           tx,
         );
-        const after = (await this.deps.repository.listBots(scope, tx)).find(
-          (one) => one.id === botInstanceId,
-        );
         const response: AppearanceTestResponse = {
-          bot: botView(after ?? { ...bot, test: { testedAt, ...outcome } }),
+          bot: botView({ ...locked, test: { testedAt, ...outcome } }),
           decoratedSlots: probed.decoratedSlots,
         };
         await rememberOnce(
@@ -396,6 +458,34 @@ export class AppearanceService {
   }
 
   // -------------------------------------------------------------------------
+
+  /**
+   * A runtime refusal opens one condition per bot and switches its decoration off; the
+   * next accepted test closes it. With the last custom emoji removed there is nothing
+   * left to test — the probe refuses `NOTHING_TO_TEST` — so the condition would stay
+   * open for ever (Codex, PR #121, finding 8). When no slot carries a custom emoji any
+   * more, every open one is closed here, with the same recovery the probe records: the
+   * operator resolved it by taking the decoration away, which is a resolution.
+   */
+  private async closeConditionsWhenNothingIsConfigured(scope: TenantContext): Promise<void> {
+    const configured = (await this.deps.repository.listSlots(scope)).some(
+      (slot) => slot.enabled && slot.customEmojiId !== null,
+    );
+    if (configured) return;
+    for (const bot of await this.deps.repository.listBots(scope)) {
+      const dedupeKey = appearanceDecorationConditionKey(bot.id);
+      if (!(await this.deps.conditions.conditionIsOpen(scope, dedupeKey))) continue;
+      await this.deps.opsLog.record(scope, {
+        code: APPEARANCE_DECORATION_OK_CODE,
+        severity: 'INFO',
+        message:
+          'Every custom emoji was removed; this bot\u2019s refused decoration no longer applies.',
+        context: { botInstanceId: bot.id },
+        recoversCode: APPEARANCE_DECORATION_FAILED_CODE,
+        recoversDedupeKey: dedupeKey,
+      });
+    }
+  }
 
   private slot(candidate: string): AppearanceSlot {
     if (isAppearanceSlot(candidate)) return candidate;

@@ -20,7 +20,10 @@ import { CATALOGUE_FA } from '@nexa/i18n';
 import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
 import { seed, SEED_IDS } from '../../apps/api/src/infrastructure/persistence/seed';
 import { appearanceFallbackText } from '../../apps/api/src/modules/commerce/messaging/application/appearance-render';
-import { TelegramCustomerMessenger } from '../../apps/api/src/modules/commerce/messaging/infrastructure/telegram-customer-messenger';
+import {
+  APPEARANCE_PROBE_BLOCK,
+  TelegramCustomerMessenger,
+} from '../../apps/api/src/modules/commerce/messaging/infrastructure/telegram-customer-messenger';
 import {
   CachedAppearanceReader,
   DrizzleAppearanceRepository,
@@ -63,6 +66,8 @@ describe('the bot appearance over HTTP and the messenger (Premium UI)', () => {
   let calls: Call[];
   /** What the fake answers `sendMessage` with next: Telegram's own shapes. */
   let sendAnswer: { status: number; body: Record<string, unknown> };
+  /** When set, decides each `sendMessage` answer in turn; cleared before every test. */
+  let answerSend: (() => { status: number; body: Record<string, unknown> }) | null;
   let ownerB: SeededAdmin;
 
   const inject = (options: Record<string, unknown>) =>
@@ -79,8 +84,9 @@ describe('the bot appearance over HTTP and the messenger (Premium UI)', () => {
     const method = (request.url ?? '').split('/').pop() ?? '';
     calls.push({ method, body });
     if (method === 'sendMessage') {
-      response.writeHead(sendAnswer.status, { 'content-type': 'application/json' });
-      response.end(JSON.stringify(sendAnswer.body));
+      const answered = answerSend === null ? sendAnswer : answerSend();
+      response.writeHead(answered.status, { 'content-type': 'application/json' });
+      response.end(JSON.stringify(answered.body));
       return;
     }
     response.writeHead(200, { 'content-type': 'application/json' });
@@ -115,6 +121,7 @@ describe('the bot appearance over HTTP and the messenger (Premium UI)', () => {
   beforeEach(async () => {
     calls = [];
     sendAnswer = { status: 200, body: { ok: true, result: { message_id: 1 } } };
+    answerSend = null;
     await resetDatabase(api.container.database.db);
     await seed(api.container.database.db, api.container.cipher);
     api.container.setInstallationTenant(tenantA.tenantId);
@@ -251,10 +258,20 @@ describe('the bot appearance over HTTP and the messenger (Premium UI)', () => {
         .statusCode,
     ).toBe(404);
 
+    // A reset built on a stale read is a conflict, never the deletion of a newer row.
+    const staleReset = await post(APPEARANCE_ROUTES.slotReset('payment'), owner, {
+      idempotencyKey: 'reset-payment-stale',
+      expectedVersion: null,
+    });
+    expect(staleReset.statusCode).toBe(409);
+    expect((await view(owner)).slots.find((slot) => slot.slot === 'payment')?.customEmojiId).toBe(
+      ID,
+    );
     const reset = appearanceSlotMutationResponseSchema.parse(
       (
         await post(APPEARANCE_ROUTES.slotReset('payment'), owner, {
           idempotencyKey: 'reset-payment-1',
+          expectedVersion: 1,
         })
       ).json(),
     );
@@ -266,6 +283,89 @@ describe('the bot appearance over HTTP and the messenger (Premium UI)', () => {
       'appearance.slot.set',
       'appearance.slot.reset',
     ]);
+  });
+
+  it('lets the second of two first saves lose at the insert, and a stale update or delete miss', async () => {
+    const repository = new DrizzleAppearanceRepository(api.container.database.db);
+    const now = api.container.clock.now();
+    const fields = {
+      slot: 'payment' as const,
+      customEmojiId: ID,
+      enabled: true,
+      now,
+      updatedByAdminId: null,
+    };
+    const first = await repository.insertSlot(
+      tenantA,
+      { id: api.container.ids.uuid(), ...fields },
+      undefined,
+    );
+    expect(first?.version).toBe(1);
+    // The row that did not exist locked nothing: the second first-save meets the first here.
+    expect(
+      await repository.insertSlot(
+        tenantA,
+        { id: api.container.ids.uuid(), ...fields, customEmojiId: '1' },
+        undefined,
+      ),
+    ).toBeNull();
+    expect((await repository.findSlot(tenantA, 'payment'))?.customEmojiId).toBe(ID);
+    expect(
+      await repository.updateSlot(
+        tenantA,
+        { ...fields, expectedVersion: 2, customEmojiId: '1' },
+        undefined,
+      ),
+    ).toBeNull();
+    expect(
+      (
+        await repository.updateSlot(
+          tenantA,
+          { ...fields, expectedVersion: 1, customEmojiId: '1' },
+          undefined,
+        )
+      )?.version,
+    ).toBe(2);
+    expect(await repository.deleteSlot(tenantA, 'payment', 1, undefined)).toBe(false);
+    expect(await repository.deleteSlot(tenantA, 'payment', 2, undefined)).toBe(true);
+  });
+
+  it('closes a bot’s refused-decoration condition when the last custom emoji is removed', async () => {
+    const owner = await cookieFor('owner', 'the-owners-real-password');
+    const saved = appearanceSlotMutationResponseSchema.parse(
+      (
+        await save(owner, 'success', { customEmojiId: ID, enabled: true, expectedVersion: null })
+      ).json(),
+    );
+    await post(APPEARANCE_ROUTES.test, owner, {
+      idempotencyKey: 'test-a1-open',
+      botInstanceId: BOT_A1,
+    });
+    // A customer message: decorated and refused, then accepted plain — the condition opens.
+    let sends = 0;
+    answerSend = () => {
+      sends += 1;
+      return sends === 1
+        ? {
+            status: 400,
+            body: { ok: false, error_code: 400, description: 'Bad Request: CUSTOM_EMOJI_INVALID' },
+          }
+        : { status: 200, body: { ok: true, result: { message_id: 3 } } };
+    };
+    await messenger(tenantA).send(BOT_A1);
+    const open = async () =>
+      (
+        (await api.container.database.db.execute(
+          sql`SELECT resolved_at FROM operational_events WHERE code = 'telegram.appearance_decoration_failed' AND dedupe_key = ${`telegram.appearance_decoration_failed:${BOT_A1}`}`,
+        )) as unknown as { rows: { resolved_at: Date | null }[] }
+      ).rows;
+    expect((await open()).map((row) => row.resolved_at)).toEqual([null]);
+    // Nothing left to test: the probe refuses, so the reset is what closes the condition.
+    await post(APPEARANCE_ROUTES.slotReset('success'), owner, {
+      idempotencyKey: 'reset-success-last',
+      expectedVersion: saved.slot.version,
+    });
+    expect((await open())[0]?.resolved_at).not.toBeNull();
   });
 
   it('charges settings.view for the read and settings.edit for every write', async () => {
@@ -352,8 +452,9 @@ describe('the bot appearance over HTTP and the messenger (Premium UI)', () => {
     expect(tested.decoratedSlots).toBe(1);
     const probe = calls.find((call) => call.method === 'sendMessage');
     expect(probe?.body['chat_id']).toBe(OPERATOR_TELEGRAM_ID);
+    // The editable copy as fallback, then the fixed block naming every slot.
     expect(probe?.body['text']).toBe(
-      appearanceFallbackText(CATALOGUE_FA['bot.appearance.test_message']),
+      `${appearanceFallbackText(CATALOGUE_FA['bot.appearance.test_message'])}\n\n${appearanceFallbackText(APPEARANCE_PROBE_BLOCK)}`,
     );
     const entities = probe?.body['entities'] as {
       offset: number;

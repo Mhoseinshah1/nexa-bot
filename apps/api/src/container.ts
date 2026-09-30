@@ -3530,6 +3530,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     sessions,
     idempotency,
     scopeActivity: tenants,
+    // The condition rows, read from the database as the messenger reads them.
+    conditions: new DrizzleOperationalConditionReader(database.db),
     clock,
     ids,
     invalidate: (scope) => appearanceReader.forget(scope),

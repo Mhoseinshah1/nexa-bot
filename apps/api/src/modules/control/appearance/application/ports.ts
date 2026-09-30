@@ -50,8 +50,13 @@ export interface AppearanceRepository {
     tx?: unknown,
     forUpdate?: boolean,
   ): Promise<StoredAppearanceSlot | null>;
-  /** Insert or replace the row, bumping its version. Returns the row as stored. */
-  upsertSlot(
+  /**
+   * Create the row — and ONLY when none exists: `ON CONFLICT DO NOTHING`. Null when another
+   * request created it first, which the caller reports as a version conflict. A row that
+   * did not exist locks nothing under `findSlot(..., forUpdate)`, so two first saves both
+   * pass the version check; the insert is where they meet (Codex, PR #121, finding 3).
+   */
+  insertSlot(
     scope: ScopeContext,
     input: {
       readonly id: string;
@@ -62,11 +67,42 @@ export interface AppearanceRepository {
       readonly updatedByAdminId: string | null;
     },
     tx: unknown,
-  ): Promise<StoredAppearanceSlot>;
-  /** Remove the row; false when there was none. */
-  deleteSlot(scope: ScopeContext, slot: AppearanceSlot, tx: unknown): Promise<boolean>;
+  ): Promise<StoredAppearanceSlot | null>;
+  /**
+   * Change the row WHERE it is still at `expectedVersion`, bumping the version. Null when
+   * no row was at that version — the predicate is the rule, whatever lock the caller holds.
+   */
+  updateSlot(
+    scope: ScopeContext,
+    input: {
+      readonly slot: AppearanceSlot;
+      readonly expectedVersion: number;
+      readonly customEmojiId: string | null;
+      readonly enabled: boolean;
+      readonly now: Date;
+      readonly updatedByAdminId: string | null;
+    },
+    tx: unknown,
+  ): Promise<StoredAppearanceSlot | null>;
+  /** Remove the row WHERE it is still at `expectedVersion`; false when none was. */
+  deleteSlot(
+    scope: ScopeContext,
+    slot: AppearanceSlot,
+    expectedVersion: number,
+    tx: unknown,
+  ): Promise<boolean>;
   /** The tenant's bots, oldest first, each with its last test. */
   listBots(scope: ScopeContext, tx?: unknown): Promise<AppearanceBotRecord[]>;
+  /**
+   * ONE bot of the tenant, `FOR UPDATE`: what a test's result transaction reads before it
+   * writes, so the audit row's `before` is the verdict this write replaces and not the one
+   * read before the claim and the Telegram call (Codex, PR #121, finding 7).
+   */
+  lockBot(
+    scope: ScopeContext,
+    botInstanceId: BotInstanceId,
+    tx: unknown,
+  ): Promise<AppearanceBotRecord | null>;
   /**
    * Record a test's answer on the bot row. A conditional UPDATE on the tenant AND the bot,
    * so a bot id from another tenant records nothing; false when no row matched.

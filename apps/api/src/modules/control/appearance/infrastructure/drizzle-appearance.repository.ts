@@ -47,6 +47,41 @@ function toSlot(row: SlotRow): StoredAppearanceSlot {
   };
 }
 
+/** The bot columns this repository reads: never a token, a key id or a fingerprint. */
+const BOT_COLUMNS = {
+  id: botInstances.id,
+  username: botInstances.username,
+  status: botInstances.status,
+  testedAt: botInstances.customEmojiTestedAt,
+  outcome: botInstances.customEmojiTestOutcome,
+  errorCode: botInstances.customEmojiTestErrorCode,
+};
+
+type BotRow = {
+  id: string;
+  username: string;
+  status: string;
+  testedAt: Date | null;
+  outcome: string | null;
+  errorCode: string | null;
+};
+
+function toBot(row: BotRow): AppearanceBotRecord {
+  return {
+    id: asId<'BotInstanceId'>(row.id) as BotInstanceId,
+    username: row.username,
+    status: row.status as BotInstanceStatus,
+    test:
+      row.testedAt === null || row.outcome === null
+        ? null
+        : {
+            testedAt: row.testedAt,
+            outcome: row.outcome as AppearanceTestOutcome,
+            errorCode: row.errorCode as AppearanceTestErrorCode | null,
+          },
+  };
+}
+
 /**
  * The appearance rows (`bot_appearance_slots`) and the test columns on `bot_instances`.
  *
@@ -82,7 +117,7 @@ export class DrizzleAppearanceRepository implements AppearanceRepository {
     return row === undefined ? null : toSlot(row);
   }
 
-  async upsertSlot(
+  async insertSlot(
     scope: ScopeContext,
     input: {
       readonly id: string;
@@ -93,7 +128,7 @@ export class DrizzleAppearanceRepository implements AppearanceRepository {
       readonly updatedByAdminId: string | null;
     },
     tx: unknown,
-  ): Promise<StoredAppearanceSlot> {
+  ): Promise<StoredAppearanceSlot | null> {
     const tenantId = requireTenantId(scope);
     const [row] = await executorOf(this.db, tx)
       .insert(botAppearanceSlots)
@@ -108,26 +143,61 @@ export class DrizzleAppearanceRepository implements AppearanceRepository {
         updatedAt: input.now,
         updatedByAdminId: input.updatedByAdminId,
       })
-      .onConflictDoUpdate({
-        target: [botAppearanceSlots.tenantId, botAppearanceSlots.slot],
-        set: {
-          customEmojiId: input.customEmojiId,
-          enabled: input.enabled,
-          version: sql`${botAppearanceSlots.version} + 1`,
-          updatedAt: input.now,
-          updatedByAdminId: input.updatedByAdminId,
-        },
-      })
+      // Never DO UPDATE: the second of two first saves must lose, not overwrite.
+      .onConflictDoNothing({ target: [botAppearanceSlots.tenantId, botAppearanceSlots.slot] })
       .returning();
-    if (row === undefined) throw new Error('An appearance slot upsert returned no row.');
-    return toSlot(row);
+    return row === undefined ? null : toSlot(row);
   }
 
-  async deleteSlot(scope: ScopeContext, slot: AppearanceSlot, tx: unknown): Promise<boolean> {
+  async updateSlot(
+    scope: ScopeContext,
+    input: {
+      readonly slot: AppearanceSlot;
+      readonly expectedVersion: number;
+      readonly customEmojiId: string | null;
+      readonly enabled: boolean;
+      readonly now: Date;
+      readonly updatedByAdminId: string | null;
+    },
+    tx: unknown,
+  ): Promise<StoredAppearanceSlot | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await executorOf(this.db, tx)
+      .update(botAppearanceSlots)
+      .set({
+        customEmojiId: input.customEmojiId,
+        enabled: input.enabled,
+        version: sql`${botAppearanceSlots.version} + 1`,
+        updatedAt: input.now,
+        updatedByAdminId: input.updatedByAdminId,
+      })
+      .where(
+        and(
+          eq(botAppearanceSlots.tenantId, tenantId),
+          eq(botAppearanceSlots.slot, input.slot),
+          eq(botAppearanceSlots.version, input.expectedVersion),
+        ),
+      )
+      .returning();
+    return row === undefined ? null : toSlot(row);
+  }
+
+  async deleteSlot(
+    scope: ScopeContext,
+    slot: AppearanceSlot,
+    expectedVersion: number,
+    tx: unknown,
+  ): Promise<boolean> {
     const tenantId = requireTenantId(scope);
     const deleted = await executorOf(this.db, tx)
       .delete(botAppearanceSlots)
-      .where(and(eq(botAppearanceSlots.tenantId, tenantId), eq(botAppearanceSlots.slot, slot)))
+      .where(
+        and(
+          eq(botAppearanceSlots.tenantId, tenantId),
+          eq(botAppearanceSlots.slot, slot),
+          eq(botAppearanceSlots.version, expectedVersion),
+        ),
+      )
       .returning({ id: botAppearanceSlots.id });
     return deleted.length > 0;
   }
@@ -135,30 +205,26 @@ export class DrizzleAppearanceRepository implements AppearanceRepository {
   async listBots(scope: ScopeContext, tx?: unknown): Promise<AppearanceBotRecord[]> {
     const tenantId = requireTenantId(scope);
     const rows = await executorOf(this.db, tx)
-      .select({
-        id: botInstances.id,
-        username: botInstances.username,
-        status: botInstances.status,
-        testedAt: botInstances.customEmojiTestedAt,
-        outcome: botInstances.customEmojiTestOutcome,
-        errorCode: botInstances.customEmojiTestErrorCode,
-      })
+      .select(BOT_COLUMNS)
       .from(botInstances)
       .where(eq(botInstances.tenantId, tenantId))
       .orderBy(asc(botInstances.createdAt), asc(botInstances.id));
-    return rows.map((row) => ({
-      id: asId<'BotInstanceId'>(row.id) as BotInstanceId,
-      username: row.username,
-      status: row.status as BotInstanceStatus,
-      test:
-        row.testedAt === null || row.outcome === null
-          ? null
-          : {
-              testedAt: row.testedAt,
-              outcome: row.outcome as AppearanceTestOutcome,
-              errorCode: row.errorCode as AppearanceTestErrorCode | null,
-            },
-    }));
+    return rows.map(toBot);
+  }
+
+  async lockBot(
+    scope: ScopeContext,
+    botInstanceId: BotInstanceId,
+    tx: unknown,
+  ): Promise<AppearanceBotRecord | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await executorOf(this.db, tx)
+      .select(BOT_COLUMNS)
+      .from(botInstances)
+      .where(and(eq(botInstances.tenantId, tenantId), eq(botInstances.id, botInstanceId)))
+      .limit(1)
+      .for('update');
+    return row === undefined ? null : toBot(row);
   }
 
   async recordTest(
