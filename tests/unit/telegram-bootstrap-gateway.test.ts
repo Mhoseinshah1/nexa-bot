@@ -82,6 +82,26 @@ describe('the Telegram bootstrap gateway — identify', () => {
     respond(502, { ok: false, description: 'Bad Gateway' });
     expect((await gateway.identify('t')).outcome).toBe('UNREACHABLE');
   });
+
+  it("carries a 429's retry_after into a command registration, and nothing else's (Codex #2)", async () => {
+    const commands = [{ command: 'start', description: 'شروع' }];
+    respond(429, { ok: false, description: 'Too Many Requests', parameters: { retry_after: 7 } });
+    expect(await gateway.registerCommands({ token: 't', commands })).toEqual({
+      outcome: 'UNREACHABLE',
+      code: 'telegram.rate_limited',
+      retryAfterMs: 7_000,
+    });
+    respond(502, { ok: false, description: 'Bad Gateway' });
+    expect(await gateway.registerCommands({ token: 't', commands })).toEqual({
+      outcome: 'UNREACHABLE',
+      code: 'telegram.server_error.502',
+    });
+    respond(400, { ok: false, description: 'Bad Request: BOT_COMMAND_INVALID' });
+    expect(await gateway.registerCommands({ token: 't', commands })).toEqual({
+      outcome: 'REFUSED',
+      code: 'telegram.rejected.400',
+    });
+  });
 });
 
 /**

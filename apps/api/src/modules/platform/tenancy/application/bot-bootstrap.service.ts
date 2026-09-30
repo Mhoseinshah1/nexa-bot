@@ -1,5 +1,4 @@
 import {
-  BOT_COMMANDS,
   errors,
   NexaError,
   PLATFORM_ERROR_CODES,
@@ -25,6 +24,7 @@ import type {
   WebhookRegistration,
 } from './ports.js';
 import { webhookSecretFingerprint } from './webhook-fingerprint.js';
+import type { CommandMenu } from './command-menu.js';
 import { tokenReplacementLeaseMs } from '../domain/token-replacement-lease.js';
 import { allowedUpdatesNarrowed, telegramWebhookUrl } from '../domain/webhook-url.js';
 
@@ -109,6 +109,8 @@ export interface BotBootstrapDeps {
   readonly clock: Clock;
   readonly ids: IdGenerator;
   readonly telegram: BotBootstrapTelegram;
+  /** Round P: the desired command menu and its digest, rendered through the tenant's texts. */
+  readonly commandMenu: Pick<CommandMenu, 'desiredFor'>;
   /**
    * The installation-wide webhook secret.
    *
@@ -758,13 +760,20 @@ export class BotBootstrapService {
     stored: string | null,
     token: string,
   ): Promise<void> {
-    const revision = this.deps.telegram.commandsRevision();
+    // Round P: the ONE desired list — `BOT_COMMANDS` rendered through the tenant's own
+    // texts — and its digest, from `CommandMenu`, the evaluator the worker's sync lane and
+    // the Web Admin's menu state read too. Three readers of one answer, so "current" means
+    // the same thing to the installer, the lane and the page.
+    const desired = await this.deps.commandMenu.desiredFor(scope);
+    const revision = desired.hash;
     // NULL is "unknown", never "matches" — the same rule the webhook secret
     // fingerprint states, and for the same reason: one unnecessary call is a
     // far cheaper mistake than a silent claim.
     if (stored === revision) return;
 
-    const registered = await this.deps.telegram.registerCommands({ token });
+    const registered =
+      (await this.deps.telegram.registerCommands({ token, commands: desired.entries })).outcome ===
+      'REGISTERED';
 
     /*
      * Recorded as an AUDIT row rather than thrown or logged into the void.
@@ -815,7 +824,7 @@ export class BotBootstrapService {
           before: { commandsRevision: stored },
           after: {
             commandsRevision: registered ? revision : stored,
-            commands: BOT_COMMANDS.length,
+            commands: desired.entries.length,
           },
           result: registered ? 'SUCCESS' : 'FAILED',
         },

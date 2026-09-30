@@ -112,6 +112,8 @@ export async function resetDatabase(db: Database): Promise<void> {
        admin_roles, role_permissions, roles, admins,
        panel_health, panel_probe_claims, panel_probe_budgets, panel_credentials,
        panel_capacity_reservations, panel_policies, panels,
+       -- Round P: the command-sync rows, before the bots they name.
+       bot_command_syncs,
        bot_instances, tenants,
        backup_runs, recovery_requests,
        -- The Phase 4 tables, listed EXPLICITLY rather than left to CASCADE.

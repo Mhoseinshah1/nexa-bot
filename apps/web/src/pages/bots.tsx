@@ -289,6 +289,13 @@ function BotCard({
         tone: 'ok',
         message: t(result.changed ? 'web.bot_token_done' : 'web.bot_token_same'),
       });
+      // Round P: the command-menu sync is a SEPARATE result. A menu that could not be
+      // registered is a warning the lane retries; the replacement above still succeeded.
+      if (result.commandSync?.outcome === 'SYNCED') {
+        notify({ tone: 'ok', message: t('web.bot_token_menu_synced') });
+      } else if (result.commandSync?.outcome === 'FAILED') {
+        notify({ tone: 'warn', message: t('web.bot_token_menu_sync_failed') });
+      }
       refresh();
     },
     onError: (error) => submission.settleOn(error),

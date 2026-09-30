@@ -154,6 +154,120 @@ describe('R4 — Telegram bot token replacement registers and verifies the webho
     });
 
   // -------------------------------------------------------------------------
+  // Round P (COMMAND-MENU): the replacement re-registers the command menu AFTERWARDS,
+  // as a separate result that never fails the replacement.
+  // -------------------------------------------------------------------------
+
+  const syncRow = async () =>
+    (
+      await db().execute<{
+        attempts: number;
+        next_attempt_at: string | null;
+        last_error_code: string | null;
+        last_synced_at: string | null;
+      }>(sql`
+        SELECT attempts, next_attempt_at, last_error_code, last_synced_at
+          FROM bot_command_syncs WHERE bot_instance_id = ${BOT_A1}`)
+    ).rows[0];
+  const storedRevision = async () =>
+    (
+      await db().execute<{ r: string | null }>(sql`
+        SELECT commands_revision AS r FROM bot_instances WHERE id = ${BOT_A1}`)
+    ).rows[0]?.r ?? null;
+
+  it('registers the command menu with the new token after storing it, and the answer carries both', async () => {
+    const newToken = telegram.revoke(TELEGRAM_ID, { keepWebhook: false });
+    const cookie = await ownerCookie();
+
+    const response = await replace(cookie, newToken, 'replace-and-sync');
+    expect(response.statusCode).toBe(201);
+    const body = botTokenReplacementResponseSchema.parse(response.json());
+    expect(body.changed).toBe(true);
+    expect(body.commandSync).toEqual({ outcome: 'SYNCED', errorCode: null });
+
+    // The four calls that decide the replacement, THEN the menu — never before the token
+    // is stored, so a menu failure can have nothing to undo.
+    expect(telegramMethods()).toEqual([
+      'getMe',
+      'getWebhookInfo',
+      'setWebhook',
+      'getWebhookInfo',
+      'setMyCommands',
+    ]);
+    // Exactly the customer scope, with the tenant's own words, and nothing of the panel's.
+    const desired = await api.container.commandMenu.desiredFor(scope);
+    expect(telegram.registeredCommands(TELEGRAM_ID)).toEqual(desired.entries);
+    expect(telegram.registeredCommands(TELEGRAM_ID).map((entry) => entry.command)).not.toContain(
+      'admin',
+    );
+    expect(await storedRevision()).toBe(desired.hash);
+    // The answer's `bot` is the snapshot remembered BEFORE the sync (a replay must answer
+    // the first result); the bots page reads the live state, which is now current.
+    const detail = await inject({
+      method: 'GET',
+      url: `${API_PREFIX}${BOT_ROUTES.detail(BOT_A1)}`,
+      headers: { cookie, origin: ORIGIN },
+    });
+    expect(botResponseSchema.parse(detail.json()).bot.commandMenu).toBe('CURRENT');
+    const row = await syncRow();
+    expect(row?.attempts).toBe(0);
+    expect(row?.next_attempt_at).toBeNull();
+    expect(row?.last_synced_at).not.toBeNull();
+  });
+
+  it('keeps a replacement whose menu registration failed a SUCCESS, with the failure as a separate warning', async () => {
+    const newToken = telegram.revoke(TELEGRAM_ID, { keepWebhook: false });
+    const cookie = await ownerCookie();
+    telegram.failNext('setMyCommands', { kind: 'server_error' });
+
+    const response = await replace(cookie, newToken, 'replace-menu-fails');
+    // The webhook and the token are the success criterion — and they succeeded.
+    expect(response.statusCode).toBe(201);
+    const body = botTokenReplacementResponseSchema.parse(response.json());
+    expect(body.changed).toBe(true);
+    expect(body.verification?.verdict).toEqual({ readyToReceive: true, problems: [] });
+    expect(await storedToken()).toBe(newToken);
+    expect(await successfulReplacements()).toBe(1);
+    expect(await openIncomplete()).toEqual([]);
+    // The menu is a SEPARATE, recoverable warning: named, coded, and queued for the lane.
+    expect(body.commandSync).toEqual({ outcome: 'FAILED', errorCode: 'telegram.server_error.500' });
+    expect(body.bot.commandMenu).not.toBe('CURRENT');
+    const row = await syncRow();
+    expect(row?.attempts).toBe(1);
+    expect(row?.last_error_code).toBe('telegram.server_error.500');
+    expect(row?.next_attempt_at).not.toBeNull();
+    // Telegram still holds whatever it held: nothing was registered.
+    expect(telegram.registeredCommands(TELEGRAM_ID)).toEqual([]);
+
+    // And the lane's next pass, once Telegram answers, converges without the operator.
+    const tick = await api.container.botCommandSync.tick(new Date(Date.now() + 60 * 60_000));
+    expect(tick).toMatchObject({ claimed: 1, synced: 1, failed: 0 });
+    expect(telegram.registeredCommands(TELEGRAM_ID)).toEqual(
+      (await api.container.commandMenu.desiredFor(scope)).entries,
+    );
+    expect((await syncRow())?.attempts).toBe(0);
+  });
+
+  it('answers a replayed replacement without a second menu registration, and says so', async () => {
+    const newToken = telegram.revoke(TELEGRAM_ID, { keepWebhook: false });
+    const cookie = await ownerCookie();
+    const first = botTokenReplacementResponseSchema.parse(
+      (await replace(cookie, newToken, 'replay-sync')).json(),
+    );
+    expect(first.commandSync?.outcome).toBe('SYNCED');
+    const calls = telegram.calls.length;
+
+    const replay = botTokenReplacementResponseSchema.parse(
+      (await replace(cookie, newToken, 'replay-sync')).json(),
+    );
+    // The first answer, from the store: the sync ran after it was remembered, so it is
+    // reported as not having been run by THIS answer rather than invented.
+    expect(replay.commandSync).toBeNull();
+    expect(replay.bot).toEqual(first.bot);
+    expect(telegram.calls.length).toBe(calls);
+  });
+
+  // -------------------------------------------------------------------------
   // The brief's required regressions
   // -------------------------------------------------------------------------
 
@@ -170,8 +284,15 @@ describe('R4 — Telegram bot token replacement registers and verifies the webho
     expect(body.changed).toBe(true);
 
     // The four calls, in order: identity, the prior registration, the registration, and
-    // the read-back that verifies it. Nothing is stored before the read-back.
-    expect(telegramMethods()).toEqual(['getMe', 'getWebhookInfo', 'setWebhook', 'getWebhookInfo']);
+    // the read-back that verifies it. Nothing is stored before the read-back. Round P adds
+    // the command menu AFTER the token is stored (asserted on its own below).
+    expect(telegramMethods()).toEqual([
+      'getMe',
+      'getWebhookInfo',
+      'setWebhook',
+      'getWebhookInfo',
+      'setMyCommands',
+    ]);
     const set = telegram.calls.find((call) => call.method === 'setWebhook');
     expect(set?.body).toEqual({
       url: EXPECTED_URL,
@@ -466,11 +587,17 @@ describe('R4 — Telegram bot token replacement registers and verifies the webho
     const done = await first;
     expect(done.statusCode).toBe(201);
 
-    // The retry of the same key is the first answer, from the store.
+    // The retry of the same key is the first answer, from the store — except the
+    // command-menu sync, which ran after that answer was remembered and is reported as
+    // not run by the replay (round P) rather than invented.
     const callsAfter = telegram.calls.length;
     const replay = await replace(cookie, newToken, 'double-submit');
     expect(replay.statusCode).toBe(201);
-    expect(replay.json()).toEqual(done.json());
+    const { commandSync: firstSync, ...firstRest } = done.json() as Record<string, unknown>;
+    const { commandSync: replaySync, ...replayRest } = replay.json() as Record<string, unknown>;
+    expect(replayRest).toEqual(firstRest);
+    expect(firstSync).toEqual({ outcome: 'SYNCED', errorCode: null });
+    expect(replaySync).toBeNull();
     expect(telegram.calls.length).toBe(callsAfter);
 
     expect(telegramMethods().filter((method) => method === 'setWebhook')).toHaveLength(1);

@@ -1,4 +1,5 @@
 import type {
+  BotCommandEntry,
   BotInstance,
   BotInstanceId,
   BotInstanceStatus,
@@ -279,33 +280,43 @@ export interface BotBootstrapTelegram {
   }): Promise<WebhookRegistration>;
 
   /**
-   * Registers the command menu with Telegram. Answers whether it landed.
+   * Registers a command menu with Telegram, and answers what happened.
    *
-   * The COMMANDS are not a parameter. `BOT_COMMANDS` is the one list and rendering its
-   * descriptions needs the catalogue, which an application file may not import — so the
-   * adapter does both and this layer decides only whether to call it.
+   * Round P: the COMMANDS are a parameter. Until then the adapter rendered `BOT_COMMANDS`
+   * from the shared catalogue itself, and the digest it compared against was its own — so
+   * a tenant's `bot.command.*` text could be edited and never reach Telegram, and a second
+   * renderer (the sync lane's) would have disagreed with the installer's on what "current"
+   * meant. Now `CommandMenu` renders the one list through the tenant's own templates, both
+   * the installer and the lane send exactly that, and the stored digest is of that.
    *
-   * A BOOLEAN, not a structured outcome, and that is the difference from
-   * `registerWebhook`: a failed webhook makes the install INCOMPLETE because updates do
-   * not arrive, and a failed command menu means a customer types `/help` instead of
-   * tapping it. Two failures of very different weight should not share a shape that
-   * invites the caller to treat them alike.
+   * The outcome is deliberately WEAKER than `registerWebhook`'s: a failed webhook makes an
+   * install INCOMPLETE because updates do not arrive, and a failed command menu means a
+   * customer types `/help` instead of tapping it. The bootstrap reads only
+   * `outcome === 'REGISTERED'`; the lane keeps the code for its back-off and its
+   * diagnostics. Nothing here throws.
    */
-  registerCommands(input: { readonly token: string }): Promise<boolean>;
-
-  /**
-   * A digest of the menu `registerCommands` would send RIGHT NOW.
-   *
-   * On the adapter because only the adapter can compute it: the digest covers
-   * the rendered descriptions, and rendering needs `@nexa/i18n`, which
-   * `check-boundaries.sh` refuses to an application file by name. This layer
-   * decides WHETHER to register and compares two opaque strings to do it.
-   *
-   * Pure and free of network. It is called on every reconcile, including the
-   * ones that have nothing else to do.
-   */
-  commandsRevision(): string;
+  registerCommands(input: {
+    readonly token: string;
+    readonly commands: readonly BotCommandEntry[];
+  }): Promise<BotCommandsRegistration>;
 }
+
+/** What `setMyCommands` answered, in the bot's vocabulary. `code` is a transport code, never text. */
+export type BotCommandsRegistration =
+  | { readonly outcome: 'REGISTERED' }
+  /** Telegram looked at the list and refused it, or the token; retrying the same list changes nothing. */
+  | { readonly outcome: 'REFUSED'; readonly code: string }
+  /**
+   * No usable answer — unreachable, a 5xx, a 429, an unreadable 2xx. Retry later; a 429's
+   * `retry_after` is carried so the lane never retries before Telegram's hold (Codex #2).
+   */
+  | { readonly outcome: 'UNREACHABLE'; readonly code: string; readonly retryAfterMs?: number };
+
+/** What `getMyCommands` answered (round P's «بررسی وضعیت»). A read. */
+export type BotCommandsRead =
+  | { readonly outcome: 'READ'; readonly commands: readonly BotCommandEntry[] }
+  | { readonly outcome: 'REJECTED' }
+  | { readonly outcome: 'UNREACHABLE' };
 
 export const TENANT_REPOSITORY = Symbol('TENANT_REPOSITORY');
 export const BOT_INSTANCE_REPOSITORY = Symbol('BOT_INSTANCE_REPOSITORY');
