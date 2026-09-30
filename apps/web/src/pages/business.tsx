@@ -61,6 +61,7 @@ import {
   BarChart,
   ButtonGroup,
   ChartCard,
+  CursorPager,
   Donut,
   FilterChip,
   FilterChips,
@@ -706,28 +707,19 @@ function TopProducts({ selection }: { selection: ReportRangeSelection }) {
               caption={t('web.report_products_title')}
               dense
             />
-            <div className="pager">
-              <span className="muted small">
-                {t('web.report_total_rows')} <Num value={data.totalRows} />
-              </span>
-              <span className="spacer" />
-              <button
-                type="button"
-                className="btn sm"
-                disabled={page <= 1}
-                onClick={() => setPage(page - 1)}
-              >
-                {t('web.report_page_previous')}
-              </button>
-              <button
-                type="button"
-                className="btn sm"
-                disabled={page * limit >= data.totalRows}
-                onClick={() => setPage(page + 1)}
-              >
-                {t('web.report_page_next')}
-              </button>
-            </div>
+            <CursorPager
+              summary={
+                <>
+                  {t('web.report_total_rows')} <Num value={data.totalRows} />
+                </>
+              }
+              hasPrevious={page > 1}
+              hasNext={page * limit < data.totalRows}
+              onPrevious={() => setPage(page - 1)}
+              onNext={() => setPage(page + 1)}
+              previousLabel="web.report_page_previous"
+              nextLabel="web.report_page_next"
+            />
           </>
         )}
       </StateSwitch>
@@ -1010,27 +1002,15 @@ function OrdersDrilldown({ selection }: { selection: ReportRangeSelection }) {
               caption={t('web.report_orders_title')}
               dense
             />
-            <div className="pager">
-              <span className="spacer" />
-              <button
-                type="button"
-                className="btn sm"
-                disabled={cursors.length === 0}
-                onClick={() => setCursors(cursors.slice(0, -1))}
-              >
-                {t('web.report_page_previous')}
-              </button>
-              <button
-                type="button"
-                className="btn sm"
-                disabled={data.nextCursor === null}
-                onClick={() =>
-                  data.nextCursor !== null && setCursors([...cursors, data.nextCursor])
-                }
-              >
-                {t('web.report_page_next')}
-              </button>
-            </div>
+            <CursorPager
+              summary={null}
+              hasPrevious={cursors.length > 0}
+              hasNext={data.nextCursor !== null}
+              onPrevious={() => setCursors(cursors.slice(0, -1))}
+              onNext={() => data.nextCursor !== null && setCursors([...cursors, data.nextCursor])}
+              previousLabel="web.report_page_previous"
+              nextLabel="web.report_page_next"
+            />
           </>
         )}
       </StateSwitch>
@@ -1681,28 +1661,19 @@ export function ReferralAnalytics({
                 caption={t('web.report_top_referrers')}
               />
             )}
-            <div className="pager">
-              <span className="muted small">
-                {t('web.report_total_rows')} <Num value={data.topReferrers.totalRows} />
-              </span>
-              <span className="spacer" />
-              <button
-                type="button"
-                className="btn sm"
-                disabled={page <= 1}
-                onClick={() => setPage(page - 1)}
-              >
-                {t('web.report_page_previous')}
-              </button>
-              <button
-                type="button"
-                className="btn sm"
-                disabled={page * limit >= data.topReferrers.totalRows}
-                onClick={() => setPage(page + 1)}
-              >
-                {t('web.report_page_next')}
-              </button>
-            </div>
+            <CursorPager
+              summary={
+                <>
+                  {t('web.report_total_rows')} <Num value={data.topReferrers.totalRows} />
+                </>
+              }
+              hasPrevious={page > 1}
+              hasNext={page * limit < data.topReferrers.totalRows}
+              onPrevious={() => setPage(page - 1)}
+              onNext={() => setPage(page + 1)}
+              previousLabel="web.report_page_previous"
+              nextLabel="web.report_page_next"
+            />
             <PeriodNote period={data.period} />
           </>
         )}

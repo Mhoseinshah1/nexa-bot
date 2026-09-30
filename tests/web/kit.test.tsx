@@ -6,6 +6,7 @@ import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import {
   BarChart,
   Checkbox,
+  CursorPager,
   DetailHead,
   Disclosure,
   Donut,
@@ -592,5 +593,48 @@ describe('icons', () => {
     expect(paths).toHaveLength(ICON_NAMES.length);
     for (const path of paths) expect(path.getAttribute('d')).toMatch(/^[mM]/);
     for (const entry of NAV) expect(ICON_NAMES, entry.id).toContain(entry.icon);
+  });
+});
+
+describe('CursorPager', () => {
+  const noop = () => undefined;
+
+  it("says «نمایش N» by default, the caller's summary when given one, and nothing for null", () => {
+    const { container } = renderPage(
+      <>
+        <CursorPager shown={3} hasPrevious={false} hasNext onPrevious={noop} onNext={noop} />
+        <CursorPager
+          summary={<>کل: ۹</>}
+          hasPrevious
+          hasNext={false}
+          onPrevious={noop}
+          onNext={noop}
+        />
+        <CursorPager summary={null} hasPrevious hasNext onPrevious={noop} onNext={noop} />
+      </>,
+    );
+    const [counted, totalled, silent] = [...container.querySelectorAll('.pager')];
+    expect(counted?.querySelector('.muted.small')?.textContent).toBe(
+      `${t('web.showing')} ${formatNumber(3)}`,
+    );
+    expect(totalled?.querySelector('.muted.small')?.textContent).toBe('کل: ۹');
+    expect(silent?.querySelector('.muted.small')).toBeNull();
+    // The same two buttons, chevrons and all, whatever the summary says.
+    for (const pager of [counted, totalled, silent]) {
+      expect(pager?.querySelectorAll('button.btn.sm')).toHaveLength(2);
+      expect(pager?.querySelectorAll('button svg[aria-hidden="true"]')).toHaveLength(2);
+    }
+  });
+
+  /*
+   * The reports drew three pagers by hand (no chevrons, their own summary
+   * spans); a hand-written .pager is how that comes back.
+   */
+  it('is the only pager the pages draw', () => {
+    const dir = join(import.meta.dirname, '../../apps/web/src/pages');
+    const offenders = readdirSync(dir)
+      .filter((name) => name.endsWith('.tsx'))
+      .filter((name) => /className="pager"/.test(readFileSync(join(dir, name), 'utf8')));
+    expect(offenders).toEqual([]);
   });
 });

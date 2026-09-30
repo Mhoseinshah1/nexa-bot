@@ -1868,20 +1868,34 @@ export function CursorPager({
   shown,
   nextLabel = 'web.older',
   previousLabel = 'web.newer',
+  summary,
 }: {
   onPrevious: () => void;
   onNext: () => void;
   hasPrevious: boolean;
   hasNext: boolean;
-  shown: number;
+  /** Rows on this page; drawn as «نمایش N» unless `summary` says something else. */
+  shown?: number;
   nextLabel?: WebKey;
   previousLabel?: WebKey;
+  /**
+   * What the pager says about the rows, in place of «نمایش N»: a report that
+   * pages by offset knows its total («تعداد کل: N»), and one that pages by an
+   * opaque cursor may say nothing at all (`null`).
+   */
+  summary?: ReactNode;
 }) {
+  const said =
+    summary !== undefined ? (
+      summary
+    ) : shown === undefined ? null : (
+      <>
+        {t('web.showing')} <Num value={shown} />
+      </>
+    );
   return (
     <div className="pager">
-      <span className="muted small">
-        {t('web.showing')} <Num value={shown} />
-      </span>
+      {said !== null && <span className="muted small">{said}</span>}
       <span className="spacer" />
       <button type="button" className="btn sm" disabled={!hasPrevious} onClick={onPrevious}>
         <Icon name="chevronRight" />
