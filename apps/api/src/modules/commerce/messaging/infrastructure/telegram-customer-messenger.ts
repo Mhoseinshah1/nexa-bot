@@ -295,6 +295,9 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
           chatId: message.chatId,
           text: part,
           html,
+          ...(index === 0 && message.replyToMessageId !== undefined
+            ? { replyToMessageId: message.replyToMessageId }
+            : {}),
           ...(last ? { buttons, ...(keyboard === undefined ? {} : { keyboard }) } : {}),
         }),
       });
@@ -488,6 +491,10 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
     if (token === null) return { outcome: 'REFUSED' };
     const caption = await this.templates.render(scope, message.templateKey, message.values);
     const html = templateDefinition(message.templateKey).format === 'TELEGRAM_HTML';
+    // Round N (F1): a caption that must arrive whole is refused, not cut, over the bound.
+    if (message.whole === true && caption.length > TELEGRAM_CAPTION_MAX) {
+      return { outcome: 'REFUSED', reason: 'CAPTION_OVER_BOUND' };
+    }
     if (caption.length === 0 || (html && caption.length > TELEGRAM_CAPTION_MAX)) {
       return { outcome: 'REFUSED', reason: 'NOT_EDITABLE' };
     }
@@ -614,6 +621,10 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
     const token = await this.bots.tokenForBotInstance(scope, message.botInstanceId);
     if (token === null) return { outcome: 'REFUSED' };
     const text = await this.templates.render(scope, message.templateKey, message.values);
+    // Round N (F1): a body that must arrive whole says WHY it was refused.
+    if (message.whole === true && text.length > TELEGRAM_MESSAGE_MAX) {
+      return { outcome: 'REFUSED', reason: 'TEXT_OVER_BOUND' };
+    }
     if (text.length === 0 || text.length > TELEGRAM_MESSAGE_MAX) {
       return { outcome: 'REFUSED', reason: 'NOT_EDITABLE' };
     }

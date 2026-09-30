@@ -3254,11 +3254,14 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    * The balance through the ledger's own SUM, gated by the guard's one resolution rule; the
    * labels through the tenant's own template overrides.
    */
+  const receiptReviewFacts = new DrizzleReceiptReviewFactsReader(database.db);
   const receiptReviewCaption = new ReceiptReviewCaption({
-    facts: new DrizzleReceiptReviewFactsReader(database.db),
+    facts: receiptReviewFacts,
     balances: walletRepository,
     guard,
     labels: templateResolver,
+    // F1 (round N): the payment's own wallet movement, for the review message's final record.
+    movements: receiptReviewFacts,
   });
 
   const receiptService = new ReceiptService({

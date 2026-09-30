@@ -61,29 +61,60 @@ const MAX_RESPONSE_BYTES = 64 * 1024;
 
 export type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
 
-/** An amount as the provider sends it: a JSON integer. Anything else is not an amount. */
-const providerAmount = z
-  .number()
-  .int()
-  .nonnegative()
-  .transform((value) => BigInt(value));
 const bounded = (max: number) => z.string().min(1).max(max);
 
+/**
+ * A provider identifier: a non-empty bounded string, or a JSON integer, which is normalised
+ * to its decimal string. The documentation names the fields and gives no types, and an id
+ * the provider chose to send as a number is still the same id — refusing it would turn a
+ * created invoice into an UNKNOWN one (F3, round N). Anything else is not an id.
+ */
+const providerId = z
+  .union([bounded(GATEWAY_PROVIDER_ID_MAX_LENGTH), z.number().int().nonnegative()])
+  .transform((value) => String(value));
+
+/**
+ * The provider's amounts and a create's status are METADATA (CLAUDE.md, TonPays rules):
+ * stored for support, never deciding approval or a credited figure. So a value of a shape
+ * nobody documented is recorded as absent — it is NEVER a reason to discard the answer it
+ * came in. Before round N a `null` or a decimal `final_amount` made the whole create
+ * `unexpected_body`, and a created, payable invoice was shown to the customer as a lost one.
+ */
+function metadataAmount(value: unknown): bigint | null {
+  if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) return BigInt(value);
+  if (typeof value === 'string' && /^\d{1,18}$/u.test(value)) return BigInt(value);
+  return null;
+}
+
+function metadataStatus(value: unknown): string | null {
+  return typeof value === 'string' &&
+    value.length > 0 &&
+    value.length <= GATEWAY_PROVIDER_STATUS_MAX_LENGTH
+    ? value
+    : null;
+}
+
+/*
+ * What decides a create is the invoice id and the echo of OUR order id; every other field
+ * is read field by field below, so one of them in an undocumented shape costs that field
+ * and nothing more.
+ */
 const createResponseSchema = z.object({
-  invoice_id: bounded(GATEWAY_PROVIDER_ID_MAX_LENGTH),
-  order_id: bounded(GATEWAY_PROVIDER_ID_MAX_LENGTH),
-  request_amount: providerAmount.optional(),
-  final_amount: providerAmount.optional(),
-  status: bounded(GATEWAY_PROVIDER_STATUS_MAX_LENGTH).optional(),
-  invoice_url: z.string().max(GATEWAY_PROVIDER_URL_MAX_LENGTH).optional().nullable(),
-  web_invoice_url: z.string().max(GATEWAY_PROVIDER_URL_MAX_LENGTH).optional().nullable(),
+  invoice_id: providerId,
+  order_id: providerId,
+  request_amount: z.unknown().optional(),
+  final_amount: z.unknown().optional(),
+  status: z.unknown().optional(),
+  invoice_url: z.unknown().optional(),
+  web_invoice_url: z.unknown().optional(),
 });
 
 const inquiryResponseSchema = z.object({
-  invoice_id: bounded(GATEWAY_PROVIDER_ID_MAX_LENGTH),
-  order_id: bounded(GATEWAY_PROVIDER_ID_MAX_LENGTH),
-  request_amount: providerAmount.optional(),
-  final_amount: providerAmount.optional(),
+  invoice_id: providerId,
+  order_id: providerId,
+  request_amount: z.unknown().optional(),
+  final_amount: z.unknown().optional(),
+  // The inquiry's status DECIDES (with `paid`), so it stays strict: a string or no answer.
   status: bounded(GATEWAY_PROVIDER_STATUS_MAX_LENGTH),
   /*
    * Kept as whatever JSON value it was, and judged by `tonpaysVerdict`, which accepts
@@ -98,16 +129,21 @@ const errorBodySchema = z.object({
 });
 
 const webhookBodySchema = z.object({
-  invoice_id: bounded(GATEWAY_PROVIDER_ID_MAX_LENGTH),
-  order_id: bounded(GATEWAY_PROVIDER_ID_MAX_LENGTH),
-  status: z.string().max(GATEWAY_PROVIDER_STATUS_MAX_LENGTH).optional(),
-  delivery_id: z.string().max(128).optional(),
-  credit_amount: providerAmount.optional(),
+  invoice_id: providerId,
+  order_id: providerId,
+  status: z.unknown().optional(),
+  delivery_id: z.unknown().optional(),
+  credit_amount: z.unknown().optional(),
 });
 
-/** A link the customer may be sent: https only, and nothing a customer should not open. */
-function safeLink(value: string | null | undefined): string | null {
+/**
+ * A link the customer may be sent: https only, and nothing a customer should not open. A
+ * value that is not a string, or longer than the column holds, is no link — and costs only
+ * itself, never the answer it came in.
+ */
+function safeLink(value: unknown): string | null {
   if (typeof value !== 'string' || value.length === 0) return null;
+  if (value.length > GATEWAY_PROVIDER_URL_MAX_LENGTH) return null;
   try {
     const url = new URL(value);
     return url.protocol === 'https:' ? url.toString() : null;
@@ -120,10 +156,105 @@ function boundedCode(code: string): string {
   return code.replace(/[^A-Za-z0-9_.:-]/gu, '_').slice(0, GATEWAY_ERROR_CODE_MAX_LENGTH);
 }
 
+/**
+ * F3 (round N): what an answer that decided nothing LOOKED like, as a machine code an
+ * operator can read on the payment and in the operational log — and nothing more. Never a
+ * body, a header, a URL or an error message: those can quote the request, and the request
+ * carries the key.
+ *
+ * - `http.<status>.unexpected_body:<field>` — a readable JSON answer missing, or carrying in
+ *   an undocumented shape, the one field named (the first zod issue's path);
+ * - `http.<status>.unreadable.<html|text|empty|too_large|stream>` — no JSON at all: an HTML
+ *   page (a proxy, a firewall or a maintenance page in front of the provider), plain text,
+ *   nothing, an answer over the bound, or a stream that broke;
+ * - `http.<status>.validation:<field>` — a 4xx whose `detail` is a list of field errors
+ *   (the framework's own validation answer) rather than the documented `{ code }`;
+ * - `http.timeout`, `http.redirect`, `http.network[.<SYSTEM_CODE>]` — no answer, with the
+ *   operating system's own error code (`ENOTFOUND`, `ECONNREFUSED`, a TLS code) when there
+ *   is one.
+ */
+type UnreadableShape = 'html' | 'text' | 'empty' | 'too_large' | 'stream';
+
 type Raw =
   | { readonly kind: 'BODY'; readonly status: number; readonly body: unknown }
-  | { readonly kind: 'UNREADABLE'; readonly status: number }
-  | { readonly kind: 'NO_RESPONSE'; readonly reason: 'timeout' | 'network' };
+  | { readonly kind: 'UNREADABLE'; readonly status: number; readonly shape: UnreadableShape }
+  | { readonly kind: 'NO_RESPONSE'; readonly reason: string };
+
+/** Why a request got no answer, from the error alone and never from its message text. */
+function transportReason(error: unknown, aborted: boolean): string {
+  if (aborted) return 'timeout';
+  const cause = (error as { cause?: unknown } | null)?.cause;
+  // `redirect: 'error'` refuses a 30x this way; compared, never stored.
+  if (cause instanceof Error && cause.message === 'unexpected redirect') return 'redirect';
+  const code =
+    (cause as { code?: unknown } | null | undefined)?.code ??
+    (error as { code?: unknown } | null)?.code;
+  return typeof code === 'string' && /^[A-Z][A-Z0-9_]{1,40}$/u.test(code)
+    ? `network.${code}`
+    : 'network';
+}
+
+/**
+ * The fields of the two request bodies this adapter SENDS — `createInvoice`'s and
+ * `inquire`'s, nothing else. The only names a provider's validation answer may put into a
+ * code (Codex review of #113): its `loc` is the provider's content, and a code built from it
+ * reaches `creation_error_code`, the operational log and the worker's log line, where only
+ * a closed vocabulary belongs.
+ */
+const REQUEST_FIELDS: ReadonlySet<string> = new Set([
+  'amount',
+  'order_id',
+  'callback_url',
+  'buyer_chat_id',
+  'invoice_id',
+]);
+
+/**
+ * The response fields the three schemas below declare. A zod issue's path is built from
+ * the SCHEMA's keys (these objects are not strict, so a key the provider added is stripped,
+ * never reported) and from array indexes (none of these schemas has an array), so it
+ * cannot carry response content today. It is checked against this set anyway, so a later
+ * schema that does — a record, an array of provider objects — cannot turn a code into a
+ * channel for the provider's text.
+ */
+const RESPONSE_FIELDS: ReadonlySet<string> = new Set([
+  'invoice_id',
+  'order_id',
+  'request_amount',
+  'final_amount',
+  'status',
+  'paid',
+  'invoice_url',
+  'web_invoice_url',
+  'delivery_id',
+  'credit_amount',
+]);
+
+/** The first field a zod parse refused, from `RESPONSE_FIELDS` or `unknown`. */
+function firstIssuePath(error: z.ZodError): string {
+  const path = error.issues[0]?.path ?? [];
+  if (path.length === 0) return 'root';
+  const field = path[0];
+  return typeof field === 'string' && RESPONSE_FIELDS.has(field) ? field : 'unknown';
+}
+
+/**
+ * The request field a framework validation answer (`{ detail: [{ loc: [..., field] }] }`)
+ * names — one of `REQUEST_FIELDS`, else `unknown` — or null when the body is not one. The
+ * provider's `loc`, `msg` and `type` are never copied into anything.
+ */
+function validationFieldOf(body: unknown): string | null {
+  const detail = (body as { detail?: unknown } | null)?.detail;
+  if (!Array.isArray(detail) || detail.length === 0) return null;
+  const loc = (detail[0] as { loc?: unknown } | null)?.loc;
+  if (!Array.isArray(loc) || loc.length === 0) return 'unknown';
+  const last: unknown = loc[loc.length - 1];
+  return typeof last === 'string' && REQUEST_FIELDS.has(last) ? last : 'unknown';
+}
+
+function unreadableCode(raw: { readonly status: number; readonly shape: UnreadableShape }): string {
+  return `http.${String(raw.status)}.unreadable.${raw.shape}`;
+}
 
 export class TonPaysAdapter implements ExternalGatewayAdapter {
   readonly provider = 'TONPAYS' as const;
@@ -176,12 +307,17 @@ export class TonPaysAdapter implements ExternalGatewayAdapter {
     const raw = await this.call('POST', TONPAYS_CREATE_PATH, apiKey, body);
     if (raw.kind === 'NO_RESPONSE') return { kind: 'UNKNOWN', code: `http.${raw.reason}` };
     if (raw.kind === 'UNREADABLE') {
-      return { kind: 'UNKNOWN', code: `http.${String(raw.status)}.unreadable` };
+      return { kind: 'UNKNOWN', code: boundedCode(unreadableCode(raw)) };
     }
     if (raw.status >= 200 && raw.status < 300) {
       const parsed = createResponseSchema.safeParse(raw.body);
       if (!parsed.success) {
-        return { kind: 'UNKNOWN', code: `http.${String(raw.status)}.unexpected_body` };
+        return {
+          kind: 'UNKNOWN',
+          code: boundedCode(
+            `http.${String(raw.status)}.unexpected_body:${firstIssuePath(parsed.error)}`,
+          ),
+        };
       }
       /*
        * An answer for a DIFFERENT order id is not an answer to this request. It is not
@@ -197,9 +333,9 @@ export class TonPaysAdapter implements ExternalGatewayAdapter {
         orderId: parsed.data.order_id,
         invoiceUrl: safeLink(parsed.data.invoice_url),
         webInvoiceUrl: safeLink(parsed.data.web_invoice_url),
-        status: parsed.data.status ?? null,
-        requestAmount: parsed.data.request_amount ?? null,
-        finalAmount: parsed.data.final_amount ?? null,
+        status: metadataStatus(parsed.data.status),
+        requestAmount: metadataAmount(parsed.data.request_amount),
+        finalAmount: metadataAmount(parsed.data.final_amount),
       };
     }
     /*
@@ -212,10 +348,19 @@ export class TonPaysAdapter implements ExternalGatewayAdapter {
     if (raw.status >= 500) return { kind: 'UNKNOWN', code: `http.${String(raw.status)}` };
     const code = this.errorCodeOf(raw.body);
     if (code === null) {
-      // A 4xx/429 with no readable code: nothing documented was said.
+      /*
+       * A 4xx/429 with no readable code: nothing documented was said, so UNKNOWN — but the
+       * field a framework validation answer names is kept, because it is the one thing that
+       * tells an operator which part of the request the provider would not take.
+       */
+      const field = validationFieldOf(raw.body);
       return {
         kind: 'UNKNOWN',
-        code: `http.${String(raw.status)}`,
+        code: boundedCode(
+          field === null
+            ? `http.${String(raw.status)}`
+            : `http.${String(raw.status)}.validation:${field}`,
+        ),
       };
     }
     switch (classifyTonPaysError(code)) {
@@ -236,12 +381,17 @@ export class TonPaysAdapter implements ExternalGatewayAdapter {
     const raw = await this.call('POST', TONPAYS_CHECK_PATH, apiKey, { invoice_id: invoiceId });
     if (raw.kind === 'NO_RESPONSE') return { kind: 'FAILED', code: `http.${raw.reason}` };
     if (raw.kind === 'UNREADABLE') {
-      return { kind: 'FAILED', code: `http.${String(raw.status)}.unreadable` };
+      return { kind: 'FAILED', code: boundedCode(unreadableCode(raw)) };
     }
     if (raw.status >= 200 && raw.status < 300) {
       const parsed = inquiryResponseSchema.safeParse(raw.body);
       if (!parsed.success) {
-        return { kind: 'FAILED', code: `http.${String(raw.status)}.unexpected_body` };
+        return {
+          kind: 'FAILED',
+          code: boundedCode(
+            `http.${String(raw.status)}.unexpected_body:${firstIssuePath(parsed.error)}`,
+          ),
+        };
       }
       return {
         kind: 'OBSERVED',
@@ -250,8 +400,8 @@ export class TonPaysAdapter implements ExternalGatewayAdapter {
         status: parsed.data.status,
         paid: typeof parsed.data.paid === 'boolean' ? parsed.data.paid : null,
         verdict: tonpaysVerdict(parsed.data.status, parsed.data.paid),
-        requestAmount: parsed.data.request_amount ?? null,
-        finalAmount: parsed.data.final_amount ?? null,
+        requestAmount: metadataAmount(parsed.data.request_amount),
+        finalAmount: metadataAmount(parsed.data.final_amount),
       };
     }
     const code = this.errorCodeOf(raw.body);
@@ -280,12 +430,18 @@ export class TonPaysAdapter implements ExternalGatewayAdapter {
       typeof deliveryIdHeader === 'string' && deliveryIdHeader.length > 0
         ? deliveryIdHeader.slice(0, 128)
         : null;
+    const bodyDelivery = parsed.data.delivery_id;
+    const deliveryFromBody =
+      (typeof bodyDelivery === 'string' && bodyDelivery.length > 0) ||
+      (typeof bodyDelivery === 'number' && Number.isSafeInteger(bodyDelivery))
+        ? String(bodyDelivery).slice(0, 128)
+        : null;
     return {
       orderId: parsed.data.order_id,
       invoiceId: parsed.data.invoice_id,
-      status: parsed.data.status ?? null,
-      deliveryId: header ?? parsed.data.delivery_id ?? null,
-      creditAmount: parsed.data.credit_amount ?? null,
+      status: metadataStatus(parsed.data.status),
+      deliveryId: header ?? deliveryFromBody,
+      creditAmount: metadataAmount(parsed.data.credit_amount),
     };
   }
 
@@ -323,9 +479,13 @@ export class TonPaysAdapter implements ExternalGatewayAdapter {
           signal: controller.signal,
           redirect: 'error',
         });
-      } catch {
-        // Nothing about the error is kept: an undici error can quote the request.
-        return { kind: 'NO_RESPONSE', reason: controller.signal.aborted ? 'timeout' : 'network' };
+      } catch (error: unknown) {
+        /*
+         * Nothing about the error is kept but its system code: an undici error's MESSAGE can
+         * quote the request, while `ENOTFOUND` or a TLS code cannot, and is exactly what an
+         * operator needs to tell a DNS, firewall or certificate problem from a slow provider.
+         */
+        return { kind: 'NO_RESPONSE', reason: transportReason(error, controller.signal.aborted) };
       }
       let text: string | null;
       try {
@@ -333,13 +493,21 @@ export class TonPaysAdapter implements ExternalGatewayAdapter {
       } catch {
         return controller.signal.aborted
           ? { kind: 'NO_RESPONSE', reason: 'timeout' }
-          : { kind: 'UNREADABLE', status: response.status };
+          : { kind: 'UNREADABLE', status: response.status, shape: 'stream' };
       }
-      if (text === null) return { kind: 'UNREADABLE', status: response.status };
+      if (text === null) return { kind: 'UNREADABLE', status: response.status, shape: 'too_large' };
       try {
         return { kind: 'BODY', status: response.status, body: JSON.parse(text) as unknown };
       } catch {
-        return { kind: 'UNREADABLE', status: response.status };
+        const trimmed = text.trimStart();
+        const contentType = response.headers.get('content-type') ?? '';
+        const shape: UnreadableShape =
+          trimmed === ''
+            ? 'empty'
+            : trimmed.startsWith('<') || /html/iu.test(contentType)
+              ? 'html'
+              : 'text';
+        return { kind: 'UNREADABLE', status: response.status, shape };
       }
     } finally {
       clearTimeout(timer);

@@ -2294,6 +2294,14 @@ Two parts stand:
   enabled for real customers until an acceptance run against the real provider has passed.
 - **One active external gateway at a time** (File 02). Not enforced: TonPays is the only
   external route. The partial unique index belongs with the second external provider.
+- **Round N (F3): the v0.3.6 staging create ended "not received" for every attempt.**
+  The in-process lane was proven correct end to end with only the network replaced
+  (`docs/tonpays-gateway-audit.md` §8); the provider's real answer could not be observed
+  from the development environment. The adapter no longer discards a created invoice for
+  undocumented metadata shapes, and every create that decides nothing now records WHY
+  (`creation_error_code`, the `payments.gateway_create_unknown` context with `elapsedMs`).
+  UNRESOLVED until the next staging run reads that code: it is the acceptance evidence
+  this question has been waiting for.
 
 ## OQ-WP11A-01 — how to verify `X-TonPays-Signature`
 
