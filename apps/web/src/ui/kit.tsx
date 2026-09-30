@@ -519,6 +519,10 @@ export function Card({
  * The head of a detail page, as a card: identity (with an optional avatar
  * initial and a status badge), a meta line, the primary actions, and a strip
  * of summary figures beneath.
+ *
+ * `level` is the heading's rank. A page whose head IS this card passes 1, so
+ * the page keeps its one level-one heading; the default, 2, is for a head
+ * drawn beneath a `PageHead`.
  */
 export function DetailHead({
   title,
@@ -527,6 +531,7 @@ export function DetailHead({
   actions,
   initial,
   stats,
+  level = 2,
 }: {
   title: ReactNode;
   badge?: ReactNode;
@@ -535,7 +540,9 @@ export function DetailHead({
   /** One or two characters for the avatar tile; omitted, no tile is drawn. */
   initial?: string;
   stats?: readonly { readonly label: ReactNode; readonly value: ReactNode }[];
+  level?: 1 | 2;
 }) {
+  const Heading = level === 1 ? 'h1' : 'h2';
   return (
     <section className="card detail-head">
       <div className="head-card">
@@ -545,10 +552,10 @@ export function DetailHead({
           </span>
         )}
         <div className="ident-block">
-          <h2>
+          <Heading>
             {title}
             {badge}
-          </h2>
+          </Heading>
           {meta !== undefined && <div className="meta">{meta}</div>}
         </div>
         {actions !== undefined && <div className="quick">{actions}</div>}

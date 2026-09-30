@@ -496,6 +496,61 @@ describe('the customer detail', () => {
      */
   });
 
+  /*
+   * Codex review on PR #125: the redesign moved the head into the loaded branch
+   * as a `DetailHead`, which drew an <h2>, and dropped the `PageHead` that stood
+   * outside the query state — so the page had no level-one heading at all while
+   * loading, refused or failed, and only an <h2> once loaded.
+   */
+  describe('keeps one level-one heading in every state', () => {
+    const page = (denied: boolean) => (
+      <UserDetailPage
+        mayEditTrial={false}
+        id={ROW_ID}
+        mayBlock={false}
+        {...NO_WALLET}
+        {...NO_COMMERCE}
+        denied={denied}
+      />
+    );
+
+    it('while loading', () => {
+      stubApi(detail());
+      renderPage(page(false));
+      expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+    });
+
+    it('when refused', () => {
+      stubApi(detail());
+      renderPage(page(true));
+      expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+    });
+
+    it('when the read fails', async () => {
+      stubApi([
+        {
+          url: `/users/${ROW_ID}`,
+          status: 500,
+          body: {
+            error: { kind: 'internal', code: 'test.boom', message: 'no', correlationId: 'test' },
+          },
+        },
+      ]);
+      const { container } = renderPage(page(false));
+      await waitFor(() => expect(container.querySelector('.skel')).toBeNull());
+      expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+    });
+
+    it('once loaded, where the head card carries it and names the customer', async () => {
+      stubApi(detail());
+      renderPage(page(false));
+      await screen.findByText('ali_tehran', { exact: false });
+      const headings = screen.getAllByRole('heading', { level: 1 });
+      expect(headings).toHaveLength(1);
+      expect(headings[0]?.closest('.detail-head')).not.toBeNull();
+    });
+  });
+
   it('sends a block with an idempotency key and the mandatory reason, in two steps', async () => {
     const api = stubApi([
       ...detail(),

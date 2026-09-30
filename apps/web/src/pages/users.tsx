@@ -625,6 +625,13 @@ export function UserDetailPage({
 
   return (
     <>
+      {/*
+       * The page keeps ONE level-one heading in every state. Loaded, the head
+       * card carries it; loading, refused or failed, there is no row to name,
+       * so the plain page head stands in — as on the order and payment pages.
+       */}
+      {row === undefined && <PageHead title={t('web.user_detail')} maturity="now" />}
+
       <StateSwitch query={customer} denied={denied}>
         {row === undefined ? null : (
           <>
@@ -861,6 +868,7 @@ function UserHead({
 
   return (
     <DetailHead
+      level={1}
       initial={initialOf(name ?? row.username ?? '#')}
       title={
         name ??
