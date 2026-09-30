@@ -87,6 +87,17 @@
   }
 }
 
+/*
+ * A column of mixed blocks with the page's rhythm. A kit `.kv` zeroes its own margin, so
+ * a sibling margin cannot space it; a gap can.
+ */
+.ob-flow {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
 /* --- Settings (WP-A1) -------------------------------------------------------- */
 
 /*
@@ -676,9 +687,285 @@ form.set-row > * + * {
   padding-top: 4px;
 }
 
-/* WP-A4: the report group's binding code, shown to be pasted into Telegram. */
+/* --- Ops group (WP-A4, WP18) ---------------------------------------------------- */
+
+.ops-group-stats {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+.ops-group-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+.ops-group-actions .spacer {
+  flex: 1;
+}
+.ops-group-test,
+.ops-group-topics {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ops-group-test li,
+.ops-group-topics li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.ops-group-topics li + li {
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+.ops-group-topic-when {
+  flex-basis: 100%;
+}
+/* The three connection steps as a numbered sequence. */
+.ops-group-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.ops-group-steps li {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ctl);
+  background: var(--bg-1);
+  font-size: var(--fs-sm);
+  color: var(--fg-2);
+}
+.ops-group-step-n {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+  font-size: var(--fs-xs);
+}
+.ops-group-connect {
+  align-items: flex-end;
+}
+/* The one-time binding code: a deep link, and the command to paste instead. */
 .ops-group-code {
-  font-family: var(--font-mono);
-  direction: ltr;
-  unicode-bidi: isolate;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 12px;
+  border: 1px dashed var(--line-2);
+  border-radius: var(--radius-ctl);
+}
+.ops-group-code p {
+  margin: 0;
+}
+.ops-group-advanced {
+  padding: 12px 16px;
+}
+.ops-group-advanced > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ops-group-advanced > * + * {
+  margin-top: 10px;
+}
+@media (max-width: 980px) {
+  .ops-group-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .ops-group-steps {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* --- Alerts and notifications --------------------------------------------------- */
+
+.alerts-code {
+  font-size: var(--fs-sm);
+  color: var(--fg-2);
+}
+.alerts-severity {
+  width: auto;
+  min-width: 150px;
+}
+/* The deliveries on the start side, the chosen one's attempts beside them. */
+.notifications-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+.notifications-side {
+  position: sticky;
+  top: 16px;
+}
+.notifications-key {
+  font-size: var(--fs-sm);
+  text-align: start;
+}
+.notifications-key[aria-pressed='true'] {
+  font-weight: 600;
+}
+@media (max-width: 1100px) {
+  .notifications-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .notifications-side {
+    position: static;
+  }
+}
+
+/* --- System (status, diagnostics, monitor, administrators) ----------------------- */
+
+/* The build this page is served by, under the title — as the reference draws it. */
+.system-build {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin-top: 4px;
+  color: var(--fg-3);
+  font-size: var(--fs-sm);
+}
+.system-stats,
+.diagnostics-stats {
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+}
+.system-separation {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.system-separation li {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ctl);
+  background: var(--bg-1);
+  padding: 10px 12px;
+}
+.system-separation-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.system-separation p {
+  margin: 0;
+}
+.system-roles {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.system-telegram {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+.system-session {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ctl);
+  background: var(--bg-1);
+}
+@media (max-width: 980px) {
+  .system-separation {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* --- Recovery (ADR-0025, ADR-0028) ------------------------------------------------ */
+
+.recovery-stats {
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+}
+.recovery-stat-time {
+  font-size: var(--fs-body);
+  font-weight: 600;
+}
+/* Upload → verify → confirm: where the request in hand stands. */
+.recovery-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.recovery-steps li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ctl);
+  color: var(--fg-3);
+  font-size: var(--fs-sm);
+}
+.recovery-steps li.current {
+  border-color: var(--accent);
+  color: var(--fg);
+  background: var(--accent-soft);
+}
+.recovery-steps li.done {
+  color: var(--fg-2);
+}
+.recovery-step-n {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--bg-4);
+  font-weight: 600;
+  font-size: var(--fs-xs);
+}
+.recovery-steps li.current .recovery-step-n {
+  background: var(--accent);
+  color: var(--on-solid);
+}
+.recovery-steps li.done .recovery-step-n {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+.recovery-current {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ctl);
+  background: var(--bg-1);
+}
+/* The restore confirmation: the one destructive control on the page, fenced off. */
+.recovery-danger {
+  padding: 14px;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-card);
+  background: var(--danger-soft);
+}
+.recovery-phrase {
+  max-width: 320px;
+}
+@media (max-width: 760px) {
+  .recovery-steps {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
