@@ -9,6 +9,7 @@ import {
   replaceBotTokenRequestSchema,
   type ActorContext,
   type AuditWriter,
+  type BotCommandSyncResult,
   type BotDiagnostic,
   type BotInstallationView,
   type BotInstanceId,
@@ -53,6 +54,8 @@ import type {
   BotWebhookRead,
 } from './bot-management-ports.js';
 import type { BotIdentityProbe } from './ports.js';
+import type { BotCommandSyncService } from './bot-command-sync.service.js';
+import type { CommandMenu } from './command-menu.js';
 import { webhookSecretFingerprint } from './webhook-fingerprint.js';
 
 /**
@@ -102,6 +105,13 @@ function telegramReasonOf(detail: string, token: string): string {
 export interface BotManagementServiceDeps {
   readonly repository: BotManagementRepository;
   readonly telegram: BotManagementTelegram;
+  /** Round P: the desired command menu's digest, for the view's `commandMenu` state. */
+  readonly commandMenu: Pick<CommandMenu, 'desiredFor'>;
+  /**
+   * Round P: the sync a token replacement queues in its storing transaction and runs after
+   * it. Its result rides on the answer as `commandSync`, and NEVER fails the replacement.
+   */
+  readonly commandSync: Pick<BotCommandSyncService, 'requestSync' | 'syncNow'>;
   readonly guard: PermissionGuard;
   readonly uow: UnitOfWork<TransactionScope>;
   readonly audit: AuditWriter;
@@ -152,6 +162,8 @@ export interface BotMutationOutcome {
 /** A token replacement's answer: the mutation, and what Telegram was verified to hold. */
 export interface BotTokenReplacementOutcome extends BotMutationOutcome {
   readonly verification: BotDiagnostic | null;
+  /** Round P: the command-menu sync run after storing, as a separate result; null on a replay. */
+  readonly commandSync: Pick<BotCommandSyncResult, 'outcome' | 'errorCode'> | null;
 }
 
 /**
@@ -175,7 +187,11 @@ export class BotManagementService {
   ): Promise<{ readonly bots: BotInstanceView[]; readonly installation: BotInstallationView }> {
     await this.deps.guard.check(scope, actor, BOTS_VIEW_PERMISSION);
     const records = await this.deps.repository.listManaged(scope, this.currentFingerprint());
-    return { bots: records.map((record) => this.view(record)), installation: this.installation() };
+    const desired = await this.desiredHash(scope);
+    return {
+      bots: records.map((record) => this.view(record, desired)),
+      installation: this.installation(),
+    };
   }
 
   async get(
@@ -185,7 +201,10 @@ export class BotManagementService {
   ): Promise<{ readonly bot: BotInstanceView; readonly installation: BotInstallationView }> {
     await this.deps.guard.check(scope, actor, BOTS_VIEW_PERMISSION);
     const record = await this.require(scope, this.botId(candidateId));
-    return { bot: this.view(record), installation: this.installation() };
+    return {
+      bot: this.view(record, await this.desiredHash(scope)),
+      installation: this.installation(),
+    };
   }
 
   /**
@@ -439,8 +458,9 @@ export class BotManagementService {
       },
     );
 
+    let outcome: BotTokenReplacementOutcome;
     try {
-      return await this.replaceUnderClaim(scope, actor, {
+      outcome = await this.replaceUnderClaim(scope, actor, {
         idempotencyKey: input.idempotencyKey,
         requestHash,
         botId,
@@ -456,6 +476,16 @@ export class BotManagementService {
       // UPDATE; on every other exit it frees the bot for the operator's retry at once.
       await this.releaseClaim(scope, botId, claimId);
     }
+    /*
+     * Round P — the command menu, AFTER the token is stored and the claim released, as a
+     * SEPARATE result. The webhook and the token are what "replaced" means; whether
+     * Telegram keeps a bot's command list across a BotFather revocation is not established
+     * (`OQ-WP13-02`'s neighbour), so the menu is re-registered with the new token — and a
+     * failure here is a recoverable warning the lane retries with back-off, never a
+     * replacement reported as failed for a menu. `syncNow` does not throw.
+     */
+    const { outcome: synced, errorCode } = await this.deps.commandSync.syncNow(scope, botId);
+    return { ...outcome, commandSync: { outcome: synced, errorCode } };
   }
 
   /** Steps 5–9 of `replaceToken`, holding the claim. */
@@ -660,6 +690,9 @@ export class BotManagementService {
             },
             tx,
           );
+          // Round P: queued in the storing transaction, so a process that dies before the
+          // sync below runs leaves a due row the worker's lane picks up.
+          await this.deps.commandSync.requestSync(scope, botId, { due: true }, tx);
           return this.rememberReplacement(
             scope,
             input.idempotencyKey,
@@ -908,12 +941,11 @@ export class BotManagementService {
   ): BotDiagnostic {
     const identified = probe.outcome === 'IDENTIFIED' ? probe : null;
     const read = webhook !== null && webhook.outcome === 'READ' ? webhook : null;
-    const view = this.view(record);
     const problems = liveProblems({
       webhookRouteEnabled: this.deps.webhookEnabled(),
       tenantActive: record.tenant.status === 'ACTIVE',
       botStatus: record.status,
-      secret: view.webhook.secret,
+      secret: webhookSecretState(record.webhookSecretMatches, this.deps.webhookSecret() !== ''),
       identified: identified !== null,
       isBot: identified?.isBot ?? null,
       sameBot:
@@ -975,7 +1007,12 @@ export class BotManagementService {
 
   // -------------------------------------------------------------------------
 
-  private view(record: BotManagementRecord): BotInstanceView {
+  /** The desired command menu's digest for this tenant, read once per request. */
+  private async desiredHash(scope: TenantContext, tx?: unknown): Promise<string> {
+    return (await this.deps.commandMenu.desiredFor(scope, tx)).hash;
+  }
+
+  private view(record: BotManagementRecord, desiredHash: string): BotInstanceView {
     const secretConfigured = this.deps.webhookSecret() !== '';
     const secret = webhookSecretState(record.webhookSecretMatches, secretConfigured);
     const readiness = readinessOf({
@@ -1003,7 +1040,7 @@ export class BotManagementService {
         url: record.webhookUrl,
         secret,
       },
-      commandMenu: commandMenuState(record.commandsRevision, this.deps.telegram.commandsRevision()),
+      commandMenu: commandMenuState(record.commandsRevision, desiredHash),
       readiness: { state: readiness.state, causes: [...readiness.causes] },
     };
   }
@@ -1105,7 +1142,7 @@ export class BotManagementService {
     );
     if (found === null) return null;
     const { bot, installation, changed, verification } = found.result;
-    return { bot, installation, changed, verification: verification ?? null };
+    return { bot, installation, changed, verification: verification ?? null, commandSync: null };
   }
 
   /**
@@ -1129,10 +1166,12 @@ export class BotManagementService {
     );
     if (record === null) throw this.notFound();
     const outcome: BotTokenReplacementOutcome = {
-      bot: this.view(record),
+      bot: this.view(record, await this.desiredHash(scope, tx)),
       installation: this.installation(),
       changed,
       verification: verificationOf(record),
+      // The sync runs AFTER this transaction commits, so a replay cannot carry its result.
+      commandSync: null,
     };
     await rememberOnce(
       this.deps.idempotency,
@@ -1183,7 +1222,7 @@ export class BotManagementService {
     );
     if (record === null) throw this.notFound();
     const outcome: BotMutationOutcome = {
-      bot: this.view(record),
+      bot: this.view(record, await this.desiredHash(scope, tx)),
       installation: this.installation(),
       changed,
     };

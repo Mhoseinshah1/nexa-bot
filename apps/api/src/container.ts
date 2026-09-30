@@ -119,6 +119,12 @@ import { BotBootstrapService } from './modules/platform/tenancy/application/bot-
 import { TelegramBotBootstrapGateway } from './modules/platform/tenancy/infrastructure/telegram-bot-bootstrap.gateway.js';
 import { DrizzleBotManagementRepository } from './modules/platform/tenancy/infrastructure/drizzle-bot-management.repository.js';
 import { BotManagementService } from './modules/platform/tenancy/application/bot-management.service.js';
+import { BotCommandSyncService } from './modules/platform/tenancy/application/bot-command-sync.service.js';
+import { BotCommandSyncConsumer } from './modules/platform/tenancy/application/bot-command-sync.consumer.js';
+import { BotCommandSyncLoop } from './modules/platform/tenancy/application/bot-command-sync-loop.js';
+import { BotMenuService } from './modules/platform/tenancy/application/bot-menu.service.js';
+import { CommandMenu } from './modules/platform/tenancy/application/command-menu.js';
+import { DrizzleBotCommandSyncRepository } from './modules/platform/tenancy/infrastructure/drizzle-bot-command-sync.repository.js';
 import { RetentionSweeper } from './modules/platform/identity/application/retention-sweeper.js';
 import { RecordPingService } from './modules/platform/system/application/record-ping.service.js';
 import { PingLogConsumer } from './modules/platform/opslog/application/ping-log.consumer.js';
@@ -164,7 +170,10 @@ import {
   FeatureFlagsService,
 } from './modules/control/features/application/feature-flags.service.js';
 import { DrizzleTemplateRepository } from './modules/control/templates/infrastructure/drizzle-template.repository.js';
-import { TemplateResolver } from './modules/control/templates/application/template-resolver.js';
+import {
+  DEFAULT_TEMPLATE_LOCALE,
+  TemplateResolver,
+} from './modules/control/templates/application/template-resolver.js';
 import { CustomerService } from './modules/commerce/customers/application/customer.service.js';
 import { DrizzleCustomerRepository } from './modules/commerce/customers/infrastructure/drizzle-customer.repository.js';
 import { TelegramCustomerMessenger } from './modules/commerce/messaging/infrastructure/telegram-customer-messenger.js';
@@ -736,6 +745,13 @@ export interface Container {
   readonly paymentAccounts: PaymentAccountService;
   /** WP13 — the Web Admin's management of this tenant's Telegram bot instances. */
   readonly botManagement: BotManagementService;
+  /** Round P — the bot's menu: items, desired commands, and every bot's sync state. */
+  readonly botMenu: BotMenuService;
+  /** Round P — the command-sync lane, exposed so a test drives the pass the worker runs. */
+  readonly botCommandSync: BotCommandSyncService;
+  readonly botCommandSyncLoop: BotCommandSyncLoop;
+  /** Round P — the one desired command menu, shared by the installer, the lane and the pages. */
+  readonly commandMenu: CommandMenu;
   /**
    * The payment ROUTES an operator offers (Phase 5C).
    *
@@ -1153,6 +1169,48 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     config.TELEGRAM_API_BASE_URL,
     config.NOTIFICATION_SEND_TIMEOUT_MS,
   );
+  /*
+   * Round P (COMMAND-MENU) — the ONE answer to "what slash-command menu does this tenant
+   * want": `BOT_COMMANDS` rendered through the tenant's own texts, and its digest. The
+   * installer's reconcile (below), the Web Admin's bot view, the sync lane and the menu
+   * page all read it, so "current" means one thing everywhere.
+   *
+   * The template resolver is built much later in this function (it needs the feature
+   * resolver and the presentation reader), so the menu reaches it through a reference
+   * filled in there — the shape `opsLogRef` already uses. Nothing calls the menu before
+   * the container is complete.
+   */
+  const templateResolverRef: { current: TemplateResolver | null } = { current: null };
+  const commandMenu = new CommandMenu({
+    templates: {
+      render: (scope, key, values, tx) => {
+        if (templateResolverRef.current === null) {
+          throw new Error('CommandMenu was read before the container finished composing.');
+        }
+        return templateResolverRef.current.render(scope, key, values, DEFAULT_TEMPLATE_LOCALE, tx);
+      },
+    },
+  });
+  /*
+   * The command-sync lane: per bot, idempotent by digest, retried with back-off, and a
+   * WARN in the operations log after repeated failure — through the façade, so it is
+   * announced. The SAME gateway as the installer and bot management: one `setMyCommands`.
+   */
+  const botCommandSync = new BotCommandSyncService({
+    repository: new DrizzleBotCommandSyncRepository(database.db),
+    bots: botInstances,
+    telegram: telegramBotGateway,
+    menu: commandMenu,
+    uow,
+    scopeActivity: tenants,
+    audit,
+    opsLog,
+    conditions: new DrizzleOperationalConditionReader(database.db),
+    clock,
+    ids,
+    telegramCallTimeoutMs: config.NOTIFICATION_SEND_TIMEOUT_MS,
+    logger,
+  });
   const bootstrapBot = new BotBootstrapService({
     uow,
     bots: botInstances,
@@ -1161,6 +1219,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     clock,
     ids,
     telegram: telegramBotGateway,
+    commandMenu,
     webhookSecret: () => config.TELEGRAM_WEBHOOK_SECRET,
     webhookEnabled: () => config.TELEGRAM_WEBHOOK_ENABLED,
     telegramCallTimeoutMs: config.NOTIFICATION_SEND_TIMEOUT_MS,
@@ -1168,12 +1227,14 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
 
   /*
    * WP13 — the Web Admin's management of the same bots. The SAME gateway instance, so a
-   * token is judged by one `identify` and the menu digested by one `commandsRevision`
-   * for both the installer and the Web Admin.
+   * token is judged by one `identify` for both the installer and the Web Admin, and the
+   * same `CommandMenu`, so the menu state on the bots page is the lane's answer.
    */
   const botManagement = new BotManagementService({
     repository: new DrizzleBotManagementRepository(database.db, cipher, botInstances),
     telegram: telegramBotGateway,
+    commandMenu,
+    commandSync: botCommandSync,
     guard,
     uow,
     audit,
@@ -1195,6 +1256,10 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     database.db,
     [
       new PingLogConsumer(opsLog),
+      // Round P: a changed `bot.command.*` text, a menu setting, a flag, or a bot that
+      // became ACTIVE queues a command-menu sync. A DB write with the relay's claim; the
+      // Telegram call is the lane's, on its own tick.
+      new BotCommandSyncConsumer(botCommandSync),
       /*
        * WHO is pushed a new receipt (WP10 follow-up §3, ADR-0031). A consumer, so the fan-out
        * commits with the relay's claim and never inside the transaction that filed the
@@ -3129,6 +3194,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     templateCatalogue,
     templatePresentation,
   );
+  // Round P: the command menu renders through the tenant's resolver from here on.
+  templateResolverRef.current = templateResolver;
   /*
    * Composes the destination block behind the application layer.
    *
@@ -3477,6 +3544,29 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
           )
         ).length > 0,
     },
+  });
+  /*
+   * Round P: the Web Admin's view of the whole menu — the items with the keyboard's own
+   * decision about each, the desired command list, and every bot's sync state — and the
+   * two actions on that state. Reads `MainMenuLayout` (one evaluator) and writes the
+   * arrangement through nothing of its own.
+   */
+  const botMenu = new BotMenuService({
+    guard,
+    audit,
+    opsLog,
+    idempotency,
+    clock,
+    settings: settingsResolver,
+    mainMenu: mainMenuLayout,
+    templates: templateResolver,
+    defaultLabel: (key) => templateCatalogue.defaultBody(key, DEFAULT_TEMPLATE_LOCALE),
+    commandMenu,
+    commandSync: botCommandSync,
+  });
+  const botCommandSyncLoop = new BotCommandSyncLoop(botCommandSync, {
+    now: () => clock.now(),
+    logger,
   });
   const customerMessenger = new TelegramCustomerMessenger(
     // The tenant's own renderer, so an override lands in exactly the messages a
@@ -4837,6 +4927,10 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     payments: paymentService,
     paymentAccounts: paymentAccountService,
     botManagement,
+    botMenu,
+    botCommandSync,
+    botCommandSyncLoop,
+    commandMenu,
     paymentGateways: paymentGatewayService,
     refunds: refundService,
     serviceRefundRequests,
@@ -5139,6 +5233,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       await serviceReminderLoop.stop();
       await customerReminderLoop.stop();
       await campaignScheduleLoop.stop();
+      // Round P: a claimed command sync finishes its record or lapses with its lease.
+      await botCommandSyncLoop.stop();
       await customerNotificationLoop.stop();
       // Round N: and the broadcast lane, for the same reason — a stamped send is recorded.
       await broadcastLoop.stop();

@@ -5,6 +5,8 @@ import {
   resolveMainMenuLayout,
   type BotMenuButton,
   type FeatureFlagKey,
+  type MainMenuGate,
+  type MainMenuItem,
   type MainMenuLayoutEntry,
   type ScopeContext,
   type SettingKey,
@@ -33,6 +35,18 @@ export interface MainMenuDeps {
   };
 }
 
+/** One resolved item and the keyboard's decision about it. */
+export interface DescribedMainMenuItem {
+  readonly item: MainMenuItem;
+  readonly button: BotMenuButton;
+  /** What, besides the operator's switch, can hide it. */
+  readonly gate: MainMenuGate | null;
+  /** Whether that gate is open; null when there is no gate or the item is off (not asked). */
+  readonly gateOpen: boolean | null;
+  /** Whether the keyboard draws it now. */
+  readonly shown: boolean;
+}
+
 /**
  * The customer main menu, as THIS tenant has it (R1, «دکمه‌های ربات»).
  *
@@ -56,36 +70,56 @@ export class MainMenuLayout {
   constructor(private readonly deps: MainMenuDeps) {}
 
   /**
-   * The buttons drawn, in order: switched on, their feature (if any) on, and — for the
-   * trial button — a panel offering a trial. Each gate is read once, and only when a button
-   * that needs it is switched on.
+   * Every item of the arrangement, in order, with the ONE decision about each: whether it
+   * is drawn — switched on, its feature (if any) on, and, for the trial button, a panel
+   * offering a trial. Each gate is read once, and only when an item that needs it is
+   * switched on. `buttonsFor` is the drawn subset; the Web Admin's table (round P) reads
+   * the whole list, so it shows the same answer the keyboard gives and never a second one.
    */
-  async buttonsFor(scope: ScopeContext): Promise<readonly BotMenuButton[]> {
+  async describeFor(scope: ScopeContext): Promise<readonly DescribedMainMenuItem[]> {
     const stored = await this.deps.settings.valueOf<readonly MainMenuLayoutEntry[]>(
       scope,
       'bot.main_menu',
     );
     const flags = new Map<FeatureFlagKey, boolean>();
     let trialOffered: boolean | undefined;
-    const drawn: BotMenuButton[] = [];
-    for (const entry of resolveMainMenuLayout(stored)) {
-      if (!entry.enabled) continue;
-      const button = mainMenuButton(entry.button);
-      if (button.needsTrialOffer) {
+    const described: DescribedMainMenuItem[] = [];
+    for (const item of resolveMainMenuLayout(stored)) {
+      const button = mainMenuButton(item.button);
+      const gate: MainMenuGate | null = button.needsTrialOffer
+        ? 'TRIAL_OFFER'
+        : button.feature !== null
+          ? 'FEATURE'
+          : null;
+      let gateOpen: boolean | null = null;
+      if (item.enabled && button.needsTrialOffer) {
         trialOffered ??= await this.deps.trials.anyOffered(scope);
-        if (!trialOffered) continue;
+        gateOpen = trialOffered;
       }
-      if (button.feature !== null) {
+      if (item.enabled && button.feature !== null) {
         let on = flags.get(button.feature);
         if (on === undefined) {
           on = await this.deps.features.isEnabled(scope, button.feature);
           flags.set(button.feature, on);
         }
-        if (!on) continue;
+        gateOpen = on;
       }
-      drawn.push(button);
+      described.push({
+        item,
+        button,
+        gate,
+        gateOpen,
+        shown: item.enabled && (gate === null || gateOpen === true),
+      });
     }
-    return drawn;
+    return described;
+  }
+
+  /** The buttons drawn, in order. */
+  async buttonsFor(scope: ScopeContext): Promise<readonly BotMenuButton[]> {
+    return (await this.describeFor(scope))
+      .filter((described) => described.shown)
+      .map((described) => described.button);
   }
 
   /** The keyboard's rows, as rendered labels. Never empty: the schema keeps one ungated button on. */

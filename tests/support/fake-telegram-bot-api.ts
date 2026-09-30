@@ -42,7 +42,18 @@ interface BotState {
   } | null;
   pendingUpdateCount: number;
   lastError: { readonly date: number; readonly message: string } | null;
+  /**
+   * Round P — the command list Telegram holds for the default scope and language, as
+   * `setMyCommands` last set it. Empty until then, which is what `getMyCommands` answers
+   * for a bot nobody gave a menu. Kept across `revoke`: the Bot API documents the list per
+   * bot, not per token.
+   */
+  commands: { readonly command: string; readonly description: string }[];
 }
+
+/** The Bot API's documented bounds on a `BotCommand` (Bot API §BotCommand). */
+const COMMAND_PATTERN = /^[a-z0-9_]{1,32}$/u;
+const DESCRIPTION_MAX = 256;
 
 export interface FakeTelegramCall {
   readonly method: string;
@@ -86,6 +97,8 @@ export interface FakeTelegramBotApi {
   ): void;
   /** What Telegram holds, INCLUDING the secret it never reports. For assertions only. */
   registration(botId: number): BotState['webhook'];
+  /** Round P: the command list Telegram holds for this bot. For assertions only. */
+  registeredCommands(botId: number): readonly { command: string; description: string }[];
   setPending(botId: number, pending: number, lastError?: string): void;
   /** The next call of `method` misbehaves once. */
   failNext(method: string, fault: FakeTelegramFault): void;
@@ -245,6 +258,54 @@ export async function startFakeTelegramBotApi(): Promise<FakeTelegramBotApi> {
           },
         };
       }
+      case 'setMyCommands': {
+        /*
+         * Round P. The documented bounds: an array of at most 100 `BotCommand`s, each
+         * command 1–32 lowercase letters, digits and underscores, each description 1–256
+         * characters. Anything else is a 400 the way Telegram answers one, and applies
+         * nothing. `scope` and `language_code` are accepted and ignored: this installation
+         * sends neither, so the default scope is the only one modelled.
+         */
+        const list = body.commands;
+        if (!Array.isArray(list) || list.length > 100) {
+          return {
+            status: 400,
+            payload: {
+              ok: false,
+              error_code: 400,
+              description: 'Bad Request: commands is invalid',
+            },
+          };
+        }
+        const parsed: { command: string; description: string }[] = [];
+        for (const entry of list as unknown[]) {
+          const { command, description } = (entry ?? {}) as Record<string, unknown>;
+          if (
+            typeof command !== 'string' ||
+            !COMMAND_PATTERN.test(command) ||
+            typeof description !== 'string' ||
+            description.length === 0 ||
+            description.length > DESCRIPTION_MAX
+          ) {
+            return {
+              status: 400,
+              payload: {
+                ok: false,
+                error_code: 400,
+                description: 'Bad Request: BOT_COMMAND_INVALID',
+              },
+            };
+          }
+          parsed.push({ command, description });
+        }
+        bot.commands = parsed;
+        return { status: 200, payload: { ok: true, result: true } };
+      }
+      case 'getMyCommands':
+        return {
+          status: 200,
+          payload: { ok: true, result: bot.commands.map((entry) => ({ ...entry })) },
+        };
       default:
         return { status: 404, payload: { ok: false, error_code: 404, description: 'Not Found' } };
     }
@@ -323,6 +384,7 @@ export async function startFakeTelegramBotApi(): Promise<FakeTelegramBotApi> {
         webhook: null,
         pendingUpdateCount: 0,
         lastError: null,
+        commands: [],
       });
       return token;
     },
@@ -347,6 +409,9 @@ export async function startFakeTelegramBotApi(): Promise<FakeTelegramBotApi> {
     registration(botId) {
       const hook = require(botId).webhook;
       return hook === null ? null : { ...hook };
+    },
+    registeredCommands(botId) {
+      return require(botId).commands.map((entry) => ({ ...entry }));
     },
     setPending(botId, pending, lastError) {
       const bot = require(botId);

@@ -149,17 +149,18 @@ export type BotWebhookRemoval =
   | { readonly outcome: 'UNREACHABLE' };
 
 /**
- * The Telegram calls bot management makes, and the menu digest it compares against.
+ * The Telegram calls bot management makes.
  *
- * `identify`, `registerWebhook` and `commandsRevision` are the bootstrap gateway's own
- * methods, so a token is judged, a webhook registered and a menu digested by one
- * implementation (`CLAUDE.md`: "the copy that would silently keep the old behaviour is the
- * unattended one").
+ * `identify` and `registerWebhook` are the bootstrap gateway's own methods, so a token is
+ * judged and a webhook registered by one implementation (`CLAUDE.md`: "the copy that would
+ * silently keep the old behaviour is the unattended one").
  *
  * R4 added the two writes. `registerWebhook` is reached only from a token replacement,
  * with the URL the installation already registered (its recorded origin, recomposed) —
  * never a URL a request supplies. `removeWebhook` is reached only from that replacement's
- * compensation. `setMyCommands` stays with the fenced bootstrap.
+ * compensation. `setMyCommands` is NOT here: round P moved it to the command-sync lane
+ * (`BotCommandSyncService`), which a replacement asks to run AFTER the token is stored —
+ * its failure is a warning on the answer, never a failed replacement.
  */
 export interface BotManagementTelegram {
   identify(token: string): Promise<BotIdentityProbe>;
@@ -172,5 +173,4 @@ export interface BotManagementTelegram {
     readonly resetAllowedUpdates?: boolean;
   }): Promise<WebhookRegistration>;
   removeWebhook(token: string): Promise<BotWebhookRemoval>;
-  commandsRevision(): string;
 }

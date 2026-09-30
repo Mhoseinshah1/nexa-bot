@@ -1,15 +1,16 @@
 import {
   telegramDeleteWebhook,
   telegramGetMe,
+  telegramGetMyCommands,
   telegramGetWebhookInfo,
   telegramSetWebhook,
   telegramSetMyCommands,
 } from '../../../../infrastructure/telegram/send-message.js';
-import { createHash } from 'node:crypto';
-import { BOT_COMMANDS } from '@nexa/contracts';
-import { CATALOGUE_FA } from '@nexa/i18n';
+import type { BotCommandEntry } from '@nexa/contracts';
 import type {
   BotBootstrapTelegram,
+  BotCommandsRead,
+  BotCommandsRegistration,
   BotIdentityProbe,
   WebhookRegistration,
 } from '../application/ports.js';
@@ -18,9 +19,11 @@ import type {
   BotWebhookRead,
   BotWebhookRemoval,
 } from '../application/bot-management-ports.js';
+import type { BotCommandSyncTelegram } from '../application/bot-command-sync-ports.js';
 
 /**
- * The bootstrap's two Telegram calls, over the SHARED call core.
+ * The bootstrap's, bot management's and the command-sync lane's Telegram calls, over the
+ * SHARED call core.
  *
  * Not a second HTTP client. Everything that makes a Telegram call safe here —
  * the abort timeout, `redirect: 'error'` because the token is in the request
@@ -36,7 +39,9 @@ import type {
  * keeps the service from having to know that a 429 and a 502 are the same
  * instruction to an operator.
  */
-export class TelegramBotBootstrapGateway implements BotBootstrapTelegram, BotManagementTelegram {
+export class TelegramBotBootstrapGateway
+  implements BotBootstrapTelegram, BotManagementTelegram, BotCommandSyncTelegram
+{
   constructor(
     private readonly apiBaseUrl: string,
     private readonly timeoutMs: number,
@@ -170,52 +175,51 @@ export class TelegramBotBootstrapGateway implements BotBootstrapTelegram, BotMan
   }
 
   /**
-   * Registers the command menu. Answers whether it landed; never throws.
+   * Registers a command menu. Never throws; the caller decides what a failure weighs.
    *
-   * Separate from `registerWebhook` and deliberately weaker: a failed webhook means
-   * updates do not arrive and the install is INCOMPLETE, while a failed command menu
-   * means a customer types `/help` instead of tapping it. Reporting the second as
-   * gravely as the first would send an operator to look for a problem they do not have.
+   * Round P: the list is a PARAMETER, rendered by `CommandMenu` through the tenant's own
+   * templates. This adapter no longer renders or digests anything — a second renderer here
+   * would be a second answer to "what is the menu", and the digest stored in
+   * `commands_revision` is of what was actually sent. PERMANENT is `REFUSED` (the token,
+   * or a list Telegram will not take: an empty description, a bad command name) and
+   * everything else `UNREACHABLE`, the split `registerWebhook` makes. The CODE is kept
+   * for the lane's diagnostics; the description is not, because Telegram's errors quote
+   * the request URL and the token is a segment of it.
    */
-  /**
-   * What the menu looks like now, as a digest, so a reconcile can tell it changed.
-   *
-   * Computed from the SAME `menu()` the registration sends, which is what makes the
-   * comparison meaningful: a digest of `BOT_COMMANDS` alone would miss a catalogue
-   * rewording, and a digest of anything else would drift from what was actually
-   * registered.
-   *
-   * `JSON.stringify` over an array of two-key objects is stable here because the input
-   * is a frozen literal in declaration order — this is not general-purpose object
-   * hashing. Truncated to 32 hex characters: this is a change detector, not a security
-   * boundary, and it is stored in a column an operator may read.
-   */
-  commandsRevision(): string {
-    return createHash('sha256').update(JSON.stringify(this.menu())).digest('hex').slice(0, 32);
-  }
-
-  private menu(): ReadonlyArray<{ readonly command: string; readonly description: string }> {
-    return BOT_COMMANDS.map((entry) => ({
-      command: entry.command,
-      description: CATALOGUE_FA[entry.description],
-    }));
-  }
-
-  async registerCommands(input: { readonly token: string }): Promise<boolean> {
-    /*
-     * Rendered HERE, from the frozen list and the shared catalogue.
-     *
-     * The application layer decides whether to register and this decides what the text
-     * says, which is the split `check:boundaries` enforces: a domain or application file
-     * importing `@nexa/i18n` is refused by name. The defaults are the right source —
-     * this runs while the tenant is being created, so there is no override to read.
-     */
+  async registerCommands(input: {
+    readonly token: string;
+    readonly commands: readonly BotCommandEntry[];
+  }): Promise<BotCommandsRegistration> {
     const outcome = await telegramSetMyCommands({
       token: input.token,
       apiBaseUrl: this.apiBaseUrl,
       timeoutMs: this.timeoutMs,
-      commands: this.menu(),
+      commands: input.commands,
     });
-    return outcome.outcome === 'SUCCEEDED';
+    switch (outcome.outcome) {
+      case 'SUCCEEDED':
+        return { outcome: 'REGISTERED' };
+      case 'FAILED_PERMANENT':
+        return { outcome: 'REFUSED', code: outcome.errorCode };
+      default:
+        return { outcome: 'UNREACHABLE', code: outcome.errorCode };
+    }
+  }
+
+  /** Reads the registered command menu (`getMyCommands`). A read; the same split as `readWebhook`. */
+  async readCommands(token: string): Promise<BotCommandsRead> {
+    const outcome = await telegramGetMyCommands({
+      token,
+      apiBaseUrl: this.apiBaseUrl,
+      timeoutMs: this.timeoutMs,
+    });
+    switch (outcome.outcome) {
+      case 'SUCCEEDED':
+        return { outcome: 'READ', commands: outcome.commands };
+      case 'FAILED_PERMANENT':
+        return { outcome: 'REJECTED' };
+      default:
+        return { outcome: 'UNREACHABLE' };
+    }
   }
 }
