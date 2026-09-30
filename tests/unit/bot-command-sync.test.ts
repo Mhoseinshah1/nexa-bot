@@ -16,6 +16,7 @@ import {
 } from '../../apps/api/src/modules/platform/tenancy/domain/bot-command-sync';
 import {
   CommandMenu,
+  boundDescription,
   commandMenuHash,
   sameCommandMenu,
 } from '../../apps/api/src/modules/platform/tenancy/application/command-menu';
@@ -74,6 +75,24 @@ describe('the desired command menu (CommandMenu)', () => {
     const shared = await menuWith().desiredFor(scope);
     expect(reworded.hash).not.toBe(shared.hash);
     expect((await menuWith().desiredFor(scope)).hash).toBe(shared.hash);
+  });
+
+  it('bounds a description at 256 units without splitting a surrogate pair (Codex #5)', async () => {
+    // 255 units then an emoji (two units): a code-unit cut at 256 would keep only the high
+    // surrogate — a string Telegram refuses, digested and re-sent for ever.
+    const straddling = 'x'.repeat(255) + '😀';
+    const bounded = boundDescription(straddling);
+    expect(bounded).toHaveLength(255);
+    expect(bounded.isWellFormed()).toBe(true);
+    // A pair that fits is kept whole; text within the bound is untouched.
+    expect(boundDescription('x'.repeat(254) + '😀')).toHaveLength(256);
+    expect(boundDescription('x'.repeat(256) + 'y')).toBe('x'.repeat(256));
+    expect(boundDescription('کوتاه')).toBe('کوتاه');
+    // And the evaluator applies it to what the tenant wrote.
+    const desired = await menuWith({ 'bot.command.apps': straddling }).desiredFor(scope);
+    expect(
+      desired.entries.find((entry) => entry.command === 'apps')?.description.isWellFormed(),
+    ).toBe(true);
   });
 
   it('digests the list with the recipe the bootstrap gateway used before round P, so an upgrade re-registers nothing', async () => {

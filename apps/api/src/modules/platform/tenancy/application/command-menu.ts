@@ -55,13 +55,28 @@ export class CommandMenu {
     const entries = await Promise.all(
       BOT_COMMANDS.map(async (entry) => ({
         command: entry.command,
-        description: (await this.deps.templates.render(scope, entry.description, {}, tx))
-          .trim()
-          .slice(0, DESCRIPTION_MAX),
+        description: boundDescription(
+          (await this.deps.templates.render(scope, entry.description, {}, tx)).trim(),
+        ),
       })),
     );
     return { entries, hash: commandMenuHash(entries) };
   }
+}
+
+/**
+ * A description within Telegram's 256, cut so it never ends in half a surrogate pair.
+ *
+ * `slice(0, 256)` counts UTF-16 code units; an emoji straddling the cut would leave a lone
+ * high surrogate that Telegram refuses, digested and re-sent for ever (Codex #5). The
+ * bound is still code units, because that is what the Bot API counts, so a text of at
+ * most 256 units is untouched and a longer one loses at most one unit more than the cut.
+ */
+export function boundDescription(text: string): string {
+  if (text.length <= DESCRIPTION_MAX) return text;
+  const last = text.charCodeAt(DESCRIPTION_MAX - 1);
+  const cut = last >= 0xd800 && last <= 0xdbff ? DESCRIPTION_MAX - 1 : DESCRIPTION_MAX;
+  return text.slice(0, cut);
 }
 
 /** The digest of a command list exactly as it is sent. Pure. */
