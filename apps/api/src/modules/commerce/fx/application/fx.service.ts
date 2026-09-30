@@ -101,12 +101,7 @@ export interface FxServiceDeps {
 
 /** What one refresh did. `NOT_DUE` and `BUSY` mean nothing was dialled. */
 export type FxRefreshOutcome =
-  | 'REFRESHED'
-  | 'REFRESHED_BY_FALLBACK'
-  | 'FAILED'
-  | 'DISABLED'
-  | 'BUSY'
-  | 'NOT_DUE';
+  'REFRESHED' | 'REFRESHED_BY_FALLBACK' | 'FAILED' | 'DISABLED' | 'BUSY' | 'NOT_DUE';
 
 /** The settings the service reads, resolved once per call inside the caller's transaction. */
 interface FxSettings {
@@ -213,7 +208,11 @@ export class FxService {
   }
 
   /** The FX section's facts. Charges `payments.gateways.view`. */
-  async status(scope: TenantContext, actor: ActorContext, baseAsset: FxBaseAsset): Promise<FxStatus> {
+  async status(
+    scope: TenantContext,
+    actor: ActorContext,
+    baseAsset: FxBaseAsset,
+  ): Promise<FxStatus> {
     await this.deps.guard.check(scope, actor, FX_VIEW_PERMISSION);
     return this.statusUnchecked(scope, baseAsset);
   }
@@ -319,7 +318,9 @@ export class FxService {
         unitRatioText,
         fixedRateMinor: gateway?.providerUnitRateMinor ?? null,
         centralRatePerUnit:
-          usable === null || unitRatio === null ? null : effectiveMinorPerUnit(usable.rate, unitRatio),
+          usable === null || unitRatio === null
+            ? null
+            : effectiveMinorPerUnit(usable.rate, unitRatio),
       });
     }
     return {
@@ -525,7 +526,18 @@ export class FxService {
 
       const stored = await this.storeChosen(scope, pair, chosen, fetchedAt, tx);
       if (!stored) {
-        // A newer quote landed meanwhile (another replica's operator refresh). Not a failure.
+        /*
+         * A newer quote is already stored (another replica's refresh landed first, or this
+         * replica's clock is behind). Not a failure, and not this pass's quote — but the
+         * lease is this pass's to give back: left held, no replica could refresh until it
+         * lapsed, which the integration case for a behind-clock replica found.
+         */
+        await this.deps.repository.releaseRefresh(
+          scope,
+          pair,
+          { now: fetchedAt, errorCode: null },
+          tx,
+        );
         return 'REFRESHED';
       }
       await this.recoverIfOpen(scope, open, FX_QUOTE_UNAVAILABLE_CODE, pairKey(pair), tx);
@@ -618,7 +630,11 @@ export class FxService {
     now: Date,
   ): FxQuoteAnswer {
     if (row === null || row.quote === null) {
-      return { kind: 'UNAVAILABLE', reason: settings.enabled ? 'NEVER_FETCHED' : 'DISABLED', stale: null };
+      return {
+        kind: 'UNAVAILABLE',
+        reason: settings.enabled ? 'NEVER_FETCHED' : 'DISABLED',
+        stale: null,
+      };
     }
     const age = ageSeconds(row.quote.fetchedAt, now);
     const state = settings.enabled
@@ -638,7 +654,11 @@ export class FxService {
       policyVersion: row.quote.policyVersion,
     };
     if (state === 'UNAVAILABLE') {
-      return { kind: 'UNAVAILABLE', reason: settings.enabled ? 'TOO_STALE' : 'DISABLED', stale: quote };
+      return {
+        kind: 'UNAVAILABLE',
+        reason: settings.enabled ? 'TOO_STALE' : 'DISABLED',
+        stale: quote,
+      };
     }
     return { kind: 'QUOTE', quote };
   }
@@ -668,7 +688,8 @@ export function pairKey(pair: FxPair): string {
 
 /** A descriptor names its settings as strings; the registry says whether they exist. */
 function settingKeyOf(name: string): SettingKey {
-  if (!isSettingKey(name)) throw new Error(`A gateway descriptor names an unknown setting: ${name}`);
+  if (!isSettingKey(name))
+    throw new Error(`A gateway descriptor names an unknown setting: ${name}`);
   return name;
 }
 
