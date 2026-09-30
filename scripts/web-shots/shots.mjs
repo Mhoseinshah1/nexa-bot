@@ -47,6 +47,7 @@ import { tmpdir } from 'node:os';
 import { extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Cdp } from './cdp.mjs';
+import { needsTypeStripping, shotProblems } from './policy.mjs';
 
 const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '../..');
 const API_PREFIX = '/api/admin/v1';
@@ -271,14 +272,7 @@ async function main() {
           ...result,
         };
         report.push(entry);
-        const problems = [
-          entry.unfixtured.length > 0 && `unfixtured: ${entry.unfixtured.join(', ')}`,
-          entry.stillLoading && 'still loading (a skeleton was on screen)',
-          entry.errorStates > 0 && `${entry.errorStates} error state(s) drawn`,
-          entry.horizontalOverflow > 0 &&
-            `page overflows sideways by ${entry.horizontalOverflow}px`,
-          entry.errors.length > 0 && `console: ${entry.errors.join(' | ')}`,
-        ].filter(Boolean);
+        const problems = shotProblems({ ...entry, timeoutMs: options.timeoutMs });
         console.log(
           `${problems.length === 0 ? 'ok  ' : 'WARN'} ${entry.file}${problems.length ? `\n     ${problems.join('\n     ')}` : ''}`,
         );
@@ -460,7 +454,26 @@ function delay(ms) {
   return new Promise((done) => setTimeout(done, ms));
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.message : error);
-  process.exit(1);
-});
+if (needsTypeStripping(process.features)) {
+  // Node 22.11–22.17: the fixtures are TypeScript, and stripping is opt-in
+  // there. Run this same script again with it on, rather than fail on the
+  // first `.ts` import.
+  const again = spawnSync(
+    process.execPath,
+    [
+      // After the inherited flags, so it wins over a `--no-experimental-strip-types`
+      // among them rather than re-running into the same refusal for ever.
+      ...process.execArgv,
+      '--experimental-strip-types',
+      fileURLToPath(import.meta.url),
+      ...process.argv.slice(2),
+    ],
+    { stdio: 'inherit' },
+  );
+  process.exit(again.status ?? 1);
+} else {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.message : error);
+    process.exit(1);
+  });
+}

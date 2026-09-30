@@ -10,6 +10,7 @@ import {
 import { createPortal } from 'react-dom';
 import { Icon, type IconName } from './icons';
 import { t } from '../i18n/web.fa';
+import { confirmDialogOpen } from './confirm-dialog';
 
 /**
  * Overlays: a modal dialog, a side drawer and a menu.
@@ -49,6 +50,9 @@ export function useFocusTrap(
     first?.focus();
 
     const onKey = (event: KeyboardEvent) => {
+      // A confirmation is always the topmost layer, and it owns the keyboard:
+      // its Escape cancels the question, not the surface underneath as well.
+      if (confirmDialogOpen()) return;
       if (event.key === 'Escape') {
         event.preventDefault();
         escape.current();

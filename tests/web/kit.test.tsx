@@ -272,6 +272,71 @@ describe('useUnsavedChanges', () => {
   });
 });
 
+describe('a guarded browser traversal', () => {
+  function Form() {
+    useUnsavedChanges(true);
+    const route = useRoute();
+    return <p>{`at ${route.path}${route.query.toString()}`}</p>;
+  }
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
+
+  it('asks on Back between two ?tab= entries of the same page', async () => {
+    go('/panels/x?tab=overview');
+    act(() => navigate('/panels/x?tab=history', { force: true }));
+    renderPage(
+      <>
+        <Form />
+        <LeaveGuardHost />
+      </>,
+    );
+    await act(async () => {
+      window.history.back();
+      await settle();
+    });
+    expect(screen.getByRole('alertdialog', { name: t('web.unsaved_title') })).toBeInTheDocument();
+    // The browser has been put back on the entry the dirty tab lives on.
+    await act(settle);
+    expect(window.location.search).toBe('?tab=history');
+    fireEvent.click(screen.getByRole('button', { name: t('web.unsaved_stay') }));
+    expect(window.location.search).toBe('?tab=history');
+  });
+
+  it('leaves by traversal, so the stack keeps the entries it had', async () => {
+    go('/orders');
+    act(() => navigate('/panels', { force: true }));
+    act(() => navigate('/settings', { force: true }));
+    const length = window.history.length;
+    renderPage(
+      <>
+        <Form />
+        <LeaveGuardHost />
+      </>,
+    );
+    await act(async () => {
+      window.history.back();
+      await settle();
+    });
+    await act(settle);
+    expect(window.location.pathname).toBe('/settings');
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: t('web.unsaved_leave') }));
+      await settle();
+    });
+    expect(window.location.pathname).toBe('/panels');
+    expect(window.history.length, 'nothing was pushed').toBe(length);
+    // Back continues backward, rather than returning to the page just left.
+    await act(async () => {
+      window.history.back();
+      await settle();
+    });
+    await act(settle);
+    expect(screen.getByRole('alertdialog')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: t('web.unsaved_leave') }));
+    await act(settle);
+    expect(window.location.pathname).toBe('/orders');
+  });
+});
+
 describe('charts', () => {
   it('breaks the line at a null instead of drawing it to zero, and writes no style', () => {
     stubApi([]);

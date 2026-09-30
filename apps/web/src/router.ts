@@ -90,9 +90,18 @@ function refresh(): void {
  * drops it.
  *
  * Browser back/forward cannot be cancelled before it happens: `popstate` fires
- * after the URL has changed. So a guarded popstate puts the page's own URL
- * back (a push, since there is no way to undo a traversal) and parks the
- * destination the operator was heading for, which a confirmation then visits.
+ * after the URL has changed. So every entry this router writes carries its
+ * POSITION in the stack (`{ nexaIndex }`), a guarded popstate traverses back
+ * to the entry the operator was on by the difference, and a confirmation
+ * traverses forward by the same difference again. Nothing is pushed, so the
+ * stack is exactly what it was: Back after leaving continues backward instead
+ * of returning to the page just left. A guarded popstate compares the WHOLE
+ * location, not the path — a Back between two `?tab=` entries unmounts a
+ * tab's form just as a path change does.
+ *
+ * An entry this router did not write (no index: the first page load before
+ * the stamp, or a foreign `pushState`) cannot be traversed back to by a known
+ * distance, so for that case alone the page's URL is pushed back as before.
  *
  * With no host mounted (a page rendered on its own, as the web suite does)
  * nothing could ask, so nothing is blocked: a guard never becomes a navigation
@@ -101,6 +110,12 @@ function refresh(): void {
 export interface PendingLeave {
   readonly to: string;
   readonly replace: boolean;
+  /**
+   * Set when the navigation is a browser traversal the guard undid: leaving
+   * re-traverses by this distance instead of pushing `to`, so the stack keeps
+   * the entries it had.
+   */
+  readonly delta?: number;
   /** The question the most recent guard asked to be put, if it named one. */
   readonly message: string | undefined;
 }
@@ -144,6 +159,11 @@ function park(to: string, replace: boolean): void {
   emitPending();
 }
 
+function parkTraversal(to: string, delta: number): void {
+  pending = { to, replace: false, delta, message: guardMessage() };
+  emitPending();
+}
+
 /** For the shell's host: the navigation waiting on an answer, and the two answers. */
 export function usePendingLeave(): {
   pending: PendingLeave | null;
@@ -174,7 +194,17 @@ export function usePendingLeave(): {
     const target = pending;
     pending = null;
     emitPending();
-    if (target !== null) navigate(target.to, { replace: target.replace, force: true });
+    if (target === null) return;
+    if (target.delta !== undefined) {
+      if (expecting === 'restore') {
+        leaveAfterRestore = target.delta;
+        return;
+      }
+      expecting = 'leave';
+      window.history.go(target.delta);
+      return;
+    }
+    navigate(target.to, { replace: target.replace, force: true });
   }, []);
   const stay = useCallback(() => {
     pending = null;
@@ -183,15 +213,69 @@ export function usePendingLeave(): {
   return { pending: current, leave, stay };
 }
 
-function onPopState(): void {
+/** Where in the history stack the entry the operator is on sits, when known. */
+let currentIndex: number | null = null;
+/** A traversal the router itself started, and what to do when it lands. */
+let expecting: 'restore' | 'leave' | null = null;
+/** A confirmation that arrived before the restoring traversal had landed. */
+let leaveAfterRestore: number | null = null;
+
+function indexOf(state: unknown): number | null {
+  if (typeof state === 'object' && state !== null && 'nexaIndex' in state) {
+    const value = (state as { nexaIndex: unknown }).nexaIndex;
+    if (typeof value === 'number' && Number.isInteger(value)) return value;
+  }
+  return null;
+}
+
+/** Stamps the entry the page was loaded on, so Back to it has a known distance. */
+function stampInitialEntry(): void {
+  const existing = indexOf(window.history.state);
+  if (existing !== null) {
+    currentIndex = existing;
+    return;
+  }
+  currentIndex = 0;
+  window.history.replaceState({ nexaIndex: 0 }, '', key());
+}
+
+function onPopState(event: PopStateEvent): void {
   const next = key();
-  if (leaveGuarded() && snapshot !== null && pathOf(next) !== snapshot.path) {
-    // Put the page the operator is on back, and ask about the one they were going to.
-    const here = snapshotKey;
-    window.history.pushState(null, '', here);
+  const landed = indexOf(event.state);
+  if (expecting === 'restore') {
+    // The router's own traversal back to the guarded page: nothing moved.
+    expecting = null;
+    currentIndex = landed;
+    if (leaveAfterRestore !== null) {
+      const delta = leaveAfterRestore;
+      leaveAfterRestore = null;
+      expecting = 'leave';
+      window.history.go(delta);
+    }
+    return;
+  }
+  if (expecting === 'leave') {
+    expecting = null;
+    currentIndex = landed;
+    refresh();
+    return;
+  }
+  if (leaveGuarded() && snapshot !== null && next !== snapshotKey) {
+    if (landed !== null && currentIndex !== null && landed !== currentIndex) {
+      // Undo the traversal by its own distance, and ask about the one it made.
+      const delta = landed - currentIndex;
+      expecting = 'restore';
+      window.history.go(-delta);
+      parkTraversal(next, delta);
+      return;
+    }
+    // An entry of unknown position: the only way back is a push.
+    window.history.pushState({ nexaIndex: (currentIndex ?? 0) + 1 }, '', snapshotKey);
+    currentIndex = (currentIndex ?? 0) + 1;
     park(next, false);
     return;
   }
+  currentIndex = landed;
   refresh();
 }
 
@@ -209,6 +293,7 @@ function getServerSnapshot(): Route {
 }
 
 if (typeof window !== 'undefined') {
+  stampInitialEntry();
   window.addEventListener('popstate', onPopState);
 }
 
@@ -236,8 +321,13 @@ export function navigate(to: string, options: NavigateOptions = {}): void {
       return;
     }
   }
-  if (options.replace === true) window.history.replaceState(null, '', to);
-  else window.history.pushState(null, '', to);
+  if (currentIndex === null) currentIndex = indexOf(window.history.state) ?? 0;
+  if (options.replace === true) {
+    window.history.replaceState({ nexaIndex: currentIndex }, '', to);
+  } else {
+    currentIndex += 1;
+    window.history.pushState({ nexaIndex: currentIndex }, '', to);
+  }
   refresh();
 }
 

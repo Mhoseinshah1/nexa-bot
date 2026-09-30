@@ -2,6 +2,8 @@ import { act } from 'react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { App } from '../../apps/web/src/app';
+import { useCommandShortcut } from '../../apps/web/src/shell';
+import { ConfirmDialog } from '../../apps/web/src/ui/confirm-dialog';
 import { navigate } from '../../apps/web/src/router';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { renderPage, stubApi } from './harness';
@@ -88,6 +90,81 @@ describe('the command search', () => {
     expect(within(dialog).getByText(t('web.search_none'))).toBeInTheDocument();
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(screen.queryByRole('dialog')).toBeNull();
+  });
+});
+
+describe('the command shortcut over a confirmation', () => {
+  it('does not open the search while a confirmation is asking', () => {
+    let opened = 0;
+    let cancelled = 0;
+    function Host({ asking }: { asking: boolean }) {
+      useCommandShortcut(() => {
+        opened += 1;
+      });
+      return asking ? (
+        <ConfirmDialog
+          title="t"
+          question="q"
+          confirmLabel="yes"
+          cancelLabel="no"
+          onConfirm={() => undefined}
+          onCancel={() => {
+            cancelled += 1;
+          }}
+        />
+      ) : null;
+    }
+    const { rerender } = renderPage(<Host asking />);
+    fireEvent.keyDown(window, { key: 'k', ctrlKey: true });
+    fireEvent.keyDown(window, { key: 'k', metaKey: true });
+    expect(opened).toBe(0);
+    // Focus stayed on the question's safe answer.
+    expect(document.activeElement?.textContent).toBe('no');
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(cancelled).toBe(1);
+
+    rerender(<Host asking={false} />);
+    fireEvent.keyDown(window, { key: 'k', ctrlKey: true });
+    expect(opened).toBe(1);
+  });
+});
+
+describe('the sidebar drawer on a narrow screen', () => {
+  const realMatch = window.matchMedia;
+  const realWidth = window.innerWidth;
+  beforeEach(() => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 600 });
+    window.matchMedia = ((query: string) => ({
+      ...realMatch(query),
+      matches: /max-width:\s*980px/.test(query) || realMatch(query).matches,
+    })) as typeof window.matchMedia;
+  });
+  afterEach(() => {
+    window.matchMedia = realMatch;
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: realWidth });
+  });
+
+  it('takes focus, keeps Tab inside, and closes on Escape back to the opener', async () => {
+    stubApi([session(['users.view'])]);
+    const { container } = renderPage(<App />);
+    const opener = await screen.findByRole('button', { name: t('web.open_menu') });
+    expect(container.querySelector('.app')?.classList.contains('collapsed')).toBe(true);
+    opener.focus();
+    fireEvent.click(opener);
+    const sidebar = container.querySelector('#app-sidebar') as HTMLElement;
+    expect(container.querySelector('.app')?.classList.contains('collapsed')).toBe(false);
+    expect(sidebar.contains(document.activeElement)).toBe(true);
+
+    // Tab from the last control wraps to the first, never to the page behind.
+    const controls = sidebar.querySelectorAll<HTMLElement>('button, [href]');
+    const last = controls[controls.length - 1] as HTMLElement;
+    last.focus();
+    fireEvent.keyDown(document, { key: 'Tab' });
+    expect(sidebar.contains(document.activeElement)).toBe(true);
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(container.querySelector('.app')?.classList.contains('collapsed')).toBe(true);
+    expect(document.activeElement).toBe(opener);
   });
 });
 

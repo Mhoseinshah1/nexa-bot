@@ -1355,9 +1355,11 @@ function SignedIn({
     // one is not a layout preference worth carrying into the next visit.
     if (window.innerWidth >= 980) writeSidebarPreference(next);
   };
+  const [narrow, setNarrow] = useState(() => window.matchMedia('(max-width: 980px)').matches);
   useEffect(() => {
     const query = window.matchMedia('(max-width: 980px)');
     const onChange = (event: MediaQueryListEvent) => {
+      setNarrow(event.matches);
       if (!touched.current) setCollapsed(event.matches);
     };
     query.addEventListener('change', onChange);
@@ -1435,6 +1437,8 @@ function SignedIn({
         counters={counters}
         theme={choice}
         onTheme={setChoice}
+        drawer={narrow && !collapsed}
+        onDismiss={() => setCollapsed(true)}
       />
       {/* The scrim behind the sidebar drawer on a narrow screen; CSS shows it only there. */}
       <div className="sidebar-scrim" aria-hidden="true" onClick={() => setCollapsed(true)} />

@@ -5,7 +5,7 @@ import { t, type WebKey } from './i18n/web.fa';
 import { navigate, useLinkHandler } from './router';
 import type { ThemeChoice } from './theme';
 import { Icon, type IconName } from './ui/icons';
-import { Breadcrumbs, Menu, useFocusTrap, type Crumb } from './ui/kit';
+import { Breadcrumbs, Menu, confirmDialogOpen, useFocusTrap, type Crumb } from './ui/kit';
 import { formatNumber } from './format';
 import { GROUP_ORDER, isCurrent, type NavEntry } from './nav';
 import type { NavCounters } from './nav-counters';
@@ -55,11 +55,20 @@ export function Sidebar({
   counters,
   theme,
   onTheme,
+  drawer = false,
+  onDismiss,
 }: {
   entries: readonly NavEntry[];
   currentPath: string;
   collapsed: boolean;
   onToggle: () => void;
+  /**
+   * The sidebar is open as a DRAWER over the page (a narrow screen): focus
+   * moves into it, Tab stays in it, and Escape dismisses it — the controls
+   * behind the scrim are not reachable while it covers them.
+   */
+  drawer?: boolean;
+  onDismiss?: () => void;
   counters: NavCounters;
   theme: ThemeChoice;
   onTheme: (next: ThemeChoice) => void;
@@ -69,9 +78,11 @@ export function Sidebar({
   const describedBy = useId();
   const nextTheme = THEME_ORDER[(THEME_ORDER.indexOf(theme) + 1) % THEME_ORDER.length] ?? 'system';
   const themeLabel = `${t('web.theme')}: ${t(THEME_LABEL[theme])}`;
+  const ref = useRef<HTMLElement>(null);
+  useFocusTrap(ref, drawer, () => onDismiss?.());
 
   return (
-    <aside className="sidebar" id="app-sidebar">
+    <aside className="sidebar" id="app-sidebar" ref={ref}>
       <div className="brand">
         <span className="brand-mark" aria-hidden="true">
           N
@@ -375,7 +386,12 @@ export function CommandSearch({
   );
 }
 
-/** Ctrl+K / Cmd+K opens the command search from anywhere in the shell. */
+/**
+ * Ctrl+K / Cmd+K opens the command search from anywhere in the shell — except
+ * over a confirmation. Two focus traps would fight over the same keyboard: the
+ * confirmation pulls focus out of the search input, and one Escape would both
+ * close the search and cancel the question the operator was being asked.
+ */
 export function useCommandShortcut(open: () => void): void {
   const latest = useRef(open);
   useEffect(() => {
@@ -385,6 +401,7 @@ export function useCommandShortcut(open: () => void): void {
     const onKey = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault();
+        if (confirmDialogOpen()) return;
         latest.current();
       }
     };
