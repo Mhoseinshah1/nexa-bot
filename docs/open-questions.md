@@ -2649,6 +2649,7 @@ fallback in their own chat — which is why the test goes there. Needs one real 
 kind to settle.
 
 UNRESOLVED. Pending real-bot acceptance.
+
 ## OQ-P-MENU-01 — does a BotFather token revocation keep the bot's command list?
 
 The Bot API documents `setMyCommands` and `getMyCommands` per bot and says nothing about a

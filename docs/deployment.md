@@ -1607,6 +1607,7 @@ one — except a tenant's own override, if an operator copied a marker into it.
 - **Nothing was ever decorated by the old release**, so the customer-facing effect of a
   rollback is only the emoji returning to the literal ones the old bodies carried — and
   the literal marker in an override, above.
+
 ### What a rollback leaves queued: the command-menu sync (round P)
 
 Round P (`docs/command-menu-audit.md`) adds one table, `bot_command_syncs` (migration

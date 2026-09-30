@@ -27,6 +27,7 @@ import {
 } from '../api/client';
 import { formatTimestamp } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
+import { APPEARANCE_SLOT_LABEL } from '../appearance-labels';
 import { useSubmissionKey } from '../submission-key';
 import { templateCopy } from '../template-copy';
 import { Badge, Banner, Card, Ltr, PageHead, StateSwitch, Switch, type Tone } from '../ui/kit';
@@ -43,27 +44,6 @@ const GATE_NOTES: Readonly<Record<MainMenuGate, WebKey>> = {
 const GATE_CLOSED: Readonly<Record<MainMenuGate, WebKey>> = {
   FEATURE: 'web.bot_buttons_feature_off',
   TRIAL_OFFER: 'web.bot_buttons_trial_not_offered',
-};
-
-/** The Persian name of each appearance slot. The catalogue itself belongs to the appearance section. */
-const SLOT_LABELS: Readonly<Record<MenuAppearanceSlot, WebKey>> = {
-  success: 'web.appearance_slot_success',
-  error: 'web.appearance_slot_error',
-  warning: 'web.appearance_slot_warning',
-  info: 'web.appearance_slot_info',
-  payment: 'web.appearance_slot_payment',
-  wallet: 'web.appearance_slot_wallet',
-  purchase: 'web.appearance_slot_purchase',
-  service: 'web.appearance_slot_service',
-  trial: 'web.appearance_slot_trial',
-  referral: 'web.appearance_slot_referral',
-  support: 'web.appearance_slot_support',
-  renewal: 'web.appearance_slot_renewal',
-  traffic: 'web.appearance_slot_traffic',
-  time: 'web.appearance_slot_time',
-  link: 'web.appearance_slot_link',
-  active: 'web.appearance_slot_active',
-  inactive: 'web.appearance_slot_inactive',
 };
 
 const SYNC_STATE_LABEL: Readonly<Record<BotCommandSyncState, WebKey>> = {
@@ -366,7 +346,7 @@ function LayoutCard({ config, mayEdit }: { config: BotMenuConfigResponse; mayEdi
                       >
                         {MENU_APPEARANCE_SLOTS.map((slot) => (
                           <option key={slot} value={slot}>
-                            {t(SLOT_LABELS[slot])}
+                            {t(APPEARANCE_SLOT_LABEL[slot])}
                             {slot === item.defaultAppearanceSlot
                               ? ` (${t('web.bot_buttons_slot_default')})`
                               : ''}

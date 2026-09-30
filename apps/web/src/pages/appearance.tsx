@@ -5,7 +5,6 @@ import {
   CUSTOM_EMOJI_ID_PATTERN,
   appearanceMarker,
   type AppearanceBotView,
-  type AppearanceSlot,
   type AppearanceSlotView,
   type AppearanceTestErrorCode,
   type AppearanceTestOutcome,
@@ -20,6 +19,7 @@ import {
 import { formatTimestamp } from '../format';
 import { useSubmissionKey } from '../submission-key';
 import { t, type WebKey } from '../i18n/web.fa';
+import { APPEARANCE_SLOT_LABEL as SLOT_LABEL } from '../appearance-labels';
 import { messageFor } from './settings';
 import {
   Badge,
@@ -47,30 +47,6 @@ import {
  * **Buttons are drawn from permissions, and that is a courtesy.** The server charges
  * `settings.view` for the read and `settings.edit` for every save, reset and test.
  */
-
-const SLOT_LABEL: Readonly<Record<AppearanceSlot, WebKey>> = {
-  success: 'web.appearance_slot_success',
-  error: 'web.appearance_slot_error',
-  warning: 'web.appearance_slot_warning',
-  info: 'web.appearance_slot_info',
-  payment: 'web.appearance_slot_payment',
-  wallet: 'web.appearance_slot_wallet',
-  purchase: 'web.appearance_slot_purchase',
-  service: 'web.appearance_slot_service',
-  trial: 'web.appearance_slot_trial',
-  referral: 'web.appearance_slot_referral',
-  support: 'web.appearance_slot_support',
-  ticket: 'web.appearance_slot_ticket',
-  renewal: 'web.appearance_slot_renewal',
-  traffic: 'web.appearance_slot_traffic',
-  time: 'web.appearance_slot_time',
-  date: 'web.appearance_slot_date',
-  link: 'web.appearance_slot_link',
-  user: 'web.appearance_slot_user',
-  location: 'web.appearance_slot_location',
-  active: 'web.appearance_slot_active',
-  inactive: 'web.appearance_slot_inactive',
-};
 
 const OUTCOME_LABEL: Readonly<Record<AppearanceTestOutcome, WebKey>> = {
   SENT: 'web.appearance_test_outcome_sent',
