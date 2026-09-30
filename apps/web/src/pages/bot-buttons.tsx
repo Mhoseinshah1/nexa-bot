@@ -1,110 +1,159 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  DEFAULT_MAIN_MENU_LAYOUT,
+  BOT_COMMANDS,
+  MENU_APPEARANCE_SLOTS,
   mainMenuButton,
   mainMenuLayoutSchema,
   packMainMenuRows,
   resolveMainMenuLayout,
-  type BotMenuButton,
-  type FeatureFlagResponse,
+  mainMenuEntryOf,
+  type BotCommandCheck,
+  type BotCommandSyncResult,
+  type BotCommandSyncState,
+  type BotCommandSyncView,
+  type BotMenuConfigResponse,
+  type MainMenuGate,
+  type MainMenuItemView,
   type MainMenuLayoutEntry,
-  type ResolvedSettingResponse,
-  type TemplateViewResponse,
+  type MenuAppearanceSlot,
 } from '@nexa/contracts';
 import {
-  fetchFeatureFlags,
-  fetchSettings,
+  checkBotMenu,
+  fetchBotMenu,
   fetchTemplates,
-  fetchTrialPanels,
   saveSetting,
+  syncBotMenu,
 } from '../api/client';
+import { formatTimestamp } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
 import { useSubmissionKey } from '../submission-key';
 import { templateCopy } from '../template-copy';
-import { Badge, Banner, Card, PageHead, StateSwitch, Switch } from '../ui/kit';
+import { Badge, Banner, Card, Ltr, PageHead, StateSwitch, Switch, type Tone } from '../ui/kit';
 import { TemplateCard } from './content';
 import { ErrorReport } from './settings';
 
 const SETTING_KEY = 'bot.main_menu';
 
-/** The sentence under a feature-gated button, keyed by the contract's own flag union. */
-const FEATURE_NOTES: Readonly<Record<NonNullable<BotMenuButton['feature']>, WebKey>> = {
-  referrals: 'web.bot_buttons_needs_referrals',
+/** The sentence under a gated button, by the gate the server names. */
+const GATE_NOTES: Readonly<Record<MainMenuGate, WebKey>> = {
+  FEATURE: 'web.bot_buttons_needs_referrals',
+  TRIAL_OFFER: 'web.bot_buttons_needs_trial_offer',
+};
+const GATE_CLOSED: Readonly<Record<MainMenuGate, WebKey>> = {
+  FEATURE: 'web.bot_buttons_feature_off',
+  TRIAL_OFFER: 'web.bot_buttons_trial_not_offered',
 };
 
+/** The Persian name of each appearance slot. The catalogue itself belongs to the appearance section. */
+const SLOT_LABELS: Readonly<Record<MenuAppearanceSlot, WebKey>> = {
+  success: 'web.appearance_slot_success',
+  error: 'web.appearance_slot_error',
+  warning: 'web.appearance_slot_warning',
+  info: 'web.appearance_slot_info',
+  payment: 'web.appearance_slot_payment',
+  wallet: 'web.appearance_slot_wallet',
+  purchase: 'web.appearance_slot_purchase',
+  service: 'web.appearance_slot_service',
+  trial: 'web.appearance_slot_trial',
+  referral: 'web.appearance_slot_referral',
+  support: 'web.appearance_slot_support',
+  renewal: 'web.appearance_slot_renewal',
+  traffic: 'web.appearance_slot_traffic',
+  time: 'web.appearance_slot_time',
+  link: 'web.appearance_slot_link',
+  active: 'web.appearance_slot_active',
+  inactive: 'web.appearance_slot_inactive',
+};
+
+const SYNC_STATE_LABEL: Readonly<Record<BotCommandSyncState, WebKey>> = {
+  CURRENT: 'web.bot_menu_state_current',
+  PENDING: 'web.bot_menu_state_pending',
+  FAILING: 'web.bot_menu_state_failing',
+  STALE: 'web.bot_menu_state_stale',
+  UNKNOWN: 'web.bot_menu_state_unknown',
+  STOPPED: 'web.bot_menu_state_stopped',
+};
+const SYNC_STATE_TONE: Readonly<Record<BotCommandSyncState, Tone>> = {
+  CURRENT: 'ok',
+  PENDING: 'info',
+  FAILING: 'warn',
+  STALE: 'warn',
+  UNKNOWN: 'neutral',
+  STOPPED: 'neutral',
+};
+const SYNC_RESULT_LABEL: Readonly<Record<BotCommandSyncResult['outcome'], WebKey>> = {
+  SYNCED: 'web.bot_buttons_sync_result_synced',
+  FAILED: 'web.bot_buttons_sync_result_failed',
+  SKIPPED: 'web.bot_buttons_sync_result_skipped',
+};
+
+/** A transport code, as a Persian sentence. The code itself is shown beside it. */
+export function syncErrorHint(code: string): WebKey {
+  if (code === 'telegram.unreachable' || code.startsWith('telegram.server_error')) {
+    return 'web.bot_buttons_error_unreachable';
+  }
+  if (code === 'telegram.rate_limited') return 'web.bot_buttons_error_rate_limited';
+  if (code === 'telegram.rejected.401') return 'web.bot_buttons_error_rejected_token';
+  if (code.startsWith('telegram.rejected.')) return 'web.bot_buttons_error_rejected_list';
+  return 'web.bot_buttons_error_other';
+}
+
 /**
- * R1: «دکمه‌های ربات» — the customer main menu, as an operator manages it.
+ * R1 + round P: «دکمه‌های ربات» — the customer main menu and the Telegram command menu, as
+ * an operator manages both.
  *
- * Three things, each stored where it already lives and read back from there, so this page
- * holds no second copy of anything:
+ * Everything shown is read from ONE endpoint (`/bot-menu`), which answers each item with
+ * the keyboard's own decision about it — enabled, its gate and whether that gate is open
+ * now — so the table and the preview say what the bot says. What is WRITTEN goes where
+ * it already lives: the arrangement (order, on/off, appearance slot) is the registry
+ * setting `bot.main_menu`, saved whole with the version it was read at; the labels and
+ * the command descriptions are the `bot.menu.*` and `bot.command.*` texts, edited with
+ * the texts screen's own card. This page holds no second copy of anything.
  *
- * - the ORDER and the ON/OFF of each button: the registry setting `bot.main_menu`, saved
- *   whole with the version it was read at (a colleague's change in between is a conflict,
- *   not an overwrite) and validated by the server against `mainMenuLayoutSchema`;
- * - the LABEL of each button: its `bot.menu.*` template, edited with the texts screen's own
- *   card — the bot draws the keyboard from the tenant's text AND routes a tap by it;
- * - whether a feature-gated button can appear at all: its feature flag, shown here and
- *   switched on the Features page — or, for the trial button (F5), whether any panel
- *   offers a trial now, from the Trials overview and switched on each panel's own tab.
- *
- * The preview packs the draft with the contract's own layout rule (`packMainMenuRows`), so
- * it is the keyboard the bot will draw, not a picture of one.
+ * A button's TARGET is shown and never edited: each button opens exactly the command it
+ * is declared for, and the schema refuses anything else, so two buttons cannot do one
+ * thing and no button can carry an arbitrary payload.
  */
 export function BotButtonsPage({
   mayEdit,
   denied,
   mayViewTemplates,
   mayEditTemplates,
-  mayViewPanels = false,
 }: {
   mayEdit: boolean;
   denied: boolean;
   mayViewTemplates: boolean;
   mayEditTemplates: boolean;
-  /** F5: `panels.view`, which the trial overview — "does any panel offer a trial" — needs. */
-  mayViewPanels?: boolean;
 }) {
-  const settings = useQuery({ queryKey: ['settings'], queryFn: fetchSettings, enabled: !denied });
-  const flags = useQuery({ queryKey: ['features'], queryFn: fetchFeatureFlags, enabled: !denied });
-  const trialPanels = useQuery({
-    queryKey: ['trial-panels'],
-    queryFn: fetchTrialPanels,
-    enabled: !denied && mayViewPanels,
-  });
-  /*
-   * Whether the trial button would be drawn now: known only from a successful read of the
-   * overview, which asks the evaluator the bot asks. Unknown (no permission, not loaded,
-   * refused) says nothing rather than guessing either way.
-   */
-  const trialOffered =
-    trialPanels.data === undefined
-      ? null
-      : trialPanels.data.panels.some((panel) => panel.offeredNow);
+  const menu = useQuery({ queryKey: ['bot-menu'], queryFn: fetchBotMenu, enabled: !denied });
   const templates = useQuery({
     queryKey: ['templates'],
     queryFn: fetchTemplates,
     enabled: !denied && mayViewTemplates,
   });
-  const setting = settings.data?.settings.find((one) => one.key === SETTING_KEY);
   const menuTemplates = (templates.data?.templates ?? []).filter((one) =>
     one.key.startsWith('bot.menu.'),
+  );
+  const commandTemplates = (templates.data?.templates ?? []).filter((one) =>
+    one.key.startsWith('bot.command.'),
   );
 
   return (
     <>
       <PageHead title={t('web.bot_buttons_title')} subtitle={t('web.bot_buttons_intro')} />
-      <StateSwitch query={settings} denied={denied} isEmpty={false}>
-        {setting !== undefined && (
-          <LayoutCard
-            // Re-seeded from the server whenever the stored value moves on.
-            key={String(setting.version ?? 0)}
-            setting={setting}
-            flags={flags.data?.flags ?? []}
-            trialOffered={trialOffered}
-            labels={menuTemplates}
-            mayEdit={mayEdit}
-          />
+      <StateSwitch query={menu} denied={denied} isEmpty={false}>
+        {menu.data !== undefined && (
+          <>
+            <LayoutCard
+              // Re-seeded from the server whenever the stored value moves on.
+              key={String(menu.data.layout.version ?? 0)}
+              config={menu.data}
+              mayEdit={mayEdit}
+            />
+            <CommandsCard config={menu.data} />
+            <SyncCard bots={menu.data.bots} mayEdit={mayEdit} />
+          </>
         )}
       </StateSwitch>
       <Card title={t('web.bot_buttons_labels_title')} hint={t('web.bot_buttons_labels_hint')}>
@@ -112,16 +161,30 @@ export function BotButtonsPage({
           <Banner tone="info">{t('web.bot_buttons_labels_denied')}</Banner>
         ) : (
           <StateSwitch query={templates}>
-            {DEFAULT_MAIN_MENU_LAYOUT.map((entry) => {
-              const button = mainMenuButton(entry.button);
+            {(menu.data?.layout.items ?? []).map((item) => {
+              const button = mainMenuButton(item.id);
               const template = menuTemplates.find((one) => one.key === button.label);
               if (template === undefined) return null;
               return (
                 <details key={button.id}>
-                  <summary>{labelOf(button, menuTemplates)}</summary>
-                  {duplicated(button, menuTemplates) && (
+                  <summary>{labelOf(item)}</summary>
+                  {duplicated(item, menu.data?.layout.items ?? []) && (
                     <Banner tone="warn">{t('web.bot_buttons_label_duplicate')}</Banner>
                   )}
+                  <TemplateCard template={template} mayEdit={mayEditTemplates} />
+                </details>
+              );
+            })}
+            <h3 className="small">{t('web.bot_buttons_command_texts_title')}</h3>
+            <p className="muted small">{t('web.bot_buttons_command_texts_hint')}</p>
+            {BOT_COMMANDS.map((entry) => {
+              const template = commandTemplates.find((one) => one.key === entry.description);
+              if (template === undefined) return null;
+              return (
+                <details key={entry.command}>
+                  <summary>
+                    <Ltr>/{entry.command}</Ltr> — {template.body}
+                  </summary>
                   <TemplateCard template={template} mayEdit={mayEditTemplates} />
                 </details>
               );
@@ -134,51 +197,36 @@ export function BotButtonsPage({
 }
 
 /** The label a button shows now: the tenant's text, else the template's Persian name. */
-function labelOf(button: BotMenuButton, labels: readonly TemplateViewResponse[]): string {
-  const template = labels.find((one) => one.key === button.label);
-  return template?.body ?? templateCopy(button.label, '').name;
+function labelOf(item: MainMenuItemView): string {
+  const button = mainMenuButton(item.id);
+  return item.label !== '' ? item.label : templateCopy(button.label, '').name;
 }
 
 /** Whether another button shows the same text — the bot could then reach only one of them. */
-function duplicated(button: BotMenuButton, labels: readonly TemplateViewResponse[]): boolean {
-  const mine = labels.find((one) => one.key === button.label)?.body.trim();
-  if (mine === undefined || mine === '') return false;
-  return labels.some(
-    (other) =>
-      other.key !== button.label &&
-      other.key !== 'bot.menu.admin' &&
-      other.key !== 'bot.menu.main_button' &&
-      other.body.trim() === mine,
+function duplicated(item: MainMenuItemView, items: readonly MainMenuItemView[]): boolean {
+  if (item.label === '') return false;
+  return items.some((other) => other.id !== item.id && other.label === item.label);
+}
+
+/** The stored entries as the server resolved them, so the draft starts from the truth. */
+function entriesOf(items: readonly MainMenuItemView[]): readonly MainMenuLayoutEntry[] {
+  return items.map((item) =>
+    mainMenuEntryOf({
+      button: item.id,
+      enabled: item.enabled,
+      target: item.target,
+      appearanceSlot: item.appearanceSlot,
+      appearanceSlotOverridden: item.appearanceSlot !== item.defaultAppearanceSlot,
+    }),
   );
 }
 
-function storedLayout(setting: ResolvedSettingResponse): readonly MainMenuLayoutEntry[] {
-  const parsed = mainMenuLayoutSchema.safeParse(setting.value);
-  return resolveMainMenuLayout(parsed.success ? parsed.data : DEFAULT_MAIN_MENU_LAYOUT);
-}
-
-function LayoutCard({
-  setting,
-  flags,
-  trialOffered,
-  labels,
-  mayEdit,
-}: {
-  setting: ResolvedSettingResponse;
-  flags: readonly FeatureFlagResponse[];
-  /** Whether any panel offers a trial now; null when the page cannot know. */
-  trialOffered: boolean | null;
-  labels: readonly TemplateViewResponse[];
-  mayEdit: boolean;
-}) {
+function LayoutCard({ config, mayEdit }: { config: BotMenuConfigResponse; mayEdit: boolean }) {
   const client = useQueryClient();
   const submission = useSubmissionKey();
-  const [draft, setDraft] = useState<readonly MainMenuLayoutEntry[]>(() => storedLayout(setting));
-  const flagOn = (button: BotMenuButton) =>
-    button.feature === null || flags.find((flag) => flag.key === button.feature)?.enabled === true;
-  // The preview leaves the trial button out only when the page KNOWS no panel offers one.
-  const shown = (button: BotMenuButton) =>
-    flagOn(button) && !(button.needsTrialOffer && trialOffered === false);
+  const items = config.layout.items;
+  const byId = new Map(items.map((item) => [item.id, item]));
+  const [draft, setDraft] = useState<readonly MainMenuLayoutEntry[]>(() => entriesOf(items));
 
   const save = useMutation({
     mutationFn: (command: {
@@ -188,7 +236,10 @@ function LayoutCard({
     }) => saveSetting({ key: SETTING_KEY, ...command }),
     onSuccess: async () => {
       submission.settle();
-      await client.invalidateQueries({ queryKey: ['settings'] });
+      await Promise.all([
+        client.invalidateQueries({ queryKey: ['bot-menu'] }),
+        client.invalidateQueries({ queryKey: ['settings'] }),
+      ]);
     },
     onError: (error: unknown) => {
       submission.settleOn(error);
@@ -196,7 +247,7 @@ function LayoutCard({
   });
 
   const valid = mainMenuLayoutSchema.safeParse(draft).success;
-  const dirty = JSON.stringify(draft) !== JSON.stringify(storedLayout(setting));
+  const dirty = JSON.stringify(draft) !== JSON.stringify(entriesOf(items));
   const editable = mayEdit && !save.isPending;
 
   const move = (index: number, by: -1 | 1) => {
@@ -210,24 +261,36 @@ function LayoutCard({
   };
   const toggle = (index: number, enabled: boolean) =>
     setDraft(draft.map((entry, at) => (at === index ? { ...entry, enabled } : entry)));
+  const chooseSlot = (index: number, slot: MenuAppearanceSlot) =>
+    setDraft(
+      draft.map((entry, at) => {
+        if (at !== index) return entry;
+        const defaultSlot = mainMenuButton(entry.button).appearanceSlot;
+        return { ...entry, appearanceSlot: slot === defaultSlot ? null : slot };
+      }),
+    );
 
   const onSave = () => {
     if (!valid) return;
-    const command = { value: draft, expectedVersion: setting.version };
+    const command = { value: draft, expectedVersion: config.layout.version };
     save.mutate({ ...command, idempotencyKey: submission.current(command) });
   };
 
+  // The preview is the keyboard the bot draws from THIS draft: the server's answer about
+  // each gate, applied to the draft's switches. A gate the server did not evaluate (the
+  // item was off when read) is unknown, and an unknown gate hides nothing.
   const preview = packMainMenuRows(
-    draft
+    resolveMainMenuLayout(draft)
       .filter((entry) => entry.enabled)
-      .map((entry) => mainMenuButton(entry.button))
-      .filter(shown),
+      .map((entry) => byId.get(entry.button))
+      .filter((item): item is MainMenuItemView => item !== undefined && item.gateOpen !== false)
+      .map((item) => ({ id: item.id, wide: item.wide, label: labelOf(item) })),
   );
 
   return (
     <>
       <Card title={t('web.bot_buttons_order_title')} hint={t('web.bot_buttons_order_hint')}>
-        {setting.storedValueInvalid && (
+        {config.layout.storedValueInvalid && (
           <Banner tone="danger">{t('web.bot_buttons_stored_invalid')}</Banner>
         )}
         <div className="tbl-wrap">
@@ -237,35 +300,64 @@ function LayoutCard({
               <tr>
                 <th>{t('web.bot_buttons_position')}</th>
                 <th>{t('web.bot_buttons_button')}</th>
+                <th>{t('web.bot_buttons_target')}</th>
+                <th>{t('web.bot_buttons_slot')}</th>
                 <th>{t('web.bot_buttons_shown')}</th>
                 <th />
               </tr>
             </thead>
             <tbody>
-              {draft.map((entry, index) => {
-                const button = mainMenuButton(entry.button);
-                const label = labelOf(button, labels);
+              {resolveMainMenuLayout(draft).map((entry, index) => {
+                const item = byId.get(entry.button);
+                if (item === undefined) return null;
+                const label = labelOf(item);
+                const slotSelect = `bot-buttons-slot-${item.id}`;
                 return (
-                  <tr key={button.id} data-button={button.id}>
+                  <tr key={item.id} data-button={item.id}>
                     <td>{String(index + 1)}</td>
                     <td>
                       <span className="strong">{label}</span>
-                      {button.feature !== null && (
+                      {item.labelOverridden && (
                         <p className="muted small">
-                          {t(FEATURE_NOTES[button.feature])}{' '}
-                          {!flagOn(button) && (
-                            <Badge tone="warn">{t('web.bot_buttons_feature_off')}</Badge>
+                          {t('web.bot_buttons_label_default')} {item.defaultLabel}
+                        </p>
+                      )}
+                      {item.gate !== null && (
+                        <p className="muted small">
+                          {t(GATE_NOTES[item.gate])}{' '}
+                          {item.gateOpen === false && (
+                            <Badge tone="warn">{t(GATE_CLOSED[item.gate])}</Badge>
                           )}
                         </p>
                       )}
-                      {button.needsTrialOffer && (
-                        <p className="muted small">
-                          {t('web.bot_buttons_needs_trial_offer')}{' '}
-                          {trialOffered === false && (
-                            <Badge tone="warn">{t('web.bot_buttons_trial_not_offered')}</Badge>
-                          )}
-                        </p>
-                      )}
+                    </td>
+                    <td>
+                      <Badge tone="neutral" title={t('web.bot_buttons_target_hint')}>
+                        <Ltr>/{item.target}</Ltr>
+                      </Badge>
+                    </td>
+                    <td>
+                      <label className="visually-hidden" htmlFor={slotSelect}>
+                        {`${t('web.bot_buttons_slot')}: ${label}`}
+                      </label>
+                      <select
+                        id={slotSelect}
+                        className="input sm"
+                        value={entry.appearanceSlot}
+                        disabled={!editable}
+                        onChange={(event) =>
+                          chooseSlot(index, event.target.value as MenuAppearanceSlot)
+                        }
+                      >
+                        {MENU_APPEARANCE_SLOTS.map((slot) => (
+                          <option key={slot} value={slot}>
+                            {t(SLOT_LABELS[slot])}
+                            {slot === item.defaultAppearanceSlot
+                              ? ` (${t('web.bot_buttons_slot_default')})`
+                              : ''}
+                          </option>
+                        ))}
+                      </select>
                     </td>
                     <td>
                       <Switch
@@ -305,6 +397,7 @@ function LayoutCard({
             </tbody>
           </table>
         </div>
+        <p className="muted small">{t('web.bot_buttons_slot_hint')}</p>
         {!valid && <Banner tone="danger">{t('web.bot_buttons_one_required')}</Banner>}
         {dirty && valid && <p className="muted small">{t('web.bot_buttons_unsaved')}</p>}
         {mayEdit && (
@@ -321,7 +414,16 @@ function LayoutCard({
               type="button"
               className="btn sm"
               disabled={!editable}
-              onClick={() => setDraft(resolveMainMenuLayout(DEFAULT_MAIN_MENU_LAYOUT))}
+              onClick={() =>
+                setDraft(
+                  items.map((item) => ({
+                    button: item.id,
+                    enabled: true,
+                    target: item.target,
+                    appearanceSlot: null,
+                  })),
+                )
+              }
             >
               {t('web.bot_buttons_restore_default')}
             </button>
@@ -343,7 +445,7 @@ function LayoutCard({
               <div key={row.map((button) => button.id).join(':')} className="menu-preview-row">
                 {row.map((button) => (
                   <span key={button.id} className="menu-preview-key">
-                    {labelOf(button, labels)}
+                    {button.label}
                   </span>
                 ))}
               </div>
@@ -352,5 +454,228 @@ function LayoutCard({
         )}
       </Card>
     </>
+  );
+}
+
+/** The command menu Telegram is given: the customer scope, as this tenant words it. */
+function CommandsCard({ config }: { config: BotMenuConfigResponse }) {
+  return (
+    <Card title={t('web.bot_buttons_commands_title')} hint={t('web.bot_buttons_commands_hint')}>
+      <div className="tbl-wrap">
+        <table className="tbl" data-testid="bot-commands">
+          <caption className="visually-hidden">{t('web.bot_buttons_commands_title')}</caption>
+          <thead>
+            <tr>
+              <th>{t('web.bot_buttons_command')}</th>
+              <th>{t('web.bot_buttons_command_description')}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {config.commands.entries.map((entry) => (
+              <tr key={entry.command} data-command={entry.command}>
+                <td>
+                  <Ltr>/{entry.command}</Ltr>
+                </td>
+                <td>{entry.description}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="muted small">
+        {t('web.bot_buttons_commands_hash')} <Ltr>{config.commands.hash}</Ltr>
+      </p>
+    </Card>
+  );
+}
+
+/** Where each bot's command menu stands, and the two actions on it. */
+function SyncCard({ bots, mayEdit }: { bots: readonly BotCommandSyncView[]; mayEdit: boolean }) {
+  const client = useQueryClient();
+  const submission = useSubmissionKey();
+  const [selectedId, setSelectedId] = useState<string | null>(
+    () => (bots.find((bot) => bot.botStatus === 'ACTIVE') ?? bots[0])?.botInstanceId ?? null,
+  );
+  const selected = bots.find((bot) => bot.botInstanceId === selectedId) ?? bots[0] ?? null;
+  const [checks, setChecks] = useState<readonly BotCommandCheck[] | null>(null);
+
+  const refresh = () => client.invalidateQueries({ queryKey: ['bot-menu'] });
+  const sync = useMutation({
+    mutationFn: (botInstanceId: string) =>
+      syncBotMenu({ botInstanceId, idempotencyKey: submission.current({ sync: botInstanceId }) }),
+    onSuccess: async () => {
+      submission.settle();
+      setChecks(null);
+      await refresh();
+    },
+    onError: (error: unknown) => submission.settleOn(error),
+  });
+  const check = useMutation({
+    mutationFn: (botInstanceId: string) => checkBotMenu({ botInstanceId }),
+    onSuccess: (result) => setChecks(result.checks),
+  });
+  const busy = sync.isPending || check.isPending;
+
+  if (selected === null) {
+    return (
+      <Card title={t('web.bot_buttons_sync_title')} hint={t('web.bot_buttons_sync_hint')}>
+        <p className="muted small">{t('web.bot_buttons_no_bots')}</p>
+      </Card>
+    );
+  }
+  const never = t('web.bot_buttons_sync_never');
+  const results = sync.data?.results.filter((one) => one.botInstanceId === selected.botInstanceId);
+  const ownChecks = checks?.filter((one) => one.botInstanceId === selected.botInstanceId);
+
+  return (
+    <Card
+      title={t('web.bot_buttons_sync_title')}
+      hint={t('web.bot_buttons_sync_hint')}
+      actions={
+        <Badge tone={SYNC_STATE_TONE[selected.state]}>{t(SYNC_STATE_LABEL[selected.state])}</Badge>
+      }
+    >
+      {bots.length > 1 && (
+        <div className="row">
+          <label htmlFor="bot-buttons-sync-bot">{t('web.bot_buttons_sync_bot')}</label>
+          <select
+            id="bot-buttons-sync-bot"
+            className="input sm"
+            value={selected.botInstanceId}
+            onChange={(event) => {
+              setSelectedId(event.target.value);
+              setChecks(null);
+            }}
+          >
+            {bots.map((bot) => (
+              <option key={bot.botInstanceId} value={bot.botInstanceId}>
+                @{bot.username}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+      <dl className="kv" data-testid="bot-menu-sync">
+        <dt>{t('web.bot_buttons_sync_bot')}</dt>
+        <dd>
+          <Ltr>@{selected.username}</Ltr>
+        </dd>
+        <dt>{t('web.bot_buttons_sync_version')}</dt>
+        <dd>
+          {String(selected.desiredVersion)} <Ltr>{selected.desiredHash}</Ltr>
+        </dd>
+        <dt>{t('web.bot_buttons_sync_last_success')}</dt>
+        <dd>{selected.lastSyncedAt === null ? never : formatTimestamp(selected.lastSyncedAt)}</dd>
+        <dt>{t('web.bot_buttons_sync_last_attempt')}</dt>
+        <dd>
+          {selected.lastAttemptedAt === null ? never : formatTimestamp(selected.lastAttemptedAt)}
+        </dd>
+        <dt>{t('web.bot_buttons_sync_last_error')}</dt>
+        <dd>
+          {selected.lastErrorCode === null ? (
+            t('web.bot_buttons_sync_none')
+          ) : (
+            <>
+              {t(syncErrorHint(selected.lastErrorCode))} <Ltr>{selected.lastErrorCode}</Ltr>
+            </>
+          )}
+        </dd>
+        {selected.attempts > 0 && (
+          <>
+            <dt>{t('web.bot_buttons_sync_attempts')}</dt>
+            <dd>{String(selected.attempts)}</dd>
+          </>
+        )}
+        {selected.nextAttemptAt !== null && (
+          <>
+            <dt>{t('web.bot_buttons_sync_next_attempt')}</dt>
+            <dd>{formatTimestamp(selected.nextAttemptAt)}</dd>
+          </>
+        )}
+      </dl>
+      {selected.state === 'STOPPED' && (
+        <p className="muted small">{t('web.bot_buttons_sync_stopped_hint')}</p>
+      )}
+      {selected.state === 'STALE' && (
+        <p className="muted small">{t('web.bot_buttons_sync_stale_hint')}</p>
+      )}
+      {selected.state === 'FAILING' && (
+        <p className="muted small">{t('web.bot_buttons_sync_failing_hint')}</p>
+      )}
+      {mayEdit && selected.botStatus === 'ACTIVE' && (
+        <div className="row">
+          <button
+            type="button"
+            className="btn primary sm"
+            disabled={busy}
+            onClick={() => sync.mutate(selected.botInstanceId)}
+          >
+            {t('web.bot_buttons_sync_now')}
+          </button>
+          <button
+            type="button"
+            className="btn sm"
+            disabled={busy}
+            onClick={() => check.mutate(selected.botInstanceId)}
+          >
+            {t('web.bot_buttons_check_now')}
+          </button>
+        </div>
+      )}
+      {(sync.isError || check.isError) && <ErrorReport error={sync.error ?? check.error} />}
+      {results?.map((result) => (
+        <Banner
+          key={result.botInstanceId}
+          tone={result.outcome === 'SYNCED' ? 'ok' : result.outcome === 'FAILED' ? 'warn' : 'info'}
+        >
+          {t(SYNC_RESULT_LABEL[result.outcome])}
+          {result.errorCode !== null && (
+            <>
+              {' '}
+              {t(syncErrorHint(result.errorCode))} <Ltr>{result.errorCode}</Ltr>
+            </>
+          )}
+        </Banner>
+      ))}
+      {ownChecks?.map((one) => (
+        <CheckView key={one.botInstanceId} check={one} />
+      ))}
+    </Card>
+  );
+}
+
+function CheckView({ check }: { check: BotCommandCheck }) {
+  if (check.outcome !== 'READ') {
+    const key: WebKey =
+      check.outcome === 'REJECTED'
+        ? 'web.bot_buttons_check_rejected'
+        : check.outcome === 'UNREACHABLE'
+          ? 'web.bot_buttons_check_unreachable'
+          : 'web.bot_buttons_check_skipped';
+    return <Banner tone="warn">{t(key)}</Banner>;
+  }
+  return (
+    <div data-testid="bot-menu-check">
+      <Banner tone={check.matches === true ? 'ok' : 'warn'}>
+        {t(
+          check.matches === true
+            ? 'web.bot_buttons_check_read_match'
+            : 'web.bot_buttons_check_read_mismatch',
+        )}
+      </Banner>
+      {check.registered !== null && (
+        <>
+          <p className="muted small">{t('web.bot_buttons_check_registered')}</p>
+          <ul>
+            {check.registered.map((entry) => (
+              <li key={entry.command}>
+                <Ltr>/{entry.command}</Ltr> — {entry.description}
+              </li>
+            ))}
+            {check.registered.length === 0 && <li>{t('web.bot_buttons_sync_none')}</li>}
+          </ul>
+        </>
+      )}
+    </div>
   );
 }

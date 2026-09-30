@@ -722,7 +722,7 @@ export const WEB_FA = {
   'web.bot_secret_not_configured': 'در این نصب تنظیم نشده است',
   'web.bot_menu': 'منوی دستورها',
   'web.bot_menu_current': 'به‌روز',
-  'web.bot_menu_stale': 'قدیمی؛ با botctl telegram register به‌روز می‌شود',
+  'web.bot_menu_stale': 'قدیمی؛ کارگر پس‌زمینه به‌زودی همگام می‌کند (صفحهٔ «دکمه‌های ربات»)',
   'web.bot_menu_unknown': 'نامعلوم',
   'web.bot_id': 'شناسهٔ داخلی',
   'web.bot_stop': 'توقف ربات',
@@ -743,6 +743,10 @@ export const WEB_FA = {
     'توکن جایگزین شد؛ وب‌هوک این نصب با توکن جدید ثبت و از تلگرام بازخوانی و تأیید شد.',
   'web.bot_token_same':
     'این همان توکن ذخیره‌شده است و تغییری نکرد؛ وب‌هوک این نصب دوباره ثبت و از تلگرام بازخوانی و تأیید شد.',
+  // Round P: the command-menu sync a replacement runs afterwards, as a separate result.
+  'web.bot_token_menu_synced': 'منوی دستورها هم با توکن جدید در تلگرام ثبت شد.',
+  'web.bot_token_menu_sync_failed':
+    'توکن و وب‌هوک با موفقیت جایگزین شدند، اما ثبت منوی دستورها ناموفق بود؛ در پس‌زمینه با فاصله دوباره تلاش می‌شود و در صفحهٔ «دکمه‌های ربات» دیده می‌شود.',
   'web.bot_check': 'بررسی زنده با تلگرام',
   'web.bot_check_title': 'پاسخ تلگرام در',
   'web.bot_identity_identified': 'تلگرام توکن را پذیرفت.',
@@ -2760,6 +2764,90 @@ export const WEB_FA = {
   'web.setting_bot_main_menu': 'دکمه‌های منوی اصلی ربات',
   'web.setting_bot_main_menu_desc':
     'ترتیب و نمایش دکمه‌های منوی اصلی ربات؛ در صفحهٔ «دکمه‌های ربات» ویرایش می‌شود.',
+  // Round P: target, appearance slot, the Telegram command menu and its sync per bot.
+  'web.bot_buttons_label_default': 'متن پیش‌فرض:',
+  'web.bot_buttons_target': 'مقصد',
+  'web.bot_buttons_target_hint':
+    'هر دکمه دقیقاً همان دستور واقعی ربات را باز می‌کند که برایش تعریف شده است. مقصد از این صفحه تغییر نمی‌کند و دو دکمه نمی‌توانند یک مقصد داشته باشند.',
+  'web.bot_buttons_slot': 'آیکون معنایی',
+  'web.bot_buttons_slot_default': 'پیش‌فرض',
+  'web.bot_buttons_slot_hint':
+    'آیکون معنایی ارجاعی به بخش «ظاهر ربات» است و صفحه‌ای را که دکمه باز می‌کند تزئین می‌کند؛ روی متن خود دکمه اثری ندارد، چون دکمه‌های کیبورد تلگرام فقط متن ساده می‌پذیرند.',
+  'web.appearance_slot_success': 'موفقیت',
+  'web.appearance_slot_error': 'خطا',
+  'web.appearance_slot_warning': 'هشدار',
+  'web.appearance_slot_info': 'اطلاع',
+  'web.appearance_slot_payment': 'پرداخت',
+  'web.appearance_slot_wallet': 'کیف پول',
+  'web.appearance_slot_purchase': 'خرید',
+  'web.appearance_slot_service': 'سرویس',
+  'web.appearance_slot_trial': 'سرویس تست',
+  'web.appearance_slot_referral': 'زیرمجموعه‌گیری',
+  'web.appearance_slot_support': 'پشتیبانی',
+  'web.appearance_slot_renewal': 'تمدید',
+  'web.appearance_slot_traffic': 'ترافیک',
+  'web.appearance_slot_time': 'زمان',
+  'web.appearance_slot_link': 'پیوند',
+  'web.appearance_slot_active': 'فعال',
+  'web.appearance_slot_inactive': 'غیرفعال',
+  'web.bot_buttons_commands_title': 'منوی دستورهای تلگرام',
+  'web.bot_buttons_commands_hint':
+    'فهرستی که با setMyCommands در تلگرام ثبت می‌شود و کنار دکمهٔ «منو» در چت دیده می‌شود: فقط دستورهای واقعی مشتری، با همان توضیحی که در متن‌ها نوشته‌اید. دستورهای پنل مدیریت هرگز ثبت نمی‌شوند.',
+  'web.bot_buttons_command': 'دستور',
+  'web.bot_buttons_command_description': 'توضیح',
+  'web.bot_buttons_commands_hash': 'شناسهٔ این فهرست:',
+  'web.bot_buttons_command_texts_title': 'توضیح دستورها',
+  'web.bot_buttons_command_texts_hint':
+    'توضیح هر دستور همان است که تلگرام کنار آن نشان می‌دهد. پس از تغییر، فهرست جدید به‌طور خودکار برای هر ربات ثبت می‌شود.',
+  'web.bot_buttons_sync_title': 'همگام‌سازی منوی دستورها',
+  'web.bot_buttons_sync_hint':
+    'وضعیت ثبت منوی دستورها در تلگرام برای هر ربات. همگام‌سازی پس از تغییر متن‌ها، جایگزینی توکن و راه‌اندازی ربات به‌طور خودکار در پس‌زمینه انجام و در صورت خطا با فاصله تکرار می‌شود؛ خطای آن هیچ‌گاه جایگزینی توکن را ناموفق نمی‌کند.',
+  'web.bot_buttons_sync_bot': 'ربات',
+  'web.bot_menu_state_current': 'به‌روز',
+  'web.bot_menu_state_pending': 'در صف همگام‌سازی',
+  'web.bot_menu_state_failing': 'ناموفق؛ در حال تکرار',
+  'web.bot_menu_state_stale': 'قدیمی',
+  'web.bot_menu_state_unknown': 'نامعلوم',
+  'web.bot_menu_state_stopped': 'ربات متوقف است',
+  'web.bot_buttons_sync_version': 'نسخهٔ پیکربندی مطلوب',
+  'web.bot_buttons_sync_last_success': 'آخرین همگام‌سازی موفق',
+  'web.bot_buttons_sync_last_attempt': 'آخرین تلاش',
+  'web.bot_buttons_sync_next_attempt': 'تلاش بعدی',
+  'web.bot_buttons_sync_last_error': 'آخرین خطا',
+  'web.bot_buttons_sync_attempts': 'تلاش‌های ناموفق پیاپی',
+  'web.bot_buttons_sync_never': 'هرگز',
+  'web.bot_buttons_sync_none': 'ندارد',
+  'web.bot_buttons_sync_now': 'همگام‌سازی دوباره',
+  'web.bot_buttons_check_now': 'بررسی وضعیت',
+  'web.bot_buttons_sync_result_synced': 'منوی دستورها در تلگرام ثبت شد.',
+  'web.bot_buttons_sync_result_failed':
+    'ثبت منوی دستورها ناموفق بود؛ در پس‌زمینه با فاصله دوباره تلاش می‌شود.',
+  'web.bot_buttons_sync_result_skipped':
+    'همگام‌سازی انجام نشد: ربات فعال نیست یا همگام‌سازی دیگری در جریان است.',
+  'web.bot_buttons_check_read_match': 'منوی ثبت‌شده در تلگرام دقیقاً همان منوی مطلوب است.',
+  'web.bot_buttons_check_read_mismatch':
+    'منوی ثبت‌شده در تلگرام با منوی مطلوب فرق دارد؛ «همگام‌سازی دوباره» را بزنید.',
+  'web.bot_buttons_check_rejected':
+    'تلگرام توکن ذخیره‌شده را رد کرد؛ توکن را در صفحهٔ «ربات‌ها» جایگزین کنید.',
+  'web.bot_buttons_check_unreachable': 'تلگرام در دسترس نبود؛ کمی بعد دوباره بررسی کنید.',
+  'web.bot_buttons_check_skipped':
+    'فقط ربات فعال بررسی می‌شود؛ از توکن ربات متوقف استفاده نمی‌شود.',
+  'web.bot_buttons_check_registered': 'آنچه تلگرام الان دارد:',
+  'web.bot_buttons_error_unreachable': 'تلگرام در دسترس نبود یا پاسخ نداد.',
+  'web.bot_buttons_error_rate_limited':
+    'تلگرام محدودیت نرخ اعمال کرد؛ تلاش بعدی با فاصله انجام می‌شود.',
+  'web.bot_buttons_error_rejected_token':
+    'تلگرام توکن ذخیره‌شده را رد کرد؛ توکن را در صفحهٔ «ربات‌ها» جایگزین کنید.',
+  'web.bot_buttons_error_rejected_list':
+    'تلگرام فهرست دستورها را نپذیرفت؛ توضیح دستورها را بررسی کنید (نباید خالی یا بلندتر از ۲۵۶ نویسه باشد).',
+  'web.bot_buttons_error_other': 'خطای غیرمنتظره؛ جزئیات در گزارش عملیاتی ثبت شده است.',
+  'web.bot_buttons_no_bots': 'رباتی برای همگام‌سازی نیست.',
+  'web.bot_buttons_sync_stopped_hint':
+    'ربات متوقف است و از توکن آن استفاده نمی‌شود؛ پس از راه‌اندازی، منو به‌طور خودکار همگام می‌شود.',
+  'web.bot_buttons_sync_stale_hint':
+    'فهرست مطلوب با آنچه آخرین بار به تلگرام داده شد فرق دارد؛ کارگر پس‌زمینه به‌زودی آن را در صف می‌گذارد، یا همین حالا «همگام‌سازی دوباره» را بزنید.',
+  'web.bot_buttons_sync_failing_hint':
+    'همگام‌سازی چند بار ناموفق بوده و با فاصلهٔ افزایشی تکرار می‌شود. مشتریان همچنان می‌توانند دستورها را تایپ کنند.',
 
   /*
    * The three states a panel read has to say separately, and the eight reasons.
