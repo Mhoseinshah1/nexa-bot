@@ -197,4 +197,114 @@ the two suites above were run, and the change was restored (script:
 
 ## 6. Part 2 — the page
 
-Recorded here when the page lands on the foundation's kit.
+`apps/web/src/pages/dashboard.tsx` on the foundation's kit, its pure rules in
+`apps/web/src/dashboard-view.ts`, styles only in `styles/pages/dashboard.css` (`dash-*`
+classes; no `style` attribute anywhere — every continuous value is an SVG attribute of a kit
+chart). The sidebar badges come from `useNavCounters()` (`apps/web/src/nav-counters.ts`).
+
+### What is drawn, top to bottom
+
+| Place                                            | Drawn as                                                                                                                                                                                                                         | Source                                                                                                                                                        | Who                                         | Cadence     |
+| ------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- | ----------- |
+| page head                                        | title, subtitle, «آخرین به‌روزرسانی» = the server's `generatedAt`, in the tenant's zone and calendar                                                                                                                             | `summary.period` (owner), else `operations.generatedAt`                                                                                                       | everyone                                    | —           |
+| period control                                   | امروز · ۷ روز · ۳۰ روز · این ماه · دلخواه + «مقایسه با دورهٔ قبل» + تازه‌سازی (re-asks every business figure; withheld after a final answer)                                                                                     | `?range=` (`TODAY`, `LAST_7_DAYS`, `LAST_30_DAYS` default, `THIS_MONTH`, `CUSTOM` + `from`/`to`), `?compare=0`                                                | owner (it changes only owner figures)       | —           |
+| KPI row 1                                        | فروش امروز (+ sales count, hourly sparkline), فروش این ماه (+ count, daily sparkline), سرویس فعال, مشتری جدید (+ sparkline), تمدیدها (+ sparkline from the RENEWAL bars), پرداخت ناموفق (outlined while > 0)                     | `summary.today`, `summary.month`, `activeServices`, `selected.newCustomers`/`newCustomerSeries`, `selected.renewals`/`salesByKind`, `selected.failedPayments` | owner                                       | 60 s        |
+| KPI row 2                                        | سرویس‌های رو به انقضا (N روز), پنل‌های فعال `active / total` (red when a probe says UNREACHABLE/AUTH_FAILED, amber for DEGRADED), صف تحویل (queued; amber while UNKNOWN or UNRECONCILED > 0), فروش در این دوره (count + revenue) | `operations.expiring`, `.panels`, `.provisioning`; `summary.selected.sales`/`revenue`                                                                         | per section permission; the last card owner | 30 s / 60 s |
+| درآمد روزانه (ساعتی/هفتگی/ماهانه by granularity) | current line + area, previous period dashed while comparing; the period total in the head                                                                                                                                        | `selected.revenueSeries`, `selected.revenue`                                                                                                                  | owner                                       | 60 s        |
+| سفارش‌ها و تمدیدها                               | stacked bars: خرید جدید / تمدید / افزودنی                                                                                                                                                                                        | `selected.salesByKind`                                                                                                                                        | owner                                       | 60 s        |
+| سهم روش‌های پرداخت                               | donut of confirmed ORDER payments per method + the exact amounts per currency                                                                                                                                                    | `selected.paymentMethods`                                                                                                                                     | owner                                       | 60 s        |
+| محصولات پرفروش                                   | top 5, by revenue or count, «مشاهدهٔ همه» → `/reports?tab=products`                                                                                                                                                              | `GET /reports/products`                                                                                                                                       | owner                                       | 5 min       |
+| خلاصهٔ خطاها                                     | the WP12 failure strip                                                                                                                                                                                                           | `GET /reports/failures`                                                                                                                                       | owner                                       | 5 min       |
+| سایر شاخص‌های دوره                               | successful orders, new services, trials, new buyers, active customers, top-up (amount, count), discount; «گزارش‌های کامل» → `/reports`                                                                                           | `GET /reports/summary`                                                                                                                                        | owner                                       | 5 min       |
+| توزیع پنل‌ها                                     | health distribution, then by provider — exact counts, one row per PANEL                                                                                                                                                          | `operations.panels`                                                                                                                                           | `panels.view`                               | 30 s        |
+| وضعیت سامانه                                     | readiness dependencies (timing only where reported)                                                                                                                                                                              | `GET /system/readiness`                                                                                                                                       | everyone                                    | 15 s        |
+| نیازمند توجه                                     | open management conditions, first-seen time, the count of the rest (a floor when paged)                                                                                                                                          | `GET /ops-log?scope=MANAGEMENT_CONDITIONS&open=true`                                                                                                          | `opslog.view`                               | 15 s        |
+| sidebar badges                                   | alerts (amber), tickets, panels (red), payments (amber), services = unreconciled + refund requests (red while any is unreconciled); zero or withheld draws nothing                                                               | `GET /nav-counters`, one request                                                                                                                              | per counter permission                      | 60 s        |
+
+**Deltas** are drawn only while comparison is on, worded by the reports' one rule
+(`describeChange`: `—`, «جدید», or a signed percentage from integer arithmetic), and coloured
+by the §2 table through `kpiDelta`'s sense: up-good for revenue, sales, renewals and new
+customers; up-bad for failed payments; no delta at all on a gauge (active services, the fleet,
+the queue, expiring). Today's and this month's deltas carry their like-for-like caption
+(«نسبت به دیروز تا همین ساعت», «نسبت به همین بازهٔ ماه قبل»). The report figures in «سایر
+شاخص‌ها» carry an uncoloured movement, as the report pages do.
+
+**Money** is `formatMoney`/`<Money>` over the exact minor-unit string, in the tenant's sales
+currency; any other currency taken in a window is listed beside it, never summed into it. A
+chart coordinate is the major-unit number, but every number a reader sees (axis, readout,
+hidden table) goes back through the same formatter. Chart axes drop the year from a local date
+(`06/15`); the page names the period.
+
+**States.** Each section is its own `StateSwitch`: a skeleton while loading, the kit's error
+card on failure (a stale-data banner over kept data on a transient failure), and the refusal
+copy on a 403 — the business section on a refused summary; the fleet card when the server
+withheld `panels` although the session believed it held `panels.view` (the permission list
+can be a minute old). A section the viewer does not hold is not drawn and not requested:
+a non-owner never asks for `/dashboard/summary` or any `/reports/*`, and a viewer with neither
+`panels.view` nor `services.view` never asks for `/dashboard/operations`. A CUSTOM range with
+a missing date asks nothing and says to enter both dates.
+
+**Requests.** Switching the period asks for the new summary (and the three report cards);
+switching the comparison asks nothing. The report cards keep `BUSINESS_REFRESH_MS`. Nothing
+polls faster than its constant, and every poll stops on a final answer (`pollUnlessFinal`).
+
+### Omitted, and why
+
+- **24-hour traffic** — no history exists (`services.traffic_used_bytes` is overwritten by
+  each read); drawn nowhere, asserted absent.
+- **Location distribution** — owner revision 2 and no location field in the panel contract.
+- **Recent purchases, busiest panels, monitor process heartbeats, 12-month subscription growth**
+  (reference cards) — no endpoint gives them without either counting a page of rows in the
+  browser (lead decision D2) or inventing a history (active services has none). Orders and
+  the monitor keep their own pages.
+- **The yesterday / previous-month / this-year ranges** on this control — the reference's five
+  presets only; `/reports` keeps all eight. A URL naming another range falls back to 30 days
+  rather than drawing figures for a period no pressed button names.
+- **`/services` badge capping** — a counter is at most `COUNTER_CAP`; the sidebar draws the
+  number, which the §3 note already defines as "that many or more".
+
+### What moved
+
+- `BusinessOverview` (`pages/business.tsx`, COMMERCE-B's file) is no longer mounted on `/`:
+  its range picker, KPI grid and trend chart are replaced by the period control, the KPI rows
+  and the two charts above; its top-products and failure cards are redrawn here compactly
+  over the same report endpoints. The export is left in place for its owner to remove.
+- The panel cards no longer walk one page of `GET /panels`, so the partial-fleet caveat and
+  its copy are gone; `docs/phase3d-falsification.md` R-01, V5 and W11 cite tests that now pin
+  the exact-count successors of those rules (same names, `dashboard.test.tsx` › "the dashboard
+  fleet").
+- The WP12 dashboard assertions left `reports.test.tsx` for `dashboard.test.tsx`; the two
+  pure report rules they also held (range from the URL, the five-minute cadence) stay there.
+
+### Tests and falsification
+
+`tests/web/dashboard.test.tsx` (31 tests; real API client and schemas, `fetch` stubbed):
+exact money and no abbreviation; delta wording and colour by sense; the period switch asks
+for the reports' range; CUSTOM asks nothing until both dates, then sends them; the comparison
+toggle removes deltas and the dashed line and asks nothing; null buckets draw no bar; the
+report cards and their links; omitted and withheld sections absent; the 403 refusal state;
+no `style` attribute anywhere in the document; the 60 s / 30 s / 5 min cadences; the refresh button re-asks every business figure and is withheld after a refusal; the non-owner
+view asks for no business figure; the fleet outline; withheld fleet → refusal; the attention
+card's scope and first-seen time; the pure rules (`dashboardSelection`, `compareFromRoute`,
+`kpiDelta`, `axisLabel`, the slices); the nav-counter mapping. `tests/web/csp.test.tsx` and
+`tests/web/permissions-and-refresh.test.tsx` now stub `/dashboard/operations` in place of
+`/panels`. `pnpm web:shots /` renders from `tests/web/shots/fixtures/dashboard.ts` (a
+deterministic, internally summed Tehran month around `SHOT_NOW`), with no WARN.
+
+Mutation record (each reverted alone, `dashboard.test.tsx` + `reports.test.tsx` run, restored):
+
+| #   | Mutation                                                   | Failed                                                                                                                     |
+| --- | ---------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| P1  | up-bad coloured as up-good (`kpiDelta`)                    | colours a movement by what it means; words and colours a delta                                                             |
+| P2  | the comparison in the summary's query key                  | turns the comparison off without asking again                                                                              |
+| P3  | the summary polled at the gauges' 30 s                     | re-reads the summary once a minute and the gauges every thirty seconds                                                     |
+| P4  | a withheld fleet not treated as a refusal                  | says so when the server withheld a section the session believed it held                                                    |
+| P5  | a zero counter drawn                                       | draws nothing for a withheld counter or a zero                                                                             |
+| P6  | any report range accepted by the dashboard                 | asks for the five offered ranges only                                                                                      |
+| P7  | the summary asked for without the owner standing           | draws the operational figures, and asks for no business figure; asks for no operational section it holds no permission for |
+| P8  | a bucket not begun drawn as zero                           | breaks the sales down by kind, and a bucket not yet begun draws nothing                                                    |
+| P9  | a gauge given a delta                                      | colours a movement by what it means; turns the comparison off                                                              |
+| P10 | a CUSTOM range asked before both dates (`rangeIsComplete`) | asks nothing for a custom range until both dates are applied                                                               |
+| P11 | the services badge not loud for unreconciled services      | places each counter beside the link that acts on it                                                                        |
+| P12 | deltas drawn whatever the comparison                       | turns the comparison off without asking again                                                                              |
+| P13 | the refresh button drawn over a refused summary            | draws no refresh over a refused summary                                                                                    |
