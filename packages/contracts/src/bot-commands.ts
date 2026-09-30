@@ -41,6 +41,13 @@ export const BOT_COMMANDS = [
    * requires, and that screen links here.
    */
   { command: 'tickets', description: 'bot.command.tickets' },
+  /*
+   * Round N close (§D): the promotional opt-out. `/stop` is the command Telegram users
+   * already know for "stop messaging me"; it stops MARKETING broadcasts and nothing else —
+   * a payment, service or support notice is a fact about their own account and still
+   * arrives. Opting back in is the button on the reply and on the support screen.
+   */
+  { command: 'stop', description: 'bot.command.stop' },
 ] as const;
 
 export type BotCommandName = (typeof BOT_COMMANDS)[number]['command'];

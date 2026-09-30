@@ -1917,6 +1917,12 @@ export const customerSummarySchema = z.object({
    * Shown so an operator can tell the two apart (WP10G).
    */
   blockedReasonShown: z.boolean(),
+  /**
+   * Round N close (§D): when the customer opted out of promotional broadcasts (`/stop`),
+   * null while they receive them. Read-only here: the customer decides it on Telegram, and
+   * it governs MARKETING broadcasts only — never a transactional notification.
+   */
+  marketingOptOutAt: z.iso.datetime().nullable(),
 });
 export type CustomerSummaryResponse = z.infer<typeof customerSummarySchema>;
 

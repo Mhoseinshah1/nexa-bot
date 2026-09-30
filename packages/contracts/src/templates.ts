@@ -9869,6 +9869,45 @@ export const TEMPLATES = [
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
+  // --- Round N close: the promotional opt-out (docs/round-n-close-audit.md §D) -------------
+  {
+    key: 'bot.command.stop',
+    description:
+      'Round N close: the one-line description Telegram shows beside /stop, the promotional opt-out.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.marketing.opted_out',
+    description:
+      'Round N close: answers /stop. The customer will receive no promotional broadcast; notices ' +
+      'about their own payments, services and tickets still arrive. Carries the opt-in button.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.marketing.opted_in',
+    description:
+      'Round N close: answers the opt-in button. The customer receives promotional broadcasts again.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.marketing.opt_out_button',
+    description:
+      'Round N close: the button on the support screen that opts the customer out of promotional ' +
+      'broadcasts (the same as /stop).',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
+    key: 'bot.marketing.opt_in_button',
+    description:
+      'Round N close: the button, on the opted-out reply and on the support screen, that opts the ' +
+      'customer back into promotional broadcasts.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
   {
     key: 'bot.menu.tickets',
     description:
