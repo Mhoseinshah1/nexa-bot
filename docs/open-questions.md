@@ -2627,6 +2627,15 @@ accept a frozen member list; their `customerIds` definition is capped at 100
 
 UNRESOLVED. Safe (never a different set), not live, in that one failure case.
 
+## OQ-P-MENU-01 — does a BotFather token revocation keep the bot's command list?
+
+The Bot API documents `setMyCommands` and `getMyCommands` per bot and says nothing about a
+revocation. Round P re-registers the menu with the new token after every replacement
+(`docs/command-menu-audit.md` D6), so the answer changes only whether that call was needed.
+`OQ-WP13-02` is the same question about the webhook.
+
+UNRESOLVED. A real bot's «بررسی وضعیت» after a revocation answers it per installation.
+
 ## OQ-FX-01 — Telegram publishes no canonical Star↔USDT merchant rate
 
 Round P, package FX-STARS. Telegram's Bot API documents Stars as the currency `XTR` and

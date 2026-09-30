@@ -447,3 +447,16 @@ What a crash cannot cover: a process that dies between `setWebhook` and the stor
 transaction leaves Telegram registered here and the old token stored, with the claim held
 until its lease lapses — inbound updates are held for that long, not lost. Submitting the
 token again after that converges.
+
+---
+
+## 8. Round P amendment — the command menu is the sync lane's
+
+`docs/command-menu-audit.md`. Two rows of §3's "not offered" table are superseded:
+"re-register the command menu" is now the Web Admin's «همگام‌سازی دوباره» on «دکمه‌های ربات»,
+and the menu is registered per bot by a worker lane after a token replacement, a bot
+start, or a reworded `bot.command.*` text. `commandsRevision()` left the gateway; the digest
+is `CommandMenu`'s. `botctl telegram register` still reconciles, through the same evaluator.
+A replacement's answer carries `commandSync` as a SEPARATE result: the token and the webhook
+remain the success criterion, and a menu that could not be registered is a warning the lane
+retries.

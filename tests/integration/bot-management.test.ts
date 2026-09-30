@@ -431,12 +431,23 @@ describe('WP13 bot management', () => {
           calls.push('removeWebhook');
           return { outcome: 'REMOVED' };
         },
-        commandsRevision: () => 'integration-revision',
       };
       const c = api.container;
       deps = {
         repository: new DrizzleBotManagementRepository(c.database.db, c.cipher, c.botInstances),
         telegram,
+        // Round P: the real menu (templates from the database) and a sync stubbed at the
+        // port — this half of the file never reaches a socket. `bot-command-sync.test.ts`
+        // runs the real lane against the HTTP fake.
+        commandMenu: c.commandMenu,
+        commandSync: {
+          requestSync: async () => undefined,
+          syncNow: async (_scope, botId) => ({
+            botInstanceId: botId,
+            outcome: 'SKIPPED',
+            errorCode: null,
+          }),
+        },
         guard: c.guard,
         uow: c.uow,
         audit: c.audit,
@@ -641,8 +652,9 @@ describe('WP13 bot management', () => {
             return { outcome: 'REGISTERED' };
           },
           removeWebhook: async () => ({ outcome: 'REMOVED' }),
-          commandsRevision: () => 'integration-revision',
         },
+        commandMenu: c.commandMenu,
+        commandSync: deps.commandSync,
         guard: c.guard,
         uow: c.uow,
         audit: c.audit,

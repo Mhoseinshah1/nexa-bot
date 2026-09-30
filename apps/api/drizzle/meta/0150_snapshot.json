@@ -1,6 +1,6 @@
 {
-  "id": "f565a7fb-0895-4604-9ebf-861f6e5522a5",
-  "prevId": "276b9bbd-1957-4175-9e7b-98981c3db9b8",
+  "id": "d3960647-6ad6-40a7-aa89-b61316b56f06",
+  "prevId": "f565a7fb-0895-4604-9ebf-861f6e5522a5",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -6631,6 +6631,255 @@
       },
       "isRLSEnabled": false
     },
+    "public.fx_quotes": {
+      "name": "fx_quotes",
+      "schema": "",
+      "columns": {
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "base_asset": {
+          "name": "base_asset",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "quote_currency": {
+          "name": "quote_currency",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "rate_mantissa": {
+          "name": "rate_mantissa",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "rate_scale": {
+          "name": "rate_scale",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "source": {
+          "name": "source",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "source_at": {
+          "name": "source_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "fetched_at": {
+          "name": "fetched_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "quote_id": {
+          "name": "quote_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "policy_version": {
+          "name": "policy_version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "refresh_claimed_until": {
+          "name": "refresh_claimed_until",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "refresh_claim_token": {
+          "name": "refresh_claim_token",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_attempt_at": {
+          "name": "last_attempt_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_error_code": {
+          "name": "last_error_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "fx_quotes_tenant_id_tenants_id_fk": {
+          "name": "fx_quotes_tenant_id_tenants_id_fk",
+          "tableFrom": "fx_quotes",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "fx_quotes_pk": {
+          "name": "fx_quotes_pk",
+          "columns": [
+            "tenant_id",
+            "base_asset",
+            "quote_currency"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "fx_quotes_base_asset_check": {
+          "name": "fx_quotes_base_asset_check",
+          "value": "base_asset IN ('USDT')"
+        },
+        "fx_quotes_quote_currency_check": {
+          "name": "fx_quotes_quote_currency_check",
+          "value": "quote_currency IN ('IRT', 'IRR')"
+        },
+        "fx_quotes_source_check": {
+          "name": "fx_quotes_source_check",
+          "value": "source IS NULL OR source IN ('NOBITEX', 'WALLEX')"
+        },
+        "fx_quotes_quote_check": {
+          "name": "fx_quotes_quote_check",
+          "value": "(quote_id IS NULL) = (rate_mantissa IS NULL)\n          AND (quote_id IS NULL) = (rate_scale IS NULL)\n          AND (quote_id IS NULL) = (source IS NULL)\n          AND (quote_id IS NULL) = (fetched_at IS NULL)\n          AND (quote_id IS NULL) = (policy_version IS NULL)\n          AND (rate_mantissa IS NULL OR rate_mantissa > 0)\n          AND (rate_scale IS NULL OR rate_scale BETWEEN 0 AND 8)\n          AND (quote_id IS NULL OR length(quote_id) BETWEEN 1 AND 96)\n          AND (last_error_code IS NULL OR length(last_error_code) BETWEEN 1 AND 64)\n          AND (refresh_claim_token IS NULL OR length(refresh_claim_token) BETWEEN 1 AND 64)\n          AND (refresh_claimed_until IS NULL) = (refresh_claim_token IS NULL)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.fx_source_states": {
+      "name": "fx_source_states",
+      "schema": "",
+      "columns": {
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source": {
+          "name": "source",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "last_success_at": {
+          "name": "last_success_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_failure_at": {
+          "name": "last_failure_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_failure_code": {
+          "name": "last_failure_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "retry_after": {
+          "name": "retry_after",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "consecutive_failures": {
+          "name": "consecutive_failures",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "fx_source_states_tenant_id_tenants_id_fk": {
+          "name": "fx_source_states_tenant_id_tenants_id_fk",
+          "tableFrom": "fx_source_states",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "fx_source_states_pk": {
+          "name": "fx_source_states_pk",
+          "columns": [
+            "tenant_id",
+            "source"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "fx_source_states_source_check": {
+          "name": "fx_source_states_source_check",
+          "value": "source IN ('NOBITEX', 'WALLEX')"
+        },
+        "fx_source_states_failures_check": {
+          "name": "fx_source_states_failures_check",
+          "value": "consecutive_failures >= 0"
+        },
+        "fx_source_states_failure_code_check": {
+          "name": "fx_source_states_failure_code_check",
+          "value": "last_failure_code IS NULL OR length(last_failure_code) BETWEEN 1 AND 64"
+        }
+      },
+      "isRLSEnabled": false
+    },
     "public.gateway_invoices": {
       "name": "gateway_invoices",
       "schema": "",
@@ -6881,6 +7130,97 @@
           "primaryKey": false,
           "notNull": false
         },
+        "conversion_policy": {
+          "name": "conversion_policy",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'SAME_UNIT'"
+        },
+        "fx_quote_id": {
+          "name": "fx_quote_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "fx_source": {
+          "name": "fx_source",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "fx_base_asset": {
+          "name": "fx_base_asset",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "fx_quote_currency": {
+          "name": "fx_quote_currency",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "fx_rate_mantissa": {
+          "name": "fx_rate_mantissa",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "fx_rate_scale": {
+          "name": "fx_rate_scale",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "fx_source_at": {
+          "name": "fx_source_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "fx_fetched_at": {
+          "name": "fx_fetched_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "fx_quote_state": {
+          "name": "fx_quote_state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "fx_policy_version": {
+          "name": "fx_policy_version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "fx_unit_ratio_mantissa": {
+          "name": "fx_unit_ratio_mantissa",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "fx_unit_ratio_scale": {
+          "name": "fx_unit_ratio_scale",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "fx_effective_rate_numerator": {
+          "name": "fx_effective_rate_numerator",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "fx_effective_rate_denominator": {
+          "name": "fx_effective_rate_denominator",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -7072,6 +7412,30 @@
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {
+        "gateway_invoices_conversion_policy_check": {
+          "name": "gateway_invoices_conversion_policy_check",
+          "value": "conversion_policy IN ('SAME_UNIT', 'FIXED_RATE', 'CENTRAL_FX')"
+        },
+        "gateway_invoices_fx_source_check": {
+          "name": "gateway_invoices_fx_source_check",
+          "value": "fx_source IS NULL OR fx_source IN ('NOBITEX', 'WALLEX')"
+        },
+        "gateway_invoices_fx_base_asset_check": {
+          "name": "gateway_invoices_fx_base_asset_check",
+          "value": "fx_base_asset IS NULL OR fx_base_asset IN ('USDT')"
+        },
+        "gateway_invoices_fx_quote_currency_check": {
+          "name": "gateway_invoices_fx_quote_currency_check",
+          "value": "fx_quote_currency IS NULL OR fx_quote_currency IN ('IRT', 'IRR')"
+        },
+        "gateway_invoices_fx_quote_state_check": {
+          "name": "gateway_invoices_fx_quote_state_check",
+          "value": "fx_quote_state IS NULL OR fx_quote_state IN ('FRESH', 'STALE_ALLOWED')"
+        },
+        "gateway_invoices_fx_snapshot_check": {
+          "name": "gateway_invoices_fx_snapshot_check",
+          "value": "(conversion_policy = 'FIXED_RATE') = (conversion_rate_minor IS NOT NULL)\n          AND (conversion_policy = 'CENTRAL_FX') = (fx_quote_id IS NOT NULL)\n          AND (fx_quote_id IS NULL) = (fx_source IS NULL)\n          AND (fx_quote_id IS NULL) = (fx_base_asset IS NULL)\n          AND (fx_quote_id IS NULL) = (fx_quote_currency IS NULL)\n          AND (fx_quote_id IS NULL) = (fx_rate_mantissa IS NULL)\n          AND (fx_quote_id IS NULL) = (fx_rate_scale IS NULL)\n          AND (fx_quote_id IS NULL) = (fx_fetched_at IS NULL)\n          AND (fx_quote_id IS NULL) = (fx_quote_state IS NULL)\n          AND (fx_quote_id IS NULL) = (fx_policy_version IS NULL)\n          AND (fx_quote_id IS NULL) = (fx_unit_ratio_mantissa IS NULL)\n          AND (fx_quote_id IS NULL) = (fx_unit_ratio_scale IS NULL)\n          AND (fx_quote_id IS NULL) = (fx_effective_rate_numerator IS NULL)\n          AND (fx_quote_id IS NULL) = (fx_effective_rate_denominator IS NULL)\n          AND (fx_rate_mantissa IS NULL OR fx_rate_mantissa > 0)\n          AND (fx_rate_scale IS NULL OR fx_rate_scale BETWEEN 0 AND 8)\n          AND (fx_unit_ratio_mantissa IS NULL OR fx_unit_ratio_mantissa > 0)\n          AND (fx_unit_ratio_scale IS NULL OR fx_unit_ratio_scale BETWEEN 0 AND 4)\n          AND (fx_effective_rate_numerator IS NULL OR fx_effective_rate_numerator > 0)\n          AND (fx_effective_rate_denominator IS NULL OR fx_effective_rate_denominator > 0)\n          AND (fx_quote_id IS NULL OR length(fx_quote_id) BETWEEN 1 AND 96)"
+        },
         "gateway_invoices_provider_check": {
           "name": "gateway_invoices_provider_check",
           "value": "provider IN ('MANUAL_TRANSFER', 'TONPAYS', 'TELEGRAM_STARS')"
@@ -7098,7 +7462,7 @@
         },
         "gateway_invoices_stars_snapshot_check": {
           "name": "gateway_invoices_stars_snapshot_check",
-          "value": "provider <> 'TELEGRAM_STARS' OR (bot_instance_id IS NOT NULL AND conversion_rate_minor IS NOT NULL AND provider_unit = 'XTR')"
+          "value": "provider <> 'TELEGRAM_STARS' OR (bot_instance_id IS NOT NULL AND conversion_policy IN ('FIXED_RATE', 'CENTRAL_FX') AND provider_unit = 'XTR')"
         },
         "gateway_invoices_sent_amount_check": {
           "name": "gateway_invoices_sent_amount_check",

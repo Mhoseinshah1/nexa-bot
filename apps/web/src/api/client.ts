@@ -336,6 +336,14 @@ import {
   type BotMutationResponse,
   type BotTokenReplacementResponse,
   type BotOperatorStatus,
+  // Round P: the bot's menu and its command-menu sync.
+  BOT_MENU_ROUTES,
+  botMenuConfigResponseSchema,
+  checkBotMenuResponseSchema,
+  syncBotMenuResponseSchema,
+  type BotMenuConfigResponse,
+  type CheckBotMenuResponse,
+  type SyncBotMenuResponse,
   paymentAccountListResponseSchema,
   paymentAccountResponseSchema,
   type PaymentAccountListResponse,
@@ -3010,6 +3018,28 @@ export function replaceBotToken(input: {
 /** Ask Telegram what it holds for this bot. A read; nothing is stored. */
 export function checkBot(id: string): Promise<BotDiagnosticResponse> {
   return post(BOT_ROUTES.diagnostics(id), {}, botDiagnosticResponseSchema);
+}
+
+// --- The bot's menu (round P) -------------------------------------------------
+
+/** Every main-menu item with the keyboard's own decision about it, the command list, and each bot's sync state. */
+export function fetchBotMenu(): Promise<BotMenuConfigResponse> {
+  return authedGet(BOT_MENU_ROUTES.config, botMenuConfigResponseSchema);
+}
+
+/** Resync: register the command menu now, on one bot or every active one. */
+export function syncBotMenu(input: {
+  idempotencyKey: string;
+  botInstanceId: string | null;
+}): Promise<SyncBotMenuResponse> {
+  return post(BOT_MENU_ROUTES.sync, input, syncBotMenuResponseSchema);
+}
+
+/** Check: read what Telegram holds against the desired list. Nothing is stored. */
+export function checkBotMenu(input: {
+  botInstanceId: string | null;
+}): Promise<CheckBotMenuResponse> {
+  return post(BOT_MENU_ROUTES.check, input, checkBotMenuResponseSchema);
 }
 
 // --- The operations log group (WP-A4) -----------------------------------------

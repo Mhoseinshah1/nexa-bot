@@ -13,6 +13,7 @@ import type {
   BotBootstrapRepository,
   BotBootstrapTelegram,
   BotBootstrapView,
+  BotCommandsRegistration,
   BotIdentityProbe,
   WebhookRegistration,
 } from '../../apps/api/src/modules/platform/tenancy/application/ports';
@@ -224,18 +225,22 @@ class FakeTelegram implements BotBootstrapTelegram {
     return this.probe;
   }
 
-  /** The digest of the menu this fake would send. Changing it is a release that added a command. */
+  /**
+   * The digest of the menu the fake `CommandMenu` (below, in `build`) answers. Changing it
+   * is a release that added a command, or an operator who reworded a description.
+   */
   revision = 'rev-1';
 
-  commandsRevision(): string {
-    return this.revision;
-  }
-
-  async registerCommands(input: { readonly token: string }): Promise<boolean> {
+  async registerCommands(input: {
+    readonly token: string;
+    readonly commands: readonly { command: string; description: string }[];
+  }): Promise<BotCommandsRegistration> {
     // Same rule as every other call here: never inside a transaction.
     expect(currentTransactionLabel()).toBeUndefined();
     this.commandCalls.push(input.token);
-    return this.commandsRegister;
+    return this.commandsRegister
+      ? { outcome: 'REGISTERED' }
+      : { outcome: 'UNREACHABLE', code: 'telegram.unreachable' };
   }
 
   async registerWebhook(input: {
@@ -350,6 +355,13 @@ function build(overrides: Partial<BotBootstrapDeps> = {}): {
       },
     },
     telegram,
+    // Round P: the desired menu, whose digest the fake gateway's `revision` stands for.
+    commandMenu: {
+      desiredFor: async () => ({
+        entries: [{ command: 'start', description: 'شروع' }],
+        hash: telegram.revision,
+      }),
+    },
     webhookSecret: () => SECRET,
     webhookEnabled: () => true,
     telegramCallTimeoutMs: 10_000,

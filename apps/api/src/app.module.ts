@@ -25,6 +25,7 @@ import { WalletController } from './surfaces/web/wallet.controller.js';
 import { PaymentsController } from './surfaces/web/payments.controller.js';
 import { PaymentAccountsController } from './surfaces/web/payment-accounts.controller.js';
 import { BotsController } from './surfaces/web/bots.controller.js';
+import { BotMenuController } from './surfaces/web/bot-menu.controller.js';
 import { OpsGroupController } from './surfaces/web/ops-group.controller.js';
 import { PaymentGatewaysController } from './surfaces/web/payment-gateways.controller.js';
 import { FxController } from './surfaces/web/fx.controller.js';
@@ -98,6 +99,8 @@ export class AppModule implements NestModule {
         PaymentsController as never,
         PaymentAccountsController as never,
         BotsController as never,
+        // Round P: the bot's menu and its command-menu sync.
+        BotMenuController as never,
         OpsGroupController as never,
         PaymentGatewaysController as never,
         // Package FX: the central exchange rate's status and manual refresh.

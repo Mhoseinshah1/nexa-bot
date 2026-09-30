@@ -128,7 +128,13 @@ describe('the Bots page', () => {
       listRoute(),
       {
         url: `/bots/${BOT_ID}/token`,
-        body: { bot: bot(), installation, changed: true, verification: verified },
+        body: {
+          bot: bot(),
+          installation,
+          changed: true,
+          verification: verified,
+          commandSync: null,
+        },
       },
     ]);
     const { container, rerender } = renderPage(page({ mayOperate: true }));
@@ -308,7 +314,13 @@ describe('the Bots page', () => {
       diagnosticRoute,
       {
         url: `/bots/${BOT_ID}/token`,
-        body: { bot: bot(), installation, changed: true, verification: verified },
+        body: {
+          bot: bot(),
+          installation,
+          changed: true,
+          verification: verified,
+          commandSync: null,
+        },
       },
     ]);
     const { container } = renderPage(page({ mayOperate: true, mayReplaceToken: true }));
@@ -335,7 +347,13 @@ describe('the Bots page', () => {
       listRoute(),
       {
         url: `/bots/${BOT_ID}/token`,
-        body: { bot: bot(), installation, changed: true, verification: verified },
+        body: {
+          bot: bot(),
+          installation,
+          changed: true,
+          verification: verified,
+          commandSync: null,
+        },
       },
     ]);
     const { container } = renderPage(page({ mayReplaceToken: true }));

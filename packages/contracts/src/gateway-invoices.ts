@@ -171,7 +171,7 @@ const gatewayInvoiceViewShape = z.object({
 /**
  * The view with its policy always present: what the previous release sent without one is
  * a fixed-rate attempt exactly when it carries a rate, and a same-unit one otherwise —
- * the same inference migration 0149 backfilled into the rows.
+ * the same inference migration 0150 backfilled into the rows.
  */
 export const gatewayInvoiceViewSchema = gatewayInvoiceViewShape.transform((view) => ({
   ...view,

@@ -1578,10 +1578,40 @@ composed. So while a release without campaigns runs:
 
 Nothing needs doing before rolling back past C1.
 
+### What a rollback leaves queued: the command-menu sync (round P)
+
+Round P (`docs/command-menu-audit.md`) adds one table, `bot_command_syncs` (migration
+`0149_command_menu_sync`), and widens the `bot.main_menu` setting's entries with an optional
+`target` and `appearanceSlot`. The Telegram command menu is now registered per bot by a
+worker lane — after a description is reworded, a token replaced or a bot started — and
+`bot_instances.commands_revision` keeps meaning what it meant: the digest of what Telegram
+was last given. While the release before round P runs:
+
+- **Telegram keeps whatever menu was last registered.** The old release registers the
+  SHARED default descriptions again only when its own digest differs from the stored one,
+  which it does exactly when a tenant had reworded a `bot.command.*` text under round P:
+  `botctl update` / `rollback` then reconcile the menu back to the defaults. Nothing is
+  lost — the override is a template row, and the lane re-registers it on the roll-forward.
+- **The sync rows are left alone.** The old release neither reads nor writes
+  `bot_command_syncs`; a row queued before the rollback is picked up by the lane after the
+  roll-forward, with its back-off where it stood.
+- **A `bot.main_menu` value saved by round P still parses** on the old release: the
+  schema's `.strict()` refuses unknown keys, so an entry carrying `target` or
+  `appearanceSlot` is REFUSED by the old schema and the setting resolver reports the stored
+  value invalid — the keyboard falls back to the default arrangement (every button, its
+  declared order) until the roll-forward, exactly as R1's rollback note describes for an
+  unreadable value. The stored value is kept and comes back with the roll-forward. To keep
+  an operator's order during the rollback, save the arrangement once on the old release's
+  «دکمه‌های ربات» page.
+- **The token replacement answers without `commandSync`**, and the bots page's STALE hint
+  names `botctl telegram register` again.
+
+Nothing needs doing before rolling back past round P.
+
 ### What a rollback leaves running: the central exchange rate (round P, package FX)
 
 Package FX (`docs/fx-audit.md`) adds two tables, `fx_quotes` and `fx_source_states`, and
-snapshot columns on `gateway_invoices` (migration `0149_round_p_fx`): a NOT NULL
+snapshot columns on `gateway_invoices` (migration `0150_round_p_fx`): a NOT NULL
 `conversion_policy` with a default, backfilled from the rows the previous release wrote,
 and nullable `fx_*` columns. It only adds, and the snapshot-guard trigger it widens still
 freezes every column the previous release froze. So while a release without the package
@@ -1599,7 +1629,7 @@ runs:
   and cannot be. This is the one behaviour that silently changes across the rollback, and
   it is the conservative direction — the operator's own figure. The old release's INSERT
   carries the rate and no policy, so it arrives with the column's default beside a rate —
-  the combination the snapshot CHECK refuses; a BEFORE INSERT trigger in 0149 infers
+  the combination the snapshot CHECK refuses; a BEFORE INSERT trigger in 0150 infers
   `FIXED_RATE` for it, exactly as the backfill did for the rows already there. Without
   that trigger every Stars attempt on the old replica failed, during the rolling deploy
   as well as after a rollback (Codex review of #122, P1).

@@ -308,6 +308,19 @@ export type BotDiagnostic = z.infer<typeof botDiagnosticSchema>;
  */
 export const botTokenReplacementResponseSchema = botMutationResponseSchema.extend({
   verification: botDiagnosticSchema.nullable(),
+  /**
+   * Round P — the command-menu sync the replacement ran AFTER the token was stored, as a
+   * SEPARATE result. The token and the webhook are the success criterion; a menu that
+   * could not be registered is a recoverable warning the sync lane retries, never a
+   * failed replacement. Null on a replay (the first answer is remembered before the sync
+   * runs) and on a result stored before this field existed.
+   */
+  commandSync: z
+    .object({
+      outcome: z.enum(['SYNCED', 'FAILED', 'SKIPPED']),
+      errorCode: z.string().max(128).nullable(),
+    })
+    .nullable(),
 });
 export type BotTokenReplacementResponse = z.infer<typeof botTokenReplacementResponseSchema>;
 

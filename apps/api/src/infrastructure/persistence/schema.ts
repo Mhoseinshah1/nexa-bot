@@ -549,6 +549,60 @@ export const botInstances = pgTable(
   ],
 );
 
+/**
+ * Round P (COMMAND-MENU) — one bot's slash-command sync state (`docs/command-menu-audit.md`).
+ *
+ * What Telegram was LAST GIVEN stays `bot_instances.commands_revision`, the one column the
+ * installer's reconcile and the Web Admin's menu state already read; this row is the lane's
+ * bookkeeping beside it. `desired_hash` is the digest of the menu the tenant wants now —
+ * `BOT_COMMANDS` rendered through the tenant's own `bot.command.*` texts — and the sync is
+ * due exactly while `next_attempt_at` is set. A NULL `next_attempt_at` means nothing is
+ * queued, whatever `attempts` says: the counter is what the back-off and the operational
+ * warning read, and it is reset by a success and by the operator's «همگام‌سازی دوباره».
+ *
+ * `claimed_until` is a lease, taken by conditional UPDATE, because the `setMyCommands` call
+ * cannot run inside a transaction and two worker replicas on a rolling update is the normal
+ * case. A process that dies mid-call leaves a claim that lapses, and the next tick retries.
+ *
+ * `last_error_code` is a CODE (`telegram.unreachable`, `telegram.rate_limited`,
+ * `telegram.rejected.401`), bounded, and never Telegram's description: the description
+ * quotes the request URL, and the bot token is a segment of it.
+ */
+export const botCommandSyncs = pgTable(
+  'bot_command_syncs',
+  {
+    botInstanceId: uuid('bot_instance_id')
+      .primaryKey()
+      .references(() => botInstances.id),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    desiredHash: text('desired_hash').notNull(),
+    /** Moves on each time `desired_hash` changes. What the Web Admin shows as the version. */
+    desiredVersion: integer('desired_version').notNull().default(1),
+    lastSyncedAt: timestamptz('last_synced_at'),
+    lastAttemptedAt: timestamptz('last_attempted_at'),
+    lastErrorCode: text('last_error_code'),
+    /** Consecutive failures since the last success or reset. */
+    attempts: integer('attempts').notNull().default(0),
+    /** When the next attempt is due; NULL when none is queued. */
+    nextAttemptAt: timestamptz('next_attempt_at'),
+    /** The lease a running attempt holds; NULL when none does. */
+    claimedUntil: timestamptz('claimed_until'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    index('bot_command_syncs_tenant_idx').on(table.tenantId),
+    // The lane's claim query: due rows only, so the index stays the size of the backlog.
+    index('bot_command_syncs_due_idx')
+      .on(table.nextAttemptAt)
+      .where(sql`next_attempt_at IS NOT NULL`),
+    check('bot_command_syncs_attempts_check', sql`attempts >= 0`),
+    check('bot_command_syncs_version_check', sql`desired_version >= 1`),
+  ],
+);
+
 // ---------------------------------------------------------------------------
 // Eventing — the transactional outbox
 // ---------------------------------------------------------------------------
@@ -3894,7 +3948,7 @@ export const gatewayInvoices = pgTable(
     providerChargeId: text('provider_charge_id'),
     /**
      * How `sent_amount` was derived from the payable (package FX, `fx.ts`). The previous
-     * release's rows are backfilled by migration 0149: `FIXED_RATE` where a rate is
+     * release's rows are backfilled by migration 0150: `FIXED_RATE` where a rate is
      * snapshotted, `SAME_UNIT` otherwise. Frozen by the snapshot guard.
      */
     conversionPolicy: text('conversion_policy').notNull().default('SAME_UNIT'),
