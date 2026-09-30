@@ -1,0 +1,150 @@
+import { act } from 'react';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { App } from '../../apps/web/src/app';
+import { navigate } from '../../apps/web/src/router';
+import { t } from '../../apps/web/src/i18n/web.fa';
+import { renderPage, stubApi } from './harness';
+
+/**
+ * The shell the owner's reference defines: sidebar, topbar, command search.
+ * What is pinned is behaviour an operator relies on — which pages the search
+ * offers, what is remembered, and that changing the theme does not throw away
+ * the page they are on.
+ */
+
+const session = (permissions: readonly string[]) => ({
+  url: '/auth/session',
+  body: {
+    admin: {
+      id: '01a05e35-c9ad-7e93-bef3-1ed9b55292c8',
+      username: 'sara',
+      displayName: 'سارا احمدی',
+      status: 'ACTIVE',
+      telegramUserId: null,
+      roleKeys: ['operator'],
+      createdAt: '2026-01-01T00:00:00.000Z',
+      lastLoginAt: '2026-09-06T08:00:00.000Z',
+    },
+    permissions,
+    expiresAt: '2026-09-07T08:00:00.000Z',
+  },
+});
+
+const INFO = {
+  url: '/health/info',
+  body: {
+    name: 'nexa-bot',
+    version: '0.4.0',
+    commit: '7ba1837e6c2d4a1b9f0e3c5d7a8b9c0d1e2f3a4b',
+    buildTime: '2026-09-04T08:00:00.000Z',
+    nodeVersion: 'v22.11.0',
+    environment: 'staging',
+  },
+};
+
+beforeEach(() => {
+  window.localStorage.clear();
+  act(() => navigate('/', { replace: true, force: true }));
+});
+
+afterEach(() => {
+  window.localStorage.clear();
+});
+
+describe('the command search', () => {
+  it('offers exactly the pages the sidebar offers this actor, and goes there', async () => {
+    stubApi([session(['users.view', 'orders.view'])]);
+    renderPage(<App />);
+    await screen.findByRole('navigation', { name: t('web.nav_label') });
+
+    fireEvent.keyDown(window, { key: 'k', ctrlKey: true });
+    const dialog = screen.getByRole('dialog', { name: t('web.search_label') });
+    const options = () =>
+      within(dialog)
+        .queryAllByRole('option')
+        .map((o) => o.textContent ?? '');
+    // Dashboard, users, orders, providers and system need no more than a session.
+    expect(options().some((o) => o.includes(t('web.nav_users')))).toBe(true);
+    expect(options().some((o) => o.includes(t('web.nav_orders')))).toBe(true);
+    // A page this actor may not see is not offered, however it is searched for.
+    expect(options().some((o) => o.includes(t('web.nav_panels')))).toBe(false);
+
+    const input = within(dialog).getByRole('combobox');
+    fireEvent.change(input, { target: { value: t('web.nav_orders') } });
+    expect(options()).toHaveLength(1);
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(window.location.pathname).toBe('/orders');
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('says so when nothing matches, and closes on Escape', async () => {
+    stubApi([session([])]);
+    renderPage(<App />);
+    await screen.findByRole('navigation', { name: t('web.nav_label') });
+    fireEvent.click(screen.getByRole('button', { name: t('web.search_label') }));
+    const dialog = screen.getByRole('dialog', { name: t('web.search_label') });
+    fireEvent.change(within(dialog).getByRole('combobox'), { target: { value: 'zzzz' } });
+    expect(within(dialog).getByText(t('web.search_none'))).toBeInTheDocument();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+});
+
+describe('the sidebar', () => {
+  it('remembers a collapse for the next visit', async () => {
+    stubApi([session([])]);
+    const first = renderPage(<App />);
+    const toggle = await screen.findByRole('button', { name: t('web.toggle_sidebar') });
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    fireEvent.click(toggle);
+    expect(window.localStorage.getItem('nexa.sidebar')).toBe('collapsed');
+    first.unmount();
+
+    renderPage(<App />);
+    const again = await screen.findByRole('button', { name: t('web.toggle_sidebar') });
+    expect(again.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('changes the theme without remounting the page', async () => {
+    stubApi([session([])]);
+    renderPage(<App />);
+    const nav = await screen.findByRole('navigation', { name: t('web.nav_label') });
+    const themeButton = screen.getByRole('button', {
+      name: `${t('web.theme')}: ${t('web.theme_system')}`,
+    });
+    fireEvent.click(themeButton);
+    expect(document.documentElement.getAttribute('data-theme')).toBe('dark');
+    fireEvent.click(
+      screen.getByRole('button', { name: `${t('web.theme')}: ${t('web.theme_dark')}` }),
+    );
+    expect(document.documentElement.getAttribute('data-theme')).toBe('light');
+    // The same node: nothing above it was torn down to repaint.
+    expect(nav.isConnected).toBe(true);
+    expect(screen.getByRole('navigation', { name: t('web.nav_label') })).toBe(nav);
+  });
+
+  it('names the build the server reports, and guesses none when it cannot', async () => {
+    stubApi([session([]), INFO]);
+    const { container, unmount } = renderPage(<App />);
+    await waitFor(() =>
+      expect(container.querySelector('.build-id')?.textContent).toBe('v0.4.0 · 7ba1837'),
+    );
+    expect(container.querySelector('.identity-env')?.textContent).toContain('staging');
+    unmount();
+
+    stubApi([session([])]);
+    const without = renderPage(<App />);
+    await screen.findByRole('navigation', { name: t('web.nav_label') });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(without.container.querySelector('.build-id')).toBeNull();
+    expect(without.container.querySelector('.identity-env')).toBeNull();
+  });
+
+  it('draws no counter nobody supplied', async () => {
+    stubApi([session(['users.view'])]);
+    const { container } = renderPage(<App />);
+    await screen.findByRole('navigation', { name: t('web.nav_label') });
+    expect(container.querySelectorAll('.nav .cnt')).toHaveLength(0);
+  });
+});

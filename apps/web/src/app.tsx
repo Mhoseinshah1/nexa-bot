@@ -142,6 +142,72 @@ interface Resolved {
 }
 
 /**
+ * Every route `resolve` serves, as a pattern (`:id` is one path segment).
+ *
+ * The inventory the route test walks: each pattern must resolve to a real page
+ * component, never to `NotFound`, and every navigation entry's path must be
+ * one of them. The test also reads `resolve` below for its literal paths and
+ * requires the two lists to agree, so a route added there and not here — or
+ * listed here and served nowhere — fails the suite rather than going unwalked.
+ */
+export const ROUTE_PATTERNS: readonly string[] = [
+  '/',
+  '/users',
+  '/users/:id',
+  '/trials',
+  '/products',
+  '/products/:id',
+  '/product-categories',
+  '/extra-devices',
+  '/service-locations',
+  '/orders',
+  '/orders/:id',
+  '/services',
+  '/services/:id',
+  '/broadcasts',
+  '/broadcasts/new',
+  '/broadcasts/:id',
+  '/bulk-operations',
+  '/bulk-operations/new',
+  '/bulk-operations/:id',
+  '/tickets',
+  '/tickets/:id',
+  '/payments',
+  '/payments/:id',
+  '/compensations',
+  '/payment-accounts',
+  '/payment-gateways',
+  '/bots',
+  '/discounts',
+  '/campaigns',
+  '/campaigns/new',
+  '/campaigns/:id',
+  '/custom-service',
+  '/referrals',
+  '/resellers',
+  '/reseller-tiers',
+  '/reseller-plans',
+  '/reports',
+  '/panels',
+  '/panels/new',
+  '/panels/:id',
+  '/providers',
+  '/settings',
+  '/support',
+  '/client-apps',
+  '/features',
+  '/reminders',
+  '/bot-buttons',
+  '/content',
+  '/alerts',
+  '/notifications',
+  '/appearance',
+  '/ops-group',
+  '/recovery',
+  '/system',
+];
+
+/**
  * Round N, C1: each campaign action's editor is drawn on the key the server charges for it —
  * the discounts route's rule, per action.
  */
