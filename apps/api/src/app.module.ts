@@ -18,6 +18,7 @@ import { ReferralsController } from './surfaces/web/referrals.controller.js';
 // Round N, C1.
 import { CampaignsController } from './surfaces/web/campaigns.controller.js';
 import { ReportsController } from './surfaces/web/reports.controller.js';
+import { DashboardController } from './surfaces/web/dashboard.controller.js';
 import { TenantMediaController } from './surfaces/web/tenant-media.controller.js';
 import { ResellersController } from './surfaces/web/resellers.controller.js';
 import { OrdersController } from './surfaces/web/orders.controller.js';
@@ -94,6 +95,7 @@ export class AppModule implements NestModule {
         ReferralsController as never,
         CampaignsController as never,
         ReportsController as never,
+        DashboardController as never,
         TenantMediaController as never,
         ResellersController as never,
         OrdersController as never,
