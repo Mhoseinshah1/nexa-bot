@@ -260,8 +260,9 @@ polls faster than its constant, and every poll stops on a final answer (`pollUnl
 - **The yesterday / previous-month / this-year ranges** on this control — the reference's five
   presets only; `/reports` keeps all eight. A URL naming another range falls back to 30 days
   rather than drawing figures for a period no pressed button names.
-- **`/services` badge capping** — a counter is at most `COUNTER_CAP`; the sidebar draws the
-  number, which the §3 note already defines as "that many or more".
+- **`/services` badge capping** — a counter is at most `COUNTER_CAP`, which the §3 note
+  defines as "that many or more"; since the consistency pass the sidebar draws a badge holding
+  a capped counter as a floor («۱۰۰۰+», `navCounterText`), never as an exact number.
 
 ### What moved
 

@@ -579,6 +579,7 @@ export const WEB_FA = {
   // --- Shell ---------------------------------------------------------------
   'web.skip_to_content': 'رفتن به محتوا',
   'web.nav_label': 'بخش‌های پنل',
+  'web.nav_counter_at_least': '{count}+',
   'web.breadcrumbs': 'مسیر صفحه',
   'web.toggle_sidebar': 'باز و بسته کردن نوار کناری',
   'web.theme': 'پوسته',

@@ -1,4 +1,5 @@
 import { act } from 'react';
+import { COUNTER_CAP } from '@nexa/contracts';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { App } from '../../apps/web/src/app';
@@ -6,6 +7,7 @@ import { useCommandShortcut } from '../../apps/web/src/shell';
 import { ConfirmDialog } from '../../apps/web/src/ui/confirm-dialog';
 import { navigate } from '../../apps/web/src/router';
 import { t } from '../../apps/web/src/i18n/web.fa';
+import { formatNumber } from '../../apps/web/src/format';
 import { renderPage, stubApi } from './harness';
 
 /**
@@ -231,6 +233,33 @@ describe('the sidebar', () => {
     // And the address the operator typed is not presented as an identity at all.
     expect(card.textContent).not.toContain(window.location.host);
     expect(card.textContent).not.toContain(window.location.hostname);
+  });
+
+  it('draws a capped counter as a floor, outside the link name', async () => {
+    stubApi([
+      session(['opslog.view']),
+      {
+        url: '/nav-counters',
+        body: {
+          generatedAt: '2026-09-06T08:00:00.000Z',
+          counters: {
+            openConditions: COUNTER_CAP,
+            ticketsAwaitingSupport: null,
+            unhealthyPanels: null,
+            unreconciledServices: null,
+            refundRequestsAwaiting: null,
+            paymentsUnknown: null,
+          },
+        },
+      },
+    ]);
+    const { container } = renderPage(<App />);
+    await waitFor(() => expect(container.querySelector('.nav .cnt')).not.toBeNull());
+    const badge = container.querySelector('.nav .cnt') as HTMLElement;
+    expect(badge.textContent).toBe(`${formatNumber(COUNTER_CAP)}+`);
+    const link = badge.closest('a') as HTMLAnchorElement;
+    expect(link).toHaveAccessibleName(t('web.nav_alerts'));
+    expect(link).toHaveAccessibleDescription(`${formatNumber(COUNTER_CAP)}+`);
   });
 
   it('draws no counter nobody supplied', async () => {

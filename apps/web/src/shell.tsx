@@ -6,9 +6,8 @@ import { navigate, useLinkHandler } from './router';
 import type { ThemeChoice } from './theme';
 import { Icon, type IconName } from './ui/icons';
 import { Breadcrumbs, Menu, confirmDialogOpen, useFocusTrap, type Crumb } from './ui/kit';
-import { formatNumber } from './format';
 import { GROUP_ORDER, isCurrent, type NavEntry } from './nav';
-import type { NavCounters } from './nav-counters';
+import { navCounterText, type NavCounters } from './nav-counters';
 
 /**
  * The pieces of the signed-in shell: the sidebar, the topbar and the command
@@ -138,14 +137,17 @@ export function Sidebar({
                     <span className="lbl">{t(entry.label)}</span>
                     {counter !== undefined && (
                       /*
-                        Out of the link's NAME, so a link is always found by
-                        its label alone, and read as its description instead.
+                        Out of the link's NAME (hidden from the name
+                        computation, still referenced by aria-describedby), so
+                        a link is always found by its label alone, and the
+                        count is read as its description instead.
                       */
                       <span
                         className={`cnt${counter.tone === undefined ? '' : ` ${counter.tone}`}`}
                         id={countId}
+                        aria-hidden="true"
                       >
-                        {formatNumber(counter.count)}
+                        {navCounterText(counter)}
                       </span>
                     )}
                   </a>

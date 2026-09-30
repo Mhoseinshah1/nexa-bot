@@ -1,6 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
-import { NAV_COUNTERS_REFRESH_MS, type NavCountersResponse } from '@nexa/contracts';
+import { COUNTER_CAP, NAV_COUNTERS_REFRESH_MS, type NavCountersResponse } from '@nexa/contracts';
 import { fetchNavCounters } from './api/client';
+import { formatNumber } from './format';
+import { t } from './i18n/web.fa';
 import { pollUnlessFinal } from './polling';
 
 /**
@@ -20,6 +22,17 @@ export interface NavCounter {
   readonly count: number;
   /** `warn` or `danger` when the number is something to act on. */
   readonly tone?: 'warn' | 'danger';
+  /**
+   * The count is a floor: a server counter it holds stopped at `COUNTER_CAP`.
+   * Drawn as «۱۰۰۰+», never as a plain number that reads as exact.
+   */
+  readonly atLeast?: true;
+}
+
+/** The badge's text: the count, with a «+» when it is only a floor. */
+export function navCounterText(counter: NavCounter): string {
+  const count = formatNumber(counter.count);
+  return counter.atLeast === true ? t('web.nav_counter_at_least').replace('{count}', count) : count;
 }
 
 export type NavCounters = Readonly<Partial<Record<string, NavCounter>>>;
@@ -38,9 +51,18 @@ const NONE: NavCounters = {};
 export function navCountersFrom(response: NavCountersResponse): NavCounters {
   const c = response.counters;
   const out: Record<string, NavCounter> = {};
-  const put = (id: string, count: number | null, tone?: 'warn' | 'danger') => {
+  const put = (
+    id: string,
+    count: number | null,
+    tone?: 'warn' | 'danger',
+    capped: boolean = count === COUNTER_CAP,
+  ) => {
     if (count === null || count <= 0) return;
-    out[id] = tone === undefined ? { count } : { count, tone };
+    out[id] = {
+      count,
+      ...(tone === undefined ? {} : { tone }),
+      ...(capped ? { atLeast: true as const } : {}),
+    };
   };
   put('alerts', c.openConditions, 'warn');
   put('tickets', c.ticketsAwaitingSupport);
@@ -48,10 +70,12 @@ export function navCountersFrom(response: NavCountersResponse): NavCounters {
   put('payments', c.paymentsUnknown, 'warn');
   if (c.unreconciledServices !== null || c.refundRequestsAwaiting !== null) {
     const unreconciled = c.unreconciledServices ?? 0;
+    const refunds = c.refundRequestsAwaiting ?? 0;
     put(
       'services',
-      unreconciled + (c.refundRequestsAwaiting ?? 0),
+      unreconciled + refunds,
       unreconciled > 0 ? 'danger' : undefined,
+      unreconciled === COUNTER_CAP || refunds === COUNTER_CAP,
     );
   }
   return out;

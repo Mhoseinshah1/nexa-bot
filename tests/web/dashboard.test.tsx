@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import {
+  COUNTER_CAP,
   DASHBOARD_OPERATIONS_REFRESH_MS,
   DASHBOARD_SUMMARY_REFRESH_MS,
   NAV_COUNTERS_REFRESH_MS,
@@ -18,8 +19,8 @@ import {
   dashboardSelection,
   kpiDelta,
 } from '../../apps/web/src/dashboard-view';
-import { navCountersFrom } from '../../apps/web/src/nav-counters';
-import { formatTimestamp } from '../../apps/web/src/format';
+import { navCounterText, navCountersFrom, type NavCounter } from '../../apps/web/src/nav-counters';
+import { formatNumber, formatTimestamp } from '../../apps/web/src/format';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { useRoute } from '../../apps/web/src/router';
 import { event, renderPage, stubApi } from './harness';
@@ -787,6 +788,22 @@ describe('the sidebar counters', () => {
     expect(
       navCountersFrom(counters({ unreconciledServices: 0, refundRequestsAwaiting: 4 })),
     ).toEqual({ services: { count: 4 } });
+  });
+
+  it('marks a counter the server capped as a floor, and draws it with a plus', () => {
+    const capped = navCountersFrom(
+      counters({ openConditions: COUNTER_CAP, ticketsAwaitingSupport: COUNTER_CAP - 1 }),
+    );
+    expect(capped).toEqual({
+      alerts: { count: COUNTER_CAP, tone: 'warn', atLeast: true },
+      tickets: { count: COUNTER_CAP - 1 },
+    });
+    expect(navCounterText(capped.alerts as NavCounter)).toBe(`${formatNumber(COUNTER_CAP)}+`);
+    expect(navCounterText(capped.tickets as NavCounter)).toBe(formatNumber(COUNTER_CAP - 1));
+    // A sum that holds a capped part is a floor too.
+    expect(
+      navCountersFrom(counters({ unreconciledServices: 3, refundRequestsAwaiting: COUNTER_CAP })),
+    ).toEqual({ services: { count: COUNTER_CAP + 3, tone: 'danger', atLeast: true } });
   });
 
   it('is one request a minute', () => {
