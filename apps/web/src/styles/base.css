@@ -93,15 +93,6 @@ hr {
   margin: 14px 0;
 }
 
-details > summary {
-  cursor: pointer;
-  color: var(--fg-2);
-  font-weight: 500;
-}
-details[open] > summary {
-  margin-bottom: 8px;
-}
-
 /* --- Text utilities --------------------------------------------------------- */
 
 .ltr {

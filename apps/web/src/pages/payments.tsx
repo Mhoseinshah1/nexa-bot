@@ -39,6 +39,7 @@ import { messageFor } from './settings';
 import { PaymentTimelineCard } from './payment-timeline';
 import { ChipGroup } from './commerce-parts';
 import {
+  Disclosure,
   Badge,
   Banner,
   Button,
@@ -1549,8 +1550,7 @@ export function PaymentDetailPage({
                       title={t('web.payment_gateway_invoice')}
                       hint={t('web.payment_gateway_invoice_hint')}
                     >
-                      <details className="ca-tech">
-                        <summary>{t('web.payment_tech_details')}</summary>
+                      <Disclosure size="sm" summary={t('web.payment_tech_details')}>
                         <KV
                           items={[
                             [
@@ -1665,7 +1665,7 @@ export function PaymentDetailPage({
                             ],
                           ]}
                         />
-                      </details>
+                      </Disclosure>
                     </Card>
                   )}
                 </>

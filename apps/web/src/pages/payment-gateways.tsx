@@ -24,6 +24,7 @@ import { t } from '../i18n/web.fa';
 import { messageFor } from './settings';
 import { FxSection } from './fx-section';
 import {
+  Disclosure,
   Badge,
   Banner,
   Card,
@@ -927,8 +928,7 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
             />
           </div>
 
-          <details className="form-section gateways-advanced">
-            <summary>{t('web.payment_gateway_section_advanced')}</summary>
+          <Disclosure className="form-section" summary={t('web.payment_gateway_section_advanced')}>
             <div className="form-grid">
               <Field
                 label={t('web.payment_gateway_sort')}
@@ -944,7 +944,7 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
                 />
               </Field>
             </div>
-          </details>
+          </Disclosure>
 
           <div className="form-section gateways-form-foot">
             {/*

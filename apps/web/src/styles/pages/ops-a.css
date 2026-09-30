@@ -287,19 +287,6 @@
   gap: 6px;
   flex-wrap: wrap;
 }
-.gateways-advanced > summary,
-.accounts-advanced > summary,
-.client-apps-advanced > summary {
-  font-weight: 600;
-  color: var(--fg-2);
-}
-.gateways-advanced[open] > summary,
-.client-apps-advanced[open] > summary {
-  margin-bottom: 12px;
-}
-.accounts-advanced[open] > summary {
-  margin-bottom: 8px;
-}
 .gateways-form-foot,
 .client-apps-form-foot {
   display: flex;
@@ -323,9 +310,6 @@
 .fx-subhead {
   margin: 0 0 8px;
   font-size: var(--fs-ui);
-  color: var(--fg-2);
-}
-.fx-technical > summary {
   color: var(--fg-2);
 }
 

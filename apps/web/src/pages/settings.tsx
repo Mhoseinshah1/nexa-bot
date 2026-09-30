@@ -25,6 +25,7 @@ import {
   type SettingGroup,
 } from '../settings-presentation';
 import {
+  Disclosure,
   Badge,
   Banner,
   ConfirmDialog,
@@ -499,8 +500,7 @@ function SettingRow({
         {/* For troubleshooting only, and closed by default: the machine key an
             engineer or a log names, and whether the value in force is the
             installation's default or was set here. */}
-        <details className="settings-technical">
-          <summary className="faint small">{t('web.settings_technical')}</summary>
+        <Disclosure size="sm" summary={t('web.settings_technical')}>
           <dl className="kv">
             <div>
               <dt>{t('web.settings_technical_key')}</dt>
@@ -515,7 +515,7 @@ function SettingRow({
               </dd>
             </div>
           </dl>
-        </details>
+        </Disclosure>
       </form>
 
       {asking !== null && (
@@ -570,8 +570,7 @@ function SaveError({ error, settingKey }: { error: unknown; settingKey: string }
   return (
     <>
       <Banner tone="danger">{sentence}</Banner>
-      <details className="settings-technical">
-        <summary className="faint small">{t('web.settings_technical_issues')}</summary>
+      <Disclosure size="sm" summary={t('web.settings_technical_issues')}>
         <ul className="danger">
           {detail.map((issue, index) => (
             <li key={`${index}:${issue}`}>
@@ -579,7 +578,7 @@ function SaveError({ error, settingKey }: { error: unknown; settingKey: string }
             </li>
           ))}
         </ul>
-      </details>
+      </Disclosure>
     </>
   );
 }

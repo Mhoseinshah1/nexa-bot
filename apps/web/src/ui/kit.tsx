@@ -796,6 +796,56 @@ export function Meter({
   );
 }
 
+/**
+ * A section closed until asked for: technical identifiers, an «advanced»
+ * field, a default text beside its override. One look everywhere — a chevron
+ * that turns when open, the summary in the secondary colour, the content
+ * spaced beneath it.
+ *
+ * - `size="sm"` for a technical footnote under a form or a card.
+ * - `variant="boxed"` frames it on the sunken background, for a disclosure
+ *   that is one block among several inside a card.
+ * - `onToggle` receives the new open state; a query enabled by opening is the
+ *   caller's to keep (see the template revisions pane).
+ *
+ * The native `<details>` is kept: keyboard, find-in-page and the open state
+ * all come from the browser, and a closed body is not in the tab order.
+ */
+export function Disclosure({
+  summary,
+  children,
+  size = 'md',
+  variant = 'plain',
+  className,
+  onToggle,
+}: {
+  summary: ReactNode;
+  children?: ReactNode;
+  size?: 'md' | 'sm';
+  variant?: 'plain' | 'boxed';
+  className?: string;
+  onToggle?: (open: boolean) => void;
+}) {
+  const classes = ['disclosure'];
+  if (size === 'sm') classes.push('sm');
+  if (variant === 'boxed') classes.push('boxed');
+  if (className !== undefined) classes.push(className);
+  return (
+    <details
+      className={classes.join(' ')}
+      {...(onToggle === undefined
+        ? {}
+        : { onToggle: (event) => onToggle(event.currentTarget.open) })}
+    >
+      <summary>
+        <Icon name="chevronLeft" size={14} className="disclosure-chevron" />
+        {summary}
+      </summary>
+      {children}
+    </details>
+  );
+}
+
 export function Banner({
   tone = 'info',
   title,

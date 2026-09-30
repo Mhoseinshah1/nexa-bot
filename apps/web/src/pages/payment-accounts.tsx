@@ -14,6 +14,7 @@ import { queryState } from '../view-state';
 import { t } from '../i18n/web.fa';
 import { messageFor } from './settings';
 import {
+  Disclosure,
   Badge,
   Banner,
   Card,
@@ -392,8 +393,7 @@ export function PaymentAccountsPage({ denied, mayEdit }: { denied: boolean; mayE
               />
             </Field>
           </div>
-          <details className="accounts-advanced">
-            <summary>{t('web.payment_gateway_section_advanced')}</summary>
+          <Disclosure summary={t('web.payment_gateway_section_advanced')}>
             <Field label={t('web.payment_account_sort')} htmlFor="pa-sort">
               <input
                 id="pa-sort"
@@ -403,7 +403,7 @@ export function PaymentAccountsPage({ denied, mayEdit }: { denied: boolean; mayE
                 onChange={(event) => setForm({ ...form, sortOrder: event.target.value })}
               />
             </Field>
-          </details>
+          </Disclosure>
 
           {editing === null && (
             <Checkbox

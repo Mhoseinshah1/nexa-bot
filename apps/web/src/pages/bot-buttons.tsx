@@ -31,6 +31,7 @@ import { APPEARANCE_SLOT_LABEL } from '../appearance-labels';
 import { useSubmissionKey } from '../submission-key';
 import { templateCopy } from '../template-copy';
 import {
+  Disclosure,
   Badge,
   Banner,
   Card,
@@ -165,8 +166,7 @@ export function BotButtonsPage({
               const template = menuTemplates.find((one) => one.key === button.label);
               if (template === undefined) return null;
               return (
-                <details key={button.id}>
-                  <summary>{labelOf(item)}</summary>
+                <Disclosure key={button.id} summary={labelOf(item)}>
                   {duplicated(item, menu.data?.layout.items ?? []) && (
                     <Banner tone="warn">{t('web.bot_buttons_label_duplicate')}</Banner>
                   )}
@@ -175,7 +175,7 @@ export function BotButtonsPage({
                     mayEdit={mayEditTemplates}
                     onChanged={refreshMenu}
                   />
-                </details>
+                </Disclosure>
               );
             })}
             <h3 className="small">{t('web.bot_buttons_command_texts_title')}</h3>
@@ -184,16 +184,20 @@ export function BotButtonsPage({
               const template = commandTemplates.find((one) => one.key === entry.description);
               if (template === undefined) return null;
               return (
-                <details key={entry.command}>
-                  <summary>
-                    <Ltr>/{entry.command}</Ltr> — {template.body}
-                  </summary>
+                <Disclosure
+                  key={entry.command}
+                  summary={
+                    <span>
+                      <Ltr>/{entry.command}</Ltr> — {template.body}
+                    </span>
+                  }
+                >
                   <TemplateCard
                     template={template}
                     mayEdit={mayEditTemplates}
                     onChanged={refreshMenu}
                   />
-                </details>
+                </Disclosure>
               );
             })}
           </StateSwitch>

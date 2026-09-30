@@ -5,6 +5,7 @@ import { currencyLabel, formatNumber, formatTimestamp } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
 import { messageFor } from './settings';
 import {
+  Disclosure,
   Badge,
   Banner,
   Card,
@@ -284,8 +285,7 @@ export function FxSection({ denied, mayEdit }: { denied: boolean; mayEdit: boole
             The identifiers somebody debugging a price needs, and nobody else: behind a
             disclosure so the normal view carries no raw key.
           */}
-          <details className="fx-technical">
-            <summary>{t('web.fx_technical')}</summary>
+          <Disclosure size="sm" className="fx-technical" summary={t('web.fx_technical')}>
             <KV
               items={[
                 [
@@ -310,7 +310,7 @@ export function FxSection({ denied, mayEdit }: { denied: boolean; mayEdit: boole
                 ],
               ]}
             />
-          </details>
+          </Disclosure>
 
           <p className="muted small">{t('web.fx_settings_link')}</p>
         </Card>

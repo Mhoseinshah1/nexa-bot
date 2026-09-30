@@ -291,17 +291,6 @@
   min-width: 0;
 }
 
-/* Technical provider detail, collapsed until asked for. */
-.ca-tech > summary {
-  cursor: pointer;
-  color: var(--accent);
-  font-size: var(--fs-sm);
-  width: max-content;
-}
-.ca-tech[open] > summary {
-  margin-bottom: 10px;
-}
-
 /* One event of a payment's history: its dot and its name. */
 .ca-event {
   display: inline-flex;

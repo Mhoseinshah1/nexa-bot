@@ -1,3 +1,5 @@
+import { readFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
@@ -5,6 +7,7 @@ import {
   BarChart,
   Checkbox,
   DetailHead,
+  Disclosure,
   Donut,
   FilterChip,
   LeaveGuardHost,
@@ -430,6 +433,44 @@ describe('charts', () => {
     );
     expect(container.querySelectorAll('rect.bar')).toHaveLength(4);
     expect(noStyle(container)).toBe(0);
+  });
+});
+
+describe('Disclosure', () => {
+  it('is a closed native disclosure that reports its open state', () => {
+    const seen: boolean[] = [];
+    const { container } = renderPage(
+      <Disclosure summary="فنی" size="sm" variant="boxed" onToggle={(open) => seen.push(open)}>
+        <p>شناسه</p>
+      </Disclosure>,
+    );
+    const details = container.querySelector('details') as HTMLDetailsElement;
+    expect(details.className.split(' ')).toEqual(['disclosure', 'sm', 'boxed']);
+    expect(details.open).toBe(false);
+    const summary = details.querySelector(':scope > summary') as HTMLElement;
+    expect(summary.textContent).toBe('فنی');
+    expect(summary.querySelector('svg.disclosure-chevron')?.getAttribute('aria-hidden')).toBe(
+      'true',
+    );
+    details.open = true;
+    fireEvent(details, new Event('toggle'));
+    details.open = false;
+    fireEvent(details, new Event('toggle'));
+    expect(seen).toEqual([true, false]);
+    expect(noStyle(container)).toBe(0);
+  });
+
+  /*
+   * One look for every closed section: a page that writes its own <details>
+   * brings back its own summary colour, marker and spacing — the five
+   * variants this pass folded into the kit.
+   */
+  it('is the only disclosure the pages draw', () => {
+    const dir = join(import.meta.dirname, '../../apps/web/src/pages');
+    const offenders = readdirSync(dir)
+      .filter((name) => name.endsWith('.tsx'))
+      .filter((name) => /<details[\s>]/.test(readFileSync(join(dir, name), 'utf8')));
+    expect(offenders).toEqual([]);
   });
 });
 

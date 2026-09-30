@@ -26,6 +26,7 @@ import { currencyLabel, formatMoneyText, formatNumber } from '../format';
 import { useSubmissionKey } from '../submission-key';
 import { t } from '../i18n/web.fa';
 import {
+  Disclosure,
   Badge,
   Banner,
   Card,
@@ -942,16 +943,19 @@ function TemplateBlock({
   mayEdit: boolean;
 }) {
   return (
-    <details className="rem-templates">
-      <summary>
-        {t('web.reminders_templates')}
-        {mayView && (
-          <span className="muted small">
-            {' '}
-            (<Num value={templates.length} />)
-          </span>
-        )}
-      </summary>
+    <Disclosure
+      className="rem-templates"
+      summary={
+        <>
+          {t('web.reminders_templates')}
+          {mayView && (
+            <span className="muted small">
+              (<Num value={templates.length} />)
+            </span>
+          )}
+        </>
+      }
+    >
       {!mayView ? (
         <p className="muted small">{t('web.reminders_templates_denied')}</p>
       ) : (
@@ -962,6 +966,6 @@ function TemplateBlock({
           ))}
         </>
       )}
-    </details>
+    </Disclosure>
   );
 }

@@ -50,6 +50,7 @@ import { sortOrderOf } from './support';
 import { TelegramPhone } from './telegram-phone';
 import { Icon } from '../ui/icons';
 import {
+  Disclosure,
   Badge,
   Banner,
   Card,
@@ -1033,8 +1034,10 @@ export function ClientAppsPage({ denied, mayEdit }: { denied: boolean; mayEdit: 
                   </fieldset>
                 </div>
               </div>
-              <details className="form-section client-apps-advanced">
-                <summary>{t('web.payment_gateway_section_advanced')}</summary>
+              <Disclosure
+                className="form-section"
+                summary={t('web.payment_gateway_section_advanced')}
+              >
                 <Field
                   label={t('web.client_apps_order')}
                   htmlFor="app-sort"
@@ -1051,7 +1054,7 @@ export function ClientAppsPage({ denied, mayEdit }: { denied: boolean; mayEdit: 
                     onChange={(event) => setForm({ ...form, sortOrder: event.target.value })}
                   />
                 </Field>
-              </details>
+              </Disclosure>
               <div className="form-section client-apps-form-foot">
                 {changedElsewhere && (
                   <Banner tone="warn">

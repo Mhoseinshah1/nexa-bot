@@ -27,6 +27,7 @@ import { useSubmissionKey } from '../submission-key';
 import { t, type WebKey } from '../i18n/web.fa';
 import { messageFor } from './settings';
 import {
+  Disclosure,
   Badge,
   Banner,
   Card,
@@ -568,14 +569,16 @@ function ManualFallback({ inUse }: { inUse: boolean }) {
   const [open, setOpen] = useState(false);
   const settings = useQuery({ queryKey: ['settings'], queryFn: fetchSettings, enabled: open });
   return (
-    <details
+    <Disclosure
       className="card ops-group-advanced"
-      onToggle={(event) => setOpen((event.target as HTMLDetailsElement).open)}
+      onToggle={setOpen}
+      summary={
+        <>
+          <Icon name="settings" size={14} />
+          {t('web.opsgroup_advanced')}
+        </>
+      }
     >
-      <summary>
-        <Icon name="settings" size={14} />
-        {t('web.opsgroup_advanced')}
-      </summary>
       <p className="muted small">{t('web.opsgroup_advanced_hint')}</p>
       {inUse && <Banner tone="info">{t('web.opsgroup_manual_in_use')}</Banner>}
       {open && (
@@ -593,7 +596,7 @@ function ManualFallback({ inUse }: { inUse: boolean }) {
           })}
         </StateSwitch>
       )}
-    </details>
+    </Disclosure>
   );
 }
 

@@ -651,6 +651,58 @@
   min-width: 130px;
 }
 
+/* --- Disclosure ----------------------------------------------------------------- */
+
+/*
+ * `Disclosure`: one look for every section closed until asked for. The
+ * chevron points along the reading direction while closed and turns down
+ * when open; the summary is only as wide as its words, so a click beside it
+ * does not toggle it.
+ */
+.disclosure > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  max-width: 100%;
+  list-style: none;
+  cursor: pointer;
+  color: var(--fg-2);
+  font-size: var(--fs-ui);
+  font-weight: 500;
+  border-radius: var(--radius-sm);
+}
+.disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+.disclosure > summary:hover {
+  color: var(--fg);
+}
+.disclosure-chevron {
+  flex: none;
+  color: var(--fg-3);
+  transition: transform 0.15s ease;
+}
+.disclosure[open] > summary .disclosure-chevron {
+  transform: rotate(-90deg);
+}
+.disclosure > * + * {
+  margin-top: 10px;
+}
+.disclosure.sm > summary {
+  font-size: var(--fs-sm);
+  font-weight: 400;
+}
+.disclosure.boxed {
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ctl);
+  background: var(--bg-1);
+}
+.disclosure.boxed > * + * {
+  margin-top: 8px;
+}
+
 /* --- Key/value ------------------------------------------------------------------ */
 
 /*
