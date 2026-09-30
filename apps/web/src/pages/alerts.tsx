@@ -18,18 +18,19 @@ import { useSubmissionKey } from '../submission-key';
 import { t, type WebKey } from '../i18n/web.fa';
 import { messageFor } from './settings';
 import { severityTone } from './dashboard';
-import { errorCopy, mayRequest, queryState, retryOf, staleAfterError } from '../view-state';
+import { mayRequest, queryState, retryOf, staleAfterError } from '../view-state';
 import {
   Badge,
   Banner,
   Card,
   CursorPager,
-  Skeleton,
   DataTable,
   Empty,
+  ErrorState,
   FilterBar,
   FilterChip,
   FilterChips,
+  LoadingState,
   Ltr,
   Num,
   PageHead,
@@ -662,7 +663,7 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
         here; the comment claiming this site "follows the SAME rule as every
         other query-driven view" was two thirds true.
       */}
-            {!denied && selected !== null && detail.isPending && <Skeleton />}
+            {!denied && selected !== null && detail.isPending && <LoadingState />}
             {!denied && detail.isError && staleAfterError(detail) && (
               <Banner tone="danger">
                 {messageFor(detail.error)}{' '}
@@ -674,27 +675,10 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
               </Banner>
             )}
             {!denied && queryState(detail) === 'error' && (
-              <Empty
-                // The SAME copy rule as `StateSwitch`, and now literally the same
-                // function rather than a second copy of its ternaries.
-                //
-                // This card hard-coded the connection copy, so one screen gave two
-                // contradictory diagnoses of one 403. Fixing that by writing the
-                // same three ternaries here left both sites wrong in the same NEW
-                // way one round later, for every final answer that is not a 403.
-                title={t(errorCopy(detail).title)}
-                hint={t(errorCopy(detail).hint)}
-                icon={errorCopy(detail).icon}
-                {...(retryOf(detail) === undefined
-                  ? {}
-                  : {
-                      action: (
-                        <button type="button" className="btn" onClick={retryOf(detail)}>
-                          {t('web.retry')}
-                        </button>
-                      ),
-                    })}
-              />
+              // The SAME state `StateSwitch` draws, not a copy of it. This card once
+              // hard-coded the connection copy, then held a second copy of the
+              // ternaries; both drifted. `ErrorState` is `errorCopy` and `retryOf`.
+              <ErrorState query={detail} />
             )}
             {!denied && queryState(detail) !== 'error' && detail.data && (
               <Card title={t('web.attempts')}>

@@ -95,7 +95,7 @@
   font-weight: 600;
 }
 .identity-env {
-  font-size: 10.5px;
+  font-size: var(--fs-2xs);
   color: var(--fg-3);
 }
 
@@ -332,7 +332,7 @@
 .user-trigger .avatar {
   width: 24px;
   height: 24px;
-  font-size: 10.5px;
+  font-size: var(--fs-2xs);
 }
 .user-trigger .who-name {
   font-size: var(--fs-sm);
@@ -439,18 +439,6 @@
 /* --- Responsive ------------------------------------------------------------------ */
 
 @media (max-width: 1200px) {
-  .grid.c6 {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-  .grid.c4 {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .three-col {
-    grid-template-columns: 200px minmax(0, 1fr);
-  }
-  .three-col > :last-child {
-    grid-column: 1 / -1;
-  }
 }
 
 /*
@@ -480,7 +468,6 @@
     background: var(--overlay);
   }
   .two-col,
-  .list-split,
   .grid.c3,
   .grid.c2,
   .grid-2 {
@@ -523,10 +510,6 @@
   }
   .topbar .menu-toggle {
     display: inline-flex;
-  }
-  .grid.c6,
-  .grid.c4 {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .stat .val {
     font-size: 18px;

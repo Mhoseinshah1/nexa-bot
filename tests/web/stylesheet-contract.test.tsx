@@ -160,6 +160,34 @@ describe('spacing and wrapping the kit leaves to its containers', () => {
   });
 });
 
+describe('the page stylesheets take their values from the tokens', () => {
+  const PAGES = ['dashboard', 'commerce-a', 'commerce-b', 'ops-a', 'ops-b'].map((name) =>
+    readFileSync(join(REPO_ROOT, `apps/web/src/styles/pages/${name}.css`), 'utf8').replace(
+      /\/\*[\s\S]*?\*\//g,
+      '',
+    ),
+  );
+
+  /* A literal colour is one theme's colour: it is wrong in the other. */
+  it('writes no literal colour', () => {
+    for (const css of PAGES) {
+      expect(css).not.toMatch(/#[0-9a-fA-F]{3,8}\b|\b(rgb|rgba|hsl|hsla)\(/);
+    }
+  });
+
+  /* The control and bubble radii are tokens; a page's own 6/7/8px was three radii for one thing. */
+  it('writes no literal control radius', () => {
+    for (const css of PAGES) {
+      expect(css).not.toMatch(/radius:\s*(4|5|6|7|8|10|12)px/);
+    }
+  });
+
+  it('frames an inset block and a danger zone in the kit', () => {
+    expect(block('.inset')).toMatch(/border:\s*1px solid var\(--line\)/);
+    expect(block('.inset.danger-zone')).toMatch(/border-color:/);
+  });
+});
+
 describe('selected state, at both ends of the seam', () => {
   const ITEMS = [
     { id: 'a' as const, label: 'یک' },

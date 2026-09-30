@@ -42,7 +42,7 @@
   text-align: start;
   background: none;
   border: none;
-  border-radius: 6px;
+  border-radius: var(--radius-ctl);
   padding: 8px 12px;
   color: var(--fg-2);
   font-size: 13px;
@@ -256,12 +256,6 @@ form.set-row > * + * {
 .feature-row > * + * {
   margin-top: 10px;
 }
-.feature-settings {
-  border: 1px solid var(--line);
-  border-radius: var(--radius-ctl);
-  background: var(--bg-1);
-  padding: 10px 12px;
-}
 .feature-settings h4 {
   margin: 0 0 6px;
   color: var(--fg-2);
@@ -388,8 +382,8 @@ form.set-row > * + * {
 .ticket-message {
   max-width: 82%;
   border: 1px solid var(--line);
-  border-radius: 12px;
-  border-start-start-radius: 4px;
+  border-radius: var(--radius-bubble);
+  border-start-start-radius: var(--radius-bubble-tail);
   background: var(--bg-3);
   padding: 10px 14px;
   display: grid;
@@ -400,8 +394,8 @@ form.set-row > * + * {
   align-self: flex-end;
   border-color: var(--accent-soft);
   background: var(--accent-soft);
-  border-start-start-radius: 12px;
-  border-start-end-radius: 4px;
+  border-start-start-radius: var(--radius-bubble);
+  border-start-end-radius: var(--radius-bubble-tail);
 }
 .ticket-message.system {
   align-self: center;
@@ -447,7 +441,7 @@ form.set-row > * + * {
   max-height: 60vh;
   width: auto;
   height: auto;
-  border-radius: 8px;
+  border-radius: var(--radius-ctl);
   border: 1px solid var(--line);
   /* The image is untrusted content from a customer; nothing about it is a control. */
   pointer-events: none;
@@ -531,7 +525,7 @@ form.set-row > * + * {
   text-align: start;
   background: none;
   border: none;
-  border-radius: 6px;
+  border-radius: var(--radius-ctl);
   padding: 7px 10px;
   color: var(--fg);
   cursor: pointer;
@@ -639,8 +633,8 @@ form.set-row > * + * {
   margin: 0;
   max-width: 420px;
   padding: 10px 12px;
-  border-radius: 12px;
-  border-start-start-radius: 4px;
+  border-radius: var(--radius-bubble);
+  border-start-start-radius: var(--radius-bubble-tail);
   background: var(--bg-3);
   border: 1px solid var(--line-2);
   color: var(--fg);
@@ -907,19 +901,6 @@ form.set-row > * + * {
 .recovery-steps li.done .recovery-step-n {
   background: var(--ok-soft);
   color: var(--ok);
-}
-.recovery-current {
-  padding: 12px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-ctl);
-  background: var(--bg-1);
-}
-/* The restore confirmation: the one destructive control on the page, fenced off. */
-.recovery-danger {
-  padding: 14px;
-  border: 1px solid var(--danger);
-  border-radius: var(--radius-card);
-  background: var(--danger-soft);
 }
 .recovery-phrase {
   max-width: 320px;

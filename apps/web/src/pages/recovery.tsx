@@ -514,7 +514,7 @@ function RecoveryOperations({
       </form>
 
       {current !== null && (
-        <div className="stack recovery-current">
+        <div className="stack inset">
           <KV
             items={[
               [
@@ -681,7 +681,7 @@ function RestoreConfirmation({
   }
   const matches = isRecoveryConfirmationPhrase(phrase);
   return (
-    <div className="stack recovery-danger">
+    <div className="stack inset danger-zone">
       <Banner tone="danger" title={t('web.recovery_restore_title')}>
         {t('web.recovery_restore_danger')}
       </Banner>

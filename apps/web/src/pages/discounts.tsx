@@ -77,6 +77,7 @@ import {
   useUnsavedChanges,
   type Column,
   type Tone,
+  PermissionDeniedState,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
 import { CheckField, ChipGroup, FormSection, SaveBar, revealField } from './editor-layout';
@@ -1946,7 +1947,7 @@ function PricePreview({ denied, options }: { denied: boolean; options: ScopeOpti
   if (denied) {
     return (
       <Card title={t('web.preview_title')}>
-        <Empty title={t('web.no_permission')} hint={t('web.no_permission_hint')} icon="lock" />
+        <PermissionDeniedState />
       </Card>
     );
   }
@@ -2085,7 +2086,7 @@ function PreviewResult({ result }: { result: PricePreviewResponse }) {
 
   return (
     <div className="discounts-preview-result">
-      <div className="discounts-quote">
+      <div className="inset">
         <KV
           items={[
             [

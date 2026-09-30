@@ -14,7 +14,7 @@
   width: auto;
   height: auto;
   margin-block-end: 10px;
-  border-radius: 8px;
+  border-radius: var(--radius-ctl);
   border: 1px solid var(--line);
   pointer-events: none;
 }
@@ -25,7 +25,7 @@
   overflow-wrap: anywhere;
   padding: 12px;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--radius-ctl);
   background: var(--bg-1);
 }
 
@@ -46,7 +46,7 @@
   text-align: center;
   overflow-wrap: anywhere;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--radius-ctl);
   background: var(--bg-1);
   font-size: var(--fs-ui);
 }
@@ -100,7 +100,8 @@
 .tg-phone-body .bot-preview {
   align-self: flex-start;
   max-width: 92%;
-  border-radius: 12px 12px 12px 4px;
+  border-radius: var(--radius-bubble) var(--radius-bubble) var(--radius-bubble)
+    var(--radius-bubble-tail);
   background: var(--bg-3);
   border-color: var(--line-2);
   font-size: var(--fs-ui);
@@ -108,7 +109,7 @@
 }
 .tg-phone-photo {
   margin: 0;
-  border-radius: 12px;
+  border-radius: var(--radius-bubble);
 }
 .tg-phone-inline {
   display: flex;
@@ -119,7 +120,7 @@
 .tg-phone-key {
   padding: 7px 8px;
   text-align: center;
-  border-radius: 7px;
+  border-radius: var(--radius-ctl);
   background: var(--bg-3);
   border: 1px solid var(--line);
   font-size: var(--fs-sm);
@@ -169,40 +170,8 @@
 }
 
 /* The detail head: status and health beside the name, provider and address beneath. */
-.panel-head-badges {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-.panel-head-meta {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-  min-width: 0;
-}
-.panel-head-meta .ltr {
-  overflow-wrap: anywhere;
-}
-.panel-stat {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.panel-stat .small {
-  font-weight: 400;
-}
 .detail-head .panels-capacity {
   align-items: flex-start;
-}
-
-/* The configuration form's last section: the concurrent-change notice and Save. */
-.panel-form-foot {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  background: var(--bg-1);
 }
 
 /* The provider catalogue: supported capabilities, wrapping. */

@@ -27,13 +27,6 @@
   border-bottom: none;
 }
 
-/* A strip of figures inside a card. */
-.stats {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px 24px;
-}
-
 /* --- Page head ------------------------------------------------------------- */
 
 .dash-updated {

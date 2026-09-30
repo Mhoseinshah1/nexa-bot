@@ -42,7 +42,7 @@
   overflow-wrap: anywhere;
   padding: 12px;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--radius-ctl);
   background: var(--bg-1);
 }
 
@@ -324,12 +324,6 @@
   border-top: 1px solid var(--line);
   padding-top: 14px;
 }
-.discounts-quote {
-  padding: 12px 14px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-card);
-  background: var(--bg-1);
-}
 @media (max-width: 1200px) {
   .discounts-preview-inputs {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -375,12 +369,6 @@
 }
 .aud-service-toggle {
   font-weight: 500;
-}
-.audience-service {
-  padding: 12px 14px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-card);
-  background: var(--bg-1);
 }
 .audience-service > * + * {
   margin-top: 8px;
@@ -449,14 +437,15 @@
   gap: 6px;
 }
 .bc-bubble {
-  border-radius: 12px 12px 12px 4px;
+  border-radius: var(--radius-bubble) var(--radius-bubble) var(--radius-bubble)
+    var(--radius-bubble-tail);
   background: var(--bg-3);
   border-color: transparent;
   box-shadow: var(--shadow-sm);
 }
 .bc-inline-button {
   padding: 7px 10px;
-  border-radius: 8px;
+  border-radius: var(--radius-ctl);
   background: var(--accent-soft);
   color: var(--accent);
   text-align: center;
@@ -478,12 +467,6 @@
 /* --- /bulk-operations --------------------------------------------------------------- */
 
 /* The confirmation that starts a mass grant, set apart as the reference sets a danger zone. */
-.bulk-danger {
-  padding: 14px;
-  border: 1px solid color-mix(in srgb, var(--danger) 40%, var(--line));
-  border-radius: var(--radius-card);
-  background: color-mix(in srgb, var(--danger-soft) 40%, transparent);
-}
 /* Inside the bubble the text is the message, not a code block. */
 .bc-bubble .preview-text {
   margin: 0;

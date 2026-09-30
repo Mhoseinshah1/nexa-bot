@@ -62,6 +62,7 @@ import {
   useUnsavedChanges,
   type Column,
   type Tone,
+  PermissionDeniedState,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
 import { CheckField, FormSection, SaveBar } from './editor-layout';
@@ -298,11 +299,7 @@ export function BroadcastsPage({
 /** A new broadcast: the composer with nothing in it. */
 export function BroadcastNewPage({ maySend }: { maySend: boolean }) {
   if (!maySend) {
-    return (
-      <Card>
-        <Banner tone="info">{t('web.no_permission')}</Banner>
-      </Card>
-    );
+    return <PermissionDeniedState />;
   }
   return (
     <>

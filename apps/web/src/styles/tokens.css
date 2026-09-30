@@ -125,6 +125,9 @@
   --radius-ctl: 7px;
   --radius-sm: 5px;
   --radius-pill: 999px;
+  /* A chat bubble (the Telegram previews, ticket messages) and its tail corner. */
+  --radius-bubble: 12px;
+  --radius-bubble-tail: 4px;
   --ctl-h: 32px;
   --ctl-h-sm: 26px;
   --sidebar-w-full: 248px;

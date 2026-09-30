@@ -50,6 +50,7 @@ import {
   useUnsavedChanges,
   type Column,
   type Tone,
+  PermissionDeniedState,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
 import { CheckField } from './editor-layout';
@@ -361,11 +362,7 @@ export function BulkOperationNewPage({
     note.trim() !== '';
 
   if (!mayWallet && !mayGrant) {
-    return (
-      <Card>
-        <Banner tone="info">{t('web.no_permission')}</Banner>
-      </Card>
-    );
+    return <PermissionDeniedState />;
   }
 
   return (
@@ -511,7 +508,7 @@ export function BulkOperationNewPage({
             {preview.count === 0 ? (
               <Banner tone="info">{t('web.aud_error_empty')}</Banner>
             ) : (
-              <div className="bulk-danger stack-sm">
+              <div className="inset danger-zone stack-sm">
                 <Banner tone="danger">{t('web.bulk_danger')}</Banner>
                 <div className="form-grid">
                   <Field label={t('web.bulk_reason')} htmlFor="bulk-note">

@@ -76,6 +76,7 @@ import {
   useUnsavedChanges,
   type Column,
   type Tone,
+  PermissionDeniedState,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
 import { SaveBar, SectionNav } from './editor-layout';
@@ -1429,7 +1430,7 @@ export function CampaignNewPage({
     enabled: !denied && mayManage,
   });
   if (denied || !mayManage) {
-    return <Empty title={t('web.no_permission')} hint={t('web.no_permission_hint')} icon="lock" />;
+    return <PermissionDeniedState />;
   }
   return (
     <>

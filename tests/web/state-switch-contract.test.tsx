@@ -125,4 +125,18 @@ describe('the query-view contract', () => {
    * cannot find an absence. The types catch a missing `query` prop on
    * `StateSwitch`; nothing mechanical catches a query that was never given one.
    */
+
+  /*
+   * The refused state is the kit's, drawn one way. Five pages spelled it
+   * themselves — an Empty with the lock and no hint, an info Banner in a bare
+   * card — so one refusal looked three ways depending on the page.
+   */
+  it('draws a refusal through PermissionDeniedState, not a copy of it', () => {
+    const offenders = sources(join(ROOT, 'pages')).filter((file) =>
+      /<(Empty|Banner)\b[^>]*>?\s*\{?t\('web\.no_permission'\)|<Empty\s+title=\{t\('web\.no_permission'\)\}/.test(
+        file.text,
+      ),
+    );
+    expect(offenders.map((file) => file.path)).toEqual([]);
+  });
 });

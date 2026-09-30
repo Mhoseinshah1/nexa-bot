@@ -400,7 +400,6 @@
 .card-body > .tbl-wrap,
 .card-body > .toolbar,
 .card-body > .filter-row,
-.card-body > .tbl-foot,
 .card-body > .pager {
   margin-inline: -16px;
 }
@@ -410,8 +409,7 @@
   margin-top: -16px;
 }
 .card-body > .tbl-wrap:last-child,
-.card-body > .pager:last-child,
-.card-body > .tbl-foot:last-child {
+.card-body > .pager:last-child {
   margin-bottom: -16px;
 }
 .card-body > .tbl-wrap + *,
@@ -421,7 +419,7 @@
 }
 .card-body > .toolbar + :not(.tbl-wrap, .filter-row),
 .card-body > .filter-row + :not(.tbl-wrap),
-.card-body > .tbl-wrap + :not(.pager, .tbl-foot) {
+.card-body > .tbl-wrap + :not(.pager) {
   margin-top: 14px;
 }
 .card-foot {
@@ -651,6 +649,24 @@
   min-width: 130px;
 }
 
+/* --- Inset -------------------------------------------------------------------- */
+
+/*
+ * A framed block inside a card: the current request, a quote, a sub-form.
+ * `.danger-zone` fences off the one destructive control on a page, as
+ * `Card tone="danger"` does for a whole card.
+ */
+.inset {
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ctl);
+  background: var(--bg-1);
+}
+.inset.danger-zone {
+  border-color: color-mix(in srgb, var(--danger) 40%, var(--line));
+  background: color-mix(in srgb, var(--danger-soft) 40%, transparent);
+}
+
 /* --- Disclosure ----------------------------------------------------------------- */
 
 /*
@@ -853,17 +869,6 @@
   text-align: end;
 }
 
-.tbl-foot {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 8px 12px;
-  border-top: 1px solid var(--line);
-  font-size: var(--fs-sm);
-  color: var(--fg-2);
-  flex-wrap: wrap;
-}
-
 /* Keyset paging: «showing N» and the two directions, nothing numbered. */
 .pager {
   display: flex;
@@ -976,7 +981,7 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 26px;
+  height: var(--ctl-h-sm);
   padding-inline: 10px;
   border-radius: var(--radius-pill);
   border: 1px solid var(--line-2);
@@ -1129,8 +1134,7 @@ textarea.input,
   font-size: var(--fs-xs);
   color: var(--fg-3);
 }
-.field > .danger.small,
-.field .err {
+.field > .danger.small {
   font-size: var(--fs-xs);
   color: var(--danger);
 }
@@ -1141,7 +1145,7 @@ textarea.input,
   gap: 3px;
 }
 .field.compact > label {
-  font-size: 11.5px;
+  font-size: var(--fs-xs);
 }
 /*
  * A heading INSIDE a form, for a group of fields that belong together.
@@ -1408,7 +1412,7 @@ textarea.input,
 .tabs.vertical button {
   text-align: start;
   border: none;
-  border-radius: 6px;
+  border-radius: var(--radius-ctl);
   margin: 0;
 }
 .tabs.vertical button.on {
@@ -1622,14 +1626,6 @@ textarea.input,
     background-position: -200% 0;
   }
 }
-.loading-state {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  padding: 32px 16px;
-  color: var(--fg-3);
-}
 
 /* --- Money, numbers, copy ---------------------------------------------------- */
 
@@ -1791,7 +1787,6 @@ textarea.input,
 
 /* --- Overlays: modal, drawer, confirmation, menu ------------------------------ */
 
-.overlay,
 .dialog-backdrop {
   position: fixed;
   inset: 0;
@@ -2052,7 +2047,7 @@ textarea.input,
 .chart text {
   font-family: inherit;
   fill: var(--fg-3);
-  font-size: 10.5px;
+  font-size: var(--fs-2xs);
 }
 .chart .grid-line {
   stroke: var(--chart-grid);
@@ -2333,7 +2328,7 @@ textarea.input,
   color: var(--fg);
 }
 .palette kbd {
-  font-size: 10.5px;
+  font-size: var(--fs-2xs);
   border: 1px solid var(--line-2);
   border-radius: 4px;
   padding: 0 5px;

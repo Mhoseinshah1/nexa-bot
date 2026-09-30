@@ -218,7 +218,7 @@ function RelatedSettings({ flag }: { flag: FeatureFlagResponse }) {
   );
   if (shown.length === 0) return null;
   return (
-    <section className="feature-settings" aria-label={t('web.feature_related_settings')}>
+    <section className="inset feature-settings" aria-label={t('web.feature_related_settings')}>
       <h4 className="small">{t('web.feature_related_settings')}</h4>
       {inert && <p className="muted small">{t('web.inert')}</p>}
       <dl className={inert ? 'inert' : undefined}>

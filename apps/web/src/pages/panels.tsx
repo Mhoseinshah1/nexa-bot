@@ -101,6 +101,7 @@ import {
   useUnsavedChanges,
   type Column,
   type Tone,
+  PermissionDeniedState,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
 import { pollUnlessFinal } from '../polling';
@@ -2769,7 +2770,7 @@ export function NewPanelPage({
     create.mutate({ ...command, idempotencyKey: submission.current(command) });
   };
 
-  if (denied) return <Empty title={t('web.no_permission')} icon="lock" />;
+  if (denied) return <PermissionDeniedState />;
 
   return (
     <>
