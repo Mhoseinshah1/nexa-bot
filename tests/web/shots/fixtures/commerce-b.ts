@@ -1,4 +1,8 @@
 import {
+  campaignListResponseSchema,
+  campaignPreviewResponseSchema,
+  campaignResponseSchema,
+  campaignResultsResponseSchema,
   audienceOptionsResponseSchema,
   broadcastListResponseSchema,
   broadcastRecipientListResponseSchema,
@@ -607,7 +611,178 @@ const BULK_ITEMS: readonly Json[] = RECIPIENTS.slice(0, 6).map((recipient, index
   processedAt: index === 2 ? null : ago(30 - index),
 }));
 
+/* --------------------------------------------------------------- campaigns --- */
+
+const PRESENTATION = { timezone: 'Asia/Tehran', calendar: 'jalali' };
+
+function campaign(index: number, name: string, over: Json = {}): Json {
+  return {
+    id: `0192c0de-0000-7000-8000-0000000010${String(index).padStart(2, '0')}`,
+    name,
+    description: '',
+    state: 'DRAFT',
+    startsAt: ago(-60 * 24 * 4),
+    endsAt: ago(-60 * 24 * 14),
+    startLocal: { date: '1405-06-19', time: '10:00' },
+    endLocal: { date: '1405-06-29', time: '23:59' },
+    audienceConfirmedCount: null,
+    actionKinds: ['DISCOUNT', 'WALLET_GIFT'],
+    scheduledAt: null,
+    startedAt: null,
+    pausedAt: null,
+    completedAt: null,
+    cancelledAt: null,
+    createdAt: ago(60 * 24 * (index + 1)),
+    updatedAt: ago(60 * index),
+    ...over,
+  };
+}
+
+const CAMPAIGNS: readonly Json[] = [
+  campaign(1, 'جشنواره پاییز', {
+    description: 'تخفیف ۲۰٪ و هدیهٔ کیف پول برای مشتریان فعال.',
+  }),
+  campaign(2, 'بازگشت مشتریان غیرفعال', {
+    state: 'ACTIVE',
+    actionKinds: ['DISCOUNT', 'ANNOUNCEMENT'],
+    audienceConfirmedCount: 2140,
+    startLocal: { date: '1405-06-10', time: '09:00' },
+    scheduledAt: ago(60 * 24 * 6),
+    startedAt: ago(60 * 24 * 5),
+  }),
+  campaign(3, 'یلدا', {
+    state: 'SCHEDULED',
+    actionKinds: ['CASHBACK', 'TRAFFIC_GIFT'],
+    audienceConfirmedCount: 860,
+    scheduledAt: ago(60 * 2),
+  }),
+  campaign(4, 'نوروز ۱۴۰۵', {
+    state: 'COMPLETED',
+    actionKinds: ['DISCOUNT'],
+    audienceConfirmedCount: 5400,
+    completedAt: ago(60 * 24 * 150),
+  }),
+];
+
+const DISCOUNT_TERMS = {
+  kind: 'CODE',
+  code: 'MEHR20',
+  type: 'PERCENTAGE',
+  value: '20',
+  currency: null,
+  appliesTo: ['NEW_SERVICE', 'RENEW'],
+  productId: null,
+  categoryId: null,
+  firstPurchaseOnly: false,
+  minimumSubtotalAmount: null,
+  totalRedemptionsLimit: 500,
+  perCustomerLimit: 1,
+  priority: 10,
+  stackable: false,
+};
+
+function action(kind: string, terms: unknown, over: Json = {}): Json {
+  return {
+    kind,
+    state: 'PENDING',
+    terms,
+    ruleStatus: null,
+    discountId: null,
+    cashbackRuleId: null,
+    broadcastId: null,
+    bulkOperationId: null,
+    frozenAudienceId: null,
+    failureCode: null,
+    launchedAt: null,
+    ...over,
+  };
+}
+
+function campaignDetail(row: Json, actions: readonly Json[]): Json {
+  return {
+    campaign: {
+      ...row,
+      audience: { version: 1, customerStatus: 'ACTIVE', purchase: 'PURCHASED' },
+      audienceHash: HASH,
+      audienceFingerprint: null,
+      actions,
+    },
+    presentation: PRESENTATION,
+  };
+}
+
 export const COMMERCE_B: readonly ShotFixture[] = [
+  fixture('/campaigns', campaignListResponseSchema, {
+    campaigns: CAMPAIGNS,
+    nextCursor: null,
+    presentation: PRESENTATION,
+  }),
+  fixture(
+    '/campaigns/:id',
+    campaignResponseSchema,
+    campaignDetail(CAMPAIGNS[0] as Json, [
+      action('DISCOUNT', DISCOUNT_TERMS),
+      action('WALLET_GIFT', { amountMinor: '50000', currency: 'IRT', notify: true }),
+    ]),
+  ),
+  fixture(
+    '/campaigns/0192c0de-0000-7000-8000-000000001002',
+    campaignResponseSchema,
+    campaignDetail(CAMPAIGNS[1] as Json, [
+      action('DISCOUNT', DISCOUNT_TERMS, {
+        state: 'LAUNCHED',
+        ruleStatus: 'ACTIVE',
+        discountId: DISCOUNTS[0]?.['id'],
+        launchedAt: ago(60 * 24 * 5),
+      }),
+      action(
+        'ANNOUNCEMENT',
+        { body: 'دلمان برایتان تنگ شده {firstName}!', purpose: 'MARKETING', buttons: [] },
+        {
+          state: 'LAUNCHED',
+          broadcastId: BROADCASTS[2]?.['id'],
+          launchedAt: ago(60 * 24 * 5),
+        },
+      ),
+    ]),
+  ),
+  fixture('/campaigns/:id/preview', campaignPreviewResponseSchema, {
+    audience: {
+      asOf: ago(3),
+      definition: { version: 1 },
+      definitionHash: HASH,
+      customers: 1240,
+      reachable: 1198,
+      fingerprint: 'b'.repeat(32),
+      sample: [
+        { id: 'x1', firstName: 'زهرا', username: null, telegramUserId: '930001' },
+        { id: 'x2', firstName: 'علی', username: 'ali_r', telegramUserId: '930002' },
+      ],
+    },
+    discountMaxLiability: null,
+    walletGift: {
+      count: 1240,
+      customers: 1240,
+      fingerprint: 'c'.repeat(32),
+      totalLiability: { amountMinor: '62000000', currency: 'IRT' },
+    },
+    trafficGift: null,
+    timeGift: null,
+    typedCountRequired: { audience: false, walletGift: true, trafficGift: false, timeGift: false },
+  }),
+  fixture('/campaigns/:id/results', campaignResultsResponseSchema, {
+    targeted: 2140,
+    discountRedemptions: [
+      { state: 'PAID', count: 214, amount: null },
+      { state: 'AWAITING_PAYMENT', count: 12, amount: null },
+      { state: 'EXPIRED', count: 40, amount: null },
+    ],
+    cashback: null,
+    announcement: { ...EMPTY_COUNTS, total: 2140, sent: 2071, unreachable: 55, failed: 14 },
+    walletGift: null,
+    trafficGift: null,
+    timeGift: null,
+  }),
   fixture('/audience/options', audienceOptionsResponseSchema, {
     currency: 'IRT',
     resellerTiers: [

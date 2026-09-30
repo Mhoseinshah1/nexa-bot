@@ -515,3 +515,42 @@
   font-size: var(--fs-body);
   line-height: 1.7;
 }
+
+/* --- /campaigns ------------------------------------------------------------------- */
+
+.cb-editor.no-side {
+  grid-template-columns: 190px minmax(0, 1fr);
+}
+.campaign-kinds {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+/* A date and its time, side by side in one field. */
+.campaign-moment {
+  display: flex;
+  gap: 8px;
+}
+.campaign-moment > input {
+  flex: 1;
+  min-width: 0;
+}
+/* The draft's save stays in reach while the sections scroll past. */
+.campaign-savebar {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  box-shadow: var(--shadow);
+}
+@media (max-width: 980px) {
+  .cb-editor.no-side {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+/* A figure that is a sentence (“not determinable”), at text size inside a stat card. */
+.cb-stat-note {
+  display: block;
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  line-height: 1.5;
+}

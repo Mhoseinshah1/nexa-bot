@@ -488,7 +488,7 @@ export function BulkOperationNewPage({
               )}
               <StatCard
                 label={t('web.bc_as_of')}
-                value={<span className="small">{formatTimestamp(preview.asOf)}</span>}
+                value={<span className="cb-stat-note">{formatTimestamp(preview.asOf)}</span>}
               />
             </div>
             <DataTable
