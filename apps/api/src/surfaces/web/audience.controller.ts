@@ -14,8 +14,10 @@ import { currentCorrelationId, newCorrelationId } from '../../infrastructure/log
 /**
  * The shared audience over HTTP (round N, `docs/round-n-broadcast-audit.md` §3).
  *
- * Authentication here, authorization in `AudienceService` (`users.view`: a count and a
- * sample of customers is reading customers). The preview is a POST because a definition is a
+ * Authentication here, authorization in `AudienceService`: the preview needs `users.view` (a
+ * count and a sample of customers is reading customers); the options — names of tiers,
+ * products and panels — are readable on `users.view` or any action an audience is built for
+ * (`AUDIENCE_OPTIONS_PERMISSIONS`). The preview is a POST because a definition is a
  * structured body, and it writes nothing — which is also why it takes no idempotency key.
  * The Origin check still applies: a cross-site form must not be able to make an operator's
  * browser enumerate the customer base.
