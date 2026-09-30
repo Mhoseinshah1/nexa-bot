@@ -479,12 +479,15 @@ describe('round N close', () => {
 
     it('releases a frozen audience only once nothing live names it, and never its header', async () => {
       await customers(2);
+      // The hand-over fails once, so for a while the audience is named by the campaign's
+      // action ALONE — the case the sweep's campaign clause exists for.
+      const service = withEnginesDownOnce();
       const id = await draftCampaign(
-        campaigns,
+        service,
         [{ kind: 'WALLET_GIFT', terms: { amountMinor: '5000', currency: 'IRT', notify: false } }],
         2 * HOUR,
       );
-      await confirmCampaign(campaigns, id);
+      await expect(confirmCampaign(service, id)).rejects.toThrow('unreachable');
       const frozenId = (await rows<{ id: string }>(sql`SELECT id FROM frozen_audiences`))[0]
         ?.id as string;
       const members = () =>
@@ -493,9 +496,14 @@ describe('round N close', () => {
         ).then((r) => r[0]?.n ?? 0);
       const actor = telegramActor('sweep');
       clock.advance(2 * DAY);
-      // Old enough, but the campaign (and its operation) are live: kept.
-      expect(await campaigns.releaseFrozenAudiences(tenantA, actor)).toBe(0);
+      // Old enough, and no engine record yet — but the campaign is live: kept.
+      expect(await rows(sql`SELECT id FROM bulk_operations`)).toHaveLength(0);
+      expect(await service.releaseFrozenAudiences(tenantA, actor)).toBe(0);
       expect(await members()).toBe(2);
+      // Handed over now: the operation names it too, and it is still kept.
+      await service.launchPending(tenantA, owner, id);
+      expect(await rows(sql`SELECT id FROM bulk_operations`)).toHaveLength(1);
+      expect(await service.releaseFrozenAudiences(tenantA, actor)).toBe(0);
 
       await campaigns.cancel(tenantA, owner, { idempotencyKey: key(), campaignId: id });
       expect(await campaigns.releaseFrozenAudiences(tenantA, actor)).toBe(1);
@@ -655,6 +663,25 @@ describe('round N close', () => {
       await ctx.container.bulkOperations.resume(tenantA, owner, op.id);
       await processor().pass(tenantA);
       expect(await rows(sql`SELECT id FROM provisioning_operations`)).toHaveLength(3);
+
+      // Paused again with its last item in flight: the item is settled, the operation is
+      // NOT closed under the operator — COMPLETED is reached from RUNNING only.
+      await ctx.container.bulkOperations.pause(tenantA, owner, op.id);
+      await ctx.container.database.db.execute(
+        sql`UPDATE provisioning_operations SET state = 'SUCCEEDED', completed_at = now()
+             WHERE state <> 'SUCCEEDED'`,
+      );
+      await processor().pass(tenantA);
+      counts = (await ctx.container.bulkOperations.progress(tenantA, owner, [op.id])).counts.get(
+        op.id,
+      );
+      expect(counts).toMatchObject({ pending: 0, planned: 0, succeeded: 3 });
+      expect((await ctx.container.bulkOperations.get(tenantA, owner, op.id)).state).toBe('PAUSED');
+      await ctx.container.bulkOperations.resume(tenantA, owner, op.id);
+      await processor().pass(tenantA);
+      expect((await ctx.container.bulkOperations.get(tenantA, owner, op.id)).state).toBe(
+        'COMPLETED',
+      );
     });
 
     it('a campaign pause and resume propagate to its gift idempotently, and never fight the operation’s own page', async () => {
