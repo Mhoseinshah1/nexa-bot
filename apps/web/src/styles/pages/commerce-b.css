@@ -1,0 +1,68 @@
+/*
+ * Page family: COMMERCE-B — /products (+:id), /product-categories,
+ * /extra-devices, /service-locations, /custom-service, /discounts,
+ * /campaigns (+:id), /broadcasts (+:id), /bulk-operations (+:id), the
+ * audience builder, /referrals, /resellers (+ standing), /reseller-tiers,
+ * /reseller-plans, /reports.
+ *
+ * Owned by the COMMERCE-B agent. Page-scoped classes only.
+ */
+
+/*
+ * Ordered display lists on the product detail. Numbered, because the order is
+ * the data: the pre-invoice renders these lines as the operator arranged them.
+ */
+.display-list {
+  margin: 0;
+  padding-inline-start: 1.25rem;
+}
+.display-list li + li {
+  margin-top: 2px;
+}
+
+/* WP12 reports. */
+.report-range {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: flex-end;
+}
+.kpi-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  margin-bottom: 10px;
+}
+.kpi {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  background: var(--bg-2);
+  min-width: 0;
+}
+.kpi strong {
+  font-size: 18px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+.kpi-money,
+.money-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: baseline;
+}
+
+/* Broadcasts: the message as it will be sent. */
+.preview-text,
+.broadcast-preview {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg-1);
+}

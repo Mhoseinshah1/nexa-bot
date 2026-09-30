@@ -77,6 +77,208 @@ function refresh(): void {
   emit();
 }
 
+/*
+ * ---------------------------------------------------------------------------
+ * Leaving a page with unsaved changes
+ * ---------------------------------------------------------------------------
+ *
+ * A form that is dirty registers a GUARD (`useUnsavedChanges` in the kit). While
+ * any guard is held, a navigation that would unmount the page — a different
+ * path, or a query change the caller marks as guarded, such as a `?tab=` switch
+ * that unmounts a tab's form — is not performed. It is parked as PENDING and the
+ * shell's `LeaveGuardHost` asks the operator; confirming performs it, cancelling
+ * drops it.
+ *
+ * Browser back/forward cannot be cancelled before it happens: `popstate` fires
+ * after the URL has changed. So every entry this router writes carries its
+ * POSITION in the stack (`{ nexaIndex }`), a guarded popstate traverses back
+ * to the entry the operator was on by the difference, and a confirmation
+ * traverses forward by the same difference again. Nothing is pushed, so the
+ * stack is exactly what it was: Back after leaving continues backward instead
+ * of returning to the page just left. A guarded popstate compares the WHOLE
+ * location, not the path — a Back between two `?tab=` entries unmounts a
+ * tab's form just as a path change does.
+ *
+ * An entry this router did not write (no index: the first page load before
+ * the stamp, or a foreign `pushState`) cannot be traversed back to by a known
+ * distance, so for that case alone the page's URL is pushed back as before.
+ *
+ * With no host mounted (a page rendered on its own, as the web suite does)
+ * nothing could ask, so nothing is blocked: a guard never becomes a navigation
+ * that silently does not happen.
+ */
+export interface PendingLeave {
+  readonly to: string;
+  readonly replace: boolean;
+  /**
+   * Set when the navigation is a browser traversal the guard undid: leaving
+   * re-traverses by this distance instead of pushing `to`, so the stack keeps
+   * the entries it had.
+   */
+  readonly delta?: number;
+  /** The question the most recent guard asked to be put, if it named one. */
+  readonly message: string | undefined;
+}
+
+const guards = new Map<symbol, string | undefined>();
+let hosts = 0;
+let pending: PendingLeave | null = null;
+const pendingListeners = new Set<Listener>();
+
+function emitPending(): void {
+  for (const listener of pendingListeners) listener();
+}
+
+/** Holds a guard until the returned release is called. */
+export function holdLeaveGuard(message?: string): () => void {
+  const id = Symbol('leave-guard');
+  guards.set(id, message);
+  return () => {
+    guards.delete(id);
+  };
+}
+
+/** Whether any page currently holds a guard. */
+export function leaveGuarded(): boolean {
+  return guards.size > 0 && hosts > 0;
+}
+
+function guardMessage(): string | undefined {
+  let last: string | undefined;
+  for (const message of guards.values()) if (message !== undefined) last = message;
+  return last;
+}
+
+function pathOf(to: string): string {
+  const path = new URL(to, window.location.origin).pathname || '/';
+  return path.length > 1 && path.endsWith('/') ? path.slice(0, -1) : path;
+}
+
+function park(to: string, replace: boolean): void {
+  pending = { to, replace, message: guardMessage() };
+  emitPending();
+}
+
+function parkTraversal(to: string, delta: number): void {
+  pending = { to, replace: false, delta, message: guardMessage() };
+  emitPending();
+}
+
+/** For the shell's host: the navigation waiting on an answer, and the two answers. */
+export function usePendingLeave(): {
+  pending: PendingLeave | null;
+  leave: () => void;
+  stay: () => void;
+} {
+  useEffect(() => {
+    hosts += 1;
+    return () => {
+      hosts -= 1;
+      if (hosts === 0 && pending !== null) {
+        pending = null;
+        emitPending();
+      }
+    };
+  }, []);
+  const current = useSyncExternalStore(
+    (listener) => {
+      pendingListeners.add(listener);
+      return () => {
+        pendingListeners.delete(listener);
+      };
+    },
+    () => pending,
+    () => pending,
+  );
+  const leave = useCallback(() => {
+    const target = pending;
+    pending = null;
+    emitPending();
+    if (target === null) return;
+    if (target.delta !== undefined) {
+      if (expecting === 'restore') {
+        leaveAfterRestore = target.delta;
+        return;
+      }
+      expecting = 'leave';
+      window.history.go(target.delta);
+      return;
+    }
+    navigate(target.to, { replace: target.replace, force: true });
+  }, []);
+  const stay = useCallback(() => {
+    pending = null;
+    emitPending();
+  }, []);
+  return { pending: current, leave, stay };
+}
+
+/** Where in the history stack the entry the operator is on sits, when known. */
+let currentIndex: number | null = null;
+/** A traversal the router itself started, and what to do when it lands. */
+let expecting: 'restore' | 'leave' | null = null;
+/** A confirmation that arrived before the restoring traversal had landed. */
+let leaveAfterRestore: number | null = null;
+
+function indexOf(state: unknown): number | null {
+  if (typeof state === 'object' && state !== null && 'nexaIndex' in state) {
+    const value = (state as { nexaIndex: unknown }).nexaIndex;
+    if (typeof value === 'number' && Number.isInteger(value)) return value;
+  }
+  return null;
+}
+
+/** Stamps the entry the page was loaded on, so Back to it has a known distance. */
+function stampInitialEntry(): void {
+  const existing = indexOf(window.history.state);
+  if (existing !== null) {
+    currentIndex = existing;
+    return;
+  }
+  currentIndex = 0;
+  window.history.replaceState({ nexaIndex: 0 }, '', key());
+}
+
+function onPopState(event: PopStateEvent): void {
+  const next = key();
+  const landed = indexOf(event.state);
+  if (expecting === 'restore') {
+    // The router's own traversal back to the guarded page: nothing moved.
+    expecting = null;
+    currentIndex = landed;
+    if (leaveAfterRestore !== null) {
+      const delta = leaveAfterRestore;
+      leaveAfterRestore = null;
+      expecting = 'leave';
+      window.history.go(delta);
+    }
+    return;
+  }
+  if (expecting === 'leave') {
+    expecting = null;
+    currentIndex = landed;
+    refresh();
+    return;
+  }
+  if (leaveGuarded() && snapshot !== null && next !== snapshotKey) {
+    if (landed !== null && currentIndex !== null && landed !== currentIndex) {
+      // Undo the traversal by its own distance, and ask about the one it made.
+      const delta = landed - currentIndex;
+      expecting = 'restore';
+      window.history.go(-delta);
+      parkTraversal(next, delta);
+      return;
+    }
+    // An entry of unknown position: the only way back is a push.
+    window.history.pushState({ nexaIndex: (currentIndex ?? 0) + 1 }, '', snapshotKey);
+    currentIndex = (currentIndex ?? 0) + 1;
+    park(next, false);
+    return;
+  }
+  currentIndex = landed;
+  refresh();
+}
+
 function getSnapshot(): Route {
   if (snapshot === null) {
     snapshot = read();
@@ -91,16 +293,41 @@ function getServerSnapshot(): Route {
 }
 
 if (typeof window !== 'undefined') {
-  window.addEventListener('popstate', refresh);
+  stampInitialEntry();
+  window.addEventListener('popstate', onPopState);
 }
 
 export function useRoute(): Route {
   return useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
 }
 
-export function navigate(to: string, options: { replace?: boolean } = {}): void {
-  if (options.replace === true) window.history.replaceState(null, '', to);
-  else window.history.pushState(null, '', to);
+export interface NavigateOptions {
+  readonly replace?: boolean;
+  /**
+   * `true` asks the leave guard even when only the query changes — a `?tab=`
+   * switch that unmounts a tab's form. By default only a change of PATH is
+   * guarded, so a filter or a pager never interrupts the operator.
+   */
+  readonly guard?: boolean;
+  /** Skips the leave guard: the operator has already answered it. */
+  readonly force?: boolean;
+}
+
+export function navigate(to: string, options: NavigateOptions = {}): void {
+  if (options.force !== true && leaveGuarded()) {
+    const current = getSnapshot();
+    if (options.guard === true || pathOf(to) !== current.path) {
+      park(to, options.replace === true);
+      return;
+    }
+  }
+  if (currentIndex === null) currentIndex = indexOf(window.history.state) ?? 0;
+  if (options.replace === true) {
+    window.history.replaceState({ nexaIndex: currentIndex }, '', to);
+  } else {
+    currentIndex += 1;
+    window.history.pushState({ nexaIndex: currentIndex }, '', to);
+  }
   refresh();
 }
 
@@ -155,14 +382,22 @@ export function match(pattern: string, path: string): Record<string, string> | n
 }
 
 /** Replaces one query parameter, keeping the rest and the current path. */
-export function setQuery(route: Route, key: string, value: string | null): void {
+export function setQuery(
+  route: Route,
+  key: string,
+  value: string | null,
+  options: { guard?: boolean } = {},
+): void {
   const next = new URLSearchParams(route.query);
   if (value === null || value === '') next.delete(key);
   else next.set(key, value);
   const suffix = next.toString();
   // `replace`, not push: a filter change is not a place an operator navigated
   // to, and stacking one history entry per keystroke makes Back unusable.
-  navigate(suffix ? `${route.path}?${suffix}` : route.path, { replace: true });
+  navigate(suffix ? `${route.path}?${suffix}` : route.path, {
+    replace: true,
+    ...(options.guard === true ? { guard: true } : {}),
+  });
 }
 
 /**
