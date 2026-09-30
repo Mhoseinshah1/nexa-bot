@@ -161,10 +161,13 @@ export interface DiscountOutcome {
 /** The cashback promises made under the campaign's rule, by state, and their reversals. */
 export interface CashbackOutcome {
   readonly byState: readonly StateTally[];
-  readonly earned: bigint;
-  readonly reversedRecovered: bigint;
-  readonly reversedUnrecovered: bigint;
-  readonly currency: CurrencyCode | null;
+  /** One entry per currency: amounts in different currencies are never added together. */
+  readonly totals: readonly {
+    readonly currency: CurrencyCode;
+    readonly earned: bigint;
+    readonly reversedRecovered: bigint;
+    readonly reversedUnrecovered: bigint;
+  }[];
 }
 
 export interface CampaignRepository {

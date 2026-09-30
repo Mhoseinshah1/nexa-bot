@@ -574,9 +574,10 @@ export class DrizzleCampaignRepository implements CampaignRepository {
       .from(orderCashback)
       .where(and(eq(orderCashback.tenantId, tenantId), eq(orderCashback.ruleId, cashbackRuleId)))
       .groupBy(orderCashback.state, orderCashback.currency)
-      .orderBy(asc(orderCashback.state));
+      .orderBy(asc(orderCashback.state), asc(orderCashback.currency));
     const reversed = await this.db
       .select({
+        currency: cashbackReversals.currency,
         recovered: sql<string>`coalesce(sum(${cashbackReversals.recoveredAmount}), 0)::text`,
         unrecovered: sql<string>`coalesce(sum(${cashbackReversals.unrecoveredAmount}), 0)::text`,
       })
@@ -590,8 +591,27 @@ export class DrizzleCampaignRepository implements CampaignRepository {
       )
       .where(
         and(eq(cashbackReversals.tenantId, tenantId), eq(orderCashback.ruleId, cashbackRuleId)),
-      );
-    const first = reversed[0];
+      )
+      .groupBy(cashbackReversals.currency);
+
+    // Per currency, never across: a sum of IRT and USD minor units is no amount at all.
+    const totals = new Map<
+      CurrencyCode,
+      { earned: bigint; reversedRecovered: bigint; reversedUnrecovered: bigint }
+    >();
+    const entry = (currency: CurrencyCode) => {
+      const found = totals.get(currency);
+      if (found !== undefined) return found;
+      const fresh = { earned: 0n, reversedRecovered: 0n, reversedUnrecovered: 0n };
+      totals.set(currency, fresh);
+      return fresh;
+    };
+    for (const row of byState) entry(row.currency as CurrencyCode).earned += BigInt(row.earned);
+    for (const row of reversed) {
+      const total = entry(row.currency as CurrencyCode);
+      total.reversedRecovered += BigInt(row.recovered);
+      total.reversedUnrecovered += BigInt(row.unrecovered);
+    }
     return {
       byState: byState.map((row) => ({
         state: row.state,
@@ -599,10 +619,9 @@ export class DrizzleCampaignRepository implements CampaignRepository {
         amount: BigInt(row.amount),
         currency: row.currency as CurrencyCode,
       })),
-      earned: byState.reduce((sum, row) => sum + BigInt(row.earned), 0n),
-      reversedRecovered: BigInt(first?.recovered ?? '0'),
-      reversedUnrecovered: BigInt(first?.unrecovered ?? '0'),
-      currency: (byState[0]?.currency as CurrencyCode | undefined) ?? null,
+      totals: [...totals.entries()]
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([currency, total]) => ({ currency, ...total })),
     };
   }
 }

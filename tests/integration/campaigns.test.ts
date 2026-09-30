@@ -693,9 +693,42 @@ describe('campaigns', () => {
         ['EARNED', 1, 8_000n],
         ['PENDING', 1, 8_000n],
       ]);
-      expect(results.cashback?.earned).toBe(8_000n);
+      expect(results.cashback?.totals).toEqual([
+        { currency: 'IRT', earned: 8_000n, reversedRecovered: 0n, reversedUnrecovered: 0n },
+      ]);
       expect(before.totals.discount.amountMinor).toBe(0n);
     });
+  });
+
+  it('never adds cashback amounts in different currencies together', async () => {
+    const id = await draftCampaign([{ kind: 'CASHBACK', terms: TEN_PERCENT_BACK }]);
+    await schedule(id);
+    const irt = await confirm(await orderDraft());
+    const other = await confirm(await orderDraft());
+    await payFromWallet(irt);
+    await deliver(irt.id);
+    await ctx.container.cashback.settleDue(tenantA, 50);
+    // A promise in another currency — a tenant that changed its selling currency during
+    // the campaign. The guard freezes a promise's currency, so the test sets it aside.
+    const db = ctx.container.database.db;
+    await db.execute(sql`ALTER TABLE order_cashback DISABLE TRIGGER USER`);
+    try {
+      await db.execute(
+        sql`UPDATE order_cashback SET currency = 'USD' WHERE order_id = ${other.id}`,
+      );
+    } finally {
+      await db.execute(sql`ALTER TABLE order_cashback ENABLE TRIGGER USER`);
+    }
+
+    const results = await service.results(tenantA, owner, id);
+    expect(results.cashback?.totals).toEqual([
+      { currency: 'IRT', earned: 10_000n, reversedRecovered: 0n, reversedUnrecovered: 0n },
+      { currency: 'USD', earned: 0n, reversedRecovered: 0n, reversedUnrecovered: 0n },
+    ]);
+    expect(results.cashback?.byState.map((t) => [t.state, t.currency, t.amount])).toEqual([
+      ['EARNED', 'IRT', 10_000n],
+      ['PENDING', 'USD', 10_000n],
+    ]);
   });
 
   describe('the announcement is a broadcast of the shared lane', () => {

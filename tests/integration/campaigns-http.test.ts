@@ -167,6 +167,37 @@ describe('campaigns HTTP surface', () => {
       discount: { code: 'AUTUMN20', status: 'ACTIVE', label: 'جشنواره' },
     });
 
+    // The rule is edited on the discounts page: the campaign shows the rule as it is NOW.
+    const edited = await post(`/discounts/${action?.discountId as string}`, {
+      idempotencyKey: key(),
+      kind: 'CODE',
+      code: 'AUTUMN20',
+      label: 'جشنواره',
+      type: 'PERCENTAGE',
+      value: '30',
+      currency: null,
+      appliesTo: ['NEW_SERVICE'],
+      productId: null,
+      categoryId: null,
+      customerId: null,
+      firstPurchaseOnly: false,
+      minimumSubtotalAmount: null,
+      startsAt: after.startsAt,
+      endsAt: after.endsAt,
+      totalRedemptionsLimit: 100,
+      perCustomerLimit: 1,
+      priority: 0,
+      stackable: false,
+    });
+    expect(edited.statusCode, edited.body).toBeLessThan(300);
+    await post(`/discounts/${action?.discountId as string}/deactivate`, {
+      idempotencyKey: key(),
+    });
+    const live = campaignResponseSchema.parse((await get(CAMPAIGN_ROUTES.one(campaign.id))).json())
+      .campaign.actions[0];
+    expect(live?.terms).toMatchObject({ value: '30' });
+    expect(live?.ruleStatus).toBe('INACTIVE');
+
     const list = campaignListResponseSchema.parse((await get(CAMPAIGN_ROUTES.list)).json());
     expect(list.campaigns.map((c) => c.id)).toEqual([campaign.id]);
     const results = campaignResultsResponseSchema.parse(

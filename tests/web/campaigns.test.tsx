@@ -72,6 +72,7 @@ function detail(overrides: Record<string, unknown> = {}) {
             priority: 0,
             stackable: false,
           },
+          ruleStatus: null,
           discountId: null,
           cashbackRuleId: null,
           broadcastId: null,
@@ -83,6 +84,7 @@ function detail(overrides: Record<string, unknown> = {}) {
           kind: 'WALLET_GIFT',
           state: 'PENDING',
           terms: { amountMinor: '50000', currency: 'IRT', notify: true },
+          ruleStatus: null,
           discountId: null,
           cashbackRuleId: null,
           broadcastId: null,
@@ -267,6 +269,10 @@ describe('one campaign', () => {
     expect(card.textContent).toContain('40,000');
     expect(card.textContent).toContain('مبلغ واریزشده');
     expect(card.textContent).not.toMatch(/درآمد کمپین|نرخ تبدیل/);
+    // Cashback in two currencies is two lines, never one added-up figure.
+    expect(card.textContent).toContain('جمع کش‌بک به تفکیک ارز');
+    expect(card.textContent).toContain('8,000');
+    expect(card.textContent).not.toContain('9,200');
     // Without campaigns.manage there is nothing to press.
     expect(screen.queryByRole('button', { name: 'لغو کمپین' })).toBeNull();
   });
@@ -290,7 +296,26 @@ function results() {
     discountRedemptions: [
       { state: 'PAID', count: 2, amount: { amountMinor: '40000', currency: 'IRT' } },
     ],
-    cashback: null,
+    cashback: {
+      byState: [
+        { state: 'EARNED', count: 1, amount: { amountMinor: '8000', currency: 'IRT' } },
+        { state: 'PENDING', count: 1, amount: { amountMinor: '1200', currency: 'USD' } },
+      ],
+      totals: [
+        {
+          currency: 'IRT',
+          earned: { amountMinor: '8000', currency: 'IRT' },
+          reversedRecovered: { amountMinor: '0', currency: 'IRT' },
+          reversedUnrecovered: { amountMinor: '0', currency: 'IRT' },
+        },
+        {
+          currency: 'USD',
+          earned: { amountMinor: '1200', currency: 'USD' },
+          reversedRecovered: { amountMinor: '0', currency: 'USD' },
+          reversedUnrecovered: { amountMinor: '0', currency: 'USD' },
+        },
+      ],
+    },
     announcement: null,
     walletGift: { counts: bulk, creditedTotal: { amountMinor: '150000', currency: 'IRT' } },
     trafficGift: null,

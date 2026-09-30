@@ -233,15 +233,12 @@ export class CampaignsController {
           ? null
           : {
               byState: results.cashback.byState.map(tallyOf),
-              earned: moneyOrNull(results.cashback.earned, results.cashback.currency),
-              reversedRecovered: moneyOrNull(
-                results.cashback.reversedRecovered,
-                results.cashback.currency,
-              ),
-              reversedUnrecovered: moneyOrNull(
-                results.cashback.reversedUnrecovered,
-                results.cashback.currency,
-              ),
+              totals: results.cashback.totals.map((total) => ({
+                currency: total.currency,
+                earned: moneyOf(total.earned, total.currency),
+                reversedRecovered: moneyOf(total.reversedRecovered, total.currency),
+                reversedUnrecovered: moneyOf(total.reversedUnrecovered, total.currency),
+              })),
             },
       announcement: results.announcement,
       walletGift:
@@ -275,7 +272,7 @@ export class CampaignsController {
         audience: detail.campaign.audience,
         audienceHash: detail.campaign.audienceHash,
         audienceFingerprint: detail.campaign.audienceFingerprint,
-        actions: detail.actions.map(actionViewOf),
+        actions: detail.actions.map((action) => actionViewOf(action, detail)),
       },
       presentation: detail.presentation,
     };
@@ -331,11 +328,40 @@ function summaryOf(
   };
 }
 
-function actionViewOf(action: CampaignActionRecord): CampaignActionView {
+/**
+ * One action as the page shows it. A discount or cashback action that has made its rule is
+ * shown from the LIVE rule — its terms and its status now — because the rule is the
+ * campaign's discount and may have been edited on the discounts page. Everything else is
+ * shown as confirmed.
+ */
+function actionViewOf(action: CampaignActionRecord, detail: CampaignDetail): CampaignActionView {
+  const liveDiscount =
+    action.kind === 'DISCOUNT' &&
+    detail.discount !== null &&
+    detail.discount.id === action.discountId
+      ? detail.discount
+      : null;
+  const liveCashback =
+    action.kind === 'CASHBACK' &&
+    detail.cashbackRule !== null &&
+    detail.cashbackRule.id === action.cashbackRuleId
+      ? detail.cashbackRule
+      : null;
   return {
     kind: action.kind,
     state: action.state,
-    terms: termsWire(action.config),
+    terms:
+      liveDiscount !== null
+        ? discountTermsWire(liveDiscount)
+        : liveCashback !== null
+          ? {
+              percent: liveCashback.percent,
+              appliesTo: [...liveCashback.appliesTo],
+              productId: liveCashback.productId,
+              categoryId: liveCashback.categoryId,
+            }
+          : termsWire(action.config),
+    ruleStatus: liveDiscount?.status ?? liveCashback?.status ?? null,
     discountId: action.discountId,
     cashbackRuleId: action.cashbackRuleId,
     broadcastId: action.broadcastId,
@@ -345,26 +371,45 @@ function actionViewOf(action: CampaignActionRecord): CampaignActionView {
   };
 }
 
+function discountTermsWire(rule: {
+  kind: string;
+  code: string | null;
+  type: string;
+  value: bigint;
+  currency: string | null;
+  appliesTo: readonly string[];
+  productId: string | null;
+  categoryId: string | null;
+  firstPurchaseOnly: boolean;
+  minimumSubtotal: bigint | null;
+  totalLimit: number | null;
+  perCustomerLimit: number | null;
+  priority: number;
+  stackable: boolean;
+}): Record<string, unknown> {
+  return {
+    kind: rule.kind,
+    code: rule.code,
+    type: rule.type,
+    value: rule.value.toString(),
+    currency: rule.currency,
+    appliesTo: [...rule.appliesTo],
+    productId: rule.productId,
+    categoryId: rule.categoryId,
+    firstPurchaseOnly: rule.firstPurchaseOnly,
+    minimumSubtotalAmount: rule.minimumSubtotal?.toString() ?? null,
+    totalRedemptionsLimit: rule.totalLimit,
+    perCustomerLimit: rule.perCustomerLimit,
+    priority: rule.priority,
+    stackable: rule.stackable,
+  };
+}
+
 /** An action's terms as the wire spells them: minor units as text, like the request. */
 function termsWire(config: CampaignActionConfig): unknown {
   if (config.kind === 'DISCOUNT') {
     const t = config.terms;
-    return {
-      kind: t.kind,
-      code: t.code,
-      type: t.type,
-      value: t.value.toString(),
-      currency: t.currency,
-      appliesTo: [...t.appliesTo],
-      productId: t.productId,
-      categoryId: t.categoryId,
-      firstPurchaseOnly: t.firstPurchaseOnly,
-      minimumSubtotalAmount: t.minimumSubtotal?.toString() ?? null,
-      totalRedemptionsLimit: t.totalLimit,
-      perCustomerLimit: t.perCustomerLimit,
-      priority: t.priority,
-      stackable: t.stackable,
-    };
+    return discountTermsWire({ ...t, stackable: t.stackable });
   }
   return config.terms;
 }

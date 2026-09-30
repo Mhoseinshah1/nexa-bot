@@ -1340,6 +1340,23 @@ function ActionsCard({ campaign }: { campaign: CampaignDetail }) {
             ),
           },
           {
+            key: 'rule',
+            header: t('web.campaign_rule_status'),
+            // The linked rule as it is NOW; it may have been withdrawn on the discounts page.
+            render: (row) =>
+              row.ruleStatus === null ? (
+                '—'
+              ) : (
+                <Badge tone={row.ruleStatus === 'ACTIVE' ? 'ok' : 'neutral'}>
+                  {t(
+                    row.ruleStatus === 'ACTIVE'
+                      ? 'web.campaign_rule_active'
+                      : 'web.campaign_rule_inactive',
+                  )}
+                </Badge>
+              ),
+          },
+          {
             key: 'terms',
             header: t('web.campaign_terms'),
             render: (row) => <TermsText kind={row.kind} terms={row.terms} />,
@@ -1681,7 +1698,7 @@ function TallyList({ rows }: { rows: readonly CampaignTally[] }) {
       {rows.map((row) => {
         const label = TALLY_STATE_LABELS[row.state];
         return (
-          <li key={row.state}>
+          <li key={`${row.state}:${row.amount?.currency ?? ''}`}>
             {label === undefined ? <Ltr>{row.state}</Ltr> : t(label)}: <Num value={row.count} />
             {row.amount !== null && (
               <>
@@ -1757,11 +1774,22 @@ function ResultsCard({ id }: { id: string }) {
                       <TallyList key="c" rows={r.cashback.byState} />,
                     ],
                     [
-                      t('web.campaign_results_cashback_reversed'),
-                      r.cashback.reversedRecovered === null ? (
-                        '—'
+                      t('web.campaign_results_cashback_totals'),
+                      r.cashback.totals.length === 0 ? (
+                        t('web.campaign_none_yet')
                       ) : (
-                        <Money key="cr" value={r.cashback.reversedRecovered} />
+                        // One line per currency: amounts in two currencies are never added.
+                        <ul key="ct" className="plain">
+                          {r.cashback.totals.map((total) => (
+                            <li key={total.currency}>
+                              {t('web.campaign_cashback_earned')}: <Money value={total.earned} /> ·{' '}
+                              {t('web.campaign_results_cashback_reversed')}:{' '}
+                              <Money value={total.reversedRecovered} /> ·{' '}
+                              {t('web.campaign_results_cashback_unrecovered')}:{' '}
+                              <Money value={total.reversedUnrecovered} />
+                            </li>
+                          ))}
+                        </ul>
                       ),
                     ],
                   ] as [ReactNode, ReactNode][])),
