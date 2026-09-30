@@ -121,6 +121,23 @@ const preview = {
   typedCountRequired: { audience: false, walletGift: true, trafficGift: false, timeGift: false },
 };
 
+const ALL = {
+  discount: true,
+  cashback: true,
+  walletGift: true,
+  serviceGift: true,
+  announcement: true,
+};
+
+const listWithPresentation = {
+  url: '/campaigns?limit=1',
+  body: {
+    campaigns: [],
+    nextCursor: null,
+    presentation: { timezone: 'Asia/Tehran', calendar: 'jalali' },
+  },
+};
+
 const posts = (api: Api, path: string) =>
   api.calls.filter((call) => call.method === 'POST' && call.url.includes(path));
 
@@ -175,9 +192,10 @@ describe('a new campaign', () => {
       },
       { url: '/products', body: { products: [], nextCursor: null } },
       { url: '/product-categories', body: { categories: [] } },
+      listWithPresentation,
       { url: '/campaigns', body: detail() },
     ]);
-    renderPage(<CampaignNewPage denied={false} mayManage />);
+    renderPage(<CampaignNewPage denied={false} mayManage may={ALL} />);
     // Broadcast's own builder, not a second one.
     expect(await screen.findByText('چه کسانی')).toBeInTheDocument();
     fireEvent.click(screen.getByLabelText('کاربران عادی (غیر نماینده)'));
@@ -204,6 +222,47 @@ describe('a new campaign', () => {
   });
 });
 
+describe('the new-campaign form, by permission and calendar', () => {
+  const routes = [
+    {
+      url: '/audience/options',
+      body: { currency: 'IRT', resellerTiers: [], products: [], panels: [] },
+    },
+    { url: '/products', body: { products: [], nextCursor: null } },
+    { url: '/product-categories', body: { categories: [] } },
+    listWithPresentation,
+  ];
+
+  it('draws the window in the tenant calendar and zone, loaded before the inputs', async () => {
+    stubApi(routes);
+    renderPage(<CampaignNewPage denied={false} mayManage may={ALL} />);
+    expect(await screen.findByText(/تقویم شمسی · Asia\/Tehran/)).toBeInTheDocument();
+  });
+
+  it('does not draw an editor for an action the actor may not perform', async () => {
+    stubApi(routes);
+    renderPage(
+      <CampaignNewPage
+        denied={false}
+        mayManage
+        may={{ ...ALL, cashback: false, walletGift: false }}
+      />,
+    );
+    await screen.findByText('چه کسانی');
+    const cashback = screen
+      .getByRole('heading', { name: 'کش‌بک' })
+      .closest('section') as HTMLElement;
+    expect(within(cashback).queryByRole('checkbox')).toBeNull();
+    expect(within(cashback).getByText(/شما مجوز این اقدام را ندارید/)).toBeInTheDocument();
+    // The discount editor, which the actor may use, is still offered.
+    const discount = screen
+      .getByRole('heading', { name: 'تخفیف' })
+      .closest('section') as HTMLElement;
+    expect(within(discount).getByRole('checkbox')).toBeInTheDocument();
+    expect(screen.queryByLabelText('هدیهٔ کیف پول')).toBeNull();
+  });
+});
+
 describe('one campaign', () => {
   it('confirms with exactly the figures the preview showed, only once reviewed', async () => {
     const api = stubApi([
@@ -211,7 +270,7 @@ describe('one campaign', () => {
       { url: `/campaigns/${CAMPAIGN_ID}/schedule`, body: detail({ state: 'SCHEDULED' }) },
       { url: `/campaigns/${CAMPAIGN_ID}`, body: detail() },
     ]);
-    renderPage(<CampaignDetailPage id={CAMPAIGN_ID} denied={false} mayManage />);
+    renderPage(<CampaignDetailPage id={CAMPAIGN_ID} denied={false} mayManage may={ALL} />);
 
     // The exact liability is on screen before anything can be confirmed.
     await screen.findByText('تعهد مالی کل هدیهٔ کیف پول');
@@ -261,7 +320,7 @@ describe('one campaign', () => {
       },
       { url: `/campaigns/${CAMPAIGN_ID}`, body: detail() },
     ]);
-    renderPage(<CampaignDetailPage id={CAMPAIGN_ID} denied={false} mayManage />);
+    renderPage(<CampaignDetailPage id={CAMPAIGN_ID} denied={false} mayManage may={ALL} />);
     await screen.findByText('تعهد مالی کل هدیهٔ کیف پول');
     const typedBox = () =>
       screen.getByLabelText('برای تأیید، تعداد را تایپ کنید') as HTMLInputElement;
@@ -296,7 +355,7 @@ describe('one campaign', () => {
       { url: `/campaigns/${CAMPAIGN_ID}/cancel`, body: detail({ state: 'CANCELLED' }) },
       { url: `/campaigns/${CAMPAIGN_ID}`, body: detail({ state: 'ACTIVE' }) },
     ]);
-    renderPage(<CampaignDetailPage id={CAMPAIGN_ID} denied={false} mayManage />);
+    renderPage(<CampaignDetailPage id={CAMPAIGN_ID} denied={false} mayManage may={ALL} />);
     fireEvent.click(await screen.findByRole('button', { name: 'لغو کمپین' }));
     expect(posts(api, '/cancel')).toHaveLength(0);
     expect(screen.getByText(/برگردانده نمی‌شود/)).toBeInTheDocument();
@@ -309,7 +368,7 @@ describe('one campaign', () => {
       { url: `/campaigns/${CAMPAIGN_ID}/results`, body: results() },
       { url: `/campaigns/${CAMPAIGN_ID}`, body: detail({ state: 'ACTIVE' }) },
     ]);
-    renderPage(<CampaignDetailPage id={CAMPAIGN_ID} denied={false} mayManage={false} />);
+    renderPage(<CampaignDetailPage id={CAMPAIGN_ID} denied={false} mayManage={false} may={ALL} />);
     const card = (await screen.findByText('نتایج')).closest('section') as HTMLElement;
     await waitFor(() => expect(card.textContent).toContain('سفارش‌های دارای تخفیف کمپین'));
     expect(card.textContent).toContain('پرداخت‌شده');

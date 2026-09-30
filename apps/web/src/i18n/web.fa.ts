@@ -2875,6 +2875,8 @@ export const WEB_FA = {
   'web.campaign_action_state_cancelled': 'لغوشده',
   'web.campaign_action_state_failed': 'ناموفق',
   'web.campaign_action_on': 'این اقدام در کمپین باشد',
+  'web.campaign_action_not_permitted':
+    'شما مجوز این اقدام را ندارید؛ در این کمپین قابل تنظیم نیست.',
   'web.campaign_section_identity': 'مشخصات',
   'web.campaign_section_audience': 'مخاطبان',
   'web.campaign_audience': 'مخاطبان',

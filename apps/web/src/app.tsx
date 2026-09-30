@@ -647,6 +647,20 @@ interface Resolved {
 }
 
 /**
+ * Round N, C1: each campaign action's editor is drawn on the key the server charges for it —
+ * the discounts route's rule, per action.
+ */
+function campaignActionPermissions(may: (permission: string) => boolean) {
+  return {
+    discount: may('catalog.discounts.edit'),
+    cashback: may('catalog.pricing.edit'),
+    walletGift: may('users.wallet.mass'),
+    serviceGift: may('services.mass.grant'),
+    announcement: may('broadcasts.send'),
+  };
+}
+
+/**
  * The route table, exported so a test can walk it.
  *
  * The planned-surface suite asserted nine component KEYS, never nine PATHS —
@@ -1050,7 +1064,11 @@ export function resolve(
   if (route.path === '/campaigns/new') {
     return {
       element: (
-        <CampaignNewPage denied={!may('campaigns.view')} mayManage={may('campaigns.manage')} />
+        <CampaignNewPage
+          denied={!may('campaigns.view')}
+          mayManage={may('campaigns.manage')}
+          may={campaignActionPermissions(may)}
+        />
       ),
       crumbs: [nav('campaigns'), { label: t('web.campaign_new') }],
       title: t('web.campaign_new'),
@@ -1065,6 +1083,7 @@ export function resolve(
           id={campaign['id'] ?? ''}
           denied={!may('campaigns.view')}
           mayManage={may('campaigns.manage')}
+          may={campaignActionPermissions(may)}
         />
       ),
       crumbs: [nav('campaigns'), { label: t('web.campaigns_title') }],

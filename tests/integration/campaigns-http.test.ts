@@ -210,14 +210,15 @@ describe('campaigns HTTP surface', () => {
     // Support holds neither campaign key: not even the list.
     expect((await get(CAMPAIGN_ROUTES.list, supportCookie)).statusCode).toBe(403);
 
-    // Sales manages campaigns but may not publish cashback (`catalog.pricing.edit`).
-    const created = await post(
-      CAMPAIGN_ROUTES.create,
-      await draftBody({
-        cashback: { percent: 5, appliesTo: ['NEW_SERVICE'], productId: null, categoryId: null },
-      }),
-      salesCookie,
-    );
+    // Sales manages campaigns but may not publish cashback (`catalog.pricing.edit`): a draft
+    // holding cashback is refused at once, and one the owner drafted cannot be confirmed.
+    const cashback = {
+      cashback: { percent: 5, appliesTo: ['NEW_SERVICE'], productId: null, categoryId: null },
+    };
+    expect(
+      (await post(CAMPAIGN_ROUTES.create, await draftBody(cashback), salesCookie)).statusCode,
+    ).toBe(403);
+    const created = await post(CAMPAIGN_ROUTES.create, await draftBody(cashback));
     expect(created.statusCode, created.body).toBe(201);
     const id = campaignResponseSchema.parse(created.json()).campaign.id;
     const preview = campaignPreviewResponseSchema.parse(

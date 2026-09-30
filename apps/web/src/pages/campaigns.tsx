@@ -731,10 +731,13 @@ function CampaignForm({
   initial,
   campaignId,
   presentation,
+  may,
 }: {
   initial: FormState;
   campaignId: string | null;
-  presentation: { timezone: string; calendar: 'jalali' | 'gregorian' } | undefined;
+  presentation: { timezone: string; calendar: 'jalali' | 'gregorian' };
+  /** Each action's own server permission; an editor the actor may not use is not drawn. */
+  may: CampaignActionPermissions;
 }) {
   const client = useQueryClient();
   const notify = useToast();
@@ -788,14 +791,11 @@ function CampaignForm({
     save.mutate();
   };
 
-  const calendarHint =
-    presentation === undefined
-      ? t('web.campaign_window_hint')
-      : `${t('web.campaign_window_hint')} ${t(
-          presentation.calendar === 'jalali'
-            ? 'web.campaign_calendar_jalali'
-            : 'web.campaign_calendar_gregorian',
-        )} · ${presentation.timezone}`;
+  const calendarHint = `${t('web.campaign_window_hint')} ${t(
+    presentation.calendar === 'jalali'
+      ? 'web.campaign_calendar_jalali'
+      : 'web.campaign_calendar_gregorian',
+  )} · ${presentation.timezone}`;
 
   return (
     <form onSubmit={onSubmit}>
@@ -860,12 +860,16 @@ function CampaignForm({
       </Card>
 
       <Card title={t('web.campaign_action_discount')} hint={t('web.campaign_discount_hint')}>
-        <Toggle
-          on={state.discountOn}
-          onChange={(on) => set('discountOn', on)}
-          label={t('web.campaign_action_on')}
-        />
-        {state.discountOn && (
+        {may.discount ? (
+          <Toggle
+            on={state.discountOn}
+            onChange={(on) => set('discountOn', on)}
+            label={t('web.campaign_action_on')}
+          />
+        ) : (
+          <NotPermitted label={t('web.campaign_action_on')} />
+        )}
+        {may.discount && state.discountOn && (
           <>
             <div className="grid-2">
               <Field label={t('web.campaign_discount_kind')}>
@@ -986,12 +990,16 @@ function CampaignForm({
       </Card>
 
       <Card title={t('web.campaign_action_cashback')} hint={t('web.campaign_cashback_hint')}>
-        <Toggle
-          on={state.cashbackOn}
-          onChange={(on) => set('cashbackOn', on)}
-          label={t('web.campaign_action_on')}
-        />
-        {state.cashbackOn && (
+        {may.cashback ? (
+          <Toggle
+            on={state.cashbackOn}
+            onChange={(on) => set('cashbackOn', on)}
+            label={t('web.campaign_action_on')}
+          />
+        ) : (
+          <NotPermitted label={t('web.campaign_action_on')} />
+        )}
+        {may.cashback && state.cashbackOn && (
           <>
             <Field label={t('web.campaign_cashback_percent')} hint={t('web.campaign_percent_hint')}>
               <input
@@ -1027,12 +1035,16 @@ function CampaignForm({
       </Card>
 
       <Card title={t('web.campaign_section_gifts')} hint={t('web.campaign_gifts_hint')}>
-        <Toggle
-          on={state.walletOn}
-          onChange={(on) => set('walletOn', on)}
-          label={t('web.campaign_action_wallet_gift')}
-        />
-        {state.walletOn && (
+        {may.walletGift ? (
+          <Toggle
+            on={state.walletOn}
+            onChange={(on) => set('walletOn', on)}
+            label={t('web.campaign_action_wallet_gift')}
+          />
+        ) : (
+          <NotPermitted label={t('web.campaign_action_wallet_gift')} />
+        )}
+        {may.walletGift && state.walletOn && (
           <div className="grid-2">
             <Field
               label={t('web.campaign_wallet_amount')}
@@ -1052,12 +1064,16 @@ function CampaignForm({
             />
           </div>
         )}
-        <Toggle
-          on={state.trafficOn}
-          onChange={(on) => set('trafficOn', on)}
-          label={t('web.campaign_action_traffic_gift')}
-        />
-        {state.trafficOn && (
+        {may.serviceGift ? (
+          <Toggle
+            on={state.trafficOn}
+            onChange={(on) => set('trafficOn', on)}
+            label={t('web.campaign_action_traffic_gift')}
+          />
+        ) : (
+          <NotPermitted label={t('web.campaign_action_traffic_gift')} />
+        )}
+        {may.serviceGift && state.trafficOn && (
           <div className="grid-2">
             <Field label={t('web.campaign_traffic_gb')} hint={t('web.campaign_traffic_hint')}>
               <input
@@ -1074,12 +1090,16 @@ function CampaignForm({
             />
           </div>
         )}
-        <Toggle
-          on={state.timeOn}
-          onChange={(on) => set('timeOn', on)}
-          label={t('web.campaign_action_time_gift')}
-        />
-        {state.timeOn && (
+        {may.serviceGift ? (
+          <Toggle
+            on={state.timeOn}
+            onChange={(on) => set('timeOn', on)}
+            label={t('web.campaign_action_time_gift')}
+          />
+        ) : (
+          <NotPermitted label={t('web.campaign_action_time_gift')} />
+        )}
+        {may.serviceGift && state.timeOn && (
           <div className="grid-2">
             <Field label={t('web.campaign_time_days')}>
               <input
@@ -1105,12 +1125,16 @@ function CampaignForm({
         title={t('web.campaign_action_announcement')}
         hint={t('web.campaign_announcement_hint')}
       >
-        <Toggle
-          on={state.announcementOn}
-          onChange={(on) => set('announcementOn', on)}
-          label={t('web.campaign_action_on')}
-        />
-        {state.announcementOn && (
+        {may.announcement ? (
+          <Toggle
+            on={state.announcementOn}
+            onChange={(on) => set('announcementOn', on)}
+            label={t('web.campaign_action_on')}
+          />
+        ) : (
+          <NotPermitted label={t('web.campaign_action_on')} />
+        )}
+        {may.announcement && state.announcementOn && (
           <>
             <Field
               label={t('web.campaign_announcement_body')}
@@ -1192,20 +1216,70 @@ function CampaignForm({
   );
 }
 
+/**
+ * The permission each action's editor needs — the same key the server charges when a draft
+ * holding that action is saved or confirmed (`CAMPAIGN_ACTION_PERMISSIONS`). Passed from the
+ * route, never derived, as the discounts page does for its two editors.
+ */
+export interface CampaignActionPermissions {
+  /** `catalog.discounts.edit` */
+  readonly discount: boolean;
+  /** `catalog.pricing.edit` */
+  readonly cashback: boolean;
+  /** `users.wallet.mass` */
+  readonly walletGift: boolean;
+  /** `services.mass.grant` */
+  readonly serviceGift: boolean;
+  /** `broadcasts.send` */
+  readonly announcement: boolean;
+}
+
+/** Instead of an editor the actor may not use: says so, and draws nothing to press. */
+function NotPermitted({ label }: { label: string }) {
+  return (
+    <p className="muted small">
+      {label}: {t('web.campaign_action_not_permitted')}
+    </p>
+  );
+}
+
 class ProblemError extends Error {
   constructor(readonly key: WebKey) {
     super(key);
   }
 }
 
-export function CampaignNewPage({ denied, mayManage }: { denied: boolean; mayManage: boolean }) {
+export function CampaignNewPage({
+  denied,
+  mayManage,
+  may,
+}: {
+  denied: boolean;
+  mayManage: boolean;
+  may: CampaignActionPermissions;
+}) {
+  // The tenant's calendar and zone come with the list; the window is not drawn without them.
+  const presentation = useQuery({
+    queryKey: [CAMPAIGNS_KEY, 'presentation'],
+    queryFn: async () => (await fetchCampaigns({ limit: 1 })).presentation,
+    enabled: !denied && mayManage,
+  });
   if (denied || !mayManage) {
     return <Empty title={t('web.no_permission')} hint={t('web.no_permission_hint')} icon="lock" />;
   }
   return (
     <>
       <PageHead title={t('web.campaign_new')} subtitle={t('web.campaigns_intro')} />
-      <CampaignForm initial={EMPTY_FORM} campaignId={null} presentation={undefined} />
+      <StateSwitch query={presentation}>
+        {presentation.data !== undefined && (
+          <CampaignForm
+            initial={EMPTY_FORM}
+            campaignId={null}
+            presentation={presentation.data}
+            may={may}
+          />
+        )}
+      </StateSwitch>
     </>
   );
 }
@@ -1218,10 +1292,12 @@ export function CampaignDetailPage({
   id,
   denied,
   mayManage,
+  may,
 }: {
   id: string;
   denied: boolean;
   mayManage: boolean;
+  may: CampaignActionPermissions;
 }) {
   const detail = useQuery({
     queryKey: [CAMPAIGNS_KEY, 'one', id],
@@ -1246,11 +1322,12 @@ export function CampaignDetailPage({
               ) : undefined
             }
           />
-          {editing ? (
+          {editing && detail.data !== undefined ? (
             <CampaignForm
               initial={formStateOf(campaign)}
               campaignId={campaign.id}
-              presentation={detail.data?.presentation}
+              presentation={detail.data.presentation}
+              may={may}
             />
           ) : (
             <>

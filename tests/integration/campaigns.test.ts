@@ -497,9 +497,16 @@ describe('campaigns', () => {
       });
       expect((await schedule(discountOnly, sales)).campaign.state).toBe('SCHEDULED');
 
-      const withCashback = await draftCampaign([{ kind: 'CASHBACK', terms: TEN_PERCENT_BACK }], {
-        actor: sales,
-      });
+      // A draft may not even hold an action its author may not perform…
+      expect(
+        await refusal(
+          draftCampaign([{ kind: 'CASHBACK', terms: TEN_PERCENT_BACK }], { actor: sales }),
+        ),
+      ).toBe('platform.permission_denied');
+      expect(await count(sql`SELECT count(*)::int AS n FROM campaigns`)).toBe(1);
+
+      // …and a draft somebody else made cannot be confirmed without the action's key either.
+      const withCashback = await draftCampaign([{ kind: 'CASHBACK', terms: TEN_PERCENT_BACK }]);
       expect(await refusal(schedule(withCashback, sales))).toBe('platform.permission_denied');
       expect(await stateOf(withCashback)).toBe('DRAFT');
       expect(await count(sql`SELECT count(*)::int AS n FROM cashback_rules`)).toBe(0);
@@ -1021,7 +1028,10 @@ describe('campaigns', () => {
       const sales = adminActorFor(
         await createAdmin(ctx.container, tenantA, { username: 'sales-g', roleKeys: ['sales'] }),
       );
-      const id = await draftCampaign([GIFT], { actor: sales });
+      expect(await refusal(draftCampaign([GIFT], { actor: sales }))).toBe(
+        'platform.permission_denied',
+      );
+      const id = await draftCampaign([GIFT]);
       expect(await refusal(service.preview(tenantA, sales, id))).toBe('platform.permission_denied');
       expect(
         await refusal(

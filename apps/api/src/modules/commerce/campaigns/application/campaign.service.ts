@@ -424,6 +424,8 @@ export class CampaignService {
       denial,
       async (tx) => {
         await this.assertScopeActive(scope, tx);
+        // A draft may only hold what its author may do: refused now, not at the schedule.
+        await this.checkActionPermissions(scope, actor, write.actions, tx);
         await this.assertActionReferences(scope, write.actions, tx);
         const row = await this.deps.campaigns.insertDraft(
           scope,
@@ -502,6 +504,7 @@ export class CampaignService {
         if (before === null) throw notFound();
         if (before.state !== 'DRAFT') throw notEditable();
         const beforeActions = await this.deps.campaigns.actionsOf(scope, campaignId, tx);
+        await this.checkActionPermissions(scope, actor, write.actions, tx);
         await this.assertActionReferences(scope, write.actions, tx);
         const replaced = await this.deps.campaigns.replaceDraft(
           scope,
@@ -1453,7 +1456,7 @@ export class CampaignService {
   private async checkActionPermissions(
     scope: TenantContext,
     actor: ActorContext,
-    actions: readonly CampaignActionRecord[],
+    actions: readonly { readonly kind: CampaignActionKind }[],
     tx: TransactionScope,
   ): Promise<void> {
     const needed = new Set<PermissionKey>();
