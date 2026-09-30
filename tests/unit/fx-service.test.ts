@@ -48,6 +48,7 @@ const actor = {
   surface: 'WEB',
 } as unknown as ActorContext;
 const T0 = 1_700_000_000_000;
+let tokenSeq = 0;
 
 class FakeRepository implements FxQuoteRepository {
   row: FxQuoteRow | null = null;
@@ -60,13 +61,14 @@ class FakeRepository implements FxQuoteRepository {
   claimRefresh(
     _scope: TenantContext,
     pair: FxPair,
-    input: { now: Date; leaseUntil: Date; dueBefore: Date | null },
+    input: { now: Date; leaseUntil: Date; dueBefore: Date | null; claimToken: string },
   ): Promise<boolean> {
     if (this.row === null) {
       this.row = {
         ...pair,
         quote: null,
         refreshClaimedUntil: input.leaseUntil,
+        refreshClaimToken: input.claimToken,
         lastAttemptAt: null,
         lastErrorCode: null,
       };
@@ -78,7 +80,11 @@ class FakeRepository implements FxQuoteRepository {
       this.row.quote === null ||
       this.row.quote.fetchedAt <= input.dueBefore;
     if (!free || !due) return Promise.resolve(false);
-    this.row = { ...this.row, refreshClaimedUntil: input.leaseUntil };
+    this.row = {
+      ...this.row,
+      refreshClaimedUntil: input.leaseUntil,
+      refreshClaimToken: input.claimToken,
+    };
     return Promise.resolve(true);
   }
 
@@ -87,14 +93,17 @@ class FakeRepository implements FxQuoteRepository {
     _pair: FxPair,
     quote: FxStoredQuote,
     now: Date,
+    claimToken: string,
   ): Promise<boolean> {
-    if (this.row === null) return Promise.resolve(false);
+    if (this.row === null || this.row.refreshClaimToken !== claimToken)
+      return Promise.resolve(false);
     if (this.row.quote !== null && !(this.row.quote.fetchedAt < quote.fetchedAt))
       return Promise.resolve(false);
     this.row = {
       ...this.row,
       quote,
       refreshClaimedUntil: null,
+      refreshClaimToken: null,
       lastAttemptAt: now,
       lastErrorCode: null,
     };
@@ -104,12 +113,13 @@ class FakeRepository implements FxQuoteRepository {
   releaseRefresh(
     _scope: TenantContext,
     _pair: FxPair,
-    input: { now: Date; errorCode: string | null },
+    input: { now: Date; errorCode: string | null; claimToken: string },
   ): Promise<void> {
-    if (this.row !== null) {
+    if (this.row !== null && this.row.refreshClaimToken === input.claimToken) {
       this.row = {
         ...this.row,
         refreshClaimedUntil: null,
+        refreshClaimToken: null,
         lastAttemptAt: input.now,
         lastErrorCode: input.errorCode,
       };
@@ -259,6 +269,7 @@ function world(
     scopeActivity: { scopeIsActive: () => Promise.resolve(true) },
     uow: { run: (_s: unknown, fn: (tx: unknown) => unknown) => Promise.resolve(fn({})) } as never,
     clock: { now: () => new Date(state.clockMs) },
+    ids: { uuid: () => `token-${String((tokenSeq += 1))}` },
     logger: { info: () => undefined, warn: () => undefined },
   };
   state.service = new FxService(deps);
@@ -415,11 +426,15 @@ describe('the central rate: refreshing', () => {
     expect(await w.service.refreshIfDue(scope, 'USDT')).toBe('REFRESHED');
     expect(w.nobitex.calls).toBe(2);
     // Another replica holds the lease: the operator's refresh answers BUSY and dials nothing.
-    w.repository.row = { ...w.repository.row!, refreshClaimedUntil: new Date(w.clockMs + 10_000) };
+    w.repository.row = {
+      ...w.repository.row!,
+      refreshClaimedUntil: new Date(w.clockMs + 10_000),
+      refreshClaimToken: 'another-replica',
+    };
     expect((await w.service.refresh(scope, actor, 'USDT')).outcome).toBe('BUSY');
     expect(w.nobitex.calls).toBe(2);
     // The operator's refresh ignores the TTL once the lease is free.
-    w.repository.row = { ...w.repository.row, refreshClaimedUntil: null };
+    w.repository.row = { ...w.repository.row, refreshClaimedUntil: null, refreshClaimToken: null };
     expect((await w.service.refresh(scope, actor, 'USDT')).outcome).toBe('REFRESHED');
     expect(w.nobitex.calls).toBe(3);
   });
@@ -430,7 +445,7 @@ describe('the central rate: refreshing', () => {
     const stored = w.repository.row!.quote!;
     // A replica whose clock is behind claims and stores "earlier": refused, the newer stays.
     w.clockMs -= 1;
-    w.repository.row = { ...w.repository.row!, refreshClaimedUntil: null };
+    w.repository.row = { ...w.repository.row!, refreshClaimedUntil: null, refreshClaimToken: null };
     expect((await w.service.refresh(scope, actor, 'USDT')).outcome).toBe('REFRESHED');
     expect(w.repository.row?.quote).toEqual(stored);
   });

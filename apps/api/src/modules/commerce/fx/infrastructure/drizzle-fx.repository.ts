@@ -61,6 +61,7 @@ export class DrizzleFxQuoteRepository implements FxQuoteRepository {
               policyVersion: row.policyVersion,
             },
       refreshClaimedUntil: row.refreshClaimedUntil,
+      refreshClaimToken: row.refreshClaimToken,
       lastAttemptAt: row.lastAttemptAt,
       lastErrorCode: row.lastErrorCode,
     };
@@ -69,7 +70,12 @@ export class DrizzleFxQuoteRepository implements FxQuoteRepository {
   async claimRefresh(
     scope: TenantContext,
     pair: FxPair,
-    input: { readonly now: Date; readonly leaseUntil: Date; readonly dueBefore: Date | null },
+    input: {
+      readonly now: Date;
+      readonly leaseUntil: Date;
+      readonly dueBefore: Date | null;
+      readonly claimToken: string;
+    },
     tx: unknown,
   ): Promise<boolean> {
     const tenantId = requireTenantId(scope);
@@ -89,12 +95,17 @@ export class DrizzleFxQuoteRepository implements FxQuoteRepository {
         baseAsset: pair.baseAsset,
         quoteCurrency: pair.quoteCurrency,
         refreshClaimedUntil: input.leaseUntil,
+        refreshClaimToken: input.claimToken,
         createdAt: input.now,
         updatedAt: input.now,
       })
       .onConflictDoUpdate({
         target: [fxQuotes.tenantId, fxQuotes.baseAsset, fxQuotes.quoteCurrency],
-        set: { refreshClaimedUntil: input.leaseUntil, updatedAt: input.now },
+        set: {
+          refreshClaimedUntil: input.leaseUntil,
+          refreshClaimToken: input.claimToken,
+          updatedAt: input.now,
+        },
         // `and` is typed as possibly undefined for an empty argument list; both are given.
         setWhere: and(free, due) ?? sql`false`,
       })
@@ -107,6 +118,7 @@ export class DrizzleFxQuoteRepository implements FxQuoteRepository {
     pair: FxPair,
     quote: FxStoredQuote,
     now: Date,
+    claimToken: string,
     tx: unknown,
   ): Promise<boolean> {
     const tenantId = requireTenantId(scope);
@@ -121,6 +133,7 @@ export class DrizzleFxQuoteRepository implements FxQuoteRepository {
         quoteId: quote.quoteId,
         policyVersion: quote.policyVersion,
         refreshClaimedUntil: null,
+        refreshClaimToken: null,
         lastAttemptAt: now,
         lastErrorCode: null,
         updatedAt: now,
@@ -130,6 +143,8 @@ export class DrizzleFxQuoteRepository implements FxQuoteRepository {
           eq(fxQuotes.tenantId, tenantId),
           eq(fxQuotes.baseAsset, pair.baseAsset),
           eq(fxQuotes.quoteCurrency, pair.quoteCurrency),
+          // Only the lease holder writes: a stalled refresher's lease has been taken over.
+          eq(fxQuotes.refreshClaimToken, claimToken),
           // Never backwards: a quote fetched earlier than the stored one is not newer news.
           or(isNull(fxQuotes.fetchedAt), sql`${fxQuotes.fetchedAt} < ${quote.fetchedAt}`),
         ),
@@ -141,7 +156,7 @@ export class DrizzleFxQuoteRepository implements FxQuoteRepository {
   async releaseRefresh(
     scope: TenantContext,
     pair: FxPair,
-    input: { readonly now: Date; readonly errorCode: string | null },
+    input: { readonly now: Date; readonly errorCode: string | null; readonly claimToken: string },
     tx: unknown,
   ): Promise<void> {
     const tenantId = requireTenantId(scope);
@@ -149,6 +164,7 @@ export class DrizzleFxQuoteRepository implements FxQuoteRepository {
       .update(fxQuotes)
       .set({
         refreshClaimedUntil: null,
+        refreshClaimToken: null,
         lastAttemptAt: input.now,
         lastErrorCode: input.errorCode,
         updatedAt: input.now,
@@ -158,6 +174,8 @@ export class DrizzleFxQuoteRepository implements FxQuoteRepository {
           eq(fxQuotes.tenantId, tenantId),
           eq(fxQuotes.baseAsset, pair.baseAsset),
           eq(fxQuotes.quoteCurrency, pair.quoteCurrency),
+          // Only the lease holder releases; somebody else's newer claim is left alone.
+          eq(fxQuotes.refreshClaimToken, input.claimToken),
         ),
       );
   }

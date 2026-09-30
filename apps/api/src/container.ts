@@ -2700,6 +2700,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     scopeActivity: tenants,
     uow,
     clock,
+    ids,
     logger,
   });
   fxRef.current = fxService;

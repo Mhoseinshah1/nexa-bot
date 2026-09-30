@@ -2,9 +2,10 @@
 -- (`docs/fx-audit.md`).
 --
 -- Additive: two new tables, nullable snapshot columns and one NOT NULL column with a
--- default on `gateway_invoices`, one widened CHECK, and a widened guard trigger. The
--- release before this one ignores the new columns and prices a Stars attempt by the
--- route's fixed rate; see `docs/deployment.md` for what to check before rolling back.
+-- default on `gateway_invoices`, one widened CHECK, a widened guard trigger and one
+-- BEFORE INSERT trigger that keeps the previous release's write shape valid. The release
+-- before this one ignores the new columns and prices a Stars attempt by the route's fixed
+-- rate; see `docs/deployment.md` for what to check before rolling back.
 CREATE TABLE "fx_quotes" (
 	"tenant_id" uuid NOT NULL,
 	"base_asset" text NOT NULL,
@@ -17,6 +18,7 @@ CREATE TABLE "fx_quotes" (
 	"quote_id" text,
 	"policy_version" integer,
 	"refresh_claimed_until" timestamp with time zone,
+	"refresh_claim_token" text,
 	"last_attempt_at" timestamp with time zone,
 	"last_error_code" text,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
@@ -33,7 +35,9 @@ CREATE TABLE "fx_quotes" (
           AND (rate_mantissa IS NULL OR rate_mantissa > 0)
           AND (rate_scale IS NULL OR rate_scale BETWEEN 0 AND 8)
           AND (quote_id IS NULL OR length(quote_id) BETWEEN 1 AND 96)
-          AND (last_error_code IS NULL OR length(last_error_code) BETWEEN 1 AND 64))
+          AND (last_error_code IS NULL OR length(last_error_code) BETWEEN 1 AND 64)
+          AND (refresh_claim_token IS NULL OR length(refresh_claim_token) BETWEEN 1 AND 64)
+          AND (refresh_claimed_until IS NULL) = (refresh_claim_token IS NULL))
 );
 --> statement-breakpoint
 CREATE TABLE "fx_source_states" (
@@ -145,3 +149,23 @@ DROP TRIGGER IF EXISTS nexa_gateway_invoices_snapshot_guard ON gateway_invoices;
 CREATE TRIGGER nexa_gateway_invoices_snapshot_guard
   BEFORE UPDATE ON gateway_invoices
   FOR EACH ROW EXECUTE FUNCTION nexa_gateway_invoices_snapshot_guard();
+
+-- The PREVIOUS release keeps writing a Stars invoice as it always did: a rate and no
+-- policy (the column did not exist for it). Its INSERT arrives with the column's default,
+-- SAME_UNIT, beside a rate — the one combination the snapshot CHECK refuses — so for the
+-- rollback window (and a rolling deploy) this trigger infers what the backfill above
+-- inferred for the rows already there: a rate is a fixed-rate attempt. This release's own
+-- writer never produces that combination (Codex review of #122, P1).
+CREATE OR REPLACE FUNCTION nexa_gateway_invoices_conversion_default() RETURNS trigger AS $$
+BEGIN
+  IF NEW.conversion_policy = 'SAME_UNIT' AND NEW.conversion_rate_minor IS NOT NULL THEN
+    NEW.conversion_policy := 'FIXED_RATE';
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;--> statement-breakpoint
+
+DROP TRIGGER IF EXISTS nexa_gateway_invoices_conversion_default ON gateway_invoices;--> statement-breakpoint
+CREATE TRIGGER nexa_gateway_invoices_conversion_default
+  BEFORE INSERT ON gateway_invoices
+  FOR EACH ROW EXECUTE FUNCTION nexa_gateway_invoices_conversion_default();

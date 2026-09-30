@@ -1,5 +1,5 @@
 {
-  "id": "f873b9a3-7a0d-411e-88de-a4af9e4c18d1",
+  "id": "6cc7a688-d0f7-4ae2-bf1f-d0dafe24082d",
   "prevId": "276b9bbd-1957-4175-9e7b-98981c3db9b8",
   "version": "7",
   "dialect": "postgresql",
@@ -6544,6 +6544,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "refresh_claim_token": {
+          "name": "refresh_claim_token",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "last_attempt_at": {
           "name": "last_attempt_at",
           "type": "timestamp with time zone",
@@ -6614,7 +6620,7 @@
         },
         "fx_quotes_quote_check": {
           "name": "fx_quotes_quote_check",
-          "value": "(quote_id IS NULL) = (rate_mantissa IS NULL)\n          AND (quote_id IS NULL) = (rate_scale IS NULL)\n          AND (quote_id IS NULL) = (source IS NULL)\n          AND (quote_id IS NULL) = (fetched_at IS NULL)\n          AND (quote_id IS NULL) = (policy_version IS NULL)\n          AND (rate_mantissa IS NULL OR rate_mantissa > 0)\n          AND (rate_scale IS NULL OR rate_scale BETWEEN 0 AND 8)\n          AND (quote_id IS NULL OR length(quote_id) BETWEEN 1 AND 96)\n          AND (last_error_code IS NULL OR length(last_error_code) BETWEEN 1 AND 64)"
+          "value": "(quote_id IS NULL) = (rate_mantissa IS NULL)\n          AND (quote_id IS NULL) = (rate_scale IS NULL)\n          AND (quote_id IS NULL) = (source IS NULL)\n          AND (quote_id IS NULL) = (fetched_at IS NULL)\n          AND (quote_id IS NULL) = (policy_version IS NULL)\n          AND (rate_mantissa IS NULL OR rate_mantissa > 0)\n          AND (rate_scale IS NULL OR rate_scale BETWEEN 0 AND 8)\n          AND (quote_id IS NULL OR length(quote_id) BETWEEN 1 AND 96)\n          AND (last_error_code IS NULL OR length(last_error_code) BETWEEN 1 AND 64)\n          AND (refresh_claim_token IS NULL OR length(refresh_claim_token) BETWEEN 1 AND 64)\n          AND (refresh_claimed_until IS NULL) = (refresh_claim_token IS NULL)"
         }
       },
       "isRLSEnabled": false

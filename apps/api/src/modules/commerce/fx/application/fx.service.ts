@@ -19,6 +19,7 @@ import {
   type FxQuoteState,
   type FxSource,
   type GatewayConversionPolicy,
+  type IdGenerator,
   type OperationalEventRecorder,
   type PaymentGatewayProvider,
   type PermissionKey,
@@ -94,6 +95,8 @@ export interface FxServiceDeps {
   readonly scopeActivity: ScopeActivityReader;
   readonly uow: UnitOfWork<TransactionScope>;
   readonly clock: Clock;
+  /** Mints the lease token a refresh claims with. */
+  readonly ids: Pick<IdGenerator, 'uuid'>;
   readonly logger: {
     info: (context: Record<string, unknown>, message: string) => void;
     warn: (context: Record<string, unknown>, message: string) => void;
@@ -228,6 +231,7 @@ export class FxService {
     const settings = await this.settingsFor(scope);
     if (!settings.enabled) return 'DISABLED';
     const pair: FxPair = { baseAsset, quoteCurrency: settings.quoteCurrency };
+    const claimToken = this.deps.ids.uuid();
     const claimed = await this.deps.uow.run(scope, async (tx) => {
       if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) return false;
       return this.deps.repository.claimRefresh(
@@ -237,12 +241,13 @@ export class FxService {
           now,
           leaseUntil: new Date(now.getTime() + FX_REFRESH_LEASE_MS),
           dueBefore: new Date(now.getTime() - settings.freshTtlSeconds * 1_000),
+          claimToken,
         },
         tx,
       );
     });
     if (!claimed) return 'NOT_DUE';
-    return this.performRefresh(scope, settings, pair);
+    return this.performRefresh(scope, settings, pair, claimToken);
   }
 
   /**
@@ -265,16 +270,22 @@ export class FxService {
     if (!settings.enabled) {
       outcome = 'DISABLED';
     } else {
+      const claimToken = this.deps.ids.uuid();
       const claimed = await this.deps.uow.run(scope, async (tx) => {
         if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) return false;
         return this.deps.repository.claimRefresh(
           scope,
           pair,
-          { now, leaseUntil: new Date(now.getTime() + FX_REFRESH_LEASE_MS), dueBefore: null },
+          {
+            now,
+            leaseUntil: new Date(now.getTime() + FX_REFRESH_LEASE_MS),
+            dueBefore: null,
+            claimToken,
+          },
           tx,
         );
       });
-      outcome = claimed ? await this.performRefresh(scope, settings, pair) : 'BUSY';
+      outcome = claimed ? await this.performRefresh(scope, settings, pair, claimToken) : 'BUSY';
     }
     await this.deps.audit.record(scope, actor, {
       action: 'fx.refresh',
@@ -341,6 +352,7 @@ export class FxService {
     scope: TenantContext,
     settings: FxSettings,
     pair: FxPair,
+    claimToken: string,
   ): Promise<FxRefreshOutcome> {
     const order: FxSource[] = [settings.primary];
     if (settings.fallback !== 'NONE' && settings.fallback !== settings.primary) {
@@ -496,7 +508,7 @@ export class FxService {
         await this.deps.repository.releaseRefresh(
           scope,
           pair,
-          { now: fetchedAt, errorCode: refreshErrorCode(failures, rejected) },
+          { now: fetchedAt, errorCode: refreshErrorCode(failures, rejected), claimToken },
           tx,
         );
         const usable =
@@ -530,7 +542,7 @@ export class FxService {
         return 'FAILED';
       }
 
-      const stored = await this.storeChosen(scope, pair, chosen, fetchedAt, tx);
+      const stored = await this.storeChosen(scope, pair, chosen, fetchedAt, claimToken, tx);
       if (!stored) {
         /*
          * A newer quote is already stored (another replica's refresh landed first, or this
@@ -541,7 +553,7 @@ export class FxService {
         await this.deps.repository.releaseRefresh(
           scope,
           pair,
-          { now: fetchedAt, errorCode: null },
+          { now: fetchedAt, errorCode: null, claimToken },
           tx,
         );
         return 'REFRESHED';
@@ -579,6 +591,7 @@ export class FxService {
     pair: FxPair,
     chosen: FxCandidate,
     fetchedAt: Date,
+    claimToken: string,
     tx: unknown,
   ): Promise<boolean> {
     const rate = normaliseRate(chosen.rate);
@@ -602,6 +615,7 @@ export class FxService {
         policyVersion: FX_POLICY_VERSION,
       },
       fetchedAt,
+      claimToken,
       tx,
     );
   }

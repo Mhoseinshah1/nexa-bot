@@ -58,6 +58,8 @@ export interface FxQuoteRow {
     readonly policyVersion: number;
   } | null;
   readonly refreshClaimedUntil: Date | null;
+  /** Who holds the lease: the token the claimer minted. Null when unclaimed. */
+  readonly refreshClaimToken: string | null;
   readonly lastAttemptAt: Date | null;
   readonly lastErrorCode: string | null;
 }
@@ -87,30 +89,45 @@ export interface FxQuoteRepository {
    * Takes the refresh lease for one pair, as ONE conditional write: the row is created
    * if it does not exist, and claimed only when no other replica holds an unexpired
    * lease and — when `dueBefore` is given — the stored quote was fetched at or before it
-   * (or never). False means somebody else is refreshing, or nothing is due.
+   * (or never). The claim is stamped with `claimToken`, the claimer's own; the store and
+   * the release below are conditioned on it, so a refresher that stalled past its lease
+   * cannot clear or overwrite a newer replica's claim. False means somebody else is
+   * refreshing, or nothing is due.
    */
   claimRefresh(
     scope: TenantContext,
     pair: FxPair,
-    input: { readonly now: Date; readonly leaseUntil: Date; readonly dueBefore: Date | null },
+    input: {
+      readonly now: Date;
+      readonly leaseUntil: Date;
+      readonly dueBefore: Date | null;
+      readonly claimToken: string;
+    },
     tx: unknown,
   ): Promise<boolean>;
   /**
-   * Stores a quote and releases the lease, only when it is NEWER than the stored one:
-   * two replicas cannot move the quote backwards. Returns whether it was stored.
+   * Stores a quote and releases the lease, only when the caller still holds the lease
+   * (`claimToken`) and the quote is NEWER than the stored one: two replicas cannot move
+   * the quote backwards, and a stalled one cannot write over a live claim. Returns
+   * whether it was stored.
    */
   storeQuote(
     scope: TenantContext,
     pair: FxPair,
     quote: FxStoredQuote,
     now: Date,
+    claimToken: string,
     tx: unknown,
   ): Promise<boolean>;
-  /** Releases the lease after a refresh that stored nothing, recording the failure's code. */
+  /**
+   * Releases the lease after a refresh that stored nothing, recording the failure's code
+   * — only when the caller still holds it. A lease another replica has since taken is
+   * left exactly as it is.
+   */
   releaseRefresh(
     scope: TenantContext,
     pair: FxPair,
-    input: { readonly now: Date; readonly errorCode: string | null },
+    input: { readonly now: Date; readonly errorCode: string | null; readonly claimToken: string },
     tx: unknown,
   ): Promise<void>;
   sourceStates(scope: TenantContext, tx?: unknown): Promise<FxSourceStateRow[]>;

@@ -26,6 +26,8 @@ import {
   FX_STALE_QUOTE_USED_CODE,
   FX_FALLBACK_IN_USE_CODE,
 } from '../../apps/api/src/modules/commerce/fx/application/fx.service';
+import { DrizzleFxQuoteRepository } from '../../apps/api/src/modules/commerce/fx/infrastructure/drizzle-fx.repository';
+import { DrizzleGatewayInvoiceRepository } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-gateway-invoice.repository';
 import {
   adminActorFor,
   createAdmin,
@@ -353,6 +355,49 @@ describe('Central FX and the Stars route (packages FX, FX-STARS)', () => {
       expect(hits).toEqual([]);
     });
 
+    it('the previous release keeps writing a Stars invoice in its own shape: a rate and no policy reads back FIXED_RATE (Codex #122, P1)', async () => {
+      await enableStars({ customerFeeBasisPoints: 500 });
+      const attempt = await topup(100_000n);
+      const db = api.container.database.db;
+      // The columns the previous release wrote: everything but the policy and the FX snapshot.
+      const columns = (
+        await rows<{ column_name: string }>(
+          sql`SELECT column_name FROM information_schema.columns
+              WHERE table_schema = 'public' AND table_name = 'gateway_invoices'
+                AND column_name <> 'conversion_policy' AND column_name NOT LIKE 'fx\\_%'
+              ORDER BY ordinal_position`,
+        )
+      ).map((row) => row.column_name);
+      expect(columns).toContain('conversion_rate_minor');
+      expect(columns).not.toContain('conversion_policy');
+      const list = sql.raw(columns.map((column) => `"${column}"`).join(', '));
+      // One connection: the copy is a TEMP table, and the re-insert is the old write shape
+      // (a rate, the column's default for the policy), exactly what a rolling deploy sees.
+      await db.transaction(async (tx) => {
+        await tx.execute(
+          sql`CREATE TEMP TABLE pre_p_invoice ON COMMIT DROP AS SELECT * FROM gateway_invoices WHERE payment_id = ${attempt.payment.id}`,
+        );
+        await tx.execute(
+          sql`DELETE FROM gateway_invoices WHERE payment_id = ${attempt.payment.id}`,
+        );
+        await tx.execute(
+          sql`INSERT INTO gateway_invoices (${list}) SELECT ${list} FROM pre_p_invoice`,
+        );
+      });
+      expect(await invoiceOf(attempt.payment.id)).toMatchObject({
+        sent_amount: '81',
+        conversion_policy: 'FIXED_RATE',
+        conversion_rate_minor: '1300',
+        fx_quote_id: null,
+      });
+      // And this release still reads it as the fixed-rate attempt it is.
+      const record = await new DrizzleGatewayInvoiceRepository(db).findByPayment(
+        tenantA,
+        attempt.payment.id,
+      );
+      expect(record?.conversionPolicy).toBe('FIXED_RATE');
+    });
+
     it('the central mode cannot be chosen while the feature is off or the ratio is unset, and the ratio cannot be cleared under it', async () => {
       // A positive ratio is accepted at any time; it is the MODE that needs the feature.
       expect((await setSetting('stars.per_usdt', '100')).changed).toBe(true);
@@ -544,7 +589,7 @@ describe('Central FX and the Stars route (packages FX, FX-STARS)', () => {
       // A lease another replica holds is honoured: nothing is dialled until it lapses.
       await ageQuote(60);
       await api.container.database.db.execute(
-        sql`UPDATE fx_quotes SET refresh_claimed_until = now() + interval '20 seconds' WHERE tenant_id = ${tenantA.tenantId}`,
+        sql`UPDATE fx_quotes SET refresh_claimed_until = now() + interval '20 seconds', refresh_claim_token = 'another-replica' WHERE tenant_id = ${tenantA.tenantId}`,
       );
       expect(await api.container.fx.refreshIfDue(tenantA, 'USDT')).toBe('NOT_DUE');
       expect((await api.container.fx.refresh(tenantA, owner, 'USDT')).outcome).toBe('BUSY');
@@ -569,6 +614,73 @@ describe('Central FX and the Stars route (packages FX, FX-STARS)', () => {
         rate_mantissa: '103550',
         source: 'NOBITEX',
         refresh_claimed_until: null,
+      });
+    });
+
+    it('a refresh lease is fenced by its token: a stalled refresher can neither release nor overwrite the claim a newer replica holds (Codex #122)', async () => {
+      const repository = new DrizzleFxQuoteRepository(api.container.database.db);
+      const pair = { baseAsset: 'USDT', quoteCurrency: 'IRT' } as const;
+      const t0 = new Date('2026-09-30T10:00:00.000Z');
+      const at = (seconds: number) => new Date(t0.getTime() + seconds * 1_000);
+      const lease = (now: Date, claimToken: string) => ({
+        now,
+        leaseUntil: new Date(now.getTime() + 30_000),
+        dueBefore: null,
+        claimToken,
+      });
+      const quote = (fetchedAt: Date, mantissa: bigint) => ({
+        rate: { mantissa, scale: 0 },
+        source: 'NOBITEX' as const,
+        sourceAt: null,
+        fetchedAt,
+        quoteId: `v1:NOBITEX:USDT/IRT:${String(mantissa)}e-0:-:${String(fetchedAt.getTime())}`,
+        policyVersion: 1,
+      });
+      // Replica A claims, then stalls past its lease; replica B claims the lapsed lease.
+      expect(await repository.claimRefresh(tenantA, pair, lease(t0, 'replica-a'), undefined)).toBe(
+        true,
+      );
+      expect(
+        await repository.claimRefresh(tenantA, pair, lease(at(60), 'replica-b'), undefined),
+      ).toBe(true);
+      // A wakes up. Its release changes nothing, and its store is refused.
+      await repository.releaseRefresh(
+        tenantA,
+        pair,
+        { now: at(61), errorCode: 'late', claimToken: 'replica-a' },
+        undefined,
+      );
+      expect(await repository.find(tenantA, pair)).toMatchObject({
+        refreshClaimedUntil: at(90),
+        refreshClaimToken: 'replica-b',
+        lastErrorCode: null,
+      });
+      expect(
+        await repository.storeQuote(
+          tenantA,
+          pair,
+          quote(at(62), 999_999n),
+          at(62),
+          'replica-a',
+          undefined,
+        ),
+      ).toBe(false);
+      expect((await repository.find(tenantA, pair))?.quote).toBeNull();
+      // B's own store lands and clears the lease it holds.
+      expect(
+        await repository.storeQuote(
+          tenantA,
+          pair,
+          quote(at(63), 103_550n),
+          at(63),
+          'replica-b',
+          undefined,
+        ),
+      ).toBe(true);
+      expect(await repository.find(tenantA, pair)).toMatchObject({
+        quote: { rate: { mantissa: 103_550n, scale: 0 }, source: 'NOBITEX' },
+        refreshClaimedUntil: null,
+        refreshClaimToken: null,
       });
     });
 

@@ -4464,6 +4464,12 @@ export const fxQuotes = pgTable(
     policyVersion: integer('policy_version'),
     /** The refresh in flight, if any: a replica that claimed the row and the lease it holds. */
     refreshClaimedUntil: timestamptz('refresh_claimed_until'),
+    /**
+     * The claim's OWNERSHIP token, minted by the claimer. The store and the release are
+     * conditioned on it, so a refresher that stalled past its lease cannot clear or
+     * overwrite a newer replica's claim (Codex review of #122). Null when unclaimed.
+     */
+    refreshClaimToken: text('refresh_claim_token'),
     /** The last refresh ATTEMPT, whatever it produced, and the machine code of its failure. */
     lastAttemptAt: timestamptz('last_attempt_at'),
     lastErrorCode: text('last_error_code'),
@@ -4489,7 +4495,9 @@ export const fxQuotes = pgTable(
           AND (rate_mantissa IS NULL OR rate_mantissa > 0)
           AND (rate_scale IS NULL OR rate_scale BETWEEN 0 AND 8)
           AND (quote_id IS NULL OR length(quote_id) BETWEEN 1 AND 96)
-          AND (last_error_code IS NULL OR length(last_error_code) BETWEEN 1 AND 64)`,
+          AND (last_error_code IS NULL OR length(last_error_code) BETWEEN 1 AND 64)
+          AND (refresh_claim_token IS NULL OR length(refresh_claim_token) BETWEEN 1 AND 64)
+          AND (refresh_claimed_until IS NULL) = (refresh_claim_token IS NULL)`,
     ),
   ],
 );
