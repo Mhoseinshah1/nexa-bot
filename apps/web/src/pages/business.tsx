@@ -599,39 +599,6 @@ function ExportButtons({
   );
 }
 
-// --- Dashboard section ----------------------------------------------------------
-
-/**
- * The business section of the main dashboard (spec §5). KPI cards and the one trend
- * chart, then a compact top-products card and a compact failure card; everything deeper
- * lives on `/reports`.
- */
-export function BusinessOverview({ route }: { route: Route }) {
-  const selection = rangeFromRoute(route, 'TODAY');
-  const onLink = useLinkHandler();
-  return (
-    <>
-      <Card
-        title={t('web.report_business_title')}
-        hint={t('web.report_business_hint')}
-        actions={
-          <a className="btn sm" href="/reports" onClick={onLink}>
-            {t('web.report_open_reports')}
-          </a>
-        }
-      >
-        <RangePicker route={route} selection={selection} />
-      </Card>
-      <SummaryCards selection={selection} />
-      <TrendCard selection={selection} />
-      <div className="grid">
-        <TopProducts selection={selection} compact />
-        <FailureSummary selection={selection} />
-      </div>
-    </>
-  );
-}
-
 /**
  * State that belongs to one period — a page number, a cursor stack. A new range starts
  * it over: the component is not remounted when the range changes, so a cursor from the
@@ -649,22 +616,15 @@ function usePerRange<T>(selection: ReportRangeSelection, initial: T): [T, (next:
 
 // --- Products -------------------------------------------------------------------
 
-function TopProducts({
-  selection,
-  compact = false,
-}: {
-  selection: ReportRangeSelection;
-  compact?: boolean;
-}) {
+function TopProducts({ selection }: { selection: ReportRangeSelection }) {
   const [by, setBy] = useState<ReportProductRanking>('REVENUE');
   const [page, setPage] = usePerRange(selection, 1);
-  const limit = compact ? 10 : 25;
+  const limit = 25;
   const products = useReport(
     ['products', selection, by, page, limit],
     () => fetchReportProducts(selection, { by, limit, page }),
     rangeIsComplete(selection),
   );
-  const onLink = useLinkHandler();
   const data = products.data;
   const columns: Column<NonNullable<typeof data>['rows'][number]>[] = [
     {
@@ -713,17 +673,9 @@ function TopProducts({
   ];
   return (
     <Card
-      title={compact ? t('web.report_top_products_title') : t('web.report_products_title')}
+      title={t('web.report_products_title')}
       hint={t('web.report_products_hint')}
-      actions={
-        compact ? (
-          <a className="btn sm" href="/reports?tab=products" onClick={onLink}>
-            {t('web.report_view_all')}
-          </a>
-        ) : (
-          <ExportButtons selection={selection} report="PRODUCTS" />
-        )
-      }
+      actions={<ExportButtons selection={selection} report="PRODUCTS" />}
     >
       <FilterChips label={t('web.report_products_title')}>
         {REPORT_PRODUCT_RANKINGS.map((r) => (
@@ -753,30 +705,28 @@ function TopProducts({
               caption={t('web.report_products_title')}
               dense
             />
-            {!compact && (
-              <div className="pager">
-                <span className="muted small">
-                  {t('web.report_total_rows')} <Num value={data.totalRows} />
-                </span>
-                <span className="spacer" />
-                <button
-                  type="button"
-                  className="btn sm"
-                  disabled={page <= 1}
-                  onClick={() => setPage(page - 1)}
-                >
-                  {t('web.report_page_previous')}
-                </button>
-                <button
-                  type="button"
-                  className="btn sm"
-                  disabled={page * limit >= data.totalRows}
-                  onClick={() => setPage(page + 1)}
-                >
-                  {t('web.report_page_next')}
-                </button>
-              </div>
-            )}
+            <div className="pager">
+              <span className="muted small">
+                {t('web.report_total_rows')} <Num value={data.totalRows} />
+              </span>
+              <span className="spacer" />
+              <button
+                type="button"
+                className="btn sm"
+                disabled={page <= 1}
+                onClick={() => setPage(page - 1)}
+              >
+                {t('web.report_page_previous')}
+              </button>
+              <button
+                type="button"
+                className="btn sm"
+                disabled={page * limit >= data.totalRows}
+                onClick={() => setPage(page + 1)}
+              >
+                {t('web.report_page_next')}
+              </button>
+            </div>
           </>
         )}
       </StateSwitch>

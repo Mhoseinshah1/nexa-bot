@@ -4186,9 +4186,6 @@ export const WEB_FA = {
   'web.error_reseller_tier_not_found': 'این سطح نمایندگی وجود ندارد؛ فهرست را تازه کنید.',
   // --- WP12 business reports -------------------------------------------------
   'web.report_all': 'همه',
-  'web.report_business_title': 'گزارش کسب‌وکار',
-  'web.report_business_hint':
-    'ارقام فروش و درآمد، فقط برای مالک. هر پنج دقیقه تازه می‌شود و درآمد پس از تخفیف است؛ شارژ کیف پول، کش‌بک و هدیه درآمد نیستند.',
   'web.report_change_hint': 'نسبت به همان بازهٔ دورهٔ قبل',
   'web.report_change_new': 'جدید',
   'web.report_chart_current': 'دورهٔ جاری',
@@ -4354,7 +4351,6 @@ export const WEB_FA = {
   'web.report_tab_sales': 'فروش',
   'web.report_tab_services': 'سرویس‌ها',
   'web.report_tab_wallet': 'کیف پول',
-  'web.report_top_products_title': '۱۰ محصول برتر',
   'web.report_top_referrers': 'معرف‌های برتر',
   'web.report_total_rows': 'تعداد کل:',
   'web.report_traffic_sold': 'ترافیک فروخته‌شده',

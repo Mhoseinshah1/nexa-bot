@@ -269,7 +269,8 @@ polls faster than its constant, and every poll stops on a final answer (`pollUnl
 - `BusinessOverview` (`pages/business.tsx`, COMMERCE-B's file) is no longer mounted on `/`:
   its range picker, KPI grid and trend chart are replaced by the period control, the KPI rows
   and the two charts above; its top-products and failure cards are redrawn here compactly
-  over the same report endpoints. The export is left in place for its owner to remove.
+  over the same report endpoints. The export was removed in the consistency pass (nothing
+  else mounted it).
 - The panel cards no longer walk one page of `GET /panels`, so the partial-fleet caveat and
   its copy are gone; `docs/phase3d-falsification.md` R-01, V5 and W11 cite tests that now pin
   the exact-count successors of those rules (same names, `dashboard.test.tsx` › "the dashboard
