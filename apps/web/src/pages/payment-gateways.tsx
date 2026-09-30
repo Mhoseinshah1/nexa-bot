@@ -6,6 +6,7 @@ import {
   PAYMENT_GATEWAY_TOPUP_CASHBACK_PERCENT_MIN,
   formatBasisPointsPercent,
   parsePercentBasisPoints,
+  takesFixedRate,
   type PaymentGatewayProvider,
   type PaymentGatewayView,
   type SalesCurrencyCode,
@@ -21,6 +22,7 @@ import { useSubmissionKey } from '../submission-key';
 import { queryState } from '../view-state';
 import { t } from '../i18n/web.fa';
 import { messageFor } from './settings';
+import { FxSection } from './fx-section';
 import {
   Badge,
   Banner,
@@ -212,7 +214,7 @@ export function percentOf(value: string): number | null {
 export function takesConversionRate(provider: string): boolean {
   return (
     provider in PAYMENT_GATEWAY_DESCRIPTORS &&
-    PAYMENT_GATEWAY_DESCRIPTORS[provider as PaymentGatewayProvider].conversion === 'FIXED_RATE'
+    takesFixedRate(PAYMENT_GATEWAY_DESCRIPTORS[provider as PaymentGatewayProvider].conversion)
   );
 }
 
@@ -625,6 +627,12 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
           />
         </Card>
       </StateSwitch>
+
+      {/*
+        Package FX: the central exchange rate beside the routes it prices. Its own query
+        and its own card, so a rate source being down never blanks the routes table.
+      */}
+      <FxSection denied={denied} mayEdit={mayEdit} />
 
       {/*
         The generated callback URLs, for diagnostics (WP11A §14). Read-only: the server

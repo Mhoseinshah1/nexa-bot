@@ -8067,6 +8067,16 @@ export const TEMPLATES = [
     placeholders: [],
   },
   {
+    key: 'bot.payment.fx_unavailable',
+    description:
+      'Answers a customer who chose a route priced by the central exchange rate while no ' +
+      'usable rate exists (package FX): every source is down and the last quote is past ' +
+      'the stale limit, or the rate feature is off. It asks them to try again shortly or ' +
+      'pay another way, and says nothing about which source failed.',
+    format: 'PLAIN_TEXT',
+    placeholders: [],
+  },
+  {
     key: 'bot.payment.gateway_preparing',
     description:
       'Answers a customer who chose an external gateway while the invoice is still being ' +

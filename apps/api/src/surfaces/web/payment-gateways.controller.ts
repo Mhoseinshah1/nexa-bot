@@ -15,6 +15,7 @@ import {
   type PaymentGatewayView,
   type SalesCurrencyCode,
   type TenantContext,
+  takesFixedRate,
 } from '@nexa/contracts';
 import { CONTAINER, type Container } from '../../container.js';
 import { adminActor, requireSessionToken } from './authenticated-request.js';
@@ -233,7 +234,7 @@ function toView(
     },
     callbackUrl: facts.callbackUrl,
     conversion: {
-      rateRequired: PAYMENT_GATEWAY_DESCRIPTORS[gateway.provider].conversion === 'FIXED_RATE',
+      rateRequired: takesFixedRate(PAYMENT_GATEWAY_DESCRIPTORS[gateway.provider].conversion),
       rateMinor: gateway.providerUnitRateMinor?.toString() ?? null,
     },
     createdAt: gateway.createdAt.toISOString(),

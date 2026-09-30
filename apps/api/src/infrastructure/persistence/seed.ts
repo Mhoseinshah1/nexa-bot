@@ -1,6 +1,7 @@
 import {
   PAYMENT_GATEWAY_DESCRIPTORS,
   PAYMENT_GATEWAY_PROVIDERS,
+  takesFixedRate,
   type SecretCipher,
 } from '@nexa/contracts';
 import { AesGcmSecretCipher } from '../crypto/secret-cipher.js';
@@ -238,7 +239,7 @@ export async function seed(db: Database, cipher: SecretCipher): Promise<void> {
            */
           status:
             PAYMENT_GATEWAY_DESCRIPTORS[provider].requiresCredentials ||
-            PAYMENT_GATEWAY_DESCRIPTORS[provider].conversion === 'FIXED_RATE'
+            takesFixedRate(PAYMENT_GATEWAY_DESCRIPTORS[provider].conversion)
               ? ('DISABLED' as const)
               : ('ACTIVE' as const),
           // The seed writes no `sales.currency`, so the registry default is what these

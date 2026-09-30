@@ -119,10 +119,11 @@ import type { LocationChangeService } from '../../modules/commerce/locations/app
 import type { TrialService } from '../../modules/commerce/trials/application/trial.service.js';
 import type { OrderService } from '../../modules/commerce/orders/application/order.service.js';
 import type { OrderRecord } from '../../modules/commerce/orders/application/ports.js';
-import type {
-  GatewayAttempt,
-  ManualTransferInstruction,
-  PaymentService,
+import {
+  FX_UNAVAILABLE_REASON,
+  type GatewayAttempt,
+  type ManualTransferInstruction,
+  type PaymentService,
 } from '../../modules/commerce/payments/application/payment.service.js';
 import type {
   GatewayAttemptView,
@@ -4733,11 +4734,30 @@ function gatewayUnavailable(): PendingReply {
  * for `PAYMENT_GATEWAY_UNAVAILABLE`); everything else goes through the shared table.
  */
 function gatewayRefusal(error: unknown): PendingReply {
+  if (!isNexaError(error)) return refusal(error);
+  /*
+   * Package FX: a route priced by the central exchange rate, with no usable rate right
+   * now (every source down past the stale limit, or the feature off). Its own sentence,
+   * because the remedy differs from a route that is off: try again shortly, or pay
+   * another way. It names no source and no figure.
+   */
   if (
-    isNexaError(error) &&
-    (error.code === COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE ||
-      error.code === COMMERCE_ERROR_CODES.PAYMENT_METHOD_UNAVAILABLE ||
-      error.code === COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_AMOUNT_REJECTED)
+    error.code === COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE &&
+    typeof error.details === 'object' &&
+    error.details !== null &&
+    (error.details as { reason?: unknown }).reason === FX_UNAVAILABLE_REASON
+  ) {
+    return {
+      key: 'bot.payment.fx_unavailable',
+      values: {},
+      buttons: [mainMenuButton()],
+      orderId: null,
+    };
+  }
+  if (
+    error.code === COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE ||
+    error.code === COMMERCE_ERROR_CODES.PAYMENT_METHOD_UNAVAILABLE ||
+    error.code === COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_AMOUNT_REJECTED
   ) {
     return gatewayUnavailable();
   }

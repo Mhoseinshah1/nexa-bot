@@ -7,6 +7,7 @@ import {
   type SalesCurrencyCode,
   type TenantContext,
   type UserId,
+  takesFixedRate,
 } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import {
@@ -182,7 +183,7 @@ export class DrizzlePaymentGatewayRepository implements PaymentGatewayRepository
            */
           status:
             PAYMENT_GATEWAY_DESCRIPTORS[provider].requiresCredentials ||
-            PAYMENT_GATEWAY_DESCRIPTORS[provider].conversion === 'FIXED_RATE'
+            takesFixedRate(PAYMENT_GATEWAY_DESCRIPTORS[provider].conversion)
               ? ('DISABLED' as const)
               : ('ACTIVE' as const),
           /*

@@ -2,6 +2,8 @@ import { Controller, Get, Inject, Param, Query, Req, Res } from '@nestjs/common'
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import {
   API_PREFIX,
+  fractionToDecimalText,
+  rateToDecimalText,
   COMMERCE_ERROR_CODES,
   COMPENSATION_ROUTES,
   PAYMENT_ROUTES,
@@ -366,6 +368,34 @@ function toGatewayInvoiceView(invoice: GatewayInvoiceRecord): GatewayInvoiceView
     // Stars (Package A): the rate the Star figure was computed at, and the charge id
     // that paid it — an identifier an operator reconciles by, never a way to pay.
     conversionRateMinor: amount(invoice.conversionRateMinor),
+    // Package FX: how the figure was derived, and the whole central-rate snapshot when it
+    // was — the rate, its source and times, the ratio and the effective figure per unit.
+    conversionPolicy: invoice.conversionPolicy,
+    fx:
+      invoice.fx === null
+        ? null
+        : {
+            quoteId: invoice.fx.quoteId,
+            source: invoice.fx.source,
+            baseAsset: invoice.fx.baseAsset,
+            quoteCurrency: invoice.fx.quoteCurrency,
+            rateMantissa: invoice.fx.rate.mantissa.toString(),
+            rateScale: invoice.fx.rate.scale,
+            rate: rateToDecimalText(invoice.fx.rate),
+            sourceAt: iso(invoice.fx.sourceAt),
+            fetchedAt: invoice.fx.fetchedAt.toISOString(),
+            quoteState: invoice.fx.quoteState,
+            policyVersion: invoice.fx.policyVersion,
+            unitRatioMantissa: invoice.fx.unitRatio.mantissa.toString(),
+            unitRatioScale: invoice.fx.unitRatio.scale,
+            unitRatio: rateToDecimalText(invoice.fx.unitRatio),
+            effectiveRateNumerator: invoice.fx.effectiveRate.numerator.toString(),
+            effectiveRateDenominator: invoice.fx.effectiveRate.denominator.toString(),
+            effectiveRate: fractionToDecimalText(
+              invoice.fx.effectiveRate.numerator,
+              invoice.fx.effectiveRate.denominator,
+            ),
+          },
     providerChargeId: invoice.providerChargeId,
     requestAmount: amount(invoice.requestAmount),
     finalAmount: amount(invoice.finalAmount),

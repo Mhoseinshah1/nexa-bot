@@ -1,6 +1,15 @@
 import { z } from 'zod';
 import { MAX_MONEY_AMOUNT_MINOR } from './money.js';
 import type { PaymentMethod } from './payment.js';
+import type { GatewayConversionSpec } from './fx.js';
+
+/** A route billed in the sales currency: nothing is converted. */
+const SAME_UNIT_CONVERSION: GatewayConversionSpec = {
+  policies: ['SAME_UNIT'],
+  fxBaseAsset: null,
+  modeSetting: null,
+  unitRatioSetting: null,
+};
 
 /**
  * The payment ROUTES an operator offers, and the conditions under which a customer
@@ -105,11 +114,11 @@ export interface PaymentGatewayDescriptor {
    */
   readonly approval: 'NONE' | 'INQUIRY' | 'RECORDED_PAYMENT';
   /**
-   * How the payable becomes the provider's amount. `SAME_UNIT`: the provider bills in the
-   * sales currency (or an exact multiple of it). `FIXED_RATE`: an operator-set rate,
-   * `providerUnitRateMinor`, snapshotted on every attempt; there is no FX feed.
+   * How the payable becomes the provider's amount (package FX, `fx.ts`): the policies
+   * the route may use, the asset its unit is pegged to, and the settings that pick the
+   * policy and hold the unit ratio. The core reads the spec and never the name.
    */
-  readonly conversion: 'SAME_UNIT' | 'FIXED_RATE';
+  readonly conversion: GatewayConversionSpec;
 }
 
 export const PAYMENT_GATEWAY_DESCRIPTORS: {
@@ -121,7 +130,7 @@ export const PAYMENT_GATEWAY_DESCRIPTORS: {
     requiresCredentials: false,
     invoiceCredential: 'NONE',
     approval: 'NONE',
-    conversion: 'SAME_UNIT',
+    conversion: SAME_UNIT_CONVERSION,
   },
   TONPAYS: {
     provider: 'TONPAYS',
@@ -129,7 +138,7 @@ export const PAYMENT_GATEWAY_DESCRIPTORS: {
     requiresCredentials: true,
     invoiceCredential: 'GATEWAY_KEY',
     approval: 'INQUIRY',
-    conversion: 'SAME_UNIT',
+    conversion: SAME_UNIT_CONVERSION,
   },
   TELEGRAM_STARS: {
     provider: 'TELEGRAM_STARS',
@@ -138,7 +147,18 @@ export const PAYMENT_GATEWAY_DESCRIPTORS: {
     requiresCredentials: false,
     invoiceCredential: 'BOT_TOKEN',
     approval: 'RECORDED_PAYMENT',
-    conversion: 'FIXED_RATE',
+    /*
+     * Priced by the operator's fixed rate (Package A) OR, when `stars.pricing_mode` is
+     * switched to `CENTRAL_FX_RATIO`, by the central USDT quote and `stars.per_usdt`
+     * (package FX-STARS). The default mode is the fixed rate, so an installation that
+     * upgrades keeps pricing exactly as before until an operator switches it.
+     */
+    conversion: {
+      policies: ['FIXED_RATE', 'CENTRAL_FX'],
+      fxBaseAsset: 'USDT',
+      modeSetting: 'stars.pricing_mode',
+      unitRatioSetting: 'stars.per_usdt',
+    },
   },
 };
 

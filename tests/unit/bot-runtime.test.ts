@@ -797,6 +797,12 @@ describe('profile metadata, normalised before it is ever stored', () => {
        * route now draws its own named button (`bot.wallet.topup_method_button`), so Stars
        * and TonPays are two choices rather than whichever came first.
        */
+      /*
+       * Package FX: a route priced by the central exchange rate, with no usable rate
+       * right now. Reviewed: it asks the customer to try again shortly or pay another
+       * way — both of which this head answers — and names no source and no figure.
+       */
+      'bot.payment.fx_unavailable',
       'bot.payment.gateway_check_button',
       'bot.payment.gateway_closed',
       'bot.payment.gateway_confirmed',

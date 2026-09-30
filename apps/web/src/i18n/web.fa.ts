@@ -94,6 +94,7 @@ export const WEB_FA = {
   'web.settings_group_trial': 'سرویس آزمایشی',
   'web.settings_group_referral': 'معرفی دوستان',
   'web.settings_group_support': 'پشتیبانی و کانال‌ها',
+  'web.settings_group_fx': 'نرخ ارز',
   'web.settings_group_ops': 'گزارش‌های مدیریتی',
   'web.settings_group_other': 'سایر تنظیمات',
   'web.settings_current_value': 'مقدار فعلی',
@@ -201,6 +202,25 @@ export const WEB_FA = {
   'web.setting_referral_commission_percent': 'درصد پورسانت معرفی',
   'web.setting_referral_commission_percent_desc':
     'چند درصد از مبلغ سفارش پرداخت‌شدهٔ کاربر معرفی‌شده به معرف داده شود. اگر خالی بماند، برنامهٔ معرفی اجرا نمی‌شود.',
+  // Package FX: what an operator sets. The live figures are on the payment routes page.
+  'web.setting_fx_primary_source': 'صرافی اصلی نرخ تتر',
+  'web.setting_fx_primary_source_desc':
+    'صرافی عمومی‌ای که نرخ تتر ابتدا از آن خوانده می‌شود. هر دو صرافی بهترین قیمت خریدِ دفتر سفارش تتر را می‌دهند؛ یعنی قیمتی که خریدار به فروشنده می‌پردازد، تا مشتری هیچ‌وقت کمتر از ارزش واقعی شارژ نشود.',
+  'web.setting_fx_fallback_source': 'صرافی پشتیبان نرخ تتر',
+  'web.setting_fx_fallback_source_desc':
+    'وقتی صرافی اصلی پاسخ ندهد، محدود شود یا عدد پرت بدهد، از این صرافی پرسیده می‌شود. «ندارد» یعنی فقط صرافی اصلی.',
+  'web.setting_fx_fresh_ttl_seconds': 'مهلت تازگی نرخ',
+  'web.setting_fx_fresh_ttl_seconds_desc':
+    'نرخ خوانده‌شده تا این مدت «تازه» است و بعد از آن دوباره خوانده می‌شود. فاکتور جدیدی که با نرخ تازه صادر شود چیز خاصی ثبت نمی‌کند.',
+  'web.setting_fx_max_stale_seconds': 'حداکثر کهنگی مجاز نرخ',
+  'web.setting_fx_max_stale_seconds_desc':
+    'اگر هر دو صرافی از کار بیفتند، آخرین نرخ معتبر تا این سن هنوز می‌تواند فاکتور جدید صادر کند (و این استفاده ثبت می‌شود). بعد از آن فاکتور جدید با نرخ مرکزی رد می‌شود؛ فاکتورهای صادرشده نرخ ثبت‌شدهٔ خودشان را نگه می‌دارند.',
+  'web.setting_stars_pricing_mode': 'حالت قیمت‌گذاری استارز',
+  'web.setting_stars_pricing_mode_desc':
+    'نرخ ثابت: همان نرخ هر ستاره که روی روش پرداخت تنظیم شده (رفتار نسخه‌های قبل، تا وقتی عوضش نکنید). نرخ مرکزی: قیمت هر ستاره از نرخ تتر و «تعداد استارز به ازای هر تتر» به‌دست می‌آید. تغییر آن فقط روی فاکتورهای بعدی اثر دارد.',
+  'web.setting_stars_per_usdt': 'تعداد استارز به ازای هر تتر',
+  'web.setting_stars_per_usdt_desc':
+    'تلگرام نرخ رسمی تبدیل ستاره به تتر منتشر نمی‌کند؛ این عدد را شما تعیین می‌کنید (مثلاً ۱۰۰ یا ۷۷٫۵؛ حداکثر چهار رقم اعشار). خالی یعنی تنظیم نشده و حالت نرخ مرکزی قابل انتخاب نیست.',
   'web.setting_referral_commission_scope': 'سفارش‌های مشمول پورسانت',
   'web.setting_referral_commission_scope_desc':
     'پورسانت فقط برای نخستین سفارش پرداخت‌شدهٔ کاربر معرفی‌شده داده شود یا برای همهٔ سفارش‌هایش. تغییر آن فقط روی معرفی‌های بعدی اثر دارد.',
@@ -304,6 +324,11 @@ export const WEB_FA = {
   'web.feature_custom_service_title': 'سرویس دلخواه',
   'web.feature_custom_service_summary':
     'مشتری موقعیت، حجم و مدت دلخواه خود را انتخاب می‌کند و قیمت بر اساس قیمت هر گیگابایت و هر روز محاسبه می‌شود.',
+  'web.feature_central_fx_title': 'نرخ ارز مرکزی',
+  'web.feature_central_fx_summary':
+    'نرخ تتر به تومان از صرافی عمومی (نوبیتکس، و والکس به‌عنوان پشتیبان) خوانده و تازه نگه داشته می‌شود تا روش‌های پرداختی که با آن قیمت‌گذاری می‌شوند از یک نرخ واحد استفاده کنند. استارز تلگرام تا وقتی حالتش را عوض نکنید روی نرخ ثابت می‌ماند.',
+  'web.feature_central_fx_off_effect':
+    'با خاموش شدن، خواندن نرخ متوقف می‌شود و روش‌هایی که با نرخ مرکزی قیمت‌گذاری می‌شوند فاکتور جدید صادر نمی‌کنند (فاکتورهای صادرشده نرخ ثبت‌شدهٔ خودشان را نگه می‌دارند).',
 
   // Templates
   'web.templates_title': 'متن‌های ربات',
@@ -1570,6 +1595,64 @@ export const WEB_FA = {
   'web.payment_gateway_invoice_amounts': 'مبلغ ارسالی / درخواستی / نهایی / واریزی درگاه',
   'web.payment_gateway_invoice_outcome': 'نتیجه',
   'web.payment_gateway_invoice_late': 'تأیید درگاه پس از مهلت',
+  'web.payment_gateway_invoice_policy': 'روش تبدیل مبلغ',
+  'web.payment_gateway_invoice_fx': 'نرخ ارز ثبت‌شده روی فاکتور',
+  'web.fx_policy_same_unit': 'همان واحد',
+  'web.fx_policy_fixed_rate': 'نرخ ثابت',
+  'web.fx_policy_central_fx': 'نرخ مرکزی',
+  // Package FX: the FX section of the payment routes page.
+  'web.fx_section_title': 'نرخ ارز مرکزی (تتر)',
+  'web.fx_section_hint':
+    'نرخ تتر به تومان از صرافی عمومی خوانده می‌شود و روش‌هایی که با نرخ مرکزی قیمت‌گذاری می‌شوند (مثل استارز در حالت نرخ مرکزی) از همین نرخ استفاده می‌کنند. هر فاکتور نرخ لحظهٔ صدور خودش را ثبت می‌کند و با تغییر نرخ عوض نمی‌شود.',
+  'web.fx_settings_link':
+    'مهلت‌ها، منابع و حالت قیمت‌گذاری استارز در صفحهٔ «تنظیمات»، گروه «نرخ ارز» تنظیم می‌شوند؛ روشن و خاموش کردن قابلیت در صفحهٔ «قابلیت‌ها».',
+  'web.fx_enabled': 'وضعیت قابلیت',
+  'web.fx_enabled_on': 'روشن',
+  'web.fx_enabled_off': 'خاموش',
+  'web.fx_primary_source': 'منبع اصلی',
+  'web.fx_fallback_source': 'منبع پشتیبان',
+  'web.fx_source_nobitex': 'نوبیتکس',
+  'web.fx_source_wallex': 'والکس',
+  'web.fx_source_none': 'ندارد',
+  'web.fx_current_rate': 'نرخ فعلی (به ازای هر تتر)',
+  'web.fx_no_quote': 'هنوز نرخی خوانده نشده است.',
+  'web.fx_current_source': 'منبع نرخ فعلی',
+  'web.fx_last_refresh': 'آخرین به‌روزرسانی',
+  'web.fx_source_time': 'زمان اعلام منبع',
+  'web.fx_age': 'سن نرخ',
+  'web.fx_state': 'وضعیت نرخ',
+  'web.fx_state_fresh': 'تازه',
+  'web.fx_state_stale': 'کهنه (هنوز قابل استفاده)',
+  'web.fx_state_unavailable': 'در دسترس نیست',
+  'web.fx_ttl': 'مهلت تازگی',
+  'web.fx_max_stale': 'حداکثر کهنگی مجاز',
+  'web.fx_quote_id': 'شناسهٔ نرخ',
+  'web.fx_policy_version': 'نسخهٔ سیاست تبدیل',
+  'web.fx_refresh': 'به‌روزرسانی / آزمایش منابع',
+  'web.fx_refresh_done': 'نرخ از منبع اصلی به‌روز شد.',
+  'web.fx_refresh_fallback': 'منبع اصلی پاسخ نداد؛ نرخ از منبع پشتیبان به‌روز شد.',
+  'web.fx_refresh_failed':
+    'هیچ منبعی پاسخ قابل استفاده‌ای نداد. نرخ قبلی (در صورت وجود) حفظ شد؛ جزئیات در وضعیت منابع.',
+  'web.fx_refresh_disabled': 'قابلیت نرخ ارز مرکزی خاموش است؛ چیزی خوانده نشد.',
+  'web.fx_refresh_busy': 'به‌روزرسانی دیگری در جریان است؛ چند ثانیهٔ دیگر دوباره تلاش کنید.',
+  'web.fx_last_attempt': 'آخرین تلاش',
+  'web.fx_last_error': 'آخرین خطا',
+  'web.fx_sources_title': 'وضعیت منابع',
+  'web.fx_sources_none': 'هنوز از هیچ منبعی پرسیده نشده است.',
+  'web.fx_source_column': 'منبع',
+  'web.fx_source_last_success': 'آخرین پاسخ موفق',
+  'web.fx_source_last_failure': 'آخرین خطا',
+  'web.fx_source_retry_after': 'توقف تا',
+  'web.fx_source_failures': 'خطاهای پیاپی',
+  'web.fx_stars_title': 'استارز تلگرام',
+  'web.fx_stars_mode': 'حالت قیمت‌گذاری',
+  'web.fx_stars_mode_fixed': 'نرخ ثابت (تنظیم‌شده روی روش پرداخت)',
+  'web.fx_stars_mode_central': 'نرخ مرکزی × نسبت استارز به تتر',
+  'web.fx_stars_ratio': 'تعداد استارز به ازای هر تتر',
+  'web.fx_stars_ratio_unset': 'تنظیم نشده',
+  'web.fx_stars_fixed_rate': 'نرخ ثابت هر ستاره',
+  'web.fx_stars_central_rate': 'قیمت هر ستاره با نرخ مرکزی',
+  'web.fx_stars_central_rate_none': 'قابل محاسبه نیست (نرخ یا نسبت در دسترس نیست)',
   'web.payment_gateway_credential': 'کلید API',
   'web.payment_gateway_credential_none': 'لازم نیست',
   'web.payment_gateway_credential_missing': 'تنظیم نشده',
