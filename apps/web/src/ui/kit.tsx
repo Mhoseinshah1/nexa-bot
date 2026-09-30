@@ -152,7 +152,8 @@ export function Money({ value }: { value: MoneyWire }) {
  *
  * `value` is a number to group, or a figure a formatter already wrote (a
  * traffic amount, a rate, `12.5%`). `signed` isolates it left to right, so a
- * leading `+`/`−` stays in front of its digits inside a Persian sentence.
+ * leading `+`/`−` stays in front of its digits inside a Persian sentence (and
+ * a figure written as an equation, `2,150 تومان = ⭐ 1`, keeps its order).
  */
 export function Num({ value, signed = false }: { value: number | string; signed?: boolean }) {
   return (
@@ -678,7 +679,8 @@ export function StatCard({
           <b>
             {delta.trend === 'up' && <Icon name="arrowUp" size={11} />}
             {delta.trend === 'down' && <Icon name="arrowDown" size={11} />}
-            {delta.text}
+            {/* Isolated LTR, so «+12.5%» keeps its sign in front inside a Persian line. */}
+            <span className="num signed">{delta.text}</span>
           </b>
           <span>{delta.caption ?? t('web.vs_previous')}</span>
         </div>

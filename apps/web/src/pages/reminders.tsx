@@ -675,7 +675,8 @@ function NumberRow({
         <div className="input-group">
           <input
             id={id}
-            className="input ltr mono"
+            className="input"
+            dir="ltr"
             type="number"
             inputMode="numeric"
             min={min}
@@ -893,7 +894,8 @@ function MoneyRow({
           <div className="input-group">
             <input
               id="reminder-wallet-threshold"
-              className="input ltr mono"
+              className="input"
+              dir="ltr"
               inputMode="numeric"
               value={draft}
               disabled={!mayEdit}

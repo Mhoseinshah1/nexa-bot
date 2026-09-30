@@ -396,7 +396,8 @@ export function PaymentAccountsPage({ denied, mayEdit }: { denied: boolean; mayE
             <Field label={t('web.payment_account_sort')} htmlFor="pa-sort">
               <input
                 id="pa-sort"
-                className="input ltr"
+                className="input"
+                dir="ltr"
                 value={form.sortOrder}
                 inputMode="numeric"
                 onChange={(event) => setForm({ ...form, sortOrder: event.target.value })}

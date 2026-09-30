@@ -559,7 +559,7 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
               {row.conversion.rateMinor === null ? (
                 <Badge tone="warn">{t('web.payment_gateway_rate_missing')}</Badge>
               ) : (
-                <Ltr>{`${boundOf(row.conversion.rateMinor, row.currency)} = ⭐ 1`}</Ltr>
+                <Num signed value={`${boundOf(row.conversion.rateMinor, row.currency)} = ⭐ 1`} />
               )}
             </span>
           ),
@@ -788,7 +788,8 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
               <Field label={t('web.payment_gateway_min')} htmlFor="pg-min">
                 <input
                   id="pg-min"
-                  className="input ltr"
+                  className="input"
+                  dir="ltr"
                   value={form.minAmountMinor}
                   inputMode="numeric"
                   onChange={(event) => setForm({ ...form, minAmountMinor: event.target.value })}
@@ -797,7 +798,8 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
               <Field label={t('web.payment_gateway_max')} htmlFor="pg-max">
                 <input
                   id="pg-max"
-                  className="input ltr"
+                  className="input"
+                  dir="ltr"
                   value={form.maxAmountMinor}
                   inputMode="numeric"
                   onChange={(event) => setForm({ ...form, maxAmountMinor: event.target.value })}
@@ -813,7 +815,8 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
               <Field label={t('web.payment_gateway_after_payments')} htmlFor="pg-after-payments">
                 <input
                   id="pg-after-payments"
-                  className="input ltr"
+                  className="input"
+                  dir="ltr"
                   value={form.activateAfterPayments}
                   inputMode="numeric"
                   onChange={(event) =>
@@ -824,7 +827,8 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
               <Field label={t('web.payment_gateway_until_payments')} htmlFor="pg-until-payments">
                 <input
                   id="pg-until-payments"
-                  className="input ltr"
+                  className="input"
+                  dir="ltr"
                   value={form.deactivateAfterPayments}
                   inputMode="numeric"
                   onChange={(event) =>
@@ -835,7 +839,8 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
               <Field label={t('web.payment_gateway_after_days')} htmlFor="pg-after-days">
                 <input
                   id="pg-after-days"
-                  className="input ltr"
+                  className="input"
+                  dir="ltr"
                   value={form.activateAfterAccountDays}
                   inputMode="numeric"
                   onChange={(event) =>
@@ -859,7 +864,8 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
               >
                 <input
                   id="pg-topup-gift"
-                  className="input ltr"
+                  className="input"
+                  dir="ltr"
                   value={form.topupCashbackPercent}
                   inputMode="numeric"
                   maxLength={4}
@@ -880,7 +886,8 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
                 >
                   <input
                     id="pg-customer-fee"
-                    className="input ltr"
+                    className="input"
+                    dir="ltr"
                     value={form.customerFeePercent}
                     inputMode="decimal"
                     maxLength={7}
@@ -902,7 +909,8 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
                 >
                   <input
                     id="pg-rate"
-                    className="input ltr"
+                    className="input"
+                    dir="ltr"
                     value={form.providerUnitRate}
                     inputMode="numeric"
                     maxLength={19}
@@ -937,7 +945,8 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
               >
                 <input
                   id="pg-sort"
-                  className="input ltr"
+                  className="input"
+                  dir="ltr"
                   value={form.sortOrder}
                   inputMode="numeric"
                   onChange={(event) => setForm({ ...form, sortOrder: event.target.value })}

@@ -516,6 +516,23 @@ describe('quantities and identifiers', () => {
     expect(container.querySelector('.ltr')).toBeNull();
   });
 
+  it('leaves a quantity input in the body digits, and only identifiers in Latin', () => {
+    const dir = join(import.meta.dirname, '../../apps/web/src/pages');
+    // Typed identifiers, not quantities: a custom emoji id, an inbound id, a card number.
+    const IDENTIFIERS = ['appearance-', 'activation-inbound-id', 'pa-card'];
+    const offenders: string[] = [];
+    for (const name of readdirSync(dir).filter((file) => file.endsWith('.tsx'))) {
+      const code = readFileSync(join(dir, name), 'utf8');
+      for (const element of code.match(/<input\b(?:[^<>]|=>)*?\/>/gs) ?? []) {
+        if (!/inputMode="(numeric|decimal)"/.test(element)) continue;
+        if (!/className="[^"]*\bltr\b/.test(element)) continue;
+        if (IDENTIFIERS.some((id) => element.includes(id))) continue;
+        offenders.push(`${name}: ${/\bid=(\S+)/.exec(element)?.[1] ?? '?'}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
   it('is what every page uses for a formatted quantity', () => {
     const dir = join(import.meta.dirname, '../../apps/web/src/pages');
     const quantity =

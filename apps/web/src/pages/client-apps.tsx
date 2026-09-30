@@ -1044,7 +1044,8 @@ export function ClientAppsPage({ denied, mayEdit }: { denied: boolean; mayEdit: 
                 >
                   <input
                     id="app-sort"
-                    className="input ltr"
+                    className="input"
+                    dir="ltr"
                     value={form.sortOrder}
                     inputMode="numeric"
                     onChange={(event) => setForm({ ...form, sortOrder: event.target.value })}

@@ -1623,7 +1623,8 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
                   >
                     <input
                       id={`cap-${panel.id}`}
-                      className="input ltr"
+                      className="input"
+                      dir="ltr"
                       inputMode="numeric"
                       value={maxServices}
                       onChange={(event) => setMaxServices(event.target.value)}

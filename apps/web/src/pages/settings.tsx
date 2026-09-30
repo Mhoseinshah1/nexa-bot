@@ -897,7 +897,8 @@ function IntegerEditor({
       <div className="input-group">
         <input
           id={id}
-          className="input ltr num"
+          className="input num"
+          dir="ltr"
           inputMode="numeric"
           value={text}
           disabled={disabled}
@@ -1202,7 +1203,8 @@ function MoneyEditor({
         <input
           id={`${id}-amount`}
           aria-label={`${t('web.amount_minor')} — ${title}`}
-          className="input ltr mono"
+          className="input"
+          dir="ltr"
           inputMode="numeric"
           value={value.amountMinor}
           disabled={disabled}
@@ -1320,7 +1322,8 @@ function TopupPresetEditor({
           </label>
           <input
             id={`preset-${index}`}
-            className="input ltr mono grow"
+            className="input grow"
+            dir="ltr"
             inputMode="numeric"
             value={item.amountMinor}
             disabled={disabled}
