@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, screen, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import {
   BarChart,
   Checkbox,
@@ -278,7 +278,12 @@ describe('a guarded browser traversal', () => {
     const route = useRoute();
     return <p>{`at ${route.path}${route.query.toString()}`}</p>;
   }
-  const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
+  // jsdom traverses history on a later task, so each step waits for the
+  // state it produces rather than for a fixed time a loaded machine can miss.
+  const traverse = async (step: () => void, done: () => void) => {
+    act(step);
+    await waitFor(done);
+  };
 
   it('asks on Back between two ?tab= entries of the same page', async () => {
     go('/panels/x?tab=overview');
@@ -289,14 +294,16 @@ describe('a guarded browser traversal', () => {
         <LeaveGuardHost />
       </>,
     );
-    await act(async () => {
-      window.history.back();
-      await settle();
-    });
-    expect(screen.getByRole('alertdialog', { name: t('web.unsaved_title') })).toBeInTheDocument();
-    // The browser has been put back on the entry the dirty tab lives on.
-    await act(settle);
-    expect(window.location.search).toBe('?tab=history');
+    await traverse(
+      () => window.history.back(),
+      () => {
+        expect(
+          screen.getByRole('alertdialog', { name: t('web.unsaved_title') }),
+        ).toBeInTheDocument();
+        // The browser has been put back on the entry the dirty tab lives on.
+        expect(window.location.search).toBe('?tab=history');
+      },
+    );
     fireEvent.click(screen.getByRole('button', { name: t('web.unsaved_stay') }));
     expect(window.location.search).toBe('?tab=history');
   });
@@ -312,28 +319,31 @@ describe('a guarded browser traversal', () => {
         <LeaveGuardHost />
       </>,
     );
-    await act(async () => {
-      window.history.back();
-      await settle();
-    });
-    await act(settle);
-    expect(window.location.pathname).toBe('/settings');
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: t('web.unsaved_leave') }));
-      await settle();
-    });
+    await traverse(
+      () => window.history.back(),
+      () => {
+        expect(screen.getByRole('alertdialog')).toBeInTheDocument();
+        expect(window.location.pathname).toBe('/settings');
+      },
+    );
+    await traverse(
+      () => fireEvent.click(screen.getByRole('button', { name: t('web.unsaved_leave') })),
+      () => expect(screen.getByText('at /panels')).toBeInTheDocument(),
+    );
     expect(window.location.pathname).toBe('/panels');
     expect(window.history.length, 'nothing was pushed').toBe(length);
     // Back continues backward, rather than returning to the page just left.
-    await act(async () => {
-      window.history.back();
-      await settle();
-    });
-    await act(settle);
-    expect(screen.getByRole('alertdialog')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: t('web.unsaved_leave') }));
-    await act(settle);
-    expect(window.location.pathname).toBe('/orders');
+    await traverse(
+      () => window.history.back(),
+      () => {
+        expect(screen.getByRole('alertdialog')).toBeInTheDocument();
+        expect(window.location.pathname).toBe('/panels');
+      },
+    );
+    await traverse(
+      () => fireEvent.click(screen.getByRole('button', { name: t('web.unsaved_leave') })),
+      () => expect(screen.getByText('at /orders')).toBeInTheDocument(),
+    );
   });
 });
 
