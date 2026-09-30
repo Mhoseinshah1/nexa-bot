@@ -343,10 +343,43 @@ export function telegramButtonMarkup(
  * from being ignored, and the failure would be a preview card appearing with no code
  * change to explain it.
  */
+/**
+ * One Telegram `MessageEntity` on its way to the wire, in UTF-16 code units.
+ *
+ * `custom_emoji_id` is the one attribute this installation sends (Premium UI): "For
+ * "custom_emoji" only, unique identifier of the custom emoji". The provider-caption
+ * entities (`caption-markup.ts`) carry no attribute and satisfy this shape as they are.
+ *
+ * Entities are sent "instead of parse_mode" (Bot API, `entities` / `caption_entities`):
+ * every builder below drops them for an HTML body, whose custom emoji travel as
+ * `<tg-emoji>` tags inside the text (`appearance-render.ts`).
+ */
+export interface TelegramMessageEntity {
+  readonly type: string;
+  readonly offset: number;
+  readonly length: number;
+  readonly custom_emoji_id?: string;
+}
+
+/** The entities that lie inside a text, for a builder that may have bounded it. */
+function entitiesInside(
+  entities: readonly TelegramMessageEntity[] | undefined,
+  text: string,
+): TelegramMessageEntity[] {
+  return (entities ?? []).filter(
+    (entity) => entity.length > 0 && entity.offset + entity.length <= text.length,
+  );
+}
+
 export function textMessageBody(input: {
   readonly chatId: string;
   readonly text: string;
   readonly html: boolean;
+  /**
+   * Premium UI: the custom emoji entities of a PLAIN body, from the appearance renderer.
+   * Ignored for HTML, where they cannot be sent beside `parse_mode`.
+   */
+  readonly entities?: readonly TelegramMessageEntity[];
   /**
    * The inline-keyboard buttons, already labelled.
    *
@@ -388,6 +421,10 @@ export function textMessageBody(input: {
     link_preview_options: { is_disabled: true },
   };
   if (input.html) body.parse_mode = 'HTML';
+  else {
+    const entities = entitiesInside(input.entities, input.text);
+    if (entities.length > 0) body.entities = entities;
+  }
   if (input.replyToMessageId !== undefined) {
     body.reply_parameters = {
       message_id: input.replyToMessageId,
@@ -460,19 +497,14 @@ function captionAndKeyboardFields(input: {
   readonly html?: boolean;
   readonly buttons?: readonly TelegramButton[];
   /** Round N (F2): a PLAIN caption's formatting, as entities; ignored for HTML. */
-  readonly captionEntities?: TelegramAlbumItem['captionEntities'];
+  readonly captionEntities?: readonly TelegramMessageEntity[];
 }): Record<string, unknown> {
   const fields: Record<string, unknown> = {};
   if (input.caption !== undefined && input.caption.length > 0) {
     const caption = input.html === true ? input.caption : boundCaption(input.caption);
     fields.caption = caption;
     if (input.html === true) fields.parse_mode = 'HTML';
-    const entities =
-      input.html === true
-        ? []
-        : (input.captionEntities ?? []).filter(
-            (entity) => entity.length > 0 && entity.offset + entity.length <= caption.length,
-          );
+    const entities = input.html === true ? [] : entitiesInside(input.captionEntities, caption);
     if (entities.length > 0) fields.caption_entities = entities;
   }
   if (input.buttons !== undefined && input.buttons.length > 0) {
@@ -496,14 +528,21 @@ export function editCaptionBody(input: {
   readonly caption: string;
   readonly html: boolean;
   readonly buttons: readonly TelegramButton[];
+  /** Premium UI: a PLAIN caption's custom emoji entities; ignored for HTML. */
+  readonly captionEntities?: readonly TelegramMessageEntity[];
 }): Record<string, unknown> {
+  const caption = input.html ? input.caption : boundCaption(input.caption);
   const body: Record<string, unknown> = {
     chat_id: input.chatId,
     message_id: input.messageId,
-    caption: input.html ? input.caption : boundCaption(input.caption),
+    caption,
     reply_markup: { inline_keyboard: telegramButtonMarkup(input.buttons) },
   };
   if (input.html) body.parse_mode = 'HTML';
+  else {
+    const entities = entitiesInside(input.captionEntities, caption);
+    if (entities.length > 0) body.caption_entities = entities;
+  }
   return body;
 }
 
@@ -546,7 +585,7 @@ export function fileUploadBody(input: {
   readonly caption?: string;
   readonly html?: boolean;
   readonly buttons?: readonly TelegramButton[];
-  readonly captionEntities?: TelegramAlbumItem['captionEntities'];
+  readonly captionEntities?: readonly TelegramMessageEntity[];
 }): TelegramMultipartBody {
   const fields: Record<string, string> = { chat_id: input.chatId };
   for (const [name, value] of Object.entries(captionAndKeyboardFields(input))) {
@@ -575,11 +614,7 @@ export interface TelegramAlbumItem {
   readonly fileName: string;
   readonly mimeType: string;
   readonly caption?: string;
-  readonly captionEntities?: readonly {
-    readonly type: string;
-    readonly offset: number;
-    readonly length: number;
-  }[];
+  readonly captionEntities?: readonly TelegramMessageEntity[];
 }
 
 /**
@@ -600,9 +635,7 @@ export function mediaGroupUploadBody(input: {
     if (item.caption !== undefined && item.caption.length > 0) {
       const caption = boundCaption(item.caption);
       entry.caption = caption;
-      const entities = (item.captionEntities ?? []).filter(
-        (entity) => entity.length > 0 && entity.offset + entity.length <= caption.length,
-      );
+      const entities = entitiesInside(item.captionEntities, caption);
       if (entities.length > 0) entry.caption_entities = entities;
     }
     return entry;
@@ -659,6 +692,8 @@ export function editMessageBody(input: {
   readonly text: string;
   readonly html: boolean;
   readonly buttons: readonly TelegramButton[];
+  /** Premium UI: the same entities `textMessageBody` takes, by the same rule. */
+  readonly entities?: readonly TelegramMessageEntity[];
 }): Record<string, unknown> {
   const body: Record<string, unknown> = {
     chat_id: input.chatId,
@@ -668,6 +703,10 @@ export function editMessageBody(input: {
     reply_markup: { inline_keyboard: telegramButtonMarkup(input.buttons) },
   };
   if (input.html) body.parse_mode = 'HTML';
+  else {
+    const entities = entitiesInside(input.entities, input.text);
+    if (entities.length > 0) body.entities = entities;
+  }
   return body;
 }
 
