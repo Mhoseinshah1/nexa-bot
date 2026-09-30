@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { useState } from 'react';
 import { describe, expect, it } from 'vitest';
 import { fireEvent, screen } from '@testing-library/react';
@@ -21,7 +21,27 @@ import { renderPage } from './harness';
  */
 
 const REPO_ROOT = join(import.meta.dirname, '../..');
-const CSS = readFileSync(join(REPO_ROOT, 'apps/web/src/styles.css'), 'utf8');
+
+/**
+ * The stylesheet exactly as the browser receives it.
+ *
+ * `styles.css` is an entry point that `@import`s the split files (tokens,
+ * base, kit, shell, one per page family) and then declares `[hidden]`. The
+ * build inlines each import IN PLACE, so the cascade is the concatenation in
+ * import order with the entry's own rules after it. Reading the entry alone
+ * would assert against a file of import lines, and every rule below would be
+ * "missing"; reading the parts in some other order would let `[hidden]` be
+ * followed by a page rule and still pass. So the imports are expanded here, in
+ * place and recursively, the way the bundler does it.
+ */
+function expandImports(path: string): string {
+  const text = readFileSync(path, 'utf8');
+  return text.replace(/@import\s+['"]([^'"]+)['"]\s*;/g, (_, target: string) =>
+    expandImports(join(dirname(path), target)),
+  );
+}
+
+const CSS = expandImports(join(REPO_ROOT, 'apps/web/src/styles.css'));
 
 /**
  * The declarations of one rule, by selector, with comments stripped.
@@ -37,6 +57,34 @@ function block(selector: string): string {
   if (match === null) throw new Error(`No rule for ${selector} in styles.css.`);
   return match[2] ?? '';
 }
+
+describe('the split stylesheet', () => {
+  /*
+   * The expansion above is only as good as what it expands. If an import line
+   * were mistyped (or a file dropped from the entry), the rules in it would
+   * vanish from the bundle AND from this suite's view, and every `block()`
+   * assertion about another file would go on passing.
+   */
+  it('inlines every part of the design system, in cascade order', () => {
+    const entry = readFileSync(join(REPO_ROOT, 'apps/web/src/styles.css'), 'utf8');
+    const imports = [...entry.matchAll(/@import\s+['"]([^'"]+)['"]\s*;/g)].map((m) => m[1]);
+    expect(imports).toEqual([
+      './styles/tokens.css',
+      './styles/base.css',
+      './styles/kit.css',
+      './styles/shell.css',
+      './styles/pages/dashboard.css',
+      './styles/pages/commerce-a.css',
+      './styles/pages/commerce-b.css',
+      './styles/pages/ops-a.css',
+      './styles/pages/ops-b.css',
+    ]);
+    expect(CSS).not.toMatch(/@import/);
+    // The token sets and the kit arrived: one rule from each end of the chain.
+    expect(block(":root[data-theme='light']")).toMatch(/--bg-0:/);
+    expect(block('.btn')).toMatch(/border-radius/);
+  });
+});
 
 describe('bidi isolation, at both ends of the seam', () => {
   /**

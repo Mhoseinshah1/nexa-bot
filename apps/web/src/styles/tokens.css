@@ -1,0 +1,134 @@
+/*
+ * Design tokens — the one place a colour, a radius or a size is decided.
+ *
+ * Dark is the primary theme and light is a full second set of tokens rather
+ * than an inversion — an inverted palette gets the greys right and every
+ * semantic colour wrong. `data-theme` on <html> selects one; `theme.ts`
+ * ALWAYS writes it, including for the `system` choice, so there is no
+ * `prefers-color-scheme` block here and every token has exactly one
+ * definition per theme.
+ *
+ * Every colour a component uses goes through a token. A literal colour in a
+ * component is a colour that exists in exactly one theme.
+ *
+ * The palette is the reference preview's (refs/reference/preview-v2,
+ * `styles/preview.css`), token for token; the size, radius and layout tokens
+ * below it are the values that preview used as literals, named so the kit and
+ * the shell cannot drift apart.
+ */
+
+@font-face {
+  font-family: 'Vazirmatn';
+  src: url('/fonts/Vazirmatn-Variable.woff2') format('woff2');
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+:root,
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg-0: #0e1014;
+  --bg-1: #13161b;
+  --bg-2: #181c22;
+  --bg-3: #1f242c;
+  --bg-4: #272d37;
+  --line: #242a33;
+  --line-2: #323a46;
+  --fg: #e7e9ed;
+  --fg-2: #a3aab6;
+  --fg-3: #6f7784;
+  --accent: #6d9bf4;
+  --accent-strong: #4f83ea;
+  --accent-fg: #0b1220;
+  --accent-soft: rgba(109, 155, 244, 0.14);
+  --ok: #3fc383;
+  --ok-soft: rgba(63, 195, 131, 0.14);
+  --warn: #e8ac3f;
+  --warn-soft: rgba(232, 172, 63, 0.14);
+  --danger: #f06565;
+  --danger-soft: rgba(240, 101, 101, 0.14);
+  --info: #6d9bf4;
+  --info-soft: rgba(109, 155, 244, 0.14);
+  --violet: #a58cff;
+  --violet-soft: rgba(165, 140, 255, 0.14);
+  --teal: #3cc7c0;
+  --teal-soft: rgba(60, 199, 192, 0.14);
+  --on-solid: #ffffff;
+  --overlay: rgba(4, 6, 10, 0.55);
+  --shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
+  --chart-1: #6d9bf4;
+  --chart-2: #3fc383;
+  --chart-3: #e8ac3f;
+  --chart-4: #a58cff;
+  --chart-5: #3cc7c0;
+  --chart-6: #f06565;
+  --chart-grid: #242a33;
+  --brand-from: #6d9bf4;
+  --brand-to: #a58cff;
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+  --bg-0: #f3f4f6;
+  --bg-1: #ffffff;
+  --bg-2: #ffffff;
+  --bg-3: #f5f6f8;
+  --bg-4: #eceef2;
+  --line: #e3e6eb;
+  --line-2: #cfd4dc;
+  --fg: #161a22;
+  --fg-2: #5a6372;
+  --fg-3: #8b94a3;
+  --accent: #2f6fe4;
+  --accent-strong: #235bc4;
+  --accent-fg: #ffffff;
+  --accent-soft: rgba(47, 111, 228, 0.1);
+  --ok: #1f9a5f;
+  --ok-soft: rgba(31, 154, 95, 0.12);
+  --warn: #b97a0c;
+  --warn-soft: rgba(185, 122, 12, 0.12);
+  --danger: #d43d3d;
+  --danger-soft: rgba(212, 61, 61, 0.1);
+  --info: #2f6fe4;
+  --info-soft: rgba(47, 111, 228, 0.1);
+  --violet: #6f4fe0;
+  --violet-soft: rgba(111, 79, 224, 0.1);
+  --teal: #178f89;
+  --teal-soft: rgba(23, 143, 137, 0.12);
+  --on-solid: #ffffff;
+  --overlay: rgba(20, 26, 38, 0.35);
+  --shadow: 0 12px 32px rgba(20, 30, 50, 0.16);
+  --shadow-sm: 0 1px 4px rgba(20, 30, 50, 0.1);
+  --chart-1: #2f6fe4;
+  --chart-2: #1f9a5f;
+  --chart-3: #b97a0c;
+  --chart-4: #6f4fe0;
+  --chart-5: #178f89;
+  --chart-6: #d43d3d;
+  --chart-grid: #e3e6eb;
+  --brand-from: #2f6fe4;
+  --brand-to: #6f4fe0;
+}
+
+/* Theme-independent scale. */
+:root {
+  --font-ui: 'Vazirmatn', 'IRANSans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono:
+    ui-monospace, 'SFMono-Regular', 'JetBrains Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace;
+  --fs-body: 13.5px;
+  --fs-ui: 12.75px;
+  --fs-sm: 12px;
+  --fs-xs: 11.5px;
+  --fs-2xs: 10.5px;
+  --radius-card: 10px;
+  --radius-ctl: 7px;
+  --radius-sm: 5px;
+  --radius-pill: 999px;
+  --ctl-h: 32px;
+  --ctl-h-sm: 26px;
+  --sidebar-w-full: 248px;
+  --sidebar-w-rail: 60px;
+  --topbar-h: 52px;
+  --gap: 14px;
+}
