@@ -354,6 +354,14 @@ move a CANCELLED action; when it does not, the campaign cancels the record it ha
 given (before the start, that credits, grants and sends nothing). Every hand-over outcome is
 audited (`campaign.action_launched` / `campaign.action_failed`) with the engine's ids.
 
+A hand-over retried after an interruption is bound to the SAME confirmation. If the
+confirmed set moved in between, the engine refuses with `audience.changed`, the action is
+FAILED, and nothing is ever given to a set the operator did not confirm; the Web Admin says
+so and names the remedy (cancel, re-make). Succeeding with the frozen set would need the
+engines to accept a frozen member list (OQ-C1-04). Pinned by "a delayed hand-over never
+gifts a set other than the one confirmed", which fails if the hand-over is re-bound to a
+fresh preview.
+
 ### 5.4 Pause, resume, cancel
 
 - Pause/resume move the standing rules and steer the announcement (Broadcast pauses a

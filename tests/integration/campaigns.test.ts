@@ -996,6 +996,51 @@ describe('campaigns', () => {
       ]);
     });
 
+    it('a delayed hand-over never gifts a set other than the one confirmed', async () => {
+      const id = await draftCampaign([GIFT], { fromMs: 2 * HOUR, toMs: DAY });
+      // The confirmation commits, and the engine is unreachable for the hand-over.
+      const down = new CampaignService({
+        ...deps(),
+        massActions: {
+          ...ctx.container.bulkOperations,
+          preview: ctx.container.bulkOperations.preview.bind(ctx.container.bulkOperations),
+          create: () => Promise.reject(new Error('the engine was unreachable')),
+        } as never,
+      });
+      const preview = await down.preview(tenantA, owner, id);
+      const wallet = preview.gifts.WALLET_GIFT;
+      await expect(
+        down.schedule(tenantA, owner, {
+          idempotencyKey: key(),
+          campaignId: id,
+          expectedDefinitionHash: preview.audience.definitionHash,
+          expectedRecipients: preview.audience.customers,
+          expectedFingerprint: preview.audience.fingerprint,
+          walletGift: {
+            count: wallet?.count ?? 0,
+            fingerprint: wallet?.fingerprint ?? '',
+            typedCount: wallet?.count ?? 0,
+            totalMinor: wallet?.totalLiability?.amountMinor ?? '0',
+          },
+        }),
+      ).rejects.toThrow('unreachable');
+      expect(await stateOf(id)).toBe('SCHEDULED');
+
+      // Somebody registers before the hand-over is retried: the set confirmed is gone.
+      await ctx.container.customers.resolveFromUpdate(tenantA, customerActor('late-gift'), {
+        idempotencyKey: 'resolve-late-gift',
+        telegramUserId: '930003',
+        from: { id: 930003, first_name: 'مریم' },
+        botInstanceId: BOT_A,
+      });
+      const detail = await service.launchPending(tenantA, owner, id);
+      const action = detail.actions.find((a) => a.kind === 'WALLET_GIFT');
+      // Refused, visibly, and nothing was handed to the engine for the new set.
+      expect(action?.state).toBe('FAILED');
+      expect(action?.failureCode).toBe('audience.changed');
+      expect(await count(sql`SELECT count(*)::int AS n FROM bulk_operations`)).toBe(0);
+    });
+
     it('refuses a time gift that reaches no service, before anything is written', async () => {
       const id = await draftCampaign([
         { kind: 'DISCOUNT', terms: TWENTY_PERCENT },

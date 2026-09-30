@@ -2577,3 +2577,18 @@ SBR-017..021). Nexa's discount engine has neither dimension, and a campaign crea
 that engine rather than growing it.
 
 UNRESOLVED. Unchanged by C1.
+
+## OQ-C1-04 — a delayed campaign hand-over after the confirmed set moved
+
+A campaign hands its gifts and announcement to the shared engines right after its own
+confirmation commits, bound to the confirmed definition hash, count and set fingerprint. If
+that hand-over is interrupted (a crash or an unreachable engine between the two
+transactions) and membership moves before it is retried, the engine refuses with
+`audience.changed`: the action becomes FAILED, nothing is credited, granted or sent, and the
+Web Admin tells the operator to cancel and re-make the campaign
+(`docs/round-n-campaigns-audit.md` §5.3; Codex review of PR #118, finding 2). A retry that
+SUCCEEDS with exactly the confirmed set would need the mass-action and Broadcast engines to
+accept a frozen member list; their `customerIds` definition is capped at 100
+(`AUDIENCE_CUSTOMER_IDS_MAX`), so that is a contract change on E's side.
+
+UNRESOLVED. Safe (never a different set), not live, in that one failure case.

@@ -2941,6 +2941,8 @@ export const WEB_FA = {
   'web.campaign_open_rules': 'در صفحهٔ تخفیف‌ها',
   'web.campaign_engine_broadcast': 'در ارسال همگانی',
   'web.campaign_engine_bulk': 'در عملیات گروهی',
+  'web.campaign_failure_audience_changed':
+    'مخاطبان تأییدشده پیش از سپردن این اقدام تغییر کردند؛ هیچ مبلغ یا هدیه‌ای داده نشد. کمپین را لغو کنید و دوباره بسازید.',
   'web.campaign_days': 'روز',
   'web.campaign_section_preview': 'پیش‌نمایش و تأیید',
   'web.campaign_preview_hint':

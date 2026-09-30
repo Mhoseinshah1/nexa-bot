@@ -349,6 +349,19 @@ describe('one campaign', () => {
     expect(screen.getByRole('button', { name: 'تأیید و زمان‌بندی' })).toBeDisabled();
   });
 
+  it('says in words why a gift was not handed over, and that nothing was given', async () => {
+    const failed = detail({ state: 'SCHEDULED' });
+    const gift = failed.campaign.actions[1] as Record<string, unknown>;
+    gift['state'] = 'FAILED';
+    gift['failureCode'] = 'audience.changed';
+    stubApi([
+      { url: `/campaigns/${CAMPAIGN_ID}/results`, body: results() },
+      { url: `/campaigns/${CAMPAIGN_ID}`, body: failed },
+    ]);
+    renderPage(<CampaignDetailPage id={CAMPAIGN_ID} denied={false} mayManage may={ALL} />);
+    expect(await screen.findByText(/هیچ مبلغ یا هدیه‌ای داده نشد/)).toBeInTheDocument();
+  });
+
   it('asks before a cancel, and says a cancel undoes nothing already done', async () => {
     const api = stubApi([
       { url: `/campaigns/${CAMPAIGN_ID}/results`, body: results() },

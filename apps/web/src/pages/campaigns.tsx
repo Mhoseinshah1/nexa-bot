@@ -1450,6 +1450,9 @@ function ActionsCard({ campaign }: { campaign: CampaignDetail }) {
                 <span className="small">{t('web.campaign_engine_broadcast')}</span>
               ) : row.bulkOperationId !== null ? (
                 <span className="small">{t('web.campaign_engine_bulk')}</span>
+              ) : row.failureCode === 'audience.changed' ? (
+                // The confirmed set moved before the hand-over: nothing was given to it.
+                <span className="small">{t('web.campaign_failure_audience_changed')}</span>
               ) : row.failureCode !== null ? (
                 <Ltr>{row.failureCode}</Ltr>
               ) : (
