@@ -88,10 +88,10 @@ const STATE_TONES: Readonly<Record<BulkOperationState, Tone>> = {
   CANCELLED: 'neutral',
 };
 /** An operation's state, with a moving dot while it runs. */
-function BulkStateBadge({ state }: { state: BulkOperationState }) {
+function BulkStateBadge({ value }: { value: BulkOperationState }) {
   return (
-    <Badge tone={STATE_TONES[state]} dot pulse={state === 'RUNNING'}>
-      {t(STATE_LABELS[state])}
+    <Badge tone={STATE_TONES[value]} dot pulse={value === 'RUNNING'}>
+      {t(STATE_LABELS[value])}
     </Badge>
   );
 }
@@ -188,7 +188,7 @@ export function BulkOperationsPage({
     {
       key: 'state',
       header: t('web.bulk_state'),
-      render: (row) => <BulkStateBadge state={row.state} />,
+      render: (row) => <BulkStateBadge value={row.state} />,
     },
     {
       key: 'items',
@@ -637,7 +637,7 @@ export function BulkOperationDetailPage({
         <>
           <PageHead
             title={t(KIND_LABELS[op.kind])}
-            badge={<BulkStateBadge state={op.state} />}
+            badge={<BulkStateBadge value={op.state} />}
             subtitle={
               <span className="cb-meta">
                 <span>{grantText(op)}</span>

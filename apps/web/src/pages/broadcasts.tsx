@@ -102,10 +102,10 @@ const STATE_TONES: Readonly<Record<BroadcastState, Tone>> = {
   CANCELLED: 'neutral',
 };
 /** A broadcast's state, with a moving dot while it is sending. */
-function BroadcastStateBadge({ state }: { state: BroadcastState }) {
+function BroadcastStateBadge({ value }: { value: BroadcastState }) {
   return (
-    <Badge tone={STATE_TONES[state]} dot pulse={state === 'SENDING'}>
-      {t(BROADCAST_STATE_LABELS[state])}
+    <Badge tone={STATE_TONES[value]} dot pulse={value === 'SENDING'}>
+      {t(BROADCAST_STATE_LABELS[value])}
     </Badge>
   );
 }
@@ -208,7 +208,7 @@ export function BroadcastsPage({
     {
       key: 'state',
       header: t('web.bc_state'),
-      render: (row) => <BroadcastStateBadge state={row.state} />,
+      render: (row) => <BroadcastStateBadge value={row.state} />,
     },
     {
       key: 'kind',
@@ -1236,7 +1236,7 @@ export function BroadcastDetailPage({
         <>
           <PageHead
             title={record.title}
-            badge={<BroadcastStateBadge state={record.state} />}
+            badge={<BroadcastStateBadge value={record.state} />}
             subtitle={
               <span className="cb-meta">
                 <span>{t(KIND_LABELS[record.contentKind])}</span>
