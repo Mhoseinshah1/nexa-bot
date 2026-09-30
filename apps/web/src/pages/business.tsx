@@ -717,8 +717,8 @@ function TopProducts({ selection }: { selection: ReportRangeSelection }) {
               hasNext={page * limit < data.totalRows}
               onPrevious={() => setPage(page - 1)}
               onNext={() => setPage(page + 1)}
-              previousLabel="web.report_page_previous"
-              nextLabel="web.report_page_next"
+              previousLabel={'web.report_page_previous'}
+              nextLabel={'web.report_page_next'}
             />
           </>
         )}
@@ -1008,8 +1008,8 @@ function OrdersDrilldown({ selection }: { selection: ReportRangeSelection }) {
               hasNext={data.nextCursor !== null}
               onPrevious={() => setCursors(cursors.slice(0, -1))}
               onNext={() => data.nextCursor !== null && setCursors([...cursors, data.nextCursor])}
-              previousLabel="web.report_page_previous"
-              nextLabel="web.report_page_next"
+              previousLabel={'web.report_page_previous'}
+              nextLabel={'web.report_page_next'}
             />
           </>
         )}
@@ -1671,8 +1671,8 @@ export function ReferralAnalytics({
               hasNext={page * limit < data.topReferrers.totalRows}
               onPrevious={() => setPage(page - 1)}
               onNext={() => setPage(page + 1)}
-              previousLabel="web.report_page_previous"
-              nextLabel="web.report_page_next"
+              previousLabel={'web.report_page_previous'}
+              nextLabel={'web.report_page_next'}
             />
             <PeriodNote period={data.period} />
           </>

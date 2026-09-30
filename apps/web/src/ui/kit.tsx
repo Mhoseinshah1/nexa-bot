@@ -1874,7 +1874,7 @@ export function CursorPager({
   onNext: () => void;
   hasPrevious: boolean;
   hasNext: boolean;
-  /** Rows on this page; drawn as «نمایش N» unless `summary` says something else. */
+  /** Rows on this page, drawn as `web.showing` N unless `summary` says something else. */
   shown?: number;
   nextLabel?: WebKey;
   previousLabel?: WebKey;
