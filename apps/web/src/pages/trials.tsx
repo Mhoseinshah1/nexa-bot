@@ -25,17 +25,21 @@ import { messageFor } from './settings';
 import {
   Badge,
   Banner,
+  Button,
   Card,
   Copyable,
   CursorPager,
   DataTable,
   Empty,
   Field,
+  Input,
   KV,
   Ltr,
   PageHead,
   StateSwitch,
+  TwoColumn,
   useToast,
+  useUnsavedChanges,
   type Column,
 } from '../ui/kit';
 
@@ -64,9 +68,15 @@ export function TrialsPage({
     <>
       <PageHead title={t('web.trials_title')} maturity="now" />
       <PanelTrialsCard mayView={mayViewPanels} />
-      <OverridesCard mayView={mayViewOverrides} />
-      <ResetCard mayReset={mayReset} />
-      <HistoryCard mayView={mayViewHistory} />
+      <TwoColumn
+        main={
+          <>
+            <OverridesCard mayView={mayViewOverrides} />
+            <HistoryCard mayView={mayViewHistory} />
+          </>
+        }
+        side={<ResetCard mayReset={mayReset} />}
+      />
     </>
   );
 }
@@ -118,11 +128,17 @@ function PanelTrialsCard({ mayView }: { mayView: boolean }) {
       header: t('web.trials_panel_state'),
       render: (row) =>
         !row.trial.enabled ? (
-          <Badge tone="neutral">{t('web.trials_panel_disabled')}</Badge>
+          <Badge tone="neutral" dot>
+            {t('web.trials_panel_disabled')}
+          </Badge>
         ) : row.offeredNow ? (
-          <Badge tone="ok">{t('web.trials_panel_offered')}</Badge>
+          <Badge tone="ok" dot>
+            {t('web.trials_panel_offered')}
+          </Badge>
         ) : (
-          <Badge tone="warn">{t('web.trials_panel_not_offered')}</Badge>
+          <Badge tone="warn" dot>
+            {t('web.trials_panel_not_offered')}
+          </Badge>
         ),
     },
   ];
@@ -137,6 +153,7 @@ function PanelTrialsCard({ mayView }: { mayView: boolean }) {
             rows={panels.data.panels}
             rowKey={(row) => row.panelId}
             caption={t('web.trials_panels_title')}
+            dense
           />
         )}
       </StateSwitch>
@@ -204,6 +221,7 @@ function OverridesCard({ mayView }: { mayView: boolean }) {
               columns={columns}
               rows={overrides.data.overrides}
               rowKey={(row) => row.customer.id}
+              dense
             />
             <CursorPager
               shown={overrides.data.overrides.length}
@@ -219,7 +237,7 @@ function OverridesCard({ mayView }: { mayView: boolean }) {
           </>
         )}
       </StateSwitch>
-      <p className="muted">{t('web.trial_zero_hint')}</p>
+      <p className="muted small">{t('web.trial_zero_hint')}</p>
     </Card>
   );
 }
@@ -274,6 +292,9 @@ function ResetCard({ mayReset }: { mayReset: boolean }) {
     onError: (error) => submission.settleOn(error),
   });
 
+  // A typed confirmation is lost by navigating away; the guard asks first.
+  useUnsavedChanges(mayReset && (typed.trim() !== '' || reason.trim() !== ''));
+
   if (!mayReset) {
     return (
       <Card title={t('web.trials_reset_title')}>
@@ -289,17 +310,12 @@ function ResetCard({ mayReset }: { mayReset: boolean }) {
     reason.trim() !== '';
 
   return (
-    <Card title={t('web.trials_reset_title')}>
+    <Card tone="danger" title={t('web.trials_reset_title')}>
       <Banner tone="danger">{t('web.trials_reset_body')}</Banner>
-      <div className="toolbar">
-        <button
-          type="button"
-          className="btn sm"
-          disabled={load.isPending}
-          onClick={() => load.mutate()}
-        >
+      <div className="form-actions">
+        <Button size="sm" icon="eye" disabled={load.isPending} onClick={() => load.mutate()}>
           {t('web.trials_reset_preview')}
-        </button>
+        </Button>
       </div>
       {load.error !== null && <Banner tone="danger">{messageFor(load.error)}</Banner>}
 
@@ -314,7 +330,7 @@ function ResetCard({ mayReset }: { mayReset: boolean }) {
                 [t('web.trials_reset_customers'), String(preview.affectedCustomers)],
               ]}
             />
-            <h3>{t('web.trials_reset_sample')}</h3>
+            <h3 className="ca-subhead">{t('web.trials_reset_sample')}</h3>
             <DataTable
               caption={t('web.trials_reset_sample')}
               columns={[
@@ -331,32 +347,36 @@ function ResetCard({ mayReset }: { mayReset: boolean }) {
               ]}
               rows={preview.sample}
               rowKey={(row) => row.customer.id}
+              dense
             />
             <Field label={t('web.trials_reset_confirm_label')} htmlFor="trial-reset-count">
-              <input
+              <Input
                 id="trial-reset-count"
+                size="sm"
+                dir="ltr"
                 inputMode="numeric"
                 value={typed}
                 onChange={(event) => setTyped(event.target.value)}
               />
             </Field>
             <Field label={t('web.trials_reset_reason_label')} htmlFor="trial-reset-reason">
-              <input
+              <Input
                 id="trial-reset-reason"
+                size="sm"
                 value={reason}
                 maxLength={TRIAL_ADMIN_REASON_MAX_LENGTH}
                 onChange={(event) => setReason(event.target.value)}
               />
             </Field>
-            <div className="toolbar">
-              <button
-                type="button"
-                className="btn danger sm"
+            <div className="form-actions">
+              <Button
+                variant="danger-solid"
+                size="sm"
                 disabled={!confirmed || execute.isPending}
                 onClick={() => execute.mutate()}
               >
                 {t('web.trials_reset_execute')}
-              </button>
+              </Button>
             </div>
             {execute.error !== null && <Banner tone="danger">{messageFor(execute.error)}</Banner>}
           </>
@@ -403,7 +423,7 @@ function HistoryCard({ mayView }: { mayView: boolean }) {
     {
       key: 'actor',
       header: t('web.trials_history_actor'),
-      render: (row) => <Copyable value={row.actorAdminId} />,
+      render: (row) => <Copyable value={row.actorAdminId} display={row.actorAdminId.slice(0, 8)} />,
     },
   ];
 
@@ -419,6 +439,7 @@ function HistoryCard({ mayView }: { mayView: boolean }) {
               columns={columns}
               rows={resets.data.resets}
               rowKey={(row) => row.id}
+              dense
             />
             <CursorPager
               shown={resets.data.resets.length}

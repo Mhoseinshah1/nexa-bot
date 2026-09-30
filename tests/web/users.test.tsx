@@ -875,10 +875,16 @@ describe('the wallet card', () => {
       />,
     );
 
-    await screen.findByText('کیف پول');
-    // The formatted amount, not the raw minor units.
-    expect(await screen.findByText(/۷۵۰٬۰۰۰|750,000/u)).toBeTruthy();
-    expect(screen.getByText('3')).toBeTruthy();
+    const card = (await screen.findByRole('heading', { name: 'کیف پول' })).closest(
+      'section',
+    ) as HTMLElement;
+    // The formatted amount, not the raw minor units — in the wallet card itself.
+    expect(await within(card).findByText(/۷۵۰٬۰۰۰|750,000/u)).toBeTruthy();
+    expect(within(card).getByText('3')).toBeTruthy();
+    // The head's summary strip reads the SAME derived balance (the same query), so the
+    // two can never disagree.
+    const strip = document.querySelector('.head-stats') as HTMLElement;
+    expect(within(strip).getByText(/۷۵۰٬۰۰۰|750,000/u)).toBeTruthy();
     // The page SAYS the number is computed, because an operator seeing a balance
     // has no other way to know there is no stored column behind it.
     expect(screen.getByText(/محاسبه می‌شود/u)).toBeTruthy();

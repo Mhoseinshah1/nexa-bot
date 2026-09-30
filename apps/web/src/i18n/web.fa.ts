@@ -1375,7 +1375,6 @@ export const WEB_FA = {
   'web.user_status_active': 'فعال',
   'web.user_status_blocked': 'مسدود',
   'web.user_detail': 'مشتری',
-  'web.user_identity_title': 'هویت',
   'web.user_access_title': 'دسترسی',
   'web.user_blocked_at': 'زمان مسدودسازی',
   'web.user_blocked_reason': 'دلیل مسدودسازی',
@@ -2833,6 +2832,10 @@ export const WEB_FA = {
   'web.trial_override_remove': 'حذف سقف اختصاصی',
   'web.trial_override_done': 'سقف اختصاصی ثبت شد.',
   'web.trial_override_removed': 'سقف اختصاصی حذف شد و مشتری از سقف پیش‌فرض پیروی می‌کند.',
+  // Commerce A redesign: labels the detail heads' summary strips need.
+  'web.user_stat_trial_remaining': 'سرویس آزمایشی باقی‌مانده',
+  'web.service_identity_title': 'مشخصات سرویس',
+  'web.payment_tech_details': 'نمایش جزئیات فنی درگاه',
   'web.trial_override_denied': 'برای تغییر سقف اختصاصی به دسترسی users.trial.edit نیاز است.',
   'web.trials_title': 'سرویس آزمایشی',
   'web.trials_overrides_title': 'مشتریان با سقف اختصاصی',
