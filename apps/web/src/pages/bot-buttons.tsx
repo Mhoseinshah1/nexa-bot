@@ -30,7 +30,20 @@ import { t, type WebKey } from '../i18n/web.fa';
 import { APPEARANCE_SLOT_LABEL } from '../appearance-labels';
 import { useSubmissionKey } from '../submission-key';
 import { templateCopy } from '../template-copy';
-import { Badge, Banner, Card, Ltr, PageHead, StateSwitch, Switch, type Tone } from '../ui/kit';
+import {
+  Badge,
+  Banner,
+  Card,
+  Ltr,
+  PageHead,
+  RowActions,
+  StateSwitch,
+  Switch,
+  useUnsavedChanges,
+  type Tone,
+} from '../ui/kit';
+import { Icon } from '../ui/icons';
+import { TelegramPhone } from './telegram-phone';
 import { TemplateCard } from './content';
 import { ErrorReport } from './settings';
 
@@ -135,8 +148,10 @@ export function BotButtonsPage({
               config={menu.data}
               mayEdit={mayEdit}
             />
-            <CommandsCard config={menu.data} />
-            <SyncCard bots={menu.data.bots} mayEdit={mayEdit} />
+            <div className="grid-2">
+              <CommandsCard config={menu.data} />
+              <SyncCard bots={menu.data.bots} mayEdit={mayEdit} />
+            </div>
           </>
         )}
       </StateSwitch>
@@ -241,6 +256,8 @@ function LayoutCard({ config, mayEdit }: { config: BotMenuConfigResponse; mayEdi
   const valid = mainMenuLayoutSchema.safeParse(draft).success;
   const dirty = JSON.stringify(draft) !== JSON.stringify(entriesOf(items));
   const editable = mayEdit && !save.isPending;
+  // An arrangement the operator moved and has not saved: leaving asks first.
+  useUnsavedChanges(mayEdit && dirty);
 
   const move = (index: number, by: -1 | 1) => {
     const target = index + by;
@@ -282,19 +299,58 @@ function LayoutCard({ config, mayEdit }: { config: BotMenuConfigResponse; mayEdi
       .map((item) => ({ id: item.id, wide: item.wide, label: labelOf(item) })),
   );
 
+  const title = config.bots.find((bot) => bot.botStatus === 'ACTIVE') ?? config.bots[0];
+
   return (
-    <>
-      <Card title={t('web.bot_buttons_order_title')} hint={t('web.bot_buttons_order_hint')}>
+    <div className="two-col">
+      <Card
+        title={t('web.bot_buttons_order_title')}
+        hint={t('web.bot_buttons_order_hint')}
+        {...(mayEdit
+          ? {
+              actions: (
+                <>
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={!editable}
+                    onClick={() =>
+                      setDraft(
+                        items.map((item) => ({
+                          button: item.id,
+                          enabled: true,
+                          target: item.target,
+                          appearanceSlot: null,
+                        })),
+                      )
+                    }
+                  >
+                    {t('web.bot_buttons_restore_default')}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn primary"
+                    disabled={!editable || !valid || !dirty}
+                    onClick={onSave}
+                  >
+                    <Icon name="check" />
+                    {save.isPending ? t('web.saving') : t('web.save')}
+                  </button>
+                </>
+              ),
+            }
+          : {})}
+      >
         {config.layout.storedValueInvalid && (
           <Banner tone="danger">{t('web.bot_buttons_stored_invalid')}</Banner>
         )}
         <div className="tbl-wrap">
-          <table className="tbl">
+          <table className="tbl dense">
             <caption className="visually-hidden">{t('web.bot_buttons_order_title')}</caption>
             <thead>
               <tr>
                 <th>{t('web.bot_buttons_position')}</th>
-                <th>{t('web.bot_buttons_button')}</th>
+                <th className="wrap">{t('web.bot_buttons_button')}</th>
                 <th>{t('web.bot_buttons_target')}</th>
                 <th>{t('web.bot_buttons_slot')}</th>
                 <th>{t('web.bot_buttons_shown')}</th>
@@ -309,8 +365,8 @@ function LayoutCard({ config, mayEdit }: { config: BotMenuConfigResponse; mayEdi
                 const slotSelect = `bot-buttons-slot-${item.id}`;
                 return (
                   <tr key={item.id} data-button={item.id}>
-                    <td>{String(index + 1)}</td>
-                    <td>
+                    <td className="faint">{String(index + 1)}</td>
+                    <td className="wrap">
                       <span className="strong">{label}</span>
                       {item.labelOverridden && (
                         <p className="muted small">
@@ -364,26 +420,28 @@ function LayoutCard({ config, mayEdit }: { config: BotMenuConfigResponse; mayEdi
                     </td>
                     <td>
                       {mayEdit && (
-                        <div className="btn-group">
+                        <RowActions>
                           <button
                             type="button"
-                            className="btn sm"
+                            className="btn sm ghost icon"
                             aria-label={`${t('web.bot_buttons_move_up')}: ${label}`}
+                            title={t('web.bot_buttons_move_up')}
                             disabled={!editable || index === 0}
                             onClick={() => move(index, -1)}
                           >
-                            {t('web.bot_buttons_move_up')}
+                            <Icon name="arrowUp" />
                           </button>
                           <button
                             type="button"
-                            className="btn sm"
+                            className="btn sm ghost icon"
                             aria-label={`${t('web.bot_buttons_move_down')}: ${label}`}
+                            title={t('web.bot_buttons_move_down')}
                             disabled={!editable || index === draft.length - 1}
                             onClick={() => move(index, 1)}
                           >
-                            {t('web.bot_buttons_move_down')}
+                            <Icon name="arrowDown" />
                           </button>
-                        </div>
+                        </RowActions>
                       )}
                     </td>
                   </tr>
@@ -392,38 +450,8 @@ function LayoutCard({ config, mayEdit }: { config: BotMenuConfigResponse; mayEdi
             </tbody>
           </table>
         </div>
-        <p className="muted small">{t('web.bot_buttons_slot_hint')}</p>
         {!valid && <Banner tone="danger">{t('web.bot_buttons_one_required')}</Banner>}
-        {dirty && valid && <p className="muted small">{t('web.bot_buttons_unsaved')}</p>}
-        {mayEdit && (
-          <div className="row">
-            <button
-              type="button"
-              className="btn primary sm"
-              disabled={!editable || !valid || !dirty}
-              onClick={onSave}
-            >
-              {save.isPending ? t('web.saving') : t('web.save')}
-            </button>
-            <button
-              type="button"
-              className="btn sm"
-              disabled={!editable}
-              onClick={() =>
-                setDraft(
-                  items.map((item) => ({
-                    button: item.id,
-                    enabled: true,
-                    target: item.target,
-                    appearanceSlot: null,
-                  })),
-                )
-              }
-            >
-              {t('web.bot_buttons_restore_default')}
-            </button>
-          </div>
-        )}
+        {dirty && valid && <Banner tone="warn">{t('web.bot_buttons_unsaved')}</Banner>}
         {save.isError && <ErrorReport error={save.error} />}
         {save.isSuccess && (
           <Banner tone={save.data.changed ? 'ok' : 'info'}>
@@ -431,24 +459,51 @@ function LayoutCard({ config, mayEdit }: { config: BotMenuConfigResponse; mayEdi
           </Banner>
         )}
       </Card>
-      <Card title={t('web.bot_buttons_preview_title')} hint={t('web.bot_buttons_preview_hint')}>
-        {preview.length === 0 ? (
-          <p className="muted small">{t('web.bot_buttons_preview_empty')}</p>
-        ) : (
-          <div className="menu-preview" aria-label={t('web.bot_buttons_preview_title')}>
-            {preview.map((row) => (
-              <div key={row.map((button) => button.id).join(':')} className="menu-preview-row">
-                {row.map((button) => (
-                  <span key={button.id} className="menu-preview-key">
-                    {button.label}
-                  </span>
-                ))}
-              </div>
-            ))}
-          </div>
-        )}
-      </Card>
-    </>
+      <div className="stack">
+        <Card title={t('web.bot_buttons_preview_title')} hint={t('web.bot_buttons_preview_hint')}>
+          <TelegramPhone
+            title={
+              title === undefined ? (
+                t('web.bot_buttons_preview_title')
+              ) : (
+                <Ltr mono={false}>@{title.username}</Ltr>
+              )
+            }
+            {...(preview.length === 0
+              ? {}
+              : {
+                  keyboard: (
+                    <div className="menu-preview" aria-label={t('web.bot_buttons_preview_title')}>
+                      {preview.map((row) => (
+                        <div
+                          key={row.map((button) => button.id).join(':')}
+                          className="menu-preview-row"
+                        >
+                          {row.map((button) => (
+                            <span key={button.id} className="menu-preview-key">
+                              {button.label}
+                            </span>
+                          ))}
+                        </div>
+                      ))}
+                    </div>
+                  ),
+                })}
+          >
+            {preview.length === 0 && (
+              <p className="tg-phone-note">{t('web.bot_buttons_preview_empty')}</p>
+            )}
+          </TelegramPhone>
+        </Card>
+        <Card title={t('web.bot_buttons_rules_title')} tone="muted">
+          <ul className="bot-buttons-rules small muted">
+            <li>{t('web.bot_buttons_slot_hint')}</li>
+            <li>{t('web.bot_buttons_target_hint')}</li>
+            <li>{t('web.bot_buttons_rule_gate')}</li>
+          </ul>
+        </Card>
+      </div>
+    </div>
   );
 }
 
@@ -457,7 +512,7 @@ function CommandsCard({ config }: { config: BotMenuConfigResponse }) {
   return (
     <Card title={t('web.bot_buttons_commands_title')} hint={t('web.bot_buttons_commands_hint')}>
       <div className="tbl-wrap">
-        <table className="tbl" data-testid="bot-commands">
+        <table className="tbl dense" data-testid="bot-commands">
           <caption className="visually-hidden">{t('web.bot_buttons_commands_title')}</caption>
           <thead>
             <tr>
@@ -471,7 +526,7 @@ function CommandsCard({ config }: { config: BotMenuConfigResponse }) {
                 <td>
                   <Ltr>/{entry.command}</Ltr>
                 </td>
-                <td>{entry.description}</td>
+                <td className="wrap">{entry.description}</td>
               </tr>
             ))}
           </tbody>

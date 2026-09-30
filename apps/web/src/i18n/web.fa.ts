@@ -1194,6 +1194,56 @@ export const WEB_FA = {
   'web.panel_upstream_status': 'کد پاسخ پنل',
   'web.panel_provider_version': 'نسخهٔ پنل',
   'web.panel_last_healthy': 'آخرین بار سالم',
+  // OPS-A redesign (round W, wave 2): bots.
+  'web.bot_details_title': 'مشخصات ربات',
+  'web.bot_token_card': 'توکن ربات',
+  'web.bot_token_card_hint':
+    'توکن فعلی هرگز نمایش داده نمی‌شود. توکن تازهٔ همین ربات را وارد کنید؛ پس از ارسال، فیلد پاک می‌شود.',
+  'web.bot_read_only': 'برای این ربات فقط دسترسی مشاهده دارید.',
+  'web.bot_check_card': 'آخرین بررسی زنده',
+  // OPS-A redesign (round W, wave 2): bot buttons.
+  'web.bot_buttons_rules_title': 'قواعد',
+  'web.bot_buttons_rule_gate':
+    'دکمه‌ای که به قابلیت یا پیشنهادی وابسته است، فقط وقتی در کیبورد دیده می‌شود که سرور بگوید آن در باز است.',
+  // OPS-A redesign (round W, wave 2): payment routes.
+  'web.payment_gateway_section_display': 'نمایش به مشتری',
+  'web.payment_gateway_section_amounts': 'محدودهٔ مبلغ',
+  'web.payment_gateway_section_money': 'هدیه، کارمزد و نرخ',
+  'web.payment_gateway_section_advanced': 'پیشرفته',
+  'web.payment_gateway_sort_hint':
+    'روش‌ها به ترتیب این عدد، کوچک به بزرگ، به مشتری نشان داده می‌شوند.',
+  'web.fx_sources_policy_title': 'منبع و پنجره‌های زمانی',
+  'web.fx_technical': 'جزئیات فنی',
+  // OPS-A redesign (round W, wave 2): client apps.
+  'web.client_apps_section_identity': 'برنامه',
+  'web.client_apps_section_links': 'لینک‌ها',
+  'web.client_apps_section_compat': 'سازگاری',
+  'web.client_apps_preview_chat': 'پیام ربات',
+  'web.client_apps_delete_title': 'حذف برنامه',
+  'web.client_apps_delete_yes': 'بله، حذف شود',
+  // OPS-A redesign (round W, wave 2): panels.
+  'web.panels_not_sellable': 'قابل فروش نیست',
+  'web.panel_stat_sellable': 'آمادهٔ فروش',
+  'web.panels_filter': 'نمایش پنل‌ها',
+  'web.panel_never_checked': 'هنوز بررسی نشده',
+  'web.panel_failure_title': 'آخرین بررسی ناموفق بود',
+  'web.panel_open_health': 'مشاهدهٔ سلامت',
+  'web.panel_section_connection': 'اتصال و ظرفیت',
+  'web.form_unsaved': 'تغییرات ذخیره‌نشده دارید.',
+  'web.panel_stale_title': 'وضعیت سلامت این پنل کهنه است',
+  'web.panel_health_latest_card': 'آخرین وضعیت ثبت‌شده',
+  'web.panel_health_latest_chip': 'بدون روند',
+  'web.credentials_presence_hint':
+    'فقط وجود هر اعتبارنامه و زمان آخرین جایگزینی نشان داده می‌شود؛ مقدار هرگز.',
+  'web.panel_new_section_identity': 'مشخصات پنل',
+  'web.panel_new_section_credentials': 'اعتبارنامهٔ اولیه',
+  'web.panel_new_provider_card': 'ارائه‌دهندهٔ انتخاب‌شده',
+  'web.panel_new_choose_provider':
+    'پس از انتخاب ارائه‌دهنده، شکل اعتبارنامه و فیلدهای لازم آن اینجا نشان داده می‌شود.',
+  'web.panel_new_no_rotate':
+    'ثبت اعتبارنامه دسترسی جداگانه‌ای لازم دارد؛ پنل بدون اعتبارنامه ساخته می‌شود و کسی که این دسترسی را دارد آن را وارد می‌کند.',
+  'web.panel_read_only':
+    'این پیکربندی اینجا فقط خواندنی است: یا دسترسی ویرایش پنل را ندارید یا پنل بایگانی شده است.',
   'web.panel_freshness': 'مهلت کهنه‌شدن',
   'web.panel_new_intro': 'ارائه‌دهنده پیش از ساخته‌شدن ردیف پنل تعیین می‌شود.',
   'web.panel_credential_shape': 'شکل اعتبارنامه',

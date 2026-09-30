@@ -25,7 +25,9 @@ import {
   Badge,
   Banner,
   Card,
+  ConfirmDialog,
   Copyable,
+  DetailHead,
   Empty,
   Field,
   Ltr,
@@ -34,6 +36,7 @@ import {
   useToast,
   type Tone,
 } from '../ui/kit';
+import { Icon } from '../ui/icons';
 
 /**
  * Bots — this installation's Telegram bot instances (WP13,
@@ -205,7 +208,7 @@ export function BotsPage({
         empty={<Empty title={t('web.bots_empty')} hint={t('web.bots_empty_hint')} />}
       >
         {rows.map((bot) => (
-          <BotCard
+          <BotSection
             key={bot.id}
             bot={bot}
             mayOperate={mayOperate}
@@ -214,14 +217,14 @@ export function BotsPage({
         ))}
       </StateSwitch>
 
-      <Card title={t('web.bots_add_title')}>
+      <Card title={t('web.bots_add_title')} tone="muted">
         <p className="muted small">{t('web.bots_add_body')}</p>
       </Card>
     </>
   );
 }
 
-function BotCard({
+function BotSection({
   bot,
   mayOperate,
   mayReplaceToken,
@@ -311,145 +314,110 @@ function BotCard({
   const busy = status.isPending || replace.isPending || check.isPending;
   const failure = status.error ?? replace.error ?? check.error;
 
+  /*
+   * The head's actions, drawn from permissions (a courtesy — the server charges
+   * `settings.edit` on every request). Stop asks first, through the kit's
+   * dialog: stopping takes the bot off Telegram for every customer at once.
+   */
+  const actions = mayOperate ? (
+    <>
+      {bot.status === 'ACTIVE' && (
+        <button type="button" className="btn" disabled={busy} onClick={() => check.mutate()}>
+          <Icon name="activity" />
+          {t('web.bot_check')}
+        </button>
+      )}
+      {bot.status === 'STOPPED' && (
+        <button
+          type="button"
+          className="btn primary"
+          disabled={busy}
+          onClick={() => status.mutate('ACTIVE')}
+        >
+          <Icon name="play" />
+          {t('web.bot_start')}
+        </button>
+      )}
+      {bot.status === 'ACTIVE' && (
+        <button
+          type="button"
+          className="btn danger"
+          disabled={busy}
+          onClick={() => setConfirmingStop(true)}
+        >
+          <Icon name="pause" />
+          {t('web.bot_stop')}
+        </button>
+      )}
+    </>
+  ) : undefined;
+
   return (
-    <Card
-      title={`@${bot.username}`}
-      actions={
-        <>
-          <Badge tone={STATUS_TONE[bot.status]}>{t(STATUS_LABEL[bot.status])}</Badge>{' '}
-          <Badge tone={READINESS_TONE[bot.readiness.state]}>
-            {t(READINESS_LABEL[bot.readiness.state])}
-          </Badge>
-        </>
-      }
-    >
-      <dl className="kv">
-        <dt>{t('web.bot_tenant')}</dt>
-        <dd>
-          {bot.tenant.displayName} <Ltr>{bot.tenant.slug}</Ltr>
-          <span className="muted small"> — {t('web.bot_tenant_fixed')}</span>
-        </dd>
-        <dt>{t('web.bot_telegram_id')}</dt>
-        <dd>
-          {bot.telegramBotId === null ? (
-            t('web.bot_telegram_id_unknown')
-          ) : (
-            <Ltr>{bot.telegramBotId}</Ltr>
-          )}
-        </dd>
-        <dt>{t('web.bot_webhook')}</dt>
-        <dd>
-          {bot.webhook.registeredAt === null ? (
-            t('web.bot_webhook_never')
-          ) : (
-            <>
-              {formatTimestamp(bot.webhook.registeredAt)}{' '}
-              {bot.webhook.url !== null && <Ltr>{bot.webhook.url}</Ltr>}
-            </>
-          )}
-        </dd>
-        <dt>{t('web.bot_secret')}</dt>
-        <dd>{t(SECRET_LABEL[bot.webhook.secret])}</dd>
-        <dt>{t('web.bot_menu')}</dt>
-        <dd>{t(MENU_LABEL[bot.commandMenu])}</dd>
-        <dt>{t('web.bot_id')}</dt>
-        <dd>
-          <Copyable value={bot.id} />
-        </dd>
-      </dl>
+    <section className="bot-block stack" aria-label={`@${bot.username}`}>
+      <DetailHead
+        title={<Ltr mono={false}>@{bot.username}</Ltr>}
+        badge={
+          <span className="bot-head-badges">
+            <Badge tone={STATUS_TONE[bot.status]} dot>
+              {t(STATUS_LABEL[bot.status])}
+            </Badge>
+            <Badge tone={READINESS_TONE[bot.readiness.state]} dot>
+              {t(READINESS_LABEL[bot.readiness.state])}
+            </Badge>
+          </span>
+        }
+        meta={
+          <span className="bot-head-meta">
+            {bot.tenant.displayName} <Ltr>{bot.tenant.slug}</Ltr>
+          </span>
+        }
+        {...(actions === undefined ? {} : { actions })}
+        stats={[
+          {
+            label: t('web.bot_webhook'),
+            value:
+              bot.webhook.registeredAt === null ? (
+                <span className="warn">{t('web.bot_webhook_never')}</span>
+              ) : (
+                <span className="small">{formatTimestamp(bot.webhook.registeredAt)}</span>
+              ),
+          },
+          {
+            label: t('web.bot_secret'),
+            value: (
+              <span className={bot.webhook.secret === 'MATCHES' ? 'ok' : 'warn'}>
+                {t(SECRET_LABEL[bot.webhook.secret])}
+              </span>
+            ),
+          },
+          {
+            label: t('web.bot_menu'),
+            value: (
+              <span className={bot.commandMenu === 'CURRENT' ? 'ok' : 'warn'}>
+                {t(MENU_LABEL[bot.commandMenu])}
+              </span>
+            ),
+          },
+          {
+            label: t('web.bot_telegram_id'),
+            value:
+              bot.telegramBotId === null ? (
+                <span className="faint">{t('web.bot_telegram_id_unknown')}</span>
+              ) : (
+                <Ltr>{bot.telegramBotId}</Ltr>
+              ),
+          },
+        ]}
+      />
 
       {bot.readiness.causes.length > 0 && (
-        <ul className="bot-causes" data-testid={`bot-causes-${bot.id}`}>
-          {bot.readiness.causes.map((cause) => (
-            <li key={cause}>{t(CAUSE_TEXT[cause])}</li>
-          ))}
-        </ul>
-      )}
-
-      {mayOperate && (
-        <div className="toolbar">
-          {bot.status === 'ACTIVE' && !confirmingStop && (
-            <button
-              type="button"
-              className="btn sm"
-              disabled={busy}
-              onClick={() => setConfirmingStop(true)}
-            >
-              {t('web.bot_stop')}
-            </button>
-          )}
-          {bot.status === 'STOPPED' && (
-            <button
-              type="button"
-              className="btn sm"
-              disabled={busy}
-              onClick={() => status.mutate('ACTIVE')}
-            >
-              {t('web.bot_start')}
-            </button>
-          )}
-          {bot.status === 'ACTIVE' && (
-            <button type="button" className="btn sm" disabled={busy} onClick={() => check.mutate()}>
-              {t('web.bot_check')}
-            </button>
-          )}
-        </div>
-      )}
-
-      {confirmingStop && (
-        <Banner tone="warn" title={t('web.bot_stop_confirm_title')}>
-          <p>{t('web.bot_stop_confirm_body')}</p>
-          <div className="toolbar">
-            <button
-              type="button"
-              className="btn danger sm"
-              disabled={busy}
-              onClick={() => status.mutate('STOPPED')}
-            >
-              {t('web.bot_stop_confirm')}
-            </button>
-            <button
-              type="button"
-              className="btn sm"
-              disabled={busy}
-              onClick={() => setConfirmingStop(false)}
-            >
-              {t('web.bot_cancel')}
-            </button>
-          </div>
+        <Banner tone={bot.readiness.state === 'HELD' ? 'danger' : 'warn'} role="status">
+          <ul className="bot-causes" data-testid={`bot-causes-${bot.id}`}>
+            {bot.readiness.causes.map((cause) => (
+              <li key={cause}>{t(CAUSE_TEXT[cause])}</li>
+            ))}
+          </ul>
         </Banner>
-      )}
-
-      {diagnostic !== null && <DiagnosticView diagnostic={diagnostic} />}
-
-      {mayReplaceToken && (
-        <div className="bot-token">
-          <Field
-            label={t('web.bot_token_label')}
-            htmlFor={`bot-token-${bot.id}`}
-            hint={t('web.bot_token_hint')}
-          >
-            <input
-              id={`bot-token-${bot.id}`}
-              type="password"
-              autoComplete="off"
-              spellCheck={false}
-              value={token}
-              maxLength={256}
-              onChange={(event) => setToken(event.target.value)}
-            />
-          </Field>
-          <div className="toolbar">
-            <button
-              type="button"
-              className="btn primary sm"
-              disabled={busy || token.trim() === ''}
-              onClick={() => replace.mutate(token.trim())}
-            >
-              {t('web.bot_token_submit')}
-            </button>
-          </div>
-        </div>
       )}
 
       {failure != null && (
@@ -458,7 +426,109 @@ function BotCard({
           <ReplacementFailureView details={replacementFailureOf(failure)} />
         </Banner>
       )}
-    </Card>
+
+      <div className="two-col">
+        <div className="stack">
+          <Card title={t('web.bot_details_title')}>
+            <dl className="kv">
+              <dt>{t('web.bot_tenant')}</dt>
+              <dd>
+                {bot.tenant.displayName} <Ltr>{bot.tenant.slug}</Ltr>
+                <span className="muted small"> — {t('web.bot_tenant_fixed')}</span>
+              </dd>
+              <dt>{t('web.bot_telegram_id')}</dt>
+              <dd>
+                {bot.telegramBotId === null ? (
+                  t('web.bot_telegram_id_unknown')
+                ) : (
+                  <Ltr>{bot.telegramBotId}</Ltr>
+                )}
+              </dd>
+              <dt>{t('web.bot_webhook')}</dt>
+              <dd>
+                {bot.webhook.registeredAt === null ? (
+                  t('web.bot_webhook_never')
+                ) : (
+                  <>
+                    {formatTimestamp(bot.webhook.registeredAt)}{' '}
+                    {bot.webhook.url !== null && <Ltr>{bot.webhook.url}</Ltr>}
+                  </>
+                )}
+              </dd>
+              <dt>{t('web.bot_secret')}</dt>
+              <dd>{t(SECRET_LABEL[bot.webhook.secret])}</dd>
+              <dt>{t('web.bot_menu')}</dt>
+              <dd>{t(MENU_LABEL[bot.commandMenu])}</dd>
+              <dt>{t('web.bot_id')}</dt>
+              <dd>
+                <Copyable value={bot.id} />
+              </dd>
+            </dl>
+          </Card>
+
+          {diagnostic !== null && (
+            <Card title={t('web.bot_check_card')}>
+              <DiagnosticView diagnostic={diagnostic} />
+            </Card>
+          )}
+        </div>
+
+        <div className="stack">
+          {mayReplaceToken && (
+            <Card title={t('web.bot_token_card')} hint={t('web.bot_token_card_hint')}>
+              <div className="bot-token stack-sm">
+                <Field
+                  label={t('web.bot_token_label')}
+                  htmlFor={`bot-token-${bot.id}`}
+                  hint={t('web.bot_token_hint')}
+                >
+                  <input
+                    id={`bot-token-${bot.id}`}
+                    className="input ltr mono"
+                    type="password"
+                    autoComplete="off"
+                    spellCheck={false}
+                    value={token}
+                    maxLength={256}
+                    onChange={(event) => setToken(event.target.value)}
+                  />
+                </Field>
+                <div className="form-actions">
+                  <button
+                    type="button"
+                    className="btn primary"
+                    disabled={busy || token.trim() === ''}
+                    onClick={() => replace.mutate(token.trim())}
+                  >
+                    <Icon name="key" />
+                    {t('web.bot_token_submit')}
+                  </button>
+                </div>
+              </div>
+            </Card>
+          )}
+          {!mayOperate && !mayReplaceToken && (
+            <Card tone="muted">
+              <p className="muted small">{t('web.bot_read_only')}</p>
+            </Card>
+          )}
+        </div>
+      </div>
+
+      {confirmingStop && (
+        <ConfirmDialog
+          title={t('web.bot_stop_confirm_title')}
+          question={t('web.bot_stop_confirm_body')}
+          confirmLabel={t('web.bot_stop_confirm')}
+          cancelLabel={t('web.bot_cancel')}
+          onConfirm={() => {
+            setConfirmingStop(false);
+            status.mutate('STOPPED');
+          }}
+          onCancel={() => setConfirmingStop(false)}
+        />
+      )}
+    </section>
   );
 }
 
