@@ -262,6 +262,27 @@ describe('MainMenuLayout — the keyboard and the route table from one object', 
     expect((await layout.routesFor(scope)).get('💳 موجودی')).toBe('/wallet');
   });
 
+  it("reads a switched-off item's gate only when asked to — the Web Admin's preview (Codex #6)", async () => {
+    const reads = { count: 0 };
+    const layout = layoutWith({
+      stored: [{ button: 'trial', enabled: false }],
+      trialOffered: false,
+      offerReads: reads,
+    });
+    // The keyboard: an off item is not drawn, so its gate is not asked.
+    const forKeyboard = (await layout.describeFor(scope)).find(
+      (one) => one.item.button === 'trial',
+    );
+    expect(forKeyboard).toMatchObject({ gate: 'TRIAL_OFFER', gateOpen: null, shown: false });
+    expect(reads.count).toBe(0);
+    // The page: the gate is answered for an off item too, so switching it on previews truly.
+    const forPage = (await layout.describeFor(scope, { gatesForHidden: true })).find(
+      (one) => one.item.button === 'trial',
+    );
+    expect(forPage).toMatchObject({ gate: 'TRIAL_OFFER', gateOpen: false, shown: false });
+    expect(reads.count).toBe(1);
+  });
+
   it('describes every item with the decision the keyboard makes, gates read only when needed', async () => {
     const reads = { count: 0 };
     const layout = layoutWith({

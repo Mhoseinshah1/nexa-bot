@@ -33,7 +33,10 @@ export const BOT_MENU_OPERATE_PERMISSION = 'settings.edit' satisfies PermissionK
 
 /** The keyboard's evaluator, as `MainMenuLayout` implements it. Structural, so this module imports nothing from commerce. */
 export interface MainMenuReader {
-  describeFor(scope: ScopeContext): Promise<
+  describeFor(
+    scope: ScopeContext,
+    options?: { readonly gatesForHidden?: boolean },
+  ): Promise<
     ReadonlyArray<{
       readonly item: MainMenuItem;
       readonly button: BotMenuButton;
@@ -90,7 +93,8 @@ export class BotMenuService {
   async config(scope: TenantContext, actor: ActorContext): Promise<BotMenuConfigResponse> {
     await this.deps.guard.check(scope, actor, BOT_MENU_VIEW_PERMISSION);
     const setting = await this.deps.settings.resolve(scope, 'bot.main_menu');
-    const described = await this.deps.mainMenu.describeFor(scope);
+    // Gates read for switched-off items too: the page previews what switching one on does.
+    const described = await this.deps.mainMenu.describeFor(scope, { gatesForHidden: true });
     const items: MainMenuItemView[] = await Promise.all(
       described.map(async ({ item, button, gate, gateOpen, shown }, order) => {
         const [label, resolved] = await Promise.all([

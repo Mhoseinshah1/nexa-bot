@@ -76,7 +76,19 @@ export class MainMenuLayout {
    * switched on. `buttonsFor` is the drawn subset; the Web Admin's table (round P) reads
    * the whole list, so it shows the same answer the keyboard gives and never a second one.
    */
-  async describeFor(scope: ScopeContext): Promise<readonly DescribedMainMenuItem[]> {
+  async describeFor(
+    scope: ScopeContext,
+    options: {
+      /**
+       * Read a gate for an item the operator switched OFF too. The keyboard never needs
+       * that (an off item is not drawn, so its gate is not asked — the trial offer dials the
+       * panel repositories on every reply); the Web Admin does, so its preview of an item
+       * about to be switched on says what the keyboard will do, not "unknown" (Codex #6).
+       */
+      readonly gatesForHidden?: boolean;
+    } = {},
+  ): Promise<readonly DescribedMainMenuItem[]> {
+    const ask = (enabled: boolean) => enabled || options.gatesForHidden === true;
     const stored = await this.deps.settings.valueOf<readonly MainMenuLayoutEntry[]>(
       scope,
       'bot.main_menu',
@@ -92,11 +104,11 @@ export class MainMenuLayout {
           ? 'FEATURE'
           : null;
       let gateOpen: boolean | null = null;
-      if (item.enabled && button.needsTrialOffer) {
+      if (ask(item.enabled) && button.needsTrialOffer) {
         trialOffered ??= await this.deps.trials.anyOffered(scope);
         gateOpen = trialOffered;
       }
-      if (item.enabled && button.feature !== null) {
+      if (ask(item.enabled) && button.feature !== null) {
         let on = flags.get(button.feature);
         if (on === undefined) {
           on = await this.deps.features.isEnabled(scope, button.feature);

@@ -241,6 +241,28 @@ describe('«دکمه‌های ربات»', () => {
     expect(within(rowOf('trial')).queryByText(t('web.bot_buttons_trial_not_offered'))).toBeNull();
   });
 
+  it('keeps a gated item out of the preview until its gate is known open (Codex #6)', async () => {
+    // The trial is switched OFF in the stored layout and the server answered nothing
+    // about its gate. Switching it on in the draft must not preview a button the keyboard
+    // will hide: unknown is not open.
+    api({
+      items: MAIN_MENU_BUTTONS.map((button, order) =>
+        item(
+          button.id,
+          order,
+          button.id === 'trial' ? { enabled: false, gateOpen: null, shownNow: false } : {},
+        ),
+      ),
+    });
+    renderPage(page());
+    await waitFor(() => expect(rowOf('trial')).not.toBeNull());
+    fireEvent.click(within(rowOf('trial')).getByRole('switch'));
+    const preview = document.querySelector('.menu-preview') as HTMLElement;
+    expect(within(preview).queryByText(CATALOGUE_FA['bot.menu.trial'])).toBeNull();
+    // An ungated item switched on in the draft IS previewed: the draft's switches count.
+    expect(within(preview).getByText(CATALOGUE_FA['bot.menu.catalog'])).toBeInTheDocument();
+  });
+
   it('reorders, switches and re-slots buttons, and saves the whole arrangement with its version', async () => {
     const calls = api();
     renderPage(page());

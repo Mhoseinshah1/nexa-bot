@@ -277,13 +277,16 @@ function LayoutCard({ config, mayEdit }: { config: BotMenuConfigResponse; mayEdi
   };
 
   // The preview is the keyboard the bot draws from THIS draft: the server's answer about
-  // each gate, applied to the draft's switches. A gate the server did not evaluate (the
-  // item was off when read) is unknown, and an unknown gate hides nothing.
+  // each gate (read for switched-off items too), applied to the draft's switches. A gated
+  // item is drawn only when its gate is KNOWN open; unknown is not open (Codex #6).
   const preview = packMainMenuRows(
     resolveMainMenuLayout(draft)
       .filter((entry) => entry.enabled)
       .map((entry) => byId.get(entry.button))
-      .filter((item): item is MainMenuItemView => item !== undefined && item.gateOpen !== false)
+      .filter(
+        (item): item is MainMenuItemView =>
+          item !== undefined && (item.gate === null || item.gateOpen === true),
+      )
       .map((item) => ({ id: item.id, wide: item.wide, label: labelOf(item) })),
   );
 
