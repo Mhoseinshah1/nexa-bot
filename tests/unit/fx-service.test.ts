@@ -179,7 +179,8 @@ const reading = (
 const down = (code = 'timeout'): FxSourceOutcome => ({ kind: 'UNAVAILABLE', code });
 
 interface World {
-  readonly service: FxService;
+  /** Assigned once the deps that close over the world exist. */
+  service: FxService;
   readonly repository: FakeRepository;
   readonly events: OperationalEventInput[];
   readonly nobitex: FxSourceAdapter & { calls: number };
