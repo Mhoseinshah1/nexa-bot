@@ -256,6 +256,19 @@ FIXED_RATE | 1300` and `TONPAYS | SAME_UNIT`, and `UPDATE … SET conversion_pol
   nothing while it is off, so a stalled lane is visible whatever an operator switched on.
 - **The manual refresh is not a keyed command**: like a panel's connection test, its
   answer is the sources' and a replay could not repeat it. It is audited (`fx.refresh`).
+- **A refresh outcome carries its reason.** `refreshIfDue` and `refresh` return
+  `{ outcome, reason }`: the first failure or rejection of the pass (`<source>:<code>`,
+  the code `last_error_code` keeps) whenever a source did not price the pair, null when
+  the primary answered; the manual refresh's HTTP answer and the loop's log line carry
+  it too. Learned on #122's first CI run: ten cases green on one machine were `FAILED`
+  on the runner with nothing in the log to say why. The why was the installation
+  policy — `panelUrlPolicy` denies the database's and Redis's host BY NAME, and on
+  GitHub's runner both are `127.0.0.1`, the literal the suite's fake sources listen on,
+  so every source read was refused; on a machine whose database is `localhost` the same
+  fakes are admitted. The suite now addresses its own services by name, and its first
+  case asserts the policy admits the fakes, naming that cause if the collision returns.
+  The policy itself is unchanged: production's data hosts are `postgres` and `redis`,
+  and the sources are public.
 - **The catalogue courtesy** (`PaymentGatewayService.adapterAdmits`) admits a rate-bearing
   route by its fixed rate whatever the mode; under the central policy the answer is the
   same, because a positive payable is at least one unit either way, and only a same-unit
@@ -291,16 +304,18 @@ rules, each reverted the same way. The migration one needed a fresh `nexa_pfx` (
 migrator applies a tag once), so it was run by hand: mutate, drop the schema, run, restore,
 drop the schema again.
 
-| #    | Rule reverted                                                                                      | Named test(s)           | Result                                                                             |
-| ---- | -------------------------------------------------------------------------------------------------- | ----------------------- | ---------------------------------------------------------------------------------- |
-| M16  | 0149: the BEFORE INSERT trigger inferring `FIXED_RATE` from a rate removed                         | `fx-stars`              | **1 failed** / 16 — `gateway_invoices_fx_snapshot_check` on the pre-P-shape insert |
-| M17  | `sourcesBehind`: only the chosen source counted a success (a corroborating outlier still rejected) | `fx-service`            | **1 failed** / 17                                                                  |
-| M18  | `gatewayInvoiceViewSchema`: a legacy view without a policy read as `SAME_UNIT` whatever its rate   | `fx-conversion`         | **1 failed** / 21                                                                  |
-| M19  | `openGatewayAttempt`: the conversion resolved BEFORE the open attempt is looked up                 | `fx-stars`              | **1 failed** / 16                                                                  |
-| M20  | `decimalText`: Persian/Arabic-Indic digits and the Arabic decimal separator left as typed          | `settings-presentation` | **1 failed** / 20                                                                  |
-| M21a | `storeQuote`: the claim-token condition dropped                                                    | `fx-stars`              | **1 failed** / 16                                                                  |
-| M21b | `releaseRefresh`: the claim-token condition dropped                                                | `fx-stars`              | **1 failed** / 16                                                                  |
-| M22  | `bookTimeOf`: an out-of-range book time returned as an invalid Date                                | `fx-sources`            | **1 failed** / 7                                                                   |
+| #    | Rule reverted                                                                                      | Named test(s)                                             | Result                                                                                        |
+| ---- | -------------------------------------------------------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| M16  | 0149: the BEFORE INSERT trigger inferring `FIXED_RATE` from a rate removed                         | `fx-stars`                                                | **1 failed** / 16 — `gateway_invoices_fx_snapshot_check` on the pre-P-shape insert            |
+| M17  | `sourcesBehind`: only the chosen source counted a success (a corroborating outlier still rejected) | `fx-service`                                              | **1 failed** / 17                                                                             |
+| M18  | `gatewayInvoiceViewSchema`: a legacy view without a policy read as `SAME_UNIT` whatever its rate   | `fx-conversion`                                           | **1 failed** / 21                                                                             |
+| M19  | `openGatewayAttempt`: the conversion resolved BEFORE the open attempt is looked up                 | `fx-stars`                                                | **1 failed** / 16                                                                             |
+| M20  | `decimalText`: Persian/Arabic-Indic digits and the Arabic decimal separator left as typed          | `settings-presentation`                                   | **1 failed** / 20                                                                             |
+| M21a | `storeQuote`: the claim-token condition dropped                                                    | `fx-stars`                                                | **1 failed** / 16                                                                             |
+| M21b | `releaseRefresh`: the claim-token condition dropped                                                | `fx-stars`                                                | **1 failed** / 16                                                                             |
+| M22  | `bookTimeOf`: an out-of-range book time returned as an invalid Date                                | `fx-sources`                                              | **1 failed** / 7                                                                              |
+| M23  | fx-stars: the suite's services addressed as `127.0.0.1` again (the runner's collision, §4)         | `fx-stars`, run under the runner's `127.0.0.1` addressing | **12 failed** / 17 — the policy case first, then every refresh, each `FAILED` with its reason |
+| M24  | `performRefresh`: a `FAILED` pass carries no reason                                                | `fx-service`                                              | **1 failed** / 17                                                                             |
 
 Not covered by mutation, stated rather than hidden:
 
