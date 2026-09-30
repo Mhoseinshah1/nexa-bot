@@ -11,6 +11,8 @@ export const BOT_COMMAND_SYNC_INTERVAL_MS = 15_000;
 export const BOT_COMMAND_SYNC_RECONCILE_INTERVAL_MS = 5 * 60_000;
 /** Due rows claimed per tick, across tenants. */
 export const BOT_COMMAND_SYNC_BATCH = 20;
+/** Bots read per page of the reconcile sweep, which pages until a short page. */
+export const BOT_COMMAND_SYNC_RECONCILE_PAGE = 500;
 /** The first back-off, doubled per consecutive failure. */
 export const BOT_COMMAND_SYNC_BACKOFF_BASE_MS = 30_000;
 /** The back-off's ceiling. A bot that never answers is asked once an hour, for ever. */

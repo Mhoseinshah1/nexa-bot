@@ -202,7 +202,12 @@ export class TelegramBotBootstrapGateway
       case 'FAILED_PERMANENT':
         return { outcome: 'REFUSED', code: outcome.errorCode };
       default:
-        return { outcome: 'UNREACHABLE', code: outcome.errorCode };
+        return {
+          outcome: 'UNREACHABLE',
+          code: outcome.errorCode,
+          // A 429's hold, in ms, when Telegram named one. The lane's back-off honours it.
+          ...(outcome.retryAfterMs === undefined ? {} : { retryAfterMs: outcome.retryAfterMs }),
+        };
     }
   }
 

@@ -70,6 +70,7 @@ export interface FakeTelegramCall {
  *  - `apply_then_drop` — the change IS applied and the answer is lost: the ambiguous
  *    outcome a timeout produces;
  *  - `refuse` — HTTP 400 with the given description, nothing applied;
+ *  - `rate_limit` — HTTP 429 naming `retry_after`, nothing applied;
  *  - `ok_without_applying` — `{ ok: true }` and nothing applied (a registration that
  *    something else replaced the instant after).
  */
@@ -78,6 +79,8 @@ export type FakeTelegramFault =
   | { readonly kind: 'drop' }
   | { readonly kind: 'apply_then_drop' }
   | { readonly kind: 'refuse'; readonly description: string }
+  /** HTTP 429 with `parameters.retry_after` (seconds), nothing applied. */
+  | { readonly kind: 'rate_limit'; readonly retryAfter: number }
   | { readonly kind: 'ok_without_applying' };
 
 export interface FakeTelegramBotApi {
@@ -357,6 +360,14 @@ export async function startFakeTelegramBotApi(): Promise<FakeTelegramBotApi> {
               return;
             case 'refuse':
               fail(response, 400, fault.description);
+              return;
+            case 'rate_limit':
+              send(response, 429, {
+                ok: false,
+                error_code: 429,
+                description: 'Too Many Requests: retry after ' + String(fault.retryAfter),
+                parameters: { retry_after: fault.retryAfter },
+              });
               return;
             case 'ok_without_applying':
               ok(response, true, 'Webhook was set');

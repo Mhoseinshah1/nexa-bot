@@ -38,6 +38,13 @@ export interface ClaimedCommandSync {
   readonly botInstanceId: BotInstanceId;
   readonly desiredHash: string;
   readonly attempts: number;
+  /**
+   * The claim's own token: the `claimed_until` this claim wrote. Every record the attempt
+   * makes names it, so a claim that lapsed and was taken over by another worker records
+   * nothing on top of that worker's newer state (Codex #4). A new claim is taken only
+   * after the previous lapsed, so two claims of one row never carry the same instant.
+   */
+  readonly claimedUntil: Date;
 }
 
 export interface BotCommandSyncRepository {
@@ -76,27 +83,46 @@ export interface BotCommandSyncRepository {
     botId: BotInstanceId,
     input: { readonly desiredHash: string; readonly now: Date; readonly leaseMs: number },
   ): Promise<ClaimedCommandSync | null>;
-  /** The attempt landed: nothing queued, no failures, the lease dropped. */
+  /**
+   * The attempt landed with `sentHash`: no failures, the lease dropped — and nothing
+   * queued ONLY when the row still wants `sentHash`. A description edited while the call
+   * was in flight moved `desired_hash` on; that row stays due (Codex #3). WHERE the row
+   * still holds `claim`; false when it did not (a lapsed claim taken over), and then the
+   * caller records nothing else either.
+   */
   recordSuccess(
     scope: ScopeContext,
     botId: BotInstanceId,
-    input: { readonly now: Date },
+    input: { readonly now: Date; readonly sentHash: string; readonly claim: Date },
     tx: unknown,
-  ): Promise<void>;
-  /** The attempt did not land: one more failure, the next attempt at `nextAttemptAt`, the lease dropped. Answers the new count. */
+  ): Promise<boolean>;
+  /**
+   * The attempt did not land: one more failure, the next attempt at `nextAttemptAt`, the
+   * lease dropped. Answers the new count, or null when the row no longer holds `claim`.
+   */
   recordFailure(
     scope: ScopeContext,
     botId: BotInstanceId,
-    input: { readonly now: Date; readonly errorCode: string; readonly nextAttemptAt: Date },
+    input: {
+      readonly now: Date;
+      readonly errorCode: string;
+      readonly nextAttemptAt: Date;
+      readonly claim: Date;
+    },
     tx: unknown,
-  ): Promise<number>;
-  /** Hands a claim back without spending an attempt (the scope stopped meanwhile). */
-  release(scope: ScopeContext, botId: BotInstanceId, tx?: unknown): Promise<void>;
+  ): Promise<number | null>;
+  /** Hands THIS claim back without spending an attempt (the scope stopped meanwhile). */
+  release(scope: ScopeContext, botId: BotInstanceId, claim: Date, tx?: unknown): Promise<void>;
   /**
-   * The reconcile sweep's input: every ACTIVE bot of every ACTIVE tenant, with what
-   * Telegram was last given and whether an attempt is queued, tenant by tenant.
+   * The reconcile sweep's input: ACTIVE bots of ACTIVE tenants, ordered by bot id, from
+   * the id after `afterBotId` (null starts at the beginning) — a keyset page, so a sweep
+   * that loops until a short page reaches every bot whatever the installation's size
+   * (Codex #1).
    */
-  activeBotsAcrossTenants(limit: number): Promise<
+  activeBotsAcrossTenants(
+    limit: number,
+    afterBotId: string | null,
+  ): Promise<
     ReadonlyArray<{
       readonly tenantId: string;
       readonly botId: BotInstanceId;

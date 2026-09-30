@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNull, lt, lte, or, sql } from 'drizzle-orm';
+import { and, asc, eq, gt, inArray, isNull, lt, lte, or, sql } from 'drizzle-orm';
 import type { BotInstanceId, BotInstanceStatus, ScopeContext } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import {
@@ -183,12 +183,14 @@ export class DrizzleBotCommandSyncRepository implements BotCommandSyncRepository
           botInstanceId: botCommandSyncs.botInstanceId,
           desiredHash: botCommandSyncs.desiredHash,
           attempts: botCommandSyncs.attempts,
+          claimedUntil: botCommandSyncs.claimedUntil,
         });
       return claimed.map((row) => ({
         tenantId: row.tenantId,
         botInstanceId: row.botInstanceId as BotInstanceId,
         desiredHash: row.desiredHash,
         attempts: row.attempts,
+        claimedUntil: row.claimedUntil as Date,
       }));
     });
   }
@@ -231,6 +233,7 @@ export class DrizzleBotCommandSyncRepository implements BotCommandSyncRepository
         .returning({
           desiredHash: botCommandSyncs.desiredHash,
           attempts: botCommandSyncs.attempts,
+          claimedUntil: botCommandSyncs.claimedUntil,
         });
       if (claimed === undefined) return null;
       return {
@@ -238,6 +241,7 @@ export class DrizzleBotCommandSyncRepository implements BotCommandSyncRepository
         botInstanceId: botId,
         desiredHash: claimed.desiredHash,
         attempts: claimed.attempts,
+        claimedUntil: claimed.claimedUntil as Date,
       };
     });
   }
@@ -245,30 +249,46 @@ export class DrizzleBotCommandSyncRepository implements BotCommandSyncRepository
   async recordSuccess(
     scope: ScopeContext,
     botId: BotInstanceId,
-    input: { readonly now: Date },
+    input: { readonly now: Date; readonly sentHash: string; readonly claim: Date },
     tx: unknown,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const tenantId = requireTenantId(scope);
-    await executorOf(this.db, tx)
+    const updated = await executorOf(this.db, tx)
       .update(botCommandSyncs)
       .set({
         lastSyncedAt: input.now,
         lastAttemptedAt: input.now,
         lastErrorCode: null,
         attempts: 0,
-        nextAttemptAt: null,
+        // Cleared only when what was sent is still what is wanted. A row whose desired
+        // digest moved on while the call was in flight stays due — queued now if nothing
+        // queued it meanwhile — so the newer text reaches Telegram on the next tick.
+        nextAttemptAt: sql`CASE WHEN ${botCommandSyncs.desiredHash} = ${input.sentHash} THEN NULL ELSE COALESCE(${botCommandSyncs.nextAttemptAt}, ${input.now}) END`,
         claimedUntil: null,
         updatedAt: input.now,
       })
-      .where(and(eq(botCommandSyncs.botInstanceId, botId), eq(botCommandSyncs.tenantId, tenantId)));
+      .where(
+        and(
+          eq(botCommandSyncs.botInstanceId, botId),
+          eq(botCommandSyncs.tenantId, tenantId),
+          eq(botCommandSyncs.claimedUntil, input.claim),
+        ),
+      )
+      .returning({ id: botCommandSyncs.botInstanceId });
+    return updated.length === 1;
   }
 
   async recordFailure(
     scope: ScopeContext,
     botId: BotInstanceId,
-    input: { readonly now: Date; readonly errorCode: string; readonly nextAttemptAt: Date },
+    input: {
+      readonly now: Date;
+      readonly errorCode: string;
+      readonly nextAttemptAt: Date;
+      readonly claim: Date;
+    },
     tx: unknown,
-  ): Promise<number> {
+  ): Promise<number | null> {
     const tenantId = requireTenantId(scope);
     const [row] = await executorOf(this.db, tx)
       .update(botCommandSyncs)
@@ -280,20 +300,40 @@ export class DrizzleBotCommandSyncRepository implements BotCommandSyncRepository
         claimedUntil: null,
         updatedAt: input.now,
       })
-      .where(and(eq(botCommandSyncs.botInstanceId, botId), eq(botCommandSyncs.tenantId, tenantId)))
+      .where(
+        and(
+          eq(botCommandSyncs.botInstanceId, botId),
+          eq(botCommandSyncs.tenantId, tenantId),
+          eq(botCommandSyncs.claimedUntil, input.claim),
+        ),
+      )
       .returning({ attempts: botCommandSyncs.attempts });
-    return row?.attempts ?? 0;
+    return row?.attempts ?? null;
   }
 
-  async release(scope: ScopeContext, botId: BotInstanceId, tx?: unknown): Promise<void> {
+  async release(
+    scope: ScopeContext,
+    botId: BotInstanceId,
+    claim: Date,
+    tx?: unknown,
+  ): Promise<void> {
     const tenantId = requireTenantId(scope);
     await executorOf(this.db, tx)
       .update(botCommandSyncs)
       .set({ claimedUntil: null })
-      .where(and(eq(botCommandSyncs.botInstanceId, botId), eq(botCommandSyncs.tenantId, tenantId)));
+      .where(
+        and(
+          eq(botCommandSyncs.botInstanceId, botId),
+          eq(botCommandSyncs.tenantId, tenantId),
+          eq(botCommandSyncs.claimedUntil, claim),
+        ),
+      );
   }
 
-  async activeBotsAcrossTenants(limit: number): Promise<
+  async activeBotsAcrossTenants(
+    limit: number,
+    afterBotId: string | null,
+  ): Promise<
     ReadonlyArray<{
       readonly tenantId: string;
       readonly botId: BotInstanceId;
@@ -311,8 +351,16 @@ export class DrizzleBotCommandSyncRepository implements BotCommandSyncRepository
       .from(botInstances)
       .innerJoin(tenants, eq(tenants.id, botInstances.tenantId))
       .leftJoin(botCommandSyncs, eq(botCommandSyncs.botInstanceId, botInstances.id))
-      .where(and(eq(botInstances.status, 'ACTIVE'), eq(tenants.status, 'ACTIVE')))
-      .orderBy(asc(botInstances.tenantId), asc(botInstances.createdAt), asc(botInstances.id))
+      .where(
+        and(
+          eq(botInstances.status, 'ACTIVE'),
+          eq(tenants.status, 'ACTIVE'),
+          ...(afterBotId === null ? [] : [gt(botInstances.id, afterBotId)]),
+        ),
+      )
+      // Keyset on the bot id (unique, UUIDv7): the page after `afterBotId` is exactly the
+      // rows a previous page did not cover, whatever moved in between.
+      .orderBy(asc(botInstances.id))
       .limit(limit);
     return rows.map((row) => ({
       tenantId: row.tenantId,

@@ -306,8 +306,11 @@ export type BotCommandsRegistration =
   | { readonly outcome: 'REGISTERED' }
   /** Telegram looked at the list and refused it, or the token; retrying the same list changes nothing. */
   | { readonly outcome: 'REFUSED'; readonly code: string }
-  /** No usable answer — unreachable, a 5xx, a 429, an unreadable 2xx. Retry later. */
-  | { readonly outcome: 'UNREACHABLE'; readonly code: string };
+  /**
+   * No usable answer — unreachable, a 5xx, a 429, an unreadable 2xx. Retry later; a 429's
+   * `retry_after` is carried so the lane never retries before Telegram's hold (Codex #2).
+   */
+  | { readonly outcome: 'UNREACHABLE'; readonly code: string; readonly retryAfterMs?: number };
 
 /** What `getMyCommands` answered (round P's «بررسی وضعیت»). A read. */
 export type BotCommandsRead =

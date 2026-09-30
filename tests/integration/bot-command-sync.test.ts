@@ -422,6 +422,95 @@ describe('round P — the Telegram command-menu sync lane', () => {
     expect(await lane().tick(new Date(Date.now() + 2 * 60_000))).toMatchObject({ claimed: 1 });
   });
 
+  it('reconciles every bot, page after page, not only the first page (Codex #1)', async () => {
+    await lane().syncNow(scopeA, BOT_A1);
+    await lane().syncNow(scopeB, BOT_B1);
+    await db().execute(
+      sql`UPDATE bot_instances SET commands_revision = 'old' WHERE id IN (${BOT_A1}, ${BOT_B1})`,
+    );
+    // A page of ONE: the sweep must go on to the next page to reach the second bot.
+    expect(await lane().reconcile(1)).toBe(2);
+    expect((await syncRow(BOT_A1))?.next_attempt_at).not.toBeNull();
+    expect((await syncRow(BOT_B1))?.next_attempt_at).not.toBeNull();
+  });
+
+  it("waits out Telegram's retry_after when it is longer than the back-off (Codex #2)", async () => {
+    await api.container.uow.run(scopeA, (tx) =>
+      lane().requestSync(scopeA, BOT_A1, { due: true }, tx),
+    );
+    telegram.failNext('setMyCommands', { kind: 'rate_limit', retryAfter: 120 });
+    expect(await lane().tick(new Date())).toMatchObject({ claimed: 1, failed: 1 });
+    const row = await syncRow(BOT_A1);
+    expect(row?.last_error_code).toBe('telegram.rate_limited');
+    const next = new Date(String(row?.next_attempt_at));
+    const attempted = new Date(String(row?.last_attempted_at));
+    // 120 s, not the first-failure back-off of 30 s.
+    expect(next.getTime() - attempted.getTime()).toBe(120_000);
+    expect(next.getTime() - attempted.getTime()).toBeGreaterThan(BOT_COMMAND_SYNC_BACKOFF_BASE_MS);
+  });
+
+  it('keeps a row due when the description changed while the registration was in flight (Codex #3)', async () => {
+    await lane().syncNow(scopeA, BOT_A1);
+    const sent = (await desired(scopeA)).hash;
+    // Between rendering the list and recording its success, an operator rewords a
+    // description and the consumer moves the desired digest on.
+    telegram.beforeNext('setMyCommands', async () => {
+      await api.container.templatesService.set(scopeA, owner, {
+        idempotencyKey: 'reword-in-flight',
+        key: 'bot.command.wallet',
+        body: 'موجودی و شارژ کیف پول',
+        expectedVersion: null,
+        expectedRevision: null,
+      });
+      await api.container.relay.processBatch();
+    });
+    expect((await lane().syncNow(scopeA, BOT_A1)).outcome).toBe('SYNCED');
+    // What was sent is recorded as sent; the newer text is still owed.
+    expect(await revisionOf(BOT_A1)).toBe(sent);
+    const row = await syncRow(BOT_A1);
+    expect(row?.next_attempt_at).not.toBeNull();
+    expect(row?.claimed_until).toBeNull();
+    expect(row?.desired_hash).not.toBe(sent);
+    expect(await lane().tick(new Date(Date.now() + 1_000))).toMatchObject({
+      claimed: 1,
+      synced: 1,
+    });
+    expect(
+      telegram.registeredCommands(ID_A1).find((entry) => entry.command === 'wallet')?.description,
+    ).toBe('موجودی و شارژ کیف پول');
+    expect(await revisionOf(BOT_A1)).toBe((await desired(scopeA)).hash);
+    expect((await syncRow(BOT_A1))?.next_attempt_at).toBeNull();
+  });
+
+  it('records nothing for a claim another worker took over while the call was in flight (Codex #4)', async () => {
+    await api.container.uow.run(scopeA, (tx) =>
+      lane().requestSync(scopeA, BOT_A1, { due: true }, tx),
+    );
+    const takeover = async () => {
+      // The first worker's lease lapsed and a second worker claimed the row.
+      await db().execute(sql`
+        UPDATE bot_command_syncs SET claimed_until = now() + interval '10 minutes'
+         WHERE bot_instance_id = ${BOT_A1}`);
+    };
+    // A failure by the stale holder writes nothing on top of the newer claim...
+    telegram.beforeNext('setMyCommands', takeover);
+    telegram.failNext('setMyCommands', { kind: 'server_error' });
+    expect(await lane().tick(new Date())).toMatchObject({ claimed: 1, failed: 1 });
+    let row = await syncRow(BOT_A1);
+    expect(row).toMatchObject({ attempts: 0, last_error_code: null });
+    expect(row?.claimed_until).not.toBeNull();
+    // ...and neither does a success: the digest stays the newer holder's to record.
+    await db().execute(
+      sql`UPDATE bot_command_syncs SET claimed_until = NULL WHERE bot_instance_id = ${BOT_A1}`,
+    );
+    telegram.beforeNext('setMyCommands', takeover);
+    expect(await lane().tick(new Date())).toMatchObject({ claimed: 1, synced: 1 });
+    row = await syncRow(BOT_A1);
+    expect(row?.last_synced_at).toBeNull();
+    expect(await revisionOf(BOT_A1)).toBeNull();
+    expect(row?.claimed_until).not.toBeNull();
+  });
+
   it('records no token, no description of Telegram’s and no payload anywhere', async () => {
     const token = telegram.revoke(ID_A1, { keepWebhook: true });
     const secret = token.split(':')[1] as string;

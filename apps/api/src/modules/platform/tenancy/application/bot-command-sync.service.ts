@@ -20,6 +20,7 @@ import type { OperationalConditionReader } from '../../opslog/application/ports.
 import type { ScopeActivityReader } from '../../system/application/record-ping.service.js';
 import {
   BOT_COMMAND_SYNC_BATCH,
+  BOT_COMMAND_SYNC_RECONCILE_PAGE,
   BOT_COMMAND_SYNC_WARN_AFTER_ATTEMPTS,
   COMMAND_SYNC_FAILING_CODE,
   COMMAND_SYNC_RECOVERED_CODE,
@@ -155,19 +156,44 @@ export class BotCommandSyncService {
    * `BOT_COMMANDS` on an installation the installer's reconcile did not reach, and any
    * event a consumer did not see. Answers how many were queued.
    */
-  async reconcile(): Promise<number> {
-    const bots = await this.deps.repository.activeBotsAcrossTenants(500);
+  async reconcile(pageSize = BOT_COMMAND_SYNC_RECONCILE_PAGE): Promise<number> {
     const desiredByTenant = new Map<string, string>();
     let queued = 0;
-    for (const bot of bots) {
-      if (bot.queued) continue;
+    let after: string | null = null;
+    // Page by bot id until a short page: an installation with more bots than one page is
+    // swept whole, not its first page for ever (Codex #1).
+    for (;;) {
+      const page = await this.deps.repository.activeBotsAcrossTenants(pageSize, after);
+      for (const bot of page) {
+        queued += await this.reconcileOne(bot, desiredByTenant);
+      }
+      const last = page[page.length - 1];
+      if (page.length < pageSize || last === undefined) break;
+      after = last.botId;
+    }
+    return queued;
+  }
+
+  /** One bot of the sweep: queue it when its registered digest differs and nothing is queued. */
+  private async reconcileOne(
+    bot: {
+      readonly tenantId: string;
+      readonly botId: BotInstanceId;
+      readonly syncedHash: string | null;
+      readonly queued: boolean;
+    },
+    desiredByTenant: Map<string, string>,
+  ): Promise<number> {
+    let queued = 0;
+    {
+      if (bot.queued) return 0;
       const scope: TenantContext = { tenantId: bot.tenantId as never, botInstanceId: null };
       let hash = desiredByTenant.get(bot.tenantId);
       if (hash === undefined) {
         hash = (await this.deps.menu.desiredFor(scope)).hash;
         desiredByTenant.set(bot.tenantId, hash);
       }
-      if (bot.syncedHash === hash) continue;
+      if (bot.syncedHash === hash) return 0;
       await this.deps.uow.run(scope, async (tx) => {
         if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) return;
         await this.deps.repository.upsertDesired(
@@ -253,7 +279,7 @@ export class BotCommandSyncService {
       const token = await this.deps.bots.tokenForBotInstance(scope, row.botInstanceId);
       if (token === null) {
         // Stopped between the claim and now. Not an attempt; the start queues it again.
-        await this.deps.repository.release(scope, row.botInstanceId);
+        await this.deps.repository.release(scope, row.botInstanceId, row.claimedUntil);
         return { botInstanceId: row.botInstanceId, outcome: 'SKIPPED', errorCode: null };
       }
       // Rendered NOW, not from the row: a description edited since the row was queued is
@@ -267,7 +293,22 @@ export class BotCommandSyncService {
       if (registration.outcome === 'REGISTERED') {
         await this.deps.uow.run(scope, async (tx) => {
           if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) {
-            await this.deps.repository.release(scope, row.botInstanceId, tx);
+            await this.deps.repository.release(scope, row.botInstanceId, row.claimedUntil, tx);
+            return;
+          }
+          // The row FIRST, WHERE it still holds this claim: a claim that lapsed and was
+          // taken over records nothing on top of the newer worker's state (Codex #4).
+          const held = await this.deps.repository.recordSuccess(
+            scope,
+            row.botInstanceId,
+            { now, sentHash: desired.hash, claim: row.claimedUntil },
+            tx,
+          );
+          if (!held) {
+            this.deps.logger.warn(
+              { botInstanceId: row.botInstanceId },
+              'command sync claim lapsed before its record; the newer claim owns the row',
+            );
             return;
           }
           await this.deps.bots.markCommandsRegistered(
@@ -276,7 +317,6 @@ export class BotCommandSyncService {
             { revision: desired.hash, now },
             tx,
           );
-          await this.deps.repository.recordSuccess(scope, row.botInstanceId, { now }, tx);
           await this.deps.audit.record(
             scope,
             actor,
@@ -310,7 +350,14 @@ export class BotCommandSyncService {
         });
         return { botInstanceId: row.botInstanceId, outcome: 'SYNCED', errorCode: null };
       }
-      return await this.recordFailure(scope, actor, row, registration.code, now);
+      return await this.recordFailure(
+        scope,
+        actor,
+        row,
+        registration.code,
+        registration.outcome === 'UNREACHABLE' ? (registration.retryAfterMs ?? null) : null,
+        now,
+      );
     } catch (error: unknown) {
       // The record itself failed (the database, a stopped scope mid-write). The claim
       // lapses with its lease and the row is met again; nothing is guessed about Telegram.
@@ -327,21 +374,32 @@ export class BotCommandSyncService {
     actor: ActorContext,
     row: ClaimedCommandSync,
     errorCode: string,
+    retryAfterMs: number | null,
     now: Date,
   ): Promise<BotCommandSyncResult> {
     const attemptsAfter = row.attempts + 1;
-    const nextAttemptAt = new Date(now.getTime() + commandSyncBackoffMs(attemptsAfter));
+    // The back-off, or Telegram's own hold when it named a longer one (Codex #2).
+    const nextAttemptAt = new Date(
+      now.getTime() + commandSyncBackoffMs(attemptsAfter, retryAfterMs),
+    );
     await this.deps.uow.run(scope, async (tx) => {
       if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) {
-        await this.deps.repository.release(scope, row.botInstanceId, tx);
+        await this.deps.repository.release(scope, row.botInstanceId, row.claimedUntil, tx);
         return;
       }
       const attempts = await this.deps.repository.recordFailure(
         scope,
         row.botInstanceId,
-        { now, errorCode, nextAttemptAt },
+        { now, errorCode, nextAttemptAt, claim: row.claimedUntil },
         tx,
       );
+      if (attempts === null) {
+        this.deps.logger.warn(
+          { botInstanceId: row.botInstanceId },
+          'command sync claim lapsed before its record; the newer claim owns the row',
+        );
+        return;
+      }
       await this.deps.audit.record(
         scope,
         actor,
