@@ -328,6 +328,8 @@ import {
 import { DrizzleResellerRepository } from './modules/commerce/resellers/infrastructure/drizzle-reseller.repository.js';
 import { ResellerService } from './modules/commerce/resellers/application/reseller.service.js';
 import { ResellerAdminService } from './modules/commerce/resellers/application/reseller-admin.service.js';
+import { ResellerMinimumService } from './modules/commerce/resellers/application/reseller-minimum.service.js';
+import { TenantMonthlyPeriods } from './infrastructure/time/monthly-period.js';
 import { DrizzleAuditHistoryReader } from './modules/platform/audit/infrastructure/drizzle-audit-history.reader.js';
 import { DrizzleDiscountRepository } from './modules/commerce/pricing/infrastructure/drizzle-discount.repository.js';
 import {
@@ -669,6 +671,8 @@ export interface Container {
   readonly resellers: ResellerService;
   /** WP9-B: reseller tiers, grants and resellers, as an operator manages them. */
   readonly resellersAdmin: ResellerAdminService;
+  /** Round N R2: the reseller monthly minimum — progress and the optional notices. */
+  readonly resellerMinimums: ResellerMinimumService;
   readonly commercialActions: CommercialActionService;
   /** WP-A6: the operator's configured locations, and a customer's free location change. */
   readonly serviceLocations: ServiceLocationAdminService;
@@ -2946,6 +2950,25 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     clock,
     ids,
   });
+  /*
+   * Round N R2: the reseller monthly minimum. Readers, not services, for the settings and
+   * flags — the reason `serviceReminderSweep` gives above. Its sales figure is the reports'
+   * own statement (`resellerSalesStatement`) and its months the reports' own resolver.
+   */
+  const resellerMinimumService = new ResellerMinimumService({
+    resellers: resellerRepository,
+    sales: new DrizzleReportingRepository(database.db),
+    periods: new TenantMonthlyPeriods(),
+    presentation: new CachedTenantPresentationReader(tenants, clock),
+    settings: settingsResolver,
+    features: featureFlagResolver,
+    notifier: customerNotifier,
+    guard,
+    scopeActivity: tenants,
+    uow,
+    clock,
+    ids,
+  });
   const customerReminderLoop = new CustomerReminderLoop(
     [
       {
@@ -2961,6 +2984,12 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
         // The service reminder cadence: a fall below a threshold is not a deadline.
         everyMs: SERVICE_REMINDER_INTERVAL_MS,
         runOnce: async (scope) => (await walletLowBalanceSweep.runOnce(scope)).alerts,
+      },
+      {
+        // Round N R2: a month-end reminder is not a deadline to the minute either.
+        name: 'reseller-monthly-minimum',
+        everyMs: SERVICE_REMINDER_INTERVAL_MS,
+        runOnce: async (scope) => resellerMinimumService.runOnce(scope),
       },
     ],
     {
@@ -4578,6 +4607,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     tenantMedia: tenantMediaService,
     resellers: resellerService,
     resellersAdmin: resellerAdminService,
+    resellerMinimums: resellerMinimumService,
     commercialActions: commercialActionService,
     serviceLocations: serviceLocationAdminService,
     locationChanges: locationChangeService,

@@ -309,6 +309,10 @@ describe('the feature flag registry', () => {
       // HF-A9. Off by default; the dispatcher holds reminder kinds inside the window it
       // switches on, and its two settings are the window's boundaries.
       'reminder_quiet_hours',
+      // Round N, package D. The achievement is off by default and the month-end reminder on
+      // (inert until a minimum is set); both are raised by the reseller-minimum sweep.
+      'reseller_minimum_achieved_notices',
+      'reseller_minimum_reminders',
       // The three reminder switches. `service_expired_notice` is a flag rather than a
       // sixth threshold because it is not a number: it fires at zero days and what an
       // operator decides about it is whether it is sent at all.

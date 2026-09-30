@@ -210,6 +210,31 @@ export const FEATURE_FLAGS = [
     configuredBy: ['reminders.quiet_hours_start', 'reminders.quiet_hours_end'],
   },
   /*
+   * Round N, package D: the reseller monthly minimum's two sentences
+   * (`docs/round-n-reseller-audit.md` §3.4). Informational only — neither switch has, or
+   * turns on, any consequence for a reseller below the minimum.
+   */
+  {
+    key: 'reseller_minimum_reminders',
+    description:
+      'Remind an active reseller, once a month, reminders.reseller_minimum_days local days ' +
+      'before the month ends, that their sales this month are still below their monthly ' +
+      'minimum. ON by default, as Mirza\u2019s three-day warning is, and inert until an ' +
+      'operator sets a minimum on a tier or a reseller: every minimum defaults to none.',
+    defaultEnabled: true,
+    blastRadius: 'TENANT_WIDE',
+    configuredBy: ['reminders.reseller_minimum_days'],
+  },
+  {
+    key: 'reseller_minimum_achieved_notices',
+    description:
+      'Tell an active reseller, once a month, that their sales this month reached their ' +
+      'monthly minimum. OFF by default.',
+    defaultEnabled: false,
+    blastRadius: 'TENANT_WIDE',
+    configuredBy: [],
+  },
+  /*
    * `trials` was here until F5. It was the tenant-wide switch in front of the free
    * trial, and R1 made each panel's own trial (`panel_trial_configs.enabled`) the thing that
    * is offered, so the switch became a second answer to "is a trial offered" that could

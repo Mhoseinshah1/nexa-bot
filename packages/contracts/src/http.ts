@@ -61,6 +61,11 @@ import {
   RESELLER_STATUSES,
   RESELLER_TIER_GRANTS_MAX,
   RESELLER_TIER_NAME_MAX,
+  RESELLER_ENTITLEMENT_DIMENSIONS,
+  RESELLER_GRANT_DIMENSION,
+  RESELLER_MINIMUM_SOURCES,
+  RESELLER_MINIMUM_STATES,
+  RESELLER_MONTHLY_MINIMUM_MAX_MINOR,
   TRIAL_LIMIT_MAX,
   TRIAL_LIMIT_MIN,
 } from './promotions.js';
@@ -140,7 +145,7 @@ import {
   PROVIDER_FAILURE_KINDS,
   PROVIDER_TYPES,
 } from './provider.js';
-import { isStorableInstant } from './time.js';
+import { CALENDARS, isStorableInstant } from './time.js';
 import { capabilityRegistryEntrySchema } from './panel-advanced.js';
 import {
   SUPPORT_FAQ_STATUSES,
@@ -3068,6 +3073,11 @@ export const resellerTierSummarySchema = z.object({
   creditLimit: z.object({ amount: z.string(), currency: z.enum(CURRENCY_CODES) }),
   grants: z.array(resellerTierGrantSchema),
   resellerCount: z.number().int().nonnegative(),
+  /**
+   * Round N, package D: the tier's monthly minimum sales, or null for none. Tracking only —
+   * nothing happens to a reseller below it (`docs/round-n-reseller-audit.md` §3.5).
+   */
+  monthlyMinimum: z.object({ amount: z.string(), currency: z.enum(CURRENCY_CODES) }).nullable(),
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),
 });
@@ -3301,6 +3311,214 @@ export const resellerHistoryResponseSchema = z.object({
 });
 export type ResellerHistoryResponse = z.infer<typeof resellerHistoryResponseSchema>;
 
+// --- Resellers, round N package D: plan controls and the monthly minimum ------------
+
+/**
+ * Per-reseller entitlement overrides, the effective-policy preview and the monthly minimum
+ * (`docs/round-n-reseller-audit.md`). Writes need `resellers.edit`; the preview
+ * `resellers.view`; the monthly progress `resellers.view` AND `orders.view`, because every
+ * figure in it is a sum of order amounts.
+ */
+
+/** A monthly minimum: whole minor units, zero allowed (zero is "no minimum"). */
+const monthlyMinimumSchema = z.object({
+  amount: minorAmountSchema.refine((v) => BigInt(v) <= RESELLER_MONTHLY_MINIMUM_MAX_MINOR, {
+    message: 'That minimum is past the largest this system allows.',
+  }),
+  currency: z.enum(CURRENCY_CODES),
+});
+
+/** A tier's minimum. Null or a zero amount: the tier has no minimum. */
+export const resellerTierMinimumWriteSchema = z.object({
+  idempotencyKey: z.string().min(8).max(255),
+  minimum: monthlyMinimumSchema.nullable(),
+});
+export type ResellerTierMinimumWriteRequest = z.infer<typeof resellerTierMinimumWriteSchema>;
+
+/**
+ * A reseller's own minimum. NULL inherits the tier's; a ZERO amount is an explicit "no
+ * minimum for this reseller"; a positive amount is theirs.
+ */
+export const resellerMinimumWriteSchema = z.object({
+  idempotencyKey: z.string().min(8).max(255),
+  minimum: monthlyMinimumSchema.nullable(),
+});
+export type ResellerMinimumWriteRequest = z.infer<typeof resellerMinimumWriteSchema>;
+
+/**
+ * One overridden dimension: the reseller's own grants of it, which REPLACE the tier's grants
+ * of that whole dimension. An empty list overrides it with nothing: deny by default.
+ */
+export const resellerGrantOverrideSchema = z
+  .object({
+    dimension: z.enum(RESELLER_ENTITLEMENT_DIMENSIONS),
+    grants: z.array(resellerTierGrantSchema).max(RESELLER_TIER_GRANTS_MAX),
+  })
+  .refine((o) => o.grants.every((g) => RESELLER_GRANT_DIMENSION[g.kind] === o.dimension), {
+    message: 'Every grant of an override belongs to the dimension it overrides.',
+    path: ['grants'],
+  });
+export type ResellerGrantOverride = z.infer<typeof resellerGrantOverrideSchema>;
+
+/**
+ * The reseller's whole override set, replaced at once. A dimension not listed inherits the
+ * tier's grants; an empty `overrides` list removes every override.
+ */
+export const resellerGrantOverridesWriteSchema = z
+  .object({
+    idempotencyKey: z.string().min(8).max(255),
+    overrides: z.array(resellerGrantOverrideSchema).max(RESELLER_ENTITLEMENT_DIMENSIONS.length),
+  })
+  .refine((w) => new Set(w.overrides.map((o) => o.dimension)).size === w.overrides.length, {
+    message: 'Each dimension is overridden once.',
+    path: ['overrides'],
+  })
+  .refine(
+    (w) => {
+      const all = w.overrides.flatMap((o) => o.grants.map((g) => `${g.kind}:${g.subject ?? '*'}`));
+      return new Set(all).size === all.length && all.length <= RESELLER_TIER_GRANTS_MAX;
+    },
+    { message: 'Each grant is listed once.', path: ['overrides'] },
+  );
+export type ResellerGrantOverridesWriteRequest = z.infer<typeof resellerGrantOverridesWriteSchema>;
+
+const wireMoneySchema = z.object({ amount: z.string(), currency: z.enum(CURRENCY_CODES) });
+
+/**
+ * What a reseller can actually do, and where each part of it comes from: inherited from the
+ * tier, or the reseller's own override. Every answer is the server's — the grants are those
+ * `decideEntitlement` reads, the layer is `resellerPriceLayer`'s — and no price is computed:
+ * a reseller's price is the pricing boundary's answer at checkout.
+ */
+export const resellerPolicySchema = z.object({
+  customerId: z.string(),
+  status: z.enum(RESELLER_STATUSES),
+  tier: z.object({ id: z.string(), name: z.string() }),
+  dimensions: z.array(
+    z.object({
+      dimension: z.enum(RESELLER_ENTITLEMENT_DIMENSIONS),
+      source: z.enum(['TIER', 'RESELLER']),
+      tierGrants: z.array(resellerTierGrantSchema),
+      /** Null: not overridden, the tier's grants apply. */
+      overrideGrants: z.array(resellerTierGrantSchema).nullable(),
+      effectiveGrants: z.array(resellerTierGrantSchema),
+    }),
+  ),
+  pricing: z.object({
+    tierMode: z.enum(RESELLER_PRICING_MODES),
+    tierPercent: z.number().int().nullable(),
+    overrideMode: z.enum(RESELLER_OVERRIDE_MODES),
+    overridePercent: z.number().int().nullable(),
+    layer: z.enum(RESELLER_PRICE_LAYERS),
+    percent: z.number().int().nullable(),
+  }),
+  monthlyMinimum: z.object({
+    tier: wireMoneySchema.nullable(),
+    /** The reseller's own value: null inherits, zero is an explicit none. */
+    own: wireMoneySchema.nullable(),
+    effective: wireMoneySchema.nullable(),
+    source: z.enum(RESELLER_MINIMUM_SOURCES),
+  }),
+  /**
+   * The existing Products (one page), each with `decideEntitlement`'s answer for a NEW
+   * purchase through the bot named by `botBasis`: any bot when every bot is granted, the
+   * first granted bot otherwise, none when no bot is granted (every answer is then `BOT`).
+   *
+   * NULL when the caller does not hold `catalog.view`: product titles, statuses and ids
+   * are the catalogue's, and `resellers.view` alone must not read them around
+   * `ProductService.list`'s gate (Codex review of PR #115). The rest of the policy stands.
+   */
+  botBasis: z.enum(['ANY_BOT', 'GRANTED_BOT', 'NO_BOT']),
+  products: z
+    .array(
+      z.object({
+        productId: z.string(),
+        title: z.string(),
+        status: z.enum(PRODUCT_STATUSES),
+        categoryId: z.string().nullable(),
+        panelId: z.string().nullable(),
+        allowed: z.boolean(),
+        refusedDimension: z.enum(RESELLER_ENTITLEMENT_DIMENSIONS).nullable(),
+      }),
+    )
+    .nullable(),
+  /**
+   * False when there are more Products than one page; the list is then the first page.
+   * Also false when `products` is null.
+   */
+  productsComplete: z.boolean(),
+});
+export type ResellerPolicy = z.infer<typeof resellerPolicySchema>;
+export const resellerPolicyResponseSchema = z.object({ policy: resellerPolicySchema });
+export type ResellerPolicyResponse = z.infer<typeof resellerPolicyResponseSchema>;
+
+/** The months the progress read answers, in the tenant's calendar. */
+export const RESELLER_MINIMUM_PERIODS = ['THIS_MONTH', 'PREVIOUS_MONTH'] as const;
+export type ResellerMinimumPeriod = (typeof RESELLER_MINIMUM_PERIODS)[number];
+export const RESELLER_MINIMUM_FILTERS = ['ALL', 'ACHIEVED', 'BELOW'] as const;
+export type ResellerMinimumFilter = (typeof RESELLER_MINIMUM_FILTERS)[number];
+/** A progress report's bound: a policy screen, not an export. `truncated` says when it bit. */
+export const RESELLER_MINIMUM_PROGRESS_MAX = 500;
+
+export const resellerMinimumQuerySchema = z.object({
+  period: z.enum(RESELLER_MINIMUM_PERIODS).optional(),
+  filter: z.enum(RESELLER_MINIMUM_FILTERS).optional(),
+});
+export type ResellerMinimumQuery = z.infer<typeof resellerMinimumQuerySchema>;
+
+export const resellerMinimumRowSchema = z.object({
+  customerId: z.string(),
+  telegramUserId: z.string(),
+  displayName: z.string().nullable(),
+  tier: z.object({ id: z.string(), name: z.string() }),
+  status: z.enum(RESELLER_STATUSES),
+  /** Null when no minimum applies. */
+  minimum: wireMoneySchema.nullable(),
+  source: z.enum(RESELLER_MINIMUM_SOURCES),
+  /**
+   * WP12's reseller sales amount in the period, in the minimum's currency (the selling
+   * currency when there is no minimum): PAID sale orders with reseller terms, fully refunded
+   * orders excluded, partial refunds not netted.
+   */
+  achieved: wireMoneySchema,
+  /** `max(0, minimum − achieved)`; null when no minimum applies. */
+  remaining: wireMoneySchema.nullable(),
+  /** `floor(achieved × 10000 / minimum)`, uncapped; null when no minimum applies. */
+  progressBasisPoints: z.number().int().nonnegative().nullable(),
+  state: z.enum(RESELLER_MINIMUM_STATES),
+});
+export type ResellerMinimumRow = z.infer<typeof resellerMinimumRowSchema>;
+
+export const resellerMinimumReportSchema = z.object({
+  period: z.object({
+    key: z.enum(RESELLER_MINIMUM_PERIODS),
+    /** Half-open `[start, end)`, UTC instants. */
+    start: z.iso.datetime(),
+    end: z.iso.datetime(),
+    /** The first and last local day, in the tenant's calendar: `1405/07/01`. */
+    startLocal: z.string(),
+    endLocalInclusive: z.string(),
+    timezone: z.string(),
+    calendar: z.enum(CALENDARS),
+    /** True while the month is still running: its figures are so far. */
+    running: z.boolean(),
+  }),
+  rows: z.array(resellerMinimumRowSchema),
+  counts: z.object({
+    achieved: z.number().int().nonnegative(),
+    below: z.number().int().nonnegative(),
+    noMinimum: z.number().int().nonnegative(),
+    notActive: z.number().int().nonnegative(),
+  }),
+  /** True when there are more resellers than `RESELLER_MINIMUM_PROGRESS_MAX`. */
+  truncated: z.boolean(),
+});
+export type ResellerMinimumReport = z.infer<typeof resellerMinimumReportSchema>;
+
+export const RESELLER_MINIMUM_ROUTES = {
+  progress: '/reseller-minimums',
+} as const;
+
 export const RESELLER_TIER_ROUTES = {
   list: '/reseller-tiers',
   create: '/reseller-tiers',
@@ -3308,6 +3526,8 @@ export const RESELLER_TIER_ROUTES = {
   update: (id: string) => `/reseller-tiers/${encodeURIComponent(id)}`,
   grants: (id: string) => `/reseller-tiers/${encodeURIComponent(id)}/grants`,
   history: (id: string) => `/reseller-tiers/${encodeURIComponent(id)}/history`,
+  // Round N, package D.
+  monthlyMinimum: (id: string) => `/reseller-tiers/${encodeURIComponent(id)}/monthly-minimum`,
 } as const;
 
 export const RESELLER_ROUTES = {
@@ -3318,6 +3538,11 @@ export const RESELLER_ROUTES = {
   credit: (customerId: string) => `/resellers/${encodeURIComponent(customerId)}/credit`,
   purchases: (customerId: string) => `/resellers/${encodeURIComponent(customerId)}/purchases`,
   history: (customerId: string) => `/resellers/${encodeURIComponent(customerId)}/history`,
+  // Round N, package D.
+  policy: (customerId: string) => `/resellers/${encodeURIComponent(customerId)}/policy`,
+  grants: (customerId: string) => `/resellers/${encodeURIComponent(customerId)}/grants`,
+  monthlyMinimum: (customerId: string) =>
+    `/resellers/${encodeURIComponent(customerId)}/monthly-minimum`,
 } as const;
 
 // --- Orders ------------------------------------------------------------------

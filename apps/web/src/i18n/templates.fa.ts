@@ -103,6 +103,8 @@ export const TEMPLATE_GROUPS_FA: readonly TemplateGroupDefinition[] = [
       'bot.wallet.low_balance',
       'bot.payment.pending_reminder',
       'bot.order.pending_reminder',
+      // Round N, package D: the reseller monthly minimum.
+      'bot.reseller.minimum_',
     ],
   },
   { id: 'transfer', label: 'انتقال سرویس', prefixes: ['bot.service.transfer_'] },
@@ -234,6 +236,7 @@ export const PLACEHOLDER_TYPE_LABELS_FA: Readonly<Record<PlaceholderType, string
  * here and the specific one is in `PLACEHOLDER_LABEL_OVERRIDES_FA` below.
  */
 export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
+  achievedSales: 'فروش نماینده در این ماه',
   addedTrafficBytes: 'حجم افزوده‌شده',
   adminId: 'شناسهٔ مدیر تصمیم‌گیرنده',
   amount: 'مبلغ',
@@ -373,6 +376,7 @@ export const PLACEHOLDER_LABELS_FA: Readonly<Record<string, string>> = {
   registeredAt: 'زمان عضویت',
   remaining: 'مبلغ قابل بازگشت باقی‌مانده',
   remainingPercent: 'درصد حجم باقی‌مانده',
+  remainingSales: 'مبلغ باقی‌مانده تا حداقل فروش',
   remainingDays: 'روزهای باقی‌مانده',
   remainingTraffic: 'حجم باقی‌مانده',
   requestId: 'شناسهٔ درخواست',
@@ -495,6 +499,12 @@ export const PLACEHOLDER_LABEL_OVERRIDES_FA: Partial<
   'bot.service.renew_option_button': { title: 'نام محصول' },
   // R2: the renewal result names the renewed account, not the customer's Telegram username.
   'bot.service.renewed': { username: 'نام کاربری سرویس' },
+  // Round N, package D: the minimum is a monthly SALES minimum, and the days run to month end.
+  'bot.reseller.minimum_reminder': {
+    minimum: 'حداقل فروش ماهانه',
+    days: 'روزهای باقی‌مانده تا پایان ماه',
+  },
+  'bot.reseller.minimum_achieved': { minimum: 'حداقل فروش ماهانه' },
   'bot.service.list': { total: 'تعداد کل سرویس‌ها' },
   'bot.service.list_item_button': { username: 'نام کاربری سرویس' },
   'bot.service.card': { lastSeen: 'آخرین اتصال', status: 'وضعیت سرویس' },
@@ -1695,6 +1705,15 @@ export const TEMPLATE_COPY_FA: Partial<Record<TemplateKey, TemplateCopyEntry>> =
   'bot.order.pending_reminder': [
     'یادآور سفارش پرداخت‌نشده',
     'کمی پیش از پایان مهلت سفارشی که هنوز پرداختی برایش شروع نشده است.',
+  ],
+  // Round N, package D: informational only — nothing happens to a reseller below the minimum.
+  'bot.reseller.minimum_reminder': [
+    'یادآوری حداقل فروش ماهانهٔ نمایندگی',
+    'چند روز پیش از پایان ماه، یک بار به نماینده‌ای که فروشش هنوز به حداقل ماهانه نرسیده فرستاده می‌شود.',
+  ],
+  'bot.reseller.minimum_achieved': [
+    'رسیدن به حداقل فروش ماهانه',
+    'یک بار در ماه، وقتی فروش نماینده به حداقل ماهانهٔ او برسد (اگر این پیام روشن باشد).',
   ],
 
   // --- Service transfer -------------------------------------------------------------

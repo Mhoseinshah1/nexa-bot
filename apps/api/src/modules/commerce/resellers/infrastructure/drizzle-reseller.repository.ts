@@ -1,8 +1,11 @@
 import { and, asc, desc, eq, ilike, or, sql, type SQL } from 'drizzle-orm';
-import { money } from '@nexa/contracts';
+import { RESELLER_GRANT_DIMENSION, money } from '@nexa/contracts';
 import type {
+  Calendar,
   CurrencyCode,
+  Money,
   OrderPurpose,
+  ResellerEntitlementDimension,
   OrderState,
   ResellerGrantKind,
   ResellerOverrideMode,
@@ -20,14 +23,20 @@ import {
   customers,
   orderResellerTerms,
   orders,
+  resellerEntitlementOverrides,
+  resellerGrantOverrides,
+  resellerMinimumNotices,
   resellerTierGrants,
   resellerTiers,
   resellers,
+  tenants,
 } from '../../../../infrastructure/persistence/schema.js';
 import type {
   OrderResellerTermsRecord,
   ResellerCursor,
   ResellerListing,
+  ResellerMinimumNoticeWrite,
+  ResellerOverrideRecord,
   ResellerPurchaseRecord,
   ResellerRecord,
   ResellerRepository,
@@ -61,9 +70,15 @@ function toTier(row: typeof resellerTiers.$inferSelect): ResellerTierRecord {
     pricingMode: row.pricingMode as ResellerPricingMode,
     discountPercentage: row.discountPercentage,
     creditLimit: money(row.creditLimitAmount, row.creditLimitCurrency as CurrencyCode),
+    monthlyMinimum: minimumOf(row.monthlyMinimumAmount, row.monthlyMinimumCurrency),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
+}
+
+/** A nullable minimum pair (a CHECK keeps both halves or neither). */
+function minimumOf(amount: bigint | null, currency: string | null): Money | null {
+  return amount === null || currency === null ? null : money(amount, currency as CurrencyCode);
 }
 
 function toReseller(row: typeof resellers.$inferSelect): ResellerRecord {
@@ -78,6 +93,7 @@ function toReseller(row: typeof resellers.$inferSelect): ResellerRecord {
       row.creditLimitAmount === null || row.creditLimitCurrency === null
         ? null
         : money(row.creditLimitAmount, row.creditLimitCurrency as CurrencyCode),
+    monthlyMinimum: minimumOf(row.monthlyMinimumAmount, row.monthlyMinimumCurrency),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -488,6 +504,279 @@ export class DrizzleResellerRepository implements ResellerRepository {
           ? { createdAt: last.createdAtText, id: last.reseller.id }
           : null,
     };
+  }
+
+  // -- Round N: overrides and the monthly minimum --------------------------------------
+
+  async overridesOf(
+    scope: TenantContext,
+    customerId: string,
+    tx?: unknown,
+  ): Promise<ResellerOverrideRecord> {
+    const tenantId = requireTenantId(scope);
+    const executor = exec(this.db, tx);
+    const dimensions = await executor
+      .select({ dimension: resellerEntitlementOverrides.dimension })
+      .from(resellerEntitlementOverrides)
+      .where(
+        and(
+          eq(resellerEntitlementOverrides.tenantId, tenantId),
+          eq(resellerEntitlementOverrides.customerId, customerId),
+        ),
+      )
+      .orderBy(asc(resellerEntitlementOverrides.dimension));
+    if (dimensions.length === 0) return { dimensions: [], grants: [] };
+    const grants = await executor
+      .select({ kind: resellerGrantOverrides.kind, subject: resellerGrantOverrides.subject })
+      .from(resellerGrantOverrides)
+      .where(
+        and(
+          eq(resellerGrantOverrides.tenantId, tenantId),
+          eq(resellerGrantOverrides.customerId, customerId),
+        ),
+      )
+      .orderBy(asc(resellerGrantOverrides.kind), asc(resellerGrantOverrides.subject));
+    return {
+      dimensions: dimensions.map((d) => d.dimension as ResellerEntitlementDimension),
+      grants: grants.map(toGrant),
+    };
+  }
+
+  async replaceOverrides(
+    scope: TenantContext,
+    customerId: string,
+    override: ResellerOverrideRecord,
+    now: Date,
+    tx: unknown,
+  ): Promise<void> {
+    const tenantId = requireTenantId(scope);
+    const executor = exec(this.db, tx);
+    // The grants go with their dimension rows (ON DELETE CASCADE); deleted explicitly anyway,
+    // so the replace does not depend on a foreign key's action to be complete.
+    await executor
+      .delete(resellerGrantOverrides)
+      .where(
+        and(
+          eq(resellerGrantOverrides.tenantId, tenantId),
+          eq(resellerGrantOverrides.customerId, customerId),
+        ),
+      );
+    await executor
+      .delete(resellerEntitlementOverrides)
+      .where(
+        and(
+          eq(resellerEntitlementOverrides.tenantId, tenantId),
+          eq(resellerEntitlementOverrides.customerId, customerId),
+        ),
+      );
+    if (override.dimensions.length === 0) return;
+    await executor.insert(resellerEntitlementOverrides).values(
+      override.dimensions.map((dimension) => ({
+        tenantId,
+        customerId,
+        dimension,
+        createdAt: now,
+      })),
+    );
+    if (override.grants.length === 0) return;
+    await executor.insert(resellerGrantOverrides).values(
+      override.grants.map((g) => ({
+        tenantId,
+        customerId,
+        dimension: RESELLER_GRANT_DIMENSION[g.kind],
+        kind: g.kind,
+        subject: g.subject ?? EVERY_SUBJECT,
+        createdAt: now,
+      })),
+    );
+  }
+
+  async setTierMinimum(
+    scope: TenantContext,
+    tierId: string,
+    minimum: Money | null,
+    now: Date,
+    tx: unknown,
+  ): Promise<ResellerTierRecord | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await exec(this.db, tx)
+      .update(resellerTiers)
+      .set({
+        monthlyMinimumAmount: minimum?.amountMinor ?? null,
+        monthlyMinimumCurrency: minimum?.currency ?? null,
+        updatedAt: now,
+      })
+      .where(and(eq(resellerTiers.tenantId, tenantId), eq(resellerTiers.id, tierId)))
+      .returning();
+    return row === undefined ? null : toTier(row);
+  }
+
+  async setMinimum(
+    scope: TenantContext,
+    customerId: string,
+    minimum: Money | null,
+    now: Date,
+    tx: unknown,
+  ): Promise<ResellerRecord | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await exec(this.db, tx)
+      .update(resellers)
+      .set({
+        monthlyMinimumAmount: minimum?.amountMinor ?? null,
+        monthlyMinimumCurrency: minimum?.currency ?? null,
+        updatedAt: now,
+      })
+      .where(and(eq(resellers.tenantId, tenantId), eq(resellers.customerId, customerId)))
+      .returning();
+    return row === undefined ? null : toReseller(row);
+  }
+
+  async listAll(
+    scope: TenantContext,
+    filter: { readonly activeOnly: boolean },
+    limit: number,
+    tx?: unknown,
+  ): Promise<readonly ResellerListing[]> {
+    const tenantId = requireTenantId(scope);
+    const rows = await exec(this.db, tx)
+      .select({
+        reseller: resellers,
+        tier: resellerTiers,
+        telegramUserId: customers.telegramUserId,
+        firstName: customers.firstName,
+        lastName: customers.lastName,
+        username: customers.username,
+      })
+      .from(resellers)
+      .innerJoin(
+        resellerTiers,
+        and(eq(resellerTiers.tenantId, resellers.tenantId), eq(resellerTiers.id, resellers.tierId)),
+      )
+      .innerJoin(
+        customers,
+        and(eq(customers.tenantId, resellers.tenantId), eq(customers.id, resellers.customerId)),
+      )
+      .where(
+        and(
+          eq(resellers.tenantId, tenantId),
+          filter.activeOnly ? eq(resellers.status, 'ACTIVE') : undefined,
+        ),
+      )
+      .orderBy(asc(resellers.createdAt), asc(resellers.id))
+      .limit(limit);
+    return rows.map((row) => this.toListing(row));
+  }
+
+  async pageActive(
+    scope: TenantContext,
+    after: ResellerCursor | null,
+    limit: number,
+    tx: unknown,
+  ): Promise<{ readonly items: readonly ResellerListing[]; readonly next: ResellerCursor | null }> {
+    const tenantId = requireTenantId(scope);
+    const rows = await exec(this.db, tx)
+      .select({
+        reseller: resellers,
+        createdAtText: sql<string>`to_char(${resellers.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
+        tier: resellerTiers,
+        telegramUserId: customers.telegramUserId,
+        firstName: customers.firstName,
+        lastName: customers.lastName,
+        username: customers.username,
+      })
+      .from(resellers)
+      .innerJoin(
+        resellerTiers,
+        and(eq(resellerTiers.tenantId, resellers.tenantId), eq(resellerTiers.id, resellers.tierId)),
+      )
+      .innerJoin(
+        customers,
+        and(eq(customers.tenantId, resellers.tenantId), eq(customers.id, resellers.customerId)),
+      )
+      .where(
+        and(
+          eq(resellers.tenantId, tenantId),
+          eq(resellers.status, 'ACTIVE'),
+          after === null
+            ? undefined
+            : sql`(${resellers.createdAt}, ${resellers.id}) > (${after.createdAt}::timestamptz, ${after.id}::uuid)`,
+        ),
+      )
+      .orderBy(asc(resellers.createdAt), asc(resellers.id))
+      .limit(limit + 1);
+    const page = rows.slice(0, limit);
+    const last = page[page.length - 1];
+    return {
+      items: page.map((row) => this.toListing(row)),
+      next:
+        rows.length > limit && last !== undefined
+          ? { createdAt: last.createdAtText, id: last.reseller.id }
+          : null,
+    };
+  }
+
+  async presentationOf(
+    scope: TenantContext,
+    tx: unknown,
+  ): Promise<{ readonly timezone: string; readonly calendar: Calendar }> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await exec(this.db, tx)
+      .select({ timezone: tenants.displayTimezone, calendar: tenants.calendar })
+      .from(tenants)
+      .where(eq(tenants.id, tenantId));
+    if (row === undefined) throw new Error(`tenant ${tenantId} not found`);
+    return { timezone: row.timezone, calendar: row.calendar as Calendar };
+  }
+
+  async noticesIn(
+    scope: TenantContext,
+    periodStart: Date,
+    tx: unknown,
+  ): Promise<ReadonlySet<string>> {
+    const tenantId = requireTenantId(scope);
+    const rows = await exec(this.db, tx)
+      .select({ customerId: resellerMinimumNotices.customerId, kind: resellerMinimumNotices.kind })
+      .from(resellerMinimumNotices)
+      .where(
+        and(
+          eq(resellerMinimumNotices.tenantId, tenantId),
+          eq(resellerMinimumNotices.periodStart, periodStart),
+        ),
+      );
+    return new Set(rows.map((row) => `${row.customerId}:${row.kind}`));
+  }
+
+  async raiseNotice(
+    scope: TenantContext,
+    notice: ResellerMinimumNoticeWrite,
+    now: Date,
+    tx: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const inserted = await exec(this.db, tx)
+      .insert(resellerMinimumNotices)
+      .values({
+        id: notice.id,
+        tenantId,
+        customerId: notice.customerId,
+        kind: notice.kind,
+        periodStart: notice.periodStart,
+        periodEnd: notice.periodEnd,
+        minimumAmount: notice.minimum.amountMinor,
+        currency: notice.minimum.currency,
+        achievedAmount: notice.achieved,
+        raisedAt: now,
+      })
+      .onConflictDoNothing({
+        target: [
+          resellerMinimumNotices.tenantId,
+          resellerMinimumNotices.customerId,
+          resellerMinimumNotices.kind,
+          resellerMinimumNotices.periodStart,
+        ],
+      })
+      .returning({ id: resellerMinimumNotices.id });
+    return inserted.length === 1;
   }
 
   // -- Purchase terms ------------------------------------------------------------------

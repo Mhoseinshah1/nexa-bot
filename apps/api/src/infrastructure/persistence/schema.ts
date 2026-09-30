@@ -127,6 +127,8 @@ import {
   RESELLER_OVERRIDE_MODES,
   RESELLER_GRANT_KINDS,
   RESELLER_GRANTABLE_OPERATIONS,
+  RESELLER_ENTITLEMENT_DIMENSIONS,
+  RESELLER_MINIMUM_NOTICE_KINDS,
   RESELLER_PRICE_LAYERS,
   TRIAL_LIMIT_MAX,
   PANEL_TRIAL_HOURS_MAX,
@@ -7344,12 +7346,31 @@ export const resellerTiers = pgTable(
       .notNull()
       .default(sql`0`),
     creditLimitCurrency: text('credit_limit_currency').notNull(),
+    /**
+     * Round N, package D: the monthly minimum sales every reseller on this tier inherits, or
+     * null — and zero — for none. Tracking only: nothing happens to a reseller below it
+     * (`docs/round-n-reseller-audit.md` §3.5).
+     */
+    monthlyMinimumAmount: bigint('monthly_minimum_amount', { mode: 'bigint' }),
+    monthlyMinimumCurrency: text('monthly_minimum_currency'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
   (table) => [
     /** The composite key the tenant-scoped foreign keys below point at. */
     uniqueIndex('reseller_tiers_tenant_id_key').on(table.tenantId, table.id),
+    check(
+      'reseller_tiers_minimum_pair_check',
+      sql`(monthly_minimum_amount IS NULL) = (monthly_minimum_currency IS NULL)`,
+    ),
+    check(
+      'reseller_tiers_minimum_check',
+      sql`monthly_minimum_amount IS NULL OR monthly_minimum_amount >= 0`,
+    ),
+    check(
+      'reseller_tiers_minimum_currency_check',
+      sql`monthly_minimum_currency IS NULL OR ${enumCheck('monthly_minimum_currency', CURRENCY_CODES)}`,
+    ),
     uniqueIndex('reseller_tiers_tenant_name_key').on(table.tenantId, sql`lower(${table.name})`),
     index('reseller_tiers_tenant_created_idx').on(table.tenantId, table.createdAt, table.id),
     check('reseller_tiers_pricing_mode_check', enumCheck('pricing_mode', RESELLER_PRICING_MODES)),
@@ -7439,6 +7460,12 @@ export const resellers = pgTable(
      */
     creditLimitAmount: bigint('credit_limit_amount', { mode: 'bigint' }).default(sql`0`),
     creditLimitCurrency: text('credit_limit_currency'),
+    /**
+     * Round N, package D: the reseller's own monthly minimum. NULL inherits the tier's; ZERO
+     * is an explicit "no minimum for this reseller"; positive is theirs. Tracking only.
+     */
+    monthlyMinimumAmount: bigint('monthly_minimum_amount', { mode: 'bigint' }),
+    monthlyMinimumCurrency: text('monthly_minimum_currency'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
@@ -7480,6 +7507,155 @@ export const resellers = pgTable(
     check(
       'resellers_discount_range_check',
       sql`discount_percentage IS NULL OR (discount_percentage >= 1 AND discount_percentage <= 100)`,
+    ),
+    check(
+      'resellers_minimum_pair_check',
+      sql`(monthly_minimum_amount IS NULL) = (monthly_minimum_currency IS NULL)`,
+    ),
+    check(
+      'resellers_minimum_check',
+      sql`monthly_minimum_amount IS NULL OR monthly_minimum_amount >= 0`,
+    ),
+    check(
+      'resellers_minimum_currency_check',
+      sql`monthly_minimum_currency IS NULL OR ${enumCheck('monthly_minimum_currency', CURRENCY_CODES)}`,
+    ),
+  ],
+);
+
+/**
+ * Round N, package D (R1): one row per entitlement DIMENSION a reseller overrides. The
+ * reseller's grants of that dimension — `reseller_grant_overrides` — REPLACE the tier's
+ * grants of the whole dimension; a dimension with no row here inherits the tier's. A row
+ * with no grants beneath it overrides the dimension with nothing: deny by default.
+ *
+ * Replaced as a set, with its grants, under the reseller row's `FOR UPDATE` — the row
+ * `ResellerService.standing` reads `FOR SHARE` — so a withdrawal and a sale serialise.
+ */
+export const resellerEntitlementOverrides = pgTable(
+  'reseller_entitlement_overrides',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    customerId: uuid('customer_id').notNull(),
+    dimension: text('dimension').notNull(),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({
+      columns: [table.tenantId, table.customerId, table.dimension],
+      name: 'reseller_entitlement_overrides_pkey',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [resellers.tenantId, resellers.customerId],
+      name: 'reseller_entitlement_overrides_reseller_fk',
+    }).onDelete('cascade'),
+    check(
+      'reseller_entitlement_overrides_dimension_check',
+      enumCheck('dimension', RESELLER_ENTITLEMENT_DIMENSIONS),
+    ),
+  ],
+);
+
+/**
+ * One grant of a reseller's override (R1): `reseller_tier_grants`' shape and subject rule,
+ * under the dimension row it belongs to. `dimension` is the kind's own
+ * (`RESELLER_GRANT_DIMENSION`), pinned by a CHECK so a grant cannot sit under another
+ * dimension's override and be read as part of it.
+ */
+export const resellerGrantOverrides = pgTable(
+  'reseller_grant_overrides',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    customerId: uuid('customer_id').notNull(),
+    dimension: text('dimension').notNull(),
+    kind: text('kind').notNull(),
+    subject: text('subject').notNull(),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({
+      columns: [table.tenantId, table.customerId, table.kind, table.subject],
+      name: 'reseller_grant_overrides_pkey',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.customerId, table.dimension],
+      foreignColumns: [
+        resellerEntitlementOverrides.tenantId,
+        resellerEntitlementOverrides.customerId,
+        resellerEntitlementOverrides.dimension,
+      ],
+      name: 'reseller_grant_overrides_dimension_fk',
+    }).onDelete('cascade'),
+    check('reseller_grant_overrides_kind_check', enumCheck('kind', RESELLER_GRANT_KINDS)),
+    check(
+      'reseller_grant_overrides_dimension_check',
+      sql`(kind = 'OPERATION' AND dimension = 'OPERATION')
+          OR (kind IN ('PRODUCT', 'CATEGORY') AND dimension = 'CATALOGUE')
+          OR (kind = 'PANEL' AND dimension = 'PANEL')
+          OR (kind = 'BOT' AND dimension = 'BOT')`,
+    ),
+    check(
+      'reseller_grant_overrides_subject_check',
+      sql`subject = '*' OR (kind = 'OPERATION' AND subject IN (${sql.raw(
+        RESELLER_GRANTABLE_OPERATIONS.map((o) => `'${o}'`).join(', '),
+      )})) OR (kind <> 'OPERATION' AND subject ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')`,
+    ),
+  ],
+);
+
+/**
+ * Round N, package D (R2): one thing the lane told — or will tell — a reseller about one
+ * month's minimum. The SUBJECT of `RESELLER_MINIMUM_REMINDER` and `_ACHIEVED`, for the
+ * reason `wallet_threshold_alerts` is one: keyed on the customer, the lane's own subject
+ * key would let a reseller be reminded once for ever.
+ *
+ * Unique per (reseller, kind, month): two worker replicas, a restart and every later pass
+ * of the sweep write at most one reminder and one achievement per reseller per month.
+ * Nothing else is written by the sweep: this row is not a debt, a fee or a status.
+ */
+export const resellerMinimumNotices = pgTable(
+  'reseller_minimum_notices',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    customerId: uuid('customer_id').notNull(),
+    kind: text('kind').notNull(),
+    /** The month, half-open `[period_start, period_end)`, in the tenant's calendar. */
+    periodStart: timestamptz('period_start').notNull(),
+    periodEnd: timestamptz('period_end').notNull(),
+    /** The effective minimum when the notice was raised: what the send-time re-check compares. */
+    minimumAmount: bigint('minimum_amount', { mode: 'bigint' }).notNull(),
+    currency: text('currency').notNull(),
+    /** The month's sales when the notice was raised. */
+    achievedAmount: bigint('achieved_amount', { mode: 'bigint' }).notNull(),
+    raisedAt: timestamptz('raised_at').notNull().defaultNow(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [resellers.tenantId, resellers.customerId],
+      name: 'reseller_minimum_notices_reseller_fk',
+    }),
+    /** At most one of each kind per reseller per month: the arbiter of every insert. */
+    unique('reseller_minimum_notices_period_key').on(
+      table.tenantId,
+      table.customerId,
+      table.kind,
+      table.periodStart,
+    ),
+    check('reseller_minimum_notices_kind_check', enumCheck('kind', RESELLER_MINIMUM_NOTICE_KINDS)),
+    check('reseller_minimum_notices_currency_check', enumCheck('currency', CURRENCY_CODES)),
+    check('reseller_minimum_notices_period_check', sql`period_end > period_start`),
+    check(
+      'reseller_minimum_notices_amounts_check',
+      sql`minimum_amount > 0 AND achieved_amount >= 0`,
     ),
   ],
 );

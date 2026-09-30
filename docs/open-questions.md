@@ -203,6 +203,15 @@ in an already-large change is how a format migration becomes an outage.
 | `O-9`        | **DECISION** | Referral anti-abuse minimum-purchase floor.                  | On by default.                                            |
 | `UNK-UM-006` | UNKNOWN      | Is referral binding immutable, and can an admin override it? | Immutable; override is an audited administrative action.  |
 
+**`O-2`, round N package D.** The owner's round N brief decided the basis and calendar and
+it is built as tracking only (`docs/round-n-reseller-audit.md` §3): WP12's reseller sales
+amount (paid purchases under reseller terms, fully refunded orders excluded) over the
+calendar month in the tenant's timezone and calendar (Jalali by default). There is no
+consequence, so the 48-hour grace period has nothing to delay and is not built. Mirza's
+declared loss of reseller status below the floor is PARTIAL evidence (never observed) and
+is deliberately not implemented; `UNK-RGS-007` and `UNK-RGS-008` stay open as evidence
+questions about Mirza, not as Nexa behaviour.
+
 ## Blocks Phase 8 — reporting
 
 | Id                                    | Type    | Question                                                                                                                  | Fallback                                                                                      |

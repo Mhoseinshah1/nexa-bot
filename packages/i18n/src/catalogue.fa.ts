@@ -932,6 +932,20 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.service.renew_paid':
     '✅ پرداخت تمدید انجام شد. نتیجهٔ تمدید سرویس در پیام جداگانه برای شما ارسال می‌شود.',
   'bot.service.capability_unsupported': 'این قابلیت برای سرویس شما در دسترس نیست.',
+  /*
+   * Round N, package D: the reseller monthly minimum. Informational only — nothing happens
+   * to a reseller below it, so neither sentence threatens anything.
+   */
+  'bot.reseller.minimum_reminder':
+    '📊 یادآوری حداقل فروش ماهانه نمایندگی\n\n' +
+    'تا پایان این ماه {days} روز باقی مانده است.\n' +
+    'حداقل فروش ماهانه شما: {minimum}\n' +
+    'فروش شما در این ماه تاکنون: {achievedSales}\n' +
+    'مبلغ باقی‌مانده تا رسیدن به حداقل: {remainingSales}',
+  'bot.reseller.minimum_achieved':
+    '🎉 فروش شما در این ماه به حداقل فروش ماهانه نمایندگی رسید.\n\n' +
+    'حداقل فروش ماهانه: {minimum}\n' +
+    'فروش شما در این ماه: {achievedSales}',
 
   'bot.discount.applied': 'کد تخفیف {code} اعمال شد. مبلغ تخفیف: {amount}',
   // One message for every rejection reason, so the bot is not an oracle for guessing

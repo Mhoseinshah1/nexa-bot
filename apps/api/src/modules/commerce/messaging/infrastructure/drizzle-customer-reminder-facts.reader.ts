@@ -9,6 +9,7 @@ import {
 } from '@nexa/contracts';
 import type { Database } from '../../../../infrastructure/persistence/database.js';
 import { requireTenantId } from '../../../../infrastructure/persistence/unit-of-work.js';
+import { resellerMinimumValues } from '../../resellers/infrastructure/drizzle-reseller-minimum-facts.js';
 
 /**
  * WP-A9: what the three non-service reminders render, read at send time from their subject.
@@ -57,6 +58,10 @@ export class DrizzleCustomerReminderFactsReader {
         expiresAt,
         minutes: minutesLeft(expiresAt, now),
       };
+    }
+    // Round N R2: the reseller monthly minimum, from its notice row and the month's sales.
+    if (kind === 'RESELLER_MINIMUM_REMINDER' || kind === 'RESELLER_MINIMUM_ACHIEVED') {
+      return resellerMinimumValues(this.db, tenantId, kind, subjectId, now);
     }
     if (kind === 'WALLET_LOW_BALANCE') {
       const result = await this.db.execute(sql`
