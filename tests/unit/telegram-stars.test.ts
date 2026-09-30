@@ -56,7 +56,7 @@ describe('the conversion (A1)', () => {
     expect(telegramStarsFor(100n, 0n)).toBeNull();
   });
 
-  it('the adapter converts only under a rate-bearing policy', () => {
+  it('the adapter converts only with a rate', () => {
     const adapter = new TelegramStarsAdapter({ apiBaseUrl: 'https://t.invalid', timeoutMs: 10 });
     const payable = money(105_000n, 'IRT');
     expect(adapter.providerAmountOf(payable, { policy: 'FIXED_RATE', rateMinor: 1_300n })).toBe(
