@@ -99,6 +99,12 @@ details[open] > summary {
   direction: ltr;
   unicode-bidi: isolate;
   text-align: start;
+  /*
+   * A technical value keeps its Latin digits. The body's stylistic set draws
+   * digits in Persian shapes, which is right for prose and wrong for a
+   * username, a host or a version: `@user_7` is not `@user_۷`.
+   */
+  font-feature-settings: normal;
 }
 .mono {
   font-family: var(--font-mono);
@@ -170,6 +176,7 @@ details[open] > summary {
  * container, not to every component's own margin.
  */
 .content-inner > * + *,
+[role='tabpanel'] > * + *,
 .stack > * + *,
 .planned-page > * + *,
 .form > * + * {
@@ -177,6 +184,15 @@ details[open] > summary {
 }
 .stack-sm > * + * {
   margin-top: 8px;
+}
+/*
+ * A plain form — one without a layout class of its own — stacks its fields
+ * with a gap. Forms that lay out their children (`toolbar`, `form-grid`,
+ * `row`…) carry a class and are left alone, since a top margin on a flex or
+ * grid item misaligns the row.
+ */
+form:not([class]) > * + * {
+  margin-top: 10px;
 }
 .content-inner > .page-head + * {
   margin-top: 0;
