@@ -374,6 +374,16 @@ export const FROZEN_AUDIENCE_KINDS = ['CUSTOMERS', 'SERVICES'] as const;
 export type FrozenAudienceKind = (typeof FROZEN_AUDIENCE_KINDS)[number];
 
 /**
+ * The grant a SERVICES audience was frozen FOR. Its members were selected by that grant's
+ * own eligibility rule — a traffic grant needs a panel that can ADD_TRAFFIC, a time grant
+ * one that can ADD_TIME — so a set frozen for one is not a set frozen for the other, and a
+ * mass operation of the other kind refuses it (`FROZEN_KIND_MISMATCH`). Null for a
+ * CUSTOMERS audience, which no grant rule selected.
+ */
+export const FROZEN_AUDIENCE_GRANT_KINDS = ['SERVICE_TRAFFIC', 'SERVICE_TIME'] as const;
+export type FrozenAudienceGrantKind = (typeof FROZEN_AUDIENCE_GRANT_KINDS)[number];
+
+/**
  * How long a frozen audience's member rows are kept once nothing live references them.
  * The header (count, fingerprint, definition, hash) is never deleted: it is the record of
  * what was confirmed. Members are released by a sweep only when every campaign action,
@@ -387,6 +397,8 @@ export const FROZEN_AUDIENCE_RELEASE_AFTER_DAYS = 1;
 export const frozenAudienceSchema = z.object({
   id: z.string(),
   kind: z.enum(FROZEN_AUDIENCE_KINDS),
+  /** The grant a SERVICES audience was selected for; null for CUSTOMERS. */
+  grantKind: z.enum(FROZEN_AUDIENCE_GRANT_KINDS).nullable(),
   /** sha256 of the canonical definition the audience was selected by. */
   definitionHash: z.string().regex(/^[0-9a-f]{64}$/u),
   /** The instant every relative criterion was evaluated against. */
@@ -415,6 +427,9 @@ export const AUDIENCE_ERROR_CODES = {
   FROZEN_NOT_FOUND: 'audience.frozen_not_found',
   /** The frozen audience's members were released by the sweep; it can seed nothing now. */
   FROZEN_RELEASED: 'audience.frozen_released',
-  /** A CUSTOMERS audience was given where a SERVICES one was needed, or the reverse. */
+  /**
+   * A CUSTOMERS audience was given where a SERVICES one was needed, or the reverse — or a
+   * SERVICES audience frozen for the other grant kind.
+   */
   FROZEN_KIND_MISMATCH: 'audience.frozen_kind_mismatch',
 } as const;
