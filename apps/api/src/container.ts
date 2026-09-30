@@ -2,6 +2,7 @@ import { fileURLToPath } from 'node:url';
 import {
   ADMIN_MENU_BUTTON,
   ADMIN_MENU_COMMAND,
+  CAMPAIGN_SCHEDULE_INTERVAL_MS,
   CHANNEL_MEMBERSHIP_TIMEOUT_MS,
   MAIN_MENU_BUTTONS,
   MAX_REQUESTS_PER_PROBE,
@@ -354,6 +355,11 @@ import { ResellerMinimumService } from './modules/commerce/resellers/application
 import { TenantMonthlyPeriods } from './infrastructure/time/monthly-period.js';
 import { DrizzleAuditHistoryReader } from './modules/platform/audit/infrastructure/drizzle-audit-history.reader.js';
 import { DrizzleDiscountRepository } from './modules/commerce/pricing/infrastructure/drizzle-discount.repository.js';
+// Round N, C1: campaigns.
+import { CampaignService } from './modules/commerce/campaigns/application/campaign.service.js';
+import { CampaignScheduleLoop } from './modules/commerce/campaigns/application/campaign-schedule-loop.js';
+import { DrizzleCampaignRepository } from './modules/commerce/campaigns/infrastructure/drizzle-campaign.repository.js';
+import { IntlCampaignCalendar } from './modules/commerce/campaigns/infrastructure/intl-campaign-calendar.js';
 import {
   DrizzleCashbackRuleRepository,
   DrizzleOrderCashbackRepository,
@@ -661,6 +667,10 @@ export interface Container {
   readonly discounts: DiscountAdminService;
   /** Cashback rules, as an operator manages them (WP8). */
   readonly cashbackRules: CashbackRuleAdminService;
+  /** Round N, C1: campaigns composing the rules, the audience and the mass actions. */
+  readonly campaigns: CampaignService;
+  /** Round N, C1: the worker lane that starts and completes campaigns on their window. */
+  readonly campaignScheduleLoop: CampaignScheduleLoop;
   /** Package D: the custom service's rules, locations and an order's frozen terms. */
   readonly customServiceAdmin: CustomServiceAdminService;
   /** Package D: the customer's flow — the locations, the typed volume and days, the draft. */
@@ -3101,6 +3111,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   // One reader for the resolver and the preview, so both show a tenant's dates the
   // same way and share one cache.
   const templatePresentation = new CachedTenantPresentationReader(tenants, clock);
+
   const reportingService = new ReportingService({
     access: new ReportAccess(guard, admins, opsLog),
     repository: new DrizzleReportingRepository(database.db),
@@ -3704,6 +3715,40 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
         : { tenantId: installationTenantId, botInstanceId: null },
     intervalMs: BROADCAST_INTERVAL_MS,
     now: () => clock.now().getTime(),
+    logger,
+  });
+
+  // Round N, C1: campaigns. A composition over the pricing rules' own repositories and the
+  // rules pages' own reference checks; it prices, credits, sends and dials nothing itself.
+  const campaignRepository = new DrizzleCampaignRepository(database.db);
+  const campaignService = new CampaignService({
+    campaigns: campaignRepository,
+    discounts: discountRepository,
+    cashbackRules: cashbackRuleRepository,
+    discountAdmin: discountAdminService,
+    cashbackAdmin: cashbackRuleAdminService,
+    calendar: new IntlCampaignCalendar(templatePresentation),
+    audience: audienceService,
+    broadcasts: broadcastService,
+    massActions: bulkOperationService,
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    clock,
+    ids,
+  });
+  const campaignScheduleLoop = new CampaignScheduleLoop(campaignService, campaignRepository, {
+    scope: () =>
+      installationTenantId === null
+        ? null
+        : { tenantId: installationTenantId, botInstanceId: null },
+    intervalMs: CAMPAIGN_SCHEDULE_INTERVAL_MS,
+    now: () => clock.now(),
+    ids,
     logger,
   });
 
@@ -4755,6 +4800,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     serviceAddons: serviceAddonService,
     discounts: discountAdminService,
     cashbackRules: cashbackRuleAdminService,
+    campaigns: campaignService,
+    campaignScheduleLoop,
     customServiceAdmin: customServiceAdminService,
     customServiceFlow: customServiceFlowService,
     customerCaptures: customerCaptureService,
@@ -5091,6 +5138,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       await gatewayPaymentLoop.stop();
       await serviceReminderLoop.stop();
       await customerReminderLoop.stop();
+      await campaignScheduleLoop.stop();
       await customerNotificationLoop.stop();
       // Round N: and the broadcast lane, for the same reason — a stamped send is recorded.
       await broadcastLoop.stop();

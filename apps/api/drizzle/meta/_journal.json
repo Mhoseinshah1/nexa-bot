@@ -1030,6 +1030,20 @@
       "when": 1790751231547,
       "tag": "0146_round_n_broadcast",
       "breakpoints": true
+    },
+    {
+      "idx": 147,
+      "version": "7",
+      "when": 1790751785635,
+      "tag": "0147_round_n_campaigns",
+      "breakpoints": true
+    },
+    {
+      "idx": 148,
+      "version": "7",
+      "when": 1790751795986,
+      "tag": "0148_round_n_campaigns_permissions",
+      "breakpoints": true
     }
   ]
 }

@@ -5,6 +5,7 @@ import { SERVICE_MACHINE, OPERATION_MACHINE } from './provisioning.js';
 import { CUSTOMER_NOTIFICATION_MACHINE } from './customer-notifications.js';
 import { TICKET_MACHINE } from './tickets.js';
 import { BROADCAST_MACHINE } from './broadcasts.js';
+import { CAMPAIGN_MACHINE } from './campaigns.js';
 
 /**
  * State machines as data.
@@ -169,4 +170,6 @@ export const STATE_MACHINES: readonly StateMachineDefinition<string, string>[] =
   TICKET_MACHINE as StateMachineDefinition<string, string>,
   // Round N: a broadcast. COMPLETED is left only by re-queuing FAILED recipients (RETRY).
   BROADCAST_MACHINE as StateMachineDefinition<string, string>,
+  // Round N, C1: a campaign. COMPLETED and CANCELLED are terminal.
+  CAMPAIGN_MACHINE as StateMachineDefinition<string, string>,
 ];

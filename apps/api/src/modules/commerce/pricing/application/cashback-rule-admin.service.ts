@@ -322,7 +322,11 @@ export class CashbackRuleAdminService {
     );
   }
 
-  private async assertReferences(
+  /**
+   * Public for one other caller: `CampaignService`, which creates a rule of this kind in
+   * its own transaction and must refuse exactly what this page refuses (round N, C1).
+   */
+  async assertReferences(
     scope: TenantContext,
     write: CashbackRuleWrite,
     tx: TransactionScope,
@@ -411,7 +415,7 @@ function serialisable(write: CashbackRuleWrite): Record<string, unknown> {
   };
 }
 
-function auditView(rule: CashbackRuleRecord): Record<string, unknown> {
+export function auditView(rule: CashbackRuleRecord): Record<string, unknown> {
   return {
     label: rule.label,
     percent: rule.percent,

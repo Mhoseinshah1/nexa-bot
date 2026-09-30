@@ -114,6 +114,12 @@ import {
   DISCOUNT_PRIORITY_MIN,
   DISCOUNT_PRIORITY_MAX,
   CASHBACK_RULE_STATUSES,
+  // Round N, C1: campaigns.
+  CAMPAIGN_ACTION_KINDS,
+  CAMPAIGN_ACTION_STATES,
+  CAMPAIGN_DESCRIPTION_MAX_LENGTH,
+  CAMPAIGN_NAME_MAX_LENGTH,
+  CAMPAIGN_STATES,
   CASHBACK_STATES,
   CASHBACK_PERCENT_MIN,
   CASHBACK_PERCENT_MAX,
@@ -6844,6 +6850,216 @@ export const cashbackReversals = pgTable(
       'cashback_reversals_entry_check',
       sql`(wallet_entry_id IS NOT NULL) = (recovered_amount > 0)`,
     ),
+  ],
+);
+
+/**
+ * Round N, C1 — a campaign (`docs/round-n-campaigns-audit.md`).
+ *
+ * A record that COMPOSES engines and owns none of their decisions: it prices nothing,
+ * credits nothing, sends nothing and dials no panel. What it owns is here — a name, the
+ * half-open window `[starts_at, ends_at)` resolved from the tenant's own calendar and
+ * zone, the audience definition frozen when it is scheduled, and a state whose every
+ * change is a conditional UPDATE naming its from-states (`CAMPAIGN_MACHINE`).
+ */
+export const campaigns = pgTable(
+  'campaigns',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    name: text('name').notNull(),
+    /** Internal only: an operator's note, never shown to a customer. */
+    description: text('description').notNull().default(''),
+    state: text('state').notNull().default('DRAFT'),
+    startsAt: timestamptz('starts_at').notNull(),
+    endsAt: timestamptz('ends_at').notNull(),
+    /**
+     * The shared audience definition (the Broadcast engine's own contract). Editable while
+     * DRAFT; frozen by the schedule, which stamps `audience_frozen_at` and the count the
+     * operator confirmed.
+     */
+    audience: jsonb('audience').notNull(),
+    /** sha256 of the canonical definition (`freezeAudience`), what a confirmation binds to. */
+    audienceHash: text('audience_hash').notNull(),
+    audienceFrozenAt: timestamptz('audience_frozen_at'),
+    /** The audience count the operator saw in the preview and confirmed. */
+    audienceConfirmedCount: integer('audience_confirmed_count'),
+    /** The md5 of the confirmed SET of customer ids, as the audience engine computes it. */
+    audienceFingerprint: text('audience_fingerprint'),
+    createdByAdminId: uuid('created_by_admin_id'),
+    scheduledByAdminId: uuid('scheduled_by_admin_id'),
+    scheduledAt: timestamptz('scheduled_at'),
+    startedAt: timestamptz('started_at'),
+    pausedAt: timestamptz('paused_at'),
+    completedAt: timestamptz('completed_at'),
+    cancelledByAdminId: uuid('cancelled_by_admin_id'),
+    cancelledAt: timestamptz('cancelled_at'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    unique('campaigns_tenant_id_key').on(table.tenantId, table.id),
+    index('campaigns_tenant_created_idx').on(table.tenantId, table.createdAt, table.id),
+    /** The worker's two discovery questions: due to start, and due to complete. */
+    index('campaigns_due_start_idx')
+      .on(table.tenantId, table.startsAt, table.id)
+      .where(sql`state = 'SCHEDULED'`),
+    index('campaigns_due_end_idx')
+      .on(table.tenantId, table.endsAt, table.id)
+      .where(sql`state IN ('ACTIVE', 'PAUSED')`),
+    foreignKey({
+      columns: [table.tenantId, table.createdByAdminId],
+      foreignColumns: [admins.tenantId, admins.id],
+      name: 'campaigns_created_by_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.scheduledByAdminId],
+      foreignColumns: [admins.tenantId, admins.id],
+      name: 'campaigns_scheduled_by_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.cancelledByAdminId],
+      foreignColumns: [admins.tenantId, admins.id],
+      name: 'campaigns_cancelled_by_fk',
+    }),
+    check('campaigns_state_check', enumCheck('state', CAMPAIGN_STATES)),
+    check('campaigns_window_check', sql`starts_at < ends_at`),
+    check(
+      'campaigns_name_check',
+      sql`char_length(name) BETWEEN 1 AND ${sql.raw(String(CAMPAIGN_NAME_MAX_LENGTH))}`,
+    ),
+    check(
+      'campaigns_description_check',
+      sql`char_length(description) <= ${sql.raw(String(CAMPAIGN_DESCRIPTION_MAX_LENGTH))}`,
+    ),
+    /** Past DRAFT the audience is frozen: every state but DRAFT and a draft's CANCEL. */
+    check(
+      'campaigns_frozen_check',
+      sql`(audience_frozen_at IS NULL) = (scheduled_at IS NULL) AND (scheduled_at IS NULL) = (audience_confirmed_count IS NULL) AND (scheduled_at IS NULL) = (audience_fingerprint IS NULL)`,
+    ),
+    check(
+      'campaigns_scheduled_check',
+      sql`state IN ('DRAFT', 'CANCELLED') OR scheduled_at IS NOT NULL`,
+    ),
+    check(
+      'campaigns_started_check',
+      sql`state NOT IN ('ACTIVE', 'PAUSED') OR started_at IS NOT NULL`,
+    ),
+    check('campaigns_completed_check', sql`(state = 'COMPLETED') = (completed_at IS NOT NULL)`),
+    check('campaigns_cancelled_check', sql`(state = 'CANCELLED') = (cancelled_at IS NOT NULL)`),
+    check('campaigns_paused_check', sql`(state = 'PAUSED') = (paused_at IS NOT NULL)`),
+    check('campaigns_audience_hash_check', sql`audience_hash ~ '^[0-9a-f]{64}$'`),
+    check(
+      'campaigns_audience_fingerprint_check',
+      sql`audience_fingerprint IS NULL OR audience_fingerprint ~ '^[0-9a-f]{32}$'`,
+    ),
+    check(
+      'campaigns_confirmed_count_check',
+      sql`audience_confirmed_count IS NULL OR audience_confirmed_count >= 0`,
+    ),
+  ],
+);
+
+/**
+ * One promotional action of a campaign, and the ONE row it made in another engine.
+ *
+ * `config` is the action's terms as the operator confirmed them, frozen with the
+ * campaign. The link columns name what the engine holds: a discount rule, a cashback
+ * rule, or the shared engines' bulk operation or broadcast. At most one action of each
+ * kind per campaign, and each link is only on the kind it belongs to.
+ */
+export const campaignActions = pgTable(
+  'campaign_actions',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    campaignId: uuid('campaign_id').notNull(),
+    kind: text('kind').notNull(),
+    state: text('state').notNull().default('PENDING'),
+    config: jsonb('config').notNull(),
+    discountId: uuid('discount_id'),
+    cashbackRuleId: uuid('cashback_rule_id'),
+    /**
+     * A launched action's confirmation binding (count, set, liability, typed count), frozen by
+     * the schedule, so an interrupted hand-over is retried with EXACTLY what was confirmed —
+     * the engine's idempotency then replays rather than creating a second operation.
+     */
+    binding: jsonb('binding'),
+    /** The announcement: the Broadcast lane's own record. */
+    broadcastId: uuid('broadcast_id'),
+    /** A wallet, traffic or time gift: the mass-action engine's own record. */
+    bulkOperationId: uuid('bulk_operation_id'),
+    /** Why the engine refused to take the work, as its error code. Null otherwise. */
+    failureCode: text('failure_code'),
+    launchedAt: timestamptz('launched_at'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('campaign_actions_campaign_kind_key').on(
+      table.tenantId,
+      table.campaignId,
+      table.kind,
+    ),
+    /** A rule belongs to at most one campaign. */
+    uniqueIndex('campaign_actions_discount_key')
+      .on(table.tenantId, table.discountId)
+      .where(sql`discount_id IS NOT NULL`),
+    uniqueIndex('campaign_actions_cashback_rule_key')
+      .on(table.tenantId, table.cashbackRuleId)
+      .where(sql`cashback_rule_id IS NOT NULL`),
+    foreignKey({
+      columns: [table.tenantId, table.campaignId],
+      foreignColumns: [campaigns.tenantId, campaigns.id],
+      name: 'campaign_actions_campaign_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.discountId],
+      foreignColumns: [discounts.tenantId, discounts.id],
+      name: 'campaign_actions_discount_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.cashbackRuleId],
+      foreignColumns: [cashbackRules.tenantId, cashbackRules.id],
+      name: 'campaign_actions_cashback_rule_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.broadcastId],
+      foreignColumns: [broadcasts.tenantId, broadcasts.id],
+      name: 'campaign_actions_broadcast_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.bulkOperationId],
+      foreignColumns: [bulkOperations.tenantId, bulkOperations.id],
+      name: 'campaign_actions_bulk_operation_fk',
+    }),
+    uniqueIndex('campaign_actions_broadcast_key')
+      .on(table.tenantId, table.broadcastId)
+      .where(sql`broadcast_id IS NOT NULL`),
+    uniqueIndex('campaign_actions_bulk_operation_key')
+      .on(table.tenantId, table.bulkOperationId)
+      .where(sql`bulk_operation_id IS NOT NULL`),
+    check(
+      'campaign_actions_broadcast_kind_check',
+      sql`broadcast_id IS NULL OR kind = 'ANNOUNCEMENT'`,
+    ),
+    check(
+      'campaign_actions_bulk_kind_check',
+      sql`bulk_operation_id IS NULL OR kind IN ('WALLET_GIFT', 'TRAFFIC_GIFT', 'TIME_GIFT')`,
+    ),
+    check('campaign_actions_kind_check', enumCheck('kind', CAMPAIGN_ACTION_KINDS)),
+    check('campaign_actions_state_check', enumCheck('state', CAMPAIGN_ACTION_STATES)),
+    check('campaign_actions_discount_kind_check', sql`discount_id IS NULL OR kind = 'DISCOUNT'`),
+    check(
+      'campaign_actions_cashback_kind_check',
+      sql`cashback_rule_id IS NULL OR kind = 'CASHBACK'`,
+    ),
+    check('campaign_actions_launched_check', sql`(state = 'LAUNCHED') = (launched_at IS NOT NULL)`),
+    check('campaign_actions_failed_check', sql`(state = 'FAILED') = (failure_code IS NOT NULL)`),
   ],
 );
 

@@ -402,6 +402,20 @@ import {
   type PanelTrialResponse,
   type UpdatePanelTrialRequest,
   type UpdatePanelTrialResponse,
+  // Round N, C1: campaigns.
+  CAMPAIGN_ROUTES,
+  campaignListResponseSchema,
+  campaignPreviewResponseSchema,
+  campaignResponseSchema,
+  campaignResultsResponseSchema,
+  type CampaignCreateRequest,
+  type CampaignListResponse,
+  type CampaignPreviewResponse,
+  type CampaignResponse,
+  type CampaignResultsResponse,
+  type CampaignScheduleRequest,
+  type CampaignState,
+  type CampaignUpdateRequest,
 } from '@nexa/contracts';
 
 /**
@@ -2402,6 +2416,64 @@ export function fetchPricePreview(query: {
 /** One order's adjustments, redemptions and cashback. Its own read, behind `orders.view`. */
 export function fetchOrderPricing(id: string): Promise<OrderPricingResponse> {
   return authedGet(ORDER_ROUTES.pricing(id), orderPricingResponseSchema);
+}
+
+// --- Campaigns (round N, C1) ---------------------------------------------------
+
+/** One page of campaigns, newest first. */
+export function fetchCampaigns(
+  query: { limit?: number; cursor?: string; state?: CampaignState } = {},
+): Promise<CampaignListResponse> {
+  const params = new URLSearchParams();
+  if (query.limit !== undefined) params.set('limit', String(query.limit));
+  if (query.cursor !== undefined && query.cursor !== '') params.set('cursor', query.cursor);
+  if (query.state !== undefined) params.set('state', query.state);
+  const suffix = params.toString();
+  return authedGet(
+    suffix ? `${CAMPAIGN_ROUTES.list}?${suffix}` : CAMPAIGN_ROUTES.list,
+    campaignListResponseSchema,
+  );
+}
+
+export function fetchCampaign(id: string): Promise<CampaignResponse> {
+  return authedGet(CAMPAIGN_ROUTES.one(encodeURIComponent(id)), campaignResponseSchema);
+}
+
+export function createCampaign(input: CampaignCreateRequest): Promise<CampaignResponse> {
+  return post(CAMPAIGN_ROUTES.create, input, campaignResponseSchema);
+}
+
+export function updateCampaign(
+  id: string,
+  input: CampaignUpdateRequest,
+): Promise<CampaignResponse> {
+  return post(CAMPAIGN_ROUTES.update(encodeURIComponent(id)), input, campaignResponseSchema);
+}
+
+/** A read: the figures the confirmation then binds to. */
+export function fetchCampaignPreview(id: string): Promise<CampaignPreviewResponse> {
+  return authedGet(CAMPAIGN_ROUTES.preview(encodeURIComponent(id)), campaignPreviewResponseSchema);
+}
+
+export function scheduleCampaign(
+  id: string,
+  input: CampaignScheduleRequest,
+): Promise<CampaignResponse> {
+  return post(CAMPAIGN_ROUTES.schedule(encodeURIComponent(id)), input, campaignResponseSchema);
+}
+
+/** `which` names the ROUTE: pause, resume, cancel, or re-hand a pending action (launch). */
+export function commandCampaign(input: {
+  id: string;
+  which: 'pause' | 'resume' | 'cancel' | 'launch';
+  idempotencyKey: string;
+}): Promise<CampaignResponse> {
+  const { id, which, ...body } = input;
+  return post(CAMPAIGN_ROUTES[which](encodeURIComponent(id)), body, campaignResponseSchema);
+}
+
+export function fetchCampaignResults(id: string): Promise<CampaignResultsResponse> {
+  return authedGet(CAMPAIGN_ROUTES.results(encodeURIComponent(id)), campaignResultsResponseSchema);
 }
 
 // --- Package D: the custom service (docs/package-d-custom-service-audit.md) ------------

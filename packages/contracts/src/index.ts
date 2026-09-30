@@ -70,6 +70,8 @@ export * from './service-refund-requests.js';
 export * from './service-transfer.js';
 // WP-A7: the support ticket system.
 export * from './tickets.js';
+// Round N, C1: campaigns composing the pricing rules, the audience and the mass actions.
+export * from './campaigns.js';
 export * from './payment-receipts.js';
 export * from './provisioning.js';
 export * from './service-reminders.js';

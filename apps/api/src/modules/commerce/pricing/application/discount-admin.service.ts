@@ -394,7 +394,11 @@ export class DiscountAdminService {
    * would sit `ACTIVE` in the list and never apply, which is the silent success the
    * legacy system was full of.
    */
-  private async assertReferences(
+  /**
+   * Public for one other caller: `CampaignService`, which creates a rule of this kind in
+   * its own transaction and must refuse exactly what this page refuses (round N, C1).
+   */
+  async assertReferences(
     scope: TenantContext,
     write: DiscountRuleWrite,
     tx: TransactionScope,
@@ -535,7 +539,7 @@ function serialisable(write: DiscountRuleWrite): Record<string, unknown> {
 }
 
 /** Every mutable field, so a before/after pair answers what an edit changed. */
-function auditView(rule: DiscountRuleRecord): Record<string, unknown> {
+export function auditView(rule: DiscountRuleRecord): Record<string, unknown> {
   return {
     kind: rule.kind,
     code: rule.code,

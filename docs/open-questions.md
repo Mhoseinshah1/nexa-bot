@@ -2584,3 +2584,45 @@ and never handed to Telegram's HTML parser. What is not known:
   types — only a stand-in for the Bot API has answered it.
 
 UNRESOLVED until a real RickPanel's `/files` answer and a real bot are observed together.
+
+## OQ-C1-01 — should a campaign's discount or cashback be restricted to its audience?
+
+The discount and cashback engines scope a rule by product, category, purpose, first purchase
+and one optional customer; they have no audience dimension. A campaign's audience therefore
+decides who is TOLD and who is GIFTED, and its discount and cashback reach whoever their own
+scope reaches (`docs/round-n-campaigns-audit.md` D4). Restricting eligibility to an audience
+would be a change to the one pricing boundary and a second place segmentation is decided.
+
+UNRESOLVED. The Web Admin states the difference on the campaign page.
+
+## OQ-C1-02 — should a campaign be able to raise the referral commission for a window?
+
+Referral terms are tenant-wide settings with no window and no audience; a campaign could only
+express an incentive by writing `referral.commission_percent` at its start and writing it
+back at its end — a lost update against any operator edit in between — and the commission
+scope is snapshotted per referral at registration (`docs/round-n-campaigns-audit.md` D8).
+
+UNRESOLVED. Not built; the referral terms stay on the settings page.
+
+## OQ-C1-03 — Mirza's discount tier and panel scope
+
+Mirza's discount codes can be scoped by user group (`f`/`n`/`n2`) and by panel (VERIFIED,
+SBR-017..021). Nexa's discount engine has neither dimension, and a campaign creates rules in
+that engine rather than growing it.
+
+UNRESOLVED. Unchanged by C1.
+
+## OQ-C1-04 — a delayed campaign hand-over after the confirmed set moved
+
+A campaign hands its gifts and announcement to the shared engines right after its own
+confirmation commits, bound to the confirmed definition hash, count and set fingerprint. If
+that hand-over is interrupted (a crash or an unreachable engine between the two
+transactions) and membership moves before it is retried, the engine refuses with
+`audience.changed`: the action becomes FAILED, nothing is credited, granted or sent, and the
+Web Admin tells the operator to cancel and re-make the campaign
+(`docs/round-n-campaigns-audit.md` §5.3; Codex review of PR #118, finding 2). A retry that
+SUCCEEDS with exactly the confirmed set would need the mass-action and Broadcast engines to
+accept a frozen member list; their `customerIds` definition is capped at 100
+(`AUDIENCE_CUSTOMER_IDS_MAX`), so that is a contract change on E's side.
+
+UNRESOLVED. Safe (never a different set), not live, in that one failure case.

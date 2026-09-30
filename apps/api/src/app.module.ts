@@ -15,6 +15,8 @@ import { ServiceLocationsController } from './surfaces/web/service-locations.con
 import { PricingController } from './surfaces/web/pricing.controller.js';
 import { CustomServiceController } from './surfaces/web/custom-service.controller.js';
 import { ReferralsController } from './surfaces/web/referrals.controller.js';
+// Round N, C1.
+import { CampaignsController } from './surfaces/web/campaigns.controller.js';
 import { ReportsController } from './surfaces/web/reports.controller.js';
 import { TenantMediaController } from './surfaces/web/tenant-media.controller.js';
 import { ResellersController } from './surfaces/web/resellers.controller.js';
@@ -86,6 +88,7 @@ export class AppModule implements NestModule {
         PricingController as never,
         CustomServiceController as never,
         ReferralsController as never,
+        CampaignsController as never,
         ReportsController as never,
         TenantMediaController as never,
         ResellersController as never,
