@@ -123,7 +123,7 @@ export const GATEWAY_ERROR_CODE_MAX_LENGTH = 64;
  * amount. The links are omitted — a payment link is a capability, and an operator
  * diagnosing a payment needs the ids and the states, not a way to pay it.
  */
-export const gatewayInvoiceViewSchema = z.object({
+const gatewayInvoiceViewShape = z.object({
   provider: z.string(),
   providerOrderId: z.string(),
   providerInvoiceId: z.string().nullable(),
@@ -147,10 +147,12 @@ export const gatewayInvoiceViewSchema = z.object({
    */
   conversionRateMinor: z.string().nullable(),
   /**
-   * How `sentAmount` was derived from the payable (package FX). Defaulted on parse for a
-   * response from the previous release, which had only the fixed rate.
+   * How `sentAmount` was derived from the payable (package FX). ABSENT in a response
+   * from the previous release, which had only the fixed rate: the transform below infers
+   * it from the legacy rate, so a Stars invoice served by that release during a rolling
+   * deploy is never shown as billed in the sales currency (Codex review of #122).
    */
-  conversionPolicy: gatewayConversionPolicySchema.default('SAME_UNIT'),
+  conversionPolicy: gatewayConversionPolicySchema.optional(),
   /**
    * The central-rate snapshot of a `CENTRAL_FX` attempt: the quote, its provenance, the
    * unit ratio and the effective figure per provider unit, exactly as the attempt was
@@ -166,4 +168,15 @@ export const gatewayInvoiceViewSchema = z.object({
   lateCompletionObservedAt: z.iso.datetime().nullable(),
   createdAt: z.iso.datetime(),
 });
+/**
+ * The view with its policy always present: what the previous release sent without one is
+ * a fixed-rate attempt exactly when it carries a rate, and a same-unit one otherwise —
+ * the same inference migration 0149 backfilled into the rows.
+ */
+export const gatewayInvoiceViewSchema = gatewayInvoiceViewShape.transform((view) => ({
+  ...view,
+  conversionPolicy:
+    view.conversionPolicy ??
+    (view.conversionRateMinor === null ? ('SAME_UNIT' as const) : ('FIXED_RATE' as const)),
+}));
 export type GatewayInvoiceView = z.infer<typeof gatewayInvoiceViewSchema>;

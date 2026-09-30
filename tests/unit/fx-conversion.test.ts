@@ -9,6 +9,7 @@ import {
   fractionToDecimalText,
   fxQuoteId,
   fxQuoteStateFor,
+  gatewayInvoiceViewSchema,
   normaliseRate,
   parseDecimalRate,
   parseUnitRatio,
@@ -196,6 +197,50 @@ describe('the conversion policy', () => {
     expect(conversionPolicyFor(stars, undefined)).toBe('FIXED_RATE');
     expect(conversionPolicyFor(stars, null)).toBe('FIXED_RATE');
     expect(conversionPolicyFor(stars, 'garbage')).toBe('FIXED_RATE');
+  });
+
+  it("reads the previous release's invoice view, a rate and no policy, as FIXED_RATE (Codex #122)", () => {
+    const legacy = {
+      provider: 'TELEGRAM_STARS',
+      providerOrderId: 'order-1',
+      providerInvoiceId: null,
+      creationState: 'CREATED',
+      creationErrorCode: null,
+      providerStatus: null,
+      providerPaid: null,
+      lastInquiryAt: null,
+      lastInquiryErrorCode: null,
+      webhookStatusHint: null,
+      lastWebhookAt: null,
+      webhookCount: 0,
+      providerUnit: 'XTR',
+      sentAmount: '81',
+      conversionRateMinor: '1300',
+      providerChargeId: null,
+      requestAmount: null,
+      finalAmount: null,
+      creditAmount: null,
+      outcome: null,
+      lateCompletionObservedAt: null,
+      createdAt: '2026-09-30T10:00:00.000Z',
+    };
+    expect(gatewayInvoiceViewSchema.parse(legacy)).toMatchObject({
+      conversionPolicy: 'FIXED_RATE',
+      fx: null,
+    });
+    // No rate: the route bills in the sales currency.
+    expect(
+      gatewayInvoiceViewSchema.parse({ ...legacy, provider: 'TONPAYS', conversionRateMinor: null })
+        .conversionPolicy,
+    ).toBe('SAME_UNIT');
+    // A policy this release sent is read as sent, whatever the rate beside it.
+    expect(
+      gatewayInvoiceViewSchema.parse({
+        ...legacy,
+        conversionPolicy: 'CENTRAL_FX',
+        conversionRateMinor: null,
+      }).conversionPolicy,
+    ).toBe('CENTRAL_FX');
   });
 
   it('says which routes take an operator rate', () => {
