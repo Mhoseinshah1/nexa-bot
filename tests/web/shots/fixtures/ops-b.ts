@@ -23,6 +23,8 @@ import {
   ticketCategoryListResponseSchema,
   ticketDetailResponseSchema,
   ticketListResponseSchema,
+  templateDefinition,
+  type TemplateKey,
 } from '@nexa/contracts';
 import { CATALOGUE_FA } from '@nexa/i18n';
 import { ago, fixture, type ShotFixture } from '../fixture.ts';
@@ -106,7 +108,7 @@ const TEMPLATE_VIEWS = TEMPLATES.map((definition) => {
     description: definition.description,
     format: definition.format,
     placeholders: definition.placeholders.map((placeholder) => ({ ...placeholder })),
-    maxLength: definition.maxLength ?? 4096,
+    maxLength: templateDefinition(definition.key as TemplateKey).maxLength ?? 4096,
     body: override ?? body,
     overrideBody: override,
     defaultBody: body,

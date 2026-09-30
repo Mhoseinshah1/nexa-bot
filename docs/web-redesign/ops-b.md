@@ -453,4 +453,121 @@ These will be updated in Phase 2 to a role/label query that asserts the same thi
 
 ## Phase 2 — migration record
 
-_To be written after FOUND merges._
+Built on the foundation merged into this branch (`38c9473`). Presentation only: no contract,
+backend, route, permission, query key, polling cadence, mutation payload or idempotency rule
+changed. Page CSS lives only in `styles/pages/ops-b.css`, every class page-prefixed (`ob-`,
+`settings-`/`set-row-`, `feature-`, `rem-`, `content-`/`template-`, `support-`, `tickets-`/
+`ticket-`, `ops-group-`, `alerts-`, `notifications-`, `system-`, `diagnostics-`,
+`recovery-`); no kit class is restyled and no `style` attribute is written.
+
+### What is new and shared
+
+`pages/ops-b-layout.tsx` — the structure the settings-like pages share:
+
+- `useDirtySet` / `DirtyScope` / `useReportDirty`: each independently saved form (a setting
+  row, a reminder row, a template card) reports whether it holds an unsaved edit; the page
+  shows the sum (`UnsavedCount` beside the title) and holds ONE `useUnsavedChanges` guard for
+  all of them. A card rendered outside a scope (the bot-buttons page draws `TemplateCard`)
+  reports to nobody, so OPS-A's page is unaffected.
+- `SectionNav`: the sticky list of a long page's sections (settings, reminders). Buttons that
+  scroll a section into view with `aria-current`; every section stays rendered, because
+  each holds drafts. It marks a section holding an unsaved edit.
+- `sameValue`: a draft compared with its basis as sent (object keys ordered).
+
+### Per route
+
+| Route            | What changed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | Tests touched                                                                                                                                                                                                                                                                     |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/settings`      | Section list beside one card per group; one `article.set-row` per setting: Persian label + helper + value in force + last change on the start side, control + its own Save (primary only while dirty) + per-row unsaved badge and «دورانداختن تغییرات» on the end side; banners across beneath; technical disclosure (key, source) closed at the bottom. Page-level unsaved count and leave guard. Success/unchanged/failed toast named by the setting (the inline banner stays the record). **New confirmation:** saving a changed `sales.currency` asks first (plain yes/cancel; nothing is sent on cancel) — no other setting asks.                                                                                                 | `settings-presentation`: a row is found by `closest('article')` (was `section.card`); same assertions.                                                                                                                                                                            |
+| `/features`      | One card listing every flag as a row (name, sentence, last change; state badge + switch), related settings in a framed block under the row; an «n of m on» count in the card head. Confirmation rule, focus hand-back, `confirmDialogOpen` guard unchanged. A flag whose related settings are all ops-group-managed no longer draws an empty "related settings" heading.                                                                                                                                                                                                                                                                                                                                                               | none                                                                                                                                                                                                                                                                              |
+| `/reminders`     | Section list + five cards; switch rows (name, helper, state, switch); number/time/money rows in the settings row layout with the unit as an addon, an inline problem under the field (range in words, time format, digits-only amount) once something is typed, per-row unsaved badge + discard, toasts; template block is a framed closed disclosure with a count. Version basis following a conflict, validation-before-send, remaining↔used conversion unchanged.                                                                                                                                                                                                                                                                   | `reminders`: card titles found by `getByRole('heading')` (the section list repeats them as buttons).                                                                                                                                                                              |
+| `/content`       | List beside the editor: search, group select, source pills and the count on top of a scrolling, grouped list (Persian name, key, customised and unsaved dots); the editor column shows only the chosen card, and **every card stays mounted** (the others `hidden`), so drafts survive choosing and searching. A chosen template the filters hide falls back to the first listed one. Card head carries customised/default and unsaved badges; disclosures framed; preview output drawn as a bubble around the same text `pre`. Page unsaved count + leave guard.                                                                                                                                                                      | `templates-persian`: "found by the search" is now "its list item is shown" (`#template-item-<key>`); the raw-key-is-`CODE` assertion is scoped to the card (the list names the key too); waits pick the template from the list. The draft-survives-search assertion is unchanged. |
+| `/support`       | Destination as one quiet line with the link; FAQ in a dense table (order, question with the answer beneath, status dot, updated, ghost row actions); **create/edit in a drawer** (same fields, inline sort-order error, conflict reload, errors); page guard while the drawer holds an edit. "New" moved to the page head (and the empty state).                                                                                                                                                                                                                                                                                                                                                                                       | none                                                                                                                                                                                                                                                                              |
+| `/tickets`       | Status chips + compact filter row (apply/clear) above a dense table: number link with the subject beneath, category, status, priority, customer as an identity cell (name link, @username and Telegram id isolated), assignee, times; closed rows quieter. Categories card: dense, inline editors styled.                                                                                                                                                                                                                                                                                                                                                                                                                              | none                                                                                                                                                                                                                                                                              |
+| `/tickets/:id`   | Status and priority badges beside the title; two columns — conversation as a chat thread (customer on the start side, support on the end side tinted, system facts as a centred pill, avatars) with the reply card under it; actions (transitions as one group, close still `danger`), summary and context/links cards on the side. Attachments use page classes (no longer COMMERCE-A's `.receipt`). A typed reply or chosen file holds the leave guard.                                                                                                                                                                                                                                                                              | none                                                                                                                                                                                                                                                                              |
+| `/ops-group`     | Four figure cards (connection, permissions + last check, pending, preserved); connection card with its facts and the manager actions in its foot; topics and queue beside it; the three steps numbered. **Disconnect now asks through `ConfirmDialog`** (was an inline banner): same words, nothing sent until confirmed, cancel sends nothing; the dialog closes on confirm so a refusal is read on the page. Manual fallback is still the page's first, closed `details`.                                                                                                                                                                                                                                                            | none (the existing "asks before disconnecting" case passes unchanged)                                                                                                                                                                                                             |
+| `/alerts`        | Status chips (open/all) and a severity select in the filter bar, both withdrawn exactly as before; severity badge in Persian (`web.setting_severity_*`, raw level in the badge `title`); dense rows, same seven columns in the same order.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | none                                                                                                                                                                                                                                                                              |
+| `/notifications` | Test sends in the page head; the list beside a side column that shows the chosen delivery's attempts (or a hint to choose one); the chosen row is marked (`selected`, `aria-pressed`). Pending status pulses. All polling, retry, stale-after-error and denied rules unchanged.                                                                                                                                                                                                                                                                                                                                                                                                                                                        | none                                                                                                                                                                                                                                                                              |
+| `/system`        | Build identity (version, commit, environment) under the title from the shell's cached `['info']`. Status: figure cards from the readiness answer (overall, slowest latency, dependencies checked), dependency table beside the build card. Diagnostics: the four stuck-reason counts and the outbox numbers as figure cards (each reason's hint now visible, not a tooltip); tables dense; still no control. Monitor: over-capacity also said in a banner at the top; figure cards (enabled, tick, healthy interval, freshness); cadence and capacity cards side by side; separation as three cells. Admins: create in a drawer (card-head action), manage in a drawer per row, Telegram binding in a dialog; roles as outline badges. | none                                                                                                                                                                                                                                                                              |
+| `/recovery`      | Status as figure cards (schedule, interval, last success / «هرگز», unknown deliveries) with the warnings and Run under them; operations card opens with a three-step strip (upload → verify → confirm, `aria-current="step"`), the current request framed, the restore confirmation fenced as a danger zone. Raw request/run states, the phrase, the checksum binding, the permission refusals and every banner are unchanged.                                                                                                                                                                                                                                                                                                         | none                                                                                                                                                                                                                                                                              |
+
+New tests: `tests/web/ops-b-redesign.test.tsx` (13 cases) — settings unsaved count, row and
+section marks, discard; leave guard held while dirty and released after a save, with the
+named toast; the currency question (cancel sends nothing, confirm sends the value and the
+version it read) and its absence for any other key; section list `aria-current`; reminder
+inline range error, disabled Save and discard; template list choosing the shown card with
+the other still mounted and marked unsaved, and the fallback when the choice is filtered
+out; support drawer guard; ticket badges in the title and reply guard; ops-group disconnect
+cancel sends nothing; notifications selected row; recovery step strip. Mutation-checked:
+reverting the page guard or the currency question fails its case.
+
+Shots fixtures (`tests/web/shots/fixtures/ops-b.ts`) now answer every OPS-B route from the
+frozen registries (all settings, all flags, all templates with their Persian default
+bodies) plus FAQs, tickets and one ticket, categories and assignees, the ops group,
+notifications and one delivery, diagnostics, the monitor profile, administrators and
+roles, backup status and history, recovery capabilities and requests.
+
+### Capability checklist (§1, re-verified)
+
+- [x] 1.1 settings — same query, filters (ops-group/elsewhere/retired), group order and
+      "other" group; every control kind; per-row versioned save with snapshotted command and
+      key; conflict reload; PLANNED / RESTART_REQUIRED / invalid-stored / currency-mismatch
+      notices; `SaveError` mapping; technical disclosure closed; no raw key in the normal view
+      (`settings-presentation` still green). Added: page guard, count, discard, toasts,
+      currency question.
+- [x] 1.2 features — switch only for editors, confirmation only where the switch-off loses
+      something or the flag is unknown, focus hand-back, related settings with inert marker,
+      invalidation.
+- [x] 1.3 reminders — five families, flags with the features rule, ranges, percent
+      conversion, money in the selling currency, quiet-hours notes, version basis following a
+      conflict, template disclosure with the denied sentence.
+- [x] 1.4 content — search (name, description, key, editable body), group select, source
+      pills, count, no-match + clear; cards hidden never unmounted; raw body only; preview
+      (Enter previews, stale marker, text output, unresolved); sticky revisions query; save /
+      revert rules; Persian refusals.
+- [x] 1.5 support — destination link; FAQ list in server order; view-only actions column
+      empty; create/edit/toggle with versions and keys; conflict reload; limit error; toasts;
+      empty state with create.
+- [x] 1.6 tickets — URL-held filters, half-open dates, pager with trail reset, categories
+      editor gated separately; detail links, links form, transitions from `ticketManualEvent`,
+      assignee / assign-to-me / priority, thread with delivery badges and attachments, reply
+      with file checks and content-keyed idempotency, closed-ticket notice. Status and priority
+      moved from the summary list to the title (still shown once each).
+- [x] 1.7 ops group — polling rule, lane-off warning, facts, problems as remedies, five
+      manager actions, shared key kept on in-flight, test results, topics, queue + requeue,
+      connect code (deep link, command, expiry, no chat id field), manual fallback loading
+      `['settings']` only when opened.
+- [x] 1.8 alerts — scope follows the open filter, severity filter, 25 per page, cursor
+      trail, first-page polling, withdrawal of refresh/filters/pager on a final refusal, three
+      kinds of state, filtered vs. true-empty copy.
+- [x] 1.9 notifications — list polling (3 s pending / 30 s first page), detail polling,
+      two test targets with their own keys, created vs. replayed, attempts and released claims,
+      loading / stale / error / denied rules, list denied while test sends remain.
+- [x] 1.10 system — tabs in `?section=` with fallback; readiness 15 s; build info;
+      diagnostics denied without a request and read-only; monitor 60 s with the capacity badge;
+      admins 60 s, create/manage/sessions/role picker/password/Telegram binding with every
+      refusal mapping; the no-logs card.
+- [x] 1.11 recovery — four queries and cadences, cursor in the URL, quiesce banner, run
+      (disabled while quiesced, BUSY vs. COMPLETED), last verified backup, cleanup warning,
+      download as a plain anchor or "gone", history, upload (client size check), verify,
+      restore confirmation (refusal without `recovery.restore`, exact contract phrase, checksum
+      binding, expiry), requests with the displaced database, foreign archives reported.
+
+### Intentionally unchanged
+
+- Per-row Save on settings/reminders (no page-wide Save): every row writes one registry row
+  at the version it read, and a page-wide save would either send N commands under one
+  click or invent a batch endpoint.
+- Raw enum text in the recovery tables and the current request (`SUCCEEDED`,
+  `RESTORE_TEST_PASSED`, stages, failure codes): DR evidence an operator may have to quote,
+  and asserted as such by `recovery.test.tsx`.
+- Notification attempt outcome stays the raw `DELIVERY_OUTCOMES` value.
+- Reference-only items listed in §2 (settings store/timezone/secrets sections, notification
+  KPI cards and compose wizard, template import/export, system requests/min, p95, process
+  table, logs and keys tabs) — no endpoint gives them.
+
+### Screenshots
+
+Captured with `pnpm web:shots` (scratchpad, not committed):
+`/tmp/claude-0/ob-shots/final/` — every route above in dark and light at 1440, and the main
+ones at 900 and 390.
