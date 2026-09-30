@@ -133,7 +133,10 @@ that adds `NOTHING_TO_TEST`):
   syntax, a COLON so the placeholder scanner cannot read it as a token. The i18n
   renderer leaves it literal, `auditCatalogue` does not report it as undeclared, and
   `validateTemplateBody` gains `UNKNOWN_ICON` for a marker naming no slot — the one
-  place a typo is caught before a customer reads `{icon:paymnt}`.
+  place a typo is caught before a customer reads `{icon:paymnt}`. The scanner matches
+  the whole `{icon:…}` form (anything but a brace), so `{icon:success1}`,
+  `{icon:Payment}` and `{icon: payment}` are refused too, not passed unseen (Codex #121,
+  finding 4).
 - `CUSTOM_EMOJI_ID_PATTERN = /^[0-9]{1,32}$/`, kept as a string (the ids exceed 2^53).
 - the test vocabulary: `APPEARANCE_TEST_OUTCOMES` (`SENT`, `REJECTED`, `UNREACHABLE`,
   `RATE_LIMITED`) and `APPEARANCE_TEST_ERROR_CODES` (`custom_emoji_refused`,
@@ -182,11 +185,18 @@ text.length, length: fallback.length, custom_emoji_id }` — `text.length` is UT
   cannot be found, and the caller then sends plain.
 - `undoHtmlDecoration` — the tags this renderer wrote, undone, for the one retry.
 
-The messenger decorates BEFORE cutting (`send`), never after: a cut before decoration
-would move every offset behind it. `renderCaption` decorates first and places the
-provider's caption entities on the result for the same reason. Every wire body builder
-in `send-message.ts` takes `entities` / `captionEntities` and drops them for an HTML
-body (`entitiesInside`), so a caller cannot send both.
+The messenger cuts a body with its markers MASKED and decorates each part AFTER the
+cut (`maskAppearanceMarkers`, Codex #121, findings 1 and 2): every `{icon:…}` becomes one
+private-use code point — a surrogate pair, never wider than the emoji it becomes — so
+the splitter cannot cut a marker, the bound is measured on what Telegram counts
+("characters after entities parsing", never the `<tg-emoji>` tags a decoration adds), a
+generated tag can never be cut, and every entity's offset is relative to the part it is
+sent in. Once a decorated part has been refused, every later part is rendered with
+`NO_DECORATION` — tags and entities alike — so the tag-free text is always derived from
+the decorated one. `renderCaption` decorates first and places the provider's caption
+entities on the result. Every wire body builder in `send-message.ts` takes `entities` /
+`captionEntities` and drops them for an HTML body (`entitiesInside`), so a caller cannot
+send both.
 
 **Decoration failure never costs the message.** `deliverDecorated` is the one Telegram
 call for a body that may be decorated: a definite refusal (4xx) of a decorated request
@@ -241,11 +251,14 @@ a customer reads, and `notification-capture.ts` renders through the same fallbac
 
 ## 6. Eligibility: never assumed
 
-`AppearanceService.sendTest` sends `bot.appearance.test_message` — every slot on its own
-line with its marker — through the chosen ACTIVE bot to the signed-in administrator's
-own chat (`admins.telegram_user_id`; refused `ADMIN_NOT_BOUND` when there is none), with
-EVERY configured, switched-on slot decorated whatever the bot's earlier verdict, because
-the test is how the verdict is found. The request's key is CLAIMED in a committed
+`AppearanceService.sendTest` sends `bot.appearance.test_message` — the tenant's editable
+copy rendered as FALLBACK, then a FIXED line the messenger appends carrying every slot's
+marker (`APPEARANCE_PROBE_BLOCK`) — through the chosen ACTIVE bot to the signed-in
+administrator's own chat (`admins.telegram_user_id`; refused `ADMIN_NOT_BOUND` when there
+is none), with EVERY configured, switched-on slot decorated whatever the bot's earlier
+verdict, because the test is how the verdict is found. The block is what makes an
+override that omits a marker unable to let a `SENT` vouch for a slot the message never
+carried (Codex #121, finding 6); `decoratedSlots` is exactly the configured count. The request's key is CLAIMED in a committed
 transaction before the send and the answer stored under `<key>#result`, as the
 ops-group test does, so two presses send one message. The answer is recorded on the
 bot: `SENT`, or `REJECTED` / `UNREACHABLE` / `RATE_LIMITED` with a closed code derived
@@ -257,7 +270,18 @@ receives is not documented; "chat not found" / "bot was blocked" named as
 With no slot configured the test is refused (`NOTHING_TO_TEST`): a message carrying no
 `custom_emoji` entity proves nothing, and a recorded `SENT` from it would switch
 decoration on for a bot nothing tested. The service guards the same case again after
-the send.
+the send. The verdict the test's audit row names as `before` is read UNDER THE LOCK in
+the result transaction (`lockBot`), not before the claim and the Telegram call (Codex
+#121, finding 7). And because a runtime refusal opens a per-bot condition that only the
+next accepted test closes, removing the last custom emoji — after which the probe
+refuses — closes every open condition with the same recovery, or the warning would stay
+open for ever (finding 8).
+
+**Writes carry their predicate.** A slot with no row locks nothing under
+`findSlot(..., FOR UPDATE)`, so two first saves both pass the version check: the insert
+is `ON CONFLICT DO NOTHING` and the loser is `control.version_conflict`, never an
+overwrite; an update and a delete are `WHERE version = <the one read>`; a reset names
+the version the operator read (finding 3, finding 5).
 
 `CachedAppearanceReader.decorationFor(scope, bot)` decorates only a bot whose recorded
 outcome is `SENT`; untested is a refusal. Cached thirty seconds per tenant and bot, and
@@ -316,6 +340,23 @@ the file run green again. The integration runs used `nexa_pui` and Redis index 8
 | M10 | `telegram-customer-messenger.ts`: a retryable (UNKNOWN) outcome is retried too           | `telegram-messenger-appearance.test.ts` | 1 failed, 11 passed   | 12 passed |
 | M11 | `drizzle-appearance.repository.ts`: `listBots` drops the tenant predicate                | `appearance-http.test.ts`               | 2 failed, 3 passed    | 5 passed  |
 | M12 | `appearance.service.ts`: a test with nothing configured is sent                          | `appearance-http.test.ts`               | 1 failed, 4 passed    | 5 passed  |
+
+### 8.2 Codex review of PR #121 (review 5364620272)
+
+Nine findings, all confirmed against the code and fixed; each with a test that fails
+when the rule is reverted, run the same way as §8.1.
+
+| Id  | Finding | Mutation (file, change)                                                               | Test file                               | Under mutation      | Restored  |
+| --- | ------- | ------------------------------------------------------------------------------------- | --------------------------------------- | ------------------- | --------- |
+| M13 | 1       | `telegram-customer-messenger.ts`: later parts keep decorating after a refusal         | `telegram-messenger-appearance.test.ts` | 1 failed, 14 passed | 15 passed |
+| M14 | 2       | `telegram-customer-messenger.ts`: split the raw text, markers unmasked                | `telegram-messenger-appearance.test.ts` | 1 failed, 14 passed | 15 passed |
+| M15 | 3       | `drizzle-appearance.repository.ts`: first insert `ON CONFLICT DO UPDATE`              | `appearance-http.test.ts`               | 1 failed, 6 passed  | 7 passed  |
+| M16 | 4       | `appearance.ts` (contracts): scanner back to `[a-z_]+`                                | `appearance-render.test.ts`             | 1 failed, 10 passed | 11 passed |
+| M17 | 5       | `appearance.service.ts`: reset without the version check                              | `appearance-http.test.ts`               | 1 failed, 6 passed  | 7 passed  |
+| M18 | 6       | `telegram-customer-messenger.ts`: probe sends the editable copy alone, no fixed block | `telegram-messenger-appearance.test.ts` | 2 failed, 13 passed | 15 passed |
+| M19 | 7       | `appearance.service.ts`: audit `before` from the pre-claim read                       | `appearance-service.test.ts`            | 1 failed, 2 passed  | 3 passed  |
+| M20 | 8       | `appearance.service.ts`: conditions never closed                                      | `appearance-service.test.ts`            | 1 failed, 2 passed  | 3 passed  |
+| M21 | 9       | `appearance.tsx`: the "sent" toast for every outcome                                  | `appearance.test.tsx`                   | 1 failed, 5 passed  | 6 passed  |
 
 Two first attempts at M1 and M2 matched nothing (an indentation mismatch in the
 replacement pattern) and ran the unmutated file — 10 passed — which is exactly the false
