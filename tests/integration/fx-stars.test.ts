@@ -354,15 +354,21 @@ describe('Central FX and the Stars route (packages FX, FX-STARS)', () => {
     });
 
     it('the central mode cannot be chosen while the feature is off or the ratio is unset, and the ratio cannot be cleared under it', async () => {
+      // A positive ratio is accepted at any time; it is the MODE that needs the feature.
+      expect((await setSetting('stars.per_usdt', '100')).changed).toBe(true);
       const off = await setSetting('stars.pricing_mode', 'CENTRAL_FX_RATIO').catch(
         (error: unknown) => error,
       );
       expect(isNexaError(off) && off.code).toBe(CONTROL_ERROR_CODES.INVALID_VALUE);
+      expect(isNexaError(off) && off.message).toMatch(/central_fx feature is on/u);
       await setFlag(true);
+      // Under the fixed rate the ratio may be cleared; the mode then needs it back.
+      expect((await setSetting('stars.per_usdt', '')).changed).toBe(true);
       const noRatio = await setSetting('stars.pricing_mode', 'CENTRAL_FX_RATIO').catch(
         (error: unknown) => error,
       );
       expect(isNexaError(noRatio) && noRatio.code).toBe(CONTROL_ERROR_CODES.INVALID_VALUE);
+      expect(isNexaError(noRatio) && noRatio.message).toMatch(/positive ratio/u);
       await setSetting('stars.per_usdt', '100');
       expect((await setSetting('stars.pricing_mode', 'CENTRAL_FX_RATIO')).changed).toBe(true);
       const cleared = await setSetting('stars.per_usdt', '').catch((error: unknown) => error);
@@ -520,6 +526,27 @@ describe('Central FX and the Stars route (packages FX, FX-STARS)', () => {
       expect(await api.container.fx.refreshIfDue(tenantA, 'USDT')).toBe('NOT_DUE');
       expect((await api.container.fx.refresh(tenantA, owner, 'USDT')).outcome).toBe('BUSY');
       expect(hits).toHaveLength(2);
+    });
+
+    it('the stored quote never moves backwards: a replica whose clock is behind cannot replace a newer quote', async () => {
+      await centralStars();
+      // The stored quote reads as fetched an hour from now — what a replica with a clock
+      // behind this one would see. A refresh from here is "older" and must not win.
+      await ageQuote(-3_600);
+      script.nobitex = { status: 200, body: nobitexBook('1139050') };
+      expect((await api.container.fx.refresh(tenantA, owner, 'USDT')).outcome).toBe('REFRESHED');
+      const [row] = await rows<{
+        rate_mantissa: string;
+        source: string;
+        refresh_claimed_until: Date | null;
+      }>(
+        sql`SELECT rate_mantissa::text AS rate_mantissa, source, refresh_claimed_until FROM fx_quotes WHERE tenant_id = ${tenantA.tenantId}`,
+      );
+      expect(row).toMatchObject({
+        rate_mantissa: '103550',
+        source: 'NOBITEX',
+        refresh_claimed_until: null,
+      });
     });
 
     it('primary down: the fallback prices the attempt from Toman as read, and the conditions are recorded', async () => {
