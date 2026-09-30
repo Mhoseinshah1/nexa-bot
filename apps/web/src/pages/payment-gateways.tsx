@@ -27,14 +27,17 @@ import {
   Badge,
   Banner,
   Card,
+  CellMain,
   DataTable,
   Empty,
   Field,
   Ltr,
   PageHead,
+  RowActions,
   StateSwitch,
-  Switch,
+  ToggleRow,
   useToast,
+  useUnsavedChanges,
   type Column,
 } from '../ui/kit';
 
@@ -138,6 +141,11 @@ function nameOf(gateway: PaymentGatewayView): string {
     case 'TELEGRAM_STARS':
       return t('web.payment_gateway_provider_telegram_stars');
   }
+}
+
+/** A form's title, naming the route it is open on when that route is on screen. */
+function titled(title: string, row: PaymentGatewayView | undefined): string {
+  return row === undefined ? title : `${title} — ${nameOf(row)}`;
 }
 
 /**
@@ -408,27 +416,46 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
   const busy = save.isPending || toggle.isPending || credential.isPending;
   const failure = save.error ?? toggle.error;
 
+  /*
+   * Dirty-state protection: an open route whose form differs from the row it was
+   * opened from, or a key typed and not yet sent. Leaving the page asks first; the
+   * key itself is never kept anywhere to come back to.
+   */
+  const editedRow = editing === null ? undefined : rows.find((row) => row.provider === editing);
+  const formDirty =
+    editedRow !== undefined && JSON.stringify(form) !== JSON.stringify(formOf(editedRow));
+  useUnsavedChanges(mayEdit && (formDirty || (keying !== null && apiKey !== '')));
+
   const columns: readonly Column<PaymentGatewayView>[] = [
     {
       key: 'name',
       header: t('web.payment_gateway_provider'),
+      // The name, and — quieter, beneath it — when the route was last changed.
       render: (row) => (
-        <>
-          {nameOf(row)}
-          {row.displayName === null && (
-            <>
-              {' '}
-              <Badge tone="neutral">{t('web.payment_gateway_name_default')}</Badge>
-            </>
-          )}
-        </>
+        <CellMain
+          primary={
+            <span className="gateways-name">
+              <span className="strong">{nameOf(row)}</span>
+              {row.displayName === null && (
+                <Badge tone="neutral" outline>
+                  {t('web.payment_gateway_name_default')}
+                </Badge>
+              )}
+            </span>
+          }
+          secondary={
+            <span>
+              {t('web.payment_gateway_updated')}: {formatTimestamp(row.updatedAt)}
+            </span>
+          }
+        />
       ),
     },
     {
       key: 'state',
       header: t('web.payment_gateway_state'),
       render: (row) => (
-        <Badge tone={row.status === 'ACTIVE' ? 'ok' : 'neutral'}>
+        <Badge tone={row.status === 'ACTIVE' ? 'ok' : 'neutral'} dot>
           {t(
             row.status === 'ACTIVE' ? 'web.payment_gateway_active' : 'web.payment_gateway_disabled',
           )}
@@ -436,14 +463,21 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
       ),
     },
     {
-      key: 'min',
-      header: t('web.payment_gateway_min'),
-      render: (row) => boundOf(row.minAmountMinor, row.currency),
-    },
-    {
-      key: 'max',
-      header: t('web.payment_gateway_max'),
-      render: (row) => boundOf(row.maxAmountMinor, row.currency),
+      key: 'amounts',
+      header: t('web.payment_gateway_section_amounts'),
+      // Both bounds in one cell, each named: `0` on either side is "no bound".
+      render: (row) => (
+        <span className="gateways-lines">
+          <span>
+            <span className="muted">{t('web.payment_gateway_min')}:</span>{' '}
+            {boundOf(row.minAmountMinor, row.currency)}
+          </span>
+          <span>
+            <span className="muted">{t('web.payment_gateway_max')}:</span>{' '}
+            {boundOf(row.maxAmountMinor, row.currency)}
+          </span>
+        </span>
+      ),
     },
     {
       key: 'eligibility',
@@ -469,36 +503,40 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
       },
     },
     {
-      key: 'gift',
-      header: t('web.payment_gateway_topup_gift'),
-      render: (row) =>
-        row.topupCashbackPercent === 0 ? '—' : <Ltr>{`${String(row.topupCashbackPercent)}%`}</Ltr>,
-    },
-    {
-      key: 'fee',
-      header: t('web.payment_gateway_customer_fee'),
-      render: (row) =>
-        row.customerFeeBasisPoints === 0 ? (
-          '—'
-        ) : (
-          <Ltr>{`${formatBasisPointsPercent(row.customerFeeBasisPoints)}%`}</Ltr>
-        ),
-    },
-    {
-      key: 'rate',
-      header: t('web.payment_gateway_rate_column'),
+      key: 'money',
+      header: t('web.payment_gateway_section_money'),
       /*
-       * A fixed-rate route's rate, or amber when it has none (it cannot be switched on
-       * until it does). A dash for a route that is not priced by a rate at all.
+       * The top-up gift, the customer fee and — for a fixed-rate route — the Stars rate,
+       * each on its own line and named, or a dash when the route carries none of them.
+       * A fixed-rate route with no rate says so in amber: it cannot be switched on.
        */
-      render: (row) =>
-        !row.conversion.rateRequired ? (
-          '—'
-        ) : row.conversion.rateMinor === null ? (
-          <Badge tone="warn">{t('web.payment_gateway_rate_missing')}</Badge>
-        ) : (
-          <Ltr>{`${boundOf(row.conversion.rateMinor, row.currency)} = ⭐ 1`}</Ltr>
-        ),
+      render: (row) => {
+        const lines = [
+          row.topupCashbackPercent === 0 ? null : (
+            <span key="gift">
+              <span className="muted">{t('web.payment_gateway_topup_gift')}:</span>{' '}
+              <Ltr>{`${String(row.topupCashbackPercent)}%`}</Ltr>
+            </span>
+          ),
+          row.customerFeeBasisPoints === 0 ? null : (
+            <span key="fee">
+              <span className="muted">{t('web.payment_gateway_customer_fee')}:</span>{' '}
+              <Ltr>{`${formatBasisPointsPercent(row.customerFeeBasisPoints)}%`}</Ltr>
+            </span>
+          ),
+          !row.conversion.rateRequired ? null : (
+            <span key="rate">
+              <span className="muted">{t('web.payment_gateway_rate_column')}:</span>{' '}
+              {row.conversion.rateMinor === null ? (
+                <Badge tone="warn">{t('web.payment_gateway_rate_missing')}</Badge>
+              ) : (
+                <Ltr>{`${boundOf(row.conversion.rateMinor, row.currency)} = ⭐ 1`}</Ltr>
+              )}
+            </span>
+          ),
+        ].filter((line) => line !== null);
+        return lines.length === 0 ? '—' : <span className="gateways-lines">{lines}</span>;
+      },
     },
     {
       key: 'purposes',
@@ -540,11 +578,6 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
         ),
     },
     {
-      key: 'updated',
-      header: t('web.payment_gateway_updated'),
-      render: (row) => formatTimestamp(row.updatedAt),
-    },
-    {
       key: 'actions',
       header: t('web.payment_gateway_actions'),
       align: 'end',
@@ -552,7 +585,7 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
       // whose columns depend on the reader is a table two operators describe differently.
       render: (row) =>
         !mayEdit ? null : (
-          <div className="toolbar">
+          <RowActions>
             <button
               type="button"
               className="btn sm"
@@ -594,7 +627,7 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
                   : 'web.payment_gateway_enable',
               )}
             </button>
-          </div>
+          </RowActions>
         ),
     },
   ];
@@ -624,9 +657,319 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
             rows={rows}
             rowKey={(row) => row.provider}
             caption={t('web.payment_gateways_title')}
+            dense
           />
         </Card>
       </StateSwitch>
+
+      {/*
+        Replacing a route's API key. The input starts EMPTY every time: the stored key is
+        never sent to this page, so there is nothing to prefill and nothing to reveal.
+      */}
+      {mayEdit && keying !== null && (
+        <Card
+          title={titled(
+            t('web.payment_gateway_credential_title'),
+            rows.find((row) => row.provider === keying),
+          )}
+          hint={t('web.payment_gateway_credential_hint')}
+          className="gateways-form"
+        >
+          <Field label={t('web.payment_gateway_credential_input')} htmlFor="pg-api-key">
+            <input
+              id="pg-api-key"
+              className="input ltr mono"
+              type="password"
+              autoComplete="new-password"
+              spellCheck={false}
+              value={apiKey}
+              maxLength={512}
+              onChange={(event) => setApiKey(event.target.value)}
+            />
+          </Field>
+          <div className="form-actions">
+            <button
+              type="button"
+              className="btn primary"
+              disabled={busy || apiKey.trim() === ''}
+              onClick={() => credential.mutate()}
+            >
+              {t('web.payment_gateway_credential_save')}
+            </button>
+            <button
+              type="button"
+              className="btn"
+              disabled={busy}
+              onClick={() => {
+                setKeying(null);
+                setApiKey('');
+              }}
+            >
+              {t('web.payment_gateway_cancel_edit')}
+            </button>
+          </div>
+          {credential.error != null && (
+            <Banner tone="danger">{messageFor(credential.error)}</Banner>
+          )}
+        </Card>
+      )}
+
+      {/*
+        A refusal to switch a route on — TonPays without its key — lands here, since the
+        toggle has no form of its own.
+      */}
+      {editing === null && toggle.error != null && (
+        <Banner tone="danger">{messageFor(toggle.error)}</Banner>
+      )}
+
+      {/*
+        Only while a route is open. There is no "new route" form, because there is no
+        create — the roster is what this release can operate.
+
+        Settings-style: one section per question the route answers, each field with
+        its helper sentence, the ordering tucked under the advanced disclosure. Save is explicit and
+        the page asks before leaving an unsaved change.
+      */}
+      {mayEdit && editing !== null && (
+        <Card
+          title={titled(t('web.payment_gateway_editing'), editedRow)}
+          hint={t('web.payment_gateway_form_hint')}
+          tight
+          className="gateways-form"
+        >
+          <div className="form-section">
+            <h3>{t('web.payment_gateway_section_display')}</h3>
+            <div className="form-grid">
+              <Field
+                label={t('web.payment_gateway_name')}
+                htmlFor="pg-name"
+                hint={t('web.payment_gateway_name_hint')}
+              >
+                <input
+                  id="pg-name"
+                  className="input"
+                  value={form.displayName}
+                  maxLength={60}
+                  onChange={(event) => setForm({ ...form, displayName: event.target.value })}
+                />
+              </Field>
+              <div className="full">
+                <Field
+                  label={t('web.payment_gateway_instructions')}
+                  htmlFor="pg-instructions"
+                  hint={t('web.payment_gateway_instructions_hint')}
+                >
+                  <textarea
+                    id="pg-instructions"
+                    className="input"
+                    rows={3}
+                    value={form.instructions}
+                    maxLength={1000}
+                    onChange={(event) => setForm({ ...form, instructions: event.target.value })}
+                  />
+                </Field>
+              </div>
+            </div>
+          </div>
+
+          <div className="form-section">
+            <h3>{t('web.payment_gateway_section_amounts')}</h3>
+            <p className="desc">{t('web.payment_gateway_amount_hint')}</p>
+            <div className="form-grid">
+              <Field label={t('web.payment_gateway_min')} htmlFor="pg-min">
+                <input
+                  id="pg-min"
+                  className="input ltr"
+                  value={form.minAmountMinor}
+                  inputMode="numeric"
+                  onChange={(event) => setForm({ ...form, minAmountMinor: event.target.value })}
+                />
+              </Field>
+              <Field label={t('web.payment_gateway_max')} htmlFor="pg-max">
+                <input
+                  id="pg-max"
+                  className="input ltr"
+                  value={form.maxAmountMinor}
+                  inputMode="numeric"
+                  onChange={(event) => setForm({ ...form, maxAmountMinor: event.target.value })}
+                />
+              </Field>
+            </div>
+          </div>
+
+          <div className="form-section">
+            <h3>{t('web.payment_gateway_eligibility')}</h3>
+            <p className="desc">{t('web.payment_gateway_eligibility_hint')}</p>
+            <div className="form-grid c3">
+              <Field label={t('web.payment_gateway_after_payments')} htmlFor="pg-after-payments">
+                <input
+                  id="pg-after-payments"
+                  className="input ltr"
+                  value={form.activateAfterPayments}
+                  inputMode="numeric"
+                  onChange={(event) =>
+                    setForm({ ...form, activateAfterPayments: event.target.value })
+                  }
+                />
+              </Field>
+              <Field label={t('web.payment_gateway_until_payments')} htmlFor="pg-until-payments">
+                <input
+                  id="pg-until-payments"
+                  className="input ltr"
+                  value={form.deactivateAfterPayments}
+                  inputMode="numeric"
+                  onChange={(event) =>
+                    setForm({ ...form, deactivateAfterPayments: event.target.value })
+                  }
+                />
+              </Field>
+              <Field label={t('web.payment_gateway_after_days')} htmlFor="pg-after-days">
+                <input
+                  id="pg-after-days"
+                  className="input ltr"
+                  value={form.activateAfterAccountDays}
+                  inputMode="numeric"
+                  onChange={(event) =>
+                    setForm({ ...form, activateAfterAccountDays: event.target.value })
+                  }
+                />
+              </Field>
+            </div>
+          </div>
+
+          <div className="form-section">
+            <h3>{t('web.payment_gateway_section_money')}</h3>
+            <div className="form-grid">
+              <Field
+                label={t('web.payment_gateway_topup_gift')}
+                htmlFor="pg-topup-gift"
+                hint={t('web.payment_gateway_topup_gift_hint')}
+                {...(percentOf(form.topupCashbackPercent) === null
+                  ? { error: t('web.payment_gateway_topup_invalid') }
+                  : {})}
+              >
+                <input
+                  id="pg-topup-gift"
+                  className="input ltr"
+                  value={form.topupCashbackPercent}
+                  inputMode="numeric"
+                  maxLength={4}
+                  onChange={(event) =>
+                    setForm({ ...form, topupCashbackPercent: event.target.value })
+                  }
+                />
+              </Field>
+
+              {takesCustomerFee(editing) && (
+                <Field
+                  label={t('web.payment_gateway_customer_fee')}
+                  htmlFor="pg-customer-fee"
+                  hint={t('web.payment_gateway_customer_fee_hint')}
+                  {...(parsePercentBasisPoints(form.customerFeePercent) === null
+                    ? { error: t('web.payment_gateway_customer_fee_invalid') }
+                    : {})}
+                >
+                  <input
+                    id="pg-customer-fee"
+                    className="input ltr"
+                    value={form.customerFeePercent}
+                    inputMode="decimal"
+                    maxLength={7}
+                    onChange={(event) =>
+                      setForm({ ...form, customerFeePercent: event.target.value })
+                    }
+                  />
+                </Field>
+              )}
+
+              {takesConversionRate(editing) && (
+                <Field
+                  label={t('web.payment_gateway_rate')}
+                  htmlFor="pg-rate"
+                  hint={t('web.payment_gateway_rate_hint')}
+                  {...(conversionRateOf(form.providerUnitRate) === undefined
+                    ? { error: t('web.payment_gateway_rate_invalid') }
+                    : {})}
+                >
+                  <input
+                    id="pg-rate"
+                    className="input ltr"
+                    value={form.providerUnitRate}
+                    inputMode="numeric"
+                    maxLength={19}
+                    onChange={(event) => setForm({ ...form, providerUnitRate: event.target.value })}
+                  />
+                </Field>
+              )}
+            </div>
+          </div>
+
+          <div className="form-section">
+            <h3>{t('web.gateway_allow_column')}</h3>
+            <p className="desc">{t('web.gateway_allow_hint')}</p>
+            <ToggleRow
+              title={t('web.gateway_allow_service_purchase')}
+              checked={form.allowServicePurchase}
+              onChange={(next) => setForm({ ...form, allowServicePurchase: next })}
+            />
+            <ToggleRow
+              title={t('web.gateway_allow_wallet_topup')}
+              checked={form.allowWalletTopup}
+              onChange={(next) => setForm({ ...form, allowWalletTopup: next })}
+            />
+          </div>
+
+          <details className="form-section gateways-advanced">
+            <summary>{t('web.payment_gateway_section_advanced')}</summary>
+            <div className="form-grid">
+              <Field
+                label={t('web.payment_gateway_sort')}
+                htmlFor="pg-sort"
+                hint={t('web.payment_gateway_sort_hint')}
+              >
+                <input
+                  id="pg-sort"
+                  className="input ltr"
+                  value={form.sortOrder}
+                  inputMode="numeric"
+                  onChange={(event) => setForm({ ...form, sortOrder: event.target.value })}
+                />
+              </Field>
+            </div>
+          </details>
+
+          <div className="form-section gateways-form-foot">
+            {/*
+              The server refuses a window that admits nothing — a maximum below the
+              minimum, or payment-count bounds that cross — and the operator is told here.
+              NOT pre-checked in the browser, deliberately: a second opinion about what a
+              valid route is would be the one nobody tests.
+            */}
+            {failure != null && <Banner tone="danger">{messageFor(failure)}</Banner>}
+            <div className="form-actions">
+              <button
+                type="button"
+                className="btn primary"
+                disabled={
+                  busy ||
+                  percentOf(form.topupCashbackPercent) === null ||
+                  (takesCustomerFee(editing) &&
+                    parsePercentBasisPoints(form.customerFeePercent) === null) ||
+                  (takesConversionRate(editing) &&
+                    conversionRateOf(form.providerUnitRate) === undefined)
+                }
+                onClick={() => save.mutate()}
+              >
+                {t('web.payment_gateway_save')}
+              </button>
+              <button type="button" className="btn" disabled={busy} onClick={reset}>
+                {t('web.payment_gateway_cancel_edit')}
+              </button>
+              {formDirty && <span className="muted small">{t('web.form_unsaved')}</span>}
+            </div>
+          </div>
+        </Card>
+      )}
 
       {/*
         Package FX: the central exchange rate beside the routes it prices. Its own query
@@ -655,262 +998,6 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
                 )}
               </p>
             ))}
-        </Card>
-      )}
-
-      {/*
-        Replacing a route's API key. The input starts EMPTY every time: the stored key is
-        never sent to this page, so there is nothing to prefill and nothing to reveal.
-      */}
-      {mayEdit && keying !== null && (
-        <Card
-          title={t('web.payment_gateway_credential_title')}
-          hint={t('web.payment_gateway_credential_hint')}
-        >
-          <Field label={t('web.payment_gateway_credential_input')} htmlFor="pg-api-key">
-            <input
-              id="pg-api-key"
-              type="password"
-              autoComplete="new-password"
-              spellCheck={false}
-              value={apiKey}
-              maxLength={512}
-              onChange={(event) => setApiKey(event.target.value)}
-            />
-          </Field>
-          <div className="toolbar">
-            <button
-              type="button"
-              className="btn primary sm"
-              disabled={busy || apiKey.trim() === ''}
-              onClick={() => credential.mutate()}
-            >
-              {t('web.payment_gateway_credential_save')}
-            </button>
-            <button
-              type="button"
-              className="btn sm"
-              disabled={busy}
-              onClick={() => {
-                setKeying(null);
-                setApiKey('');
-              }}
-            >
-              {t('web.payment_gateway_cancel_edit')}
-            </button>
-          </div>
-          {credential.error != null && (
-            <Banner tone="danger">{messageFor(credential.error)}</Banner>
-          )}
-        </Card>
-      )}
-
-      {/*
-        A refusal to switch a route on — TonPays without its key — lands here, since the
-        toggle has no form of its own.
-      */}
-      {editing === null && toggle.error != null && (
-        <Banner tone="danger">{messageFor(toggle.error)}</Banner>
-      )}
-
-      {/*
-        Only while a route is open. There is no "new route" form, because there is no
-        create — the roster is what this release can operate.
-      */}
-      {mayEdit && editing !== null && (
-        <Card title={t('web.payment_gateway_editing')} hint={t('web.payment_gateway_form_hint')}>
-          <Field
-            label={t('web.payment_gateway_name')}
-            htmlFor="pg-name"
-            hint={t('web.payment_gateway_name_hint')}
-          >
-            <input
-              id="pg-name"
-              value={form.displayName}
-              maxLength={60}
-              onChange={(event) => setForm({ ...form, displayName: event.target.value })}
-            />
-          </Field>
-
-          <Field
-            label={t('web.payment_gateway_instructions')}
-            htmlFor="pg-instructions"
-            hint={t('web.payment_gateway_instructions_hint')}
-          >
-            <textarea
-              id="pg-instructions"
-              rows={3}
-              value={form.instructions}
-              maxLength={1000}
-              onChange={(event) => setForm({ ...form, instructions: event.target.value })}
-            />
-          </Field>
-
-          <Field
-            label={t('web.payment_gateway_min')}
-            htmlFor="pg-min"
-            hint={t('web.payment_gateway_amount_hint')}
-          >
-            <input
-              id="pg-min"
-              value={form.minAmountMinor}
-              inputMode="numeric"
-              onChange={(event) => setForm({ ...form, minAmountMinor: event.target.value })}
-            />
-          </Field>
-          <Field label={t('web.payment_gateway_max')} htmlFor="pg-max">
-            <input
-              id="pg-max"
-              value={form.maxAmountMinor}
-              inputMode="numeric"
-              onChange={(event) => setForm({ ...form, maxAmountMinor: event.target.value })}
-            />
-          </Field>
-
-          <Field
-            label={t('web.payment_gateway_after_payments')}
-            htmlFor="pg-after-payments"
-            hint={t('web.payment_gateway_eligibility_hint')}
-          >
-            <input
-              id="pg-after-payments"
-              value={form.activateAfterPayments}
-              inputMode="numeric"
-              onChange={(event) => setForm({ ...form, activateAfterPayments: event.target.value })}
-            />
-          </Field>
-          <Field label={t('web.payment_gateway_until_payments')} htmlFor="pg-until-payments">
-            <input
-              id="pg-until-payments"
-              value={form.deactivateAfterPayments}
-              inputMode="numeric"
-              onChange={(event) =>
-                setForm({ ...form, deactivateAfterPayments: event.target.value })
-              }
-            />
-          </Field>
-          <Field label={t('web.payment_gateway_after_days')} htmlFor="pg-after-days">
-            <input
-              id="pg-after-days"
-              value={form.activateAfterAccountDays}
-              inputMode="numeric"
-              onChange={(event) =>
-                setForm({ ...form, activateAfterAccountDays: event.target.value })
-              }
-            />
-          </Field>
-
-          <Field
-            label={t('web.payment_gateway_topup_gift')}
-            htmlFor="pg-topup-gift"
-            hint={t('web.payment_gateway_topup_gift_hint')}
-            {...(percentOf(form.topupCashbackPercent) === null
-              ? { error: t('web.payment_gateway_topup_invalid') }
-              : {})}
-          >
-            <input
-              id="pg-topup-gift"
-              value={form.topupCashbackPercent}
-              inputMode="numeric"
-              maxLength={4}
-              onChange={(event) => setForm({ ...form, topupCashbackPercent: event.target.value })}
-            />
-          </Field>
-
-          {takesCustomerFee(editing) && (
-            <Field
-              label={t('web.payment_gateway_customer_fee')}
-              htmlFor="pg-customer-fee"
-              hint={t('web.payment_gateway_customer_fee_hint')}
-              {...(parsePercentBasisPoints(form.customerFeePercent) === null
-                ? { error: t('web.payment_gateway_customer_fee_invalid') }
-                : {})}
-            >
-              <input
-                id="pg-customer-fee"
-                value={form.customerFeePercent}
-                inputMode="decimal"
-                maxLength={7}
-                onChange={(event) => setForm({ ...form, customerFeePercent: event.target.value })}
-              />
-            </Field>
-          )}
-
-          {takesConversionRate(editing) && (
-            <Field
-              label={t('web.payment_gateway_rate')}
-              htmlFor="pg-rate"
-              hint={t('web.payment_gateway_rate_hint')}
-              {...(conversionRateOf(form.providerUnitRate) === undefined
-                ? { error: t('web.payment_gateway_rate_invalid') }
-                : {})}
-            >
-              <input
-                id="pg-rate"
-                value={form.providerUnitRate}
-                inputMode="numeric"
-                maxLength={19}
-                onChange={(event) => setForm({ ...form, providerUnitRate: event.target.value })}
-              />
-            </Field>
-          )}
-
-          <Field label={t('web.gateway_allow_column')} hint={t('web.gateway_allow_hint')}>
-            <div className="toolbar">
-              <Switch
-                checked={form.allowServicePurchase}
-                onChange={(next) => setForm({ ...form, allowServicePurchase: next })}
-                label={t('web.gateway_allow_service_purchase')}
-              />
-              <span>{t('web.gateway_allow_service_purchase')}</span>
-            </div>
-            <div className="toolbar">
-              <Switch
-                checked={form.allowWalletTopup}
-                onChange={(next) => setForm({ ...form, allowWalletTopup: next })}
-                label={t('web.gateway_allow_wallet_topup')}
-              />
-              <span>{t('web.gateway_allow_wallet_topup')}</span>
-            </div>
-          </Field>
-
-          <Field label={t('web.payment_gateway_sort')} htmlFor="pg-sort">
-            <input
-              id="pg-sort"
-              value={form.sortOrder}
-              inputMode="numeric"
-              onChange={(event) => setForm({ ...form, sortOrder: event.target.value })}
-            />
-          </Field>
-
-          <div className="toolbar">
-            <button
-              type="button"
-              className="btn primary sm"
-              disabled={
-                busy ||
-                percentOf(form.topupCashbackPercent) === null ||
-                (takesCustomerFee(editing) &&
-                  parsePercentBasisPoints(form.customerFeePercent) === null) ||
-                (takesConversionRate(editing) &&
-                  conversionRateOf(form.providerUnitRate) === undefined)
-              }
-              onClick={() => save.mutate()}
-            >
-              {t('web.payment_gateway_save')}
-            </button>
-            <button type="button" className="btn sm" disabled={busy} onClick={reset}>
-              {t('web.payment_gateway_cancel_edit')}
-            </button>
-          </div>
-
-          {/*
-            The server refuses a window that admits nothing — a maximum below the
-            minimum, or payment-count bounds that cross — and the operator is told here.
-            NOT pre-checked in the browser, deliberately: a second opinion about what a
-            valid route is would be the one nobody tests.
-          */}
-          {failure != null && <Banner tone="danger">{messageFor(failure)}</Banner>}
         </Card>
       )}
     </>

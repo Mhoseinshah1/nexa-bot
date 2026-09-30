@@ -34,7 +34,6 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
-  max-width: 420px;
 }
 .menu-preview-row {
   display: flex;
@@ -49,10 +48,323 @@
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--bg-1);
+  font-size: var(--fs-ui);
+}
+
+/*
+ * The Telegram phone frame (telegram-phone.tsx), shared by «دکمه‌های ربات» and the
+ * client-apps preview. Theme tokens only, so it follows light and dark.
+ */
+.tg-phone {
+  width: 100%;
+  max-width: 340px;
+  margin-inline: auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 360px;
+  border: 1px solid var(--line-2);
+  border-radius: 22px;
+  background: var(--bg-0);
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+}
+.tg-phone-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--line);
+  font-size: var(--fs-ui);
+}
+.tg-phone-avatar {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--brand-from), var(--brand-to));
+  flex: none;
+}
+.tg-phone-title {
+  font-weight: 600;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.tg-phone-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  background: var(--bg-1);
+}
+.tg-phone-body .bot-preview {
+  align-self: flex-start;
+  max-width: 92%;
+  border-radius: 12px 12px 12px 4px;
+  background: var(--bg-3);
+  border-color: var(--line-2);
+  font-size: var(--fs-ui);
+  line-height: 1.7;
+}
+.tg-phone-photo {
+  margin: 0;
+  border-radius: 12px;
+}
+.tg-phone-inline {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 92%;
+}
+.tg-phone-key {
+  padding: 7px 8px;
+  text-align: center;
+  border-radius: 7px;
+  background: var(--bg-3);
+  border: 1px solid var(--line);
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+.tg-phone-note {
+  margin: auto;
+  color: var(--fg-3);
+  font-size: var(--fs-sm);
+  text-align: center;
+}
+.tg-phone-keyboard {
+  padding: 8px;
+  background: var(--bg-2);
+  border-top: 1px solid var(--line);
+}
+.tg-phone-keyboard .menu-preview-key {
+  background: var(--bg-3);
+  border-color: var(--line-2);
 }
 
 /* WP13: the causes a bot's live check reports. */
 .bot-causes {
   margin: 0;
   padding-inline-start: 1.25rem;
+}
+
+/* --- Panels (round W, wave 2) ------------------------------------------------ */
+
+/* The list's capacity cell: the fraction, and a thin bar under it when capped. */
+.panels-capacity {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+.panels-capacity .progress {
+  width: 84px;
+  min-width: 0;
+  height: 4px;
+}
+.panels-provider,
+.panels-health {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* The detail head: status and health beside the name, provider and address beneath. */
+.panel-head-badges {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.panel-head-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.panel-head-meta .ltr {
+  overflow-wrap: anywhere;
+}
+.panel-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.panel-stat .small {
+  font-weight: 400;
+}
+.detail-head .panels-capacity {
+  align-items: flex-start;
+}
+
+/* The configuration form's last section: the concurrent-change notice and Save. */
+.panel-form-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--bg-1);
+}
+
+/* The provider catalogue: supported capabilities, wrapping. */
+.providers-caps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.panels-filter {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+/* Marzban's protocol checkboxes, spaced as a row that wraps. */
+.panel-protocols {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+}
+
+/* --- Bots ---------------------------------------------------------------------- */
+
+.bot-block + .bot-block {
+  margin-top: 24px;
+}
+.bot-head-badges,
+.bot-head-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.bot-causes li + li {
+  margin-top: 4px;
+}
+.bot-diagnostic ul {
+  margin: 0;
+  padding-inline-start: 1.25rem;
+}
+
+/* --- Bot buttons ----------------------------------------------------------------- */
+
+.bot-buttons-rules {
+  margin: 0;
+  padding-inline-start: 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* --- Appearance ------------------------------------------------------------------ */
+
+.appearance-glyph {
+  font-size: 18px;
+  line-height: 1;
+}
+.appearance-id {
+  width: 100%;
+  min-width: 150px;
+  max-width: 220px;
+}
+.appearance-error {
+  display: block;
+  margin-top: 4px;
+}
+.appearance-bots {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* --- Payment routes and FX --------------------------------------------------------- */
+
+.gateways-name,
+.accounts-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.gateways-advanced > summary,
+.accounts-advanced > summary,
+.client-apps-advanced > summary {
+  font-weight: 600;
+  color: var(--fg-2);
+}
+.gateways-advanced[open] > summary,
+.client-apps-advanced[open] > summary {
+  margin-bottom: 12px;
+}
+.accounts-advanced[open] > summary {
+  margin-bottom: 8px;
+}
+.gateways-form-foot,
+.client-apps-form-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--bg-1);
+}
+.fx-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ctl);
+  background: var(--bg-1);
+}
+.fx-strip > .stat + .stat {
+  border-inline-start: 1px solid var(--line);
+}
+.fx-strip .val {
+  font-size: 16px;
+}
+.fx-subhead {
+  margin: 0 0 8px;
+  font-size: var(--fs-ui);
+  color: var(--fg-2);
+}
+.fx-technical > summary {
+  color: var(--fg-2);
+}
+
+/* --- Client apps ------------------------------------------------------------------ */
+
+.client-apps-sets {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px 16px;
+}
+.client-apps-set {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  min-width: 0;
+}
+.client-apps-set > legend {
+  padding: 0;
+  margin-bottom: 4px;
+  font-weight: 600;
+  font-size: var(--fs-sm);
+  color: var(--fg-2);
+}
+
+@media (max-width: 760px) {
+  .client-apps-sets {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.gateways-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: var(--fs-sm);
+}
+.card-body > .fx-subhead,
+.card-body > .fx-technical {
+  margin-top: 18px;
 }
