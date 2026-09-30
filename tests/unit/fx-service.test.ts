@@ -281,7 +281,7 @@ const codes = (w: World) => w.events.map((event) => event.code);
 describe('the central rate: refreshing', () => {
   it('primary success: stores the Rial best bid as an exact Toman quote, with the book time', async () => {
     const w = world();
-    expect(await w.service.refreshIfDue(scope, 'USDT')).toBe('REFRESHED');
+    expect(await w.service.refreshIfDue(scope, 'USDT')).toMatchObject({ outcome: 'REFRESHED' });
     expect(w.nobitex.calls).toBe(1);
     // The fallback is not dialled when the primary answered and was accepted.
     expect(w.wallex.calls).toBe(0);
@@ -305,7 +305,9 @@ describe('the central rate: refreshing', () => {
 
   it('primary down → fallback prices the pair, and the two conditions are recorded once each', async () => {
     const w = world({ nobitex: () => down('timeout') });
-    expect(await w.service.refreshIfDue(scope, 'USDT')).toBe('REFRESHED_BY_FALLBACK');
+    expect(await w.service.refreshIfDue(scope, 'USDT')).toMatchObject({
+      outcome: 'REFRESHED_BY_FALLBACK',
+    });
     expect(w.repository.row?.quote).toMatchObject({
       rate: { mantissa: 103_500n, scale: 0 },
       source: 'WALLEX',
@@ -317,7 +319,9 @@ describe('the central rate: refreshing', () => {
     });
     // Both are deduped by subject: a second failing pass adds no new code.
     w.clockMs += 60_000;
-    expect(await w.service.refreshIfDue(scope, 'USDT')).toBe('REFRESHED_BY_FALLBACK');
+    expect(await w.service.refreshIfDue(scope, 'USDT')).toMatchObject({
+      outcome: 'REFRESHED_BY_FALLBACK',
+    });
     expect(codes(w)).toEqual([
       FX_SOURCE_UNAVAILABLE_CODE,
       FX_FALLBACK_IN_USE_CODE,
@@ -339,7 +343,7 @@ describe('the central rate: refreshing', () => {
     ]);
     primaryUp = true;
     w.clockMs += 60_000;
-    expect(await w.service.refreshIfDue(scope, 'USDT')).toBe('REFRESHED');
+    expect(await w.service.refreshIfDue(scope, 'USDT')).toMatchObject({ outcome: 'REFRESHED' });
     const recoveries = w.events.filter((event) => event.recoversCode !== undefined);
     expect(recoveries.map((event) => [event.recoversCode, event.recoversDedupeKey])).toEqual([
       [FX_SOURCE_UNAVAILABLE_CODE, `${FX_SOURCE_UNAVAILABLE_CODE}:NOBITEX`],
@@ -361,7 +365,11 @@ describe('the central rate: refreshing', () => {
     await w.service.refreshIfDue(scope, 'USDT');
     up = false;
     w.clockMs += 120_000;
-    expect(await w.service.refreshIfDue(scope, 'USDT')).toBe('FAILED');
+    // The outcome names WHY, so a FAILED is a diagnosis: the first failure of the pass.
+    expect(await w.service.refreshIfDue(scope, 'USDT')).toEqual({
+      outcome: 'FAILED',
+      reason: 'nobitex:timeout',
+    });
     expect(w.repository.row?.quote?.source).toBe('NOBITEX');
     expect(w.repository.row?.lastErrorCode).toBe('nobitex:timeout');
     expect(codes(w)).toEqual([FX_SOURCE_UNAVAILABLE_CODE, FX_SOURCE_UNAVAILABLE_CODE]);
@@ -381,14 +389,14 @@ describe('the central rate: refreshing', () => {
     await w.service.refreshIfDue(scope, 'USDT');
     up = false;
     w.clockMs += 901_000;
-    expect(await w.service.refreshIfDue(scope, 'USDT')).toBe('FAILED');
+    expect(await w.service.refreshIfDue(scope, 'USDT')).toMatchObject({ outcome: 'FAILED' });
     expect(codes(w)).toContain(FX_QUOTE_UNAVAILABLE_CODE);
     const answer = await w.service.quoteFor(scope, 'USDT', new Date(w.clockMs));
     expect(answer).toMatchObject({ kind: 'UNAVAILABLE', reason: 'TOO_STALE' });
     expect(answer.kind === 'UNAVAILABLE' && answer.stale?.state).toBe('UNAVAILABLE');
     up = true;
     w.clockMs += 60_000;
-    expect(await w.service.refreshIfDue(scope, 'USDT')).toBe('REFRESHED');
+    expect(await w.service.refreshIfDue(scope, 'USDT')).toMatchObject({ outcome: 'REFRESHED' });
     expect(w.events.at(-1)).toMatchObject({
       recoversCode: FX_QUOTE_UNAVAILABLE_CODE,
       recoversDedupeKey: `${FX_QUOTE_UNAVAILABLE_CODE}:USDT-IRT`,
@@ -403,7 +411,7 @@ describe('the central rate: refreshing', () => {
       stale: null,
     });
     const off = world({ enabled: false });
-    expect(await off.service.refreshIfDue(scope, 'USDT')).toBe('DISABLED');
+    expect(await off.service.refreshIfDue(scope, 'USDT')).toMatchObject({ outcome: 'DISABLED' });
     expect(off.nobitex.calls + off.wallex.calls).toBe(0);
     expect(await off.service.quoteFor(scope, 'USDT', new Date(T0))).toMatchObject({
       kind: 'UNAVAILABLE',
@@ -418,12 +426,12 @@ describe('the central rate: refreshing', () => {
 
   it('refreshes only when the quote is older than the TTL, and never past another replica lease', async () => {
     const w = world();
-    expect(await w.service.refreshIfDue(scope, 'USDT')).toBe('REFRESHED');
+    expect(await w.service.refreshIfDue(scope, 'USDT')).toMatchObject({ outcome: 'REFRESHED' });
     w.clockMs += 30_000;
-    expect(await w.service.refreshIfDue(scope, 'USDT')).toBe('NOT_DUE');
+    expect(await w.service.refreshIfDue(scope, 'USDT')).toMatchObject({ outcome: 'NOT_DUE' });
     expect(w.nobitex.calls).toBe(1);
     w.clockMs += 16_000;
-    expect(await w.service.refreshIfDue(scope, 'USDT')).toBe('REFRESHED');
+    expect(await w.service.refreshIfDue(scope, 'USDT')).toMatchObject({ outcome: 'REFRESHED' });
     expect(w.nobitex.calls).toBe(2);
     // Another replica holds the lease: the operator's refresh answers BUSY and dials nothing.
     w.repository.row = {
@@ -452,7 +460,9 @@ describe('the central rate: refreshing', () => {
 
   it('rejects zero, negative-looking and absurd figures, records the rejection per source, and asks the fallback', async () => {
     const w = world({ nobitex: () => reading('NOBITEX', 0n, 'IRR') });
-    expect(await w.service.refreshIfDue(scope, 'USDT')).toBe('REFRESHED_BY_FALLBACK');
+    expect(await w.service.refreshIfDue(scope, 'USDT')).toMatchObject({
+      outcome: 'REFRESHED_BY_FALLBACK',
+    });
     expect(w.events[0]).toMatchObject({
       code: FX_QUOTE_REJECTED_CODE,
       dedupeKey: `${FX_QUOTE_REJECTED_CODE}:NOBITEX`,
@@ -462,7 +472,7 @@ describe('the central rate: refreshing', () => {
       nobitex: () => reading('NOBITEX', 10n, 'IRR'),
       wallex: () => reading('WALLEX', 5_000_000_000n, 'IRT'),
     });
-    expect(await absurd.service.refreshIfDue(scope, 'USDT')).toBe('FAILED');
+    expect(await absurd.service.refreshIfDue(scope, 'USDT')).toMatchObject({ outcome: 'FAILED' });
     expect(absurd.events.map((event) => event.context?.['reason'])).toEqual([
       'out_of_rails',
       'out_of_rails',
@@ -482,7 +492,9 @@ describe('the central rate: refreshing', () => {
     // A ten-fold unit mistake on the primary: refused, the fallback prices the pair.
     primary = 10_355_000n;
     w.clockMs += 60_000;
-    expect(await w.service.refreshIfDue(scope, 'USDT')).toBe('REFRESHED_BY_FALLBACK');
+    expect(await w.service.refreshIfDue(scope, 'USDT')).toMatchObject({
+      outcome: 'REFRESHED_BY_FALLBACK',
+    });
     expect(w.repository.row?.quote).toMatchObject({
       source: 'WALLEX',
       rate: { mantissa: 103_500n, scale: 0 },
@@ -495,7 +507,7 @@ describe('the central rate: refreshing', () => {
     primary = 1_346_150n;
     fallback = 134_000n;
     w.clockMs += 60_000;
-    expect(await w.service.refreshIfDue(scope, 'USDT')).toBe('REFRESHED');
+    expect(await w.service.refreshIfDue(scope, 'USDT')).toMatchObject({ outcome: 'REFRESHED' });
     expect(w.repository.row?.quote).toMatchObject({
       source: 'NOBITEX',
       rate: { mantissa: 134_615n, scale: 0 },
@@ -504,7 +516,9 @@ describe('the central rate: refreshing', () => {
     primary = 1_750_000n;
     fallback = 134_000n;
     w.clockMs += 60_000;
-    expect(await w.service.refreshIfDue(scope, 'USDT')).toBe('REFRESHED_BY_FALLBACK');
+    expect(await w.service.refreshIfDue(scope, 'USDT')).toMatchObject({
+      outcome: 'REFRESHED_BY_FALLBACK',
+    });
     expect(w.repository.row?.quote).toMatchObject({
       source: 'WALLEX',
       rate: { mantissa: 134_000n, scale: 0 },
@@ -524,7 +538,7 @@ describe('the central rate: refreshing', () => {
     primary = 1_346_150n;
     fallback = 134_000n;
     w.clockMs += 60_000;
-    expect(await w.service.refreshIfDue(scope, 'USDT')).toBe('REFRESHED');
+    expect(await w.service.refreshIfDue(scope, 'USDT')).toMatchObject({ outcome: 'REFRESHED' });
     expect(w.repository.row?.quote).toMatchObject({ source: 'NOBITEX' });
     expect(codes(w)).toEqual([]);
     expect(w.repository.states.get('WALLEX')).toMatchObject({
@@ -540,14 +554,18 @@ describe('the central rate: refreshing', () => {
 
   it('a rate-limited source is left alone for the cooldown, on every replica, and the fallback answers meanwhile', async () => {
     const w = world({ nobitex: () => ({ kind: 'RATE_LIMITED', code: 'nobitex.rate_limited' }) });
-    expect(await w.service.refreshIfDue(scope, 'USDT')).toBe('REFRESHED_BY_FALLBACK');
+    expect(await w.service.refreshIfDue(scope, 'USDT')).toMatchObject({
+      outcome: 'REFRESHED_BY_FALLBACK',
+    });
     expect(w.repository.states.get('NOBITEX')).toMatchObject({
       lastFailureCode: 'nobitex.rate_limited',
       retryAfter: new Date(T0 + FX_RATE_LIMIT_COOLDOWN_MS),
       consecutiveFailures: 1,
     });
     w.clockMs += 46_000;
-    expect(await w.service.refreshIfDue(scope, 'USDT')).toBe('REFRESHED_BY_FALLBACK');
+    expect(await w.service.refreshIfDue(scope, 'USDT')).toMatchObject({
+      outcome: 'REFRESHED_BY_FALLBACK',
+    });
     // Inside the cooldown the primary was not dialled again.
     expect(w.nobitex.calls).toBe(1);
     w.clockMs += 46_000;
@@ -564,10 +582,10 @@ describe('the central rate: refreshing', () => {
     await w.service.refreshIfDue(scope, 'USDT');
     up = false;
     w.clockMs += 60_000;
-    expect(await w.service.refreshIfDue(scope, 'USDT')).toBe('FAILED');
+    expect(await w.service.refreshIfDue(scope, 'USDT')).toMatchObject({ outcome: 'FAILED' });
     expect(w.wallex.calls).toBe(0);
     const same = world({ nobitex: () => down(), settings: { 'fx.fallback_source': 'NOBITEX' } });
-    expect(await same.service.refreshIfDue(scope, 'USDT')).toBe('FAILED');
+    expect(await same.service.refreshIfDue(scope, 'USDT')).toMatchObject({ outcome: 'FAILED' });
     expect(same.wallex.calls).toBe(0);
     expect(same.nobitex.calls).toBe(1);
   });
@@ -623,7 +641,7 @@ describe('the refresh loop', () => {
       {
         refreshIfDue: () => {
           if (fail) return Promise.reject(new Error('boom'));
-          return Promise.resolve('NOT_DUE' as const);
+          return Promise.resolve({ outcome: 'NOT_DUE' as const, reason: null });
         },
       },
       {

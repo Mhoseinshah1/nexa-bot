@@ -40,9 +40,10 @@ export class FxController {
   @Post(FX_ROUTES.refresh)
   async refresh(@Req() request: FastifyRequest): Promise<FxRefreshResponse> {
     const { scope, actor } = await this.authenticate(request);
-    const { outcome, status } = await this.container.fx.refresh(scope, actor, BASE_ASSET);
+    const { outcome, reason, status } = await this.container.fx.refresh(scope, actor, BASE_ASSET);
     return {
       outcome: outcome === 'NOT_DUE' ? 'REFRESHED' : outcome,
+      reason,
       status: toView(status),
     };
   }

@@ -107,6 +107,18 @@ export interface FxServiceDeps {
 export type FxRefreshOutcome =
   'REFRESHED' | 'REFRESHED_BY_FALLBACK' | 'FAILED' | 'DISABLED' | 'BUSY' | 'NOT_DUE';
 
+/**
+ * What a refresh pass did, and WHY when a source did not price the pair: the first
+ * failure or rejection (`<source>:<code>`, the same code the row's `last_error_code`
+ * keeps), so a `FAILED` is a diagnosis somebody can make from the outcome alone — a
+ * `FAILED` with no reason was ten green-locally cases red in CI with nothing in the log
+ * to name the refused loopback fakes. Null when the primary answered.
+ */
+export interface FxRefreshResult {
+  readonly outcome: FxRefreshOutcome;
+  readonly reason: string | null;
+}
+
 /** The settings the service reads, resolved once per call inside the caller's transaction. */
 interface FxSettings {
   readonly enabled: boolean;
@@ -226,10 +238,10 @@ export class FxService {
    * dialled while the feature is off, and nothing is dialled while another replica holds
    * the lease or the quote is still fresh.
    */
-  async refreshIfDue(scope: TenantContext, baseAsset: FxBaseAsset): Promise<FxRefreshOutcome> {
+  async refreshIfDue(scope: TenantContext, baseAsset: FxBaseAsset): Promise<FxRefreshResult> {
     const now = this.deps.clock.now();
     const settings = await this.settingsFor(scope);
-    if (!settings.enabled) return 'DISABLED';
+    if (!settings.enabled) return { outcome: 'DISABLED', reason: null };
     const pair: FxPair = { baseAsset, quoteCurrency: settings.quoteCurrency };
     const claimToken = this.deps.ids.uuid();
     const claimed = await this.deps.uow.run(scope, async (tx) => {
@@ -246,7 +258,7 @@ export class FxService {
         tx,
       );
     });
-    if (!claimed) return 'NOT_DUE';
+    if (!claimed) return { outcome: 'NOT_DUE', reason: null };
     return this.performRefresh(scope, settings, pair, claimToken);
   }
 
@@ -261,14 +273,14 @@ export class FxService {
     scope: TenantContext,
     actor: ActorContext,
     baseAsset: FxBaseAsset,
-  ): Promise<{ readonly outcome: FxRefreshOutcome; readonly status: FxStatus }> {
+  ): Promise<FxRefreshResult & { readonly status: FxStatus }> {
     await this.deps.guard.check(scope, actor, FX_REFRESH_PERMISSION);
     const now = this.deps.clock.now();
     const settings = await this.settingsFor(scope);
     const pair: FxPair = { baseAsset, quoteCurrency: settings.quoteCurrency };
-    let outcome: FxRefreshOutcome;
+    let result: FxRefreshResult;
     if (!settings.enabled) {
-      outcome = 'DISABLED';
+      result = { outcome: 'DISABLED', reason: null };
     } else {
       const claimToken = this.deps.ids.uuid();
       const claimed = await this.deps.uow.run(scope, async (tx) => {
@@ -285,17 +297,19 @@ export class FxService {
           tx,
         );
       });
-      outcome = claimed ? await this.performRefresh(scope, settings, pair, claimToken) : 'BUSY';
+      result = claimed
+        ? await this.performRefresh(scope, settings, pair, claimToken)
+        : { outcome: 'BUSY', reason: null };
     }
     await this.deps.audit.record(scope, actor, {
       action: 'fx.refresh',
       entityType: 'FxQuote',
       entityId: pairKey(pair),
       before: null,
-      after: { pair: pairKey(pair), outcome },
+      after: { pair: pairKey(pair), outcome: result.outcome, reason: result.reason },
       result: 'SUCCESS',
     });
-    return { outcome, status: await this.statusUnchecked(scope, baseAsset) };
+    return { ...result, status: await this.statusUnchecked(scope, baseAsset) };
   }
 
   // ---------------------------------------------------------------------------------------
@@ -353,7 +367,7 @@ export class FxService {
     settings: FxSettings,
     pair: FxPair,
     claimToken: string,
-  ): Promise<FxRefreshOutcome> {
+  ): Promise<FxRefreshResult> {
     const order: FxSource[] = [settings.primary];
     if (settings.fallback !== 'NONE' && settings.fallback !== settings.primary) {
       order.push(settings.fallback);
@@ -433,8 +447,14 @@ export class FxService {
     }
     const stillRejected = rejected.filter((entry) => !successes.includes(entry.source));
 
+    // Why a source did not price the pair, whatever the pass then concluded.
+    const reason =
+      failures.length + rejected.length > 0 ? refreshErrorCode(failures, rejected) : null;
+
     return this.deps.uow.run(scope, async (tx) => {
-      if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) return 'FAILED';
+      if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) {
+        return { outcome: 'FAILED', reason: 'nexa.scope_inactive' };
+      }
       for (const failure of failures) {
         await this.deps.repository.recordSourceFailure(
           scope,
@@ -539,7 +559,7 @@ export class FxService {
           { pair: pairKey(pair), failures, rejected: rejected.map((r) => r.code) },
           'fx refresh stored no quote',
         );
-        return 'FAILED';
+        return { outcome: 'FAILED', reason: reason ?? 'nexa.no_source' };
       }
 
       const stored = await this.storeChosen(scope, pair, chosen, fetchedAt, claimToken, tx);
@@ -556,14 +576,14 @@ export class FxService {
           { now: fetchedAt, errorCode: null, claimToken },
           tx,
         );
-        return 'REFRESHED';
+        return { outcome: 'REFRESHED', reason };
       }
       await this.recoverIfOpen(scope, open, FX_QUOTE_UNAVAILABLE_CODE, pairKey(pair), tx);
       await this.recoverIfOpen(scope, open, FX_STALE_QUOTE_USED_CODE, pairKey(pair), tx);
       if (chosen.source === settings.primary) {
         await this.recoverIfOpen(scope, open, FX_FALLBACK_IN_USE_CODE, pairKey(pair), tx);
         this.deps.logger.info({ pair: pairKey(pair), source: chosen.source }, 'fx quote refreshed');
-        return 'REFRESHED';
+        return { outcome: 'REFRESHED', reason };
       }
       await this.deps.opsLog.record(
         scope,
@@ -582,7 +602,7 @@ export class FxService {
         { pair: pairKey(pair), source: chosen.source },
         'fx quote refreshed by the fallback',
       );
-      return 'REFRESHED_BY_FALLBACK';
+      return { outcome: 'REFRESHED_BY_FALLBACK', reason };
     });
   }
 

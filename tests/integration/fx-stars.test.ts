@@ -28,6 +28,9 @@ import {
 } from '../../apps/api/src/modules/commerce/fx/application/fx.service';
 import { DrizzleFxQuoteRepository } from '../../apps/api/src/modules/commerce/fx/infrastructure/drizzle-fx.repository';
 import { DrizzleGatewayInvoiceRepository } from '../../apps/api/src/modules/commerce/payments/infrastructure/drizzle-gateway-invoice.repository';
+import { panelUrlPolicy } from '../../apps/api/src/infrastructure/net/installation-policy';
+import { checkUrl } from '../../apps/api/src/infrastructure/net/url-policy';
+import type { AppConfig } from '../../apps/api/src/infrastructure/config/config.schema';
 import {
   adminActorFor,
   createAdmin,
@@ -101,8 +104,16 @@ function wallexDepth(bestBidToman: string) {
   };
 }
 
+/** The same service, addressed by name rather than by the loopback literal. */
+function byName(connectionString: string): string {
+  const url = new URL(connectionString);
+  if (url.hostname === '127.0.0.1') url.hostname = 'localhost';
+  return url.toString();
+}
+
 describe('Central FX and the Stars route (packages FX, FX-STARS)', () => {
   let api: ApiApp;
+  let config: AppConfig;
   let nobitexServer: Server;
   let wallexServer: Server;
   let telegram: Server;
@@ -159,7 +170,19 @@ describe('Central FX and the Stars route (packages FX, FX-STARS)', () => {
       port(wallexServer),
       port(telegram),
     ]);
-    const config = testConfig({
+    /*
+     * The installation policy refuses the database's and Redis's host BY NAME
+     * (`panelUrlPolicy` → `deniedHosts`), whatever it resolves to. On GitHub's runner both
+     * are addressed as `127.0.0.1` — the literal the fakes listen on — so every source
+     * read was refused there and every refresh FAILED, while the same file passed against
+     * a database addressed as `localhost` (#122). The suite's own services are addressed
+     * by name here, so the fakes' literal is not the data host; the first case below
+     * asserts that the policy admits them, naming the cause if the collision returns.
+     */
+    const defaults = testConfig();
+    config = testConfig({
+      DATABASE_URL: byName(defaults.DATABASE_URL),
+      REDIS_URL: byName(defaults.REDIS_URL),
       WEB_ADMIN_ORIGINS: ORIGIN,
       TELEGRAM_WEBHOOK_ENABLED: 'true',
       TELEGRAM_WEBHOOK_SECRET: WEBHOOK_SECRET,
@@ -254,7 +277,9 @@ describe('Central FX and the Stars route (packages FX, FX-STARS)', () => {
     await setFlag(true);
     await setSetting('stars.per_usdt', '100');
     await setSetting('stars.pricing_mode', 'CENTRAL_FX_RATIO');
-    expect(await api.container.fx.refreshIfDue(tenantA, 'USDT')).toBe('REFRESHED');
+    expect(await api.container.fx.refreshIfDue(tenantA, 'USDT')).toMatchObject({
+      outcome: 'REFRESHED',
+    });
   }
 
   const inBot = { ...tenantA, botInstanceId: BOT_A };
@@ -334,6 +359,16 @@ describe('Central FX and the Stars route (packages FX, FX-STARS)', () => {
 
   // =====================================================================================
 
+  describe('the suite against the installation policy', () => {
+    it("the fakes are reachable: they do not share the data services' host name, which the policy denies by name (CI on #122)", () => {
+      const policy = panelUrlPolicy(config);
+      expect(policy.deniedHosts).not.toContain('127.0.0.1');
+      for (const base of [config.FX_NOBITEX_BASE_URL, config.FX_WALLEX_BASE_URL]) {
+        expect(checkUrl(`${base}/`, policy)).toMatchObject({ allowed: true });
+      }
+    });
+  });
+
   describe('backward compatibility (FX-STARS)', () => {
     it('an upgraded installation prices Stars by the fixed rate: policy FIXED_RATE, no FX snapshot, nothing dialled', async () => {
       await enableStars({ customerFeeBasisPoints: 500 });
@@ -351,7 +386,9 @@ describe('Central FX and the Stars route (packages FX, FX-STARS)', () => {
       expect(attempt.invoice.fx).toBeNull();
       expect(hits).toEqual([]);
       // The worker's lane, with the feature off, dials nothing either.
-      expect(await api.container.fx.refreshIfDue(tenantA, 'USDT')).toBe('DISABLED');
+      expect(await api.container.fx.refreshIfDue(tenantA, 'USDT')).toMatchObject({
+        outcome: 'DISABLED',
+      });
       expect(hits).toEqual([]);
     });
 
@@ -580,18 +617,24 @@ describe('Central FX and the Stars route (packages FX, FX-STARS)', () => {
     it('the worker lane refreshes only when the quote is older than the TTL: one conditional claim, nothing dialled otherwise', async () => {
       await centralStars();
       expect(hits).toHaveLength(1);
-      expect(await api.container.fx.refreshIfDue(tenantA, 'USDT')).toBe('NOT_DUE');
+      expect(await api.container.fx.refreshIfDue(tenantA, 'USDT')).toMatchObject({
+        outcome: 'NOT_DUE',
+      });
       expect(hits).toHaveLength(1);
       // Past the TTL (the default is 45 s) the same call claims the row and dials the primary.
       await ageQuote(60);
-      expect(await api.container.fx.refreshIfDue(tenantA, 'USDT')).toBe('REFRESHED');
+      expect(await api.container.fx.refreshIfDue(tenantA, 'USDT')).toMatchObject({
+        outcome: 'REFRESHED',
+      });
       expect(hits).toHaveLength(2);
       // A lease another replica holds is honoured: nothing is dialled until it lapses.
       await ageQuote(60);
       await api.container.database.db.execute(
         sql`UPDATE fx_quotes SET refresh_claimed_until = now() + interval '20 seconds', refresh_claim_token = 'another-replica' WHERE tenant_id = ${tenantA.tenantId}`,
       );
-      expect(await api.container.fx.refreshIfDue(tenantA, 'USDT')).toBe('NOT_DUE');
+      expect(await api.container.fx.refreshIfDue(tenantA, 'USDT')).toMatchObject({
+        outcome: 'NOT_DUE',
+      });
       expect((await api.container.fx.refresh(tenantA, owner, 'USDT')).outcome).toBe('BUSY');
       expect(hits).toHaveLength(2);
     });
@@ -690,7 +733,9 @@ describe('Central FX and the Stars route (packages FX, FX-STARS)', () => {
       await setSetting('stars.per_usdt', '100');
       await setSetting('stars.pricing_mode', 'CENTRAL_FX_RATIO');
       script.nobitex = { status: 502, body: 'bad gateway' };
-      expect(await api.container.fx.refreshIfDue(tenantA, 'USDT')).toBe('REFRESHED_BY_FALLBACK');
+      expect(await api.container.fx.refreshIfDue(tenantA, 'USDT')).toMatchObject({
+        outcome: 'REFRESHED_BY_FALLBACK',
+      });
       expect(hits).toEqual(['nobitex/v3/orderbook/USDTIRT', 'wallex/v1/depth?symbol=USDTTMN']);
       const attempt = await topup(100_000n);
       // 103,500 / 100 = 1,035 per Star; 105,000 / 1,035 = 101.44… → 102.
@@ -746,6 +791,8 @@ describe('Central FX and the Stars route (packages FX, FX-STARS)', () => {
       expect(refreshed.statusCode).toBe(201);
       const result = fxRefreshResponseSchema.parse(refreshed.json());
       expect(result.outcome).toBe('REFRESHED_BY_FALLBACK');
+      // The answer says why the primary did not price the pair.
+      expect(result.reason).toBe('nobitex:nobitex.rate_limited');
       expect(result.status.quote?.source).toBe('WALLEX');
       const nobitex = result.status.sources.find((source) => source.source === 'NOBITEX');
       expect(nobitex).toMatchObject({

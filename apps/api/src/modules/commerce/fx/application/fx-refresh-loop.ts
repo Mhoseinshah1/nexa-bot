@@ -80,9 +80,9 @@ export class FxRefreshLoop {
         this.progress.record(this.options.now());
         return;
       }
-      const outcome = await this.fx.refreshIfDue(scope, this.options.baseAsset);
+      const { outcome, reason } = await this.fx.refreshIfDue(scope, this.options.baseAsset);
       if (outcome !== 'NOT_DUE' && outcome !== 'DISABLED') {
-        this.options.logger.info({ outcome }, 'fx refresh pass');
+        this.options.logger.info({ outcome, reason }, 'fx refresh pass');
       }
       this.progress.record(this.options.now());
     } catch (error) {
