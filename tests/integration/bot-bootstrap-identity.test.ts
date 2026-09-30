@@ -81,13 +81,15 @@ describe('a Telegram bot belongs to one tenant', () => {
         // R4: a rerun asks whether Telegram still holds the registration. Unreadable here,
         // which leaves the marker's answer standing — nothing in this file is about it.
         readWebhook: async () => ({ outcome: 'UNREACHABLE' }) as never,
-        // The command menu. Answering `true` is the ordinary case; the bootstrap
+        // The command menu. Answering REGISTERED is the ordinary case; the bootstrap
         // service's own unit test covers a refusal, which must not fail an install.
-        registerCommands: async () => true,
-        // Constant: nothing here is about the menu, and a fresh bootstrap
-        // registers it once whatever this answers.
-        commandsRevision: () => 'integration-revision',
+        registerCommands: async () => ({ outcome: 'REGISTERED' }),
       } as never,
+      // Round P: constant — nothing here is about the menu, and a fresh bootstrap
+      // registers it once whatever this answers.
+      commandMenu: {
+        desiredFor: async () => ({ entries: [], hash: 'integration-revision' }),
+      },
       // A value of Telegram's own alphabet and past the schema's minimum. The test
       // config does not set one, and the service refuses a short secret on purpose.
       webhookSecret: () => 'integration-webhook-secret-not-a-real-one',

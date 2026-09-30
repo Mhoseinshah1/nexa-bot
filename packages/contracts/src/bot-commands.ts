@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { MENU_APPEARANCE_SLOTS, type MenuAppearanceSlot } from './menu-appearance.js';
 import type { TemplateKey } from './templates.js';
 
 /**
@@ -53,6 +54,32 @@ export const BOT_COMMANDS = [
 export type BotCommandName = (typeof BOT_COMMANDS)[number]['command'];
 
 /**
+ * Round P (COMMAND-MENU): `BOT_COMMANDS` IS the customer scope. It is the list the
+ * command-sync lane sends to `setMyCommands` for every bot instance, rendered through the
+ * tenant's own `bot.command.*` texts, and nothing else is ever sent: no admin command, no
+ * button-only command (`/trial`, `/referral`), no command the runtime does not answer.
+ *
+ * The management panel's commands, named here so "never registered" is a rule two tests
+ * can hold — one that this list and `BOT_COMMANDS` are disjoint, and one that every admin
+ * command the runtime parses is in this list. Telegram's command list is per BOT, not per
+ * user: registering any of these would advertise the panel's existence to every customer
+ * of every tenant (`ADMIN_MENU_COMMAND` below records the same rule for `/admin`).
+ */
+export const ADMIN_ONLY_COMMANDS = [
+  'admin',
+  'link',
+  'role',
+  'service',
+  'customer',
+  'category_new',
+  'category_rename',
+  'category_emoji',
+  'panel_prefix',
+  'panel_template',
+] as const;
+export type AdminOnlyCommand = (typeof ADMIN_ONLY_COMMANDS)[number];
+
+/**
  * R1: the two main-menu commands that are NOT registered with `setMyCommands`.
  *
  * Both are features a tenant may not be offering (no panel with a trial since F5; the
@@ -63,6 +90,26 @@ export type BotCommandName = (typeof BOT_COMMANDS)[number]['command'];
  */
 export const TRIAL_MENU_COMMAND = 'trial';
 export const REFERRAL_MENU_COMMAND = 'referral';
+
+/**
+ * Round P: what a main-menu item may DO — the closed set of real actions. Exactly the
+ * commands the declared buttons stand for; a stored entry names its target explicitly so
+ * the configuration is self-describing, and the schema refuses a target that is not the
+ * button's declared one. There is no way to make a button open something else, and no
+ * way to store an arbitrary callback payload: the keyboard carries text, the text is
+ * matched to one of these, and the command's own branch decides.
+ */
+export const MAIN_MENU_TARGETS = [
+  'catalog',
+  'services',
+  'wallet',
+  'help',
+  TRIAL_MENU_COMMAND,
+  REFERRAL_MENU_COMMAND,
+  'apps',
+  'tickets',
+] as const satisfies readonly MainMenuCommand[];
+export type MainMenuTarget = (typeof MAIN_MENU_TARGETS)[number];
 
 /** What a main-menu button may stand for: a registered command, or one of the two above. */
 export type MainMenuCommand =
@@ -97,7 +144,7 @@ export interface BotMenuButton {
    */
   readonly label: TemplateKey;
   /** The command this button is exactly equivalent to. Not a second handler. */
-  readonly command: MainMenuCommand;
+  readonly command: MainMenuTarget;
   /** Drawn on a row of its own: its label is long, and it is a place of its own. */
   readonly wide: boolean;
   /**
@@ -114,6 +161,13 @@ export interface BotMenuButton {
    * The tap still answers from the claim, never from the button having been drawn.
    */
   readonly needsTrialOffer: boolean;
+  /**
+   * Round P: the semantic appearance slot the screen this button opens is decorated with,
+   * by default. An operator may point an item at another slot (`appearanceSlot` on the
+   * stored entry); null there means this one. A string reference into the PREMIUM-UI
+   * package's catalogue (`MENU_APPEARANCE_SLOTS`), never an emoji or a fragment of markup.
+   */
+  readonly appearanceSlot: MenuAppearanceSlot;
 }
 
 /**
@@ -172,6 +226,7 @@ export const MAIN_MENU_BUTTONS: readonly BotMenuButton[] = [
     wide: false,
     feature: null,
     needsTrialOffer: false,
+    appearanceSlot: 'purchase',
   },
   {
     id: 'services',
@@ -180,6 +235,7 @@ export const MAIN_MENU_BUTTONS: readonly BotMenuButton[] = [
     wide: false,
     feature: null,
     needsTrialOffer: false,
+    appearanceSlot: 'service',
   },
   {
     id: 'wallet',
@@ -188,6 +244,7 @@ export const MAIN_MENU_BUTTONS: readonly BotMenuButton[] = [
     wide: false,
     feature: null,
     needsTrialOffer: false,
+    appearanceSlot: 'wallet',
   },
   {
     id: 'help',
@@ -196,6 +253,7 @@ export const MAIN_MENU_BUTTONS: readonly BotMenuButton[] = [
     wide: false,
     feature: null,
     needsTrialOffer: false,
+    appearanceSlot: 'support',
   },
   /*
    * R1: «🧪 دریافت سرویس تست» and «👥 زیرمجموعه‌گیری», side by side. The referral button is
@@ -208,6 +266,7 @@ export const MAIN_MENU_BUTTONS: readonly BotMenuButton[] = [
     wide: false,
     feature: null,
     needsTrialOffer: true,
+    appearanceSlot: 'trial',
   },
   {
     id: 'referral',
@@ -216,6 +275,7 @@ export const MAIN_MENU_BUTTONS: readonly BotMenuButton[] = [
     wide: false,
     feature: 'referrals',
     needsTrialOffer: false,
+    appearanceSlot: 'referral',
   },
   // WP-A10: a row of its own — the label is long, and it is a place, like the four above.
   {
@@ -225,6 +285,7 @@ export const MAIN_MENU_BUTTONS: readonly BotMenuButton[] = [
     wide: true,
     feature: null,
     needsTrialOffer: false,
+    appearanceSlot: 'link',
   },
   // WP-A7: the ticket desk, on a row of its own.
   {
@@ -234,6 +295,7 @@ export const MAIN_MENU_BUTTONS: readonly BotMenuButton[] = [
     wide: true,
     feature: null,
     needsTrialOffer: false,
+    appearanceSlot: 'support',
   },
 ];
 
@@ -276,6 +338,11 @@ export function packMainMenuRows<T extends Pick<BotMenuButton, 'wide'>>(
 export const MAIN_MENU_ROWS: readonly (readonly BotMenuButton[])[] =
   packMainMenuRows(MAIN_MENU_BUTTONS);
 
+/** The declared target of a button id. Total over `MAIN_MENU_BUTTON_IDS`. */
+export function mainMenuTargetOf(id: MainMenuButtonId): MainMenuTarget {
+  return mainMenuButton(id).command;
+}
+
 /**
  * The operator's arrangement of the main menu (R1, `bot.main_menu`): the buttons in the
  * order they are drawn, each switched on or off.
@@ -290,9 +357,41 @@ export const MAIN_MENU_ROWS: readonly (readonly BotMenuButton[])[] =
  * that carries it down with it.
  */
 export const mainMenuLayoutEntrySchema = z
-  .object({ button: z.enum(MAIN_MENU_BUTTON_IDS), enabled: z.boolean() })
-  .strict();
+  .object({
+    button: z.enum(MAIN_MENU_BUTTON_IDS),
+    enabled: z.boolean(),
+    /**
+     * Round P: the item's action, from `MAIN_MENU_TARGETS`. Optional in the STORED value
+     * because R1 stored entries without it (migration 0142); `resolveMainMenuLayout` fills
+     * the declared one. When present it must BE the declared one — refused below.
+     */
+    target: z.enum(MAIN_MENU_TARGETS).optional(),
+    /** Round P: an appearance slot for the item's screen; null or absent is the button's default. */
+    appearanceSlot: z.enum(MENU_APPEARANCE_SLOTS).nullable().optional(),
+  })
+  .strict()
+  .refine(
+    (entry) => entry.target === undefined || entry.target === mainMenuTargetOf(entry.button),
+    {
+      message: 'A button opens the action it is declared for, and no other.',
+    },
+  );
 export type MainMenuLayoutEntry = z.infer<typeof mainMenuLayoutEntrySchema>;
+
+/**
+ * One item of the main menu, RESOLVED: every field present. What `resolveMainMenuLayout`
+ * answers, and what the keyboard, the route table and the Web Admin's table are built from.
+ * `order` is the position in the resolved list, zero-based.
+ */
+export interface MainMenuItem {
+  readonly button: MainMenuButtonId;
+  readonly enabled: boolean;
+  readonly target: MainMenuTarget;
+  /** The stored slot, or the button's default when none was stored. */
+  readonly appearanceSlot: MenuAppearanceSlot;
+  /** Whether the slot above was chosen by the operator rather than defaulted. */
+  readonly appearanceSlotOverridden: boolean;
+}
 
 export const mainMenuLayoutSchema = z
   .array(mainMenuLayoutEntrySchema)
@@ -300,6 +399,18 @@ export const mainMenuLayoutSchema = z
   .refine((entries) => new Set(entries.map((entry) => entry.button)).size === entries.length, {
     message: 'Each button may appear once.',
   })
+  /*
+   * Round P: each TARGET at most once. With `target` pinned to the button's declared
+   * action this follows from the rule above, and it is stated on its own so a later
+   * release that lets two buttons name one target cannot draw two buttons that do the
+   * same thing without a schema change somebody reviewed.
+   */
+  .refine(
+    (entries) =>
+      new Set(entries.map((entry) => entry.target ?? mainMenuTargetOf(entry.button))).size ===
+      entries.length,
+    { message: 'Each action may have one button.' },
+  )
   .refine(
     (entries) =>
       resolveMainMenuLayout(entries).some(
@@ -308,20 +419,42 @@ export const mainMenuLayoutSchema = z
     { message: 'At least one button that nothing else can hide must stay on.' },
   );
 
-/** Every declared button, in its declared order, switched on. */
+/** Every declared button, in its declared order, switched on, at its declared action. */
 export const DEFAULT_MAIN_MENU_LAYOUT: readonly MainMenuLayoutEntry[] = MAIN_MENU_BUTTONS.map(
-  (button) => ({ button: button.id, enabled: true }),
+  (button) => ({ button: button.id, enabled: true, target: button.command, appearanceSlot: null }),
 );
 
 /**
  * A stored arrangement, completed: its entries in its order, then every declared button it
- * does not name, in declared order and switched on.
+ * does not name, in declared order and switched on — each with its target and slot filled.
  */
 export function resolveMainMenuLayout(
   stored: readonly MainMenuLayoutEntry[],
-): readonly MainMenuLayoutEntry[] {
+): readonly MainMenuItem[] {
   const named = new Set(stored.map((entry) => entry.button));
-  return [...stored, ...DEFAULT_MAIN_MENU_LAYOUT.filter((entry) => !named.has(entry.button))];
+  return [...stored, ...DEFAULT_MAIN_MENU_LAYOUT.filter((entry) => !named.has(entry.button))].map(
+    (entry) => {
+      const button = mainMenuButton(entry.button);
+      const slot = entry.appearanceSlot ?? null;
+      return {
+        button: entry.button,
+        enabled: entry.enabled,
+        target: button.command,
+        appearanceSlot: slot ?? button.appearanceSlot,
+        appearanceSlotOverridden: slot !== null && slot !== button.appearanceSlot,
+      };
+    },
+  );
+}
+
+/** A resolved item as it is STORED: the explicit target, and the slot only when chosen. */
+export function mainMenuEntryOf(item: MainMenuItem): MainMenuLayoutEntry {
+  return {
+    button: item.button,
+    enabled: item.enabled,
+    target: item.target,
+    appearanceSlot: item.appearanceSlotOverridden ? item.appearanceSlot : null,
+  };
 }
 
 /**

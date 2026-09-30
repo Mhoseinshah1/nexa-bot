@@ -1413,7 +1413,6 @@ export function resolve(
           denied={!may('settings.view')}
           mayViewTemplates={may('templates.view')}
           mayEditTemplates={may('templates.edit')}
-          mayViewPanels={may('panels.view')}
         />
       ),
       crumbs: [{ label: t('web.nav_bot_buttons') }],

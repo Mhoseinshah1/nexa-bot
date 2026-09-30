@@ -1,5 +1,5 @@
 {
-  "id": "e7157226-9d47-426f-9910-5adc1aaf5394",
+  "id": "f565a7fb-0895-4604-9ebf-861f6e5522a5",
   "prevId": "276b9bbd-1957-4175-9e7b-98981c3db9b8",
   "version": "7",
   "dialect": "postgresql",
@@ -1510,6 +1510,163 @@
       },
       "isRLSEnabled": false
     },
+    "public.bot_command_syncs": {
+      "name": "bot_command_syncs",
+      "schema": "",
+      "columns": {
+        "bot_instance_id": {
+          "name": "bot_instance_id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "desired_hash": {
+          "name": "desired_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "desired_version": {
+          "name": "desired_version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        },
+        "last_synced_at": {
+          "name": "last_synced_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_attempted_at": {
+          "name": "last_attempted_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_error_code": {
+          "name": "last_error_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "attempts": {
+          "name": "attempts",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "next_attempt_at": {
+          "name": "next_attempt_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "claimed_until": {
+          "name": "claimed_until",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "bot_command_syncs_tenant_idx": {
+          "name": "bot_command_syncs_tenant_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "bot_command_syncs_due_idx": {
+          "name": "bot_command_syncs_due_idx",
+          "columns": [
+            {
+              "expression": "next_attempt_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "next_attempt_at IS NOT NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "bot_command_syncs_bot_instance_id_bot_instances_id_fk": {
+          "name": "bot_command_syncs_bot_instance_id_bot_instances_id_fk",
+          "tableFrom": "bot_command_syncs",
+          "tableTo": "bot_instances",
+          "columnsFrom": [
+            "bot_instance_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "bot_command_syncs_tenant_id_tenants_id_fk": {
+          "name": "bot_command_syncs_tenant_id_tenants_id_fk",
+          "tableFrom": "bot_command_syncs",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "bot_command_syncs_attempts_check": {
+          "name": "bot_command_syncs_attempts_check",
+          "value": "attempts >= 0"
+        },
+        "bot_command_syncs_version_check": {
+          "name": "bot_command_syncs_version_check",
+          "value": "desired_version >= 1"
+        }
+      },
+      "isRLSEnabled": false
+    },
     "public.bot_instances": {
       "name": "bot_instances",
       "schema": "",
@@ -2106,30 +2263,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "sent_message_id": {
-          "name": "sent_message_id",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "pin_state": {
-          "name": "pin_state",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "pin_error_code": {
-          "name": "pin_error_code",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "pin_started_at": {
-          "name": "pin_started_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -2146,22 +2279,6 @@
         }
       },
       "indexes": {
-        "broadcast_recipients_pin_stranded_idx": {
-          "name": "broadcast_recipients_pin_stranded_idx",
-          "columns": [
-            {
-              "expression": "pin_started_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "where": "pin_state = 'PENDING'",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
         "broadcast_recipients_due_idx": {
           "name": "broadcast_recipients_due_idx",
           "columns": [
@@ -2317,14 +2434,6 @@
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {
-        "broadcast_recipients_pin_state_check": {
-          "name": "broadcast_recipients_pin_state_check",
-          "value": "pin_state IS NULL OR pin_state IN ('PENDING', 'PINNED', 'FAILED', 'UNCONFIRMED')"
-        },
-        "broadcast_recipients_pin_check": {
-          "name": "broadcast_recipients_pin_check",
-          "value": "(pin_state IS NULL OR (state = 'SENT' AND sent_message_id IS NOT NULL AND pin_started_at IS NOT NULL))\n          AND (pin_error_code IS NULL OR length(pin_error_code) BETWEEN 1 AND 100)"
-        },
         "broadcast_recipients_state_check": {
           "name": "broadcast_recipients_state_check",
           "value": "state IN ('PENDING', 'SENDING', 'SENT', 'UNCONFIRMED', 'FAILED', 'UNREACHABLE', 'SKIPPED', 'CANCELLED')"
@@ -2401,44 +2510,6 @@
           "primaryKey": false,
           "notNull": true,
           "default": "'[]'::jsonb"
-        },
-        "purpose": {
-          "name": "purpose",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'MARKETING'"
-        },
-        "source_chat_id": {
-          "name": "source_chat_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "source_message_id": {
-          "name": "source_message_id",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "source_verified_at": {
-          "name": "source_verified_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "pin": {
-          "name": "pin",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
-        "frozen_audience_id": {
-          "name": "frozen_audience_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
         },
         "audience_definition": {
           "name": "audience_definition",
@@ -2640,21 +2711,6 @@
           ],
           "onDelete": "no action",
           "onUpdate": "no action"
-        },
-        "broadcasts_frozen_audience_fk": {
-          "name": "broadcasts_frozen_audience_fk",
-          "tableFrom": "broadcasts",
-          "tableTo": "frozen_audiences",
-          "columnsFrom": [
-            "tenant_id",
-            "frozen_audience_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -2680,15 +2736,7 @@
         },
         "broadcasts_content_kind_check": {
           "name": "broadcasts_content_kind_check",
-          "value": "content_kind IN ('TEXT', 'PHOTO', 'VIDEO', 'DOCUMENT', 'FORWARD', 'COPY')"
-        },
-        "broadcasts_purpose_check": {
-          "name": "broadcasts_purpose_check",
-          "value": "purpose IN ('MARKETING', 'SERVICE_ANNOUNCEMENT')"
-        },
-        "broadcasts_source_check": {
-          "name": "broadcasts_source_check",
-          "value": "(content_kind IN ('FORWARD', 'COPY')) = (source_chat_id IS NOT NULL AND source_message_id IS NOT NULL)\n          AND (source_message_id IS NULL OR source_message_id > 0)\n          AND (source_verified_at IS NULL OR source_chat_id IS NOT NULL)"
+          "value": "content_kind IN ('TEXT', 'PHOTO', 'VIDEO', 'DOCUMENT')"
         },
         "broadcasts_title_check": {
           "name": "broadcasts_title_check",
@@ -3191,12 +3239,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "frozen_audience_id": {
-          "name": "frozen_audience_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
         "created_by_admin_id": {
           "name": "created_by_admin_id",
           "type": "uuid",
@@ -3216,12 +3258,6 @@
           "primaryKey": false,
           "notNull": true,
           "default": "now()"
-        },
-        "paused_at": {
-          "name": "paused_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
         },
         "completed_at": {
           "name": "completed_at",
@@ -3307,21 +3343,6 @@
           ],
           "onDelete": "no action",
           "onUpdate": "no action"
-        },
-        "bulk_operations_frozen_audience_fk": {
-          "name": "bulk_operations_frozen_audience_fk",
-          "tableFrom": "bulk_operations",
-          "tableTo": "frozen_audiences",
-          "columnsFrom": [
-            "tenant_id",
-            "frozen_audience_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -3337,17 +3358,13 @@
       },
       "policies": {},
       "checkConstraints": {
-        "bulk_operations_paused_check": {
-          "name": "bulk_operations_paused_check",
-          "value": "(state = 'PAUSED') = (paused_at IS NOT NULL)"
-        },
         "bulk_operations_kind_check": {
           "name": "bulk_operations_kind_check",
           "value": "kind IN ('WALLET_CREDIT', 'SERVICE_TRAFFIC', 'SERVICE_TIME')"
         },
         "bulk_operations_state_check": {
           "name": "bulk_operations_state_check",
-          "value": "state IN ('RUNNING', 'PAUSED', 'COMPLETED', 'CANCELLED')"
+          "value": "state IN ('RUNNING', 'COMPLETED', 'CANCELLED')"
         },
         "bulk_operations_currency_check": {
           "name": "bulk_operations_currency_check",
@@ -3447,12 +3464,6 @@
         },
         "bulk_operation_id": {
           "name": "bulk_operation_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "frozen_audience_id": {
-          "name": "frozen_audience_id",
           "type": "uuid",
           "primaryKey": false,
           "notNull": false
@@ -3615,21 +3626,6 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "campaign_actions_frozen_audience_fk": {
-          "name": "campaign_actions_frozen_audience_fk",
-          "tableFrom": "campaign_actions",
-          "tableTo": "frozen_audiences",
-          "columnsFrom": [
-            "tenant_id",
-            "frozen_audience_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
-        },
         "campaign_actions_campaign_fk": {
           "name": "campaign_actions_campaign_fk",
           "tableFrom": "campaign_actions",
@@ -3710,10 +3706,6 @@
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {
-        "campaign_actions_frozen_kind_check": {
-          "name": "campaign_actions_frozen_kind_check",
-          "value": "frozen_audience_id IS NULL OR kind IN ('WALLET_GIFT', 'TRAFFIC_GIFT', 'TIME_GIFT', 'ANNOUNCEMENT')"
-        },
         "campaign_actions_broadcast_kind_check": {
           "name": "campaign_actions_broadcast_kind_check",
           "value": "broadcast_id IS NULL OR kind = 'ANNOUNCEMENT'"
@@ -5651,12 +5643,6 @@
           "notNull": true,
           "default": false
         },
-        "marketing_opt_out_at": {
-          "name": "marketing_opt_out_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -6641,361 +6627,6 @@
         "feature_flag_states_version_check": {
           "name": "feature_flag_states_version_check",
           "value": "version >= 1"
-        }
-      },
-      "isRLSEnabled": false
-    },
-    "public.frozen_audience_members": {
-      "name": "frozen_audience_members",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "tenant_id": {
-          "name": "tenant_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "frozen_audience_id": {
-          "name": "frozen_audience_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "customer_id": {
-          "name": "customer_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "service_id": {
-          "name": "service_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "bot_instance_id": {
-          "name": "bot_instance_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "chat_id": {
-          "name": "chat_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {
-        "frozen_audience_members_customer_key": {
-          "name": "frozen_audience_members_customer_key",
-          "columns": [
-            {
-              "expression": "tenant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "frozen_audience_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "customer_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "where": "service_id IS NULL",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "frozen_audience_members_service_key": {
-          "name": "frozen_audience_members_service_key",
-          "columns": [
-            {
-              "expression": "tenant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "frozen_audience_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "service_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "where": "service_id IS NOT NULL",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "frozen_audience_members_tenant_id_tenants_id_fk": {
-          "name": "frozen_audience_members_tenant_id_tenants_id_fk",
-          "tableFrom": "frozen_audience_members",
-          "tableTo": "tenants",
-          "columnsFrom": [
-            "tenant_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "frozen_audience_members_bot_instance_id_bot_instances_id_fk": {
-          "name": "frozen_audience_members_bot_instance_id_bot_instances_id_fk",
-          "tableFrom": "frozen_audience_members",
-          "tableTo": "bot_instances",
-          "columnsFrom": [
-            "bot_instance_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "frozen_audience_members_audience_fk": {
-          "name": "frozen_audience_members_audience_fk",
-          "tableFrom": "frozen_audience_members",
-          "tableTo": "frozen_audiences",
-          "columnsFrom": [
-            "tenant_id",
-            "frozen_audience_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "frozen_audience_members_customer_fk": {
-          "name": "frozen_audience_members_customer_fk",
-          "tableFrom": "frozen_audience_members",
-          "tableTo": "customers",
-          "columnsFrom": [
-            "tenant_id",
-            "customer_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "frozen_audience_members_service_fk": {
-          "name": "frozen_audience_members_service_fk",
-          "tableFrom": "frozen_audience_members",
-          "tableTo": "services",
-          "columnsFrom": [
-            "tenant_id",
-            "service_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.frozen_audiences": {
-      "name": "frozen_audiences",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "tenant_id": {
-          "name": "tenant_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "kind": {
-          "name": "kind",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "grant_kind": {
-          "name": "grant_kind",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "definition": {
-          "name": "definition",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "definition_hash": {
-          "name": "definition_hash",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "as_of": {
-          "name": "as_of",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "member_count": {
-          "name": "member_count",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "fingerprint": {
-          "name": "fingerprint",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "created_by_admin_id": {
-          "name": "created_by_admin_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "released_at": {
-          "name": "released_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        }
-      },
-      "indexes": {
-        "frozen_audiences_held_idx": {
-          "name": "frozen_audiences_held_idx",
-          "columns": [
-            {
-              "expression": "tenant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "created_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "where": "released_at IS NULL",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "frozen_audiences_tenant_id_tenants_id_fk": {
-          "name": "frozen_audiences_tenant_id_tenants_id_fk",
-          "tableFrom": "frozen_audiences",
-          "tableTo": "tenants",
-          "columnsFrom": [
-            "tenant_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "frozen_audiences_created_by_admin_id_admins_id_fk": {
-          "name": "frozen_audiences_created_by_admin_id_admins_id_fk",
-          "tableFrom": "frozen_audiences",
-          "tableTo": "admins",
-          "columnsFrom": [
-            "created_by_admin_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "frozen_audiences_tenant_id_key": {
-          "name": "frozen_audiences_tenant_id_key",
-          "nullsNotDistinct": false,
-          "columns": [
-            "tenant_id",
-            "id"
-          ]
-        }
-      },
-      "policies": {},
-      "checkConstraints": {
-        "frozen_audiences_grant_kind_check": {
-          "name": "frozen_audiences_grant_kind_check",
-          "value": "grant_kind IS NULL OR grant_kind IN ('SERVICE_TRAFFIC', 'SERVICE_TIME')"
-        },
-        "frozen_audiences_grant_check": {
-          "name": "frozen_audiences_grant_check",
-          "value": "(kind = 'SERVICES') = (grant_kind IS NOT NULL)"
-        },
-        "frozen_audiences_kind_check": {
-          "name": "frozen_audiences_kind_check",
-          "value": "kind IN ('CUSTOMERS', 'SERVICES')"
-        },
-        "frozen_audiences_hash_check": {
-          "name": "frozen_audiences_hash_check",
-          "value": "definition_hash ~ '^[0-9a-f]{64}$'"
-        },
-        "frozen_audiences_fingerprint_check": {
-          "name": "frozen_audiences_fingerprint_check",
-          "value": "fingerprint ~ '^[0-9a-f]{32}$'"
-        },
-        "frozen_audiences_count_check": {
-          "name": "frozen_audiences_count_check",
-          "value": "member_count >= 0"
         }
       },
       "isRLSEnabled": false

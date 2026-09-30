@@ -2656,3 +2656,12 @@ override is implemented"; none is. Whether support should be able to opt a custo
 their behalf (a customer who asks by ticket) is a product decision.
 
 UNRESOLVED. Not built.
+
+## OQ-P-MENU-01 — does a BotFather token revocation keep the bot's command list?
+
+The Bot API documents `setMyCommands` and `getMyCommands` per bot and says nothing about a
+revocation. Round P re-registers the menu with the new token after every replacement
+(`docs/command-menu-audit.md` D6), so the answer changes only whether that call was needed.
+`OQ-WP13-02` is the same question about the webhook.
+
+UNRESOLVED. A real bot's «بررسی وضعیت» after a revocation answers it per installation.
