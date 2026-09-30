@@ -1,6 +1,7 @@
 import { useState, type FormEvent, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  type BroadcastPurpose,
   BROADCAST_BUTTONS_MAX,
   CAMPAIGN_DESCRIPTION_MAX_LENGTH,
   CAMPAIGN_NAME_MAX_LENGTH,
@@ -365,6 +366,8 @@ interface FormState {
   timeNotify: boolean;
   announcementOn: boolean;
   announcementBody: string;
+  /** Round N close (§D): MARKETING leaves out opted-out customers; a service notice does not. */
+  announcementPurpose: BroadcastPurpose;
   buttons: readonly { label: string; url: string }[];
 }
 
@@ -407,6 +410,7 @@ const EMPTY_FORM: FormState = {
   timeNotify: true,
   announcementOn: false,
   announcementBody: '',
+  announcementPurpose: 'MARKETING',
   buttons: [],
 };
 
@@ -527,6 +531,7 @@ export function campaignBodyOf(
     if (state.announcementBody.trim() === '') return { problem: 'web.campaign_problem_body' };
     actions.announcement = {
       body: state.announcementBody,
+      purpose: state.announcementPurpose,
       buttons: state.buttons
         .filter((b) => b.label.trim() !== '' || b.url.trim() !== '')
         .map((b) => ({ label: b.label.trim(), url: b.url.trim() })),
@@ -616,6 +621,8 @@ function formStateOf(campaign: CampaignDetail): FormState {
         Object.assign(state, {
           announcementOn: true,
           announcementBody: String(terms['body'] ?? ''),
+          announcementPurpose:
+            terms['purpose'] === 'SERVICE_ANNOUNCEMENT' ? 'SERVICE_ANNOUNCEMENT' : 'MARKETING',
           buttons: (terms['buttons'] as { label: string; url: string }[] | undefined) ?? [],
         });
         break;
@@ -1145,6 +1152,17 @@ function CampaignForm({
                 value={state.announcementBody}
                 onChange={(event) => set('announcementBody', event.target.value)}
               />
+            </Field>
+            <Field label={t('web.campaign_announcement_purpose')} hint={t('web.bc_purpose_hint')}>
+              <select
+                value={state.announcementPurpose}
+                onChange={(event) =>
+                  set('announcementPurpose', event.target.value as BroadcastPurpose)
+                }
+              >
+                <option value="MARKETING">{t('web.bc_purpose_marketing')}</option>
+                <option value="SERVICE_ANNOUNCEMENT">{t('web.bc_purpose_service')}</option>
+              </select>
             </Field>
             {state.buttons.map((button, index) => (
               <div className="grid-2" key={index}>
@@ -1756,6 +1774,7 @@ function CommandsCard({ campaign }: { campaign: CampaignDetail }) {
   const cancellable = campaign.state !== 'COMPLETED' && campaign.state !== 'CANCELLED';
   return (
     <Card title={t('web.campaign_section_commands')} hint={t('web.campaign_cancel_hint')}>
+      <p className="muted small">{t('web.campaign_frozen_note')}</p>
       <div className="btn-group">
         {campaign.state === 'ACTIVE' && (
           <button type="button" className="btn" onClick={() => run.mutate('pause')}>

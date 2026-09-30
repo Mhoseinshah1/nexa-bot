@@ -16,6 +16,7 @@ import {
   type AudienceOptionsResponse,
   type AudiencePreviewResponse,
   type BroadcastContentKind,
+  type BroadcastPurpose,
   type BroadcastListResponse,
   type BroadcastRecipientListResponse,
   type BroadcastResponse,
@@ -3217,6 +3218,10 @@ export interface BroadcastContentWire {
   body: string;
   buttons: { label: string; url: string }[];
   audience: unknown;
+  /** Round N close: the purpose, the FORWARD/COPY source and the pin. */
+  purpose: BroadcastPurpose;
+  source: { chatId: string; messageId: number } | null;
+  pin: boolean;
 }
 
 export function createBroadcast(
@@ -3320,4 +3325,12 @@ export function createBulkOperation(input: {
 
 export function cancelBulkOperation(id: string): Promise<BulkOperationResponse> {
   return post(BULK_OPERATION_ROUTES.cancel(id), {}, bulkOperationResponseSchema);
+}
+
+/** Round N close (§B): pause or resume a mass operation. */
+export function steerBulkOperation(
+  id: string,
+  action: 'pause' | 'resume',
+): Promise<BulkOperationResponse> {
+  return post(BULK_OPERATION_ROUTES[action](id), {}, bulkOperationResponseSchema);
 }

@@ -634,6 +634,7 @@ describe('the customer detail', () => {
         blockedAt: '2026-09-11T09:00:00.000Z',
         blockedReason: 'spam',
         blockedReasonShown: true,
+        marketingOptOutAt: null,
       }),
       { url: `/users/${ROW_ID}/unblock`, body: { customer: customer() } },
     ]);
@@ -667,6 +668,7 @@ describe('the customer detail', () => {
         blockedAt: '2026-09-11T09:00:00.000Z',
         blockedReason: 'an old note',
         blockedReasonShown: false,
+        marketingOptOutAt: '2026-09-21T10:00:00.000Z',
       }),
     );
     renderPage(

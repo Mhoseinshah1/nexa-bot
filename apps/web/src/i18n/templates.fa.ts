@@ -127,7 +127,11 @@ export const TEMPLATE_GROUPS_FA: readonly TemplateGroupDefinition[] = [
   { id: 'support', label: 'پشتیبانی و پرسش‌های متداول', prefixes: ['bot.faq.', 'bot.support.'] },
   { id: 'tickets', label: 'تیکت‌های پشتیبانی (مشتری)', prefixes: ['bot.ticket.'] },
   // Round N: the wrapper every broadcast is sent in.
-  { id: 'broadcast', label: 'ارسال همگانی', prefixes: ['bot.broadcast.'] },
+  {
+    id: 'broadcast',
+    label: 'ارسال همگانی و پیام‌های تبلیغاتی',
+    prefixes: ['bot.broadcast.', 'bot.marketing.'],
+  },
   {
     id: 'admin',
     label: 'مدیریت در تلگرام — عمومی',

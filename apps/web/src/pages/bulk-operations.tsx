@@ -17,6 +17,7 @@ import {
 import {
   ApiError,
   cancelBulkOperation,
+  steerBulkOperation,
   createBulkOperation,
   fetchAudienceOptions,
   fetchBulkItems,
@@ -68,11 +69,13 @@ const KIND_LABELS: Readonly<Record<BulkOperationKind, WebKey>> = {
 };
 const STATE_LABELS: Readonly<Record<BulkOperationState, WebKey>> = {
   RUNNING: 'web.bulk_state_running',
+  PAUSED: 'web.bulk_state_paused',
   COMPLETED: 'web.bulk_state_completed',
   CANCELLED: 'web.bulk_state_cancelled',
 };
 const STATE_TONES: Readonly<Record<BulkOperationState, Tone>> = {
   RUNNING: 'warn',
+  PAUSED: 'warn',
   COMPLETED: 'ok',
   CANCELLED: 'neutral',
 };
@@ -523,6 +526,11 @@ export function BulkOperationDetailPage({
     mutationFn: () => cancelBulkOperation(id),
     onSuccess: () => void client.invalidateQueries({ queryKey: ['bulk-operation', id] }),
   });
+  // Round N close (§B): pause claims nothing new; resume continues from exactly there.
+  const steer = useMutation({
+    mutationFn: (action: 'pause' | 'resume') => steerBulkOperation(id, action),
+    onSuccess: () => void client.invalidateQueries({ queryKey: ['bulk-operation', id] }),
+  });
   const [state, setState] = useState<BulkItemState | ''>('');
   const [trail, setTrail] = useState<string[]>([]);
   const cursor = trail[trail.length - 1];
@@ -601,14 +609,38 @@ export function BulkOperationDetailPage({
             />
             <progress max={100} value={op.progressPercent} aria-label={t('web.bulk_progress')} />
             <p className="muted small">{t('web.bulk_cancel_note')}</p>
+            <p className="muted small">{t('web.bulk_pause_note')}</p>
+            {op.frozenAudienceId !== null && (
+              <p className="muted small">{t('web.bulk_frozen_audience')}</p>
+            )}
             <h3>{t('web.bc_filters')}</h3>
             <ul className="small">
               {describeAudience(op.audience).map((line) => (
                 <li key={line}>{line}</li>
               ))}
             </ul>
-            {mayCancel && op.state === 'RUNNING' && (
+            {mayCancel && (op.state === 'RUNNING' || op.state === 'PAUSED') && (
               <div className="toolbar">
+                {op.state === 'RUNNING' && (
+                  <button
+                    type="button"
+                    className="btn sm"
+                    disabled={steer.isPending}
+                    onClick={() => steer.mutate('pause')}
+                  >
+                    {t('web.bulk_pause')}
+                  </button>
+                )}
+                {op.state === 'PAUSED' && (
+                  <button
+                    type="button"
+                    className="btn sm"
+                    disabled={steer.isPending}
+                    onClick={() => steer.mutate('resume')}
+                  >
+                    {t('web.bulk_resume')}
+                  </button>
+                )}
                 {cancelAsked ? (
                   <>
                     <span className="small">{t('web.bulk_cancel_question')}</span>
@@ -638,6 +670,7 @@ export function BulkOperationDetailPage({
               </div>
             )}
             {cancel.error !== null && <Banner tone="danger">{bulkMessage(cancel.error)}</Banner>}
+            {steer.error !== null && <Banner tone="danger">{bulkMessage(steer.error)}</Banner>}
           </Card>
           <Card title={t('web.bulk_items')}>
             <Field label={t('web.bulk_state')} htmlFor="bulk-item-state">

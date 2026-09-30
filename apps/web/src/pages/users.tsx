@@ -653,8 +653,21 @@ export function UserDetailPage({
                         ],
                       ] as [ReactNode, ReactNode][])
                     : []),
+                  // Round N close (§D): the customer's own promotional opt-out, read-only here.
+                  [
+                    t('web.user_marketing'),
+                    row.marketingOptOutAt === null
+                      ? t('web.user_marketing_in')
+                      : t('web.user_marketing_out'),
+                  ],
+                  ...(row.marketingOptOutAt === null
+                    ? []
+                    : ([
+                        [t('web.user_marketing_since'), formatTimestamp(row.marketingOptOutAt)],
+                      ] as [ReactNode, ReactNode][])),
                 ]}
               />
+              <p className="muted small">{t('web.user_marketing_hint')}</p>
 
               {mayBlock ? (
                 <>
