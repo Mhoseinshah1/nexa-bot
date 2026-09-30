@@ -292,6 +292,7 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
       readonly finalAmount: bigint | null;
       readonly buyerChatIdSent: boolean;
       readonly callbackUrlSent: boolean;
+      readonly note?: string | null;
       readonly firstInquiryAt: Date | null;
     },
     now: Date,
@@ -312,7 +313,7 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
         buyerChatIdSent: created.buyerChatIdSent,
         callbackUrlSent: created.callbackUrlSent,
         creationClaimedUntil: null,
-        creationErrorCode: null,
+        creationErrorCode: created.note ?? null,
         // Null keeps the row's schedule: a Stars charge recorded before this commits is due.
         nextInquiryAt: created.firstInquiryAt ?? sql`${gatewayInvoices.nextInquiryAt}`,
         updatedAt: now,
@@ -638,6 +639,7 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
       readonly amount: Money;
       readonly botInstanceId: string | null;
       readonly now: Date;
+      readonly requireLink: boolean;
     },
     tx: unknown,
   ): Promise<GatewayInvoiceRecord | null> {
@@ -657,6 +659,14 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
           eq(gatewayInvoices.tenantId, tenantId),
           eq(gatewayInvoices.provider, input.provider),
           inArray(gatewayInvoices.creationState, ['CREATING', 'CREATED']),
+          // F3: a created invoice with no link a customer can open is not an open attempt.
+          input.requireLink
+            ? or(
+                eq(gatewayInvoices.creationState, 'CREATING'),
+                isNotNull(gatewayInvoices.webInvoiceUrl),
+                isNotNull(gatewayInvoices.invoiceUrl),
+              )
+            : undefined,
           input.botInstanceId === null
             ? isNull(gatewayInvoices.botInstanceId)
             : eq(gatewayInvoices.botInstanceId, input.botInstanceId),

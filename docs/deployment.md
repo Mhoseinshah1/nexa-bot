@@ -1420,6 +1420,26 @@ the previous release writes. While the release before R1 runs:
 
 Nothing needs doing before rolling back past R1.
 
+### What a rollback changes back: the review record and the gateway invoice ends (round N, F1 + F3)
+
+Neither package has a migration: nothing new is stored but machine codes in columns that
+already held free text, and nothing is removed. While the release before them runs:
+
+- **A receipt decided then is finalised into the one-line outcome again** (✅ پرداخت تأیید
+  شد …), not the complete record, and a tap on a finalised review message is acknowledged
+  without its notice. Messages finalised by the newer release keep the record they show.
+- **A gateway create's `creation_error_code` keeps the longer codes** the newer adapter
+  wrote (`http.403.unreadable.html`, `http.network.ENOTFOUND`, …); the older Web Admin shows
+  them as text, and the older adapter writes its shorter ones again.
+- **A created invoice without a payable link** (`creation_error_code =
+nexa.no_payment_link`) is shown by the older release as «پاسخ درگاه … دریافت نشد», and
+  its retry hands the same attempt back until the attempt's deadline, as before this round.
+- **A create answered with metadata in an undocumented shape** (a numeric invoice id, a
+  null or decimal amount) is UNKNOWN again under the older adapter. An invoice the newer
+  release already recorded as CREATED stays CREATED and is asked about as before.
+
+Nothing needs doing before rolling back past round N's payments package.
+
 ### How far back you can roll
 
 **One release**, safely. Migrations are expand-only within a release

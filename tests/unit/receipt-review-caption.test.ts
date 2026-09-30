@@ -43,9 +43,19 @@ function paymentOf(orderId: string | null): PaymentRecord {
   } as unknown as PaymentRecord;
 }
 
-function builder(granted: readonly string[]) {
+function builder(
+  granted: readonly string[],
+  movement: { moved: bigint; before: bigint; after: bigint } | null = null,
+) {
   const rendered: TemplateKey[] = [];
+  const movementReads: string[] = [];
   const caption = new ReceiptReviewCaption({
+    movements: {
+      movementOf: async (_scope, _customer, paymentId) => {
+        movementReads.push(paymentId);
+        return movement;
+      },
+    },
     facts: {
       factsFor: async (_scope, orderId) =>
         orderId === null
@@ -88,7 +98,7 @@ function builder(granted: readonly string[]) {
       },
     },
   });
-  return { caption, rendered };
+  return { caption, rendered, movementReads };
 }
 
 const translator = createTranslator();
@@ -285,5 +295,125 @@ describe('what a blocked customer is told (File 01 §9)', () => {
     const reply = blockedReply({ blockedReason: 'مشکوک به تقلب', blockedReasonShown: false });
     expect(reply).toMatchObject({ key: 'bot.blocked', values: {} });
     expect(JSON.stringify(reply)).not.toContain('مشکوک');
+  });
+});
+
+/*
+ * F1 (round N): the final record the review message becomes. The same facts as the caption,
+ * from the same readers; a fact the payment lacks is ABSENT (its template line is dropped),
+ * never a dash; and the wallet movement only for a decision that moved the wallet, for a
+ * viewer holding users.view, on the deciding reviewer's own message.
+ */
+describe('the review message’s final record (F1)', () => {
+  const approved = {
+    outcome: 'APPROVED',
+    outcomeLabel: 'bot.admin.review_approved',
+    wallet: true,
+  } as const;
+  const credited = {
+    outcome: 'CREDITED',
+    outcomeLabel: 'bot.admin.review_credited',
+    wallet: true,
+  } as const;
+  const moved = { moved: 90_000n, before: 10_000n, after: 100_000n };
+
+  it('leads with the outcome label and carries the decided facts, typed', async () => {
+    const { caption } = builder(['users.view'], moved);
+    const values = await caption.finalValuesFor(
+      {} as never,
+      viewer,
+      paymentOf('order-new'),
+      customer,
+      approved,
+    );
+    expect(values).toEqual({
+      outcome: 'label:bot.admin.review_approved',
+      operation: 'label:bot.admin.operation_new_service',
+      order: 'پلن پایه',
+      trafficBytes: 53_687_091_200n,
+      durationDays: 30,
+      serviceUsername: 'zahra01',
+      customer: '750900',
+      username: '@zahra_pay',
+      name: 'زهرا احمدی',
+      total: money(250_000n, 'IRT'),
+      reference: 'REF-1',
+    });
+  });
+
+  it('leaves out, rather than dashes, what a top-up or a customer without a username lacks', async () => {
+    const { caption } = builder([]);
+    const values = await caption.finalValuesFor({} as never, viewer, paymentOf(null), null, {
+      ...approved,
+      wallet: false,
+    });
+    expect(Object.keys(values).sort()).toEqual(
+      ['customer', 'operation', 'outcome', 'reference', 'total'].sort(),
+    );
+    expect(Object.values(values)).not.toContain('—');
+  });
+
+  it('shows the wallet movement for a credit or an approved top-up, to a users.view viewer only', async () => {
+    const credit = await builder(['users.view'], moved).caption.finalValuesFor(
+      {} as never,
+      viewer,
+      paymentOf('order-1'),
+      customer,
+      credited,
+    );
+    expect(credit).toMatchObject({
+      creditedAmount: money(90_000n, 'IRT'),
+      walletBefore: money(10_000n, 'IRT'),
+      walletAfter: money(100_000n, 'IRT'),
+    });
+    const topup = await builder(['users.view'], moved).caption.finalValuesFor(
+      {} as never,
+      viewer,
+      paymentOf(null),
+      customer,
+      approved,
+    );
+    expect(topup['walletAfter']).toEqual(money(100_000n, 'IRT'));
+
+    // Without users.view: no balance, and the ledger is not even read.
+    const blind = builder(['receipts.review'], moved);
+    const hidden = await blind.caption.finalValuesFor(
+      {} as never,
+      viewer,
+      paymentOf(null),
+      customer,
+      approved,
+    );
+    expect(hidden).not.toHaveProperty('walletBefore');
+    expect(blind.movementReads).toEqual([]);
+
+    // Another reviewer's copy: no balance whatever this viewer holds.
+    const copy = builder(['users.view'], moved);
+    expect(
+      await copy.caption.finalValuesFor({} as never, viewer, paymentOf(null), customer, {
+        ...approved,
+        wallet: false,
+      }),
+    ).not.toHaveProperty('walletAfter');
+    expect(copy.movementReads).toEqual([]);
+  });
+
+  it('shows no wallet movement for a purchase approval, a rejection or a block', async () => {
+    for (const decision of [
+      approved,
+      { outcome: 'REJECTED', outcomeLabel: 'bot.admin.review_rejected', wallet: true },
+      { outcome: 'BLOCKED', outcomeLabel: 'bot.admin.review_blocked', wallet: true },
+    ] as const) {
+      const built = builder(['users.view'], moved);
+      const values = await built.caption.finalValuesFor(
+        {} as never,
+        viewer,
+        paymentOf('order-1'),
+        customer,
+        decision,
+      );
+      expect(values, decision.outcome).not.toHaveProperty('creditedAmount');
+      expect(built.movementReads, decision.outcome).toEqual([]);
+    }
   });
 });

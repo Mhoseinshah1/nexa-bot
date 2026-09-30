@@ -155,6 +155,13 @@ export interface CustomerMessage {
    * both today, and Telegram's `reply_markup` holds one or the other.
    */
   readonly keyboard?: MainMenuVariant;
+  /**
+   * Round N (F1): send this as a REPLY to one message of the same chat — the complete
+   * receipt-review record under the review message whose caption could not hold it. Only the
+   * first part of a split body carries it; `allow_sending_without_reply`, so a message
+   * deleted in between costs the link and never the record.
+   */
+  readonly replyToMessageId?: number;
 }
 
 /**
@@ -312,7 +319,7 @@ export interface CustomerMessageRef {
  * and Telegram's answer to that is the same 400 as to a long one — so it is refused
  * whole, and the caller decides what to send instead.
  */
-export type CustomerSendRefusal = 'CAPTION_OVER_BOUND' | 'NOT_EDITABLE';
+export type CustomerSendRefusal = 'CAPTION_OVER_BOUND' | 'NOT_EDITABLE' | 'TEXT_OVER_BOUND';
 
 /**
  * R3: one message a customer already has, rewritten in place — the service card after a
@@ -330,6 +337,13 @@ export interface CustomerEditMessage {
   readonly templateKey: TemplateKey;
   readonly values: TemplateValues;
   readonly buttons: readonly CustomerButton[];
+  /**
+   * Round N (F1): the edited body must arrive WHOLE. Over Telegram's bound it is refused
+   * without a request — `CAPTION_OVER_BOUND` for a caption (never cut by `boundCaption`),
+   * `TEXT_OVER_BOUND` for a text (never folded into `NOT_EDITABLE`) — so the caller can
+   * choose an arrangement that loses nothing. Absent keeps the cut and the refusal as before.
+   */
+  readonly whole?: true;
 }
 
 export interface CustomerMessenger {

@@ -667,10 +667,15 @@ describe('Block User and the rejection reason, from the receipt message', () => 
         );
         /*
          * R2 (item 3): a stale button ON a receipt message edits that message into the
-         * outcome's one line; the queue item (`C:`) still answers with the full sentence.
+         * decision — since F1 (round N) the complete final record, led by the outcome's
+         * label and carrying the credited amount; the queue item (`C:`) still answers with
+         * the full sentence.
          */
         if (data.startsWith('C:')) expect(lastText(f)).toContain('120,000');
-        else expect(lastText(f)).toBe('💳 مبلغ به کیف پول واریز شد');
+        else {
+          expect(lastText(f).startsWith('💳 مبلغ به کیف پول واریز شد\n')).toBe(true);
+          expect(lastText(f)).toContain('مبلغ واریز شده به کیف پول: 120,000');
+        }
       }
       expect(await paymentState(f, credited)).toBe('FAILED');
       expect(await ledgerCount(f)).toBe(1);

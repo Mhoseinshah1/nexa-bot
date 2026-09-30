@@ -808,6 +808,12 @@ describe('profile metadata, normalised before it is ever stored', () => {
        */
       'bot.payment.gateway_invoice_order_fee',
       'bot.payment.gateway_invoice_topup_fee',
+      /*
+       * F3 (round N): the gateway reported the invoice created without a link that can be
+       * opened. Says only that, that nothing was recorded as paid, and that the customer may
+       * start again — which opens a new attempt; it promises no link that is coming.
+       */
+      'bot.payment.gateway_no_link',
       'bot.payment.gateway_pay_button',
       'bot.payment.gateway_preparing',
       'bot.payment.gateway_unavailable',
@@ -1300,6 +1306,20 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.admin.reminder_usage_second_button',
       'bot.admin.reminders_button',
       'bot.admin.reminders_section',
+      /*
+       * F1 (round N): the receipt review message's complete final record, and the notice a
+       * tap on an already-finalised review message is answered with. Reviewed against the
+       * same rule: the record restates facts of a decision already committed, and each
+       * notice names the recorded disposition and offers nothing to do again.
+       */
+      'bot.admin.review_final',
+      // Codex review of #113: the bounded caption of a record too long for one; the record follows.
+      'bot.admin.review_final_short',
+      'bot.admin.review_repeat_approved',
+      'bot.admin.review_repeat_blocked',
+      'bot.admin.review_repeat_credited',
+      'bot.admin.review_repeat_gone',
+      'bot.admin.review_repeat_rejected',
       'bot.admin.revoke_button',
       'bot.admin.revoked',
       'bot.admin.roles_set',
