@@ -287,7 +287,8 @@ describe('a guarded browser traversal', () => {
 
   it('asks on Back between two ?tab= entries of the same page', async () => {
     go('/panels/x?tab=overview');
-    act(() => navigate('/panels/x?tab=history', { force: true }));
+    // A `?tab=` switch that unmounts a tab's form is a GUARDED navigation.
+    act(() => navigate('/panels/x?tab=history', { force: true, guard: true }));
     renderPage(
       <>
         <Form />
@@ -306,6 +307,35 @@ describe('a guarded browser traversal', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: t('web.unsaved_stay') }));
     expect(window.location.search).toBe('?tab=history');
+  });
+
+  it('lets Back through a query-only entry no guarded navigation wrote', async () => {
+    // A pager, or a tab strip that keeps every panel mounted: the forward step
+    // did not ask, so neither does the step back.
+    go('/orders');
+    act(() => navigate('/panels/x', { force: true }));
+    act(() => navigate('/panels/x?tab=health', { force: true }));
+    renderPage(
+      <>
+        <Form />
+        <LeaveGuardHost />
+      </>,
+    );
+    await traverse(
+      () => window.history.back(),
+      () => expect(screen.getByText('at /panels/x')).toBeInTheDocument(),
+    );
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    // And a path change behind it is still guarded.
+    await traverse(
+      () => window.history.back(),
+      () => {
+        expect(screen.getByRole('alertdialog')).toBeInTheDocument();
+        // Put back on the page the operator is on before anything else moves.
+        expect(window.location.pathname).toBe('/panels/x');
+      },
+    );
+    fireEvent.click(screen.getByRole('button', { name: t('web.unsaved_stay') }));
   });
 
   it('leaves by traversal, so the stack keeps the entries it had', async () => {

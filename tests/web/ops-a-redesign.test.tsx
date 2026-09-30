@@ -109,6 +109,37 @@ describe('the panel detail, redesigned', () => {
     expect(window.location.pathname).toBe(`/panels/${PANEL_ID}`);
   });
 
+  it('lets browser Back return between tabs over an unsaved Overview, without asking', async () => {
+    go(`/panels/${PANEL_ID}`);
+    stubApi(detail());
+    renderPage(
+      <>
+        <PanelDetailPage id={PANEL_ID} mayEdit mayRotate denied={false} />
+        <LeaveGuardHost />
+      </>,
+    );
+    await screen.findByRole('heading', { name: /^Frankfurt A/u });
+    fireEvent.change(screen.getByLabelText(t('web.panel_name')), {
+      target: { value: 'Frankfurt Z' },
+    });
+    fireEvent.click(screen.getByRole('tab', { name: t('web.panel_tab_health') }));
+    await waitFor(() => expect(window.location.search).toBe('?tab=health'));
+
+    act(() => window.history.back());
+    await waitFor(() => expect(window.location.search).toBe(''));
+    await waitFor(() =>
+      expect(screen.getByRole('tab', { name: t('web.panel_tab_overview') })).toHaveAttribute(
+        'aria-selected',
+        'true',
+      ),
+    );
+    // Overview never unmounted, so nothing was at stake and nothing was asked.
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect((screen.getByLabelText(t('web.panel_name')) as HTMLInputElement).value).toBe(
+      'Frankfurt Z',
+    );
+  });
+
   it('draws no leave guard for a viewer, who has no form to lose', async () => {
     go(`/panels/${PANEL_ID}`);
     stubApi(detail());
