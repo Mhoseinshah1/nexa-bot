@@ -17,9 +17,11 @@ import {
   type PaymentPurpose,
   type PermissionKey,
   type TenantContext,
+  type ResolvedConversion,
   type SalesCurrencyCode,
   type UnitOfWork,
   type UserId,
+  takesFixedRate,
 } from '@nexa/contracts';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
 import {
@@ -388,8 +390,8 @@ export class PaymentGatewayService {
          * it is a number nothing reads, refused rather than stored for an operator to
          * believe — the rule the customer fee below states for itself.
          */
-        const conversion = PAYMENT_GATEWAY_DESCRIPTORS[provider].conversion;
-        if (config.providerUnitRateMinor !== null && conversion !== 'FIXED_RATE') {
+        const pricedByRate = takesFixedRate(PAYMENT_GATEWAY_DESCRIPTORS[provider].conversion);
+        if (config.providerUnitRateMinor !== null && !pricedByRate) {
           throw errors.validation(
             COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
             'A conversion rate applies only to a route priced in another unit.',
@@ -402,11 +404,7 @@ export class PaymentGatewayService {
          * row read above, inside the transaction, so a concurrent enable is serialised by
          * the UPDATE below rather than slipping between the check and the write.
          */
-        if (
-          conversion === 'FIXED_RATE' &&
-          config.providerUnitRateMinor === null &&
-          before.status === 'ACTIVE'
-        ) {
+        if (pricedByRate && config.providerUnitRateMinor === null && before.status === 'ACTIVE') {
           throw errors.conflict(
             COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE,
             'An enabled route needs its conversion rate. Switch it off before clearing it.',
@@ -519,7 +517,7 @@ export class PaymentGatewayService {
          */
         if (
           input.status === 'ACTIVE' &&
-          PAYMENT_GATEWAY_DESCRIPTORS[provider].conversion === 'FIXED_RATE' &&
+          takesFixedRate(PAYMENT_GATEWAY_DESCRIPTORS[provider].conversion) &&
           before.providerUnitRateMinor === null
         ) {
           throw errors.conflict(
@@ -854,12 +852,25 @@ export class PaymentGatewayService {
   }
 
   private adapterAdmits(gateway: PaymentGatewayRecord, amount: Money): boolean {
-    if (PAYMENT_GATEWAY_DESCRIPTORS[gateway.provider].settlesVia !== 'GATEWAY') return true;
+    const descriptor = PAYMENT_GATEWAY_DESCRIPTORS[gateway.provider];
+    if (descriptor.settlesVia !== 'GATEWAY') return true;
     const adapter = this.deps.adapters(gateway.provider);
-    // A `FIXED_RATE` route with no rate converts nothing, so it is offered for nothing.
-    return (
-      adapter !== null && adapter.providerAmountOf(amount, gateway.providerUnitRateMinor) !== null
-    );
+    if (adapter === null) return false;
+    /*
+     * A COURTESY, decided from the route alone (package FX): the attempt resolves the
+     * conversion authoritatively, in its own transaction, from the mode setting and the
+     * central quote. Here a route that may take a fixed rate is admitted by that rate —
+     * and without one is offered for nothing, since enabling it requires one. Under the
+     * central policy the answer is the same: a positive payable is at least one unit
+     * either way, and "does this amount have an exact value in the unit" is a question
+     * only a same-unit route can answer no to.
+     */
+    const conversion: ResolvedConversion | null = takesFixedRate(descriptor.conversion)
+      ? gateway.providerUnitRateMinor === null
+        ? null
+        : { policy: 'FIXED_RATE', rateMinor: gateway.providerUnitRateMinor }
+      : { policy: 'SAME_UNIT' };
+    return conversion !== null && adapter.providerAmountOf(amount, conversion) !== null;
   }
 
   private async audienceFor(scope: TenantContext, customerId: UserId, tx?: unknown) {

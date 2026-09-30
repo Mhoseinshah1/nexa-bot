@@ -94,6 +94,11 @@ async function main(): Promise<void> {
         // or asks about is a customer who paid and was never credited, and silence is
         // exactly what a stalled lane looks like.
         ['gateway-payments', true, () => container.gatewayPaymentLoop.isFresh(now)],
+        // Package FX: the central exchange rate's refresh. No flag on the LOOP: a pass
+        // reads the feature inside and does nothing while it is off, so a stalled lane is
+        // visible whatever an operator has switched on. Its failure mode is a quote that
+        // silently goes stale and then refuses every central-rate invoice.
+        ['fx-refresh', true, () => container.fxRefreshLoop.isFresh(now)],
         // The lane that warns a customer before their service runs out of days or
         // traffic. No flag, and for the reason the two either side of it have none:
         // the alternative to warning them is finding out when it has already
@@ -198,6 +203,9 @@ async function main(): Promise<void> {
   // And the external payment gateway lane (WP11A): creates provider invoices and asks the
   // provider what happened, outside every transaction, never while Telegram waits.
   container.gatewayPaymentLoop.start();
+  // Package FX: and the exchange-rate refresh, outside every transaction, primary then
+  // fallback, under a lease so two replicas do not both dial.
+  container.fxRefreshLoop.start();
   // And the reminder lane. Nothing here dials a panel: both halves read columns
   // `SYNC_USAGE` and the commercial actions already maintain.
   container.serviceReminderLoop.start();

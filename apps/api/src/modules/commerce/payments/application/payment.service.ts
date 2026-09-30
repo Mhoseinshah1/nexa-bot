@@ -43,7 +43,15 @@ import {
   type UserId,
   type PaymentGatewayProvider,
   type PaymentPurpose,
+  conversionPolicyFor,
+  effectiveMinorPerUnit,
+  isSettingKey,
+  parseUnitRatio,
+  type GatewayConversionSpec,
+  type ResolvedConversion,
+  type SettingKey,
 } from '@nexa/contracts';
+import type { FxService } from '../../fx/application/fx.service.js';
 import type { ResellerService } from '../../resellers/application/reseller.service.js';
 import type { CustomerNotifier } from '../../messaging/application/customer-notifier.js';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
@@ -66,6 +74,7 @@ import type { PaymentReceiptRepository, ReceiptCaptureRepository } from './recei
 import type {
   ExternalGatewayAdapter,
   GatewayCredentialStore,
+  GatewayInvoiceFxSnapshot,
   GatewayInvoiceRecord,
   GatewayInvoiceRepository,
 } from './gateway-invoice-ports.js';
@@ -269,7 +278,20 @@ export interface PaymentServiceDeps {
   > | null;
   /** Whether a route's API key is stored — READ only; never the key. */
   readonly gatewayCredentials: Pick<GatewayCredentialStore, 'setAt'>;
+  /**
+   * The central exchange rate (package FX), for a route whose conversion resolves to
+   * `CENTRAL_FX`: the quote is READ inside the attempt's transaction and snapshotted
+   * onto the invoice, and a stale one's use is recorded in the same transaction. Nothing
+   * here dials a source — that is the worker's lane.
+   */
+  readonly fx: Pick<FxService, 'quoteFor' | 'recordStaleUse'>;
 }
+
+/**
+ * The `reason` a `PAYMENT_GATEWAY_UNAVAILABLE` refusal carries when a central-rate route
+ * has no usable quote (package FX). The Telegram surface answers it with its own sentence.
+ */
+export const FX_UNAVAILABLE_REASON = 'FX_UNAVAILABLE';
 
 /**
  * An external-gateway attempt as the customer's command answers it: the payment and the
@@ -3240,6 +3262,7 @@ export class PaymentService {
           'SERVICE_PURCHASE',
           order.totals.total,
           intent.provider,
+          now,
           tx,
         );
         return this.openGatewayAttempt(scope, actor, tx, {
@@ -3250,7 +3273,7 @@ export class PaymentService {
           // An order payment promises no top-up gift (File 02 §17), exactly as the manual path.
           topupCashbackPercent: null,
           customerFeeBasisPoints: route.gateway.customerFeeBasisPoints,
-          providerUnitRateMinor: route.gateway.providerUnitRateMinor,
+          conversion: route.conversion,
           paymentId,
           reference,
           now,
@@ -3318,6 +3341,7 @@ export class PaymentService {
           'WALLET_TOPUP',
           amount,
           intent.provider,
+          now,
           tx,
         );
         return this.openGatewayAttempt(scope, actor, tx, {
@@ -3327,7 +3351,7 @@ export class PaymentService {
           provider: route.provider,
           topupCashbackPercent: route.gateway.topupCashbackPercent,
           customerFeeBasisPoints: route.gateway.customerFeeBasisPoints,
-          providerUnitRateMinor: route.gateway.providerUnitRateMinor,
+          conversion: route.conversion,
           paymentId,
           reference,
           now,
@@ -3561,10 +3585,12 @@ export class PaymentService {
     purpose: PaymentPurpose,
     amount: Money,
     provider: PaymentGatewayProvider,
+    now: Date,
     tx: TransactionScope,
   ): Promise<{
     readonly provider: PaymentGatewayProvider;
     readonly gateway: PaymentGatewayRecord;
+    readonly conversion: ResolvedConversion;
   }> {
     const routes = await this.deps.gateways.routesFor(scope, customerId, purpose, amount, tx);
     const chosen = routes.find((route) => route.provider === provider);
@@ -3598,16 +3624,86 @@ export class PaymentService {
         'That payment route is only offered inside the bot.',
       );
     }
-    // A priced-by-rate route with no rate converts nothing (enable refuses this; a
-    // route read FOR SHARE here cannot lose its rate before this attempt commits).
-    if (descriptor.conversion === 'FIXED_RATE' && chosen.gateway.providerUnitRateMinor === null) {
-      throw errors.conflict(
-        COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE,
-        'This payment route is not configured.',
-        { reason: 'RATE_MISSING' },
-      );
+    const conversion = await this.resolveConversion(
+      scope,
+      descriptor.conversion,
+      chosen.gateway,
+      now,
+      tx,
+    );
+    return { provider: chosen.provider, gateway: chosen.gateway, conversion };
+  }
+
+  /**
+   * How THIS attempt's payable becomes the provider's amount (package FX), decided inside
+   * the attempt's transaction from the route's descriptor and never from its name:
+   *
+   * - a single-policy route uses that policy;
+   * - a route with a mode setting uses whatever the setting says NOW (read in this
+   *   transaction), `FIXED_RATE` for any value that is not the central mode;
+   * - `FIXED_RATE` needs the route's stored rate — enabling refuses without one, and a
+   *   route read FOR SHARE here cannot lose it before this attempt commits;
+   * - `CENTRAL_FX` needs a positive unit ratio and a usable quote: FRESH, or
+   *   STALE_ALLOWED inside the stale limit. Anything else refuses the NEW attempt with
+   *   `FX_UNAVAILABLE` and touches no attempt already open.
+   *
+   * What is resolved here is snapshotted whole onto the invoice by `openGatewayAttempt`.
+   */
+  private async resolveConversion(
+    scope: TenantContext,
+    spec: GatewayConversionSpec,
+    gateway: PaymentGatewayRecord,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<ResolvedConversion> {
+    const mode =
+      spec.modeSetting === null
+        ? null
+        : await this.deps.settings.valueOf<unknown>(scope, settingKeyOf(spec.modeSetting), tx);
+    const policy = conversionPolicyFor(spec, mode);
+    switch (policy) {
+      case 'SAME_UNIT':
+        return { policy: 'SAME_UNIT' };
+      case 'FIXED_RATE': {
+        if (gateway.providerUnitRateMinor === null) {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE,
+            'This payment route is not configured.',
+            { reason: 'RATE_MISSING' },
+          );
+        }
+        return { policy: 'FIXED_RATE', rateMinor: gateway.providerUnitRateMinor };
+      }
+      case 'CENTRAL_FX': {
+        if (spec.fxBaseAsset === null || spec.unitRatioSetting === null) {
+          // A descriptor that names the central policy names its asset and its ratio.
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE,
+            'This payment route is not configured.',
+            { reason: FX_UNAVAILABLE_REASON, detail: 'SPEC_INCOMPLETE' },
+          );
+        }
+        const unitRatio = parseUnitRatio(
+          await this.deps.settings.valueOf<string>(scope, settingKeyOf(spec.unitRatioSetting), tx),
+        );
+        if (unitRatio === null) {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE,
+            'This payment route has no unit ratio configured.',
+            { reason: FX_UNAVAILABLE_REASON, detail: 'UNIT_RATIO_MISSING' },
+          );
+        }
+        const answer = await this.deps.fx.quoteFor(scope, spec.fxBaseAsset, now, tx);
+        if (answer.kind !== 'QUOTE') {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE,
+            'No usable exchange rate is available for this payment route right now.',
+            { reason: FX_UNAVAILABLE_REASON, detail: answer.reason },
+          );
+        }
+        return { policy: 'CENTRAL_FX', quote: answer.quote, unitRatio };
+      }
     }
-    return { provider: chosen.provider, gateway: chosen.gateway };
   }
 
   /** The shared body of the two gateway requests: hand back an open attempt, or open one. */
@@ -3624,10 +3720,11 @@ export class PaymentService {
       /** The route's customer fee rate (WP18), read in this transaction and snapshotted. */
       readonly customerFeeBasisPoints: number;
       /**
-       * A `FIXED_RATE` route's conversion rate (Package A), read in this transaction and
-       * snapshotted onto the invoice. Null for a `SAME_UNIT` route.
+       * How the payable becomes the provider's amount (package FX), resolved in this
+       * transaction by `resolveConversion` and snapshotted whole onto the invoice: the
+       * fixed rate (Package A), or the central quote and the unit ratio.
        */
-      readonly providerUnitRateMinor: bigint | null;
+      readonly conversion: ResolvedConversion;
       readonly paymentId: PaymentId;
       readonly reference: string;
       readonly now: Date;
@@ -3646,7 +3743,7 @@ export class PaymentService {
     // The bot the invoice is sent through, for a route that sends it with the bot's token.
     const botInstanceId = descriptor.invoiceCredential === 'BOT_TOKEN' ? scope.botInstanceId : null;
     const conversionRateMinor =
-      descriptor.conversion === 'FIXED_RATE' ? input.providerUnitRateMinor : null;
+      input.conversion.policy === 'FIXED_RATE' ? input.conversion.rateMinor : null;
     const open = await this.deps.gatewayInvoices.findOpenAttempt(
       scope,
       {
@@ -3703,17 +3800,30 @@ export class PaymentService {
        */
       /*
        * For a `FIXED_RATE` route (Stars) this is `ceil(payable / rate)` at the rate read in
-       * this transaction, and the rate is snapshotted beside it. The rounding excess is no
-       * figure Nexa holds: every settlement, credit and refund reads the payment's Toman
-       * snapshot, never this.
+       * this transaction, and the rate is snapshotted beside it; for a `CENTRAL_FX` one it
+       * is the same ceiling over the central quote and the unit ratio, both snapshotted
+       * (package FX). The rounding excess is no figure Nexa holds: every settlement,
+       * credit and refund reads the payment's Toman snapshot, never this.
        */
-      const sentAmount = adapter.providerAmountOf(customerFee.payable, conversionRateMinor);
+      const sentAmount = adapter.providerAmountOf(customerFee.payable, input.conversion);
       if (sentAmount === null) {
         throw errors.conflict(
           COMMERCE_ERROR_CODES.PAYMENT_GATEWAY_UNAVAILABLE,
           'This amount cannot be paid through this route.',
           { reason: 'AMOUNT_NOT_REPRESENTABLE' },
         );
+      }
+      const fx = fxSnapshotOf(input.conversion);
+      /*
+       * A NEW invoice priced by a quote past its TTL is recorded, in this transaction, so
+       * the record and the invoice commit together. An open attempt handed back above
+       * records nothing: it was priced when it opened, by whatever it snapshotted then.
+       */
+      if (
+        input.conversion.policy === 'CENTRAL_FX' &&
+        input.conversion.quote.state === 'STALE_ALLOWED'
+      ) {
+        await this.deps.fx.recordStaleUse(scope, input.conversion.quote, tx);
       }
       payment = await this.deps.repository.create(
         scope,
@@ -3744,6 +3854,8 @@ export class PaymentService {
           providerUnit: adapter.unit,
           sentAmount,
           conversionRateMinor,
+          conversionPolicy: input.conversion.policy,
+          fx,
           botInstanceId,
           now: input.now,
         },
@@ -3775,6 +3887,18 @@ export class PaymentService {
           providerUnit: invoice.providerUnit,
           providerAmount: invoice.sentAmount.toString(),
           conversionRateMinor: invoice.conversionRateMinor?.toString() ?? null,
+          // Package FX: the policy and, for the central rate, the quote and ratio it used.
+          conversionPolicy: invoice.conversionPolicy,
+          fxQuoteId: invoice.fx?.quoteId ?? null,
+          fxSource: invoice.fx?.source ?? null,
+          fxRate:
+            invoice.fx === null
+              ? null
+              : `${invoice.fx.rate.mantissa.toString()}e-${String(invoice.fx.rate.scale)}`,
+          fxUnitRatio:
+            invoice.fx === null
+              ? null
+              : `${invoice.fx.unitRatio.mantissa.toString()}e-${String(invoice.fx.unitRatio.scale)}`,
           reissued: open !== null,
         },
         result: 'SUCCESS',
@@ -4502,4 +4626,43 @@ export class PaymentService {
     }
     return parsed.data;
   }
+}
+
+/**
+ * A descriptor names its settings as strings (the contract cannot import the registry
+ * without a cycle); the registry is what says whether the name exists. A descriptor
+ * naming a key the registry does not declare is a programming error, not a refusal.
+ */
+function settingKeyOf(name: string): SettingKey {
+  if (!isSettingKey(name))
+    throw new Error(`A gateway descriptor names an unknown setting: ${name}`);
+  return name;
+}
+
+/**
+ * What a `CENTRAL_FX` attempt snapshots onto its invoice (package FX): the quote as it
+ * was read and its state at this moment, the ratio, and the exact effective figure per
+ * provider unit. Null for any other policy. The quote's state is one of the two usable
+ * ones by construction — `resolveConversion` refused anything else.
+ */
+function fxSnapshotOf(conversion: ResolvedConversion): GatewayInvoiceFxSnapshot | null {
+  if (conversion.policy !== 'CENTRAL_FX') return null;
+  const { quote, unitRatio } = conversion;
+  if (quote.state === 'UNAVAILABLE')
+    throw new Error('an unavailable quote cannot price an attempt');
+  const effectiveRate = effectiveMinorPerUnit(quote.rate, unitRatio);
+  if (effectiveRate === null) throw new Error('a positive quote and ratio have an effective rate');
+  return {
+    quoteId: quote.quoteId,
+    source: quote.source,
+    baseAsset: quote.baseAsset,
+    quoteCurrency: quote.quoteCurrency,
+    rate: quote.rate,
+    sourceAt: quote.sourceAt,
+    fetchedAt: quote.fetchedAt,
+    quoteState: quote.state,
+    policyVersion: quote.policyVersion,
+    unitRatio,
+    effectiveRate,
+  };
 }

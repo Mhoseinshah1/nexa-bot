@@ -1,11 +1,15 @@
 import { and, asc, eq, gt, inArray, isNotNull, isNull, lte, or, sql } from 'drizzle-orm';
 import type {
+  FxBaseAsset,
+  FxSource,
+  GatewayConversionPolicy,
   GatewayProviderUnit,
   Money,
   GatewayInvoiceCreationState,
   GatewayInvoiceOutcome,
   PaymentGatewayProvider,
   PaymentId,
+  SalesCurrencyCode,
   TenantContext,
 } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
@@ -16,11 +20,52 @@ import {
 import { gatewayInvoices, payments } from '../../../../infrastructure/persistence/schema.js';
 import type {
   ClaimedGatewayInvoice,
+  GatewayInvoiceFxSnapshot,
   GatewayInvoiceRecord,
   GatewayInvoiceRepository,
 } from '../application/gateway-invoice-ports.js';
 
 type Row = typeof gatewayInvoices.$inferSelect;
+
+/**
+ * The FX snapshot as the row holds it, whole or absent: `gateway_invoices_fx_snapshot_check`
+ * makes every column present exactly when `fx_quote_id` is, so a partial row cannot exist.
+ */
+function fxSnapshotOf(row: Row): GatewayInvoiceFxSnapshot | null {
+  if (
+    row.fxQuoteId === null ||
+    row.fxSource === null ||
+    row.fxBaseAsset === null ||
+    row.fxQuoteCurrency === null ||
+    row.fxRateMantissa === null ||
+    row.fxRateScale === null ||
+    row.fxFetchedAt === null ||
+    row.fxQuoteState === null ||
+    row.fxPolicyVersion === null ||
+    row.fxUnitRatioMantissa === null ||
+    row.fxUnitRatioScale === null ||
+    row.fxEffectiveRateNumerator === null ||
+    row.fxEffectiveRateDenominator === null
+  ) {
+    return null;
+  }
+  return {
+    quoteId: row.fxQuoteId,
+    source: row.fxSource as FxSource,
+    baseAsset: row.fxBaseAsset as FxBaseAsset,
+    quoteCurrency: row.fxQuoteCurrency as SalesCurrencyCode,
+    rate: { mantissa: row.fxRateMantissa, scale: row.fxRateScale },
+    sourceAt: row.fxSourceAt,
+    fetchedAt: row.fxFetchedAt,
+    quoteState: row.fxQuoteState as 'FRESH' | 'STALE_ALLOWED',
+    policyVersion: row.fxPolicyVersion,
+    unitRatio: { mantissa: row.fxUnitRatioMantissa, scale: row.fxUnitRatioScale },
+    effectiveRate: {
+      numerator: row.fxEffectiveRateNumerator,
+      denominator: row.fxEffectiveRateDenominator,
+    },
+  };
+}
 
 function toRecord(row: Row): GatewayInvoiceRecord {
   return {
@@ -43,6 +88,8 @@ function toRecord(row: Row): GatewayInvoiceRecord {
     providerUnit: row.providerUnit as GatewayProviderUnit,
     sentAmount: row.sentAmount,
     conversionRateMinor: row.conversionRateMinor,
+    conversionPolicy: row.conversionPolicy as GatewayConversionPolicy,
+    fx: fxSnapshotOf(row),
     botInstanceId: row.botInstanceId,
     providerChargeId: row.providerChargeId,
     requestAmount: row.requestAmount,
@@ -87,6 +134,8 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
       readonly providerUnit: GatewayProviderUnit;
       readonly sentAmount: bigint;
       readonly conversionRateMinor: bigint | null;
+      readonly conversionPolicy: GatewayConversionPolicy;
+      readonly fx: GatewayInvoiceFxSnapshot | null;
       readonly botInstanceId: string | null;
       readonly now: Date;
     },
@@ -104,6 +153,25 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
         providerUnit: input.providerUnit,
         sentAmount: input.sentAmount,
         conversionRateMinor: input.conversionRateMinor,
+        conversionPolicy: input.conversionPolicy,
+        ...(input.fx === null
+          ? {}
+          : {
+              fxQuoteId: input.fx.quoteId,
+              fxSource: input.fx.source,
+              fxBaseAsset: input.fx.baseAsset,
+              fxQuoteCurrency: input.fx.quoteCurrency,
+              fxRateMantissa: input.fx.rate.mantissa,
+              fxRateScale: input.fx.rate.scale,
+              fxSourceAt: input.fx.sourceAt,
+              fxFetchedAt: input.fx.fetchedAt,
+              fxQuoteState: input.fx.quoteState,
+              fxPolicyVersion: input.fx.policyVersion,
+              fxUnitRatioMantissa: input.fx.unitRatio.mantissa,
+              fxUnitRatioScale: input.fx.unitRatio.scale,
+              fxEffectiveRateNumerator: input.fx.effectiveRate.numerator,
+              fxEffectiveRateDenominator: input.fx.effectiveRate.denominator,
+            }),
         botInstanceId: input.botInstanceId,
         createdAt: input.now,
         updatedAt: input.now,

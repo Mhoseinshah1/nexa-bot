@@ -27,6 +27,7 @@ import { PaymentAccountsController } from './surfaces/web/payment-accounts.contr
 import { BotsController } from './surfaces/web/bots.controller.js';
 import { OpsGroupController } from './surfaces/web/ops-group.controller.js';
 import { PaymentGatewaysController } from './surfaces/web/payment-gateways.controller.js';
+import { FxController } from './surfaces/web/fx.controller.js';
 import { SupportFaqController } from './surfaces/web/support-faq.controller.js';
 import { ClientAppController } from './surfaces/web/client-app.controller.js';
 import { TicketsController } from './surfaces/web/tickets.controller.js';
@@ -99,6 +100,8 @@ export class AppModule implements NestModule {
         BotsController as never,
         OpsGroupController as never,
         PaymentGatewaysController as never,
+        // Package FX: the central exchange rate's status and manual refresh.
+        FxController as never,
         SupportFaqController as never,
         ClientAppController as never,
         // WP-A7: support tickets.
