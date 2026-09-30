@@ -14,6 +14,7 @@ import { BroadcastService } from '../../apps/api/src/modules/commerce/broadcasts
 import { BroadcastDispatcher } from '../../apps/api/src/modules/commerce/broadcasts/application/broadcast-dispatcher';
 import type {
   BroadcastDeliverRequest,
+  BroadcastPinResult,
   BroadcastRenderRequest,
   BroadcastRenderResult,
   BroadcastSendResult,
@@ -57,6 +58,15 @@ class ScriptedTransport implements BroadcastTransport {
     this.scripts.set(chatId, results);
   }
 
+  /** Every pin request, by chat id; and what each answers. */
+  readonly pinned: string[] = [];
+  private readonly pinScripts = new Map<string, BroadcastPinResult[]>();
+  crashOnPin: string | null = null;
+
+  scriptPin(chatId: string, ...results: BroadcastPinResult[]): void {
+    this.pinScripts.set(chatId, results);
+  }
+
   async render(_scope: unknown, request: BroadcastRenderRequest): Promise<BroadcastRenderResult> {
     const name = request.facts.firstName ?? '';
     return {
@@ -65,8 +75,18 @@ class ScriptedTransport implements BroadcastTransport {
         contentKind: request.contentKind,
         text: request.body.replace('{firstName}', name),
         buttons: request.buttons,
+        source: request.source,
       },
     };
+  }
+
+  async pin(
+    _scope: unknown,
+    request: { chatId: string; botInstanceId: string; messageId: number },
+  ): Promise<BroadcastPinResult> {
+    this.pinned.push(request.chatId);
+    if (this.crashOnPin === request.chatId) throw new Error('worker died mid-pin');
+    return this.pinScripts.get(request.chatId)?.shift() ?? { outcome: 'PINNED' };
   }
 
   async deliver(_scope: unknown, request: BroadcastDeliverRequest): Promise<BroadcastSendResult> {
@@ -77,7 +97,8 @@ class ScriptedTransport implements BroadcastTransport {
     }
     const queue = this.scripts.get(request.chatId);
     const next = queue?.shift();
-    return next ?? { outcome: 'SENT' };
+    // A message id with every success, as Telegram answers, so a pin has something to pin.
+    return next ?? { outcome: 'SENT', messageId: this.delivered.length };
   }
 }
 

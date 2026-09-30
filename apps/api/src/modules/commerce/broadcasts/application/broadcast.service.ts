@@ -11,6 +11,7 @@ import {
   broadcastMediaRefusal,
   broadcastMediaType,
   errors,
+  isSourcedBroadcastKind,
   placeholderTokensIn,
   validateTemplateBody,
   type ActorContext,
@@ -18,7 +19,9 @@ import {
   type AuditWriter,
   type BroadcastButton,
   type BroadcastContentKind,
+  type BroadcastPurpose,
   type BroadcastRecipientState,
+  type BroadcastSource,
   type BroadcastState,
   type BroadcastTestResponse,
   type Clock,
@@ -45,6 +48,7 @@ import {
   toPreview,
   type AudienceService,
 } from '../../audience/application/audience.service.js';
+import type { FrozenAudienceRecord } from '../../audience/application/ports.js';
 import type {
   BroadcastRecord,
   BroadcastRepository,
@@ -87,6 +91,12 @@ export interface BroadcastContentInput {
   readonly buttons: readonly BroadcastButton[];
   /** Any audience definition; frozen to its canonical form here. */
   readonly audience: unknown;
+  /** Round N close (§D); promotional unless said otherwise. */
+  readonly purpose?: BroadcastPurpose;
+  /** Round N close (§C); required for FORWARD and COPY, refused for the rest. */
+  readonly source?: BroadcastSource | null;
+  /** Round N close (§C); pin each delivered message once. */
+  readonly pin?: boolean;
 }
 
 export interface LaunchBroadcastInput {
@@ -109,6 +119,8 @@ function adminIdOf(actor: ActorContext): string | null {
  * `validateTemplateBody` every template is held to. A media broadcast may have no caption.
  */
 export function broadcastBodyIssues(kind: BroadcastContentKind, body: string): readonly string[] {
+  // A FORWARD or COPY renders nothing: its body must be empty, which `checkedContent` holds.
+  if (isSourcedBroadcastKind(kind)) return [];
   const max = kind === 'TEXT' ? BROADCAST_TEXT_MAX_LENGTH : BROADCAST_CAPTION_MAX_LENGTH;
   return validateTemplateBody({ ...BROADCAST_BODY_DEFINITION, maxLength: max }, body)
     .filter((issue) => !(kind !== 'TEXT' && issue.kind === 'EMPTY'))
@@ -173,17 +185,26 @@ export class BroadcastService {
   async create(
     scope: TenantContext,
     actor: ActorContext,
-    input: BroadcastContentInput & { readonly idempotencyKey: string },
+    input: BroadcastContentInput & {
+      readonly idempotencyKey: string;
+      /** Round N close (§A): bind the draft to a frozen audience for its whole life. */
+      readonly frozenAudienceId?: string | null;
+    },
   ): Promise<BroadcastRecord> {
     const content = this.checkedContent(input);
     const denial = { action: 'broadcast.create', entityType: 'Broadcast', entityId: null };
     await this.authorize(scope, actor, denial);
+    const frozenAudienceId = input.frozenAudienceId ?? null;
     const requestHash = hashRequest({
       title: content.title,
       contentKind: content.contentKind,
       body: content.body,
       buttons: content.buttons,
       audienceHash: content.audience.hash,
+      purpose: content.purpose,
+      source: content.source,
+      pin: content.pin,
+      frozenAudienceId,
     });
     const replay = await this.deps.idempotency.find<{ broadcastId: string }>(
       scope,
@@ -203,6 +224,11 @@ export class BroadcastService {
       denial,
       async (tx) => {
         await this.assertScopeActive(scope, tx);
+        // A frozen audience is checked at creation and again at the launch: the draft is
+        // bound to it, and the record it names must be this tenant's, of customers, held.
+        if (frozenAudienceId !== null) {
+          await this.frozenSource(scope, frozenAudienceId, content.audience.hash, tx);
+        }
         await this.deps.repository.create(
           scope,
           {
@@ -211,8 +237,12 @@ export class BroadcastService {
             contentKind: content.contentKind,
             body: content.body,
             buttons: content.buttons,
+            purpose: content.purpose,
+            source: content.source,
+            pin: content.pin,
             audienceJson: content.audience.json,
             audienceHash: content.audience.hash,
+            frozenAudienceId,
             createdByAdminId: adminIdOf(actor),
             now,
           },
@@ -230,6 +260,10 @@ export class BroadcastService {
               title: content.title,
               contentKind: content.contentKind,
               audienceHash: content.audience.hash,
+              purpose: content.purpose,
+              source: content.source,
+              pin: content.pin,
+              frozenAudienceId,
             },
             result: 'SUCCESS',
           },
@@ -280,6 +314,9 @@ export class BroadcastService {
             contentKind: content.contentKind,
             body: content.body,
             buttons: content.buttons,
+            purpose: content.purpose,
+            source: content.source,
+            pin: content.pin,
             audienceJson: content.audience.json,
             audienceHash: content.audience.hash,
             now,
@@ -306,6 +343,9 @@ export class BroadcastService {
               title: content.title,
               contentKind: content.contentKind,
               audienceHash: content.audience.hash,
+              purpose: content.purpose,
+              source: content.source,
+              pin: content.pin,
               version: current.version + 1,
             },
             result: 'SUCCESS',
@@ -448,8 +488,35 @@ export class BroadcastService {
   async preview(scope: TenantContext, actor: ActorContext, id: string): Promise<AudiencePreview> {
     await this.deps.guard.check(scope, actor, BROADCAST_SEND);
     const record = await this.require(scope, id);
-    const result = await this.deps.audience.evaluate(scope, record.audienceDefinition);
-    const sample = await this.deps.audience.sampleOf(scope, record.audienceDefinition, result.asOf);
+    if (record.frozenAudienceId !== null) {
+      // A frozen draft's preview IS its frozen header: the launch copies those members.
+      const frozen = await this.frozenSource(scope, record.frozenAudienceId, record.audienceHash);
+      return {
+        asOf: frozen.asOf.toISOString(),
+        definition: frozen.definition,
+        definitionHash: frozen.definitionHash,
+        customers: frozen.count,
+        reachable: frozen.count,
+        fingerprint: frozen.fingerprint,
+        sample: [],
+      };
+    }
+    // Round N close (§D): a MARKETING send counts without the customers who opted out, and
+    // the launch materialises with the same flag, so the count confirmed is the count frozen.
+    const options = { excludeMarketingOptOuts: record.purpose === 'MARKETING' };
+    const result = await this.deps.audience.evaluate(
+      scope,
+      record.audienceDefinition,
+      undefined,
+      undefined,
+      options,
+    );
+    const sample = await this.deps.audience.sampleOf(
+      scope,
+      record.audienceDefinition,
+      result.asOf,
+      options,
+    );
     return toPreview(result, sample);
   }
 
@@ -483,12 +550,13 @@ export class BroadcastService {
       body: record.body,
       facts,
       buttons: record.buttons,
+      source: record.source,
     });
-    const media =
-      record.contentKind === 'TEXT'
-        ? null
-        : await this.deps.repository.mediaSource(scope, id, target.botInstanceId);
-    if (!rendered.ok || (record.contentKind !== 'TEXT' && media === null)) {
+    const isMedia = record.contentKind !== 'TEXT' && !isSourcedBroadcastKind(record.contentKind);
+    const media = !isMedia
+      ? null
+      : await this.deps.repository.mediaSource(scope, id, target.botInstanceId);
+    if (!rendered.ok || (isMedia && media === null)) {
       throw errors.validation(
         BROADCAST_ERROR_CODES.BODY_INVALID,
         'This broadcast cannot be sent as it stands.',
@@ -539,6 +607,19 @@ export class BroadcastService {
             result.fileId,
             tx,
           );
+        }
+        /*
+         * Round N close (§C): the preview IS the source's validation. The Bot API offers no
+         * way to read a message by id, so a `copyMessage`/`forwardMessage` that reached the
+         * operator is the one proof the bot can reach the source; the launch requires it.
+         * A draft still: an edit of the source clears the stamp (`updateDraft`).
+         */
+        if (
+          result.outcome === 'SENT' &&
+          isSourcedBroadcastKind(record.contentKind) &&
+          record.state === 'DRAFT'
+        ) {
+          await this.deps.repository.markSourceVerified(scope, id, this.deps.clock.now(), tx);
         }
         await this.deps.audit.record(
           scope,
@@ -634,7 +715,20 @@ export class BroadcastService {
             issues,
           });
         }
-        if (current.contentKind !== 'TEXT') {
+        if (isSourcedBroadcastKind(current.contentKind)) {
+          if (current.source === null) {
+            throw errors.preconditionFailed(
+              BROADCAST_ERROR_CODES.SOURCE_REQUIRED,
+              'Name the message this broadcast forwards or copies.',
+            );
+          }
+          if (current.sourceVerifiedAt === null) {
+            throw errors.preconditionFailed(
+              BROADCAST_ERROR_CODES.SOURCE_UNVERIFIED,
+              'Send yourself a test first: it proves the bot can reach the source message.',
+            );
+          }
+        } else if (current.contentKind !== 'TEXT') {
           if (current.media === null) {
             throw errors.preconditionFailed(
               BROADCAST_ERROR_CODES.MEDIA_REQUIRED,
@@ -648,13 +742,47 @@ export class BroadcastService {
             );
           }
         }
-        const frozen = await this.deps.repository.materialise(
-          scope,
-          id,
-          { tenantId: scope.tenantId as string, definition: current.audienceDefinition, asOf: now },
-          now,
-          tx,
-        );
+        const excludeMarketingOptOuts = current.purpose === 'MARKETING';
+        /*
+         * Round N close (§A): a draft bound to a frozen audience COPIES its members, and the
+         * rows written must be the rows frozen (the header's count and fingerprint) as well as
+         * what the operator confirmed. A live draft evaluates its definition now, as before.
+         */
+        const source =
+          current.frozenAudienceId === null
+            ? null
+            : await this.frozenSource(scope, current.frozenAudienceId, current.audienceHash, tx);
+        const frozen =
+          source !== null
+            ? await this.deps.repository.materialiseFromFrozen(
+                scope,
+                id,
+                source.id,
+                { excludeMarketingOptOuts, now },
+                tx,
+              )
+            : await this.deps.repository.materialise(
+                scope,
+                id,
+                {
+                  tenantId: scope.tenantId as string,
+                  definition: current.audienceDefinition,
+                  asOf: now,
+                  excludeMarketingOptOuts,
+                },
+                now,
+                tx,
+              );
+        if (
+          source !== null &&
+          (frozen.count !== source.count || frozen.fingerprint !== source.fingerprint)
+        ) {
+          throw errors.conflict(
+            AUDIENCE_ERROR_CODES.FROZEN_RELEASED,
+            'The frozen audience no longer holds the members it was confirmed with.',
+            { frozenAudienceId: source.id },
+          );
+        }
         if (frozen.count === 0) {
           throw errors.preconditionFailed(
             AUDIENCE_ERROR_CODES.EMPTY,
@@ -684,7 +812,7 @@ export class BroadcastService {
           {
             to,
             scheduledAt: input.mode === 'NOW' ? null : input.scheduledAt,
-            asOf: now,
+            asOf: source?.asOf ?? now,
             count: frozen.count,
             fingerprint: frozen.fingerprint,
             launchedByAdminId: adminIdOf(actor),
@@ -884,6 +1012,30 @@ export class BroadcastService {
         issues,
       });
     }
+    const source = input.source ?? null;
+    if (isSourcedBroadcastKind(input.contentKind)) {
+      if (source === null) {
+        throw errors.validation(
+          BROADCAST_ERROR_CODES.SOURCE_REQUIRED,
+          'A forward or copy names the message it sends: its chat id and message id.',
+        );
+      }
+      // Telegram sends the source as it is: no text of ours, and a forward takes no keyboard.
+      if (
+        input.body.trim().length > 0 ||
+        (input.contentKind === 'FORWARD' && input.buttons.length > 0)
+      ) {
+        throw errors.validation(
+          BROADCAST_ERROR_CODES.SOURCE_CONTENT_INVALID,
+          'A forward or copy carries no text of its own, and a forward carries no buttons.',
+        );
+      }
+    } else if (source !== null) {
+      throw errors.validation(
+        BROADCAST_ERROR_CODES.SOURCE_REQUIRED,
+        'Only a forward or a copy names a source message.',
+      );
+    }
     return {
       title: input.title.trim(),
       contentKind: input.contentKind,
@@ -893,7 +1045,43 @@ export class BroadcastService {
         url: button.url.trim(),
       })),
       audience: freezeAudience(input.audience),
+      purpose: input.purpose ?? 'MARKETING',
+      source,
+      pin: input.pin ?? false,
     };
+  }
+
+  /** The frozen audience a draft names: this tenant's, of customers, held, by this definition. */
+  private async frozenSource(
+    scope: TenantContext,
+    frozenAudienceId: string,
+    audienceHash: string,
+    tx?: TransactionScope,
+  ): Promise<FrozenAudienceRecord> {
+    const frozen = await this.deps.audience.frozen(scope, frozenAudienceId, tx);
+    if (frozen === null) {
+      throw errors.notFound(AUDIENCE_ERROR_CODES.FROZEN_NOT_FOUND, 'No such frozen audience.');
+    }
+    if (frozen.releasedAt !== null) {
+      throw errors.conflict(
+        AUDIENCE_ERROR_CODES.FROZEN_RELEASED,
+        'This frozen audience was released; its members are no longer held.',
+      );
+    }
+    if (frozen.kind !== 'CUSTOMERS') {
+      throw errors.validation(
+        AUDIENCE_ERROR_CODES.FROZEN_KIND_MISMATCH,
+        'A broadcast is sent to a CUSTOMERS audience.',
+        { kind: frozen.kind },
+      );
+    }
+    if (frozen.definitionHash !== audienceHash) {
+      throw errors.conflict(
+        AUDIENCE_ERROR_CODES.CHANGED,
+        'The frozen audience was not frozen by this broadcast’s definition.',
+      );
+    }
+    return frozen;
   }
 
   private async require(scope: TenantContext, id: string): Promise<BroadcastRecord> {

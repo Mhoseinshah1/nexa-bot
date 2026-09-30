@@ -1,5 +1,6 @@
 import {
   BROADCAST_BODY_DEFINITION,
+  isSourcedBroadcastKind,
   type BroadcastButton,
   type BroadcastContentKind,
   type TemplateValues,
@@ -23,22 +24,21 @@ import type {
 } from '../../messaging/infrastructure/telegram-customer-messenger.js';
 import type {
   BroadcastDeliverRequest,
+  BroadcastPinResult,
   BroadcastRenderRequest,
   BroadcastRenderResult,
   BroadcastSendResult,
   BroadcastTransport,
 } from '../application/ports.js';
 
-const METHOD: Readonly<
-  Record<Exclude<BroadcastContentKind, 'TEXT'>, 'sendPhoto' | 'sendVideo' | 'sendDocument'>
-> = {
+/** The kinds sent from bytes this installation holds. */
+type MediaKind = Exclude<BroadcastContentKind, 'TEXT' | 'FORWARD' | 'COPY'>;
+const METHOD: Readonly<Record<MediaKind, 'sendPhoto' | 'sendVideo' | 'sendDocument'>> = {
   PHOTO: 'sendPhoto',
   VIDEO: 'sendVideo',
   DOCUMENT: 'sendDocument',
 };
-const FIELD: Readonly<
-  Record<Exclude<BroadcastContentKind, 'TEXT'>, 'photo' | 'video' | 'document'>
-> = {
+const FIELD: Readonly<Record<MediaKind, 'photo' | 'video' | 'document'>> = {
   PHOTO: 'photo',
   VIDEO: 'video',
   DOCUMENT: 'document',
@@ -92,6 +92,29 @@ export class TelegramBroadcastTransport implements BroadcastTransport {
     scope: TenantContext,
     request: BroadcastRenderRequest,
   ): Promise<BroadcastRenderResult> {
+    if (isSourcedBroadcastKind(request.contentKind)) {
+      /*
+       * Round N close (§C): nothing is rendered. `forwardMessage` sends the message as it
+       * is and takes no keyboard; `copyMessage` keeps the original caption when none is
+       * given and may carry an inline keyboard (Bot API 10.3).
+       */
+      if (request.source === null) return { ok: false, errorCode: 'broadcast.source_required' };
+      if (request.contentKind === 'FORWARD' && request.buttons.length > 0) {
+        return { ok: false, errorCode: 'broadcast.source_content_invalid' };
+      }
+      if (!request.buttons.every((button) => openable(button.url))) {
+        return { ok: false, errorCode: 'broadcast.button_invalid' };
+      }
+      return {
+        ok: true,
+        rendered: {
+          contentKind: request.contentKind,
+          text: '',
+          buttons: request.buttons,
+          source: request.source,
+        },
+      };
+    }
     const values: Record<string, TemplateValues[string]> = {};
     if (request.facts.firstName !== null) values.firstName = request.facts.firstName;
     if (request.facts.username !== null) values.username = request.facts.username;
@@ -114,7 +137,7 @@ export class TelegramBroadcastTransport implements BroadcastTransport {
     }
     return {
       ok: true,
-      rendered: { contentKind: request.contentKind, text, buttons: request.buttons },
+      rendered: { contentKind: request.contentKind, text, buttons: request.buttons, source: null },
     };
   }
 
@@ -129,7 +152,30 @@ export class TelegramBroadcastTransport implements BroadcastTransport {
     const markup = rendered.buttons.length === 0 ? null : keyboard(rendered.buttons);
 
     let call: TelegramRequest;
-    if (rendered.contentKind === 'TEXT') {
+    if (isSourcedBroadcastKind(rendered.contentKind)) {
+      if (rendered.source === null) {
+        return { outcome: 'REFUSED', errorCode: 'broadcast.source_required' };
+      }
+      /*
+       * `forwardMessage(chat_id, from_chat_id, message_id)` returns the sent Message;
+       * `copyMessage(chat_id, from_chat_id, message_id[, reply_markup])` returns a MessageId.
+       * Both carry `message_id`, which `telegramSend` reads for the pin. The source chat id
+       * is a number or an `@username`, passed as the string it was given: Telegram accepts
+       * either form for `from_chat_id`.
+       */
+      call = {
+        ...base,
+        method: rendered.contentKind === 'FORWARD' ? 'forwardMessage' : 'copyMessage',
+        body: {
+          chat_id: request.chatId,
+          from_chat_id: rendered.source.chatId,
+          message_id: rendered.source.messageId,
+          ...(markup === null || rendered.contentKind === 'FORWARD'
+            ? {}
+            : { reply_markup: { inline_keyboard: markup } }),
+        },
+      };
+    } else if (rendered.contentKind === 'TEXT') {
       call = {
         ...base,
         body: textMessageBody({
@@ -176,6 +222,51 @@ export class TelegramBroadcastTransport implements BroadcastTransport {
     }
     return classify(await telegramSend(call));
   }
+
+  /**
+   * ONE `pinChatMessage` (round N close, §C): "In private chats … all non-service messages
+   * can be pinned" without any right (Bot API 10.3), so a bot that could send here can pin
+   * here. `disable_notification` is passed although "notifications are always disabled in
+   * channels and private chats", so the intent is on the wire whatever chat this is.
+   */
+  async pin(
+    scope: TenantContext,
+    request: {
+      readonly chatId: string;
+      readonly botInstanceId: string;
+      readonly messageId: number;
+    },
+  ): Promise<BroadcastPinResult> {
+    const token = await this.bots.tokenForBotInstance(scope, request.botInstanceId as never);
+    if (token === null) return { outcome: 'FAILED', errorCode: 'broadcast.no_bot' };
+    return classifyPin(
+      await telegramSend({
+        token,
+        apiBaseUrl: this.apiBaseUrl,
+        timeoutMs: this.timeoutMs,
+        method: 'pinChatMessage',
+        body: {
+          chat_id: request.chatId,
+          message_id: request.messageId,
+          disable_notification: true,
+        },
+      }),
+    );
+  }
+}
+
+/**
+ * A pin's answer. One attempt, so a 429 is this attempt's FAILURE (the bot is not held: the
+ * pin is not the send, and a rate-limited pin must not stall thousands of sends); a timeout
+ * or 5xx may have pinned and is UNKNOWN; anything readable is FAILED with its code.
+ */
+export function classifyPin(outcome: TelegramSendOutcome): BroadcastPinResult {
+  if (outcome.outcome === 'SUCCEEDED') return { outcome: 'PINNED' };
+  const code = outcome.errorCode.slice(0, 100);
+  if (outcome.outcome === 'FAILED_RETRYABLE' && code !== 'telegram.rate_limited') {
+    return { outcome: 'UNKNOWN', errorCode: code };
+  }
+  return { outcome: 'FAILED', errorCode: code };
 }
 
 /**
@@ -185,9 +276,11 @@ export class TelegramBroadcastTransport implements BroadcastTransport {
  */
 export function classify(outcome: TelegramSendOutcome): BroadcastSendResult {
   if (outcome.outcome === 'SUCCEEDED') {
-    return outcome.file === undefined
-      ? { outcome: 'SENT' }
-      : { outcome: 'SENT', fileId: outcome.file.fileId };
+    return {
+      outcome: 'SENT',
+      ...(outcome.file === undefined ? {} : { fileId: outcome.file.fileId }),
+      ...(outcome.messageId === null ? {} : { messageId: outcome.messageId }),
+    };
   }
   if (outcome.outcome === 'FAILED_RETRYABLE') {
     if (outcome.errorCode === 'telegram.rate_limited') {

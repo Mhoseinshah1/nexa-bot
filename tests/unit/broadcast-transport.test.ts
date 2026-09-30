@@ -25,6 +25,8 @@ describe('classify', () => {
     ).toEqual({
       outcome: 'SENT',
       fileId: 'F',
+      // Round N close: the delivered message's id, kept for the pin.
+      messageId: 1,
     });
     expect(
       classify({
@@ -127,6 +129,7 @@ describe('TelegramBroadcastTransport', () => {
       body: 'سلام {firstName}\nموجودی: {walletBalance}\n@{username}',
       facts: { firstName: 'Sara', username: null, walletBalance: money(125_000n, 'IRT') },
       buttons: [],
+      source: null,
     });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -141,6 +144,7 @@ describe('TelegramBroadcastTransport', () => {
       body: 'x'.repeat(1100),
       facts: { firstName: null, username: null, walletBalance: null },
       buttons: [],
+      source: null,
     });
     expect(result).toEqual({ ok: false, errorCode: 'broadcast.caption_over_bound' });
   });
@@ -155,6 +159,7 @@ describe('TelegramBroadcastTransport', () => {
         contentKind: 'TEXT',
         text: 'hi',
         buttons: [{ label: 'Go', url: 'https://example.test' }],
+        source: null,
       },
       media: null,
     });
@@ -170,7 +175,7 @@ describe('TelegramBroadcastTransport', () => {
     await t.deliver(scope, {
       chatId: '42',
       botInstanceId: 'bot',
-      rendered: { contentKind: 'VIDEO', text: 'cap', buttons: [] },
+      rendered: { contentKind: 'VIDEO', text: 'cap', buttons: [], source: null },
       media: { kind: 'FILE_ID', fileId: 'VID' },
     });
     expect(received[1]?.path).toBe('/botTOKEN/sendVideo');
@@ -179,7 +184,7 @@ describe('TelegramBroadcastTransport', () => {
     const upload = await t.deliver(scope, {
       chatId: '42',
       botInstanceId: 'bot',
-      rendered: { contentKind: 'VIDEO', text: '', buttons: [] },
+      rendered: { contentKind: 'VIDEO', text: '', buttons: [], source: null },
       media: {
         kind: 'BYTES',
         bytes: new Uint8Array([0, 0, 0, 0, 0x66, 0x74, 0x79, 0x70]),
@@ -190,7 +195,7 @@ describe('TelegramBroadcastTransport', () => {
     expect(received[2]?.contentType).toContain('multipart/form-data');
     expect(received[2]?.body).toContain('name="video"; filename="v.mp4"');
     // The handle Telegram gave the uploaded video is what later recipients are sent.
-    expect(upload).toEqual({ outcome: 'SENT', fileId: 'VID' });
+    expect(upload).toEqual({ outcome: 'SENT', fileId: 'VID', messageId: 9 });
   });
 
   it('answers BOT_UNAVAILABLE without a request when the bot has no token', async () => {
@@ -204,7 +209,7 @@ describe('TelegramBroadcastTransport', () => {
     const result = await t.deliver(scope, {
       chatId: '42',
       botInstanceId: 'bot',
-      rendered: { contentKind: 'TEXT', text: 'x', buttons: [] },
+      rendered: { contentKind: 'TEXT', text: 'x', buttons: [], source: null },
       media: null,
     });
     expect(result).toEqual({ outcome: 'BOT_UNAVAILABLE', errorCode: 'broadcast.no_bot' });

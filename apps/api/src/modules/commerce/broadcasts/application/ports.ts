@@ -5,7 +5,10 @@ import type {
   BroadcastCounts,
   BroadcastMediaMimeType,
   BroadcastPauseReason,
+  BroadcastPinState,
+  BroadcastPurpose,
   BroadcastRecipientState,
+  BroadcastSource,
   BroadcastState,
   Money,
   TenantContext,
@@ -23,6 +26,15 @@ export interface BroadcastRecord {
   /** RAW, as the operator typed it. */
   readonly body: string;
   readonly buttons: readonly BroadcastButton[];
+  /** Round N close (§D): MARKETING leaves out opted-out customers. */
+  readonly purpose: BroadcastPurpose;
+  /** Round N close (§C): the message a FORWARD or COPY sends, and when a preview last reached it. */
+  readonly source: BroadcastSource | null;
+  readonly sourceVerifiedAt: Date | null;
+  /** Round N close (§C): pin each delivered message, once, recorded apart from the send. */
+  readonly pin: boolean;
+  /** Round N close (§A): the frozen audience the launch copies its recipients from. */
+  readonly frozenAudienceId: string | null;
   readonly audienceDefinition: AudienceDefinition;
   readonly audienceHash: string;
   readonly audienceAsOf: Date | null;
@@ -56,8 +68,13 @@ export interface BroadcastDraftInput {
   readonly contentKind: BroadcastContentKind;
   readonly body: string;
   readonly buttons: readonly BroadcastButton[];
+  readonly purpose: BroadcastPurpose;
+  readonly source: BroadcastSource | null;
+  readonly pin: boolean;
   readonly audienceJson: string;
   readonly audienceHash: string;
+  /** Create only: a draft is bound to its frozen audience for life. */
+  readonly frozenAudienceId: string | null;
   readonly createdByAdminId: string | null;
   readonly now: Date;
 }
@@ -88,6 +105,9 @@ export interface BroadcastContent {
   readonly contentKind: BroadcastContentKind;
   readonly body: string;
   readonly buttons: readonly BroadcastButton[];
+  readonly purpose: BroadcastPurpose;
+  readonly source: BroadcastSource | null;
+  readonly pin: boolean;
   /** Whether a BLOCKED customer is a skip (the audience asked for ACTIVE customers only). */
   readonly requiresActiveCustomer: boolean;
 }
@@ -104,12 +124,24 @@ export type BroadcastMediaSource =
 
 /** How one recipient's send ended, as the repository records it. */
 export type RecipientOutcome =
-  | { readonly to: 'SENT' }
+  | {
+      readonly to: 'SENT';
+      /** Telegram's message id, kept for the pin; null when the answer named none. */
+      readonly messageId: number | null;
+      /** Stamp the pin PENDING in the same write, so the pin request follows a commit. */
+      readonly pinRequested: boolean;
+    }
   | { readonly to: 'UNCONFIRMED'; readonly errorCode: string }
   | { readonly to: 'UNREACHABLE'; readonly errorCode: string }
   | { readonly to: 'FAILED'; readonly errorCode: string }
   | { readonly to: 'RETRY'; readonly errorCode: string; readonly nextAttemptAt: Date }
   | { readonly to: 'DEFER'; readonly errorCode: string; readonly nextAttemptAt: Date };
+
+/** How one recipient's pin ended, as the repository records it. One attempt. */
+export type PinOutcome =
+  | { readonly to: 'PINNED' }
+  | { readonly to: 'FAILED'; readonly errorCode: string }
+  | { readonly to: 'UNCONFIRMED'; readonly errorCode: string };
 
 export interface RecipientPageRow {
   readonly customerId: string;
@@ -119,6 +151,8 @@ export interface RecipientPageRow {
   readonly attempts: number;
   readonly errorCode: string | null;
   readonly resolvedAt: Date | null;
+  readonly pinState: BroadcastPinState | null;
+  readonly pinErrorCode: string | null;
 }
 
 export interface BroadcastRepository {
@@ -131,9 +165,16 @@ export interface BroadcastRepository {
     scope: TenantContext,
     id: string,
     expectedVersion: number,
-    input: Omit<BroadcastDraftInput, 'id' | 'createdByAdminId'>,
+    input: Omit<BroadcastDraftInput, 'id' | 'createdByAdminId' | 'frozenAudienceId'>,
     tx: TransactionScope,
   ): Promise<boolean>;
+  /** Round N close (§C): a real preview reached the operator from the draft's source. */
+  markSourceVerified(
+    scope: TenantContext,
+    id: string,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<void>;
   /** Removes the media row when its kind no longer matches the draft's. */
   dropMismatchedMedia(scope: TenantContext, id: string, tx: TransactionScope): Promise<void>;
   /** Bytes the tenant holds undelivered, excluding one broadcast's own row. */
@@ -171,6 +212,19 @@ export interface BroadcastRepository {
     id: string,
     evaluation: AudienceEvaluation,
     now: Date,
+    tx: TransactionScope,
+  ): Promise<{ readonly count: number; readonly fingerprint: string }>;
+  /**
+   * Round N close (§A): the recipients COPIED from a frozen audience's members. A member who
+   * opted out of promotions is written SKIPPED at once when the broadcast is MARKETING — a
+   * frozen set decides WHO, never whether a promotional message may still be sent — and is
+   * part of the count and fingerprint, exactly as an unreachable member is.
+   */
+  materialiseFromFrozen(
+    scope: TenantContext,
+    id: string,
+    frozenAudienceId: string,
+    input: { readonly excludeMarketingOptOuts: boolean; readonly now: Date },
     tx: TransactionScope,
   ): Promise<{ readonly count: number; readonly fingerprint: string }>;
   markLaunched(
@@ -236,6 +290,8 @@ export interface BroadcastRepository {
   startDue(scope: TenantContext, now: Date, tx: TransactionScope): Promise<readonly string[]>;
   /** Stamped sends whose lease ran out, resolved UNCONFIRMED. Returns how many. */
   reapStranded(scope: TenantContext, now: Date, tx: TransactionScope): Promise<number>;
+  /** Round N close (§C): stamped pins whose answer never came, resolved UNCONFIRMED. */
+  reapStrandedPins(scope: TenantContext, now: Date, tx: TransactionScope): Promise<number>;
   /** The bots that have a SENDING broadcast's recipient waiting. */
   botsWithWork(scope: TenantContext, now: Date): Promise<readonly string[]>;
   /**
@@ -255,6 +311,8 @@ export interface BroadcastRepository {
   ): Promise<readonly ClaimedRecipient[]>;
   content(scope: TenantContext, id: string): Promise<BroadcastContent | null>;
   customerStatus(scope: TenantContext, customerId: string): Promise<string | null>;
+  /** Round N close (§D): whether the customer has opted out of promotional broadcasts NOW. */
+  customerMarketingOptedOut(scope: TenantContext, customerId: string): Promise<boolean>;
   /** PENDING → SKIPPED, for a customer a live fact excludes. */
   skip(
     scope: TenantContext,
@@ -279,6 +337,19 @@ export interface BroadcastRepository {
     recipient: ClaimedRecipient,
     stampedAt: Date,
     outcome: RecipientOutcome,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<boolean>;
+  /**
+   * Round N close (§C): the pin's outcome, for the pin THIS pass stamped (`pin_started_at`
+   * = `stampedAt`, state PENDING). False when the row had moved — the reaper resolved it,
+   * or the send itself was never recorded — and then nothing is written.
+   */
+  recordPin(
+    scope: TenantContext,
+    recipient: ClaimedRecipient,
+    stampedAt: Date,
+    outcome: PinOutcome,
     now: Date,
     tx: TransactionScope,
   ): Promise<boolean>;
@@ -326,6 +397,8 @@ export interface BroadcastRenderRequest {
   readonly body: string;
   readonly facts: RecipientFacts;
   readonly buttons: readonly BroadcastButton[];
+  /** Round N close (§C): the message a FORWARD or COPY sends; null for a composed kind. */
+  readonly source: BroadcastSource | null;
 }
 
 /**
@@ -336,9 +409,10 @@ export interface BroadcastRenderRequest {
  */
 export interface RenderedBroadcast {
   readonly contentKind: BroadcastContentKind;
-  /** The text, or the caption (possibly empty). */
+  /** The text, or the caption (possibly empty); empty for a FORWARD or COPY. */
   readonly text: string;
   readonly buttons: readonly BroadcastButton[];
+  readonly source: BroadcastSource | null;
 }
 
 export type BroadcastRenderResult =
@@ -362,16 +436,36 @@ export interface BroadcastDeliverRequest {
  * - `BOT_UNAVAILABLE` — there is no usable token for the bot (disabled, revoked, 401).
  */
 export type BroadcastSendResult =
-  | { readonly outcome: 'SENT'; readonly fileId?: string }
+  | { readonly outcome: 'SENT'; readonly fileId?: string; readonly messageId?: number }
   | { readonly outcome: 'RATE_LIMITED'; readonly retryAfterMs?: number }
   | { readonly outcome: 'UNKNOWN'; readonly errorCode: string }
   | { readonly outcome: 'UNREACHABLE'; readonly errorCode: string }
   | { readonly outcome: 'REFUSED'; readonly errorCode: string }
   | { readonly outcome: 'BOT_UNAVAILABLE'; readonly errorCode: string };
 
+/**
+ * What a pin did (round N close, §C). `PINNED` is Telegram's `True`; `FAILED` is a readable
+ * refusal — including a 429, because a pin is attempted ONCE and never retried, so a rate
+ * limit is a failure of that one attempt and not a reason to hold the bot; `UNKNOWN` may
+ * have pinned (timeout, 5xx, unreadable 2xx).
+ */
+export type BroadcastPinResult =
+  | { readonly outcome: 'PINNED' }
+  | { readonly outcome: 'FAILED'; readonly errorCode: string }
+  | { readonly outcome: 'UNKNOWN'; readonly errorCode: string };
+
 export interface BroadcastTransport {
   /** Renders without sending. Never throws for a body Telegram would refuse: it says so. */
   render(scope: TenantContext, request: BroadcastRenderRequest): Promise<BroadcastRenderResult>;
   /** ONE Telegram request. Never throws for a send failure: the outcome is returned. */
   deliver(scope: TenantContext, request: BroadcastDeliverRequest): Promise<BroadcastSendResult>;
+  /** ONE `pinChatMessage` request for a message this bot delivered. Never throws. */
+  pin(
+    scope: TenantContext,
+    request: {
+      readonly chatId: string;
+      readonly botInstanceId: string;
+      readonly messageId: number;
+    },
+  ): Promise<BroadcastPinResult>;
 }
