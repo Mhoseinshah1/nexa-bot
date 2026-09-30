@@ -68,8 +68,8 @@ export interface SelectOption {
  *   quiet window's two `HH:MM` times (HF-A9), which the registry's schema validates.
  * - `select`: a closed set of values, each with a Persian label.
  * - the rest are the dedicated editors a structured value needs: a currency picker,
- *   money (amount and currency), a list of money, of Telegram handles and of channels,
- *   and a product picker.
+ *   money (amount and currency), and a list of money, of Telegram handles and of channels.
+ *   (The product picker went with `trial.product_id`'s retirement, F5.)
  *
  * There is no boolean and no secret control because the registry holds neither: a
  * switch is a feature flag, not a setting, and a credential is never a setting
@@ -83,8 +83,7 @@ export type SettingControl =
   | { readonly kind: 'money' }
   | { readonly kind: 'money_list' }
   | { readonly kind: 'handle_list' }
-  | { readonly kind: 'channel_list' }
-  | { readonly kind: 'product' };
+  | { readonly kind: 'channel_list' };
 
 /**
  * Registry keys with a page of their own, which the Settings page does not draw (R1):
@@ -92,6 +91,16 @@ export type SettingControl =
  * «دکمه‌های ربات» page beside the labels it arranges.
  */
 export const SETTINGS_MANAGED_ELSEWHERE: readonly SettingKey[] = ['bot.main_menu'];
+
+/**
+ * Retired registry keys, drawn on no page (F5). Each is `consumer: 'PLANNED'` in the
+ * registry — stored, and read by nothing — and stays declared only so a value stored
+ * before its retirement keeps parsing. A row for it would be a control that changes
+ * nothing, which is the one thing this screen must never offer.
+ *
+ * `trial.product_id` (R1): a trial is configured on each panel's «سرویس تست» tab.
+ */
+export const SETTINGS_RETIRED: readonly SettingKey[] = ['trial.product_id'];
 
 export interface SettingPresentation {
   readonly title: WebKey;
@@ -281,11 +290,15 @@ export const SETTING_PRESENTATION: Readonly<Record<SettingKey, SettingPresentati
     group: 'support',
     control: { kind: 'text' },
   },
+  /*
+   * Retired by R1 and drawn nowhere since F5 (`SETTINGS_RETIRED`); the entry exists because
+   * this map is total.
+   */
   'trial.product_id': {
     title: 'web.setting_trial_product_id',
     description: 'web.setting_trial_product_id_desc',
     group: 'trial',
-    control: { kind: 'product' },
+    control: { kind: 'text' },
   },
   'trial.limit_per_customer': {
     title: 'web.setting_trial_limit_per_customer',

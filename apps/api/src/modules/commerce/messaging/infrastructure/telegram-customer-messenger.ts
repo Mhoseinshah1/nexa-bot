@@ -10,6 +10,7 @@ import {
   ADMIN_MENU_BUTTON,
   MAIN_MENU_BUTTONS,
   errors,
+  mainMenuButtonIsGated,
   packMainMenuRows,
   templateDefinition,
 } from '@nexa/contracts';
@@ -237,16 +238,16 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
      * labels are the tenant's AND the route table the runtime matches a tap against is
      * built from the same rendering (`MainMenuLayout.routesFor`), so a renamed button
      * routes under its new name. The stand-in fallback draws only the ungated buttons: a
-     * feature-gated one without its flag read would be a promise nobody checked.
+     * gated one without its flag or trial offer read would be a promise nobody checked.
      */
     const customerRows =
       message.keyboard === undefined
         ? undefined
         : this.menu !== undefined
           ? await this.menu.rowsFor(scope)
-          : packMainMenuRows(MAIN_MENU_BUTTONS.filter((button) => button.feature === null)).map(
-              (row) => row.map((button) => CATALOGUE_FA[button.label]),
-            );
+          : packMainMenuRows(
+              MAIN_MENU_BUTTONS.filter((button) => !mainMenuButtonIsGated(button)),
+            ).map((row) => row.map((button) => CATALOGUE_FA[button.label]));
     /*
      * The admin row is APPENDED to the customer rows rather than replacing them.
      *

@@ -250,15 +250,27 @@ describe('the feature flag registry', () => {
     }
   });
 
-  it('asks for a typed confirmation before offering every customer a free trial', () => {
-    // Codex, PR #64: the trials flag reaches every customer of the tenant at once, the
-    // reach the reminder flags have, and LOCAL let it flip with one press and no reason.
-    expect(featureFlagDefinition('trials').blastRadius).toBe('TENANT_WIDE');
+  it('has no trial flag: each panel’s own trial is the one switch (F5)', () => {
+    /*
+     * The owner's F5 rule: per-panel trial settings are authoritative and the trial leaves
+     * the generic Features page. A `trials` key would be a second answer to "is a trial
+     * offered", and the Features page draws every registered flag.
+     */
+    expect(isFeatureFlagKey('trials')).toBe(false);
+    // Its one setting is the customer's allowance across every panel, configuring no flag.
+    expect(settingDefinition('trial.limit_per_customer')).toMatchObject({
+      configures: null,
+      consumer: 'ACTIVE',
+    });
+    // The retired product key stays declared only to parse a stored value, read by nothing.
+    expect(settingDefinition('trial.product_id')).toMatchObject({
+      configures: null,
+      consumer: 'PLANNED',
+    });
   });
 
   it('asks for a typed confirmation before offering every customer a new link', () => {
-    // WP6-C: like `trials`, the rotation flag offers a new action to every customer of
-    // the tenant at once.
+    // WP6-C: the rotation flag offers a new action to every customer of the tenant at once.
     expect(featureFlagDefinition('customer_link_rotation').blastRadius).toBe('TENANT_WIDE');
     expect(featureFlagDefinition('customer_link_rotation').defaultEnabled).toBe(false);
   });
@@ -306,8 +318,7 @@ describe('the feature flag registry', () => {
       'service_expiry_reminders',
       'service_usage_reminders',
       'template_overrides',
-      // WP6-A. Off by default; the trial path it switches on is reachable.
-      'trials',
+      // `trials` (WP6-A) left in F5: each panel's own trial is the switch.
       // WP-A9. Off by default; the low-balance lane it switches on is reachable, and it
       // does nothing until wallet.low_balance.threshold is a positive amount.
       'wallet_low_balance_reminders',

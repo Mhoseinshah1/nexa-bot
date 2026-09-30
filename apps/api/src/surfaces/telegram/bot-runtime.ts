@@ -881,7 +881,13 @@ export const CANCEL_ORDER_CALLBACK_PREFIX = 'f:';
  */
 export const TOPUP_MENU_CALLBACK_PREFIX = 'o:';
 export const TOPUP_PICK_CALLBACK_PREFIX = 'y:';
-/** The wallet screen's invite button (WP9). Matched on the whole string, like the top-up menu. */
+/**
+ * The wallet screen's invite button (WP9). Matched on the whole string, like the top-up menu.
+ *
+ * F5: the wallet no longer draws it — the wallet shows wallet operations only, and the
+ * referral program is its own main-menu action. Still PARSED, so a wallet message drawn
+ * before F5 opens the same referral screen the menu's button does.
+ */
 export const REFERRAL_INVITE_CALLBACK_PREFIX = 'rf:';
 
 export const SERVICE_CALLBACK_PREFIX = 's:';
@@ -2330,6 +2336,10 @@ export const CATEGORY_CALLBACK_PREFIX = 'ck:';
  * id and no figure, because nothing about a trial is the client's to say. Two letters
  * because every single-letter prefix is taken; `t:` is terminate's, and `tr:` does not
  * start with it.
+ *
+ * F5: the catalogue no longer draws it — a trial is its own main-menu action, not a step
+ * of buying. It is still PARSED, so a catalogue message drawn before F5 and still sitting
+ * in a chat answers its tap exactly as the menu's button does (the claim decides).
  */
 export const TRIAL_CALLBACK_DATA = 'tr:';
 /**
@@ -3193,8 +3203,8 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
   /*
    * R1: «🧪 دریافت سرویس تست» and «👥 زیرمجموعه‌گیری». Not registered with
    * `setMyCommands` (see `TRIAL_MENU_COMMAND`); reachable by the button and by typing, and
-   * each answers from its feature's own state — the same two paths the catalogue's trial
-   * button (`tr:`) and the wallet's referral button (`rf:`) already take.
+   * each answers from its feature's own state — the same two paths the pre-F5 catalogue
+   * trial button (`tr:`) and wallet referral button (`rf:`) still take from old messages.
    */
   if (command === `/${TRIAL_MENU_COMMAND}`) {
     return { intent: 'TRIAL_CLAIM', targetId: null, callbackQueryId: null };
@@ -3649,10 +3659,11 @@ export interface BotRuntimeDeps {
   readonly locationChanges?: Pick<LocationChangeService, 'requestFree'>;
   /**
    * The free trial (WP6-A). Optional only so the customer-side unit fixtures need not
-   * build it; the composition root always supplies it, and without it the catalogue
-   * simply offers no trial — which is also what a tenant with the flag off sees.
+   * build it; the composition root always supplies it, and without it every trial tap is
+   * answered unavailable. Only the claim is asked: since F5 no purchase screen offers a
+   * trial, so nothing here reads availability ahead of a tap.
    */
-  readonly trials?: Pick<TrialService, 'availabilityFor' | 'claim'>;
+  readonly trials?: Pick<TrialService, 'claim'>;
   /**
    * Package D — the custom-service flow. Optional for the fixtures that build a runtime
    * without it: then no button is drawn and a stale tap answers the unavailable sentence.
@@ -3676,7 +3687,7 @@ export interface BotRuntimeDeps {
    * `bot.tutorial.<platform>` texts it was before, and a stale `ca:` answers not-found.
    */
   readonly clientApps?: Pick<ClientAppCatalog, 'platformsFor' | 'appsFor' | 'appFor'>;
-  /** The referral program (WP9): its terms, for the wallet button, and the invite. */
+  /** The referral program (WP9): its terms and the invite, for the referral screen. */
   readonly referrals?: Pick<ReferralProgram, 'terms' | 'invite'>;
   readonly orders: OrderService;
   readonly payments: PaymentService;
@@ -12374,31 +12385,26 @@ export class BotRuntime {
       customer.id,
     );
     /*
-     * The trial, first on the first page and only there — and only when this customer
-     * could take one NOW. A button that answers "no trial for you" is a promise the
-     * keyboard broke; `claimTrial` decides again anyway, because this read is a
-     * courtesy made before the tap and without the lock.
+     * No trial here (F5). A trial is not something a customer buys or browses to: it is
+     * its own main-menu action («🧪 دریافت سرویس تست», `/trial`), drawn while a panel
+     * offers one. The purchase flow — categories, products, plans — sells, and only sells.
+     *
+     * The custom service (Package D), on the first page only: drawn when at least one
+     * location could price this customer now. A courtesy — every step after the tap
+     * decides again. Unlike the trial it IS a way to buy, so it stays.
      */
-    const trial: CustomerButton[] =
-      page === 0 && (await this.trialOffered(scope, actor, customer))
-        ? [{ label: { kind: 'TEMPLATE', key: 'bot.trial.button' }, data: TRIAL_CALLBACK_DATA }]
-        : [];
-    /*
-     * The custom service (Package D), beside the trial and on the first page only: drawn
-     * when at least one location could price this customer now. A courtesy — every step
-     * after the tap decides again.
-     */
+    const leading: CustomerButton[] = [];
     if (page === 0 && (await this.customServiceOffered(scope, actor, customer))) {
-      trial.push({
+      leading.push({
         label: { kind: 'TEMPLATE', key: 'bot.custom_service.button' },
         data: CUSTOM_SERVICE_CALLBACK_DATA,
       });
     }
     if (items.length === 0) {
       if (page > 0) return this.catalogue(scope, actor, 0, customer);
-      return { key: 'bot.catalog.empty', values: {}, buttons: trial, orderId: null };
+      return { key: 'bot.catalog.empty', values: {}, buttons: leading, orderId: null };
     }
-    const buttons: CustomerButton[] = [...trial];
+    const buttons: CustomerButton[] = [...leading];
     buttons.push(
       ...items.map((category) => ({
         // Operator text, exactly as a product title is. The emoji is optional and its
@@ -12546,20 +12552,9 @@ export class BotRuntime {
     }
   }
 
-  /** Whether to draw the trial button for this customer. Never throws a reply away. */
-  private async trialOffered(
-    scope: TenantContext,
-    actor: ActorContext,
-    customer: CustomerRecord,
-  ): Promise<boolean> {
-    if (this.deps.trials === undefined) return false;
-    const availability = await this.deps.trials.availabilityFor(scope, actor, customer.id);
-    return availability.available;
-  }
-
   /**
-   * A customer asked for a trial — the main menu's «🧪 دریافت سرویس تست», `/trial`, or the
-   * catalogue's trial button (R1).
+   * A customer asked for a trial — the main menu's «🧪 دریافت سرویس تست», `/trial`, or a
+   * pre-F5 catalogue message's trial button (R1).
    *
    * Which panels offer one is `TrialService.claim`'s answer, decided with no panel named —
    * enabled, eligible by the one evaluator, able to name the account — and never this
@@ -13265,7 +13260,12 @@ export class BotRuntime {
   ): Promise<PendingReply> {
     const balance = await this.deps.wallet.balanceForCustomer(scope, actor, customer.id);
     const counters = await this.deps.counters.counters(scope, customer.id);
-    const referring = (await this.deps.referrals?.terms(scope))?.active === true;
+    /*
+     * The referral COUNT stays on the account summary: it is a fact about this customer
+     * that Mirza's /wallet shows too (the one referral surface its research VERIFIED). The
+     * referral BUTTON does not (F5): the wallet carries wallet operations only, and the
+     * program is reached from its own main-menu button and `/referral`.
+     */
     const referralCount =
       this.deps.referralGifts === undefined
         ? 0
@@ -13298,14 +13298,6 @@ export class BotRuntime {
               },
             ]
           : []),
-        ...(referring
-          ? [
-              {
-                label: { kind: 'TEMPLATE' as const, key: 'bot.referral.button' as const },
-                data: REFERRAL_INVITE_CALLBACK_PREFIX,
-              },
-            ]
-          : []),
         mainMenuButton(),
       ],
       orderId: null,
@@ -13325,7 +13317,7 @@ export class BotRuntime {
    * nothing is calculated here. Asking records the customer's code the first time, which
    * is why it carries the turn's idempotency key; every other answer is the one
    * unconfigured sentence. Reached from the main menu's «👥 زیرمجموعه‌گیری», `/referral`
-   * and the wallet's referral button alike.
+   * and — from a wallet message drawn before F5 — the wallet's old referral button alike.
    */
   private async referralInvite(
     scope: TenantContext,

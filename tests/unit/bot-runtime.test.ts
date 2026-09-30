@@ -249,7 +249,7 @@ describe('a Telegram turn, decided before any I/O', () => {
     expect(MAIN_MENU_ROWS.map((row) => row.map((button) => button.command))).toEqual([
       ['catalog', 'services'],
       ['wallet', 'help'],
-      // R1: the trial and the referral program, each drawn only while its flag is on.
+      // R1: the trial (while a panel offers one, F5) and the referral program (its flag).
       ['trial', 'referral'],
       // WP-A10: «📱 دانلود برنامه و آموزش اتصال», which `/apps` answers.
       ['apps'],
@@ -266,16 +266,17 @@ describe('a Telegram turn, decided before any I/O', () => {
       'bot.menu.apps',
       'bot.menu.tickets',
     ]);
-    // The two feature-gated buttons name their flag; every other button is always drawn.
+    // The referral button names its flag; the trial button (F5) waits for a panel offering
+    // a trial and names no flag; every other button is always drawn.
     expect(
       MAIN_MENU_BUTTONS.filter((button) => button.feature !== null).map((button) => [
         button.id,
         button.feature,
       ]),
-    ).toEqual([
-      ['trial', 'trials'],
-      ['referral', 'referrals'],
-    ]);
+    ).toEqual([['referral', 'referrals']]);
+    expect(
+      MAIN_MENU_BUTTONS.filter((button) => button.needsTrialOffer).map((button) => button.id),
+    ).toEqual(['trial']);
     // And every label renders. A key with no catalogue entry is a blank button.
     for (const button of MAIN_MENU_BUTTONS) {
       expect(CATALOGUE_FA[button.label], `${button.label} has no text`).toBeTruthy();
@@ -843,7 +844,7 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.payment.wallet_button',
       'bot.payment.window_too_short',
       'bot.payment.withdraw_under_review',
-      'bot.referral.button',
+      // `bot.referral.button` left in F5: the wallet no longer draws a referral button.
       'bot.referral.gift_button',
       'bot.referral.gift_claimed',
       'bot.referral.gift_disabled',
@@ -1008,7 +1009,7 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.ticket.reply_sent',
       'bot.ticket.view',
       'bot.ticket.view_button',
-      'bot.trial.button',
+      // `bot.trial.button` left in F5: the catalogue no longer draws a trial button.
       // R1: the panel choice, when more than one panel offers a trial.
       'bot.trial.choose_panel',
       'bot.trial.issued',

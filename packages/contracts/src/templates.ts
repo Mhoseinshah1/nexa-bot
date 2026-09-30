@@ -252,16 +252,17 @@ export const TEMPLATES = [
     placeholders: [],
   },
   /*
-   * R1: the trial's and the referral program's main-menu buttons. Each is drawn only while
-   * its feature flag is on and the operator has not switched it off on the bot-buttons
-   * page; the tap answers from the feature's own state either way.
+   * R1: the trial's and the referral program's main-menu buttons. The referral button is
+   * drawn only while its feature flag is on, the trial button (F5) only while a panel
+   * offers a trial, and either only while the operator has not switched it off on the
+   * bot-buttons page; the tap answers from the feature's own state either way.
    */
   {
     key: 'bot.menu.trial',
     description:
       'The main-menu button that takes a free trial service: straight to the one panel ' +
-      'that offers one, or to a choice when several do. Drawn only while the trials flag ' +
-      'is on. Routes exactly as /trial.',
+      'that offers one, or to a choice when several do. Drawn only while at least one ' +
+      'panel offers a trial. Routes exactly as /trial.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
@@ -6723,8 +6724,10 @@ export const TEMPLATES = [
   {
     key: 'bot.referral.button',
     description:
-      'The button on the wallet screen that shows the customer their referral link. Drawn ' +
-      'only while the referral program is running.',
+      'RETIRED (F5): the wallet screen\u2019s referral button. The wallet shows wallet ' +
+      'operations only; the referral program is reached from its own main-menu button ' +
+      '(`bot.menu.referral`) and /referral. Nothing renders it; it stays declared so a ' +
+      'stored override keeps parsing.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },
@@ -6749,10 +6752,10 @@ export const TEMPLATES = [
   {
     key: 'bot.trial.button',
     description:
-      'The button on the catalogue that takes a trial. Drawn only when this customer can ' +
-      'take one right now — the flag is on, at least one panel offers an enabled trial it ' +
-      'can take a new account for, and they are under their limit — and decided again on ' +
-      'the server when tapped.',
+      'RETIRED (F5): the catalogue\u2019s trial button. A trial is not something a customer ' +
+      'browses to: it is taken from its own main-menu button (`bot.menu.trial`) and ' +
+      '/trial, and the purchase flow no longer draws it. Nothing renders it; it stays ' +
+      'declared so a stored override keeps parsing.',
     format: 'PLAIN_TEXT',
     placeholders: [],
   },

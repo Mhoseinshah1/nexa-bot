@@ -195,7 +195,7 @@ export const WEB_FA = {
   'web.setting_trial_product_id_desc':
     'دیگر استفاده نمی‌شود. سرویس تست اکنون مستقل از محصولات و روی هر پنل (صفحهٔ پنل، زبانهٔ «سرویس تست») تنظیم می‌شود؛ مقدار قبلی این تنظیم یک بار به تنظیمات همان پنل منتقل شده است.',
   'web.setting_trial_limit_per_customer_desc':
-    'هر مشتری چند بار می‌تواند سرویس آزمایشی بگیرد. صفر یعنی سرویس آزمایشی به کسی داده نمی‌شود.',
+    'هر مشتری در مجموع همهٔ پنل‌ها چند بار می‌تواند سرویس آزمایشی بگیرد. صفر یعنی سرویس آزمایشی به کسی داده نمی‌شود. روشن یا خاموش بودن سرویس تست روی هر پنل جداگانه (صفحهٔ پنل، زبانهٔ «سرویس تست») تعیین می‌شود.',
   'web.setting_link_rotation_cooldown_hours_desc':
     'مشتری پس از دریافت لینک اشتراک تازه، باید این مدت صبر کند تا دوباره بتواند لینک تازه بگیرد.',
   'web.setting_referral_commission_percent': 'درصد پورسانت معرفی',
@@ -278,9 +278,6 @@ export const WEB_FA = {
   'web.feature_reminder_quiet_hours_title': 'ساعات سکوت یادآورها',
   'web.feature_reminder_quiet_hours_summary':
     'یادآورهایی که در ساعات سکوت موعدشان می‌رسد حذف نمی‌شوند؛ تا پایان ساعات سکوت نگه داشته و سپس فرستاده می‌شوند، مگر اینکه دیگر معتبر نباشند. پیام‌های پرداخت، سفارش و پاسخ‌ها نگه داشته نمی‌شوند.',
-  'web.feature_trials_title': 'سرویس آزمایشی رایگان',
-  'web.feature_trials_summary':
-    'مشتریان می‌توانند یک سرویس تست رایگان دریافت کنند. برای کار کردن، سرویس تست باید دست‌کم روی یک پنل (در صفحهٔ همان پنل، زبانهٔ «سرویس تست») روشن و تنظیم شده باشد.',
   'web.feature_customer_link_rotation_title': 'دریافت لینک جدید توسط مشتری',
   'web.feature_customer_link_rotation_summary':
     'مشتری می‌تواند از ربات برای سرویس فعال خود لینک اشتراک جدید بگیرد؛ فقط روی پنل‌هایی که این کار را پشتیبانی می‌کنند و با فاصلهٔ زمانی تعیین‌شده.',
@@ -2621,8 +2618,7 @@ export const WEB_FA = {
   'web.reminders_templates_hint':
     'متن هر پیام را می‌توانید همین‌جا ویرایش کنید؛ همان متنی است که در بخش «متن‌ها» هم دیده می‌شود.',
   'web.reminders_templates_denied': 'برای دیدن و ویرایش متن پیام‌ها به دسترسی «متن‌ها» نیاز است.',
-  // WP6-A: the trial's flag, its two settings, and the product picker's two options.
-  'web.flag_trials': 'سرویس آزمایشی',
+  // WP6-A: the trial's two settings. Its flag and the product picker went in F5.
   'web.setting_trial_product_id': 'محصول سرویس آزمایشی (بازنشسته)',
   'web.setting_trial_limit_per_customer': 'تعداد مجاز سرویس آزمایشی برای هر مشتری',
   'web.flag_customer_link_rotation': 'دریافت لینک اشتراک جدید توسط مشتری',
@@ -2631,15 +2627,12 @@ export const WEB_FA = {
   'web.setting_referral_signup_gift_total': 'مبلغ کل هدیهٔ عضویت',
   'web.setting_referral_signup_gift_referrer_percent': 'سهم معرف از هدیهٔ عضویت',
   'web.setting_referral_signup_gift_referred_percent': 'سهم کاربر معرفی‌شده از هدیهٔ عضویت',
-  'web.trial_product_none': 'هیچ‌کدام (سرویس آزمایشی ارائه نمی‌شود)',
-  'web.trial_product_unlisted': 'محصول فعلی (در فهرست محصولات فعال نیست)',
-  'web.trial_product_current': 'محصول فعلی',
 
   // WP6-B: a customer's trial allowance, the override, the global reset and its history.
   'web.nav_trials': 'سرویس آزمایشی',
   'web.trial_card_title': 'سرویس آزمایشی',
   'web.trial_feature_off':
-    'سرویس آزمایشی در این نصب خاموش است؛ این اعداد تا روشن شدن آن به کار نمی‌آیند.',
+    'سرویس تست فعلاً روی هیچ پنلی روشن نیست؛ این اعداد تا روشن شدن آن روی دست‌کم یک پنل به کار نمی‌آیند.',
   'web.trial_global_limit': 'سقف پیش‌فرض',
   'web.trial_override': 'سقف اختصاصی',
   'web.trial_override_none': 'ندارد (از سقف پیش‌فرض پیروی می‌کند)',
@@ -2686,7 +2679,7 @@ export const WEB_FA = {
   'web.service_trial_badge': 'سرویس تست',
   'web.panel_trial_title': 'سرویس تست این پنل',
   'web.panel_trial_hint':
-    'سرویس تست مستقل از محصولات فروشی است و فقط از همین‌جا تنظیم می‌شود. وقتی به مشتری پیشنهاد می‌شود که قابلیت «سرویس آزمایشی» روشن باشد، این پنل بتواند سرویس جدید بپذیرد و ساخت نام کاربری خودکار در آن مجاز باشد. تعداد دفعات مجاز برای هر مشتری در صفحهٔ تنظیمات است. تغییر این مقادیر روی سرویس‌های تستی که قبلاً داده شده‌اند اثری ندارد.',
+    'سرویس تست مستقل از محصولات فروشی است و فقط از همین‌جا روشن، خاموش و تنظیم می‌شود. وقتی به مشتری پیشنهاد می‌شود که اینجا روشن باشد، این پنل بتواند سرویس جدید بپذیرد و ساخت نام کاربری خودکار در آن مجاز باشد. تعداد دفعات مجاز برای هر مشتری در صفحهٔ تنظیمات است. تغییر این مقادیر روی سرویس‌های تستی که قبلاً داده شده‌اند اثری ندارد.',
   'web.panel_trial_unconfigured': 'سرویس تست برای این پنل هنوز تنظیم نشده است.',
   'web.panel_trial_enabled': 'ارائهٔ سرویس تست روی این پنل',
   'web.panel_trial_traffic': 'حجم سرویس تست',
@@ -2732,7 +2725,9 @@ export const WEB_FA = {
   'web.bot_buttons_shown': 'نمایش',
   'web.bot_buttons_move_up': 'بالا',
   'web.bot_buttons_move_down': 'پایین',
-  'web.bot_buttons_needs_trials': 'فقط وقتی قابلیت «سرویس آزمایشی» روشن باشد دیده می‌شود.',
+  'web.bot_buttons_needs_trial_offer':
+    'فقط وقتی دیده می‌شود که دست‌کم روی یک پنل سرویس تست روشن باشد و همین حالا ارائه شود (صفحهٔ پنل، زبانهٔ «سرویس تست»).',
+  'web.bot_buttons_trial_not_offered': 'فعلاً هیچ پنلی سرویس تست ارائه نمی‌کند',
   'web.bot_buttons_needs_referrals': 'فقط وقتی قابلیت «معرفی دوستان» روشن باشد دیده می‌شود.',
   'web.bot_buttons_feature_off': 'قابلیت خاموش است',
   'web.bot_buttons_one_required':

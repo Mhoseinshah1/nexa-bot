@@ -32,7 +32,6 @@ import { hashRequest } from '../../../platform/idempotency/infrastructure/drizzl
 import type { SessionRepository } from '../../../platform/identity/application/ports.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
 import type { SettingsResolver } from '../../../control/settings/application/settings-resolver.js';
-import type { FeatureFlagResolver } from '../../../control/features/application/feature-flags.service.js';
 import type { OutboxWriter } from '../../../platform/eventing/infrastructure/outbox-writer.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type { CustomerRepository } from '../../customers/application/ports.js';
@@ -151,7 +150,6 @@ export interface TrialServiceDeps {
   readonly panelSales: Pick<PanelSalesGate, 'evaluateMany'>;
   readonly provisioning: Pick<ProvisioningService, 'prepareFulfilment' | 'planForSettledOrder'>;
   readonly settings: SettingsResolver;
-  readonly features: FeatureFlagResolver;
   readonly guard: PermissionGuard;
   readonly uow: UnitOfWork<TransactionScope>;
   readonly audit: AuditWriter;
@@ -198,6 +196,10 @@ export class TrialService {
    * The panels are `trialOffersFor`'s: enabled, eligible by the one evaluator, and able
    * to name the account themselves. Without that the button was offered for a trial the
    * tap could only refuse (Codex, PR #64).
+   *
+   * F5: the catalogue's trial button that drew from this is gone. The main menu's button
+   * is drawn per TENANT (a keyboard is not per customer), from `trialOffersFor` alone;
+   * this remains the read-only, per-customer statement of the claim's rule.
    */
   async availabilityFor(
     scope: TenantContext,
@@ -509,8 +511,13 @@ export class TrialService {
     customerId: UserId,
     tx?: TransactionScope,
   ): Promise<TrialRejection | null> {
-    if (!(await this.deps.features.isEnabled(scope, 'trials', tx))) return 'UNCONFIGURED';
-
+    /*
+     * No switch is read here (F5). The `trials` flag that stood in front of every claim is
+     * retired: whether a trial is offered at all is each panel's own `enabled`. The menu's
+     * claim, which names no panel, answers UNCONFIGURED when no panel has one switched on
+     * (`trialOffersFor`); a named panel whose trial is off or was never configured is
+     * PRODUCT_UNAVAILABLE (`configFor`). The customer hears one sentence for both.
+     */
     const customer = await this.deps.customers.findById(scope, customerId, tx);
     if (customer === null) {
       throw errors.notFound(COMMERCE_ERROR_CODES.CUSTOMER_NOT_FOUND, 'Unknown customer.');
