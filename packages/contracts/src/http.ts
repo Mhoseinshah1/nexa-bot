@@ -4960,6 +4960,12 @@ export const FX_REFRESH_OUTCOMES = [
 ] as const;
 export const fxRefreshResponseSchema = z.object({
   outcome: z.enum(FX_REFRESH_OUTCOMES),
+  /**
+   * WHY, as a machine code, whenever a source did not price the pair: the first failure
+   * or rejection of the pass (`<source>:<code>`), so a `FAILED` — and a fallback answer —
+   * is a diagnosis an operator can make. Null when the primary answered.
+   */
+  reason: z.string().nullable(),
   status: fxStatusResponseSchema,
 });
 export type FxRefreshResponse = z.infer<typeof fxRefreshResponseSchema>;
