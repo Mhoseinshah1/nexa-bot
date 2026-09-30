@@ -816,6 +816,12 @@ describe('profile metadata, normalised before it is ever stored', () => {
        */
       'bot.payment.gateway_no_link',
       'bot.payment.gateway_pay_button',
+      /*
+       * Package FX: a route priced by the central exchange rate, with no usable rate
+       * right now. Reviewed: it asks the customer to try again shortly or pay another
+       * way — both of which this head answers — and names no source and no figure.
+       */
+      'bot.payment.fx_unavailable',
       'bot.payment.gateway_preparing',
       'bot.payment.gateway_unavailable',
       'bot.payment.gateway_unknown',
