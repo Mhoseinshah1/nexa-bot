@@ -28,7 +28,19 @@ import {
   type TemplateGroup,
 } from '../template-copy';
 import { ErrorReport } from './settings';
-import { Banner, Card, Ltr, Num, PageHead, Pills, StateSwitch } from '../ui/kit';
+import { DirtyScope, UnsavedCount, useDirtySet, useReportDirty } from './ops-b-layout';
+import {
+  Badge,
+  Banner,
+  Card,
+  Ltr,
+  Num,
+  PageHead,
+  Pills,
+  StateSwitch,
+  useUnsavedChanges,
+} from '../ui/kit';
+import { Icon } from '../ui/icons';
 
 /**
  * What a sample value has to look like in a text field, per declared type.
@@ -136,89 +148,175 @@ export function ContentPage({ mayEdit, denied }: { mayEdit: boolean; denied: boo
     setSource('all');
   };
 
+  /*
+   * The template open in the editor column. Every card stays MOUNTED and only the chosen
+   * one is shown, for the reason the filters hide rather than unmount: a card holds its
+   * operator's unsaved draft in its own state. A choice the filters have since hidden
+   * falls back to the first template still listed, so the editor never shows a template
+   * the list does not.
+   */
+  const [chosen, setChosen] = useState<string | null>(null);
+  const ordered = useMemo(() => sections.flatMap((section) => section.templates), [sections]);
+  const firstVisible = ordered.find((template) => visible.has(template.key))?.key ?? null;
+  const selected = chosen !== null && visible.has(chosen) ? chosen : firstVisible;
+
+  const { dirty, report } = useDirtySet();
+  useUnsavedChanges(dirty.size > 0);
+
   return (
     <>
       <PageHead
         title={t('web.templates_title')}
         subtitle={t('web.templates_intro')}
         maturity="now"
+        badge={<UnsavedCount count={dirty.size} />}
       />
       <StateSwitch query={templates} denied={denied} isEmpty={rows.length === 0}>
-        <div className="grid template-stack">
-          <Card>
-            <div className="toolbar">
-              <label className="visually-hidden" htmlFor="templates-search">
-                {t('web.templates_search')}
-              </label>
-              <input
-                id="templates-search"
-                type="search"
-                className="input template-search"
-                value={search}
-                placeholder={t('web.templates_search_placeholder')}
-                onChange={(event) => setSearch(event.target.value)}
-              />
-              <label className="visually-hidden" htmlFor="templates-group">
-                {t('web.templates_group')}
-              </label>
-              <select
-                id="templates-group"
-                className="input sm"
-                value={groupId}
-                onChange={(event) => setGroupId(event.target.value)}
-              >
-                <option value="">{t('web.templates_group_all')}</option>
-                {sections.map((section) => (
-                  <option key={section.group.id} value={section.group.id}>
-                    {section.group.label}
-                  </option>
-                ))}
-              </select>
-              <Pills
-                value={source}
-                onChange={setSource}
-                items={[
-                  { id: 'all', label: t('web.all') },
-                  { id: 'custom', label: t('web.templates_filter_custom') },
-                  { id: 'default', label: t('web.templates_filter_default') },
-                ]}
-              />
-              <span className="spacer" />
-              <span className="muted small">
-                {t('web.templates_count')}: <Num value={visible.size} />{' '}
-                {t('web.templates_count_of')} <Num value={rows.length} />
-              </span>
-            </div>
-          </Card>
-
-          {visible.size === 0 && (
-            <Card>
-              <p>{t('web.templates_no_match')}</p>
-              <div className="actions">
-                <button type="button" className="btn" onClick={clearFilters}>
-                  {t('web.templates_clear_filters')}
-                </button>
+        <DirtyScope report={report}>
+          <div className="content-split">
+            <aside className="card content-nav" aria-label={t('web.templates_list')}>
+              <div className="content-nav-tools">
+                <label className="visually-hidden" htmlFor="templates-search">
+                  {t('web.templates_search')}
+                </label>
+                <div className="search">
+                  <Icon name="search" size={14} />
+                  <input
+                    id="templates-search"
+                    type="search"
+                    className="input"
+                    value={search}
+                    placeholder={t('web.templates_search_placeholder')}
+                    onChange={(event) => setSearch(event.target.value)}
+                  />
+                </div>
+                <div className="content-nav-filters">
+                  <label className="visually-hidden" htmlFor="templates-group">
+                    {t('web.templates_group')}
+                  </label>
+                  <select
+                    id="templates-group"
+                    className="input sm"
+                    value={groupId}
+                    onChange={(event) => setGroupId(event.target.value)}
+                  >
+                    <option value="">{t('web.templates_group_all')}</option>
+                    {sections.map((section) => (
+                      <option key={section.group.id} value={section.group.id}>
+                        {section.group.label}
+                      </option>
+                    ))}
+                  </select>
+                  <Pills
+                    value={source}
+                    onChange={setSource}
+                    items={[
+                      { id: 'all', label: t('web.all') },
+                      { id: 'custom', label: t('web.templates_filter_custom') },
+                      { id: 'default', label: t('web.templates_filter_default') },
+                    ]}
+                  />
+                </div>
+                <span className="muted small">
+                  {t('web.templates_count')}: <Num value={visible.size} />{' '}
+                  {t('web.templates_count_of')} <Num value={rows.length} />
+                </span>
               </div>
-            </Card>
-          )}
 
-          {sections.map((section) => (
-            <section
-              key={section.group.id}
-              className="grid template-stack"
-              hidden={!section.templates.some((template) => visible.has(template.key))}
-            >
-              <h2>{section.group.label}</h2>
-              {section.templates.map((template) => (
-                <div key={template.key} hidden={!visible.has(template.key)}>
+              {visible.size === 0 && (
+                <div className="content-nav-empty">
+                  <p>{t('web.templates_no_match')}</p>
+                  <button type="button" className="btn sm" onClick={clearFilters}>
+                    {t('web.templates_clear_filters')}
+                  </button>
+                </div>
+              )}
+
+              <div className="content-nav-list">
+                {sections.map((section) => (
+                  <section
+                    key={section.group.id}
+                    aria-labelledby={`templates-group-${section.group.id}`}
+                    hidden={!section.templates.some((template) => visible.has(template.key))}
+                  >
+                    <h2 id={`templates-group-${section.group.id}`} className="content-nav-group">
+                      {section.group.label}
+                    </h2>
+                    <ul>
+                      {section.templates.map((template) => (
+                        <li key={template.key} hidden={!visible.has(template.key)}>
+                          <TemplateListItem
+                            template={template}
+                            current={template.key === selected}
+                            unsaved={dirty.has(template.key)}
+                            onSelect={() => setChosen(template.key)}
+                          />
+                        </li>
+                      ))}
+                    </ul>
+                  </section>
+                ))}
+              </div>
+            </aside>
+
+            <div className="content-editor">
+              {ordered.map((template) => (
+                <div key={template.key} hidden={template.key !== selected}>
                   <TemplateCard template={template} mayEdit={mayEdit} />
                 </div>
               ))}
-            </section>
-          ))}
-        </div>
+            </div>
+          </div>
+        </DirtyScope>
       </StateSwitch>
     </>
+  );
+}
+
+/** One template in the list: its Persian name, its key, and whether it is customised. */
+function TemplateListItem({
+  template,
+  current,
+  unsaved,
+  onSelect,
+}: {
+  template: TemplateViewResponse;
+  current: boolean;
+  unsaved: boolean;
+  onSelect: () => void;
+}) {
+  const copy = templateCopy(template.key, template.description);
+  return (
+    <button
+      type="button"
+      id={`template-item-${template.key}`}
+      className="content-item"
+      aria-current={current ? 'true' : undefined}
+      onClick={onSelect}
+    >
+      <span className="content-item-name">
+        {copy.localized ? <BidiText text={copy.name} /> : <Ltr>{copy.name}</Ltr>}
+      </span>
+      {copy.localized && (
+        <span className="content-item-key">
+          <Ltr>{template.key}</Ltr>
+        </span>
+      )}
+      <span className="content-item-marks">
+        {isCustomised(template) && (
+          <span className="content-item-mark" title={t('web.template_customised')}>
+            <i className="dot info" aria-hidden="true" />
+            <span className="visually-hidden">{t('web.template_customised')}</span>
+          </span>
+        )}
+        {unsaved && (
+          <span className="content-item-mark" title={t('web.ob_unsaved_row')}>
+            <i className="dot warn" aria-hidden="true" />
+            <span className="visually-hidden">{t('web.ob_unsaved_row')}</span>
+          </span>
+        )}
+      </span>
+    </button>
   );
 }
 
@@ -283,6 +381,8 @@ export const TemplateCard = memo(function TemplateCard({
   const changedElsewhereStored =
     basis.version !== template.version || basis.revision !== template.revision;
   const unsaved = draft !== (basis.overrideBody ?? basis.defaultBody);
+  // The page that draws this card (texts, reminders) holds one leave guard for all of them.
+  useReportDirty(template.key, unsaved);
 
   const adopt = (fresh: TemplateViewResponse) => {
     setBasis(fresh);
@@ -500,10 +600,22 @@ export const TemplateCard = memo(function TemplateCard({
           <Ltr mono={false}>{copy.description}</Ltr>
         )
       }
+      actions={
+        <>
+          {unsaved && (
+            <Badge tone="warn" dot>
+              {t('web.ob_unsaved_row')}
+            </Badge>
+          )}
+          <Badge tone={isCustomised(template) ? 'info' : 'neutral'}>
+            {isCustomised(template) ? t('web.template_customised') : t('web.source_default')}
+          </Badge>
+        </>
+      }
     >
       <form onSubmit={onSubmit}>
         {/* The raw key is a technical detail: small, and never the title. */}
-        <p className="muted small">
+        <p className="muted small template-meta">
           {t('web.template_technical_key')}:{' '}
           <Ltr>
             <code>{template.key}</code>
@@ -512,9 +624,6 @@ export const TemplateCard = memo(function TemplateCard({
             {template.format === 'TELEGRAM_HTML'
               ? t('web.template_format_html')
               : t('web.template_format_plain')}
-          </span>{' '}
-          <span className="tag">
-            {isCustomised(template) ? t('web.template_customised') : t('web.source_default')}
           </span>
         </p>
 
@@ -573,7 +682,9 @@ export const TemplateCard = memo(function TemplateCard({
             {/* Showing the default beside the override is the one thing the
               legacy web surface got right here (WEB-BR-019). */}
             <summary>{t('web.template_default')}</summary>
-            <pre dir="auto">{template.defaultBody}</pre>
+            <pre dir="auto" className="template-default">
+              {template.defaultBody}
+            </pre>
           </details>
         )}
 
@@ -587,8 +698,8 @@ export const TemplateCard = memo(function TemplateCard({
             {/* The token is the contract and is shown exactly as it must be typed;
               the Persian beside it only explains it. */}
             <p className="muted small">{t('web.template_placeholders_hint')}</p>
-            <div className="template-table">
-              <table>
+            <div className="tbl-wrap template-table">
+              <table className="tbl dense">
                 <thead>
                   <tr>
                     <th>{t('web.template_placeholder_token')}</th>
@@ -679,7 +790,9 @@ export const TemplateCard = memo(function TemplateCard({
                 that body may have been edited since. Saying so is cheaper than
                 a preview that quietly describes something else. */}
               {previewStale && <p className="notice">{t('web.preview_stale')}</p>}
-              <pre dir="auto">{preview.data.rendered}</pre>
+              <pre dir="auto" className="template-bubble">
+                {preview.data.rendered}
+              </pre>
               {preview.data.unresolved.length > 0 && (
                 <p className="notice">
                   {t('web.preview_unresolved')}:{' '}
@@ -742,37 +855,41 @@ export const TemplateCard = memo(function TemplateCard({
               empty={<p>{t('web.empty')}</p>}
             >
               {revisions.data && revisions.data.revisions.length > 0 && (
-                <table>
-                  <thead>
-                    <tr>
-                      <th>{t('web.revision')}</th>
-                      <th>{t('web.action')}</th>
-                      <th>{t('web.template_body')}</th>
-                      <th>{t('web.updated_at')}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {revisions.data.revisions.map((revision) => (
-                      <tr key={revision.revision}>
-                        <td>{revision.revision}</td>
-                        <td>
-                          {revision.action === 'SET' ? t('web.action_set') : t('web.action_revert')}
-                        </td>
-                        {/* A REVERT stores no body: reverting goes back to the
-                      default rather than copying it. */}
-                        <td dir="auto">{revision.body ?? '—'}</td>
-                        <td>{formatTimestamp(revision.createdAt)}</td>
+                <div className="tbl-wrap template-table">
+                  <table className="tbl dense">
+                    <thead>
+                      <tr>
+                        <th>{t('web.revision')}</th>
+                        <th>{t('web.action')}</th>
+                        <th>{t('web.template_body')}</th>
+                        <th>{t('web.updated_at')}</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {revisions.data.revisions.map((revision) => (
+                        <tr key={revision.revision}>
+                          <td>{revision.revision}</td>
+                          <td>
+                            {revision.action === 'SET'
+                              ? t('web.action_set')
+                              : t('web.action_revert')}
+                          </td>
+                          {/* A REVERT stores no body: reverting goes back to the
+                      default rather than copying it. */}
+                          <td dir="auto">{revision.body ?? '—'}</td>
+                          <td>{formatTimestamp(revision.createdAt)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               )}
             </StateSwitch>
           )}
         </details>
 
         {mayEdit && (
-          <div className="actions">
+          <div className="template-actions">
             <button type="submit" className="btn primary" disabled={save.isPending}>
               {save.isPending ? t('web.saving') : t('web.save')}
             </button>

@@ -27,16 +27,28 @@ import {
   Skeleton,
   DataTable,
   Empty,
+  FilterBar,
+  FilterChip,
+  FilterChips,
   Ltr,
   Num,
   PageHead,
-  Pills,
   StateSwitch,
   type Column,
 } from '../ui/kit';
+import { Icon } from '../ui/icons';
 import { pollUnlessFinal, pollUnlessFinalWhile } from '../polling';
 
 const SEVERITIES: readonly OperationalSeverity[] = ['DEBUG', 'INFO', 'WARN', 'ERROR', 'CRITICAL'];
+
+/** Each severity in the operator's words — the same names the settings page uses. */
+const SEVERITY_LABELS: Readonly<Record<OperationalSeverity, WebKey>> = {
+  DEBUG: 'web.setting_severity_debug',
+  INFO: 'web.setting_severity_info',
+  WARN: 'web.setting_severity_warn',
+  ERROR: 'web.setting_severity_error',
+  CRITICAL: 'web.setting_severity_critical',
+};
 
 /**
  * Management alerts.
@@ -141,16 +153,25 @@ export function AlertsPage({ denied }: { denied: boolean }) {
     {
       key: 'severity',
       header: t('web.severity'),
-      render: (row) => <Badge tone={severityTone(row.severity)}>{row.severity}</Badge>,
+      render: (row) => (
+        <Badge tone={severityTone(row.severity)} dot title={row.severity}>
+          {t(SEVERITY_LABELS[row.severity])}
+        </Badge>
+      ),
     },
     {
       key: 'code',
       header: t('web.code'),
-      render: (row) => <Ltr>{row.code}</Ltr>,
+      render: (row) => (
+        <span className="alerts-code">
+          <Ltr>{row.code}</Ltr>
+        </span>
+      ),
     },
     {
       key: 'message',
       header: t('web.message'),
+      wrap: true,
       render: (row) => <span className="plain">{row.message}</span>,
     },
     // One row per condition with a counter, not one row per occurrence: the
@@ -167,7 +188,7 @@ export function AlertsPage({ denied }: { denied: boolean }) {
     {
       key: 'first',
       header: t('web.first_seen'),
-      render: (row) => <span className="nowrap">{formatTimestamp(row.firstSeenAt)}</span>,
+      render: (row) => <span className="nowrap muted">{formatTimestamp(row.firstSeenAt)}</span>,
     },
     {
       key: 'last',
@@ -196,11 +217,11 @@ export function AlertsPage({ denied }: { denied: boolean }) {
         // the recoveries as their own list rather than leaving them inside the
         // lifecycle.
         isOneShotManagementCode(row.code) || isConditionRecoveryCode(row.code) ? (
-          <Badge tone={isConditionRecoveryCode(row.code) ? 'ok' : 'neutral'}>
+          <Badge tone={isConditionRecoveryCode(row.code) ? 'ok' : 'neutral'} dot>
             {isConditionRecoveryCode(row.code) ? t('web.event_recovered') : t('web.event_recorded')}
           </Badge>
         ) : (
-          <Badge tone={row.resolvedAt ? 'ok' : 'warn'}>
+          <Badge tone={row.resolvedAt ? 'ok' : 'warn'} dot>
             {row.resolvedAt ? t('web.resolved') : t('web.unresolved')}
           </Badge>
         ),
@@ -228,6 +249,7 @@ export function AlertsPage({ denied }: { denied: boolean }) {
            */
           !mayRequest(events, denied) ? undefined : (
             <button type="button" className="btn sm" onClick={retryOf(events)}>
+              <Icon name="refresh" />
               {t('web.refresh')}
             </button>
           )
@@ -246,33 +268,33 @@ export function AlertsPage({ denied }: { denied: boolean }) {
           gated. Each change was one more refused request and one more
           `access.permission_denied` event, two in production.
         */}
-        <div className="toolbar" hidden={!mayRequest(events, denied)}>
-          <Pills
-            value={openOnly ? 'open' : 'all'}
-            onChange={(next) => filter(() => setOpenOnly(next === 'open'))}
-            items={[
-              { id: 'open', label: t('web.unresolved') },
-              { id: 'all', label: t('web.all') },
-            ]}
-          />
+        <FilterBar hidden={!mayRequest(events, denied)}>
+          <FilterChips label={t('web.status')}>
+            <FilterChip pressed={openOnly} onClick={() => filter(() => setOpenOnly(true))}>
+              {t('web.unresolved')}
+            </FilterChip>
+            <FilterChip pressed={!openOnly} onClick={() => filter(() => setOpenOnly(false))}>
+              {t('web.all')}
+            </FilterChip>
+          </FilterChips>
           <span className="spacer" />
           <label className="visually-hidden" htmlFor="alert-severity">
             {t('web.severity')}
           </label>
           <select
             id="alert-severity"
-            className="input sm"
+            className="input sm alerts-severity"
             value={severity}
             onChange={(event) => filter(() => setSeverity(event.target.value))}
           >
-            <option value="">{t('web.all')}</option>
+            <option value="">{t('web.alerts_all_severities')}</option>
             {SEVERITIES.map((value) => (
               <option key={value} value={value}>
-                {value}
+                {t(SEVERITY_LABELS[value])}
               </option>
             ))}
           </select>
-        </div>
+        </FilterBar>
 
         <StateSwitch
           query={events}
@@ -314,6 +336,7 @@ export function AlertsPage({ denied }: { denied: boolean }) {
             columns={columns}
             rows={rows}
             rowKey={(row) => row.id}
+            dense
           />
         </StateSwitch>
 
@@ -473,7 +496,11 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
       key: 'status',
       header: t('web.status'),
       render: (row) => (
-        <Badge tone={row.status === 'SENT' ? 'ok' : row.status === 'FAILED' ? 'danger' : 'warn'}>
+        <Badge
+          tone={row.status === 'SENT' ? 'ok' : row.status === 'FAILED' ? 'danger' : 'warn'}
+          dot
+          pulse={row.status === 'PENDING'}
+        >
           {t(STATUS_KEYS[row.status] ?? 'web.status_pending')}
         </Badge>
       ),
@@ -482,7 +509,12 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
       key: 'template',
       header: t('web.key'),
       render: (row) => (
-        <button type="button" className="btn ghost sm" onClick={() => setSelected(row.id)}>
+        <button
+          type="button"
+          className="link notifications-key"
+          aria-pressed={row.id === selected}
+          onClick={() => setSelected(row.id)}
+        >
           <Ltr>{row.templateKey}</Ltr>
         </button>
       ),
@@ -501,7 +533,7 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
       key: 'at',
       header: t('web.updated_at'),
       render: (row) => (
-        <span className="nowrap">{formatTimestamp(row.lastAttemptAt ?? row.createdAt)}</span>
+        <span className="nowrap muted">{formatTimestamp(row.lastAttemptAt ?? row.createdAt)}</span>
       ),
     },
   ];
@@ -515,19 +547,6 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
         actions={
           mayTest ? (
             <>
-              <button
-                type="button"
-                className="btn primary sm"
-                onClick={() =>
-                  test.mutate({
-                    idempotencyKey: submission.current({ command: 'notifications.test' }),
-                    target: 'OPERATIONS',
-                  })
-                }
-                disabled={test.isPending}
-              >
-                {test.isPending ? t('web.saving') : t('web.send_test')}
-              </button>
               <button
                 type="button"
                 className="btn sm"
@@ -544,6 +563,20 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
               >
                 {t('web.send_test_payments')}
               </button>
+              <button
+                type="button"
+                className="btn primary sm"
+                onClick={() =>
+                  test.mutate({
+                    idempotencyKey: submission.current({ command: 'notifications.test' }),
+                    target: 'OPERATIONS',
+                  })
+                }
+                disabled={test.isPending}
+              >
+                <Icon name="send" />
+                {test.isPending ? t('web.saving') : t('web.send_test')}
+              </button>
             </>
           ) : undefined
         }
@@ -558,17 +591,20 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
       )}
       {test.isError && <Banner tone="danger">{messageFor(test.error)}</Banner>}
 
-      <Card title={t('web.notifications_title')}>
-        <StateSwitch query={notifications} denied={denied} isEmpty={rows.length === 0}>
-          <DataTable
-            caption={t('web.notifications_title')}
-            columns={columns}
-            rows={rows}
-            rowKey={(row) => row.id}
-          />
-        </StateSwitch>
+      <div className={denied ? undefined : 'notifications-layout'}>
+        <Card title={t('web.notifications_title')} hint={t('web.notifications_list_hint')}>
+          <StateSwitch query={notifications} denied={denied} isEmpty={rows.length === 0}>
+            <DataTable
+              caption={t('web.notifications_title')}
+              columns={columns}
+              rows={rows}
+              rowKey={(row) => row.id}
+              dense
+              rowClassName={(row) => (row.id === selected ? 'selected' : undefined)}
+            />
+          </StateSwitch>
 
-        {/*
+          {/*
           The pager describes rows that are ON SCREEN.
           
           It is a sibling of `StateSwitch`, so the error card replaced the table
@@ -576,24 +612,31 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
           offering an enabled "older" that pushed a cursor — changing the query
           key and issuing a fresh request the server had just refused.
         */}
-        {!denied && queryState(notifications) === 'ready' && (
-          <CursorPager
-            shown={rows.length}
-            hasPrevious={trail.length > 0}
-            // The SERVER's cursor, not a guess from the page length. `null`
-            // means the last page, so "older" is never offered where there is
-            // nothing older.
-            hasNext={notifications.data?.nextCursor != null}
-            onPrevious={() => setTrail((current) => current.slice(0, -1))}
-            onNext={() => {
-              const next = notifications.data?.nextCursor;
-              if (next) setTrail((current) => [...current, next]);
-            }}
-          />
-        )}
-      </Card>
+          {!denied && queryState(notifications) === 'ready' && (
+            <CursorPager
+              shown={rows.length}
+              hasPrevious={trail.length > 0}
+              // The SERVER's cursor, not a guess from the page length. `null`
+              // means the last page, so "older" is never offered where there is
+              // nothing older.
+              hasNext={notifications.data?.nextCursor != null}
+              onPrevious={() => setTrail((current) => current.slice(0, -1))}
+              onNext={() => {
+                const next = notifications.data?.nextCursor;
+                if (next) setTrail((current) => [...current, next]);
+              }}
+            />
+          )}
+        </Card>
 
-      {/*
+        {!denied && (
+          <div className="stack notifications-side">
+            {selected === null && (
+              <Card tone="muted" title={t('web.attempts')}>
+                <p className="muted small">{t('web.notifications_pick_hint')}</p>
+              </Card>
+            )}
+            {/*
         A message AND a way out. This was the one polled query on the branch
         with no retry control: the interval stops on a refusal, the stale
         attempts card below goes on showing the pre-failure list, and clicking
@@ -601,7 +644,7 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
         React bails out and nothing refetches. The only escapes were a full
         reload or a detour through another notification.
       */}
-      {/*
+            {/*
         The SAME rule as every other query-driven view, not a hand-rolled
         ladder beside it.
         
@@ -612,7 +655,7 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
         does not distinguish a blip from an answer, and `detail.data` does not
         know what `detail.isError` decided.
       */}
-      {/*
+            {/*
         The LOADING state, which the three blocks below jointly did not cover.
         
         `isPending` matched none of them, so selecting a notification left the
@@ -621,123 +664,127 @@ export function NotificationsPage({ mayTest, denied }: { mayTest: boolean; denie
         here; the comment claiming this site "follows the SAME rule as every
         other query-driven view" was two thirds true.
       */}
-      {!denied && selected !== null && detail.isPending && <Skeleton />}
-      {!denied && detail.isError && staleAfterError(detail) && (
-        <Banner tone="danger">
-          {messageFor(detail.error)}{' '}
-          {retryOf(detail) !== undefined && (
-            <button type="button" className="btn ghost sm" onClick={retryOf(detail)}>
-              {t('web.retry')}
-            </button>
-          )}
-        </Banner>
-      )}
-      {!denied && queryState(detail) === 'error' && (
-        <Empty
-          // The SAME copy rule as `StateSwitch`, and now literally the same
-          // function rather than a second copy of its ternaries.
-          //
-          // This card hard-coded the connection copy, so one screen gave two
-          // contradictory diagnoses of one 403. Fixing that by writing the
-          // same three ternaries here left both sites wrong in the same NEW
-          // way one round later, for every final answer that is not a 403.
-          title={t(errorCopy(detail).title)}
-          hint={t(errorCopy(detail).hint)}
-          icon={errorCopy(detail).icon}
-          {...(retryOf(detail) === undefined
-            ? {}
-            : {
-                action: (
-                  <button type="button" className="btn" onClick={retryOf(detail)}>
+            {!denied && selected !== null && detail.isPending && <Skeleton />}
+            {!denied && detail.isError && staleAfterError(detail) && (
+              <Banner tone="danger">
+                {messageFor(detail.error)}{' '}
+                {retryOf(detail) !== undefined && (
+                  <button type="button" className="btn ghost sm" onClick={retryOf(detail)}>
                     {t('web.retry')}
                   </button>
-                ),
-              })}
-        />
-      )}
-      {!denied && queryState(detail) !== 'error' && detail.data && (
-        <Card title={t('web.attempts')}>
-          {detail.data.attempts.length === 0 && <Empty title={t('web.empty')} />}
-          {detail.data.attempts.length > 0 && (
-            <DataTable
-              caption={t('web.attempts')}
-              rows={detail.data.attempts}
-              rowKey={(row) => String(row.attemptNumber)}
-              columns={[
-                {
-                  key: 'n',
-                  header: t('web.attempt'),
-                  render: (row) => <Num value={row.attemptNumber} />,
-                },
-                {
-                  key: 'outcome',
-                  header: t('web.outcome'),
-                  render: (row) => (
-                    <Badge tone={row.outcome === 'SUCCEEDED' ? 'ok' : 'danger'}>
-                      {row.outcome}
-                    </Badge>
-                  ),
-                },
-                {
-                  key: 'code',
-                  header: t('web.error_code'),
-                  render: (row) => (row.errorCode === null ? '—' : <Ltr>{row.errorCode}</Ltr>),
-                },
-                {
-                  key: 'message',
-                  header: t('web.message'),
-                  render: (row) => <span className="plain">{row.errorMessage ?? '—'}</span>,
-                },
-                {
-                  key: 'at',
-                  header: t('web.updated_at'),
-                  render: (row) => (
-                    <span className="nowrap">{formatTimestamp(row.finishedAt)}</span>
-                  ),
-                },
-              ]}
-            />
-          )}
+                )}
+              </Banner>
+            )}
+            {!denied && queryState(detail) === 'error' && (
+              <Empty
+                // The SAME copy rule as `StateSwitch`, and now literally the same
+                // function rather than a second copy of its ternaries.
+                //
+                // This card hard-coded the connection copy, so one screen gave two
+                // contradictory diagnoses of one 403. Fixing that by writing the
+                // same three ternaries here left both sites wrong in the same NEW
+                // way one round later, for every final answer that is not a 403.
+                title={t(errorCopy(detail).title)}
+                hint={t(errorCopy(detail).hint)}
+                icon={errorCopy(detail).icon}
+                {...(retryOf(detail) === undefined
+                  ? {}
+                  : {
+                      action: (
+                        <button type="button" className="btn" onClick={retryOf(detail)}>
+                          {t('web.retry')}
+                        </button>
+                      ),
+                    })}
+              />
+            )}
+            {!denied && queryState(detail) !== 'error' && detail.data && (
+              <Card title={t('web.attempts')}>
+                {detail.data.attempts.length === 0 && <Empty title={t('web.empty')} />}
+                {detail.data.attempts.length > 0 && (
+                  <DataTable
+                    caption={t('web.attempts')}
+                    rows={detail.data.attempts}
+                    rowKey={(row) => String(row.attemptNumber)}
+                    columns={[
+                      {
+                        key: 'n',
+                        header: t('web.attempt'),
+                        render: (row) => <Num value={row.attemptNumber} />,
+                      },
+                      {
+                        key: 'outcome',
+                        header: t('web.outcome'),
+                        render: (row) => (
+                          <Badge tone={row.outcome === 'SUCCEEDED' ? 'ok' : 'danger'}>
+                            {row.outcome}
+                          </Badge>
+                        ),
+                      },
+                      {
+                        key: 'code',
+                        header: t('web.error_code'),
+                        render: (row) =>
+                          row.errorCode === null ? '—' : <Ltr>{row.errorCode}</Ltr>,
+                      },
+                      {
+                        key: 'message',
+                        header: t('web.message'),
+                        render: (row) => <span className="plain">{row.errorMessage ?? '—'}</span>,
+                      },
+                      {
+                        key: 'at',
+                        header: t('web.updated_at'),
+                        render: (row) => (
+                          <span className="nowrap">{formatTimestamp(row.finishedAt)}</span>
+                        ),
+                      },
+                    ]}
+                  />
+                )}
 
-          {/* The claims that were given back.
+                {/* The claims that were given back.
 
               Rendered alongside the attempts rather than merged into them,
               because they are the opposite kind of fact: an attempt row says
               what happened on the wire and one of these says that on this
               number nothing did. Merged, the two would need a shared "outcome"
               column and a released claim has no outcome to put in it. */}
-          {detail.data.releasedClaims.length > 0 && (
-            <>
-              <h3>{t('web.returned_claims')}</h3>
-              <p className="muted small">{t('web.returned_claims_intro')}</p>
-              <DataTable
-                caption={t('web.returned_claims')}
-                rows={detail.data.releasedClaims}
-                rowKey={(row) => String(row.attemptNumber)}
-                columns={[
-                  {
-                    key: 'n',
-                    header: t('web.attempt'),
-                    render: (row) => <Num value={row.attemptNumber} />,
-                  },
-                  {
-                    key: 'reason',
-                    header: t('web.returned_reason'),
-                    render: (row) => <Ltr>{row.reason}</Ltr>,
-                  },
-                  {
-                    key: 'at',
-                    header: t('web.returned_at'),
-                    render: (row) => (
-                      <span className="nowrap">{formatTimestamp(row.releasedAt)}</span>
-                    ),
-                  },
-                ]}
-              />
-            </>
-          )}
-        </Card>
-      )}
+                {detail.data.releasedClaims.length > 0 && (
+                  <>
+                    <h3>{t('web.returned_claims')}</h3>
+                    <p className="muted small">{t('web.returned_claims_intro')}</p>
+                    <DataTable
+                      caption={t('web.returned_claims')}
+                      rows={detail.data.releasedClaims}
+                      rowKey={(row) => String(row.attemptNumber)}
+                      columns={[
+                        {
+                          key: 'n',
+                          header: t('web.attempt'),
+                          render: (row) => <Num value={row.attemptNumber} />,
+                        },
+                        {
+                          key: 'reason',
+                          header: t('web.returned_reason'),
+                          render: (row) => <Ltr>{row.reason}</Ltr>,
+                        },
+                        {
+                          key: 'at',
+                          header: t('web.returned_at'),
+                          render: (row) => (
+                            <span className="nowrap">{formatTimestamp(row.releasedAt)}</span>
+                          ),
+                        },
+                      ]}
+                    />
+                  </>
+                )}
+              </Card>
+            )}
+          </div>
+        )}
+      </div>
     </>
   );
 }

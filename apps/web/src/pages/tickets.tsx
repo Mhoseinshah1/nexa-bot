@@ -60,19 +60,26 @@ import {
   Badge,
   Banner,
   Card,
+  CellMain,
+  ChipDivider,
   CursorPager,
   DataTable,
   Empty,
   Field,
+  FilterBar,
+  FilterChip,
+  FilterChips,
+  IdentityCell,
   KV,
   Ltr,
   PageHead,
-  Pills,
   StateSwitch,
   useToast,
+  useUnsavedChanges,
   type Column,
   type Tone,
 } from '../ui/kit';
+import { Icon } from '../ui/icons';
 
 /**
  * Support tickets (WP-A7) — the inbox, one conversation, and the categories customers
@@ -295,16 +302,6 @@ function Dash() {
   return <span className="faint">—</span>;
 }
 
-function customerLabel(row: TicketSummary): string {
-  return [
-    row.customerDisplayName,
-    row.customerUsername === null ? null : `@${row.customerUsername}`,
-    row.customerTelegramUserId,
-  ]
-    .filter((part): part is string => part !== null && part !== '')
-    .join(' · ');
-}
-
 /** The id of the administrator signed in, from the session the shell already holds. */
 function useViewerId(): string | null {
   const queries = useQueryClient();
@@ -403,18 +400,24 @@ export function TicketsPage({
 
   const columns: readonly Column<TicketSummary>[] = [
     {
-      key: 'number',
-      header: t('web.ticket_number'),
+      key: 'ticket',
+      // The number is the row's link and the subject sits beneath it.
+      header: `${t('web.ticket_number')}${t('web.list_separator')}${t('web.ticket_subject')}`,
+      wrap: true,
       render: (row) => (
-        <a href={`/tickets/${encodeURIComponent(row.id)}`} onClick={onLink} className="strong">
-          <Ltr>#{row.number}</Ltr>
-        </a>
+        <CellMain
+          primary={
+            <a
+              href={`/tickets/${encodeURIComponent(row.id)}`}
+              onClick={onLink}
+              className="strong tickets-number"
+            >
+              <Ltr>#{row.number}</Ltr>
+            </a>
+          }
+          secondary={row.subject ?? <Dash />}
+        />
       ),
-    },
-    {
-      key: 'subject',
-      header: t('web.ticket_subject'),
-      render: (row) => row.subject ?? <Dash />,
     },
     { key: 'category', header: t('web.ticket_category'), render: (row) => row.categoryTitle },
     {
@@ -431,16 +434,23 @@ export function TicketsPage({
       key: 'customer',
       header: t('web.ticket_customer'),
       render: (row) => (
-        <a href={`/users/${encodeURIComponent(row.customerId)}`} onClick={onLink}>
-          {customerLabel(row) || <Ltr>{row.customerId.slice(0, 8)}</Ltr>}
-        </a>
+        <IdentityCell
+          name={row.customerDisplayName ?? <Ltr>{row.customerId.slice(0, 8)}</Ltr>}
+          username={row.customerUsername}
+          id={row.customerTelegramUserId}
+          href={`/users/${encodeURIComponent(row.customerId)}`}
+        />
       ),
     },
     {
       key: 'assignee',
       header: t('web.ticket_assignee'),
       render: (row) =>
-        row.assignedAdminUsername ?? <span className="muted">{t('web.ticket_unassigned')}</span>,
+        row.assignedAdminUsername === null ? (
+          <span className="muted">{t('web.ticket_unassigned')}</span>
+        ) : (
+          <Ltr mono={false}>@{row.assignedAdminUsername}</Ltr>
+        ),
     },
     {
       key: 'last',
@@ -450,98 +460,111 @@ export function TicketsPage({
     {
       key: 'created',
       header: t('web.ticket_created_at'),
-      render: (row) => <span className="nowrap">{formatTimestamp(row.createdAt)}</span>,
+      render: (row) => <span className="nowrap muted">{formatTimestamp(row.createdAt)}</span>,
     },
   ];
+
+  const requestable = mayRequest(tickets, denied);
 
   return (
     <>
       <PageHead title={t('web.tickets_title')} subtitle={t('web.tickets_intro')} maturity="now" />
 
       <Card>
-        <div hidden={!mayRequest(tickets, denied)}>
-          <div className="toolbar">
-            <Pills
-              value={status ?? 'ALL'}
-              onChange={(next) => setQuery(route, 'status', next === 'ALL' ? null : next)}
-              items={[
-                { id: 'ALL' as const, label: t('web.ticket_filter_all') },
-                ...TICKET_STATUSES.map((value) => ({
-                  id: value,
-                  label: t(TICKET_STATUS_LABELS[value]),
-                })),
-              ]}
+        <FilterBar hidden={!requestable}>
+          <FilterChips label={t('web.status')}>
+            <FilterChip pressed={status === null} onClick={() => setQuery(route, 'status', null)}>
+              {t('web.ticket_filter_all')}
+            </FilterChip>
+            <ChipDivider />
+            {TICKET_STATUSES.map((value) => (
+              <FilterChip
+                key={value}
+                pressed={status === value}
+                onClick={() => setQuery(route, 'status', value)}
+              >
+                {t(TICKET_STATUS_LABELS[value])}
+              </FilterChip>
+            ))}
+          </FilterChips>
+        </FilterBar>
+        <form className="toolbar tickets-filters" onSubmit={apply} hidden={!requestable}>
+          <Field label={t('web.ticket_category')} htmlFor="tickets-category" compact>
+            <select
+              id="tickets-category"
+              className="input sm"
+              value={categoryId}
+              onChange={(event) => setQuery(route, 'categoryId', event.target.value || null)}
+            >
+              <option value="">{t('web.ticket_filter_all')}</option>
+              {(categories.data?.categories ?? []).map((category) => (
+                <option key={category.id} value={category.id}>
+                  {category.title}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label={t('web.ticket_assignee')} htmlFor="tickets-assigned" compact>
+            <select
+              id="tickets-assigned"
+              className="input sm"
+              value={assigned}
+              onChange={(event) => setQuery(route, 'assigned', event.target.value || null)}
+            >
+              <option value="">{t('web.ticket_filter_all')}</option>
+              <option value="me">{t('web.ticket_filter_mine')}</option>
+              <option value="none">{t('web.ticket_unassigned')}</option>
+              {(assignees.data?.admins ?? []).map((admin) => (
+                <option key={admin.id} value={admin.id}>
+                  {admin.displayName} (@{admin.username})
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field
+            label={t('web.ticket_customer')}
+            hint={t('web.ticket_filter_customer_hint')}
+            htmlFor="tickets-customer"
+            compact
+          >
+            <input
+              id="tickets-customer"
+              className="input sm"
+              dir="ltr"
+              value={draftCustomer}
+              onChange={(event) => edit({ customer: event.target.value })}
             />
-          </div>
-          <form className="toolbar" onSubmit={apply}>
-            <Field label={t('web.ticket_category')} htmlFor="tickets-category">
-              <select
-                id="tickets-category"
-                value={categoryId}
-                onChange={(event) => setQuery(route, 'categoryId', event.target.value || null)}
-              >
-                <option value="">{t('web.ticket_filter_all')}</option>
-                {(categories.data?.categories ?? []).map((category) => (
-                  <option key={category.id} value={category.id}>
-                    {category.title}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            <Field label={t('web.ticket_assignee')} htmlFor="tickets-assigned">
-              <select
-                id="tickets-assigned"
-                value={assigned}
-                onChange={(event) => setQuery(route, 'assigned', event.target.value || null)}
-              >
-                <option value="">{t('web.ticket_filter_all')}</option>
-                <option value="me">{t('web.ticket_filter_mine')}</option>
-                <option value="none">{t('web.ticket_unassigned')}</option>
-                {(assignees.data?.admins ?? []).map((admin) => (
-                  <option key={admin.id} value={admin.id}>
-                    {admin.displayName} (@{admin.username})
-                  </option>
-                ))}
-              </select>
-            </Field>
-            <Field
-              label={t('web.ticket_customer')}
-              hint={t('web.ticket_filter_customer_hint')}
-              htmlFor="tickets-customer"
-            >
-              <input
-                id="tickets-customer"
-                dir="ltr"
-                value={draftCustomer}
-                onChange={(event) => edit({ customer: event.target.value })}
-              />
-            </Field>
-            <Field label={t('web.ticket_filter_from')} htmlFor="tickets-from">
-              <input
-                id="tickets-from"
-                type="date"
-                value={draftFrom}
-                onChange={(event) => edit({ fromDay: event.target.value })}
-              />
-            </Field>
-            <Field
-              label={t('web.ticket_filter_to')}
-              htmlFor="tickets-to"
-              {...(dateProblem ? { error: t('web.ticket_filter_dates_invalid') } : {})}
-            >
-              <input
-                id="tickets-to"
-                type="date"
-                value={draftTo}
-                onChange={(event) => edit({ toDay: event.target.value })}
-              />
-            </Field>
+          </Field>
+          <Field label={t('web.ticket_filter_from')} htmlFor="tickets-from" compact>
+            <input
+              id="tickets-from"
+              className="input sm"
+              type="date"
+              value={draftFrom}
+              onChange={(event) => edit({ fromDay: event.target.value })}
+            />
+          </Field>
+          <Field
+            label={t('web.ticket_filter_to')}
+            htmlFor="tickets-to"
+            compact
+            {...(dateProblem ? { error: t('web.ticket_filter_dates_invalid') } : {})}
+          >
+            <input
+              id="tickets-to"
+              className="input sm"
+              type="date"
+              value={draftTo}
+              onChange={(event) => edit({ toDay: event.target.value })}
+            />
+          </Field>
+          <div className="tickets-filter-actions">
             <button type="submit" className="btn primary sm" disabled={dateProblem}>
               {t('web.users_search_apply')}
             </button>
             <button
               type="button"
-              className="btn sm"
+              className="btn ghost sm"
               disabled={!filtering}
               onClick={() => {
                 setDraft({ signature: '||', customer: '', fromDay: '', toDay: '' });
@@ -557,8 +580,8 @@ export function TicketsPage({
             >
               {t('web.users_search_clear')}
             </button>
-          </form>
-        </div>
+          </div>
+        </form>
 
         <StateSwitch
           query={tickets}
@@ -577,6 +600,8 @@ export function TicketsPage({
             columns={columns}
             rows={rows}
             rowKey={(row) => row.id}
+            dense
+            rowClassName={(row) => (row.status === 'CLOSED' ? 'tickets-row-closed' : undefined)}
           />
           <CursorPager
             shown={rows.length}
@@ -702,11 +727,12 @@ function TicketCategoriesCard({
           columns={columns}
           rows={categories}
           rowKey={(row) => row.id}
+          dense
         />
       </StateSwitch>
       {mayEdit && (
         <form
-          className="toolbar"
+          className="toolbar tickets-category-form"
           onSubmit={(event) => {
             event.preventDefault();
             if (normalized === null || sortOrder === null) return;
@@ -720,6 +746,7 @@ function TicketCategoriesCard({
           >
             <input
               id="ticket-category-title"
+              className="input sm"
               value={title}
               maxLength={TICKET_CATEGORY_TITLE_MAX_LENGTH * 2}
               onChange={(event) => setTitle(event.target.value)}
@@ -728,6 +755,7 @@ function TicketCategoriesCard({
           <Field label={t('web.ticket_category_order')} htmlFor="ticket-category-order">
             <input
               id="ticket-category-order"
+              className="input sm tickets-order"
               inputMode="numeric"
               value={order}
               onChange={(event) => setOrder(event.target.value)}
@@ -758,9 +786,10 @@ function CategoryTitleEditor({
   useEffect(() => setValue(category.title), [category.title]);
   const normalized = normalizeTicketCategoryTitle(value);
   return (
-    <span className="btn-group">
+    <span className="tickets-inline-edit">
       <input
         aria-label={t('web.ticket_category_title')}
+        className="input sm"
         value={value}
         onChange={(event) => setValue(event.target.value)}
       />
@@ -792,9 +821,10 @@ function CategoryOrderEditor({
   useEffect(() => setValue(String(category.sortOrder)), [category.sortOrder]);
   const sortOrder = sortOrderOf(value);
   return (
-    <span className="btn-group">
+    <span className="tickets-inline-edit">
       <input
         aria-label={t('web.ticket_category_order')}
+        className="input sm tickets-order"
         inputMode="numeric"
         size={6}
         value={value}
@@ -840,39 +870,52 @@ export function TicketDetailPage({
     <>
       <PageHead
         title={
-          data === undefined
-            ? t('web.ticket_detail')
-            : `${t('web.ticket_detail')} #${data.ticket.number}`
+          data === undefined ? (
+            t('web.ticket_detail')
+          ) : (
+            <>
+              {t('web.ticket_detail')} <Ltr mono={false}>#{data.ticket.number}</Ltr>
+            </>
+          )
+        }
+        badge={
+          data === undefined ? undefined : (
+            <>
+              <StatusBadge status={data.ticket.status} />
+              <PriorityBadge priority={data.ticket.priority} />
+            </>
+          )
         }
         subtitle={data?.ticket.subject ?? t('web.ticket_detail_intro')}
       />
       <StateSwitch query={ticket} denied={denied}>
         {data !== undefined && (
-          <>
-            <TicketSummaryCard detail={data} />
-            <div className="grid c2">
-              <TicketContextCard detail={data} mayAssign={mayAssign} />
+          <div className="two-col ticket-layout">
+            <div className="stack">
+              <TicketConversationCard messages={data.messages} />
+              {mayReply && <TicketReplyCard ticket={data.ticket} />}
+            </div>
+            <div className="stack">
               {(mayAssign || mayClose) && (
                 <TicketActionsCard ticket={data.ticket} mayAssign={mayAssign} mayClose={mayClose} />
               )}
+              <TicketSummaryCard detail={data} />
+              <TicketContextCard detail={data} mayAssign={mayAssign} />
             </div>
-            <TicketConversationCard messages={data.messages} />
-            {mayReply && <TicketReplyCard ticket={data.ticket} />}
-          </>
+          </div>
         )}
       </StateSwitch>
     </>
   );
 }
 
+/** What the ticket is and when: its state and priority stand beside the title above. */
 function TicketSummaryCard({ detail }: { detail: TicketDetailResponse }) {
   const { ticket } = detail;
   return (
     <Card title={t('web.ticket_summary')}>
       <KV
         items={[
-          [t('web.status'), <StatusBadge key="s" status={ticket.status} />],
-          [t('web.ticket_priority'), <PriorityBadge key="p" priority={ticket.priority} />],
           [t('web.ticket_category'), ticket.categoryTitle],
           [
             t('web.ticket_assignee'),
@@ -971,31 +1014,34 @@ function TicketLinksForm({ ticket }: { ticket: TicketSummary }) {
   });
   return (
     <form
-      className="toolbar"
+      className="ticket-links"
       onSubmit={(event) => {
         event.preventDefault();
         save.mutate();
       }}
     >
-      <Field label={t('web.ticket_link_service')} htmlFor="ticket-link-service">
+      <Field label={t('web.ticket_link_service')} htmlFor="ticket-link-service" compact>
         <input
           id="ticket-link-service"
+          className="input sm"
           dir="ltr"
           value={service}
           onChange={(e) => setService(e.target.value)}
         />
       </Field>
-      <Field label={t('web.ticket_link_order')} htmlFor="ticket-link-order">
+      <Field label={t('web.ticket_link_order')} htmlFor="ticket-link-order" compact>
         <input
           id="ticket-link-order"
+          className="input sm"
           dir="ltr"
           value={order}
           onChange={(e) => setOrder(e.target.value)}
         />
       </Field>
-      <Field label={t('web.ticket_link_payment')} htmlFor="ticket-link-payment">
+      <Field label={t('web.ticket_link_payment')} htmlFor="ticket-link-payment" compact>
         <input
           id="ticket-link-payment"
+          className="input sm"
           dir="ltr"
           value={payment}
           onChange={(e) => setPayment(e.target.value)}
@@ -1065,7 +1111,7 @@ function TicketActionsCard({
   return (
     <Card title={t('web.ticket_actions')} hint={t('web.ticket_actions_hint')}>
       {mayClose && (
-        <div className="btn-group">
+        <div className="btn-group ticket-transitions" role="group" aria-label={t('web.status')}>
           {targets.map((to) => (
             <button
               key={to}
@@ -1084,6 +1130,7 @@ function TicketActionsCard({
           <Field label={t('web.ticket_assignee')} htmlFor="ticket-assignee">
             <select
               id="ticket-assignee"
+              className="input"
               value={ticket.assignedAdminId ?? ''}
               disabled={assign.isPending}
               onChange={(event) =>
@@ -1102,7 +1149,7 @@ function TicketActionsCard({
             <div className="btn-group">
               <button
                 type="button"
-                className="btn sm"
+                className="btn ghost sm"
                 disabled={assign.isPending}
                 onClick={() => assign.mutate(viewer)}
               >
@@ -1113,6 +1160,7 @@ function TicketActionsCard({
           <Field label={t('web.ticket_priority')} htmlFor="ticket-priority">
             <select
               id="ticket-priority"
+              className="input"
               value={ticket.priority}
               disabled={priority.isPending}
               onChange={(event) => priority.mutate(event.target.value as TicketPriority)}
@@ -1133,7 +1181,7 @@ function TicketActionsCard({
 function TicketConversationCard({ messages }: { messages: readonly TicketMessageView[] }) {
   return (
     <Card title={t('web.ticket_conversation')} hint={t('web.ticket_conversation_hint')}>
-      <ol className="ticket-thread">
+      <ol className="ticket-thread" aria-label={t('web.ticket_conversation')}>
         {messages.map((message) => (
           <TicketMessageItem key={message.id} message={message} />
         ))}
@@ -1146,7 +1194,7 @@ function TicketMessageItem({ message }: { message: TicketMessageView }) {
   if (message.senderType === 'SYSTEM') {
     return (
       <li className="ticket-message system">
-        <span className="muted small">
+        <span className="small">
           {message.systemEvent === null ? '' : t(SYSTEM_LABELS[message.systemEvent])} ·{' '}
           {formatTimestamp(message.createdAt)}
         </span>
@@ -1157,6 +1205,12 @@ function TicketMessageItem({ message }: { message: TicketMessageView }) {
   return (
     <li className={`ticket-message ${support ? 'support' : 'customer'}`}>
       <div className="ticket-message-head">
+        <span
+          className={support ? 'avatar ticket-avatar support' : 'avatar ticket-avatar'}
+          aria-hidden="true"
+        >
+          <Icon name={support ? 'help' : 'user'} size={13} />
+        </span>
         <strong>
           {support
             ? `${t('web.ticket_sender_support')}${message.authorAdminUsername === null ? '' : ` (@${message.authorAdminUsername})`}`
@@ -1213,7 +1267,7 @@ function TicketAttachment({ message }: { message: TicketMessageView }) {
   // HF-A7: support's file is its own send, so it has its own delivery beside the text's.
   const delivery = message.attachmentDelivery;
   return (
-    <div className="receipt">
+    <div className="ticket-attachment">
       <KV
         items={[
           [
@@ -1251,7 +1305,7 @@ function TicketAttachment({ message }: { message: TicketMessageView }) {
       {objectUrl !== null &&
         (photo ? (
           <img
-            className="receipt-image"
+            className="ticket-attachment-image"
             src={objectUrl}
             alt={t(
               message.senderType === 'ADMIN'
@@ -1286,6 +1340,8 @@ function TicketReplyCard({ ticket }: { ticket: TicketSummary }) {
    */
   const selection = useRef(0);
   const body = normalizeTicketText(text);
+  // A typed reply or a chosen file is work the operator would lose by leaving.
+  useUnsavedChanges(text.trim() !== '' || picked.kind !== 'NONE');
   // Nothing is sendable while a chosen file is being read, or when it was refused.
   const valid =
     body !== null &&
@@ -1371,6 +1427,7 @@ function TicketReplyCard({ ticket }: { ticket: TicketSummary }) {
         >
           <textarea
             id="ticket-reply-text"
+            className="input"
             rows={5}
             value={text}
             maxLength={TICKET_MESSAGE_MAX_LENGTH * 2}
@@ -1397,13 +1454,14 @@ function TicketReplyCard({ ticket }: { ticket: TicketSummary }) {
             onChange={(event: ChangeEvent<HTMLInputElement>) => onPick(event.target.files?.[0])}
           />
         </Field>
-        <div className="btn-group">
+        <div className="form-actions ticket-reply-actions">
           {picked.kind !== 'NONE' && (
             <button type="button" className="btn sm" disabled={reply.isPending} onClick={clearFile}>
               {t('web.ticket_reply_file_clear')}
             </button>
           )}
-          <button type="submit" className="btn primary sm" disabled={!valid || reply.isPending}>
+          <button type="submit" className="btn primary" disabled={!valid || reply.isPending}>
+            <Icon name="send" />
             {t('web.ticket_reply_send')}
           </button>
         </div>
