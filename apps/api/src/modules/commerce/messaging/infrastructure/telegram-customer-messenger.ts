@@ -676,9 +676,14 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
         : { value: caption.values[caption.markup.token], entities: caption.markup.entities };
     const place = (body: string, custom: readonly CustomEmojiEntity[]) => {
       if (html) return { caption: body, entities: [] as readonly TelegramMessageEntity[] };
+      /*
+       * Without provider markup the caption is NOT bounded here: `sendFile` still has to see
+       * a caption over the bound to refuse a `captionWhole` one, and the body builders cut a
+       * plain caption (`boundCaption`) and drop the entities past the cut themselves.
+       */
       const placed =
         provider === undefined || typeof provider.value !== 'string'
-          ? placeCaptionEntities(body, '', [])
+          ? { caption: body, entities: [] as readonly TelegramMessageEntity[] }
           : placeCaptionEntities(body, provider.value, provider.entities);
       const entities: TelegramMessageEntity[] = [
         ...placed.entities,
