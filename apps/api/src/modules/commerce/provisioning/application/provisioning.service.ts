@@ -2159,6 +2159,115 @@ export class ProvisioningService {
     return operation;
   }
 
+  /**
+   * Round N (B2): plans ONE service's share of a mass traffic or time grant — a FREE
+   * `ADD_TRAFFIC` / `ADD_TIME` operation through the path a purchased add-on takes, so the
+   * provisioner executes it exactly as it executes a paid one and no new provider write path
+   * exists. Called inside the bulk item's transaction.
+   *
+   * The same refusals as a purchase (`prepareCommercialAction`: owner, state, operability, an
+   * open commercial action, a pending deletion or refund request), asked as a VERDICT because
+   * no money moves here, plus the two a grant has of its own: a service with no limit in that
+   * dimension cannot be given more of it, and a target past what a panel can hold is refused
+   * rather than clamped. The target is absolute and computed HERE, once, against the service
+   * under its lifecycle lock — the basis on which the provisioner may retry an uncertain
+   * write of it and must never re-plan it.
+   *
+   * No order, and nobody asked: `requested_by_customer_id` is null, so the outcome announcer
+   * tells the customer nothing about a "request". The bulk lane tells them, once the
+   * operation has SUCCEEDED, if the operator chose to. The operation id derives from the
+   * grant and the service, so a replayed item plans the same operation, not a second one.
+   */
+  async planGrant(
+    scope: TenantContext,
+    actor: ActorContext,
+    input: {
+      readonly serviceId: string;
+      readonly customerId: UserId;
+      readonly kind: 'ADD_TRAFFIC' | 'ADD_TIME';
+      readonly trafficBytes: bigint;
+      readonly durationDays: number;
+      /** The bulk operation's id: one grant, one operation per service. */
+      readonly grantKey: string;
+    },
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<
+    | { readonly outcome: 'PLANNED'; readonly operation: OperationRecord }
+    | { readonly outcome: 'UNFULFILLABLE'; readonly reason: string }
+  > {
+    const usable = await this.prepareCommercialAction(
+      scope,
+      { serviceId: input.serviceId, kind: input.kind, customerId: input.customerId },
+      tx,
+      // A verdict, not a refund: nothing was paid. 'REFUND' is the disposition that answers
+      // instead of throwing.
+      'REFUND',
+    );
+    if (usable.outcome !== 'FULFILLABLE') return usable;
+    const service = await this.deps.services.findById(scope, input.serviceId, tx);
+    if (service === null) {
+      throw new Error(`grant names service ${input.serviceId}, which is not there`);
+    }
+    let target: OperationTarget;
+    if (input.kind === 'ADD_TIME') {
+      const expiresAt = extendedExpiry(service.expiresAt, now, input.durationDays);
+      if (expiresAt === null) return { outcome: 'UNFULFILLABLE', reason: 'UNLIMITED' };
+      target = { expiresAt, trafficLimitBytes: null, deviceLimit: null };
+    } else {
+      if (service.trafficLimitBytes === 0n)
+        return { outcome: 'UNFULFILLABLE', reason: 'UNLIMITED' };
+      const limit = extendedAllowance(service.trafficLimitBytes, input.trafficBytes);
+      if (limit > MAX_TRAFFIC_BYTES) return { outcome: 'UNFULFILLABLE', reason: 'LIMIT_EXCEEDED' };
+      target = { expiresAt: null, trafficLimitBytes: limit, deviceLimit: null };
+    }
+    let operation: OperationRecord;
+    try {
+      operation = await this.deps.operations.plan(
+        scope,
+        {
+          id: this.deps.ids.uuid(),
+          operationId: this.deps.operationId(`${service.id}:${input.kind}:grant:${input.grantKey}`),
+          serviceId: service.id,
+          orderId: null,
+          requestedByCustomerId: null,
+          panelId: service.panelId,
+          type: input.kind,
+          target,
+        },
+        now,
+        tx,
+      );
+    } catch (error) {
+      if (isActionInProgress(error))
+        return { outcome: 'UNFULFILLABLE', reason: 'ACTION_IN_PROGRESS' };
+      throw error;
+    }
+    await this.deps.audit.record(
+      scope,
+      actor,
+      {
+        action: `service.plan_grant_${input.kind.toLowerCase()}`,
+        entityType: 'Service',
+        entityId: service.id,
+        before: {
+          state: service.state,
+          expiresAt: service.expiresAt?.toISOString() ?? null,
+          trafficLimitBytes: service.trafficLimitBytes.toString(),
+        },
+        after: {
+          grant: input.grantKey,
+          operationId: operation.operationId,
+          targetExpiresAt: target.expiresAt?.toISOString() ?? null,
+          targetTrafficLimitBytes: target.trafficLimitBytes?.toString() ?? null,
+        },
+        result: 'SUCCESS',
+      },
+      tx,
+    );
+    return { outcome: 'PLANNED', operation };
+  }
+
   /** Whether a service is in a state where re-sending its configuration means anything. */
   static isDeliverable(service: ServiceRecord): boolean {
     const live: readonly ServiceState[] = ['ACTIVE', 'SUSPENDED', 'EXPIRED'];

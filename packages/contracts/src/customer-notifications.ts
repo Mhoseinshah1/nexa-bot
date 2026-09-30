@@ -308,6 +308,21 @@ export const CUSTOMER_NOTIFICATION_KINDS = [
   'RESELLER_MINIMUM_REMINDER',
   /** The reseller's sales this month reached their minimum. `reseller_minimum_notices.id`. */
   'RESELLER_MINIMUM_ACHIEVED',
+  /*
+   * Round N (B2): a mass wallet credit, told to the customer when the operator chose to
+   * notify. The subject is the bulk item; the amount is read at send time from the
+   * `MASS_CREDIT` wallet entry the item names — a reader, not a payload (ADR 0030 §1).
+   * Enqueued in the transaction that writes the entry, so a credit that did not happen is
+   * never announced.
+   */
+  'WALLET_MASS_CREDITED',
+  /*
+   * Round N (B2): a mass traffic or time grant that the provider AUTHORITATIVELY applied. The
+   * subject is the bulk item; what was granted and to which service is read from it at send
+   * time. Enqueued only when the item's operation is SUCCEEDED — never for a planned, unknown
+   * or failed one.
+   */
+  'SERVICE_GIFT_APPLIED',
 ] as const;
 export type CustomerNotificationKind = (typeof CUSTOMER_NOTIFICATION_KINDS)[number];
 export const customerNotificationKindSchema = z.enum(CUSTOMER_NOTIFICATION_KINDS);
@@ -471,6 +486,9 @@ export const CUSTOMER_NOTIFICATION_PRECONDITIONS: Readonly<
    */
   RESELLER_MINIMUM_REMINDER: true,
   RESELLER_MINIMUM_ACHIEVED: false,
+  // Round N: both are terminal facts about work already done.
+  WALLET_MASS_CREDITED: false,
+  SERVICE_GIFT_APPLIED: false,
 };
 
 /**
@@ -543,6 +561,8 @@ export const CUSTOMER_NOTIFICATION_QUIET_HOURS: Readonly<
   // Round N, package D: the month-end reminder is held like every reminder; the achievement is not.
   RESELLER_MINIMUM_REMINDER: true,
   RESELLER_MINIMUM_ACHIEVED: false,
+  WALLET_MASS_CREDITED: false,
+  SERVICE_GIFT_APPLIED: false,
 };
 
 /**
@@ -614,6 +634,8 @@ export const CUSTOMER_NOTIFICATION_TEMPLATES: Readonly<
   // Round N, package D: values read at send time from the notice row and the month's sales.
   RESELLER_MINIMUM_REMINDER: 'bot.reseller.minimum_reminder',
   RESELLER_MINIMUM_ACHIEVED: 'bot.reseller.minimum_achieved',
+  WALLET_MASS_CREDITED: 'bot.wallet.mass_credited',
+  SERVICE_GIFT_APPLIED: 'bot.service.gift_applied',
 };
 
 /**

@@ -366,6 +366,19 @@ export interface CustomerNotificationDeps {
   readonly orderScreens?: {
     close(scope: TenantContext, orderId: string): Promise<void>;
   };
+  /**
+   * Round N (B2): what `WALLET_MASS_CREDITED` and `SERVICE_GIFT_APPLIED` render, read at send
+   * time from the bulk item the notification names — the credited ledger entry, or the grant
+   * and the service. A reader, not a payload (ADR 0030 §1). Null when the item does not state
+   * an effect that happened, which sends nothing. Absent, both kinds render nothing.
+   */
+  readonly massActions?: {
+    notificationValues(
+      scope: TenantContext,
+      kind: 'WALLET_MASS_CREDITED' | 'SERVICE_GIFT_APPLIED',
+      itemId: string,
+    ): Promise<TemplateValues | null>;
+  };
   readonly uow: UnitOfWork<TransactionScope>;
   readonly clock: Clock;
   readonly scopeIsActive: (scope: TenantContext) => Promise<boolean>;
@@ -509,6 +522,11 @@ export class CustomerNotificationService {
         buttons: this.deps.buttonsFor?.(row.kind, { serviceId: facts.serviceId }) ?? [],
         ...(facts.orderId === null ? {} : { closesOrder: facts.orderId }),
       };
+    }
+    if (row.kind === 'WALLET_MASS_CREDITED' || row.kind === 'SERVICE_GIFT_APPLIED') {
+      if (this.deps.massActions === undefined) return null;
+      const values = await this.deps.massActions.notificationValues(scope, row.kind, row.subjectId);
+      return values === null ? null : { values, buttons: [] };
     }
     if (row.kind === 'TICKET_REPLY_ATTACHMENT') {
       if (this.deps.tickets === undefined) return null;

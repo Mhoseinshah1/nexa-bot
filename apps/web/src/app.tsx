@@ -28,6 +28,12 @@ import { PaymentGatewaysPage } from './pages/payment-gateways';
 import { SupportPage } from './pages/support';
 import { ClientAppsPage } from './pages/client-apps';
 import { TicketDetailPage, TicketsPage } from './pages/tickets';
+import { BroadcastDetailPage, BroadcastNewPage, BroadcastsPage } from './pages/broadcasts';
+import {
+  BulkOperationDetailPage,
+  BulkOperationNewPage,
+  BulkOperationsPage,
+} from './pages/bulk-operations';
 import { ProductDetailPage, ProductsPage } from './pages/products';
 import { ProductCategoriesPage } from './pages/product-categories';
 import { ExtraDevicesPage } from './pages/extra-devices';
@@ -221,6 +227,27 @@ export const NAV: readonly NavEntry[] = [
     // ANY of the two: the page is the services list AND the customers' refund-request queue
     // (WP19), and a finance reviewer may hold `refunds.view` alone (Codex review of #83).
     permission: ['services.view', 'refunds.view'],
+    group: 'web.navgroup_sales',
+  },
+  {
+    /*
+     * Round N (B1): «ارسال همگانی». `broadcasts.view` reads the list and the reports;
+     * composing and launching is `broadcasts.send`, which requires it.
+     */
+    id: 'broadcasts',
+    path: '/broadcasts',
+    label: 'web.nav_broadcasts',
+    icon: 'send',
+    permission: 'broadcasts.view',
+    group: 'web.navgroup_sales',
+  },
+  {
+    // Round N (B2): «عملیات گروهی» — mass wallet credit and mass traffic/time.
+    id: 'bulk-operations',
+    path: '/bulk-operations',
+    label: 'web.nav_bulk_operations',
+    icon: 'zap',
+    permission: 'bulk_operations.view',
     group: 'web.navgroup_sales',
   },
   {
@@ -823,6 +850,84 @@ export function resolve(
       ),
       crumbs: [nav('services'), { label: t('web.service_detail') }],
       title: t('web.service_detail'),
+    };
+  }
+
+  // Round N: broadcast and mass operations.
+  if (route.path === '/broadcasts') {
+    return {
+      element: (
+        <BroadcastsPage
+          route={route}
+          denied={!may('broadcasts.view')}
+          maySend={may('broadcasts.send')}
+        />
+      ),
+      crumbs: [{ label: t('web.bc_page_title') }],
+      title: t('web.bc_page_title'),
+    };
+  }
+  if (route.path === '/broadcasts/new') {
+    return {
+      element: <BroadcastNewPage maySend={may('broadcasts.send')} />,
+      crumbs: [nav('broadcasts'), { label: t('web.bc_new') }],
+      title: t('web.bc_new'),
+    };
+  }
+  const broadcast = match('/broadcasts/:id', route.path);
+  if (broadcast !== null) {
+    return {
+      element: (
+        <BroadcastDetailPage
+          key={broadcast['id'] ?? ''}
+          id={broadcast['id'] ?? ''}
+          denied={!may('broadcasts.view')}
+          maySend={may('broadcasts.send')}
+        />
+      ),
+      crumbs: [nav('broadcasts'), { label: t('web.bc_detail') }],
+      title: t('web.bc_detail'),
+    };
+  }
+  if (route.path === '/bulk-operations') {
+    return {
+      element: (
+        <BulkOperationsPage
+          route={route}
+          denied={!may('bulk_operations.view')}
+          mayRun={may('users.wallet.mass') || may('services.mass.grant')}
+        />
+      ),
+      crumbs: [{ label: t('web.bulk_page_title') }],
+      title: t('web.bulk_page_title'),
+    };
+  }
+  if (route.path === '/bulk-operations/new') {
+    return {
+      element: (
+        <BulkOperationNewPage
+          mayWallet={may('users.wallet.mass')}
+          mayGrant={may('services.mass.grant')}
+        />
+      ),
+      crumbs: [nav('bulk-operations'), { label: t('web.bulk_new') }],
+      title: t('web.bulk_new'),
+    };
+  }
+  const bulk = match('/bulk-operations/:id', route.path);
+  if (bulk !== null) {
+    return {
+      element: (
+        <BulkOperationDetailPage
+          key={bulk['id'] ?? ''}
+          id={bulk['id'] ?? ''}
+          denied={!may('bulk_operations.view')}
+          mayWallet={may('users.wallet.mass')}
+          mayGrant={may('services.mass.grant')}
+        />
+      ),
+      crumbs: [nav('bulk-operations'), { label: t('web.bulk_detail') }],
+      title: t('web.bulk_detail'),
     };
   }
 

@@ -1283,6 +1283,11 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.ticket.category_default_5': 'سایر',
   'ops.support.ticket_opened':
     '🎫 تیکت جدید #{number}\n\n📂 موضوع: {category}\n👤 کاربر: {displayName} | {username} | {telegramId}\n🕒 زمان: {at}\n\nبرای دیدن گفتگو و پاسخ، بخش «تیکت‌های پشتیبانی» پنل مدیریت را باز کنید.',
+  // Round N: broadcast and safe mass actions.
+  'bot.broadcast.message': '{message}',
+  'bot.wallet.mass_credited': '🎁 مبلغ {amount} به کیف پول شما اضافه شد.',
+  'bot.service.gift_applied':
+    '🎁 هدیه برای سرویس {service} اعمال شد.\n📦 حجم اضافه: {traffic}\n⏳ زمان اضافه: {days}',
   'ops.support.customer_replied':
     '💬 پیام تازهٔ کاربر در تیکت #{number}\n\n📂 موضوع: {category}\n👤 کاربر: {displayName} | {username} | {telegramId}\n🕒 زمان: {at}\n\nبرای دیدن گفتگو و پاسخ، بخش «تیکت‌های پشتیبانی» پنل مدیریت را باز کنید.',
 };

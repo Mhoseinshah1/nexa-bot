@@ -9,6 +9,8 @@ import {
   TICKET_REPLY_FILE_RETENTION_DAYS,
   canAdjustDeviceLimit,
   canChangeLocation,
+  // Round N: the mass credit's notification renders the amount the ledger holds.
+  money,
   faqNumberMarker,
   isSystemContext,
   systemJobActor,
@@ -34,6 +36,8 @@ import type {
   ProductId,
   TenantContext,
   Translator,
+  // Round N: the audience's balance range is written in the selling currency.
+  SalesCurrencyCode,
 } from '@nexa/contracts';
 
 import { acceptsV1, type AppConfig } from './infrastructure/config/config.schema.js';
@@ -177,6 +181,24 @@ import { DrizzleTrialGrantRepository } from './modules/commerce/trials/infrastru
 import { DrizzleTrialOverrideRepository } from './modules/commerce/trials/infrastructure/drizzle-trial-override.repository.js';
 import { DrizzleTrialResetRepository } from './modules/commerce/trials/infrastructure/drizzle-trial-reset.repository.js';
 import { TrialAdminService } from './modules/commerce/trials/application/trial-admin.service.js';
+import { AudienceService } from './modules/commerce/audience/application/audience.service.js';
+import { DrizzleAudienceReader } from './modules/commerce/audience/infrastructure/drizzle-audience.reader.js';
+import { BroadcastService } from './modules/commerce/broadcasts/application/broadcast.service.js';
+import { BroadcastDispatcher } from './modules/commerce/broadcasts/application/broadcast-dispatcher.js';
+import {
+  BROADCAST_INTERVAL_MS,
+  BroadcastLoop,
+} from './modules/commerce/broadcasts/application/broadcast-loop.js';
+import { DrizzleBroadcastRepository } from './modules/commerce/broadcasts/infrastructure/drizzle-broadcast.repository.js';
+import { DrizzleRecipientFactsReader } from './modules/commerce/broadcasts/infrastructure/drizzle-recipient-facts.reader.js';
+import { TelegramBroadcastTransport } from './modules/commerce/broadcasts/infrastructure/telegram-broadcast.transport.js';
+import { BulkOperationService } from './modules/commerce/bulk-operations/application/bulk-operation.service.js';
+import { BulkOperationProcessor } from './modules/commerce/bulk-operations/application/bulk-operation-processor.js';
+import {
+  BULK_OPERATION_INTERVAL_MS,
+  BulkOperationLoop,
+} from './modules/commerce/bulk-operations/application/bulk-operation-loop.js';
+import { DrizzleBulkOperationRepository } from './modules/commerce/bulk-operations/infrastructure/drizzle-bulk-operation.repository.js';
 import { DrizzleCommercialActionRepository } from './modules/commerce/commercial/infrastructure/drizzle-commercial-action.repository.js';
 import { LocationChangePolicy } from './modules/commerce/locations/application/location-change-policy.js';
 import { LocationChangeService } from './modules/commerce/locations/application/location-change.service.js';
@@ -683,6 +705,22 @@ export interface Container {
   readonly trialAdmin: TrialAdminService;
   /** R1: each panel's free trial, for an operator. */
   readonly panelTrials: PanelTrialService;
+  /**
+   * Round N: the SHARED audience — preview for an operator, evaluation for Broadcast, the
+   * mass actions and Campaigns. One query implementation (`audience-sql.ts`).
+   */
+  readonly audience: AudienceService;
+  /** Round N (B1): «ارسال همگانی» for an operator — compose, preview, test, launch, steer. */
+  readonly broadcasts: BroadcastService;
+  /** Round N (B1): the broadcast dispatcher's timer, run by the WORKER role. */
+  readonly broadcastLoop: BroadcastLoop;
+  /** Round N (B1): the dispatcher itself, exposed so a test drives the pass production runs. */
+  readonly broadcastDispatcher: BroadcastDispatcher;
+  /** Round N (B2): «عملیات گروهی» — mass wallet credit and mass traffic/time. */
+  readonly bulkOperations: BulkOperationService;
+  /** Round N (B2): the processor, exposed so a test drives the pass production runs. */
+  readonly bulkOperationProcessor: BulkOperationProcessor;
+  readonly bulkOperationLoop: BulkOperationLoop;
   readonly wallet: WalletService;
   readonly payments: PaymentService;
   readonly paymentAccounts: PaymentAccountService;
@@ -2880,6 +2918,61 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     scopeActivity: tenants,
     clock,
   });
+  /** Round N: the shared audience (`docs/round-n-broadcast-audit.md` §3). */
+  const audienceService = new AudienceService({
+    reader: new DrizzleAudienceReader(database.db),
+    guard,
+    clock,
+    sellingCurrency: (scope) =>
+      settingsResolver.valueOf<SalesCurrencyCode>(scope, 'sales.currency'),
+  });
+  /*
+   * Round N (B2): safe mass actions over the shared audience. The processor writes ledger
+   * entries through the wallet repository and PLANS free ADD_TRAFFIC / ADD_TIME operations
+   * through `ProvisioningService.planGrant`, which the provisioner executes as it executes a
+   * purchased add-on — no new provider write path.
+   */
+  const bulkOperationRepository = new DrizzleBulkOperationRepository(database.db);
+  const bulkSellingCurrency = (scope: TenantContext, tx?: unknown) =>
+    settingsResolver.valueOf<SalesCurrencyCode>(scope, 'sales.currency', tx as never);
+  const bulkOperationService = new BulkOperationService({
+    repository: bulkOperationRepository,
+    audience: audienceService,
+    panels: panelOperability,
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    outbox,
+    sellingCurrency: bulkSellingCurrency,
+    clock,
+    ids,
+  });
+  const bulkOperationProcessor = new BulkOperationProcessor({
+    repository: bulkOperationRepository,
+    wallet: walletRepository,
+    grants: provisioningService,
+    notifier: customerNotifier,
+    outbox,
+    uow,
+    scopeActivity: tenants,
+    sellingCurrency: bulkSellingCurrency,
+    clock,
+    ids,
+    logger,
+  });
+  const bulkOperationLoop = new BulkOperationLoop(bulkOperationProcessor, {
+    scope: () =>
+      installationTenantId === null
+        ? null
+        : { tenantId: installationTenantId, botInstanceId: null },
+    intervalMs: BULK_OPERATION_INTERVAL_MS,
+    now: () => clock.now().getTime(),
+    logger,
+  });
   const featureFlags = new FeatureFlagsService(
     guard,
     uow,
@@ -3531,6 +3624,24 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       orderScreens: { close: (scope, orderId) => wizardScreens.closeOrder(scope, orderId) },
       // HF-A9: reminders claimed inside the tenant's quiet window wait for its end.
       quietHours: reminderQuietHours,
+      // Round N (B2): the mass credit's amount and the grant's service, read from the item.
+      massActions: {
+        notificationValues: async (scope, kind, itemId) => {
+          const facts = await bulkOperationRepository.notificationValues(scope, kind, itemId);
+          if (facts === null) return null;
+          if (kind === 'WALLET_MASS_CREDITED') {
+            return facts.amountMinor === null || facts.currency === null
+              ? null
+              : { amount: money(facts.amountMinor, facts.currency) };
+          }
+          if (facts.serviceLabel === null) return null;
+          return {
+            service: facts.serviceLabel,
+            ...(facts.trafficBytes === null ? {} : { traffic: facts.trafficBytes }),
+            ...(facts.durationDays === null ? {} : { days: facts.durationDays }),
+          };
+        },
+      },
       logger,
     }),
     {
@@ -3543,6 +3654,58 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       logger,
     },
   );
+
+  /*
+   * Round N (B1): the broadcast lane. Its own tables and dispatcher — ADR-0030 closes the
+   * customer notification lane to operator-authored content — sharing the one Telegram
+   * transport (`telegramSend`), the tenant's template renderer and the bot-token source.
+   */
+  const broadcastRepository = new DrizzleBroadcastRepository(database.db);
+  const broadcastTransport = new TelegramBroadcastTransport(
+    templateResolver,
+    botInstances,
+    config.TELEGRAM_API_BASE_URL,
+    config.NOTIFICATION_SEND_TIMEOUT_MS,
+  );
+  const broadcastFacts = new DrizzleRecipientFactsReader(database.db, (scope) =>
+    settingsResolver.valueOf<SalesCurrencyCode>(scope, 'sales.currency'),
+  );
+  const broadcastService = new BroadcastService({
+    repository: broadcastRepository,
+    audience: audienceService,
+    transport: broadcastTransport,
+    facts: broadcastFacts,
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    outbox,
+    clock,
+    ids,
+  });
+  const broadcastDispatcher = new BroadcastDispatcher({
+    repository: broadcastRepository,
+    transport: broadcastTransport,
+    facts: broadcastFacts,
+    outbox,
+    uow,
+    clock,
+    ids,
+    scopeIsActive: (scope) => uow.run(scope, async (tx) => tenants.scopeIsActive(scope, tx)),
+    logger,
+  });
+  const broadcastLoop = new BroadcastLoop(broadcastDispatcher, {
+    scope: () =>
+      installationTenantId === null
+        ? null
+        : { tenantId: installationTenantId, botInstanceId: null },
+    intervalMs: BROADCAST_INTERVAL_MS,
+    now: () => clock.now().getTime(),
+    logger,
+  });
 
   /*
    * Block User from the receipt message (WP10 follow-up §4). The payment READ, the customer
@@ -4616,6 +4779,13 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     trials: trialService,
     trialAdmin: trialAdminService,
     panelTrials,
+    audience: audienceService,
+    broadcasts: broadcastService,
+    broadcastLoop,
+    broadcastDispatcher,
+    bulkOperations: bulkOperationService,
+    bulkOperationProcessor,
+    bulkOperationLoop,
     wallet: walletService,
     payments: paymentService,
     paymentAccounts: paymentAccountService,
@@ -4922,6 +5092,9 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       await serviceReminderLoop.stop();
       await customerReminderLoop.stop();
       await customerNotificationLoop.stop();
+      // Round N: and the broadcast lane, for the same reason — a stamped send is recorded.
+      await broadcastLoop.stop();
+      await bulkOperationLoop.stop();
       await receiptReviewPushLoop.stop();
       await opsGroupMaintainer.stop();
       await interactionCounter.close();
