@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { audienceFingerprintSchema } from './audience.js';
+import { uuidV7Schema } from './ids.js';
 import type { StateMachineDefinition } from './state-machine.js';
 import type { TemplateDefinition } from './templates.js';
 
@@ -92,8 +93,82 @@ export const BROADCAST_MACHINE: StateMachineDefinition<BroadcastState, Broadcast
 export const BROADCAST_PAUSE_REASONS = ['OPERATOR', 'BOT_UNAVAILABLE'] as const;
 export type BroadcastPauseReason = (typeof BROADCAST_PAUSE_REASONS)[number];
 
-export const BROADCAST_CONTENT_KINDS = ['TEXT', 'PHOTO', 'VIDEO', 'DOCUMENT'] as const;
+/**
+ * What a broadcast sends. The first four are composed here; `FORWARD` and `COPY` (round N
+ * close, `docs/round-n-close-audit.md` §C) send an EXISTING Telegram message the bot can
+ * reach, named by its chat and message id:
+ *
+ * - `FORWARD` is the Bot API's `forwardMessage`: the recipient sees the "forwarded from"
+ *   header naming the source, and the message arrives exactly as it is — no buttons can be
+ *   added (`forwardMessage` takes no `reply_markup`) and no caption changed. "Service
+ *   messages and messages with protected content can't be forwarded" (Bot API 10.3).
+ * - `COPY` is `copyMessage`: "analogous to the method forwardMessage, but the copied message
+ *   doesn't have a link to the original message". Buttons may be attached. "Service
+ *   messages, paid media messages, giveaway messages, giveaway winners messages, and invoice
+ *   messages can't be copied", and a quiz poll only when the bot knows its answer.
+ *
+ * Neither renders placeholders: the content is Telegram's, not the operator's text, so the
+ * body is empty and nothing is rendered per recipient. The Bot API has no way to READ a
+ * message by id, so the source is validated by the real preview — a `copyMessage` (or
+ * `forwardMessage`) to the operator's own chat through the bot — and a launch refuses a
+ * source that never passed one (`SOURCE_UNVERIFIED`).
+ */
+export const BROADCAST_CONTENT_KINDS = [
+  'TEXT',
+  'PHOTO',
+  'VIDEO',
+  'DOCUMENT',
+  'FORWARD',
+  'COPY',
+] as const;
 export type BroadcastContentKind = (typeof BROADCAST_CONTENT_KINDS)[number];
+
+/** The kinds sourced from an existing Telegram message rather than composed here. */
+export const BROADCAST_SOURCED_KINDS = [
+  'FORWARD',
+  'COPY',
+] as const satisfies readonly BroadcastContentKind[];
+export function isSourcedBroadcastKind(kind: BroadcastContentKind): kind is 'FORWARD' | 'COPY' {
+  return kind === 'FORWARD' || kind === 'COPY';
+}
+
+/**
+ * Why a broadcast is sent (round N close, §D). `MARKETING` is promotional: a customer who
+ * opted out (`/stop`) is excluded when the recipients are materialised and skipped again if
+ * they opt out before their send. `SERVICE_ANNOUNCEMENT` is operational — maintenance,
+ * an outage, a change to how the service works — and reaches every recipient of the
+ * audience. Neither touches the customer notification lane (ADR-0030): a transactional
+ * fact about a payment, a service or a ticket is never a broadcast and never opted out of.
+ */
+export const BROADCAST_PURPOSES = ['MARKETING', 'SERVICE_ANNOUNCEMENT'] as const;
+export type BroadcastPurpose = (typeof BROADCAST_PURPOSES)[number];
+
+/**
+ * The pin outcome of one recipient's message, recorded SEPARATELY from the send: a message
+ * that was delivered stays delivered whatever its pin did. One attempt per recipient, never
+ * a retry loop; `PENDING` is stamped before the request and a process that dies between the
+ * stamp and the answer leaves `UNCONFIRMED`, as the send itself does.
+ */
+export const BROADCAST_PIN_STATES = ['PENDING', 'PINNED', 'FAILED', 'UNCONFIRMED'] as const;
+export type BroadcastPinState = (typeof BROADCAST_PIN_STATES)[number];
+
+/**
+ * The Telegram message a FORWARD or COPY broadcast sends. `chatId` is a numeric chat id
+ * (a channel's `-100…`, a group's negative id, or a private chat's user id) or a public
+ * `@username`; `messageId` is that chat's own message number. The bot that sends to each
+ * recipient must be able to reach the source: a channel it administers, or a chat it is in.
+ * No token, no invite link, no secret: a chat id and a message number identify a message
+ * and grant nothing.
+ */
+export const BROADCAST_SOURCE_CHAT_ID_PATTERN =
+  /^(-?[1-9][0-9]{0,19}|@[A-Za-z][A-Za-z0-9_]{3,31})$/u;
+export const broadcastSourceSchema = z
+  .object({
+    chatId: z.string().trim().regex(BROADCAST_SOURCE_CHAT_ID_PATTERN),
+    messageId: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  })
+  .strict();
+export type BroadcastSource = z.infer<typeof broadcastSourceSchema>;
 
 /**
  * The media a broadcast may carry: each type with the kind it is sent as and its own bound.
@@ -300,10 +375,29 @@ const broadcastContentFields = {
   body: z.string().max(BROADCAST_TEXT_MAX_LENGTH),
   buttons: z.array(broadcastButtonSchema).max(BROADCAST_BUTTONS_MAX).default([]),
   audience: z.unknown(),
+  /** Round N close (§D). Promotional unless the operator says otherwise. */
+  purpose: z.enum(BROADCAST_PURPOSES).default('MARKETING'),
+  /** Round N close (§C): the message a FORWARD or COPY sends; null for the other kinds. */
+  source: broadcastSourceSchema.nullable().default(null),
+  /**
+   * Round N close (§C): pin the delivered message in each recipient's chat. A private chat
+   * needs no right ("In private chats … all non-service messages can be pinned", Bot API
+   * 10.3), so the bot can pin wherever it could send. Recorded per recipient, apart from
+   * the send, and attempted once.
+   */
+  pin: z.boolean().default(false),
 };
 
 export const createBroadcastRequestSchema = z
-  .object({ idempotencyKey: z.string().min(8).max(255), ...broadcastContentFields })
+  .object({
+    idempotencyKey: z.string().min(8).max(255),
+    ...broadcastContentFields,
+    /**
+     * Round N close (§A): a frozen audience the launch copies its recipients from instead of
+     * evaluating `audience` live. `audience` still carries the definition it was frozen by.
+     */
+    frozenAudienceId: uuidV7Schema.nullable().default(null),
+  })
   .strict();
 export type CreateBroadcastRequest = z.input<typeof createBroadcastRequestSchema>;
 
@@ -365,6 +459,9 @@ export const broadcastCountsSchema = z.object({
   unreachable: z.number().int().nonnegative(),
   skipped: z.number().int().nonnegative(),
   cancelled: z.number().int().nonnegative(),
+  /** Of `sent`, when the broadcast pins: pinned, and pin attempts that failed or are unconfirmed. */
+  pinned: z.number().int().nonnegative(),
+  pinFailed: z.number().int().nonnegative(),
 });
 export type BroadcastCounts = z.infer<typeof broadcastCountsSchema>;
 
@@ -389,6 +486,13 @@ export const broadcastSchema = z.object({
   body: z.string(),
   buttons: z.array(broadcastButtonSchema),
   media: broadcastMediaSchema.nullable(),
+  purpose: z.enum(BROADCAST_PURPOSES),
+  source: broadcastSourceSchema.nullable(),
+  /** When a real preview last reached the operator from this source; null until one did. */
+  sourceVerifiedAt: z.iso.datetime().nullable(),
+  pin: z.boolean(),
+  /** The frozen audience the recipients were copied from; null when evaluated live. */
+  frozenAudienceId: z.string().nullable(),
   /** The canonical audience definition. */
   audience: z.unknown(),
   audienceHash: z.string(),
@@ -449,6 +553,9 @@ export const broadcastRecipientSchema = z.object({
   attempts: z.number().int().nonnegative(),
   errorCode: z.string().nullable(),
   resolvedAt: z.iso.datetime().nullable(),
+  /** The pin's own outcome; null when no pin was asked for or the send did not deliver. */
+  pinState: z.enum(BROADCAST_PIN_STATES).nullable(),
+  pinErrorCode: z.string().nullable(),
 });
 export type BroadcastRecipientRow = z.infer<typeof broadcastRecipientSchema>;
 
@@ -503,4 +610,14 @@ export const BROADCAST_ERROR_CODES = {
   SCHEDULE_INVALID: 'broadcast.schedule_invalid',
   /** The operator has no Telegram account this installation can reach for a test send. */
   TEST_TARGET_UNAVAILABLE: 'broadcast.test_target_unavailable',
+  /** A FORWARD or COPY with no source, or a source on a composed kind. */
+  SOURCE_REQUIRED: 'broadcast.source_required',
+  /** A FORWARD carries buttons, or a FORWARD or COPY carries a body: Telegram sends as is. */
+  SOURCE_CONTENT_INVALID: 'broadcast.source_content_invalid',
+  /**
+   * The source was never reached by a real preview (the test send through the bot), or it
+   * changed since one did. The Bot API cannot read a message by id, so the preview IS the
+   * validation, and a launch to thousands of chats is not the place to find out.
+   */
+  SOURCE_UNVERIFIED: 'broadcast.source_unverified',
 } as const;
