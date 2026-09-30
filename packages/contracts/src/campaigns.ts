@@ -4,6 +4,7 @@ import { uuidV7Schema } from './ids.js';
 import { audienceFingerprintSchema, audiencePreviewSchema } from './audience.js';
 import {
   BROADCAST_BUTTONS_MAX,
+  BROADCAST_PURPOSES,
   BROADCAST_TEXT_MAX_LENGTH,
   broadcastButtonSchema,
   broadcastCountsSchema,
@@ -385,6 +386,11 @@ export const campaignAnnouncementTermsSchema = z
   .object({
     body: z.string().trim().min(1).max(BROADCAST_TEXT_MAX_LENGTH),
     buttons: z.array(broadcastButtonSchema).max(BROADCAST_BUTTONS_MAX).default([]),
+    /**
+     * Round N close (§D): a campaign's announcement is promotional unless the operator says
+     * it is a service announcement; Broadcast excludes opted-out customers from MARKETING.
+     */
+    purpose: z.enum(BROADCAST_PURPOSES).default('MARKETING'),
   })
   .strict();
 export type CampaignAnnouncementTerms = z.infer<typeof campaignAnnouncementTermsSchema>;
@@ -477,6 +483,13 @@ export const campaignActionViewSchema = z.object({
   /** The shared engine's own record: a broadcast id, or a bulk operation id. */
   broadcastId: z.string().nullable(),
   bulkOperationId: z.string().nullable(),
+  /**
+   * Round N close (§A): the frozen audience the action's engine record is seeded from —
+   * the exact members confirmed, so a hand-over retried after the live audience moved
+   * still gives to precisely the confirmed set. Null before the confirmation and for the
+   * two standing rules.
+   */
+  frozenAudienceId: z.string().nullable(),
   failureCode: z.string().nullable(),
   launchedAt: z.iso.datetime().nullable(),
 });
