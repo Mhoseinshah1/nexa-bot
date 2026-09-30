@@ -554,3 +554,13 @@
   font-weight: 500;
   line-height: 1.5;
 }
+
+/* --- /referrals ------------------------------------------------------------------- */
+
+.referrals-referrer {
+  min-width: 320px;
+  font-family: var(--font-mono);
+}
+.referrals-foot {
+  align-items: start;
+}

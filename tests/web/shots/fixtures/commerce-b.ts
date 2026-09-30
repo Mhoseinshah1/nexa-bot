@@ -1,4 +1,7 @@
 import {
+  referralCommissionListResponseSchema,
+  referralListResponseSchema,
+  tenantMediaStateSchema,
   campaignListResponseSchema,
   campaignPreviewResponseSchema,
   campaignResponseSchema,
@@ -711,7 +714,71 @@ function campaignDetail(row: Json, actions: readonly Json[]): Json {
   };
 }
 
+/* --------------------------------------------------------------- referrals --- */
+
+function party(index: number, name: string | null): Json {
+  return {
+    customerId: `019210ab-cdef-7012-8345-${String(6789 + index).padStart(4, '0')}abcdef01`,
+    telegramUserId: String(5551234567 + index * 7919),
+    displayName: name,
+  };
+}
+
+const REFERRERS = [party(0, 'علی رضایی'), party(1, 'مریم اکبری'), party(5, 'نگار موسوی')];
+const REFEREES = [
+  party(2, 'سارا شریفی'),
+  party(3, null),
+  party(4, 'مهدی قاسمی'),
+  party(6, 'زهرا مرادی'),
+  party(7, null),
+];
+
+const REFERRALS: readonly Json[] = REFEREES.map((referee, index) => ({
+  id: `0192c0de-0000-7000-8000-0000000011${String(index).padStart(2, '0')}`,
+  referrer: REFERRERS[index % REFERRERS.length],
+  referee,
+  trigger: index % 2 === 0 ? 'ON_FIRST_PAID_ORDER' : 'ON_EVERY_PAID_ORDER',
+  createdAt: ago(60 * 24 * (index * 3 + 1)),
+}));
+
+const COMMISSION_STATES = ['EARNED', 'EARNED', 'PENDING', 'VOID', 'EARNED'];
+
+const COMMISSIONS: readonly Json[] = COMMISSION_STATES.map((state, index) => ({
+  id: `0192c0de-0000-7000-8000-0000000012${String(index).padStart(2, '0')}`,
+  referralId: REFERRALS[index]?.['id'],
+  orderId: `0192c0de-0000-7000-8000-0000000013${String(index).padStart(2, '0')}`,
+  referrer: REFERRERS[index % REFERRERS.length],
+  referee: REFEREES[index],
+  scope: index % 2 === 0 ? 'FIRST_PAID_ORDER' : 'EVERY_PAID_ORDER',
+  percent: 10,
+  basisAmount: String(149000 * (index + 1)),
+  promisedAmount: String(14900 * (index + 1)),
+  currency: 'IRT',
+  state,
+  earnedAmount: state === 'EARNED' ? String(14900 * (index + 1)) : null,
+  reversedAmount: index === 4 ? '20000' : '0',
+  unrecoveredAmount: index === 4 ? '5000' : '0',
+  createdAt: ago(60 * 24 * (index * 2 + 1)),
+  earnedAt: state === 'EARNED' ? ago(60 * 24 * index * 2) : null,
+  voidedAt: state === 'VOID' ? ago(60 * 24 * index * 2) : null,
+}));
+
 export const COMMERCE_B: readonly ShotFixture[] = [
+  fixture('/referrals', referralListResponseSchema, { referrals: REFERRALS, nextCursor: null }),
+  fixture('/referral-commissions', referralCommissionListResponseSchema, {
+    commissions: COMMISSIONS,
+    nextCursor: null,
+  }),
+  fixture('/media/:purpose', tenantMediaStateSchema, {
+    media: {
+      purpose: 'REFERRAL_BANNER',
+      mimeType: 'image/png',
+      byteLength: 184_320,
+      sha256: '9f2c4e1a7b3d5f6e8a0c2b4d6f8e0a1c3b5d7f9e1a3c5e7b9d1f3a5c7e9b1d3f',
+      version: 3,
+      updatedAt: ago(60 * 24 * 9),
+    },
+  }),
   fixture('/campaigns', campaignListResponseSchema, {
     campaigns: CAMPAIGNS,
     nextCursor: null,
