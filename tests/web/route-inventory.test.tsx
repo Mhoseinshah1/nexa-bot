@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ReactElement } from 'react';
 import { describe, expect, it } from 'vitest';
-import { screen, within } from '@testing-library/react';
+import { act, fireEvent, screen, within } from '@testing-library/react';
 import { PERMISSION_KEYS } from '@nexa/contracts';
 import {
   App,
@@ -14,6 +14,7 @@ import {
   type NavEntry,
 } from '../../apps/web/src/app';
 import { t } from '../../apps/web/src/i18n/web.fa';
+import { navigate } from '../../apps/web/src/router';
 import { renderPage, stubApi } from './harness';
 
 /**
@@ -165,5 +166,62 @@ describe('the navigation groups', () => {
       const group = (matching[0] as HTMLElement).closest('[role="group"]');
       expect(group?.getAttribute('aria-label'), entry.path).toBe(t(entry.group));
     }
+  });
+
+  /*
+   * Reachable, not merely listed: the least actor the sidebar draws an entry
+   * for gets the same page the owner gets — not the 404, and not some other
+   * component standing in for it.
+   */
+  it('opens each entry on its own page for the least actor it is drawn for', () => {
+    for (const entry of NAV) {
+      const { permissions, roles } = minimal(entry);
+      const owner = componentName(at(entry.path).element as ReactElement);
+      const least = at(entry.path, permissions, roles);
+      expect(componentName(least.element as ReactElement), entry.path).toBe(owner);
+      expect(least.title, entry.path).not.toBe(t('web.not_found_title'));
+      // …and a page that lets them in: a link to a refusal is not reachable.
+      const props = (least.element as ReactElement<{ denied?: boolean }>).props;
+      expect(props.denied ?? false, `${entry.path} is refused to the actor it is drawn for`).toBe(
+        false,
+      );
+    }
+  });
+
+  it('lands on each page when its sidebar link is followed', async () => {
+    stubApi([
+      {
+        url: '/auth/session',
+        body: {
+          admin: {
+            id: SAMPLE_ID,
+            username: 'owner',
+            displayName: 'مدیر اصلی',
+            status: 'ACTIVE',
+            telegramUserId: null,
+            roleKeys: OWNER,
+            createdAt: '2026-01-01T00:00:00.000Z',
+            lastLoginAt: '2026-09-06T08:00:00.000Z',
+          },
+          permissions: ALL,
+          expiresAt: '2026-09-07T08:00:00.000Z',
+        },
+      },
+    ]);
+    act(() => navigate('/', { replace: true, force: true }));
+    renderPage(<App />);
+    const nav = await screen.findByRole('navigation', { name: t('web.nav_label') });
+    for (const entry of NAV) {
+      const link = within(nav)
+        .getAllByRole('link')
+        .find((candidate) => candidate.getAttribute('href') === entry.path) as HTMLElement;
+      act(() => {
+        fireEvent.click(link);
+      });
+      expect(window.location.pathname, entry.path).toBe(entry.path);
+      expect(link.getAttribute('aria-current'), entry.path).toBe('page');
+      expect(screen.queryByText(t('web.not_found_title')), entry.path).toBeNull();
+    }
+    act(() => navigate('/', { replace: true, force: true }));
   });
 });
