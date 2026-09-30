@@ -33,6 +33,7 @@ import {
   Field,
   Ltr,
   PageHead,
+  RowActions,
   StateSwitch,
   ToggleRow,
   useToast,
@@ -592,7 +593,7 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
       render: (row) =>
         !mayEdit ? null : (
           // Wrapping, so three actions never push the table wider than its card.
-          <span className="gateways-actions">
+          <RowActions wrap>
             <button
               type="button"
               className="btn sm"
@@ -634,7 +635,7 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
                   : 'web.payment_gateway_enable',
               )}
             </button>
-          </span>
+          </RowActions>
         ),
     },
   ];

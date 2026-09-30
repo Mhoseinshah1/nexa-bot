@@ -1758,8 +1758,10 @@ export function CellMain({ primary, secondary }: { primary: ReactNode; secondary
 }
 
 /** The actions at the end of a row. Put them in a column with `align: 'end'`. */
-export function RowActions({ children }: { children: ReactNode }) {
-  return <span className="row-actions">{children}</span>;
+export function RowActions({ children, wrap = false }: { children: ReactNode; wrap?: boolean }) {
+  // `wrap`: more actions than fit one line beside the data break onto a second
+  // line, so a row with three buttons never pushes its table wider than the card.
+  return <span className={wrap ? 'row-actions wrap' : 'row-actions'}>{children}</span>;
 }
 
 /**

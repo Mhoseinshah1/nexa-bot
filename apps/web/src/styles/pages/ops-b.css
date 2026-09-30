@@ -87,17 +87,6 @@
   }
 }
 
-/*
- * A column of mixed blocks with the page's rhythm. A kit `.kv` zeroes its own margin, so
- * a sibling margin cannot space it; a gap can.
- */
-.ob-flow {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  min-width: 0;
-}
-
 /* --- Settings (WP-A1) -------------------------------------------------------- */
 
 /*

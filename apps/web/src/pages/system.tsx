@@ -409,7 +409,7 @@ function MonitorSection({ denied }: { denied: boolean }) {
 
 function CapacityView({ profile }: { profile: MonitorProfile }) {
   return (
-    <div className="ob-flow">
+    <div className="stack">
       <Banner tone="info">{t('web.monitor_capacity_ceiling_note')}</Banner>
       <KV
         items={[

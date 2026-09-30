@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path';
 import { useState } from 'react';
 import { describe, expect, it } from 'vitest';
 import { fireEvent, screen } from '@testing-library/react';
-import { Ltr, Money, Pills, Tabs } from '../../apps/web/src/ui/kit';
+import { KV, Ltr, Money, Pills, RowActions, Tabs } from '../../apps/web/src/ui/kit';
 import { renderPage } from './harness';
 
 /**
@@ -121,6 +121,42 @@ describe('bidi isolation, at both ends of the seam', () => {
     // `plaintext`, not `isolate`: a run whose direction is decided by its own
     // first strong character rather than imposed.
     expect(block('.plain')).toMatch(/unicode-bidi:\s*plaintext/);
+  });
+});
+
+describe('spacing and wrapping the kit leaves to its containers', () => {
+  /*
+   * `.kv { margin: 0 }` out-ranked `.card-body > * + *` (same specificity,
+   * later in the cascade), so a KV right after a banner in a card had no gap
+   * and a page grew a wrapper of its own to space it. The list's margin is now
+   * zeroed at zero specificity, where every container rhythm beats it.
+   */
+  it('lets the container space a definition list', () => {
+    const { container } = renderPage(<KV items={[['الف', 'ب']]} />);
+    expect(container.querySelector('dl.kv')).not.toBeNull();
+    expect(block('.kv'), 'a margin on .kv defeats every container rhythm').not.toMatch(/margin/);
+    expect(block(':where(dl)')).toMatch(/margin:\s*0/);
+    expect(block('.card-body > * + *')).toMatch(/margin-top:\s*12px/);
+  });
+
+  it('wraps the row actions that ask to wrap, and only those', () => {
+    const { container } = renderPage(
+      <>
+        <RowActions>
+          <button type="button">الف</button>
+        </RowActions>
+        <RowActions wrap>
+          <button type="button">ب</button>
+        </RowActions>
+      </>,
+    );
+    const [plain, wrapping] = [...container.querySelectorAll('.row-actions')];
+    expect(plain?.className).toBe('row-actions');
+    expect(wrapping?.className.split(' ')).toEqual(['row-actions', 'wrap']);
+    expect(block('.tbl .row-actions')).not.toMatch(/flex-wrap/);
+    const rule = block('.tbl .row-actions.wrap');
+    expect(rule).toMatch(/flex-wrap:\s*wrap/);
+    expect(rule).toMatch(/max-width:\s*var\(--row-actions-wrap-w\)/);
   });
 });
 

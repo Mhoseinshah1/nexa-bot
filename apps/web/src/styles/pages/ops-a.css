@@ -368,10 +368,3 @@
 .card-body > .fx-technical {
   margin-top: 18px;
 }
-.gateways-actions {
-  display: inline-flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 4px;
-  max-width: 170px;
-}

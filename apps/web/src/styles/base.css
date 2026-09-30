@@ -63,6 +63,15 @@ ol {
   padding-inline-start: 1.25rem;
 }
 
+/*
+ * Zero specificity: the browser's <dl> margin is gone, and any container's
+ * rhythm — `.card-body > * + *`, `.stack`, the sibling rule below — still
+ * spaces a definition list the way it spaces every other block.
+ */
+:where(dl) {
+  margin: 0;
+}
+
 button,
 input,
 select,
@@ -327,7 +336,7 @@ form:not([class]) > * + * {
  * misaligns its row.
  */
 :where(.card, .banner, .notice, .grid, .grid-2, .two-col, .kv)
-  + :where(.card, .banner, .notice, .grid, .grid-2, .two-col) {
+  + :where(.card, .banner, .notice, .grid, .grid-2, .two-col, .kv) {
   margin-top: var(--gap);
 }
 :where(

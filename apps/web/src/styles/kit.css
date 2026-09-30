@@ -653,13 +653,17 @@
 
 /* --- Key/value ------------------------------------------------------------------ */
 
+/*
+ * No margin of its own: base.css zeroes a <dl> at zero specificity, so the
+ * container's rhythm (`.card-body`, `.stack`, a sibling section) spaces a KV
+ * like any other block. A `margin: 0` here out-ranked all three.
+ */
 .kv {
   display: grid;
   grid-template-columns: max-content 1fr;
   gap: 8px 18px;
   font-size: var(--fs-ui);
   align-items: baseline;
-  margin: 0;
 }
 .kv > div {
   display: contents;
@@ -759,6 +763,11 @@
   display: inline-flex;
   gap: 4px;
   justify-content: flex-end;
+}
+/* More actions than one line holds: at most two small buttons abreast, then the next line. */
+.tbl .row-actions.wrap {
+  flex-wrap: wrap;
+  max-width: var(--row-actions-wrap-w);
 }
 .tbl td.actions {
   text-align: end;
