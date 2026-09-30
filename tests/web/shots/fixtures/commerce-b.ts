@@ -1,5 +1,7 @@
 import {
+  cashbackRuleListResponseSchema,
   customServiceLocationListResponseSchema,
+  discountListResponseSchema,
   customServiceRuleListResponseSchema,
   productCategoryListResponseSchema,
   productListResponseSchema,
@@ -279,7 +281,120 @@ const CUSTOM_RULES: readonly Json[] = [
   customRule(4, { label: 'حجم عمده', minimum: '100.5', maximum: '2000', enabled: false }),
 ];
 
+/* ------------------------------------------------------ discounts, cashback --- */
+
+function discount(index: number, label: string, over: Json): Json {
+  return {
+    id: `0192c0de-0000-7000-8000-0000000006${String(index).padStart(2, '0')}`,
+    kind: 'CODE',
+    code: null,
+    label,
+    type: 'PERCENTAGE',
+    value: '10',
+    currency: null,
+    appliesTo: ['NEW_SERVICE'],
+    productId: null,
+    categoryId: null,
+    customerId: null,
+    firstPurchaseOnly: false,
+    minimumSubtotalAmount: null,
+    startsAt: null,
+    endsAt: null,
+    totalRedemptionsLimit: null,
+    perCustomerLimit: null,
+    priority: 10,
+    stackable: false,
+    status: 'ACTIVE',
+    liveRedemptions: 0,
+    createdAt: ago(60 * 24 * (40 - index)),
+    updatedAt: ago(60 * 24 * index),
+    ...over,
+  };
+}
+
+const DISCOUNTS: readonly Json[] = [
+  discount(1, 'تخفیف مهر', {
+    code: 'MEHR20',
+    value: '20',
+    appliesTo: ['NEW_SERVICE', 'RENEW'],
+    categoryId: CATEGORY_ID[1],
+    startsAt: ago(60 * 24 * 7),
+    endsAt: ago(-60 * 24 * 23),
+    totalRedemptionsLimit: 500,
+    perCustomerLimit: 1,
+    liveRedemptions: 312,
+  }),
+  discount(2, 'خوش‌آمد', {
+    code: 'WELCOME10',
+    firstPurchaseOnly: true,
+    liveRedemptions: 1840,
+    perCustomerLimit: 1,
+  }),
+  discount(3, 'برگشت مشتری', {
+    code: 'BACK15',
+    value: '15',
+    productId: PRODUCTS[1]?.['id'],
+    totalRedemptionsLimit: 300,
+    liveRedemptions: 96,
+    stackable: true,
+  }),
+  discount(4, 'نوروز', {
+    code: 'NOWRUZ',
+    type: 'FIXED_AMOUNT',
+    value: '30000',
+    currency: 'IRT',
+    appliesTo: ['NEW_SERVICE', 'RENEW', 'ADD_TRAFFIC'],
+    minimumSubtotalAmount: '100000',
+    totalRedemptionsLimit: 1000,
+    liveRedemptions: 1000,
+    status: 'INACTIVE',
+    startsAt: ago(60 * 24 * 190),
+    endsAt: ago(60 * 24 * 170),
+  }),
+  discount(5, 'تمدید خودکار پاییز', {
+    kind: 'AUTOMATIC',
+    value: '5',
+    appliesTo: ['RENEW'],
+    priority: 5,
+    liveRedemptions: 402,
+  }),
+];
+
+const CASHBACK_RULES: readonly Json[] = [
+  {
+    id: '0192c0de-0000-7000-8000-000000000701',
+    label: 'وفاداری ۵٪',
+    percent: 5,
+    appliesTo: ['NEW_SERVICE', 'RENEW'],
+    productId: null,
+    categoryId: null,
+    startsAt: null,
+    endsAt: null,
+    status: 'ACTIVE',
+    createdAt: ago(60 * 24 * 60),
+    updatedAt: ago(60 * 24 * 4),
+  },
+  {
+    id: '0192c0de-0000-7000-8000-000000000702',
+    label: 'کش‌بک پلن حرفه‌ای',
+    percent: 8,
+    appliesTo: ['NEW_SERVICE'],
+    productId: null,
+    categoryId: CATEGORY_ID[1],
+    startsAt: ago(60 * 24 * 3),
+    endsAt: ago(-60 * 24 * 27),
+    status: 'INACTIVE',
+    createdAt: ago(60 * 24 * 10),
+    updatedAt: ago(60 * 24 * 1),
+  },
+];
+
 export const COMMERCE_B: readonly ShotFixture[] = [
+  fixture('/discounts', discountListResponseSchema, { discounts: DISCOUNTS, nextCursor: null }),
+  fixture('/cashback-rules', cashbackRuleListResponseSchema, {
+    rules: CASHBACK_RULES,
+    nextCursor: null,
+  }),
   fixture('/service-addons', serviceAddonListResponseSchema, { addons: ADDONS, nextCursor: null }),
   fixture('/service-locations', serviceLocationListResponseSchema, {
     locations: SERVICE_LOCATIONS,

@@ -2194,6 +2194,9 @@ export const WEB_FA = {
   'web.cb_add': 'افزودن',
   'web.cb_section_where': 'کجا',
   'web.cb_section_offer': 'عرضه و هزینه',
+  'web.cb_section_code_value': 'کد و مقدار',
+  'web.cb_section_limits': 'محدودیت استفاده',
+  'web.cb_section_priority': 'اولویت و ترکیب',
   'web.cb_delete_yes': 'بله، حذف شود',
 
   'web.products_intro': 'سرویس‌هایی که مشتری می‌تواند بخرد، و آنهایی که هنوز نمی‌تواند.',

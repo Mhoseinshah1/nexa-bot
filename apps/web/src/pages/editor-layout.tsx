@@ -128,3 +128,16 @@ export function CheckField({
     </div>
   );
 }
+
+/**
+ * One labelled set of filter chips — its own `role="group"` — for a filter row that
+ * holds several sets side by side (`<div className="filter-row">` + `ChipDivider`).
+ * The kit's `FilterChips` is the row itself; this is a set inside one.
+ */
+export function ChipGroup({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="cb-chip-group" role="group" aria-label={label}>
+      {children}
+    </div>
+  );
+}

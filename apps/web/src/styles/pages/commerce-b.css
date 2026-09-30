@@ -300,3 +300,67 @@
   border-radius: var(--radius-ctl);
   background: var(--bg-1);
 }
+
+/* A set of filter chips inside a filter row, beside other sets. */
+.cb-chip-group {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+/* A group of checkboxes with its legend, laid out as a form field. */
+.cb-fieldset {
+  border: none;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+.cb-fieldset > legend {
+  padding: 0;
+  margin-bottom: 6px;
+}
+
+/* --- /discounts -------------------------------------------------------------------- */
+
+.discounts-code {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  letter-spacing: 0.02em;
+}
+.discounts-usage {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 120px;
+}
+.discounts-preview-inputs {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+/* The quote beside the rules it was decided by. */
+.discounts-preview-result {
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) minmax(0, 2fr);
+  gap: 16px;
+  align-items: start;
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+}
+.discounts-quote {
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  background: var(--bg-1);
+}
+@media (max-width: 1200px) {
+  .discounts-preview-inputs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .discounts-preview-result {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (max-width: 980px) {
+  .discounts-preview-inputs {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
