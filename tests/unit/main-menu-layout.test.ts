@@ -3,9 +3,13 @@ import {
   DEFAULT_MAIN_MENU_LAYOUT,
   MAIN_MENU_BUTTON_IDS,
   MAIN_MENU_BUTTONS,
+  MAIN_MENU_TARGETS,
+  MENU_APPEARANCE_SLOTS,
   mainMenuButton,
   mainMenuButtonIsGated,
+  mainMenuEntryOf,
   mainMenuLayoutSchema,
+  mainMenuTargetOf,
   packMainMenuRows,
   parseTrafficInput,
   resolveMainMenuLayout,
@@ -133,7 +137,183 @@ describe('the main-menu arrangement (bot.main_menu)', () => {
   });
 });
 
+describe('the main-menu item model (round P: target and appearance slot)', () => {
+  it('pins each button to its declared action and refuses any other target', () => {
+    for (const button of MAIN_MENU_BUTTONS) {
+      expect(mainMenuTargetOf(button.id)).toBe(button.command);
+      expect((MAIN_MENU_TARGETS as readonly string[]).includes(button.command)).toBe(true);
+    }
+    expect(
+      mainMenuLayoutSchema.safeParse([{ button: 'wallet', enabled: true, target: 'wallet' }])
+        .success,
+    ).toBe(true);
+    // A wallet button that opened the catalogue would mis-sell; refused at the schema.
+    expect(
+      mainMenuLayoutSchema.safeParse([{ button: 'wallet', enabled: true, target: 'catalog' }])
+        .success,
+    ).toBe(false);
+    // And no target outside the closed set — `start` is a command, not a button.
+    expect(
+      mainMenuLayoutSchema.safeParse([{ button: 'wallet', enabled: true, target: 'start' }])
+        .success,
+    ).toBe(false);
+    expect(
+      mainMenuLayoutSchema.safeParse([{ button: 'wallet', enabled: true, target: 'lottery' }])
+        .success,
+    ).toBe(false);
+  });
+
+  it('validates the appearance slot against the closed list, and resolves the default', () => {
+    expect(
+      mainMenuLayoutSchema.safeParse([
+        { button: 'wallet', enabled: true, target: 'wallet', appearanceSlot: 'payment' },
+      ]).success,
+    ).toBe(true);
+    expect(
+      mainMenuLayoutSchema.safeParse([
+        { button: 'wallet', enabled: true, appearanceSlot: '<b>x</b>' },
+      ]).success,
+    ).toBe(false);
+    const resolved = resolveMainMenuLayout([
+      { button: 'wallet', enabled: true, appearanceSlot: 'payment' },
+      { button: 'catalog', enabled: false },
+    ]);
+    expect(resolved[0]).toEqual({
+      button: 'wallet',
+      enabled: true,
+      target: 'wallet',
+      appearanceSlot: 'payment',
+      appearanceSlotOverridden: true,
+    });
+    expect(resolved[1]).toEqual({
+      button: 'catalog',
+      enabled: false,
+      target: 'catalog',
+      appearanceSlot: mainMenuButton('catalog').appearanceSlot,
+      appearanceSlotOverridden: false,
+    });
+    // Every button names a slot the closed list knows.
+    for (const button of MAIN_MENU_BUTTONS) {
+      expect((MENU_APPEARANCE_SLOTS as readonly string[]).includes(button.appearanceSlot)).toBe(
+        true,
+      );
+    }
+    // Stored back, a default slot is null and a chosen one is kept.
+    expect(mainMenuEntryOf(resolved[0]!)).toEqual({
+      button: 'wallet',
+      enabled: true,
+      target: 'wallet',
+      appearanceSlot: 'payment',
+    });
+    expect(mainMenuEntryOf(resolved[1]!).appearanceSlot).toBeNull();
+  });
+
+  it('keeps an R1-shaped stored value (no target, no slot) valid and complete', () => {
+    const stored: MainMenuLayoutEntry[] = [{ button: 'wallet', enabled: true }];
+    expect(mainMenuLayoutSchema.safeParse(stored).success).toBe(true);
+    expect(resolveMainMenuLayout(stored).map((item) => item.target)).toEqual([
+      'wallet',
+      'catalog',
+      'services',
+      'help',
+      'trial',
+      'referral',
+      'apps',
+      'tickets',
+    ]);
+  });
+});
+
 describe('MainMenuLayout — the keyboard and the route table from one object', () => {
+  it('reflects a rename and a reorder on the very next render, with no cache in between', async () => {
+    let stored: MainMenuLayoutEntry[] = [
+      { button: 'catalog', enabled: true },
+      { button: 'wallet', enabled: true },
+    ];
+    let walletLabel = CATALOGUE_FA['bot.menu.wallet'];
+    const layout = new MainMenuLayout({
+      settings: { valueOf: <T>() => Promise.resolve(stored as T) },
+      features: { isEnabled: () => Promise.resolve(false) },
+      trials: { anyOffered: () => Promise.resolve(false) },
+      templates: {
+        render: (_scope, key) =>
+          Promise.resolve(
+            key === 'bot.menu.wallet'
+              ? walletLabel
+              : ((CATALOGUE_FA as Record<string, string>)[key] ?? ''),
+          ),
+      },
+    });
+    expect((await layout.rowsFor(scope))[0]).toEqual([
+      CATALOGUE_FA['bot.menu.catalog'],
+      CATALOGUE_FA['bot.menu.wallet'],
+    ]);
+    // The operator reorders and renames; the next render is the new keyboard.
+    stored = [
+      { button: 'wallet', enabled: true },
+      { button: 'catalog', enabled: true },
+    ];
+    walletLabel = '💳 موجودی';
+    expect((await layout.rowsFor(scope))[0]).toEqual([
+      '💳 موجودی',
+      CATALOGUE_FA['bot.menu.catalog'],
+    ]);
+    // And a tap on the new label routes; the shared default keeps routing in the runtime's table.
+    expect((await layout.routesFor(scope)).get('💳 موجودی')).toBe('/wallet');
+  });
+
+  it("reads a switched-off item's gate only when asked to — the Web Admin's preview (Codex #6)", async () => {
+    const reads = { count: 0 };
+    const layout = layoutWith({
+      stored: [{ button: 'trial', enabled: false }],
+      trialOffered: false,
+      offerReads: reads,
+    });
+    // The keyboard: an off item is not drawn, so its gate is not asked.
+    const forKeyboard = (await layout.describeFor(scope)).find(
+      (one) => one.item.button === 'trial',
+    );
+    expect(forKeyboard).toMatchObject({ gate: 'TRIAL_OFFER', gateOpen: null, shown: false });
+    expect(reads.count).toBe(0);
+    // The page: the gate is answered for an off item too, so switching it on previews truly.
+    const forPage = (await layout.describeFor(scope, { gatesForHidden: true })).find(
+      (one) => one.item.button === 'trial',
+    );
+    expect(forPage).toMatchObject({ gate: 'TRIAL_OFFER', gateOpen: false, shown: false });
+    expect(reads.count).toBe(1);
+  });
+
+  it('describes every item with the decision the keyboard makes, gates read only when needed', async () => {
+    const reads = { count: 0 };
+    const layout = layoutWith({
+      stored: [
+        { button: 'trial', enabled: false },
+        { button: 'referral', enabled: true },
+      ],
+      flags: { referrals: false },
+      trialOffered: true,
+      offerReads: reads,
+    });
+    const described = await layout.describeFor(scope);
+    expect(described.map((one) => [one.item.button, one.gate, one.gateOpen, one.shown])).toEqual([
+      // Switched off: its gate is not asked (null), and it is not shown.
+      ['trial', 'TRIAL_OFFER', null, false],
+      // On, but its feature is off: no dead button.
+      ['referral', 'FEATURE', false, false],
+      ['catalog', null, null, true],
+      ['services', null, null, true],
+      ['wallet', null, null, true],
+      ['help', null, null, true],
+      ['apps', null, null, true],
+      ['tickets', null, null, true],
+    ]);
+    expect(reads.count).toBe(0);
+    // `buttonsFor` is exactly the shown subset of the same answer.
+    expect((await layout.buttonsFor(scope)).map((button) => button.id)).toEqual(
+      described.filter((one) => one.shown).map((one) => one.item.button),
+    );
+  });
+
   it('draws the operator’s order, without switched-off buttons, and a gated one only while its gate is open', async () => {
     const stored: MainMenuLayoutEntry[] = [
       { button: 'referral', enabled: true },

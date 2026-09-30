@@ -1,5 +1,5 @@
 {
-  "id": "4c00582a-5c36-4b19-a595-dbaa6eeaef06",
+  "id": "f565a7fb-0895-4604-9ebf-861f6e5522a5",
   "prevId": "276b9bbd-1957-4175-9e7b-98981c3db9b8",
   "version": "7",
   "dialect": "postgresql",
@@ -1510,12 +1510,12 @@
       },
       "isRLSEnabled": false
     },
-    "public.bot_appearance_slots": {
-      "name": "bot_appearance_slots",
+    "public.bot_command_syncs": {
+      "name": "bot_command_syncs",
       "schema": "",
       "columns": {
-        "id": {
-          "name": "id",
+        "bot_instance_id": {
+          "name": "bot_instance_id",
           "type": "uuid",
           "primaryKey": true,
           "notNull": true
@@ -1526,31 +1526,55 @@
           "primaryKey": false,
           "notNull": true
         },
-        "slot": {
-          "name": "slot",
+        "desired_hash": {
+          "name": "desired_hash",
           "type": "text",
           "primaryKey": false,
           "notNull": true
         },
-        "custom_emoji_id": {
-          "name": "custom_emoji_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "enabled": {
-          "name": "enabled",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": true
-        },
-        "version": {
-          "name": "version",
+        "desired_version": {
+          "name": "desired_version",
           "type": "integer",
           "primaryKey": false,
           "notNull": true,
           "default": 1
+        },
+        "last_synced_at": {
+          "name": "last_synced_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_attempted_at": {
+          "name": "last_attempted_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_error_code": {
+          "name": "last_error_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "attempts": {
+          "name": "attempts",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "next_attempt_at": {
+          "name": "next_attempt_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "claimed_until": {
+          "name": "claimed_until",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
         },
         "created_at": {
           "name": "created_at",
@@ -1565,44 +1589,48 @@
           "primaryKey": false,
           "notNull": true,
           "default": "now()"
-        },
-        "updated_by_admin_id": {
-          "name": "updated_by_admin_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
         }
       },
       "indexes": {
-        "bot_appearance_slots_tenant_slot_key": {
-          "name": "bot_appearance_slots_tenant_slot_key",
+        "bot_command_syncs_tenant_idx": {
+          "name": "bot_command_syncs_tenant_idx",
           "columns": [
             {
               "expression": "tenant_id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
-            },
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "bot_command_syncs_due_idx": {
+          "name": "bot_command_syncs_due_idx",
+          "columns": [
             {
-              "expression": "slot",
+              "expression": "next_attempt_at",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
             }
           ],
-          "isUnique": true,
+          "isUnique": false,
+          "where": "next_attempt_at IS NOT NULL",
           "concurrently": false,
           "method": "btree",
           "with": {}
         }
       },
       "foreignKeys": {
-        "bot_appearance_slots_tenant_id_tenants_id_fk": {
-          "name": "bot_appearance_slots_tenant_id_tenants_id_fk",
-          "tableFrom": "bot_appearance_slots",
-          "tableTo": "tenants",
+        "bot_command_syncs_bot_instance_id_bot_instances_id_fk": {
+          "name": "bot_command_syncs_bot_instance_id_bot_instances_id_fk",
+          "tableFrom": "bot_command_syncs",
+          "tableTo": "bot_instances",
           "columnsFrom": [
-            "tenant_id"
+            "bot_instance_id"
           ],
           "columnsTo": [
             "id"
@@ -1610,16 +1638,14 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "bot_appearance_slots_tenant_admin_fk": {
-          "name": "bot_appearance_slots_tenant_admin_fk",
-          "tableFrom": "bot_appearance_slots",
-          "tableTo": "admins",
+        "bot_command_syncs_tenant_id_tenants_id_fk": {
+          "name": "bot_command_syncs_tenant_id_tenants_id_fk",
+          "tableFrom": "bot_command_syncs",
+          "tableTo": "tenants",
           "columnsFrom": [
-            "tenant_id",
-            "updated_by_admin_id"
+            "tenant_id"
           ],
           "columnsTo": [
-            "tenant_id",
             "id"
           ],
           "onDelete": "no action",
@@ -1630,17 +1656,13 @@
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {
-        "bot_appearance_slots_slot_check": {
-          "name": "bot_appearance_slots_slot_check",
-          "value": "slot IN ('success', 'error', 'warning', 'info', 'payment', 'wallet', 'purchase', 'service', 'trial', 'referral', 'support', 'ticket', 'renewal', 'traffic', 'time', 'date', 'link', 'user', 'location', 'active', 'inactive')"
+        "bot_command_syncs_attempts_check": {
+          "name": "bot_command_syncs_attempts_check",
+          "value": "attempts >= 0"
         },
-        "bot_appearance_slots_custom_emoji_id_check": {
-          "name": "bot_appearance_slots_custom_emoji_id_check",
-          "value": "custom_emoji_id IS NULL OR custom_emoji_id ~ '^[0-9]{1,32}$'"
-        },
-        "bot_appearance_slots_version_check": {
-          "name": "bot_appearance_slots_version_check",
-          "value": "version >= 1"
+        "bot_command_syncs_version_check": {
+          "name": "bot_command_syncs_version_check",
+          "value": "desired_version >= 1"
         }
       },
       "isRLSEnabled": false
@@ -1725,24 +1747,6 @@
         "token_replacement_claimed_until": {
           "name": "token_replacement_claimed_until",
           "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "custom_emoji_tested_at": {
-          "name": "custom_emoji_tested_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "custom_emoji_test_outcome": {
-          "name": "custom_emoji_test_outcome",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "custom_emoji_test_error_code": {
-          "name": "custom_emoji_test_error_code",
-          "type": "text",
           "primaryKey": false,
           "notNull": false
         },
@@ -1835,18 +1839,6 @@
         "bot_instances_token_replacement_claim_check": {
           "name": "bot_instances_token_replacement_claim_check",
           "value": "(token_replacement_claim IS NULL) = (token_replacement_claimed_until IS NULL)"
-        },
-        "bot_instances_custom_emoji_test_outcome_check": {
-          "name": "bot_instances_custom_emoji_test_outcome_check",
-          "value": "custom_emoji_test_outcome IN ('SENT', 'REJECTED', 'UNREACHABLE', 'RATE_LIMITED')"
-        },
-        "bot_instances_custom_emoji_test_error_code_check": {
-          "name": "bot_instances_custom_emoji_test_error_code_check",
-          "value": "custom_emoji_test_error_code IN ('appearance.custom_emoji_refused', 'appearance.chat_unavailable', 'appearance.telegram_rejected', 'appearance.telegram_unreachable', 'appearance.rate_limited')"
-        },
-        "bot_instances_custom_emoji_test_shape_check": {
-          "name": "bot_instances_custom_emoji_test_shape_check",
-          "value": "(custom_emoji_tested_at IS NULL AND custom_emoji_test_outcome IS NULL AND custom_emoji_test_error_code IS NULL)\n        OR (custom_emoji_tested_at IS NOT NULL AND custom_emoji_test_outcome IS NOT NULL\n            AND ((custom_emoji_test_outcome = 'SENT') = (custom_emoji_test_error_code IS NULL)))"
         }
       },
       "isRLSEnabled": false

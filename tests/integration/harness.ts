@@ -114,6 +114,8 @@ export async function resetDatabase(db: Database): Promise<void> {
        panel_capacity_reservations, panel_policies, panels,
        -- Premium UI: the appearance slots, before the tenants and admins they name.
        bot_appearance_slots,
+       -- Round P: the command-sync rows, before the bots they name.
+       bot_command_syncs,
        bot_instances, tenants,
        backup_runs, recovery_requests,
        -- The Phase 4 tables, listed EXPLICITLY rather than left to CASCADE.

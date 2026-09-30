@@ -233,9 +233,16 @@ export function ContentPage({ mayEdit, denied }: { mayEdit: boolean; denied: boo
 export const TemplateCard = memo(function TemplateCard({
   template,
   mayEdit,
+  onChanged,
 }: {
   template: TemplateViewResponse;
   mayEdit: boolean;
+  /**
+   * Run after a save or a revert committed, once the card's own queries are invalidated.
+   * A page that draws this card beside a read model of the same text (the bot's menu, its
+   * command list and digest) refreshes that model here (Codex #7).
+   */
+  onChanged?: () => Promise<unknown> | void;
 }) {
   const client = useQueryClient();
   const copy = templateCopy(template.key, template.description);
@@ -285,6 +292,7 @@ export const TemplateCard = memo(function TemplateCard({
   const invalidate = async () => {
     await client.invalidateQueries({ queryKey: ['templates'] });
     await client.invalidateQueries({ queryKey: ['revisions', template.key] });
+    await onChanged?.();
   };
 
   // Two independent submissions on this card, so two keys. Saving and

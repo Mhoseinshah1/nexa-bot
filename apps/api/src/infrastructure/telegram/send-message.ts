@@ -879,6 +879,50 @@ export async function telegramSetMyCommands(
   return { outcome: 'SUCCEEDED', messageId: null };
 }
 
+/** One command as Telegram reports it (`BotCommand`): the two documented fields. */
+export interface TelegramBotCommand {
+  readonly command: string;
+  readonly description: string;
+}
+
+export type TelegramCommandsOutcome =
+  | { readonly outcome: 'SUCCEEDED'; readonly commands: readonly TelegramBotCommand[] }
+  | Exclude<TelegramSendOutcome, { outcome: 'SUCCEEDED' }>;
+
+/**
+ * Read the command list Telegram holds for this bot (`getMyCommands`, default scope and
+ * language — the same scope `telegramSetMyCommands` writes, since it sends neither).
+ *
+ * A READ, which is why the Web Admin's «بررسی وضعیت» may call it (round P): it changes
+ * nothing at Telegram. The Bot API answers an array of `BotCommand`; an entry that is not
+ * `{ command: string, description: string }` is dropped rather than failing the read, and
+ * a `result` that is not an array at all is refused as not Telegram answering — the rule
+ * `telegramGetWebhookInfo` applies to its object.
+ */
+export async function telegramGetMyCommands(
+  request: Omit<TelegramSendRequest, 'body' | 'method'>,
+): Promise<TelegramCommandsOutcome> {
+  assertOutsideTransaction('A Telegram getMyCommands');
+
+  const call = await telegramCall({ ...request, method: 'getMyCommands', body: {} });
+  if (call.outcome !== 'SUCCEEDED') return call;
+  if (!Array.isArray(call.result)) {
+    return {
+      outcome: 'FAILED_PERMANENT',
+      errorCode: 'telegram.rejected.commands_shape',
+      errorMessage: 'getMyCommands answered without an array of BotCommand.',
+    };
+  }
+  const commands = (call.result as unknown[]).flatMap((entry) => {
+    if (entry === null || typeof entry !== 'object') return [];
+    const { command, description } = entry as Record<string, unknown>;
+    return typeof command === 'string' && typeof description === 'string'
+      ? [{ command, description }]
+      : [];
+  });
+  return { outcome: 'SUCCEEDED', commands };
+}
+
 /**
  * What Telegram holds as this bot's webhook registration, as Telegram reports it.
  *

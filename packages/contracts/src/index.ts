@@ -55,7 +55,9 @@ export * from './catalog.js';
 export * from './traffic-input.js';
 export * from './commerce.js';
 export * from './customer-notifications.js';
+export * from './menu-appearance.js';
 export * from './bot-commands.js';
+export * from './bot-menu.js';
 export * from './bot-management.js';
 // Premium UI: appearance slots and custom emoji.
 export * from './appearance.js';

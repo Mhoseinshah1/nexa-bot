@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { ADMIN_MENU_COMMAND, BOT_COMMANDS, TEMPLATES } from '@nexa/contracts';
+import { ADMIN_MENU_COMMAND, ADMIN_ONLY_COMMANDS, BOT_COMMANDS, TEMPLATES } from '@nexa/contracts';
 import { CATALOGUE_FA } from '@nexa/i18n';
 
 /**
@@ -24,7 +24,7 @@ describe('the Telegram command menu', () => {
      */
     const runtime = new URL('../../apps/api/src/surfaces/telegram/bot-runtime.ts', import.meta.url);
     const source = readFileSync(runtime, 'utf8');
-    const parsed = [...source.matchAll(/command === '\/([a-z]+)'/g)].map((m) => m[1] ?? '');
+    const parsed = [...source.matchAll(/command === '\/([a-z_]+)'/g)].map((m) => m[1] ?? '');
     /*
      * The management panel's commands are parsed and deliberately NOT registered
      * (Phase 5T).
@@ -47,10 +47,23 @@ describe('the Telegram command menu', () => {
      * `/admin` is matched through `ADMIN_MENU_COMMAND` rather than a literal, so it
      * does not appear in `parsed` at all; the assertion below covers it.
      */
-    const ADMIN_ONLY = new Set(['link', 'role', 'service', 'customer']);
-    const answered = parsed.filter((command) => !ADMIN_ONLY.has(command)).sort();
+    const ADMIN_ONLY = new Set<string>(ADMIN_ONLY_COMMANDS);
+    const answered = [...new Set(parsed.filter((command) => !ADMIN_ONLY.has(command)))].sort();
 
     expect([...BOT_COMMANDS].map((entry) => entry.command).sort()).toEqual(answered);
+
+    /*
+     * Round P: every admin command the runtime PARSES is declared in `ADMIN_ONLY_COMMANDS`
+     * — the contract's own statement of what the customer scope never carries — so a
+     * management command added to the runtime without being named there fails here
+     * rather than quietly joining `BOT_COMMANDS` one release later.
+     */
+    for (const command of new Set(parsed)) {
+      expect(
+        ADMIN_ONLY.has(command) || BOT_COMMANDS.some((entry) => entry.command === command),
+        `/${command} is parsed by the runtime and declared in neither list`,
+      ).toBe(true);
+    }
 
     /*
      * And the other half of the 5T rule: the panel's commands are registered NOWHERE.
@@ -61,21 +74,8 @@ describe('the Telegram command menu', () => {
      * about the installation and not about them.
      */
     const registered = new Set([...BOT_COMMANDS].map((entry) => entry.command));
-    for (const command of [
-      ADMIN_MENU_COMMAND,
-      'link',
-      'role',
-      'service',
-      'customer',
-      /*
-       * WP5's three category commands. The underscore keeps them out of `parsed`
-       * above (its pattern is `[a-z]+`), so they are named here directly: registering
-       * any of them would advertise the management panel to every customer.
-       */
-      'category_new',
-      'category_rename',
-      'category_emoji',
-    ]) {
+    expect((ADMIN_ONLY_COMMANDS as readonly string[]).includes(ADMIN_MENU_COMMAND)).toBe(true);
+    for (const command of ADMIN_ONLY_COMMANDS) {
       expect(registered.has(command as never), command).toBe(false);
     }
   });
