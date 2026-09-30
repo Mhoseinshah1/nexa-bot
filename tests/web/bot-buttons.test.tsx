@@ -190,7 +190,7 @@ const rowOf = (id: string) =>
 const page = () => <BotButtonsPage mayEdit denied={false} mayViewTemplates mayEditTemplates />;
 
 describe('«دکمه‌های ربات»', () => {
-  it('lists every main-menu item with its label, target, slot and gate, as the server decided it', async () => {
+  it('lists every main-menu button, the trial and the referral included, with its label and its gate', async () => {
     api();
     renderPage(page());
     await waitFor(() => expect(rowOf('trial')).not.toBeNull());
