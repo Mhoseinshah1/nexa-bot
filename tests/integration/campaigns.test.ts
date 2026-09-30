@@ -739,6 +739,23 @@ describe('campaigns', () => {
       expect((await broadcastOf(id))?.state).toBe('CANCELLED');
     });
 
+    it('a replayed pause after a resume does not pause the announcement again', async () => {
+      const id = await draftCampaign([{ kind: 'DISCOUNT', terms: TWENTY_PERCENT }, ANNOUNCE]);
+      await schedule(id);
+      await loop.runOnce(tenantA);
+      expect((await broadcastOf(id))?.state).toBe('SENDING');
+
+      const pauseKey = key();
+      await service.pause(tenantA, owner, { idempotencyKey: pauseKey, campaignId: id });
+      expect((await broadcastOf(id))?.state).toBe('PAUSED');
+      await service.resume(tenantA, owner, { idempotencyKey: key(), campaignId: id });
+      expect((await broadcastOf(id))?.state).toBe('SENDING');
+
+      await service.pause(tenantA, owner, { idempotencyKey: pauseKey, campaignId: id });
+      expect(await stateOf(id)).toBe('ACTIVE');
+      expect((await broadcastOf(id))?.state).toBe('SENDING');
+    });
+
     it('a failed announcement rolls back no financial action', async () => {
       const failing = new CampaignService({
         ...deps(),
@@ -896,6 +913,44 @@ describe('campaigns', () => {
       // The start has passed, so an operation left running would credit on the next pass.
       await ctx.container.bulkOperationProcessor.pass(tenantA);
       expect(await massCredits()).toHaveLength(0);
+      expect(await rows<{ state: string }>(sql`SELECT state FROM bulk_operations`)).toEqual([
+        { state: 'CANCELLED' },
+      ]);
+    });
+
+    it('a replayed cancel asks the engine again when the first engine cancel failed', async () => {
+      const id = await draftCampaign([GIFT], { fromMs: 2 * HOUR, toMs: DAY });
+      await confirmGift(id);
+      let failures = 1;
+      const flaky = new CampaignService({
+        ...deps(),
+        massActions: {
+          ...ctx.container.bulkOperations,
+          get: ctx.container.bulkOperations.get.bind(ctx.container.bulkOperations),
+          progress: ctx.container.bulkOperations.progress.bind(ctx.container.bulkOperations),
+          preview: ctx.container.bulkOperations.preview.bind(ctx.container.bulkOperations),
+          create: ctx.container.bulkOperations.create.bind(ctx.container.bulkOperations),
+          cancel: (...args: Parameters<typeof ctx.container.bulkOperations.cancel>) => {
+            if (failures > 0) {
+              failures -= 1;
+              return Promise.reject(new Error('the engine was unreachable'));
+            }
+            return ctx.container.bulkOperations.cancel(...args);
+          },
+        } as never,
+      });
+      const cancelKey = key();
+      await expect(
+        flaky.cancel(tenantA, owner, { idempotencyKey: cancelKey, campaignId: id }),
+      ).rejects.toThrow('unreachable');
+      // The campaign's own cancel committed; the engine's did not.
+      expect(await stateOf(id)).toBe('CANCELLED');
+      expect(await rows<{ state: string }>(sql`SELECT state FROM bulk_operations`)).toEqual([
+        { state: 'RUNNING' },
+      ]);
+
+      // The operator presses again: the same command, replayed, reaches the engine.
+      await flaky.cancel(tenantA, owner, { idempotencyKey: cancelKey, campaignId: id });
       expect(await rows<{ state: string }>(sql`SELECT state FROM bulk_operations`)).toEqual([
         { state: 'CANCELLED' },
       ]);

@@ -1016,6 +1016,7 @@ export class CampaignService {
       // The announcement pauses with it where Broadcast can (a SENDING broadcast). A mass
       // gift has no pause in its engine: one already running finishes its frozen items.
       (actions) => this.forEachBroadcast(scope, actor, actions, 'SENDING', 'pause'),
+      'PAUSED',
     );
   }
 
@@ -1037,6 +1038,7 @@ export class CampaignService {
         return this.setRules(scope, actor, actions, 'ACTIVE', now, tx);
       },
       (actions) => this.forEachBroadcast(scope, actor, actions, 'PAUSED', 'resume'),
+      'ACTIVE',
     );
   }
 
@@ -1088,6 +1090,7 @@ export class CampaignService {
         }
         await this.forEachBroadcast(scope, actor, actions, null, 'cancel');
       },
+      'CANCELLED',
     );
   }
 
@@ -1197,6 +1200,8 @@ export class CampaignService {
     ) => Promise<Record<string, unknown>>,
     /** What the shared engines are then asked, after the commit, in their own transactions. */
     afterCommit: (actions: readonly CampaignActionRecord[]) => Promise<void>,
+    /** The state this edge leaves the campaign in; the engines are steered only from it. */
+    settled: 'PAUSED' | 'ACTIVE' | 'CANCELLED',
   ): Promise<CampaignDetail> {
     const campaignId = this.campaignId(input.campaignId);
     const requestHash = hashRequest({ campaignId, action });
@@ -1209,7 +1214,14 @@ export class CampaignService {
       input.idempotencyKey,
       requestHash,
     );
-    if (replay !== null) return this.detailOf(scope, campaignId);
+    if (replay !== null) {
+      // The edge committed, but its engine commands may not have: the process died, or an
+      // engine answered with an error, after the commit. They are idempotent, so a replay
+      // asks them again — but only while the campaign is still where this edge left it: a
+      // replayed PAUSE after a later RESUME must not pause the announcement again.
+      await this.steerEngines(scope, campaignId, settled, afterCommit);
+      return this.detailOf(scope, campaignId);
+    }
 
     const now = this.deps.clock.now();
     await runAuthorizedMutation(
@@ -1250,8 +1262,19 @@ export class CampaignService {
         );
       },
     );
-    await afterCommit(await this.deps.campaigns.actionsOf(scope, campaignId));
+    await this.steerEngines(scope, campaignId, settled, afterCommit);
     return this.detailOf(scope, campaignId);
+  }
+
+  private async steerEngines(
+    scope: TenantContext,
+    campaignId: string,
+    settled: 'PAUSED' | 'ACTIVE' | 'CANCELLED',
+    afterCommit: (actions: readonly CampaignActionRecord[]) => Promise<void>,
+  ): Promise<void> {
+    const campaign = await this.deps.campaigns.findById(scope, campaignId);
+    if (campaign?.state !== settled) return;
+    await afterCommit(await this.deps.campaigns.actionsOf(scope, campaignId));
   }
 
   /**
