@@ -3152,7 +3152,7 @@ export const resellerSummarySchema = z.object({
   discountPercentage: z.number().int().nullable(),
   /**
    * The reseller's STORED own limit, or null when the tier's is inherited. Reseller credit
-   * was removed (owner decision, 2026-10-01): migration `0153_reseller_credit_removed` set
+   * was removed (owner decision, 2026-10-01): migration `0155_reseller_credit_removed` set
    * every one to null, and the service stores only zero or null.
    */
   creditLimit: z.object({ amount: z.string(), currency: z.enum(CURRENCY_CODES) }).nullable(),
@@ -3231,7 +3231,7 @@ export type ResellerResponse = z.infer<typeof resellerResponseSchema>;
  * Why credit does or does not apply to a reseller. Reseller credit was removed (owner
  * decision, 2026-10-01 — no reseller debt, no credit purchases): the server now answers
  * `NO_LIMIT` for every reseller, and every stored limit is zero (migration
- * `0153_reseller_credit_removed`).
+ * `0155_reseller_credit_removed`).
  *
  * The vocabulary is kept whole, deliberately. During a rolling update an old replica still
  * answers with the other values, and an old browser bundle still parses this field with

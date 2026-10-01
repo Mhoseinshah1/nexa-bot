@@ -536,7 +536,7 @@ export const resellerPricingModeSchema = z.enum(RESELLER_PRICING_MODES);
  * limit other than this one, except the idempotent replay of a command that committed
  * before the decision (`RESELLER_MAX_CREDIT_LIMIT_MINOR`).
  *
- * The `credit_limit_*` columns stay. Migration `0153_reseller_credit_removed` set every
+ * The `credit_limit_*` columns stay. Migration `0155_reseller_credit_removed` set every
  * stored limit to zero (a tier) or null (a reseller), so a replica from before the decision,
  * still serving during a rolling update, also computes no credit. A balance that is
  * already negative is a legacy debt, left exactly as it is — never collected, never
