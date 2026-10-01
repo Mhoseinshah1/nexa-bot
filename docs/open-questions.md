@@ -2271,7 +2271,9 @@ purchase takes a balance below zero, and every reseller write refuses a non-zero
 balance that was already negative before the decision is a legacy debt: left exactly as it
 is, never collected, aged or charged, and repaid only by the same top-ups and operator
 credits as any balance. `RESELLER_SETTLEMENT` and `RESELLER_MEMBERSHIP_FEE` stay reserved
-and unwritten.
+and unwritten. Migration `0155_reseller_credit_removed` zeroed every stored limit, recording
+each previous value in the audit log, so a replica of the previous release still serving
+during the update extends no credit either.
 
 ## OQ-WP9-05 — the catalogue list shows the catalogue price to a reseller
 

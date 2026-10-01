@@ -112,6 +112,10 @@ Option 2 is small and well bounded: one domain function, two schema refinements,
 The owner answered §3 directly: **remove reseller credit (option 2)**. There is no reseller
 debt, no negative balance from a purchase and no credit purchase.
 
+The first implementation is described below as it was committed. The review of PR #132
+changed five parts of it, for clients and replicas that straddle the upgrade; §6 gives
+those changes, and where they differ, §6 is current.
+
 ### Contract commit (its own commit)
 
 - **The write schemas.** `creditLimitSchema` (`packages/contracts/src/http.ts`), used by
@@ -207,3 +211,80 @@ debt, no negative balance from a purchase and no credit purchase.
 | `lockCustomer` without `FOR UPDATE` (WP9B-05, re-run)                                                       | the concurrency case: "the second settlement never waited"                                                                                                                                                           |
 | The report's debt read in the stored limit's currency (R14-11, re-run)                                      | "reports a legacy debt exactly as the balance card derives it, whatever limit is stored"                                                                                                                             |
 | `signedSum` adding a DEBIT (R12-09, re-run)                                                                 | "reports reseller orders, sales, services and a legacy debt, and never margin, cost or a credit limit"                                                                                                               |
+
+## 6. PR #132 review: safe across the rolling update
+
+Codex reviewed PR #132 and raised five findings. All five were confirmed, and each is fixed
+with a regression test and a mutation that kills it. The contract changes are in their own
+commits (`457a84f2` and `8d4cd803`). The behaviour, web and test changes are in `8be3d454`.
+
+1. **[P1] Old replicas extended credit from retained limits.**
+   - During a rolling update the migrations run first, and replicas of the previous
+     release keep serving until they are replaced.
+   - That code computes the allowance as the reseller's own limit, else the tier's, and
+     extends credit only when it is positive and in the purchase currency.
+   - **Fix: migration `0155_reseller_credit_removed`.** It is hand-written and data only,
+     and is numbered after PR #131's `0153` and `0154`.
+     - It sets every `reseller_tiers.credit_limit_amount` to 0.
+     - It sets every `resellers` own limit to NULL (inherit the tier's 0).
+     - From the moment it commits, the previous release computes zero too. So does a
+       rollback to that release.
+   - It is **irreversible by design**: the owner removed credit.
+     - Each non-zero value is first written as an ordinary audit row on its own entity
+       (`reseller_tier.update` / `reseller.update`, actor `SYSTEM_JOB`, correlation
+       `migration-0155-reseller-credit-removed`, before and after). It therefore shows in
+       the Web Admin change history.
+     - The pre-update backup also holds the old values.
+   - No wallet entry, balance, order or payment is read or written.
+   - **Residual:** a replica of the previous release that is still serving could store a
+     new positive limit, but only if an operator types one into the old form before that
+     replica is replaced. The new release ignores that value. The next tier save writes
+     zero over it, and the next reseller save writes null.
+   - **The claim "limits stored before the decision still read but grant nothing" is
+     superseded.** After the migration, no positive limit is stored.
+2. **[P1] Legacy payloads must reach the idempotent replay.**
+   - The schema parses the pre-decision shape again: 0 up to the restored
+     `RESELLER_MAX_CREDIT_LIMIT_MINOR`.
+   - `ResellerAdminService` refuses any non-zero limit (`COMMERCE_REQUEST_INVALID`) only
+     AFTER the replay lookup, on all four writes.
+   - So a command that committed before the upgrade and lost its response replays its
+     original result.
+   - A new key carrying a positive limit is refused. So is an old client re-sending the
+     positive value the migration zeroed: the stored value is 0, so a positive one is a
+     change. The operator reloads and saves without it.
+   - A cached old form can still edit unrelated fields, because after the migration it
+     loads and sends 0 (tier) or null (reseller).
+3. **[P2] Credit-state vocabulary.**
+   - `RESELLER_CREDIT_STATES` is the original four values again.
+   - `creditStateOf()` answers `NO_LIMIT`, which is true once every stored limit is zero.
+   - An old bundle parses the new server, and the new schema parses an old replica.
+   - The Web Admin reads nothing from the field and draws the balance only.
+4. **[P2] Report compatibility.** `creditLimit` in the resellers report is a zero money
+   object in the selling currency, not null, so an old bundle that requires a money object
+   still parses it. The schema still accepts null.
+5. **[P2] User-facing credit claims.**
+   - Rewritten for the balance-only rule and a legacy debt:
+     - `web.wallet_balance_negative_hint`;
+     - `web.resellers_intro` and `web.resellers_list_hint`;
+     - `web.cb_reseller_standing`;
+     - `web.reseller_status_hint` and `web.user_reseller_suspended`;
+     - `web.report_resellers_hint`.
+   - No Telegram template made a credit claim.
+   - A web test now scans every Web Admin string and every Telegram template for an
+     active-credit phrase. The one exception is `web.reseller_credit_limit`, the field label
+     in change-history rows, migration 0155's included.
+
+### Tests and mutations (each reverted after its run)
+
+| Mutation                                                       | Failed                                                                                                            |
+| -------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| Migration 0155 without its `resellers` UPDATE                  | `resellers.test.ts` "migration 0155 zeroes every stored limit, so the PREVIOUS release computes no credit either" |
+| `refuseCredit` called before the replay lookup in `createTier` | "replays a positive-limit command that committed before the decision…" and the HTTP "replays over HTTP…"          |
+| `creditStateOf()` returns `CREDIT_APPLIES`                     | 1 unit case and 3 `reseller-phase2-http.test.ts` cases                                                            |
+| The report's `creditLimit` back to null                        | 2 `reports.test.ts` cases                                                                                         |
+| The old `web.wallet_balance_negative_hint` restored            | 2 web cases: the wallet card and "holds for every Web Admin string"                                               |
+
+The migration test copies the previous release's allowance rule verbatim from `main`.
+Before the migration's SQL runs, that rule extends credit on the fixture rows; afterwards
+it yields zero for all three. The test also checks that `wallet_entries` is unchanged and
+that exactly the two non-zero values are in `audit_logs`.

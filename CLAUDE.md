@@ -120,8 +120,9 @@ Four reseller rules, each a way to sell below cost or on credit nobody granted:
 - **There is no reseller credit** — removed by owner decision (2026-10-01): no
   reseller debt, no negative balances, no credit purchases. `creditAllowanceOf`
   is zero for everyone, so `settleFromWallet` never takes a wallet below zero;
-  every reseller write refuses a non-zero limit, and a limit stored before the
-  decision grants nothing. A balance already negative is a legacy debt, left
+  every reseller write refuses a non-zero limit (after its idempotent replay),
+  and migration `0155_reseller_credit_removed` zeroed every stored limit so an
+  old replica grants none either. A balance already negative is a legacy debt, left
   exactly as it is and never collected. An operator's manual debit never
   overdraws; a clawback never goes below zero. Never reintroduce a credit
   line, a debt, or a monthly-minimum consequence without an explicit owner
