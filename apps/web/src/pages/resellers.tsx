@@ -50,6 +50,8 @@ import {
   FilterChips,
   RowActions,
   TwoColumn,
+  useDiscardGuard,
+  useReportDirty,
   useUnsavedChanges,
   useToast,
   type Column,
@@ -342,6 +344,12 @@ export function ResellersPage({
 
   /** The reseller whose edit form is open, as the server last described it. */
   const [editing, setEditing] = useState<ResellerSummaryResponse | null>(null);
+  /*
+   * One reseller form is mounted at a time — the register form, or one reseller's edit —
+   * and opening another reseller, the register form, or closing the standing unmounts it.
+   * Each of those asks first while the form holds unsaved edits.
+   */
+  const discard = useDiscardGuard();
   /** The reseller whose standing (credit, purchases, history) is open — a READ. */
   const [viewing, setViewing] = useState<string | null>(null);
 
@@ -394,8 +402,14 @@ export function ResellersPage({
             variant="ghost"
             icon="eye"
             onClick={() => {
-              setViewing(row.customerId);
-              revealField('reseller-standing');
+              const open = () => {
+                setViewing(row.customerId);
+                revealField('reseller-standing');
+              };
+              // The edit form moves out of the standing it was drawn in, and remounts.
+              if (editing !== null && editing.customerId !== row.customerId) {
+                discard.confirmDiscard(open);
+              } else open();
             }}
           >
             {t('web.reseller_standing_open')}
@@ -406,9 +420,13 @@ export function ResellersPage({
               variant="ghost"
               icon="edit"
               onClick={() => {
-                setEditing(row);
-                setViewing(row.customerId);
-                revealField('reseller-standing');
+                const open = () => {
+                  setEditing(row);
+                  setViewing(row.customerId);
+                  revealField('reseller-standing');
+                };
+                if (editing?.customerId === row.customerId) open();
+                else discard.confirmDiscard(open);
               }}
             >
               {t('web.rule_edit')}
@@ -439,8 +457,12 @@ export function ResellersPage({
                 variant="primary"
                 icon="userPlus"
                 onClick={() => {
-                  setEditing(null);
-                  revealField('reseller-register-customer');
+                  const open = () => {
+                    setEditing(null);
+                    revealField('reseller-register-customer');
+                  };
+                  if (editing === null) open();
+                  else discard.confirmDiscard(open);
                 }}
               >
                 {t('web.cb_reseller_new')}
@@ -562,8 +584,12 @@ export function ResellersPage({
             customerId={viewing}
             row={rows.find((row) => row.customerId === viewing)}
             onClose={() => {
-              setViewing(null);
-              setEditing(null);
+              const close = () => {
+                setViewing(null);
+                setEditing(null);
+              };
+              if (editing === null) close();
+              else discard.confirmDiscard(close);
             }}
           />
           <TwoColumn
@@ -578,6 +604,7 @@ export function ResellersPage({
                     tiers={tierRows}
                     mayViewWallet={mayViewWallet}
                     onDone={() => setEditing(null)}
+                    onDirtyChange={discard.onDirtyChange}
                   />
                 )}
                 {/* Round N: what this reseller may sell, inherited or their own, and the minimum. */}
@@ -610,6 +637,7 @@ export function ResellersPage({
             tiers={tierRows}
             mayViewWallet={mayViewWallet}
             onDone={() => setEditing(null)}
+            onDirtyChange={discard.onDirtyChange}
           />
         ) : editing === null ? (
           // Keyed by the handed-over customer, so following a second "register" link
@@ -619,6 +647,7 @@ export function ResellersPage({
             initialCustomerId={registering}
             tiers={tierRows}
             onDone={() => undefined}
+            onDirtyChange={discard.onDirtyChange}
           />
         ) : null}
 
@@ -639,6 +668,7 @@ export function ResellersPage({
           </p>
         </Card>
       </div>
+      {discard.dialog}
     </>
   );
 }
@@ -856,6 +886,7 @@ function ResellerForm({
   tiers,
   mayViewWallet = false,
   onDone,
+  onDirtyChange,
 }: {
   /** Absent for a registration; the stored reseller for an edit. */
   reseller?: ResellerSummaryResponse;
@@ -865,6 +896,8 @@ function ResellerForm({
   /** `users.view`: without it the credit in use is unknown here, and nothing is warned. */
   mayViewWallet?: boolean;
   onDone: () => void;
+  /** Told whether the form holds unsaved edits, so the page asks before replacing it. */
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
   const mode = reseller === undefined ? 'register' : 'update';
   const prefix = `reseller-${mode}`;
@@ -877,10 +910,19 @@ function ResellerForm({
   );
   /** The operator has read the debt warning for the terms as they are NOW. */
   const [acknowledged, setAcknowledged] = useState(false);
+  /*
+   * What a registration is compared with: the handed-over customer until one is
+   * registered, then the blank form it resets to. The `register` query outlives the
+   * save, so comparing with it would call the just-cleared form unsaved.
+   */
+  const [registerBaseline, setRegisterBaseline] = useState<ResellerFormState>(() =>
+    blankState(initialCustomerId),
+  );
   const dirty =
     JSON.stringify(state) !==
-    JSON.stringify(reseller === undefined ? blankState(initialCustomerId) : stateOf(reseller));
+    JSON.stringify(reseller === undefined ? registerBaseline : stateOf(reseller));
   useUnsavedChanges(dirty);
+  useReportDirty(dirty, onDirtyChange);
   const set = <K extends keyof ResellerFormState>(key: K, value: ResellerFormState[K]) => {
     setAcknowledged(false);
     setState((current) => ({ ...current, [key]: value }));
@@ -921,7 +963,10 @@ function ResellerForm({
         tone: 'ok',
         message: mode === 'register' ? t('web.reseller_registered') : t('web.reseller_saved'),
       });
-      if (mode === 'register') setState(blankState(''));
+      if (mode === 'register') {
+        setState(blankState(''));
+        setRegisterBaseline(blankState(''));
+      }
       // The customer's card reads the same row, and a tier's count moves with it.
       queries.setQueryData(['customer-reseller', response.reseller.customerId], response);
       void queries.invalidateQueries({ queryKey: ['resellers'] });

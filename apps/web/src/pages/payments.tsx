@@ -951,16 +951,28 @@ function RefundsCard({
     },
   });
 
-  // A typed refund or answer is lost by navigating away; the guard asks first.
-  useUnsavedChanges(
-    amount.trim() !== '' ||
-      reason.trim() !== '' ||
-      note.trim() !== '' ||
-      externalReference.trim() !== '',
-  );
-
   const currency = data?.currency ?? 'IRT';
   const remaining = data === undefined ? 0n : BigInt(data.refundableMinor);
+  const awaiting = rows.filter((row) => row.state === 'AWAITING_EXTERNAL');
+  /*
+   * Whether each form is ON SCREEN, decided once and used both to draw it and to
+   * guard it (Codex review on PR #125). A refusal re-reads the ledger, and the
+   * answer can take a form away — `refundable: false`, or the refund being answered
+   * no longer AWAITING_EXTERNAL — while its typed strings stay in state. Guarded on
+   * the strings alone, the page then asked "discard your changes?" about a form the
+   * operator could no longer see. The strings are kept, not cleared: if the form
+   * comes back, so does what was typed, and the guard with it.
+   */
+  const issueFormShown = data !== undefined && data.refundable && remaining > 0n && mayIssue;
+  const answerFormShown =
+    mayIssue && answering !== null && awaiting.some((row) => row.id === answering);
+
+  // A typed refund or answer is lost by navigating away; the guard asks first.
+  useUnsavedChanges(
+    (issueFormShown && (amount.trim() !== '' || reason.trim() !== '')) ||
+      (answerFormShown && (note.trim() !== '' || externalReference.trim() !== '')),
+  );
+
   const columns: readonly Column<RefundView>[] = [
     {
       key: 'amount',
@@ -1019,8 +1031,6 @@ function RefundsCard({
         row.externalReference === null ? <Dash /> : <Ltr>{row.externalReference}</Ltr>,
     },
   ];
-
-  const awaiting = rows.filter((row) => row.state === 'AWAITING_EXTERNAL');
 
   return (
     <Card title={t('web.refunds')}>
@@ -1170,7 +1180,7 @@ function RefundsCard({
                     ))}
                   </select>
                 </Field>
-                {answering !== null && (
+                {answerFormShown && (
                   <>
                     <div className="form-grid">
                       <Field label={t('web.refund_answer_note')} htmlFor="refund-note">

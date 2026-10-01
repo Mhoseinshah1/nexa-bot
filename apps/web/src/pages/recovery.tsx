@@ -610,14 +610,34 @@ const VERIFYING_STATES: readonly RecoveryRequestSummary['state'][] = [
 ];
 
 /**
+ * The step a FAILED request failed in.
+ *
+ * Not the row's `stage`: every failure exit writes `CLEANUP` there, so the stage says what
+ * was done AFTER the failure, not where it happened. What does say it is what the row
+ * reached before it failed — a confirmation accepted means the destructive run is what
+ * failed; a rejected upload never produced an archive to verify; and every other failure
+ * before a confirmation is the verification and restore test, which is one call and one
+ * step here. Verify answers HTTP 200 with such a row for a bad archive, so without this
+ * the strip said verification had not started at the moment it had just failed.
+ */
+function failedStep(current: RecoveryRequestSummary): 1 | 2 | 3 {
+  if (current.confirmedAt !== null) return 3;
+  if (current.failureCode === 'recovery.upload_rejected') return 1;
+  return 2;
+}
+
+type StepMark = 'done' | 'current' | 'failed' | 'todo';
+
+/**
  * Where the request in hand stands, as three steps. Presentation only: which controls are
  * drawn is still decided by the request's own state below, exactly as before.
  */
 function RecoverySteps({ current }: { current: RecoveryRequestSummary | null }) {
   const state = current?.state ?? null;
-  const reached = (step: 1 | 2 | 3): 'done' | 'current' | 'todo' => {
+  const failedAt = current !== null && state === 'FAILED' ? failedStep(current) : null;
+  const reached = (step: 1 | 2 | 3): StepMark => {
     if (state === null) return step === 1 ? 'current' : 'todo';
-    if (state === 'FAILED') return step === 1 ? 'done' : 'todo';
+    if (failedAt !== null) return step < failedAt ? 'done' : step === failedAt ? 'failed' : 'todo';
     if (VERIFYING_STATES.includes(state))
       return step === 1 ? 'done' : step === 2 ? 'current' : 'todo';
     if (state === 'RESTORE_TEST_PASSED') return step === 3 ? 'current' : 'done';
@@ -630,18 +650,31 @@ function RecoverySteps({ current }: { current: RecoveryRequestSummary | null }) 
   ];
   return (
     <ol className="recovery-steps">
-      {steps.map(([step, label]) => (
-        <li
-          key={step}
-          className={reached(step)}
-          aria-current={reached(step) === 'current' ? 'step' : undefined}
-        >
-          <span className="recovery-step-n" aria-hidden="true">
-            {reached(step) === 'done' ? <Icon name="check" size={12} /> : <Num value={step} />}
-          </span>
-          <span>{t(label)}</span>
-        </li>
-      ))}
+      {steps.map(([step, label]) => {
+        const mark = reached(step);
+        return (
+          <li
+            key={step}
+            className={mark}
+            // The failed step is where the request stopped, so it is the current one.
+            aria-current={mark === 'current' || mark === 'failed' ? 'step' : undefined}
+          >
+            <span className="recovery-step-n" aria-hidden="true">
+              {mark === 'done' ? (
+                <Icon name="check" size={12} />
+              ) : mark === 'failed' ? (
+                <Icon name="x" size={12} />
+              ) : (
+                <Num value={step} />
+              )}
+            </span>
+            <span>{t(label)}</span>
+            {mark === 'failed' && (
+              <span className="recovery-step-state">{t('web.status_failed')}</span>
+            )}
+          </li>
+        );
+      })}
     </ol>
   );
 }

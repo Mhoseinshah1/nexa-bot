@@ -53,6 +53,8 @@ import {
   StateSwitch,
   Switch,
   useToast,
+  useDiscardGuard,
+  useReportDirty,
   useUnsavedChanges,
   type Column,
   type Tone,
@@ -321,6 +323,8 @@ function Locations({
 
   /** The row being edited, or null for the blank form. */
   const [editing, setEditing] = useState<LocationRow | null>(null);
+  /** Opening another panel's location drops the open form's draft: asked first. */
+  const discard = useDiscardGuard();
   /** The row whose offer is being withdrawn, while the question is open. */
   const [deleting, setDeleting] = useState<LocationRow | null>(null);
 
@@ -369,8 +373,12 @@ function Locations({
               icon={row.location === null ? 'plus' : 'edit'}
               disabled={remove.isPending}
               onClick={() => {
-                setEditing(row);
-                revealField('custom-location-label');
+                if (editing?.panelId === row.panelId) revealField('custom-location-label');
+                else
+                  discard.confirmDiscard(() => {
+                    setEditing(row);
+                    revealField('custom-location-label');
+                  });
               }}
             >
               {row.location === null ? t('web.custom_service_location_offer') : t('web.rule_edit')}
@@ -432,9 +440,11 @@ function Locations({
           row={editing}
           options={options}
           onDone={() => setEditing(null)}
+          onDirtyChange={discard.onDirtyChange}
         />
       )}
 
+      {discard.dialog}
       {deleting !== null && (
         <ConfirmDialog
           title={deleting.location?.label ?? deleting.panelName ?? deleting.panelId}
@@ -475,10 +485,13 @@ function LocationForm({
   row,
   options,
   onDone,
+  onDirtyChange,
 }: {
   row: LocationRow | null;
   options: PickerOptions;
   onDone: () => void;
+  /** Told whether the form holds unsaved edits, so the page asks before replacing it. */
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
   const notify = useToast();
   const queries = useQueryClient();
@@ -491,6 +504,7 @@ function LocationForm({
   const [state, setState] = useState<LocationFormState>(loaded);
   const dirty = JSON.stringify(state) !== JSON.stringify(loaded);
   useUnsavedChanges(dirty);
+  useReportDirty(dirty, onDirtyChange);
 
   const checked = locationBodyFrom(state);
   const problem = 'problem' in checked ? checked.problem : null;
@@ -658,6 +672,8 @@ function Rules({
   const rows = rules.data?.rules ?? [];
 
   const [editing, setEditing] = useState<CustomServiceRuleSummaryResponse | null>(null);
+  /** Opening another rule drops the open form's draft: asked first. */
+  const discard = useDiscardGuard();
   /** The rule whose deletion is being asked about. */
   const [deleting, setDeleting] = useState<CustomServiceRuleSummaryResponse | null>(null);
 
@@ -747,8 +763,12 @@ function Rules({
               icon="edit"
               disabled={remove.isPending}
               onClick={() => {
-                setEditing(row);
-                revealField('custom-rule-edit-dimension');
+                if (editing?.id === row.id) revealField('custom-rule-edit-dimension');
+                else
+                  discard.confirmDiscard(() => {
+                    setEditing(row);
+                    revealField('custom-rule-edit-dimension');
+                  });
               }}
             >
               {t('web.rule_edit')}
@@ -799,11 +819,17 @@ function Rules({
           rule={editing}
           options={options}
           onDone={() => setEditing(null)}
+          onDirtyChange={discard.onDirtyChange}
         />
       ) : (
-        <RuleForm options={options} onDone={() => undefined} />
+        <RuleForm
+          options={options}
+          onDone={() => undefined}
+          onDirtyChange={discard.onDirtyChange}
+        />
       )}
 
+      {discard.dialog}
       {deleting !== null && (
         <ConfirmDialog
           title={deleting.label ?? t(DIMENSION_LABELS[deleting.dimension])}
@@ -942,10 +968,13 @@ function RuleForm({
   rule,
   options,
   onDone,
+  onDirtyChange,
 }: {
   rule?: CustomServiceRuleSummaryResponse;
   options: PickerOptions;
   onDone: () => void;
+  /** Told whether the form holds unsaved edits, so the page asks before replacing it. */
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
   const mode = rule === undefined ? 'create' : 'edit';
   const prefix = `custom-rule-${mode}`;
@@ -958,6 +987,7 @@ function RuleForm({
   const dirty =
     JSON.stringify(state) !== JSON.stringify(rule === undefined ? BLANK_RULE : ruleStateOf(rule));
   useUnsavedChanges(dirty);
+  useReportDirty(dirty, onDirtyChange);
   const set = <K extends keyof RuleFormState>(key: K, value: RuleFormState[K]) =>
     setState({ ...state, [key]: value });
 

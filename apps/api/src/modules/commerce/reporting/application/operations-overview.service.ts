@@ -49,7 +49,11 @@ export interface OperationsOverviewRepository {
   provisioningQueue(
     scope: TenantContext,
   ): Promise<{ readonly queued: number; readonly unknown: number }>;
-  unreconciledServices(scope: TenantContext, cap: number): Promise<number>;
+  /**
+   * Services UNRECONCILED, counted in full: the dashboard's gauge, beside the uncapped queued
+   * and unknown totals. The sidebar's bounded count is `navCounter`.
+   */
+  unreconciledServices(scope: TenantContext): Promise<number>;
   expiringServices(scope: TenantContext, now: Date, withinDays: number): Promise<number>;
   /** One sidebar counter, bounded: at most `cap`. */
   navCounter(scope: TenantContext, key: NavCounterKey, cap: number): Promise<number>;
@@ -84,7 +88,9 @@ export class OperationsOverviewService {
       provisioning: may('provisioning')
         ? {
             ...(await repo.provisioningQueue(scope)),
-            unreconciledServices: await repo.unreconciledServices(scope, this.deps.counterCap),
+            // Uncapped: `COUNTER_CAP` bounds a sidebar badge, which says "or more"; a gauge
+            // that stopped at the cap would state a false exact figure.
+            unreconciledServices: await repo.unreconciledServices(scope),
           }
         : null,
       expiring: may('expiring')

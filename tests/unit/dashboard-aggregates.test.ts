@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  COUNTER_CAP,
   DASHBOARD_OPERATION_PERMISSIONS,
   DASHBOARD_SALE_KINDS,
   NAV_ATTENTION_PANEL_HEALTH_STATES,
@@ -16,7 +17,9 @@ import {
   type OrderPurpose,
 } from '@nexa/contracts';
 import {
+  OperationsOverviewService,
   fleetOf,
+  type OperationsOverviewRepository,
   type PanelFleetRow,
 } from '../../apps/api/src/modules/commerce/reporting/application/operations-overview.service';
 import { salesKindCounts } from '../../apps/api/src/modules/commerce/reporting/application/reporting.service';
@@ -136,5 +139,49 @@ describe('the sidebar counters and the operations sections', () => {
     ]) {
       expect(isRegisteredMetric(name), name).toBe(true);
     }
+  });
+});
+
+describe('the unreconciled-services figure', () => {
+  /**
+   * The sidebar badge is bounded by `COUNTER_CAP` and drawn as "or more"; the dashboard's
+   * gauge sits beside uncapped queued and unknown totals and is read as exact. A backlog
+   * past the cap must reach the gauge in full, and the badge still stops at the cap.
+   */
+  it('is counted in full on the dashboard and bounded only in the sidebar', async () => {
+    const backlog = COUNTER_CAP + 234;
+    const bounded = (total: number, cap: number) => Math.min(total, cap);
+    const repository: OperationsOverviewRepository = {
+      panelFleet: async () => [],
+      provisioningQueue: async () => ({ queued: 5000, unknown: 3000 }),
+      unreconciledServices: async (...args: unknown[]) =>
+        typeof args[1] === 'number' ? bounded(backlog, args[1]) : backlog,
+      expiringServices: async () => 0,
+      navCounter: async (_scope, key, cap) =>
+        key === 'unreconciledServices' ? bounded(backlog, cap) : 0,
+    };
+    const service = new OperationsOverviewService({
+      permissions: {
+        permissionsOf: async () =>
+          new Set([
+            DASHBOARD_OPERATION_PERMISSIONS.provisioning,
+            NAV_COUNTER_PERMISSIONS.unreconciledServices,
+          ]),
+      },
+      repository,
+      clock: { now: () => new Date('2026-09-06T08:00:00.000Z') },
+      counterCap: COUNTER_CAP,
+    });
+    const scope = { tenantId: '019210ab-cdef-7012-8345-6789abcdef01' } as never;
+    const actor = { type: 'WEB_ADMIN' } as never;
+
+    const operations = await service.operations(scope, actor);
+    expect(operations.provisioning).toEqual({
+      queued: 5000,
+      unknown: 3000,
+      unreconciledServices: backlog,
+    });
+    const counters = await service.navCounters(scope, actor);
+    expect(counters.counters.unreconciledServices).toBe(COUNTER_CAP);
   });
 });

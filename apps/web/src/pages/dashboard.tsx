@@ -26,6 +26,7 @@ import {
   REVENUE_TITLES,
   axisLabel,
   chartMoneyText,
+  chartMoneyTexts,
   chartMoneyValue,
   compareFromRoute,
   countValues,
@@ -726,6 +727,10 @@ function RevenueChart({ data, compare }: { data: DashboardSummaryResponse; compa
             name: current,
             tone: 1,
             values: series.current.map((b) => chartMoneyValue(b.value, currency)),
+            texts: chartMoneyTexts(
+              series.current.map((b) => b.value),
+              currency,
+            ),
           },
           ...(compare
             ? [
@@ -733,6 +738,10 @@ function RevenueChart({ data, compare }: { data: DashboardSummaryResponse; compa
                   name: previous,
                   dashed: true,
                   values: series.previous.map((b) => chartMoneyValue(b.value, currency)),
+                  texts: chartMoneyTexts(
+                    series.previous.map((b) => b.value),
+                    currency,
+                  ),
                 },
               ]
             : []),

@@ -95,9 +95,11 @@ function refresh(): void {
  * to the entry the operator was on by the difference, and a confirmation
  * traverses forward by the same difference again. Nothing is pushed, so the
  * stack is exactly what it was: Back after leaving continues backward instead
- * of returning to the page just left. A guarded popstate compares the WHOLE
- * location, not the path — a Back between two `?tab=` entries unmounts a
- * tab's form just as a path change does.
+ * of returning to the page just left. A path change is always guarded; a
+ * query-only traversal is guarded when it crosses an entry a GUARDED
+ * navigation wrote (`{ nexaGuarded: true }`) — a Back between two `?tab=`
+ * entries of `RoutedTabs` unmounts a tab's form, while a pager or a tab strip
+ * that keeps its panels mounted never asks.
  *
  * An entry this router did not write (no index: the first page load before
  * the stamp, or a foreign `pushState`) cannot be traversed back to by a known
@@ -215,10 +217,27 @@ export function usePendingLeave(): {
 
 /** Where in the history stack the entry the operator is on sits, when known. */
 let currentIndex: number | null = null;
+/**
+ * Whether the entry the operator is on was written by a GUARDED same-page
+ * navigation (`navigate(…, { guard: true })`, a `?tab=` switch that unmounts a
+ * tab's form). A Back or Forward that only changes the query is guarded when it
+ * crosses such an entry, and not otherwise: a pager, or a tab strip that keeps
+ * every panel mounted, never asks, exactly as the forward navigation did not.
+ */
+let currentGuarded = false;
 /** A traversal the router itself started, and what to do when it lands. */
 let expecting: 'restore' | 'leave' | null = null;
 /** A confirmation that arrived before the restoring traversal had landed. */
 let leaveAfterRestore: number | null = null;
+
+function guardedOf(state: unknown): boolean {
+  return (
+    typeof state === 'object' &&
+    state !== null &&
+    'nexaGuarded' in state &&
+    (state as { nexaGuarded: unknown }).nexaGuarded === true
+  );
+}
 
 function indexOf(state: unknown): number | null {
   if (typeof state === 'object' && state !== null && 'nexaIndex' in state) {
@@ -233,6 +252,7 @@ function stampInitialEntry(): void {
   const existing = indexOf(window.history.state);
   if (existing !== null) {
     currentIndex = existing;
+    currentGuarded = guardedOf(window.history.state);
     return;
   }
   currentIndex = 0;
@@ -242,10 +262,12 @@ function stampInitialEntry(): void {
 function onPopState(event: PopStateEvent): void {
   const next = key();
   const landed = indexOf(event.state);
+  const landedGuarded = guardedOf(event.state);
   if (expecting === 'restore') {
     // The router's own traversal back to the guarded page: nothing moved.
     expecting = null;
     currentIndex = landed;
+    currentGuarded = landedGuarded;
     if (leaveAfterRestore !== null) {
       const delta = leaveAfterRestore;
       leaveAfterRestore = null;
@@ -257,10 +279,17 @@ function onPopState(event: PopStateEvent): void {
   if (expecting === 'leave') {
     expecting = null;
     currentIndex = landed;
+    currentGuarded = landedGuarded;
     refresh();
     return;
   }
-  if (leaveGuarded() && snapshot !== null && next !== snapshotKey) {
+  // A path change always unmounts the page. A query-only change unmounts
+  // something only across an entry a guarded navigation wrote.
+  const unmounts =
+    snapshot !== null &&
+    next !== snapshotKey &&
+    (pathOf(next) !== snapshot.path || currentGuarded || landedGuarded);
+  if (leaveGuarded() && unmounts) {
     if (landed !== null && currentIndex !== null && landed !== currentIndex) {
       // Undo the traversal by its own distance, and ask about the one it made.
       const delta = landed - currentIndex;
@@ -276,6 +305,7 @@ function onPopState(event: PopStateEvent): void {
     return;
   }
   currentIndex = landed;
+  currentGuarded = landedGuarded;
   refresh();
 }
 
@@ -322,12 +352,15 @@ export function navigate(to: string, options: NavigateOptions = {}): void {
     }
   }
   if (currentIndex === null) currentIndex = indexOf(window.history.state) ?? 0;
+  const guarded = options.guard === true;
+  const entry = (nexaIndex: number) => (guarded ? { nexaIndex, nexaGuarded: true } : { nexaIndex });
   if (options.replace === true) {
-    window.history.replaceState({ nexaIndex: currentIndex }, '', to);
+    window.history.replaceState(entry(currentIndex), '', to);
   } else {
     currentIndex += 1;
-    window.history.pushState({ nexaIndex: currentIndex }, '', to);
+    window.history.pushState(entry(currentIndex), '', to);
   }
+  currentGuarded = guarded;
   refresh();
 }
 

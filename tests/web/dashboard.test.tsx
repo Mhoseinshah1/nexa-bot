@@ -15,12 +15,14 @@ import {
 import { DashboardPage, healthSlices, providerSlices } from '../../apps/web/src/pages/dashboard';
 import {
   axisLabel,
+  chartMoneyText,
+  chartMoneyTexts,
   compareFromRoute,
   dashboardSelection,
   kpiDelta,
 } from '../../apps/web/src/dashboard-view';
-import { navCounterText, navCountersFrom, type NavCounter } from '../../apps/web/src/nav-counters';
-import { formatNumber, formatTimestamp } from '../../apps/web/src/format';
+import { navCountersFrom } from '../../apps/web/src/nav-counters';
+import { formatTimestamp } from '../../apps/web/src/format';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { useRoute } from '../../apps/web/src/router';
 import { event, renderPage, stubApi } from './harness';
@@ -247,6 +249,38 @@ describe('the owner dashboard', () => {
     for (const abbreviation of ['میلیون', 'میلیارد', 'هزار']) {
       expect(text, abbreviation).not.toContain(abbreviation);
     }
+  });
+
+  /**
+   * A bucket is an exact minor-unit string; the chart's coordinate is a `number`, which
+   * rounds past 2^53. Everything a reader is shown — the hover readout, each slot's focus
+   * name, the hidden table — is the exact string, never the coordinate turned back into text.
+   */
+  it('states a revenue bucket past 2^53 exactly wherever the chart shows it as text', async () => {
+    const big = '9007199254740993'; // 2^53 + 1: Number() makes it ...992.
+    const huge = '12345678901234567891';
+    const summary = structuredClone(SUMMARY);
+    summary.selected.revenueSeries.current[1] = bucket(1, big);
+    summary.selected.revenueSeries.previous[0] = bucket(0, huge);
+    stubApi(
+      OWNER_ROUTES.map((r) => (r.url === '/dashboard/summary' ? { ...r, body: summary } : r)),
+    );
+    const { container } = ownerPage();
+    await screen.findByText(t('web.dashboard_today_sales'));
+    const chart = container.querySelector('.dash-revenue') as HTMLElement;
+    const exact = '9,007,199,254,740,993';
+    const exactHuge = '12,345,678,901,234,567,891';
+
+    const table = chart.querySelector('table.visually-hidden') as HTMLTableElement;
+    expect(table.textContent).toContain(exact);
+    expect(table.textContent).toContain(exactHuge);
+    expect(table.textContent).not.toContain('9,007,199,254,740,992');
+
+    const hits = chart.querySelectorAll('rect.hit');
+    expect(hits[1]?.getAttribute('aria-label')).toContain(exact);
+    expect(hits[0]?.getAttribute('aria-label')).toContain(exactHuge);
+    fireEvent.focus(hits[1] as Element);
+    expect(chart.querySelector('.chart-readout')?.textContent).toContain(exact);
   });
 
   /**
@@ -731,6 +765,16 @@ describe('dashboard presentation rules', () => {
     expect(kpiDelta(10n, 10n, 'up-good')).toEqual({ text: '0%', direction: 'neutral' });
   });
 
+  it('writes an axis tick as a grouped amount, never in exponent notation', () => {
+    // String(1e21) is "1e+21"; an amount is digits.
+    expect(chartMoneyText(1e21, 'IRT')).toBe('1,000,000,000,000,000,000,000');
+    expect(chartMoneyText(2500, 'USD')).toBe('2,500.00');
+    expect(chartMoneyTexts(['9007199254740993', null], 'IRT')).toEqual([
+      '9,007,199,254,740,993',
+      null,
+    ]);
+  });
+
   it('drops only the year from a date on a chart axis', () => {
     expect(axisLabel('1405/06/15')).toBe('06/15');
     expect(axisLabel('1405/06/01–1405/06/07')).toBe('06/01–06/07');
@@ -790,20 +834,31 @@ describe('the sidebar counters', () => {
     ).toEqual({ services: { count: 4 } });
   });
 
-  it('marks a counter the server capped as a floor, and draws it with a plus', () => {
-    const capped = navCountersFrom(
-      counters({ openConditions: COUNTER_CAP, ticketsAwaitingSupport: COUNTER_CAP - 1 }),
-    );
-    expect(capped).toEqual({
+  /**
+   * `COUNTER_CAP` means "this many or more". A badge at the cap is a floor, and so is any
+   * sum with a capped part in it — the services badge adds two counters.
+   */
+  it('marks a counter at the cap, and a sum with a capped part, as a lower bound', () => {
+    expect(
+      navCountersFrom(
+        counters({
+          openConditions: COUNTER_CAP,
+          ticketsAwaitingSupport: COUNTER_CAP - 1,
+          unreconciledServices: 3,
+          refundRequestsAwaiting: COUNTER_CAP,
+        }),
+      ),
+    ).toEqual({
       alerts: { count: COUNTER_CAP, tone: 'warn', atLeast: true },
       tickets: { count: COUNTER_CAP - 1 },
+      services: { count: COUNTER_CAP + 3, tone: 'danger', atLeast: true },
     });
-    expect(navCounterText(capped.alerts as NavCounter)).toBe(`${formatNumber(COUNTER_CAP)}+`);
-    expect(navCounterText(capped.tickets as NavCounter)).toBe(formatNumber(COUNTER_CAP - 1));
-    // A sum that holds a capped part is a floor too.
+    expect(navCountersFrom(counters({ unreconciledServices: COUNTER_CAP }))).toEqual({
+      services: { count: COUNTER_CAP, tone: 'danger', atLeast: true },
+    });
     expect(
-      navCountersFrom(counters({ unreconciledServices: 3, refundRequestsAwaiting: COUNTER_CAP })),
-    ).toEqual({ services: { count: COUNTER_CAP + 3, tone: 'danger', atLeast: true } });
+      navCountersFrom(counters({ unreconciledServices: 2, refundRequestsAwaiting: 5 })),
+    ).toEqual({ services: { count: 7, tone: 'danger' } });
   });
 
   it('is one request a minute', () => {

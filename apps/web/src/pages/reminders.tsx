@@ -457,32 +457,78 @@ function FlagRow({
 }
 
 /**
- * The version a setting's write is based on, and how it follows a conflict.
+ * A row's draft, and the saved row it is a draft OF.
  *
- * Held apart from the query's version for the settings screen's reason: a write must state
- * the version the operator's draft was based on, so a concurrent change comes back as a
- * `VERSION_CONFLICT` instead of being overwritten unseen. After that conflict the refreshed
- * row's version is ADOPTED — the operator has now been told, and a retry is a deliberate
- * write over the new row — while the draft they typed is left exactly as it is. Without
- * this every retry resubmitted the stale version and conflicted again (Codex review #2 of
- * PR #100).
+ * The draft is compared with its BASIS — the value and version it was drawn from — never
+ * with whatever the shared `['settings']` query holds now. That query refetches after any
+ * write on this page (and a colleague's write reaches it too), and comparing a draft with
+ * the live value made an untouched row dirty the moment its setting changed underneath it,
+ * which held the leave guard over a page with nothing unsaved; and a save the server
+ * normalised (`005` stored as `5`) stayed "unsaved" for ever, because the draft kept the
+ * operator's spelling.
+ *
+ * So, `SettingRow`'s rule:
+ *
+ * - a successful save ADOPTS the returned row as the basis and its value as the draft;
+ * - an untouched row FOLLOWS a newer live row — there is nothing typed to protect;
+ * - a touched row keeps its draft and its basis, so a concurrent change comes back as a
+ *   `VERSION_CONFLICT` instead of being overwritten unseen. After that conflict the
+ *   refreshed row becomes the basis — the operator has now been told, and a retry is a
+ *   deliberate write over the new row — while the draft they typed is left exactly as it
+ *   is (Codex review #2 of PR #100).
+ *
+ * "Newer" is a higher version, so the stale cache between our own save and its refetch is
+ * never mistaken for a change and the field does not flicker back to the old value.
  */
-function useVersionBasis(current: number | null | undefined): {
-  readonly basis: number | null;
-  readonly adopt: (version: number | null) => void;
+function useRowDraft(
+  setting: ResolvedSettingResponse | undefined,
+  project: (value: unknown) => string,
+): {
+  readonly draft: string;
+  readonly setDraft: (next: string) => void;
+  readonly unsaved: boolean;
+  readonly discard: () => void;
+  readonly expectedVersion: number | null;
+  readonly adopt: (saved: ResolvedSettingResponse) => void;
   readonly followConflict: (error: unknown) => void;
 } {
-  const [basis, setBasis] = useState<number | null>(current ?? null);
+  const live = setting === undefined ? '' : project(setting.value);
+  const liveVersion = setting?.version ?? null;
+  const [basis, setBasis] = useState<{ value: string; version: number | null }>({
+    value: live,
+    version: liveVersion,
+  });
+  const [draft, setDraft] = useState(live);
   const [adopting, setAdopting] = useState(false);
+  const unsaved = setting !== undefined && draft !== basis.value;
+  const newer =
+    setting !== undefined &&
+    liveVersion !== null &&
+    (basis.version === null || liveVersion > basis.version);
+
   useEffect(() => {
-    if (adopting && current !== undefined && current !== basis) {
-      setBasis(current);
+    if (!newer) return;
+    if (!unsaved) {
+      setBasis({ value: live, version: liveVersion });
+      setDraft(live);
+    } else if (adopting) {
+      setBasis({ value: live, version: liveVersion });
       setAdopting(false);
     }
-  }, [adopting, current, basis]);
+  }, [newer, unsaved, adopting, live, liveVersion]);
+
   return {
-    basis,
-    adopt: setBasis,
+    draft,
+    setDraft,
+    unsaved,
+    discard: () => setDraft(basis.value),
+    expectedVersion: basis.version,
+    adopt: (saved) => {
+      const value = project(saved.value);
+      setBasis({ value, version: saved.version });
+      setDraft(value);
+      setAdopting(false);
+    },
     followConflict: (error: unknown) => {
       if (error instanceof ApiError && error.code === CONTROL_ERROR_CODES.VERSION_CONFLICT) {
         setAdopting(true);
@@ -618,10 +664,10 @@ function NumberRow({
   toStored?: (shown: number) => number;
   mayEdit: boolean;
 }) {
-  const shown = typeof setting?.value === 'number' ? toShown(setting.value) : null;
-  const stored = shown === null ? '' : String(shown);
-  const [draft, setDraft] = useState(stored);
-  const { basis, adopt, followConflict } = useVersionBasis(setting?.version);
+  const { draft, setDraft, unsaved, discard, expectedVersion, adopt, followConflict } = useRowDraft(
+    setting,
+    (value) => (typeof value === 'number' ? String(toShown(value)) : ''),
+  );
   const refresh = useRefresh();
   const submission = useSubmissionKey();
   const toasts = useSaveToasts(label);
@@ -633,7 +679,7 @@ function NumberRow({
     }) => saveSetting({ key: setting?.key ?? '', ...command }),
     onSuccess: async (result) => {
       submission.settle();
-      adopt(result.setting.version);
+      adopt(result.setting);
       toasts.saved(result.changed);
       await refresh();
     },
@@ -644,7 +690,6 @@ function NumberRow({
       void refresh();
     },
   });
-  const unsaved = setting !== undefined && draft !== stored;
   useReportDirty(setting?.key ?? '', unsaved);
   if (setting === undefined) return null;
   const id = `reminder-${setting.key}`;
@@ -654,7 +699,7 @@ function NumberRow({
   const onSubmit = (event: FormEvent) => {
     event.preventDefault();
     if (!valid) return;
-    const command = { value: toStored(parsed), expectedVersion: basis };
+    const command = { value: toStored(parsed), expectedVersion };
     save.mutate({ ...command, idempotencyKey: submission.current(command) });
   };
 
@@ -666,7 +711,7 @@ function NumberRow({
       // Said only once something was typed: an empty field is a prompt, not a mistake.
       problem={!valid && draft.trim() !== '' ? rangeText(min, max) : null}
       unsaved={unsaved}
-      onDiscard={() => setDraft(stored)}
+      onDiscard={discard}
       mayEdit={mayEdit}
       canSave={valid}
       saving={save.isPending}
@@ -720,9 +765,10 @@ function TimeRow({
   label: string;
   mayEdit: boolean;
 }) {
-  const stored = typeof setting?.value === 'string' ? setting.value : '';
-  const [draft, setDraft] = useState(stored);
-  const { basis, adopt, followConflict } = useVersionBasis(setting?.version);
+  const { draft, setDraft, unsaved, discard, expectedVersion, adopt, followConflict } = useRowDraft(
+    setting,
+    (value) => (typeof value === 'string' ? value : ''),
+  );
   const refresh = useRefresh();
   const submission = useSubmissionKey();
   const toasts = useSaveToasts(label);
@@ -734,7 +780,7 @@ function TimeRow({
     }) => saveSetting({ key: setting?.key ?? '', ...command }),
     onSuccess: async (result) => {
       submission.settle();
-      adopt(result.setting.version);
+      adopt(result.setting);
       toasts.saved(result.changed);
       await refresh();
     },
@@ -745,7 +791,6 @@ function TimeRow({
       void refresh();
     },
   });
-  const unsaved = setting !== undefined && draft !== stored;
   useReportDirty(setting?.key ?? '', unsaved);
   if (setting === undefined) return null;
   const id = `reminder-${setting.key}`;
@@ -754,7 +799,7 @@ function TimeRow({
   const onSubmit = (event: FormEvent) => {
     event.preventDefault();
     if (!valid) return;
-    const command = { value: draft, expectedVersion: basis };
+    const command = { value: draft, expectedVersion };
     save.mutate({ ...command, idempotencyKey: submission.current(command) });
   };
 
@@ -765,7 +810,7 @@ function TimeRow({
       hint={t('web.reminders_quiet_time_hint')}
       problem={!valid && draft !== '' ? t('web.reminders_quiet_time_hint') : null}
       unsaved={unsaved}
-      onDiscard={() => setDraft(stored)}
+      onDiscard={discard}
       mayEdit={mayEdit}
       canSave={valid}
       saving={save.isPending}
@@ -836,8 +881,10 @@ function MoneyRow({
   mayEdit: boolean;
 }) {
   const stored = asMoney(setting?.value);
-  const [draft, setDraft] = useState(stored.amountMinor);
-  const { basis, adopt, followConflict } = useVersionBasis(setting?.version);
+  const { draft, setDraft, unsaved, discard, expectedVersion, adopt, followConflict } = useRowDraft(
+    setting,
+    (value) => asMoney(value).amountMinor,
+  );
   const refresh = useRefresh();
   const submission = useSubmissionKey();
   const label = t('web.reminders_wallet_threshold');
@@ -850,7 +897,7 @@ function MoneyRow({
     }) => saveSetting({ key: setting?.key ?? '', ...command }),
     onSuccess: async (result) => {
       submission.settle();
-      adopt(result.setting.version);
+      adopt(result.setting);
       toasts.saved(result.changed);
       await refresh();
     },
@@ -861,7 +908,6 @@ function MoneyRow({
       void refresh();
     },
   });
-  const unsaved = setting !== undefined && draft !== stored.amountMinor;
   useReportDirty(setting?.key ?? '', unsaved);
   if (setting === undefined) return null;
   const valid = /^\d{1,19}$/.test(draft.trim());
@@ -872,7 +918,7 @@ function MoneyRow({
     if (!valid) return;
     const command = {
       value: { amountMinor: draft.trim().replace(/^0+(?=\d)/, ''), currency: selling },
-      expectedVersion: basis,
+      expectedVersion,
     };
     save.mutate({ ...command, idempotencyKey: submission.current(command) });
   };
@@ -884,7 +930,7 @@ function MoneyRow({
       hint={t('web.reminders_wallet_threshold_hint')}
       problem={!valid && draft.trim() !== '' ? t('web.reminders_wallet_threshold_invalid') : null}
       unsaved={unsaved}
-      onDiscard={() => setDraft(stored.amountMinor)}
+      onDiscard={discard}
       mayEdit={mayEdit}
       canSave={valid}
       saving={save.isPending}

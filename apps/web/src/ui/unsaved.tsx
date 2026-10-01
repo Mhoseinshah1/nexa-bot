@@ -1,7 +1,7 @@
-import { useEffect } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { holdLeaveGuard, usePendingLeave } from '../router';
 import { t } from '../i18n/web.fa';
-import { ConfirmDialog } from './confirm-dialog';
+import { ConfirmDialog, confirmDialogOpen } from './confirm-dialog';
 
 /**
  * Dirty-state protection (brief §8).
@@ -56,4 +56,107 @@ export function LeaveGuardHost() {
       onCancel={stay}
     />
   );
+}
+
+/**
+ * For a page that swaps the record its editor holds — Edit on another row, Add while a
+ * row is open. The leave guard above asks about NAVIGATIONS only, and a swap is not
+ * one: it re-keys or unmounts the editor on the same page, and its draft would go
+ * without a word.
+ *
+ * The editor says whether it holds unsaved edits, either as `dirty` here (a form that
+ * lives in the page itself) or through `onDirtyChange` (a form component, via
+ * `useReportDirty`). `confirmDiscard(action)` runs `action` at once when nothing is
+ * unsaved, and otherwise asks first; the page renders `dialog`. A caller passes only
+ * the actions that WOULD drop the draft — Add while the create form is already the one
+ * shown replaces nothing, and asking then would be a question with no stake.
+ */
+export function useDiscardGuard(dirty = false): {
+  onDirtyChange: (dirty: boolean) => void;
+  confirmDiscard: (action: () => void) => void;
+  dialog: ReactNode;
+} {
+  const reported = useRef(false);
+  const [pending, setPending] = useState<{ run: () => void } | null>(null);
+  const onDirtyChange = useCallback((next: boolean) => {
+    reported.current = next;
+  }, []);
+  const confirmDiscard = useCallback(
+    (action: () => void) => {
+      if (dirty || reported.current) setPending({ run: action });
+      else action();
+    },
+    [dirty],
+  );
+  const dialog =
+    pending === null ? null : (
+      <ConfirmDialog
+        title={t('web.unsaved_title')}
+        question={t('web.unsaved_switch_question')}
+        confirmLabel={t('web.discard')}
+        cancelLabel={t('web.unsaved_stay')}
+        onConfirm={() => {
+          setPending(null);
+          pending.run();
+        }}
+        onCancel={() => setPending(null)}
+      />
+    );
+  return { onDirtyChange, confirmDiscard, dialog };
+}
+
+/**
+ * The form's half of `useDiscardGuard`: tells the page whether this editor holds
+ * unsaved edits, and that it holds none once it unmounts.
+ */
+export function useReportDirty(
+  dirty: boolean,
+  report: ((dirty: boolean) => void) | undefined,
+): void {
+  useEffect(() => {
+    if (report === undefined) return undefined;
+    report(dirty);
+    return () => report(false);
+  }, [dirty, report]);
+}
+
+/**
+ * A close that would throw away what was typed asks first.
+ *
+ * A drawer or a dialog closes by Escape, by a click on its backdrop, by its ✕ and by its
+ * own Cancel, and every one of them used to call the close directly. A close that clears
+ * the form therefore discarded a draft silently — on a page whose leave guard would have
+ * asked about the very same draft had the operator navigated away instead. Every close is
+ * routed through `requestClose`: while `dirty` it opens the same yes/cancel question the
+ * leave guard asks, and only «دورانداختن تغییرات» runs `close`; otherwise it closes at once.
+ *
+ * `dirty` means "closing now loses something", which is for the caller to say: a dialog
+ * that keeps its fields in its caller's state loses nothing by closing and needs none of
+ * this. Render `dialog` beside the drawer; it is `null` while nothing is being asked.
+ */
+export function useConfirmedClose(
+  dirty: boolean,
+  close: () => void,
+): { readonly requestClose: () => void; readonly dialog: ReactNode } {
+  const [asking, setAsking] = useState(false);
+  const requestClose = () => {
+    // One question at a time: an Escape behind an open confirmation is that dialog's.
+    if (confirmDialogOpen()) return;
+    if (dirty) setAsking(true);
+    else close();
+  };
+  const dialog = asking ? (
+    <ConfirmDialog
+      title={t('web.unsaved_title')}
+      question={t('web.discard_draft_question')}
+      confirmLabel={t('web.discard')}
+      cancelLabel={t('web.unsaved_stay')}
+      onConfirm={() => {
+        setAsking(false);
+        close();
+      }}
+      onCancel={() => setAsking(false)}
+    />
+  ) : null;
+  return { requestClose, dialog };
 }

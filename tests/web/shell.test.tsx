@@ -1,5 +1,4 @@
 import { act } from 'react';
-import { COUNTER_CAP } from '@nexa/contracts';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { App } from '../../apps/web/src/app';
@@ -8,6 +7,7 @@ import { ConfirmDialog } from '../../apps/web/src/ui/confirm-dialog';
 import { navigate } from '../../apps/web/src/router';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { formatNumber } from '../../apps/web/src/format';
+import { COUNTER_CAP } from '@nexa/contracts';
 import { renderPage, stubApi } from './harness';
 
 /**
@@ -235,7 +235,43 @@ describe('the sidebar', () => {
     expect(card.textContent).not.toContain(window.location.hostname);
   });
 
-  it('draws a capped counter as a floor, outside the link name', async () => {
+  it('draws a counter at the cap as "or more", and an exact one as it is', async () => {
+    stubApi([
+      session(['services.view', 'payments.view']),
+      {
+        url: '/nav-counters',
+        body: {
+          generatedAt: '2026-09-06T08:00:00.000Z',
+          counters: {
+            openConditions: null,
+            ticketsAwaitingSupport: null,
+            unhealthyPanels: null,
+            unreconciledServices: COUNTER_CAP,
+            refundRequestsAwaiting: null,
+            paymentsUnknown: 7,
+          },
+        },
+      },
+    ]);
+    const { container } = renderPage(<App />);
+    await waitFor(() => expect(container.querySelectorAll('.nav .cnt')).toHaveLength(2));
+    const services = container.querySelector('.nav a[href="/services"]') as HTMLElement;
+    const payments = container.querySelector('.nav a[href="/payments"]') as HTMLElement;
+    const capped = formatNumber(COUNTER_CAP);
+    // Seen as "1,000+", heard as "1,000 or more" — never as an exact 1,000.
+    expect(services.querySelector('.cnt [aria-hidden="true"]')?.textContent).toBe(`${capped}+`);
+    expect(services).toHaveAccessibleDescription(
+      t('web.nav_counter_at_least_spoken').replace('{count}', capped),
+    );
+    // The count is read inside the link's name too, so the name says "or more" as well.
+    expect(services).toHaveAccessibleName(
+      `${t('web.nav_services')}${t('web.nav_counter_at_least_spoken').replace('{count}', capped)}`,
+    );
+    expect(payments.querySelector('.cnt')?.textContent).toBe(formatNumber(7));
+    expect(payments).toHaveAccessibleDescription(formatNumber(7));
+  });
+
+  it('draws any single counter at the cap as a floor, seen and heard', async () => {
     stubApi([
       session(['opslog.view']),
       {
@@ -256,10 +292,12 @@ describe('the sidebar', () => {
     const { container } = renderPage(<App />);
     await waitFor(() => expect(container.querySelector('.nav .cnt')).not.toBeNull());
     const badge = container.querySelector('.nav .cnt') as HTMLElement;
-    expect(badge.textContent).toBe(`${formatNumber(COUNTER_CAP)}+`);
+    const capped = formatNumber(COUNTER_CAP);
+    const spoken = t('web.nav_counter_at_least_spoken').replace('{count}', capped);
+    expect(badge.querySelector('[aria-hidden="true"]')?.textContent).toBe(`${capped}+`);
     const link = badge.closest('a') as HTMLAnchorElement;
-    expect(link).toHaveAccessibleName(t('web.nav_alerts'));
-    expect(link).toHaveAccessibleDescription(`${formatNumber(COUNTER_CAP)}+`);
+    expect(link).toHaveAccessibleName(`${t('web.nav_alerts')}${spoken}`);
+    expect(link).toHaveAccessibleDescription(spoken);
   });
 
   it('draws no counter nobody supplied', async () => {

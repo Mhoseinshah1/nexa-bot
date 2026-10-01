@@ -175,9 +175,19 @@ export function Sparkline({
 
 /* ------------------------------------------------------------ line chart --- */
 
+/**
+ * What a reader is shown for each value, where a coordinate cannot carry it exactly.
+ *
+ * `values` is geometry, and a `number` rounds past 2^53; a money figure arrives as an exact
+ * minor-unit string. When `texts[i]` is given, the readout, the focus label and the hidden
+ * table show it instead of `format(values[i])`, so the chart never states a rounded figure.
+ */
+type ValueTexts = readonly (string | null)[];
+
 export interface LineSeries {
   readonly name: string;
   readonly values: readonly (number | null)[];
+  readonly texts?: ValueTexts;
   readonly tone?: SeriesTone;
   /** A comparison series: dashed, no area, drawn beneath the others. */
   readonly dashed?: boolean;
@@ -288,6 +298,7 @@ export function LineChart({
 export interface BarSeries {
   readonly name: string;
   readonly values: readonly (number | null)[];
+  readonly texts?: ValueTexts;
   readonly tone?: SeriesTone;
 }
 
@@ -463,6 +474,19 @@ export function Donut({
 
 /* --------------------------------------------------------------- helpers --- */
 
+interface TextedSeries {
+  readonly name: string;
+  readonly values: readonly (number | null)[];
+  readonly texts?: ValueTexts;
+}
+
+/** One value as a reader sees it: the exact text when supplied, else the formatted coordinate. */
+function valueText(one: TextedSeries, i: number, format: (value: number) => string): string {
+  const value = one.values[i];
+  if (value === null || value === undefined) return '—';
+  return one.texts?.[i] ?? format(value);
+}
+
 function ChartEmpty() {
   return <div className="chart-empty">{t('web.chart_empty')}</div>;
 }
@@ -504,14 +528,11 @@ function Grid({
 
 function readout(
   label: string,
-  series: readonly { name: string; values: readonly (number | null)[] }[],
+  series: readonly TextedSeries[],
   i: number,
   format: (value: number) => string,
 ): string {
-  const parts = series.map((one) => {
-    const value = one.values[i];
-    return `${one.name}: ${value === null || value === undefined ? '—' : format(value)}`;
-  });
+  const parts = series.map((one) => `${one.name}: ${valueText(one, i, format)}`);
   return `${label} — ${parts.join(t('web.list_separator'))}`;
 }
 
@@ -523,7 +544,7 @@ function Readout({
 }: {
   active: number | null;
   labels: readonly string[];
-  series: readonly { name: string; values: readonly (number | null)[] }[];
+  series: readonly TextedSeries[];
   format: (value: number) => string;
 }) {
   return (
@@ -533,15 +554,11 @@ function Readout({
       ) : (
         <>
           <strong>{labels[active]}</strong>
-          {series.map((one) => {
-            const value = one.values[active];
-            return (
-              <span key={one.name}>
-                {one.name}:{' '}
-                <b className="num">{value === null || value === undefined ? '—' : format(value)}</b>
-              </span>
-            );
-          })}
+          {series.map((one) => (
+            <span key={one.name}>
+              {one.name}: <b className="num">{valueText(one, active, format)}</b>
+            </span>
+          ))}
         </>
       )}
     </div>
@@ -557,7 +574,7 @@ function DataTableFor({
 }: {
   caption: string;
   labels: readonly string[];
-  series: readonly { name: string; values: readonly (number | null)[] }[];
+  series: readonly TextedSeries[];
   format: (value: number) => string;
 }) {
   const id = useId();
@@ -579,14 +596,9 @@ function DataTableFor({
         {rows.map(({ label, i }) => (
           <tr key={i}>
             <th scope="row">{label}</th>
-            {series.map((one) => {
-              const value = one.values[i];
-              return (
-                <td key={one.name}>
-                  {value === null || value === undefined ? '—' : format(value)}
-                </td>
-              );
-            })}
+            {series.map((one) => (
+              <td key={one.name}>{valueText(one, i, format)}</td>
+            ))}
           </tr>
         ))}
       </tbody>

@@ -74,6 +74,8 @@ import {
   ChipDivider,
   FilterChip,
   useToast,
+  useDiscardGuard,
+  useReportDirty,
   useUnsavedChanges,
   type Column,
   type Tone,
@@ -460,6 +462,8 @@ function DiscountRules({
 
   /** The rule whose edit form is open, as the server last described it. */
   const [editing, setEditing] = useState<DiscountSummaryResponse | null>(null);
+  /** Opening another rule, or the create form, drops the open form's draft: asked first. */
+  const discard = useDiscardGuard();
 
   const transition = useMutation({
     mutationFn: (input: { id: string; which: 'activate' | 'deactivate' }) =>
@@ -615,8 +619,12 @@ function DiscountRules({
             status={row.status}
             busy={transition.isPending}
             onEdit={() => {
-              setEditing(row);
-              revealField('discount-edit-label');
+              if (editing?.id === row.id) revealField('discount-edit-label');
+              else
+                discard.confirmDiscard(() => {
+                  setEditing(row);
+                  revealField('discount-edit-label');
+                });
             }}
             onTransition={() =>
               transition.mutate({
@@ -642,8 +650,12 @@ function DiscountRules({
                   size="sm"
                   icon="plus"
                   onClick={() => {
-                    setEditing(null);
-                    revealField('discount-create-kind');
+                    if (editing === null) revealField('discount-create-kind');
+                    else
+                      discard.confirmDiscard(() => {
+                        setEditing(null);
+                        revealField('discount-create-kind');
+                      });
                   }}
                 >
                   {t('web.cb_add')}
@@ -722,10 +734,16 @@ function DiscountRules({
           rule={editing}
           options={options}
           onDone={() => setEditing(null)}
+          onDirtyChange={discard.onDirtyChange}
         />
       ) : (
-        <DiscountForm options={options} onDone={() => undefined} />
+        <DiscountForm
+          options={options}
+          onDone={() => undefined}
+          onDirtyChange={discard.onDirtyChange}
+        />
       )}
+      {discard.dialog}
     </>
   );
 }
@@ -1217,11 +1235,14 @@ function DiscountForm({
   rule,
   options,
   onDone,
+  onDirtyChange,
 }: {
   /** Absent for create; the stored rule for edit. */
   rule?: DiscountSummaryResponse;
   options: ScopeOptions;
   onDone: () => void;
+  /** Told whether the form holds unsaved edits, so the page asks before replacing it. */
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
   const mode = rule === undefined ? 'create' : 'edit';
   const prefix = `discount-${mode}`;
@@ -1237,6 +1258,7 @@ function DiscountForm({
     JSON.stringify(state) !==
     JSON.stringify(rule === undefined ? BLANK_DISCOUNT : discountStateOf(rule));
   useUnsavedChanges(dirty);
+  useReportDirty(dirty, onDirtyChange);
 
   const checked = discountBodyFrom(state, rule);
   const problem = 'problem' in checked ? checked.problem : null;
@@ -1580,6 +1602,8 @@ function CashbackRules({
   const nextCursor = rules.data?.nextCursor ?? null;
 
   const [editing, setEditing] = useState<CashbackRuleSummaryResponse | null>(null);
+  /** Opening another rule, or the create form, drops the open form's draft: asked first. */
+  const discard = useDiscardGuard();
 
   const transition = useMutation({
     mutationFn: (input: { id: string; which: 'activate' | 'deactivate' }) =>
@@ -1641,8 +1665,12 @@ function CashbackRules({
             status={row.status}
             busy={transition.isPending}
             onEdit={() => {
-              setEditing(row);
-              revealField('cashback-edit-label');
+              if (editing?.id === row.id) revealField('cashback-edit-label');
+              else
+                discard.confirmDiscard(() => {
+                  setEditing(row);
+                  revealField('cashback-edit-label');
+                });
             }}
             onTransition={() =>
               transition.mutate({
@@ -1668,8 +1696,12 @@ function CashbackRules({
                   size="sm"
                   icon="plus"
                   onClick={() => {
-                    setEditing(null);
-                    revealField('cashback-create-label');
+                    if (editing === null) revealField('cashback-create-label');
+                    else
+                      discard.confirmDiscard(() => {
+                        setEditing(null);
+                        revealField('cashback-create-label');
+                      });
                   }}
                 >
                   {t('web.cb_add')}
@@ -1725,10 +1757,16 @@ function CashbackRules({
           rule={editing}
           options={options}
           onDone={() => setEditing(null)}
+          onDirtyChange={discard.onDirtyChange}
         />
       ) : (
-        <CashbackForm options={options} onDone={() => undefined} />
+        <CashbackForm
+          options={options}
+          onDone={() => undefined}
+          onDirtyChange={discard.onDirtyChange}
+        />
       )}
+      {discard.dialog}
     </>
   );
 }
@@ -1760,10 +1798,13 @@ function CashbackForm({
   rule,
   options,
   onDone,
+  onDirtyChange,
 }: {
   rule?: CashbackRuleSummaryResponse;
   options: ScopeOptions;
   onDone: () => void;
+  /** Told whether the form holds unsaved edits, so the page asks before replacing it. */
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
   const mode = rule === undefined ? 'create' : 'edit';
   const prefix = `cashback-${mode}`;
@@ -1777,6 +1818,7 @@ function CashbackForm({
   const [state, setState] = useState<CashbackFormState>(loaded);
   const dirty = JSON.stringify(state) !== JSON.stringify(loaded);
   useUnsavedChanges(dirty);
+  useReportDirty(dirty, onDirtyChange);
 
   const checked = cashbackBodyFrom(state, rule);
   const problem = 'problem' in checked ? checked.problem : null;

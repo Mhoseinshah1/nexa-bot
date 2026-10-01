@@ -579,7 +579,9 @@ export const WEB_FA = {
   // --- Shell ---------------------------------------------------------------
   'web.skip_to_content': 'رفتن به محتوا',
   'web.nav_label': 'بخش‌های پنل',
+  // A sidebar counter at its cap is a lower bound: drawn "1,000+", read "1,000 or more".
   'web.nav_counter_at_least': '{count}+',
+  'web.nav_counter_at_least_spoken': '{count} یا بیشتر',
   'web.breadcrumbs': 'مسیر صفحه',
   'web.toggle_sidebar': 'باز و بسته کردن نوار کناری',
   'web.theme': 'پوسته',
@@ -607,6 +609,10 @@ export const WEB_FA = {
   'web.unsaved_question': 'تغییرات این صفحه هنوز ذخیره نشده‌اند. اگر خارج شوید از بین می‌روند.',
   'web.unsaved_leave': 'خروج بدون ذخیره',
   'web.unsaved_stay': 'ماندن و ادامهٔ ویرایش',
+  'web.unsaved_switch_question':
+    'تغییرات این فرم هنوز ذخیره نشده‌اند. اگر فرم دیگری را باز کنید از بین می‌روند.',
+  'web.discard_draft_question':
+    'آنچه در این فرم نوشته‌اید هنوز ذخیره نشده است. اگر بسته شود از بین می‌رود.',
   'web.period_label': 'بازهٔ زمانی',
   'web.period_today': 'امروز',
   'web.period_7d': '۷ روز',

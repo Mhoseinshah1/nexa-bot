@@ -6,8 +6,9 @@ import { navigate, useLinkHandler } from './router';
 import type { ThemeChoice } from './theme';
 import { Icon, type IconName } from './ui/icons';
 import { Breadcrumbs, Menu, confirmDialogOpen, useFocusTrap, type Crumb } from './ui/kit';
+import { formatNumber } from './format';
 import { GROUP_ORDER, isCurrent, type NavEntry } from './nav';
-import { navCounterText, type NavCounters } from './nav-counters';
+import type { NavCounters } from './nav-counters';
 
 /**
  * The pieces of the signed-in shell: the sidebar, the topbar and the command
@@ -137,17 +138,37 @@ export function Sidebar({
                     <span className="lbl">{t(entry.label)}</span>
                     {counter !== undefined && (
                       /*
-                        Out of the link's NAME (hidden from the name
-                        computation, still referenced by aria-describedby), so
-                        a link is always found by its label alone, and the
-                        count is read as its description instead.
+                        The count is the link's description (aria-describedby)
+                        and, sitting inside the link, also follows the label in
+                        its name — so what is read there must be true: a capped
+                        count says "or more" in both, never an exact figure.
                       */
                       <span
                         className={`cnt${counter.tone === undefined ? '' : ` ${counter.tone}`}`}
                         id={countId}
-                        aria-hidden="true"
                       >
-                        {navCounterText(counter)}
+                        {counter.atLeast === true ? (
+                          /*
+                            At the server's cap the number is a floor: drawn with a
+                            plus, and described as "or more" rather than as a total.
+                          */
+                          <>
+                            <span aria-hidden="true">
+                              {t('web.nav_counter_at_least').replace(
+                                '{count}',
+                                formatNumber(counter.count),
+                              )}
+                            </span>
+                            <span className="visually-hidden">
+                              {t('web.nav_counter_at_least_spoken').replace(
+                                '{count}',
+                                formatNumber(counter.count),
+                              )}
+                            </span>
+                          </>
+                        ) : (
+                          formatNumber(counter.count)
+                        )}
                       </span>
                     )}
                   </a>

@@ -127,20 +127,35 @@ export function moneyRow(
 /**
  * A minor-unit string as a chart coordinate in MAJOR units.
  *
- * Geometry only: a coordinate may round, the figure never does. Every number a
- * reader is shown — the readout, the hidden table, the axis — goes back through
- * `chartMoneyText`, and every headline figure is `<Money>` over the exact
- * string.
+ * Geometry only: a coordinate may round, the figure never does. A value a
+ * reader is shown — the readout, the focus label, the hidden table — is
+ * `chartMoneyTexts` over the EXACT string, never this number turned back into
+ * text; only an axis tick, which is itself a coordinate, goes through
+ * `chartMoneyText`. Every headline figure is `<Money>` over the exact string.
  */
 export function chartMoneyValue(minor: string | null, currency: CurrencyCode): number | null {
   if (minor === null) return null;
   return Number(minor) / 10 ** CURRENCY_EXPONENT[currency];
 }
 
-/** A chart coordinate back as grouped money text, never abbreviated. */
+/** The exact minor-unit strings as grouped money text, for the chart's `texts`. */
+export function chartMoneyTexts(
+  values: readonly (string | null)[],
+  currency: CurrencyCode,
+): (string | null)[] {
+  return values.map((minor) =>
+    minor === null ? null : formatMoney({ amountMinor: minor, currency }).amount,
+  );
+}
+
+/**
+ * An axis tick — a coordinate, not a figure — as grouped money text, never
+ * abbreviated. Through `BigInt`, because `String` of a number of 1e21 or more
+ * is exponent notation, which is not an amount.
+ */
 export function chartMoneyText(value: number, currency: CurrencyCode): string {
   const minor = Math.round(value * 10 ** CURRENCY_EXPONENT[currency]);
-  return formatMoney({ amountMinor: String(minor), currency }).amount;
+  return formatMoney({ amountMinor: BigInt(minor).toString(), currency }).amount;
 }
 
 /** A count series for a sparkline or a bar; `null` stays a gap. */

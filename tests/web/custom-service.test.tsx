@@ -542,3 +542,57 @@ describe('the /custom-service route', () => {
     expect(api.calls).toHaveLength(0);
   });
 });
+
+describe('replacing a price rule form that holds unsaved input', () => {
+  it('asks before an edit replaces a new rule being typed', async () => {
+    stubApi(routes());
+    render();
+    await screen.findByText('Bulk volume');
+    const edit = () =>
+      within(rowOf('Bulk volume')).getByRole('button', { name: t('web.rule_edit') });
+    fireEvent.change(input('custom-rule-create-label'), { target: { value: 'Starter' } });
+
+    fireEvent.click(edit());
+    fireEvent.click(
+      within(screen.getByRole('alertdialog', { name: t('web.unsaved_title') })).getByRole(
+        'button',
+        { name: t('web.unsaved_stay') },
+      ),
+    );
+    expect(input('custom-rule-create-label').value).toBe('Starter');
+
+    fireEvent.click(edit());
+    fireEvent.click(
+      within(screen.getByRole('alertdialog', { name: t('web.unsaved_title') })).getByRole(
+        'button',
+        { name: t('web.discard') },
+      ),
+    );
+    await waitFor(() =>
+      expect(document.getElementById('custom-rule-edit-dimension')).not.toBeNull(),
+    );
+    expect(document.getElementById('custom-rule-create-label')).toBeNull();
+  });
+});
+
+describe('replacing a location form that holds unsaved input', () => {
+  it('asks before a row replaces a location being typed, and not once it is clean', async () => {
+    stubApi(routes({ locations: [location()] }));
+    render();
+    await screen.findByText('🇩🇪 آلمان');
+    const edit = () => within(rowOf('🇩🇪 آلمان')).getByRole('button', { name: t('web.rule_edit') });
+    const ask = () => screen.getByRole('alertdialog', { name: t('web.unsaved_title') });
+    fireEvent.change(input('custom-location-label'), { target: { value: 'پیش‌نویس' } });
+
+    fireEvent.click(edit());
+    fireEvent.click(within(ask()).getByRole('button', { name: t('web.unsaved_stay') }));
+    expect(input('custom-location-label').value).toBe('پیش‌نویس');
+
+    fireEvent.click(edit());
+    fireEvent.click(within(ask()).getByRole('button', { name: t('web.discard') }));
+    await waitFor(() => expect(input('custom-location-label').value).toBe('🇩🇪 آلمان'));
+    // The same row again, untouched: nothing to ask.
+    fireEvent.click(edit());
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+  });
+});
