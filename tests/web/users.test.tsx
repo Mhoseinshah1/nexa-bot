@@ -496,6 +496,61 @@ describe('the customer detail', () => {
      */
   });
 
+  /*
+   * Codex review on PR #125: the redesign moved the head into the loaded branch
+   * as a `DetailHead`, which drew an <h2>, and dropped the `PageHead` that stood
+   * outside the query state — so the page had no level-one heading at all while
+   * loading, refused or failed, and only an <h2> once loaded.
+   */
+  describe('keeps one level-one heading in every state', () => {
+    const page = (denied: boolean) => (
+      <UserDetailPage
+        mayEditTrial={false}
+        id={ROW_ID}
+        mayBlock={false}
+        {...NO_WALLET}
+        {...NO_COMMERCE}
+        denied={denied}
+      />
+    );
+
+    it('while loading', () => {
+      stubApi(detail());
+      renderPage(page(false));
+      expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+    });
+
+    it('when refused', () => {
+      stubApi(detail());
+      renderPage(page(true));
+      expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+    });
+
+    it('when the read fails', async () => {
+      stubApi([
+        {
+          url: `/users/${ROW_ID}`,
+          status: 500,
+          body: {
+            error: { kind: 'internal', code: 'test.boom', message: 'no', correlationId: 'test' },
+          },
+        },
+      ]);
+      const { container } = renderPage(page(false));
+      await waitFor(() => expect(container.querySelector('.skel')).toBeNull());
+      expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+    });
+
+    it('once loaded, where the head card carries it and names the customer', async () => {
+      stubApi(detail());
+      renderPage(page(false));
+      await screen.findByText('ali_tehran', { exact: false });
+      const headings = screen.getAllByRole('heading', { level: 1 });
+      expect(headings).toHaveLength(1);
+      expect(headings[0]?.closest('.detail-head')).not.toBeNull();
+    });
+  });
+
   it('sends a block with an idempotency key and the mandatory reason, in two steps', async () => {
     const api = stubApi([
       ...detail(),
@@ -875,10 +930,16 @@ describe('the wallet card', () => {
       />,
     );
 
-    await screen.findByText('کیف پول');
-    // The formatted amount, not the raw minor units.
-    expect(await screen.findByText(/۷۵۰٬۰۰۰|750,000/u)).toBeTruthy();
-    expect(screen.getByText('3')).toBeTruthy();
+    const card = (await screen.findByRole('heading', { name: 'کیف پول' })).closest(
+      'section',
+    ) as HTMLElement;
+    // The formatted amount, not the raw minor units — in the wallet card itself.
+    expect(await within(card).findByText(/۷۵۰٬۰۰۰|750,000/u)).toBeTruthy();
+    expect(within(card).getByText('3')).toBeTruthy();
+    // The head's summary strip reads the SAME derived balance (the same query), so the
+    // two can never disagree.
+    const strip = document.querySelector('.head-stats') as HTMLElement;
+    expect(within(strip).getByText(/۷۵۰٬۰۰۰|750,000/u)).toBeTruthy();
     // The page SAYS the number is computed, because an operator seeing a balance
     // has no other way to know there is no stored column behind it.
     expect(screen.getByText(/محاسبه می‌شود/u)).toBeTruthy();

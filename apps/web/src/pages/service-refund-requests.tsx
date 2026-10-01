@@ -18,15 +18,19 @@ import { useSubmissionKey } from '../submission-key';
 import {
   Badge,
   Banner,
+  Button,
   Card,
+  Checkbox,
   CursorPager,
   DataTable,
   Empty,
   Field,
+  Input,
   Ltr,
   Money,
   StateSwitch,
   useToast,
+  useUnsavedChanges,
   type Column,
   type Tone,
 } from '../ui/kit';
@@ -70,13 +74,21 @@ function columns(onLink: ReturnType<typeof useLinkHandler>, withService: boolean
     {
       key: 'state',
       header: t('web.refund_state'),
-      render: (row) => <Badge tone={STATE_TONES[row.state]}>{t(STATE_LABELS[row.state])}</Badge>,
+      render: (row) => (
+        <Badge tone={STATE_TONES[row.state]} dot>
+          {t(STATE_LABELS[row.state])}
+        </Badge>
+      ),
     },
     {
       key: 'service',
       header: t('web.service_refund_service'),
       render: (row) => (
-        <a href={`/services/${encodeURIComponent(row.serviceId)}`} onClick={onLink}>
+        <a
+          href={`/services/${encodeURIComponent(row.serviceId)}`}
+          onClick={onLink}
+          className="strong"
+        >
           <Ltr>{row.serviceUsername ?? row.serviceId}</Ltr>
         </a>
       ),
@@ -91,10 +103,16 @@ function columns(onLink: ReturnType<typeof useLinkHandler>, withService: boolean
         </Ltr>
       ),
     },
-    { key: 'reason', header: t('web.service_refund_reason'), render: (row) => row.reason },
+    {
+      key: 'reason',
+      header: t('web.service_refund_reason'),
+      wrap: true,
+      render: (row) => row.reason,
+    },
     {
       key: 'principal',
       header: t('web.service_refund_principal'),
+      align: 'end',
       render: (row) => (
         <Money value={{ amountMinor: row.principalMinor, currency: row.currency }} />
       ),
@@ -102,6 +120,7 @@ function columns(onLink: ReturnType<typeof useLinkHandler>, withService: boolean
     {
       key: 'remaining',
       header: t('web.service_refund_remaining'),
+      align: 'end',
       render: (row) => (
         <Money value={{ amountMinor: row.remainingMinor, currency: row.currency }} />
       ),
@@ -109,6 +128,7 @@ function columns(onLink: ReturnType<typeof useLinkHandler>, withService: boolean
     {
       key: 'approved',
       header: t('web.service_refund_approved'),
+      align: 'end',
       render: (row) =>
         row.approvedAmountMinor === null ? (
           '—'
@@ -131,7 +151,7 @@ function columns(onLink: ReturnType<typeof useLinkHandler>, withService: boolean
     {
       key: 'created',
       header: t('web.service_refund_created'),
-      render: (row) => formatTimestamp(row.createdAt),
+      render: (row) => <span className="nowrap">{formatTimestamp(row.createdAt)}</span>,
     },
   ];
   return withService ? all : all.filter((column) => column.key !== 'service');
@@ -173,7 +193,7 @@ export function OpenServiceRefundRequestsCard() {
     <Card title={t('web.service_refunds_open')} hint={t('web.service_refunds_hint')}>
       <StateSwitch query={requests} denied={false}>
         {rows.length === 0 && trail.length === 0 ? (
-          <Empty title={t('web.service_refunds_empty')} />
+          <Empty variant="compact" title={t('web.service_refunds_empty')} />
         ) : (
           <>
             <DataTable
@@ -181,6 +201,7 @@ export function OpenServiceRefundRequestsCard() {
               columns={columns(onLink, true)}
               rows={rows}
               rowKey={(row) => row.id}
+              dense
             />
             <CursorPager
               shown={rows.length}
@@ -216,13 +237,14 @@ export function ServiceRefundRequestsCard({
     <Card title={t('web.service_refunds')} hint={t('web.service_refunds_hint')}>
       <StateSwitch query={requests} denied={false}>
         {rows.length === 0 ? (
-          <Empty title={t('web.service_refunds_empty')} />
+          <Empty variant="compact" title={t('web.service_refunds_empty')} />
         ) : (
           <DataTable
             caption={t('web.service_refunds')}
             columns={columns(onLink, false)}
             rows={rows}
             rowKey={(row) => row.id}
+            dense
           />
         )}
         {open !== undefined &&
@@ -304,55 +326,58 @@ function DecisionForm({
   });
 
   const busy = approve.isPending || reject.isPending;
+  // A typed amount or reason is lost by navigating away; the guard asks first.
+  useUnsavedChanges(amount.trim() !== '' || reason.trim() !== '' || confirmed);
   return (
-    <>
-      <Field label={t('web.service_refund_amount')} htmlFor="service-refund-amount">
-        <input
-          id="service-refund-amount"
-          value={amount}
-          inputMode="numeric"
-          maxLength={19}
-          onChange={(event) => setAmount(event.target.value)}
-        />
-      </Field>
-      <label className="check">
-        <input
-          type="checkbox"
+    <div className="ca-decision">
+      <div className="ca-decision-part ca-decision-approve">
+        <Field label={t('web.service_refund_amount')} htmlFor="service-refund-amount">
+          <Input
+            id="service-refund-amount"
+            size="sm"
+            value={amount}
+            inputMode="numeric"
+            maxLength={19}
+            onChange={(event) => setAmount(event.target.value)}
+          />
+        </Field>
+        <Checkbox
+          label={t('web.service_refund_confirm')}
           checked={confirmed}
-          onChange={(event) => setConfirmed(event.target.checked)}
-        />{' '}
-        {t('web.service_refund_confirm')}
-      </label>
-      <div className="toolbar">
-        <button
-          type="button"
-          className="btn danger sm"
-          disabled={busy || !confirmed || digitsOf(amount) === '0'}
-          onClick={() => approve.mutate()}
-        >
-          {t('web.service_refund_approve')}
-        </button>
-      </div>
-      <Field label={t('web.service_refund_reject_reason')} htmlFor="service-refund-reject">
-        <input
-          id="service-refund-reject"
-          value={reason}
-          onChange={(event) => setReason(event.target.value)}
+          onChange={setConfirmed}
         />
-      </Field>
-      <div className="toolbar">
-        <button
-          type="button"
-          className="btn sm"
-          // The contract's rule, in code points: `maxLength` counts UTF-16 units (round 8).
-          disabled={busy || !isServiceRefundRejectionReason(reason)}
-          onClick={() => reject.mutate()}
-        >
-          {t('web.service_refund_reject')}
-        </button>
+        <div className="form-actions">
+          <Button
+            variant="danger"
+            size="sm"
+            disabled={busy || !confirmed || digitsOf(amount) === '0'}
+            onClick={() => approve.mutate()}
+          >
+            {t('web.service_refund_approve')}
+          </Button>
+        </div>
+      </div>
+      <div className="ca-decision-part">
+        <Field label={t('web.service_refund_reject_reason')} htmlFor="service-refund-reject">
+          <Input
+            id="service-refund-reject"
+            size="sm"
+            value={reason}
+            onChange={(event) => setReason(event.target.value)}
+          />
+        </Field>
+        <div className="form-actions">
+          <Button
+            size="sm"
+            disabled={busy || !isServiceRefundRejectionReason(reason)}
+            onClick={() => reject.mutate()}
+          >
+            {t('web.service_refund_reject')}
+          </Button>
+        </div>
       </div>
       {approve.error !== null && <Banner tone="danger">{messageFor(approve.error)}</Banner>}
       {reject.error !== null && <Banner tone="danger">{messageFor(reject.error)}</Banner>}
-    </>
+    </div>
   );
 }

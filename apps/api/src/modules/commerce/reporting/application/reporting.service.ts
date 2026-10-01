@@ -11,12 +11,16 @@ import {
   SALE_ORDER_PURPOSES,
   SERVICE_STATES,
   WALLET_REPORT_GROUP_OF,
+  dashboardSaleKindOf,
   errors,
   money,
   type ActorContext,
   type Clock,
   type CountComparison,
   type CurrencyCode,
+  type DashboardFixedWindow,
+  type DashboardSaleKind,
+  type DashboardSummaryResponse,
   type Money,
   type MoneyComparison,
   type OrderPurpose,
@@ -41,6 +45,7 @@ import {
   type ReportResellersResponse,
   type ReportServicesResponse,
   type ReportSummaryResponse,
+  type ReportBucket,
   type ReportTrendMetric,
   type ReportTrendResponse,
   type ReportWalletResponse,
@@ -180,44 +185,116 @@ export class ReportingService {
     const chosen = money
       ? (currency ?? (await this.deps.salesCurrency.salesCurrency(scope)))
       : null;
-    // Each side is read only up to its own effective end: `now` for a running current
-    // period, and the like-for-like cut for its previous one. Reading the previous side's
-    // whole nominal span would compare today's partial series with all of yesterday.
-    const series = async (side: PeriodSide) => {
-      const values = await repo.trend(
-        scope,
-        metric,
-        chosen,
-        boundariesOf(side.buckets, side.effectiveEnd),
-      );
-      return side.buckets.map((bucket) => ({
-        index: bucket.index,
-        start: bucket.start.toISOString(),
-        end: bucket.end.toISOString(),
-        label: bucket.label,
-        // A bucket that begins at or after its side's cut is unknown, never zero: the
-        // chart must not draw a collapse for hours that have not happened yet, nor for
-        // the part of the previous period the current one has not reached.
-        value:
-          bucket.start.getTime() >= side.effectiveEnd.getTime()
-            ? null
-            : (values.get(bucket.index) ?? 0n).toString(),
-      }));
-    };
+    const series = (side: PeriodSide) => this.series(scope, metric, chosen, side);
     return {
       period: r.wire,
       metric,
       currency: chosen,
       currencies: money
         ? [
-            ...(await repo.revenueCurrencies(scope, [
-              { from: r.period.current.start, to: r.period.current.end },
-              { from: r.period.previous.start, to: r.period.previous.end },
-            ])),
+            // The effective windows, like every figure: a nominal end reaches past the cut.
+            ...(await repo.revenueCurrencies(scope, [r.current, r.previous])),
           ]
         : [],
       current: await series(r.period.current),
       previous: await series(r.period.previous),
+    };
+  }
+
+  /**
+   * The owner's dashboard (round W, `docs/web-redesign/dashboard.md`): one request for the
+   * KPI cards and the two charts, where the report pages make several.
+   *
+   * Not a second definition of anything. Every figure is a registered metric computed by the
+   * repository methods the reports use, over windows the same resolver produces — the
+   * selected period, today and this calendar month, each with its like-for-like previous
+   * window — and behind the same gate, charged FIRST. The two figures whose cost no window
+   * bounds (new buyers, active customers) are not here; they stay on `summary`.
+   */
+  async dashboard(
+    scope: TenantContext,
+    actor: ActorContext,
+    request: ReportRangeRequest,
+  ): Promise<DashboardSummaryResponse> {
+    const r = await this.prepare(scope, actor, request, REPORTS_VIEW_PERMISSION);
+    const repo = this.deps.repository;
+    const presentation = { timezone: r.period.timezone, calendar: r.period.calendar };
+    // The same instant as the selected period, so the three windows agree on "now".
+    const fixed = (range: 'TODAY' | 'THIS_MONTH') =>
+      this.resolvedOf(this.deps.periods.resolve({ range }, r.period.now, presentation));
+    const today = fixed('TODAY');
+    const month = fixed('THIS_MONTH');
+    const currency = await this.deps.salesCurrency.salesCurrency(scope);
+
+    const fixedWindow = async (w: Resolved): Promise<DashboardFixedWindow> => {
+      const now = await repo.salesTotals(scope, w.current);
+      const before = await repo.salesTotals(scope, w.previous);
+      return {
+        period: w.wire,
+        revenue: moneyPair(now.revenue, before.revenue),
+        sales: pair(now.sales, before.sales),
+        series: await this.series(scope, 'REVENUE', currency, w.period.current),
+      };
+    };
+
+    const sales = await repo.salesTotals(scope, r.current);
+    const salesBefore = await repo.salesTotals(scope, r.previous);
+    const failed = await repo.paymentFailures(scope, r.current);
+    const failedBefore = await repo.paymentFailures(scope, r.previous);
+    const side = r.period.current;
+    const byPurpose = await repo.salesTrendByPurpose(
+      scope,
+      boundariesOf(side.buckets, side.effectiveEnd),
+    );
+    const methods = new Map<PaymentMethod, { confirmed: number; amounts: CurrencyAmount[] }>();
+    for (const group of await repo.paymentGroups(scope, r.current)) {
+      if (group.kind !== 'ORDER') continue;
+      const found = methods.get(group.method) ?? { confirmed: 0, amounts: [] };
+      found.confirmed += group.counts.CONFIRMED;
+      addAmounts(found.amounts, group.confirmedAmount);
+      methods.set(group.method, found);
+    }
+    // Discovered over the EFFECTIVE windows every total and series runs over. A nominal end
+    // reaches past a running period's like-for-like cut, and would name a currency that no
+    // figure on the page contains.
+    const windows = [r, today, month].flatMap((w) => [w.current, w.previous]);
+
+    return {
+      period: r.wire,
+      currency,
+      currencies: [...(await repo.revenueCurrencies(scope, windows))],
+      today: await fixedWindow(today),
+      month: await fixedWindow(month),
+      selected: {
+        revenue: moneyPair(sales.revenue, salesBefore.revenue),
+        sales: pair(sales.sales, salesBefore.sales),
+        renewals: pair(sales.renewals, salesBefore.renewals),
+        newCustomers: pair(
+          await repo.newCustomers(scope, r.current),
+          await repo.newCustomers(scope, r.previous),
+        ),
+        failedPayments: pair(failed.failed, failedBefore.failed),
+        revenueSeries: {
+          current: await this.series(scope, 'REVENUE', currency, r.period.current),
+          previous: await this.series(scope, 'REVENUE', currency, r.period.previous),
+        },
+        newCustomerSeries: await this.series(scope, 'NEW_USERS', null, r.period.current),
+        salesByKind: side.buckets.map((bucket) => ({
+          index: bucket.index,
+          start: bucket.start.toISOString(),
+          end: bucket.end.toISOString(),
+          label: bucket.label,
+          counts: begun(bucket, side) ? salesKindCounts(byPurpose.get(bucket.index)) : null,
+        })),
+        paymentMethods: [...methods.entries()]
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([method, figures]) => ({
+            method,
+            confirmed: figures.confirmed,
+            confirmedAmount: figures.amounts.map(toMoneyTotal),
+          })),
+      },
+      activeServices: await repo.activeServices(scope),
     };
   }
 
@@ -986,6 +1063,11 @@ export class ReportingService {
       this.deps.clock.now(),
       presentation,
     );
+    return this.resolvedOf(period);
+  }
+
+  /** A resolved period with its wire form and the two windows its figures run over. */
+  private resolvedOf(period: ResolvedPeriod): Resolved {
     const fmt = (d: PeriodSide['startLocal']): string => this.deps.periods.formatLocalDate(d);
     const side = (s: PeriodSide) => ({
       start: s.start.toISOString(),
@@ -1010,6 +1092,58 @@ export class ReportingService {
       previous: { from: period.previous.start, to: period.previous.effectiveEnd },
     };
   }
+
+  /**
+   * One side of a trend: its buckets, each with its exact value.
+   *
+   * Each side is read only up to its own effective end: `now` for a running current
+   * period, and the like-for-like cut for its previous one. Reading the previous side's
+   * whole nominal span would compare today's partial series with all of yesterday.
+   */
+  private async series(
+    scope: TenantContext,
+    metric: ReportTrendMetric,
+    currency: CurrencyCode | null,
+    side: PeriodSide,
+  ): Promise<ReportBucket[]> {
+    const values = await this.deps.repository.trend(
+      scope,
+      metric,
+      currency,
+      boundariesOf(side.buckets, side.effectiveEnd),
+    );
+    return side.buckets.map((bucket) => ({
+      index: bucket.index,
+      start: bucket.start.toISOString(),
+      end: bucket.end.toISOString(),
+      label: bucket.label,
+      // A bucket that begins at or after its side's cut is unknown, never zero: the
+      // chart must not draw a collapse for hours that have not happened yet, nor for
+      // the part of the previous period the current one has not reached.
+      value: begun(bucket, side) ? (values.get(bucket.index) ?? 0n).toString() : null,
+    }));
+  }
+}
+
+/**
+ * One bucket's sales by kind. Folded through `dashboardSaleKindOf`, the one classifier; a
+ * purpose with no kind (a trial) cannot reach here, since the statement selects sales only,
+ * and would be dropped rather than counted as one if it did.
+ */
+export function salesKindCounts(
+  purposes: ReadonlyMap<OrderPurpose, number> | undefined,
+): Record<DashboardSaleKind, number> {
+  const out: Record<DashboardSaleKind, number> = { NEW: 0, RENEWAL: 0, ADDON: 0 };
+  for (const [purpose, n] of purposes ?? []) {
+    const kind = dashboardSaleKindOf(purpose);
+    if (kind !== null) out[kind] += n;
+  }
+  return out;
+}
+
+/** Whether a bucket has begun before its side's cut; one that has not is unknown, never zero. */
+function begun(bucket: BucketBounds, side: PeriodSide): boolean {
+  return bucket.start.getTime() < side.effectiveEnd.getTime();
 }
 
 // --- Pure helpers -----------------------------------------------------------------

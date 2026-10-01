@@ -2,10 +2,12 @@
  * Page family: DASHBOARD — `/` (pages/dashboard.tsx).
  *
  * Owned by the dashboard agent. Rules here are scoped to the dashboard's own
- * classes; shared components are styled in `kit.css` and are not restyled here.
+ * classes (`dash-*`); shared components are styled in `kit.css` and are not
+ * restyled here. Every continuous value on the page is an SVG attribute drawn by
+ * the kit's charts — nothing here depends on a `style` attribute.
  */
 
-/* The dashboard's side list of recent attention items. */
+/* A side list of attention items (also the report failure card's kinds). */
 .side-list {
   display: flex;
   flex-direction: column;
@@ -14,6 +16,10 @@
   list-style: none;
 }
 .side-list > * {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
   padding: 8px 0;
   border-bottom: 1px solid var(--line);
 }
@@ -26,4 +32,155 @@
   display: flex;
   flex-wrap: wrap;
   gap: 10px 24px;
+}
+
+/* --- Page head ------------------------------------------------------------- */
+
+.dash-updated {
+  display: inline-block;
+  margin-inline-start: 8px;
+  color: var(--fg-3);
+  font-size: var(--fs-xs);
+}
+.dash-custom {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.dash-custom input {
+  inline-size: 112px;
+}
+
+/* --- KPI rows -------------------------------------------------------------- */
+
+/*
+ * The owner's six KPIs, then the operational row. Columns are set by how many
+ * cards a viewer actually has (`n1`…`n6`), so a row a permission shortened never
+ * leaves an empty slot, and each steps down at the content widths the shell's
+ * own grids use.
+ */
+.dash-kpis {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+.dash-kpis.n4 {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+.dash-kpis.n3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.dash-kpis.n2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.dash-kpis.n1 {
+  grid-template-columns: minmax(0, 1fr);
+}
+.dash-kpis > .stat {
+  margin: 0;
+}
+.dash-kpis .stat .val {
+  overflow-wrap: break-word;
+}
+.dash-kpis .stat .val small {
+  white-space: nowrap;
+}
+.dash-kpis .stat .spark {
+  margin-top: auto;
+}
+.dash-kpis + .dash-kpis,
+.dash-kpis + .card,
+.card + .dash-kpis {
+  margin-top: var(--gap);
+}
+
+/* --- Charts and card rows -------------------------------------------------- */
+
+.dash-charts {
+  display: grid;
+  gap: var(--gap);
+  grid-template-columns: minmax(0, 1.65fr) minmax(0, 1fr);
+  align-items: stretch;
+  margin-top: var(--gap);
+}
+.dash-charts > .card,
+.dash-row > .card {
+  margin: 0;
+}
+.dash-row {
+  display: grid;
+  gap: var(--gap);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: start;
+  margin-top: var(--gap);
+}
+.dash-row + .card,
+.dash-charts + .dash-row,
+.card + .dash-row {
+  margin-top: var(--gap);
+}
+
+/*
+ * The orders chart is drawn tall for the narrow column it has beside the revenue
+ * chart; once it has a row of its own it would grow with the width, so its height
+ * is capped and the plot (viewBox, aspect kept) centres in it.
+ */
+.dash-orders .chart {
+  max-block-size: 260px;
+}
+
+.dash-sub {
+  margin: 14px 0 8px;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--fg-2);
+}
+
+/* Several exact amounts side by side — one per currency, never summed. */
+.dash-amounts {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  align-items: baseline;
+}
+.dash-figure {
+  display: inline-flex;
+  gap: 8px;
+  align-items: baseline;
+}
+.dash-figures {
+  display: grid;
+  gap: 4px 24px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+/* --- Responsive ------------------------------------------------------------- */
+
+@media (max-width: 1200px) {
+  .dash-kpis,
+  .dash-kpis.n4 {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .dash-kpis.n4 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .dash-charts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .dash-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .dash-kpis,
+  .dash-kpis.n3,
+  .dash-kpis.n4 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .dash-row,
+  .dash-figures {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }

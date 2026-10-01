@@ -6,6 +6,8 @@ import { useCommandShortcut } from '../../apps/web/src/shell';
 import { ConfirmDialog } from '../../apps/web/src/ui/confirm-dialog';
 import { navigate } from '../../apps/web/src/router';
 import { t } from '../../apps/web/src/i18n/web.fa';
+import { formatNumber } from '../../apps/web/src/format';
+import { COUNTER_CAP } from '@nexa/contracts';
 import { renderPage, stubApi } from './harness';
 
 /**
@@ -231,6 +233,42 @@ describe('the sidebar', () => {
     // And the address the operator typed is not presented as an identity at all.
     expect(card.textContent).not.toContain(window.location.host);
     expect(card.textContent).not.toContain(window.location.hostname);
+  });
+
+  it('draws a counter at the cap as "or more", and an exact one as it is', async () => {
+    stubApi([
+      session(['services.view', 'payments.view']),
+      {
+        url: '/nav-counters',
+        body: {
+          generatedAt: '2026-09-06T08:00:00.000Z',
+          counters: {
+            openConditions: null,
+            ticketsAwaitingSupport: null,
+            unhealthyPanels: null,
+            unreconciledServices: COUNTER_CAP,
+            refundRequestsAwaiting: null,
+            paymentsUnknown: 7,
+          },
+        },
+      },
+    ]);
+    const { container } = renderPage(<App />);
+    await waitFor(() => expect(container.querySelectorAll('.nav .cnt')).toHaveLength(2));
+    const services = container.querySelector('.nav a[href="/services"]') as HTMLElement;
+    const payments = container.querySelector('.nav a[href="/payments"]') as HTMLElement;
+    const capped = formatNumber(COUNTER_CAP);
+    // Seen as "1,000+", heard as "1,000 or more" — never as an exact 1,000.
+    expect(services.querySelector('.cnt [aria-hidden="true"]')?.textContent).toBe(`${capped}+`);
+    expect(services).toHaveAccessibleDescription(
+      t('web.nav_counter_at_least_spoken').replace('{count}', capped),
+    );
+    // The count is read inside the link's name too, so the name says "or more" as well.
+    expect(services).toHaveAccessibleName(
+      `${t('web.nav_services')}${t('web.nav_counter_at_least_spoken').replace('{count}', capped)}`,
+    );
+    expect(payments.querySelector('.cnt')?.textContent).toBe(formatNumber(7));
+    expect(payments).toHaveAccessibleDescription(formatNumber(7));
   });
 
   it('draws no counter nobody supplied', async () => {

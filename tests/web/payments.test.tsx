@@ -8,6 +8,8 @@ import { t } from '../../apps/web/src/i18n/web.fa';
 import { renderPage, stubApi } from './harness';
 import { PAYMENT_ROUTES } from '@nexa/contracts';
 import * as client from '../../apps/web/src/api/client';
+import { leaveGuarded } from '../../apps/web/src/router';
+import { LeaveGuardHost } from '../../apps/web/src/ui/kit';
 
 /**
  * Payments, rendered against the shapes the server actually returns.
@@ -1253,6 +1255,144 @@ describe('the refund card', () => {
       expect(api.calls.some((call) => call.method === 'POST')).toBe(true);
     });
     await waitFor(() => expect(timelineReads()).toBe(2));
+  });
+});
+
+/*
+ * Codex review on PR #125: a refusal re-reads the ledger, and the answer can take a
+ * refund form off the screen — `refundable: false`, or the refund being answered no
+ * longer AWAITING_EXTERNAL. The typed strings stayed in state, so the leave guard kept
+ * asking about edits in a form the operator could no longer see.
+ */
+describe('the refund leave guard', () => {
+  const refusal = {
+    error: { kind: 'conflict', code: 'refund.not_refundable', message: 'no', correlationId: 't' },
+  };
+  const ledger = (refunds: readonly unknown[], overrides: Record<string, unknown> = {}) => ({
+    refunds,
+    paidMinor: '250000',
+    consumedMinor: '100000',
+    refundableMinor: '150000',
+    currency: 'IRT',
+    refundable: true,
+    ...overrides,
+  });
+
+  /**
+   * The ledger answers `before` until the first POST, and `after` from then on; every
+   * POST is refused with a 409. Everything else is the ordinary stub.
+   */
+  const stubStaleRefusal = (before: unknown, after: unknown) => {
+    stubApi([...detail({ state: 'CONFIRMED' })] as never);
+    const routed = globalThis.fetch;
+    let refused = false;
+    const json = (body: unknown, status = 200) =>
+      Promise.resolve(
+        new Response(JSON.stringify(body), {
+          status,
+          headers: { 'content-type': 'application/json' },
+        }),
+      );
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: unknown, init?: RequestInit) => {
+        const url = String(input);
+        if (init?.method === 'POST') {
+          refused = true;
+          return json(refusal, 409);
+        }
+        if (url.endsWith(`/payments/${ROW_ID}/refunds`)) return json(refused ? after : before);
+        return routed(input as RequestInfo, init);
+      }),
+    );
+  };
+
+  const renderGuarded = () =>
+    renderPage(
+      <>
+        <PaymentDetailPage
+          id={ROW_ID}
+          mayViewReceipts={false}
+          mayViewRefunds
+          mayIssueRefunds
+          denied={false}
+        />
+        <LeaveGuardHost />
+      </>,
+    );
+
+  it('releases the guard when a refusal re-reads the payment as not refundable', async () => {
+    stubStaleRefusal(ledger([]), ledger([], { refundable: false }));
+    renderGuarded();
+    fireEvent.change(await screen.findByLabelText('مبلغ (به کوچک‌ترین یکای پول)'), {
+      target: { value: '1000' },
+    });
+    fireEvent.change(screen.getByLabelText('دلیل'), { target: { value: 'مشتری منصرف شد' } });
+    expect(leaveGuarded()).toBe(true);
+
+    fireEvent.click(screen.getByRole('button', { name: 'ثبت درخواست' }));
+    await screen.findByText(t('web.refund_unavailable'));
+    expect(screen.queryByLabelText('دلیل')).toBeNull();
+    expect(leaveGuarded()).toBe(false);
+  });
+
+  it('releases the guard when a refusal re-reads the answered refund as no longer awaiting', async () => {
+    stubStaleRefusal(
+      ledger([refundRow()]),
+      // Somebody else answered it: COMPLETED, and nothing is refundable any more.
+      ledger([refundRow({ state: 'COMPLETED', completedByAdminId: ADMIN_ID })], {
+        consumedMinor: '250000',
+        refundableMinor: '0',
+      }),
+    );
+    renderGuarded();
+    fireEvent.change(await screen.findByLabelText('کدام بازگشت'), {
+      target: { value: REFUND_ID },
+    });
+    fireEvent.change(screen.getByLabelText('توضیح'), { target: { value: 'واریز شد' } });
+    expect(leaveGuarded()).toBe(true);
+
+    fireEvent.click(screen.getByRole('button', { name: 'واریز انجام شد' }));
+    await waitFor(() => expect(screen.queryByLabelText('توضیح')).toBeNull());
+    expect(leaveGuarded()).toBe(false);
+  });
+
+  it('hides the answer form, and releases the guard, when only the answered refund stopped awaiting', async () => {
+    // A SECOND refund is still AWAITING_EXTERNAL, so the answer section stays drawn —
+    // but the one selected is gone, and a note for it has nowhere to go.
+    const other = refundRow({ id: '019260ab-cdef-7012-8345-6789abcdef02' });
+    stubStaleRefusal(
+      ledger([refundRow(), other]),
+      ledger([refundRow({ state: 'COMPLETED', completedByAdminId: ADMIN_ID }), other]),
+    );
+    renderGuarded();
+    fireEvent.change(await screen.findByLabelText('کدام بازگشت'), {
+      target: { value: REFUND_ID },
+    });
+    fireEvent.change(screen.getByLabelText('توضیح'), { target: { value: 'واریز شد' } });
+    expect(leaveGuarded()).toBe(true);
+
+    fireEvent.click(screen.getByRole('button', { name: 'واریز انجام شد' }));
+    await waitFor(() => expect(screen.queryByLabelText('توضیح')).toBeNull());
+    expect(screen.getByLabelText('کدام بازگشت')).toBeInTheDocument();
+    expect(leaveGuarded()).toBe(false);
+  });
+
+  it('keeps the guard while the answer form stays on screen after a refusal', async () => {
+    // The same refusal, but the refund is still AWAITING_EXTERNAL: the form and what
+    // was typed into it are both still there, so leaving would still lose it.
+    stubStaleRefusal(ledger([refundRow()]), ledger([refundRow()]));
+    renderGuarded();
+    fireEvent.change(await screen.findByLabelText('کدام بازگشت'), {
+      target: { value: REFUND_ID },
+    });
+    fireEvent.change(screen.getByLabelText('توضیح'), { target: { value: 'واریز شد' } });
+    fireEvent.click(screen.getByRole('button', { name: 'واریز انجام شد' }));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'واریز انجام شد' })).toBeEnabled(),
+    );
+    expect(screen.getByLabelText('توضیح')).toHaveValue('واریز شد');
+    expect(leaveGuarded()).toBe(true);
   });
 });
 

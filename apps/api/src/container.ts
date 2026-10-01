@@ -4,6 +4,7 @@ import {
   ADMIN_MENU_COMMAND,
   CAMPAIGN_SCHEDULE_INTERVAL_MS,
   CHANNEL_MEMBERSHIP_TIMEOUT_MS,
+  COUNTER_CAP,
   MAIN_MENU_BUTTONS,
   MAX_REQUESTS_PER_PROBE,
   OPERATION_LEASE_SECONDS_MIN,
@@ -371,6 +372,8 @@ import { ReferralReadService } from './modules/commerce/referrals/application/re
 import { ReportAccess } from './modules/commerce/reporting/application/report-access.js';
 import { ReportingService } from './modules/commerce/reporting/application/reporting.service.js';
 import { DrizzleReportingRepository } from './modules/commerce/reporting/infrastructure/drizzle-reporting.repository.js';
+import { OperationsOverviewService } from './modules/commerce/reporting/application/operations-overview.service.js';
+import { DrizzleOperationsOverviewRepository } from './modules/commerce/reporting/infrastructure/drizzle-operations-overview.repository.js';
 import { DefaultReportExportWriter } from './infrastructure/export/report-export-writer.js';
 import { IntlReportPeriodResolver } from './infrastructure/time/report-calendar.js';
 import {
@@ -735,6 +738,8 @@ export interface Container {
   readonly referralsRead: ReferralReadService;
   /** WP12's business reports, Super Admin only (`docs/wp12-business-analytics-audit.md`). */
   readonly reports: ReportingService;
+  /** Round W: the dashboard's operational gauges and the sidebar counters, per permission. */
+  readonly operationsOverview: OperationsOverviewService;
   readonly referralSignupGifts: ReferralSignupGiftService;
   readonly tenantMedia: TenantMediaService;
   /** WP9-B: a reseller's standing, entitlements, pricing layer, credit and purchase record. */
@@ -3283,6 +3288,12 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     writer: new DefaultReportExportWriter(),
     clock,
   });
+  const operationsOverview = new OperationsOverviewService({
+    permissions: guard,
+    repository: new DrizzleOperationsOverviewRepository(database.db),
+    clock,
+    counterCap: COUNTER_CAP,
+  });
   const templateResolver = new TemplateResolver(
     templateRepository,
     featureFlagResolver,
@@ -5032,6 +5043,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     referralCommissions: referralCommissionService,
     referralsRead: referralReadService,
     reports: reportingService,
+    operationsOverview,
     referralSignupGifts: referralSignupGiftService,
     tenantMedia: tenantMediaService,
     resellers: resellerService,
