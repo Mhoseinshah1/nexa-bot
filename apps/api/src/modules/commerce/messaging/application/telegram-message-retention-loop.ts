@@ -54,13 +54,12 @@ export class TelegramMessageRetentionLoop {
   private running = false;
   private readonly progress: LoopProgress;
   private consecutiveFailures = 0;
-  /** When THIS process last wrote the failing condition; null when it has not. */
-  private failureRecordedAt: number | null = null;
   /**
-   * Whether this process has asked the log, since it started, for a failing condition
-   * another process left open — a replica replaced mid-streak takes its memory with it.
+   * When THIS process last WROTE the failing condition — set only once the write succeeded,
+   * so a failed write never leaves a recovery to be recorded for a condition that does not
+   * exist. Null when it has not.
    */
-  private lookedForOpenCondition = false;
+  private failureRecordedAt: number | null = null;
 
   constructor(
     private readonly service: Pick<TelegramMessageStateService, 'purgeExpired'>,
@@ -177,8 +176,7 @@ export class TelegramMessageRetentionLoop {
     ) {
       return;
     }
-    this.failureRecordedAt = now;
-    await this.recordQuietly(scope, {
+    const recorded = await this.recordQuietly(scope, {
       code: TELEGRAM_MESSAGE_RETENTION_FAILING_CODE,
       severity: 'WARN',
       message:
@@ -189,13 +187,21 @@ export class TelegramMessageRetentionLoop {
       },
       dedupeKey: TELEGRAM_MESSAGE_RETENTION_FAILING_CODE,
     });
+    // Only a condition that was written is remembered: a write that failed is retried on the
+    // next failed tick, and a good tick has no recovery of its own to record for it.
+    if (recorded) this.failureRecordedAt = now;
   }
 
   private async succeeded(scope: TenantContext): Promise<void> {
     this.consecutiveFailures = 0;
     let open = this.failureRecordedAt !== null;
-    if (!open && !this.lookedForOpenCondition && this.options.conditions !== undefined) {
-      this.lookedForOpenCondition = true;
+    /*
+     * With no failure of its own on record, a completed tick ASKS the log whether the
+     * condition is open — on every completed tick, not once per process: another replica
+     * may have opened it at any time (a rolling update runs two), and a read that threw is
+     * simply asked again next tick. One indexed read an hour.
+     */
+    if (!open && this.options.conditions !== undefined) {
       try {
         const codes = await this.options.conditions.openConditions(scope, [
           TELEGRAM_MESSAGE_RETENTION_FAILING_CODE,
