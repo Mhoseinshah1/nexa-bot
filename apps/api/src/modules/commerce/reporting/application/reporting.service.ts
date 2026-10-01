@@ -49,16 +49,10 @@ import {
   type ReportTrendMetric,
   type ReportTrendResponse,
   type ReportWalletResponse,
-  type ResellerStatus,
   type TenantContext,
   type WalletReportGroup,
 } from '@nexa/contracts';
-import {
-  creditAllowanceOf,
-  creditFigures,
-  effectiveLimitOf,
-  type CreditTerms,
-} from '../../resellers/domain/reseller-credit.js';
+import { creditAllowanceOf, creditFigures } from '../../resellers/domain/reseller-credit.js';
 import {
   REPORTS_EXPORT_PERMISSION,
   REPORTS_VIEW_PERMISSION,
@@ -549,16 +543,11 @@ export class ReportingService {
         orders: row.orders,
         sales: row.sales.map(toMoneyTotal),
         services: row.services,
-        ...((credit) => ({
-          creditLimit: {
-            amountMinor: credit.limit.amountMinor.toString(),
-            currency: credit.limit.currency,
-          },
-          creditInUse: {
-            amountMinor: credit.inUse.amountMinor.toString(),
-            currency: credit.inUse.currency,
-          },
-        }))(resellerCreditOf(row, selling)),
+        // Reseller credit was removed: there is no limit to report, only a legacy debt.
+        creditLimit: null,
+        ...((debt) => ({
+          creditInUse: { amountMinor: debt.amountMinor.toString(), currency: debt.currency },
+        }))(resellerDebtOf(row, selling)),
       })),
     };
   }
@@ -994,7 +983,7 @@ export class ReportingService {
         const out: Record<string, ExportCell>[] = [];
         for (const row of rows) {
           const sales = row.sales.length > 0 ? row.sales : [null];
-          const credit = resellerCreditOf(row, selling);
+          const debt = resellerDebtOf(row, selling);
           for (const sale of sales) {
             out.push({
               resellerCustomerId: row.resellerCustomerId,
@@ -1004,14 +993,7 @@ export class ReportingService {
               sales: sale === null ? null : { amountMinor: sale.amount, currency: sale.currency },
               currency: sale === null ? null : sale.currency,
               services: row.services,
-              creditLimit: {
-                amountMinor: credit.limit.amountMinor,
-                currency: credit.limit.currency,
-              },
-              creditInUse: {
-                amountMinor: credit.inUse.amountMinor,
-                currency: credit.inUse.currency,
-              },
+              creditInUse: { amountMinor: debt.amountMinor, currency: debt.currency },
             });
           }
         }
@@ -1025,7 +1007,6 @@ export class ReportingService {
             ['sales', 'money'],
             ['currency', 'text'],
             ['services', 'number'],
-            ['creditLimit', 'money'],
             ['creditInUse', 'money'],
           ],
           out,
@@ -1310,24 +1291,12 @@ export function exportFileStem(
 }
 
 /**
- * A reseller's credit line as settlement sees it — the ONE derivation (`reseller-credit.ts`),
- * never a second: the effective limit (the reseller's own, else the tier's), and credit in
- * use as the negative part of the balance in the SELLING currency, the only currency a
- * debit is written in. Reading the balance in the limit's currency, or ignoring a tier's
- * limit, gave the report a different answer from the operator's credit card.
+ * A reseller's legacy debt — the ONE derivation (`reseller-credit.ts`), never a second: the
+ * negative part of the balance in the SELLING currency, the only currency a debit is written
+ * in. Reseller credit was removed (owner decision, 2026-10-01), so the allowance is zero, no
+ * limit is reported, and a debt run up before the decision is shown as it is.
  */
-function resellerCreditOf(
-  row: ResellerRow,
-  selling: CurrencyCode,
-): { readonly limit: Money; readonly inUse: Money } {
-  const terms: CreditTerms = {
-    status: row.status as ResellerStatus,
-    ownLimit: row.ownLimit === null ? null : money(row.ownLimit.amount, row.ownLimit.currency),
-    tierLimit: money(row.tierLimit.amount, row.tierLimit.currency),
-  };
-  const { creditInUse } = creditFigures(
-    row.balanceInSellingCurrency,
-    creditAllowanceOf(terms, selling),
-  );
-  return { limit: effectiveLimitOf(terms).limit, inUse: money(creditInUse, selling) };
+function resellerDebtOf(row: ResellerRow, selling: CurrencyCode): Money {
+  const { creditInUse } = creditFigures(row.balanceInSellingCurrency, creditAllowanceOf());
+  return money(creditInUse, selling);
 }

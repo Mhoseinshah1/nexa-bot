@@ -1507,14 +1507,8 @@ function ResellersReport({ selection }: { selection: ReportRangeSelection }) {
               {
                 key: 'credit',
                 header: t('web.report_col_credit_in_use'),
-                render: (r) =>
-                  r.creditInUse === null || r.creditLimit === null ? (
-                    '—'
-                  ) : (
-                    <>
-                      <Money value={r.creditInUse} /> / <Money value={r.creditLimit} />
-                    </>
-                  ),
+                // Reseller credit was removed (2026-10-01): no limit, only a legacy debt.
+                render: (r) => (r.creditInUse === null ? '—' : <Money value={r.creditInUse} />),
                 align: 'end',
               },
             ]}

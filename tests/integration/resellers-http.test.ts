@@ -189,7 +189,8 @@ describe('reseller HTTP surface', () => {
     name: 'Gold',
     pricingMode: 'PERCENTAGE_DISCOUNT',
     discountPercentage: 20,
-    creditLimit: { amount: '100000', currency: 'IRT' },
+    // Zero, the only limit there is: reseller credit was removed (owner decision, 2026-10-01).
+    creditLimit: { amount: '0', currency: 'IRT' },
     ...overrides,
   });
 
@@ -330,7 +331,7 @@ describe('reseller HTTP surface', () => {
       name: 'Gold',
       pricingMode: 'PERCENTAGE_DISCOUNT',
       discountPercentage: 20,
-      creditLimit: { amount: '100000', currency: 'IRT' },
+      creditLimit: { amount: '0', currency: 'IRT' },
       grants: [],
       resellerCount: 0,
     });
@@ -386,20 +387,20 @@ describe('reseller HTTP surface', () => {
       pricingMode: 'TIER',
       creditLimit: null,
       // The tier's, because the reseller has none of their own.
-      effectiveCreditLimit: { amount: '100000', currency: 'IRT' },
+      effectiveCreditLimit: { amount: '0', currency: 'IRT' },
     });
     const second = await post(
       RESELLER_ROUTES.register,
       registerBody(customerA2, tierId, {
         pricingMode: 'PERCENTAGE_DISCOUNT',
         discountPercentage: 35,
-        creditLimit: { amount: '5000', currency: 'IRT' },
+        creditLimit: { amount: '0', currency: 'IRT' },
       }),
     );
     expect(second.statusCode, second.body).toBe(201);
     expect(resellerResponseSchema.parse(second.json()).reseller).toMatchObject({
-      creditLimit: { amount: '5000', currency: 'IRT' },
-      effectiveCreditLimit: { amount: '5000', currency: 'IRT' },
+      creditLimit: { amount: '0', currency: 'IRT' },
+      effectiveCreditLimit: { amount: '0', currency: 'IRT' },
     });
 
     const all = resellerListResponseSchema.parse((await get(RESELLER_ROUTES.list)).json());
@@ -467,6 +468,15 @@ describe('reseller HTTP surface', () => {
         await post(
           RESELLER_TIER_ROUTES.create,
           tierBody({ creditLimit: { amount: '-1', currency: 'IRT' } }),
+        )
+      ).statusCode,
+    ).toBe(400);
+    // Any positive limit too: reseller credit was removed (owner decision, 2026-10-01).
+    expect(
+      (
+        await post(
+          RESELLER_TIER_ROUTES.create,
+          tierBody({ creditLimit: { amount: '1', currency: 'IRT' } }),
         )
       ).statusCode,
     ).toBe(400);

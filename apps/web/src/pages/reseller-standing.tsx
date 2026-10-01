@@ -5,9 +5,7 @@ import type {
   AuditResult,
   OrderPurpose,
   ResellerCreditStanding,
-  ResellerCreditState,
   ResellerHistoryEntry,
-  ResellerLimitSource,
   ResellerPurchase,
 } from '@nexa/contracts';
 import {
@@ -27,7 +25,6 @@ import {
   Empty,
   KV,
   Ltr,
-  Meter,
   Money,
   StateSwitch,
   type Column,
@@ -39,37 +36,19 @@ import { PRICE_LAYER_LABELS, limitWire } from './resellers';
 
 /**
  * A reseller's standing, as three read-only cards (WP14, `docs/wp14-reseller-phase2-audit.md`
- * D1–D4): the credit line in use, the purchases as their confirmation recorded them, and
- * the audited changes to the reseller or its tier.
+ * D1–D4): the wallet balance and any legacy debt, the purchases as their confirmation
+ * recorded them, and the audited changes to the reseller or its tier.
  *
- * Nothing here moves money or states a rule the server does not apply. Every figure on the
- * credit card is the SERVER's derivation of R8 and the ledger; the browser formats it and
- * compares nothing. There is no settlement, repayment, due date or collection anywhere in
- * this product (`OQ-WP9-04`), so the card names none — a debt is a negative balance, and it
- * is repaid by the same top-ups and credits as any balance.
+ * Nothing here moves money or states a rule the server does not apply. Reseller credit was
+ * removed (owner decision, 2026-10-01: no reseller debt, no credit purchases), so the
+ * balance card offers no limit, allowance or "available on credit". It shows the balance
+ * the SERVER derives from the ledger and, when that is below zero, says it is a debt from
+ * before the decision — left as it is, never settled, collected or penalised
+ * (`OQ-WP9-04`), and repaid by the same top-ups and credits as any balance.
  *
  * Each card is drawn only when the viewer holds the key its route charges beyond
  * `resellers.view`; otherwise it says which key, rather than asking for a 403.
  */
-
-const CREDIT_STATE_LABELS: Readonly<Record<ResellerCreditState, WebKey>> = {
-  CREDIT_APPLIES: 'web.reseller_credit_state_applies',
-  RESELLER_SUSPENDED: 'web.reseller_credit_state_suspended',
-  NO_LIMIT: 'web.reseller_credit_state_no_limit',
-  CURRENCY_MISMATCH: 'web.reseller_credit_state_currency',
-};
-
-const CREDIT_STATE_TONES: Readonly<Record<ResellerCreditState, Tone>> = {
-  CREDIT_APPLIES: 'ok',
-  RESELLER_SUSPENDED: 'warn',
-  NO_LIMIT: 'neutral',
-  CURRENCY_MISMATCH: 'warn',
-};
-
-const LIMIT_SOURCE_LABELS: Readonly<Record<ResellerLimitSource, WebKey>> = {
-  RESELLER: 'web.reseller_credit_own',
-  TIER: 'web.reseller_credit_from_tier',
-};
 
 /** Every purpose, including the one a reseller never buys, so the map is total. */
 const PURCHASE_PURPOSE_LABELS: Readonly<Record<OrderPurpose, WebKey>> = {
@@ -129,10 +108,10 @@ const FIELD_LABELS: Readonly<Record<string, WebKey>> = {
 };
 
 // ---------------------------------------------------------------------------
-// D1 — credit standing
+// D1 — the wallet balance, and a legacy debt when there is one
 // ---------------------------------------------------------------------------
 
-export function ResellerCreditCard({
+export function ResellerBalanceCard({
   customerId,
   mayViewWallet,
 }: {
@@ -151,74 +130,37 @@ export function ResellerCreditCard({
         <Banner tone="info">{t('web.reseller_credit_denied')}</Banner>
       ) : (
         <StateSwitch query={credit}>
-          {credit.data !== undefined && <CreditStanding standing={credit.data.credit} />}
+          {credit.data !== undefined && <BalanceStanding standing={credit.data.credit} />}
         </StateSwitch>
       )}
     </Card>
   );
 }
 
-function CreditStanding({ standing }: { standing: ResellerCreditStanding }) {
+/** The balance as the server derived it; a negative one is named as the legacy debt it is. */
+function BalanceStanding({ standing }: { standing: ResellerCreditStanding }) {
   const inSelling = (amount: string) => limitWire({ amount, currency: standing.balance.currency });
-  const over = standing.overLimitBy.amount !== '0';
-  const allowance = BigInt(standing.allowance.amount);
-  const inUse = BigInt(standing.creditInUse.amount);
+  const debt = BigInt(standing.creditInUse.amount) > 0n;
   return (
     <>
-      {/* The credit line as a bar: in use against the allowance, in the selling currency. */}
-      {allowance > 0n && inUse > 0n && (
-        <Meter
-          label={t('web.reseller_credit_in_use')}
-          used={<Money value={inSelling(standing.creditInUse.amount)} />}
-          total={<Money value={inSelling(standing.allowance.amount)} />}
-          value={inUse}
-          max={allowance}
-          {...(over ? { tone: 'danger' as const } : {})}
-        />
-      )}
       <KV
         items={[
-          [
-            t('web.reseller_credit_state'),
-            <Badge key="s" tone={CREDIT_STATE_TONES[standing.credit]} dot>
-              {t(CREDIT_STATE_LABELS[standing.credit])}
-            </Badge>,
-          ],
-          [
-            t('web.reseller_credit_limit_effective'),
-            <span key="l">
-              <Money value={limitWire(standing.effectiveLimit)} />{' '}
-              <span className="muted small">{t(LIMIT_SOURCE_LABELS[standing.limitSource])}</span>
-            </span>,
-          ],
           [
             t('web.reseller_credit_balance'),
             <Money key="b" value={inSelling(standing.balance.amount)} />,
           ],
-          [
-            t('web.reseller_credit_allowance'),
-            <Money key="a" value={inSelling(standing.allowance.amount)} />,
-          ],
-          [
-            t('web.reseller_credit_in_use'),
-            <Money key="u" value={inSelling(standing.creditInUse.amount)} />,
-          ],
-          [
-            t('web.reseller_credit_available'),
-            <Money key="v" value={inSelling(standing.availableToSpend.amount)} />,
-          ],
-          [
-            t('web.reseller_credit_over_limit'),
-            <Money key="o" value={inSelling(standing.overLimitBy.amount)} />,
-          ],
+          ...(debt
+            ? [
+                [
+                  t('web.reseller_credit_in_use'),
+                  <Money key="u" value={inSelling(standing.creditInUse.amount)} />,
+                ] as [string, ReactNode],
+              ]
+            : []),
         ]}
       />
-      {over && <Banner tone="warn">{t('web.reseller_credit_over_limit_banner')}</Banner>}
-      {standing.credit === 'CURRENCY_MISMATCH' && (
-        <Banner tone="warn">{t('web.reseller_credit_currency_banner')}</Banner>
-      )}
+      {debt && <Banner tone="warn">{t('web.reseller_credit_legacy_banner')}</Banner>}
       <p className="muted small">{t('web.reseller_credit_rule_debt')}</p>
-      <p className="muted small">{t('web.reseller_credit_rule_available')}</p>
     </>
   );
 }

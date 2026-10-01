@@ -2,25 +2,23 @@ import { describe, expect, it } from 'vitest';
 import type { ReactElement } from 'react';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { resolve } from '../../apps/web/src/app';
-import {
-  ResellersPage,
-  debtWarningOf,
-  type ResellerFormState,
-} from '../../apps/web/src/pages/resellers';
+import { ResellersPage } from '../../apps/web/src/pages/resellers';
 import { ResellerTiersPage } from '../../apps/web/src/pages/reseller-tiers';
 import { changedFieldsOf } from '../../apps/web/src/pages/reseller-standing';
 import { renderPage, stubApi, type Api } from './harness';
 
 /**
- * WP14 on the Web Admin (`docs/wp14-reseller-phase2-audit.md` D4): a reseller's credit
- * standing, purchases and history, and the two acknowledgements before a save that
- * leaves a debt uncovered.
+ * WP14 on the Web Admin (`docs/wp14-reseller-phase2-audit.md` D4): a reseller's balance,
+ * purchases and history.
+ *
+ * Reseller credit was removed (owner decision, 2026-10-01: no reseller debt, no credit
+ * purchases). The balance card offers no limit, allowance or "available on credit"; a
+ * negative balance is shown as the legacy debt it is. The form offers no limit and sends
+ * none, so there is nothing left to acknowledge before a save.
  *
  * Every response goes through the real client and the contract schemas. The cases hold
- * what the screen DOES: ask for each view only with the key its route charges, draw the
- * server's figures without computing any, and refuse to save a limit below the debt or a
- * suspension of a reseller who owes until the operator has read what that means — while
- * sending exactly the body it always sent.
+ * what the screen DOES: ask for each view only with the key its route charges, and draw
+ * the server's figures without computing any.
  */
 
 const CUSTOMER_ID = '019210ab-cdef-7012-8345-6789abcdef01';
@@ -32,7 +30,7 @@ const tier = (overrides: Record<string, unknown> = {}) => ({
   name: 'Gold',
   pricingMode: 'PERCENTAGE_DISCOUNT',
   discountPercentage: 20,
-  creditLimit: { amount: '100000', currency: 'IRT' },
+  creditLimit: { amount: '0', currency: 'IRT' },
   grants: [],
   resellerCount: 1,
   monthlyMinimum: null,
@@ -50,7 +48,7 @@ const reseller = (overrides: Record<string, unknown> = {}) => ({
   pricingMode: 'TIER',
   discountPercentage: null,
   creditLimit: null,
-  effectiveCreditLimit: { amount: '100000', currency: 'IRT' },
+  effectiveCreditLimit: { amount: '0', currency: 'IRT' },
   createdAt: '2026-09-02T08:00:00.000Z',
   updatedAt: '2026-09-02T08:00:00.000Z',
   ...overrides,
@@ -58,20 +56,23 @@ const reseller = (overrides: Record<string, unknown> = {}) => ({
 
 const IRT = (amount: string) => ({ amount, currency: 'IRT' as const });
 
+/** A reseller with a LEGACY debt: run up under the credit line the owner removed. */
 const credit = (overrides: Record<string, unknown> = {}) => ({
   customerId: CUSTOMER_ID,
   status: 'ACTIVE',
-  effectiveLimit: IRT('100000'),
+  effectiveLimit: IRT('0'),
   limitSource: 'TIER',
   sellingCurrency: 'IRT',
-  credit: 'CREDIT_APPLIES',
+  credit: 'CREDIT_REMOVED',
   balance: IRT('-80000'),
-  allowance: IRT('100000'),
+  allowance: IRT('0'),
   creditInUse: IRT('80000'),
-  availableToSpend: IRT('20000'),
-  overLimitBy: IRT('0'),
+  availableToSpend: IRT('-80000'),
+  overLimitBy: IRT('80000'),
   ...overrides,
 });
+
+const LEGACY_DEBT = /بدهی‌ای که پیش از حذف خرید اعتباری ایجاد شده است/u;
 
 const purchase = {
   orderId: ORDER_ID,
@@ -128,18 +129,20 @@ const render = (keys: { wallet?: boolean; orders?: boolean; audit?: boolean } = 
   );
 
 describe('the reseller standing cards', () => {
-  it('draws the server’s credit figures, the purchase as recorded and the history', async () => {
-    stubApi(routes(credit({ overLimitBy: IRT('0') })));
+  it('draws the server’s balance and legacy debt, the purchase as recorded and the history', async () => {
+    stubApi(routes());
     render();
     await screen.findByText('Reza Reseller');
     fireEvent.click(screen.getByRole('button', { name: 'وضعیت' }));
 
-    expect(await screen.findByText('اعمال می‌شود')).toBeInTheDocument();
-    const card = screen.getByText('اعتبار نماینده').closest('section') ?? document.body;
+    expect(await screen.findByText(LEGACY_DEBT)).toBeInTheDocument();
+    const card = screen.getByText('کیف پول نماینده').closest('section') ?? document.body;
     const text = card.textContent ?? '';
     expect(text).toContain('−80,000');
-    expect(text).toContain('20,000');
-    expect(text).toContain('100,000');
+    expect(text).toContain('بدهی پیشین (مانده منفی)');
+    // No credit line is drawn: no limit, no allowance, nothing "available on credit".
+    expect(text).not.toContain('سقف');
+    expect(text).not.toContain('قابل خرید با اعتبار');
     // No settlement, collection or due date is named anywhere (`OQ-WP9-04`).
     expect(text).toContain('تسویه، وصول یا جریمه نمی‌کند');
 
@@ -156,22 +159,24 @@ describe('the reseller standing cards', () => {
     expect(history.textContent).not.toContain('سطح');
   });
 
-  it('warns when the debt is beyond the current limit', async () => {
+  it('draws no debt line and no warning for a balance at or above zero', async () => {
     stubApi(
       routes(
         credit({
-          allowance: IRT('50000'),
-          effectiveLimit: IRT('50000'),
-          limitSource: 'RESELLER',
-          availableToSpend: IRT('-30000'),
-          overLimitBy: IRT('30000'),
+          balance: IRT('5000'),
+          creditInUse: IRT('0'),
+          availableToSpend: IRT('5000'),
+          overLimitBy: IRT('0'),
         }),
       ),
     );
     render();
     await screen.findByText('Reza Reseller');
     fireEvent.click(screen.getByRole('button', { name: 'وضعیت' }));
-    expect(await screen.findByText(/بدهی این نماینده از سقف کنونی بیشتر است/u)).toBeInTheDocument();
+    const card = (await screen.findByText('کیف پول نماینده')).closest('section') ?? document.body;
+    await waitFor(() => expect(card.textContent).toContain('5,000'));
+    expect(card.textContent).not.toContain('بدهی پیشین (مانده منفی)');
+    expect(screen.queryByText(LEGACY_DEBT)).toBeNull();
   });
 
   it('asks for each view only with its key, and names the key otherwise', async () => {
@@ -220,137 +225,27 @@ describe('the reseller standing cards', () => {
   });
 });
 
-describe('acknowledging a debt before a save', () => {
+describe('the reseller form offers no credit', () => {
   const openEdit = async () => {
     await screen.findByText('Reza Reseller');
     fireEvent.click(screen.getByRole('button', { name: 'ویرایش' }));
   };
 
-  it('requires an acknowledgement to lower the limit below the debt, and sends the same body', async () => {
+  it('has no limit field, and saves a suspension of a reseller with a legacy debt with null', async () => {
     const api = stubApi(routes());
     render();
     await openEdit();
-    fireEvent.click(screen.getByLabelText('سقف اعتبار اختصاصی'));
-    fireEvent.change(screen.getByLabelText('سقف اعتبار (واحد خرد)'), {
-      target: { value: '50000' },
-    });
-    expect(
-      await screen.findByText(/سقف تازه از بدهی کنونی این نماینده کمتر است/u),
-    ).toBeInTheDocument();
+    expect(screen.queryByLabelText('سقف اعتبار اختصاصی')).toBeNull();
+    expect(screen.queryByLabelText('سقف اعتبار (واحد خرد)')).toBeNull();
+    fireEvent.change(screen.getByLabelText('وضعیت'), { target: { value: 'SUSPENDED' } });
     const save = screen.getByRole('button', { name: 'ذخیره' });
-    expect(save).toBeDisabled();
-
-    fireEvent.click(screen.getByLabelText('متوجه شدم؛ ذخیره شود.'));
-    expect(save).not.toBeDisabled();
+    await waitFor(() => expect(save).not.toBeDisabled());
     fireEvent.click(save);
     await waitFor(() => expect(posts(api, `/resellers/${CUSTOMER_ID}`)).toHaveLength(1));
     expect(posts(api, `/resellers/${CUSTOMER_ID}`)[0]?.body).toMatchObject({
-      status: 'ACTIVE',
-      creditLimit: { amount: '50000', currency: 'IRT' },
+      status: 'SUSPENDED',
+      creditLimit: null,
     });
-  });
-
-  it('requires an acknowledgement to suspend a reseller who owes', async () => {
-    stubApi(routes());
-    render();
-    await openEdit();
-    fireEvent.change(screen.getByLabelText('وضعیت'), { target: { value: 'SUSPENDED' } });
-    expect(await screen.findByText(/تعلیق بدهی را سر جای خود نگه می‌دارد/u)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'ذخیره' })).toBeDisabled();
-  });
-
-  it('asks for nothing when nothing is owed', async () => {
-    stubApi(
-      routes(
-        credit({ balance: IRT('5000'), creditInUse: IRT('0'), availableToSpend: IRT('105000') }),
-      ),
-    );
-    render();
-    await openEdit();
-    fireEvent.change(screen.getByLabelText('وضعیت'), { target: { value: 'SUSPENDED' } });
-    await waitFor(() => expect(screen.getByRole('button', { name: 'ذخیره' })).not.toBeDisabled());
-    expect(screen.queryByLabelText('متوجه شدم؛ ذخیره شود.')).toBeNull();
-  });
-
-  it('acknowledgement is reset by any further change', async () => {
-    stubApi(routes());
-    render();
-    await openEdit();
-    fireEvent.change(screen.getByLabelText('وضعیت'), { target: { value: 'SUSPENDED' } });
-    fireEvent.click(await screen.findByLabelText('متوجه شدم؛ ذخیره شود.'));
-    expect(screen.getByRole('button', { name: 'ذخیره' })).not.toBeDisabled();
-    fireEvent.change(screen.getByLabelText('قیمت‌گذاری'), { target: { value: 'LIST_PRICE' } });
-    expect(screen.getByRole('button', { name: 'ذخیره' })).toBeDisabled();
-  });
-});
-
-describe('debtWarningOf', () => {
-  const state = (overrides: Partial<ResellerFormState> = {}): ResellerFormState => ({
-    customerId: CUSTOMER_ID,
-    tierId: TIER_ID,
-    status: 'ACTIVE',
-    pricingMode: 'TIER',
-    percent: '',
-    ownLimit: false,
-    limitAmount: '',
-    limitCurrency: 'IRT',
-    ...overrides,
-  });
-  const before = reseller() as never;
-  const tiers = [tier()] as never;
-
-  it('is silent without the credit standing, and when nothing is owed', () => {
-    expect(debtWarningOf(before, state({ status: 'SUSPENDED' }), tiers, undefined)).toBeNull();
-    expect(
-      debtWarningOf(
-        before,
-        state({ status: 'SUSPENDED' }),
-        tiers,
-        credit({ creditInUse: IRT('0') }) as never,
-      ),
-    ).toBeNull();
-  });
-
-  it('warns on a limit that settlement would read as below the debt, including another currency', () => {
-    const owes = credit() as never;
-    expect(
-      debtWarningOf(before, state({ ownLimit: true, limitAmount: '79999' }), tiers, owes),
-    ).toBe('web.reseller_confirm_limit_below_debt');
-    expect(
-      debtWarningOf(before, state({ ownLimit: true, limitAmount: '80000' }), tiers, owes),
-    ).toBeNull();
-    expect(
-      debtWarningOf(
-        before,
-        state({ ownLimit: true, limitAmount: '500000', limitCurrency: 'USD' }),
-        tiers,
-        owes,
-      ),
-    ).toBe('web.reseller_confirm_limit_below_debt');
-    // Unchanged terms under an existing over-limit debt: nothing is being lowered.
-    expect(
-      debtWarningOf(
-        before,
-        state(),
-        [tier({ creditLimit: IRT('50000') })] as never,
-        credit({ allowance: IRT('50000') }) as never,
-      ),
-    ).toBeNull();
-  });
-
-  it('warns on suspending an ACTIVE reseller who owes, and not on keeping one suspended', () => {
-    const owes = credit() as never;
-    expect(debtWarningOf(before, state({ status: 'SUSPENDED' }), tiers, owes)).toBe(
-      'web.reseller_confirm_suspend_debt',
-    );
-    expect(
-      debtWarningOf(
-        reseller({ status: 'SUSPENDED' }) as never,
-        state({ status: 'SUSPENDED' }),
-        tiers,
-        owes,
-      ),
-    ).toBeNull();
   });
 });
 
@@ -419,16 +314,12 @@ describe('the /resellers and /reseller-tiers routes wire each WP14 read to its o
     await screen.findByText('Reza Reseller');
     fireEvent.click(screen.getByRole('button', { name: 'وضعیت' }));
 
-    expect(await screen.findByText('اعمال می‌شود')).toBeInTheDocument();
+    expect(await screen.findByText(LEGACY_DEBT)).toBeInTheDocument();
     expect(await screen.findByRole('table', { name: 'خریدهای نماینده' })).toBeInTheDocument();
     expect(await screen.findByRole('table', { name: 'تاریخچهٔ تغییرات' })).toBeInTheDocument();
   });
 
-  /**
-   * The edit form reads the credit in use for its debt acknowledgement, and it must ask
-   * on the same key as the card: an editor without `users.view` is refused the credit,
-   * so the form neither asks for it nor stops a save on a figure it cannot show.
-   */
+  /** The edit form reads no balance at all: with no credit, there is nothing to acknowledge. */
   it('lets an editor without users.view save a suspension without asking for the credit', async () => {
     const api = stubApi(routes());
     open('/resellers', ['resellers.view', 'resellers.edit']);
@@ -441,15 +332,17 @@ describe('the /resellers and /reseller-tiers routes wire each WP14 read to its o
     expect(gets(api, '/credit')).toHaveLength(0);
   });
 
-  it('asks an editor holding users.view to acknowledge suspending a reseller who owes', async () => {
-    stubApi(routes());
+  it('lets an editor holding users.view suspend a reseller with a legacy debt, asking nothing', async () => {
+    const api = stubApi(routes());
     open('/resellers', ['resellers.view', 'resellers.edit', 'users.view']);
     await screen.findByText('Reza Reseller');
     fireEvent.click(screen.getByRole('button', { name: 'ویرایش' }));
     fireEvent.change(screen.getByLabelText('وضعیت'), { target: { value: 'SUSPENDED' } });
 
-    expect(await screen.findByText(/تعلیق بدهی را سر جای خود نگه می‌دارد/u)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'ذخیره' })).toBeDisabled();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'ذخیره' })).not.toBeDisabled());
+    expect(screen.queryByLabelText('متوجه شدم؛ ذخیره شود.')).toBeNull();
+    // The one balance read is the standing card's, never the form's.
+    expect(gets(api, '/credit').length).toBeLessThanOrEqual(1);
   });
 
   const tierRoutes = [

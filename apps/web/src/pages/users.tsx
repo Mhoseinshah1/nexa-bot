@@ -50,7 +50,7 @@ import {
   STATE_TONES as SERVICE_STATE_TONES,
 } from './services';
 import { PartyCell, TriggerBadge } from './referrals';
-import { CreditLimitCell, OVERRIDE_LABELS, PricingText, ResellerStatusBadge } from './resellers';
+import { OVERRIDE_LABELS, PricingText, ResellerStatusBadge } from './resellers';
 import { ChipGroup } from './commerce-parts';
 import {
   Badge,
@@ -1784,10 +1784,6 @@ function ResellerCard({
                     label={OVERRIDE_LABELS[found.pricingMode]}
                     percent={found.discountPercentage}
                   />,
-                ],
-                [
-                  t('web.reseller_credit_limit_effective'),
-                  <CreditLimitCell key="l" reseller={found} />,
                 ],
               ]}
             />

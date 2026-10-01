@@ -415,7 +415,8 @@ describe('WP12 business reports', () => {
       refundedAt: at(20),
     });
 
-    // A reseller's purchase on credit.
+    // A reseller's purchase on credit, under limits stored before the owner removed reseller
+    // credit (2026-10-01): a legacy debt, which the report still shows as it is.
     const tier = uuid();
     await run(sql`INSERT INTO reseller_tiers (id, tenant_id, name, pricing_mode, credit_limit_amount, credit_limit_currency)
       VALUES (${tier}, ${tenantA.tenantId}, 'Gold', 'LIST_PRICE', 100000, 'IRT')`);
@@ -720,7 +721,7 @@ describe('WP12 business reports', () => {
     expect(body.topReferrers.totalRows).toBe(1);
   });
 
-  it('reports reseller orders, sales, services and credit in use, and never margin or cost', async () => {
+  it('reports reseller orders, sales, services and a legacy debt, and never margin, cost or a credit limit', async () => {
     const response = await get(`${REPORT_ROUTES.resellers}?${DAY_D}`);
     const body = reportResellersResponseSchema.parse(response.json());
     expect(body.rows).toEqual([
@@ -730,14 +731,15 @@ describe('WP12 business reports', () => {
         orders: 1,
         sales: [{ currency: 'IRT', amount: '30000' }],
         services: 1,
-        creditLimit: { amountMinor: '100000', currency: 'IRT' },
+        // Reseller credit was removed: no limit is reported, whatever the rows still store.
+        creditLimit: null,
         creditInUse: { amountMinor: '30000', currency: 'IRT' },
       }),
     ]);
     expect(response.body).not.toMatch(/margin|cost|profit/i);
   });
 
-  it('reports credit exactly as the credit card derives it: the tier limit, and debt in the selling currency', async () => {
+  it('reports a legacy debt exactly as the balance card derives it, whatever limit is stored', async () => {
     const credit = async () => {
       const body = reportResellersResponseSchema.parse(
         (await get(`${REPORT_ROUTES.resellers}?${DAY_D}`)).json(),
@@ -745,19 +747,19 @@ describe('WP12 business reports', () => {
       const row = body.rows.find((r) => r.resellerCustomerId === ids.r2);
       return { creditLimit: row?.creditLimit, creditInUse: row?.creditInUse };
     };
-    // No limit of its own: the tier's applies, and the IRT debt is in use against it.
+    // No limit of its own, the tier's stored one: no limit reported, the IRT debt shown.
     await run(sql`UPDATE resellers SET credit_limit_amount = NULL, credit_limit_currency = NULL
       WHERE tenant_id = ${tenantA.tenantId} AND customer_id = ${ids.r2}`);
     expect(await credit()).toEqual({
-      creditLimit: { amountMinor: '100000', currency: 'IRT' },
+      creditLimit: null,
       creditInUse: { amountMinor: '30000', currency: 'IRT' },
     });
-    // A limit in another currency grants no credit here, and the debt still shows — in the
-    // currency it was run up in, never as zero in the limit's.
+    // A limit in another currency: the debt still shows — in the currency it was run up in,
+    // never as zero in the limit's.
     await run(sql`UPDATE resellers SET credit_limit_amount = 50, credit_limit_currency = 'USD'
       WHERE tenant_id = ${tenantA.tenantId} AND customer_id = ${ids.r2}`);
     expect(await credit()).toEqual({
-      creditLimit: { amountMinor: '50', currency: 'USD' },
+      creditLimit: null,
       creditInUse: { amountMinor: '30000', currency: 'IRT' },
     });
   });

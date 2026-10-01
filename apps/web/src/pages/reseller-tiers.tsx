@@ -35,13 +35,7 @@ import { t, type WebKey } from '../i18n/web.fa';
 import { useLinkHandler } from '../router';
 import { messageFor } from './settings';
 import { PURPOSE_LABELS } from './discounts';
-import {
-  PricingText,
-  TIER_PRICING_LABELS,
-  creditAmountOf,
-  limitWire,
-  percentOf,
-} from './resellers';
+import { PricingText, TIER_PRICING_LABELS, percentOf } from './resellers';
 import {
   Badge,
   Banner,
@@ -50,7 +44,6 @@ import {
   DataTable,
   Empty,
   Field,
-  Money,
   Num,
   PageHead,
   StateSwitch,
@@ -69,7 +62,7 @@ import { TierHistoryCard } from './reseller-standing';
 /**
  * Reseller tiers and what each one grants (WP9-B, `docs/wp9-reseller-audit.md` R2, R5).
  *
- * A tier is a name, a pricing policy and a credit policy, edited in place and never
+ * A tier is a name and a pricing policy, edited in place and never
  * deleted while referenced — there is no delete here because the server has none. Its
  * GRANTS are the entitlements, and they fail CLOSED per kind: a kind with no row grants
  * nothing of that kind, so a new tier lets its resellers buy nothing until an operator
@@ -389,11 +382,6 @@ export function ResellerTiersPage({
           percent={row.discountPercentage}
         />
       ),
-    },
-    {
-      key: 'credit',
-      header: t('web.reseller_credit_limit'),
-      render: (row) => <Money value={limitWire(row.creditLimit)} />,
     },
     {
       key: 'count',
@@ -828,7 +816,10 @@ export interface TierFormState {
   name: string;
   pricingMode: ResellerPricingMode;
   percent: string;
-  limitAmount: string;
+  /**
+   * Not shown. The currency the (always zero) credit limit is written in: the tier's stored
+   * one on an edit, so a save does not rewrite it for nothing.
+   */
   limitCurrency: CurrencyCode;
 }
 
@@ -836,8 +827,6 @@ const BLANK_TIER: TierFormState = {
   name: '',
   pricingMode: 'LIST_PRICE',
   percent: '',
-  // No credit until an owner types a positive limit (`docs/reseller-phase3-closure.md` §3).
-  limitAmount: RESELLER_DEFAULT_CREDIT_LIMIT_MINOR.toString(),
   limitCurrency: SALES_CURRENCY_CODES[0],
 };
 
@@ -846,12 +835,16 @@ function tierStateOf(tier: ResellerTierSummaryResponse): TierFormState {
     name: tier.name,
     pricingMode: tier.pricingMode,
     percent: tier.discountPercentage === null ? '' : String(tier.discountPercentage),
-    limitAmount: tier.creditLimit.amount,
     limitCurrency: tier.creditLimit.currency,
   };
 }
 
-/** The tier write body, or the field that is wrong — the contract's own refinements. */
+/**
+ * The tier write body, or the field that is wrong — the contract's own refinements.
+ *
+ * The credit limit is always zero: reseller credit was removed (owner decision, 2026-10-01:
+ * no reseller debt, no credit purchases), and the contract refuses anything else.
+ */
 export function tierBodyFrom(
   state: TierFormState,
 ): { body: Omit<ResellerTierWriteRequest, 'idempotencyKey'> } | { problem: WebKey } {
@@ -864,14 +857,15 @@ export function tierBodyFrom(
     discountPercentage = percentOf(state.percent);
     if (discountPercentage === null) return { problem: 'web.reseller_problem_percent' };
   }
-  const amount = creditAmountOf(state.limitAmount);
-  if (amount === null) return { problem: 'web.reseller_problem_limit' };
   return {
     body: {
       name,
       pricingMode: state.pricingMode,
       discountPercentage,
-      creditLimit: { amount, currency: state.limitCurrency },
+      creditLimit: {
+        amount: RESELLER_DEFAULT_CREDIT_LIMIT_MINOR.toString(),
+        currency: state.limitCurrency,
+      },
     },
   };
 }
@@ -921,21 +915,13 @@ function TierForm({
       if (mode === 'create') setState(BLANK_TIER);
       void queries.invalidateQueries({ queryKey: ['reseller-tiers'] });
       void queries.invalidateQueries({ queryKey: ['reseller-tier-history'] });
-      // A reseller's effective limit may follow its tier's.
+      // A reseller's row names its tier.
       void queries.invalidateQueries({ queryKey: ['resellers'] });
       void queries.invalidateQueries({ queryKey: ['customer-reseller'] });
       onDone();
     },
     onError: (error) => submission.settleOn(error),
   });
-
-  const currencies: readonly CurrencyCode[] = (
-    SALES_CURRENCY_CODES as readonly CurrencyCode[]
-  ).concat(
-    (SALES_CURRENCY_CODES as readonly string[]).includes(state.limitCurrency)
-      ? []
-      : [state.limitCurrency],
-  );
 
   return (
     <Card
@@ -980,33 +966,6 @@ function TierForm({
           />
         </Field>
       )}
-      <Field
-        label={t('web.reseller_limit_amount')}
-        hint={t('web.reseller_tier_limit_hint')}
-        htmlFor={`${prefix}-limit`}
-      >
-        <input
-          id={`${prefix}-limit`}
-          dir="ltr"
-          inputMode="numeric"
-          value={state.limitAmount}
-          onChange={(event) => set('limitAmount', event.target.value.trim())}
-        />
-      </Field>
-      <Field label={t('web.discount_currency')} htmlFor={`${prefix}-currency`}>
-        <select
-          id={`${prefix}-currency`}
-          value={state.limitCurrency}
-          onChange={(event) => set('limitCurrency', event.target.value as CurrencyCode)}
-        >
-          {currencies.map((code) => (
-            <option key={code} value={code}>
-              {code}
-            </option>
-          ))}
-        </select>
-      </Field>
-
       {problem !== null && <Banner tone="warn">{t(problem)}</Banner>}
       <SaveBar dirty={dirty}>
         {mode === 'create' && (

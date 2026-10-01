@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { money, type ResellerStatus } from '@nexa/contracts';
+import {
+  RESELLER_DEFAULT_CREDIT_LIMIT_MINOR,
+  money,
+  resellerRegisterSchema,
+  resellerTierWriteSchema,
+  resellerUpdateSchema,
+  type ResellerStatus,
+} from '@nexa/contracts';
 import {
   creditAllowanceOf,
   creditFigures,
@@ -10,11 +17,12 @@ import {
 import { canCover } from '../../apps/api/src/modules/commerce/wallet/domain/balance';
 
 /**
- * R8, the one statement of the allowance (`docs/wp14-reseller-phase2-audit.md` D1, D5).
+ * Reseller credit, REMOVED (owner decision, 2026-10-01: no reseller debt, no credit
+ * purchases; `docs/reseller-phase3-closure.md` §3).
  *
- * Settlement (`ResellerService.creditAllowance`) and the operator's credit view both call
- * `creditAllowanceOf`, so each rule below is a rule of what a purchase may do, not only of
- * what an operator is shown.
+ * Settlement (`ResellerService.creditAllowance`), the operator's credit view and the
+ * resellers report all call `creditAllowanceOf`, so the rule below is a rule of what a
+ * purchase may do, not only of what an operator is shown: nothing below zero, ever.
  */
 
 const terms = (overrides: Partial<CreditTerms> = {}): CreditTerms => ({
@@ -24,12 +32,12 @@ const terms = (overrides: Partial<CreditTerms> = {}): CreditTerms => ({
   ...overrides,
 });
 
-describe('effectiveLimitOf', () => {
+describe('effectiveLimitOf (the STORED limit, which grants nothing)', () => {
   it('is the tier’s limit when the reseller has none of their own', () => {
     expect(effectiveLimitOf(terms())).toEqual({ limit: money(100_000n, 'IRT'), source: 'TIER' });
   });
 
-  it('is the reseller’s own limit when set, in either direction, including zero', () => {
+  it('is the reseller’s own limit when set, including zero', () => {
     for (const own of [0n, 30_000n, 500_000n]) {
       expect(effectiveLimitOf(terms({ ownLimit: money(own, 'IRT') }))).toEqual({
         limit: money(own, 'IRT'),
@@ -39,38 +47,76 @@ describe('effectiveLimitOf', () => {
   });
 });
 
-describe('creditStateOf and creditAllowanceOf', () => {
-  it('applies the effective limit to an ACTIVE reseller in its own currency', () => {
-    expect(creditStateOf(terms(), 'IRT')).toBe('CREDIT_APPLIES');
-    expect(creditAllowanceOf(terms(), 'IRT')).toBe(100_000n);
-    expect(creditAllowanceOf(terms({ ownLimit: money(30_000n, 'IRT') }), 'IRT')).toBe(30_000n);
+describe('creditStateOf and creditAllowanceOf: credit was removed', () => {
+  it('is CREDIT_REMOVED and an allowance of zero, the only answers there are', () => {
+    expect(creditStateOf()).toBe('CREDIT_REMOVED');
+    expect(creditAllowanceOf()).toBe(0n);
+    expect(RESELLER_DEFAULT_CREDIT_LIMIT_MINOR).toBe(0n);
   });
 
-  it('gives a SUSPENDED reseller no credit, whatever the limit (R1)', () => {
-    const suspended = terms({ status: 'SUSPENDED' as ResellerStatus });
-    expect(creditStateOf(suspended, 'IRT')).toBe('RESELLER_SUSPENDED');
-    expect(creditAllowanceOf(suspended, 'IRT')).toBe(0n);
+  it('lets no stored limit, status or currency take a wallet below zero', () => {
+    for (const status of ['ACTIVE', 'SUSPENDED'] as ResellerStatus[]) {
+      for (const own of [null, money(30_000n, 'IRT'), money(5_000n, 'USD')]) {
+        // The terms a row stored before the decision may still hold: they decide nothing.
+        expect(effectiveLimitOf(terms({ status, ownLimit: own })).limit.amountMinor > 0n).toBe(
+          true,
+        );
+        expect(canCover(0n, 1n, creditAllowanceOf())).toBe(false);
+        expect(canCover(1_000n, 1_001n, creditAllowanceOf())).toBe(false);
+        expect(canCover(1_000n, 1_000n, creditAllowanceOf())).toBe(true);
+      }
+    }
+  });
+});
+
+describe('every reseller write schema refuses a non-zero credit limit', () => {
+  const tierId = '01890a5d-ac96-774b-bcce-b302099a8057';
+  const customerId = '01890a5d-ac96-774b-bcce-b302099a8058';
+  const limit = (amount: string) => ({ amount, currency: 'IRT' as const });
+  const tier = (amount: string) => ({
+    idempotencyKey: 'tier-key-1',
+    name: 'Gold',
+    pricingMode: 'LIST_PRICE',
+    discountPercentage: null,
+    creditLimit: limit(amount),
+  });
+  const register = (creditLimit: ReturnType<typeof limit> | null) => ({
+    idempotencyKey: 'register-key-1',
+    customerId,
+    tierId,
+    pricingMode: 'TIER',
+    discountPercentage: null,
+    creditLimit,
+  });
+  const update = (creditLimit: ReturnType<typeof limit> | null) => ({
+    idempotencyKey: 'update-key-1',
+    status: 'ACTIVE',
+    tierId,
+    pricingMode: 'TIER',
+    discountPercentage: null,
+    creditLimit,
   });
 
-  it('gives no credit for a zero limit, and a zero own limit overrides a positive tier limit', () => {
-    expect(creditStateOf(terms({ tierLimit: money(0n, 'IRT') }), 'IRT')).toBe('NO_LIMIT');
-    const zeroOwn = terms({ ownLimit: money(0n, 'IRT') });
-    expect(creditStateOf(zeroOwn, 'IRT')).toBe('NO_LIMIT');
-    expect(creditAllowanceOf(zeroOwn, 'IRT')).toBe(0n);
+  it('accepts zero, and null where the field is nullable', () => {
+    expect(resellerTierWriteSchema.safeParse(tier('0')).success).toBe(true);
+    expect(resellerRegisterSchema.safeParse(register(null)).success).toBe(true);
+    expect(resellerRegisterSchema.safeParse(register(limit('0'))).success).toBe(true);
+    expect(resellerUpdateSchema.safeParse(update(null)).success).toBe(true);
+    expect(resellerUpdateSchema.safeParse(update(limit('0'))).success).toBe(true);
   });
 
-  it('gives no credit for a debit in another currency than the limit’s', () => {
-    expect(creditStateOf(terms(), 'USD')).toBe('CURRENCY_MISMATCH');
-    expect(creditAllowanceOf(terms(), 'USD')).toBe(0n);
-    const usd = terms({ ownLimit: money(5_000n, 'USD') });
-    expect(creditAllowanceOf(usd, 'IRT')).toBe(0n);
-    expect(creditAllowanceOf(usd, 'USD')).toBe(5_000n);
-  });
-
-  it('reports suspension before the limit, so a suspended zero-limit reseller reads as suspended', () => {
-    expect(creditStateOf(terms({ status: 'SUSPENDED', tierLimit: money(0n, 'IRT') }), 'USD')).toBe(
-      'RESELLER_SUSPENDED',
-    );
+  it('refuses one minor unit and anything above, on all three writes', () => {
+    for (const amount of ['1', '100000', '1000000000000']) {
+      const refusals = [
+        resellerTierWriteSchema.safeParse(tier(amount)),
+        resellerRegisterSchema.safeParse(register(limit(amount))),
+        resellerUpdateSchema.safeParse(update(limit(amount))),
+      ];
+      for (const result of refusals) {
+        expect(result.success).toBe(false);
+        expect(JSON.stringify(result.error?.issues)).toContain('Reseller credit was removed');
+      }
+    }
   });
 });
 
@@ -83,7 +129,7 @@ describe('creditFigures', () => {
     });
   });
 
-  it('reads a negative balance as the credit in use', () => {
+  it('reads a negative balance as the credit in use (a legacy debt, with no allowance now)', () => {
     expect(creditFigures(-80_000n, 100_000n)).toEqual({
       creditInUse: 80_000n,
       availableToSpend: 20_000n,
@@ -97,7 +143,13 @@ describe('creditFigures', () => {
       availableToSpend: -30_000n,
       overLimitBy: 30_000n,
     });
-    expect(creditFigures(-80_000n, 0n).overLimitBy).toBe(80_000n);
+    // The allowance is zero now: a legacy debt is all over the limit, and nothing is
+    // available beyond the (negative) balance.
+    expect(creditFigures(-80_000n, creditAllowanceOf())).toEqual({
+      creditInUse: 80_000n,
+      availableToSpend: -80_000n,
+      overLimitBy: 80_000n,
+    });
     expect(creditFigures(0n, 0n)).toEqual({
       creditInUse: 0n,
       availableToSpend: 0n,

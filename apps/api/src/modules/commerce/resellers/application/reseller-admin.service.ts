@@ -1,6 +1,7 @@
 import {
   COMMERCE_ERROR_CODES,
   PRODUCT_PAGE_MAX,
+  RESELLER_DEFAULT_CREDIT_LIMIT_MINOR,
   RESELLER_ENTITLEMENT_DIMENSIONS,
   RESELLER_GRANT_DIMENSION,
   RESELLER_HISTORY_MAX,
@@ -118,9 +119,9 @@ export interface ResellerAdminServiceDeps {
 }
 
 /**
- * A reseller's credit standing (WP14 D1). Every figure is a derivation of R8's allowance
- * and the ledger balance — `docs/wp14-reseller-phase2-audit.md` §2. None is a debt, a
- * repayment or a settlement amount; `OQ-WP9-04` defines none of those.
+ * A reseller's balance and legacy debt (WP14 D1). Every figure is a derivation of the
+ * allowance — zero since the owner removed reseller credit (2026-10-01) — and the ledger
+ * balance. None is a repayment or a settlement amount; `OQ-WP9-04` defines none of those.
  */
 export interface ResellerCreditStandingRecord {
   readonly customerId: string;
@@ -223,6 +224,7 @@ export class ResellerAdminService {
     actor: ActorContext,
     input: { readonly idempotencyKey: string; readonly write: TierWrite },
   ): Promise<ResellerTierListing> {
+    refuseCredit(input.write.creditLimit);
     const write = { ...input.write, name: input.write.name.trim() };
     const requestHash = hashRequest({ tier: serialisableTier(write) });
     const denial = { action: 'reseller_tier.create', entityType: 'ResellerTier', entityId: null };
@@ -268,6 +270,7 @@ export class ResellerAdminService {
     actor: ActorContext,
     input: { readonly idempotencyKey: string; readonly tierId: string; readonly write: TierWrite },
   ): Promise<ResellerTierListing> {
+    refuseCredit(input.write.creditLimit);
     const tierId = this.id(input.tierId, 'tier');
     const write = { ...input.write, name: input.write.name.trim() };
     const requestHash = hashRequest({ tierId, tier: serialisableTier(write) });
@@ -430,6 +433,7 @@ export class ResellerAdminService {
       readonly write: Omit<ResellerWrite, 'status'>;
     },
   ): Promise<ResellerListing> {
+    refuseCredit(input.write.creditLimit);
     const customerId = this.id(input.customerId, 'customer');
     const write: ResellerWrite = { ...input.write, status: 'ACTIVE' };
     const requestHash = hashRequest({ customerId, reseller: serialisableReseller(write) });
@@ -502,6 +506,7 @@ export class ResellerAdminService {
       readonly write: ResellerWrite;
     },
   ): Promise<ResellerListing> {
+    refuseCredit(input.write.creditLimit);
     const customerId = this.id(input.customerId, 'customer');
     const requestHash = hashRequest({ customerId, reseller: serialisableReseller(input.write) });
     const denial = { action: 'reseller.update', entityType: 'Customer', entityId: customerId };
@@ -865,12 +870,12 @@ export class ResellerAdminService {
   // -- Phase 2 reads (WP14) -----------------------------------------------------------------
 
   /**
-   * How much of a reseller's credit line is in use (D1). `resellers.view` for the terms and
+   * A reseller's balance and any legacy debt (D1). `resellers.view` for the terms and
    * `users.view` for the balance, which is the customer's wallet.
    *
-   * The allowance comes from `creditAllowanceOf`, the function settlement calls under the
-   * wallet lock, so "available" here is what a purchase would be allowed at this instant.
-   * It is a read, not a reservation: a purchase committed a moment later changes it.
+   * Reseller credit was removed (owner decision, 2026-10-01): the allowance comes from
+   * `creditAllowanceOf`, the function settlement calls under the wallet lock, and it is zero.
+   * A negative balance is a debt run up before the decision, shown as it is.
    */
   async creditStanding(
     scope: TenantContext,
@@ -887,7 +892,7 @@ export class ResellerAdminService {
     };
     const selling = await this.deps.settings.valueOf<SalesCurrencyCode>(scope, 'sales.currency');
     const balance = await this.deps.wallet.balanceOf(scope, listing.customerId as UserId, selling);
-    const allowance = creditAllowanceOf(terms, selling);
+    const allowance = creditAllowanceOf();
     const { limit, source } = effectiveLimitOf(terms);
     return {
       customerId: listing.customerId,
@@ -895,7 +900,7 @@ export class ResellerAdminService {
       effectiveLimit: limit,
       limitSource: source,
       sellingCurrency: selling,
-      credit: creditStateOf(terms, selling),
+      credit: creditStateOf(),
       balance: balance.amountMinor,
       allowance,
       ...creditFigures(balance.amountMinor, allowance),
@@ -1121,6 +1126,22 @@ function serialisableReseller(r: ResellerWrite) {
         ? null
         : { amount: r.creditLimit.amountMinor.toString(), currency: r.creditLimit.currency },
   };
+}
+
+/**
+ * Reseller credit was removed (owner decision, 2026-10-01: no reseller debt, no credit
+ * purchases). The write schemas refuse a non-zero limit; this is the same rule for a caller
+ * that reaches the service without them, so nothing can store a limit above zero again. A
+ * row stored before the decision keeps what it holds and grants nothing
+ * (`creditAllowanceOf`).
+ */
+function refuseCredit(limit: Money | null): void {
+  if (limit !== null && limit.amountMinor !== RESELLER_DEFAULT_CREDIT_LIMIT_MINOR) {
+    throw errors.validation(
+      COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+      'Reseller credit was removed: a credit limit is always zero.',
+    );
+  }
 }
 
 /**

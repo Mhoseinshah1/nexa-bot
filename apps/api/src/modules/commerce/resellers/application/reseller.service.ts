@@ -146,28 +146,18 @@ export class ResellerService {
   }
 
   /**
-   * The credit allowance below zero for a debit in `currency` (R8): the reseller's own
-   * limit, else the tier's, in its own currency only. Zero for everyone else. Read inside
-   * the wallet transaction, after the customer's lock, so it is the limit in force when
-   * the money moves.
+   * The credit allowance below zero for a wallet debit: ZERO, for every customer. Reseller
+   * credit was removed (owner decision, 2026-10-01: no reseller debt, no credit purchases),
+   * so a stored limit, however large, grants nothing. Still the one place settlement asks,
+   * so the answer stays in `creditAllowanceOf` rather than in a payment-path literal.
    */
   async creditAllowance(
-    scope: TenantContext,
-    customerId: string,
-    currency: CurrencyCode,
-    tx: unknown,
+    _scope: TenantContext,
+    _customerId: string,
+    _currency: CurrencyCode,
+    _tx: unknown,
   ): Promise<bigint> {
-    const standing = await this.standing(scope, customerId, tx);
-    if (standing === null) return 0n;
-    // R8's one statement, shared with the operator's credit view (WP14 D1).
-    return creditAllowanceOf(
-      {
-        status: standing.reseller.status,
-        ownLimit: standing.reseller.creditLimit,
-        tierLimit: standing.tier.creditLimit,
-      },
-      currency,
-    );
+    return creditAllowanceOf();
   }
 
   /**

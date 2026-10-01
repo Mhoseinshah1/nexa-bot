@@ -245,8 +245,8 @@ export const SERVICE_LOCATIONS: readonly Json[] = [
 
 const TIERS: readonly Json[] = [
   tier(1, 'برنزی', 'LIST_PRICE', null, '0', 4),
-  tier(2, 'نقره‌ای', 'PERCENTAGE_DISCOUNT', 10, '5000000', 7),
-  tier(3, 'طلایی', 'PERCENTAGE_DISCOUNT', 20, '20000000', 2),
+  tier(2, 'نقره‌ای', 'PERCENTAGE_DISCOUNT', 10, '0', 7),
+  tier(3, 'طلایی', 'PERCENTAGE_DISCOUNT', 20, '0', 2),
 ];
 
 function tier(
@@ -809,7 +809,7 @@ function resellerRow(index: number, name: string | null, tierIndex: number, over
 export const RESELLERS: readonly Json[] = [
   resellerRow(3, 'حامد کریمی', 2, { pricingMode: 'PERCENTAGE_DISCOUNT', discountPercentage: 25 }),
   resellerRow(8, 'الهام احمدی', 1),
-  resellerRow(9, null, 1, { creditLimit: IRT('8000000'), effectiveCreditLimit: IRT('8000000') }),
+  resellerRow(9, null, 1),
   resellerRow(11, 'رضا نادری', 0, { status: 'SUSPENDED' }),
   resellerRow(12, 'بهنام زارعی', 2),
 ];
@@ -1141,10 +1141,8 @@ export const COMMERCE_B: readonly ShotFixture[] = [
       orders: 48 - index * 13,
       sales: [{ currency: 'IRT', amount: String(7_860_000 - index * 2_100_000) }],
       services: 40 - index * 11,
-      creditLimit: {
-        amountMinor: (row['effectiveCreditLimit'] as Json)['amount'],
-        currency: 'IRT',
-      },
+      // Reseller credit was removed (owner decision, 2026-10-01): no limit, a legacy debt.
+      creditLimit: null,
       creditInUse: { amountMinor: String(3_200_000 - index * 1_000_000), currency: 'IRT' },
     })),
     truncated: false,
@@ -1180,15 +1178,16 @@ export const COMMERCE_B: readonly ShotFixture[] = [
     credit: {
       customerId: FIRST_RESELLER,
       status: 'ACTIVE',
-      effectiveLimit: IRT('20000000'),
+      effectiveLimit: IRT('0'),
       limitSource: 'TIER',
       sellingCurrency: 'IRT',
-      credit: 'CREDIT_APPLIES',
+      credit: 'CREDIT_REMOVED',
+      // A legacy debt, from before the owner removed reseller credit (2026-10-01).
       balance: IRT('-3200000'),
-      allowance: IRT('20000000'),
+      allowance: IRT('0'),
       creditInUse: IRT('3200000'),
-      availableToSpend: IRT('16800000'),
-      overLimitBy: IRT('0'),
+      availableToSpend: IRT('-3200000'),
+      overLimitBy: IRT('3200000'),
     },
   }),
   fixture('/resellers/:id/purchases', resellerPurchasePageSchema, {
