@@ -916,19 +916,6 @@ form.set-row > * + * {
   color: var(--danger);
   font-weight: 600;
 }
-.recovery-current {
-  padding: 12px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-ctl);
-  background: var(--bg-1);
-}
-/* The restore confirmation: the one destructive control on the page, fenced off. */
-.recovery-danger {
-  padding: 14px;
-  border: 1px solid var(--danger);
-  border-radius: var(--radius-card);
-  background: var(--danger-soft);
-}
 .recovery-phrase {
   max-width: 320px;
 }

@@ -630,7 +630,7 @@ export function UserDetailPage({
        * card carries it; loading, refused or failed, there is no row to name,
        * so the plain page head stands in — as on the order and payment pages.
        */}
-      {row === undefined && <PageHead title={t('web.user_detail')} maturity="now" />}
+      {row === undefined && <PageHead title={t('web.user_detail')} />}
 
       <StateSwitch query={customer} denied={denied}>
         {row === undefined ? null : (
