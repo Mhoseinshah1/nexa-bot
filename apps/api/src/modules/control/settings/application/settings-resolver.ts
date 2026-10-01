@@ -90,6 +90,25 @@ export class SettingsResolver {
     return this.resolveOne(scope, key, await this.settings.find(scope, key, tx), tx);
   }
 
+  /**
+   * Resolves a row the CALLER already read — for a reader that has to take the setting in
+   * the same statement as something else, so the two cannot straddle a commit (round T's
+   * main-menu snapshot). The same parse, default and invalid-value event as `resolve`.
+   */
+  async resolveStored(
+    scope: ScopeContext,
+    key: SettingKey,
+    row: {
+      value: unknown;
+      version: number;
+      updatedAt: Date;
+      updatedByAdminId: string | null;
+    } | null,
+    tx?: unknown,
+  ): Promise<ResolvedSetting> {
+    return this.resolveOne(scope, key, row, tx);
+  }
+
   /** The parsed value alone, for code that only needs to behave correctly. */
   async valueOf<T>(scope: ScopeContext, key: SettingKey, tx?: unknown): Promise<T> {
     return (await this.resolve(scope, key, tx)).value as T;

@@ -10,9 +10,14 @@ import { APPEARANCE_SLOTS, isAppearanceSlot, type AppearanceSlot } from './appea
  * kept identical to the catalogue by hand; the catalogue has since grown four slots
  * (`ticket`, `date`, `user`, `location`) and a menu item may name any of them.
  *
- * What a slot does NOT do here: a Reply Keyboard button is plain text (the Bot API's
- * `KeyboardButton.text` carries no entities), so no slot changes what the keyboard shows.
- * The reference is for the screen the item opens, which the appearance renderer decorates.
+ * What `appearanceSlot` does NOT do: it never decorates the keyboard. It names the slot of
+ * the screen the item OPENS, which the appearance renderer decorates. A reply-keyboard
+ * button's `text` carries no entities and is never altered (a tap is routed by it), but
+ * since round T a button may carry an ICON — `KeyboardButton.icon_custom_emoji_id` — and
+ * that is a DIFFERENT field, `iconSlot` (`bot-menu-builder.ts`), null by default. The two
+ * are kept apart on purpose: every item has a non-null default `appearanceSlot`, so reusing
+ * it as the icon would change every eligible bot's keyboard on upgrade
+ * (`docs/round-t-button-builder-audit.md` §7).
  */
 export const MENU_APPEARANCE_SLOTS = APPEARANCE_SLOTS;
 export type MenuAppearanceSlot = AppearanceSlot;

@@ -230,8 +230,13 @@ The arrangement is still saved through `/settings/bot.main_menu` (versioned, aud
   answers 400 outside them; the desired list is trimmed and cut at 256.
 - `getMyCommands(scope?, language_code?)` — returns an Array of `BotCommand`; "If
   commands aren't set, an empty list is returned." A read.
-- `KeyboardButton.text` — plain text; a reply-keyboard button carries no entities, which
-  is why an appearance slot cannot change what the keyboard shows (D3).
+- `KeyboardButton.text` — plain text; a reply-keyboard button's TEXT carries no entities,
+  which is why an item's `appearanceSlot` cannot change what the keyboard shows (D3).
+  **Correction (round T):** that is true of `text` and is no longer the whole
+  `KeyboardButton` — the Bot API also has `style` and `icon_custom_emoji_id`, which the
+  button builder carries as a separate per-button `style` and `iconSlot`, never through
+  `appearanceSlot` and never by altering `text` (`docs/round-t-button-builder-audit.md`
+  §4, §7; the exact semantics are `OQ-T-API-01`..`04`).
 - What the docs do NOT say, and this package does not assume: whether the command list
   survives a token revocation (`OQ-P-MENU-01`).
 

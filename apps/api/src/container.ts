@@ -125,6 +125,10 @@ import { BotCommandSyncService } from './modules/platform/tenancy/application/bo
 import { BotCommandSyncConsumer } from './modules/platform/tenancy/application/bot-command-sync.consumer.js';
 import { BotCommandSyncLoop } from './modules/platform/tenancy/application/bot-command-sync-loop.js';
 import { BotMenuService } from './modules/platform/tenancy/application/bot-menu.service.js';
+import { BotMenuBuilderService } from './modules/control/bot-menu-builder/application/bot-menu-builder.service.js';
+import { MainMenuSettingGuard } from './modules/control/bot-menu-builder/application/main-menu-setting-guard.js';
+import { PublishedMainMenuSource } from './modules/control/bot-menu-builder/application/main-menu-source.js';
+import { DrizzleMainMenuBuilderRepository } from './modules/control/bot-menu-builder/infrastructure/drizzle-main-menu-builder.repository.js';
 import { CommandMenu } from './modules/platform/tenancy/application/command-menu.js';
 import { DrizzleBotCommandSyncRepository } from './modules/platform/tenancy/infrastructure/drizzle-bot-command-sync.repository.js';
 import { RetentionSweeper } from './modules/platform/identity/application/retention-sweeper.js';
@@ -790,6 +794,16 @@ export interface Container {
   readonly botManagement: BotManagementService;
   /** Round P — the bot's menu: items, desired commands, and every bot's sync state. */
   readonly botMenu: BotMenuService;
+  /**
+   * Round T: the button builder — the draft, the publish that rewrites `bot.main_menu` as
+   * its compatibility projection, and the append-only revisions.
+   */
+  readonly botMenuBuilder: BotMenuBuilderService;
+  /**
+   * The customer main menu's ONE evaluator (R1), read by the messenger and the runtime:
+   * `keyboardFor` (round T, structured buttons), `rowsFor`, `routesFor`, `describeFor`.
+   */
+  readonly mainMenu: MainMenuLayout;
   /** Round P — the command-sync lane, exposed so a test drives the pass the worker runs. */
   readonly botCommandSync: BotCommandSyncService;
   readonly botCommandSyncLoop: BotCommandSyncLoop;
@@ -1460,6 +1474,12 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
 
   const settingRepository = new DrizzleSettingRepository(database.db);
   const settingsResolver = new SettingsResolver(settingRepository, opsLog);
+  /*
+   * Round T: the button builder's rows. Built here, beside the settings it projects into,
+   * because three things read it — the `bot.main_menu` change guard, the keyboard's source
+   * and the builder service.
+   */
+  const mainMenuBuilderRepository = new DrizzleMainMenuBuilderRepository(database.db);
   /*
    * Package B — mandatory channel membership. `getChatMember` through the receiving bot's
    * own token, bounded well under the send timeout because a customer's turn waits on it,
@@ -3049,6 +3069,9 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       ...QuietHoursGuard.all(settingsResolver, new DrizzleQuietHoursLock()),
       // The signup gift's three terms have to make a whole while the gift is on.
       ...SignupGiftTermsGuard.all(settingsResolver, featureFlagResolver),
+      // Round T: once a layout is published, `bot.main_menu` is the builder's projection and
+      // the publish is its one writer.
+      new MainMenuSettingGuard(mainMenuBuilderRepository),
     ],
   );
 
@@ -3656,7 +3679,18 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    * the messenger (the keyboard it draws) and the runtime (the labels a tap is matched
    * against), so the two cannot disagree about a renamed or hidden button.
    */
+  /*
+   * Round T: the PUBLISHED layout while its projection is current, else the legacy path
+   * over `bot.main_menu` — never the draft. One statement per decision; the builder's read
+   * shares it (`fromState`).
+   */
+  const mainMenuSource = new PublishedMainMenuSource(
+    mainMenuBuilderRepository,
+    settingsResolver,
+    opsLog,
+  );
   const mainMenuLayout = new MainMenuLayout({
+    source: mainMenuSource,
     settings: settingsResolver,
     features: featureFlagResolver,
     templates: templateResolver,
@@ -3707,6 +3741,33 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     defaultLabel: (key) => templateCatalogue.defaultBody(key, DEFAULT_TEMPLATE_LOCALE),
     commandMenu,
     commandSync: botCommandSync,
+  });
+  /*
+   * Round T: the button builder. Reads the SAME evaluator (`describeFor` for the gate
+   * answers, `rowsFor` for the live keyboard) and the SAME appearance rows for per-bot icon
+   * eligibility; writes the projection through the setting repository's own conditional
+   * write, inside the publish's transaction.
+   */
+  const botMenuBuilder = new BotMenuBuilderService({
+    repository: mainMenuBuilderRepository,
+    guard,
+    uow,
+    audit,
+    outbox,
+    // The RAW recorder: a denial is written after the transaction, a recovery inside it.
+    opsLog: opsLogWriter,
+    sessions,
+    idempotency,
+    scopeActivity: tenants,
+    clock,
+    ids,
+    settings: settingsResolver,
+    settingRepository,
+    mainMenu: mainMenuLayout,
+    source: mainMenuSource,
+    templates: templateResolver,
+    defaultLabel: (key) => templateCatalogue.defaultBody(key, DEFAULT_TEMPLATE_LOCALE),
+    bots: appearanceRepository,
   });
   const botCommandSyncLoop = new BotCommandSyncLoop(botCommandSync, {
     now: () => clock.now(),
@@ -5099,6 +5160,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     paymentAccounts: paymentAccountService,
     botManagement,
     botMenu,
+    botMenuBuilder,
+    mainMenu: mainMenuLayout,
     botCommandSync,
     botCommandSyncLoop,
     commandMenu,

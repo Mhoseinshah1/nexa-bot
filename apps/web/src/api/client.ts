@@ -355,6 +355,17 @@ import {
   type BotOperatorStatus,
   // Round P: the bot's menu and its command-menu sync.
   BOT_MENU_ROUTES,
+  BOT_MENU_BUILDER_ROUTES,
+  botMenuBuilderResponseSchema,
+  mainMenuBuilderMutationResponseSchema,
+  mainMenuRevisionListResponseSchema,
+  type BotMenuBuilderResponse,
+  type MainMenuBuilderMutationResponse,
+  type MainMenuRevisionListResponse,
+  type PublishMainMenuRequest,
+  type ResetMainMenuDraftRequest,
+  type RestoreMainMenuRevisionRequest,
+  type SaveMainMenuDraftRequest,
   botMenuConfigResponseSchema,
   checkBotMenuResponseSchema,
   syncBotMenuResponseSchema,
@@ -508,6 +519,28 @@ async function post<T>(
 ): Promise<T> {
   const response = await fetch(`${API_PREFIX}${path}`, {
     method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'content-type': 'application/json', accept: 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  const payload: unknown = await response.json().catch(() => null);
+  if (!response.ok) throw toApiError(response.status, payload);
+  return schema.parse(payload);
+}
+
+/**
+ * PUT, for a write that REPLACES one whole resource — the button builder's draft (round T).
+ * Same discipline as `post`: an idempotency key in the body, the session cookie, and the
+ * Origin check every non-GET method passes server-side.
+ */
+async function put<T>(
+  path: string,
+  body: unknown,
+  schema: { parse: (v: unknown) => T },
+): Promise<T> {
+  const response = await fetch(`${API_PREFIX}${path}`, {
+    method: 'PUT',
     credentials: 'same-origin',
     headers: { 'content-type': 'application/json', accept: 'application/json' },
     body: JSON.stringify(body),
@@ -3077,6 +3110,77 @@ export function checkBotMenu(input: {
   botInstanceId: string | null;
 }): Promise<CheckBotMenuResponse> {
   return post(BOT_MENU_ROUTES.check, input, checkBotMenuResponseSchema);
+}
+
+// --- The button builder (round T) ----------------------------------------------
+
+/**
+ * The builder's whole read: the draft (or, before any save, the live keyboard converted),
+ * the published layout, every registry button with the SERVER's gate answer, the live
+ * keyboard's rows and each bot's icon eligibility. The preview calls `customerRowsOf` with
+ * `items[].gateOpen`; the page evaluates no gate of its own.
+ */
+export function fetchBotMenuBuilder(): Promise<BotMenuBuilderResponse> {
+  return authedGet(BOT_MENU_BUILDER_ROUTES.view, botMenuBuilderResponseSchema);
+}
+
+/**
+ * Save the draft against the draft version read (null: no saved draft). Nothing goes live.
+ * `legacyBaselineVersion` is the read's `draft.legacyBaselineVersion` — the `bot.main_menu`
+ * version the page seeded this draft from; the first save stores it.
+ */
+export function saveBotMenuDraft(
+  input: SaveMainMenuDraftRequest,
+): Promise<MainMenuBuilderMutationResponse> {
+  return put(BOT_MENU_BUILDER_ROUTES.draft, input, mainMenuBuilderMutationResponseSchema);
+}
+
+/**
+ * Publish the saved draft against the draft version AND the published revision read. Before
+ * the first publish (or behind a superseded one) the server also requires `bot.main_menu` to
+ * still be at the draft's stored `legacyBaselineVersion` — else 409; reseed with
+ * `resetBotMenuDraft({ seed: 'LIVE', … })`.
+ */
+export function publishBotMenu(
+  input: PublishMainMenuRequest,
+): Promise<MainMenuBuilderMutationResponse> {
+  return post(BOT_MENU_BUILDER_ROUTES.publish, input, mainMenuBuilderMutationResponseSchema);
+}
+
+/**
+ * Reset the DRAFT — to the default keyboard (`seed: 'DEFAULT'`, the default) or reseeded from
+ * the live arrangement (`seed: 'LIVE'`). `confirm: true` — the page asked first.
+ */
+export function resetBotMenuDraft(
+  input: ResetMainMenuDraftRequest,
+): Promise<MainMenuBuilderMutationResponse> {
+  return post(BOT_MENU_BUILDER_ROUTES.reset, input, mainMenuBuilderMutationResponseSchema);
+}
+
+/** The published revisions, newest first; `before` is the previous page's `nextBefore`. */
+export function fetchBotMenuRevisions(
+  query: { before?: number; limit?: number } = {},
+): Promise<MainMenuRevisionListResponse> {
+  const params = new URLSearchParams();
+  if (query.before !== undefined) params.set('before', String(query.before));
+  if (query.limit !== undefined) params.set('limit', String(query.limit));
+  const search = params.toString();
+  return authedGet(
+    `${BOT_MENU_BUILDER_ROUTES.revisions}${search === '' ? '' : `?${search}`}`,
+    mainMenuRevisionListResponseSchema,
+  );
+}
+
+/** Restore one revision INTO THE DRAFT. Never live: publishing it is a separate act. */
+export function restoreBotMenuRevision(
+  input: { revisionId: string } & RestoreMainMenuRevisionRequest,
+): Promise<MainMenuBuilderMutationResponse> {
+  const { revisionId, ...body } = input;
+  return post(
+    BOT_MENU_BUILDER_ROUTES.restore(revisionId),
+    body,
+    mainMenuBuilderMutationResponseSchema,
+  );
 }
 
 // --- The operations log group (WP-A4) -----------------------------------------

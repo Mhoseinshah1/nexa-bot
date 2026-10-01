@@ -116,6 +116,9 @@ export async function resetDatabase(db: Database): Promise<void> {
        bot_appearance_slots,
        -- Round P: the command-sync rows, before the bots they name.
        bot_command_syncs,
+       -- Round T: the button builder's draft/published heads and revisions, before the
+       -- tenants and admins they name.
+       main_menu_layouts, main_menu_revisions,
        -- R2 and its retention: the Telegram message state and the per-chat purge horizons,
        -- before the bots, payments and tenants they name.
        telegram_message_horizons, telegram_review_messages, telegram_wizards,
