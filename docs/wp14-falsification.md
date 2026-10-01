@@ -13,7 +13,7 @@ in this pass and each mutation was re-run here.
 view's allowance per currency), `R14-09` and `R14-10` (the Web Admin's debt
 acknowledgement), `R14-12` (the report's effective limit) and `R14-16` (the edit form's
 credit read) each held a rule of the reseller credit line the owner removed
-(`docs/reseller-phase3-closure.md` §3). The allowance is zero, the report names no limit,
+(`docs/reseller-phase3-closure.md` §5). The allowance is zero, the report names no limit,
 and the form neither offers a limit nor reads a balance, so there is nothing for those
 rules to hold. `R14-11` keeps its rule — the debt is read in the SELLING currency — under
 its test's new name; its mutation (the balance read in the stored limit's currency) was

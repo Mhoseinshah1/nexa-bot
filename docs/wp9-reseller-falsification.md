@@ -23,7 +23,7 @@ again after each restore.
 `WP9B-15` and `WP9B-21` each named a rule of the reseller credit line — the limit's currency,
 the own-over-tier precedence, the allowance reaching `canCover`, and a suspension racing a
 settlement that spends credit. The owner removed reseller credit
-(`docs/reseller-phase3-closure.md` §3): the allowance is zero for everyone and a settlement no
+(`docs/reseller-phase3-closure.md` §5): the allowance is zero for everyone and a settlement no
 longer reads the reseller row, so those rules are about nothing and their tests are gone.
 The rule that replaces them — no stored limit lets a wallet go below zero — is pinned by
 `resellers.test.ts` › lets no stored limit overdraw, and mutated in the closure document.

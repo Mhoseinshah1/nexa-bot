@@ -13,7 +13,8 @@ The governing rules are CLAUDE.md's four reseller rules, `docs/wp9-reseller-audi
   catalogue is a courtesy held to it by a unit test over every grant subset;
 - a quote is honoured, never re-priced, and `ResellerService.recordPurchase` decides again,
   authoritatively, at confirmation;
-- credit is read under the wallet lock by `settleFromWallet` only.
+- credit is read under the wallet lock by `settleFromWallet` only. (Since superseded: the
+  owner removed reseller credit on 2026-10-01 — `docs/reseller-phase3-closure.md` §5.)
 
 Owner-locked exclusions, restated because R2 sits next to them: **no debt collection, no
 repayment, no settlement, no ageing, no fee, no wallet debit, no sub-bots.**

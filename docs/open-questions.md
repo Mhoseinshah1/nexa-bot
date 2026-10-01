@@ -2264,6 +2264,15 @@ leaves the debt where it is. A clawback (cashback or referral reversal) never ta
 balance further below zero; the shortfall is recorded as unrecovered, as before. Whether
 debt should age, block, or be collected is a commercial decision for the owner.
 
+**Resolved by owner decision, 2026-10-01: there is no reseller debt.** The owner removed
+reseller credit — no debt, no negative balances, no credit purchases, no settlement, no
+penalty (`docs/reseller-phase3-closure.md` §5). `creditAllowanceOf` is zero, so no wallet
+purchase takes a balance below zero, and every reseller write refuses a non-zero limit. A
+balance that was already negative before the decision is a legacy debt: left exactly as it
+is, never collected, aged or charged, and repaid only by the same top-ups and operator
+credits as any balance. `RESELLER_SETTLEMENT` and `RESELLER_MEMBERSHIP_FEE` stay reserved
+and unwritten.
+
 ## OQ-WP9-05 — the catalogue list shows the catalogue price to a reseller
 
 The reseller's catalogue shows only what their tier grants, but each product's row still
@@ -2436,6 +2445,10 @@ server-side would be a new rule on `ResellerAdminService.update`, and is not gue
 
 **Trigger to resolve:** an owner decision, or the first operator who suspends a reseller
 without having seen the debt.
+
+**Moot since 2026-10-01.** The owner removed reseller credit (`OQ-WP9-04`): no limit can be
+lowered below a debt, a suspension changes no credit, and the Web Admin's acknowledgement
+was removed with the limit field.
 
 ## OQ-WP17-FEE — what a payment fee is
 
