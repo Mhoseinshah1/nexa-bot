@@ -167,6 +167,28 @@ describe('the capability registry', () => {
   });
 
   /*
+   * Round R, packages A and B. No shipped adapter carries even ONE device-limit or
+   * location method. The registry row asks for both methods, so a lone method would still
+   * read NOT_SUPPORTED there — this asks each method directly. A method that arrived
+   * without its real-panel acceptance is an operation nothing has proven
+   * (docs/provider-capability-audit.md), and the next commit to add its twin and the
+   * declaration would turn it on.
+   */
+  it('finds no device-limit or location method on any shipped adapter', () => {
+    for (const type of IMPLEMENTED_PROVIDER_TYPES) {
+      const methods = providerAdapter(type) as unknown as Record<string, unknown>;
+      for (const name of ['readDeviceLimit', 'applyDeviceLimit', 'readLocation', 'applyLocation']) {
+        expect(typeof methods[name], `${type}.${name}`).toBe('undefined');
+      }
+      expect(entryFor(providerAdapter(type), 'EXTRA_DEVICES'), type).toEqual({
+        row: 'EXTRA_DEVICES',
+        supported: false,
+        gap: 'NOT_SUPPORTED',
+      });
+    }
+  });
+
+  /*
    * The owner's rule: an implemented-but-undeclared operation is refused rather than
    * offered. Marzban HAS `applyAllowance`; a descriptor that stops declaring RENEW_USER
    * must read the row as unsupported and say why.

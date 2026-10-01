@@ -589,6 +589,127 @@ describe('extra users / devices on an existing service (WP-A5)', () => {
       expect(await countOrders('ADD_DEVICES')).toBe(0);
     });
 
+    /*
+     * Round R, package A. The capability is code, so it can disappear between a quote and
+     * its money — a `botctl rollback` to a release that did not declare it is the ordinary
+     * way. The panel then cannot SETTLE what it was offered: a wallet purchase is refused,
+     * never charged (money rule three), and a purchase already paid is refunded for the
+     * exact amount through the one credit path, never written and never held.
+     */
+    it('cannot settle once the capability is withdrawn: a wallet purchase is refused, uncharged', async () => {
+      const service = await activeService('withdrawn-pay');
+      const rate = await offeredRate('withdrawn-pay');
+      await fund('withdrawn-pay');
+      const { order } = await draftDevices(service.id, rate, 1, 'withdrawn-pay');
+      await confirmDevices(order.id, 'withdrawn-pay');
+      const before = await balance();
+
+      uninstallDevicePanel();
+      try {
+        await expect(payDevices(order.id, 'withdrawn-pay')).rejects.toMatchObject({
+          code: COMMERCE_ERROR_CODES.PANEL_NOT_OPERABLE,
+        });
+        expect(await balance()).toBe(before);
+        expect(await orderState(order.id)).not.toBe('PAID');
+        expect(await operationOf(service.id)).toBeUndefined();
+        await ctx.container.provisionerLoop.tick();
+      } finally {
+        installDevicePanel();
+      }
+      expect(devicePanel.writes).toEqual([]);
+      expect((await services.findById(tenantA, service.id))?.deviceLimit).toBe(2);
+    });
+
+    it('cannot settle once the capability is withdrawn: a paid purchase is refunded, never written', async () => {
+      const service = await activeService('withdrawn-run');
+      const rate = await offeredRate('withdrawn-run');
+      await fund('withdrawn-run');
+      const beforePurchase = await balance();
+      const orderId = await buyDevices(service.id, rate, 2, 'withdrawn-run');
+      expect(beforePurchase - (await balance())).toBe(100_000n);
+      expect(await orderState(orderId)).toBe('PAID');
+
+      uninstallDevicePanel();
+      try {
+        await ctx.container.provisionerLoop.tick();
+        await makeDue();
+        await ctx.container.provisionerLoop.tick();
+      } finally {
+        installDevicePanel();
+      }
+      expect(devicePanel.writes, 'nothing was sent to a panel that cannot take it').toEqual([]);
+      expect((await operationOf(service.id))?.state).toBe('FAILED');
+      expect(await orderState(orderId)).toBe('REFUNDED');
+      expect(await balance()).toBe(beforePurchase);
+      const credits = await ctx.container.database.db.execute<{ n: string }>(
+        sql`SELECT count(*)::text AS n FROM wallet_entries
+             WHERE direction = 'CREDIT' AND order_id = ${orderId}`,
+      );
+      expect(credits.rows[0]?.n).toBe('1');
+      expect((await services.findById(tenantA, service.id))?.deviceLimit).toBe(2);
+    });
+
+    /*
+     * Round R, package A. The panel policy is the operator's switch over a capability the
+     * adapter HAS: off, it takes extra users away at every step before money moves, and it
+     * takes away nothing else the customer could buy on the same service.
+     */
+    it('is switched off by the panel policy, at every step, and nothing else is', async () => {
+      const service = await activeService('policy');
+      const rate = await offeredRate('policy');
+      await fund('policy');
+      const record = (await services.findById(tenantA, service.id))!;
+      const offered = await ctx.container.commercialActions.availableFor(
+        tenantA,
+        systemActor('policy-on'),
+        record,
+      );
+      expect(offered).toContain('ADD_DEVICES');
+      expect(offered.length, 'another action is offered beside it').toBeGreaterThan(1);
+      const { order: early } = await draftDevices(service.id, rate, 1, 'policy-early');
+
+      const off = await ctx.container.panelAdvanced.updatePolicy(tenantA, owner, panelId, {
+        policy: {
+          delivery: { mode: 'CARD_WITH_QR' },
+          actions: { EXTRA_DEVICES: { customerEnabled: false, maxDeviceLimit: null } },
+        },
+        expectedRevision: 0,
+        idempotencyKey: 'devices-policy-off',
+      });
+      expect(off.advanced.registry.find((entry) => entry.row === 'EXTRA_DEVICES')).toMatchObject({
+        supported: true,
+        customer: { available: false, blocker: 'POLICY_DISABLED' },
+      });
+
+      // Only extra users went: every other action the service had is still offered.
+      expect(
+        await ctx.container.commercialActions.availableFor(
+          tenantA,
+          systemActor('policy-off'),
+          record,
+        ),
+      ).toEqual(offered.filter((kind) => kind !== 'ADD_DEVICES'));
+
+      await runtime().handle(tenantA, systemActor('bot'), tapUpdate(`s:${service.id}`));
+      expect(drawnCallbacks().some((data) => data.startsWith('dv:'))).toBe(false);
+      for (const data of [`dv:${service.id}`, encodeDeviceQuantity(service.id, rate, 1)]) {
+        const reply = await runtime().handle(tenantA, systemActor('bot'), tapUpdate(data));
+        expect(reply.replyKey, data).toBe('bot.service.capability_unsupported');
+      }
+      const policyRefusal = {
+        code: COMMERCE_ERROR_CODES.PANEL_NOT_OPERABLE,
+        details: { reason: 'CUSTOMER_POLICY', policy: 'POLICY_DISABLED', action: 'EXTRA_DEVICES' },
+      };
+      await expect(draftDevices(service.id, rate, 1, 'policy-late')).rejects.toMatchObject(
+        policyRefusal,
+      );
+      // A quote drawn before the switch is refused at its confirmation, before any money.
+      await expect(confirmDevices(early.id, 'policy-early')).rejects.toMatchObject(policyRefusal);
+      expect(await orderState(early.id)).toBe('DRAFT');
+      expect(await operationOf(service.id)).toBeUndefined();
+      expect(devicePanel.writes).toEqual([]);
+    });
+
     it('is idempotent: a replayed draft, confirmation and payment buy it once', async () => {
       const service = await activeService('idem');
       const rate = await offeredRate('idem', 3);
