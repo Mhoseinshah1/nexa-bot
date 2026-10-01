@@ -109,6 +109,7 @@ const RECORDS = [
   'docs/package-f-falsification.md',
   'docs/r1-falsification.md',
   'docs/f5-falsification.md',
+  'docs/round-t-t1-falsification.md',
 ];
 /**
  * The fewest citations this record may contain.
@@ -139,7 +140,7 @@ const RECORDS = [
  * by the owner's decision of 2026-10-01 — WP9B-02, -03, -15, -21 and R14-02, -09, -10,
  * -12, -16. Each record says so above its table.
  */
-const EXPECTED = 2449;
+const EXPECTED = 2462;
 /**
  * A table whose last column is one of these is making citations.
  *

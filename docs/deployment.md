@@ -1773,6 +1773,36 @@ While a release without the retention lane runs:
 
 Nothing needs doing before rolling back or forward.
 
+### What a rollback keeps and degrades: the button builder (round T)
+
+Migration `0156_round_t_button_builder` adds two tables, `main_menu_layouts` (each tenant's
+draft and published head) and `main_menu_revisions` (one append-only row per publish). It
+changes nothing in an existing table, widens no CHECK, adds no event type, and leaves the
+`bot.main_menu` schema exactly as it was — that schema is pinned by a test against a frozen
+copy of the previous release's parser. A publish rewrites `bot.main_menu` in the same
+transaction as its **compatibility projection**: the placed buttons in row order with their
+own switch, then the unplaced ones switched off, each with its target and slot. While the
+release before round T runs:
+
+- **The keyboard keeps the operator's order and visibility.** The old release reads the
+  projection, which its strict parser accepts — no `settings.stored_value_invalid`, no
+  fallback to the default arrangement. It packs the buttons two to a row (a wide one
+  alone) as it always did: the operator's rows, styles and icons are not drawn until the
+  roll-forward. That is a degradation, not a reset.
+- **The builder's tables are left alone.** The old release neither reads nor writes them;
+  drafts and revisions come back with the roll-forward.
+- **A save on the old release's «دکمه‌های ربات» page wins.** It writes `bot.main_menu`
+  directly, moving its version past the one the last publish recorded. After the
+  roll-forward the runtime follows that setting (the operator's latest act) and the
+  builder reports the published layout **superseded**; the operator reviews the draft and
+  publishes again. Nothing is silently overwritten in either direction. Unlike round P's
+  workaround, there is no need to save the arrangement on the old release to keep it.
+- **On the new release, `bot.main_menu` has one writer once a tenant has published**: the
+  settings endpoint refuses a change to it (`MainMenuSettingGuard`) and the builder's
+  publish rewrites it. A tenant that never published keeps the legacy path, unchanged.
+
+Nothing needs doing before rolling back or forward.
+
 ### How far back you can roll
 
 **One release**, safely. Migrations are expand-only within a release

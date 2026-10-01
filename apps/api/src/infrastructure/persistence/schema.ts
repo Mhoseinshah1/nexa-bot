@@ -1344,6 +1344,119 @@ export const settingValues = pgTable(
 );
 
 /**
+ * Round T — one row per PUBLISH of a tenant's main-menu layout
+ * (`docs/round-t-button-builder-audit.md` §11.1, §11.8).
+ *
+ * Append-only, by trigger (`nexa_reject_mutation`, migration 0156), like
+ * `template_revisions`, and kept for the tenant's life (OQ-T-3): the only record of what
+ * the keyboard used to be. Only a publish writes one — a draft save, a reset and a restore
+ * change the draft alone. `snapshot` is the explicit layout exactly as published, with its
+ * own `v`, so a release that cannot read it says so instead of guessing.
+ *
+ * `restored_from_revision_id` names the revision a restored draft came from; the composite
+ * foreign key keeps it inside the tenant.
+ */
+export const mainMenuRevisions = pgTable(
+  'main_menu_revisions',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    /** Monotonic per tenant, starting at 1. */
+    revision: integer('revision').notNull(),
+    snapshot: jsonb('snapshot').notNull(),
+    restoredFromRevisionId: uuid('restored_from_revision_id'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    createdByAdminId: uuid('created_by_admin_id'),
+  },
+  (table) => [
+    uniqueIndex('main_menu_revisions_tenant_revision_key').on(table.tenantId, table.revision),
+    // The target of the tenant-scoped foreign keys below and on `main_menu_layouts`.
+    unique('main_menu_revisions_tenant_id_key').on(table.tenantId, table.id),
+    check('main_menu_revisions_revision_check', sql`revision >= 1`),
+    check('main_menu_revisions_snapshot_check', sql`jsonb_typeof(snapshot) = 'object'`),
+    foreignKey({
+      name: 'main_menu_revisions_restored_from_fk',
+      columns: [table.tenantId, table.restoredFromRevisionId],
+      foreignColumns: [table.tenantId, table.id],
+    }),
+    foreignKey({
+      name: 'main_menu_revisions_tenant_admin_fk',
+      columns: [table.tenantId, table.createdByAdminId],
+      foreignColumns: [admins.tenantId, admins.id],
+    }),
+  ],
+);
+
+/**
+ * Round T — a tenant's main-menu builder state: the DRAFT and the PUBLISHED head, one row
+ * per tenant (`docs/round-t-button-builder-audit.md` §11.1).
+ *
+ * No row means the tenant never saved a draft, and the keyboard is the legacy path over
+ * `bot.main_menu`, byte for byte. The runtime reads `published` only, never `draft`.
+ *
+ * `projection_setting_version` is the `setting_values.version` of `bot.main_menu` the
+ * publish wrote in the same transaction. When the setting's version has moved past it —
+ * written by an older release during a rollback, the one remaining writer — the published
+ * layout is SUPERSEDED: the keyboard follows the setting and the builder says so.
+ *
+ * Every write is a conditional UPDATE naming the version it read (`draft_version`, and for
+ * a publish `published_revision` too); the first write is `INSERT … ON CONFLICT DO NOTHING`.
+ */
+export const mainMenuLayouts = pgTable(
+  'main_menu_layouts',
+  {
+    tenantId: uuid('tenant_id')
+      .primaryKey()
+      .references(() => tenants.id),
+    draft: jsonb('draft').notNull(),
+    draftVersion: integer('draft_version').notNull().default(1),
+    draftUpdatedAt: timestamptz('draft_updated_at').notNull(),
+    draftUpdatedByAdminId: uuid('draft_updated_by_admin_id'),
+    draftRestoredFromRevisionId: uuid('draft_restored_from_revision_id'),
+    published: jsonb('published'),
+    publishedRevision: integer('published_revision'),
+    publishedAt: timestamptz('published_at'),
+    publishedByAdminId: uuid('published_by_admin_id'),
+    projectionSettingVersion: integer('projection_setting_version'),
+  },
+  (table) => [
+    check('main_menu_layouts_draft_check', sql`jsonb_typeof(draft) = 'object'`),
+    check('main_menu_layouts_draft_version_check', sql`draft_version >= 1`),
+    check(
+      'main_menu_layouts_published_check',
+      sql`published IS NULL OR jsonb_typeof(published) = 'object'`,
+    ),
+    check(
+      'main_menu_layouts_published_revision_check',
+      sql`published_revision IS NULL OR published_revision >= 1`,
+    ),
+    // A published head is whole or absent: never a layout without its revision, its time
+    // or the projection version it wrote.
+    check(
+      'main_menu_layouts_published_shape_check',
+      sql`(published IS NULL) = (published_revision IS NULL) AND (published IS NULL) = (published_at IS NULL) AND (published IS NULL) = (projection_setting_version IS NULL)`,
+    ),
+    foreignKey({
+      name: 'main_menu_layouts_restored_from_fk',
+      columns: [table.tenantId, table.draftRestoredFromRevisionId],
+      foreignColumns: [mainMenuRevisions.tenantId, mainMenuRevisions.id],
+    }),
+    foreignKey({
+      name: 'main_menu_layouts_draft_admin_fk',
+      columns: [table.tenantId, table.draftUpdatedByAdminId],
+      foreignColumns: [admins.tenantId, admins.id],
+    }),
+    foreignKey({
+      name: 'main_menu_layouts_published_admin_fk',
+      columns: [table.tenantId, table.publishedByAdminId],
+      foreignColumns: [admins.tenantId, admins.id],
+    }),
+  ],
+);
+
+/**
  * A tenant's state for one registered feature flag.
  *
  * `enabled` is a boolean column, and that is a design constraint rather than an

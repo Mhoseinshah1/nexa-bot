@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+  DEFAULT_EXPLICIT_MAIN_MENU,
   DEFAULT_MAIN_MENU_LAYOUT,
+  defaultMainMenuButtonConfig,
+  explicitFromLegacy,
+  type ExplicitMainMenu,
+  type OperationalEventInput,
   MAIN_MENU_BUTTON_IDS,
   MAIN_MENU_BUTTONS,
   MAIN_MENU_TARGETS,
@@ -21,7 +26,11 @@ import {
   type TemplateKey,
 } from '@nexa/contracts';
 import { CATALOGUE_FA } from '@nexa/i18n';
-import { MainMenuLayout } from '../../apps/api/src/modules/commerce/messaging/application/main-menu';
+import {
+  MainMenuLayout,
+  type MainMenuSourceAnswer,
+} from '../../apps/api/src/modules/commerce/messaging/application/main-menu';
+import { PublishedMainMenuSource } from '../../apps/api/src/modules/control/bot-menu-builder/application/main-menu-source';
 import { expiryFor } from '../../apps/api/src/modules/commerce/provisioning/application/provision-executor';
 
 /**
@@ -43,8 +52,12 @@ function layoutWith(options: {
   readonly labels?: Partial<Record<TemplateKey, string>>;
   /** Counts the offer reads, so a test can see when the gate is asked. */
   readonly offerReads?: { count: number };
+  /** Round T: the published-layout source; absent is the legacy path. */
+  readonly source?: MainMenuSourceAnswer;
 }): MainMenuLayout {
+  const answer = options.source;
   return new MainMenuLayout({
+    ...(answer === undefined ? {} : { source: { currentFor: () => Promise.resolve(answer) } }),
     settings: {
       valueOf: <T>() => Promise.resolve((options.stored ?? DEFAULT_MAIN_MENU_LAYOUT) as T),
     },
@@ -390,6 +403,159 @@ describe('MainMenuLayout — the keyboard and the route table from one object', 
   it('gives a label two buttons share to the first declared one', async () => {
     const layout = layoutWith({ labels: { 'bot.menu.wallet': CATALOGUE_FA['bot.menu.catalog'] } });
     expect((await layout.routesFor(scope)).get(CATALOGUE_FA['bot.menu.catalog'])).toBe('/catalog');
+  });
+});
+
+describe('round T: the keyboard from a PUBLISHED explicit layout', () => {
+  const explicit: ExplicitMainMenu = {
+    v: 1,
+    rows: [['trial', 'wallet', 'catalog'], ['referral'], ['help']],
+    buttons: MAIN_MENU_BUTTON_IDS.map((id) => ({
+      ...defaultMainMenuButtonConfig(id),
+      enabled: id !== 'catalog',
+      style: id === 'wallet' ? ('danger' as const) : ('default' as const),
+      iconSlot: id === 'wallet' ? ('payment' as const) : null,
+    })),
+  };
+  const published = (layout: ExplicitMainMenu): MainMenuSourceAnswer => ({
+    kind: 'EXPLICIT',
+    layout,
+    revision: 1,
+  });
+
+  it('draws the operator’s rows with style and icon slot; hidden buttons leave a gap, never a reflow', async () => {
+    const layout = layoutWith({ source: published(explicit), trialOffered: false });
+    expect(await layout.keyboardFor(scope)).toEqual([
+      [{ text: CATALOGUE_FA['bot.menu.wallet'], style: 'danger', iconSlot: 'payment' }],
+      [{ text: CATALOGUE_FA['bot.menu.help'], style: 'default', iconSlot: null }],
+    ]);
+    // `rowsFor` is the text-only view of the same rows — what the transport draws until T2.
+    expect(await layout.rowsFor(scope)).toEqual([
+      [CATALOGUE_FA['bot.menu.wallet']],
+      [CATALOGUE_FA['bot.menu.help']],
+    ]);
+    const open = layoutWith({
+      source: published(explicit),
+      trialOffered: true,
+      flags: { referrals: true },
+    });
+    expect(await open.rowsFor(scope)).toEqual([
+      [CATALOGUE_FA['bot.menu.trial'], CATALOGUE_FA['bot.menu.wallet']],
+      [CATALOGUE_FA['bot.menu.referral']],
+      [CATALOGUE_FA['bot.menu.help']],
+    ]);
+  });
+
+  it('ignores bot.main_menu while a layout is published, and routes every declared button still', async () => {
+    const layout = layoutWith({
+      source: published(explicit),
+      stored: [{ button: 'help', enabled: false }],
+    });
+    expect((await layout.rowsFor(scope)).flat()).toContain(CATALOGUE_FA['bot.menu.help']);
+    const routes = await layout.routesFor(scope);
+    // Unplaced and disabled buttons route too: a keyboard already in a chat keeps working.
+    expect(routes.get(CATALOGUE_FA['bot.menu.catalog'])).toBe('/catalog');
+    expect(routes.get(CATALOGUE_FA['bot.menu.tickets'])).toBe('/tickets');
+  });
+
+  it('describes placed buttons row-major, then the pool switched off', async () => {
+    const described = await layoutWith({ source: published(explicit) }).describeFor(scope);
+    expect(described.map((one) => [one.item.button, one.item.enabled])).toEqual([
+      ['trial', true],
+      ['wallet', true],
+      ['catalog', false],
+      ['referral', true],
+      ['help', true],
+      ['services', false],
+      ['apps', false],
+      ['tickets', false],
+    ]);
+  });
+
+  it('a LEGACY answer (nothing published, superseded, unreadable) is today’s keyboard exactly', async () => {
+    for (const source of [
+      { kind: 'LEGACY', superseded: false, publishedUnreadable: false },
+      { kind: 'LEGACY', superseded: true, publishedUnreadable: false },
+      { kind: 'LEGACY', superseded: false, publishedUnreadable: true },
+    ] as const) {
+      const stored: MainMenuLayoutEntry[] = [{ button: 'apps', enabled: true }];
+      expect(await layoutWith({ source, stored }).keyboardFor(scope)).toEqual(
+        (await layoutWith({ stored }).rowsFor(scope)).map((row) =>
+          row.map((text) => ({ text, style: 'default', iconSlot: null })),
+        ),
+      );
+    }
+  });
+
+  it('the converted default is the default keyboard', async () => {
+    expect(DEFAULT_EXPLICIT_MAIN_MENU).toEqual(explicitFromLegacy(DEFAULT_MAIN_MENU_LAYOUT));
+    const flags = { referrals: true };
+    expect(
+      await layoutWith({
+        source: published(DEFAULT_EXPLICIT_MAIN_MENU),
+        flags,
+        trialOffered: true,
+      }).rowsFor(scope),
+    ).toEqual(await layoutWith({ flags, trialOffered: true }).rowsFor(scope));
+  });
+});
+
+describe('round T: PublishedMainMenuSource — published only, and only while its projection is current', () => {
+  const head = (overrides: Record<string, unknown> = {}) => ({
+    published: DEFAULT_EXPLICIT_MAIN_MENU,
+    publishedRevision: 4,
+    projectionSettingVersion: 7,
+    settingVersion: 7,
+    ...overrides,
+  });
+  const sourceOver = (
+    answer: ReturnType<typeof head> | null,
+    events: OperationalEventInput[] = [],
+  ) =>
+    new PublishedMainMenuSource(
+      { publishedHead: () => Promise.resolve(answer as never) },
+      {
+        record: (_scope, event) => {
+          events.push(event);
+          return Promise.resolve({} as never);
+        },
+      },
+    );
+
+  it('answers EXPLICIT for a readable, current publish', async () => {
+    expect(await sourceOver(head()).currentFor(scope)).toEqual({
+      kind: 'EXPLICIT',
+      layout: DEFAULT_EXPLICIT_MAIN_MENU,
+      revision: 4,
+    });
+  });
+
+  it('answers LEGACY with nothing published, and with the setting moved (superseded)', async () => {
+    expect(await sourceOver(null).currentFor(scope)).toEqual({
+      kind: 'LEGACY',
+      superseded: false,
+      publishedUnreadable: false,
+    });
+    expect(await sourceOver(head({ settingVersion: 8 })).currentFor(scope)).toEqual({
+      kind: 'LEGACY',
+      superseded: true,
+      publishedUnreadable: false,
+    });
+    // A setting row that vanished is not "current" either.
+    expect((await sourceOver(head({ settingVersion: null })).currentFor(scope)).kind).toBe(
+      'LEGACY',
+    );
+  });
+
+  it('answers LEGACY for an unreadable snapshot and records it once per tenant key', async () => {
+    const events: OperationalEventInput[] = [];
+    const answer = await sourceOver(head({ published: { v: 2, rows: [] } }), events).currentFor(
+      scope,
+    );
+    expect(answer).toEqual({ kind: 'LEGACY', superseded: false, publishedUnreadable: true });
+    expect(events.map((event) => [event.code, event.severity, event.dedupeKey])).toEqual([
+      ['bot_menu.published_unreadable', 'WARN', 'bot_menu.published_unreadable:published'],
+    ]);
   });
 });
 

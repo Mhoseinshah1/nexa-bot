@@ -2736,3 +2736,47 @@ UNRESOLVED until one live read of each source has been recorded from a machine t
 reach them (the staging server can: `POST /api/admin/v1/fx/refresh`, then read the
 operational log and the FX section). A wrong shape fails closed — the source reads
 `UNAVAILABLE`, the other prices the pair, and no figure is invented.
+
+## OQ-T-API-01 — `KeyboardButton.style`: its exact values and what a client draws
+
+Round T, button builder. `core.telegram.org/bots/api` was refused by the build session's
+egress policy, and nothing in the repository mentions `style`. The builder stores the
+closed set `default | primary | success | danger`, with `default` OMITTED on the wire, as
+the owner's brief states — relied on, not verified. Unknown: whether every client draws
+each value, and what Telegram answers a value it does not know (a 400 would take down the
+whole reply that carries the keyboard, which is why the set is closed).
+
+UNRESOLVED. `docs/round-t-button-builder-audit.md` §13, R-ACC-1, on a real bot.
+
+## OQ-T-API-02 — who may use `KeyboardButton.icon_custom_emoji_id`
+
+Round T. The only rule the repository knows is for message ENTITIES: "Custom emoji
+entities can only be used by bots that purchased additional usernames on Fragment"
+(`OQ-P-UI-02`). Whether the same rule governs a button's icon, and what Telegram answers an
+ineligible bot (a 400, or silently dropping the icon), is not established. The builder
+resolves an icon only for a bot whose appearance test answered `SENT` (one eligibility
+truth per bot, OQ-T-4) and falls back once, without icons, on a definite refusal.
+
+UNRESOLVED. R-ACC-2 on an eligible and an ineligible bot.
+
+## OQ-T-API-03 — how many buttons a reply-keyboard row may hold
+
+Round T. Telegram's per-row limit for a REPLY keyboard could not be read (the inline
+keyboard's eight is the only bound in the repository's notes). The builder caps a row at
+`MAIN_MENU_ROW_LENGTH_MAX = 4` — twice the legacy packing, half the inline bound, and the
+most a phone shows with Persian labels still readable — and the whole keyboard at the eight
+declared buttons. Raising the cap later is a widening the previous release still parses;
+lowering it would strand stored layouts, so it starts low.
+
+UNRESOLVED as a Telegram fact; the cap is the product's own bound either way.
+
+## OQ-T-API-04 — what a tap on an iconed or styled button sends back
+
+Round T. A reply-keyboard tap arrives as a message whose text is the button's `text`, and
+the runtime routes by exactly that string (`docs/round-t-button-builder-audit.md` §3). The
+builder never alters `text` — an icon travels only in `icon_custom_emoji_id` — so routing
+holds IF Telegram sends back the text alone, without the icon (as a character or an
+entity) and without any marker for the style. Not verifiable from this session.
+
+UNRESOLVED. R-ACC-3: tap each styled and iconed button on a real client and confirm the
+command it reaches.
