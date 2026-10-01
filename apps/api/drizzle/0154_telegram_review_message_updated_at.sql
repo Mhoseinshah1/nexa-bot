@@ -1,0 +1,1 @@
+ALTER TABLE "telegram_review_messages" ADD COLUMN "updated_at" timestamp with time zone DEFAULT now() NOT NULL;

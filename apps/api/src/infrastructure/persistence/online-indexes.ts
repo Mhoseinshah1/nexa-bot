@@ -250,12 +250,14 @@ export const ONLINE_INDEXES: readonly OnlineIndex[] = [
   },
   {
     /*
-     * The same sweep's review-message side: oldest first by `created_at`, which bounds
-     * `COALESCE(finalised_at, created_at)` from below, so the age test is an index range.
-     * Concurrently, for the reason above: every receipt decision writes this table.
+     * The same sweep's review-message side: oldest last write first (`updated_at`, bumped by
+     * recording, finalising and clearing a stamp). Concurrently, for the reason above: every
+     * receipt decision writes this table. Named apart from the `created_at` shape an earlier
+     * revision of this branch declared, so no database that built that one keeps it under
+     * this name.
      */
-    name: 'telegram_review_messages_retention_idx',
-    definition: 'ON "telegram_review_messages" USING btree ("tenant_id","created_at")',
+    name: 'telegram_review_messages_updated_idx',
+    definition: 'ON "telegram_review_messages" USING btree ("tenant_id","updated_at")',
   },
 ];
 

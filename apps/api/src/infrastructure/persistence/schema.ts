@@ -10072,6 +10072,12 @@ export const telegramReviewMessages = pgTable(
     hasMedia: boolean('has_media').notNull(),
     finalisedAt: timestamptz('finalised_at'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
+    /**
+     * The row's last write — its recording, its finalisation, or a stamp cleared because the
+     * edit failed (Codex review of #131). The retention sweep ages a review row by THIS, so
+     * a stamp cleared for a retry is not eligible the moment it is cleared.
+     */
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
   (table) => [
     uniqueIndex('telegram_review_messages_message_key').on(
@@ -10081,7 +10087,7 @@ export const telegramReviewMessages = pgTable(
       table.messageId,
     ),
     index('telegram_review_messages_payment_idx').on(table.tenantId, table.paymentId),
-    // The retention sweep's `(tenant_id, created_at)` index is an ONLINE index
+    // The retention sweep's `(tenant_id, updated_at)` index is an ONLINE index
     // (`online-indexes.ts`): every receipt decision writes this table.
     foreignKey({
       columns: [table.tenantId, table.paymentId],
