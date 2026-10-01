@@ -3679,12 +3679,18 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    * the messenger (the keyboard it draws) and the runtime (the labels a tap is matched
    * against), so the two cannot disagree about a renamed or hidden button.
    */
+  /*
+   * Round T: the PUBLISHED layout while its projection is current, else the legacy path
+   * over `bot.main_menu` — never the draft. One statement per decision; the builder's read
+   * shares it (`fromState`).
+   */
+  const mainMenuSource = new PublishedMainMenuSource(
+    mainMenuBuilderRepository,
+    settingsResolver,
+    opsLog,
+  );
   const mainMenuLayout = new MainMenuLayout({
-    /*
-     * Round T: the PUBLISHED layout while its projection is current, else the legacy path
-     * over `bot.main_menu` — never the draft.
-     */
-    source: new PublishedMainMenuSource(mainMenuBuilderRepository, opsLog),
+    source: mainMenuSource,
     settings: settingsResolver,
     features: featureFlagResolver,
     templates: templateResolver,
@@ -3758,6 +3764,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     settings: settingsResolver,
     settingRepository,
     mainMenu: mainMenuLayout,
+    source: mainMenuSource,
     templates: templateResolver,
     defaultLabel: (key) => templateCatalogue.defaultBody(key, DEFAULT_TEMPLATE_LOCALE),
     bots: appearanceRepository,

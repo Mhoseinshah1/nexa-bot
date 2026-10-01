@@ -13,7 +13,7 @@ import {
 } from '../../../../infrastructure/persistence/unit-of-work.js';
 import type {
   MainMenuBuilderRepository,
-  PublishedMainMenuHead,
+  MainMenuStateRead,
   StoredMainMenuLayout,
   StoredMainMenuRevision,
 } from '../application/ports.js';
@@ -32,6 +32,7 @@ const LAYOUT_SELECTION = {
   draftVersion: mainMenuLayouts.draftVersion,
   draftUpdatedAt: mainMenuLayouts.draftUpdatedAt,
   draftUpdatedByAdminId: mainMenuLayouts.draftUpdatedByAdminId,
+  draftLegacySettingVersion: mainMenuLayouts.draftLegacySettingVersion,
   originId: draftOrigin.id,
   originRevision: draftOrigin.revision,
   published: mainMenuLayouts.published,
@@ -46,6 +47,7 @@ interface LayoutRow {
   draftVersion: number;
   draftUpdatedAt: Date;
   draftUpdatedByAdminId: string | null;
+  draftLegacySettingVersion: number | null;
   originId: string | null;
   originRevision: number | null;
   published: unknown;
@@ -65,6 +67,7 @@ function toLayout(row: LayoutRow): StoredMainMenuLayout {
       row.originId === null || row.originRevision === null
         ? null
         : { id: row.originId, revision: row.originRevision },
+    draftLegacySettingVersion: row.draftLegacySettingVersion,
     published: row.published,
     publishedRevision: row.publishedRevision,
     publishedAt: row.publishedAt,
@@ -128,6 +131,7 @@ export class DrizzleMainMenuBuilderRepository implements MainMenuBuilderReposito
       readonly now: Date;
       readonly adminId: string | null;
       readonly restoredFromRevisionId: string | null;
+      readonly legacySettingVersion: number | null;
     },
     tx: unknown,
   ): Promise<StoredMainMenuLayout | null> {
@@ -141,6 +145,7 @@ export class DrizzleMainMenuBuilderRepository implements MainMenuBuilderReposito
         draftUpdatedAt: input.now,
         draftUpdatedByAdminId: input.adminId,
         draftRestoredFromRevisionId: input.restoredFromRevisionId,
+        draftLegacySettingVersion: input.legacySettingVersion,
       })
       .onConflictDoNothing()
       .returning({ tenantId: mainMenuLayouts.tenantId });
@@ -156,6 +161,7 @@ export class DrizzleMainMenuBuilderRepository implements MainMenuBuilderReposito
       readonly now: Date;
       readonly adminId: string | null;
       readonly restoredFromRevisionId: string | null;
+      readonly legacySettingVersion?: number | null;
     },
     tx: unknown,
   ): Promise<StoredMainMenuLayout | null> {
@@ -163,6 +169,9 @@ export class DrizzleMainMenuBuilderRepository implements MainMenuBuilderReposito
     const updated = await executorOf(this.db, tx)
       .update(mainMenuLayouts)
       .set({
+        ...(input.legacySettingVersion === undefined
+          ? {}
+          : { draftLegacySettingVersion: input.legacySettingVersion }),
         draft: encode(input.draft),
         draftVersion: sql`${mainMenuLayouts.draftVersion} + 1`,
         draftUpdatedAt: input.now,
@@ -203,6 +212,7 @@ export class DrizzleMainMenuBuilderRepository implements MainMenuBuilderReposito
         publishedByAdminId: input.adminId,
         projectionSettingVersion: input.projectionSettingVersion,
         draftRestoredFromRevisionId: null,
+        draftLegacySettingVersion: input.projectionSettingVersion,
       })
       .where(
         and(
@@ -273,38 +283,57 @@ export class DrizzleMainMenuBuilderRepository implements MainMenuBuilderReposito
     return rows.map(toRevision);
   }
 
-  async publishedHead(scope: ScopeContext, tx?: unknown): Promise<PublishedMainMenuHead | null> {
+  async readMenuState(scope: ScopeContext, tx?: unknown): Promise<MainMenuStateRead> {
     const tenantId = requireTenantId(scope);
-    const [row] = await executorOf(this.db, tx)
-      .select({
-        published: mainMenuLayouts.published,
-        publishedRevision: mainMenuLayouts.publishedRevision,
-        projectionSettingVersion: mainMenuLayouts.projectionSettingVersion,
-        settingVersion: settingValues.version,
-      })
-      .from(mainMenuLayouts)
-      .leftJoin(
-        settingValues,
-        and(
-          eq(settingValues.tenantId, mainMenuLayouts.tenantId),
-          eq(settingValues.settingKey, 'bot.main_menu'),
-        ),
-      )
-      .where(eq(mainMenuLayouts.tenantId, tenantId))
-      .limit(1);
-    if (
-      row === undefined ||
-      row.published === null ||
-      row.publishedRevision === null ||
-      row.projectionSettingVersion === null
-    ) {
-      return null;
-    }
+    /*
+     * ONE statement, so ONE snapshot even at READ COMMITTED: the builder row (with its
+     * restored-from revision's number) and the `bot.main_menu` row, each optional, joined
+     * on a one-row anchor. Two statements could straddle a publish's commit and pair an old
+     * published head with the new setting version — a false "superseded".
+     */
+    const result = await executorOf(this.db, tx).execute<StateRow>(sql`
+      SELECT l.tenant_id IS NOT NULL AS has_layout,
+             l.draft::text AS draft, l.draft_version, l.draft_updated_at,
+             l.draft_updated_by_admin_id, l.draft_legacy_setting_version,
+             o.id AS origin_id, o.revision AS origin_revision,
+             l.published::text AS published, l.published_revision, l.published_at,
+             l.published_by_admin_id, l.projection_setting_version,
+             s.value::text AS setting_value, s.version AS setting_version,
+             s.updated_at AS setting_updated_at, s.updated_by_admin_id AS setting_updated_by
+        FROM (SELECT ${tenantId}::uuid AS tenant_id) AS anchor
+        LEFT JOIN ${mainMenuLayouts} AS l ON l.tenant_id = anchor.tenant_id
+        LEFT JOIN ${mainMenuRevisions} AS o
+               ON o.tenant_id = l.tenant_id AND o.id = l.draft_restored_from_revision_id
+        LEFT JOIN ${settingValues} AS s
+               ON s.tenant_id = anchor.tenant_id AND s.setting_key = 'bot.main_menu'`);
+    const row = result.rows[0];
+    if (row === undefined) return { layout: null, setting: null };
     return {
-      published: row.published,
-      publishedRevision: row.publishedRevision,
-      projectionSettingVersion: row.projectionSettingVersion,
-      settingVersion: row.settingVersion,
+      layout: row.has_layout
+        ? toLayout({
+            draft: parseJson(row.draft),
+            draftVersion: Number(row.draft_version),
+            draftUpdatedAt: toDate(row.draft_updated_at) ?? new Date(0),
+            draftUpdatedByAdminId: row.draft_updated_by_admin_id,
+            draftLegacySettingVersion: toInt(row.draft_legacy_setting_version),
+            originId: row.origin_id,
+            originRevision: toInt(row.origin_revision),
+            published: parseJson(row.published),
+            publishedRevision: toInt(row.published_revision),
+            publishedAt: toDate(row.published_at),
+            publishedByAdminId: row.published_by_admin_id,
+            projectionSettingVersion: toInt(row.projection_setting_version),
+          })
+        : null,
+      setting:
+        row.setting_version === null
+          ? null
+          : {
+              value: parseJson(row.setting_value),
+              version: Number(row.setting_version),
+              updatedAt: toDate(row.setting_updated_at) ?? new Date(0),
+              updatedByAdminId: row.setting_updated_by,
+            },
     };
   }
 
@@ -351,4 +380,38 @@ function toRevision(row: {
         ? null
         : { id: row.originId, revision: row.originRevision },
   };
+}
+
+/** The raw row of `readMenuState`. Text for jsonb (parsed once, here); numbers may arrive as strings. */
+interface StateRow extends Record<string, unknown> {
+  has_layout: boolean;
+  draft: string | null;
+  draft_version: number | string | null;
+  draft_updated_at: Date | string | null;
+  draft_updated_by_admin_id: string | null;
+  draft_legacy_setting_version: number | string | null;
+  origin_id: string | null;
+  origin_revision: number | string | null;
+  published: string | null;
+  published_revision: number | string | null;
+  published_at: Date | string | null;
+  published_by_admin_id: string | null;
+  projection_setting_version: number | string | null;
+  setting_value: string | null;
+  setting_version: number | string | null;
+  setting_updated_at: Date | string | null;
+  setting_updated_by: string | null;
+}
+
+function parseJson(text: string | null): unknown {
+  return text === null ? null : (JSON.parse(text) as unknown);
+}
+
+function toInt(value: number | string | null): number | null {
+  return value === null ? null : Number(value);
+}
+
+function toDate(value: Date | string | null): Date | null {
+  if (value === null) return null;
+  return value instanceof Date ? value : new Date(value);
 }

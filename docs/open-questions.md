@@ -2737,46 +2737,50 @@ reach them (the staging server can: `POST /api/admin/v1/fx/refresh`, then read t
 operational log and the FX section). A wrong shape fails closed — the source reads
 `UNAVAILABLE`, the other prices the pair, and no figure is invented.
 
-## OQ-T-API-01 — `KeyboardButton.style`: its exact values and what a client draws
+## OQ-T-API-01 — `KeyboardButton.style`: its exact values
 
-Round T, button builder. `core.telegram.org/bots/api` was refused by the build session's
-egress policy, and nothing in the repository mentions `style`. The builder stores the
-closed set `default | primary | success | danger`, with `default` OMITTED on the wire, as
-the owner's brief states — relied on, not verified. Unknown: whether every client draws
-each value, and what Telegram answers a value it does not know (a 400 would take down the
-whole reply that carries the keyboard, which is why the set is closed).
+Round T, button builder. The build session could not reach `core.telegram.org` (egress
+blocked); the owner confirmed the facts on 2026-10-01: `KeyboardButton.style` accepts
+exactly `primary`, `success` and `danger` (Bot API 9.4), and an absent style is the
+client's default. The builder stores the closed set `default | primary | success | danger`
+and OMITS `style` for `default`. No custom colours exist and none are offered.
 
-UNRESOLVED. `docs/round-t-button-builder-audit.md` §13, R-ACC-1, on a real bot.
+RESOLVED (owner, Bot API 9.4). Real-bot acceptance R-ACC-1 still checks the rendering.
 
 ## OQ-T-API-02 — who may use `KeyboardButton.icon_custom_emoji_id`
 
-Round T. The only rule the repository knows is for message ENTITIES: "Custom emoji
-entities can only be used by bots that purchased additional usernames on Fragment"
-(`OQ-P-UI-02`). Whether the same rule governs a button's icon, and what Telegram answers an
-ineligible bot (a 400, or silently dropping the icon), is not established. The builder
-resolves an icon only for a bot whose appearance test answered `SENT` (one eligibility
-truth per bot, OQ-T-4) and falls back once, without icons, on a definite refusal.
+Round T. Confirmed by the owner: `icon_custom_emoji_id` is official Bot API, usable by bots
+able to use custom emoji (bots with purchased Fragment usernames, or in the applicable
+cases a bot whose owner has Premium). Nexa keeps its per-BOT-INSTANCE empirical appearance
+test as the runtime authority: an eligible tenant never implies that every one of its bots
+is. The icon is a separate `iconSlot`, never `appearanceSlot`.
 
-UNRESOLVED. R-ACC-2 on an eligible and an ineligible bot.
+For T2 (recorded here and in the audit's T2 section): a generic permanent 400 on a request
+carrying a keyboard icon must NOT mark the bot's whole custom-emoji capability rejected —
+only a reliably classified eligibility denial downgrades the shared per-bot state. On a
+definite, icon-attributable rejection: at most ONE retry without `icon_custom_emoji_id`,
+keeping the text and any valid style. A timeout, an unreadable 2xx, transport uncertainty
+or anything that may have landed is NEVER sent a second time (the UNKNOWN discipline).
+
+RESOLVED as an API fact (owner). What Telegram answers an ineligible bot is still observed
+per bot by the appearance test (`OQ-P-UI-02`) and real-bot acceptance R-ACC-2.
 
 ## OQ-T-API-03 — how many buttons a reply-keyboard row may hold
 
-Round T. Telegram's per-row limit for a REPLY keyboard could not be read (the inline
-keyboard's eight is the only bound in the repository's notes). The builder caps a row at
-`MAIN_MENU_ROW_LENGTH_MAX = 4` — twice the legacy packing, half the inline bound, and the
-most a phone shows with Persian labels still readable — and the whole keyboard at the eight
-declared buttons. Raising the cap later is a widening the previous release still parses;
-lowering it would strand stored layouts, so it starts low.
+Round T. The builder no longer invents a protocol limit: `MAIN_MENU_ROW_LENGTH_MAX` and
+`MAIN_MENU_ROWS_MAX` are both the size of the closed registry (`MAIN_MENU_BUTTON_IDS`) —
+Nexa DOMAIN bounds (each button is placed at most once), documented as NOT Telegram maxima.
+One button per row and every button on one row are both valid. How many read well side by
+side is the operator's call in the builder.
 
-UNRESOLVED as a Telegram fact; the cap is the product's own bound either way.
+RESOLVED by owner decision (B4, 2026-10-01): no Telegram-derived cap is stored.
 
 ## OQ-T-API-04 — what a tap on an iconed or styled button sends back
 
-Round T. A reply-keyboard tap arrives as a message whose text is the button's `text`, and
-the runtime routes by exactly that string (`docs/round-t-button-builder-audit.md` §3). The
-builder never alters `text` — an icon travels only in `icon_custom_emoji_id` — so routing
-holds IF Telegram sends back the text alone, without the icon (as a character or an
-entity) and without any marker for the style. Not verifiable from this session.
+Round T. Confirmed by the owner: when a `KeyboardButton` carries no special field other than
+`text`, `icon_custom_emoji_id` and `style`, a press sends `text` — the icon is not prepended
+and the style adds nothing. The builder never alters `text`, so routing by the rendered
+`bot.menu.*` label stays valid for styled and iconed buttons.
 
-UNRESOLVED. R-ACC-3: tap each styled and iconed button on a real client and confirm the
-command it reaches.
+RESOLVED (owner). Real-bot acceptance R-ACC-3 still taps each styled and iconed button and
+confirms the command it reaches.

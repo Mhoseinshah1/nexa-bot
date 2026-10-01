@@ -3,15 +3,26 @@ import {
   explicitMainMenuSchema,
   isSystemContext,
   normalizeExplicitMainMenu,
+  settingDefinition,
   type ExplicitMainMenu,
+  type MainMenuLayoutEntry,
   type OperationalEventRecorder,
   type ScopeContext,
 } from '@nexa/contracts';
 import type {
+  MainMenuSnapshot,
   MainMenuSource,
   MainMenuSourceAnswer,
 } from '../../../commerce/messaging/application/main-menu.js';
-import type { MainMenuBuilderRepository, PublishedMainMenuHead } from './ports.js';
+import type {
+  ResolvedSetting,
+  SettingsResolver,
+} from '../../settings/application/settings-resolver.js';
+import type {
+  MainMenuBuilderRepository,
+  MainMenuStateRead,
+  PublishedMainMenuHead,
+} from './ports.js';
 
 /**
  * The dedupe key of a tenant's "published layout unreadable" condition. Operational events
@@ -37,32 +48,68 @@ export function readPublishedHead(head: PublishedMainMenuHead): PublishedHeadRea
 }
 
 /**
- * Round T — the runtime's answer to "what is the customer keyboard drawn from"
- * (`docs/round-t-button-builder-audit.md` §11.5).
+ * Round T — the ONE selection of what the customer keyboard is drawn from
+ * (`docs/round-t-button-builder-audit.md` §11.5), shared by the runtime and the builder's
+ * read.
  *
- * The PUBLISHED layout, only while the compatibility projection it wrote is still the
- * setting's current version. A draft is never read here. Anything else is the legacy path:
+ * Decided from ONE statement (`readMenuState`: the builder row and the `bot.main_menu` row
+ * together), so the head, the projection version, the setting version and the legacy value
+ * all come from the same commit. The PUBLISHED layout, only while the projection it wrote is
+ * still the setting's current version; a draft is never read. Anything else is the legacy
+ * path over that same setting value:
  *
  * - nothing published — today's keyboard, byte for byte;
- * - `bot.main_menu` written behind the publish (an older release during a rollback, the
- *   only writer left once the builder's guard is in place) — the setting is the operator's
- *   latest act, and the builder reports the layout superseded;
+ * - `bot.main_menu` written behind the publish (an older release during a rollback) — the
+ *   setting is the operator's latest act, and the builder reports the layout superseded;
  * - a snapshot this release cannot parse (a later release wrote it) — recorded as
  *   `bot_menu.published_unreadable`, deduplicated per tenant, and closed by the next publish.
+ *
+ * The setting row is resolved by the settings resolver's own rule (`resolveStored`: the same
+ * parse, the same default, the same invalid-value event), never a second copy of it.
  */
 export class PublishedMainMenuSource implements MainMenuSource {
   constructor(
-    private readonly repository: Pick<MainMenuBuilderRepository, 'publishedHead'>,
+    private readonly repository: Pick<MainMenuBuilderRepository, 'readMenuState'>,
+    private readonly settings: Pick<SettingsResolver, 'resolveStored'>,
     private readonly opsLog: OperationalEventRecorder,
   ) {}
 
-  async currentFor(scope: ScopeContext): Promise<MainMenuSourceAnswer> {
+  async snapshotFor(scope: ScopeContext): Promise<MainMenuSnapshot> {
     // A system scope draws no customer's keyboard and has no builder row.
-    if (isSystemContext(scope)) return legacy(false, false);
-    const head = await this.repository.publishedHead(scope);
-    if (head === null) return legacy(false, false);
-    const reading = readPublishedHead(head);
-    if (reading.layout === null) {
+    if (isSystemContext(scope)) {
+      return {
+        source: legacy(false, false),
+        legacy: settingDefinition('bot.main_menu').defaultValue as readonly MainMenuLayoutEntry[],
+      };
+    }
+    return (await this.fromState(scope, await this.repository.readMenuState(scope))).snapshot;
+  }
+
+  /**
+   * The snapshot a state read means — what the builder's read calls with the SAME state it
+   * builds its draft and heads from, so its `source`, `superseded` and `live` are the
+   * runtime's answer for that state.
+   */
+  async fromState(
+    scope: ScopeContext,
+    state: MainMenuStateRead,
+  ): Promise<{ readonly snapshot: MainMenuSnapshot; readonly setting: ResolvedSetting }> {
+    const setting = await this.settings.resolveStored(scope, 'bot.main_menu', state.setting);
+    const layout = state.layout;
+    const head =
+      layout === null ||
+      layout.published === null ||
+      layout.publishedRevision === null ||
+      layout.projectionSettingVersion === null
+        ? null
+        : {
+            published: layout.published,
+            publishedRevision: layout.publishedRevision,
+            projectionSettingVersion: layout.projectionSettingVersion,
+            settingVersion: state.setting?.version ?? null,
+          };
+    const answer = sourceAnswerOf(head);
+    if (head !== null && answer.kind === 'LEGACY' && answer.publishedUnreadable) {
       await this.opsLog.record(scope, {
         code: BOT_MENU_PUBLISHED_UNREADABLE_CODE,
         severity: 'WARN',
@@ -71,11 +118,24 @@ export class PublishedMainMenuSource implements MainMenuSource {
         context: { revision: head.publishedRevision },
         dedupeKey: PUBLISHED_UNREADABLE_DEDUPE_KEY,
       });
-      return legacy(reading.superseded, true);
     }
-    if (reading.superseded) return legacy(true, false);
-    return { kind: 'EXPLICIT', layout: reading.layout, revision: head.publishedRevision };
+    return {
+      snapshot: { source: answer, legacy: setting.value as readonly MainMenuLayoutEntry[] },
+      setting,
+    };
   }
+}
+
+/**
+ * THE decision of what a published head means for the keyboard, over a head and setting
+ * version read together.
+ */
+export function sourceAnswerOf(head: PublishedMainMenuHead | null): MainMenuSourceAnswer {
+  if (head === null) return legacy(false, false);
+  const reading = readPublishedHead(head);
+  if (reading.layout === null) return legacy(reading.superseded, true);
+  if (reading.superseded) return legacy(true, false);
+  return { kind: 'EXPLICIT', layout: reading.layout, revision: head.publishedRevision };
 }
 
 function legacy(superseded: boolean, publishedUnreadable: boolean): MainMenuSourceAnswer {

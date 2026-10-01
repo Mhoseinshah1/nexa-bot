@@ -59,7 +59,11 @@ import {
   INVALID_STORED_SETTING_CODE,
   type ResolvedSetting,
 } from '../../settings/application/settings-resolver.js';
-import { PUBLISHED_UNREADABLE_DEDUPE_KEY } from './main-menu-source.js';
+import type { MainMenuSnapshot } from '../../../commerce/messaging/application/main-menu.js';
+import {
+  PUBLISHED_UNREADABLE_DEDUPE_KEY,
+  type PublishedMainMenuSource,
+} from './main-menu-source.js';
 import type { MainMenuBuilderRepository, StoredMainMenuLayout } from './ports.js';
 
 export const BOT_MENU_BUILDER_VIEW_PERMISSION = 'settings.view' satisfies PermissionKey;
@@ -69,7 +73,7 @@ export const BOT_MENU_BUILDER_EDIT_PERMISSION = 'settings.edit' satisfies Permis
 export interface BuilderMainMenuReader {
   describeFor(
     scope: TenantContext,
-    options?: { readonly gatesForHidden?: boolean },
+    options?: { readonly gatesForHidden?: boolean; readonly pinned?: MainMenuSnapshot },
   ): Promise<
     ReadonlyArray<{
       readonly item: MainMenuItem;
@@ -79,7 +83,10 @@ export interface BuilderMainMenuReader {
       readonly shown: boolean;
     }>
   >;
-  rowsFor(scope: TenantContext): Promise<string[][]>;
+  rowsFor(
+    scope: TenantContext,
+    options?: { readonly pinned?: MainMenuSnapshot },
+  ): Promise<string[][]>;
 }
 
 export interface BotMenuBuilderServiceDeps {
@@ -100,8 +107,10 @@ export interface BotMenuBuilderServiceDeps {
     resolve(scope: TenantContext, key: 'bot.main_menu', tx?: unknown): Promise<ResolvedSetting>;
   };
   /** The setting's own conditional write — the publish's projection goes through it. */
-  readonly settingRepository: Pick<SettingRepository, 'upsert'>;
+  readonly settingRepository: Pick<SettingRepository, 'upsert' | 'find'>;
   readonly mainMenu: BuilderMainMenuReader;
+  /** The runtime's own source selection, applied to the builder's one state read. */
+  readonly source: Pick<PublishedMainMenuSource, 'fromState'>;
   readonly templates: {
     render(scope: TenantContext, key: TemplateKey, values: TemplateValues): Promise<string>;
     resolve(
@@ -135,29 +144,31 @@ export class BotMenuBuilderService {
 
   async view(scope: TenantContext, actor: ActorContext): Promise<BotMenuBuilderResponse> {
     await this.deps.guard.check(scope, actor, BOT_MENU_BUILDER_VIEW_PERMISSION);
-    const [row, setting] = await Promise.all([
-      this.deps.repository.findLayout(scope),
-      this.deps.settings.resolve(scope, 'bot.main_menu'),
-    ]);
-    const seed = explicitFromLegacy(setting.value as readonly MainMenuLayoutEntry[]);
-    const head = headOf(row, seed);
-    const published = head.published;
-    const superseded =
-      row !== null &&
-      row.publishedRevision !== null &&
-      row.projectionSettingVersion !== setting.version;
-    const publishedUnreadable = published !== null && published.layout === null;
+    /*
+     * ONE statement for the builder row and the setting (`readMenuState`), and the
+     * runtime's own source selection over it (`fromState`): read separately, a publish
+     * committing between the reads paired an old published head with the new setting
+     * version, and the page reported its own publish superseded. `source`, `superseded`,
+     * `live`, the items and the draft's legacy check all come from this one state; the
+     * evaluator is PINNED to it and reads the menu state nowhere else.
+     */
+    const state = await this.deps.repository.readMenuState(scope);
+    const { snapshot: pinned, setting } = await this.deps.source.fromState(scope, state);
+    const answer = pinned.source;
+    const row = state.layout;
+    const head = headOf(row, explicitFromLegacy(pinned.legacy), setting.version);
     const [described, live, bots] = await Promise.all([
-      this.deps.mainMenu.describeFor(scope, { gatesForHidden: true }),
-      this.deps.mainMenu.rowsFor(scope),
+      this.deps.mainMenu.describeFor(scope, { gatesForHidden: true, pinned }),
+      this.deps.mainMenu.rowsFor(scope, { pinned }),
       this.deps.bots.listBots(scope),
     ]);
     return {
-      source: published !== null && !superseded && !publishedUnreadable ? 'EXPLICIT' : 'LEGACY',
-      superseded,
-      publishedUnreadable,
+      source: answer.kind,
+      superseded: answer.kind === 'LEGACY' && answer.superseded,
+      publishedUnreadable: answer.kind === 'LEGACY' && answer.publishedUnreadable,
+      settingVersion: setting.version,
       draft: head.draft,
-      published,
+      published: head.published,
       items: await this.items(scope, described),
       live: { rows: live },
       iconEligibility: bots.map((bot) => ({
@@ -222,17 +233,31 @@ export class BotMenuBuilderService {
       action: denial.action,
       layout,
       expectedDraftVersion: command.expectedDraftVersion,
+      legacyBaselineVersion: command.legacyBaselineVersion,
     });
     return this.mutate(scope, actor, denial, command.idempotencyKey, requestHash, async (tx) => {
       const before = await this.lockedRow(scope, tx, command.expectedDraftVersion);
-      if (before !== null && sameDraft(before, layout)) return { changed: false, row: before };
+      if (before !== null && sameDraft(before, layout)) {
+        return {
+          changed: false,
+          row: before,
+          settingVersion: await this.settingVersionIn(scope, tx),
+        };
+      }
       const after = await this.writeDraft(scope, actor, tx, before, {
         draft: layout,
         // An edit of a restored draft is still derived from that revision.
         restoredFromRevisionId: before?.draftRestoredFrom?.id ?? null,
+        /*
+         * The FIRST save records the version the page seeded this draft from — stated by the
+         * page, because a legacy write may have landed since it loaded, and taking today's
+         * version here would quietly rebase the draft onto it. A later save keeps the
+         * baseline the draft already has.
+         */
+        legacySettingVersion: before === null ? command.legacyBaselineVersion : undefined,
       });
       await this.auditDraft(scope, actor, tx, denial.action, before, after, null);
-      return { changed: true, row: after };
+      return { changed: true, row: after, settingVersion: await this.settingVersionIn(scope, tx) };
     });
   }
 
@@ -248,22 +273,39 @@ export class BotMenuBuilderService {
     const requestHash = hashRequest({
       action: denial.action,
       expectedDraftVersion: command.expectedDraftVersion,
+      seed: command.seed,
     });
     return this.mutate(scope, actor, denial, command.idempotencyKey, requestHash, async (tx) => {
       const before = await this.lockedRow(scope, tx, command.expectedDraftVersion);
+      /*
+       * A reset is the operator's knowing re-seed: the draft's legacy baseline becomes the
+       * setting's CURRENT version, read under this transaction. `LIVE` takes the draft from
+       * that same value — what "the legacy menu changed since this draft" asks for.
+       */
+      const setting = await this.deps.settings.resolve(scope, 'bot.main_menu', tx);
+      const target =
+        command.seed === 'LIVE'
+          ? explicitFromLegacy(setting.value as readonly MainMenuLayoutEntry[])
+          : DEFAULT_EXPLICIT_MAIN_MENU;
       if (
         before !== null &&
-        sameDraft(before, DEFAULT_EXPLICIT_MAIN_MENU) &&
-        before.draftRestoredFrom === null
+        sameDraft(before, target) &&
+        before.draftRestoredFrom === null &&
+        before.draftLegacySettingVersion === setting.version
       ) {
-        return { changed: false, row: before };
+        return {
+          changed: false,
+          row: before,
+          settingVersion: await this.settingVersionIn(scope, tx),
+        };
       }
       const after = await this.writeDraft(scope, actor, tx, before, {
-        draft: DEFAULT_EXPLICIT_MAIN_MENU,
+        draft: target,
         restoredFromRevisionId: null,
+        legacySettingVersion: setting.version,
       });
       await this.auditDraft(scope, actor, tx, denial.action, before, after, null);
-      return { changed: true, row: after };
+      return { changed: true, row: after, settingVersion: await this.settingVersionIn(scope, tx) };
     });
   }
 
@@ -306,17 +348,23 @@ export class BotMenuBuilderService {
         sameDraft(before, snapshot) &&
         before.draftRestoredFrom?.id === revision.id
       ) {
-        return { changed: false, row: before };
+        return {
+          changed: false,
+          row: before,
+          settingVersion: await this.settingVersionIn(scope, tx),
+        };
       }
       const after = await this.writeDraft(scope, actor, tx, before, {
         draft: snapshot,
         restoredFromRevisionId: revision.id,
+        // A restored revision does not change what legacy value the draft answers to.
+        legacySettingVersion: undefined,
       });
       await this.auditDraft(scope, actor, tx, denial.action, before, after, {
         id: revision.id,
         revision: revision.revision,
       });
-      return { changed: true, row: after };
+      return { changed: true, row: after, settingVersion: await this.settingVersionIn(scope, tx) };
     });
   }
 
@@ -357,13 +405,37 @@ export class BotMenuBuilderService {
         );
       }
       const setting = await this.deps.settings.resolve(scope, 'bot.main_menu', tx);
+      /*
+       * The DURABLE legacy baseline (owner, PR #133). A publish OVERWRITES `bot.main_menu`.
+       * While nothing is published the legacy settings path is still open, and behind a
+       * superseded publish an older release has written it — in both states the setting
+       * must still be at the version this draft was derived from, or the publish would
+       * replace a legacy change nobody looked at. Refused, never rebased: the operator
+       * resets or reseeds the draft. Once a published head is current, the guard closes the
+       * legacy path and the draft-version / published-revision checks are the authority.
+       */
+      const superseded =
+        row.publishedRevision !== null && row.projectionSettingVersion !== setting.version;
+      if (
+        (row.publishedRevision === null || superseded) &&
+        row.draftLegacySettingVersion !== setting.version
+      ) {
+        throw errors.conflict(
+          CONTROL_ERROR_CODES.VERSION_CONFLICT,
+          'The live main menu changed since this draft was made. Reset or reseed the draft, then publish.',
+          {
+            legacyBaselineVersion: row.draftLegacySettingVersion,
+            settingVersion: setting.version,
+          },
+        );
+      }
       const current = readLayout(row.published);
       if (
         current !== null &&
         explicitMainMenusEqual(current, layout) &&
         row.projectionSettingVersion === setting.version
       ) {
-        return { changed: false, row };
+        return { changed: false, row, settingVersion: setting.version };
       }
 
       // 1. The compatibility projection, under the setting's own version predicate.
@@ -474,7 +546,7 @@ export class BotMenuBuilderService {
           tx,
         );
       }
-      return { changed: true, row: after };
+      return { changed: true, row: after, settingVersion: written.version };
     });
   }
 
@@ -533,15 +605,39 @@ export class BotMenuBuilderService {
     actor: ActorContext,
     tx: TransactionScope,
     before: StoredMainMenuLayout | null,
-    change: { readonly draft: ExplicitMainMenu; readonly restoredFromRevisionId: string | null },
+    change: {
+      readonly draft: ExplicitMainMenu;
+      readonly restoredFromRevisionId: string | null;
+      /**
+       * The draft's legacy baseline. A first draft always states one (the row is created
+       * with it); a later write replaces it only when given — a reset — and keeps it
+       * otherwise.
+       */
+      readonly legacySettingVersion: number | null | undefined;
+    },
   ): Promise<StoredMainMenuLayout> {
-    const fields = { ...change, now: this.deps.clock.now(), adminId: adminIdOf(actor) };
+    const fields = {
+      draft: change.draft,
+      restoredFromRevisionId: change.restoredFromRevisionId,
+      now: this.deps.clock.now(),
+      adminId: adminIdOf(actor),
+    };
     const after =
       before === null
-        ? await this.deps.repository.insertDraft(scope, fields, tx)
+        ? await this.deps.repository.insertDraft(
+            scope,
+            { ...fields, legacySettingVersion: change.legacySettingVersion ?? null },
+            tx,
+          )
         : await this.deps.repository.updateDraft(
             scope,
-            { ...fields, expectedDraftVersion: before.draftVersion },
+            {
+              ...fields,
+              expectedDraftVersion: before.draftVersion,
+              ...(change.legacySettingVersion === undefined
+                ? {}
+                : { legacySettingVersion: change.legacySettingVersion }),
+            },
             tx,
           );
     if (after === null) {
@@ -588,9 +684,11 @@ export class BotMenuBuilderService {
     denial: MutationDenial,
     idempotencyKey: string,
     requestHash: string,
-    work: (
-      tx: TransactionScope,
-    ) => Promise<{ readonly changed: boolean; readonly row: StoredMainMenuLayout }>,
+    work: (tx: TransactionScope) => Promise<{
+      readonly changed: boolean;
+      readonly row: StoredMainMenuLayout;
+      readonly settingVersion: number | null;
+    }>,
   ): Promise<MainMenuBuilderMutationResponse> {
     const replayed = await this.deps.idempotency.find<MainMenuBuilderMutationResponse>(
       scope,
@@ -619,10 +717,10 @@ export class BotMenuBuilderService {
             'This scope is not accepting work.',
           );
         }
-        const { changed, row } = await work(tx);
+        const { changed, row, settingVersion } = await work(tx);
         const answer: MainMenuBuilderMutationResponse = {
           changed,
-          head: headOf(row, DEFAULT_EXPLICIT_MAIN_MENU),
+          head: headOf(row, DEFAULT_EXPLICIT_MAIN_MENU, settingVersion),
         };
         await rememberOnce(
           this.deps.idempotency,
@@ -636,6 +734,14 @@ export class BotMenuBuilderService {
         return answer;
       },
     );
+  }
+
+  /** `bot.main_menu`'s version in this transaction, for the head a write answers with. */
+  private async settingVersionIn(
+    scope: TenantContext,
+    tx: TransactionScope,
+  ): Promise<number | null> {
+    return (await this.deps.settingRepository.find(scope, 'bot.main_menu', tx))?.version ?? null;
   }
 
   private denial(scope: TenantContext, action: string): MutationDenial {
@@ -679,7 +785,11 @@ function sameDraft(row: StoredMainMenuLayout, layout: ExplicitMainMenu): boolean
  * The two heads as the builder shows them. `seed` stands in for a draft there is none of,
  * or one this release cannot read: the live keyboard converted, for the read.
  */
-function headOf(row: StoredMainMenuLayout | null, seed: ExplicitMainMenu): MainMenuBuilderHead {
+function headOf(
+  row: StoredMainMenuLayout | null,
+  seed: ExplicitMainMenu,
+  settingVersion: number | null,
+): MainMenuBuilderHead {
   const published =
     row === null ||
     row.publishedRevision === null ||
@@ -694,6 +804,12 @@ function headOf(row: StoredMainMenuLayout | null, seed: ExplicitMainMenu): MainM
         };
   const stored = row === null ? null : readLayout(row.draft);
   const layout = stored ?? seed;
+  // With no saved draft, the seed IS the live arrangement: its baseline is today's version.
+  const legacyBaselineVersion = row === null ? settingVersion : row.draftLegacySettingVersion;
+  const legacyMatters =
+    row === null ||
+    row.publishedRevision === null ||
+    row.projectionSettingVersion !== settingVersion;
   return {
     draft: {
       layout,
@@ -706,8 +822,11 @@ function headOf(row: StoredMainMenuLayout | null, seed: ExplicitMainMenu): MainM
           ? true
           : !explicitMainMenusEqual(layout, published.layout),
       storedValueInvalid: row !== null && stored === null,
+      legacyBaselineVersion,
+      legacyChangedSinceDraft: legacyMatters && legacyBaselineVersion !== settingVersion,
     },
     published,
+    settingVersion,
   };
 }
 

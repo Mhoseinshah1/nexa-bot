@@ -57,7 +57,17 @@ function layoutWith(options: {
 }): MainMenuLayout {
   const answer = options.source;
   return new MainMenuLayout({
-    ...(answer === undefined ? {} : { source: { currentFor: () => Promise.resolve(answer) } }),
+    ...(answer === undefined
+      ? {}
+      : {
+          source: {
+            snapshotFor: () =>
+              Promise.resolve({
+                source: answer,
+                legacy: options.stored ?? DEFAULT_MAIN_MENU_LAYOUT,
+              }),
+          },
+        }),
     settings: {
       valueOf: <T>() => Promise.resolve((options.stored ?? DEFAULT_MAIN_MENU_LAYOUT) as T),
     },
@@ -508,12 +518,44 @@ describe('round T: PublishedMainMenuSource — published only, and only while it
     settingVersion: 7,
     ...overrides,
   });
+  /** A source over ONE state read, as `readMenuState` answers it. */
   const sourceOver = (
     answer: ReturnType<typeof head> | null,
     events: OperationalEventInput[] = [],
-  ) =>
-    new PublishedMainMenuSource(
-      { publishedHead: () => Promise.resolve(answer as never) },
+  ) => {
+    const legacy = [{ button: 'help', enabled: true }];
+    const settingVersion = answer === null ? 3 : answer.settingVersion;
+    return new PublishedMainMenuSource(
+      {
+        readMenuState: () =>
+          Promise.resolve({
+            layout:
+              answer === null
+                ? null
+                : ({
+                    published: answer.published,
+                    publishedRevision: answer.publishedRevision,
+                    projectionSettingVersion: answer.projectionSettingVersion,
+                  } as never),
+            setting:
+              settingVersion === null
+                ? null
+                : {
+                    value: legacy,
+                    version: settingVersion as number,
+                    updatedAt: new Date(0),
+                    updatedByAdminId: null,
+                  },
+          }),
+      },
+      {
+        // The resolver's own rule is the integration suite's; here, the row as read.
+        resolveStored: (_scope, _key, row) =>
+          Promise.resolve({
+            value: row?.value ?? DEFAULT_MAIN_MENU_LAYOUT,
+            version: row?.version ?? null,
+          } as never),
+      },
       {
         record: (_scope, event) => {
           events.push(event);
@@ -521,9 +563,18 @@ describe('round T: PublishedMainMenuSource — published only, and only while it
         },
       },
     );
+  };
+  const currentFor = async (source: PublishedMainMenuSource) =>
+    (await source.snapshotFor(scope)).source;
+
+  it('takes the legacy value from the SAME read as the head', async () => {
+    expect((await sourceOver(null).snapshotFor(scope)).legacy).toEqual([
+      { button: 'help', enabled: true },
+    ]);
+  });
 
   it('answers EXPLICIT for a readable, current publish', async () => {
-    expect(await sourceOver(head()).currentFor(scope)).toEqual({
+    expect(await currentFor(sourceOver(head()))).toEqual({
       kind: 'EXPLICIT',
       layout: DEFAULT_EXPLICIT_MAIN_MENU,
       revision: 4,
@@ -531,27 +582,23 @@ describe('round T: PublishedMainMenuSource — published only, and only while it
   });
 
   it('answers LEGACY with nothing published, and with the setting moved (superseded)', async () => {
-    expect(await sourceOver(null).currentFor(scope)).toEqual({
+    expect(await currentFor(sourceOver(null))).toEqual({
       kind: 'LEGACY',
       superseded: false,
       publishedUnreadable: false,
     });
-    expect(await sourceOver(head({ settingVersion: 8 })).currentFor(scope)).toEqual({
+    expect(await currentFor(sourceOver(head({ settingVersion: 8 })))).toEqual({
       kind: 'LEGACY',
       superseded: true,
       publishedUnreadable: false,
     });
     // A setting row that vanished is not "current" either.
-    expect((await sourceOver(head({ settingVersion: null })).currentFor(scope)).kind).toBe(
-      'LEGACY',
-    );
+    expect((await currentFor(sourceOver(head({ settingVersion: null })))).kind).toBe('LEGACY');
   });
 
   it('answers LEGACY for an unreadable snapshot and records it once per tenant key', async () => {
     const events: OperationalEventInput[] = [];
-    const answer = await sourceOver(head({ published: { v: 2, rows: [] } }), events).currentFor(
-      scope,
-    );
+    const answer = await currentFor(sourceOver(head({ published: { v: 2, rows: [] } }), events));
     expect(answer).toEqual({ kind: 'LEGACY', superseded: false, publishedUnreadable: true });
     expect(events.map((event) => [event.code, event.severity, event.dedupeKey])).toEqual([
       ['bot_menu.published_unreadable', 'WARN', 'bot_menu.published_unreadable:published'],

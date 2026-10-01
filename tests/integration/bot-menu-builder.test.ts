@@ -31,6 +31,7 @@ import { CATALOGUE_FA } from '@nexa/i18n';
 import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
 import { MainMenuLayout } from '../../apps/api/src/modules/commerce/messaging/application/main-menu';
 import { BotMenuBuilderService } from '../../apps/api/src/modules/control/bot-menu-builder/application/bot-menu-builder.service';
+import { PublishedMainMenuSource } from '../../apps/api/src/modules/control/bot-menu-builder/application/main-menu-source';
 import type { MainMenuBuilderRepository } from '../../apps/api/src/modules/control/bot-menu-builder/application/ports';
 import { DrizzleMainMenuBuilderRepository } from '../../apps/api/src/modules/control/bot-menu-builder/infrastructure/drizzle-main-menu-builder.repository';
 import { DrizzleAppearanceRepository } from '../../apps/api/src/modules/control/appearance/infrastructure/drizzle-appearance.repository';
@@ -143,12 +144,26 @@ describe('the button builder (round T, T1)', () => {
     );
   });
 
-  const saveDraft = (
+  /**
+   * A draft save from a page built NOW: the legacy baseline is the setting's current
+   * version unless a test states the one its page was seeded from.
+   */
+  const saveDraft = async (
     layout: ExplicitMainMenu,
     expectedDraftVersion: number | null,
     actor = owner,
     scope: TenantContext = tenantA,
-  ) => builder().saveDraft(scope, actor, { idempotencyKey: key(), expectedDraftVersion, layout });
+    legacyBaselineVersion?: number | null,
+  ) =>
+    builder().saveDraft(scope, actor, {
+      idempotencyKey: key(),
+      expectedDraftVersion,
+      layout,
+      legacyBaselineVersion:
+        legacyBaselineVersion === undefined
+          ? ((await settingRow(scope))?.version ?? null)
+          : legacyBaselineVersion,
+    });
   const publish = (
     expectedDraftVersion: number,
     expectedPublishedRevision: number | null,
@@ -159,6 +174,13 @@ describe('the button builder (round T, T1)', () => {
       idempotencyKey: key(),
       expectedDraftVersion,
       expectedPublishedRevision,
+    });
+  const reset = (expectedDraftVersion: number | null, seed: 'DEFAULT' | 'LIVE' = 'DEFAULT') =>
+    builder().reset(tenantA, owner, {
+      idempotencyKey: key(),
+      expectedDraftVersion,
+      confirm: true,
+      seed,
     });
   const keyboard = (scope: ScopeContext = tenantA) => container.mainMenu.keyboardFor(scope);
   const settingRow = async (scope: TenantContext = tenantA) =>
@@ -443,12 +465,13 @@ describe('the button builder (round T, T1)', () => {
         idempotencyKey: 'menu-builder-replayed-draft',
         expectedDraftVersion: 2,
         layout: threeAcross(),
+        legacyBaselineVersion: null,
       };
       const saved = await builder().saveDraft(tenantA, owner, draftCommand);
       expect(await builder().saveDraft(tenantA, owner, draftCommand)).toEqual(saved);
     });
 
-    it('P-5 a setting written behind the publish by an older release wins, is reported superseded, and a publish restores it', async () => {
+    it('P-5 a setting written behind the publish by an older release wins, is reported superseded, and is never overwritten unseen', async () => {
       await saveDraft(threeAcross(), null);
       await publish(1, null);
       // What a rolled-back release writes: its own shape, a new version.
@@ -464,14 +487,124 @@ describe('the button builder (round T, T1)', () => {
       const view = await builder().view(tenantA, owner);
       expect(view.superseded).toBe(true);
       expect(view.source).toBe('LEGACY');
-      // The same draft publishes again — the projection is what has to be put back.
-      const republished = await publish(1, 1);
+      expect(view.draft.legacyChangedSinceDraft).toBe(true);
+      // The same draft does NOT publish over the older release's write.
+      expect(await codeOf(publish(1, 1))).toBe(CONTROL_ERROR_CODES.VERSION_CONFLICT);
+      expect((await settingRow())?.version).toBe(2);
+      // The operator adopts the live arrangement knowingly, puts revision 1 back into the
+      // draft, and publishes: revision 2, current again.
+      const reseeded = await reset(1, 'LIVE');
+      expect(reseeded.head.draft.legacyBaselineVersion).toBe(2);
+      const [revisionOne] = (await builder().revisions(tenantA, owner, {})).revisions;
+      await builder().restore(tenantA, owner, revisionOne?.id ?? '', {
+        idempotencyKey: key(),
+        expectedDraftVersion: 2,
+      });
+      const republished = await publish(3, 1);
       expect(republished.changed).toBe(true);
       expect(republished.head.published?.revision).toBe(2);
+      expect(republished.head.published?.layout).toEqual(revisionOne?.layout);
       expect((await settingRow())?.version).toBe(3);
       const after = await builder().view(tenantA, owner);
       expect(after.superseded).toBe(false);
       expect(after.source).toBe('EXPLICIT');
+      expect(after.draft.legacyBaselineVersion).toBe(3);
+    });
+
+    it('P-7 never publishes a draft over a legacy write made after the draft was seeded, even after a reload', async () => {
+      const legacy = (button: MainMenuButtonId) => [{ button, enabled: true }];
+      const writeLegacy = (button: MainMenuButtonId, expectedVersion: number | null) =>
+        container.settingsService.set(tenantA, owner, {
+          idempotencyKey: key(),
+          key: 'bot.main_menu',
+          value: legacy(button),
+          expectedVersion,
+        });
+      // Seeded from N (no row), saved, then the legacy path moves the setting to N+1.
+      const loaded = await builder().view(tenantA, owner);
+      expect(loaded.draft.legacyBaselineVersion).toBeNull();
+      await saveDraft(threeAcross(), null, owner, tenantA, loaded.draft.legacyBaselineVersion);
+      await writeLegacy('help', null);
+      expect(await codeOf(publish(1, null))).toBe(CONTROL_ERROR_CODES.VERSION_CONFLICT);
+      // N+1 untouched; no revision, no published head.
+      expect(await settingRow()).toEqual({ version: 1, value: legacy('help') });
+      expect(await revisionCount()).toBe(0);
+
+      // A reload does not rebase the durable draft: the fresh versions still conflict.
+      const reloaded = await builder().view(tenantA, owner);
+      expect(reloaded.published).toBeNull();
+      expect(reloaded.draft.version).toBe(1);
+      expect(reloaded.draft.legacyBaselineVersion).toBeNull();
+      expect(reloaded.draft.legacyChangedSinceDraft).toBe(true);
+      expect(
+        await codeOf(publish(reloaded.draft.version ?? 0, reloaded.published?.revision ?? null)),
+      ).toBe(CONTROL_ERROR_CODES.VERSION_CONFLICT);
+      expect(await settingRow()).toEqual({ version: 1, value: legacy('help') });
+      expect(await revisionCount()).toBe(0);
+
+      // The page seeded at N, then a legacy write lands BEFORE the first save: the baseline the
+      // page states is stored, not today's version, so the publish still conflicts.
+      await db().execute(sql`TRUNCATE main_menu_layouts`);
+      const seededAt = await builder().view(tenantA, owner);
+      expect(seededAt.draft.legacyBaselineVersion).toBe(1);
+      await writeLegacy('wallet', 1);
+      await saveDraft(threeAcross(), null, owner, tenantA, seededAt.draft.legacyBaselineVersion);
+      expect(await codeOf(publish(1, null))).toBe(CONTROL_ERROR_CODES.VERSION_CONFLICT);
+      expect(await settingRow()).toEqual({ version: 2, value: legacy('wallet') });
+
+      // Reseeded from the live arrangement — knowingly — it publishes, and the projection's
+      // version becomes the draft's new baseline.
+      const reseeded = await reset(1, 'LIVE');
+      expect(reseeded.head.draft.layout).toEqual(explicitFromLegacy(legacy('wallet')));
+      expect(reseeded.head.draft.legacyBaselineVersion).toBe(2);
+      expect(reseeded.head.draft.legacyChangedSinceDraft).toBe(false);
+      const published = await publish(2, null);
+      expect(published.head.published?.revision).toBe(1);
+      expect(published.head.draft.legacyBaselineVersion).toBe(3);
+      expect(published.head.settingVersion).toBe(3);
+    });
+
+    it('P-8 builds the read from ONE state read: a publish committing during it is not reported superseded', async () => {
+      await saveDraft(threeAcross(), null);
+      await publish(1, null);
+      await saveDraft(DEFAULT_EXPLICIT_MAIN_MENU, 1);
+      // A colleague's publish commits right after the builder's FIRST read of the menu state
+      // — whichever read that is — so revision 2 and the setting's version 2 land between it
+      // and anything the read does afterwards.
+      const real = new DrizzleMainMenuBuilderRepository(db());
+      let armed = true;
+      const race = async () => {
+        if (!armed) return;
+        armed = false;
+        await publish(2, 1);
+      };
+      const racing = Object.assign(Object.create(real) as object, {
+        findLayout: async (scope: ScopeContext, tx?: unknown, forUpdate?: boolean) => {
+          const found = await real.findLayout(scope, tx, forUpdate);
+          await race();
+          return found;
+        },
+        readMenuState: async (scope: ScopeContext, tx?: unknown) => {
+          const found = await real.readMenuState(scope, tx);
+          await race();
+          return found;
+        },
+      }) as unknown as MainMenuBuilderRepository;
+      const view = await serviceWith(container, { repository: racing }).view(tenantA, owner);
+      expect(armed).toBe(false);
+      expect((await settingRow())?.version).toBe(2);
+      // The answer describes ONE state: revision 1 with its own projection, drawn as such.
+      expect(view.published?.revision).toBe(1);
+      expect(view.settingVersion).toBe(1);
+      expect(view.superseded).toBe(false);
+      expect(view.source).toBe('EXPLICIT');
+      expect(view.live.rows).toEqual(rowsOfLabels([['wallet', 'catalog', 'services'], ['help']]));
+      expect(view.items.find((item) => item.id === 'wallet')).toBeDefined();
+      // And the next read sees the colleague's publish, whole.
+      const after = await builder().view(tenantA, owner);
+      expect(after.published?.revision).toBe(2);
+      expect(after.settingVersion).toBe(2);
+      expect(after.live.rows).toEqual(DEFAULT_ROWS);
     });
 
     it('P-6 refuses a direct bot.main_menu settings write once published, and only then', async () => {
@@ -487,7 +620,9 @@ describe('the button builder (round T, T1)', () => {
       await saveDraft(threeAcross(), null);
       // A draft alone does not close it either.
       await write([{ button: 'help', enabled: true }], 1);
-      await publish(1, null);
+      // (That write moved the setting past the draft's baseline: reseeded, knowingly.)
+      await reset(1, 'LIVE');
+      await publish(2, null);
       const version = (await settingRow())?.version ?? 0;
       expect(await codeOf(write(DEFAULT_MAIN_MENU_LAYOUT, version))).toBe(
         CONTROL_ERROR_CODES.INVALID_VALUE,
@@ -771,7 +906,12 @@ describe('the button builder (round T, T1)', () => {
       expect(read.statusCode).toBe(200);
       botMenuBuilderResponseSchema.parse(read.json());
 
-      const body = { idempotencyKey: key(), expectedDraftVersion: null, layout: threeAcross() };
+      const body = {
+        idempotencyKey: key(),
+        expectedDraftVersion: null,
+        layout: threeAcross(),
+        legacyBaselineVersion: null,
+      };
       const denied = await inject({
         method: 'PUT',
         url: `${API_PREFIX}${BOT_MENU_BUILDER_ROUTES.draft}`,
@@ -853,6 +993,11 @@ function serviceWith(
     settings: container.settingsResolver,
     settingRepository: new DrizzleSettingRepository(db),
     mainMenu: container.mainMenu,
+    source: new PublishedMainMenuSource(
+      new DrizzleMainMenuBuilderRepository(db),
+      container.settingsResolver,
+      container.opsLog,
+    ),
     templates: container.templateResolver,
     defaultLabel: (templateKey) => label(templateKey),
     bots: new DrizzleAppearanceRepository(db),

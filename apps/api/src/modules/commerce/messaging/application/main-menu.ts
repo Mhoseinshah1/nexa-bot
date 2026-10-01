@@ -42,15 +42,21 @@ export type MainMenuSourceAnswer =
       readonly publishedUnreadable: boolean;
     };
 
-export interface MainMenuSource {
-  currentFor(scope: ScopeContext): Promise<MainMenuSourceAnswer>;
+/**
+ * Everything the keyboard is decided from, read in ONE snapshot: the source answer AND the
+ * legacy arrangement (`bot.main_menu`, resolved) from the same statement. `describeFor` and
+ * `keyboardFor` compute from it and read the menu state nowhere else; only the gate answers
+ * (a feature flag, a panel's trial offer) are read live.
+ */
+export interface MainMenuSnapshot {
+  readonly source: MainMenuSourceAnswer;
+  /** `bot.main_menu` as resolved in that snapshot; drawn when `source` is LEGACY. */
+  readonly legacy: readonly MainMenuLayoutEntry[];
 }
 
-/** The legacy path's answer, for a deployment with no builder wired (a stand-in). */
-export const LEGACY_MAIN_MENU_SOURCE: MainMenuSource = {
-  currentFor: () =>
-    Promise.resolve({ kind: 'LEGACY', superseded: false, publishedUnreadable: false }),
-};
+export interface MainMenuSource {
+  snapshotFor(scope: ScopeContext): Promise<MainMenuSnapshot>;
+}
 
 /**
  * One button of the customer keyboard as the bot draws it: the rendered label — which is
@@ -62,6 +68,14 @@ export interface MainMenuKeyboardButton {
   readonly text: string;
   readonly style: MainMenuButtonStyle;
   readonly iconSlot: AppearanceSlot | null;
+}
+
+/**
+ * A snapshot the CALLER already read: the builder's read passes the one it built its heads
+ * from, so the items and live rows it returns describe that state and not a later commit.
+ */
+export interface MainMenuReadOptions {
+  readonly pinned?: MainMenuSnapshot;
 }
 
 export interface MainMenuDeps {
@@ -143,7 +157,7 @@ export class MainMenuLayout {
        * about to be switched on says what the keyboard will do, not "unknown" (Codex #6).
        */
       readonly gatesForHidden?: boolean;
-    } = {},
+    } & MainMenuReadOptions = {},
   ): Promise<readonly DescribedMainMenuItem[]> {
     return (await this.decide(scope, options)).described;
   }
@@ -156,17 +170,15 @@ export class MainMenuLayout {
    */
   private async decide(
     scope: ScopeContext,
-    options: { readonly gatesForHidden?: boolean },
+    options: { readonly gatesForHidden?: boolean } & MainMenuReadOptions,
   ): Promise<{
     readonly source: MainMenuSourceAnswer;
     readonly described: readonly DescribedMainMenuItem[];
   }> {
     const ask = (enabled: boolean) => enabled || options.gatesForHidden === true;
-    const source = await (this.deps.source ?? LEGACY_MAIN_MENU_SOURCE).currentFor(scope);
-    const stored =
-      source.kind === 'EXPLICIT'
-        ? legacyProjectionOf(source.layout)
-        : await this.deps.settings.valueOf<readonly MainMenuLayoutEntry[]>(scope, 'bot.main_menu');
+    const snapshot = options.pinned ?? (await this.snapshotFor(scope));
+    const source = snapshot.source;
+    const stored = source.kind === 'EXPLICIT' ? legacyProjectionOf(source.layout) : snapshot.legacy;
     const flags = new Map<FeatureFlagKey, boolean>();
     let trialOffered: boolean | undefined;
     const described: DescribedMainMenuItem[] = [];
@@ -201,6 +213,18 @@ export class MainMenuLayout {
     return { source, described };
   }
 
+  /** One read of the menu state: the source's snapshot, or the legacy setting for a stand-in. */
+  private async snapshotFor(scope: ScopeContext): Promise<MainMenuSnapshot> {
+    if (this.deps.source !== undefined) return this.deps.source.snapshotFor(scope);
+    return {
+      source: { kind: 'LEGACY', superseded: false, publishedUnreadable: false },
+      legacy: await this.deps.settings.valueOf<readonly MainMenuLayoutEntry[]>(
+        scope,
+        'bot.main_menu',
+      ),
+    };
+  }
+
   /** The buttons drawn, in order. */
   async buttonsFor(scope: ScopeContext): Promise<readonly BotMenuButton[]> {
     return (await this.describeFor(scope))
@@ -219,8 +243,11 @@ export class MainMenuLayout {
    *
    * Never empty: both schemas keep one ungated button on.
    */
-  async keyboardFor(scope: ScopeContext): Promise<MainMenuKeyboardButton[][]> {
-    const { source, described } = await this.decide(scope, {});
+  async keyboardFor(
+    scope: ScopeContext,
+    options: MainMenuReadOptions = {},
+  ): Promise<MainMenuKeyboardButton[][]> {
+    const { source, described } = await this.decide(scope, options);
     const label = (button: BotMenuButton) => this.deps.templates.render(scope, button.label, {});
     if (source.kind === 'EXPLICIT') {
       const gateOpenById: Partial<Record<MainMenuButtonId, boolean | null>> = {};
@@ -252,8 +279,8 @@ export class MainMenuLayout {
    * what the transport draws until it carries styles and icons (round T, T2). Byte for byte
    * the rows it drew before round T on the legacy path.
    */
-  async rowsFor(scope: ScopeContext): Promise<string[][]> {
-    return (await this.keyboardFor(scope)).map((row) => row.map((button) => button.text));
+  async rowsFor(scope: ScopeContext, options: MainMenuReadOptions = {}): Promise<string[][]> {
+    return (await this.keyboardFor(scope, options)).map((row) => row.map((button) => button.text));
   }
 
   /** Every declared button's CURRENT label, and the slash command it stands for. */

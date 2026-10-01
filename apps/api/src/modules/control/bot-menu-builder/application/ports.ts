@@ -13,6 +13,8 @@ export interface StoredMainMenuLayout {
   readonly draftUpdatedAt: Date;
   readonly draftUpdatedByAdminId: string | null;
   readonly draftRestoredFrom: { readonly id: string; readonly revision: number } | null;
+  /** The `bot.main_menu` version the draft was derived from (null: the setting had no row). */
+  readonly draftLegacySettingVersion: number | null;
   readonly published: unknown;
   readonly publishedRevision: number | null;
   readonly publishedAt: Date | null;
@@ -29,7 +31,22 @@ export interface StoredMainMenuRevision {
   readonly restoredFrom: { readonly id: string; readonly revision: number } | null;
 }
 
-/** What the runtime's source needs: the published head beside the setting's live version. */
+/**
+ * The builder row AND the `bot.main_menu` row, read in ONE statement — so the two can never
+ * straddle another transaction's commit. What the runtime's source and the builder's read
+ * both decide from.
+ */
+export interface MainMenuStateRead {
+  readonly layout: StoredMainMenuLayout | null;
+  readonly setting: {
+    readonly value: unknown;
+    readonly version: number;
+    readonly updatedAt: Date;
+    readonly updatedByAdminId: string | null;
+  } | null;
+}
+
+/** The published head beside the setting's version, as `sourceAnswerOf` judges it. */
 export interface PublishedMainMenuHead {
   readonly published: unknown;
   readonly publishedRevision: number;
@@ -56,10 +73,15 @@ export interface MainMenuBuilderRepository {
       readonly now: Date;
       readonly adminId: string | null;
       readonly restoredFromRevisionId: string | null;
+      readonly legacySettingVersion: number | null;
     },
     tx: unknown,
   ): Promise<StoredMainMenuLayout | null>;
-  /** Replace the draft WHERE `draft_version` is still `expectedDraftVersion`, bumping it. */
+  /**
+   * Replace the draft WHERE `draft_version` is still `expectedDraftVersion`, bumping it. The
+   * legacy baseline is replaced only when `legacySettingVersion` is given (a reset); an
+   * ordinary save keeps it.
+   */
   updateDraft(
     scope: ScopeContext,
     input: {
@@ -68,13 +90,15 @@ export interface MainMenuBuilderRepository {
       readonly now: Date;
       readonly adminId: string | null;
       readonly restoredFromRevisionId: string | null;
+      readonly legacySettingVersion?: number | null;
     },
     tx: unknown,
   ): Promise<StoredMainMenuLayout | null>;
   /**
    * Set the published head WHERE the draft and the published revision are still the ones
    * read (`IS NOT DISTINCT FROM` for a first publish). Clears the draft's restored-from:
-   * that revision is now carried by the published revision.
+   * that revision is now carried by the published revision. Moves the draft's legacy
+   * baseline to the projection's version: the draft and the setting agree again.
    */
   publish(
     scope: ScopeContext,
@@ -112,6 +136,6 @@ export interface MainMenuBuilderRepository {
     scope: ScopeContext,
     page: { readonly before: number | null; readonly limit: number },
   ): Promise<StoredMainMenuRevision[]>;
-  /** The published head and the setting's live version, in one read; null when nothing is published. */
-  publishedHead(scope: ScopeContext, tx?: unknown): Promise<PublishedMainMenuHead | null>;
+  /** The builder row and the `bot.main_menu` row in ONE statement (`MainMenuStateRead`). */
+  readMenuState(scope: ScopeContext, tx?: unknown): Promise<MainMenuStateRead>;
 }

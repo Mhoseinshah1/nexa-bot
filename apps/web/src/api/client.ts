@@ -3124,21 +3124,33 @@ export function fetchBotMenuBuilder(): Promise<BotMenuBuilderResponse> {
   return authedGet(BOT_MENU_BUILDER_ROUTES.view, botMenuBuilderResponseSchema);
 }
 
-/** Save the draft against the draft version read (null: no saved draft). Nothing goes live. */
+/**
+ * Save the draft against the draft version read (null: no saved draft). Nothing goes live.
+ * `legacyBaselineVersion` is the read's `draft.legacyBaselineVersion` — the `bot.main_menu`
+ * version the page seeded this draft from; the first save stores it.
+ */
 export function saveBotMenuDraft(
   input: SaveMainMenuDraftRequest,
 ): Promise<MainMenuBuilderMutationResponse> {
   return put(BOT_MENU_BUILDER_ROUTES.draft, input, mainMenuBuilderMutationResponseSchema);
 }
 
-/** Publish the saved draft against the draft version AND the published revision read. */
+/**
+ * Publish the saved draft against the draft version AND the published revision read. Before
+ * the first publish (or behind a superseded one) the server also requires `bot.main_menu` to
+ * still be at the draft's stored `legacyBaselineVersion` — else 409; reseed with
+ * `resetBotMenuDraft({ seed: 'LIVE', … })`.
+ */
 export function publishBotMenu(
   input: PublishMainMenuRequest,
 ): Promise<MainMenuBuilderMutationResponse> {
   return post(BOT_MENU_BUILDER_ROUTES.publish, input, mainMenuBuilderMutationResponseSchema);
 }
 
-/** Reset the DRAFT to the default keyboard. `confirm: true` — the page asked first. */
+/**
+ * Reset the DRAFT — to the default keyboard (`seed: 'DEFAULT'`, the default) or reseeded from
+ * the live arrangement (`seed: 'LIVE'`). `confirm: true` — the page asked first.
+ */
 export function resetBotMenuDraft(
   input: ResetMainMenuDraftRequest,
 ): Promise<MainMenuBuilderMutationResponse> {

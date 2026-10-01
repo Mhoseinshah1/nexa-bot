@@ -1,5 +1,5 @@
 {
-  "id": "89b42a75-773d-4a1c-bd6d-8561303d9300",
+  "id": "26e6acf3-a9fb-409e-9116-0a96716f0645",
   "prevId": "cfcd1ad7-a7c9-44e7-b9d3-6c4269348373",
   "version": "7",
   "dialect": "postgresql",
@@ -8215,6 +8215,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "draft_legacy_setting_version": {
+          "name": "draft_legacy_setting_version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
         "published": {
           "name": "published",
           "type": "jsonb",
@@ -8318,6 +8324,10 @@
         "main_menu_layouts_draft_version_check": {
           "name": "main_menu_layouts_draft_version_check",
           "value": "draft_version >= 1"
+        },
+        "main_menu_layouts_draft_legacy_setting_version_check": {
+          "name": "main_menu_layouts_draft_legacy_setting_version_check",
+          "value": "draft_legacy_setting_version IS NULL OR draft_legacy_setting_version >= 1"
         },
         "main_menu_layouts_published_check": {
           "name": "main_menu_layouts_published_check",

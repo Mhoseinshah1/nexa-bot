@@ -114,23 +114,25 @@ must be confirmed in real acceptance (§13, R-ACC-3).
 
 ### Telegram Bot API facts (verification)
 
-`WebFetch https://core.telegram.org/bots/api` → **EGRESS_BLOCKED** in this session. The repo
-contains no mention of `KeyboardButton.style` or `icon_custom_emoji_id` (grep: none). So:
+`WebFetch https://core.telegram.org/bots/api` → **EGRESS_BLOCKED** in the audit session. The
+owner **CONFIRMED** the facts on 2026-10-01 (update to PR #133); they are no longer open:
 
-- `KeyboardButton.style` (`primary|success|danger`, omitted = default) and
-  `KeyboardButton.icon_custom_emoji_id` — **UNVERIFIED here**; relied on from the owner's
-  brief.
-- Who may use `icon_custom_emoji_id` — **UNKNOWN**. The repo's only evidence about custom
-  emoji is for message ENTITIES: "Custom emoji entities can only be used by bots that
-  purchased additional usernames on Fragment" (`packages/contracts/src/appearance.ts:21-24`).
-  Whether the same rule governs button icons is not established. The design below does not
-  depend on it: icons follow the same per-bot proof as entities (§7).
-- Per-row limits for reply keyboards — **UNKNOWN**; the registry has 8 buttons total, so the
-  schema bounds rows and row length at 8 regardless.
-- Outdated repo statement to correct (T1, docs only): `docs/command-menu-audit.md:233-234`
-  and `packages/contracts/src/menu-appearance.ts:12-14` say a reply-keyboard button can carry
-  no decoration. That was true of `text` and remains true of `text`; it is no longer the whole
-  `KeyboardButton`.
+- `KeyboardButton.style` accepts exactly `primary`, `success` and `danger` (Bot API 9.4);
+  omitted is the client default. Nexa's stored enum `default|primary|success|danger` stays,
+  `default` = omit. No custom colours.
+- `KeyboardButton.icon_custom_emoji_id` is official, for bots able to use custom emoji
+  (purchased Fragment usernames, or in applicable cases an owner with Premium). Nexa's
+  per-BotInstance empirical appearance test stays the runtime authority; a tenant's
+  eligibility never implies every bot. The icon stays a separate `iconSlot` (§7).
+- With no special field other than `text`, `icon_custom_emoji_id` and `style`, a press sends
+  `text`. The icon is not prepended, so `bot.menu.*` routing stays valid. Real-Telegram
+  acceptance (R-ACC-3) still confirms it.
+- Row length: no Telegram-derived cap is stored. `MAIN_MENU_ROW_LENGTH_MAX` and
+  `MAIN_MENU_ROWS_MAX` are both the registry size — Nexa domain bounds, NOT Telegram maxima
+  (owner, B4).
+- Outdated repo statement corrected by T1 (docs only): `docs/command-menu-audit.md` and
+  `packages/contracts/src/menu-appearance.ts` said a reply-keyboard button can carry no
+  decoration. True of `text`; no longer of the whole `KeyboardButton`.
 
 ## 5. Label ownership
 
@@ -314,8 +316,8 @@ used the builder".
 
 ```ts
 export const MAIN_MENU_BUTTON_STYLES = ['default', 'primary', 'success', 'danger'] as const;
-export const MAIN_MENU_ROWS_MAX = 8;            // ≤ MAIN_MENU_BUTTON_IDS.length
-export const MAIN_MENU_ROW_LENGTH_MAX = 8;
+export const MAIN_MENU_ROWS_MAX = MAIN_MENU_BUTTON_IDS.length;       // domain bound, not Telegram's
+export const MAIN_MENU_ROW_LENGTH_MAX = MAIN_MENU_BUTTON_IDS.length; // domain bound, not Telegram's
 export const MAIN_MENU_LAYOUT_V = 1;
 
 mainMenuButtonConfigSchema = z.object({
@@ -473,6 +475,24 @@ rows as drawn now)}, iconEligibility: [{botInstanceId, username, status, eligibl
 When there is no draft row, `draft.layout = explicitFromLegacy(current setting)` with
 `version: null`. Existing `GET /bot-menu` stays (sync card, commands card).
 
+### 11.11 Amendments after T1's review (PR #133, owner update 2026-10-01)
+
+- **Durable legacy baseline.** `main_menu_layouts.draft_legacy_setting_version` records the
+  `bot.main_menu` version the draft was derived from: stated by the page on the FIRST save
+  (the version it seeded from), set to the current version by a reset (`seed: 'DEFAULT'`, or
+  `'LIVE'` to reseed from the live arrangement), and moved to the projection's version by
+  every publish. While nothing is published, or the published layout is superseded, a
+  publish requires the setting to still be at that baseline, else `control.version_conflict`
+  — never an overwrite, never a silent rebase on reload. Once a published head is current
+  the guard closes the legacy path and draft-version / published-revision concurrency is the
+  authority. The read exposes `draft.legacyBaselineVersion` and
+  `draft.legacyChangedSinceDraft`.
+- **One state read.** `readMenuState` returns the builder row and the `bot.main_menu` row in
+  ONE statement; `PublishedMainMenuSource.fromState` turns it into the snapshot (source
+  answer + resolved legacy value) for BOTH the runtime (`snapshotFor`) and the builder's
+  read, and `MainMenuLayout` computes items and rows from that snapshot (`pinned`) without
+  reading the menu state again. Only gate answers are read live.
+
 ## 12. File ownership
 
 Sequencing: **T1 merges first**; T2 and T3 then run in parallel on disjoint files.
@@ -522,6 +542,13 @@ May modify:
   `text decorated ∨ keyboard carries an icon`; the `plain` request strips entities AND icons,
   keeps text and styles; admin row unchanged.
 - `apps/api/src/modules/commerce/messaging/application/ports.ts` (only if a port widens).
+- **Fallback rule (owner, PR #133 update — binding on T2):** a generic permanent Telegram
+  400 on a request carrying a keyboard icon must NOT mark the bot's whole custom-emoji
+  capability rejected; the shared per-bot state is downgraded only on a reliably classified
+  eligibility denial. On a definite, icon-attributable rejection: at most ONE retry without
+  `icon_custom_emoji_id`, preserving `text` and any valid `style`. A timeout, an unreadable
+  2xx, transport uncertainty or anything that may have landed: NO second send (the UNKNOWN
+  discipline).
 - `tests/support/fake-telegram-bot-api.ts` (record `reply_markup`), `tests/unit/telegram-messenger-appearance.test.ts`,
   `tests/unit/telegram-messenger-parts.test.ts`, new `tests/unit/telegram-reply-keyboard-*.test.ts`,
   `tests/integration/telegram-customer-turn.test.ts` (additions).

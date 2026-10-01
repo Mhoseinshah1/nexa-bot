@@ -1415,6 +1415,14 @@ export const mainMenuLayouts = pgTable(
     draftUpdatedAt: timestamptz('draft_updated_at').notNull(),
     draftUpdatedByAdminId: uuid('draft_updated_by_admin_id'),
     draftRestoredFromRevisionId: uuid('draft_restored_from_revision_id'),
+    /**
+     * The draft's LEGACY BASELINE: the `bot.main_menu` version it was derived from (NULL:
+     * the setting had no row). Set by the first draft save (from the version the page was
+     * seeded from), by a reset or reseed, and by every publish. While nothing is published,
+     * or the published layout is superseded, a publish requires the setting to still be at
+     * this version — a draft is never published over a legacy write nobody looked at.
+     */
+    draftLegacySettingVersion: integer('draft_legacy_setting_version'),
     published: jsonb('published'),
     publishedRevision: integer('published_revision'),
     publishedAt: timestamptz('published_at'),
@@ -1424,6 +1432,10 @@ export const mainMenuLayouts = pgTable(
   (table) => [
     check('main_menu_layouts_draft_check', sql`jsonb_typeof(draft) = 'object'`),
     check('main_menu_layouts_draft_version_check', sql`draft_version >= 1`),
+    check(
+      'main_menu_layouts_draft_legacy_setting_version_check',
+      sql`draft_legacy_setting_version IS NULL OR draft_legacy_setting_version >= 1`,
+    ),
     check(
       'main_menu_layouts_published_check',
       sql`published IS NULL OR jsonb_typeof(published) = 'object'`,

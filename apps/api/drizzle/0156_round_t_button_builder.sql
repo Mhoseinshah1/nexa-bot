@@ -19,6 +19,7 @@ CREATE TABLE "main_menu_layouts" (
 	"draft_updated_at" timestamp with time zone NOT NULL,
 	"draft_updated_by_admin_id" uuid,
 	"draft_restored_from_revision_id" uuid,
+	"draft_legacy_setting_version" integer,
 	"published" jsonb,
 	"published_revision" integer,
 	"published_at" timestamp with time zone,
@@ -26,6 +27,7 @@ CREATE TABLE "main_menu_layouts" (
 	"projection_setting_version" integer,
 	CONSTRAINT "main_menu_layouts_draft_check" CHECK (jsonb_typeof(draft) = 'object'),
 	CONSTRAINT "main_menu_layouts_draft_version_check" CHECK (draft_version >= 1),
+	CONSTRAINT "main_menu_layouts_draft_legacy_setting_version_check" CHECK (draft_legacy_setting_version IS NULL OR draft_legacy_setting_version >= 1),
 	CONSTRAINT "main_menu_layouts_published_check" CHECK (published IS NULL OR jsonb_typeof(published) = 'object'),
 	CONSTRAINT "main_menu_layouts_published_revision_check" CHECK (published_revision IS NULL OR published_revision >= 1),
 	CONSTRAINT "main_menu_layouts_published_shape_check" CHECK ((published IS NULL) = (published_revision IS NULL) AND (published IS NULL) = (published_at IS NULL) AND (published IS NULL) = (projection_setting_version IS NULL))
