@@ -437,6 +437,11 @@ export const CONTROL_ERROR_CODES = {
   DESTINATION_NOT_CONFIGURED: 'control.destination_not_configured',
   NOTIFICATION_NOT_FOUND: 'control.notification_not_found',
   /**
+   * Round T: no main-menu revision with this id in this tenant. Another tenant's revision
+   * is answered the same way, so the id is not an oracle for which revisions exist.
+   */
+  MAIN_MENU_REVISION_NOT_FOUND: 'control.main_menu_revision_not_found',
+  /**
    * An idempotency record names a notification that no longer exists.
    *
    * Distinct from NOT_FOUND on purpose. That one answers "no such notification
