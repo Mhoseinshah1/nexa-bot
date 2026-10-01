@@ -27,27 +27,6 @@
   gap: 10px;
   align-items: flex-end;
 }
-.kpi-grid {
-  display: grid;
-  gap: 12px;
-  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
-  margin-bottom: 10px;
-}
-.kpi {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 12px 14px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-card);
-  background: var(--bg-2);
-  min-width: 0;
-}
-.kpi strong {
-  font-size: 18px;
-  font-weight: 650;
-  font-variant-numeric: tabular-nums;
-}
 .kpi-money,
 .money-line {
   display: flex;
@@ -65,4 +44,570 @@
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--bg-1);
+}
+
+/* --- Shared by the COMMERCE-B editors (editor-layout.tsx) ------------------------ */
+
+/*
+ * An editor page: the section sub-nav, the form, and a side column of facts and
+ * isolated actions — the reference product editor's three columns. The side
+ * column drops under the form below 1200px; the nav hides below 980px, where the
+ * sections are one scroll anyway.
+ */
+.cb-editor {
+  display: grid;
+  grid-template-columns: 190px minmax(0, 1fr) 340px;
+  gap: 16px;
+  align-items: start;
+}
+.cb-editor.no-nav {
+  grid-template-columns: minmax(0, 1fr) 340px;
+}
+.cb-editor-main,
+.cb-editor-side {
+  min-width: 0;
+}
+.cb-section-nav {
+  position: sticky;
+  top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.cb-section-nav button {
+  text-align: start;
+  border: none;
+  background: transparent;
+  color: var(--fg-2);
+  font: inherit;
+  font-size: var(--fs-ui);
+  padding: 8px 12px;
+  border-radius: var(--radius-ctl);
+  cursor: pointer;
+}
+.cb-section-nav button:hover {
+  background: var(--bg-2);
+  color: var(--fg);
+}
+.cb-form-section {
+  scroll-margin-top: 12px;
+}
+.cb-form-section:focus {
+  outline: none;
+}
+.cb-form-section:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.cb-form-error {
+  padding: 0 20px 16px;
+}
+.cb-savebar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+}
+.cb-dirty {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--warn);
+  font-size: var(--fs-sm);
+}
+.cb-dirty .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+/*
+ * A list beside its editor (categories, extra devices, service locations, custom
+ * service): the table takes the room, the form a fixed side column that stays in
+ * view while the list scrolls. One column below 1200px.
+ */
+.cb-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  gap: 16px;
+  align-items: start;
+}
+.cb-split > * {
+  min-width: 0;
+}
+.cb-side-form.cb-sticky {
+  position: sticky;
+  top: 12px;
+}
+/* The rules a page states about itself, as a quiet list. */
+.cb-notes {
+  margin: 0;
+  padding-inline-start: 1.1rem;
+  color: var(--fg-2);
+  font-size: var(--fs-sm);
+}
+.cb-notes li + li {
+  margin-top: 4px;
+}
+/*
+ * A list's search and filter rows, wrapped so they can be hidden together while the
+ * list cannot answer. Flush with the card, as the kit draws a bare toolbar.
+ */
+.card-body > .cb-filters {
+  margin: -16px -16px 0;
+}
+.card-body > .cb-filters + .tbl-wrap {
+  margin-top: 0;
+}
+/* A checkbox field: the box and its label on one line, the hint beneath. */
+.cb-check-field .check {
+  font-weight: 500;
+}
+/* A checkbox that qualifies the input beside it (unlimited ↔ a figure). */
+.cb-inline-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  align-items: center;
+}
+.cb-inline-controls > input {
+  flex: 1;
+  min-width: 140px;
+}
+/* A quiet meta line under a detail title: kind · id. */
+.cb-meta {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  align-items: baseline;
+}
+.cb-search {
+  flex: 1;
+  max-width: 360px;
+}
+/* Duration · traffic in one list cell. */
+.cb-specs {
+  display: inline-flex;
+  gap: 6px;
+  align-items: baseline;
+  white-space: nowrap;
+}
+
+@media (max-width: 1200px) {
+  .cb-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .cb-side-form.cb-sticky {
+    position: static;
+  }
+  .cb-editor {
+    grid-template-columns: 170px minmax(0, 1fr);
+  }
+  .cb-editor.no-nav {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .cb-editor > .cb-editor-side {
+    grid-column: 1 / -1;
+  }
+}
+@media (max-width: 980px) {
+  .cb-editor {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .cb-section-nav {
+    display: none;
+  }
+}
+
+/* --- /products ------------------------------------------------------------------- */
+
+/* Why a product is not in the bot's list: a dot and a sentence that may wrap. */
+.products-gap {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  max-width: 260px;
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  color: var(--fg-2);
+  white-space: normal;
+}
+.products-gap .dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--fg-3);
+  transform: translateY(-1px);
+}
+.products-gap.warn {
+  color: var(--warn);
+}
+.products-gap.warn .dot {
+  background: var(--warn);
+}
+
+/* --- /product-categories -------------------------------------------------------- */
+
+.categories-name {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+.categories-emoji {
+  font-size: 15px;
+}
+
+/* --- /custom-service --------------------------------------------------------------- */
+
+.custom-levels {
+  margin: 0;
+  padding-inline-start: 1.25rem;
+}
+.custom-levels li + li {
+  margin-top: 2px;
+}
+/* A form's on/off line: its label, and the switch at the end. */
+.cb-toggle-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ctl);
+  background: var(--bg-1);
+}
+
+/* A set of filter chips inside a filter row, beside other sets. */
+.cb-chip-group {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+/* A group of checkboxes with its legend, laid out as a form field. */
+.cb-fieldset {
+  border: none;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+.cb-fieldset > legend {
+  padding: 0;
+  margin-bottom: 6px;
+}
+
+/* --- /discounts -------------------------------------------------------------------- */
+
+.discounts-code {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  letter-spacing: 0.02em;
+}
+.discounts-usage {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 120px;
+}
+.discounts-preview-inputs {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+/* The quote beside the rules it was decided by. */
+.discounts-preview-result {
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) minmax(0, 2fr);
+  gap: 16px;
+  align-items: start;
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+}
+.discounts-quote {
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  background: var(--bg-1);
+}
+@media (max-width: 1200px) {
+  .discounts-preview-inputs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .discounts-preview-result {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (max-width: 980px) {
+  .discounts-preview-inputs {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* --- The audience builder (broadcasts, bulk operations, campaigns) ---------------- */
+
+.audience-builder > * + * {
+  margin-top: 14px;
+}
+.aud-section > * + * {
+  margin-top: 8px;
+}
+.aud-section > .field-group-head:first-child {
+  margin-top: 0;
+}
+/* Who: each segment as a selectable tile, the way the reference lists recipients. */
+.aud-segments {
+  gap: 8px;
+}
+.aud-segment {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-ctl);
+  background: var(--bg-1);
+  cursor: pointer;
+}
+.aud-segment:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.aud-service-toggle {
+  font-weight: 500;
+}
+.audience-service {
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  background: var(--bg-1);
+}
+.audience-service > * + * {
+  margin-top: 8px;
+}
+.audience-service h4 {
+  font-size: var(--fs-sm);
+  color: var(--fg-2);
+}
+/* The count, and what it found, on one line. */
+.aud-count {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 20px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--line);
+}
+
+/* --- Figures shared by broadcasts, bulk operations and campaigns ------------------- */
+
+.cb-stat-row {
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+}
+.cb-progress-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 130px;
+}
+.cb-progress-cell > svg {
+  flex: 1;
+  min-width: 70px;
+}
+.cb-progress-line {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.cb-progress-line > svg {
+  flex: 1;
+}
+
+/* --- /broadcasts: the composer and its live preview -------------------------------- */
+
+.bc-compose {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 20px;
+  align-items: start;
+}
+.bc-preview-pane {
+  position: sticky;
+  top: 12px;
+}
+.bc-preview-pane > * + * {
+  margin-top: 8px;
+}
+/* A chat backdrop, the bubble the bot sends, and its inline buttons beneath. */
+.bc-phone {
+  padding: 14px;
+  border-radius: var(--radius-card);
+  border: 1px solid var(--line);
+  background: var(--bg-0);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.bc-bubble {
+  border-radius: 12px 12px 12px 4px;
+  background: var(--bg-3);
+  border-color: transparent;
+  box-shadow: var(--shadow-sm);
+}
+.bc-inline-button {
+  padding: 7px 10px;
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  text-align: center;
+  font-size: var(--fs-sm);
+}
+.bc-file {
+  max-width: 100%;
+  font-size: var(--fs-sm);
+}
+@media (max-width: 1200px) {
+  .bc-compose {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .bc-preview-pane {
+    position: static;
+  }
+}
+
+/* --- /bulk-operations --------------------------------------------------------------- */
+
+/* The confirmation that starts a mass grant, set apart as the reference sets a danger zone. */
+.bulk-danger {
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--danger) 40%, var(--line));
+  border-radius: var(--radius-card);
+  background: color-mix(in srgb, var(--danger-soft) 40%, transparent);
+}
+/* Inside the bubble the text is the message, not a code block. */
+.bc-bubble .preview-text {
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  font-family: var(--font-ui);
+  font-size: var(--fs-body);
+  line-height: 1.7;
+}
+
+/* --- /campaigns ------------------------------------------------------------------- */
+
+.cb-editor.no-side {
+  grid-template-columns: 190px minmax(0, 1fr);
+}
+.campaign-kinds {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+/* A date and its time, side by side in one field. */
+.campaign-moment {
+  display: flex;
+  gap: 8px;
+}
+.campaign-moment > input {
+  flex: 1;
+  min-width: 0;
+}
+/* The draft's save stays in reach while the sections scroll past. */
+.campaign-savebar {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  box-shadow: var(--shadow);
+}
+@media (max-width: 980px) {
+  .cb-editor.no-side {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+/* A figure that is a sentence (“not determinable”), at text size inside a stat card. */
+.cb-stat-note {
+  display: block;
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  line-height: 1.5;
+}
+
+/* --- /referrals ------------------------------------------------------------------- */
+
+.referrals-referrer {
+  min-width: 320px;
+  font-family: var(--font-mono);
+}
+.referrals-foot {
+  align-items: start;
+}
+
+/* --- /resellers ------------------------------------------------------------------- */
+
+.resellers-who {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.resellers-badges {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+.resellers-foot {
+  align-items: start;
+}
+.resellers-standing:focus {
+  outline: none;
+}
+
+/* --- /reseller-tiers -------------------------------------------------------------- */
+
+/* A scroll target for an opened panel; takes no room. */
+.tiers-anchor {
+  height: 0;
+  margin: 0 !important;
+}
+.tiers-anchor:focus {
+  outline: none;
+}
+.tiers-grants {
+  display: grid;
+  grid-template-columns: repeat(2, max-content);
+  gap: 2px 14px;
+}
+.tiers-grants > .danger {
+  grid-column: 1 / -1;
+}
+.tiers-foot {
+  align-items: start;
+}
+
+/* --- /reports (and the dashboard's business section) --------------------------------- */
+
+.report-custom {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  align-items: flex-end;
+}
+.report-kpis {
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+}
+/* The tile keeps its tooltip wrapper; the card fills it. */
+.report-kpi > .card {
+  height: 100%;
+}
+.report-substats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  padding: 8px 2px 0;
+  border-top: 1px dashed var(--line);
+}
+/* The payments donut beside its legend, not spread across the card. */
+.report-donut {
+  max-width: 440px;
 }

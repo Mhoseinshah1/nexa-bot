@@ -1,6 +1,6 @@
 import type { ReactElement } from 'react';
-import { describe, expect, it } from 'vitest';
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { ResellersPage, percentOf } from '../../apps/web/src/pages/resellers';
 import {
   ResellerTiersPage,
@@ -12,6 +12,9 @@ import { UserDetailPage } from '../../apps/web/src/pages/users';
 import { OrderDetailPage } from '../../apps/web/src/pages/orders';
 import { PLANNED_SURFACES } from '../../apps/web/src/pages/planned';
 import { NAV, navPermitted, resolve } from '../../apps/web/src/app';
+import { LeaveGuardHost } from '../../apps/web/src/ui/kit';
+import { navigate } from '../../apps/web/src/router';
+import { t } from '../../apps/web/src/i18n/web.fa';
 import {
   categoryListing,
   customer,
@@ -338,6 +341,128 @@ describe('registering and editing a reseller', () => {
       await screen.findByText('این سطح نمایندگی وجود ندارد؛ فهرست را تازه کنید.'),
     ).toBeInTheDocument();
     expect(screen.queryByText('Not found.')).toBeNull();
+  });
+});
+
+describe('unsaved edits on the reseller forms', () => {
+  const go = (url: string) => act(() => navigate(url, { replace: true, force: true }));
+
+  afterEach(() => {
+    go('/');
+  });
+
+  it('calls a handed-over registration saved, not unsaved, once it is registered', async () => {
+    const api = stubApi(listRoutes());
+    // `POST /resellers` shares its URL with the list: answer the write as the server does.
+    const routed = globalThis.fetch;
+    vi.stubGlobal('fetch', async (input: unknown, init?: RequestInit) => {
+      const answer = await routed(input as RequestInfo, init);
+      if (init?.method !== 'POST' || !String(input).endsWith('/resellers')) return answer;
+      return new Response(JSON.stringify({ reseller: reseller() }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+    go(`/resellers?register=${CUSTOMER_ID}`);
+    renderPage(
+      <>
+        <ResellersPage
+          route={{ path: '/resellers', query: new URLSearchParams(`register=${CUSTOMER_ID}`) }}
+          denied={false}
+          mayEdit
+          mayViewWallet={false}
+          mayViewOrders={false}
+          mayViewAudit={false}
+        />
+        <LeaveGuardHost />
+      </>,
+    );
+    await screen.findByText('Reza Reseller');
+    // Handed over and untouched: nothing unsaved yet.
+    expect(screen.queryByText(t('web.unsaved_changes'))).toBeNull();
+    fireEvent.change(screen.getByLabelText('سطح', { selector: '#reseller-register-tier' }), {
+      target: { value: TIER_ID },
+    });
+    expect(screen.getByText(t('web.unsaved_changes'))).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'ثبت نماینده' }));
+    await waitFor(() => expect(posts(api, '/resellers')).toHaveLength(1));
+    expect(await screen.findByText(t('web.reseller_registered'))).toBeInTheDocument();
+    // Cleared for the next one, and clean — although `?register=` is still in the URL.
+    expect((screen.getByLabelText('شناسهٔ مشتری') as HTMLInputElement).value).toBe('');
+    expect(screen.queryByText(t('web.unsaved_changes'))).toBeNull();
+    act(() => navigate('/orders'));
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(window.location.pathname).toBe('/orders');
+  });
+
+  it('asks before the register button replaces an edit holding unsaved changes', async () => {
+    stubApi(listRoutes());
+    renderList();
+    await screen.findByText('Reza Reseller');
+    fireEvent.click(screen.getByRole('button', { name: t('web.rule_edit') }));
+    fireEvent.change(screen.getByLabelText('وضعیت'), { target: { value: 'SUSPENDED' } });
+
+    fireEvent.click(screen.getByRole('button', { name: t('web.cb_reseller_new') }));
+    const asked = screen.getByRole('alertdialog', { name: t('web.unsaved_title') });
+    fireEvent.click(within(asked).getByRole('button', { name: t('web.unsaved_stay') }));
+    expect((screen.getByLabelText('وضعیت') as HTMLSelectElement).value).toBe('SUSPENDED');
+    expect(document.getElementById('reseller-register-customer')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: t('web.cb_reseller_new') }));
+    const again = screen.getByRole('alertdialog', { name: t('web.unsaved_title') });
+    fireEvent.click(within(again).getByRole('button', { name: t('web.discard') }));
+    await waitFor(() =>
+      expect(document.getElementById('reseller-register-customer')).not.toBeNull(),
+    );
+    expect(document.getElementById('reseller-update-tier')).toBeNull();
+  });
+
+  it('asks before an edit replaces a registration being typed', async () => {
+    stubApi(listRoutes());
+    renderList();
+    await screen.findByText('Reza Reseller');
+    fireEvent.change(screen.getByLabelText('شناسهٔ مشتری'), { target: { value: CUSTOMER_ID } });
+
+    fireEvent.click(screen.getByRole('button', { name: t('web.rule_edit') }));
+    const asked = screen.getByRole('alertdialog', { name: t('web.unsaved_title') });
+    fireEvent.click(within(asked).getByRole('button', { name: t('web.unsaved_stay') }));
+    expect((screen.getByLabelText('شناسهٔ مشتری') as HTMLInputElement).value).toBe(CUSTOMER_ID);
+
+    fireEvent.click(screen.getByRole('button', { name: t('web.rule_edit') }));
+    const again = screen.getByRole('alertdialog', { name: t('web.unsaved_title') });
+    fireEvent.click(within(again).getByRole('button', { name: t('web.discard') }));
+    await waitFor(() => expect(document.getElementById('reseller-update-tier')).not.toBeNull());
+  });
+
+  it('asks before another standing or Close moves an edit holding unsaved changes', async () => {
+    const OTHER_ID = '019210ab-cdef-7012-8345-6789abcdef02';
+    stubApi(
+      listRoutes([
+        reseller(),
+        reseller({ customerId: OTHER_ID, telegramUserId: '5551234568', displayName: 'Sara' }),
+      ]),
+    );
+    renderList();
+    const row = (name: string) => screen.getAllByText(name)[0]?.closest('tr') as HTMLElement;
+    await screen.findByText('Sara');
+    fireEvent.click(within(row('Reza Reseller')).getByRole('button', { name: t('web.rule_edit') }));
+    fireEvent.change(screen.getByLabelText('وضعیت'), { target: { value: 'SUSPENDED' } });
+
+    fireEvent.click(
+      within(row('Sara')).getByRole('button', { name: t('web.reseller_standing_open') }),
+    );
+    const asked = screen.getByRole('alertdialog', { name: t('web.unsaved_title') });
+    fireEvent.click(within(asked).getByRole('button', { name: t('web.unsaved_stay') }));
+    expect((screen.getByLabelText('وضعیت') as HTMLSelectElement).value).toBe('SUSPENDED');
+
+    const standing = document.getElementById('reseller-standing') as HTMLElement;
+    fireEvent.click(within(standing).getByRole('button', { name: t('web.close') }));
+    const again = screen.getByRole('alertdialog', { name: t('web.unsaved_title') });
+    fireEvent.click(within(again).getByRole('button', { name: t('web.discard') }));
+    await waitFor(() => expect(document.getElementById('reseller-standing')).toBeNull());
+    expect(document.getElementById('reseller-update-tier')).toBeNull();
+    expect(document.getElementById('reseller-register-customer')).not.toBeNull();
   });
 });
 
@@ -865,5 +990,40 @@ describe('the percentage field', () => {
     expect(percentOf('99')).toBe(99);
     expect(percentOf('100')).toBeNull();
     expect(percentOf('0')).toBeNull();
+  });
+});
+
+describe('unsaved edits on the tier form', () => {
+  it('asks before an edit replaces a new tier holding unsaved input, and not after', async () => {
+    stubApi([{ url: '/reseller-tiers', body: { tiers: [tier()] } }]);
+    renderPage(
+      <ResellerTiersPage
+        denied={false}
+        mayEdit
+        mayViewCatalog={false}
+        mayViewPanels={false}
+        mayViewAudit={false}
+      />,
+    );
+    const table = await screen.findByRole('table', { name: 'سطوح' });
+    const edit = () =>
+      within(within(table).getByText('Gold').closest('tr') as HTMLElement).getByRole('button', {
+        name: t('web.rule_edit'),
+      });
+    const name = (id: string) => document.getElementById(id) as HTMLInputElement | null;
+    fireEvent.change(name('tier-create-name')!, { target: { value: 'Platinum' } });
+
+    fireEvent.click(edit());
+    const asked = screen.getByRole('alertdialog', { name: t('web.unsaved_title') });
+    fireEvent.click(within(asked).getByRole('button', { name: t('web.unsaved_stay') }));
+    expect(name('tier-create-name')?.value).toBe('Platinum');
+
+    fireEvent.click(edit());
+    const again = screen.getByRole('alertdialog', { name: t('web.unsaved_title') });
+    fireEvent.click(within(again).getByRole('button', { name: t('web.discard') }));
+    await waitFor(() => expect(name('tier-edit-name')?.value).toBe('Gold'));
+    // The same tier again, untouched: nothing to ask.
+    fireEvent.click(edit());
+    expect(screen.queryByRole('alertdialog')).toBeNull();
   });
 });

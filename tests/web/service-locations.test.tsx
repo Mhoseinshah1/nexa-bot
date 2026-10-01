@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { ServiceLocationsPage } from '../../apps/web/src/pages/service-locations';
 import { resolve } from '../../apps/web/src/app';
+import { t } from '../../apps/web/src/i18n/web.fa';
 import { panel, product, renderPage, stubApi } from './harness';
 
 /**
@@ -174,5 +175,41 @@ describe('the service location screen', () => {
   it('is routed at /service-locations, under the catalogue permissions', () => {
     const route = { path: '/service-locations', query: new URLSearchParams() };
     expect(resolve(route, ['catalog.view']).title).toBe('تغییر لوکیشن سرویس');
+  });
+});
+
+describe('replacing unsaved input in the location form', () => {
+  it('asks before Edit or Add replaces what was typed, and not when nothing was', async () => {
+    stubApi(routes());
+    renderPage(<ServiceLocationsPage denied={false} mayEdit />);
+    const cell = await screen.findByText('هلند', { selector: 'td *, td' });
+    const edit = () =>
+      within(cell.closest('tr') as HTMLElement).getByRole('button', {
+        name: t('web.service_locations_edit'),
+      });
+    const label = () => document.getElementById('sl-label') as HTMLInputElement;
+    fireEvent.change(label(), { target: { value: 'فرانسه' } });
+
+    fireEvent.click(screen.getByRole('button', { name: t('web.cb_add') }));
+    fireEvent.click(
+      within(screen.getByRole('alertdialog', { name: t('web.unsaved_title') })).getByRole(
+        'button',
+        { name: t('web.unsaved_stay') },
+      ),
+    );
+    expect(label().value).toBe('فرانسه');
+
+    fireEvent.click(edit());
+    fireEvent.click(
+      within(screen.getByRole('alertdialog', { name: t('web.unsaved_title') })).getByRole(
+        'button',
+        { name: t('web.discard') },
+      ),
+    );
+    await waitFor(() => expect(label().value).toBe('هلند'));
+
+    fireEvent.click(screen.getByRole('button', { name: t('web.cb_add') }));
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    await waitFor(() => expect(label().value).toBe(''));
   });
 });

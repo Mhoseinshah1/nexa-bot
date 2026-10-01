@@ -140,6 +140,11 @@ describe('broadcast in the Web Admin', () => {
     fireEvent.click(screen.getByLabelText(/ارسال را تأیید می‌کنم/u));
     expect(send).not.toBeDisabled();
     fireEvent.click(send);
+    // The last question is asked in a dialog; nothing is sent until it is answered.
+    expect(api.calls.some((call) => call.url.endsWith('/launch'))).toBe(false);
+    fireEvent.click(
+      within(screen.getByRole('alertdialog')).getByRole('button', { name: 'بله، ارسال شود' }),
+    );
     await waitFor(() =>
       expect(api.calls.some((call) => call.url.endsWith(`/broadcasts/${ID}/launch`))).toBe(true),
     );

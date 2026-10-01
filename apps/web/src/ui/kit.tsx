@@ -478,6 +478,7 @@ export function Card({
   tone,
   tight = false,
   id,
+  focusable = false,
 }: {
   /** A node rather than a string, so a title can isolate a Latin run inside Persian. */
   title?: ReactNode;
@@ -489,6 +490,11 @@ export function Card({
   tone?: 'danger' | 'muted';
   tight?: boolean;
   id?: string;
+  /**
+   * A target a section list moves to: focusable by script (`tabIndex={-1}`), not a
+   * tab stop, so `revealField` lands a keyboard user in the section it scrolled to.
+   */
+  focusable?: boolean;
 }) {
   return (
     <section
@@ -499,6 +505,7 @@ export function Card({
         className,
       )}
       {...(id === undefined ? {} : { id })}
+      {...(focusable ? { tabIndex: -1 } : {})}
     >
       {(title !== undefined || actions !== undefined) && (
         <header className="card-head">
@@ -2091,5 +2098,5 @@ export function Breadcrumbs({ items }: { items: readonly Crumb[] }) {
 /* Re-exported so a page imports its whole kit from one module. */
 export { Modal, Drawer, Menu, useFocusTrap } from './overlays';
 export { ChartCard, Sparkline, BarChart, LineChart, Donut, Legend } from './charts';
-export { useUnsavedChanges, LeaveGuardHost } from './unsaved';
+export { useUnsavedChanges, LeaveGuardHost, useDiscardGuard, useReportDirty } from './unsaved';
 export { ConfirmDialog, confirmDialogOpen } from './confirm-dialog';
