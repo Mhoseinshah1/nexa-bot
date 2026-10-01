@@ -252,24 +252,37 @@ describe('pages that must not go stale', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const api = stubApi([
       READINESS,
-      { url: '/panels', body: { panels: [panel()], nextCursor: null } },
+      {
+        url: '/dashboard/operations',
+        body: {
+          generatedAt: '2026-09-06T08:00:00.000Z',
+          panels: {
+            total: 1,
+            active: 1,
+            health: [{ state: 'HEALTHY', count: 1 }],
+            providers: [{ providerType: 'marzban', providerName: 'Marzban', count: 1 }],
+          },
+          provisioning: null,
+          expiring: null,
+        },
+      },
       { url: '/ops-log', body: { events: [], nextCursor: null } },
     ]);
     renderPage(<DashboardPage permissions={['panels.view', 'opslog.view']} />);
     await screen.findByText('توزیع پنل‌ها');
 
-    const fleetBefore = countOf(api.calls, '/panels');
+    const fleetBefore = countOf(api.calls, '/dashboard/operations');
     // Past the conditions cadence but not the fleet's: the two are deliberately
     // different, and asserting them together would hide one of them.
     await vi.advanceTimersByTimeAsync(20_000);
     await waitFor(() => {
       expect(countOf(api.calls, '/ops-log')).toBeGreaterThan(1);
     });
-    expect(countOf(api.calls, '/panels')).toBe(fleetBefore);
+    expect(countOf(api.calls, '/dashboard/operations')).toBe(fleetBefore);
 
-    await vi.advanceTimersByTimeAsync(45_000);
+    await vi.advanceTimersByTimeAsync(15_000);
     await waitFor(() => {
-      expect(countOf(api.calls, '/panels')).toBeGreaterThan(fleetBefore);
+      expect(countOf(api.calls, '/dashboard/operations')).toBeGreaterThan(fleetBefore);
     });
   });
 });

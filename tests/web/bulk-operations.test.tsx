@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { NAV, navPermitted } from '../../apps/web/src/app';
 import {
   BulkOperationDetailPage,
@@ -111,6 +111,13 @@ describe('mass operations in the Web Admin', () => {
     fireEvent.click(screen.getByLabelText(/این عملیات را تأیید می‌کنم/u));
     expect(execute).not.toBeDisabled();
     fireEvent.click(execute);
+    // Nothing starts until the dialog's own yes: the last question before money moves.
+    expect(
+      api.calls.some((call) => call.method === 'POST' && call.url.endsWith('/bulk-operations')),
+    ).toBe(false);
+    fireEvent.click(
+      within(screen.getByRole('alertdialog')).getByRole('button', { name: 'بله، اجرا شود' }),
+    );
     await waitFor(() =>
       expect(
         api.calls.some((call) => call.method === 'POST' && call.url.endsWith('/bulk-operations')),

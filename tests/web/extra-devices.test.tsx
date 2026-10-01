@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { ExtraDevicesPage, everyPage } from '../../apps/web/src/pages/extra-devices';
 import { resolve } from '../../apps/web/src/app';
+import { t } from '../../apps/web/src/i18n/web.fa';
 import { panel, product, renderPage, stubApi } from './harness';
 
 /**
@@ -196,5 +197,41 @@ describe('the extra users / devices screen', () => {
     const route = { path: '/extra-devices', query: new URLSearchParams() };
     const viewer = resolve(route, ['catalog.view']);
     expect(viewer.title).toBe('افزایش کاربر / دستگاه');
+  });
+});
+
+describe('replacing unsaved input in the rate form', () => {
+  it('asks before Edit or Add replaces what was typed, and not when nothing was', async () => {
+    stubApi(routes());
+    renderPage(<ExtraDevicesPage denied={false} mayEdit mayViewPanels />);
+    const cell = await screen.findByText('کاربر اضافه', { selector: 'td *, td' });
+    const edit = () =>
+      within(cell.closest('tr') as HTMLElement).getByRole('button', {
+        name: t('web.extra_devices_edit'),
+      });
+    const title = () => document.getElementById('xd-title') as HTMLInputElement;
+    fireEvent.change(title(), { target: { value: 'پیش‌نویس' } });
+
+    fireEvent.click(edit());
+    fireEvent.click(
+      within(screen.getByRole('alertdialog', { name: t('web.unsaved_title') })).getByRole(
+        'button',
+        { name: t('web.unsaved_stay') },
+      ),
+    );
+    expect(title().value).toBe('پیش‌نویس');
+
+    fireEvent.click(edit());
+    fireEvent.click(
+      within(screen.getByRole('alertdialog', { name: t('web.unsaved_title') })).getByRole(
+        'button',
+        { name: t('web.discard') },
+      ),
+    );
+    await waitFor(() => expect(title().value).toBe('کاربر اضافه'));
+
+    fireEvent.click(screen.getByRole('button', { name: t('web.cb_add') }));
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    await waitFor(() => expect(title().value).toBe(''));
   });
 });

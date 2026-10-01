@@ -145,7 +145,28 @@ export function Sidebar({
                         className={`cnt${counter.tone === undefined ? '' : ` ${counter.tone}`}`}
                         id={countId}
                       >
-                        {formatNumber(counter.count)}
+                        {counter.atLeast === true ? (
+                          /*
+                            At the server's cap the number is a floor: drawn with a
+                            plus, and described as "or more" rather than as a total.
+                          */
+                          <>
+                            <span aria-hidden="true">
+                              {t('web.nav_counter_at_least').replace(
+                                '{count}',
+                                formatNumber(counter.count),
+                              )}
+                            </span>
+                            <span className="visually-hidden">
+                              {t('web.nav_counter_at_least_spoken').replace(
+                                '{count}',
+                                formatNumber(counter.count),
+                              )}
+                            </span>
+                          </>
+                        ) : (
+                          formatNumber(counter.count)
+                        )}
                       </span>
                     )}
                   </a>

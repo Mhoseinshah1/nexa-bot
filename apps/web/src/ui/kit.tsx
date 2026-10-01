@@ -478,6 +478,7 @@ export function Card({
   tone,
   tight = false,
   id,
+  focusable = false,
 }: {
   /** A node rather than a string, so a title can isolate a Latin run inside Persian. */
   title?: ReactNode;
@@ -489,6 +490,11 @@ export function Card({
   tone?: 'danger' | 'muted';
   tight?: boolean;
   id?: string;
+  /**
+   * A target a section list moves to: focusable by script (`tabIndex={-1}`), not a
+   * tab stop, so `revealField` lands a keyboard user in the section it scrolled to.
+   */
+  focusable?: boolean;
 }) {
   return (
     <section
@@ -499,6 +505,7 @@ export function Card({
         className,
       )}
       {...(id === undefined ? {} : { id })}
+      {...(focusable ? { tabIndex: -1 } : {})}
     >
       {(title !== undefined || actions !== undefined) && (
         <header className="card-head">
@@ -519,6 +526,10 @@ export function Card({
  * The head of a detail page, as a card: identity (with an optional avatar
  * initial and a status badge), a meta line, the primary actions, and a strip
  * of summary figures beneath.
+ *
+ * `level` is the heading's rank. A page whose head IS this card passes 1, so
+ * the page keeps its one level-one heading; the default, 2, is for a head
+ * drawn beneath a `PageHead`.
  */
 export function DetailHead({
   title,
@@ -527,6 +538,7 @@ export function DetailHead({
   actions,
   initial,
   stats,
+  level = 2,
 }: {
   title: ReactNode;
   badge?: ReactNode;
@@ -535,7 +547,9 @@ export function DetailHead({
   /** One or two characters for the avatar tile; omitted, no tile is drawn. */
   initial?: string;
   stats?: readonly { readonly label: ReactNode; readonly value: ReactNode }[];
+  level?: 1 | 2;
 }) {
+  const Heading = level === 1 ? 'h1' : 'h2';
   return (
     <section className="card detail-head">
       <div className="head-card">
@@ -545,10 +559,10 @@ export function DetailHead({
           </span>
         )}
         <div className="ident-block">
-          <h2>
+          <Heading>
             {title}
             {badge}
-          </h2>
+          </Heading>
           {meta !== undefined && <div className="meta">{meta}</div>}
         </div>
         {actions !== undefined && <div className="quick">{actions}</div>}
@@ -2084,5 +2098,5 @@ export function Breadcrumbs({ items }: { items: readonly Crumb[] }) {
 /* Re-exported so a page imports its whole kit from one module. */
 export { Modal, Drawer, Menu, useFocusTrap } from './overlays';
 export { ChartCard, Sparkline, BarChart, LineChart, Donut, Legend } from './charts';
-export { useUnsavedChanges, LeaveGuardHost } from './unsaved';
+export { useUnsavedChanges, LeaveGuardHost, useDiscardGuard, useReportDirty } from './unsaved';
 export { ConfirmDialog, confirmDialogOpen } from './confirm-dialog';

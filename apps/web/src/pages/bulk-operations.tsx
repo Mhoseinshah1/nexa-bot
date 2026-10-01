@@ -41,10 +41,18 @@ import {
   Money,
   PageHead,
   StateSwitch,
+  Button,
+  ConfirmDialog,
+  Progress,
+  StatCard,
+  TwoColumn,
   useToast,
+  useUnsavedChanges,
   type Column,
   type Tone,
 } from '../ui/kit';
+import { Icon } from '../ui/icons';
+import { CheckField } from './editor-layout';
 import { messageFor } from './settings';
 import {
   AudienceBuilder,
@@ -79,6 +87,15 @@ const STATE_TONES: Readonly<Record<BulkOperationState, Tone>> = {
   COMPLETED: 'ok',
   CANCELLED: 'neutral',
 };
+/** An operation's state, with a moving dot while it runs. */
+function BulkStateBadge({ value }: { value: BulkOperationState }) {
+  return (
+    <Badge tone={STATE_TONES[value]} dot pulse={value === 'RUNNING'}>
+      {t(STATE_LABELS[value])}
+    </Badge>
+  );
+}
+
 const ITEM_LABELS: Readonly<Record<BulkItemState, WebKey>> = {
   PENDING: 'web.bulk_item_pending',
   CREDITED: 'web.bulk_item_credited',
@@ -158,7 +175,11 @@ export function BulkOperationsPage({
       key: 'kind',
       header: t('web.bulk_kind'),
       render: (row) => (
-        <a href={`/bulk-operations/${encodeURIComponent(row.id)}`} onClick={onLink}>
+        <a
+          href={`/bulk-operations/${encodeURIComponent(row.id)}`}
+          onClick={onLink}
+          className="strong"
+        >
           {t(KIND_LABELS[row.kind])}
         </a>
       ),
@@ -167,18 +188,33 @@ export function BulkOperationsPage({
     {
       key: 'state',
       header: t('web.bulk_state'),
-      render: (row) => <Badge tone={STATE_TONES[row.state]}>{t(STATE_LABELS[row.state])}</Badge>,
+      render: (row) => <BulkStateBadge value={row.state} />,
     },
-    { key: 'items', header: t('web.bulk_items'), render: (row) => formatNumber(row.itemCount) },
+    {
+      key: 'items',
+      header: t('web.bulk_items'),
+      align: 'end',
+      render: (row) => <span className="num">{formatNumber(row.itemCount)}</span>,
+    },
     {
       key: 'progress',
       header: t('web.bulk_progress'),
-      render: (row) => `${formatNumber(row.progressPercent)}%`,
+      render: (row) => (
+        <span className="cb-progress-cell">
+          <Progress
+            value={row.progressPercent}
+            max={100}
+            label={t('web.bulk_progress')}
+            tone={row.state === 'COMPLETED' ? 'ok' : 'info'}
+          />
+          <span className="num small">{`${formatNumber(row.progressPercent)}%`}</span>
+        </span>
+      ),
     },
     {
       key: 'created',
       header: t('web.bulk_created'),
-      render: (row) => <span className="nowrap">{formatTimestamp(row.createdAt)}</span>,
+      render: (row) => <span className="nowrap muted small">{formatTimestamp(row.createdAt)}</span>,
     },
   ];
   return (
@@ -189,7 +225,8 @@ export function BulkOperationsPage({
         maturity="now"
         actions={
           mayRun ? (
-            <a className="btn primary sm" href="/bulk-operations/new" onClick={onLink}>
+            <a className="btn primary" href="/bulk-operations/new" onClick={onLink}>
+              <Icon name="plus" />
               {t('web.bulk_new')}
             </a>
           ) : undefined
@@ -198,7 +235,7 @@ export function BulkOperationsPage({
       <Card>
         <StateSwitch query={list} denied={denied}>
           {list.data === undefined ? null : list.data.operations.length === 0 ? (
-            <Empty title={t('web.bulk_empty')} />
+            <Empty title={t('web.bulk_empty')} icon="grid" />
           ) : (
             <>
               <DataTable
@@ -206,6 +243,7 @@ export function BulkOperationsPage({
                 columns={columns}
                 rows={list.data.operations}
                 rowKey={(row) => row.id}
+                dense
               />
               <CursorPager
                 shown={list.data.operations.length}
@@ -246,6 +284,15 @@ export function BulkOperationNewPage({
   const [preview, setPreview] = useState<BulkPreview | null>(null);
   const [typed, setTyped] = useState('');
   const [confirmed, setConfirmed] = useState(false);
+  /** The final question, asked in a dialog once everything above is filled in. */
+  const [asking, setAsking] = useState(false);
+  const dirty =
+    amount !== '' ||
+    traffic !== '' ||
+    days !== '' ||
+    note !== '' ||
+    JSON.stringify(audience) !== JSON.stringify(EMPTY_AUDIENCE);
+  useUnsavedChanges(dirty);
 
   const currency = options.data?.currency ?? 'IRT';
   const grant = (): BulkGrant | null => {
@@ -299,7 +346,8 @@ export function BulkOperationNewPage({
       submission.settle();
       toast({ tone: 'ok', message: t('web.bulk_started') });
       void client.invalidateQueries({ queryKey: ['bulk-operations'] });
-      navigate(`/bulk-operations/${encodeURIComponent(response.operation.id)}`);
+      // Started: the form's work is done, so leaving it is not leaving unsaved work.
+      navigate(`/bulk-operations/${encodeURIComponent(response.operation.id)}`, { force: true });
     },
     onError: (error) => {
       submission.settleOn(error);
@@ -325,72 +373,76 @@ export function BulkOperationNewPage({
     <>
       <PageHead title={t('web.bulk_new')} subtitle={t('web.bulk_page_intro')} />
       <Card title={t('web.bulk_what')}>
-        <Field label={t('web.bulk_kind')} htmlFor="bulk-kind">
-          <select
-            id="bulk-kind"
-            value={kind}
-            onChange={(event) => {
-              setKind(event.target.value as BulkOperationKind);
-              reset();
-            }}
-          >
-            {mayWallet && <option value="WALLET_CREDIT">{t('web.bulk_kind_wallet')}</option>}
-            {mayGrant && <option value="SERVICE_TRAFFIC">{t('web.bulk_kind_traffic')}</option>}
-            {mayGrant && <option value="SERVICE_TIME">{t('web.bulk_kind_time')}</option>}
-          </select>
-        </Field>
-        {kind === 'WALLET_CREDIT' && (
-          <Field
-            label={t('web.bulk_amount')}
-            htmlFor="bulk-amount"
-            hint={t('web.bulk_amount_hint')}
-          >
-            <input
-              id="bulk-amount"
-              inputMode="numeric"
-              value={amount}
+        <div className="form-grid">
+          <Field label={t('web.bulk_kind')} htmlFor="bulk-kind">
+            <select
+              id="bulk-kind"
+              value={kind}
               onChange={(event) => {
-                setAmount(event.target.value.trim());
+                setKind(event.target.value as BulkOperationKind);
                 reset();
               }}
-            />
+            >
+              {mayWallet && <option value="WALLET_CREDIT">{t('web.bulk_kind_wallet')}</option>}
+              {mayGrant && <option value="SERVICE_TRAFFIC">{t('web.bulk_kind_traffic')}</option>}
+              {mayGrant && <option value="SERVICE_TIME">{t('web.bulk_kind_time')}</option>}
+            </select>
           </Field>
-        )}
-        {kind === 'SERVICE_TRAFFIC' && (
-          <Field
-            label={t('web.bulk_traffic')}
-            htmlFor="bulk-traffic"
-            hint={t('web.bulk_traffic_hint')}
-          >
-            <input
-              id="bulk-traffic"
-              inputMode="decimal"
-              value={traffic}
-              onChange={(event) => {
-                setTraffic(event.target.value.trim());
-                reset();
-              }}
-            />
-          </Field>
-        )}
-        {kind === 'SERVICE_TIME' && (
-          <Field label={t('web.bulk_days_label')} htmlFor="bulk-days">
-            <input
-              id="bulk-days"
-              inputMode="numeric"
-              value={days}
-              onChange={(event) => {
-                setDays(event.target.value.trim());
-                reset();
-              }}
-            />
-          </Field>
-        )}
+          {kind === 'WALLET_CREDIT' && (
+            <Field
+              label={t('web.bulk_amount')}
+              htmlFor="bulk-amount"
+              hint={t('web.bulk_amount_hint')}
+            >
+              <input
+                id="bulk-amount"
+                inputMode="numeric"
+                value={amount}
+                onChange={(event) => {
+                  setAmount(event.target.value.trim());
+                  reset();
+                }}
+              />
+            </Field>
+          )}
+          {kind === 'SERVICE_TRAFFIC' && (
+            <Field
+              label={t('web.bulk_traffic')}
+              htmlFor="bulk-traffic"
+              hint={t('web.bulk_traffic_hint')}
+            >
+              <input
+                id="bulk-traffic"
+                inputMode="decimal"
+                value={traffic}
+                onChange={(event) => {
+                  setTraffic(event.target.value.trim());
+                  reset();
+                }}
+              />
+            </Field>
+          )}
+          {kind === 'SERVICE_TIME' && (
+            <Field label={t('web.bulk_days_label')} htmlFor="bulk-days">
+              <input
+                id="bulk-days"
+                inputMode="numeric"
+                value={days}
+                onChange={(event) => {
+                  setDays(event.target.value.trim());
+                  reset();
+                }}
+              />
+            </Field>
+          )}
+        </div>
         {kind !== 'WALLET_CREDIT' && <p className="muted small">{t('web.bulk_grant_hint')}</p>}
-        <label className="checks">
-          <input type="checkbox" checked={notify} onChange={() => setNotify(!notify)} />{' '}
-          {t('web.bulk_notify')}
-        </label>
+        <CheckField
+          id="bulk-notify"
+          label={t('web.bulk_notify')}
+          checked={notify}
+          onChange={setNotify}
+        />
       </Card>
       <Card title={t('web.bulk_audience')}>
         <AudienceBuilder
@@ -402,39 +454,43 @@ export function BulkOperationNewPage({
         />
       </Card>
       <Card title={t('web.bulk_preview')} hint={t('web.bulk_preview_hint')}>
-        <div className="toolbar">
-          <button
-            type="button"
-            className="btn sm"
+        <div className="form-actions">
+          <Button
+            icon="users"
             disabled={grant() === null || load.isPending}
             onClick={() => load.mutate()}
           >
             {t('web.bulk_preview_button')}
-          </button>
+          </Button>
         </div>
         {load.error !== null && <Banner tone="danger">{bulkMessage(load.error)}</Banner>}
         {preview !== null && (
           <>
-            <KV
-              items={[
-                [
+            <div className="stat-grid cb-stat-row">
+              <StatCard
+                label={
                   preview.kind === 'WALLET_CREDIT'
                     ? t('web.bulk_count_customers')
-                    : t('web.bulk_count_services'),
-                  formatNumber(preview.count),
-                ],
-                [t('web.bulk_count_distinct'), formatNumber(preview.customers)],
-                ...(preview.totalLiability === null
-                  ? []
-                  : ([
-                      [
-                        t('web.bulk_liability'),
-                        <Money key="liability" value={preview.totalLiability} />,
-                      ],
-                    ] as [string, ReactNode][])),
-                [t('web.bc_as_of'), formatTimestamp(preview.asOf)],
-              ]}
-            />
+                    : t('web.bulk_count_services')
+                }
+                value={formatNumber(preview.count)}
+              />
+              <StatCard
+                label={t('web.bulk_count_distinct')}
+                value={formatNumber(preview.customers)}
+              />
+              {preview.totalLiability !== null && (
+                <StatCard
+                  label={t('web.bulk_liability')}
+                  value={<Money value={preview.totalLiability} />}
+                  tone="warn"
+                />
+              )}
+              <StatCard
+                label={t('web.bc_as_of')}
+                value={<span className="cb-stat-note">{formatTimestamp(preview.asOf)}</span>}
+              />
+            </div>
             <DataTable
               caption={t('web.bulk_sample')}
               columns={[
@@ -451,29 +507,32 @@ export function BulkOperationNewPage({
               ]}
               rows={preview.sample}
               rowKey={(row) => row.serviceId ?? row.customerId}
+              dense
             />
             {preview.count === 0 ? (
               <Banner tone="info">{t('web.aud_error_empty')}</Banner>
             ) : (
-              <>
+              <div className="bulk-danger stack-sm">
                 <Banner tone="danger">{t('web.bulk_danger')}</Banner>
-                <Field label={t('web.bulk_reason')} htmlFor="bulk-note">
-                  <input
-                    id="bulk-note"
-                    value={note}
-                    maxLength={BULK_NOTE_MAX_LENGTH}
-                    onChange={(event) => setNote(event.target.value)}
-                  />
-                </Field>
-                <Field label={t('web.bulk_typed')} htmlFor="bulk-typed">
-                  <input
-                    id="bulk-typed"
-                    inputMode="numeric"
-                    value={typed}
-                    onChange={(event) => setTyped(event.target.value)}
-                  />
-                </Field>
-                <label className="checks">
+                <div className="form-grid">
+                  <Field label={t('web.bulk_reason')} htmlFor="bulk-note">
+                    <input
+                      id="bulk-note"
+                      value={note}
+                      maxLength={BULK_NOTE_MAX_LENGTH}
+                      onChange={(event) => setNote(event.target.value)}
+                    />
+                  </Field>
+                  <Field label={t('web.bulk_typed')} htmlFor="bulk-typed">
+                    <input
+                      id="bulk-typed"
+                      inputMode="numeric"
+                      value={typed}
+                      onChange={(event) => setTyped(event.target.value)}
+                    />
+                  </Field>
+                </div>
+                <label className="check">
                   <input
                     type="checkbox"
                     checked={confirmed}
@@ -481,17 +540,34 @@ export function BulkOperationNewPage({
                   />{' '}
                   {t('web.bulk_confirm_check')}
                 </label>
-                <div className="toolbar">
-                  <button
-                    type="button"
-                    className="btn danger"
+                <div className="form-actions">
+                  <Button
+                    variant="danger-solid"
+                    icon="zap"
                     disabled={!ready || execute.isPending}
-                    onClick={() => execute.mutate()}
+                    onClick={() => setAsking(true)}
                   >
                     {t('web.bulk_execute')}
-                  </button>
+                  </Button>
                 </div>
-              </>
+                {asking && (
+                  <ConfirmDialog
+                    title={t(KIND_LABELS[kind])}
+                    question={t('web.cb_bulk_run_question').replace(
+                      '{count}',
+                      formatNumber(preview.count),
+                    )}
+                    detail={t('web.bulk_danger')}
+                    confirmLabel={t('web.cb_bulk_run_yes')}
+                    cancelLabel={t('web.cb_cancel')}
+                    onConfirm={() => {
+                      setAsking(false);
+                      execute.mutate();
+                    }}
+                    onCancel={() => setAsking(false)}
+                  />
+                )}
+              </div>
             )}
           </>
         )}
@@ -561,135 +637,183 @@ export function BulkOperationDetailPage({
         <>
           <PageHead
             title={t(KIND_LABELS[op.kind])}
-            subtitle={t(STATE_LABELS[op.state])}
-            maturity="now"
+            badge={<BulkStateBadge value={op.state} />}
+            subtitle={
+              <span className="cb-meta">
+                <span>{grantText(op)}</span>
+                <span>{formatTimestamp(op.createdAt)}</span>
+              </span>
+            }
           />
-          <Card title={t('web.bulk_report')}>
-            <KV
-              items={[
-                [t('web.bulk_state'), t(STATE_LABELS[op.state])],
-                [t('web.bulk_grant'), grantText(op)],
-                [t('web.bulk_items'), formatNumber(op.itemCount)],
-                ...(op.totalLiability === null
-                  ? []
-                  : ([
-                      [t('web.bulk_liability'), <Money key="l" value={op.totalLiability} />],
-                      [
-                        t('web.bulk_credited_total'),
-                        op.creditedTotal === null ? (
-                          '—'
-                        ) : (
-                          <Money key="c" value={op.creditedTotal} />
-                        ),
-                      ],
-                    ] as [string, ReactNode | string][])),
-                [t('web.bulk_item_pending'), formatNumber(op.counts.pending)],
-                [t('web.bulk_item_credited'), formatNumber(op.counts.credited)],
-                [t('web.bulk_item_planned'), formatNumber(op.counts.planned)],
-                [
-                  t('web.bulk_awaiting_reconciliation'),
-                  formatNumber(op.counts.awaitingReconciliation),
-                ],
-                [t('web.bulk_item_succeeded'), formatNumber(op.counts.succeeded)],
-                [t('web.bulk_item_failed'), formatNumber(op.counts.failed)],
-                [t('web.bulk_item_skipped'), formatNumber(op.counts.skipped)],
-                [t('web.bulk_item_cancelled'), formatNumber(op.counts.cancelled)],
-                [t('web.bulk_notified'), formatNumber(op.counts.notified)],
-                [t('web.bulk_notice_queued'), formatNumber(op.counts.notificationQueued)],
-                [t('web.bulk_progress'), `${formatNumber(op.progressPercent)}%`],
-                [t('web.bulk_reason'), op.note],
-                [t('web.bc_created_by'), op.createdBy?.username ?? '—'],
-                [t('web.bulk_created'), formatTimestamp(op.createdAt)],
-                [
-                  t('web.bulk_not_before'),
-                  op.notBefore === null ? '—' : formatTimestamp(op.notBefore),
-                ],
-                [t('web.bc_as_of'), formatTimestamp(op.audienceAsOf)],
-              ]}
+          <div className="stat-grid cb-stat-row">
+            <StatCard label={t('web.bulk_items')} value={formatNumber(op.itemCount)} />
+            <StatCard
+              label={t('web.bulk_item_succeeded')}
+              value={formatNumber(op.counts.succeeded)}
             />
-            <progress max={100} value={op.progressPercent} aria-label={t('web.bulk_progress')} />
-            <p className="muted small">{t('web.bulk_cancel_note')}</p>
-            <p className="muted small">{t('web.bulk_pause_note')}</p>
-            {op.frozenAudienceId !== null && (
-              <p className="muted small">{t('web.bulk_frozen_audience')}</p>
+            <StatCard
+              label={t('web.bulk_item_credited')}
+              value={formatNumber(op.counts.credited)}
+            />
+            <StatCard
+              label={t('web.bulk_item_failed')}
+              value={formatNumber(op.counts.failed)}
+              {...(op.counts.failed > 0 ? { tone: 'alert' as const } : {})}
+            />
+            {op.totalLiability !== null && (
+              <StatCard
+                label={t('web.bulk_liability')}
+                value={<Money value={op.totalLiability} />}
+              />
             )}
-            <h3>{t('web.bc_filters')}</h3>
-            <ul className="small">
-              {describeAudience(op.audience).map((line) => (
-                <li key={line}>{line}</li>
-              ))}
-            </ul>
-            {mayCancel && (op.state === 'RUNNING' || op.state === 'PAUSED') && (
-              <div className="toolbar">
-                {op.state === 'RUNNING' && (
-                  <button
-                    type="button"
-                    className="btn sm"
-                    disabled={steer.isPending}
-                    onClick={() => steer.mutate('pause')}
-                  >
-                    {t('web.bulk_pause')}
-                  </button>
-                )}
-                {op.state === 'PAUSED' && (
-                  <button
-                    type="button"
-                    className="btn sm"
-                    disabled={steer.isPending}
-                    onClick={() => steer.mutate('resume')}
-                  >
-                    {t('web.bulk_resume')}
-                  </button>
-                )}
-                {cancelAsked ? (
-                  <>
-                    <span className="small">{t('web.bulk_cancel_question')}</span>
-                    <button
-                      type="button"
-                      className="btn danger sm"
-                      onClick={() => {
-                        setCancelAsked(false);
-                        cancel.mutate();
-                      }}
-                    >
-                      {t('web.bc_cancel_confirm')}
-                    </button>
-                    <button type="button" className="btn sm" onClick={() => setCancelAsked(false)}>
-                      {t('web.bc_back')}
-                    </button>
-                  </>
-                ) : (
-                  <button
-                    type="button"
-                    className="btn danger sm"
-                    onClick={() => setCancelAsked(true)}
-                  >
-                    {t('web.bulk_cancel')}
-                  </button>
-                )}
-              </div>
-            )}
-            {cancel.error !== null && <Banner tone="danger">{bulkMessage(cancel.error)}</Banner>}
-            {steer.error !== null && <Banner tone="danger">{bulkMessage(steer.error)}</Banner>}
-          </Card>
+          </div>
+          <TwoColumn
+            main={
+              <Card title={t('web.bulk_report')}>
+                <div className="cb-progress-line">
+                  <Progress
+                    value={op.progressPercent}
+                    max={100}
+                    label={t('web.bulk_progress')}
+                    tone={op.state === 'COMPLETED' ? 'ok' : 'info'}
+                    size="lg"
+                  />
+                  <span className="num">{`${formatNumber(op.progressPercent)}%`}</span>
+                </div>
+                <KV
+                  items={[
+                    [t('web.bulk_state'), t(STATE_LABELS[op.state])],
+                    [t('web.bulk_grant'), grantText(op)],
+                    [t('web.bulk_items'), formatNumber(op.itemCount)],
+                    ...(op.totalLiability === null
+                      ? []
+                      : ([
+                          [t('web.bulk_liability'), <Money key="l" value={op.totalLiability} />],
+                          [
+                            t('web.bulk_credited_total'),
+                            op.creditedTotal === null ? (
+                              '—'
+                            ) : (
+                              <Money key="c" value={op.creditedTotal} />
+                            ),
+                          ],
+                        ] as [string, ReactNode | string][])),
+                    [t('web.bulk_item_pending'), formatNumber(op.counts.pending)],
+                    [t('web.bulk_item_credited'), formatNumber(op.counts.credited)],
+                    [t('web.bulk_item_planned'), formatNumber(op.counts.planned)],
+                    [
+                      t('web.bulk_awaiting_reconciliation'),
+                      formatNumber(op.counts.awaitingReconciliation),
+                    ],
+                    [t('web.bulk_item_succeeded'), formatNumber(op.counts.succeeded)],
+                    [t('web.bulk_item_failed'), formatNumber(op.counts.failed)],
+                    [t('web.bulk_item_skipped'), formatNumber(op.counts.skipped)],
+                    [t('web.bulk_item_cancelled'), formatNumber(op.counts.cancelled)],
+                    [t('web.bulk_notified'), formatNumber(op.counts.notified)],
+                    [t('web.bulk_notice_queued'), formatNumber(op.counts.notificationQueued)],
+                    [t('web.bulk_progress'), `${formatNumber(op.progressPercent)}%`],
+                  ]}
+                />
+              </Card>
+            }
+            side={
+              <>
+                <Card title={t('web.bc_summary')}>
+                  <KV
+                    items={[
+                      [t('web.bulk_reason'), op.note],
+                      [t('web.bc_created_by'), op.createdBy?.username ?? '—'],
+                      [t('web.bulk_created'), formatTimestamp(op.createdAt)],
+                      [
+                        t('web.bulk_not_before'),
+                        op.notBefore === null ? '—' : formatTimestamp(op.notBefore),
+                      ],
+                      [t('web.bc_as_of'), formatTimestamp(op.audienceAsOf)],
+                    ]}
+                  />
+                  <h3>{t('web.bc_filters')}</h3>
+                  {op.frozenAudienceId !== null && (
+                    <p className="muted small">{t('web.bulk_frozen_audience')}</p>
+                  )}
+                  <ul className="small">
+                    {describeAudience(op.audience).map((line) => (
+                      <li key={line}>{line}</li>
+                    ))}
+                  </ul>
+                </Card>
+                <Card title={t('web.cb_steering')} tone="danger">
+                  <p className="muted small">{t('web.bulk_cancel_note')}</p>
+                  <p className="muted small">{t('web.bulk_pause_note')}</p>
+                  {mayCancel && (op.state === 'RUNNING' || op.state === 'PAUSED') && (
+                    <div className="form-actions">
+                      {op.state === 'RUNNING' && (
+                        <Button
+                          size="sm"
+                          icon="pause"
+                          disabled={steer.isPending}
+                          onClick={() => steer.mutate('pause')}
+                        >
+                          {t('web.bulk_pause')}
+                        </Button>
+                      )}
+                      {op.state === 'PAUSED' && (
+                        <Button
+                          size="sm"
+                          icon="play"
+                          disabled={steer.isPending}
+                          onClick={() => steer.mutate('resume')}
+                        >
+                          {t('web.bulk_resume')}
+                        </Button>
+                      )}
+                      <Button size="sm" variant="danger" onClick={() => setCancelAsked(true)}>
+                        {t('web.bulk_cancel')}
+                      </Button>
+                    </div>
+                  )}
+                  {cancel.error !== null && (
+                    <Banner tone="danger">{bulkMessage(cancel.error)}</Banner>
+                  )}
+                  {steer.error !== null && (
+                    <Banner tone="danger">{bulkMessage(steer.error)}</Banner>
+                  )}
+                </Card>
+              </>
+            }
+          />
+          {cancelAsked && (
+            <ConfirmDialog
+              title={t(KIND_LABELS[op.kind])}
+              question={t('web.bulk_cancel_question')}
+              confirmLabel={t('web.bc_cancel_confirm')}
+              cancelLabel={t('web.bc_back')}
+              onConfirm={() => {
+                setCancelAsked(false);
+                cancel.mutate();
+              }}
+              onCancel={() => setCancelAsked(false)}
+            />
+          )}
           <Card title={t('web.bulk_items')}>
-            <Field label={t('web.bulk_state')} htmlFor="bulk-item-state">
-              <select
-                id="bulk-item-state"
-                value={state}
-                onChange={(event) => {
-                  setState(event.target.value as BulkItemState | '');
-                  setTrail([]);
-                }}
-              >
-                <option value="">{t('web.aud_any')}</option>
-                {BULK_ITEM_STATES.map((option) => (
-                  <option key={option} value={option}>
-                    {t(ITEM_LABELS[option])}
-                  </option>
-                ))}
-              </select>
-            </Field>
+            <div className="toolbar">
+              <Field label={t('web.bulk_state')} htmlFor="bulk-item-state" compact>
+                <select
+                  id="bulk-item-state"
+                  value={state}
+                  onChange={(event) => {
+                    setState(event.target.value as BulkItemState | '');
+                    setTrail([]);
+                  }}
+                >
+                  <option value="">{t('web.aud_any')}</option>
+                  {BULK_ITEM_STATES.map((option) => (
+                    <option key={option} value={option}>
+                      {t(ITEM_LABELS[option])}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            </div>
             <StateSwitch query={items}>
               {items.data === undefined ? null : (
                 <>
@@ -739,6 +863,7 @@ export function BulkOperationDetailPage({
                     ]}
                     rows={items.data.items}
                     rowKey={(row) => row.id}
+                    dense
                   />
                   <CursorPager
                     shown={items.data.items.length}

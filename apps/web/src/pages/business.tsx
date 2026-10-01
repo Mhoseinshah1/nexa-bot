@@ -55,12 +55,21 @@ import {
   Money,
   Num,
   PageHead,
-  Pills,
   StateSwitch,
   TabPanel,
   Tabs,
+  BarChart,
+  ButtonGroup,
+  ChartCard,
+  Donut,
+  FilterChip,
+  FilterChips,
+  Legend,
+  StatCard,
   type Column,
 } from '../ui/kit';
+import type { DonutSlice, SeriesTone } from '../ui/charts';
+import { Icon } from '../ui/icons';
 import { TrendChart } from '../ui/trend-chart';
 import { STATE_LABELS as SERVICE_STATE_LABELS } from './services';
 import { STATUS_LABELS as PRODUCT_STATUS_LABELS } from './products';
@@ -172,11 +181,19 @@ export function RangePicker({
   };
   return (
     <div className="report-range">
-      <Pills
-        value={selection.range}
-        onChange={choose}
-        items={REPORT_RANGES.map((range) => ({ id: range, label: t(REPORT_RANGE_LABELS[range]) }))}
-      />
+      <ButtonGroup segmented label={t('web.period_label')}>
+        {REPORT_RANGES.map((range) => (
+          <button
+            key={range}
+            type="button"
+            className={selection.range === range ? 'btn sm on' : 'btn sm'}
+            aria-pressed={selection.range === range}
+            onClick={() => choose(range)}
+          >
+            {t(REPORT_RANGE_LABELS[range])}
+          </button>
+        ))}
+      </ButtonGroup>
       {selection.range === 'CUSTOM' && (
         // Keyed by the APPLIED dates, so a range that arrives by history or a link starts a
         // fresh draft: the inputs never show one range while the figures show another.
@@ -202,8 +219,9 @@ function CustomRangeForm({ route, from, to }: { route: Route; from: string; to: 
     ]);
   };
   return (
-    <form className="toolbar" onSubmit={apply}>
+    <form className="report-custom" onSubmit={apply}>
       <Field
+        compact
         label={t('web.report_range_from')}
         htmlFor="report-from"
         hint={t('web.report_range_date_hint')}
@@ -216,7 +234,7 @@ function CustomRangeForm({ route, from, to }: { route: Route; from: string; to: 
           onChange={(event) => setDraft({ ...draft, from: event.target.value })}
         />
       </Field>
-      <Field label={t('web.report_range_to')} htmlFor="report-to">
+      <Field compact label={t('web.report_range_to')} htmlFor="report-to">
         <input
           id="report-to"
           dir="ltr"
@@ -225,7 +243,7 @@ function CustomRangeForm({ route, from, to }: { route: Route; from: string; to: 
           onChange={(event) => setDraft({ ...draft, to: event.target.value })}
         />
       </Field>
-      <button type="submit" className="btn sm">
+      <button type="submit" className="btn sm primary">
         {t('web.report_range_apply')}
       </button>
     </form>
@@ -293,6 +311,7 @@ function RefreshButton() {
       className="btn sm"
       onClick={() => void client.invalidateQueries({ queryKey: [REPORTS_KEY] })}
     >
+      <Icon name="refresh" />
       {t('web.report_refresh')}
     </button>
   );
@@ -313,11 +332,35 @@ export function ChangeNote({ current, previous }: { current: bigint; previous: b
   );
 }
 
-function Kpi({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
+/**
+ * One KPI, as the kit's stat card. The change against the previous period is its delta
+ * and is always `neutral`: a movement is shown, never judged (spec §23). The hint stays a
+ * tooltip on the tile, as before, rather than a sentence under every figure.
+ */
+function Kpi({
+  label,
+  hint,
+  value,
+  change,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  value: ReactNode;
+  change?: ReactNode;
+  children?: ReactNode;
+}) {
   return (
-    <div className="kpi" {...(hint === undefined ? {} : { title: hint })}>
-      <span className="muted small">{label}</span>
-      {children}
+    <div className="report-kpi" {...(hint === undefined ? {} : { title: hint })}>
+      <StatCard
+        label={label}
+        value={value}
+        {...(change === undefined
+          ? {}
+          : { delta: { text: change, direction: 'neutral' as const } })}
+      >
+        {children}
+      </StatCard>
     </div>
   );
 }
@@ -332,12 +375,12 @@ function CountKpi({
   value: { current: number; previous: number };
 }) {
   return (
-    <Kpi label={label} {...(hint === undefined ? {} : { hint })}>
-      <strong>
-        <Num value={value.current} />
-      </strong>
-      <ChangeNote current={BigInt(value.current)} previous={BigInt(value.previous)} />
-    </Kpi>
+    <Kpi
+      label={label}
+      {...(hint === undefined ? {} : { hint })}
+      value={<Num value={value.current} />}
+      change={<ChangeNote current={BigInt(value.current)} previous={BigInt(value.previous)} />}
+    />
   );
 }
 
@@ -352,22 +395,34 @@ function MoneyKpi({
   value: MoneyComparison;
   sub?: ReactNode;
 }) {
+  // One currency is the tile's figure and its change; more are listed, each with its own
+  // change — two currencies are never added into one number.
+  const [first, ...rest] = value;
   return (
-    <Kpi label={label} {...(hint === undefined ? {} : { hint })}>
-      {value.length === 0 ? (
-        <strong>
+    <Kpi
+      label={label}
+      {...(hint === undefined ? {} : { hint })}
+      value={
+        first === undefined ? (
           <Num value={0} />
-        </strong>
-      ) : (
-        value.map((row) => (
-          <span key={row.currency} className="kpi-money">
-            <strong>
-              <Money value={{ amountMinor: row.current, currency: row.currency }} />
-            </strong>
-            <ChangeNote current={BigInt(row.current)} previous={BigInt(row.previous)} />
-          </span>
-        ))
-      )}
+        ) : (
+          <Money value={{ amountMinor: first.current, currency: first.currency }} />
+        )
+      }
+      {...(first === undefined
+        ? {}
+        : {
+            change: (
+              <ChangeNote current={BigInt(first.current)} previous={BigInt(first.previous)} />
+            ),
+          })}
+    >
+      {rest.map((row) => (
+        <span key={row.currency} className="kpi-money">
+          <Money value={{ amountMinor: row.current, currency: row.currency }} />
+          <ChangeNote current={BigInt(row.current)} previous={BigInt(row.previous)} />
+        </span>
+      ))}
       {sub}
     </Kpi>
   );
@@ -389,7 +444,7 @@ function SummaryCards({ selection }: { selection: ReportRangeSelection }) {
       <StateSwitch query={summary}>
         {data !== undefined && (
           <>
-            <div className="kpi-grid">
+            <div className="stat-grid report-kpis">
               <CountKpi
                 label={t('web.report_kpi_sales')}
                 hint={t('web.report_kpi_sales_hint')}
@@ -422,13 +477,13 @@ function SummaryCards({ selection }: { selection: ReportRangeSelection }) {
                   </span>
                 }
               />
-              <Kpi label={t('web.report_kpi_active_services')} hint={t('web.report_kpi_now_hint')}>
-                <strong>
-                  <Num value={data.activeServices} />
-                </strong>
-              </Kpi>
+              <Kpi
+                label={t('web.report_kpi_active_services')}
+                hint={t('web.report_kpi_now_hint')}
+                value={<Num value={data.activeServices} />}
+              />
             </div>
-            <div className="head-stats">
+            <div className="report-substats">
               <span className="faint small">
                 {t('web.report_kpi_new_buyers')} <Num value={data.newBuyers.current} />
               </span>
@@ -472,12 +527,25 @@ function TrendCard({ selection }: { selection: ReportRangeSelection }) {
     data !== undefined &&
     [...data.current, ...data.previous].every((b) => b.value === null || b.value === '0');
   return (
-    <Card title={t('web.report_trend_title')} hint={t('web.report_trend_hint')}>
-      <Pills
-        value={metric}
-        onChange={setMetric}
-        items={REPORT_TREND_METRICS.map((m) => ({ id: m, label: t(METRIC_LABELS[m]) }))}
-      />
+    <ChartCard
+      title={t('web.report_trend_title')}
+      hint={t('web.report_trend_hint')}
+      legend={
+        <Legend
+          items={[
+            { label: t('web.report_period_current'), tone: 1 },
+            { label: t('web.report_period_previous'), tone: 1, dashed: true },
+          ]}
+        />
+      }
+    >
+      <FilterChips label={t('web.report_trend_title')}>
+        {REPORT_TREND_METRICS.map((m) => (
+          <FilterChip key={m} pressed={metric === m} onClick={() => setMetric(m)}>
+            {t(METRIC_LABELS[m])}
+          </FilterChip>
+        ))}
+      </FilterChips>
       <StateSwitch
         query={trend}
         isEmpty={empty}
@@ -497,7 +565,7 @@ function TrendCard({ selection }: { selection: ReportRangeSelection }) {
           </>
         )}
       </StateSwitch>
-    </Card>
+    </ChartCard>
   );
 }
 
@@ -520,9 +588,11 @@ function ExportButtons({
   return (
     <>
       <a className="btn sm" href={reportExportUrl(selection, report, 'csv')} download>
+        <Icon name="download" />
         {t('web.report_export_csv')}
       </a>
       <a className="btn sm" href={reportExportUrl(selection, report, 'xlsx')} download>
+        <Icon name="download" />
         {t('web.report_export_xlsx')}
       </a>
     </>
@@ -655,14 +725,20 @@ function TopProducts({
         )
       }
     >
-      <Pills
-        value={by}
-        onChange={(next) => {
-          setBy(next);
-          setPage(1);
-        }}
-        items={REPORT_PRODUCT_RANKINGS.map((r) => ({ id: r, label: t(PRODUCT_RANKING_LABELS[r]) }))}
-      />
+      <FilterChips label={t('web.report_products_title')}>
+        {REPORT_PRODUCT_RANKINGS.map((r) => (
+          <FilterChip
+            key={r}
+            pressed={by === r}
+            onClick={() => {
+              setBy(r);
+              setPage(1);
+            }}
+          >
+            {t(PRODUCT_RANKING_LABELS[r])}
+          </FilterChip>
+        ))}
+      </FilterChips>
       <StateSwitch
         query={products}
         isEmpty={(data?.rows.length ?? 0) === 0}
@@ -675,6 +751,7 @@ function TopProducts({
               rows={data.rows}
               rowKey={(r) => `${r.productId}|${r.title}|${r.currency}`}
               caption={t('web.report_products_title')}
+              dense
             />
             {!compact && (
               <div className="pager">
@@ -721,7 +798,7 @@ function FailureSummary({ selection }: { selection: ReportRangeSelection }) {
       <StateSwitch query={failures}>
         {data !== undefined && (
           <>
-            <div className="head-stats">
+            <div className="stat-grid report-kpis">
               <Stat label={t('web.report_failed_payments')} value={data.payments.failed} />
               <Stat
                 label={t('web.report_failed_provisioning')}
@@ -756,14 +833,7 @@ function FailureSummary({ selection }: { selection: ReportRangeSelection }) {
 }
 
 function Stat({ label, value }: { label: string; value: number }) {
-  return (
-    <div className="stat">
-      <span className="muted small">{label}</span>
-      <strong>
-        <Num value={value} />
-      </strong>
-    </div>
-  );
+  return <StatCard label={label} value={<Num value={value} />} />;
 }
 
 // --- Reports page ----------------------------------------------------------------
@@ -830,7 +900,7 @@ export function ReportsPage({
         subtitle={t('web.report_page_intro')}
         actions={<RefreshButton />}
       />
-      <Card>
+      <Card className="report-range-card">
         <RangePicker route={route} selection={selection} />
       </Card>
       <Tabs
@@ -953,20 +1023,28 @@ function OrdersDrilldown({ selection }: { selection: ReportRangeSelection }) {
       hint={t('web.report_orders_hint')}
       actions={<ExportButtons selection={selection} report="SALES" />}
     >
-      <Pills
-        value={purpose}
-        onChange={(next) => {
-          setPurpose(next);
-          setCursors([]);
-        }}
-        items={[
-          { id: 'ALL' as const, label: t('web.report_all') },
-          ...(Object.keys(PURPOSE_LABELS) as OrderPurpose[]).map((p) => ({
-            id: p,
-            label: t(PURPOSE_LABELS[p]),
-          })),
-        ]}
-      />
+      <FilterChips label={t('web.report_col_purpose')}>
+        {(
+          [
+            { id: 'ALL', label: t('web.report_all') },
+            ...(Object.keys(PURPOSE_LABELS) as OrderPurpose[]).map((p) => ({
+              id: p,
+              label: t(PURPOSE_LABELS[p]),
+            })),
+          ] as { id: OrderPurpose | 'ALL'; label: string }[]
+        ).map((item) => (
+          <FilterChip
+            key={item.id}
+            pressed={purpose === item.id}
+            onClick={() => {
+              setPurpose(item.id);
+              setCursors([]);
+            }}
+          >
+            {item.label}
+          </FilterChip>
+        ))}
+      </FilterChips>
       <StateSwitch
         query={orders}
         isEmpty={(data?.rows.length ?? 0) === 0}
@@ -979,6 +1057,7 @@ function OrdersDrilldown({ selection }: { selection: ReportRangeSelection }) {
               rows={data.rows}
               rowKey={(r) => r.orderId}
               caption={t('web.report_orders_title')}
+              dense
             />
             <div className="pager">
               <span className="spacer" />
@@ -1033,23 +1112,44 @@ function ServicesReport({ selection }: { selection: ReportRangeSelection }) {
       <StateSwitch query={services}>
         {data !== undefined && (
           <>
-            <div className="head-stats">
+            <div className="stat-grid report-kpis">
               <Stat label={t('web.report_kpi_new_services')} value={data.newServices.current} />
               <Stat
                 label={t('web.report_kpi_trial_services')}
                 value={data.newTrialServices.current}
               />
               <Stat label={t('web.report_kpi_active_services')} value={data.activeServices} />
-              <div className="stat">
-                <span className="muted small">{t('web.report_traffic_sold')}</span>
-                <strong>
-                  <Ltr>{bytesText(BigInt(data.trafficSoldBytes))}</Ltr>
-                </strong>
-                <span className="faint small">
-                  {t('web.report_unlimited_lines')} <Num value={data.unlimitedTrafficLines} />
-                </span>
-              </div>
+              <StatCard
+                label={t('web.report_traffic_sold')}
+                value={<Ltr>{bytesText(BigInt(data.trafficSoldBytes))}</Ltr>}
+                hint={
+                  <>
+                    {t('web.report_unlimited_lines')} <Num value={data.unlimitedTrafficLines} />
+                  </>
+                }
+              />
             </div>
+            {/* The operations table below, as columns: orders per purpose, this period
+                beside the previous. Counts only — revenue stays per currency in the table. */}
+            {data.operations.some((r) => r.orders.current > 0 || r.orders.previous > 0) && (
+              <BarChart
+                labels={data.operations.map((r) => t(PURPOSE_LABELS[r.purpose]))}
+                series={[
+                  {
+                    name: t('web.report_period_current'),
+                    values: data.operations.map((r) => r.orders.current),
+                    tone: 1,
+                  },
+                  {
+                    name: t('web.report_period_previous'),
+                    values: data.operations.map((r) => r.orders.previous),
+                    tone: 3,
+                  },
+                ]}
+                caption={t('web.report_col_orders')}
+                height={180}
+              />
+            )}
             <DataTable
               columns={[
                 {
@@ -1109,6 +1209,20 @@ function ServicesReport({ selection }: { selection: ReportRangeSelection }) {
       </StateSwitch>
     </Card>
   );
+}
+
+/** Confirmed attempts summed per method — the table's rows are method × provider × kind. */
+function paymentMethodSlices(
+  rows: readonly { method: PaymentMethod; confirmed: number }[],
+): DonutSlice[] {
+  const totals = new Map<PaymentMethod, number>();
+  for (const row of rows) totals.set(row.method, (totals.get(row.method) ?? 0) + row.confirmed);
+  return [...totals.entries()].map(([method, value], index) => ({
+    key: method,
+    label: t(METHOD_LABELS[method]),
+    value,
+    tone: ((index % 6) + 1) as SeriesTone,
+  }));
 }
 
 function PaymentsReport({ selection }: { selection: ReportRangeSelection }) {
@@ -1185,11 +1299,19 @@ function PaymentsReport({ selection }: { selection: ReportRangeSelection }) {
       >
         {data !== undefined && (
           <>
+            {/* Confirmed attempts by method, from the rows the table below holds. */}
+            <div className="report-donut">
+              <Donut
+                slices={paymentMethodSlices(data.rows)}
+                caption={t('web.report_col_confirmed')}
+              />
+            </div>
             <DataTable
               columns={columns}
               rows={data.rows}
               rowKey={(r) => `${r.method}|${r.provider ?? ''}|${r.kind}`}
               caption={t('web.report_payments_title')}
+              dense
             />
             <p className="faint small">
               {t('web.report_success_rate_total')}{' '}
@@ -1412,7 +1534,9 @@ function ResellersReport({ selection }: { selection: ReportRangeSelection }) {
                 key: 'reseller',
                 header: t('web.report_col_reseller'),
                 render: (r) => (
-                  <a href={`/resellers/${r.resellerCustomerId}`} onClick={onLink}>
+                  // The customer page, whose reseller card shows the standing: there is
+                  // no `/resellers/:id` route, and this link resolved to Not Found (D1).
+                  <a href={`/users/${encodeURIComponent(r.resellerCustomerId)}`} onClick={onLink}>
                     <Ltr>{r.resellerCustomerId.slice(-8)}</Ltr>
                   </a>
                 ),
@@ -1518,43 +1642,44 @@ export function ReferralAnalytics({
       <StateSwitch query={referrals}>
         {data !== undefined && (
           <>
-            <div className="kpi-grid">
+            <div className="stat-grid report-kpis">
               <CountKpi label={t('web.report_referral_signups')} value={data.signups} />
               <Kpi
                 label={t('web.report_referral_buyers')}
                 hint={t('web.report_referral_buyers_hint')}
+                value={<Num value={data.convertedBuyers} />}
               >
-                <strong>
-                  <Num value={data.convertedBuyers} />
-                </strong>
                 <span className="faint small">
                   <Ltr>{formatRate(data.conversionBasisPoints)}</Ltr>
                 </span>
               </Kpi>
-              <Kpi label={t('web.report_referral_gifts')}>{sum(data.signupGifts)}</Kpi>
-              <Kpi label={t('web.report_referral_commissions')}>{sum(data.commissions)}</Kpi>
+              <Kpi label={t('web.report_referral_gifts')} value={sum(data.signupGifts)} />
+              <Kpi label={t('web.report_referral_commissions')} value={sum(data.commissions)} />
               <Kpi
                 label={t('web.report_referral_revenue')}
                 hint={t('web.report_referral_revenue_hint')}
+                value={sum(data.referredRevenue)}
               >
-                {sum(data.referredRevenue)}
                 <span className="faint small">
                   {t('web.report_kpi_sales')} <Num value={data.referredSales} />
                 </span>
               </Kpi>
             </div>
             <h3>{t('web.report_top_referrers')}</h3>
-            <Pills
-              value={by}
-              onChange={(next) => {
-                setBy(next);
-                setPage(1);
-              }}
-              items={REPORT_REFERRER_RANKINGS.map((r) => ({
-                id: r,
-                label: t(REFERRER_RANKING_LABELS[r]),
-              }))}
-            />
+            <FilterChips label={t('web.report_top_referrers')}>
+              {REPORT_REFERRER_RANKINGS.map((r) => (
+                <FilterChip
+                  key={r}
+                  pressed={by === r}
+                  onClick={() => {
+                    setBy(r);
+                    setPage(1);
+                  }}
+                >
+                  {t(REFERRER_RANKING_LABELS[r])}
+                </FilterChip>
+              ))}
+            </FilterChips>
             {data.topReferrers.rows.length === 0 ? (
               <Empty title={t('web.report_referrers_empty')} icon="users" />
             ) : (

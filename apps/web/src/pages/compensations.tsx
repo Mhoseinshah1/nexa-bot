@@ -73,7 +73,11 @@ export function CompensationsPage({ route, denied }: { route: Route; denied: boo
       key: 'payment',
       header: t('web.compensation_payment'),
       render: (row) => (
-        <a href={`/payments/${encodeURIComponent(row.paymentId)}`} onClick={onLink}>
+        <a
+          href={`/payments/${encodeURIComponent(row.paymentId)}`}
+          onClick={onLink}
+          className="strong"
+        >
           <Ltr>{row.paymentId.slice(0, 8)}</Ltr>
         </a>
       ),
@@ -108,6 +112,7 @@ export function CompensationsPage({ route, denied }: { route: Route; denied: boo
     {
       key: 'principal',
       header: t('web.compensation_principal'),
+      align: 'end',
       render: (row) => (
         <Money value={{ amountMinor: row.principalMinor, currency: row.currency }} />
       ),
@@ -115,6 +120,7 @@ export function CompensationsPage({ route, denied }: { route: Route; denied: boo
     {
       key: 'credited',
       header: t('web.compensation_credited'),
+      align: 'end',
       render: (row) => <Money value={{ amountMinor: row.creditedMinor, currency: row.currency }} />,
     },
     {
@@ -125,7 +131,11 @@ export function CompensationsPage({ route, denied }: { route: Route; denied: boo
     {
       key: 'state',
       header: t('web.compensation_state'),
-      render: (row) => <Badge tone={STATE_TONES[row.state]}>{t(STATE_LABELS[row.state])}</Badge>,
+      render: (row) => (
+        <Badge tone={STATE_TONES[row.state]} dot>
+          {t(STATE_LABELS[row.state])}
+        </Badge>
+      ),
     },
     {
       key: 'time',
@@ -143,7 +153,7 @@ export function CompensationsPage({ route, denied }: { route: Route; denied: boo
         subtitle={t('web.compensations_intro')}
         maturity="now"
       />
-      <Card>
+      <Card className="ca-list">
         <StateSwitch query={compensations} denied={denied}>
           {compensations.data === undefined ? null : compensations.data.compensations.length ===
             0 ? (
@@ -155,6 +165,8 @@ export function CompensationsPage({ route, denied }: { route: Route; denied: boo
                 columns={columns}
                 rows={compensations.data.compensations}
                 rowKey={(row) => row.refundId}
+                dense
+                sticky
               />
               <CursorPager
                 shown={compensations.data.compensations.length}

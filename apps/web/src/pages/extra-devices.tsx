@@ -24,6 +24,7 @@ import { messageFor } from './settings';
 import {
   Badge,
   Banner,
+  Button,
   Card,
   CursorPager,
   DataTable,
@@ -31,10 +32,14 @@ import {
   Field,
   Money,
   PageHead,
+  RowActions,
   StateSwitch,
   useToast,
+  useDiscardGuard,
+  useUnsavedChanges,
   type Column,
 } from '../ui/kit';
+import { SaveBar, revealField } from './editor-layout';
 
 /**
  * Extra users / devices (WP-A5) — the per-user rate a customer is charged for more
@@ -185,6 +190,13 @@ export function ExtraDevicesPage({
   const [editing, setEditing] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const rows = rates.data?.addons ?? [];
+  const editedRow = editing === null ? undefined : rows.find((row) => row.id === editing);
+  const dirty =
+    JSON.stringify(form) !==
+    JSON.stringify(editedRow === undefined ? EMPTY_FORM : formOf(editedRow));
+  useUnsavedChanges(dirty);
+  /** Edit or Add replaces the form's contents: asked first while they are unsaved. */
+  const discard = useDiscardGuard(dirty);
 
   const panelName = (id: string | null): string =>
     id === null
@@ -253,13 +265,17 @@ export function ExtraDevicesPage({
   const failure = save.error ?? toggle.error;
 
   const columns: readonly Column<ServiceAddonSummaryResponse>[] = [
-    { key: 'title', header: t('web.extra_devices_rate_title'), render: (row) => row.title },
+    {
+      key: 'title',
+      header: t('web.extra_devices_rate_title'),
+      render: (row) => <span className="strong">{row.title}</span>,
+    },
     {
       key: 'price',
       header: t('web.extra_devices_unit_price'),
       render: (row) =>
         row.priceAmount === null || row.priceCurrency === null ? (
-          t('web.extra_devices_unpriced')
+          <span className="faint">{t('web.extra_devices_unpriced')}</span>
         ) : (
           <Money value={{ amountMinor: row.priceAmount, currency: row.priceCurrency }} />
         ),
@@ -267,18 +283,21 @@ export function ExtraDevicesPage({
     {
       key: 'max',
       header: t('web.extra_devices_max_quantity'),
-      render: (row) => String(row.maxQuantity ?? '—'),
+      align: 'end',
+      render: (row) => <span className="num">{String(row.maxQuantity ?? '—')}</span>,
     },
     {
       key: 'scope',
       header: t('web.extra_devices_scope'),
-      render: (row) => `${panelName(row.panelId)} / ${productName(row.productId)}`,
+      render: (row) => (
+        <span className="muted">{`${panelName(row.panelId)} / ${productName(row.productId)}`}</span>
+      ),
     },
     {
       key: 'state',
       header: t('web.extra_devices_state'),
       render: (row) => (
-        <Badge tone={row.status === 'ACTIVE' ? 'ok' : 'neutral'}>
+        <Badge tone={row.status === 'ACTIVE' ? 'ok' : 'neutral'} dot>
           {t(row.status === 'ACTIVE' ? 'web.extra_devices_active' : 'web.extra_devices_inactive')}
         </Badge>
       ),
@@ -286,7 +305,7 @@ export function ExtraDevicesPage({
     {
       key: 'updated',
       header: t('web.extra_devices_updated'),
-      render: (row) => formatTimestamp(row.updatedAt),
+      render: (row) => <span className="muted small">{formatTimestamp(row.updatedAt)}</span>,
     },
     {
       key: 'actions',
@@ -294,32 +313,41 @@ export function ExtraDevicesPage({
       align: 'end',
       render: (row) =>
         !mayEdit ? null : (
-          <div className="toolbar">
-            <button
-              type="button"
-              className="btn sm"
+          <RowActions>
+            <Button
+              size="sm"
+              variant="ghost"
+              icon="edit"
               disabled={busy}
-              onClick={() => {
-                setEditing(row.id);
-                setForm(formOf(row));
-              }}
+              onClick={() =>
+                discard.confirmDiscard(() => {
+                  setEditing(row.id);
+                  setForm(formOf(row));
+                  revealField('xd-title');
+                })
+              }
             >
               {t('web.extra_devices_edit')}
-            </button>
-            <button
-              type="button"
-              className="btn sm"
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
               disabled={busy}
               onClick={() => toggle.mutate({ id: row.id, active: row.status !== 'ACTIVE' })}
             >
               {t(
                 row.status === 'ACTIVE' ? 'web.extra_devices_disable' : 'web.extra_devices_enable',
               )}
-            </button>
-          </div>
+            </Button>
+          </RowActions>
         ),
     },
   ];
+
+  const quantityHint = t('web.extra_devices_max_quantity_hint').replace(
+    '{max}',
+    String(DEVICE_ADDON_MAX_QUANTITY),
+  );
 
   return (
     <>
@@ -327,6 +355,24 @@ export function ExtraDevicesPage({
         title={t('web.extra_devices_title')}
         subtitle={t('web.extra_devices_subtitle')}
         maturity="now"
+        {...(mayEdit
+          ? {
+              actions: (
+                <Button
+                  variant="primary"
+                  icon="plus"
+                  onClick={() =>
+                    discard.confirmDiscard(() => {
+                      reset();
+                      revealField('xd-title');
+                    })
+                  }
+                >
+                  {t('web.cb_add')}
+                </Button>
+              ),
+            }
+          : {})}
       />
 
       {CAPABLE_PROVIDERS.length === 0 ? (
@@ -340,172 +386,175 @@ export function ExtraDevicesPage({
         </Banner>
       )}
 
-      <StateSwitch
-        query={rates}
-        denied={denied}
-        isEmpty={queryState(rates) === 'ready' && rows.length === 0}
-        empty={
-          <Empty title={t('web.extra_devices_empty')} hint={t('web.extra_devices_empty_hint')} />
-        }
-      >
-        <Card title={t('web.extra_devices_rates')}>
-          <DataTable
-            columns={columns}
-            rows={rows}
-            rowKey={(row) => row.id}
-            caption={t('web.extra_devices_rates')}
-          />
-          <CursorPager
-            shown={rows.length}
-            hasPrevious={trail.length > 0}
-            hasNext={(rates.data?.nextCursor ?? null) !== null}
-            onPrevious={() => {
-              setCursor(trail[trail.length - 1] ?? null);
-              setTrail(trail.slice(0, -1));
-            }}
-            onNext={() => {
-              const next = rates.data?.nextCursor ?? null;
-              if (next === null) return;
-              setTrail([...trail, cursor]);
-              setCursor(next);
-            }}
-            nextLabel="web.newer"
-            previousLabel="web.older"
-          />
-        </Card>
-      </StateSwitch>
-
-      {mayEdit && (
-        <Card
-          title={t(editing === null ? 'web.extra_devices_new' : 'web.extra_devices_editing')}
-          hint={t('web.extra_devices_form_hint')}
+      <div className="stack">
+        <StateSwitch
+          query={rates}
+          denied={denied}
+          isEmpty={queryState(rates) === 'ready' && rows.length === 0}
+          empty={
+            <Card>
+              <Empty
+                title={t('web.extra_devices_empty')}
+                hint={t('web.extra_devices_empty_hint')}
+                icon="userPlus"
+              />
+            </Card>
+          }
         >
-          <Field label={t('web.extra_devices_rate_title')} htmlFor="xd-title">
-            <input
-              id="xd-title"
-              value={form.title}
-              maxLength={120}
-              onChange={(event) => setForm({ ...form, title: event.target.value })}
+          <Card title={t('web.extra_devices_rates')}>
+            <DataTable
+              columns={columns}
+              rows={rows}
+              rowKey={(row) => row.id}
+              caption={t('web.extra_devices_rates')}
+              dense
             />
-          </Field>
-          <Field
-            label={t('web.extra_devices_unit_price')}
-            hint={t('web.extra_devices_unit_price_hint')}
-            htmlFor="xd-price"
-          >
-            <input
-              id="xd-price"
-              dir="ltr"
-              inputMode="numeric"
-              value={form.priceAmount}
-              onChange={(event) => setForm({ ...form, priceAmount: event.target.value.trim() })}
+            <CursorPager
+              shown={rows.length}
+              hasPrevious={trail.length > 0}
+              hasNext={(rates.data?.nextCursor ?? null) !== null}
+              onPrevious={() => {
+                setCursor(trail[trail.length - 1] ?? null);
+                setTrail(trail.slice(0, -1));
+              }}
+              onNext={() => {
+                const next = rates.data?.nextCursor ?? null;
+                if (next === null) return;
+                setTrail([...trail, cursor]);
+                setCursor(next);
+              }}
+              nextLabel="web.newer"
+              previousLabel="web.older"
             />
-          </Field>
-          <Field label={t('web.extra_devices_currency')} htmlFor="xd-currency">
-            <select
-              id="xd-currency"
-              value={form.priceCurrency}
-              onChange={(event) =>
-                setForm({ ...form, priceCurrency: event.target.value as SalesCurrencyCode })
-              }
-            >
-              {SALES_CURRENCY_CODES.map((code) => (
-                <option key={code} value={code}>
-                  {t(CURRENCY_LABEL[code])}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field
-            label={t('web.extra_devices_max_quantity')}
-            hint={t('web.extra_devices_max_quantity_hint').replace(
-              '{max}',
-              String(DEVICE_ADDON_MAX_QUANTITY),
-            )}
-            htmlFor="xd-max"
-          >
-            <input
-              id="xd-max"
-              dir="ltr"
-              inputMode="numeric"
-              value={form.maxQuantity}
-              onChange={(event) => setForm({ ...form, maxQuantity: event.target.value.trim() })}
-            />
-          </Field>
-          <Field
-            label={t('web.extra_devices_scope_panel')}
-            hint={t('web.extra_devices_scope_hint')}
-            htmlFor="xd-panel"
-          >
-            <select
-              id="xd-panel"
-              value={form.panelId}
-              onChange={(event) => setForm({ ...form, panelId: event.target.value })}
-            >
-              <option value="">{t('web.extra_devices_scope_all_panels')}</option>
-              {(panels.data ?? []).map((one) => (
-                <option key={one.id} value={one.id}>
-                  {one.capabilities.includes('DEVICE_LIMIT_ADJUSTMENT')
-                    ? one.name
-                    : `${one.name} — ${t('web.extra_devices_panel_unsupported')}`}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label={t('web.extra_devices_scope_product')} htmlFor="xd-product">
-            <select
-              id="xd-product"
-              value={form.productId}
-              onChange={(event) => setForm({ ...form, productId: event.target.value })}
-            >
-              <option value="">{t('web.extra_devices_scope_all_products')}</option>
-              {(products.data ?? []).map((one) => (
-                <option key={one.id} value={one.id}>
-                  {one.title}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label={t('web.extra_devices_sort')} htmlFor="xd-sort">
-            <input
-              id="xd-sort"
-              dir="ltr"
-              inputMode="numeric"
-              value={form.sortOrder}
-              onChange={(event) => setForm({ ...form, sortOrder: event.target.value.trim() })}
-            />
-          </Field>
+          </Card>
+        </StateSwitch>
 
-          {(panels.isError || products.isError) && (
-            <Banner tone="danger">{t('web.extra_devices_scope_unavailable')}</Banner>
-          )}
-          {maxQuantity === null && (
-            <Banner tone="warn">
-              {t('web.extra_devices_max_quantity_hint').replace(
-                '{max}',
-                String(DEVICE_ADDON_MAX_QUANTITY),
-              )}
-            </Banner>
-          )}
+        {mayEdit && (
+          <Card
+            title={t(editing === null ? 'web.extra_devices_new' : 'web.extra_devices_editing')}
+            hint={t('web.extra_devices_form_hint')}
+            foot={
+              <SaveBar dirty={dirty}>
+                {editing !== null && (
+                  <Button size="sm" disabled={busy} onClick={reset}>
+                    {t('web.extra_devices_cancel_edit')}
+                  </Button>
+                )}
+                <Button
+                  variant="primary"
+                  size="sm"
+                  icon="check"
+                  disabled={busy || form.title.trim() === '' || !priceValid || maxQuantity === null}
+                  onClick={() => save.mutate()}
+                >
+                  {t('web.extra_devices_save')}
+                </Button>
+              </SaveBar>
+            }
+          >
+            <div className="form-grid c3">
+              <Field label={t('web.extra_devices_rate_title')} htmlFor="xd-title">
+                <input
+                  id="xd-title"
+                  value={form.title}
+                  maxLength={120}
+                  onChange={(event) => setForm({ ...form, title: event.target.value })}
+                />
+              </Field>
+              <Field
+                label={t('web.extra_devices_unit_price')}
+                hint={t('web.extra_devices_unit_price_hint')}
+                htmlFor="xd-price"
+              >
+                <input
+                  id="xd-price"
+                  dir="ltr"
+                  inputMode="numeric"
+                  value={form.priceAmount}
+                  onChange={(event) => setForm({ ...form, priceAmount: event.target.value.trim() })}
+                />
+              </Field>
+              <Field label={t('web.extra_devices_currency')} htmlFor="xd-currency">
+                <select
+                  id="xd-currency"
+                  value={form.priceCurrency}
+                  onChange={(event) =>
+                    setForm({ ...form, priceCurrency: event.target.value as SalesCurrencyCode })
+                  }
+                >
+                  {SALES_CURRENCY_CODES.map((code) => (
+                    <option key={code} value={code}>
+                      {t(CURRENCY_LABEL[code])}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field
+                label={t('web.extra_devices_max_quantity')}
+                {...(maxQuantity === null ? { error: quantityHint } : { hint: quantityHint })}
+                htmlFor="xd-max"
+              >
+                <input
+                  id="xd-max"
+                  dir="ltr"
+                  inputMode="numeric"
+                  value={form.maxQuantity}
+                  onChange={(event) => setForm({ ...form, maxQuantity: event.target.value.trim() })}
+                />
+              </Field>
+              <Field
+                label={t('web.extra_devices_scope_panel')}
+                hint={t('web.extra_devices_scope_hint')}
+                htmlFor="xd-panel"
+              >
+                <select
+                  id="xd-panel"
+                  value={form.panelId}
+                  onChange={(event) => setForm({ ...form, panelId: event.target.value })}
+                >
+                  <option value="">{t('web.extra_devices_scope_all_panels')}</option>
+                  {(panels.data ?? []).map((one) => (
+                    <option key={one.id} value={one.id}>
+                      {one.capabilities.includes('DEVICE_LIMIT_ADJUSTMENT')
+                        ? one.name
+                        : `${one.name} — ${t('web.extra_devices_panel_unsupported')}`}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label={t('web.extra_devices_scope_product')} htmlFor="xd-product">
+                <select
+                  id="xd-product"
+                  value={form.productId}
+                  onChange={(event) => setForm({ ...form, productId: event.target.value })}
+                >
+                  <option value="">{t('web.extra_devices_scope_all_products')}</option>
+                  {(products.data ?? []).map((one) => (
+                    <option key={one.id} value={one.id}>
+                      {one.title}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label={t('web.extra_devices_sort')} htmlFor="xd-sort">
+                <input
+                  id="xd-sort"
+                  dir="ltr"
+                  inputMode="numeric"
+                  value={form.sortOrder}
+                  onChange={(event) => setForm({ ...form, sortOrder: event.target.value.trim() })}
+                />
+              </Field>
+            </div>
 
-          <div className="toolbar">
-            <button
-              type="button"
-              className="btn primary sm"
-              disabled={busy || form.title.trim() === '' || !priceValid || maxQuantity === null}
-              onClick={() => save.mutate()}
-            >
-              {t('web.extra_devices_save')}
-            </button>
-            {editing !== null && (
-              <button type="button" className="btn sm" disabled={busy} onClick={reset}>
-                {t('web.extra_devices_cancel_edit')}
-              </button>
+            {(panels.isError || products.isError) && (
+              <Banner tone="danger">{t('web.extra_devices_scope_unavailable')}</Banner>
             )}
-          </div>
-          {failure != null && <Banner tone="danger">{messageFor(failure)}</Banner>}
-        </Card>
-      )}
+            {failure != null && <Banner tone="danger">{messageFor(failure)}</Banner>}
+          </Card>
+        )}
+      </div>
+      {discard.dialog}
     </>
   );
 }

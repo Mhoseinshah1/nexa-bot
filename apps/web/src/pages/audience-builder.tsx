@@ -16,7 +16,8 @@ import {
 import { ApiError, fetchAudienceOptions, previewAudience } from '../api/client';
 import { currencyLabel, formatNumber } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
-import { Banner, Field, KV } from '../ui/kit';
+import { Banner, Field, Metric } from '../ui/kit';
+import { Icon } from '../ui/icons';
 
 /**
  * The SHARED audience builder (round N): the one editor of an audience definition, used by
@@ -165,223 +166,238 @@ export function AudienceBuilder({
 
   return (
     <div className="audience-builder">
-      <h3>{t('web.aud_who')}</h3>
-      <p className="muted small">{t('web.aud_who_hint')}</p>
-      <div className="checks">
-        <label>
-          <input
-            type="checkbox"
-            disabled={disabled}
-            checked={segment.ordinary}
-            onChange={() => setSegment({ ...segment, ordinary: !segment.ordinary })}
-          />{' '}
-          {t('web.aud_ordinary')}
-        </label>
-        {(opts?.resellerTiers ?? []).map((tier) => (
-          <label key={tier.id}>
+      <div className="aud-section">
+        <h3>{t('web.aud_who')}</h3>
+        <p className="muted small">{t('web.aud_who_hint')}</p>
+        <div className="checks aud-segments">
+          <label className="aud-segment">
             <input
               type="checkbox"
               disabled={disabled}
-              checked={segment.resellerTierIds.includes(tier.id)}
-              onChange={() =>
-                setSegment({
-                  ...segment,
-                  resellerTierIds: toggle(segment.resellerTierIds, tier.id),
-                })
-              }
+              checked={segment.ordinary}
+              onChange={() => setSegment({ ...segment, ordinary: !segment.ordinary })}
             />{' '}
-            {t('web.aud_tier')} {tier.name}
+            {t('web.aud_ordinary')}
           </label>
-        ))}
-      </div>
+          {(opts?.resellerTiers ?? []).map((tier) => (
+            <label key={tier.id} className="aud-segment">
+              <input
+                type="checkbox"
+                disabled={disabled}
+                checked={segment.resellerTierIds.includes(tier.id)}
+                onChange={() =>
+                  setSegment({
+                    ...segment,
+                    resellerTierIds: toggle(segment.resellerTierIds, tier.id),
+                  })
+                }
+              />{' '}
+              {t('web.aud_tier')} {tier.name}
+            </label>
+          ))}
+        </div>
 
-      <Field
-        label={t('web.aud_customer_ids')}
-        htmlFor="aud-ids"
-        hint={t('web.aud_customer_ids_hint')}
-      >
-        <textarea
-          id="aud-ids"
-          dir="ltr"
-          rows={2}
-          disabled={disabled}
-          value={(value.customerIds ?? []).join('\n')}
-          onChange={(event) => {
-            const ids = event.target.value
-              .split(/[\s,]+/u)
-              .map((id) => id.trim())
-              .filter((id) => id !== '');
-            set({ customerIds: ids.length === 0 ? null : ids });
-          }}
-        />
-      </Field>
-
-      <div className="grid-2">
-        <Field label={t('web.aud_purchase')} htmlFor="aud-purchase">
-          <select
-            id="aud-purchase"
-            disabled={disabled}
-            value={value.purchase}
-            onChange={(event) => set({ purchase: event.target.value as AudiencePurchaseFilter })}
-          >
-            {AUDIENCE_PURCHASE_FILTERS.map((option) => (
-              <option key={option} value={option}>
-                {t(PURCHASE_LABELS[option])}
-              </option>
-            ))}
-          </select>
-        </Field>
-        <Field label={t('web.aud_status')} htmlFor="aud-status">
-          <select
-            id="aud-status"
-            disabled={disabled}
-            value={value.customerStatus}
-            onChange={(event) =>
-              set({ customerStatus: event.target.value as AudienceCustomerStatus })
-            }
-          >
-            {AUDIENCE_CUSTOMER_STATUSES.map((option) => (
-              <option key={option} value={option}>
-                {t(STATUS_LABELS[option])}
-              </option>
-            ))}
-          </select>
-        </Field>
-        <Field label={t('web.aud_trial')} htmlFor="aud-trial">
-          <select
-            id="aud-trial"
-            disabled={disabled}
-            value={value.trial}
-            onChange={(event) => set({ trial: event.target.value as AudienceTrialFilter })}
-          >
-            {AUDIENCE_TRIAL_FILTERS.map((option) => (
-              <option key={option} value={option}>
-                {t(TRIAL_LABELS[option])}
-              </option>
-            ))}
-          </select>
-        </Field>
-        <Field label={t('web.aud_referral')} htmlFor="aud-referral">
-          <select
-            id="aud-referral"
-            disabled={disabled}
-            value={value.referral}
-            onChange={(event) => set({ referral: event.target.value as AudienceReferralFilter })}
-          >
-            {AUDIENCE_REFERRAL_FILTERS.map((option) => (
-              <option key={option} value={option}>
-                {t(REFERRAL_LABELS[option])}
-              </option>
-            ))}
-          </select>
-        </Field>
-        <Field label={t('web.aud_registered_from')} htmlFor="aud-reg-from">
-          <input
-            id="aud-reg-from"
-            type="date"
-            disabled={disabled}
-            value={instantToDay(value.registeredFrom)}
-            onChange={(event) => set({ registeredFrom: dayToInstant(event.target.value) })}
-          />
-        </Field>
-        <Field label={t('web.aud_registered_before')} htmlFor="aud-reg-before">
-          <input
-            id="aud-reg-before"
-            type="date"
-            disabled={disabled}
-            value={instantToDay(value.registeredBefore)}
-            onChange={(event) => set({ registeredBefore: dayToInstant(event.target.value) })}
-          />
-        </Field>
-        <Field label={t('web.aud_age_min')} htmlFor="aud-age-min">
-          <input
-            id="aud-age-min"
-            inputMode="numeric"
-            disabled={disabled}
-            value={value.accountAgeMinDays ?? ''}
-            onChange={(event) => set({ accountAgeMinDays: whole(event.target.value) })}
-          />
-        </Field>
-        <Field label={t('web.aud_age_max')} htmlFor="aud-age-max">
-          <input
-            id="aud-age-max"
-            inputMode="numeric"
-            disabled={disabled}
-            value={value.accountAgeMaxDays ?? ''}
-            onChange={(event) => set({ accountAgeMaxDays: whole(event.target.value) })}
-          />
-        </Field>
-        <Field label={t('web.aud_last_purchase_from')} htmlFor="aud-lp-from">
-          <input
-            id="aud-lp-from"
-            type="date"
-            disabled={disabled}
-            value={instantToDay(value.lastPurchaseFrom)}
-            onChange={(event) => set({ lastPurchaseFrom: dayToInstant(event.target.value) })}
-          />
-        </Field>
-        <Field label={t('web.aud_last_purchase_before')} htmlFor="aud-lp-before">
-          <input
-            id="aud-lp-before"
-            type="date"
-            disabled={disabled}
-            value={instantToDay(value.lastPurchaseBefore)}
-            onChange={(event) => set({ lastPurchaseBefore: dayToInstant(event.target.value) })}
-          />
-        </Field>
-        <Field label={t('web.aud_no_purchase_days')} htmlFor="aud-lapse">
-          <input
-            id="aud-lapse"
-            inputMode="numeric"
-            disabled={disabled}
-            value={value.noPurchaseForDays ?? ''}
-            onChange={(event) => {
-              const days = whole(event.target.value);
-              set({ noPurchaseForDays: days === 0 ? null : days });
-            }}
-          />
-        </Field>
         <Field
-          label={`${t('web.aud_balance_min')} (${currencyLabel(currency as never)})`}
-          htmlFor="aud-bal-min"
+          label={t('web.aud_customer_ids')}
+          htmlFor="aud-ids"
+          hint={t('web.aud_customer_ids_hint')}
         >
-          <input
-            id="aud-bal-min"
-            inputMode="numeric"
+          <textarea
+            id="aud-ids"
+            dir="ltr"
+            rows={2}
             disabled={disabled}
-            value={value.walletBalance?.minMinor ?? ''}
+            value={(value.customerIds ?? []).join('\n')}
             onChange={(event) => {
-              const min = /^-?\d+$/u.test(event.target.value) ? event.target.value : null;
-              const max = value.walletBalance?.maxMinor ?? null;
-              set({
-                walletBalance:
-                  min === null && max === null ? null : { currency, minMinor: min, maxMinor: max },
-              });
-            }}
-          />
-        </Field>
-        <Field
-          label={`${t('web.aud_balance_max')} (${currencyLabel(currency as never)})`}
-          htmlFor="aud-bal-max"
-        >
-          <input
-            id="aud-bal-max"
-            inputMode="numeric"
-            disabled={disabled}
-            value={value.walletBalance?.maxMinor ?? ''}
-            onChange={(event) => {
-              const max = /^-?\d+$/u.test(event.target.value) ? event.target.value : null;
-              const min = value.walletBalance?.minMinor ?? null;
-              set({
-                walletBalance:
-                  min === null && max === null ? null : { currency, minMinor: min, maxMinor: max },
-              });
+              const ids = event.target.value
+                .split(/[\s,]+/u)
+                .map((id) => id.trim())
+                .filter((id) => id !== '');
+              set({ customerIds: ids.length === 0 ? null : ids });
             }}
           />
         </Field>
       </div>
 
-      <label className="checks">
+      <div className="aud-section">
+        <h4 className="field-group-head">{t('web.cb_aud_profile')}</h4>
+        <div className="form-grid c3 aud-grid">
+          <Field label={t('web.aud_purchase')} htmlFor="aud-purchase">
+            <select
+              id="aud-purchase"
+              disabled={disabled}
+              value={value.purchase}
+              onChange={(event) => set({ purchase: event.target.value as AudiencePurchaseFilter })}
+            >
+              {AUDIENCE_PURCHASE_FILTERS.map((option) => (
+                <option key={option} value={option}>
+                  {t(PURCHASE_LABELS[option])}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label={t('web.aud_status')} htmlFor="aud-status">
+            <select
+              id="aud-status"
+              disabled={disabled}
+              value={value.customerStatus}
+              onChange={(event) =>
+                set({ customerStatus: event.target.value as AudienceCustomerStatus })
+              }
+            >
+              {AUDIENCE_CUSTOMER_STATUSES.map((option) => (
+                <option key={option} value={option}>
+                  {t(STATUS_LABELS[option])}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label={t('web.aud_trial')} htmlFor="aud-trial">
+            <select
+              id="aud-trial"
+              disabled={disabled}
+              value={value.trial}
+              onChange={(event) => set({ trial: event.target.value as AudienceTrialFilter })}
+            >
+              {AUDIENCE_TRIAL_FILTERS.map((option) => (
+                <option key={option} value={option}>
+                  {t(TRIAL_LABELS[option])}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label={t('web.aud_referral')} htmlFor="aud-referral">
+            <select
+              id="aud-referral"
+              disabled={disabled}
+              value={value.referral}
+              onChange={(event) => set({ referral: event.target.value as AudienceReferralFilter })}
+            >
+              {AUDIENCE_REFERRAL_FILTERS.map((option) => (
+                <option key={option} value={option}>
+                  {t(REFERRAL_LABELS[option])}
+                </option>
+              ))}
+            </select>
+          </Field>
+        </div>
+        <h4 className="field-group-head">{t('web.cb_aud_dates')}</h4>
+        <div className="form-grid c3 aud-grid">
+          <Field label={t('web.aud_registered_from')} htmlFor="aud-reg-from">
+            <input
+              id="aud-reg-from"
+              type="date"
+              disabled={disabled}
+              value={instantToDay(value.registeredFrom)}
+              onChange={(event) => set({ registeredFrom: dayToInstant(event.target.value) })}
+            />
+          </Field>
+          <Field label={t('web.aud_registered_before')} htmlFor="aud-reg-before">
+            <input
+              id="aud-reg-before"
+              type="date"
+              disabled={disabled}
+              value={instantToDay(value.registeredBefore)}
+              onChange={(event) => set({ registeredBefore: dayToInstant(event.target.value) })}
+            />
+          </Field>
+          <Field label={t('web.aud_age_min')} htmlFor="aud-age-min">
+            <input
+              id="aud-age-min"
+              inputMode="numeric"
+              disabled={disabled}
+              value={value.accountAgeMinDays ?? ''}
+              onChange={(event) => set({ accountAgeMinDays: whole(event.target.value) })}
+            />
+          </Field>
+          <Field label={t('web.aud_age_max')} htmlFor="aud-age-max">
+            <input
+              id="aud-age-max"
+              inputMode="numeric"
+              disabled={disabled}
+              value={value.accountAgeMaxDays ?? ''}
+              onChange={(event) => set({ accountAgeMaxDays: whole(event.target.value) })}
+            />
+          </Field>
+          <Field label={t('web.aud_last_purchase_from')} htmlFor="aud-lp-from">
+            <input
+              id="aud-lp-from"
+              type="date"
+              disabled={disabled}
+              value={instantToDay(value.lastPurchaseFrom)}
+              onChange={(event) => set({ lastPurchaseFrom: dayToInstant(event.target.value) })}
+            />
+          </Field>
+          <Field label={t('web.aud_last_purchase_before')} htmlFor="aud-lp-before">
+            <input
+              id="aud-lp-before"
+              type="date"
+              disabled={disabled}
+              value={instantToDay(value.lastPurchaseBefore)}
+              onChange={(event) => set({ lastPurchaseBefore: dayToInstant(event.target.value) })}
+            />
+          </Field>
+          <Field label={t('web.aud_no_purchase_days')} htmlFor="aud-lapse">
+            <input
+              id="aud-lapse"
+              inputMode="numeric"
+              disabled={disabled}
+              value={value.noPurchaseForDays ?? ''}
+              onChange={(event) => {
+                const days = whole(event.target.value);
+                set({ noPurchaseForDays: days === 0 ? null : days });
+              }}
+            />
+          </Field>
+        </div>
+        <h4 className="field-group-head">{t('web.cb_aud_wallet')}</h4>
+        <div className="form-grid c3 aud-grid">
+          <Field
+            label={`${t('web.aud_balance_min')} (${currencyLabel(currency as never)})`}
+            htmlFor="aud-bal-min"
+          >
+            <input
+              id="aud-bal-min"
+              inputMode="numeric"
+              disabled={disabled}
+              value={value.walletBalance?.minMinor ?? ''}
+              onChange={(event) => {
+                const min = /^-?\d+$/u.test(event.target.value) ? event.target.value : null;
+                const max = value.walletBalance?.maxMinor ?? null;
+                set({
+                  walletBalance:
+                    min === null && max === null
+                      ? null
+                      : { currency, minMinor: min, maxMinor: max },
+                });
+              }}
+            />
+          </Field>
+          <Field
+            label={`${t('web.aud_balance_max')} (${currencyLabel(currency as never)})`}
+            htmlFor="aud-bal-max"
+          >
+            <input
+              id="aud-bal-max"
+              inputMode="numeric"
+              disabled={disabled}
+              value={value.walletBalance?.maxMinor ?? ''}
+              onChange={(event) => {
+                const max = /^-?\d+$/u.test(event.target.value) ? event.target.value : null;
+                const min = value.walletBalance?.minMinor ?? null;
+                set({
+                  walletBalance:
+                    min === null && max === null
+                      ? null
+                      : { currency, minMinor: min, maxMinor: max },
+                });
+              }}
+            />
+          </Field>
+        </div>
+      </div>
+
+      <label className="check aud-service-toggle">
         <input
           type="checkbox"
           disabled={disabled}
@@ -473,24 +489,29 @@ export function AudienceBuilder({
         </div>
       )}
 
-      <div className="toolbar">
+      <div className="aud-count">
         <button
           type="button"
           className="btn sm"
           disabled={count.isPending}
           onClick={() => count.mutate()}
         >
+          <Icon name="users" />
           {t('web.aud_count')}
         </button>
+        {count.data !== undefined && (
+          <>
+            <Metric
+              label={t('web.aud_count_customers')}
+              value={formatNumber(count.data.preview.customers)}
+            />
+            <Metric
+              label={t('web.aud_count_reachable')}
+              value={formatNumber(count.data.preview.reachable)}
+            />
+          </>
+        )}
       </div>
-      {count.data !== undefined && (
-        <KV
-          items={[
-            [t('web.aud_count_customers'), formatNumber(count.data.preview.customers)],
-            [t('web.aud_count_reachable'), formatNumber(count.data.preview.reachable)],
-          ]}
-        />
-      )}
       {count.error !== null && (
         <Banner tone="danger">{audienceMessage(count.error) ?? t('web.error')}</Banner>
       )}
