@@ -431,6 +431,41 @@ describe('referral analytics', () => {
     expect(link.getAttribute('href')).toBe('/users/019210ab-cdef-7012-8345-6789abcdef99');
   });
 
+  /*
+   * The Top Referrers pager pages by offset: «بعدی» while a later page holds a
+   * row, never on the last page — exactly full, ten of ten, included.
+   */
+  it('offers the next Top Referrers page only while one holds a row', async () => {
+    for (const [totalRows, nextOffered] of [
+      [10, false],
+      [11, true],
+    ] as const) {
+      stubApi([
+        ...LISTS.slice(0, 2),
+        {
+          url: '/reports/referrals',
+          body: { ...REFERRALS, topReferrers: { ...REFERRALS.topReferrers, totalRows } },
+        },
+      ]);
+      const page = renderPage(
+        <ReferralsPage
+          route={{ path: '/referrals', query: new URLSearchParams() }}
+          denied={false}
+          mayViewBanner={false}
+          mayEditBanner={false}
+          superAdmin
+        />,
+      );
+      const card = (await screen.findByText('تحلیل معرفی')).closest('section') as HTMLElement;
+      const next = await within(card).findByRole('button', { name: t('web.report_page_next') });
+      await waitFor(() => expect(card.textContent).toContain('145,000'));
+      expect((next as HTMLButtonElement).disabled, `${totalRows} rows`).toBe(!nextOffered);
+      const previous = within(card).getByRole('button', { name: t('web.report_page_previous') });
+      expect((previous as HTMLButtonElement).disabled, 'page 1 has no previous').toBe(true);
+      page.unmount();
+    }
+  });
+
   it('is absent, and never asked for, without the owner role', async () => {
     const api = stubApi(LISTS);
     renderPage(

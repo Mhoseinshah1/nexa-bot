@@ -63,6 +63,15 @@ ol {
   padding-inline-start: 1.25rem;
 }
 
+/*
+ * Zero specificity: the browser's <dl> margin is gone, and any container's
+ * rhythm — `.card-body > * + *`, `.stack`, the sibling rule below — still
+ * spaces a definition list the way it spaces every other block.
+ */
+:where(dl) {
+  margin: 0;
+}
+
 button,
 input,
 select,
@@ -82,15 +91,6 @@ hr {
   border: 0;
   border-top: 1px solid var(--line);
   margin: 14px 0;
-}
-
-details > summary {
-  cursor: pointer;
-  color: var(--fg-2);
-  font-weight: 500;
-}
-details[open] > summary {
-  margin-bottom: 8px;
 }
 
 /* --- Text utilities --------------------------------------------------------- */
@@ -113,6 +113,11 @@ details[open] > summary {
 }
 .num {
   font-variant-numeric: tabular-nums;
+}
+/* A signed quantity: its sign stays in front, its digits keep the body's shapes. */
+.num.signed {
+  direction: ltr;
+  unicode-bidi: isolate;
 }
 .muted {
   color: var(--fg-2);
@@ -225,18 +230,6 @@ form:not([class]) > * + * {
 .grid.c3 {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
-.grid.c4 {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-}
-.grid.c6 {
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-}
-.span2 {
-  grid-column: span 2;
-}
-.span3 {
-  grid-column: span 3;
-}
 .full {
   grid-column: 1 / -1;
 }
@@ -244,18 +237,6 @@ form:not([class]) > * + * {
 .two-col {
   display: grid;
   grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
-  gap: 16px;
-  align-items: start;
-}
-.list-split {
-  display: grid;
-  grid-template-columns: 300px minmax(0, 1fr);
-  gap: 16px;
-  align-items: start;
-}
-.three-col {
-  display: grid;
-  grid-template-columns: 220px minmax(0, 1fr) 320px;
   gap: 16px;
   align-items: start;
 }
@@ -327,21 +308,9 @@ form:not([class]) > * + * {
  * misaligns its row.
  */
 :where(.card, .banner, .notice, .grid, .grid-2, .two-col, .kv)
-  + :where(.card, .banner, .notice, .grid, .grid-2, .two-col) {
+  + :where(.card, .banner, .notice, .grid, .grid-2, .two-col, .kv) {
   margin-top: var(--gap);
 }
-:where(
-    .grid,
-    .grid-2,
-    .two-col,
-    .list-split,
-    .three-col,
-    .stat-grid,
-    .kpi-grid,
-    .row,
-    .head-stats,
-    .toolbar
-  )
-  > * {
+:where(.grid, .grid-2, .two-col, .stat-grid, .row, .head-stats, .toolbar) > * {
   margin-top: 0;
 }

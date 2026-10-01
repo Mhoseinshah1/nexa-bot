@@ -47,6 +47,7 @@ import {
   useToast,
   type Column,
   type Tone,
+  Num,
 } from '../ui/kit';
 
 /**
@@ -209,11 +210,7 @@ export function ReferralsPage({
 
   return (
     <>
-      <PageHead
-        title={t('web.referrals_title')}
-        subtitle={t('web.referrals_intro')}
-        maturity="now"
-      />
+      <PageHead title={t('web.referrals_title')} subtitle={t('web.referrals_intro')} />
 
       {!denied && (
         <Card className="referrals-filter">
@@ -402,7 +399,7 @@ function Commissions({ denied, referrerId }: { denied: boolean; referrerId: stri
       header: t('web.referral_percent'),
       render: (row) => (
         <span className="nowrap">
-          <Ltr>{String(row.percent)}</Ltr> {t('web.discount_percent_unit')}
+          <Num value={String(row.percent)} /> {t('web.discount_percent_unit')}
         </span>
       ),
     },

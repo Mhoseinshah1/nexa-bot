@@ -47,6 +47,7 @@ import {
   TabPanel,
   useConfirmedClose,
   useToast,
+  Quantity,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
 import { formatNumber } from '../format';
@@ -115,7 +116,6 @@ export function SystemPage({
             )}
           </>
         }
-        maturity="now"
       />
 
       <Tabs
@@ -244,9 +244,9 @@ function StatusSection() {
                     row.latencyMs === undefined ? (
                       <span className="faint">—</span>
                     ) : (
-                      <Ltr mono={false}>
+                      <Quantity>
                         <Num value={row.latencyMs} /> ms
-                      </Ltr>
+                      </Quantity>
                     ),
                 },
                 {
@@ -422,7 +422,7 @@ function MonitorSection({ denied }: { denied: boolean }) {
 
 function CapacityView({ profile }: { profile: MonitorProfile }) {
   return (
-    <div className="ob-flow">
+    <div className="stack">
       <Banner tone="info">{t('web.monitor_capacity_ceiling_note')}</Banner>
       <KV
         items={[
@@ -463,9 +463,9 @@ function CapacityView({ profile }: { profile: MonitorProfile }) {
           ],
           [
             t('web.monitor_reserve'),
-            <Ltr key="r" mono={false}>
+            <Quantity key="r">
               <Num value={profile.budgetReservePercent} />%
-            </Ltr>,
+            </Quantity>,
           ],
           [t('web.monitor_batch'), <Num key="ba" value={profile.batchSize} />],
           [t('web.monitor_concurrency'), <Num key="c" value={profile.concurrency} />],

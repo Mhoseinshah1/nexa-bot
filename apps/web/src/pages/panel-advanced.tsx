@@ -524,7 +524,8 @@ function PolicyCard({ advanced, mayEdit }: { advanced: PanelAdvancedResponse; ma
                 <Field label={t(knob.label)} hint={t(knob.hint)} htmlFor={inputId}>
                   <input
                     id={inputId}
-                    className="input ltr mono"
+                    className="input"
+                    dir="ltr"
                     inputMode="numeric"
                     disabled={!editable}
                     value={entry.knob}

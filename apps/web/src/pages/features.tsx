@@ -34,7 +34,7 @@ export function FeaturesPage({ mayEdit, denied }: { mayEdit: boolean; denied: bo
 
   return (
     <>
-      <PageHead title={t('web.features_title')} subtitle={t('web.features_intro')} maturity="now" />
+      <PageHead title={t('web.features_title')} subtitle={t('web.features_intro')} />
       <StateSwitch query={flags} denied={denied} isEmpty={rows.length === 0}>
         <Card
           title={t('web.features_list_title')}
@@ -218,7 +218,7 @@ function RelatedSettings({ flag }: { flag: FeatureFlagResponse }) {
   );
   if (shown.length === 0) return null;
   return (
-    <section className="feature-settings" aria-label={t('web.feature_related_settings')}>
+    <section className="inset feature-settings" aria-label={t('web.feature_related_settings')}>
       <h4 className="small">{t('web.feature_related_settings')}</h4>
       {inert && <p className="muted small">{t('web.inert')}</p>}
       <dl className={inert ? 'inert' : undefined}>

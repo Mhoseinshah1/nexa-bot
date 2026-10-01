@@ -42,7 +42,7 @@
   text-align: start;
   background: none;
   border: none;
-  border-radius: 6px;
+  border-radius: var(--radius-ctl);
   padding: 8px 12px;
   color: var(--fg-2);
   font-size: 13px;
@@ -85,17 +85,6 @@
     padding: 4px 12px;
     font-size: var(--fs-sm);
   }
-}
-
-/*
- * A column of mixed blocks with the page's rhythm. A kit `.kv` zeroes its own margin, so
- * a sibling margin cannot space it; a gap can.
- */
-.ob-flow {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  min-width: 0;
 }
 
 /* --- Settings (WP-A1) -------------------------------------------------------- */
@@ -165,12 +154,6 @@ form.set-row > * + * {
   justify-content: flex-end;
   gap: 8px;
 }
-.settings-technical {
-  font-size: var(--fs-sm);
-}
-.settings-technical > summary {
-  font-weight: 400;
-}
 @media (max-width: 760px) {
   .set-row-main {
     grid-template-columns: minmax(0, 1fr);
@@ -216,9 +199,6 @@ form.set-row > * + * {
   background: var(--bg-1);
   border-bottom-left-radius: var(--radius-card);
   border-bottom-right-radius: var(--radius-card);
-}
-.rem-templates > * + * {
-  margin-top: 10px;
 }
 
 /* Package B: a channel's handle, id, join link and flag — wraps on a narrow screen. */
@@ -275,12 +255,6 @@ form.set-row > * + * {
 }
 .feature-row > * + * {
   margin-top: 10px;
-}
-.feature-settings {
-  border: 1px solid var(--line);
-  border-radius: var(--radius-ctl);
-  background: var(--bg-1);
-  padding: 10px 12px;
 }
 .feature-settings h4 {
   margin: 0 0 6px;
@@ -408,8 +382,8 @@ form.set-row > * + * {
 .ticket-message {
   max-width: 82%;
   border: 1px solid var(--line);
-  border-radius: 12px;
-  border-start-start-radius: 4px;
+  border-radius: var(--radius-bubble);
+  border-start-start-radius: var(--radius-bubble-tail);
   background: var(--bg-3);
   padding: 10px 14px;
   display: grid;
@@ -420,8 +394,8 @@ form.set-row > * + * {
   align-self: flex-end;
   border-color: var(--accent-soft);
   background: var(--accent-soft);
-  border-start-start-radius: 12px;
-  border-start-end-radius: 4px;
+  border-start-start-radius: var(--radius-bubble);
+  border-start-end-radius: var(--radius-bubble-tail);
 }
 .ticket-message.system {
   align-self: center;
@@ -467,7 +441,7 @@ form.set-row > * + * {
   max-height: 60vh;
   width: auto;
   height: auto;
-  border-radius: 8px;
+  border-radius: var(--radius-ctl);
   border: 1px solid var(--line);
   /* The image is untrusted content from a customer; nothing about it is a control. */
   pointer-events: none;
@@ -551,7 +525,7 @@ form.set-row > * + * {
   text-align: start;
   background: none;
   border: none;
-  border-radius: 6px;
+  border-radius: var(--radius-ctl);
   padding: 7px 10px;
   color: var(--fg);
   cursor: pointer;
@@ -625,18 +599,6 @@ form.set-row > * + * {
   width: 100%;
   max-width: 460px;
 }
-.template-card details {
-  border: 1px solid var(--line);
-  border-radius: var(--radius-ctl);
-  padding: 8px 12px;
-  background: var(--bg-1);
-}
-.template-card details > * + * {
-  margin-top: 8px;
-}
-.template-card details > summary {
-  font-size: var(--fs-sm);
-}
 .template-card code {
   overflow-wrap: anywhere;
 }
@@ -671,8 +633,8 @@ form.set-row > * + * {
   margin: 0;
   max-width: 420px;
   padding: 10px 12px;
-  border-radius: 12px;
-  border-start-start-radius: 4px;
+  border-radius: var(--radius-bubble);
+  border-start-start-radius: var(--radius-bubble-tail);
   background: var(--bg-3);
   border: 1px solid var(--line-2);
   color: var(--fg);
@@ -775,14 +737,6 @@ form.set-row > * + * {
 }
 .ops-group-advanced {
   padding: 12px 16px;
-}
-.ops-group-advanced > summary {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.ops-group-advanced > * + * {
-  margin-top: 10px;
 }
 @media (max-width: 980px) {
   .ops-group-stats {
@@ -961,19 +915,6 @@ form.set-row > * + * {
   margin-inline-start: auto;
   color: var(--danger);
   font-weight: 600;
-}
-.recovery-current {
-  padding: 12px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-ctl);
-  background: var(--bg-1);
-}
-/* The restore confirmation: the one destructive control on the page, fenced off. */
-.recovery-danger {
-  padding: 14px;
-  border: 1px solid var(--danger);
-  border-radius: var(--radius-card);
-  background: var(--danger-soft);
 }
 .recovery-phrase {
   max-width: 320px;

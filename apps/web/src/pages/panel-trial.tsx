@@ -163,7 +163,8 @@ function TrialForm({ trial, mayEdit }: { trial: PanelTrialResponseBody; mayEdit:
           <div className="input-group">
             <input
               id={id('amount')}
-              className="input ltr mono"
+              className="input"
+              dir="ltr"
               inputMode="decimal"
               value={draft.amount}
               disabled={!editable}
@@ -192,7 +193,8 @@ function TrialForm({ trial, mayEdit }: { trial: PanelTrialResponseBody; mayEdit:
           <div className="input-group">
             <input
               id={id('hours')}
-              className="input ltr mono"
+              className="input"
+              dir="ltr"
               type="number"
               inputMode="numeric"
               min={PANEL_TRIAL_HOURS_MIN}

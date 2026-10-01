@@ -30,6 +30,7 @@ import {
 import { ErrorReport } from './settings';
 import { DirtyScope, UnsavedCount, useDirtySet, useReportDirty } from './ops-b-layout';
 import {
+  Disclosure,
   Badge,
   Banner,
   Card,
@@ -168,7 +169,6 @@ export function ContentPage({ mayEdit, denied }: { mayEdit: boolean; denied: boo
       <PageHead
         title={t('web.templates_title')}
         subtitle={t('web.templates_intro')}
-        maturity="now"
         badge={<UnsavedCount count={dirty.size} />}
       />
       <StateSwitch query={templates} denied={denied} isEmpty={rows.length === 0}>
@@ -510,7 +510,7 @@ export const TemplateCard = memo(function TemplateCard({
      *
      * `showHistory` is sticky so that closing the pane no longer flips
      * `enabled` false→true on the next open, which used to re-trigger an
-     * errored query once per reopen. The comment on `<details>` below said
+     * errored query once per reopen. The comment on the revisions disclosure below said
      * staying enabled "costs nothing: this query has no interval". The cost is
      * not an interval — it is `invalidate()`, which runs on every save
      * success, every save failure and every undo failure and invalidates this
@@ -678,23 +678,27 @@ export const TemplateCard = memo(function TemplateCard({
         )}
 
         {isCustomised(template) && (
-          <details>
-            {/* Showing the default beside the override is the one thing the
-              legacy web surface got right here (WEB-BR-019). */}
-            <summary>{t('web.template_default')}</summary>
+          /* Showing the default beside the override is the one thing the
+             legacy web surface got right here (WEB-BR-019). */
+          <Disclosure variant="boxed" size="sm" summary={t('web.template_default')}>
             <pre dir="auto" className="template-default">
               {template.defaultBody}
             </pre>
-          </details>
+          </Disclosure>
         )}
 
         {template.placeholders.length === 0 ? (
           <p className="muted small">{t('web.template_no_placeholders')}</p>
         ) : (
-          <details>
-            <summary>
-              {t('web.placeholders')} (<Num value={template.placeholders.length} />)
-            </summary>
+          <Disclosure
+            variant="boxed"
+            size="sm"
+            summary={
+              <span>
+                {t('web.placeholders')} (<Num value={template.placeholders.length} />)
+              </span>
+            }
+          >
             {/* The token is the contract and is shown exactly as it must be typed;
               the Persian beside it only explains it. */}
             <p className="muted small">{t('web.template_placeholders_hint')}</p>
@@ -734,11 +738,10 @@ export const TemplateCard = memo(function TemplateCard({
                 </tbody>
               </table>
             </div>
-          </details>
+          </Disclosure>
         )}
 
-        <details>
-          <summary>{t('web.preview')}</summary>
+        <Disclosure variant="boxed" size="sm" summary={t('web.preview')}>
           <p className="notice">{t('web.preview_note')}</p>
           {template.placeholders.length > 0 && <h4>{t('web.preview_values')}</h4>}
           {template.placeholders.map((placeholder) => (
@@ -806,7 +809,7 @@ export const TemplateCard = memo(function TemplateCard({
               )}
             </>
           )}
-        </details>
+        </Disclosure>
 
         {/*
           STICKY. The first open enables the query; closing does not disable it.
@@ -827,13 +830,14 @@ export const TemplateCard = memo(function TemplateCard({
           `enabled` callback on the query is where that is stopped: see it for
           the measurement.
         */}
-        <details
-          onToggle={(event) => {
-            const { open } = event.currentTarget;
+        <Disclosure
+          variant="boxed"
+          size="sm"
+          summary={t('web.revisions')}
+          onToggle={(open) => {
             setShowHistory((current) => current || open);
           }}
         >
-          <summary>{t('web.revisions')}</summary>
           {/*
             The SAME rule as every other query-driven view.
             
@@ -886,7 +890,7 @@ export const TemplateCard = memo(function TemplateCard({
               )}
             </StateSwitch>
           )}
-        </details>
+        </Disclosure>
 
         {mayEdit && (
           <div className="template-actions">

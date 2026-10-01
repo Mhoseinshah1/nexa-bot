@@ -103,8 +103,8 @@ CSP is `style-src 'self'` (see §6). `stylesheet-contract.test.tsx` expands the
 imports in place and pins their order.
 
 Layout primitives in `base.css`: `.stack` / `.stack-sm` (vertical rhythm),
-`.row`, `.grow`, `.spacer`, `.grid` + `.c2/.c3/.c4/.c6`, `.grid-2`, `.span2/3`,
-`.full`, `.two-col`, `.list-split`, `.three-col`, `.checks`, `.form-grid`
+`.row`, `.grow`, `.spacer`, `.grid` + `.c2/.c3`, `.grid-2`,
+`.full`, `.two-col`, `.checks`, `.form-grid`
 (+`.c3`), `.field-row`, `.form-actions`. Page content, tab panels, modal and
 drawer bodies, and class-less `<form>`s already space their children.
 

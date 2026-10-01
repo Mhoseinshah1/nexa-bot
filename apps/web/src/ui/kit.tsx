@@ -144,9 +144,32 @@ export function Money({ value }: { value: MoneyWire }) {
   );
 }
 
-/** A count. Grouped, tabular, never shortened to `1.2k`. */
-export function Num({ value }: { value: number }) {
-  return <span className="num">{formatNumber(value)}</span>;
+/**
+ * A quantity — a count, days, gigabytes, a percentage, a rate. Grouped,
+ * tabular, never shortened to `1.2k`, and drawn in the body's digit shapes:
+ * a quantity is not a technical identifier, so it is never `Ltr` (which
+ * keeps Latin digits for ids, hosts, hashes and usernames).
+ *
+ * `value` is a number to group, or a figure a formatter already wrote (a
+ * traffic amount, a rate, `12.5%`). `signed` isolates it left to right, so a
+ * leading `+`/`−` stays in front of its digits inside a Persian sentence (and
+ * a figure written as an equation, `2,150 تومان = ⭐ 1`, keeps its order).
+ */
+export function Num({ value, signed = false }: { value: number | string; signed?: boolean }) {
+  return (
+    <span className={signed ? 'num signed' : 'num'}>
+      {typeof value === 'number' ? formatNumber(value) : value}
+    </span>
+  );
+}
+
+/**
+ * A compound quantity — `215 / 400`, `42 ms`, `3 / 5` — kept in its written
+ * order (isolated left to right) and drawn in the body's digits, like `Num`.
+ * Not `Ltr`, which would turn every digit in it Latin.
+ */
+export function Quantity({ children }: { children: ReactNode }) {
+  return <span className="num signed">{children}</span>;
 }
 
 /**
@@ -440,7 +463,12 @@ export function PageHead({
 }: {
   title: ReactNode;
   subtitle?: ReactNode;
-  maturity?: Maturity;
+  /**
+   * Only for a page that does not do its job yet (planned, server-ready,
+   * unsupported). A working page carries no badge: «فعال» beside a list's
+   * title read as the state of some record, and the reference draws none.
+   */
+  maturity?: Exclude<Maturity, 'now'>;
   /** A status badge beside the title — the entity's state on a detail page. */
   badge?: ReactNode;
   actions?: ReactNode;
@@ -674,7 +702,8 @@ export function StatCard({
           <b>
             {delta.trend === 'up' && <Icon name="arrowUp" size={11} />}
             {delta.trend === 'down' && <Icon name="arrowDown" size={11} />}
-            {delta.text}
+            {/* Isolated LTR, so «+12.5%» keeps its sign in front inside a Persian line. */}
+            <span className="num signed">{delta.text}</span>
           </b>
           <span>{delta.caption ?? t('web.vs_previous')}</span>
         </div>
@@ -807,6 +836,56 @@ export function Meter({
       </div>
       <Progress value={value} max={max} label={label} {...(tone === undefined ? {} : { tone })} />
     </div>
+  );
+}
+
+/**
+ * A section closed until asked for: technical identifiers, an «advanced»
+ * field, a default text beside its override. One look everywhere — a chevron
+ * that turns when open, the summary in the secondary colour, the content
+ * spaced beneath it.
+ *
+ * - `size="sm"` for a technical footnote under a form or a card.
+ * - `variant="boxed"` frames it on the sunken background, for a disclosure
+ *   that is one block among several inside a card.
+ * - `onToggle` receives the new open state; a query enabled by opening is the
+ *   caller's to keep (see the template revisions pane).
+ *
+ * The native `<details>` is kept: keyboard, find-in-page and the open state
+ * all come from the browser, and a closed body is not in the tab order.
+ */
+export function Disclosure({
+  summary,
+  children,
+  size = 'md',
+  variant = 'plain',
+  className,
+  onToggle,
+}: {
+  summary: ReactNode;
+  children?: ReactNode;
+  size?: 'md' | 'sm';
+  variant?: 'plain' | 'boxed';
+  className?: string;
+  onToggle?: (open: boolean) => void;
+}) {
+  const classes = ['disclosure'];
+  if (size === 'sm') classes.push('sm');
+  if (variant === 'boxed') classes.push('boxed');
+  if (className !== undefined) classes.push(className);
+  return (
+    <details
+      className={classes.join(' ')}
+      {...(onToggle === undefined
+        ? {}
+        : { onToggle: (event) => onToggle(event.currentTarget.open) })}
+    >
+      <summary>
+        <Icon name="chevronLeft" size={14} className="disclosure-chevron" />
+        {summary}
+      </summary>
+      {children}
+    </details>
   );
 }
 
@@ -1772,8 +1851,10 @@ export function CellMain({ primary, secondary }: { primary: ReactNode; secondary
 }
 
 /** The actions at the end of a row. Put them in a column with `align: 'end'`. */
-export function RowActions({ children }: { children: ReactNode }) {
-  return <span className="row-actions">{children}</span>;
+export function RowActions({ children, wrap = false }: { children: ReactNode; wrap?: boolean }) {
+  // `wrap`: more actions than fit one line beside the data break onto a second
+  // line, so a row with three buttons never pushes its table wider than the card.
+  return <span className={wrap ? 'row-actions wrap' : 'row-actions'}>{children}</span>;
 }
 
 /**
@@ -1801,20 +1882,34 @@ export function CursorPager({
   shown,
   nextLabel = 'web.older',
   previousLabel = 'web.newer',
+  summary,
 }: {
   onPrevious: () => void;
   onNext: () => void;
   hasPrevious: boolean;
   hasNext: boolean;
-  shown: number;
+  /** Rows on this page, drawn as `web.showing` N unless `summary` says something else. */
+  shown?: number;
   nextLabel?: WebKey;
   previousLabel?: WebKey;
+  /**
+   * What the pager says about the rows, in place of «نمایش N»: a report that
+   * pages by offset knows its total («تعداد کل: N»), and one that pages by an
+   * opaque cursor may say nothing at all (`null`).
+   */
+  summary?: ReactNode;
 }) {
+  const said =
+    summary !== undefined ? (
+      summary
+    ) : shown === undefined ? null : (
+      <>
+        {t('web.showing')} <Num value={shown} />
+      </>
+    );
   return (
     <div className="pager">
-      <span className="muted small">
-        {t('web.showing')} <Num value={shown} />
-      </span>
+      {said !== null && <span className="muted small">{said}</span>}
       <span className="spacer" />
       <button type="button" className="btn sm" disabled={!hasPrevious} onClick={onPrevious}>
         <Icon name="chevronRight" />
@@ -2097,7 +2192,7 @@ export function Breadcrumbs({ items }: { items: readonly Crumb[] }) {
 
 /* Re-exported so a page imports its whole kit from one module. */
 export { Modal, Drawer, Menu, useFocusTrap } from './overlays';
-export { ChartCard, Sparkline, BarChart, LineChart, Donut, Legend } from './charts';
+export { ChartCard, Sparkline, BarChart, LineChart, Donut, Legend, axisLabelSlots } from './charts';
 export {
   useUnsavedChanges,
   useConfirmedClose,

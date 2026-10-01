@@ -39,6 +39,7 @@ import { messageFor } from './settings';
 import { PaymentTimelineCard } from './payment-timeline';
 import { ChipGroup } from './commerce-parts';
 import {
+  Disclosure,
   Badge,
   Banner,
   Button,
@@ -61,6 +62,7 @@ import {
   useUnsavedChanges,
   type Column,
   type Tone,
+  Num,
 } from '../ui/kit';
 
 /**
@@ -469,7 +471,7 @@ export function PaymentsPage({ route, denied }: { route: Route; denied: boolean 
 
   return (
     <>
-      <PageHead title={t('web.payments_title')} subtitle={t('web.payments_intro')} maturity="now" />
+      <PageHead title={t('web.payments_title')} subtitle={t('web.payments_intro')} />
 
       <Card className="ca-list">
         <form className="toolbar ca-search" onSubmit={apply} hidden={toolbarHidden}>
@@ -1291,7 +1293,7 @@ export function PaymentDetailPage({
   return (
     <>
       {row === undefined ? (
-        <PageHead title={t('web.payment_detail')} maturity="now" />
+        <PageHead title={t('web.payment_detail')} />
       ) : (
         <PageHead
           title={
@@ -1524,7 +1526,10 @@ export function PaymentDetailPage({
                         items={[
                           [
                             t('web.payment_customer_fee_rate'),
-                            <Ltr key="r">{`${formatBasisPointsPercent(row.customerFee.basisPoints)}%`}</Ltr>,
+                            <Num
+                              key="r"
+                              value={`${formatBasisPointsPercent(row.customerFee.basisPoints)}%`}
+                            />,
                           ],
                           [
                             t('web.payment_customer_fee_amount'),
@@ -1559,8 +1564,7 @@ export function PaymentDetailPage({
                       title={t('web.payment_gateway_invoice')}
                       hint={t('web.payment_gateway_invoice_hint')}
                     >
-                      <details className="ca-tech">
-                        <summary>{t('web.payment_tech_details')}</summary>
+                      <Disclosure size="sm" summary={t('web.payment_tech_details')}>
                         <KV
                           items={[
                             [
@@ -1675,7 +1679,7 @@ export function PaymentDetailPage({
                             ],
                           ]}
                         />
-                      </details>
+                      </Disclosure>
                     </Card>
                   )}
                 </>
@@ -1743,7 +1747,7 @@ export function PaymentDetailPage({
                   {row.topupCashbackPercent !== null && (
                     <Card title={t('web.payment_topup_gift')}>
                       <p className="strong">
-                        <Ltr>{`${String(row.topupCashbackPercent)}%`}</Ltr>
+                        <Num value={`${String(row.topupCashbackPercent)}%`} />
                       </p>
                       <p className="muted small">{t('web.payment_topup_gift_hint')}</p>
                     </Card>

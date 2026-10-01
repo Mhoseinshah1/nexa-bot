@@ -271,6 +271,35 @@ describe('the sidebar', () => {
     expect(payments).toHaveAccessibleDescription(formatNumber(7));
   });
 
+  it('draws any single counter at the cap as a floor, seen and heard', async () => {
+    stubApi([
+      session(['opslog.view']),
+      {
+        url: '/nav-counters',
+        body: {
+          generatedAt: '2026-09-06T08:00:00.000Z',
+          counters: {
+            openConditions: COUNTER_CAP,
+            ticketsAwaitingSupport: null,
+            unhealthyPanels: null,
+            unreconciledServices: null,
+            refundRequestsAwaiting: null,
+            paymentsUnknown: null,
+          },
+        },
+      },
+    ]);
+    const { container } = renderPage(<App />);
+    await waitFor(() => expect(container.querySelector('.nav .cnt')).not.toBeNull());
+    const badge = container.querySelector('.nav .cnt') as HTMLElement;
+    const capped = formatNumber(COUNTER_CAP);
+    const spoken = t('web.nav_counter_at_least_spoken').replace('{count}', capped);
+    expect(badge.querySelector('[aria-hidden="true"]')?.textContent).toBe(`${capped}+`);
+    const link = badge.closest('a') as HTMLAnchorElement;
+    expect(link).toHaveAccessibleName(`${t('web.nav_alerts')}${spoken}`);
+    expect(link).toHaveAccessibleDescription(spoken);
+  });
+
   it('draws no counter nobody supplied', async () => {
     stubApi([session(['users.view'])]);
     const { container } = renderPage(<App />);

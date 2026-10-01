@@ -126,7 +126,7 @@ export function RecoveryPage({
 
   return (
     <>
-      <PageHead title={t('web.recovery_title')} subtitle={t('web.recovery_intro')} maturity="now" />
+      <PageHead title={t('web.recovery_title')} subtitle={t('web.recovery_intro')} />
 
       {status.data?.quiesced === true && (
         <Banner tone="danger" title={t('web.recovery_quiesced')}>
@@ -353,7 +353,7 @@ function LastSuccess({
     return <Empty title={t('web.recovery_no_backups')} hint={t('web.recovery_no_backups_hint')} />;
   }
   return (
-    <div className="ob-flow">
+    <div className="stack">
       <KV
         items={[
           [t('web.recovery_backup_id'), <Copyable key="id" value={newest.id} />],
@@ -514,7 +514,7 @@ function RecoveryOperations({
       </form>
 
       {current !== null && (
-        <div className="ob-flow recovery-current">
+        <div className="stack inset">
           <KV
             items={[
               [
@@ -714,7 +714,7 @@ function RestoreConfirmation({
   }
   const matches = isRecoveryConfirmationPhrase(phrase);
   return (
-    <div className="ob-flow recovery-danger">
+    <div className="stack inset danger-zone">
       <Banner tone="danger" title={t('web.recovery_restore_title')}>
         {t('web.recovery_restore_danger')}
       </Banner>

@@ -410,7 +410,6 @@ export function ServiceLocationsPage({
       <PageHead
         title={t('web.service_locations_title')}
         subtitle={t('web.service_locations_subtitle')}
-        maturity="now"
         {...(mayEdit
           ? {
               actions: (

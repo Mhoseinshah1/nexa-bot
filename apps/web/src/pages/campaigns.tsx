@@ -76,6 +76,7 @@ import {
   useUnsavedChanges,
   type Column,
   type Tone,
+  PermissionDeniedState,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
 import { SaveBar, SectionNav } from './editor-layout';
@@ -288,7 +289,6 @@ export function CampaignsPage({
       <PageHead
         title={t('web.campaigns_title')}
         subtitle={t('web.campaigns_intro')}
-        maturity="now"
         actions={
           mayManage && !denied ? (
             <>
@@ -1448,7 +1448,7 @@ export function CampaignNewPage({
     enabled: !denied && mayManage,
   });
   if (denied || !mayManage) {
-    return <Empty title={t('web.no_permission')} hint={t('web.no_permission_hint')} icon="lock" />;
+    return <PermissionDeniedState />;
   }
   return (
     <>
@@ -1679,9 +1679,7 @@ function TermsText({ kind, terms }: { kind: CampaignActionKind; terms: unknown }
       return (
         <span className="small">
           {d['type'] === 'PERCENTAGE' ? (
-            <>
-              <Ltr>{String(d['value'])}%</Ltr>
-            </>
+            <Num value={`${String(d['value'])}%`} />
           ) : (
             <Money
               value={{ amountMinor: String(d['value']), currency: d['currency'] as CurrencyCode }}
@@ -1699,7 +1697,7 @@ function TermsText({ kind, terms }: { kind: CampaignActionKind; terms: unknown }
     case 'CASHBACK':
       return (
         <span className="small">
-          <Ltr>{String(d['percent'])}%</Ltr> · {purposeText}
+          <Num value={`${String(d['percent'])}%`} /> · {purposeText}
         </span>
       );
     case 'WALLET_GIFT':
@@ -1711,7 +1709,7 @@ function TermsText({ kind, terms }: { kind: CampaignActionKind; terms: unknown }
     case 'TRAFFIC_GIFT':
       return (
         <span className="small">
-          <Ltr>{String(d['trafficGb'])}</Ltr> {t('web.unit_gib')}
+          <Num value={String(d['trafficGb'])} /> {t('web.unit_gib')}
         </span>
       );
     case 'TIME_GIFT':

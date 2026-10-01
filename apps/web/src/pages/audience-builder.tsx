@@ -411,7 +411,7 @@ export function AudienceBuilder({
         {t('web.aud_service_toggle')}
       </label>
       {serviceOpen && (
-        <div className="audience-service">
+        <div className="inset audience-service">
           <p className="muted small">{t('web.aud_service_hint')}</p>
           <h4>{t('web.aud_products')}</h4>
           <div className="checks">

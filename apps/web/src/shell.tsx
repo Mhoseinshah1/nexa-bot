@@ -138,8 +138,10 @@ export function Sidebar({
                     <span className="lbl">{t(entry.label)}</span>
                     {counter !== undefined && (
                       /*
-                        Out of the link's NAME, so a link is always found by
-                        its label alone, and read as its description instead.
+                        The count is the link's description (aria-describedby)
+                        and, sitting inside the link, also follows the label in
+                        its name — so what is read there must be true: a capped
+                        count says "or more" in both, never an exact figure.
                       */
                       <span
                         className={`cnt${counter.tone === undefined ? '' : ` ${counter.tone}`}`}

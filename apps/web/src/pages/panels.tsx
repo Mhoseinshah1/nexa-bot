@@ -101,6 +101,8 @@ import {
   useUnsavedChanges,
   type Column,
   type Tone,
+  PermissionDeniedState,
+  Quantity,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
 import { pollUnlessFinal } from '../polling';
@@ -248,7 +250,7 @@ function FailureBadge({ failure }: { failure: string | null }) {
 function CapacityCell({ capacity }: { capacity: PanelSummaryResponse['capacity'] }) {
   return (
     <span className="panels-capacity">
-      <Ltr mono={false}>
+      <Quantity>
         <Num value={capacity.used} />
         {' / '}
         {capacity.maxServices === null ? (
@@ -263,7 +265,7 @@ function CapacityCell({ capacity }: { capacity: PanelSummaryResponse['capacity']
             {')'}
           </span>
         )}
-      </Ltr>
+      </Quantity>
       {/* A share only where there is a whole: an uncapped panel has no bar. */}
       {capacity.maxServices !== null && (
         <Progress
@@ -409,9 +411,9 @@ export function PanelsPage({
         row.health.latencyMs === null ? (
           <span className="faint">—</span>
         ) : (
-          <Ltr mono={false}>
+          <Quantity>
             <Num value={row.health.latencyMs} /> ms
-          </Ltr>
+          </Quantity>
         ),
     },
     {
@@ -459,7 +461,6 @@ export function PanelsPage({
       <PageHead
         title={t('web.panels_title')}
         subtitle={t('web.panels_intro')}
-        maturity="now"
         actions={
           mayEdit ? (
             <a className="btn primary" href="/panels/new" onClick={onLink}>
@@ -904,9 +905,9 @@ function PanelHead({ panel, actions }: { panel: PanelSummaryResponse; actions?: 
             health.latencyMs === null ? (
               <span className="faint">—</span>
             ) : (
-              <Ltr mono={false}>
+              <Quantity>
                 <Num value={health.latencyMs} /> ms
-              </Ltr>
+              </Quantity>
             ),
         },
         {
@@ -1623,7 +1624,8 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
                   >
                     <input
                       id={`cap-${panel.id}`}
-                      className="input ltr"
+                      className="input"
+                      dir="ltr"
                       inputMode="numeric"
                       value={maxServices}
                       onChange={(event) => setMaxServices(event.target.value)}
@@ -2217,9 +2219,9 @@ function HealthTab({ panel }: { panel: PanelSummaryResponse }) {
                   panel.health.latencyMs === null ? (
                     '—'
                   ) : (
-                    <Ltr key="l" mono={false}>
+                    <Quantity key="l">
                       <Num value={panel.health.latencyMs} /> ms
-                    </Ltr>
+                    </Quantity>
                   ),
                 ],
                 [
@@ -2770,11 +2772,11 @@ export function NewPanelPage({
     create.mutate({ ...command, idempotencyKey: submission.current(command) });
   };
 
-  if (denied) return <Empty title={t('web.no_permission')} icon="lock" />;
+  if (denied) return <PermissionDeniedState />;
 
   return (
     <>
-      <PageHead title={t('web.panel_new')} subtitle={t('web.panel_new_intro')} maturity="now" />
+      <PageHead title={t('web.panel_new')} subtitle={t('web.panel_new_intro')} />
 
       {/* The success an actor who cannot open the detail page still gets to
           see. Naming the panel matters: it is the only confirmation that the
@@ -2965,11 +2967,7 @@ export function ProvidersPage() {
 
   return (
     <>
-      <PageHead
-        title={t('web.providers_title')}
-        subtitle={t('web.providers_intro')}
-        maturity="now"
-      />
+      <PageHead title={t('web.providers_title')} subtitle={t('web.providers_intro')} />
 
       <Banner tone="info" title={t('web.providers_code_title')}>
         {t('web.providers_code_body')}

@@ -27,13 +27,6 @@
   border-bottom: none;
 }
 
-/* A strip of figures inside a card. */
-.stats {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px 24px;
-}
-
 /* --- Page head ------------------------------------------------------------- */
 
 .dash-updated {
@@ -79,12 +72,24 @@
 }
 .dash-kpis > .stat {
   margin: 0;
+  container-type: inline-size;
 }
 .dash-kpis .stat .val {
   overflow-wrap: break-word;
 }
 .dash-kpis .stat .val small {
   white-space: nowrap;
+}
+/*
+ * Six abreast at 1440 leaves a card about 150px of text: a nine-digit toman
+ * figure and its unit no longer fit on one line, the unit dropped to its own,
+ * and the whole row grew to the height of that one card. A narrow card sets
+ * its figure a step smaller instead.
+ */
+@container (max-width: 200px) {
+  .dash-kpis .stat .val {
+    font-size: var(--fs-kpi-narrow);
+  }
 }
 .dash-kpis .stat .spark {
   margin-top: auto;

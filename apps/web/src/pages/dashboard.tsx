@@ -69,6 +69,7 @@ import {
   type DistributionSlice,
   type PeriodPreset,
   type Tone,
+  Quantity,
 } from '../ui/kit';
 import type { SeriesTone } from '../ui/charts';
 import type { QueryView } from '../view-state';
@@ -331,7 +332,7 @@ function LastUpdated({
   if (text === null) return null;
   return (
     <span className="dash-updated">
-      {t('web.dashboard_updated_at')} <span className="ltr">{text}</span>
+      {t('web.dashboard_updated_at')} <Quantity>{text}</Quantity>
     </span>
   );
 }
@@ -990,7 +991,7 @@ function OtherFigures({ selection }: { selection: ReportRangeSelection }) {
   const count = (value: { current: number; previous: number }): ReactNode => (
     <span className="dash-figure">
       <Num value={value.current} />
-      <span className="faint small ltr">
+      <span className="faint small num signed">
         {kpiDelta(BigInt(value.current), BigInt(value.previous), 'neutral').text}
       </span>
     </span>

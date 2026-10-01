@@ -354,7 +354,6 @@ export function ExtraDevicesPage({
       <PageHead
         title={t('web.extra_devices_title')}
         subtitle={t('web.extra_devices_subtitle')}
-        maturity="now"
         {...(mayEdit
           ? {
               actions: (

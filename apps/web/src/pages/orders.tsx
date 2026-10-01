@@ -23,7 +23,7 @@ import {
   fetchServiceOperations,
   fetchServices,
 } from '../api/client';
-import { currencyLabel, formatNumber, formatTimestamp, formatTrafficGbText } from '../format';
+import { currencyLabel, formatTimestamp, formatTrafficGbText } from '../format';
 import { mayRequest, queryState } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
 import { setQueries, setQuery, useLinkHandler, type Route } from '../router';
@@ -161,7 +161,7 @@ function Traffic({ bytes }: { bytes: string }) {
   if (value === UNLIMITED_TRAFFIC_BYTES) return <span>{t('web.product_unlimited')}</span>;
   return (
     <span className="nowrap">
-      <Ltr>{formatTrafficGbText(value)}</Ltr> {t('web.unit_gib')}
+      <Num value={formatTrafficGbText(value)} /> {t('web.unit_gib')}
     </span>
   );
 }
@@ -170,7 +170,7 @@ function Duration({ days }: { days: number }) {
   if (days === UNLIMITED_DURATION_DAYS) return <span>{t('web.product_unlimited')}</span>;
   return (
     <span className="nowrap">
-      <Ltr>{formatNumber(days)}</Ltr> {t('web.product_days_unit')}
+      <Num value={days} /> {t('web.product_days_unit')}
     </span>
   );
 }
@@ -308,7 +308,7 @@ export function OrdersPage({ route, denied }: { route: Route; denied: boolean })
 
   return (
     <>
-      <PageHead title={t('web.orders_title')} subtitle={t('web.orders_intro')} maturity="now" />
+      <PageHead title={t('web.orders_title')} subtitle={t('web.orders_intro')} />
 
       <Card className="ca-list">
         <form className="toolbar ca-search" onSubmit={apply} hidden={toolbarHidden}>
@@ -497,7 +497,7 @@ export function OrderDetailPage({
   return (
     <>
       {row === undefined ? (
-        <PageHead title={t('web.order_detail')} maturity="now" />
+        <PageHead title={t('web.order_detail')} />
       ) : (
         <PageHead
           title={row.lineTitle}
@@ -577,7 +577,7 @@ export function OrderDetailPage({
                           row.lineDeviceLimit === null ? (
                             <span key="dl">{t('web.product_devices_provider_default')}</span>
                           ) : (
-                            <Ltr key="dl">{formatNumber(row.lineDeviceLimit)}</Ltr>
+                            <Num key="dl" value={row.lineDeviceLimit} />
                           ),
                         ],
                         [
@@ -587,10 +587,7 @@ export function OrderDetailPage({
                             value={{ amountMinor: row.lineUnitPriceAmount, currency: row.currency }}
                           />,
                         ],
-                        [
-                          t('web.order_quantity'),
-                          <Ltr key="q">{formatNumber(row.lineQuantity)}</Ltr>,
-                        ],
+                        [t('web.order_quantity'), <Num key="q" value={row.lineQuantity} />],
                       ]}
                     />
                     <h3 className="ca-subhead">{t('web.order_totals_title')}</h3>
@@ -905,7 +902,7 @@ const OPERATION_COLUMNS: readonly Column<ServiceOperationResponse>[] = [
   {
     key: 'attempts',
     header: t('web.operation_attempts'),
-    render: (op) => <Ltr>{formatNumber(op.attempts)}</Ltr>,
+    render: (op) => <Num value={op.attempts} />,
   },
   {
     key: 'completed',
@@ -1212,7 +1209,7 @@ function OrderPricingBody({ pricing }: { pricing: OrderPricingResponse }) {
               [
                 t('web.order_cashback_percent'),
                 <span key="p" className="nowrap">
-                  <Ltr>{String(cashback.percent)}</Ltr> {t('web.discount_percent_unit')}
+                  <Num value={String(cashback.percent)} /> {t('web.discount_percent_unit')}
                 </span>,
               ],
               [t('web.order_cashback_promised'), money(cashback.promisedAmount)],
@@ -1309,7 +1306,7 @@ function ResellerTerms({
               <Dash key="p" />
             ) : (
               <span key="p" className="nowrap">
-                <Ltr>{String(terms.percent)}</Ltr> {t('web.discount_percent_unit')}
+                <Num value={String(terms.percent)} /> {t('web.discount_percent_unit')}
               </span>
             ),
           ],

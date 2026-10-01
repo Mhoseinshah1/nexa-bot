@@ -38,6 +38,24 @@ export function niceCeiling(max: number): number {
   return 10 * power;
 }
 
+/**
+ * Which x-axis slots carry a label: every `step`-th from the first, where
+ * `step` keeps at most `most` labels, and always the last. When the last does
+ * not land on the stepping, the stepped label before it is dropped rather
+ * than drawn on top of it — two labels are never closer than one `step`.
+ */
+export function axisLabelSlots(slots: number, most: number): ReadonlySet<number> {
+  const shown = new Set<number>();
+  if (slots <= 0) return shown;
+  const step = Math.max(1, Math.ceil(slots / Math.max(1, most)));
+  for (let i = 0; i < slots; i += step) shown.add(i);
+  const last = slots - 1;
+  const lastStepped = last - (last % step);
+  if (lastStepped !== last && lastStepped !== 0) shown.delete(lastStepped);
+  shown.add(last);
+  return shown;
+}
+
 function defaultFormat(value: number): string {
   return formatNumber(Math.round(value));
 }
@@ -205,7 +223,7 @@ export function LineChart({
   const x = (i: number) => padL + (slots <= 1 ? 0 : (i / (slots - 1)) * (WIDTH - padL - padR));
   const y = (v: number) => padT + (1 - v / max) * (height - padT - padB);
   const slotW = slots <= 1 ? WIDTH - padL - padR : (WIDTH - padL - padR) / (slots - 1);
-  const step = Math.max(1, Math.ceil(slots / 8));
+  const labelled = axisLabelSlots(slots, 8);
 
   if (known.length === 0) return <ChartEmpty />;
 
@@ -214,7 +232,7 @@ export function LineChart({
       <svg className="chart" viewBox={`0 0 ${WIDTH} ${height}`} role="img" aria-label={caption}>
         <Grid max={max} y={y} padL={padL} padR={padR} format={format} />
         {labels.map((label, i) =>
-          i % step === 0 || i === slots - 1 ? (
+          labelled.has(i) ? (
             <text key={i} x={x(i)} y={height - 8} textAnchor="middle">
               {label}
             </text>
@@ -316,7 +334,7 @@ export function BarChart({
   const slot = slots === 0 ? 0 : (WIDTH - padL - padR) / slots;
   const bw = stacked ? slot * 0.55 : (slot * 0.7) / Math.max(1, series.length);
   const y = (v: number) => padT + (1 - v / max) * (height - padT - padB);
-  const step = Math.max(1, Math.ceil(slots / 10));
+  const labelled = axisLabelSlots(slots, 10);
 
   if (!anything) return <ChartEmpty />;
 
@@ -348,7 +366,7 @@ export function BarChart({
                   />
                 );
               })}
-              {(i % step === 0 || i === slots - 1) && (
+              {labelled.has(i) && (
                 <text x={cx} y={height - 8} textAnchor="middle">
                   {label}
                 </text>

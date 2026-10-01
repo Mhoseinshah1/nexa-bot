@@ -1,21 +1,29 @@
+import { readFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import {
   BarChart,
   Checkbox,
+  CursorPager,
   DetailHead,
+  Disclosure,
   Donut,
   FilterChip,
   LeaveGuardHost,
   LineChart,
   Menu,
   Modal,
+  Num,
+  PageHead,
   PeriodControl,
   Progress,
+  Quantity,
   RoutedTabs,
   Sparkline,
   StatCard,
+  axisLabelSlots,
   progressRatio,
   useUnsavedChanges,
   type PeriodPreset,
@@ -78,6 +86,24 @@ describe('StatCard and DetailHead', () => {
     const term = screen.getByText('سرویس');
     expect(term.tagName).toBe('DT');
     expect(term.nextElementSibling?.textContent).toBe('۱۲');
+  });
+});
+
+describe('PageHead', () => {
+  it('flags only a page that does not do its job yet', () => {
+    const { container } = renderPage(
+      <>
+        <PageHead title="کاربران" subtitle="فهرست" />
+        <PageHead title="گزارش" maturity="planned" />
+        {/* @ts-expect-error — a working page carries no maturity badge beside its title. */}
+        <PageHead title="سفارش‌ها" maturity="now" />
+      </>,
+    );
+    const heads = [...container.querySelectorAll('.page-head')];
+    expect(heads[0]?.querySelector('.maturity')).toBeNull();
+    expect(heads[1]?.querySelector('.maturity.planned')?.textContent).toBe(
+      t('web.maturity_planned'),
+    );
   });
 });
 
@@ -449,6 +475,37 @@ describe('charts', () => {
     expect(screen.getAllByText(t('web.chart_empty'))).toHaveLength(2);
   });
 
+  it('never draws two x-axis labels closer than one step, and always the last', () => {
+    for (const most of [8, 10]) {
+      for (let slots = 1; slots <= 120; slots += 1) {
+        const shown = [...axisLabelSlots(slots, most)].sort((a, b) => a - b);
+        const step = Math.max(1, Math.ceil(slots / most));
+        expect(shown[0]).toBe(0);
+        expect(shown[shown.length - 1]).toBe(slots - 1);
+        expect(shown.length).toBeLessThanOrEqual(most + 1);
+        for (let n = 1; n < shown.length; n += 1) {
+          expect((shown[n] as number) - (shown[n - 1] as number)).toBeGreaterThanOrEqual(step);
+        }
+      }
+    }
+    // The dashboard's 30-day month: stepping by 4 ends on 28, one slot from 29.
+    expect([...axisLabelSlots(30, 8)].sort((a, b) => a - b)).toEqual([0, 4, 8, 12, 16, 20, 24, 29]);
+  });
+
+  it('labels the 30th day without drawing it over the 29th', () => {
+    const labels = Array.from({ length: 30 }, (_, i) => `d${i + 1}`);
+    const { container } = renderPage(
+      <LineChart
+        caption="درآمد"
+        labels={labels}
+        series={[{ name: 'جاری', values: labels.map((_, i) => i) }]}
+      />,
+    );
+    const drawn = [...container.querySelectorAll('svg.chart > text')].map((n) => n.textContent);
+    expect(drawn).toContain('d30');
+    expect(drawn).not.toContain('d29');
+  });
+
   it('stacks bars from SVG geometry', () => {
     const { container } = renderPage(
       <BarChart
@@ -463,6 +520,100 @@ describe('charts', () => {
     );
     expect(container.querySelectorAll('rect.bar')).toHaveLength(4);
     expect(noStyle(container)).toBe(0);
+  });
+});
+
+describe('Disclosure', () => {
+  it('is a closed native disclosure that reports its open state', () => {
+    const seen: boolean[] = [];
+    const { container } = renderPage(
+      <Disclosure summary="فنی" size="sm" variant="boxed" onToggle={(open) => seen.push(open)}>
+        <p>شناسه</p>
+      </Disclosure>,
+    );
+    const details = container.querySelector('details') as HTMLDetailsElement;
+    expect(details.className.split(' ')).toEqual(['disclosure', 'sm', 'boxed']);
+    expect(details.open).toBe(false);
+    const summary = details.querySelector(':scope > summary') as HTMLElement;
+    expect(summary.textContent).toBe('فنی');
+    expect(summary.querySelector('svg.disclosure-chevron')?.getAttribute('aria-hidden')).toBe(
+      'true',
+    );
+    details.open = true;
+    fireEvent(details, new Event('toggle'));
+    details.open = false;
+    fireEvent(details, new Event('toggle'));
+    expect(seen).toEqual([true, false]);
+    expect(noStyle(container)).toBe(0);
+  });
+
+  /*
+   * One look for every closed section: a page that writes its own <details>
+   * brings back its own summary colour, marker and spacing — the five
+   * variants this pass folded into the kit.
+   */
+  it('is the only disclosure the pages draw', () => {
+    const dir = join(import.meta.dirname, '../../apps/web/src/pages');
+    const offenders = readdirSync(dir)
+      .filter((name) => name.endsWith('.tsx'))
+      .filter((name) => /<details[\s>]/.test(readFileSync(join(dir, name), 'utf8')));
+    expect(offenders).toEqual([]);
+  });
+});
+
+describe('quantities and identifiers', () => {
+  /*
+   * Days, gigabytes, counts, percentages and rates are quantities: they take
+   * the body's digit shapes. `Ltr` resets those shapes to Latin, which is
+   * right for an id, a host or a username and wrong for «۳۰ روز».
+   */
+  it('draws a quantity as Num, never as a technical Latin run', () => {
+    const { container } = renderPage(
+      <>
+        <Num value={1250} />
+        <Num value="12.5" />
+        <Num value="+4.2%" signed />
+        <Quantity>
+          <Num value={42} /> ms
+        </Quantity>
+      </>,
+    );
+    const [count, figure, signed] = [...container.querySelectorAll('span')];
+    expect(count?.className).toBe('num');
+    expect(count?.textContent).toBe(formatNumber(1250));
+    expect(figure?.textContent).toBe('12.5');
+    expect(signed?.className.split(' ')).toEqual(['num', 'signed']);
+    const group = [...container.querySelectorAll('span.num.signed')].at(-1);
+    expect(group?.className).toBe('num signed');
+    expect(group?.textContent).toBe('42 ms');
+    expect(container.querySelector('.ltr')).toBeNull();
+  });
+
+  it('leaves a quantity input in the body digits, and only identifiers in Latin', () => {
+    const dir = join(import.meta.dirname, '../../apps/web/src/pages');
+    // Typed identifiers, not quantities: a custom emoji id, an inbound id, a card number.
+    const IDENTIFIERS = ['appearance-', 'activation-inbound-id', 'pa-card'];
+    const offenders: string[] = [];
+    for (const name of readdirSync(dir).filter((file) => file.endsWith('.tsx'))) {
+      const code = readFileSync(join(dir, name), 'utf8');
+      for (const element of code.match(/<input\b(?:[^<>]|=>)*?\/>/gs) ?? []) {
+        if (!/inputMode="(numeric|decimal)"/.test(element)) continue;
+        if (!/className="[^"]*\bltr\b/.test(element)) continue;
+        if (IDENTIFIERS.some((id) => element.includes(id))) continue;
+        offenders.push(`${name}: ${/\bid=(\S+)/.exec(element)?.[1] ?? '?'}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it('is what every page uses for a formatted quantity', () => {
+    const dir = join(import.meta.dirname, '../../apps/web/src/pages');
+    const quantity =
+      /<Ltr[^>]*>\s*(<Num\b|\{\s*(formatNumber|formatTrafficGbText|formatRate|formatBasisPoints|bytesText)\()/;
+    const offenders = readdirSync(dir)
+      .filter((name) => name.endsWith('.tsx'))
+      .filter((name) => quantity.test(readFileSync(join(dir, name), 'utf8')));
+    expect(offenders).toEqual([]);
   });
 });
 
@@ -507,5 +658,48 @@ describe('icons', () => {
     expect(paths).toHaveLength(ICON_NAMES.length);
     for (const path of paths) expect(path.getAttribute('d')).toMatch(/^[mM]/);
     for (const entry of NAV) expect(ICON_NAMES, entry.id).toContain(entry.icon);
+  });
+});
+
+describe('CursorPager', () => {
+  const noop = () => undefined;
+
+  it("says «نمایش N» by default, the caller's summary when given one, and nothing for null", () => {
+    const { container } = renderPage(
+      <>
+        <CursorPager shown={3} hasPrevious={false} hasNext onPrevious={noop} onNext={noop} />
+        <CursorPager
+          summary={<>کل: ۹</>}
+          hasPrevious
+          hasNext={false}
+          onPrevious={noop}
+          onNext={noop}
+        />
+        <CursorPager summary={null} hasPrevious hasNext onPrevious={noop} onNext={noop} />
+      </>,
+    );
+    const [counted, totalled, silent] = [...container.querySelectorAll('.pager')];
+    expect(counted?.querySelector('.muted.small')?.textContent).toBe(
+      `${t('web.showing')} ${formatNumber(3)}`,
+    );
+    expect(totalled?.querySelector('.muted.small')?.textContent).toBe('کل: ۹');
+    expect(silent?.querySelector('.muted.small')).toBeNull();
+    // The same two buttons, chevrons and all, whatever the summary says.
+    for (const pager of [counted, totalled, silent]) {
+      expect(pager?.querySelectorAll('button.btn.sm')).toHaveLength(2);
+      expect(pager?.querySelectorAll('button svg[aria-hidden="true"]')).toHaveLength(2);
+    }
+  });
+
+  /*
+   * The reports drew three pagers by hand (no chevrons, their own summary
+   * spans); a hand-written .pager is how that comes back.
+   */
+  it('is the only pager the pages draw', () => {
+    const dir = join(import.meta.dirname, '../../apps/web/src/pages');
+    const offenders = readdirSync(dir)
+      .filter((name) => name.endsWith('.tsx'))
+      .filter((name) => /className="pager"/.test(readFileSync(join(dir, name), 'utf8')));
+    expect(offenders).toEqual([]);
   });
 });

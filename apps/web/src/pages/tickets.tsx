@@ -468,7 +468,7 @@ export function TicketsPage({
 
   return (
     <>
-      <PageHead title={t('web.tickets_title')} subtitle={t('web.tickets_intro')} maturity="now" />
+      <PageHead title={t('web.tickets_title')} subtitle={t('web.tickets_intro')} />
 
       <Card>
         <FilterBar hidden={!requestable}>

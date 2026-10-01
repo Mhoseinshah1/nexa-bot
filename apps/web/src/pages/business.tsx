@@ -61,12 +61,14 @@ import {
   BarChart,
   ButtonGroup,
   ChartCard,
+  CursorPager,
   Donut,
   FilterChip,
   FilterChips,
   Legend,
   StatCard,
   type Column,
+  Quantity,
 } from '../ui/kit';
 import type { DonutSlice, SeriesTone } from '../ui/charts';
 import { Icon } from '../ui/icons';
@@ -269,10 +271,10 @@ function PeriodNote({
       : `${side.startLocal} – ${side.endLocalInclusive}`;
   return (
     <p className="faint small">
-      {t('web.report_period_current')} <Ltr>{span(period.current)}</Ltr> ·{' '}
-      {t('web.report_period_previous')} <Ltr>{span(period.previous)}</Ltr> ·{' '}
+      {t('web.report_period_current')} <Quantity>{span(period.current)}</Quantity> ·{' '}
+      {t('web.report_period_previous')} <Quantity>{span(period.previous)}</Quantity> ·{' '}
       {t('web.report_updated_at')}{' '}
-      <Ltr>{formatInstantIn(period.generatedAt, period.timezone, period.calendar)}</Ltr>
+      <Quantity>{formatInstantIn(period.generatedAt, period.timezone, period.calendar)}</Quantity>
       {period.lengthsDiffer && <> · {t('web.report_lengths_differ')}</>}
     </p>
   );
@@ -327,7 +329,7 @@ export function ChangeNote({ current, previous }: { current: bigint; previous: b
     return <span className="faint small">{t('web.report_change_new')}</span>;
   return (
     <span className="faint small" title={t('web.report_change_hint')}>
-      <Ltr>{formatBasisPoints(change.basisPoints)}</Ltr>
+      <Num signed value={formatBasisPoints(change.basisPoints)} />
     </span>
   );
 }
@@ -599,39 +601,6 @@ function ExportButtons({
   );
 }
 
-// --- Dashboard section ----------------------------------------------------------
-
-/**
- * The business section of the main dashboard (spec §5). KPI cards and the one trend
- * chart, then a compact top-products card and a compact failure card; everything deeper
- * lives on `/reports`.
- */
-export function BusinessOverview({ route }: { route: Route }) {
-  const selection = rangeFromRoute(route, 'TODAY');
-  const onLink = useLinkHandler();
-  return (
-    <>
-      <Card
-        title={t('web.report_business_title')}
-        hint={t('web.report_business_hint')}
-        actions={
-          <a className="btn sm" href="/reports" onClick={onLink}>
-            {t('web.report_open_reports')}
-          </a>
-        }
-      >
-        <RangePicker route={route} selection={selection} />
-      </Card>
-      <SummaryCards selection={selection} />
-      <TrendCard selection={selection} />
-      <div className="grid">
-        <TopProducts selection={selection} compact />
-        <FailureSummary selection={selection} />
-      </div>
-    </>
-  );
-}
-
 /**
  * State that belongs to one period — a page number, a cursor stack. A new range starts
  * it over: the component is not remounted when the range changes, so a cursor from the
@@ -649,22 +618,15 @@ function usePerRange<T>(selection: ReportRangeSelection, initial: T): [T, (next:
 
 // --- Products -------------------------------------------------------------------
 
-function TopProducts({
-  selection,
-  compact = false,
-}: {
-  selection: ReportRangeSelection;
-  compact?: boolean;
-}) {
+function TopProducts({ selection }: { selection: ReportRangeSelection }) {
   const [by, setBy] = useState<ReportProductRanking>('REVENUE');
   const [page, setPage] = usePerRange(selection, 1);
-  const limit = compact ? 10 : 25;
+  const limit = 25;
   const products = useReport(
     ['products', selection, by, page, limit],
     () => fetchReportProducts(selection, { by, limit, page }),
     rangeIsComplete(selection),
   );
-  const onLink = useLinkHandler();
   const data = products.data;
   const columns: Column<NonNullable<typeof data>['rows'][number]>[] = [
     {
@@ -713,17 +675,9 @@ function TopProducts({
   ];
   return (
     <Card
-      title={compact ? t('web.report_top_products_title') : t('web.report_products_title')}
+      title={t('web.report_products_title')}
       hint={t('web.report_products_hint')}
-      actions={
-        compact ? (
-          <a className="btn sm" href="/reports?tab=products" onClick={onLink}>
-            {t('web.report_view_all')}
-          </a>
-        ) : (
-          <ExportButtons selection={selection} report="PRODUCTS" />
-        )
-      }
+      actions={<ExportButtons selection={selection} report="PRODUCTS" />}
     >
       <FilterChips label={t('web.report_products_title')}>
         {REPORT_PRODUCT_RANKINGS.map((r) => (
@@ -753,30 +707,19 @@ function TopProducts({
               caption={t('web.report_products_title')}
               dense
             />
-            {!compact && (
-              <div className="pager">
-                <span className="muted small">
+            <CursorPager
+              summary={
+                <>
                   {t('web.report_total_rows')} <Num value={data.totalRows} />
-                </span>
-                <span className="spacer" />
-                <button
-                  type="button"
-                  className="btn sm"
-                  disabled={page <= 1}
-                  onClick={() => setPage(page - 1)}
-                >
-                  {t('web.report_page_previous')}
-                </button>
-                <button
-                  type="button"
-                  className="btn sm"
-                  disabled={page * limit >= data.totalRows}
-                  onClick={() => setPage(page + 1)}
-                >
-                  {t('web.report_page_next')}
-                </button>
-              </div>
-            )}
+                </>
+              }
+              hasPrevious={page > 1}
+              hasNext={page * limit < data.totalRows}
+              onPrevious={() => setPage(page - 1)}
+              onNext={() => setPage(page + 1)}
+              previousLabel={'web.report_page_previous'}
+              nextLabel={'web.report_page_next'}
+            />
           </>
         )}
       </StateSwitch>
@@ -1059,27 +1002,15 @@ function OrdersDrilldown({ selection }: { selection: ReportRangeSelection }) {
               caption={t('web.report_orders_title')}
               dense
             />
-            <div className="pager">
-              <span className="spacer" />
-              <button
-                type="button"
-                className="btn sm"
-                disabled={cursors.length === 0}
-                onClick={() => setCursors(cursors.slice(0, -1))}
-              >
-                {t('web.report_page_previous')}
-              </button>
-              <button
-                type="button"
-                className="btn sm"
-                disabled={data.nextCursor === null}
-                onClick={() =>
-                  data.nextCursor !== null && setCursors([...cursors, data.nextCursor])
-                }
-              >
-                {t('web.report_page_next')}
-              </button>
-            </div>
+            <CursorPager
+              summary={null}
+              hasPrevious={cursors.length > 0}
+              hasNext={data.nextCursor !== null}
+              onPrevious={() => setCursors(cursors.slice(0, -1))}
+              onNext={() => data.nextCursor !== null && setCursors([...cursors, data.nextCursor])}
+              previousLabel={'web.report_page_previous'}
+              nextLabel={'web.report_page_next'}
+            />
           </>
         )}
       </StateSwitch>
@@ -1121,7 +1052,7 @@ function ServicesReport({ selection }: { selection: ReportRangeSelection }) {
               <Stat label={t('web.report_kpi_active_services')} value={data.activeServices} />
               <StatCard
                 label={t('web.report_traffic_sold')}
-                value={<Ltr>{bytesText(BigInt(data.trafficSoldBytes))}</Ltr>}
+                value={<Num value={bytesText(BigInt(data.trafficSoldBytes))} />}
                 hint={
                   <>
                     {t('web.report_unlimited_lines')} <Num value={data.unlimitedTrafficLines} />
@@ -1276,7 +1207,7 @@ function PaymentsReport({ selection }: { selection: ReportRangeSelection }) {
     {
       key: 'rate',
       header: t('web.report_col_success_rate'),
-      render: (r) => <Ltr>{formatRate(r.successRateBasisPoints)}</Ltr>,
+      render: (r) => <Num value={formatRate(r.successRateBasisPoints)} />,
       align: 'end',
     },
     {
@@ -1315,7 +1246,7 @@ function PaymentsReport({ selection }: { selection: ReportRangeSelection }) {
             />
             <p className="faint small">
               {t('web.report_success_rate_total')}{' '}
-              <Ltr>{formatRate(data.totals.successRateBasisPoints)}</Ltr>
+              <Num value={formatRate(data.totals.successRateBasisPoints)} />
             </p>
           </>
         )}
@@ -1439,7 +1370,7 @@ function InfrastructureReport({ selection }: { selection: ReportRangeSelection }
     {
       key: 'traffic',
       header: t('web.report_traffic_sold'),
-      render: (r) => <Ltr>{bytesText(BigInt(r.trafficSoldBytes))}</Ltr>,
+      render: (r) => <Num value={bytesText(BigInt(r.trafficSoldBytes))} />,
       align: 'end',
     },
     {
@@ -1650,7 +1581,7 @@ export function ReferralAnalytics({
                 value={<Num value={data.convertedBuyers} />}
               >
                 <span className="faint small">
-                  <Ltr>{formatRate(data.conversionBasisPoints)}</Ltr>
+                  <Num value={formatRate(data.conversionBasisPoints)} />
                 </span>
               </Kpi>
               <Kpi label={t('web.report_referral_gifts')} value={sum(data.signupGifts)} />
@@ -1730,28 +1661,19 @@ export function ReferralAnalytics({
                 caption={t('web.report_top_referrers')}
               />
             )}
-            <div className="pager">
-              <span className="muted small">
-                {t('web.report_total_rows')} <Num value={data.topReferrers.totalRows} />
-              </span>
-              <span className="spacer" />
-              <button
-                type="button"
-                className="btn sm"
-                disabled={page <= 1}
-                onClick={() => setPage(page - 1)}
-              >
-                {t('web.report_page_previous')}
-              </button>
-              <button
-                type="button"
-                className="btn sm"
-                disabled={page * limit >= data.topReferrers.totalRows}
-                onClick={() => setPage(page + 1)}
-              >
-                {t('web.report_page_next')}
-              </button>
-            </div>
+            <CursorPager
+              summary={
+                <>
+                  {t('web.report_total_rows')} <Num value={data.topReferrers.totalRows} />
+                </>
+              }
+              hasPrevious={page > 1}
+              hasNext={page * limit < data.topReferrers.totalRows}
+              onPrevious={() => setPage(page - 1)}
+              onNext={() => setPage(page + 1)}
+              previousLabel={'web.report_page_previous'}
+              nextLabel={'web.report_page_next'}
+            />
             <PeriodNote period={data.period} />
           </>
         )}

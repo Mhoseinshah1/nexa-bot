@@ -56,6 +56,7 @@ import {
   useToast,
   type Column,
   type Tone,
+  Num,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
 import { CheckField, SaveBar, revealField } from './editor-layout';
@@ -167,7 +168,7 @@ export function PricingText({ label, percent }: { label: WebKey; percent: number
       {percent !== null && (
         <>
           {' '}
-          <Ltr>{String(percent)}</Ltr> {t('web.discount_percent_unit')}
+          <Num value={String(percent)} /> {t('web.discount_percent_unit')}
         </>
       )}
     </span>
@@ -441,7 +442,6 @@ export function ResellersPage({
       <PageHead
         title={t('web.resellers_title')}
         subtitle={t('web.resellers_intro')}
-        maturity="now"
         actions={
           <>
             <a className="btn" href="/reseller-tiers" onClick={onLink}>

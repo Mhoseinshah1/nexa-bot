@@ -348,7 +348,6 @@ export function ResellerPlansPage({
       <PageHead
         title={t('web.reseller_plans_title')}
         subtitle={t('web.reseller_plans_intro')}
-        maturity="now"
         actions={
           <>
             <a className="btn" href="/resellers" onClick={onLink}>
@@ -932,7 +931,8 @@ export function ResellerPolicyCard({
                     {data.pricing.percent !== null && (
                       <>
                         {' '}
-                        <Ltr>{String(data.pricing.percent)}</Ltr> {t('web.discount_percent_unit')}
+                        <Num value={String(data.pricing.percent)} />{' '}
+                        {t('web.discount_percent_unit')}
                       </>
                     )}
                   </span>,

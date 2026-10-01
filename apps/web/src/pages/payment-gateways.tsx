@@ -24,6 +24,7 @@ import { t } from '../i18n/web.fa';
 import { messageFor } from './settings';
 import { FxSection } from './fx-section';
 import {
+  Disclosure,
   Badge,
   Banner,
   Card,
@@ -33,11 +34,13 @@ import {
   Field,
   Ltr,
   PageHead,
+  RowActions,
   StateSwitch,
   ToggleRow,
   useToast,
   useUnsavedChanges,
   type Column,
+  Num,
 } from '../ui/kit';
 
 /**
@@ -541,13 +544,13 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
           row.topupCashbackPercent === 0 ? null : (
             <span key="gift">
               <span className="muted">{t('web.payment_gateway_topup_gift')}:</span>{' '}
-              <Ltr>{`${String(row.topupCashbackPercent)}%`}</Ltr>
+              <Num value={`${String(row.topupCashbackPercent)}%`} />
             </span>
           ),
           row.customerFeeBasisPoints === 0 ? null : (
             <span key="fee">
               <span className="muted">{t('web.payment_gateway_customer_fee')}:</span>{' '}
-              <Ltr>{`${formatBasisPointsPercent(row.customerFeeBasisPoints)}%`}</Ltr>
+              <Num value={`${formatBasisPointsPercent(row.customerFeeBasisPoints)}%`} />
             </span>
           ),
           !row.conversion.rateRequired ? null : (
@@ -556,7 +559,7 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
               {row.conversion.rateMinor === null ? (
                 <Badge tone="warn">{t('web.payment_gateway_rate_missing')}</Badge>
               ) : (
-                <Ltr>{`${boundOf(row.conversion.rateMinor, row.currency)} = ⭐ 1`}</Ltr>
+                <Num signed value={`${boundOf(row.conversion.rateMinor, row.currency)} = ⭐ 1`} />
               )}
             </span>
           ),
@@ -592,7 +595,7 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
       render: (row) =>
         !mayEdit ? null : (
           // Wrapping, so three actions never push the table wider than its card.
-          <span className="gateways-actions">
+          <RowActions wrap>
             <button
               type="button"
               className="btn sm"
@@ -634,7 +637,7 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
                   : 'web.payment_gateway_enable',
               )}
             </button>
-          </span>
+          </RowActions>
         ),
     },
   ];
@@ -644,7 +647,6 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
       <PageHead
         title={t('web.payment_gateways_title')}
         subtitle={t('web.payment_gateways_subtitle')}
-        maturity="now"
       />
 
       <StateSwitch
@@ -786,7 +788,8 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
               <Field label={t('web.payment_gateway_min')} htmlFor="pg-min">
                 <input
                   id="pg-min"
-                  className="input ltr"
+                  className="input"
+                  dir="ltr"
                   value={form.minAmountMinor}
                   inputMode="numeric"
                   onChange={(event) => setForm({ ...form, minAmountMinor: event.target.value })}
@@ -795,7 +798,8 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
               <Field label={t('web.payment_gateway_max')} htmlFor="pg-max">
                 <input
                   id="pg-max"
-                  className="input ltr"
+                  className="input"
+                  dir="ltr"
                   value={form.maxAmountMinor}
                   inputMode="numeric"
                   onChange={(event) => setForm({ ...form, maxAmountMinor: event.target.value })}
@@ -811,7 +815,8 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
               <Field label={t('web.payment_gateway_after_payments')} htmlFor="pg-after-payments">
                 <input
                   id="pg-after-payments"
-                  className="input ltr"
+                  className="input"
+                  dir="ltr"
                   value={form.activateAfterPayments}
                   inputMode="numeric"
                   onChange={(event) =>
@@ -822,7 +827,8 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
               <Field label={t('web.payment_gateway_until_payments')} htmlFor="pg-until-payments">
                 <input
                   id="pg-until-payments"
-                  className="input ltr"
+                  className="input"
+                  dir="ltr"
                   value={form.deactivateAfterPayments}
                   inputMode="numeric"
                   onChange={(event) =>
@@ -833,7 +839,8 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
               <Field label={t('web.payment_gateway_after_days')} htmlFor="pg-after-days">
                 <input
                   id="pg-after-days"
-                  className="input ltr"
+                  className="input"
+                  dir="ltr"
                   value={form.activateAfterAccountDays}
                   inputMode="numeric"
                   onChange={(event) =>
@@ -857,7 +864,8 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
               >
                 <input
                   id="pg-topup-gift"
-                  className="input ltr"
+                  className="input"
+                  dir="ltr"
                   value={form.topupCashbackPercent}
                   inputMode="numeric"
                   maxLength={4}
@@ -878,7 +886,8 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
                 >
                   <input
                     id="pg-customer-fee"
-                    className="input ltr"
+                    className="input"
+                    dir="ltr"
                     value={form.customerFeePercent}
                     inputMode="decimal"
                     maxLength={7}
@@ -900,7 +909,8 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
                 >
                   <input
                     id="pg-rate"
-                    className="input ltr"
+                    className="input"
+                    dir="ltr"
                     value={form.providerUnitRate}
                     inputMode="numeric"
                     maxLength={19}
@@ -926,8 +936,7 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
             />
           </div>
 
-          <details className="form-section gateways-advanced">
-            <summary>{t('web.payment_gateway_section_advanced')}</summary>
+          <Disclosure className="form-section" summary={t('web.payment_gateway_section_advanced')}>
             <div className="form-grid">
               <Field
                 label={t('web.payment_gateway_sort')}
@@ -936,14 +945,15 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
               >
                 <input
                   id="pg-sort"
-                  className="input ltr"
+                  className="input"
+                  dir="ltr"
                   value={form.sortOrder}
                   inputMode="numeric"
                   onChange={(event) => setForm({ ...form, sortOrder: event.target.value })}
                 />
               </Field>
             </div>
-          </details>
+          </Disclosure>
 
           <div className="form-section gateways-form-foot">
             {/*

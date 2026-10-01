@@ -148,11 +148,7 @@ export function CompensationsPage({ route, denied }: { route: Route; denied: boo
 
   return (
     <>
-      <PageHead
-        title={t('web.compensations_title')}
-        subtitle={t('web.compensations_intro')}
-        maturity="now"
-      />
+      <PageHead title={t('web.compensations_title')} subtitle={t('web.compensations_intro')} />
       <Card className="ca-list">
         <StateSwitch query={compensations} denied={denied}>
           {compensations.data === undefined ? null : compensations.data.compensations.length ===
