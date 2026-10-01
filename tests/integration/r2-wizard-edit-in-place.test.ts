@@ -393,6 +393,55 @@ describe('the wizard is one message, edited in place', () => {
     );
   });
 
+  /*
+   * Retention (docs/telegram-retention.md): the CLOSED row that keeps the left-behind
+   * message's old keyboard stale is itself removed once old. Without the chat's purge
+   * horizon the next tap on that keyboard would be ADOPTED as a fresh pre-invoice — and its
+   * pay button would pay. With it, the tap is stale: answered, and nothing else.
+   */
+  it('retention: once the left-behind message’s row is removed, its old pay button still moves no money', async () => {
+    const productId = await product('retained');
+    await fund(1_000_000n, 'retained');
+    const wizard = 760;
+    await tapOn(wizard, `ck:${SEED_IDS.categoryA}.0`);
+    await tapOn(wizard, `p:${productId}`);
+    const [order] = await draftOrders();
+    if (order === undefined) throw new Error('no draft');
+    uneditable.add(wizard);
+    await tapOn(wizard, `Z:${order.id}`);
+    const freshId = calls.find((call) => call.method === 'sendMessage')?.sentId;
+    if (freshId === null || freshId === undefined) throw new Error('no fallback message');
+
+    // The left-behind row grows old; the live pre-invoice on the fresh message does not.
+    await ctx.container.database.db.execute(sql`
+      UPDATE telegram_wizards SET updated_at = now() - interval '40 days',
+                                  created_at = now() - interval '40 days'
+       WHERE tenant_id = ${tenantA.tenantId} AND message_id = ${wizard}`);
+    const swept = await ctx.container.telegramMessageState.purgeExpired(
+      tenantA,
+      systemActor('retention'),
+      100,
+    );
+    expect(swept.wizards).toBe(1);
+
+    // The pre-invoice's wallet button, on the message whose row is gone.
+    const stale = await tapOn(wizard, `w:${order.id}`);
+    expect(stale.replyKey).toBeNull();
+    expect(methods()).toEqual(['answerCallbackQuery']);
+    expect(await debits()).toBe(0);
+    expect((await draftOrders()).map((o) => o.state)).toEqual(['DRAFT']);
+    const tracked = await rows<{ message_id: string }>(
+      sql`SELECT message_id::text AS message_id FROM telegram_wizards
+          WHERE tenant_id = ${tenantA.tenantId} AND message_id = ${wizard}`,
+    );
+    expect(tracked).toEqual([]);
+
+    // The live wizard is untouched by both: its own pay button still pays, once.
+    await tapOn(freshId, `w:${order.id}`);
+    expect(await debits()).toBe(1);
+    expect((await draftOrders()).map((o) => o.state)).toEqual(['PAID']);
+  });
+
   it('a typed username continues the SAME wizard message, and the typed message is removed', async () => {
     const productId = await product('typed');
     const wizard = 710;

@@ -80,3 +80,33 @@ export type TelegramReviewMessageRole = (typeof TELEGRAM_REVIEW_MESSAGE_ROLES)[n
  */
 export const TELEGRAM_REVIEW_OUTCOMES = ['APPROVED', 'REJECTED', 'BLOCKED', 'CREDITED'] as const;
 export type TelegramReviewOutcome = (typeof TELEGRAM_REVIEW_OUTCOMES)[number];
+
+// --- Retention (docs/telegram-retention.md) ------------------------------------------------
+
+/**
+ * How long a tracked message's row is kept after it was last touched before the retention
+ * sweep may remove it — and only then if nothing live still names it (a lease, a payment
+ * that is still `PENDING` or `UNKNOWN`, an order that is still `DRAFT` or
+ * `AWAITING_PAYMENT`). See `docs/telegram-retention.md` for the rules row by row.
+ *
+ * A CONSTANT, not a setting, for the reason `TICKET_REPLY_FILE_RETENTION_DAYS` is one: the
+ * safety argument for a stale tap after cleanup is the chat's purge horizon, which is exact
+ * whatever this value is, so an operator gains nothing by tuning it — and every existing
+ * retention period in this installation is a constant or a deployment variable, never a
+ * per-tenant setting. Thirty days is far past every window a row serves: a payment attempt
+ * ends within an hour, a draft's price hold within the order expiry, and Telegram redelivers
+ * an update for at most a day.
+ */
+export const TELEGRAM_MESSAGE_STATE_RETENTION_DAYS = 30;
+
+/**
+ * The Telegram-message retention sweep has failed three ticks in a row — `TELEGRAM_MESSAGE_RETENTION_FAILURE_THRESHOLD` in the loop (the database
+ * refused its delete, its transaction timed out). One condition per tenant — the dedupe key
+ * is the code — written when the streak reaches its threshold and then at most once an
+ * hour while it lasts, so a sweep that fails every tick is ONE row whose counter climbs,
+ * never a row per tick. Nothing business-critical waits on the sweep; the condition says
+ * the two presentation tables are growing again. Recovered by
+ * `TELEGRAM_MESSAGE_RETENTION_RECOVERED_CODE` on the next tick that completes.
+ */
+export const TELEGRAM_MESSAGE_RETENTION_FAILING_CODE = 'telegram.message_retention_failing';
+export const TELEGRAM_MESSAGE_RETENTION_RECOVERED_CODE = 'telegram.message_retention_recovered';

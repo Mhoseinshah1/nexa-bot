@@ -4020,6 +4020,7 @@ export interface BotRuntimeDeps {
     | 'moveAll'
     | 'recordReview'
     | 'findReview'
+    | 'reviewTapIsRetired'
     | 'finaliseReviews'
     | 'unfinaliseReview'
   >;
@@ -5216,7 +5217,19 @@ export class BotRuntime {
       state !== undefined && origin !== null && REVIEW_TAP_INTENTS.has(command.intent)
         ? await state.findReview(scope, this.refOf(input.botInstanceId, origin))
         : null;
-    const repeatedReview = (reviewRecord?.finalisedAt ?? null) !== null;
+    /*
+     * Retention (docs/telegram-retention.md): a review tap on a message with NO row, at or
+     * below the chat's purge horizon, is a tap on a message whose row the sweep removed —
+     * which it does only once the payment is terminal. Answered and nothing else, like a
+     * finalised one: the decision is never asked for again.
+     */
+    const retiredReview =
+      state !== undefined &&
+      origin !== null &&
+      reviewRecord === null &&
+      REVIEW_TAP_INTENTS.has(command.intent) &&
+      (await state.reviewTapIsRetired(scope, this.refOf(input.botInstanceId, origin)));
+    const repeatedReview = (reviewRecord?.finalisedAt ?? null) !== null || retiredReview;
     const gate = WIZARD_GATES.get(command.intent);
     let claim: TelegramWizardRecord | null = null;
     let staleWizard = false;

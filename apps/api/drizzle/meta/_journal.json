@@ -1072,6 +1072,20 @@
       "when": 1790773391042,
       "tag": "0152_round_n_close",
       "breakpoints": true
+    },
+    {
+      "idx": 153,
+      "version": "7",
+      "when": 1790849581025,
+      "tag": "0153_telegram_message_retention",
+      "breakpoints": true
+    },
+    {
+      "idx": 154,
+      "version": "7",
+      "when": 1790854708033,
+      "tag": "0154_telegram_review_message_updated_at",
+      "breakpoints": true
     }
   ]
 }
