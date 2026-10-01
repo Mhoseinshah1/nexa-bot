@@ -823,6 +823,68 @@ describe('service location change (WP-A6)', () => {
       expect(await moveOf(service.id)).toHaveLength(1);
     });
 
+    /*
+     * Round R, package B. The capability is code, so it can disappear between a quote and
+     * its money — a `botctl rollback` to a release that did not declare it. A move the
+     * panel can no longer perform is then never settled: a wallet purchase is refused,
+     * never charged, and one already paid is refunded once, never sent, and the service
+     * keeps the location it had — the customer is never shown a place it did not reach.
+     */
+    it('cannot settle once the capability is withdrawn: a wallet purchase is refused, uncharged', async () => {
+      const service = await activeService('withdrawn-pay');
+      const { nl } = await standardLocations();
+      await fund('withdrawn-pay');
+      const { order } = await draftMove(service.id, nl, 'withdrawn-pay');
+      await confirmMove(order.id, 'withdrawn-pay');
+      const before = await balance();
+
+      uninstallLocationPanel();
+      try {
+        await expect(payMove(order.id, 'withdrawn-pay')).rejects.toMatchObject({
+          code: COMMERCE_ERROR_CODES.PANEL_NOT_OPERABLE,
+        });
+        expect(await balance()).toBe(before);
+        expect(await orderState(order.id)).not.toBe('PAID');
+        expect(await moveOf(service.id)).toEqual([]);
+        await ctx.container.provisionerLoop.tick();
+      } finally {
+        installLocationPanel();
+      }
+      expect(locationPanel.writes).toEqual([]);
+      expect((await services.findById(tenantA, service.id))?.locationKey).toBeNull();
+    });
+
+    it('cannot settle once the capability is withdrawn: a paid move is refunded, never sent', async () => {
+      const service = await activeService('withdrawn-run');
+      const { nl } = await standardLocations();
+      await fund('withdrawn-run');
+      const before = (await services.findById(tenantA, service.id))!;
+      const beforePurchase = await balance();
+      const orderId = await buyMove(service.id, nl, 'withdrawn-run');
+      expect(await orderState(orderId)).toBe('PAID');
+
+      uninstallLocationPanel();
+      try {
+        await ctx.container.provisionerLoop.tick();
+        await makeDue();
+        await ctx.container.provisionerLoop.tick();
+      } finally {
+        installLocationPanel();
+      }
+      expect(locationPanel.writes, 'nothing was sent to a panel that cannot move').toEqual([]);
+      expect((await moveOf(service.id))[0]?.state).toBe('FAILED');
+      expect(await orderState(orderId)).toBe('REFUNDED');
+      expect(await balance()).toBe(beforePurchase);
+      // The same service, where it was, with its expiry, allowance and link untouched.
+      expect(await services.findById(tenantA, service.id)).toMatchObject({
+        state: 'ACTIVE',
+        locationKey: null,
+        expiresAt: before.expiresAt,
+        trafficLimitBytes: before.trafficLimitBytes,
+        subscriptionUrl: before.subscriptionUrl,
+      });
+    });
+
     it('asks again when the money moves: a service already there is not charged', async () => {
       const service = await activeService('landed');
       const { nl } = await standardLocations();
