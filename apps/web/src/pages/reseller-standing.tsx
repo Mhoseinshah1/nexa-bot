@@ -27,6 +27,7 @@ import {
   Empty,
   KV,
   Ltr,
+  Meter,
   Money,
   StateSwitch,
   type Column,
@@ -159,13 +160,26 @@ export function ResellerCreditCard({
 function CreditStanding({ standing }: { standing: ResellerCreditStanding }) {
   const inSelling = (amount: string) => limitWire({ amount, currency: standing.balance.currency });
   const over = standing.overLimitBy.amount !== '0';
+  const allowance = BigInt(standing.allowance.amount);
+  const inUse = BigInt(standing.creditInUse.amount);
   return (
     <>
+      {/* The credit line as a bar: in use against the allowance, in the selling currency. */}
+      {allowance > 0n && inUse > 0n && (
+        <Meter
+          label={t('web.reseller_credit_in_use')}
+          used={<Money value={inSelling(standing.creditInUse.amount)} />}
+          total={<Money value={inSelling(standing.allowance.amount)} />}
+          value={inUse}
+          max={allowance}
+          {...(over ? { tone: 'danger' as const } : {})}
+        />
+      )}
       <KV
         items={[
           [
             t('web.reseller_credit_state'),
-            <Badge key="s" tone={CREDIT_STATE_TONES[standing.credit]}>
+            <Badge key="s" tone={CREDIT_STATE_TONES[standing.credit]} dot>
               {t(CREDIT_STATE_LABELS[standing.credit])}
             </Badge>,
           ],
@@ -308,6 +322,7 @@ export function ResellerPurchasesCard({
           empty={<Empty title={t('web.reseller_purchases_empty')} icon="inbox" />}
         >
           <DataTable
+            dense
             caption={t('web.reseller_purchases_title')}
             columns={columns}
             rows={rows}
@@ -434,6 +449,7 @@ function HistoryCard({
           empty={<Empty title={t('web.history_empty')} icon="inbox" />}
         >
           <DataTable
+            dense
             caption={t('web.history_title')}
             columns={columns}
             rows={entries}

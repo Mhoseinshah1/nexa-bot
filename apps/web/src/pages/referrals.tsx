@@ -40,7 +40,9 @@ import {
   Ltr,
   Money,
   PageHead,
-  Pills,
+  FilterChip,
+  FilterChips,
+  Button,
   StateSwitch,
   useToast,
   type Column,
@@ -214,26 +216,28 @@ export function ReferralsPage({
       />
 
       {!denied && (
-        <Card>
+        <Card className="referrals-filter">
           <form className="toolbar" onSubmit={apply}>
             <Field
               label={t('web.referrals_filter_referrer')}
               hint={t('web.referrals_filter_referrer_hint')}
               htmlFor="referrals-referrer"
+              compact
               {...(problem === undefined ? {} : { error: problem })}
             >
               <input
                 id="referrals-referrer"
+                className="referrals-referrer"
                 dir="ltr"
                 value={draft.value}
                 onChange={(event) => setDraft({ applied, value: event.target.value.trim() })}
               />
             </Field>
-            <button type="submit" className="btn sm">
+            <Button type="submit" size="sm" variant="primary" icon="filter">
               {t('web.referrals_filter_apply')}
-            </button>
+            </Button>
             {applied !== '' && (
-              <a href="/referrals" onClick={onLink}>
+              <a className="btn sm ghost" href="/referrals" onClick={onLink}>
                 {t('web.referrals_filter_clear')}
               </a>
             )}
@@ -246,13 +250,17 @@ export function ReferralsPage({
       <Attributions denied={denied} referrerId={applied} />
       <Commissions denied={denied} referrerId={applied} />
 
-      {mayViewBanner && <BannerCard mayEdit={mayEditBanner} />}
+      <div className={mayViewBanner ? 'grid-2 referrals-foot' : undefined}>
+        {mayViewBanner && <BannerCard mayEdit={mayEditBanner} />}
 
-      <Card title={t('web.referrals_scope_title')}>
-        <p className="muted">{t('web.referrals_rule_read_only')}</p>
-        <p className="muted">{t('web.referrals_rule_configure')}</p>
-        <p className="muted">{t('web.referrals_rule_unrecovered')}</p>
-      </Card>
+        <Card title={t('web.referrals_scope_title')} tone="muted">
+          <ul className="cb-notes">
+            <li>{t('web.referrals_rule_read_only')}</li>
+            <li>{t('web.referrals_rule_configure')}</li>
+            <li>{t('web.referrals_rule_unrecovered')}</li>
+          </ul>
+        </Card>
+      </div>
     </>
   );
 }
@@ -294,7 +302,7 @@ function Attributions({ denied, referrerId }: { denied: boolean; referrerId: str
     {
       key: 'created',
       header: t('web.referral_created_at'),
-      render: (row) => <span className="nowrap">{formatTimestamp(row.createdAt)}</span>,
+      render: (row) => <span className="nowrap muted small">{formatTimestamp(row.createdAt)}</span>,
     },
   ];
 
@@ -320,6 +328,7 @@ function Attributions({ denied, referrerId }: { denied: boolean; referrerId: str
           columns={columns}
           rows={rows}
           rowKey={(row) => row.id}
+          dense
         />
         {/* Default labels: `GET /referrals` pages newest to oldest. */}
         <CursorPager
@@ -400,18 +409,20 @@ function Commissions({ denied, referrerId }: { denied: boolean; referrerId: stri
     {
       key: 'basis',
       header: t('web.referral_basis'),
+      align: 'end',
       render: (row) => money(row.basisAmount, row.currency),
     },
     {
       key: 'promised',
       header: t('web.referral_promised'),
+      align: 'end',
       render: (row) => money(row.promisedAmount, row.currency),
     },
     {
       key: 'state',
       header: t('web.status'),
       render: (row) => (
-        <Badge tone={COMMISSION_STATE_TONES[row.state]}>
+        <Badge tone={COMMISSION_STATE_TONES[row.state]} dot>
           {t(COMMISSION_STATE_LABELS[row.state])}
         </Badge>
       ),
@@ -419,17 +430,20 @@ function Commissions({ denied, referrerId }: { denied: boolean; referrerId: stri
     {
       key: 'earned',
       header: t('web.referral_earned'),
+      align: 'end',
       render: (row) =>
         row.earnedAmount === null ? <Dash /> : money(row.earnedAmount, row.currency),
     },
     {
       key: 'reversed',
       header: t('web.referral_reversed'),
+      align: 'end',
       render: (row) => money(row.reversedAmount, row.currency),
     },
     {
       key: 'unrecovered',
       header: t('web.referral_unrecovered'),
+      align: 'end',
       render: (row) => money(row.unrecoveredAmount, row.currency),
     },
     {
@@ -455,18 +469,22 @@ function Commissions({ denied, referrerId }: { denied: boolean; referrerId: stri
     <Card title={t('web.referrals_commissions_title')} hint={t('web.referrals_commissions_hint')}>
       {/* Hidden while the list cannot answer: a filter mints a request the server has
           just refused. */}
-      <div className="toolbar" hidden={!mayRequest(commissions, denied)}>
-        <Pills
-          value={state}
-          onChange={setState}
-          items={[
-            { id: 'ALL' as const, label: t('web.referrals_state_all') },
-            ...REFERRAL_COMMISSION_STATES.map((one) => ({
-              id: one,
-              label: t(COMMISSION_STATE_LABELS[one]),
-            })),
-          ]}
-        />
+      <div className="cb-filters" hidden={!mayRequest(commissions, denied)}>
+        <FilterChips label={t('web.status')}>
+          {(
+            [
+              { id: 'ALL', label: t('web.referrals_state_all') },
+              ...REFERRAL_COMMISSION_STATES.map((one) => ({
+                id: one,
+                label: t(COMMISSION_STATE_LABELS[one]),
+              })),
+            ] as { id: StateFilter; label: string }[]
+          ).map((item) => (
+            <FilterChip key={item.id} pressed={state === item.id} onClick={() => setState(item.id)}>
+              {item.label}
+            </FilterChip>
+          ))}
+        </FilterChips>
       </div>
 
       <StateSwitch
@@ -489,6 +507,7 @@ function Commissions({ denied, referrerId }: { denied: boolean; referrerId: stri
           columns={columns}
           rows={rows}
           rowKey={(row) => row.id}
+          dense
         />
         {/* Default labels: `GET /referral-commissions` pages newest to oldest. */}
         <CursorPager
@@ -700,25 +719,28 @@ function BannerCard({ mayEdit }: { mayEdit: boolean }) {
               disabled={busy}
             />
           </Field>
-          <div className="toolbar">
-            <button
+          <div className="form-actions">
+            <Button
               type="submit"
-              className="btn primary sm"
+              variant="primary"
+              size="sm"
+              icon="upload"
               disabled={busy || picked.kind !== 'READY'}
             >
               {upload.isPending
                 ? t('web.referral_banner_uploading')
                 : t('web.referral_banner_upload')}
-            </button>
+            </Button>
             {current !== null && (
-              <button
-                type="button"
-                className="btn sm"
+              <Button
+                size="sm"
+                variant="danger"
+                icon="trash"
                 disabled={busy}
                 onClick={() => clear.mutate()}
               >
                 {t('web.referral_banner_clear')}
-              </button>
+              </Button>
             )}
           </div>
           {failure != null && <Banner tone="danger">{messageFor(failure)}</Banner>}

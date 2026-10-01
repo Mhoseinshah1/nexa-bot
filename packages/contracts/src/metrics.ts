@@ -315,6 +315,60 @@ export const METRIC_DEFINITIONS: readonly MetricDefinition[] = [
     supportedPeriods: REPORT_PERIODS,
     description: 'Provisioning and provider failures.',
   },
+  /*
+   * Round W (`docs/web-redesign/dashboard.md`): the dashboard and the sidebar. Each is a
+   * split or a gauge over rows the reports already read — no second definition of a sale.
+   */
+  {
+    name: 'sales.by_kind',
+    kind: 'COUNT',
+    formula:
+      'count(orders) of sales.count, split by dashboardSaleKindOf(purpose): NEW (NEW_SERVICE, CUSTOM_SERVICE), RENEWAL (RENEW), ADDON (ADD_TRAFFIC, ADD_TIME, ADD_DEVICES, CHANGE_LOCATION)',
+    timestampBasis: 'PAID_AT',
+    filters: SALE_FILTERS,
+    supportedPeriods: REPORT_PERIODS,
+    description: 'The same sales, by what they bought. The three kinds add up to sales.count.',
+  },
+  {
+    name: 'services.expiring',
+    kind: 'GAUGE',
+    formula:
+      "count(services) where state = 'ACTIVE' and expires_at is in [now, now + 7 days) — the audience expiringWithinHours predicate",
+    timestampBasis: 'OCCURRED_AT',
+    filters: ['tenant-scoped', 'the canonical state, never inferred from expires_at alone'],
+    supportedPeriods: [],
+    description: 'Active services that expire within the next seven days.',
+  },
+  {
+    name: 'panels.fleet',
+    kind: 'GAUGE',
+    formula:
+      "count(panels) where status <> 'ARCHIVED', by status, projected health view (readHealth) and provider type",
+    timestampBasis: 'OCCURRED_AT',
+    filters: ['tenant-scoped', 'health is the latest probe only; DISABLED and UNCHECKED projected'],
+    supportedPeriods: [],
+    description: 'The fleet now: how many panels, how many active, and how healthy.',
+  },
+  {
+    name: 'provisioning.queue',
+    kind: 'GAUGE',
+    formula:
+      'count(provisioning_operations) in state PLANNED or IN_FLIGHT, and apart those in UNKNOWN; count(services) in state UNRECONCILED; now',
+    timestampBasis: 'OCCURRED_AT',
+    filters: ['tenant-scoped', 'UNKNOWN is not a failure: a READ decides'],
+    supportedPeriods: [],
+    description: 'Work waiting for a panel, and work whose outcome a READ must decide.',
+  },
+  {
+    name: 'nav.counters',
+    kind: 'GAUGE',
+    formula:
+      'per sidebar link, now: open management conditions; tickets OPEN or WAITING_FOR_SUPPORT; ACTIVE panels whose latest probe is not HEALTHY; services UNRECONCILED; refund requests OPEN, EXECUTING or FAILED; payments UNKNOWN — each capped at COUNTER_CAP',
+    timestampBasis: 'OCCURRED_AT',
+    filters: ['tenant-scoped', "withheld unless the viewer holds the linked page's permission"],
+    supportedPeriods: [],
+    description: 'What is waiting for an operator behind each sidebar link.',
+  },
 ];
 
 const METRIC_BY_NAME = new Map(METRIC_DEFINITIONS.map((m) => [m.name, m]));

@@ -14,7 +14,18 @@ import type {
 import { fetchPaymentReceipts, fetchPaymentTimeline } from '../api/client';
 import { formatTimestamp } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
-import { Banner, Card, Copyable, DataTable, Empty, Ltr, Money, StateSwitch } from '../ui/kit';
+import {
+  Banner,
+  Button,
+  Card,
+  Copyable,
+  DataTable,
+  Empty,
+  Ltr,
+  Money,
+  StateSwitch,
+  type Tone,
+} from '../ui/kit';
 import { pollUnlessFinalWhile } from '../polling';
 import { retryOf } from '../view-state';
 
@@ -66,6 +77,25 @@ const KIND_LABELS: Readonly<Record<PaymentTimelineKind, WebKey>> = {
   REFUND_COMPLETED: 'web.payment_timeline_refund_completed',
   REFUND_CLOSED_FAILED: 'web.payment_timeline_refund_failed',
   CUSTOMER_NOTIFIED: 'web.payment_timeline_notified',
+};
+
+/**
+ * The dot beside each event: decoration beside the label, never instead of it.
+ * Money arriving is ok, money going back or a payment ending unpaid is warn, and
+ * everything the customer or the bot did is neutral information.
+ */
+const KIND_TONES: Readonly<Record<PaymentTimelineKind, Tone>> = {
+  PAYMENT_CREATED: 'info',
+  CUSTOMER_SIGNALLED: 'info',
+  RECEIPT_SUBMITTED: 'info',
+  PAYMENT_CONFIRMED: 'ok',
+  PAYMENT_RESOLVED: 'warn',
+  RECEIPT_CREDITED: 'ok',
+  WALLET_ENTRY: 'violet',
+  REFUND_REQUESTED: 'warn',
+  REFUND_COMPLETED: 'violet',
+  REFUND_CLOSED_FAILED: 'neutral',
+  CUSTOMER_NOTIFIED: 'teal',
 };
 
 const SECTION_LABELS: Readonly<Record<PaymentTimelineSection, WebKey>> = {
@@ -352,9 +382,9 @@ export function PaymentTimelineCard({
       hint={t('web.payment_timeline_hint')}
       actions={
         refresh === undefined ? undefined : (
-          <button type="button" className="btn sm" onClick={refresh}>
+          <Button size="sm" variant="ghost" icon="refresh" onClick={refresh}>
             {t('web.refresh')}
-          </button>
+          </Button>
         )
       }
     >
@@ -371,26 +401,35 @@ export function PaymentTimelineCard({
             )}
             {data.truncated && <Banner tone="warn">{t('web.payment_timeline_truncated')}</Banner>}
             {data.entries.length === 0 ? (
-              <Empty title={t('web.payment_timeline_empty')} />
+              <Empty variant="compact" title={t('web.payment_timeline_empty')} />
             ) : (
               <DataTable<Row>
                 caption={t('web.payment_timeline')}
+                dense
                 rows={data.entries.map((entry, index) => ({ index, entry }))}
                 rowKey={(row) => String(row.index)}
                 columns={[
                   {
                     key: 'at',
                     header: t('web.payment_timeline_at'),
-                    render: (row) => formatTimestamp(row.entry.at),
+                    render: (row) => (
+                      <span className="nowrap faint">{formatTimestamp(row.entry.at)}</span>
+                    ),
                   },
                   {
                     key: 'kind',
                     header: t('web.payment_timeline_event'),
-                    render: (row) => t(KIND_LABELS[row.entry.kind]),
+                    render: (row) => (
+                      <span className="ca-event">
+                        <i className={`dot ${KIND_TONES[row.entry.kind]}`} aria-hidden="true" />
+                        <span className="strong">{t(KIND_LABELS[row.entry.kind])}</span>
+                      </span>
+                    ),
                   },
                   {
                     key: 'detail',
                     header: t('web.payment_timeline_detail'),
+                    wrap: true,
                     render: (row) => detail(row.entry),
                   },
                 ]}

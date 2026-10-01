@@ -61,13 +61,19 @@ import {
   Money,
   Num,
   PageHead,
-  Pills,
   StateSwitch,
-  Stat,
+  Button,
+  ChipDivider,
+  FilterChip,
+  Progress,
+  RowActions,
+  StatCard,
   useToast,
   type Column,
   type Tone,
 } from '../ui/kit';
+import { Icon } from '../ui/icons';
+import { ChipGroup, revealField } from './editor-layout';
 
 /**
  * «تنظیمات نمایندگان / پلن‌ها و حداقل فروش» — round N, package D
@@ -307,16 +313,32 @@ export function ResellerPlansPage({
       header: t('web.rule_actions'),
       align: 'end',
       render: (row) => (
-        <div className="toolbar">
-          <button type="button" className="btn sm" onClick={() => setGrantsId(row.id)}>
+        <RowActions>
+          <Button
+            size="sm"
+            variant="ghost"
+            icon="products"
+            onClick={() => {
+              setGrantsId(row.id);
+              revealField('plans-panels');
+            }}
+          >
             {t('web.reseller_plans_edit_products')}
-          </button>
+          </Button>
           {mayEdit && (
-            <button type="button" className="btn sm" onClick={() => setMinimumId(row.id)}>
+            <Button
+              size="sm"
+              variant="ghost"
+              icon="target"
+              onClick={() => {
+                setMinimumId(row.id);
+                revealField('plans-panels');
+              }}
+            >
               {t('web.reseller_minimum_edit')}
-            </button>
+            </Button>
           )}
-        </div>
+        </RowActions>
       ),
     },
   ];
@@ -327,6 +349,18 @@ export function ResellerPlansPage({
         title={t('web.reseller_plans_title')}
         subtitle={t('web.reseller_plans_intro')}
         maturity="now"
+        actions={
+          <>
+            <a className="btn" href="/resellers" onClick={onLink}>
+              <Icon name="resellers" />
+              {t('web.nav_resellers')}
+            </a>
+            <a className="btn" href="/reseller-tiers" onClick={onLink}>
+              <Icon name="layers" />
+              {t('web.nav_reseller_tiers')}
+            </a>
+          </>
+        }
       />
 
       <Card title={t('web.reseller_plans_tiers_title')} hint={t('web.reseller_plans_tiers_hint')}>
@@ -347,10 +381,15 @@ export function ResellerPlansPage({
             columns={columns}
             rows={rows}
             rowKey={(row) => row.id}
+            rowClassName={(row) =>
+              row.id === grantsId || row.id === minimumId ? 'selected' : undefined
+            }
           />
         </StateSwitch>
         <p className="muted small">{t('web.reseller_plans_pricing_rule')}</p>
       </Card>
+
+      <div id="plans-panels" className="tiers-anchor" tabIndex={-1} />
 
       {granting !== undefined &&
         (mayEdit ? (
@@ -365,9 +404,9 @@ export function ResellerPlansPage({
           <Card title={`${t('web.reseller_grants_title')} — ${granting.name}`}>
             <p>{grantsInWords(granting.grants, RESELLER_GRANT_KINDS, names)}</p>
             <Banner tone="info">{t('web.reseller_tier_edit_denied')}</Banner>
-            <button type="button" className="btn sm" onClick={() => setGrantsId(null)}>
+            <Button size="sm" onClick={() => setGrantsId(null)}>
               {t('web.reseller_grants_close')}
-            </button>
+            </Button>
           </Card>
         ))}
 
@@ -381,6 +420,7 @@ export function ResellerPlansPage({
 
       {!denied && <MinimumProgressCard mayViewOrders={mayViewOrders} onOpenPolicy={setPolicyId} />}
 
+      <div id="plans-policy" className="tiers-anchor" tabIndex={-1} />
       {!denied && policyId !== null && (
         <ResellerPolicyCard
           key={policyId}
@@ -392,12 +432,14 @@ export function ResellerPlansPage({
         />
       )}
 
-      <Card title={t('web.reseller_minimum_rules_title')}>
-        <p className="muted">{t('web.reseller_minimum_rule_counts')}</p>
-        <p className="muted">{t('web.reseller_minimum_rule_period')}</p>
-        <p className="muted">{t('web.reseller_minimum_rule_no_consequence')}</p>
-        <p className="muted">{t('web.reseller_minimum_rule_notices')}</p>
-        <p className="muted">{t('web.reseller_minimum_rule_mirza')}</p>
+      <Card title={t('web.reseller_minimum_rules_title')} tone="muted">
+        <ul className="cb-notes">
+          <li>{t('web.reseller_minimum_rule_counts')}</li>
+          <li>{t('web.reseller_minimum_rule_period')}</li>
+          <li>{t('web.reseller_minimum_rule_no_consequence')}</li>
+          <li>{t('web.reseller_minimum_rule_notices')}</li>
+          <li>{t('web.reseller_minimum_rule_mirza')}</li>
+        </ul>
         <p>
           <a href="/features" onClick={onLink}>
             {t('web.reseller_minimum_features_link')}
@@ -516,18 +558,19 @@ function TierMinimumForm({
         onCurrency={setCurrency}
       />
       {parsed === null && <Banner tone="warn">{t('web.reseller_minimum_problem')}</Banner>}
-      <div className="toolbar">
-        <button
-          type="button"
-          className="btn primary sm"
+      <div className="form-actions">
+        <Button size="sm" disabled={save.isPending} onClick={onDone}>
+          {t('web.rule_cancel_edit')}
+        </Button>
+        <Button
+          variant="primary"
+          size="sm"
+          icon="check"
           disabled={parsed === null || save.isPending}
           onClick={() => save.mutate()}
         >
           {t('web.rule_save')}
-        </button>
-        <button type="button" className="btn sm" disabled={save.isPending} onClick={onDone}>
-          {t('web.rule_cancel_edit')}
-        </button>
+        </Button>
       </div>
       {save.error !== null && <Banner tone="danger">{messageFor(save.error)}</Banner>}
     </Card>
@@ -541,28 +584,18 @@ function TierMinimumForm({
 function ProgressBar({ basisPoints, reached }: { basisPoints: number; reached: boolean }) {
   const percent = progressPercentOf(basisPoints);
   return (
-    <div className="dist-row">
-      <span className="num">
+    <span className="cb-progress-cell">
+      {/* The kit's SVG bar — geometry, not a style, for the CSP — floored like the figure. */}
+      <Progress
+        value={Math.min(100, percent)}
+        max={100}
+        label={t('web.reseller_minimum_progress')}
+        tone={reached ? 'ok' : 'warn'}
+      />
+      <span className="num small">
         <Num value={percent} /> {t('web.unit_percent')}
       </span>
-      <span />
-      {/* SVG geometry, for the reason `Distribution` gives: the CSP forbids inline styles. */}
-      <svg
-        className="bar"
-        viewBox="0 0 100 8"
-        preserveAspectRatio="none"
-        aria-hidden="true"
-        focusable="false"
-      >
-        <rect
-          className={reached ? 'ok' : 'warn'}
-          x="0"
-          y="0"
-          height="8"
-          width={Math.min(100, percent)}
-        />
-      </svg>
-    </div>
+    </span>
   );
 }
 
@@ -657,7 +690,9 @@ function MinimumProgressCard({
       key: 'state',
       header: t('web.status'),
       render: (row) => (
-        <Badge tone={MINIMUM_STATE_TONES[row.state]}>{t(MINIMUM_STATE_LABELS[row.state])}</Badge>
+        <Badge tone={MINIMUM_STATE_TONES[row.state]} dot>
+          {t(MINIMUM_STATE_LABELS[row.state])}
+        </Badge>
       ),
     },
     {
@@ -665,9 +700,17 @@ function MinimumProgressCard({
       header: t('web.rule_actions'),
       align: 'end',
       render: (row) => (
-        <button type="button" className="btn sm" onClick={() => onOpenPolicy(row.customerId)}>
+        <Button
+          size="sm"
+          variant="ghost"
+          icon="shield"
+          onClick={() => {
+            onOpenPolicy(row.customerId);
+            revealField('plans-policy');
+          }}
+        >
           {t('web.reseller_policy_open')}
-        </button>
+        </Button>
       ),
     },
   ];
@@ -681,23 +724,22 @@ function MinimumProgressCard({
         <Banner tone="info">{t('web.reseller_minimum_progress_denied')}</Banner>
       ) : (
         <>
-          <div className="toolbar">
-            <Pills
-              value={period}
-              onChange={setPeriod}
-              items={(['THIS_MONTH', 'PREVIOUS_MONTH'] as const).map((id) => ({
-                id,
-                label: t(PERIOD_LABELS[id]),
-              }))}
-            />
-            <Pills
-              value={filter}
-              onChange={setFilter}
-              items={(['ALL', 'ACHIEVED', 'BELOW'] as const).map((id) => ({
-                id,
-                label: t(FILTER_LABELS[id]),
-              }))}
-            />
+          <div className="filter-row">
+            <ChipGroup label={t('web.reseller_minimum_period')}>
+              {(['THIS_MONTH', 'PREVIOUS_MONTH'] as const).map((id) => (
+                <FilterChip key={id} pressed={period === id} onClick={() => setPeriod(id)}>
+                  {t(PERIOD_LABELS[id])}
+                </FilterChip>
+              ))}
+            </ChipGroup>
+            <ChipDivider />
+            <ChipGroup label={t('web.status')}>
+              {(['ALL', 'ACHIEVED', 'BELOW'] as const).map((id) => (
+                <FilterChip key={id} pressed={filter === id} onClick={() => setFilter(id)}>
+                  {t(FILTER_LABELS[id])}
+                </FilterChip>
+              ))}
+            </ChipGroup>
           </div>
           {data !== undefined && (
             <>
@@ -716,22 +758,21 @@ function MinimumProgressCard({
               {data.period.running && (
                 <p className="muted small">{t('web.reseller_minimum_running')}</p>
               )}
-              <div className="head-stats">
-                <Stat
+              <div className="stat-grid cb-stat-row">
+                <StatCard
                   label={t('web.reseller_minimum_state_achieved')}
                   value={<Num value={data.counts.achieved} />}
-                  tone="ok"
                 />
-                <Stat
+                <StatCard
                   label={t('web.reseller_minimum_state_below')}
                   value={<Num value={data.counts.below} />}
-                  tone="warn"
+                  {...(data.counts.below > 0 ? { tone: 'warn' as const } : {})}
                 />
-                <Stat
+                <StatCard
                   label={t('web.reseller_minimum_state_none')}
                   value={<Num value={data.counts.noMinimum} />}
                 />
-                <Stat
+                <StatCard
                   label={t('web.reseller_minimum_state_not_active')}
                   value={<Num value={data.counts.notActive} />}
                 />
@@ -749,6 +790,7 @@ function MinimumProgressCard({
               columns={columns}
               rows={rows}
               rowKey={(row) => row.customerId}
+              dense
             />
           </StateSwitch>
         </>
@@ -992,7 +1034,7 @@ export function ResellerPolicyCard({
                   onDone={() => setEditing(false)}
                 />
               ) : (
-                <div className="toolbar">
+                <div className="form-actions">
                   <button type="button" className="btn sm" onClick={() => setEditing(true)}>
                     {t('web.reseller_policy_edit')}
                   </button>
@@ -1146,7 +1188,7 @@ function OverrideEditor({
         </fieldset>
       ))}
       {problem !== null && <Banner tone="warn">{t(problem)}</Banner>}
-      <div className="toolbar">
+      <div className="form-actions">
         <button
           type="button"
           className="btn primary sm"
@@ -1188,7 +1230,7 @@ function OverrideEditor({
         )}
       </fieldset>
       {minimumProblem && <Banner tone="warn">{t('web.reseller_minimum_problem_own')}</Banner>}
-      <div className="toolbar">
+      <div className="form-actions">
         <button
           type="button"
           className="btn primary sm"

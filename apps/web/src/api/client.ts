@@ -27,6 +27,14 @@ import {
   type BulkOperationResponse,
   type BulkPreviewResponse,
   REPORT_ROUTES,
+  // Round W: the dashboard and the sidebar counters.
+  DASHBOARD_ROUTES,
+  dashboardOperationsResponseSchema,
+  dashboardSummaryResponseSchema,
+  navCountersResponseSchema,
+  type DashboardOperationsResponse,
+  type DashboardSummaryResponse,
+  type NavCountersResponse,
   reportFailuresResponseSchema,
   reportInfrastructureResponseSchema,
   reportOrdersResponseSchema,
@@ -2989,6 +2997,26 @@ export function reportExportUrl(
   format: ReportExportFormat,
 ): string {
   return `${API_PREFIX}${REPORT_ROUTES.export}?${reportParams(s, { report, format }).toString()}`;
+}
+
+// --- Dashboard and sidebar counters (round W) ----------------------------------
+
+/**
+ * The owner's business summary for one period (`docs/web-redesign/dashboard.md`). The
+ * reports' own range parameters, so a CUSTOM range is two tenant-calendar dates.
+ */
+export function fetchDashboardSummary(s: ReportRangeSelection): Promise<DashboardSummaryResponse> {
+  return reportGet(DASHBOARD_ROUTES.summary, dashboardSummaryResponseSchema, reportParams(s));
+}
+
+/** Fleet, provisioning lane and expiring services, NOW. A withheld section is `null`. */
+export function fetchDashboardOperations(): Promise<DashboardOperationsResponse> {
+  return authedGet(DASHBOARD_ROUTES.operations, dashboardOperationsResponseSchema);
+}
+
+/** The sidebar's counts, one request for all of them. A withheld counter is `null`. */
+export function fetchNavCounters(): Promise<NavCountersResponse> {
+  return authedGet(DASHBOARD_ROUTES.navCounters, navCountersResponseSchema);
 }
 
 // --- Bots (WP13) -------------------------------------------------------------

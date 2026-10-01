@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import {
   PanelsPage,
   PanelDetailPage,
@@ -13,6 +13,16 @@ import {
 } from '@nexa/contracts';
 import { t, type WebKey } from '../../apps/web/src/i18n/web.fa';
 import { capabilityRegistry, panel, product, renderPage, stubApi } from './harness';
+import { navigate } from '../../apps/web/src/router';
+
+/*
+ * The panel detail keeps its open tab in the URL (`?tab=`, lead decision D1), and
+ * jsdom's location outlives a test. Every test starts on a clean address, so one
+ * that opened a tab does not open it for the next.
+ */
+beforeEach(() => {
+  navigate('/', { replace: true, force: true });
+});
 
 /** The panels list reads its archive filter from the URL, as `/system` does. */
 const LIVE_ROUTE = { path: '/panels', query: new URLSearchParams() };
@@ -3142,6 +3152,17 @@ describe('panel sellability', () => {
     { url: '/panels/', body: { panel: panel(overrides) } },
   ];
 
+  /*
+   * The sellability card, by its heading. The page head's summary strip repeats
+   * the verdict and its reason, so "the card says X" is asked of the card.
+   */
+  const sellabilityCard = () =>
+    within(
+      screen
+        .getByRole('heading', { name: t('web.panel_sellability_title') })
+        .closest('section') as HTMLElement,
+    );
+
   const SELLABLE = {
     sellable: true,
     reason: null,
@@ -3159,7 +3180,7 @@ describe('panel sellability', () => {
     expect(screen.getByText(t('web.panel_activation_incomplete'))).toBeTruthy();
     expect(screen.getByText(t('web.panel_connection_validated_no'))).toBeTruthy();
     // The reason in Persian, and the remedy under it.
-    expect(screen.getByText(t('web.panel_reason_activation_incomplete'))).toBeTruthy();
+    expect(sellabilityCard().getByText(t('web.panel_reason_activation_incomplete'))).toBeTruthy();
     expect(screen.getByText(t('web.panel_reason_activation_incomplete_help'))).toBeTruthy();
     // And the FIELDS, because "incomplete" alone sends an operator looking.
     expect(screen.getByText(/proxyProtocols, inboundTags/)).toBeTruthy();
@@ -3203,7 +3224,9 @@ describe('panel sellability', () => {
     // true at once, and the production incident is what happens when a reader is
     // only ever shown the second one.
     fireEvent.click(screen.getByRole('tab', { name: t('web.panel_tab_health') }));
-    expect(await screen.findByText(t('web.health_healthy'))).toBeTruthy();
+    expect(
+      await within(screen.getByRole('tabpanel')).findByText(t('web.health_healthy')),
+    ).toBeTruthy();
   });
 
   /** A validated connection is still not a sellable panel. The converse case. */
@@ -3225,7 +3248,7 @@ describe('panel sellability', () => {
     expect(screen.getByText(t('web.panel_activation_complete'))).toBeTruthy();
     expect(screen.getByText(t('web.panel_connection_validated_yes'))).toBeTruthy();
     expect(screen.getByText(t('web.panel_sellable_no'))).toBeTruthy();
-    expect(screen.getByText(t('web.panel_reason_at_capacity'))).toBeTruthy();
+    expect(sellabilityCard().getByText(t('web.panel_reason_at_capacity'))).toBeTruthy();
   });
 });
 

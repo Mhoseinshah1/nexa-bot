@@ -22,9 +22,12 @@ import {
   Empty,
   Field,
   Ltr,
+  Checkbox,
   PageHead,
+  RowActions,
   StateSwitch,
   useToast,
+  useUnsavedChanges,
   type Column,
 } from '../ui/kit';
 
@@ -190,20 +193,29 @@ export function PaymentAccountsPage({ denied, mayEdit }: { denied: boolean; mayE
   const busy = save.isPending || toggle.isPending || promote.isPending;
   const failure = save.error ?? toggle.error ?? promote.error;
 
+  /*
+   * Dirty-state protection: the form differs from what it was opened with — the
+   * empty form for a new account, the stored row for a correction. Leaving the
+   * page asks first.
+   */
+  const editedRow = editing === null ? undefined : rows.find((row) => row.id === editing);
+  const basisForm = editedRow === undefined ? EMPTY_FORM : formOf(editedRow);
+  const formDirty = JSON.stringify(form) !== JSON.stringify(basisForm) || makeDefault;
+  useUnsavedChanges(mayEdit && formDirty);
+
   const columns: readonly Column<PaymentAccountView>[] = [
     {
       key: 'label',
       header: t('web.payment_account_label'),
       render: (row) => (
-        <>
-          {row.label}
+        <span className="accounts-label">
+          <span className="strong">{row.label}</span>
           {row.isDefault && (
-            <>
-              {' '}
-              <Badge tone="ok">{t('web.payment_account_default')}</Badge>
-            </>
+            <Badge tone="ok" outline>
+              {t('web.payment_account_default')}
+            </Badge>
           )}
-        </>
+        </span>
       ),
     },
     { key: 'bank', header: t('web.payment_account_bank'), render: (row) => row.bankName },
@@ -217,7 +229,7 @@ export function PaymentAccountsPage({ denied, mayEdit }: { denied: boolean; mayE
       key: 'state',
       header: t('web.payment_account_state'),
       render: (row) => (
-        <Badge tone={row.enabled ? 'ok' : 'neutral'}>
+        <Badge tone={row.enabled ? 'ok' : 'neutral'} dot>
           {t(row.enabled ? 'web.payment_account_enabled' : 'web.payment_account_disabled')}
         </Badge>
       ),
@@ -235,7 +247,7 @@ export function PaymentAccountsPage({ denied, mayEdit }: { denied: boolean; mayE
       // whose columns depend on the reader is a table two operators describe differently.
       render: (row) =>
         !mayEdit ? null : (
-          <div className="toolbar">
+          <RowActions>
             <button
               type="button"
               className="btn sm"
@@ -274,7 +286,7 @@ export function PaymentAccountsPage({ denied, mayEdit }: { denied: boolean; mayE
                 {t(row.enabled ? 'web.payment_account_disable' : 'web.payment_account_enable')}
               </button>
             )}
-          </div>
+          </RowActions>
         ),
     },
   ];
@@ -304,10 +316,10 @@ export function PaymentAccountsPage({ denied, mayEdit }: { denied: boolean; mayE
             rows={rows}
             rowKey={(row) => row.id}
             caption={t('web.payment_accounts_title')}
+            dense
           />
         </Card>
       </StateSwitch>
-
       {/*
         Outside the StateSwitch on purpose: a tenant with NO account still needs the
         form, and that is exactly the installation whose manual-transfer button is not
@@ -317,89 +329,98 @@ export function PaymentAccountsPage({ denied, mayEdit }: { denied: boolean; mayE
         <Card
           title={t(editing === null ? 'web.payment_account_new' : 'web.payment_account_editing')}
           hint={t('web.payment_account_form_hint')}
+          className="accounts-form"
         >
-          <Field label={t('web.payment_account_label')} htmlFor="pa-label">
-            <input
-              id="pa-label"
-              value={form.label}
-              maxLength={80}
-              onChange={(event) => setForm({ ...form, label: event.target.value })}
-            />
-          </Field>
-          <Field label={t('web.payment_account_bank')} htmlFor="pa-bank">
-            <input
-              id="pa-bank"
-              value={form.bankName}
-              maxLength={80}
-              onChange={(event) => setForm({ ...form, bankName: event.target.value })}
-            />
-          </Field>
-          <Field label={t('web.payment_account_holder')} htmlFor="pa-holder">
-            <input
-              id="pa-holder"
-              value={form.holderName}
-              maxLength={120}
-              onChange={(event) => setForm({ ...form, holderName: event.target.value })}
-            />
-          </Field>
-          {/*
+          <div className="form-grid">
+            <Field label={t('web.payment_account_label')} htmlFor="pa-label">
+              <input
+                id="pa-label"
+                className="input"
+                value={form.label}
+                maxLength={80}
+                onChange={(event) => setForm({ ...form, label: event.target.value })}
+              />
+            </Field>
+            <Field label={t('web.payment_account_bank')} htmlFor="pa-bank">
+              <input
+                id="pa-bank"
+                className="input"
+                value={form.bankName}
+                maxLength={80}
+                onChange={(event) => setForm({ ...form, bankName: event.target.value })}
+              />
+            </Field>
+            <Field label={t('web.payment_account_holder')} htmlFor="pa-holder">
+              <input
+                id="pa-holder"
+                className="input"
+                value={form.holderName}
+                maxLength={120}
+                onChange={(event) => setForm({ ...form, holderName: event.target.value })}
+              />
+            </Field>
+            {/*
             Sent exactly as typed. Persian digits, spaces and dashes are normalised on
             the SERVER, inside `paymentAccountInputSchema`, so that what is stored and
             what is frozen onto a payment are one representation decided in one place.
           */}
-          <Field
-            label={t('web.payment_account_card')}
-            htmlFor="pa-card"
-            hint={t('web.payment_account_card_hint')}
-          >
-            <input
-              id="pa-card"
-              value={form.cardNumber}
-              maxLength={40}
-              inputMode="numeric"
-              onChange={(event) => setForm({ ...form, cardNumber: event.target.value })}
-            />
-          </Field>
-          <Field
-            label={t('web.payment_account_iban')}
-            htmlFor="pa-iban"
-            hint={t('web.payment_account_iban_hint')}
-          >
-            <input
-              id="pa-iban"
-              value={form.iban}
-              maxLength={40}
-              onChange={(event) => setForm({ ...form, iban: event.target.value })}
-            />
-          </Field>
-          <Field label={t('web.payment_account_sort')} htmlFor="pa-sort">
-            <input
-              id="pa-sort"
-              value={form.sortOrder}
-              inputMode="numeric"
-              onChange={(event) => setForm({ ...form, sortOrder: event.target.value })}
-            />
-          </Field>
-
-          {editing === null && (
-            <Field label={t('web.payment_account_make_default')} htmlFor="pa-default">
+            <Field
+              label={t('web.payment_account_card')}
+              htmlFor="pa-card"
+              hint={t('web.payment_account_card_hint')}
+            >
               <input
-                id="pa-default"
-                type="checkbox"
-                checked={makeDefault}
-                onChange={(event) => setMakeDefault(event.target.checked)}
+                id="pa-card"
+                className="input ltr mono"
+                value={form.cardNumber}
+                maxLength={40}
+                inputMode="numeric"
+                onChange={(event) => setForm({ ...form, cardNumber: event.target.value })}
               />
             </Field>
+            <Field
+              label={t('web.payment_account_iban')}
+              htmlFor="pa-iban"
+              hint={t('web.payment_account_iban_hint')}
+            >
+              <input
+                id="pa-iban"
+                className="input ltr mono"
+                value={form.iban}
+                maxLength={40}
+                onChange={(event) => setForm({ ...form, iban: event.target.value })}
+              />
+            </Field>
+          </div>
+          <details className="accounts-advanced">
+            <summary>{t('web.payment_gateway_section_advanced')}</summary>
+            <Field label={t('web.payment_account_sort')} htmlFor="pa-sort">
+              <input
+                id="pa-sort"
+                className="input ltr"
+                value={form.sortOrder}
+                inputMode="numeric"
+                onChange={(event) => setForm({ ...form, sortOrder: event.target.value })}
+              />
+            </Field>
+          </details>
+
+          {editing === null && (
+            <Checkbox
+              label={t('web.payment_account_make_default')}
+              checked={makeDefault}
+              onChange={setMakeDefault}
+            />
           )}
 
           {editing === null && atLimit && (
             <Banner tone="warn">{t('web.payment_account_limit')}</Banner>
           )}
 
-          <div className="toolbar">
+          <div className="form-actions">
             <button
               type="button"
-              className="btn primary sm"
+              className="btn primary"
               disabled={
                 busy ||
                 (editing === null && atLimit) ||
@@ -413,7 +434,7 @@ export function PaymentAccountsPage({ denied, mayEdit }: { denied: boolean; mayE
               {t('web.payment_account_save')}
             </button>
             {editing !== null && (
-              <button type="button" className="btn sm" disabled={busy} onClick={reset}>
+              <button type="button" className="btn" disabled={busy} onClick={reset}>
                 {t('web.payment_account_cancel_edit')}
               </button>
             )}

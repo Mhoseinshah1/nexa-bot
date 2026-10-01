@@ -285,12 +285,19 @@ describe('writing a price rule', () => {
     await screen.findByText('Bulk volume');
     const remove = within(rowOf('Bulk volume')).getByRole('button', { name: 'حذف' });
 
-    window.confirm = () => false;
+    // Asked in the page's own dialog: declining sends nothing…
     fireEvent.click(remove);
+    fireEvent.click(
+      within(screen.getByRole('alertdialog')).getByRole('button', { name: 'انصراف' }),
+    );
     expect(posts(api, '/delete')).toHaveLength(0);
 
-    window.confirm = () => true;
+    // …and only the dialog's own yes deletes.
     fireEvent.click(remove);
+    expect(posts(api, '/delete')).toHaveLength(0);
+    fireEvent.click(
+      within(screen.getByRole('alertdialog')).getByRole('button', { name: 'بله، حذف شود' }),
+    );
     await waitFor(() =>
       expect(posts(api, `/custom-service/rules/${VOLUME_RULE_ID}/delete`)).toHaveLength(1),
     );
@@ -393,10 +400,13 @@ describe('locations', () => {
         extra: [{ url: `/custom-service/locations/${PANEL_ID}/delete`, body: { deleted: true } }],
       }),
     );
-    window.confirm = () => true;
     render();
     await screen.findByText('🇩🇪 آلمان');
     fireEvent.click(within(rowOf('🇩🇪 آلمان')).getByRole('button', { name: 'حذف' }));
+    expect(posts(api, `/custom-service/locations/${PANEL_ID}/delete`)).toHaveLength(0);
+    fireEvent.click(
+      within(screen.getByRole('alertdialog')).getByRole('button', { name: 'بله، حذف شود' }),
+    );
     await waitFor(() =>
       expect(posts(api, `/custom-service/locations/${PANEL_ID}/delete`)).toHaveLength(1),
     );
@@ -530,5 +540,59 @@ describe('the /custom-service route', () => {
     const api = stubApi(routes());
     renderPage(<CustomServicePage denied mayEdit={false} mayViewPanels mayViewTiers />);
     expect(api.calls).toHaveLength(0);
+  });
+});
+
+describe('replacing a price rule form that holds unsaved input', () => {
+  it('asks before an edit replaces a new rule being typed', async () => {
+    stubApi(routes());
+    render();
+    await screen.findByText('Bulk volume');
+    const edit = () =>
+      within(rowOf('Bulk volume')).getByRole('button', { name: t('web.rule_edit') });
+    fireEvent.change(input('custom-rule-create-label'), { target: { value: 'Starter' } });
+
+    fireEvent.click(edit());
+    fireEvent.click(
+      within(screen.getByRole('alertdialog', { name: t('web.unsaved_title') })).getByRole(
+        'button',
+        { name: t('web.unsaved_stay') },
+      ),
+    );
+    expect(input('custom-rule-create-label').value).toBe('Starter');
+
+    fireEvent.click(edit());
+    fireEvent.click(
+      within(screen.getByRole('alertdialog', { name: t('web.unsaved_title') })).getByRole(
+        'button',
+        { name: t('web.discard') },
+      ),
+    );
+    await waitFor(() =>
+      expect(document.getElementById('custom-rule-edit-dimension')).not.toBeNull(),
+    );
+    expect(document.getElementById('custom-rule-create-label')).toBeNull();
+  });
+});
+
+describe('replacing a location form that holds unsaved input', () => {
+  it('asks before a row replaces a location being typed, and not once it is clean', async () => {
+    stubApi(routes({ locations: [location()] }));
+    render();
+    await screen.findByText('🇩🇪 آلمان');
+    const edit = () => within(rowOf('🇩🇪 آلمان')).getByRole('button', { name: t('web.rule_edit') });
+    const ask = () => screen.getByRole('alertdialog', { name: t('web.unsaved_title') });
+    fireEvent.change(input('custom-location-label'), { target: { value: 'پیش‌نویس' } });
+
+    fireEvent.click(edit());
+    fireEvent.click(within(ask()).getByRole('button', { name: t('web.unsaved_stay') }));
+    expect(input('custom-location-label').value).toBe('پیش‌نویس');
+
+    fireEvent.click(edit());
+    fireEvent.click(within(ask()).getByRole('button', { name: t('web.discard') }));
+    await waitFor(() => expect(input('custom-location-label').value).toBe('🇩🇪 آلمان'));
+    // The same row again, untouched: nothing to ask.
+    fireEvent.click(edit());
+    expect(screen.queryByRole('alertdialog')).toBeNull();
   });
 });

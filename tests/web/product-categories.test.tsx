@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { ProductCategoriesPage } from '../../apps/web/src/pages/product-categories';
+import { t } from '../../apps/web/src/i18n/web.fa';
 import { renderPage, stubApi } from './harness';
 
 /**
@@ -173,8 +174,12 @@ describe('deleting a category', () => {
     renderPage(<ProductCategoriesPage denied={false} mayEdit />);
 
     await screen.findByText('عمومی');
-    window.confirm = () => true;
     fireEvent.click(within(rowFor('عمومی')).getByRole('button', { name: 'حذف' }));
+    // Asked in the page's own dialog, whose buttons say what they do.
+    expect(api.calls.some((call) => call.method === 'DELETE')).toBe(false);
+    fireEvent.click(
+      within(screen.getByRole('alertdialog')).getByRole('button', { name: 'بله، حذف شود' }),
+    );
 
     /*
      * The count is asserted INSIDE the banner, not anywhere on the page — the table
@@ -191,9 +196,12 @@ describe('deleting a category', () => {
     renderPage(<ProductCategoriesPage denied={false} mayEdit />);
 
     await screen.findByText('عمومی');
-    window.confirm = () => false;
     fireEvent.click(within(rowFor('عمومی')).getByRole('button', { name: 'حذف' }));
+    fireEvent.click(
+      within(screen.getByRole('alertdialog')).getByRole('button', { name: 'انصراف' }),
+    );
 
+    expect(screen.queryByRole('alertdialog')).toBeNull();
     expect(api.calls.some((call) => call.method === 'DELETE')).toBe(false);
   });
 });
@@ -244,5 +252,39 @@ describe('reordering', () => {
     expect(
       within(rowFor('دوم')).getByRole('button', { name: 'پایین‌تر' }).hasAttribute('disabled'),
     ).toBe(true);
+  });
+});
+
+describe('replacing unsaved input in the category form', () => {
+  it('asks before Edit or New replaces what was typed, and not when nothing was', async () => {
+    stubApi(list([category()]));
+    renderPage(<ProductCategoriesPage denied={false} mayEdit />);
+    await screen.findByText('عمومی');
+    const name = () => document.getElementById('cat-name') as HTMLInputElement;
+    const edit = () =>
+      within(rowFor('عمومی')).getByRole('button', { name: t('web.category_edit') });
+    fireEvent.change(name(), { target: { value: 'ویژه' } });
+
+    fireEvent.click(edit());
+    fireEvent.click(
+      within(screen.getByRole('alertdialog', { name: t('web.unsaved_title') })).getByRole(
+        'button',
+        { name: t('web.unsaved_stay') },
+      ),
+    );
+    expect(name().value).toBe('ویژه');
+
+    fireEvent.click(screen.getByRole('button', { name: t('web.category_new') }));
+    fireEvent.click(
+      within(screen.getByRole('alertdialog', { name: t('web.unsaved_title') })).getByRole(
+        'button',
+        { name: t('web.discard') },
+      ),
+    );
+    await waitFor(() => expect(name().value).toBe(''));
+
+    fireEvent.click(edit());
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    await waitFor(() => expect(name().value).toBe('عمومی'));
   });
 });

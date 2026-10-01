@@ -166,7 +166,7 @@ const OVERALL_TONES: Readonly<Record<PanelDiagnosticOverall, Tone>> = {
 };
 
 /** Every failure kind, with the one remedy it maps to (`provider.ts`). */
-const FAILURE_LABELS: Readonly<Record<ProviderFailureKind, WebKey>> = {
+export const FAILURE_LABELS: Readonly<Record<ProviderFailureKind, WebKey>> = {
   AUTHENTICATION_FAILED: 'web.diag_failure_authentication_failed',
   AUTHENTICATION_REQUIRES_INTERACTION: 'web.diag_failure_authentication_requires_interaction',
   UNREACHABLE: 'web.diag_failure_unreachable',

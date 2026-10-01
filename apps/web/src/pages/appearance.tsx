@@ -28,9 +28,11 @@ import {
   Field,
   Ltr,
   PageHead,
+  RowActions,
   StateSwitch,
   Switch,
   useToast,
+  useUnsavedChanges,
   type Tone,
 } from '../ui/kit';
 
@@ -106,7 +108,7 @@ export function AppearancePage({ denied, mayEdit }: { denied: boolean; mayEdit: 
           <>
             <Card title={t('web.appearance_slots_title')} hint={t('web.appearance_slots_hint')}>
               <div className="tbl-wrap">
-                <table className="tbl">
+                <table className="tbl dense">
                   <caption className="visually-hidden">{t('web.appearance_slots_title')}</caption>
                   <thead>
                     <tr>
@@ -130,6 +132,7 @@ export function AppearancePage({ denied, mayEdit }: { denied: boolean; mayEdit: 
                   </tbody>
                 </table>
               </div>
+              <p className="muted small">{t('web.appearance_custom_id_hint')}</p>
             </Card>
             <TestCard
               bots={view.bots}
@@ -194,6 +197,8 @@ function SlotRow({ slot, mayEdit }: { slot: AppearanceSlotView; mayEdit: boolean
   const busy = save.isPending || reset.isPending;
   const failure = save.error ?? reset.error;
   const previewCustom = enabled && trimmed !== '' && valid;
+  // A slot edited and not saved: leaving the page asks first.
+  useUnsavedChanges(mayEdit && dirty);
 
   return (
     <tr data-slot={slot.slot}>
@@ -204,24 +209,30 @@ function SlotRow({ slot, mayEdit }: { slot: AppearanceSlotView; mayEdit: boolean
         </p>
       </td>
       <td>
-        <span aria-label={t('web.appearance_col_fallback')}>{slot.fallback}</span>
+        <span className="appearance-glyph" aria-label={t('web.appearance_col_fallback')}>
+          {slot.fallback}
+        </span>
       </td>
       <td>
-        <Field
-          label={`${t('web.appearance_col_custom')}: ${label}`}
-          hint={t('web.appearance_custom_id_hint')}
-          htmlFor={`appearance-${slot.slot}`}
-          {...(valid ? {} : { error: t('web.appearance_custom_id_invalid') })}
-        >
-          <input
-            id={`appearance-${slot.slot}`}
-            dir="ltr"
-            inputMode="numeric"
-            value={customEmojiId}
-            disabled={!mayEdit || busy}
-            onChange={(event) => setCustomEmojiId(event.target.value)}
-          />
-        </Field>
+        {/* The label is the input's name; the shared hint sits once under the table. */}
+        <label className="visually-hidden" htmlFor={`appearance-${slot.slot}`}>
+          {`${t('web.appearance_col_custom')}: ${label}`}
+        </label>
+        <input
+          id={`appearance-${slot.slot}`}
+          className="input sm ltr mono appearance-id"
+          dir="ltr"
+          inputMode="numeric"
+          value={customEmojiId}
+          disabled={!mayEdit || busy}
+          onChange={(event) => setCustomEmojiId(event.target.value)}
+          {...(valid ? {} : { 'aria-invalid': true })}
+        />
+        {!valid && (
+          <span className="danger small appearance-error" role="alert">
+            {t('web.appearance_custom_id_invalid')}
+          </span>
+        )}
       </td>
       <td>
         <Switch
@@ -246,7 +257,7 @@ function SlotRow({ slot, mayEdit }: { slot: AppearanceSlotView; mayEdit: boolean
       </td>
       <td>
         {mayEdit && (
-          <div className="btn-group">
+          <RowActions>
             <button
               type="button"
               className="btn primary sm"
@@ -267,7 +278,7 @@ function SlotRow({ slot, mayEdit }: { slot: AppearanceSlotView; mayEdit: boolean
                 {t('web.appearance_reset')}
               </button>
             )}
-          </div>
+          </RowActions>
         )}
         {failure !== null && failure !== undefined && (
           <Banner tone="danger">{appearanceMessageFor(failure)}</Banner>
@@ -318,7 +329,7 @@ function TestCard({
 
   return (
     <Card title={t('web.appearance_test_title')} hint={t('web.appearance_test_hint')}>
-      <ul className="small" data-testid="appearance-bots">
+      <ul className="appearance-bots small" data-testid="appearance-bots">
         {bots.map((bot) => (
           <li key={bot.id}>
             <Ltr>@{bot.username}</Ltr>{' '}

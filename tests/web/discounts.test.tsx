@@ -5,6 +5,7 @@ import { DiscountsPage } from '../../apps/web/src/pages/discounts';
 import { OrderDetailPage } from '../../apps/web/src/pages/orders';
 import { PLANNED_SURFACES } from '../../apps/web/src/pages/planned';
 import { NAV, navPermitted, resolve } from '../../apps/web/src/app';
+import { t } from '../../apps/web/src/i18n/web.fa';
 import { order, renderPage, stubApi, type Api } from './harness';
 
 /**
@@ -700,5 +701,76 @@ describe('the promotion of /discounts', () => {
     expect(navPermitted(entry, ['catalog.discounts.edit'])).toBe(false);
     expect(navPermitted(entry, ['catalog.pricing.edit'])).toBe(false);
     expect(navPermitted(entry, [])).toBe(false);
+  });
+});
+
+describe('replacing a rule form that holds unsaved edits', () => {
+  const editIn = (table: HTMLElement, label: string) =>
+    within(within(table).getByText(label).closest('tr') as HTMLElement).getByRole('button', {
+      name: t('web.rule_edit'),
+    });
+  const addIn = (table: HTMLElement) =>
+    within(table.closest('section.card') as HTMLElement).getByRole('button', {
+      name: t('web.cb_add'),
+    });
+
+  it('asks before Add or another rule replaces a discount edit, and only then', async () => {
+    stubApi(lists());
+    render();
+    await screen.findByText('Summer launch');
+    fireEvent.click(editIn(discountTable(), 'Summer launch'));
+    await screen.findByText('ویرایش قاعدهٔ تخفیف');
+    fireEvent.change(input('discount-edit-label'), { target: { value: 'Draft label' } });
+
+    fireEvent.click(addIn(discountTable()));
+    fireEvent.click(
+      within(screen.getByRole('alertdialog', { name: t('web.unsaved_title') })).getByRole(
+        'button',
+        { name: t('web.unsaved_stay') },
+      ),
+    );
+    expect(input('discount-edit-label').value).toBe('Draft label');
+
+    fireEvent.click(editIn(discountTable(), 'Autumn automatic'));
+    fireEvent.click(
+      within(screen.getByRole('alertdialog', { name: t('web.unsaved_title') })).getByRole(
+        'button',
+        { name: t('web.discard') },
+      ),
+    );
+    await waitFor(() => expect(input('discount-edit-label').value).toBe('Autumn automatic'));
+
+    // A form with nothing unsaved is replaced without a question.
+    fireEvent.click(addIn(discountTable()));
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    await waitFor(() => expect(document.getElementById('discount-create-kind')).not.toBeNull());
+  });
+
+  it('asks before Add replaces a cashback edit holding unsaved changes', async () => {
+    stubApi(lists());
+    render();
+    await screen.findByText('Loyalty five');
+    fireEvent.click(editIn(cashbackTable(), 'Loyalty five'));
+    await screen.findByText('ویرایش قاعدهٔ کش‌بک');
+    fireEvent.change(input('cashback-edit-label'), { target: { value: 'Draft label' } });
+
+    fireEvent.click(addIn(cashbackTable()));
+    fireEvent.click(
+      within(screen.getByRole('alertdialog', { name: t('web.unsaved_title') })).getByRole(
+        'button',
+        { name: t('web.unsaved_stay') },
+      ),
+    );
+    expect(input('cashback-edit-label').value).toBe('Draft label');
+
+    fireEvent.click(addIn(cashbackTable()));
+    fireEvent.click(
+      within(screen.getByRole('alertdialog', { name: t('web.unsaved_title') })).getByRole(
+        'button',
+        { name: t('web.discard') },
+      ),
+    );
+    await waitFor(() => expect(document.getElementById('cashback-create-label')).not.toBeNull());
+    expect(document.getElementById('cashback-edit-label')).toBeNull();
   });
 });
