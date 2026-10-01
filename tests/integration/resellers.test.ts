@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { sql, type SQL } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -21,6 +23,7 @@ import {
 } from '@nexa/contracts';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
 import type { OrderRecord } from '../../apps/api/src/modules/commerce/orders/application/ports';
+import { hashRequest } from '../../apps/api/src/modules/platform/idempotency/infrastructure/drizzle-idempotency-store';
 import type { DiscountRuleWrite } from '../../apps/api/src/modules/commerce/pricing/application/ports';
 import {
   SEED_IDS,
@@ -1301,6 +1304,203 @@ describe('resellers (WP9-B)', () => {
         SELECT credit_limit_amount::text AS amount FROM reseller_tiers
         UNION ALL SELECT credit_limit_amount::text FROM resellers`);
       expect(stored.every((r) => r.amount === null || r.amount === '0')).toBe(true);
+    });
+
+    it('replays a positive-limit command that committed before the decision, and refuses a new one', async () => {
+      /*
+       * PR #132 review, finding 2. A command sent by the previous release with a positive
+       * limit can commit and lose its response; its retry carries the same key and body
+       * across the upgrade. It must get its ORIGINAL result, so the schema parses the old
+       * shape and the service looks up the replay BEFORE it refuses a non-zero limit.
+       *
+       * The previous release's commit is reproduced as it left the database: the row (its
+       * limit since zeroed by migration 0155) and the idempotency record of the positive
+       * body, hashed by the same `serialisableTier` / `serialisableReseller` shape.
+       */
+      const legacy = money(L, 'IRT');
+      const tierWrite = {
+        name: 'Legacy Gold',
+        pricingMode: 'LIST_PRICE' as const,
+        discountPercentage: null,
+        creditLimit: legacy,
+      };
+      const tierKey = key();
+      const committed = await ctx.container.resellersAdmin.createTier(tenantA, owner, {
+        idempotencyKey: tierKey,
+        write: { ...tierWrite, creditLimit: money(0n, 'IRT') },
+      });
+      const asSent = (payload: unknown, idempotencyKey: string) =>
+        ctx.container.database.db.execute(sql`
+          UPDATE request_idempotency SET request_hash = ${hashRequest(payload)}
+           WHERE key = ${idempotencyKey}`);
+      await asSent(
+        {
+          tier: {
+            name: tierWrite.name,
+            pricingMode: tierWrite.pricingMode,
+            discountPercentage: null,
+            creditLimit: { amount: L.toString(), currency: 'IRT' },
+          },
+        },
+        tierKey,
+      );
+      const replayed = await ctx.container.resellersAdmin.createTier(tenantA, owner, {
+        idempotencyKey: tierKey,
+        write: tierWrite,
+      });
+      expect(replayed.id, 'the original result').toBe(committed.id);
+      expect(await count(sql`SELECT count(*)::int AS n FROM reseller_tiers`)).toBe(1);
+
+      // The same for a registration.
+      await grant(committed.id, EVERYTHING);
+      const registerKey = key();
+      const terms = {
+        tierId: committed.id,
+        pricingMode: 'TIER' as const,
+        discountPercentage: null,
+      };
+      await ctx.container.resellersAdmin.register(tenantA, owner, {
+        idempotencyKey: registerKey,
+        customerId: resellerCustomer,
+        write: { ...terms, creditLimit: null },
+      });
+      await asSent(
+        {
+          customerId: resellerCustomer,
+          reseller: {
+            ...terms,
+            status: 'ACTIVE',
+            creditLimit: { amount: L.toString(), currency: 'IRT' },
+          },
+        },
+        registerKey,
+      );
+      const again = await ctx.container.resellersAdmin.register(tenantA, owner, {
+        idempotencyKey: registerKey,
+        customerId: resellerCustomer,
+        write: { ...terms, creditLimit: legacy },
+      });
+      expect(again.customerId).toBe(resellerCustomer);
+      expect(await count(sql`SELECT count(*)::int AS n FROM resellers`)).toBe(1);
+
+      // A NEW key with a positive limit is not a replay: refused, and nothing stored.
+      await expect(
+        ctx.container.resellersAdmin.createTier(tenantA, owner, {
+          idempotencyKey: key(),
+          write: { ...tierWrite, name: 'Fresh' },
+        }),
+      ).rejects.toMatchObject(refusal(COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID));
+      // And neither replay granted any credit: the stored limits are zero and null.
+      expect(
+        (await ctx.container.resellersAdmin.getTier(tenantA, owner, committed.id)).creditLimit,
+      ).toEqual(money(0n, 'IRT'));
+      expect(
+        (await ctx.container.resellersAdmin.get(tenantA, owner, resellerCustomer)).creditLimit,
+      ).toBeNull();
+      expect(await count(sql`SELECT count(*)::int AS n FROM reseller_tiers`)).toBe(1);
+    });
+
+    it('migration 0155 zeroes every stored limit, so the PREVIOUS release computes no credit either', async () => {
+      /*
+       * PR #132 review, finding 1. During a rolling update a replica of the previous release
+       * keeps serving after the migrations ran. Its allowance rule — copied here verbatim
+       * from `reseller-credit.ts` on main before the decision — must read zero from what the
+       * migration leaves. The migration's own SQL is applied to rows holding the limits the
+       * previous release could store, and the ledger is checked untouched.
+       */
+      const previousAllowance = (
+        status: string,
+        own: { amount: bigint; currency: string } | null,
+        tierLimit: { amount: bigint; currency: string },
+        currency: string,
+      ): bigint => {
+        if (status !== 'ACTIVE') return 0n;
+        const limit = own ?? tierLimit;
+        if (limit.amount <= 0n) return 0n;
+        if (limit.currency !== currency) return 0n;
+        return limit.amount;
+      };
+
+      const generous = await tier({ credit: L });
+      const zero = await tier();
+      await register(resellerCustomer, generous);
+      const own = await customer('940006');
+      await register(own, zero, { credit: 30_000n });
+      const explicitZero = await customer('940007');
+      await register(explicitZero, generous, { credit: 0n });
+      await adjust(resellerCustomer, 'CREDIT', 5n);
+      const ledgerBefore = await rows<Record<string, unknown>>(
+        sql`SELECT * FROM wallet_entries ORDER BY created_at, id`,
+      );
+
+      const stateOf = async () =>
+        rows<{
+          customer_id: string;
+          status: string;
+          own_amount: string | null;
+          own_currency: string | null;
+          tier_amount: string;
+          tier_currency: string;
+        }>(sql`
+          SELECT r.customer_id, r.status,
+                 r.credit_limit_amount::text AS own_amount, r.credit_limit_currency AS own_currency,
+                 t.credit_limit_amount::text AS tier_amount, t.credit_limit_currency AS tier_currency
+            FROM resellers r JOIN reseller_tiers t ON t.id = r.tier_id ORDER BY r.customer_id`);
+      const allowances = async () =>
+        (await stateOf()).map((r) =>
+          previousAllowance(
+            r.status,
+            r.own_amount === null
+              ? null
+              : { amount: BigInt(r.own_amount), currency: r.own_currency ?? '' },
+            { amount: BigInt(r.tier_amount), currency: r.tier_currency },
+            'IRT',
+          ),
+        );
+      expect(
+        (await allowances()).some((a) => a > 0n),
+        'the previous release would extend credit before the migration',
+      ).toBe(true);
+
+      const migration = readFileSync(
+        join(__dirname, '../../apps/api/drizzle/0155_reseller_credit_removed.sql'),
+        'utf8',
+      );
+      for (const statement of migration.split('--> statement-breakpoint')) {
+        await ctx.container.database.db.execute(sql.raw(statement));
+      }
+
+      expect(await allowances(), 'the previous release computes no credit after it').toEqual([
+        0n,
+        0n,
+        0n,
+      ]);
+      const after = await stateOf();
+      expect(after.every((r) => r.own_amount === null && r.tier_amount === '0')).toBe(true);
+      expect(await rows(sql`SELECT * FROM wallet_entries ORDER BY created_at, id`)).toEqual(
+        ledgerBefore,
+      );
+
+      // Each non-zero value is on record, on the entity it belonged to.
+      const recorded = await rows<{ action: string; entity_id: string; before: unknown }>(sql`
+        SELECT action, entity_id, before FROM audit_logs
+         WHERE correlation_id = 'migration-0155-reseller-credit-removed'
+         ORDER BY action, entity_id`);
+      expect(recorded).toEqual(
+        expect.arrayContaining([
+          {
+            action: 'reseller_tier.update',
+            entity_id: generous,
+            before: { creditLimit: { amount: L.toString(), currency: 'IRT' } },
+          },
+          {
+            action: 'reseller.update',
+            entity_id: own,
+            before: { creditLimit: { amount: '30000', currency: 'IRT' } },
+          },
+        ]),
+      );
+      expect(recorded, 'zero values are not recorded as changes').toHaveLength(2);
     });
 
     it('leaves a legacy debt exactly as it is: no purchase deepens it, nothing collects it', async () => {

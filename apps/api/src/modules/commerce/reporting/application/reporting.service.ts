@@ -543,8 +543,9 @@ export class ReportingService {
         orders: row.orders,
         sales: row.sales.map(toMoneyTotal),
         services: row.services,
-        // Reseller credit was removed: there is no limit to report, only a legacy debt.
-        creditLimit: null,
+        // Reseller credit was removed: no limit, only a legacy debt. A ZERO money object
+        // rather than null, so a browser bundle from before the decision still parses it.
+        creditLimit: { amountMinor: '0', currency: selling },
         ...((debt) => ({
           creditInUse: { amountMinor: debt.amountMinor.toString(), currency: debt.currency },
         }))(resellerDebtOf(row, selling)),

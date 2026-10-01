@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  RESELLER_CREDIT_STATES,
   RESELLER_DEFAULT_CREDIT_LIMIT_MINOR,
+  RESELLER_MAX_CREDIT_LIMIT_MINOR,
   money,
   resellerRegisterSchema,
   resellerTierWriteSchema,
@@ -48,8 +50,15 @@ describe('effectiveLimitOf (the STORED limit, which grants nothing)', () => {
 });
 
 describe('creditStateOf and creditAllowanceOf: credit was removed', () => {
-  it('is CREDIT_REMOVED and an allowance of zero, the only answers there are', () => {
-    expect(creditStateOf()).toBe('CREDIT_REMOVED');
+  it('is NO_LIMIT and an allowance of zero, the only answers there are', () => {
+    // An EXISTING state, so a browser bundle from before the decision still parses it.
+    expect(creditStateOf()).toBe('NO_LIMIT');
+    expect(RESELLER_CREDIT_STATES).toEqual([
+      'CREDIT_APPLIES',
+      'RESELLER_SUSPENDED',
+      'NO_LIMIT',
+      'CURRENCY_MISMATCH',
+    ]);
     expect(creditAllowanceOf()).toBe(0n);
     expect(RESELLER_DEFAULT_CREDIT_LIMIT_MINOR).toBe(0n);
   });
@@ -69,7 +78,7 @@ describe('creditStateOf and creditAllowanceOf: credit was removed', () => {
   });
 });
 
-describe('every reseller write schema refuses a non-zero credit limit', () => {
+describe('the reseller write schemas still parse a pre-decision limit (the service refuses it)', () => {
   const tierId = '01890a5d-ac96-774b-bcce-b302099a8057';
   const customerId = '01890a5d-ac96-774b-bcce-b302099a8058';
   const limit = (amount: string) => ({ amount, currency: 'IRT' as const });
@@ -105,17 +114,19 @@ describe('every reseller write schema refuses a non-zero credit limit', () => {
     expect(resellerUpdateSchema.safeParse(update(limit('0'))).success).toBe(true);
   });
 
-  it('refuses one minor unit and anything above, on all three writes', () => {
-    for (const amount of ['1', '100000', '1000000000000']) {
-      const refusals = [
-        resellerTierWriteSchema.safeParse(tier(amount)),
-        resellerRegisterSchema.safeParse(register(limit(amount))),
-        resellerUpdateSchema.safeParse(update(limit(amount))),
-      ];
-      for (const result of refusals) {
-        expect(result.success).toBe(false);
-        expect(JSON.stringify(result.error?.issues)).toContain('Reseller credit was removed');
-      }
+  it('parses a positive limit up to the old maximum, so it can reach the idempotent replay', () => {
+    for (const amount of ['1', '100000', String(RESELLER_MAX_CREDIT_LIMIT_MINOR)]) {
+      expect(resellerTierWriteSchema.safeParse(tier(amount)).success).toBe(true);
+      expect(resellerRegisterSchema.safeParse(register(limit(amount))).success).toBe(true);
+      expect(resellerUpdateSchema.safeParse(update(limit(amount))).success).toBe(true);
+    }
+  });
+
+  it('refuses what a pre-decision client could not send either: negative, or past the maximum', () => {
+    for (const amount of ['-1', String(RESELLER_MAX_CREDIT_LIMIT_MINOR + 1n)]) {
+      expect(resellerTierWriteSchema.safeParse(tier(amount)).success).toBe(false);
+      expect(resellerRegisterSchema.safeParse(register(limit(amount))).success).toBe(false);
+      expect(resellerUpdateSchema.safeParse(update(limit(amount))).success).toBe(false);
     }
   });
 });

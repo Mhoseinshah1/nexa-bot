@@ -731,8 +731,8 @@ describe('WP12 business reports', () => {
         orders: 1,
         sales: [{ currency: 'IRT', amount: '30000' }],
         services: 1,
-        // Reseller credit was removed: no limit is reported, whatever the rows still store.
-        creditLimit: null,
+        // Reseller credit was removed: a ZERO money object (an old bundle needs one), never a limit.
+        creditLimit: { amountMinor: '0', currency: 'IRT' },
         creditInUse: { amountMinor: '30000', currency: 'IRT' },
       }),
     ]);
@@ -751,7 +751,7 @@ describe('WP12 business reports', () => {
     await run(sql`UPDATE resellers SET credit_limit_amount = NULL, credit_limit_currency = NULL
       WHERE tenant_id = ${tenantA.tenantId} AND customer_id = ${ids.r2}`);
     expect(await credit()).toEqual({
-      creditLimit: null,
+      creditLimit: { amountMinor: '0', currency: 'IRT' },
       creditInUse: { amountMinor: '30000', currency: 'IRT' },
     });
     // A limit in another currency: the debt still shows — in the currency it was run up in,
@@ -759,7 +759,7 @@ describe('WP12 business reports', () => {
     await run(sql`UPDATE resellers SET credit_limit_amount = 50, credit_limit_currency = 'USD'
       WHERE tenant_id = ${tenantA.tenantId} AND customer_id = ${ids.r2}`);
     expect(await credit()).toEqual({
-      creditLimit: null,
+      creditLimit: { amountMinor: '0', currency: 'IRT' },
       creditInUse: { amountMinor: '30000', currency: 'IRT' },
     });
   });

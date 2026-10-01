@@ -15,7 +15,8 @@ import { PLANNED_SURFACES } from '../../apps/web/src/pages/planned';
 import { NAV, navPermitted, resolve } from '../../apps/web/src/app';
 import { LeaveGuardHost } from '../../apps/web/src/ui/kit';
 import { navigate } from '../../apps/web/src/router';
-import { t } from '../../apps/web/src/i18n/web.fa';
+import { WEB_FA, t } from '../../apps/web/src/i18n/web.fa';
+import { CATALOGUE_FA } from '@nexa/i18n';
 import {
   categoryListing,
   customer,
@@ -850,7 +851,7 @@ describe("the customer's reseller card", () => {
     // A limit stored before the owner removed reseller credit is not drawn.
     expect(card.textContent).not.toContain('900,000');
     expect(card.textContent).not.toContain('سقف اعتبار');
-    expect(card.textContent).toContain('با قیمت فهرست و بدون اعتبار خرید می‌کند');
+    expect(card.textContent).toContain('با قیمت فهرست خرید می‌کند');
   });
 
   it('names the key and asks nothing without resellers.view', async () => {
@@ -899,7 +900,9 @@ describe("the customer's reseller card", () => {
     ) as HTMLElement;
     await within(card).findByText('بدهکار');
     expect(card.textContent).toContain('−150,000');
-    expect(card.textContent).toContain('سقف اعتبار');
+    // A legacy debt: reseller credit was removed, so no limit is named (PR #132 finding 5).
+    expect(card.textContent).toContain('پیش از حذف خرید اعتباری');
+    expect(card.textContent).not.toContain('سقف اعتبار');
   });
 
   it('draws no debt badge for a balance of zero or more', async () => {
@@ -1062,5 +1065,43 @@ describe('unsaved edits on the tier form', () => {
     // The same tier again, untouched: nothing to ask.
     fireEvent.click(edit());
     expect(screen.queryByRole('alertdialog')).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// No user-facing text claims an active credit line (PR #132 review, finding 5)
+// ---------------------------------------------------------------------------
+
+describe('no catalogue string promises reseller credit', () => {
+  /*
+   * Reseller credit was removed (owner decision, 2026-10-01). A sentence that still
+   * describes a purchase limit, spending on credit or a debt "within the limit" tells an
+   * operator — or a reseller — something the system no longer does. `web.reseller_credit_limit`
+   * is the one exception: it labels the field in change-history rows written before the
+   * decision (and by migration 0155), which still name it.
+   */
+  const ACTIVE_CREDIT = [
+    'سقف اعتبار',
+    'بدون اعتبار خرید',
+    'قابل خرید با اعتبار',
+    'اعتبار مصرف‌شده',
+    'اعتبار در حال استفاده',
+    'از اعتبار او برداشته شده است. این عدد',
+  ];
+
+  it('holds for every Web Admin string', () => {
+    const offending = Object.entries(WEB_FA)
+      .filter(([key]) => key !== 'web.reseller_credit_limit')
+      .filter(([, text]) => ACTIVE_CREDIT.some((phrase) => text.includes(phrase)))
+      .map(([key]) => key);
+    expect(offending).toEqual([]);
+    expect(WEB_FA['web.wallet_balance_negative_hint']).toContain('پیش از حذف خرید اعتباری');
+  });
+
+  it('holds for every Telegram template', () => {
+    const offending = Object.entries(CATALOGUE_FA)
+      .filter(([, text]) => ACTIVE_CREDIT.some((phrase) => text.includes(phrase)))
+      .map(([key]) => key);
+    expect(offending).toEqual([]);
   });
 });

@@ -24,6 +24,7 @@ import {
   type UserId,
 } from '@nexa/contracts';
 import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import { hashRequest } from '../../apps/api/src/modules/platform/idempotency/infrastructure/drizzle-idempotency-store';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
 import { seed, SEED_IDS } from '../../apps/api/src/infrastructure/persistence/seed';
 import {
@@ -306,7 +307,7 @@ describe('reseller phase 2 HTTP surface (WP14)', () => {
       effectiveLimit: IRT('0'),
       limitSource: 'TIER',
       sellingCurrency: 'IRT',
-      credit: 'CREDIT_REMOVED',
+      credit: 'NO_LIMIT',
       balance: IRT('0'),
       allowance: IRT('0'),
       creditInUse: IRT('0'),
@@ -316,7 +317,7 @@ describe('reseller phase 2 HTTP surface (WP14)', () => {
 
     await purchased();
     expect(await creditOf(customerA)).toMatchObject({
-      credit: 'CREDIT_REMOVED',
+      credit: 'NO_LIMIT',
       balance: IRT('0'),
       allowance: IRT('0'),
       creditInUse: IRT('0'),
@@ -361,7 +362,7 @@ describe('reseller phase 2 HTTP surface (WP14)', () => {
     const legacy = {
       effectiveLimit: IRT('100000'),
       limitSource: 'RESELLER',
-      credit: 'CREDIT_REMOVED',
+      credit: 'NO_LIMIT',
       balance: IRT('-80000'),
       allowance: IRT('0'),
       creditInUse: IRT('80000'),
@@ -419,9 +420,51 @@ describe('reseller phase 2 HTTP surface (WP14)', () => {
       ),
     ).toBe(true);
     expect(await creditOf(customerA)).toMatchObject({
-      credit: 'CREDIT_REMOVED',
+      credit: 'NO_LIMIT',
       allowance: IRT('0'),
     });
+  });
+
+  it('replays over HTTP a positive-limit tier command that committed before the decision', async () => {
+    /*
+     * PR #132 review, finding 2: the schema must let the pre-decision body through to the
+     * service's replay lookup, so a retry across the upgrade gets its original 201.
+     */
+    const idempotencyKey = key();
+    const body = tierBody({ idempotencyKey, name: 'Legacy', creditLimit: IRT('0') });
+    const first = await post(RESELLER_TIER_ROUTES.create, body);
+    expect(first.statusCode, first.body).toBe(201);
+    const original = resellerTierResponseSchema.parse(first.json()).tier.id;
+    // The previous release hashed the body it was sent, positive limit included.
+    await api.container.database.db.execute(sql`
+      UPDATE request_idempotency
+         SET request_hash = ${hashRequest({
+           tier: {
+             name: 'Legacy',
+             pricingMode: 'PERCENTAGE_DISCOUNT',
+             discountPercentage: 20,
+             creditLimit: { amount: '100000', currency: 'IRT' },
+           },
+         })}
+       WHERE key = ${idempotencyKey}`);
+    const retried = await post(RESELLER_TIER_ROUTES.create, {
+      ...body,
+      creditLimit: IRT('100000'),
+    });
+    expect(retried.statusCode, retried.body).toBe(201);
+    expect(resellerTierResponseSchema.parse(retried.json()).tier).toMatchObject({
+      id: original,
+      creditLimit: IRT('0'),
+    });
+    // A new key with the same positive limit is refused.
+    expect(
+      (
+        await post(
+          RESELLER_TIER_ROUTES.create,
+          tierBody({ name: 'New', creditLimit: IRT('100000') }),
+        )
+      ).statusCode,
+    ).toBe(400);
   });
 
   // -------------------------------------------------------------------------

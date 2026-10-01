@@ -36,9 +36,14 @@ export function effectiveLimitOf(terms: CreditTerms): {
     : { limit: terms.ownLimit, source: 'RESELLER' };
 }
 
-/** Why credit does not apply: it was removed. The one answer, for every reseller. */
+/**
+ * Why credit does not apply: `NO_LIMIT`, for every reseller. The removal is stated with an
+ * EXISTING value rather than a new one, so a browser bundle from before the decision still
+ * parses the answer during a rolling update; and since migration
+ * `0155_reseller_credit_removed` every stored limit is zero, so it is also literally true.
+ */
 export function creditStateOf(): ResellerCreditState {
-  return 'CREDIT_REMOVED';
+  return 'NO_LIMIT';
 }
 
 /**

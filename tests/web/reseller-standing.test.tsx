@@ -63,7 +63,7 @@ const credit = (overrides: Record<string, unknown> = {}) => ({
   effectiveLimit: IRT('0'),
   limitSource: 'TIER',
   sellingCurrency: 'IRT',
-  credit: 'CREDIT_REMOVED',
+  credit: 'NO_LIMIT',
   balance: IRT('-80000'),
   allowance: IRT('0'),
   creditInUse: IRT('80000'),

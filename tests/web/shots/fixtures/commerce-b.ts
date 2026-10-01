@@ -1181,7 +1181,7 @@ export const COMMERCE_B: readonly ShotFixture[] = [
       effectiveLimit: IRT('0'),
       limitSource: 'TIER',
       sellingCurrency: 'IRT',
-      credit: 'CREDIT_REMOVED',
+      credit: 'NO_LIMIT',
       // A legacy debt, from before the owner removed reseller credit (2026-10-01).
       balance: IRT('-3200000'),
       allowance: IRT('0'),

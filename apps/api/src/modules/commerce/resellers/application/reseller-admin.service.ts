@@ -224,7 +224,6 @@ export class ResellerAdminService {
     actor: ActorContext,
     input: { readonly idempotencyKey: string; readonly write: TierWrite },
   ): Promise<ResellerTierListing> {
-    refuseCredit(input.write.creditLimit);
     const write = { ...input.write, name: input.write.name.trim() };
     const requestHash = hashRequest({ tier: serialisableTier(write) });
     const denial = { action: 'reseller_tier.create', entityType: 'ResellerTier', entityId: null };
@@ -232,6 +231,8 @@ export class ResellerAdminService {
 
     const replay = await this.replay<{ tierId: string }>(scope, input.idempotencyKey, requestHash);
     if (replay !== null) return this.tierListing(scope, replay.tierId);
+    // After the replay: a command that committed before the decision replays its result.
+    refuseCredit(input.write.creditLimit);
 
     const now = this.deps.clock.now();
     const id = this.deps.ids.uuid();
@@ -270,7 +271,6 @@ export class ResellerAdminService {
     actor: ActorContext,
     input: { readonly idempotencyKey: string; readonly tierId: string; readonly write: TierWrite },
   ): Promise<ResellerTierListing> {
-    refuseCredit(input.write.creditLimit);
     const tierId = this.id(input.tierId, 'tier');
     const write = { ...input.write, name: input.write.name.trim() };
     const requestHash = hashRequest({ tierId, tier: serialisableTier(write) });
@@ -279,6 +279,8 @@ export class ResellerAdminService {
 
     const replay = await this.replay<{ tierId: string }>(scope, input.idempotencyKey, requestHash);
     if (replay !== null) return this.tierListing(scope, replay.tierId);
+    // After the replay: a command that committed before the decision replays its result.
+    refuseCredit(input.write.creditLimit);
 
     const now = this.deps.clock.now();
     await runAuthorizedMutation(
@@ -433,7 +435,6 @@ export class ResellerAdminService {
       readonly write: Omit<ResellerWrite, 'status'>;
     },
   ): Promise<ResellerListing> {
-    refuseCredit(input.write.creditLimit);
     const customerId = this.id(input.customerId, 'customer');
     const write: ResellerWrite = { ...input.write, status: 'ACTIVE' };
     const requestHash = hashRequest({ customerId, reseller: serialisableReseller(write) });
@@ -446,6 +447,8 @@ export class ResellerAdminService {
       requestHash,
     );
     if (replay !== null) return this.resellerListing(scope, replay.customerId);
+    // After the replay: a command that committed before the decision replays its result.
+    refuseCredit(input.write.creditLimit);
 
     const now = this.deps.clock.now();
     await runAuthorizedMutation(
@@ -506,7 +509,6 @@ export class ResellerAdminService {
       readonly write: ResellerWrite;
     },
   ): Promise<ResellerListing> {
-    refuseCredit(input.write.creditLimit);
     const customerId = this.id(input.customerId, 'customer');
     const requestHash = hashRequest({ customerId, reseller: serialisableReseller(input.write) });
     const denial = { action: 'reseller.update', entityType: 'Customer', entityId: customerId };
@@ -518,6 +520,8 @@ export class ResellerAdminService {
       requestHash,
     );
     if (replay !== null) return this.resellerListing(scope, replay.customerId);
+    // After the replay: a command that committed before the decision replays its result.
+    refuseCredit(input.write.creditLimit);
 
     const now = this.deps.clock.now();
     await runAuthorizedMutation(
@@ -1130,10 +1134,12 @@ function serialisableReseller(r: ResellerWrite) {
 
 /**
  * Reseller credit was removed (owner decision, 2026-10-01: no reseller debt, no credit
- * purchases). The write schemas refuse a non-zero limit; this is the same rule for a caller
- * that reaches the service without them, so nothing can store a limit above zero again. A
- * row stored before the decision keeps what it holds and grants nothing
- * (`creditAllowanceOf`).
+ * purchases). THE refusal of a non-zero limit — the schemas still parse one, so that a
+ * command which committed before the decision and lost its response reaches the replay
+ * lookup and gets its original result. Every caller runs this AFTER that lookup and before
+ * anything is written, so nothing can store a limit above zero again. A client re-sending
+ * a limit that migration `0155_reseller_credit_removed` zeroed is refused here: the stored
+ * value is zero, so a positive one is a change, and the operator saves again without it.
  */
 function refuseCredit(limit: Money | null): void {
   if (limit !== null && limit.amountMinor !== RESELLER_DEFAULT_CREDIT_LIMIT_MINOR) {
