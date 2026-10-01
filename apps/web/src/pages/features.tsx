@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { OPS_GROUP_MANAGED_SETTING_KEYS, type FeatureFlagResponse } from '@nexa/contracts';
 import { fetchFeatureFlags, saveFeatureFlag } from '../api/client';
-import { formatTimestamp } from '../format';
+import { formatNumber, formatTimestamp } from '../format';
 import { useSubmissionKey } from '../submission-key';
 import { t } from '../i18n/web.fa';
 import { ConfirmDialog, confirmDialogOpen } from '../ui/confirm-dialog';
@@ -30,13 +30,28 @@ export function FeaturesPage({ mayEdit, denied }: { mayEdit: boolean; denied: bo
   const flags = useQuery({ queryKey: ['features'], queryFn: fetchFeatureFlags, enabled: !denied });
   const rows = flags.data?.flags ?? [];
 
+  const enabledCount = rows.filter((flag) => flag.enabled).length;
+
   return (
     <>
       <PageHead title={t('web.features_title')} subtitle={t('web.features_intro')} maturity="now" />
       <StateSwitch query={flags} denied={denied} isEmpty={rows.length === 0}>
-        {rows.map((flag) => (
-          <FlagCard key={flag.key} flag={flag} mayEdit={mayEdit} />
-        ))}
+        <Card
+          title={t('web.features_list_title')}
+          hint={t('web.features_list_hint')}
+          actions={
+            <span className="muted small">
+              {`${t('web.features_on_count')}: ${formatNumber(enabledCount)} ${t('web.templates_count_of')} ${formatNumber(rows.length)}`}
+            </span>
+          }
+          tight
+        >
+          <ul className="feature-list">
+            {rows.map((flag) => (
+              <FlagCard key={flag.key} flag={flag} mayEdit={mayEdit} />
+            ))}
+          </ul>
+        </Card>
       </StateSwitch>
     </>
   );
@@ -132,11 +147,19 @@ function FlagCard({ flag, mayEdit }: { flag: FeatureFlagResponse; mayEdit: boole
   }, [toggle.isPending, returnFocus]);
 
   return (
-    <Card
-      title={title}
-      actions={
-        <>
-          <Badge tone={flag.enabled ? 'ok' : 'neutral'}>
+    <li className="feature-row">
+      <div className="feature-row-main">
+        <div className="feature-row-text">
+          <h3>{title}</h3>
+          <p className="muted small">{summary}</p>
+          {flag.updatedAt !== null && (
+            <p className="faint small">
+              {t('web.feature_last_changed')}: {formatTimestamp(flag.updatedAt)}
+            </p>
+          )}
+        </div>
+        <div className="feature-row-state">
+          <Badge tone={flag.enabled ? 'ok' : 'neutral'} dot>
             {flag.enabled ? t('web.enabled') : t('web.disabled')}
           </Badge>
           {mayEdit && (
@@ -151,16 +174,8 @@ function FlagCard({ flag, mayEdit }: { flag: FeatureFlagResponse; mayEdit: boole
               />
             </span>
           )}
-        </>
-      }
-    >
-      <p className="muted small">{summary}</p>
-
-      {flag.updatedAt !== null && (
-        <p className="faint small">
-          {t('web.feature_last_changed')}: {formatTimestamp(flag.updatedAt)}
-        </p>
-      )}
+        </div>
+      </div>
 
       {flag.configuration.length > 0 && <RelatedSettings flag={flag} />}
 
@@ -182,7 +197,7 @@ function FlagCard({ flag, mayEdit }: { flag: FeatureFlagResponse; mayEdit: boole
           returnFocusTo={returnFocus}
         />
       )}
-    </Card>
+    </li>
   );
 }
 
@@ -201,9 +216,10 @@ function RelatedSettings({ flag }: { flag: FeatureFlagResponse }) {
   const shown = flag.configuration.filter(
     (setting) => !(OPS_GROUP_MANAGED_SETTING_KEYS as readonly string[]).includes(setting.key),
   );
+  if (shown.length === 0) return null;
   return (
     <section className="feature-settings" aria-label={t('web.feature_related_settings')}>
-      <h3 className="small">{t('web.feature_related_settings')}</h3>
+      <h4 className="small">{t('web.feature_related_settings')}</h4>
       {inert && <p className="muted small">{t('web.inert')}</p>}
       <dl className={inert ? 'inert' : undefined}>
         {shown.map((setting) => {

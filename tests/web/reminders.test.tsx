@@ -117,10 +117,18 @@ describe('the reminders screen', () => {
     api();
     page();
 
-    expect(await screen.findByText(t('web.reminders_expiry_title'))).toBeInTheDocument();
-    expect(screen.getByText(t('web.reminders_usage_title'))).toBeInTheDocument();
-    expect(screen.getByText(t('web.reminders_wallet_title'))).toBeInTheDocument();
-    expect(screen.getByText(t('web.reminders_pending_title'))).toBeInTheDocument();
+    expect(
+      await screen.findByRole('heading', { name: t('web.reminders_expiry_title') }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('heading', { name: t('web.reminders_usage_title') }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('heading', { name: t('web.reminders_wallet_title') }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('heading', { name: t('web.reminders_pending_title') }),
+    ).toBeInTheDocument();
     // Stored 80/90/95 used, shown as 20/10/5 remaining.
     expect(screen.getByLabelText(t('web.reminders_usage_first'))).toHaveValue(20);
     expect(screen.getByLabelText(t('web.reminders_usage_second'))).toHaveValue(10);
@@ -293,7 +301,9 @@ describe('the reminders screen', () => {
     api();
     page();
 
-    expect(await screen.findByText(t('web.reminders_quiet_title'))).toBeInTheDocument();
+    expect(
+      await screen.findByRole('heading', { name: t('web.reminders_quiet_title') }),
+    ).toBeInTheDocument();
     expect(screen.getByText(t('web.reminders_quiet_hint'))).toBeInTheDocument();
     const toggle = screen.getByRole('switch', { name: t('web.reminders_flag_quiet') });
     expect(toggle).toHaveAttribute('aria-checked', 'false');
@@ -309,7 +319,7 @@ describe('the reminders screen', () => {
   it('says nothing about midnight or equality for a window inside one day', async () => {
     api({ 'reminders.quiet_hours_start': { value: '01:00' } });
     page();
-    await screen.findByText(t('web.reminders_quiet_title'));
+    await screen.findByRole('heading', { name: t('web.reminders_quiet_title') });
     expect(screen.queryByText(t('web.reminders_quiet_overnight'))).toBeNull();
     expect(screen.queryByText(t('web.reminders_quiet_same'))).toBeNull();
   });
@@ -361,7 +371,7 @@ describe('the reminders screen', () => {
       <RemindersPage mayEdit denied={false} mayViewTemplates={false} mayEditTemplates={false} />,
     );
 
-    await screen.findByText(t('web.reminders_expiry_title'));
+    await screen.findByRole('heading', { name: t('web.reminders_expiry_title') });
     expect(screen.getAllByText(t('web.reminders_templates_denied')).length).toBeGreaterThan(0);
   });
 });

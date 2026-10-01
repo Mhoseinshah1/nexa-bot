@@ -20,7 +20,7 @@ import {
   ApiError,
 } from '../api/client';
 import { formatTimestamp } from '../format';
-import { t } from '../i18n/web.fa';
+import { t, type WebKey } from '../i18n/web.fa';
 import { pollUnlessFinal } from '../polling';
 import { setQuery, useLinkHandler, type Route } from '../router';
 import {
@@ -37,9 +37,12 @@ import {
   MaturityBadge,
   Num,
   PageHead,
+  StatCard,
   StateSwitch,
+  StatusDot,
   type Column,
 } from '../ui/kit';
+import { Icon } from '../ui/icons';
 
 /**
  * Backup and disaster recovery.
@@ -164,6 +167,7 @@ export function RecoveryPage({
             rows={runs}
             rowKey={(run) => run.id}
             caption={t('web.recovery_history_title')}
+            dense
           />
           <CursorPager
             onPrevious={() => setQuery(route, 'cursor', null)}
@@ -175,7 +179,11 @@ export function RecoveryPage({
         </StateSwitch>
       </Card>
 
-      <Card title={t('web.recovery_operations_title')} hint={t('web.recovery_upload_hint')}>
+      <Card
+        title={t('web.recovery_operations_title')}
+        hint={t('web.recovery_upload_hint')}
+        className="recovery-operations"
+      >
         <StateSwitch query={capabilities} denied={!mayView}>
           <RecoveryOperations
             uploadEnabled={capabilities.data?.uploadEnabled ?? false}
@@ -198,11 +206,12 @@ export function RecoveryPage({
             rows={recoveries.data?.recoveries ?? []}
             rowKey={(row) => row.id}
             caption={t('web.recovery_requests_title')}
+            dense
           />
         </StateSwitch>
       </Card>
 
-      <Card title={t('web.recovery_foreign_unsupported')}>
+      <Card title={t('web.recovery_foreign_unsupported')} tone="muted">
         {/*
           Reported rather than omitted. ADR-0028: supporting a foreign archive
           means holding another installation's key, and the only ways to do that
@@ -248,28 +257,43 @@ function BackupStatus({
   if (status === undefined) return null;
   return (
     <>
-      <KV
-        items={[
-          [
-            t('web.recovery_schedule'),
-            status.scheduleEnabled ? (
-              <Badge tone="ok">{t('web.recovery_schedule_on')}</Badge>
-            ) : (
-              <Badge tone="warn">{t('web.recovery_schedule_off')}</Badge>
-            ),
-          ],
-          [t('web.recovery_interval'), <Duration key="i" ms={status.intervalMs} />],
-          [
-            t('web.recovery_last_success'),
+      <div className="stat-grid recovery-stats">
+        <StatCard
+          label={t('web.recovery_schedule')}
+          icon="calendar"
+          value={
+            <StatusDot tone={status.scheduleEnabled ? 'ok' : 'warn'}>
+              {status.scheduleEnabled
+                ? t('web.recovery_schedule_on')
+                : t('web.recovery_schedule_off')}
+            </StatusDot>
+          }
+          {...(status.scheduleEnabled ? {} : { tone: 'warn' as const })}
+        />
+        <StatCard
+          label={t('web.recovery_interval')}
+          icon="clock"
+          value={<Duration ms={status.intervalMs} />}
+        />
+        <StatCard
+          label={t('web.recovery_last_success')}
+          icon="check"
+          value={
             status.lastSucceededAt === null ? (
               <Badge tone="danger">{t('web.recovery_never')}</Badge>
             ) : (
-              formatTimestamp(status.lastSucceededAt)
-            ),
-          ],
-          [t('web.recovery_unknown_deliveries'), <Num key="u" value={status.unknownDeliveries} />],
-        ]}
-      />
+              <span className="recovery-stat-time">{formatTimestamp(status.lastSucceededAt)}</span>
+            )
+          }
+          {...(status.lastSucceededAt === null ? { tone: 'alert' as const } : {})}
+        />
+        <StatCard
+          label={t('web.recovery_unknown_deliveries')}
+          icon="send"
+          value={<Num value={status.unknownDeliveries} />}
+          {...(status.unknownDeliveries > 0 ? { tone: 'warn' as const } : {})}
+        />
+      </div>
 
       {/*
         A green history with the schedule off is the shape that reads as healthy
@@ -290,7 +314,13 @@ function BackupStatus({
 
       {mayRun && (
         <div className="btn-group">
-          <button type="button" className="btn" onClick={onRun} disabled={busy || status.quiesced}>
+          <button
+            type="button"
+            className="btn primary"
+            onClick={onRun}
+            disabled={busy || status.quiesced}
+          >
+            <Icon name="database" />
             {busy ? t('web.recovery_running_now') : t('web.recovery_run_now')}
           </button>
         </div>
@@ -323,7 +353,7 @@ function LastSuccess({
     return <Empty title={t('web.recovery_no_backups')} hint={t('web.recovery_no_backups_hint')} />;
   }
   return (
-    <>
+    <div className="ob-flow">
       <KV
         items={[
           [t('web.recovery_backup_id'), <Copyable key="id" value={newest.id} />],
@@ -356,7 +386,7 @@ function LastSuccess({
         </Banner>
       )}
       <DownloadControl run={newest} mayDownload={mayDownload} />
-    </>
+    </div>
   );
 }
 
@@ -386,6 +416,7 @@ function DownloadControl({ run, mayDownload }: { run: BackupRunSummary; mayDownl
         buffer the whole archive in this tab to hand it straight back as a blob.
       */}
       <a className="btn" href={backupArchiveUrl(run.id)}>
+        <Icon name="download" />
         {t('web.recovery_download')}
       </a>
     </div>
@@ -457,12 +488,14 @@ function RecoveryOperations({
 
   return (
     <>
+      <RecoverySteps current={current} />
       <h3 className="card-subtitle">{t('web.recovery_upload_title')}</h3>
       <form onSubmit={onSubmit} className="stack">
         <label className="field">
           <span className="field-label">{t('web.recovery_upload_choose')}</span>
           <input
             type="file"
+            className="recovery-file"
             onChange={(event) => onChoose(event.currentTarget.files?.[0] ?? null)}
           />
         </label>
@@ -470,9 +503,10 @@ function RecoveryOperations({
         <div className="btn-group">
           <button
             type="submit"
-            className="btn"
+            className="btn primary"
             disabled={file === null || tooLarge || upload.isPending}
           >
+            <Icon name="upload" />
             {upload.isPending ? t('web.recovery_uploading') : t('web.recovery_upload_send')}
           </button>
         </div>
@@ -480,7 +514,7 @@ function RecoveryOperations({
       </form>
 
       {current !== null && (
-        <>
+        <div className="ob-flow recovery-current">
           <KV
             items={[
               [
@@ -530,7 +564,7 @@ function RecoveryOperations({
               <div className="btn-group">
                 <button
                   type="button"
-                  className="btn"
+                  className="btn primary"
                   onClick={() => verify.mutate(current.id)}
                   disabled={verify.isPending}
                 >
@@ -561,9 +595,87 @@ function RecoveryOperations({
                 : `${t('web.recovery_confirm_expires')}: ${formatTimestamp(current.confirmationExpiresAt)}`}
             </Banner>
           )}
-        </>
+        </div>
       )}
     </>
+  );
+}
+
+/** The request's progress through the three things a page may do: upload, verify, confirm. */
+const VERIFYING_STATES: readonly RecoveryRequestSummary['state'][] = [
+  'UPLOADED',
+  'VERIFYING',
+  'VERIFIED',
+  'RESTORE_TESTING',
+];
+
+/**
+ * The step a FAILED request failed in.
+ *
+ * Not the row's `stage`: every failure exit writes `CLEANUP` there, so the stage says what
+ * was done AFTER the failure, not where it happened. What does say it is what the row
+ * reached before it failed — a confirmation accepted means the destructive run is what
+ * failed; a rejected upload never produced an archive to verify; and every other failure
+ * before a confirmation is the verification and restore test, which is one call and one
+ * step here. Verify answers HTTP 200 with such a row for a bad archive, so without this
+ * the strip said verification had not started at the moment it had just failed.
+ */
+function failedStep(current: RecoveryRequestSummary): 1 | 2 | 3 {
+  if (current.confirmedAt !== null) return 3;
+  if (current.failureCode === 'recovery.upload_rejected') return 1;
+  return 2;
+}
+
+type StepMark = 'done' | 'current' | 'failed' | 'todo';
+
+/**
+ * Where the request in hand stands, as three steps. Presentation only: which controls are
+ * drawn is still decided by the request's own state below, exactly as before.
+ */
+function RecoverySteps({ current }: { current: RecoveryRequestSummary | null }) {
+  const state = current?.state ?? null;
+  const failedAt = current !== null && state === 'FAILED' ? failedStep(current) : null;
+  const reached = (step: 1 | 2 | 3): StepMark => {
+    if (state === null) return step === 1 ? 'current' : 'todo';
+    if (failedAt !== null) return step < failedAt ? 'done' : step === failedAt ? 'failed' : 'todo';
+    if (VERIFYING_STATES.includes(state))
+      return step === 1 ? 'done' : step === 2 ? 'current' : 'todo';
+    if (state === 'RESTORE_TEST_PASSED') return step === 3 ? 'current' : 'done';
+    return 'done';
+  };
+  const steps: readonly [1 | 2 | 3, WebKey][] = [
+    [1, 'web.recovery_upload_title'],
+    [2, 'web.recovery_verify'],
+    [3, 'web.recovery_restore_title'],
+  ];
+  return (
+    <ol className="recovery-steps">
+      {steps.map(([step, label]) => {
+        const mark = reached(step);
+        return (
+          <li
+            key={step}
+            className={mark}
+            // The failed step is where the request stopped, so it is the current one.
+            aria-current={mark === 'current' || mark === 'failed' ? 'step' : undefined}
+          >
+            <span className="recovery-step-n" aria-hidden="true">
+              {mark === 'done' ? (
+                <Icon name="check" size={12} />
+              ) : mark === 'failed' ? (
+                <Icon name="x" size={12} />
+              ) : (
+                <Num value={step} />
+              )}
+            </span>
+            <span>{t(label)}</span>
+            {mark === 'failed' && (
+              <span className="recovery-step-state">{t('web.status_failed')}</span>
+            )}
+          </li>
+        );
+      })}
+    </ol>
   );
 }
 
@@ -602,7 +714,7 @@ function RestoreConfirmation({
   }
   const matches = isRecoveryConfirmationPhrase(phrase);
   return (
-    <div className="stack">
+    <div className="ob-flow recovery-danger">
       <Banner tone="danger" title={t('web.recovery_restore_title')}>
         {t('web.recovery_restore_danger')}
       </Banner>
@@ -616,6 +728,7 @@ function RestoreConfirmation({
         <Ltr>{RECOVERY_CONFIRMATION_PHRASE}</Ltr>
         <input
           type="text"
+          className="input recovery-phrase"
           value={phrase}
           dir="ltr"
           autoComplete="off"
@@ -627,7 +740,7 @@ function RestoreConfirmation({
       <div className="btn-group">
         <button
           type="button"
-          className="btn danger"
+          className="btn danger solid"
           onClick={onConfirm}
           disabled={!matches || busy || recovery.artifactChecksum === null}
         >

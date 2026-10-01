@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { holdLeaveGuard, usePendingLeave } from '../router';
 import { t } from '../i18n/web.fa';
-import { ConfirmDialog } from './confirm-dialog';
+import { ConfirmDialog, confirmDialogOpen } from './confirm-dialog';
 
 /**
  * Dirty-state protection (brief §8).
@@ -118,4 +118,45 @@ export function useReportDirty(
     report(dirty);
     return () => report(false);
   }, [dirty, report]);
+}
+
+/**
+ * A close that would throw away what was typed asks first.
+ *
+ * A drawer or a dialog closes by Escape, by a click on its backdrop, by its ✕ and by its
+ * own Cancel, and every one of them used to call the close directly. A close that clears
+ * the form therefore discarded a draft silently — on a page whose leave guard would have
+ * asked about the very same draft had the operator navigated away instead. Every close is
+ * routed through `requestClose`: while `dirty` it opens the same yes/cancel question the
+ * leave guard asks, and only «دورانداختن تغییرات» runs `close`; otherwise it closes at once.
+ *
+ * `dirty` means "closing now loses something", which is for the caller to say: a dialog
+ * that keeps its fields in its caller's state loses nothing by closing and needs none of
+ * this. Render `dialog` beside the drawer; it is `null` while nothing is being asked.
+ */
+export function useConfirmedClose(
+  dirty: boolean,
+  close: () => void,
+): { readonly requestClose: () => void; readonly dialog: ReactNode } {
+  const [asking, setAsking] = useState(false);
+  const requestClose = () => {
+    // One question at a time: an Escape behind an open confirmation is that dialog's.
+    if (confirmDialogOpen()) return;
+    if (dirty) setAsking(true);
+    else close();
+  };
+  const dialog = asking ? (
+    <ConfirmDialog
+      title={t('web.unsaved_title')}
+      question={t('web.discard_draft_question')}
+      confirmLabel={t('web.discard')}
+      cancelLabel={t('web.unsaved_stay')}
+      onConfirm={() => {
+        setAsking(false);
+        close();
+      }}
+      onCancel={() => setAsking(false)}
+    />
+  ) : null;
+  return { requestClose, dialog };
 }

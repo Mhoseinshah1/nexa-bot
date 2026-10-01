@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { templateDefinition, templateViewSchema, type TemplateKey } from '@nexa/contracts';
 import { ContentPage } from '../../apps/web/src/pages/content';
 import { t } from '../../apps/web/src/i18n/web.fa';
@@ -46,8 +46,16 @@ const linked = () => view(LINKED, 'دسترسی تلگرام برای {username}
 const nameOf = (key: TemplateKey) => TEMPLATE_COPY_FA[key]?.[0] ?? '';
 const descriptionOf = (key: TemplateKey) => TEMPLATE_COPY_FA[key]?.[1] ?? '';
 const editor = (key: string) => document.getElementById(`body-${key}`) as HTMLTextAreaElement;
-/** Whether the card holding this key's editor is hidden by the search or a filter. */
-const hidden = (key: string) => editor(key).closest('[hidden]') !== null;
+/**
+ * Whether the search or a filter hid this template from the list. The editor column shows
+ * one card at a time, so the LIST ITEM is what a search finds or hides; every card stays
+ * mounted (see the draft case below).
+ */
+const hidden = (key: string) =>
+  (document.getElementById(`template-item-${key}`) as HTMLElement).closest('[hidden]') !== null;
+/** Opens a template's card in the editor column, as an operator picks it from the list. */
+const open = (key: string) =>
+  fireEvent.click(document.getElementById(`template-item-${key}`) as HTMLElement);
 const search = () => document.getElementById('templates-search') as HTMLInputElement;
 
 async function renderAll() {
@@ -55,6 +63,8 @@ async function renderAll() {
     { url: '/templates', body: { templates: [balance(), cancelled(), linked()] } },
   ]);
   renderPage(<ContentPage mayEdit denied={false} />);
+  await screen.findByRole('button', { name: new RegExp(nameOf(BALANCE)) });
+  open(BALANCE);
   await screen.findByRole('heading', { name: nameOf(BALANCE) });
   return api;
 }
@@ -65,8 +75,10 @@ describe('a template card', () => {
 
     expect(screen.getByRole('heading', { name: nameOf(BALANCE) })).toBeInTheDocument();
     expect(screen.getByText(descriptionOf(BALANCE))).toBeInTheDocument();
-    // The raw key is still there, as the technical detail, not the title.
-    expect(screen.getByText(BALANCE).tagName).toBe('CODE');
+    // The raw key is still there, as the technical detail, not the title. (The list beside
+    // the editor names it too, under the Persian name.)
+    const card = screen.getByRole('heading', { name: nameOf(BALANCE) }).closest('section.card');
+    expect(within(card as HTMLElement).getByText(BALANCE).tagName).toBe('CODE');
     expect(screen.queryByRole('heading', { name: BALANCE })).toBeNull();
     // And the English catalogue description is not what the operator reads.
     expect(screen.queryByText(templateDefinition(BALANCE).description)).toBeNull();
@@ -95,7 +107,7 @@ describe('a template card', () => {
       stubApi([{ url: '/templates', body: { templates: [balance(), cancelled(), linked()] } }]);
       return renderPage(<ContentPage mayEdit denied={false} />);
     })();
-    await screen.findByRole('heading', { name: nameOf(BALANCE) });
+    await screen.findByRole('button', { name: new RegExp(nameOf(BALANCE)) });
 
     const copy = container.cloneNode(true) as HTMLElement;
     for (const technical of copy.querySelectorAll('code, .ltr, textarea, input, pre')) {
@@ -184,7 +196,7 @@ describe('searching and filtering the templates', () => {
       },
     ]);
     renderPage(<ContentPage mayEdit denied={false} />);
-    await screen.findByRole('heading', { name: nameOf(BALANCE) });
+    await screen.findByRole('button', { name: new RegExp(nameOf(BALANCE)) });
 
     fireEvent.click(screen.getByRole('button', { name: t('web.templates_filter_custom') }));
     expect(hidden(CANCELLED)).toBe(false);
@@ -215,7 +227,7 @@ describe('searching and filtering the templates', () => {
       },
     ]);
     renderPage(<ContentPage mayEdit denied={false} />);
-    await screen.findByRole('heading', { name: nameOf(BALANCE) });
+    await screen.findByRole('button', { name: new RegExp(nameOf(BALANCE)) });
     expect(editor(CANCELLED).value).toBe('درخواست لغو شما پذیرفته شد.');
 
     fireEvent.click(screen.getByRole('button', { name: t('web.templates_filter_custom') }));

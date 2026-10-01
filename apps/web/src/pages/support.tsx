@@ -25,14 +25,21 @@ import {
   Badge,
   Banner,
   Card,
+  CellMain,
   DataTable,
+  Drawer,
   Empty,
   Field,
+  Num,
   PageHead,
+  RowActions,
   StateSwitch,
+  useConfirmedClose,
   useToast,
+  useUnsavedChanges,
   type Column,
 } from '../ui/kit';
+import { Icon } from '../ui/icons';
 
 /**
  * Support — the FAQ the bot answers with, and a pointer at where support goes.
@@ -229,20 +236,49 @@ export function SupportPage({ denied, mayEdit }: { denied: boolean; mayEdit: boo
     save.mutate({ ...command, idempotencyKey: submission.current(command) });
   };
 
+  // The form holds an edit only when it differs from what it was opened with.
+  const opened = editor.kind === 'edit' ? formOf(editor.basis) : EMPTY_FORM;
+  const formDirty =
+    editor.kind !== 'closed' &&
+    (form.question !== opened.question ||
+      form.answer !== opened.answer ||
+      form.sortOrder !== opened.sortOrder);
+  useUnsavedChanges(mayEdit && formDirty);
+  // `close` clears the form, so Escape, the backdrop, ✕ and Cancel ask first while it holds
+  // an edit — the same question the leave guard asks about the same draft. A save closes
+  // through `close` itself: what it held is stored, not discarded.
+  const { requestClose, dialog: discardQuestion } = useConfirmedClose(mayEdit && formDirty, close);
+
   const newButton = (
     <button type="button" className="btn primary sm" disabled={busy} onClick={openCreate}>
+      <Icon name="plus" />
       {t('web.support_faq_new')}
     </button>
   );
 
   const columns: readonly Column<SupportFaqResponse>[] = [
-    { key: 'order', header: t('web.support_faq_order'), render: (row) => String(row.sortOrder) },
-    { key: 'question', header: t('web.support_faq_question'), render: (row) => row.question },
+    {
+      key: 'order',
+      header: t('web.support_faq_order'),
+      align: 'end',
+      render: (row) => <Num value={row.sortOrder} />,
+    },
+    {
+      key: 'question',
+      header: t('web.support_faq_question'),
+      wrap: true,
+      render: (row) => (
+        <CellMain
+          primary={<span className="strong">{row.question}</span>}
+          secondary={<span className="support-answer">{row.answer}</span>}
+        />
+      ),
+    },
     {
       key: 'status',
       header: t('web.support_faq_status'),
       render: (row) => (
-        <Badge tone={row.status === 'ACTIVE' ? 'ok' : 'neutral'}>
+        <Badge tone={row.status === 'ACTIVE' ? 'ok' : 'neutral'} dot>
           {t(row.status === 'ACTIVE' ? 'web.support_faq_active' : 'web.support_faq_inactive')}
         </Badge>
       ),
@@ -250,7 +286,7 @@ export function SupportPage({ denied, mayEdit }: { denied: boolean; mayEdit: boo
     {
       key: 'updated',
       header: t('web.support_faq_updated'),
-      render: (row) => formatTimestamp(row.updatedAt),
+      render: (row) => <span className="nowrap muted">{formatTimestamp(row.updatedAt)}</span>,
     },
     {
       key: 'actions',
@@ -260,13 +296,18 @@ export function SupportPage({ denied, mayEdit }: { denied: boolean; mayEdit: boo
       // whose columns depend on the reader is a table two operators describe differently.
       render: (row) =>
         !mayEdit ? null : (
-          <div className="toolbar">
-            <button type="button" className="btn sm" disabled={busy} onClick={() => openEdit(row)}>
+          <RowActions>
+            <button
+              type="button"
+              className="btn ghost sm"
+              disabled={busy}
+              onClick={() => openEdit(row)}
+            >
               {t('web.support_faq_edit')}
             </button>
             <button
               type="button"
-              className="btn sm"
+              className="btn ghost sm"
               disabled={busy}
               onClick={() =>
                 toggle.mutate({
@@ -280,7 +321,7 @@ export function SupportPage({ denied, mayEdit }: { denied: boolean; mayEdit: boo
                 row.status === 'ACTIVE' ? 'web.support_faq_deactivate' : 'web.support_faq_activate',
               )}
             </button>
-          </div>
+          </RowActions>
         ),
     },
   ];
@@ -291,14 +332,19 @@ export function SupportPage({ denied, mayEdit }: { denied: boolean; mayEdit: boo
         title={t('web.support_title')}
         subtitle={t('web.support_subtitle')}
         maturity="now"
+        actions={mayEdit && editor.kind === 'closed' && rows.length > 0 ? newButton : undefined}
       />
 
-      <Card title={t('web.support_destination_title')}>
-        <p className="muted small">{t('web.support_destination_note')}</p>
+      <div className="support-destination">
+        <Icon name="send" size={16} />
+        <div>
+          <strong>{t('web.support_destination_title')}</strong>
+          <p className="muted small">{t('web.support_destination_note')}</p>
+        </div>
         <a className="btn sm" href="/settings" onClick={onLink}>
           {t('web.support_destination_link')}
         </a>
-      </Card>
+      </div>
 
       <StateSwitch
         query={faqs}
@@ -312,95 +358,95 @@ export function SupportPage({ denied, mayEdit }: { denied: boolean; mayEdit: boo
           />
         }
       >
-        <Card
-          title={t('web.support_title')}
-          hint={t('web.support_faq_hint')}
-          actions={mayEdit && editor.kind === 'closed' ? newButton : undefined}
-        >
+        <Card title={t('web.support_title')} hint={t('web.support_faq_hint')}>
           <DataTable
             columns={columns}
             rows={rows}
             rowKey={(row) => row.id}
             caption={t('web.support_title')}
+            dense
           />
         </Card>
       </StateSwitch>
 
-      {mayEdit && editor.kind !== 'closed' && (
-        <Card
-          title={t(
-            editor.kind === 'create' ? 'web.support_faq_creating' : 'web.support_faq_editing',
-          )}
-          hint={t('web.support_faq_form_hint')}
-        >
-          <form onSubmit={submit}>
-            <Field label={t('web.support_faq_question')} htmlFor="faq-question">
-              <input
-                id="faq-question"
-                value={form.question}
-                maxLength={SUPPORT_FAQ_QUESTION_MAX_LENGTH}
-                onChange={(event) => setForm({ ...form, question: event.target.value })}
-              />
-            </Field>
-            <Field label={t('web.support_faq_answer')} htmlFor="faq-answer">
-              <textarea
-                id="faq-answer"
-                rows={4}
-                value={form.answer}
-                maxLength={SUPPORT_FAQ_ANSWER_MAX_LENGTH}
-                onChange={(event) => setForm({ ...form, answer: event.target.value })}
-              />
-            </Field>
-            <Field
-              label={t('web.support_faq_order')}
-              htmlFor="faq-sort"
-              hint={t('web.support_faq_sort_hint')}
-              {...(sortOrder === null ? { error: t('web.support_faq_sort_invalid') } : {})}
-            >
-              <input
-                id="faq-sort"
-                value={form.sortOrder}
-                inputMode="numeric"
-                onChange={(event) => setForm({ ...form, sortOrder: event.target.value })}
-              />
-            </Field>
-
-            {changedElsewhere && (
-              <Banner tone="warn">
-                {t('web.changed_elsewhere')}{' '}
-                <button
-                  type="button"
-                  className="btn ghost sm"
-                  onClick={() => {
-                    save.reset();
-                    if (current !== undefined) openEdit(current);
-                  }}
-                >
-                  {t('web.reload_value')}
-                </button>
-              </Banner>
-            )}
-
-            <div className="toolbar">
-              <button
-                type="submit"
-                className="btn primary sm"
-                disabled={busy || formInvalid}
-                {...(textMissing ? { title: t('web.support_faq_text_required') } : {})}
-              >
-                {t('web.support_faq_save')}
-              </button>
-              <button type="button" className="btn sm" disabled={busy} onClick={close}>
-                {t('web.support_faq_cancel')}
-              </button>
-            </div>
-
-            {save.error != null && <Banner tone="danger">{faultOf(save.error)}</Banner>}
-          </form>
-        </Card>
-      )}
-
       {toggle.error != null && <Banner tone="danger">{faultOf(toggle.error)}</Banner>}
+
+      <Drawer
+        open={mayEdit && editor.kind !== 'closed'}
+        onClose={requestClose}
+        title={t(editor.kind === 'create' ? 'web.support_faq_creating' : 'web.support_faq_editing')}
+      >
+        <p className="muted small">{t('web.support_faq_form_hint')}</p>
+        <form onSubmit={submit} className="stack">
+          <Field label={t('web.support_faq_question')} htmlFor="faq-question">
+            <input
+              id="faq-question"
+              className="input"
+              value={form.question}
+              maxLength={SUPPORT_FAQ_QUESTION_MAX_LENGTH}
+              onChange={(event) => setForm({ ...form, question: event.target.value })}
+            />
+          </Field>
+          <Field label={t('web.support_faq_answer')} htmlFor="faq-answer">
+            <textarea
+              id="faq-answer"
+              className="input"
+              rows={6}
+              value={form.answer}
+              maxLength={SUPPORT_FAQ_ANSWER_MAX_LENGTH}
+              onChange={(event) => setForm({ ...form, answer: event.target.value })}
+            />
+          </Field>
+          <Field
+            label={t('web.support_faq_order')}
+            htmlFor="faq-sort"
+            hint={t('web.support_faq_sort_hint')}
+            {...(sortOrder === null ? { error: t('web.support_faq_sort_invalid') } : {})}
+          >
+            <input
+              id="faq-sort"
+              className="input support-sort"
+              value={form.sortOrder}
+              inputMode="numeric"
+              aria-invalid={sortOrder === null}
+              onChange={(event) => setForm({ ...form, sortOrder: event.target.value })}
+            />
+          </Field>
+
+          {changedElsewhere && (
+            <Banner tone="warn">
+              {t('web.changed_elsewhere')}{' '}
+              <button
+                type="button"
+                className="btn ghost sm"
+                onClick={() => {
+                  save.reset();
+                  if (current !== undefined) openEdit(current);
+                }}
+              >
+                {t('web.reload_value')}
+              </button>
+            </Banner>
+          )}
+
+          {save.error != null && <Banner tone="danger">{faultOf(save.error)}</Banner>}
+
+          <div className="form-actions">
+            <button
+              type="submit"
+              className="btn primary"
+              disabled={busy || formInvalid}
+              {...(textMissing ? { title: t('web.support_faq_text_required') } : {})}
+            >
+              {t('web.support_faq_save')}
+            </button>
+            <button type="button" className="btn" disabled={busy} onClick={requestClose}>
+              {t('web.support_faq_cancel')}
+            </button>
+          </div>
+        </form>
+      </Drawer>
+      {discardQuestion}
     </>
   );
 }

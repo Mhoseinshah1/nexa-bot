@@ -30,20 +30,28 @@ import {
   Card,
   Copyable,
   DataTable,
+  Drawer,
   Duration,
   Field,
   Ident,
   KV,
   Ltr,
   MaturityBadge,
+  Modal,
   Num,
   PageHead,
+  StatCard,
   StateSwitch,
+  StatusDot,
   Tabs,
   TabPanel,
+  useConfirmedClose,
   useToast,
 } from '../ui/kit';
+import { Icon } from '../ui/icons';
+import { formatNumber } from '../format';
 import { pollUnlessFinal } from '../polling';
+import { queryState } from '../view-state';
 import { useSubmissionKey } from '../submission-key';
 import { DiagnosticsSection } from './system-diagnostics';
 
@@ -82,9 +90,33 @@ export function SystemPage({
   // component state.
   const section: Section = isSection(requested) ? requested : 'status';
 
+  // The shell reads the same `['info']` once per session; this costs no request.
+  const info = useQuery({ queryKey: ['info'], queryFn: fetchInfo });
+
   return (
     <>
-      <PageHead title={t('web.system_title')} subtitle={t('web.system_intro')} maturity="now" />
+      <PageHead
+        title={t('web.system_title')}
+        subtitle={
+          <>
+            {t('web.system_intro')}
+            {info.data !== undefined && (
+              <span className="system-build">
+                <span>
+                  {t('web.version')} <Ltr>{info.data.version}</Ltr>
+                </span>
+                <span>
+                  {t('web.commit')} <Ltr>{info.data.commit.slice(0, 7)}</Ltr>
+                </span>
+                <span>
+                  {t('web.environment')} <Ltr>{info.data.environment}</Ltr>
+                </span>
+              </span>
+            )}
+          </>
+        }
+        maturity="now"
+      />
 
       <Tabs
         panelId="system-panel"
@@ -114,7 +146,7 @@ export function SystemPage({
         )}
       </TabPanel>
 
-      <Card title={t('web.system_logs_title')}>
+      <Card title={t('web.system_logs_title')} tone="muted">
         <Banner tone="info" title={t('web.system_logs_absent')}>
           {t('web.system_logs_body')}
         </Banner>
@@ -133,64 +165,117 @@ function StatusSection() {
     refetchInterval: pollUnlessFinal(15_000),
   });
   const info = useQuery({ queryKey: ['info'], queryFn: fetchInfo });
+  const dependencies = readiness.data?.dependencies ?? [];
+  const down = dependencies.filter((row) => row.status !== 'up').length;
+  // The overall verdict is the SERVER's, not a count of red rows. A dependency the
+  // service reports as `required: false` (Redis, today) can be down while the process
+  // stays ready; only a down dependency that blocks readiness makes the answer
+  // `degraded`, and a badge derived from the rows would call the system down while its
+  // own readiness probe keeps serving traffic. An optional dependency down is said as a
+  // warning on the same card, never as the verdict.
+  const ready = readiness.data?.status === 'ok';
+  const latencies = dependencies.flatMap((row) =>
+    row.latencyMs === undefined ? [] : [row.latencyMs],
+  );
 
   return (
     <>
-      <Card title={t('web.system_status')} hint={t('web.system_status_hint')}>
-        <StateSwitch query={readiness}>
-          <DataTable
-            caption={t('web.system_status')}
-            rows={readiness.data?.dependencies ?? []}
-            rowKey={(row) => row.name}
-            columns={[
-              { key: 'name', header: t('web.dependency'), render: (row) => <Ltr>{row.name}</Ltr> },
-              {
-                key: 'status',
-                header: t('web.status'),
-                render: (row) => (
-                  <Badge tone={row.status === 'up' ? 'ok' : 'danger'}>
-                    {row.status === 'up' ? t('web.up') : t('web.down')}
-                  </Badge>
-                ),
-              },
-              {
-                key: 'latency',
-                header: t('web.latency'),
-                align: 'end',
-                render: (row) =>
-                  row.latencyMs === undefined ? (
-                    <span className="faint">—</span>
-                  ) : (
-                    <Ltr mono={false}>
-                      <Num value={row.latencyMs} /> ms
-                    </Ltr>
-                  ),
-              },
-              {
-                key: 'detail',
-                header: t('web.detail'),
-                render: (row) => <span className="plain">{row.detail ?? '—'}</span>,
-              },
-            ]}
+      {readiness.data !== undefined && (
+        <div className="stat-grid system-stats">
+          <StatCard
+            label={t('web.system_overall')}
+            icon="activity"
+            value={
+              <StatusDot tone={!ready ? 'danger' : down === 0 ? 'ok' : 'warn'}>
+                {ready ? t('web.system_overall_ok') : t('web.system_overall_down')}
+              </StatusDot>
+            }
+            hint={`${formatNumber(dependencies.length - down)} ${t('web.templates_count_of')} ${formatNumber(dependencies.length)} ${t('web.system_dependencies_up')}`}
+            {...(!ready ? { tone: 'alert' as const } : down > 0 ? { tone: 'warn' as const } : {})}
           />
-        </StateSwitch>
-      </Card>
+          <StatCard
+            label={t('web.system_slowest')}
+            icon="clock"
+            value={
+              latencies.length === 0 ? (
+                <span className="faint">—</span>
+              ) : (
+                <Num value={Math.max(...latencies)} />
+              )
+            }
+            {...(latencies.length === 0 ? {} : { unit: 'ms' })}
+          />
+          <StatCard
+            label={t('web.system_dependency_count')}
+            icon="layers"
+            value={<Num value={dependencies.length} />}
+          />
+        </div>
+      )}
 
-      <Card title={t('web.build_info')}>
-        <StateSwitch query={info}>
-          {info.data !== undefined && (
-            <KV
-              items={[
-                [t('web.version'), <Ltr key="v">{info.data.version}</Ltr>],
-                [t('web.commit'), <Copyable key="c" value={info.data.commit} />],
-                [t('web.environment'), <Ltr key="e">{info.data.environment}</Ltr>],
-                [t('web.build_time'), formatTimestamp(info.data.buildTime)],
-                [t('web.node_version'), <Ltr key="n">{info.data.nodeVersion}</Ltr>],
+      <div className="two-col">
+        <Card title={t('web.system_status')} hint={t('web.system_status_hint')}>
+          <StateSwitch query={readiness}>
+            <DataTable
+              caption={t('web.system_status')}
+              rows={dependencies}
+              rowKey={(row) => row.name}
+              dense
+              columns={[
+                {
+                  key: 'name',
+                  header: t('web.dependency'),
+                  render: (row) => <Ltr>{row.name}</Ltr>,
+                },
+                {
+                  key: 'status',
+                  header: t('web.status'),
+                  render: (row) => (
+                    <Badge tone={row.status === 'up' ? 'ok' : 'danger'} dot>
+                      {row.status === 'up' ? t('web.up') : t('web.down')}
+                    </Badge>
+                  ),
+                },
+                {
+                  key: 'latency',
+                  header: t('web.latency'),
+                  align: 'end',
+                  render: (row) =>
+                    row.latencyMs === undefined ? (
+                      <span className="faint">—</span>
+                    ) : (
+                      <Ltr mono={false}>
+                        <Num value={row.latencyMs} /> ms
+                      </Ltr>
+                    ),
+                },
+                {
+                  key: 'detail',
+                  header: t('web.detail'),
+                  wrap: true,
+                  render: (row) => <span className="plain muted">{row.detail ?? '—'}</span>,
+                },
               ]}
             />
-          )}
-        </StateSwitch>
-      </Card>
+          </StateSwitch>
+        </Card>
+
+        <Card title={t('web.build_info')}>
+          <StateSwitch query={info}>
+            {info.data !== undefined && (
+              <KV
+                items={[
+                  [t('web.version'), <Ltr key="v">{info.data.version}</Ltr>],
+                  [t('web.commit'), <Copyable key="c" value={info.data.commit} />],
+                  [t('web.environment'), <Ltr key="e">{info.data.environment}</Ltr>],
+                  [t('web.build_time'), formatTimestamp(info.data.buildTime)],
+                  [t('web.node_version'), <Ltr key="n">{info.data.nodeVersion}</Ltr>],
+                ]}
+              />
+            )}
+          </StateSwitch>
+        </Card>
+      </div>
     </>
   );
 }
@@ -231,70 +316,105 @@ function MonitorSection({ denied }: { denied: boolean }) {
     enabled: !denied,
     refetchInterval: pollUnlessFinal(MONITOR_PROFILE_REFRESH_MS),
   });
-  const profile = monitor.data?.monitor;
+  // The banner and the figure cards sit OUTSIDE the `StateSwitch`es below, so they are
+  // held to the same answer those cards give: nothing when the actor may not see the
+  // monitor (a revoked `panels.view` disables the query but keeps its cached profile),
+  // and nothing when the query is in the state that draws an error instead of data.
+  const profile = !denied && queryState(monitor) === 'ready' ? monitor.data?.monitor : undefined;
 
   return (
     <>
-      <Card title={t('web.monitor_cadence')} hint={t('web.monitor_cadence_hint')}>
-        <StateSwitch query={monitor} denied={denied}>
-          {profile !== undefined && (
-            <KV
-              items={[
-                [
-                  t('web.monitor_enabled'),
-                  <Badge key="e" tone={profile.enabled ? 'ok' : 'neutral'}>
-                    {profile.enabled ? t('web.enabled') : t('web.disabled')}
-                  </Badge>,
-                ],
-                [
-                  t('web.monitor_healthy_interval'),
-                  <Duration key="h" ms={profile.healthyIntervalMs} />,
-                ],
-                [
-                  t('web.monitor_retryable_interval'),
-                  <Duration key="r" ms={profile.retryableIntervalMs} />,
-                ],
-                [
-                  t('web.monitor_nonretryable_interval'),
-                  <Duration key="n" ms={profile.nonRetryableIntervalMs} />,
-                ],
-                [t('web.monitor_tick'), <Duration key="t" ms={profile.tickMs} />],
-                [t('web.monitor_freshness'), <Duration key="f" ms={profile.freshForMs} />],
-              ]}
-            />
-          )}
-        </StateSwitch>
-      </Card>
+      {/*
+        The installation's capacity condition reaches an operator nowhere else (see
+        `CapacityView`), so when it is open it is said at the top of the tab as well as
+        on its own row.
+      */}
+      {profile?.schedulerCapacityExceeded === true && (
+        <Banner tone="danger" title={t('web.monitor_over_capacity_title')}>
+          {t('web.monitor_over_capacity_body')}
+        </Banner>
+      )}
 
-      <Card title={t('web.monitor_capacity')} hint={t('web.monitor_capacity_hint')}>
-        <StateSwitch query={monitor} denied={denied}>
-          {profile !== undefined && <CapacityView profile={profile} />}
-        </StateSwitch>
-      </Card>
+      {profile !== undefined && (
+        <div className="stat-grid system-stats">
+          <StatCard
+            label={t('web.monitor_enabled')}
+            icon="activity"
+            value={
+              <StatusDot tone={profile.enabled ? 'ok' : 'neutral'}>
+                {profile.enabled ? t('web.enabled') : t('web.disabled')}
+              </StatusDot>
+            }
+          />
+          <StatCard
+            label={t('web.monitor_tick')}
+            icon="clock"
+            value={<Duration ms={profile.tickMs} />}
+          />
+          <StatCard
+            label={t('web.monitor_healthy_interval')}
+            icon="refresh"
+            value={<Duration ms={profile.healthyIntervalMs} />}
+          />
+          <StatCard
+            label={t('web.monitor_freshness')}
+            icon="shield"
+            value={<Duration ms={profile.freshForMs} />}
+          />
+        </div>
+      )}
+
+      <div className="grid c2 system-monitor">
+        <Card title={t('web.monitor_cadence')} hint={t('web.monitor_cadence_hint')}>
+          <StateSwitch query={monitor} denied={denied}>
+            {profile !== undefined && (
+              <KV
+                items={[
+                  [
+                    t('web.monitor_retryable_interval'),
+                    <Duration key="r" ms={profile.retryableIntervalMs} />,
+                  ],
+                  [
+                    t('web.monitor_nonretryable_interval'),
+                    <Duration key="n" ms={profile.nonRetryableIntervalMs} />,
+                  ],
+                ]}
+              />
+            )}
+          </StateSwitch>
+        </Card>
+
+        <Card title={t('web.monitor_capacity')} hint={t('web.monitor_capacity_hint')}>
+          <StateSwitch query={monitor} denied={denied}>
+            {profile !== undefined && <CapacityView profile={profile} />}
+          </StateSwitch>
+        </Card>
+      </div>
 
       <Card title={t('web.monitor_separation')} hint={t('web.monitor_separation_hint')}>
-        <KV
-          items={[
-            [
-              <span key="l">
-                {t('web.monitor_lightweight')} <MaturityBadge value="now" />
-              </span>,
-              t('web.monitor_lightweight_body'),
-            ],
-            [
-              <span key="s">
-                {t('web.monitor_heavy')} <MaturityBadge value="planned" />
-              </span>,
-              t('web.monitor_heavy_body'),
-            ],
-            [
-              <span key="u">
-                {t('web.monitor_user_sync')} <MaturityBadge value="planned" />
-              </span>,
-              t('web.monitor_user_sync_body'),
-            ],
-          ]}
-        />
+        <ul className="system-separation">
+          <li>
+            <div className="system-separation-head">
+              <span className="strong">{t('web.monitor_lightweight')}</span>
+              <MaturityBadge value="now" />
+            </div>
+            <p className="muted small">{t('web.monitor_lightweight_body')}</p>
+          </li>
+          <li>
+            <div className="system-separation-head">
+              <span className="strong">{t('web.monitor_heavy')}</span>
+              <MaturityBadge value="planned" />
+            </div>
+            <p className="muted small">{t('web.monitor_heavy_body')}</p>
+          </li>
+          <li>
+            <div className="system-separation-head">
+              <span className="strong">{t('web.monitor_user_sync')}</span>
+              <MaturityBadge value="planned" />
+            </div>
+            <p className="muted small">{t('web.monitor_user_sync_body')}</p>
+          </li>
+        </ul>
       </Card>
     </>
   );
@@ -302,7 +422,7 @@ function MonitorSection({ denied }: { denied: boolean }) {
 
 function CapacityView({ profile }: { profile: MonitorProfile }) {
   return (
-    <>
+    <div className="ob-flow">
       <Banner tone="info">{t('web.monitor_capacity_ceiling_note')}</Banner>
       <KV
         items={[
@@ -351,7 +471,7 @@ function CapacityView({ profile }: { profile: MonitorProfile }) {
           [t('web.monitor_concurrency'), <Num key="c" value={profile.concurrency} />],
         ]}
       />
-    </>
+    </div>
   );
 }
 
@@ -373,13 +493,17 @@ function AdminsSection({ denied, mayEdit }: { denied: boolean; mayEdit: boolean 
   const rows = admins.data?.admins ?? [];
 
   return (
-    <Card title={t('web.administrators')} hint={t('web.administrators_hint')}>
-      {mayEdit && <CreateAdmin />}
+    <Card
+      title={t('web.administrators')}
+      hint={t('web.administrators_hint')}
+      {...(mayEdit ? { actions: <CreateAdmin /> } : {})}
+    >
       <StateSwitch query={admins} denied={denied} isEmpty={rows.length === 0}>
         <DataTable
           caption={t('web.administrators')}
           rows={rows}
           rowKey={(row) => row.id}
+          dense
           columns={[
             {
               key: 'who',
@@ -393,7 +517,7 @@ function AdminsSection({ denied, mayEdit }: { denied: boolean; mayEdit: boolean 
               key: 'status',
               header: t('web.status'),
               render: (row) => (
-                <Badge tone={row.status === 'ACTIVE' ? 'ok' : 'neutral'}>
+                <Badge tone={row.status === 'ACTIVE' ? 'ok' : 'neutral'} dot>
                   {/*
                     An administrator is enabled or disabled, not "up" or "out
                     of service". `web.down` is the dependency vocabulary this
@@ -407,7 +531,18 @@ function AdminsSection({ denied, mayEdit }: { denied: boolean; mayEdit: boolean 
             {
               key: 'roles',
               header: t('web.roles'),
-              render: (row) => row.roleKeys.join(t('web.list_separator')) || '—',
+              render: (row) =>
+                row.roleKeys.length === 0 ? (
+                  <span className="faint">—</span>
+                ) : (
+                  <span className="system-roles">
+                    {row.roleKeys.map((key) => (
+                      <Badge key={key} outline>
+                        {key}
+                      </Badge>
+                    ))}
+                  </span>
+                ),
             },
             {
               key: 'last',
@@ -427,6 +562,7 @@ function AdminsSection({ denied, mayEdit }: { denied: boolean; mayEdit: boolean 
             {
               key: 'manage',
               header: t('web.admin_manage'),
+              align: 'end',
               render: (row) => <AdminControls row={row} mayEdit={mayEdit} />,
             },
           ]}
@@ -510,99 +646,104 @@ function CreateAdmin() {
     },
   });
 
-  if (!open) {
-    return (
-      <div className="toolbar">
-        <button type="button" className="btn sm" onClick={() => setOpen(true)}>
-          {t('web.admin_add')}
-        </button>
-      </div>
-    );
-  }
-
   const ready =
     username.trim() !== '' &&
     displayName.trim() !== '' &&
     password.length >= 12 &&
     roleKeys.length > 0;
 
+  const cancel = () => {
+    setOpen(false);
+    setPassword('');
+    setProblem(null);
+  };
+  // Closing keeps the name, the display name and the roles, and clears the password — on
+  // purpose, see `onSuccess`. So a close with a password typed loses it, and asks first.
+  const { requestClose, dialog: discardQuestion } = useConfirmedClose(password !== '', cancel);
+
   return (
-    <form
-      className="stack"
-      onSubmit={(event) => {
-        event.preventDefault();
-        mutate.mutate({
-          username: username.trim(),
-          displayName: displayName.trim(),
-          password,
-          roleKeys,
-        });
-      }}
-    >
-      <Banner tone="info" title={t('web.admin_add_title')}>
-        {t('web.admin_add_hint')}
-      </Banner>
-      <Field
-        label={t('web.admin_username_label')}
-        hint={t('web.admin_username_hint')}
-        htmlFor="admin-new-username"
-        {...(problem === null ? {} : { error: problem })}
-      >
-        <input
-          id="admin-new-username"
-          dir="ltr"
-          autoComplete="off"
-          value={username}
-          onChange={(event) => setUsername(event.target.value)}
-        />
-      </Field>
-      <Field label={t('web.admin_display_name_label')} htmlFor="admin-new-display">
-        <input
-          id="admin-new-display"
-          value={displayName}
-          onChange={(event) => setDisplayName(event.target.value)}
-        />
-      </Field>
-      <Field
-        label={t('web.admin_password_label')}
-        hint={t('web.admin_password_hint')}
-        htmlFor="admin-new-password"
-      >
-        <input
-          id="admin-new-password"
-          type="password"
-          dir="ltr"
-          autoComplete="new-password"
-          value={password}
-          onChange={(event) => setPassword(event.target.value)}
-        />
-      </Field>
-      <Field label={t('web.admin_roles_label')} hint={t('web.admin_roles_hint')}>
-        <RolePicker
-          idPrefix="admin-new"
-          available={roles.data?.roles ?? []}
-          selected={roleKeys}
-          onChange={setRoleKeys}
-        />
-      </Field>
-      <div className="toolbar">
-        <button type="submit" className="btn primary sm" disabled={mutate.isPending || !ready}>
-          {t('web.admin_add')}
-        </button>
-        <button
-          type="button"
-          className="btn sm"
-          disabled={mutate.isPending}
-          onClick={() => {
-            setOpen(false);
-            setPassword('');
-            setProblem(null);
+    <>
+      <button type="button" className="btn primary sm" onClick={() => setOpen(true)}>
+        <Icon name="userPlus" />
+        {t('web.admin_add')}
+      </button>
+      <Drawer open={open} onClose={requestClose} title={t('web.admin_add_title')}>
+        <form
+          className="stack"
+          onSubmit={(event) => {
+            event.preventDefault();
+            mutate.mutate({
+              username: username.trim(),
+              displayName: displayName.trim(),
+              password,
+              roleKeys,
+            });
           }}
         >
-          {t('web.admin_telegram_cancel')}
-        </button>
-      </div>
-    </form>
+          <Banner tone="info">{t('web.admin_add_hint')}</Banner>
+          <Field
+            label={t('web.admin_username_label')}
+            hint={t('web.admin_username_hint')}
+            htmlFor="admin-new-username"
+            {...(problem === null ? {} : { error: problem })}
+          >
+            <input
+              id="admin-new-username"
+              className="input"
+              dir="ltr"
+              autoComplete="off"
+              value={username}
+              onChange={(event) => setUsername(event.target.value)}
+            />
+          </Field>
+          <Field label={t('web.admin_display_name_label')} htmlFor="admin-new-display">
+            <input
+              id="admin-new-display"
+              className="input"
+              value={displayName}
+              onChange={(event) => setDisplayName(event.target.value)}
+            />
+          </Field>
+          <Field
+            label={t('web.admin_password_label')}
+            hint={t('web.admin_password_hint')}
+            htmlFor="admin-new-password"
+          >
+            <input
+              id="admin-new-password"
+              className="input"
+              type="password"
+              dir="ltr"
+              autoComplete="new-password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+            />
+          </Field>
+          <Field label={t('web.admin_roles_label')} hint={t('web.admin_roles_hint')}>
+            <RolePicker
+              idPrefix="admin-new"
+              available={roles.data?.roles ?? []}
+              selected={roleKeys}
+              onChange={setRoleKeys}
+            />
+          </Field>
+          <div className="form-actions">
+            <button type="submit" className="btn primary" disabled={mutate.isPending || !ready}>
+              {t('web.admin_add')}
+            </button>
+            <button
+              type="button"
+              className="btn"
+              disabled={mutate.isPending}
+              onClick={requestClose}
+            >
+              {t('web.admin_telegram_cancel')}
+            </button>
+          </div>
+        </form>
+      </Drawer>
+      {discardQuestion}
+    </>
   );
 }
 
@@ -797,163 +938,171 @@ function AdminControls({ row, mayEdit }: { row: AdminSummary; mayEdit: boolean }
     },
   });
 
-  if (!open) {
-    return (
-      <div className="toolbar">
-        <button type="button" className="btn sm" onClick={() => setOpen(true)}>
-          {t('web.admin_manage')}
-        </button>
-      </div>
-    );
-  }
-
   const live = sessions.data?.sessions ?? [];
   const busy =
     status.isPending || rolesMutation.isPending || password.isPending || revoke.isPending;
+  const close = () => {
+    setOpen(false);
+    setNewPassword('');
+    setProblem(null);
+  };
+  // The reason and the roles survive a close; the new password is cleared by it, so a
+  // close with one typed asks first.
+  const { requestClose, dialog: discardQuestion } = useConfirmedClose(newPassword !== '', close);
 
   return (
-    <div className="stack">
-      {problem !== null && (
-        <Banner tone="danger" title={t('web.admin_manage')}>
-          {problem}
-        </Banner>
-      )}
+    <>
+      <button type="button" className="btn ghost sm" onClick={() => setOpen(true)}>
+        {t('web.admin_manage')}
+      </button>
+      <Drawer
+        open={open}
+        onClose={requestClose}
+        wide
+        title={<Ident name={row.displayName} id={row.username} />}
+      >
+        <div className="stack">
+          {problem !== null && (
+            <Banner tone="danger" title={t('web.admin_manage')}>
+              {problem}
+            </Banner>
+          )}
 
-      {/* The sessions panel is a READ and is shown to anybody who may see this
+          {/* The sessions panel is a READ and is shown to anybody who may see this
           screen at all — `admins.view` is what the route charges. */}
-      <div className="stack">
-        <strong>{t('web.admin_sessions')}</strong>
-        {/* Through `StateSwitch` rather than a bare `length === 0`, so a read
+          <div className="stack">
+            <strong>{t('web.admin_sessions')}</strong>
+            {/* Through `StateSwitch` rather than a bare `length === 0`, so a read
             that was REFUSED or failed renders as what it was. Printing "no
             live sessions" for an answer we never got is the kind of quiet
             untruth an operator would act on. */}
-        <StateSwitch
-          query={sessions}
-          isEmpty={live.length === 0}
-          empty={<span className="faint">{t('web.admin_sessions_empty')}</span>}
-        >
-          {live.map((session) => (
-            <div key={session.id} className="stack">
-              {session.current && <Badge tone="ok">{t('web.admin_sessions_current')}</Badge>}
-              <KV items={sessionRows(session)} />
-            </div>
-          ))}
-        </StateSwitch>
-      </div>
-
-      {mayEdit && (
-        <>
-          <Field
-            label={t('web.admin_reason_label')}
-            hint={t('web.admin_reason_hint')}
-            htmlFor={`admin-reason-${row.id}`}
-          >
-            <input
-              id={`admin-reason-${row.id}`}
-              value={reason}
-              maxLength={500}
-              onChange={(event) => setReason(event.target.value)}
-            />
-          </Field>
-
-          <div className="toolbar">
-            <button
-              type="button"
-              className={row.status === 'ACTIVE' ? 'btn danger sm' : 'btn primary sm'}
-              disabled={busy || !reasonGiven}
-              onClick={() => status.mutate(row.status === 'ACTIVE' ? 'DISABLED' : 'ACTIVE')}
+            <StateSwitch
+              query={sessions}
+              isEmpty={live.length === 0}
+              empty={<span className="faint">{t('web.admin_sessions_empty')}</span>}
             >
-              {row.status === 'ACTIVE' ? t('web.admin_disable') : t('web.admin_enable')}
-            </button>
-            <button
-              type="button"
-              className="btn danger sm"
-              /*
-               * NOT gated on the listing at all any more.
-               *
-               * Gating on "we know there is nothing to revoke" sounds careful
-               * and is a trap: a cached empty result keeps the button disabled
-               * after the target signs in, and the operator is locked out of
-               * the action by a fact that stopped being true. Revoking when
-               * there is nothing to revoke is safe and answers zero, so the
-               * server is the right place to find that out.
-               */
-              disabled={busy || !reasonGiven}
-              onClick={() => revoke.mutate()}
-            >
-              {t('web.admin_sessions_revoke')}
-            </button>
+              {live.map((session) => (
+                <div key={session.id} className="system-session">
+                  {session.current && (
+                    <Badge tone="ok" dot>
+                      {t('web.admin_sessions_current')}
+                    </Badge>
+                  )}
+                  <KV items={sessionRows(session)} />
+                </div>
+              ))}
+            </StateSwitch>
           </div>
 
-          <Field label={t('web.admin_roles_label')} hint={t('web.admin_roles_hint')}>
-            <RolePicker
-              idPrefix={`admin-${row.id}`}
-              available={roles.data?.roles ?? []}
-              selected={roleKeys}
-              onChange={setEdited}
-            />
-          </Field>
+          {mayEdit && (
+            <>
+              <Field
+                label={t('web.admin_reason_label')}
+                hint={t('web.admin_reason_hint')}
+                htmlFor={`admin-reason-${row.id}`}
+              >
+                <input
+                  id={`admin-reason-${row.id}`}
+                  className="input"
+                  value={reason}
+                  maxLength={500}
+                  onChange={(event) => setReason(event.target.value)}
+                />
+              </Field>
+
+              <div className="toolbar">
+                <button
+                  type="button"
+                  className={row.status === 'ACTIVE' ? 'btn danger sm' : 'btn primary sm'}
+                  disabled={busy || !reasonGiven}
+                  onClick={() => status.mutate(row.status === 'ACTIVE' ? 'DISABLED' : 'ACTIVE')}
+                >
+                  {row.status === 'ACTIVE' ? t('web.admin_disable') : t('web.admin_enable')}
+                </button>
+                <button
+                  type="button"
+                  className="btn danger sm"
+                  /*
+                   * NOT gated on the listing at all any more.
+                   *
+                   * Gating on "we know there is nothing to revoke" sounds careful
+                   * and is a trap: a cached empty result keeps the button disabled
+                   * after the target signs in, and the operator is locked out of
+                   * the action by a fact that stopped being true. Revoking when
+                   * there is nothing to revoke is safe and answers zero, so the
+                   * server is the right place to find that out.
+                   */
+                  disabled={busy || !reasonGiven}
+                  onClick={() => revoke.mutate()}
+                >
+                  {t('web.admin_sessions_revoke')}
+                </button>
+              </div>
+
+              <Field label={t('web.admin_roles_label')} hint={t('web.admin_roles_hint')}>
+                <RolePicker
+                  idPrefix={`admin-${row.id}`}
+                  available={roles.data?.roles ?? []}
+                  selected={roleKeys}
+                  onChange={setEdited}
+                />
+              </Field>
+              <div className="toolbar">
+                <button
+                  type="button"
+                  className="btn sm"
+                  /*
+                   * NOT gated on a non-empty set. `setAdminRolesRequestSchema`
+                   * accepts an empty array and the domain supports an
+                   * administrator with none — parking an account without
+                   * disabling it. Requiring one here made the last role
+                   * unremovable, which is the advertised operation refused by the
+                   * button rather than by the server. Creation is the arm that
+                   * genuinely needs a role, and it keeps the requirement.
+                   */
+                  disabled={busy || !reasonGiven}
+                  onClick={() => rolesMutation.mutate()}
+                >
+                  {t('web.admin_roles_save')}
+                </button>
+              </div>
+
+              <Banner tone="warn" title={t('web.admin_password_reset_title')}>
+                {t('web.admin_password_reset_hint')}
+              </Banner>
+              <Field label={t('web.admin_new_password_label')} htmlFor={`admin-password-${row.id}`}>
+                <input
+                  id={`admin-password-${row.id}`}
+                  className="input"
+                  type="password"
+                  dir="ltr"
+                  autoComplete="new-password"
+                  value={newPassword}
+                  onChange={(event) => setNewPassword(event.target.value)}
+                />
+              </Field>
+              <div className="toolbar">
+                <button
+                  type="button"
+                  className="btn danger sm"
+                  disabled={busy || !reasonGiven || newPassword.length < 12}
+                  onClick={() => password.mutate()}
+                >
+                  {t('web.admin_password_reset')}
+                </button>
+              </div>
+            </>
+          )}
+
           <div className="toolbar">
-            <button
-              type="button"
-              className="btn sm"
-              /*
-               * NOT gated on a non-empty set. `setAdminRolesRequestSchema`
-               * accepts an empty array and the domain supports an
-               * administrator with none — parking an account without
-               * disabling it. Requiring one here made the last role
-               * unremovable, which is the advertised operation refused by the
-               * button rather than by the server. Creation is the arm that
-               * genuinely needs a role, and it keeps the requirement.
-               */
-              disabled={busy || !reasonGiven}
-              onClick={() => rolesMutation.mutate()}
-            >
-              {t('web.admin_roles_save')}
+            <button type="button" className="btn sm" disabled={busy} onClick={requestClose}>
+              {t('web.admin_manage_close')}
             </button>
           </div>
-
-          <Banner tone="warn" title={t('web.admin_password_reset_title')}>
-            {t('web.admin_password_reset_hint')}
-          </Banner>
-          <Field label={t('web.admin_new_password_label')} htmlFor={`admin-password-${row.id}`}>
-            <input
-              id={`admin-password-${row.id}`}
-              type="password"
-              dir="ltr"
-              autoComplete="new-password"
-              value={newPassword}
-              onChange={(event) => setNewPassword(event.target.value)}
-            />
-          </Field>
-          <div className="toolbar">
-            <button
-              type="button"
-              className="btn danger sm"
-              disabled={busy || !reasonGiven || newPassword.length < 12}
-              onClick={() => password.mutate()}
-            >
-              {t('web.admin_password_reset')}
-            </button>
-          </div>
-        </>
-      )}
-
-      <div className="toolbar">
-        <button
-          type="button"
-          className="btn sm"
-          disabled={busy}
-          onClick={() => {
-            setOpen(false);
-            setNewPassword('');
-            setProblem(null);
-          }}
-        >
-          {t('web.admin_manage_close')}
-        </button>
-      </div>
-    </div>
+        </div>
+      </Drawer>
+      {discardQuestion}
+    </>
   );
 }
 
@@ -1087,7 +1236,7 @@ function TelegramBinding({ row, mayEdit }: { row: AdminSummary; mayEdit: boolean
   const reasonGiven = reason.trim().length > 0;
 
   return (
-    <div className="stack">
+    <div className="system-telegram">
       {bound ? (
         <Ltr>
           <code>{row.telegramUserId}</code>
@@ -1096,20 +1245,29 @@ function TelegramBinding({ row, mayEdit }: { row: AdminSummary; mayEdit: boolean
         <span className="faint">{t('web.admin_telegram_not_connected')}</span>
       )}
       {mayEdit && !editing && (
-        <div className="toolbar">
-          <button
-            type="button"
-            className="btn sm"
-            onClick={() => {
-              setProblem(null);
-              setEditing(true);
-            }}
-          >
-            {bound ? t('web.admin_telegram_edit') : t('web.admin_telegram_connect')}
-          </button>
-        </div>
+        <button
+          type="button"
+          className="link small"
+          onClick={() => {
+            setProblem(null);
+            setEditing(true);
+          }}
+        >
+          {bound ? t('web.admin_telegram_edit') : t('web.admin_telegram_connect')}
+        </button>
       )}
-      {mayEdit && editing && (
+      <Modal
+        open={mayEdit && editing}
+        onClose={() => {
+          setEditing(false);
+          setProblem(null);
+        }}
+        title={
+          <>
+            {t('web.admin_telegram')} — {row.displayName}
+          </>
+        }
+      >
         <form
           className="stack"
           onSubmit={(event) => {
@@ -1129,6 +1287,7 @@ function TelegramBinding({ row, mayEdit }: { row: AdminSummary; mayEdit: boolean
           >
             <input
               id={`admin-telegram-id-${row.id}`}
+              className="input"
               dir="ltr"
               inputMode="numeric"
               autoComplete="off"
@@ -1143,6 +1302,7 @@ function TelegramBinding({ row, mayEdit }: { row: AdminSummary; mayEdit: boolean
           >
             <input
               id={`admin-telegram-reason-${row.id}`}
+              className="input"
               value={reason}
               maxLength={500}
               onChange={(event) => setReason(event.target.value)}
@@ -1179,7 +1339,7 @@ function TelegramBinding({ row, mayEdit }: { row: AdminSummary; mayEdit: boolean
             </button>
           </div>
         </form>
-      )}
+      </Modal>
     </div>
   );
 }

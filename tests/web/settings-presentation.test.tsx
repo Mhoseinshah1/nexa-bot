@@ -161,7 +161,7 @@ describe('the settings page', () => {
     for (const key of VISIBLE_KEYS) {
       const presentation = SETTING_PRESENTATION[key];
       const heading = screen.getByRole('heading', { name: t(presentation.title) });
-      const card = heading.closest('section.card') as HTMLElement;
+      const card = heading.closest('article') as HTMLElement;
       expect(within(card).getByText(t(presentation.description))).toBeInTheDocument();
       expect(
         within(card).getByText(`${t('web.settings_current_value')}:`, { exact: false }),
@@ -193,7 +193,7 @@ describe('the settings page', () => {
     const heading = await screen.findByRole('heading', {
       name: t('web.setting_ops_max_per_minute'),
     });
-    const card = heading.closest('section.card') as HTMLElement;
+    const card = heading.closest('article') as HTMLElement;
     const details = card.querySelector('details') as HTMLDetailsElement;
     expect(details.open).toBe(false);
     expect(within(details).getByText(t('web.settings_technical'))).toBeInTheDocument();
@@ -388,7 +388,7 @@ describe('the settings page', () => {
     );
     fireEvent.change(amount, { target: { value: '۲۰٬۰۰۰' } });
     const heading = screen.getByRole('heading', { name: t('web.setting_topup_maximum') });
-    const card = heading.closest('section.card') as HTMLElement;
+    const card = heading.closest('article') as HTMLElement;
     fireEvent.click(within(card).getByRole('button', { name: t('web.save') }));
     await waitFor(() => {
       const write = api.calls.find((call) => call.method === 'POST');
@@ -481,7 +481,7 @@ describe('the settings page', () => {
     const heading = await screen.findByRole('heading', {
       name: t('web.setting_telegram_channels'),
     });
-    const card = heading.closest('section.card') as HTMLElement;
+    const card = heading.closest('article') as HTMLElement;
     const current = within(card).getByText(`${t('web.settings_current_value')}:`, {
       exact: false,
     }).parentElement as HTMLElement;
@@ -508,7 +508,7 @@ describe('the settings page', () => {
       name: t('web.setting_trial_limit_per_customer'),
     });
     expect(screen.queryByRole('heading', { name: t('web.setting_trial_product_id') })).toBeNull();
-    const card = heading.closest('section.card') as HTMLElement;
+    const card = heading.closest('article') as HTMLElement;
     expect(within(card).queryByText(t('web.settings_needs_feature'))).toBeNull();
     // No row on the page is a control nothing reads.
     expect(screen.queryByText(t('web.setting_no_consumer'))).toBeNull();

@@ -11,7 +11,7 @@ import {
   Card,
   DataTable,
   Empty,
-  KV,
+  StatCard,
   Ltr,
   Num,
   StateSwitch,
@@ -62,7 +62,7 @@ export function DiagnosticsSection({ denied }: { denied: boolean }) {
       key: 'reason',
       header: t('web.diagnostics_reason'),
       render: (row) => (
-        <Badge tone={row.reason === 'RETRYING' ? 'warn' : 'danger'}>
+        <Badge tone={row.reason === 'RETRYING' ? 'warn' : 'danger'} dot>
           {t(REASON_LABELS[row.reason])}
         </Badge>
       ),
@@ -159,19 +159,25 @@ export function DiagnosticsSection({ denied }: { denied: boolean }) {
         >
           {data !== undefined && (
             <>
-              <KV
-                items={STUCK_OPERATION_REASONS.map((reason) => [
-                  <span key={`l-${reason}`} title={t(REASON_HINTS[reason])}>
-                    {t(REASON_LABELS[reason])}
-                  </span>,
-                  <Num key={`n-${reason}`} value={data.provisioning.counts[reason]} />,
-                ])}
-              />
+              <div className="stat-grid diagnostics-stats">
+                {STUCK_OPERATION_REASONS.map((reason) => (
+                  <StatCard
+                    key={reason}
+                    label={t(REASON_LABELS[reason])}
+                    value={<Num value={data.provisioning.counts[reason]} />}
+                    hint={t(REASON_HINTS[reason])}
+                    {...(data.provisioning.counts[reason] > 0
+                      ? { tone: reason === 'RETRYING' ? ('warn' as const) : ('alert' as const) }
+                      : {})}
+                  />
+                ))}
+              </div>
               <DataTable
                 caption={t('web.diagnostics_provisioning_title')}
                 columns={stuckColumns}
                 rows={data.provisioning.sample}
                 rowKey={(row) => row.operationId}
+                dense
               />
             </>
           )}
@@ -183,32 +189,27 @@ export function DiagnosticsSection({ denied }: { denied: boolean }) {
         <StateSwitch query={diagnostics} denied={denied}>
           {data !== undefined && (
             <>
-              <KV
-                items={[
-                  [
-                    t('web.diagnostics_outbox_pending'),
-                    <Num key="p" value={data.outbox.pending} />,
-                  ],
-                  [
-                    t('web.diagnostics_outbox_oldest'),
-                    data.outbox.oldestPendingAt === null ? (
-                      <span key="o" className="faint">
-                        —
-                      </span>
-                    ) : (
-                      <span key="o">{formatTimestamp(data.outbox.oldestPendingAt)}</span>
-                    ),
-                  ],
-                  [
-                    t('web.diagnostics_outbox_failing'),
-                    <Num key="f" value={data.outbox.failing} />,
-                  ],
-                  [
-                    t('web.diagnostics_outbox_exhausted'),
-                    <Num key="x" value={data.outbox.exhausted} />,
-                  ],
-                ]}
-              />
+              <div className="stat-grid diagnostics-stats">
+                <StatCard
+                  label={t('web.diagnostics_outbox_pending')}
+                  value={<Num value={data.outbox.pending} />}
+                  hint={
+                    data.outbox.oldestPendingAt === null
+                      ? undefined
+                      : `${t('web.diagnostics_outbox_oldest')}: ${formatTimestamp(data.outbox.oldestPendingAt)}`
+                  }
+                />
+                <StatCard
+                  label={t('web.diagnostics_outbox_failing')}
+                  value={<Num value={data.outbox.failing} />}
+                  {...(data.outbox.failing > 0 ? { tone: 'warn' as const } : {})}
+                />
+                <StatCard
+                  label={t('web.diagnostics_outbox_exhausted')}
+                  value={<Num value={data.outbox.exhausted} />}
+                  {...(data.outbox.exhausted > 0 ? { tone: 'alert' as const } : {})}
+                />
+              </div>
               {data.outbox.failing > 0 && (
                 <Banner tone="warn">{t('web.diagnostics_outbox_failing_banner')}</Banner>
               )}
@@ -221,6 +222,7 @@ export function DiagnosticsSection({ denied }: { denied: boolean }) {
                   columns={failingColumns}
                   rows={data.outbox.failingSample}
                   rowKey={(row) => row.id}
+                  dense
                 />
               )}
             </>

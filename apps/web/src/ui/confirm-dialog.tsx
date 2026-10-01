@@ -154,3 +154,35 @@ export function ConfirmDialog({
     document.body,
   );
 }
+
+/**
+ * Focus after a CONFIRMED write — `FlagCard`'s rule, for any other confirmation.
+ *
+ * Confirming closes the dialog and starts the write, and the control that opened the
+ * dialog is disabled while that write is pending (or is gone until it settles). The
+ * dialog's own hand-back therefore lands on nothing usable and focus falls to the page
+ * body. Calling the returned `arm` in `onConfirm` makes this wait for the write to start
+ * (`armed` to `pending`) and then settle (`pending` to idle, on success or error), and
+ * only then focus `target()` — and only when focus is nowhere useful, so an operator who
+ * has since moved to another control keeps it. Cancel never arms it: nothing is pending
+ * and the dialog's own hand-back already works.
+ */
+export function useFocusAfterWrite(pending: boolean, target: () => HTMLElement | null): () => void {
+  const phase = useRef<'idle' | 'armed' | 'pending'>('idle');
+  const targetRef = useRef(target);
+  useLayoutEffect(() => {
+    targetRef.current = target;
+  });
+  useEffect(() => {
+    if (phase.current === 'armed' && pending) {
+      phase.current = 'pending';
+    } else if (phase.current === 'pending' && !pending) {
+      phase.current = 'idle';
+      const active = document.activeElement;
+      if (active === null || active === document.body) targetRef.current()?.focus();
+    }
+  }, [pending]);
+  return () => {
+    phase.current = 'armed';
+  };
+}

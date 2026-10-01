@@ -1,4 +1,4 @@
-import { useState, type FormEvent, type ReactNode } from 'react';
+import { useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   COMMERCE_ERROR_CODES,
@@ -27,7 +27,7 @@ import {
 import {
   Badge,
   Banner,
-  Card,
+  ConfirmDialog,
   Field,
   ListEditor,
   Ltr,
@@ -35,7 +35,19 @@ import {
   PageHead,
   StateSwitch,
   Switch,
+  confirmDialogOpen,
+  useToast,
+  useFocusAfterWrite,
+  useUnsavedChanges,
 } from '../ui/kit';
+import {
+  DirtyScope,
+  SectionNav,
+  UnsavedCount,
+  sameValue,
+  useDirtySet,
+  useReportDirty,
+} from './ops-b-layout';
 
 /**
  * The settings screen (WP-A1: an operator's page, not a developer's).
@@ -71,27 +83,62 @@ export function SettingsPage({ mayEdit, denied }: { mayEdit: boolean; denied: bo
       !(SETTINGS_MANAGED_ELSEWHERE as readonly string[]).includes(setting.key) &&
       !(SETTINGS_RETIRED as readonly string[]).includes(setting.key),
   );
+  const sections = grouped(rows);
+
+  // Every row keeps its own draft and its own Save (each writes one registry row at the
+  // version it was read at); the page adds the sum of them and one leave guard.
+  const { dirty, report } = useDirtySet();
+  useUnsavedChanges(dirty.size > 0);
 
   return (
     <>
-      <PageHead title={t('web.settings_title')} subtitle={t('web.settings_intro')} maturity="now" />
+      <PageHead
+        title={t('web.settings_title')}
+        subtitle={t('web.settings_intro')}
+        maturity="now"
+        badge={<UnsavedCount count={dirty.size} />}
+      />
 
       <StateSwitch query={settings} denied={denied} isEmpty={rows.length === 0}>
-        {grouped(rows).map(({ group, title, members }) => (
-          <section key={group} className="settings-group" aria-labelledby={`settings-${group}`}>
-            <h2 id={`settings-${group}`} className="settings-group-head">
-              {t(title)}
-            </h2>
-            {members.map((setting) => (
-              <SettingRow
-                key={setting.key}
-                setting={setting}
-                mayEdit={mayEdit}
-                salesCurrency={salesCurrency}
-              />
-            ))}
-          </section>
-        ))}
+        <DirtyScope report={report}>
+          <div className="ob-sectioned">
+            <SectionNav
+              label={t('web.ob_sections')}
+              items={sections.map(({ group, title, members }) => ({
+                id: `settings-${group}`,
+                label: t(title),
+                unsaved: members.some((member) => dirty.has(member.key)),
+              }))}
+            />
+            <div className="stack">
+              {sections.map(({ group, title, members }) => (
+                <section
+                  key={group}
+                  id={`settings-${group}`}
+                  tabIndex={-1}
+                  className="card settings-group"
+                  aria-labelledby={`settings-${group}-title`}
+                >
+                  <header className="card-head">
+                    <div className="titles">
+                      <h2 id={`settings-${group}-title`}>{t(title)}</h2>
+                    </div>
+                  </header>
+                  <div className="settings-rows">
+                    {members.map((setting) => (
+                      <SettingRow
+                        key={setting.key}
+                        setting={setting}
+                        mayEdit={mayEdit}
+                        salesCurrency={salesCurrency}
+                      />
+                    ))}
+                  </div>
+                </section>
+              ))}
+            </div>
+          </div>
+        </DirtyScope>
       </StateSwitch>
     </>
   );
@@ -212,6 +259,7 @@ function SettingRow({
   salesCurrency: CurrencyCode | null;
 }) {
   const client = useQueryClient();
+  const notify = useToast();
   const presentation = settingPresentation(setting.key);
   const title = presentation === null ? t('web.settings_unknown_title') : t(presentation.title);
 
@@ -232,6 +280,12 @@ function SettingRow({
    */
   const [basis, setBasis] = useState<ResolvedSettingResponse>(setting);
   const [draft, setDraft] = useState<unknown>(setting.value);
+  /** Bumped to remount the editor, whose half-typed text is its own state. */
+  const [epoch, setEpoch] = useState(0);
+  /** The selling-currency change waiting on its question. */
+  const [asking, setAsking] = useState<{ value: unknown; expectedVersion: number | null } | null>(
+    null,
+  );
 
   const refresh = async () => {
     await client.invalidateQueries({ queryKey: ['settings'] });
@@ -241,6 +295,7 @@ function SettingRow({
   const adopt = (fresh: ResolvedSettingResponse) => {
     setBasis(fresh);
     setDraft(fresh.value);
+    setEpoch((value) => value + 1);
   };
 
   const submission = useSubmissionKey();
@@ -267,6 +322,10 @@ function SettingRow({
       // alone does the opposite, which is what the comment here used to claim.
       submission.settle();
       adopt(result.setting);
+      notify({
+        tone: result.changed ? 'ok' : 'info',
+        message: `${t(result.changed ? 'web.ob_toast_saved' : 'web.ob_toast_unchanged')} — ${title}`,
+      });
       await refresh();
     },
     // A conflict means the cached row is stale, and only a success refreshed
@@ -276,9 +335,18 @@ function SettingRow({
     // row it will be compared against.
     onError: (error: unknown) => {
       submission.settleOn(error);
+      notify({ tone: 'danger', message: `${t('web.ob_toast_failed')} — ${title}` });
       void refresh();
     },
   });
+
+  /*
+   * The currency question is opened by this row's Save, and confirming it starts a write
+   * that disables that Save — so the dialog's hand-back lands on a disabled button and
+   * focus falls to the page body. Focus comes back to Save once the write has settled.
+   */
+  const saveButton = useRef<HTMLButtonElement>(null);
+  const armFocusRestore = useFocusAfterWrite(save.isPending, () => saveButton.current);
 
   /**
    * Not while OUR OWN write is settling.
@@ -292,36 +360,108 @@ function SettingRow({
    * is what caused it. Same fix as the panel form.
    */
   const changedElsewhere = !save.isPending && basis.version !== setting.version;
+  const unsaved = !sameValue(draft, basis.value);
+  useReportDirty(setting.key, unsaved);
+
+  const send = (command: { value: unknown; expectedVersion: number | null }) => {
+    save.mutate({ ...command, idempotencyKey: submission.current(command) });
+  };
 
   const onSubmit = (event: FormEvent) => {
     event.preventDefault();
     // Snapshotted HERE, at the click, so the retry cannot see a later edit.
     const command = { value: draft, expectedVersion: basis.version };
-    save.mutate({ ...command, idempotencyKey: submission.current(command) });
+    // The selling currency re-prices nothing, and every money setting and top-up preset
+    // stored in the old one stops applying: asked once, in words, before it is sent.
+    if (
+      setting.key === 'sales.currency' &&
+      !sameValue(command.value, basis.value) &&
+      !confirmDialogOpen()
+    ) {
+      setAsking(command);
+      return;
+    }
+    send(command);
   };
 
   return (
-    <Card
-      title={title}
-      actions={
-        <>
-          {setting.consumer === 'PLANNED' && <MaturityBadge value="ready" />}
-          {setting.mutability === 'RESTART_REQUIRED' && (
-            <Badge tone="warn">{t('web.restart_required')}</Badge>
-          )}
-        </>
-      }
-    >
+    // An article per setting: the row is the unit a reader (and a test) finds by its
+    // heading. Not labelled by it — a labelled container would share the input's name.
+    <article className="set-row">
       {/* `noValidate`: the server's schema decides what is acceptable and its refusal is
           shown in Persian below. A browser's own validation bubble would speak the
           browser's language and a range the server does not own. */}
       <form onSubmit={onSubmit} noValidate>
-        <p className="muted small">
-          {presentation === null ? t('web.settings_unknown_desc') : t(presentation.description)}
-        </p>
-        {setting.configures !== null && (
-          <p className="faint small">{t('web.settings_needs_feature')}</p>
-        )}
+        <div className="set-row-main">
+          <div className="set-row-text">
+            <div className="set-row-title">
+              <h3>{title}</h3>
+              {setting.consumer === 'PLANNED' && <MaturityBadge value="ready" />}
+              {setting.mutability === 'RESTART_REQUIRED' && (
+                <Badge tone="warn">{t('web.restart_required')}</Badge>
+              )}
+            </div>
+            <p className="muted small">
+              {presentation === null ? t('web.settings_unknown_desc') : t(presentation.description)}
+            </p>
+            {setting.configures !== null && (
+              <p className="faint small">{t('web.settings_needs_feature')}</p>
+            )}
+            <p className="small set-row-current">
+              <span className="muted">{t('web.settings_current_value')}: </span>
+              <CurrentValue control={presentation?.control ?? null} value={setting.value} />
+            </p>
+            {setting.updatedAt !== null && (
+              <p className="faint small">
+                {t('web.updated_at')}: {formatTimestamp(setting.updatedAt)}
+              </p>
+            )}
+          </div>
+
+          <div className="set-row-control">
+            <SettingEditor
+              // Remounting on a new basis is what makes "reload value" reset the
+              // editor's own internal draft as well as the value above it.
+              key={`${setting.key}:${basis.version ?? 0}:${epoch}`}
+              setting={basis}
+              control={presentation?.control ?? null}
+              title={title}
+              salesCurrency={salesCurrency}
+              value={draft}
+              onChange={setDraft}
+              disabled={!mayEdit}
+            />
+            {mayEdit && (
+              <div className="set-row-actions">
+                {unsaved && (
+                  <>
+                    <Badge tone="warn" dot>
+                      {t('web.ob_unsaved_row')}
+                    </Badge>
+                    <button
+                      type="button"
+                      className="btn ghost sm"
+                      disabled={save.isPending}
+                      onClick={() => adopt(basis)}
+                    >
+                      {t('web.discard')}
+                    </button>
+                  </>
+                )}
+                {/* Primary only while there is something to save: a column of identical
+                    blue buttons reads as a column of pending work. */}
+                <button
+                  ref={saveButton}
+                  type="submit"
+                  className={unsaved ? 'btn primary sm' : 'btn sm'}
+                  disabled={save.isPending}
+                >
+                  {save.isPending ? t('web.saving') : t('web.save')}
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
 
         {/* Stored, and nothing reads it. An operator has to know that a change here
             has no effect yet — the legacy pattern this whole registry exists to end is
@@ -337,11 +477,6 @@ function SettingRow({
           <Banner tone="danger">{t('web.stored_value_invalid')}</Banner>
         )}
 
-        <p className="small">
-          <span className="muted">{t('web.settings_current_value')}: </span>
-          <CurrentValue control={presentation?.control ?? null} value={setting.value} />
-        </p>
-
         {/* A stored amount outside the selling currency is one its consumer cannot
             compare with anything (F3): said here, not left for the operator to infer. */}
         {presentation?.control.kind === 'money' &&
@@ -353,19 +488,6 @@ function SettingRow({
             <Banner tone="warn">{t('web.settings_presets_currency_mismatch')}</Banner>
           )}
 
-        <SettingEditor
-          // Remounting on a new basis is what makes "reload value" reset the
-          // editor's own internal draft as well as the value above it.
-          key={`${setting.key}:${basis.version ?? 0}`}
-          setting={basis}
-          control={presentation?.control ?? null}
-          title={title}
-          salesCurrency={salesCurrency}
-          value={draft}
-          onChange={setDraft}
-          disabled={!mayEdit}
-        />
-
         {changedElsewhere && (
           <Banner tone="warn">
             {t('web.changed_elsewhere')}{' '}
@@ -375,17 +497,6 @@ function SettingRow({
           </Banner>
         )}
 
-        {setting.updatedAt !== null && (
-          <p className="faint small">
-            {t('web.updated_at')}: {formatTimestamp(setting.updatedAt)}
-          </p>
-        )}
-
-        {mayEdit && (
-          <button type="submit" className="btn primary" disabled={save.isPending}>
-            {save.isPending ? t('web.saving') : t('web.save')}
-          </button>
-        )}
         {save.isError && <SaveError error={save.error} settingKey={setting.key} />}
         {/* A no-op says so. The legacy screens answer "✅ updated" either way,
             and one of them said it three times while nothing changed. */}
@@ -416,7 +527,25 @@ function SettingRow({
           </dl>
         </details>
       </form>
-    </Card>
+
+      {asking !== null && (
+        <ConfirmDialog
+          title={title}
+          question={t('web.settings_currency_confirm')}
+          detail={t('web.settings_currency_confirm_detail')}
+          confirmLabel={t('web.settings_currency_confirm_yes')}
+          cancelLabel={t('web.feature_confirm_cancel')}
+          onConfirm={() => {
+            const command = asking;
+            armFocusRestore();
+            setAsking(null);
+            send(command);
+          }}
+          onCancel={() => setAsking(null)}
+          returnFocusTo={() => saveButton.current}
+        />
+      )}
+    </article>
   );
 }
 
