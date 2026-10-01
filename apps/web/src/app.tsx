@@ -3,11 +3,14 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { SessionResponse } from '@nexa/contracts';
 import { finalAnswer, pollSession } from './polling';
 import { ApiError, fetchSession, signIn, signOut } from './api/client';
-import { t, type WebKey } from './i18n/web.fa';
+import { t } from './i18n/web.fa';
 import { match, navigate, useDocumentTitle, useLinkHandler, useRoute, type Route } from './router';
-import { useTheme, type ThemeChoice } from './theme';
-import { Icon, type IconName } from './ui/icons';
-import { ToastProvider } from './ui/kit';
+import { useTheme } from './theme';
+import { Icon } from './ui/icons';
+import { Empty, LeaveGuardHost, ToastProvider } from './ui/kit';
+import { NAV, navPermitted } from './nav';
+import { useNavCounters } from './nav-counters';
+import { CommandSearch, Sidebar, Topbar, useCommandShortcut } from './shell';
 import { DashboardPage } from './pages/dashboard';
 import { PanelsPage, PanelDetailPage, NewPanelPage, ProvidersPage } from './pages/panels';
 import { SettingsPage } from './pages/settings';
@@ -124,538 +127,7 @@ export function sessionView(query: {
 // The route table
 // ---------------------------------------------------------------------------
 
-interface NavEntry {
-  readonly id: string;
-  /** The nav destination. Detail routes are matched separately. */
-  readonly path: string;
-  readonly label: WebKey;
-  readonly icon: IconName;
-  /**
-   * What the entry needs to be worth showing. Null means everyone with a
-   * session; an ARRAY means ANY of them, because a page can serve more than one
-   * capability and gating it on the first one hides the others.
-   *
-   * `/notifications` is why this is not a single string. It carries two
-   * separate server capabilities — the delivery history (`opslog.view`) and the
-   * test send (`settings.edit`, which `POST /notifications/test` authorizes on
-   * its own and which the page already gates separately). Requiring only
-   * `opslog.view` meant an actor holding `settings.edit` alone had no link to a
-   * page that would have served them correctly: the UI hid an action the server
-   * permits, which is the same defect as offering one it refuses, in the
-   * direction nobody looks.
-   */
-  readonly permission: string | readonly string[] | null;
-  readonly group: WebKey;
-  /**
-   * WP12: shown only to the Super Admin — the owner role AND the permission. The server
-   * refuses anyone else on every report route; this only stops drawing a link to a page
-   * that would answer 403 (`docs/wp12-business-analytics-audit.md` §2).
-   */
-  readonly ownerOnly?: boolean;
-}
-
-/**
- * Whether an actor may see a navigation entry.
- *
- * Exported because the rule is worth asserting directly: an entry listing
- * several permissions is satisfied by ANY of them, and the failure it exists to
- * prevent — a page with two capabilities hidden from an actor who holds one —
- * is invisible from the outside.
- */
-export function navPermitted(
-  entry: NavEntry,
-  permissions: readonly string[],
-  roleKeys: readonly string[] = [],
-): boolean {
-  if (entry.ownerOnly === true && !isSuperAdmin(roleKeys, permissions)) return false;
-  if (entry.permission === null) return true;
-  const needed = typeof entry.permission === 'string' ? [entry.permission] : entry.permission;
-  return needed.some((permission) => permissions.includes(permission));
-}
-
-/**
- * The navigation, in the order it is drawn.
- *
- * The surfaces come from the owner's route inventory; what each one may DO
- * comes from `docs/phase3d-coverage-ledger.md`. Nine of them have no backend at
- * all in this release and are marked `planned` at the page rather than hidden —
- * hiding them would leave an operator wondering whether the product has them,
- * which is the question the maturity vocabulary exists to answer.
- */
-/**
- * Exported so a test can drive the paths an operator actually CLICKS.
- *
- * These are hardcoded here and looked up from `PLANNED_SURFACES` in `resolve`,
- * which makes the two independent: a typo in one sends a working navigation
- * link to `NotFound`. A test that reads its path from the same table it
- * checks cannot see that, and the first version of the route test did exactly
- * that — the mutation moved its input and the route table together and
- * survived.
- */
-export const NAV: readonly NavEntry[] = [
-  {
-    id: 'dashboard',
-    path: '/',
-    label: 'web.nav_overview',
-    icon: 'dashboard',
-    permission: null,
-    group: 'web.navgroup_main',
-  },
-  {
-    id: 'users',
-    path: '/users',
-    label: 'web.nav_users',
-    icon: 'users',
-    permission: 'users.view',
-    group: 'web.navgroup_sales',
-  },
-  {
-    id: 'trials',
-    path: '/trials',
-    label: 'web.nav_trials',
-    icon: 'users',
-    // ANY of the three, for the reason `/products` gives: the page serves three
-    // capabilities — the override list, the global reset and its history — each
-    // charged by the server on its own key.
-    // R1: and `panels.view`, which the per-panel trial overview is charged on.
-    permission: ['users.view', 'settings.destructive', 'settings.view', 'panels.view'],
-    group: 'web.navgroup_sales',
-  },
-  {
-    id: 'services',
-    path: '/services',
-    label: 'web.nav_services',
-    icon: 'services',
-    // ANY of the two: the page is the services list AND the customers' refund-request queue
-    // (WP19), and a finance reviewer may hold `refunds.view` alone (Codex review of #83).
-    permission: ['services.view', 'refunds.view'],
-    group: 'web.navgroup_sales',
-  },
-  {
-    /*
-     * Round N (B1): «ارسال همگانی». `broadcasts.view` reads the list and the reports;
-     * composing and launching is `broadcasts.send`, which requires it.
-     */
-    id: 'broadcasts',
-    path: '/broadcasts',
-    label: 'web.nav_broadcasts',
-    icon: 'send',
-    permission: 'broadcasts.view',
-    group: 'web.navgroup_sales',
-  },
-  {
-    // Round N (B2): «عملیات گروهی» — mass wallet credit and mass traffic/time.
-    id: 'bulk-operations',
-    path: '/bulk-operations',
-    label: 'web.nav_bulk_operations',
-    icon: 'zap',
-    permission: 'bulk_operations.view',
-    group: 'web.navgroup_sales',
-  },
-  {
-    /*
-     * WP-A7: the support ticket inbox. `tickets.view`, and only that — every write on the
-     * page (reply, assign, status, categories) opens from a row the view key lists.
-     */
-    id: 'tickets',
-    path: '/tickets',
-    label: 'web.nav_tickets',
-    icon: 'message',
-    permission: 'tickets.view',
-    group: 'web.navgroup_sales',
-  },
-  {
-    id: 'orders',
-    path: '/orders',
-    label: 'web.nav_orders',
-    icon: 'orders',
-    permission: 'orders.view',
-    group: 'web.navgroup_sales',
-  },
-  {
-    id: 'products',
-    path: '/products',
-    label: 'web.nav_products',
-    icon: 'products',
-    // EITHER, exactly as `/panels` and `/notifications` do above and below, and for
-    // the identical reason. The route renders the CREATE form on `catalog.edit`
-    // whether or not `catalog.view` is held, and the server authorizes creation on
-    // `catalog.edit` alone — so gating the link on `catalog.view` hid a page that
-    // would have served a custom-role editor correctly. Found by the Codex review of
-    // this branch, which is the third time this shape has been the answer.
-    permission: ['catalog.view', 'catalog.edit'],
-    group: 'web.navgroup_sales',
-  },
-  {
-    id: 'product-categories',
-    path: '/product-categories',
-    label: 'web.nav_product_categories',
-    icon: 'products',
-    // EITHER, for the reason `/products` above gives in full: the route renders the
-    // create form on `catalog.edit` whether or not `catalog.view` is held, and the
-    // server authorizes every write on `catalog.edit` alone.
-    permission: ['catalog.view', 'catalog.edit'],
-    group: 'web.navgroup_sales',
-  },
-  {
-    // WP-A5: the extra users / devices rate — an `ADD_DEVICES` add-on, under the catalogue's
-    // own pair and for the reason `/products` gives: the create form needs only edit.
-    id: 'extra-devices',
-    path: '/extra-devices',
-    label: 'web.nav_extra_devices',
-    icon: 'products',
-    permission: ['catalog.view', 'catalog.edit'],
-    group: 'web.navgroup_sales',
-  },
-  {
-    // WP-A6: a panel's locations and the price of moving a service there, under the
-    // catalogue's own pair, for the reason the entry above gives.
-    id: 'service-locations',
-    path: '/service-locations',
-    label: 'web.nav_service_locations',
-    icon: 'products',
-    permission: ['catalog.view', 'catalog.edit'],
-    group: 'web.navgroup_sales',
-  },
-  {
-    id: 'payments',
-    path: '/payments',
-    label: 'web.nav_payments',
-    icon: 'payments',
-    permission: 'payments.view',
-    group: 'web.navgroup_sales',
-  },
-  {
-    /*
-     * The compensation list (Payment File 02 §21, D7), directly under payments because it
-     * is a view OF payments: the automatic wallet refunds of paid orders that could not be
-     * delivered. `payments.view`, the key `GET /compensations` charges.
-     */
-    id: 'compensations',
-    path: '/compensations',
-    label: 'web.nav_compensations',
-    icon: 'payments',
-    permission: 'payments.view',
-    group: 'web.navgroup_sales',
-  },
-  {
-    id: 'payment-accounts',
-    path: '/payment-accounts',
-    label: 'web.nav_payment_accounts',
-    icon: 'payments',
-    /*
-     * `payments.accounts.view`, and ONLY that — which is a correction.
-     *
-     * This used to admit either key, on the stated ground that the page "serves a
-     * custom-role editor correctly" without the view key. It does not, and never did:
-     * the route below passes `denied={!may('payments.accounts.view')}`, which disables
-     * the only query that supplies rows, and the edit form opens from a row. The server
-     * agrees — `PaymentAccountService.list` charges the view key. So an edit-only custom
-     * role saw a navigation entry, followed it, and arrived at a page with nothing on it
-     * and no way to reach the form.
-     *
-     * A link is a promise that a page will work. The honest fix is the narrower
-     * permission rather than a page that apologises after the click.
-     *
-     * `/panels` and `/products` carry the same shape and the same dead end. They are
-     * older than this batch and are not changed here; `OQ-5H-01` records them so the
-     * inconsistency is a known item rather than a comment that contradicts its code.
-     */
-    permission: 'payments.accounts.view',
-    group: 'web.navgroup_sales',
-  },
-  {
-    id: 'payment-gateways',
-    path: '/payment-gateways',
-    label: 'web.nav_payment_gateways',
-    icon: 'payments',
-    /*
-     * `payments.gateways.view`, and only that, for the reason the accounts link above
-     * now states: the route passes `denied={!may('payments.gateways.view')}` and
-     * `PaymentGatewayService.list` charges the same key, so an edit-only role reached a
-     * page it could not load and therefore could not edit from.
-     */
-    permission: 'payments.gateways.view',
-    group: 'web.navgroup_sales',
-  },
-  {
-    id: 'discounts',
-    path: '/discounts',
-    label: 'web.nav_discounts',
-    icon: 'discounts',
-    /*
-     * `catalog.view`, and only that — the rule the payment-accounts entry above states.
-     *
-     * WP8 made this a real page. Both rule lists, the edit forms (which open from a
-     * row), activate and deactivate (buttons on a row) and the price preview all need
-     * `catalog.view`, which `DiscountAdminService.list`, `CashbackRuleAdminService.list`
-     * and `PricingReadService.preview` each charge. An actor holding only
-     * `catalog.discounts.edit` or `catalog.pricing.edit` could reach nothing but a
-     * blank create form, so a link offered on either would be a promise the page could
-     * not keep.
-     */
-    permission: 'catalog.view',
-    group: 'web.navgroup_sales',
-  },
-  {
-    id: 'campaigns',
-    path: '/campaigns',
-    label: 'web.nav_campaigns',
-    icon: 'zap',
-    /*
-     * Round N, C1. `campaigns.view`, and only that: the list, the detail and the results all
-     * charge it (`CampaignService`), and every write opens from them. The writes ALSO charge
-     * each composed action's own key on the server.
-     */
-    permission: 'campaigns.view',
-    group: 'web.navgroup_sales',
-  },
-  {
-    id: 'custom-service',
-    path: '/custom-service',
-    label: 'web.nav_custom_service',
-    icon: 'zap',
-    /*
-     * `catalog.view`, and only that — the rule the discounts entry above states. Both
-     * lists need it (`CustomServiceAdminService` charges it to read), and every write
-     * opens from a row or a form beside them; an actor holding only
-     * `catalog.pricing.edit` would reach forms with nothing to edit.
-     */
-    permission: 'catalog.view',
-    group: 'web.navgroup_sales',
-  },
-  {
-    id: 'referrals',
-    path: '/referrals',
-    label: 'web.nav_referrals',
-    icon: 'link',
-    /*
-     * `referrals.view`, and only that. The page is READ-ONLY — there is no referral
-     * write for any other key to unlock (`docs/wp9-referral-audit.md` F10) — and both
-     * of its lists are charged this key by `ReferralReadService`.
-     */
-    permission: 'referrals.view',
-    group: 'web.navgroup_sales',
-  },
-  {
-    id: 'resellers',
-    path: '/resellers',
-    label: 'web.nav_resellers',
-    icon: 'resellers',
-    /*
-     * `resellers.view`, and only that — the rule the payment-accounts entry states. The
-     * list, the tier filter and the edit form (which opens from a row) all need it, and
-     * `ResellerAdminService.list` charges it; an actor holding only `resellers.edit`
-     * would reach a register form with no tier to choose.
-     */
-    permission: 'resellers.view',
-    group: 'web.navgroup_sales',
-  },
-  {
-    id: 'reseller-tiers',
-    path: '/reseller-tiers',
-    label: 'web.nav_reseller_tiers',
-    icon: 'layers',
-    // The same key, for the same reason: every tier write opens from the list it charges.
-    permission: 'resellers.view',
-    group: 'web.navgroup_sales',
-  },
-  {
-    // Round N, package D: «تنظیمات نمایندگان / پلن‌ها و حداقل فروش».
-    id: 'reseller-plans',
-    path: '/reseller-plans',
-    label: 'web.nav_reseller_plans',
-    icon: 'layers',
-    // The tiers list it opens with is charged `resellers.view`; the progress card asks
-    // `orders.view` as well and says so when it is missing.
-    permission: 'resellers.view',
-    group: 'web.navgroup_sales',
-  },
-  {
-    id: 'reports',
-    path: '/reports',
-    label: 'web.nav_reports',
-    icon: 'reports',
-    permission: 'reports.view',
-    group: 'web.navgroup_sales',
-    ownerOnly: true,
-  },
-  {
-    id: 'panels',
-    path: '/panels',
-    label: 'web.nav_panels',
-    icon: 'panels',
-    // EITHER, for the reason `/notifications` carries a list: this page serves
-    // the fleet list (`panels.view`) AND the route to the create form
-    // (`panels.edit`), and the server authorizes them separately. Gating the
-    // entry on the first hid the second — an actor permitted to create a panel
-    // had no link to the page the form lives behind, which is the same defect
-    // this branch fixed one entry away.
-    permission: ['panels.view', 'panels.edit'],
-    group: 'web.navgroup_infra',
-  },
-  {
-    id: 'providers',
-    path: '/providers',
-    label: 'web.nav_providers',
-    icon: 'layers',
-    // `GET /providers` needs a session and nothing more — it is a catalogue of
-    // code, identical for every tenant. Gating it on `panels.view` hid it from
-    // an actor holding `panels.edit` alone, who is the actor this release
-    // built the create form for, and whose create form fetches this very
-    // catalogue and renders it in its picker. Hiding what the server serves is
-    // the same defect as offering what it refuses, seen from the other side.
-    permission: null,
-    group: 'web.navgroup_infra',
-  },
-  {
-    id: 'bots',
-    path: '/bots',
-    label: 'web.nav_bots',
-    icon: 'bots',
-    permission: 'settings.view',
-    group: 'web.navgroup_infra',
-  },
-  {
-    id: 'content',
-    path: '/content',
-    label: 'web.nav_templates',
-    icon: 'content',
-    permission: 'templates.view',
-    group: 'web.navgroup_config',
-  },
-  {
-    // R1: the customer main menu — order, switches (a setting) and labels (templates).
-    id: 'bot-buttons',
-    path: '/bot-buttons',
-    label: 'web.nav_bot_buttons',
-    icon: 'bots',
-    permission: 'settings.view',
-    group: 'web.navgroup_config',
-  },
-  {
-    // Premium UI: «ظاهر ربات» — custom emoji per semantic slot. Read with `settings.view`,
-    // edited and tested with `settings.edit`, the bot-buttons pair.
-    id: 'appearance',
-    path: '/appearance',
-    label: 'web.nav_appearance',
-    icon: 'bots',
-    permission: 'settings.view',
-    group: 'web.navgroup_config',
-  },
-  {
-    id: 'settings',
-    path: '/settings',
-    label: 'web.nav_settings',
-    icon: 'settings',
-    permission: 'settings.view',
-    group: 'web.navgroup_config',
-  },
-  {
-    id: 'support',
-    path: '/support',
-    label: 'web.nav_support',
-    icon: 'message',
-    /*
-     * `settings.view`, and only that — the payment-accounts rule. The FAQ is
-     * configuration: the server's list charges `settings.view` and its writes
-     * `settings.edit`, the same pair the settings page beside it uses, because the
-     * support DESTINATION is a setting on that page.
-     */
-    permission: 'settings.view',
-    group: 'web.navgroup_config',
-  },
-  {
-    // WP-A10: the client apps and connection guides the bot recommends. Its own pair,
-    // `client_apps.*`: the list charges the view and every write the edit.
-    id: 'client-apps',
-    path: '/client-apps',
-    label: 'web.nav_client_apps',
-    icon: 'link',
-    permission: 'client_apps.view',
-    group: 'web.navgroup_config',
-  },
-  {
-    id: 'features',
-    path: '/features',
-    label: 'web.nav_features',
-    icon: 'zap',
-    permission: 'settings.view',
-    group: 'web.navgroup_config',
-  },
-  {
-    // WP-A9: every automated customer reminder, its schedule and its message.
-    id: 'reminders',
-    path: '/reminders',
-    label: 'web.nav_reminders',
-    icon: 'bell',
-    permission: 'settings.view',
-    group: 'web.navgroup_config',
-  },
-  {
-    id: 'alerts',
-    path: '/alerts',
-    label: 'web.nav_alerts',
-    icon: 'bell',
-    permission: 'opslog.view',
-    group: 'web.navgroup_system',
-  },
-  {
-    id: 'notifications',
-    path: '/notifications',
-    label: 'web.nav_notifications',
-    icon: 'send',
-    // EITHER capability. See `NavEntry.permission`.
-    permission: ['opslog.view', 'settings.edit'],
-    group: 'web.navgroup_system',
-  },
-  {
-    // WP-A4: «گروه گزارش‌های مدیریتی». Read with `settings.view`, acted on with
-    // `settings.edit`, which the page gates itself.
-    id: 'ops-group',
-    path: '/ops-group',
-    label: 'web.nav_ops_group',
-    icon: 'message',
-    permission: 'settings.view',
-    group: 'web.navgroup_system',
-  },
-  {
-    id: 'system',
-    path: '/system',
-    label: 'web.nav_system',
-    icon: 'system',
-    permission: null,
-    group: 'web.navgroup_system',
-  },
-  {
-    id: 'recovery',
-    path: '/recovery',
-    label: 'web.nav_recovery',
-    icon: 'database',
-    /*
-     * `backup.view` alone. The page serves four capabilities and gates each one
-     * itself, so requiring the most privileged of them would hide the list from
-     * an operator whose whole job is checking that backups work.
-     *
-     * Not a LIST, unlike `/panels` and `/notifications`: every other capability
-     * here is strictly narrower in audience than `backup.view`, because
-     * `backup.view` is LOW and is in the observer role's read-only set while
-     * `backup.run`, `backup.download` and `recovery.restore` are HIGH or
-     * CRITICAL. There is no actor who holds one of those and not this one —
-     * which is the condition under which a list is needed, and it does not hold.
-     */
-    permission: 'backup.view',
-    group: 'web.navgroup_system',
-  },
-];
-
-const GROUP_ORDER: readonly WebKey[] = [
-  'web.navgroup_main',
-  'web.navgroup_sales',
-  'web.navgroup_infra',
-  'web.navgroup_config',
-  'web.navgroup_system',
-];
+export { NAV, GROUP_ORDER, navPermitted, isCurrent, type NavEntry } from './nav';
 
 /**
  * The page for a path, plus the crumb trail that leads to it.
@@ -668,6 +140,72 @@ interface Resolved {
   readonly crumbs: readonly { label: string; href?: string }[];
   readonly title: string;
 }
+
+/**
+ * Every route `resolve` serves, as a pattern (`:id` is one path segment).
+ *
+ * The inventory the route test walks: each pattern must resolve to a real page
+ * component, never to `NotFound`, and every navigation entry's path must be
+ * one of them. The test also reads `resolve` below for its literal paths and
+ * requires the two lists to agree, so a route added there and not here — or
+ * listed here and served nowhere — fails the suite rather than going unwalked.
+ */
+export const ROUTE_PATTERNS: readonly string[] = [
+  '/',
+  '/users',
+  '/users/:id',
+  '/trials',
+  '/products',
+  '/products/:id',
+  '/product-categories',
+  '/extra-devices',
+  '/service-locations',
+  '/orders',
+  '/orders/:id',
+  '/services',
+  '/services/:id',
+  '/broadcasts',
+  '/broadcasts/new',
+  '/broadcasts/:id',
+  '/bulk-operations',
+  '/bulk-operations/new',
+  '/bulk-operations/:id',
+  '/tickets',
+  '/tickets/:id',
+  '/payments',
+  '/payments/:id',
+  '/compensations',
+  '/payment-accounts',
+  '/payment-gateways',
+  '/bots',
+  '/discounts',
+  '/campaigns',
+  '/campaigns/new',
+  '/campaigns/:id',
+  '/custom-service',
+  '/referrals',
+  '/resellers',
+  '/reseller-tiers',
+  '/reseller-plans',
+  '/reports',
+  '/panels',
+  '/panels/new',
+  '/panels/:id',
+  '/providers',
+  '/settings',
+  '/support',
+  '/client-apps',
+  '/features',
+  '/reminders',
+  '/bot-buttons',
+  '/content',
+  '/alerts',
+  '/notifications',
+  '/appearance',
+  '/ops-group',
+  '/recovery',
+  '/system',
+];
 
 /**
  * Round N, C1: each campaign action's editor is drawn on the key the server charges for it —
@@ -1520,13 +1058,18 @@ export function resolve(
 function NotFound() {
   const onLink = useLinkHandler();
   return (
-    <div className="empty">
-      <Icon name="alert" size={28} />
-      <strong>{t('web.not_found_title')}</strong>
-      <p className="muted small">{t('web.not_found_hint')}</p>
-      <a className="btn" href="/" onClick={onLink}>
-        {t('web.nav_overview')}
-      </a>
+    <div className="not-found">
+      <Empty
+        icon="alert"
+        title={t('web.not_found_title')}
+        hint={t('web.not_found_hint')}
+        action={
+          <a className="btn" href="/" onClick={onLink}>
+            <Icon name="dashboard" />
+            {t('web.nav_overview')}
+          </a>
+        }
+      />
     </div>
   );
 }
@@ -1571,7 +1114,12 @@ export function App() {
   });
   const view = sessionView(session);
 
-  if (view === 'loading') return <main className="shell">{t('web.loading')}</main>;
+  if (view === 'loading')
+    return (
+      <main className="shell screen" aria-busy="true">
+        <p className="screen-loading">{t('web.loading')}</p>
+      </main>
+    );
 
   // A failed LOOKUP is not a signed-out state. `fetchSession` returns null only
   // for a 401, which is the server saying "no session"; anything else — a
@@ -1601,15 +1149,21 @@ export function App() {
      */
     const settled = finalAnswer(session.error);
     return (
-      <main className="shell">
-        <p>{settled ? t('web.rejected') : t('web.session_unavailable')}</p>
-        {settled ? (
-          <p>{t('web.rejected_hint')}</p>
-        ) : (
-          <button type="button" className="btn" onClick={() => void session.refetch()}>
-            {t('web.retry')}
-          </button>
-        )}
+      <main className="shell screen">
+        <div className="screen-card">
+          <Brand />
+          <p className={settled ? 'danger' : 'warn'}>
+            {settled ? t('web.rejected') : t('web.session_unavailable')}
+          </p>
+          {settled ? (
+            <p className="muted small">{t('web.rejected_hint')}</p>
+          ) : (
+            <button type="button" className="btn" onClick={() => void session.refetch()}>
+              <Icon name="refresh" />
+              {t('web.retry')}
+            </button>
+          )}
+        </div>
       </main>
     );
   }
@@ -1681,43 +1235,69 @@ function SignIn() {
   };
 
   return (
-    <main className="shell signin">
-      <header>
-        <h1>{t('web.title')}</h1>
-        <p className="subtitle">{t('web.subtitle')}</p>
-      </header>
+    <main className="shell signin screen">
+      <div className="screen-card">
+        <header>
+          <Brand />
+        </header>
 
-      <form onSubmit={onSubmit}>
-        <label htmlFor="username">{t('web.username')}</label>
-        <input
-          id="username"
-          name="username"
-          className="input"
-          autoComplete="username"
-          value={username}
-          onChange={(event) => setUsername(event.target.value)}
-          required
-        />
+        <form onSubmit={onSubmit}>
+          <div className="field">
+            <label htmlFor="username">{t('web.username')}</label>
+            <input
+              id="username"
+              name="username"
+              className="input"
+              dir="ltr"
+              autoComplete="username"
+              value={username}
+              onChange={(event) => setUsername(event.target.value)}
+              required
+            />
+          </div>
 
-        <label htmlFor="password">{t('web.password')}</label>
-        <input
-          id="password"
-          name="password"
-          type="password"
-          className="input"
-          autoComplete="current-password"
-          value={password}
-          onChange={(event) => setPassword(event.target.value)}
-          required
-        />
+          <div className="field">
+            <label htmlFor="password">{t('web.password')}</label>
+            <input
+              id="password"
+              name="password"
+              type="password"
+              className="input"
+              dir="ltr"
+              autoComplete="current-password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              required
+            />
+          </div>
 
-        <button type="submit" className="btn primary" disabled={attempt.isPending}>
-          {attempt.isPending ? t('web.signing_in') : t('web.sign_in')}
-        </button>
+          <button type="submit" className="btn primary" disabled={attempt.isPending}>
+            {attempt.isPending ? t('web.signing_in') : t('web.sign_in')}
+          </button>
 
-        {attempt.isError && <p className="error">{messageFor(attempt.error)}</p>}
-      </form>
+          {attempt.isError && (
+            <p className="error" role="alert">
+              {messageFor(attempt.error)}
+            </p>
+          )}
+        </form>
+      </div>
     </main>
+  );
+}
+
+/** The product mark and name, as the sidebar draws them. */
+function Brand() {
+  return (
+    <div className="brand">
+      <span className="brand-mark" aria-hidden="true">
+        N
+      </span>
+      <span className="brand-text">
+        <h1 className="strong">{t('web.title')}</h1>
+        <span className="subtitle">{t('web.subtitle')}</span>
+      </span>
+    </div>
   );
 }
 
@@ -1742,7 +1322,6 @@ function SignedIn({
   permissions: string[];
 }) {
   const route = useRoute();
-  const onLink = useLinkHandler();
   const client = useQueryClient();
   const { choice, setChoice } = useTheme();
 
@@ -1760,20 +1339,41 @@ function SignedIn({
    * preference the viewport is the best guess available; afterwards it is not
    * a guess any more, and nothing overrides it for the life of the session.
    */
-  const [collapsed, setCollapsed] = useState(() => window.innerWidth < 980);
-  const touched = useRef(false);
+  const [collapsed, setCollapsed] = useState(() =>
+    window.innerWidth < 980 ? true : (readSidebarPreference() ?? false),
+  );
+  /*
+   * A preference remembered from an earlier visit is an operator's decision
+   * too, so it counts as touched: the viewport does not override it.
+   */
+  const touched = useRef(readSidebarPreference() !== null);
   const choose = (next: boolean) => {
     touched.current = true;
     setCollapsed(next);
+    // Remembered per browser — but only as a desk-width choice. Below the
+    // breakpoint the expanded sidebar is a drawer over the page, and opening
+    // one is not a layout preference worth carrying into the next visit.
+    if (window.innerWidth >= 980) writeSidebarPreference(next);
   };
+  const [narrow, setNarrow] = useState(() => window.matchMedia('(max-width: 980px)').matches);
   useEffect(() => {
     const query = window.matchMedia('(max-width: 980px)');
     const onChange = (event: MediaQueryListEvent) => {
+      setNarrow(event.matches);
       if (!touched.current) setCollapsed(event.matches);
     };
     query.addEventListener('change', onChange);
     return () => query.removeEventListener('change', onChange);
   }, []);
+
+  // On a narrow screen the open sidebar is a drawer: following a link closes it.
+  useEffect(() => {
+    if (window.matchMedia('(max-width: 980px)').matches) setCollapsed(true);
+  }, [route.path]);
+
+  const [searching, setSearching] = useState(false);
+  useCommandShortcut(() => setSearching(true));
+  const counters = useNavCounters();
 
   const resolved = resolve(route, permissions, admin.roleKeys);
   useDocumentTitle(`${resolved.title} — ${t('web.title')}`);
@@ -1783,7 +1383,9 @@ function SignedIn({
     retry: false,
     mutationFn: signOut,
     onSuccess: async () => {
-      navigate('/');
+      // Forced past the leave guard: the session is already gone, and a draft
+      // cannot be saved by staying.
+      navigate('/', { force: true });
       // SET it, do not merely invalidate. The server has destroyed the session;
       // that is known, and it is not a fact the client should have to re-derive
       // from a lookup that may fail. React Query retains the previous `data`
@@ -1827,123 +1429,58 @@ function SignedIn({
         {t('web.skip_to_content')}
       </a>
 
-      <aside className="sidebar">
-        <div className="brand">
-          <span className="brand-mark" aria-hidden="true">
-            N
-          </span>
-          <span className="brand-text">
-            <strong>{t('web.title')}</strong>
-            <span>{t('web.subtitle')}</span>
-          </span>
-        </div>
-
-        <nav className="nav" aria-label={t('web.nav_label')}>
-          {GROUP_ORDER.map((group) => {
-            const entries = visible.filter((entry) => entry.group === group);
-            if (entries.length === 0) return null;
-            return (
-              <div className="nav-group" key={group}>
-                <div className="nav-group-label">{t(group)}</div>
-                {entries.map((entry) => (
-                  <a
-                    key={entry.id}
-                    href={entry.path}
-                    onClick={onLink}
-                    aria-current={isCurrent(entry.path, route.path) ? 'page' : undefined}
-                    title={collapsed ? t(entry.label) : undefined}
-                  >
-                    <Icon name={entry.icon} size={17} className="ico" />
-                    <span className="lbl">{t(entry.label)}</span>
-                  </a>
-                ))}
-              </div>
-            );
-          })}
-        </nav>
-
-        <div className="sidebar-foot">
-          <button
-            type="button"
-            className="btn ghost icon sm"
-            aria-label={t('web.toggle_sidebar')}
-            aria-expanded={!collapsed}
-            onClick={() => choose(!collapsed)}
-          >
-            <Icon name="sidebar" size={15} />
-          </button>
-          <button
-            type="button"
-            className="btn ghost icon sm"
-            aria-label={t('web.sign_out')}
-            onClick={() => leave.mutate()}
-          >
-            <Icon name="logout" size={15} />
-          </button>
-        </div>
-      </aside>
+      <Sidebar
+        entries={visible}
+        currentPath={route.path}
+        collapsed={collapsed}
+        onToggle={() => choose(!collapsed)}
+        counters={counters}
+        theme={choice}
+        onTheme={setChoice}
+        drawer={narrow && !collapsed}
+        onDismiss={() => setCollapsed(true)}
+      />
+      {/* The scrim behind the sidebar drawer on a narrow screen; CSS shows it only there. */}
+      <div className="sidebar-scrim" aria-hidden="true" onClick={() => setCollapsed(true)} />
 
       <div className="main">
-        <header className="topbar">
-          <nav className="crumbs" aria-label={t('web.breadcrumbs')}>
-            {resolved.crumbs.map((crumb, index) => (
-              <span key={`${crumb.label}-${index}`}>
-                {index > 0 && (
-                  <span className="sep" aria-hidden="true">
-                    /
-                  </span>
-                )}
-                {crumb.href === undefined ? (
-                  <span className="cur" aria-current="page">
-                    {crumb.label}
-                  </span>
-                ) : (
-                  <a href={crumb.href} onClick={onLink}>
-                    {crumb.label}
-                  </a>
-                )}
-              </span>
-            ))}
-          </nav>
-
-          <span className="spacer" />
-
-          <label className="visually-hidden" htmlFor="theme-choice">
-            {t('web.theme')}
-          </label>
-          <select
-            id="theme-choice"
-            className="input sm"
-            value={choice}
-            onChange={(event) => setChoice(event.target.value as ThemeChoice)}
-          >
-            <option value="system">{t('web.theme_system')}</option>
-            <option value="dark">{t('web.theme_dark')}</option>
-            <option value="light">{t('web.theme_light')}</option>
-          </select>
-
-          <span className="muted small nowrap">
-            {admin.displayName}
-            <span className="faint"> · {admin.roleKeys.join(t('web.list_separator')) || '—'}</span>
-          </span>
-        </header>
+        <Topbar
+          crumbs={resolved.crumbs}
+          collapsed={collapsed}
+          onOpenMenu={() => setCollapsed(false)}
+          onSearch={() => setSearching(true)}
+          admin={admin}
+          onSignOut={() => leave.mutate()}
+        />
 
         <main className="content" id="main">
           <div className="content-inner">{resolved.element}</div>
         </main>
       </div>
+
+      {searching && <CommandSearch entries={visible} onClose={() => setSearching(false)} />}
+      <LeaveGuardHost />
     </div>
   );
 }
 
-/**
- * Whether a nav entry owns the current path.
- *
- * `/panels` must light up on `/panels/abc` but `/` must not light up on
- * everything — which is what a bare `startsWith` does, and why the root is a
- * separate case rather than a shorter prefix.
- */
-export function isCurrent(entryPath: string, currentPath: string): boolean {
-  if (entryPath === '/') return currentPath === '/';
-  return currentPath === entryPath || currentPath.startsWith(`${entryPath}/`);
+const SIDEBAR_KEY = 'nexa.sidebar';
+
+/** Storage can THROW, not only come back empty — see `theme.ts`. */
+function readSidebarPreference(): boolean | null {
+  try {
+    const raw = window.localStorage.getItem(SIDEBAR_KEY);
+    return raw === 'collapsed' ? true : raw === 'expanded' ? false : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeSidebarPreference(collapsed: boolean): void {
+  try {
+    window.localStorage.setItem(SIDEBAR_KEY, collapsed ? 'collapsed' : 'expanded');
+  } catch {
+    // A remembered layout is a convenience; a browser that refuses to store it
+    // still gets a working sidebar for this visit.
+  }
 }
