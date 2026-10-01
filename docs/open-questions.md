@@ -2551,6 +2551,11 @@ added the per-panel «تغییر لوکیشن سرویس» policy switch, which 
 provider declares the capability. Neither verdict changed:
 `docs/provider-capability-audit.md` has the table, with the exact blocker for each provider.
 
+Round R re-audited both capabilities again and found no new evidence for any provider.
+Neither verdict changed. It added regression tests that pin the gates closed from outside
+the flows. `docs/provider-capability-audit.md`, "Round R re-audit", has the matrix and each
+provider's remaining acceptance items.
+
 ## OQ-WPA7-01 — attachments on support's replies
 
 WP-A7 lets a CUSTOMER attach a photo or a document to a ticket; the file stays at Telegram

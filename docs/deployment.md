@@ -1343,8 +1343,10 @@ Three notes on R2 itself, for whoever operates or extends it:
   service and the confirmed payment — the shape `TICKET_REPLY` and `TICKET_REPLY_ATTACHMENT`
   already use (`docs/wp-a7-tickets-audit.md` §2). A read that finds no succeeded renewal
   sends nothing.
-- **`telegram_wizards` and `telegram_review_messages` are not pruned yet.** Each tracked
-  message keeps its row; a retention sweep is a known limitation, not yet built.
+- **`telegram_wizards` and `telegram_review_messages` were not pruned in R2.** A worker
+  retention lane now removes the rows nothing live names any more
+  (`docs/telegram-retention.md`); see "Telegram message-state retention" below for what a
+  rollback past it does.
 - **The state writes take no idempotency key of their own.** Each is one conditional
   statement naming what it moves from: a claim names the step, the lease and, for a
   redelivery, the update's key; a landing names the claim's version; a review stamp names
@@ -1746,6 +1748,30 @@ nothing either: the mode an operator set is still stored, and the first attempt 
 the roll-forward prices by it — so an operator who switched to the central mode should
 expect the fixed rate to have applied in between, and can read which policy each attempt
 used on its invoice row.
+
+### What a rollback leaves behind: Telegram message-state retention
+
+Migration `0153_telegram_message_retention` adds one table, `telegram_message_horizons` (a
+per-chat purge horizon), and two ONLINE indexes on the R2 tables are built after the
+migrator (`telegram_wizards_retention_idx`, `telegram_review_messages_updated_idx`);
+`0154_telegram_review_message_updated_at` adds a defaulted `updated_at` to
+`telegram_review_messages`. Both only add. A release without the lane inserts review rows
+with the column's default and does not bump it when it finalises or clears a stamp, so
+after a roll-forward such a row ages from its recording — at worst a cleared stamp the old
+release wrote is retired 30 days after it was recorded rather than after it was cleared.
+While a release without the retention lane runs:
+
+- **Nothing is swept**, and the two tables grow again as they did in R2. The horizon table
+  is never read or written by the old release.
+- **A tap on a message whose row the sweep already removed is ADOPTED again by the old
+  release's gate** — the R2 behaviour for an untracked message — because the old release
+  does not read the horizon. The services behind every button still re-decide under their
+  own locks (a paid order is not paid twice, a terminal payment is not decided again), but
+  an old keyboard of a still-`DRAFT` order could act on it. Only rows untouched for 30 days
+  were ever removed, so this concerns old messages only; rolling forward restores the
+  horizon check with every horizon intact.
+
+Nothing needs doing before rolling back or forward.
 
 ### How far back you can roll
 

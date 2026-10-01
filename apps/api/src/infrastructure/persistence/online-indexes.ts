@@ -235,6 +235,30 @@ export const ONLINE_INDEXES: readonly OnlineIndex[] = [
       'ON "outbox_messages" USING btree ("aggregate_type","aggregate_id","sequence") ' +
       'WHERE (published_at IS NULL) AND (attempts > 0) AND (exhausted_at IS NULL)',
   },
+  {
+    /*
+     * The Telegram message-state retention sweep (`docs/telegram-retention.md`): one
+     * tenant's wizard rows, least recently touched first, bounded by `updated_at < cutoff`.
+     * Every other index on `telegram_wizards` leads with the payment, the subject or the
+     * chat, so without this the sweep read the tenant's whole table every pass.
+     *
+     * Concurrently: every customer tap on a wizard writes this table, and it is the table
+     * that grew unbounded until this release, so a blocking build would hold every tap.
+     */
+    name: 'telegram_wizards_retention_idx',
+    definition: 'ON "telegram_wizards" USING btree ("tenant_id","updated_at")',
+  },
+  {
+    /*
+     * The same sweep's review-message side: oldest last write first (`updated_at`, bumped by
+     * recording, finalising and clearing a stamp). Concurrently, for the reason above: every
+     * receipt decision writes this table. Named apart from the `created_at` shape an earlier
+     * revision of this branch declared, so no database that built that one keeps it under
+     * this name.
+     */
+    name: 'telegram_review_messages_updated_idx',
+    definition: 'ON "telegram_review_messages" USING btree ("tenant_id","updated_at")',
+  },
 ];
 
 /** Index names are code constants; this refuses one that stopped being one. */

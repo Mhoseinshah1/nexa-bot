@@ -115,6 +115,12 @@ async function main(): Promise<void> {
         // thing, and silence is what a stalled lane looks like. Its prices do not depend on
         // it (the rules carry their own window), which is why it is watched, not trusted.
         ['campaign-schedule', true, () => container.campaignScheduleLoop.isFresh(now)],
+        // Telegram message-state retention. No flag: it bounds two tables every chat grows.
+        [
+          'telegram-message-retention',
+          true,
+          () => container.telegramMessageRetentionLoop.isFresh(now),
+        ],
         // Round P: the command-menu sync lane. No flag: a menu nobody registers is a bot
         // whose customers type what they should be able to tap, and silence is what a
         // stalled lane looks like. The menu is a convenience, so it is watched, not trusted.
@@ -218,6 +224,9 @@ async function main(): Promise<void> {
   container.customerReminderLoop.start();
   // Round N, C1: and the campaign lane, which moves a campaign along its own window.
   container.campaignScheduleLoop.start();
+  // And the retention of the Telegram messages edited in place (docs/telegram-retention.md):
+  // presentation rows nothing live names any more, never business truth.
+  container.telegramMessageRetentionLoop.start();
   // Round P: and the command-menu sync lane — per bot, by digest, with back-off.
   container.botCommandSyncLoop.start();
   // And the customer notification lane. `docs/phase4h-audit.md` §1 measured what it

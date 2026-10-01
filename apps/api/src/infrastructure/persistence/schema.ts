@@ -10041,6 +10041,8 @@ export const telegramWizards = pgTable(
       table.chatId,
       table.updatedAt,
     ),
+    // The retention sweep's `(tenant_id, updated_at)` index is an ONLINE index
+    // (`online-indexes.ts`): every customer tap writes this table.
     check('telegram_wizards_kind_check', enumCheck('kind', TELEGRAM_WIZARD_KINDS)),
     check('telegram_wizards_step_check', enumCheck('step', TELEGRAM_WIZARD_STEPS)),
     check('telegram_wizards_version_check', sql`version >= 0`),
@@ -10075,6 +10077,12 @@ export const telegramReviewMessages = pgTable(
     hasMedia: boolean('has_media').notNull(),
     finalisedAt: timestamptz('finalised_at'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
+    /**
+     * The row's last write — its recording, its finalisation, or a stamp cleared because the
+     * edit failed (Codex review of #131). The retention sweep ages a review row by THIS, so
+     * a stamp cleared for a retry is not eligible the moment it is cleared.
+     */
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
   (table) => [
     uniqueIndex('telegram_review_messages_message_key').on(
@@ -10084,6 +10092,8 @@ export const telegramReviewMessages = pgTable(
       table.messageId,
     ),
     index('telegram_review_messages_payment_idx').on(table.tenantId, table.paymentId),
+    // The retention sweep's `(tenant_id, updated_at)` index is an ONLINE index
+    // (`online-indexes.ts`): every receipt decision writes this table.
     foreignKey({
       columns: [table.tenantId, table.paymentId],
       foreignColumns: [payments.tenantId, payments.id],
@@ -10091,6 +10101,41 @@ export const telegramReviewMessages = pgTable(
     }),
     check('telegram_review_messages_role_check', enumCheck('role', TELEGRAM_REVIEW_MESSAGE_ROLES)),
     check('telegram_review_messages_message_check', sql`message_id > 0`),
+  ],
+);
+
+/**
+ * The retention sweep's PURGE HORIZON for one chat (`docs/telegram-retention.md`): the
+ * greatest Telegram message id whose `telegram_wizards` or `telegram_review_messages` row
+ * the sweep has removed in this chat.
+ *
+ * It is what keeps a removed row's old keyboard harmless. A tap on a message nothing tracks
+ * is otherwise ADOPTED (a wizard gate) or decided afresh (a receipt review) — right for a
+ * message whose row was never written, wrong for one whose row was deleted. So a tap on an
+ * untracked message at or below this id is stale, answered and nothing else. Written in
+ * the SAME transaction as the delete, so no reader can see the row gone and the horizon not
+ * yet raised; it only ever rises (`GREATEST`), and it is never deleted: one row per chat the
+ * sweep has touched, a bound the chats themselves set.
+ */
+export const telegramMessageHorizons = pgTable(
+  'telegram_message_horizons',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    botInstanceId: uuid('bot_instance_id')
+      .notNull()
+      .references(() => botInstances.id),
+    chatId: text('chat_id').notNull(),
+    purgedThroughMessageId: bigint('purged_through_message_id', { mode: 'number' }).notNull(),
+    updatedAt: timestamptz('updated_at').notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({
+      name: 'telegram_message_horizons_pkey',
+      columns: [table.tenantId, table.botInstanceId, table.chatId],
+    }),
+    check('telegram_message_horizons_message_check', sql`purged_through_message_id > 0`),
   ],
 );
 

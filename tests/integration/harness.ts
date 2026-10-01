@@ -116,6 +116,9 @@ export async function resetDatabase(db: Database): Promise<void> {
        bot_appearance_slots,
        -- Round P: the command-sync rows, before the bots they name.
        bot_command_syncs,
+       -- R2 and its retention: the Telegram message state and the per-chat purge horizons,
+       -- before the bots, payments and tenants they name.
+       telegram_message_horizons, telegram_review_messages, telegram_wizards,
        bot_instances, tenants,
        backup_runs, recovery_requests,
        -- The Phase 4 tables, listed EXPLICITLY rather than left to CASCADE.
