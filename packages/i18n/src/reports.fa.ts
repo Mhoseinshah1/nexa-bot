@@ -60,8 +60,7 @@ export const REPORT_EXPORT_HEADERS_FA = {
   status: 'وضعیت',
   sales: 'مبلغ فروش',
   services: 'سرویس‌ها',
-  creditLimit: 'سقف اعتبار',
-  creditInUse: 'اعتبار در حال استفاده',
+  creditInUse: 'بدهی پیشین (مانده منفی)',
 } as const;
 export type ReportExportHeaderKey = keyof typeof REPORT_EXPORT_HEADERS_FA;
 

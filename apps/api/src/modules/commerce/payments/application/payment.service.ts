@@ -132,7 +132,7 @@ export interface PaymentServiceDeps {
   readonly repository: PaymentRepository;
   readonly orders: OrderRepository;
   readonly wallet: WalletRepository;
-  /** A reseller's credit allowance below zero, read under the wallet lock (R8). */
+  /** The allowance below zero, read under the wallet lock: zero since credit was removed. */
   readonly resellers: Pick<ResellerService, 'creditAllowance'>;
   /**
    * Where an out-of-band transfer is to be sent, chosen inside the issuing transaction.
@@ -828,9 +828,11 @@ export class PaymentService {
 
         const balance = await this.deps.wallet.balanceOf(scope, customerId, total.currency, tx);
         /*
-         * A reseller's credit line, read HERE, under the customer's lock taken above
-         * (`docs/wp9-reseller-audit.md` R8). Two concurrent purchases serialise on that lock,
-         * so the second sees the first's debit and the limit cannot be crossed.
+         * The allowance below zero, read HERE, under the customer's lock taken above. It is
+         * zero for every customer: reseller credit (WP9-B R8) was removed by owner decision
+         * (2026-10-01, `docs/reseller-phase3-closure.md` §3), so no wallet purchase takes a
+         * balance below zero. Two concurrent purchases serialise on that lock, so the second
+         * sees the first's debit.
          */
         const allowance = await this.deps.resellers.creditAllowance(
           scope,

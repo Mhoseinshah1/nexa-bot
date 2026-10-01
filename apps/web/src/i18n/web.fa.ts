@@ -1586,7 +1586,7 @@ export const WEB_FA = {
   'web.wallet_denied': 'برای دیدن کیف پول دسترسی users.view لازم است.',
   'web.wallet_balance_negative': 'بدهکار',
   'web.wallet_balance_negative_hint':
-    'موجودی منفی فقط برای نماینده‌ای ممکن است که سقف اعتبار دارد: خریدی که از اعتبار او برداشته شده است. این عدد همان مجموع تراکنش‌هاست و بدهی او در محدودهٔ سقف اعتبارش را نشان می‌دهد.',
+    'موجودی منفی بدهی پیشین یک نماینده است: خریدی که پیش از حذف خرید اعتباری از اعتبار او برداشته شد. هیچ خریدی دیگر موجودی را زیر صفر نمی‌برد. این عدد همان مجموع تراکنش‌هاست؛ بدهی سر جای خود می‌ماند، وصول یا جریمه نمی‌شود و فقط با شارژ یا اعتبار دستی جبران می‌شود.',
 
   // --- Payments (Phase 4C) -------------------------------------------------
   /*
@@ -2348,7 +2348,7 @@ export const WEB_FA = {
   'web.cb_steering': 'کنترل اجرا',
   'web.cb_time': 'ساعت',
   'web.cb_reseller_new': 'ثبت نماینده جدید',
-  'web.cb_reseller_standing': 'اعتبار، سیاست فروش، خریدها و تاریخچه',
+  'web.cb_reseller_standing': 'کیف پول، سیاست فروش، خریدها و تاریخچه',
   'web.cb_delete_yes': 'بله، حذف شود',
 
   'web.products_intro': 'سرویس‌هایی که مشتری می‌تواند بخرد، و آنهایی که هنوز نمی‌تواند.',
@@ -3826,10 +3826,10 @@ export const WEB_FA = {
   // --- Resellers (WP9-B) ---------------------------------------------------
   'web.resellers_title': 'نمایندگان',
   'web.resellers_intro':
-    'مشتریانی که با قیمت نمایندگی خرید می‌کنند، سطح هر کدام و سقف اعتبار خریدشان. نماینده همان مشتری است با یک ردیف نمایندگی.',
+    'مشتریانی که با قیمت نمایندگی خرید می‌کنند و سطح هر کدام. نماینده همان مشتری است با یک ردیف نمایندگی و مثل هر مشتری فقط با موجودی کیف پول خرید می‌کند.',
   'web.resellers_list_title': 'فهرست نمایندگان',
   'web.resellers_list_hint':
-    'تازه‌ترین در بالا. سقف اعتباری که نشان داده می‌شود همان است که واقعاً اعمال می‌شود.',
+    'تازه‌ترین در بالا. قیمت‌گذاری‌ای که نشان داده می‌شود همان است که واقعاً اعمال می‌شود.',
   'web.resellers_search': 'جست‌وجو',
   'web.resellers_search_hint': 'شناسهٔ تلگرام (دقیق) یا بخشی از نام یا نام کاربری.',
   'web.resellers_empty': 'هنوز نماینده‌ای ثبت نشده است.',
@@ -3839,7 +3839,7 @@ export const WEB_FA = {
   'web.resellers_rule_identity':
     'هر مشتری حداکثر یک ردیف نمایندگی دارد و فقط اپراتور آن را ثبت می‌کند. مشتری بدون ردیف یا با ردیف معلق، از هر نظر مشتری عادی است.',
   'web.resellers_rule_credit':
-    'سقف اعتبار فقط برای خرید است و فقط در واحد پول همان سقف: موجودی کیف پول نماینده تا همین اندازه می‌تواند منفی شود. برداشت دستی هرگز موجودی را زیر صفر نمی‌برد و ثبت نماینده هیچ تراکنشی در کیف پول نمی‌نویسد.',
+    'خرید اعتباری برای نمایندگان حذف شده است: نماینده مثل هر مشتری فقط با موجودی کیف پول خرید می‌کند و موجودی هرگز با خرید یا برداشت دستی زیر صفر نمی‌رود. ثبت نماینده هیچ تراکنشی در کیف پول نمی‌نویسد.',
   'web.resellers_rule_suspend':
     'تعلیق فقط امتیازهای نمایندگی را برمی‌دارد؛ مسدود کردن مشتری اهرم جداگانه‌ای است که در صفحهٔ مشتری است. تغییر سطح یا نرخ فقط بر سفارش‌هایی اثر دارد که پس از آن تأیید شوند.',
   'web.resellers_tiers_link': 'سطوح نمایندگی و مجوزهای آنها',
@@ -3851,8 +3851,7 @@ export const WEB_FA = {
   'web.reseller_status_all': 'همه',
   'web.reseller_status_active': 'فعال',
   'web.reseller_status_suspended': 'معلق',
-  'web.reseller_status_hint':
-    'نمایندهٔ معلق با قیمت فهرست و بدون اعتبار خرید می‌کند، درست مانند مشتری عادی.',
+  'web.reseller_status_hint': 'نمایندهٔ معلق با قیمت فهرست خرید می‌کند، درست مانند مشتری عادی.',
   'web.reseller_pricing': 'قیمت‌گذاری',
   'web.reseller_pricing_hint':
     '«مطابق سطح» یعنی نرخ اختصاصی ندارد. هر گزینهٔ دیگر جایگزین نرخ سطح می‌شود و فقط برای همین نماینده است.',
@@ -3865,14 +3864,6 @@ export const WEB_FA = {
   'web.reseller_percent': 'درصد',
   'web.reseller_percent_hint': 'عددی صحیح از ۱ تا ۱۰۰؛ از قیمت فهرست کم می‌شود.',
   'web.reseller_credit_limit': 'سقف اعتبار',
-  'web.reseller_credit_limit_effective': 'سقف اعتبار اعمال‌شده',
-  'web.reseller_credit_from_tier': 'از سطح',
-  'web.reseller_credit_own': 'اختصاصی این نماینده',
-  'web.reseller_own_limit': 'سقف اعتبار اختصاصی',
-  'web.reseller_own_limit_hint': 'اگر علامت نخورد، سقف اعتبار سطح اعمال می‌شود.',
-  'web.reseller_uses_tier_limit': 'سقف اعتبار سطح اعمال می‌شود:',
-  'web.reseller_limit_amount': 'سقف اعتبار (واحد خرد)',
-  'web.reseller_limit_amount_hint': 'صفر یعنی بدون اعتبار: موجودی این نماینده زیر صفر نمی‌رود.',
   'web.reseller_register_title': 'ثبت نماینده',
   'web.reseller_register_hint':
     'یک مشتری موجود را نماینده می‌کند. ثبت نماینده هیچ پولی جابه‌جا نمی‌کند.',
@@ -3886,12 +3877,10 @@ export const WEB_FA = {
   'web.reseller_problem_customer': 'شناسهٔ مشتری کامل و معتبر نیست.',
   'web.reseller_problem_tier': 'یک سطح انتخاب کنید.',
   'web.reseller_problem_percent': 'درصد باید عددی صحیح از ۱ تا ۱۰۰ باشد.',
-  'web.reseller_problem_limit':
-    'سقف اعتبار باید عددی صحیح و نامنفی به واحد خرد و در بازهٔ مجاز باشد.',
 
   'web.reseller_tiers_title': 'سطوح نمایندگی',
   'web.reseller_tiers_intro':
-    'هر سطح یک نرخ قیمت، یک سقف اعتبار و مجموعه‌ای از مجوزهاست. هر نماینده دقیقاً یک سطح دارد.',
+    'هر سطح یک نرخ قیمت و مجموعه‌ای از مجوزهاست. هر نماینده دقیقاً یک سطح دارد.',
   'web.reseller_tiers_list_title': 'سطوح',
   'web.reseller_tiers_list_hint':
     'به ترتیب ساخت. مجوزی که قرمز است یعنی آن سطح از آن نوع هیچ چیزی را اجازه نمی‌دهد.',
@@ -3900,13 +3889,10 @@ export const WEB_FA = {
   'web.reseller_tier_name': 'نام سطح',
   'web.reseller_tier_count': 'تعداد نمایندگان',
   'web.reseller_tier_new_title': 'سطح تازه',
-  'web.reseller_tier_new_hint':
-    'نرخ و سقف اعتبار سطح را تعیین کنید؛ مجوزها را پس از ساخت، از فهرست بالا.',
+  'web.reseller_tier_new_hint': 'نرخ سطح را تعیین کنید؛ مجوزها را پس از ساخت، از فهرست بالا.',
   'web.reseller_tier_edit_title': 'ویرایش سطح',
   'web.reseller_tier_edit_hint':
     'تغییر فقط بر سفارش‌هایی اثر دارد که پس از آن تأیید شوند؛ سفارش تأییدشده قیمت خود را نگه می‌دارد.',
-  'web.reseller_tier_limit_hint':
-    'سقف اعتبار پیش‌فرض نمایندگان این سطح، به واحد خرد. صفر یعنی بدون اعتبار.',
   'web.reseller_tier_create': 'ساخت سطح',
   'web.reseller_tier_created': 'سطح ساخته شد.',
   'web.reseller_tier_saved': 'سطح ذخیره شد.',
@@ -3932,33 +3918,15 @@ export const WEB_FA = {
    * balance; nothing is settled, collected, aged or charged.
    */
   'web.reseller_standing_open': 'وضعیت',
-  'web.reseller_credit_title': 'اعتبار نماینده',
-  'web.reseller_credit_hint':
-    'بخشی از سقف اعتبار که اکنون مصرف شده است، از روی دفتر کیف پول همین مشتری.',
-  'web.reseller_credit_denied': 'برای دیدن اعتبار مصرف‌شده دسترسی users.view لازم است.',
-  'web.reseller_credit_state': 'اعتبار',
-  'web.reseller_credit_state_applies': 'اعمال می‌شود',
-  'web.reseller_credit_state_suspended': 'اعمال نمی‌شود: نماینده معلق است',
-  'web.reseller_credit_state_no_limit': 'اعمال نمی‌شود: سقف صفر است',
-  'web.reseller_credit_state_currency': 'اعمال نمی‌شود: ارز سقف با ارز فروش یکی نیست',
+  'web.reseller_credit_title': 'کیف پول نماینده',
+  'web.reseller_credit_hint': 'موجودی کیف پول همین مشتری، از روی دفتر کیف پول.',
+  'web.reseller_credit_denied': 'برای دیدن موجودی کیف پول دسترسی users.view لازم است.',
   'web.reseller_credit_balance': 'موجودی کیف پول',
-  'web.reseller_credit_allowance': 'مجاز زیر صفر',
-  'web.reseller_credit_in_use': 'اعتبار مصرف‌شده (بدهی)',
-  'web.reseller_credit_available': 'قابل خرید با اعتبار',
-  'web.reseller_credit_over_limit': 'بیش از سقف کنونی',
-  'web.reseller_credit_over_limit_banner':
-    'بدهی این نماینده از سقف کنونی بیشتر است. بدهی سر جای خود می‌ماند و تا وقتی موجودی به محدودهٔ سقف برنگردد خرید اعتباری تازه‌ای پذیرفته نمی‌شود.',
-  'web.reseller_credit_currency_banner':
-    'سقف اعتبار به ارزی تعریف شده که فروش با آن انجام نمی‌شود؛ هیچ خریدی از این اعتبار استفاده نمی‌کند.',
+  'web.reseller_credit_in_use': 'بدهی پیشین (مانده منفی)',
+  'web.reseller_credit_legacy_banner':
+    'موجودی این نماینده زیر صفر است: بدهی‌ای که پیش از حذف خرید اعتباری ایجاد شده است. سر جای خود می‌ماند و فقط با شارژ یا اعتبار دستی جبران می‌شود؛ تا وقتی موجودی کافی نباشد هیچ خرید تازه‌ای از کیف پول پذیرفته نمی‌شود.',
   'web.reseller_credit_rule_debt':
-    'بدهی همان موجودی منفی است و مثل هر موجودی با شارژ یا اعتبار دستی جبران می‌شود. سامانه بدهی را تسویه، وصول یا جریمه نمی‌کند.',
-  'web.reseller_credit_rule_available':
-    '«قابل خرید با اعتبار» همان مرزی است که هنگام پرداخت بررسی می‌شود؛ خریدی که یک لحظه بعد ثبت شود آن را تغییر می‌دهد.',
-  'web.reseller_confirm_limit_below_debt':
-    'سقف تازه از بدهی کنونی این نماینده کمتر است. بدهی سر جای خود می‌ماند و خرید اعتباری تازه متوقف می‌شود؛ هیچ مبلغی کسر یا وصول نمی‌شود.',
-  'web.reseller_confirm_suspend_debt':
-    'این نماینده بدهی دارد. تعلیق بدهی را سر جای خود نگه می‌دارد و فقط اعتبار تازه را قطع می‌کند؛ هیچ مبلغی کسر یا وصول نمی‌شود.',
-  'web.reseller_confirm_acknowledge': 'متوجه شدم؛ ذخیره شود.',
+    'خرید اعتباری برای نمایندگان حذف شده است و هیچ خریدی موجودی را زیر صفر نمی‌برد. سامانه بدهی پیشین را تسویه، وصول یا جریمه نمی‌کند.',
   'web.reseller_purchases_title': 'خریدهای نماینده',
   'web.reseller_purchases_hint':
     'هر ردیف همان شرایطی است که هنگام تأیید سفارش ثبت شد، نه نرخ کنونی سطح. وضعیت سفارش، وضعیت امروز آن است.',
@@ -4166,8 +4134,7 @@ export const WEB_FA = {
   'web.user_reseller_denied': 'برای دیدن نمایندگی این مشتری دسترسی resellers.view لازم است.',
   'web.user_reseller_none': 'این مشتری نماینده نیست.',
   'web.user_reseller_register': 'ثبت این مشتری به‌عنوان نماینده',
-  'web.user_reseller_suspended':
-    'نمایندگی این مشتری معلق است: با قیمت فهرست و بدون اعتبار خرید می‌کند.',
+  'web.user_reseller_suspended': 'نمایندگی این مشتری معلق است: با قیمت فهرست خرید می‌کند.',
   'web.user_reseller_manage': 'مدیریت در صفحهٔ نمایندگان',
 
   'web.order_reseller_title': 'خرید نماینده',
@@ -4203,7 +4170,7 @@ export const WEB_FA = {
   'web.report_col_confirmed': 'موفق',
   'web.report_col_confirmed_amount': 'مبلغ موفق',
   'web.report_col_count': 'تعداد',
-  'web.report_col_credit_in_use': 'اعتبار در حال استفاده / سقف',
+  'web.report_col_credit_in_use': 'بدهی پیشین (مانده منفی)',
   'web.report_col_direction': 'جهت',
   'web.report_col_discount': 'تخفیف',
   'web.report_col_failed_terminal': 'ناموفق قطعی',
@@ -4342,7 +4309,7 @@ export const WEB_FA = {
   'web.report_resellers_empty': 'نماینده‌ای ثبت نشده است.',
   'web.report_resellers_title': 'نمایندگان',
   'web.report_resellers_hint':
-    'سفارش، فروش، سرویس و اعتبار در حال استفاده. سود و تسویه در این گزارش نیست.',
+    'سفارش، فروش، سرویس و بدهی پیشین (موجودی منفی از پیش از حذف خرید اعتباری). سود و تسویه در این گزارش نیست.',
   'web.report_service_states': 'وضعیت سرویس‌ها',
   'web.report_services_title': 'سرویس‌ها',
   'web.report_services_hint':

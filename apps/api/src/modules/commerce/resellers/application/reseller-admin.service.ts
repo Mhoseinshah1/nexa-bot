@@ -1,6 +1,7 @@
 import {
   COMMERCE_ERROR_CODES,
   PRODUCT_PAGE_MAX,
+  RESELLER_DEFAULT_CREDIT_LIMIT_MINOR,
   RESELLER_ENTITLEMENT_DIMENSIONS,
   RESELLER_GRANT_DIMENSION,
   RESELLER_HISTORY_MAX,
@@ -118,9 +119,9 @@ export interface ResellerAdminServiceDeps {
 }
 
 /**
- * A reseller's credit standing (WP14 D1). Every figure is a derivation of R8's allowance
- * and the ledger balance — `docs/wp14-reseller-phase2-audit.md` §2. None is a debt, a
- * repayment or a settlement amount; `OQ-WP9-04` defines none of those.
+ * A reseller's balance and legacy debt (WP14 D1). Every figure is a derivation of the
+ * allowance — zero since the owner removed reseller credit (2026-10-01) — and the ledger
+ * balance. None is a repayment or a settlement amount; `OQ-WP9-04` defines none of those.
  */
 export interface ResellerCreditStandingRecord {
   readonly customerId: string;
@@ -230,6 +231,8 @@ export class ResellerAdminService {
 
     const replay = await this.replay<{ tierId: string }>(scope, input.idempotencyKey, requestHash);
     if (replay !== null) return this.tierListing(scope, replay.tierId);
+    // After the replay: a command that committed before the decision replays its result.
+    refuseCredit(input.write.creditLimit);
 
     const now = this.deps.clock.now();
     const id = this.deps.ids.uuid();
@@ -276,6 +279,8 @@ export class ResellerAdminService {
 
     const replay = await this.replay<{ tierId: string }>(scope, input.idempotencyKey, requestHash);
     if (replay !== null) return this.tierListing(scope, replay.tierId);
+    // After the replay: a command that committed before the decision replays its result.
+    refuseCredit(input.write.creditLimit);
 
     const now = this.deps.clock.now();
     await runAuthorizedMutation(
@@ -442,6 +447,8 @@ export class ResellerAdminService {
       requestHash,
     );
     if (replay !== null) return this.resellerListing(scope, replay.customerId);
+    // After the replay: a command that committed before the decision replays its result.
+    refuseCredit(input.write.creditLimit);
 
     const now = this.deps.clock.now();
     await runAuthorizedMutation(
@@ -513,6 +520,8 @@ export class ResellerAdminService {
       requestHash,
     );
     if (replay !== null) return this.resellerListing(scope, replay.customerId);
+    // After the replay: a command that committed before the decision replays its result.
+    refuseCredit(input.write.creditLimit);
 
     const now = this.deps.clock.now();
     await runAuthorizedMutation(
@@ -865,12 +874,12 @@ export class ResellerAdminService {
   // -- Phase 2 reads (WP14) -----------------------------------------------------------------
 
   /**
-   * How much of a reseller's credit line is in use (D1). `resellers.view` for the terms and
+   * A reseller's balance and any legacy debt (D1). `resellers.view` for the terms and
    * `users.view` for the balance, which is the customer's wallet.
    *
-   * The allowance comes from `creditAllowanceOf`, the function settlement calls under the
-   * wallet lock, so "available" here is what a purchase would be allowed at this instant.
-   * It is a read, not a reservation: a purchase committed a moment later changes it.
+   * Reseller credit was removed (owner decision, 2026-10-01): the allowance comes from
+   * `creditAllowanceOf`, the function settlement calls under the wallet lock, and it is zero.
+   * A negative balance is a debt run up before the decision, shown as it is.
    */
   async creditStanding(
     scope: TenantContext,
@@ -887,7 +896,7 @@ export class ResellerAdminService {
     };
     const selling = await this.deps.settings.valueOf<SalesCurrencyCode>(scope, 'sales.currency');
     const balance = await this.deps.wallet.balanceOf(scope, listing.customerId as UserId, selling);
-    const allowance = creditAllowanceOf(terms, selling);
+    const allowance = creditAllowanceOf();
     const { limit, source } = effectiveLimitOf(terms);
     return {
       customerId: listing.customerId,
@@ -895,7 +904,7 @@ export class ResellerAdminService {
       effectiveLimit: limit,
       limitSource: source,
       sellingCurrency: selling,
-      credit: creditStateOf(terms, selling),
+      credit: creditStateOf(),
       balance: balance.amountMinor,
       allowance,
       ...creditFigures(balance.amountMinor, allowance),
@@ -1121,6 +1130,24 @@ function serialisableReseller(r: ResellerWrite) {
         ? null
         : { amount: r.creditLimit.amountMinor.toString(), currency: r.creditLimit.currency },
   };
+}
+
+/**
+ * Reseller credit was removed (owner decision, 2026-10-01: no reseller debt, no credit
+ * purchases). THE refusal of a non-zero limit — the schemas still parse one, so that a
+ * command which committed before the decision and lost its response reaches the replay
+ * lookup and gets its original result. Every caller runs this AFTER that lookup and before
+ * anything is written, so nothing can store a limit above zero again. A client re-sending
+ * a limit that migration `0155_reseller_credit_removed` zeroed is refused here: the stored
+ * value is zero, so a positive one is a change, and the operator saves again without it.
+ */
+function refuseCredit(limit: Money | null): void {
+  if (limit !== null && limit.amountMinor !== RESELLER_DEFAULT_CREDIT_LIMIT_MINOR) {
+    throw errors.validation(
+      COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID,
+      'Reseller credit was removed: a credit limit is always zero.',
+    );
+  }
 }
 
 /**

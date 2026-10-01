@@ -1,15 +1,12 @@
 import { useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  RESELLER_MAX_CREDIT_LIMIT_MINOR,
   RESELLER_OVERRIDE_MODES,
   RESELLER_STATUSES,
-  SALES_CURRENCY_CODES,
   uuidV7Schema,
   type CurrencyCode,
   type MoneyWire,
   type PricingStep,
-  type ResellerCreditStanding,
   type ResellerOverrideMode,
   type ResellerPriceLayer,
   type ResellerPricingMode,
@@ -20,7 +17,6 @@ import {
   type ResellerUpdateRequest,
 } from '@nexa/contracts';
 import {
-  fetchResellerCredit,
   fetchResellerTiers,
   fetchResellers,
   registerReseller,
@@ -41,7 +37,6 @@ import {
   Field,
   KV,
   Ltr,
-  Money,
   PageHead,
   StateSwitch,
   Button,
@@ -59,17 +54,17 @@ import {
   Num,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
-import { CheckField, SaveBar, revealField } from './editor-layout';
+import { SaveBar, revealField } from './editor-layout';
 import {
-  ResellerCreditCard,
+  ResellerBalanceCard,
   ResellerHistoryCard,
   ResellerPurchasesCard,
 } from './reseller-standing';
 import { ResellerPolicyCard } from './reseller-plans';
 
 /**
- * Resellers — who buys at a reseller's price, on which tier, and on how much credit
- * (WP9-B, `docs/wp9-reseller-audit.md` R1, R2, R3, R8, R11, R12).
+ * Resellers — who buys at a reseller's price, and on which tier
+ * (WP9-B, `docs/wp9-reseller-audit.md` R1, R2, R3, R11, R12).
  *
  * A reseller is a CUSTOMER with a reseller row, addressed by the customer's id; there is
  * one row per customer and no self-service application, so registering one is an
@@ -80,14 +75,11 @@ import { ResellerPolicyCard } from './reseller-plans';
  *
  * What the page says because the server does it:
  *
- * - **The effective credit limit is the server's**: the reseller's own, or the tier's
- *   when the reseller has none. The list shows which of the two applies.
- * - **Credit is an allowance below zero for purchases only** (R8). Registering a
- *   reseller writes no ledger entry. How much of the line is in use is the SERVER's
- *   derivation from the ledger (WP14 D1), drawn by `ResellerCreditCard`; a debt is a
- *   negative balance and nothing here settles or collects it (`OQ-WP9-04`).
- * - **Lowering a limit below the debt, or suspending a reseller who owes, asks for an
- *   acknowledgement first** (WP14 D4). The server accepts both, as it always has.
+ * - **There is no reseller credit** (owner decision, 2026-10-01: no reseller debt, no credit
+ *   purchases). The form offers no limit and sends none; the server refuses a non-zero one.
+ *   A reseller pays from the wallet like any customer. A balance below zero is a legacy
+ *   debt from before the decision, drawn as it is by `ResellerBalanceCard`; nothing here
+ *   settles or collects it (`OQ-WP9-04`).
  * - **Suspension withdraws the privileges and nothing else** (R1). Blocking the customer
  *   is the separate, existing lever on the customer's page.
  *
@@ -176,32 +168,12 @@ export function PricingText({ label, percent }: { label: WebKey; percent: number
 }
 
 /**
- * A credit limit as `Money` draws it. The reseller contract spells the pair
+ * A reseller amount as `Money` draws it. The reseller contract spells the pair
  * `{ amount, currency }`; the renderer takes `{ amountMinor, currency }`. Same digits,
  * same currency, renamed once here rather than at every call site.
  */
 export function limitWire(limit: { amount: string; currency: CurrencyCode }): MoneyWire {
   return { amountMinor: limit.amount, currency: limit.currency };
-}
-
-/** The limit that applies, and whether it is the reseller's own or the tier's. */
-export function CreditLimitCell({ reseller }: { reseller: ResellerSummaryResponse }) {
-  return (
-    <div>
-      <Money value={limitWire(reseller.effectiveCreditLimit)} />
-      <div className="muted small">
-        {t(
-          reseller.creditLimit === null
-            ? 'web.reseller_credit_from_tier'
-            : 'web.reseller_credit_own',
-        )}
-      </div>
-    </div>
-  );
-}
-
-function Dash() {
-  return <span className="faint">—</span>;
 }
 
 /** The name an operator recognises, falling back to the Telegram id that always exists. */
@@ -247,21 +219,6 @@ function useTrail(signature: string) {
     push: (next: string) => setTrail({ signature, cursors: [...cursors, next] }),
     pop: () => setTrail({ signature, cursors: cursors.slice(0, -1) }),
   };
-}
-
-/**
- * A credit limit typed in minor units, or null when it is not one.
- *
- * Digits only, and never parsed to a `number`: the contract carries money as a decimal
- * string so a value above 2^53 survives. Bounded by the contract's own maximum, so the
- * operator is told here rather than by a 400.
- */
-export function creditAmountOf(raw: string): string | null {
-  const text = raw.trim();
-  if (!/^\d{1,19}$/u.test(text)) return null;
-  if (BigInt(text) > RESELLER_MAX_CREDIT_LIMIT_MINOR) return null;
-  // Stripped of leading zeros so `010` and `10` are one payload and one fingerprint.
-  return text.replace(/^0+(?=\d)/u, '');
 }
 
 /** A whole percentage in `[1, 99]`, the range the contract's `percentSchema` allows. */
@@ -384,11 +341,6 @@ export function ResellersPage({
       render: (row) => (
         <PricingText label={OVERRIDE_LABELS[row.pricingMode]} percent={row.discountPercentage} />
       ),
-    },
-    {
-      key: 'credit',
-      header: t('web.reseller_credit_limit'),
-      render: (row) => <CreditLimitCell reseller={row} />,
     },
     {
       key: 'actions',
@@ -602,7 +554,6 @@ export function ResellersPage({
                     key={`edit-${editing.customerId}`}
                     reseller={editing}
                     tiers={tierRows}
-                    mayViewWallet={mayViewWallet}
                     onDone={() => setEditing(null)}
                     onDirtyChange={discard.onDirtyChange}
                   />
@@ -618,7 +569,7 @@ export function ResellersPage({
                 <ResellerHistoryCard customerId={viewing} mayViewAudit={mayViewAudit} />
               </>
             }
-            side={<ResellerCreditCard customerId={viewing} mayViewWallet={mayViewWallet} />}
+            side={<ResellerBalanceCard customerId={viewing} mayViewWallet={mayViewWallet} />}
           />
         </div>
       )}
@@ -635,7 +586,6 @@ export function ResellersPage({
             key={`edit-${editing.customerId}`}
             reseller={editing}
             tiers={tierRows}
-            mayViewWallet={mayViewWallet}
             onDone={() => setEditing(null)}
             onDirtyChange={discard.onDirtyChange}
           />
@@ -722,18 +672,6 @@ function StandingHead({
                   />
                 ),
               },
-              {
-                label: t('web.reseller_credit_limit_effective'),
-                value: <Money value={limitWire(row.effectiveCreditLimit)} />,
-              },
-              {
-                label: t('web.reseller_credit_limit'),
-                value: t(
-                  row.creditLimit === null
-                    ? 'web.reseller_credit_from_tier'
-                    : 'web.reseller_credit_own',
-                ),
-              },
             ],
           })}
       actions={
@@ -755,10 +693,6 @@ export interface ResellerFormState {
   status: ResellerStatus;
   pricingMode: ResellerOverrideMode;
   percent: string;
-  /** False is "use the tier's limit", which is a null on the wire. */
-  ownLimit: boolean;
-  limitAmount: string;
-  limitCurrency: CurrencyCode;
 }
 
 function blankState(customerId: string): ResellerFormState {
@@ -768,9 +702,6 @@ function blankState(customerId: string): ResellerFormState {
     status: 'ACTIVE',
     pricingMode: 'TIER',
     percent: '',
-    ownLimit: false,
-    limitAmount: '',
-    limitCurrency: SALES_CURRENCY_CODES[0],
   };
 }
 
@@ -781,9 +712,6 @@ function stateOf(reseller: ResellerSummaryResponse): ResellerFormState {
     status: reseller.status,
     pricingMode: reseller.pricingMode,
     percent: reseller.discountPercentage === null ? '' : String(reseller.discountPercentage),
-    ownLimit: reseller.creditLimit !== null,
-    limitAmount: reseller.creditLimit?.amount ?? '',
-    limitCurrency: reseller.creditLimit?.currency ?? reseller.effectiveCreditLimit.currency,
   };
 }
 
@@ -796,8 +724,9 @@ type TermsBody = Pick<
  * The write body, or the field that is wrong.
  *
  * Checked with the same rules the contract refines — a percentage exactly when the mode
- * is a percentage, a limit that is a whole number of minor units — so the operator is
- * told which field to fix rather than receiving a 400. The server decides again.
+ * is a percentage — so the operator is told which field to fix rather than receiving a
+ * 400. The server decides again. The credit limit is always null: reseller credit was
+ * removed (owner decision, 2026-10-01), and null is "no limit of its own".
  */
 export function resellerBodyFrom(
   state: ResellerFormState,
@@ -826,65 +755,21 @@ export function resellerBodyFrom(
     discountPercentage = percentOf(state.percent);
     if (discountPercentage === null) return { problem: 'web.reseller_problem_percent' };
   }
-  let creditLimit: TermsBody['creditLimit'] = null;
-  if (state.ownLimit) {
-    const amount = creditAmountOf(state.limitAmount);
-    if (amount === null) return { problem: 'web.reseller_problem_limit' };
-    creditLimit = { amount, currency: state.limitCurrency };
-  }
   const terms: TermsBody = {
     tierId: state.tierId,
     pricingMode: state.pricingMode,
     discountPercentage,
-    creditLimit,
+    creditLimit: null,
   };
   return mode === 'register'
     ? { body: { customerId, ...terms } }
     : { body: { status: state.status, ...terms } };
 }
 
-/**
- * Whether saving these terms needs the operator to acknowledge what happens to a debt
- * (WP14 D4), and which sentence says so. Null when nothing is owed, when the credit in use
- * is unknown (no `users.view`), or when the change does not reduce the credit line.
- *
- * It decides no money and gates nothing on the server, which accepts both changes as it
- * always has (R8, `OQ-WP9-04`): the debt stays where it is and further credit stops. The
- * one comparison it makes is the allowance settlement would apply — the new effective
- * limit in the selling currency, else zero — against the server's own credit in use.
- */
-export function debtWarningOf(
-  before: ResellerSummaryResponse,
-  state: ResellerFormState,
-  tiers: readonly ResellerTierSummaryResponse[] | null,
-  credit: ResellerCreditStanding | undefined,
-): WebKey | null {
-  if (credit === undefined) return null;
-  const inUse = BigInt(credit.creditInUse.amount);
-  if (inUse <= 0n) return null;
-  if (state.status !== 'ACTIVE') {
-    return before.status === 'ACTIVE' ? 'web.reseller_confirm_suspend_debt' : null;
-  }
-  let limit: { amount: string; currency: CurrencyCode } | null;
-  if (state.ownLimit) {
-    const amount = creditAmountOf(state.limitAmount);
-    limit = amount === null ? null : { amount, currency: state.limitCurrency };
-  } else {
-    limit = tiers?.find((candidate) => candidate.id === state.tierId)?.creditLimit ?? null;
-  }
-  if (limit === null) return null;
-  const amount = BigInt(limit.amount);
-  const allowance = limit.currency === credit.sellingCurrency && amount > 0n ? amount : 0n;
-  return allowance < inUse && allowance < BigInt(credit.allowance.amount)
-    ? 'web.reseller_confirm_limit_below_debt'
-    : null;
-}
-
 function ResellerForm({
   reseller,
   initialCustomerId = '',
   tiers,
-  mayViewWallet = false,
   onDone,
   onDirtyChange,
 }: {
@@ -893,8 +778,6 @@ function ResellerForm({
   initialCustomerId?: string;
   /** Every tier, or null while the list has not answered. */
   tiers: readonly ResellerTierSummaryResponse[] | null;
-  /** `users.view`: without it the credit in use is unknown here, and nothing is warned. */
-  mayViewWallet?: boolean;
   onDone: () => void;
   /** Told whether the form holds unsaved edits, so the page asks before replacing it. */
   onDirtyChange?: (dirty: boolean) => void;
@@ -908,8 +791,6 @@ function ResellerForm({
   const [state, setState] = useState<ResellerFormState>(
     reseller === undefined ? blankState(initialCustomerId) : stateOf(reseller),
   );
-  /** The operator has read the debt warning for the terms as they are NOW. */
-  const [acknowledged, setAcknowledged] = useState(false);
   /*
    * What a registration is compared with: the handed-over customer until one is
    * registered, then the blank form it resets to. The `register` query outlives the
@@ -924,21 +805,12 @@ function ResellerForm({
   useUnsavedChanges(dirty);
   useReportDirty(dirty, onDirtyChange);
   const set = <K extends keyof ResellerFormState>(key: K, value: ResellerFormState[K]) => {
-    setAcknowledged(false);
     setState((current) => ({ ...current, [key]: value }));
   };
-  const credit = useQuery({
-    queryKey: ['reseller-credit', reseller?.customerId ?? ''],
-    queryFn: () => fetchResellerCredit(reseller?.customerId ?? ''),
-    enabled: reseller !== undefined && mayViewWallet,
-  });
-
   const checked =
     mode === 'register' ? resellerBodyFrom(state, 'register') : resellerBodyFrom(state, 'update');
   const problem = 'problem' in checked ? checked.problem : null;
   const tier = tiers?.find((candidate) => candidate.id === state.tierId);
-  const warning =
-    reseller === undefined ? null : debtWarningOf(reseller, state, tiers, credit.data?.credit);
 
   const save = useMutation({
     mutationFn: () => {
@@ -983,15 +855,6 @@ function ResellerForm({
     onError: (error) => submission.settleOn(error),
   });
 
-  /** A stored currency outside the sales list stays selectable, so an edit keeps it. */
-  const currencies: readonly CurrencyCode[] = (
-    SALES_CURRENCY_CODES as readonly CurrencyCode[]
-  ).concat(
-    (SALES_CURRENCY_CODES as readonly string[]).includes(state.limitCurrency)
-      ? []
-      : [state.limitCurrency],
-  );
-
   return (
     <Card
       title={mode === 'register' ? t('web.reseller_register_title') : t('web.reseller_edit_title')}
@@ -1021,15 +884,7 @@ function ResellerForm({
         </Field>
       ) : (
         /* TEXT, not a disabled input: a reseller row never moves to another customer. */
-        <KV
-          items={[
-            [t('web.reseller_customer'), <ResellerCell key="c" reseller={reseller} />],
-            [
-              t('web.reseller_credit_limit_effective'),
-              <CreditLimitCell key="l" reseller={reseller} />,
-            ],
-          ]}
-        />
+        <KV items={[[t('web.reseller_customer'), <ResellerCell key="c" reseller={reseller} />]]} />
       )}
 
       <Field label={t('web.reseller_tier')} htmlFor={`${prefix}-tier`}>
@@ -1111,66 +966,7 @@ function ResellerForm({
         </Field>
       )}
 
-      <CheckField
-        id={`${prefix}-own-limit`}
-        label={t('web.reseller_own_limit')}
-        hint={t('web.reseller_own_limit_hint')}
-        checked={state.ownLimit}
-        onChange={(next) => set('ownLimit', next)}
-      />
-
-      {!state.ownLimit ? (
-        <p className="muted small">
-          {t('web.reseller_uses_tier_limit')}{' '}
-          {tier === undefined ? <Dash /> : <Money value={limitWire(tier.creditLimit)} />}
-        </p>
-      ) : (
-        <>
-          <Field
-            label={t('web.reseller_limit_amount')}
-            hint={t('web.reseller_limit_amount_hint')}
-            htmlFor={`${prefix}-limit`}
-          >
-            <input
-              id={`${prefix}-limit`}
-              dir="ltr"
-              inputMode="numeric"
-              value={state.limitAmount}
-              onChange={(event) => set('limitAmount', event.target.value.trim())}
-            />
-          </Field>
-          <Field label={t('web.discount_currency')} htmlFor={`${prefix}-currency`}>
-            <select
-              id={`${prefix}-currency`}
-              value={state.limitCurrency}
-              onChange={(event) => set('limitCurrency', event.target.value as CurrencyCode)}
-            >
-              {currencies.map((code) => (
-                <option key={code} value={code}>
-                  {code}
-                </option>
-              ))}
-            </select>
-          </Field>
-        </>
-      )}
-
       {problem !== null && <Banner tone="warn">{t(problem)}</Banner>}
-
-      {problem === null && warning !== null && (
-        <Banner tone="warn">
-          <p>{t(warning)}</p>
-          <label htmlFor={`${prefix}-acknowledge`}>
-            <input
-              id={`${prefix}-acknowledge`}
-              type="checkbox"
-              checked={acknowledged}
-              onChange={(event) => setAcknowledged(event.target.checked)}
-            />{' '}
-            {t('web.reseller_confirm_acknowledge')}
-          </label>
-        </Banner>
-      )}
 
       <SaveBar dirty={dirty}>
         {mode === 'update' && (
@@ -1182,7 +978,7 @@ function ResellerForm({
           variant="primary"
           size="sm"
           icon="check"
-          disabled={problem !== null || (warning !== null && !acknowledged) || save.isPending}
+          disabled={problem !== null || save.isPending}
           onClick={() => save.mutate()}
         >
           {mode === 'register' ? t('web.reseller_register') : t('web.rule_save')}

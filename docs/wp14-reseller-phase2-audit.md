@@ -1,5 +1,12 @@
 # WP14 — Reseller Phase 2: audit and design
 
+> **Superseded in part, owner decision 2026-10-01: reseller credit is removed.** No reseller
+> debt, no negative balances, no credit purchases (`docs/reseller-phase3-closure.md` §5).
+> Where this document describes a credit line, an allowance, credit in use as spendable, or
+> the debt acknowledgements, it records what was built then, not current behaviour. The
+> allowance is now zero for everyone, every write refuses a non-zero limit, and the Web
+> Admin shows only the balance and any legacy debt.
+
 Status: audit written before any implementation; §7 records what was built and the evidence. Branch `claude/wp14-reseller-phase2`,
 from `origin/main` at `4e6fb39`. It does not depend on WP10G, WP11A, WP12 or WP13.
 

@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { sql, type SQL } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -21,6 +23,7 @@ import {
 } from '@nexa/contracts';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
 import type { OrderRecord } from '../../apps/api/src/modules/commerce/orders/application/ports';
+import { hashRequest } from '../../apps/api/src/modules/platform/idempotency/infrastructure/drizzle-idempotency-store';
 import type { DiscountRuleWrite } from '../../apps/api/src/modules/commerce/pricing/application/ports';
 import {
   SEED_IDS,
@@ -46,8 +49,9 @@ import {
  *   promotions come off what is left; one of TIER_PRICE / USER_OVERRIDE fires (R3, R4);
  * - confirmation snapshots the terms append-only and refuses a quote whose reseller layer
  *   no longer matches the live terms with RESELLER_TERMS_CHANGED (R9);
- * - credit is an allowance below zero, read under the wallet lock, in its own currency,
- *   for purchases only (R8); a refund is a compensating credit (R10);
+ * - there is NO reseller credit (owner decision, 2026-10-01: no reseller debt, no credit
+ *   purchases): a write refuses a non-zero limit, a limit stored before the decision
+ *   grants nothing, and no wallet goes below zero; a refund is a compensating credit (R10);
  * - every operator write is audited, idempotent and tenant-scoped (R11).
  */
 
@@ -215,9 +219,16 @@ describe('resellers (WP9-B)', () => {
         name: options.name ?? `Tier ${n}`,
         pricingMode: percent === null ? 'LIST_PRICE' : 'PERCENTAGE_DISCOUNT',
         discountPercentage: percent,
-        creditLimit: money(options.credit ?? 0n, options.creditCurrency ?? 'IRT'),
+        creditLimit: money(0n, options.creditCurrency ?? 'IRT'),
       },
     });
+    // A non-zero limit can no longer be WRITTEN; one stored before the decision is
+    // reproduced in the row directly, as a legacy value.
+    if ((options.credit ?? 0n) !== 0n) {
+      await ctx.container.database.db.execute(sql`
+        UPDATE reseller_tiers SET credit_limit_amount = ${options.credit}
+         WHERE id = ${created.id}`);
+    }
     const grants = options.grants ?? EVERYTHING;
     if (grants.length > 0) await grant(created.id, grants);
     return created.id;
@@ -239,7 +250,7 @@ describe('resellers (WP9-B)', () => {
         name: current.name,
         pricingMode: percent === null ? 'LIST_PRICE' : 'PERCENTAGE_DISCOUNT',
         discountPercentage: percent,
-        creditLimit: current.creditLimit,
+        creditLimit: money(0n, current.creditLimit.currency),
       },
     });
   }
@@ -254,19 +265,27 @@ describe('resellers (WP9-B)', () => {
       readonly creditCurrency?: CurrencyCode;
     } = {},
   ) {
-    return ctx.container.resellersAdmin.register(tenantA, owner, {
+    const own =
+      override.credit === undefined || override.credit === null
+        ? null
+        : money(override.credit, override.creditCurrency ?? 'IRT');
+    const registered = await ctx.container.resellersAdmin.register(tenantA, owner, {
       idempotencyKey: key(),
       customerId,
       write: {
         tierId,
         pricingMode: override.mode ?? 'TIER',
         discountPercentage: override.percent ?? null,
-        creditLimit:
-          override.credit === undefined || override.credit === null
-            ? null
-            : money(override.credit, override.creditCurrency ?? 'IRT'),
+        creditLimit: own === null || own.amountMinor === 0n ? own : money(0n, own.currency),
       },
     });
+    // A legacy own limit, stored before the decision: only the row can hold one now.
+    if (own !== null && own.amountMinor !== 0n) {
+      await ctx.container.database.db.execute(sql`
+        UPDATE resellers SET credit_limit_amount = ${own.amountMinor}
+         WHERE tenant_id = ${tenantA.tenantId} AND customer_id = ${customerId}`);
+    }
+    return registered;
   }
 
   async function setStatus(customerId: UserId, status: ResellerStatus): Promise<void> {
@@ -279,7 +298,7 @@ describe('resellers (WP9-B)', () => {
         status,
         pricingMode: current.pricingMode,
         discountPercentage: current.discountPercentage,
-        creditLimit: current.creditLimit,
+        creditLimit: null,
       },
     });
   }
@@ -1065,11 +1084,62 @@ describe('resellers (WP9-B)', () => {
     });
   });
 
+  describe('an ordinary customer beside a configured reseller (docs/reseller-phase3-closure.md)', () => {
+    it('keeps the public catalogue, the list price, no terms and no credit, whatever a tier and an override say', async () => {
+      const L = 100_000n;
+      const narrowed = await product(100_000n);
+      const other = await product(50_000n);
+      const resellersOnly = await product(80_000n, { audience: 'RESELLERS_ONLY' });
+      // Everything a reseller can be given at once: a discount, a legacy stored limit, and a
+      // per-reseller catalogue override narrowing them to one existing Product.
+      await register(resellerCustomer, await tier({ percent: 30, credit: L }));
+      await ctx.container.resellersAdmin.replaceOverrides(tenantA, owner, {
+        idempotencyKey: key(),
+        customerId: resellerCustomer,
+        overrides: [{ dimension: 'CATALOGUE', grants: [{ kind: 'PRODUCT', subject: narrowed }] }],
+      });
+      const browse = async (customerId: UserId) =>
+        (await ctx.container.products.browse(viaBot, customerActor(key()), 50, customerId)).items
+          .map((p) => p.id)
+          .sort();
+
+      // The reseller is narrowed and discounted — so the configuration is live.
+      expect(await browse(resellerCustomer)).toEqual([narrowed]);
+      await expect(draft(resellerCustomer, other)).rejects.toMatchObject(
+        refusal(COMMERCE_ERROR_CODES.RESELLER_NOT_ENTITLED, { dimension: 'CATALOGUE' }),
+      );
+      const resold = await confirmed(resellerCustomer, narrowed);
+      expect(resold.totals.total.amountMinor).toBe(70_000n);
+      expect(stepsOf(resold).map((s) => s.step)).toContain('TIER_PRICE');
+
+      // The ordinary customer: the whole public catalogue, none of the reseller-only one.
+      expect(await browse(ordinary)).toEqual([narrowed, other].sort());
+      await expect(draft(ordinary, resellersOnly)).rejects.toMatchObject(
+        refusal(COMMERCE_ERROR_CODES.PRODUCT_NOT_FOR_AUDIENCE),
+      );
+      // List price through the one engine: a BASE_PRICE step and nothing else, no terms.
+      const plain = await confirmed(ordinary, narrowed);
+      expect(plain.totals.total.amountMinor).toBe(100_000n);
+      expect(stepsOf(plain).map((s) => s.step)).toEqual(['BASE_PRICE']);
+      expect(await termsRow(plain.id)).toBeUndefined();
+
+      // And no overdraft: no credit for anyone (reseller credit was removed, 2026-10-01).
+      await expect(settle(ordinary, plain.id)).rejects.toMatchObject(
+        refusal(COMMERCE_ERROR_CODES.WALLET_INSUFFICIENT_FUNDS, {
+          shortfallMinor: '100000',
+          currency: 'IRT',
+        }),
+      );
+      expect(await balance(ordinary)).toBe(0n);
+      expect((await orderRow(plain.id))?.state).toBe('AWAITING_PAYMENT');
+    });
+  });
+
   // -------------------------------------------------------------------------
-  // 8, 9. The credit line
+  // 8, 9. No credit line (owner decision, 2026-10-01: no reseller debt, no credit purchases)
   // -------------------------------------------------------------------------
 
-  describe('the credit line (R8)', () => {
+  describe('no reseller credit (R8 removed by owner decision)', () => {
     const L = 100_000n;
 
     it('keeps a 99% reseller price payable: one minor unit, confirmed and settled from the wallet', async () => {
@@ -1142,65 +1212,330 @@ describe('resellers (WP9-B)', () => {
       expect(await balance(resellerCustomer)).toBe(0n);
     });
 
-    it('lets the wallet reach exactly −L and not −L−1', async () => {
+    it('lets no stored limit overdraw: a legacy tier or own limit, ACTIVE, in the selling currency', async () => {
+      /*
+       * The rule the owner's decision states. Every condition R8 used to extend credit under
+       * holds here — an ACTIVE reseller, a positive limit, the purchase in the limit's own
+       * currency — and the wallet still needs the whole amount. Restoring the old allowance
+       * (`creditAllowanceOf` returning the limit) makes this case pay on credit.
+       */
       await register(resellerCustomer, await tier({ credit: L }));
-      const tooMuch = await confirmed(resellerCustomer, await product(L + 1n));
-      await expect(settle(resellerCustomer, tooMuch.id)).rejects.toMatchObject(
+      const onTier = await confirmed(resellerCustomer, await product(1_000n));
+      await expect(settle(resellerCustomer, onTier.id)).rejects.toMatchObject(
+        refusal(COMMERCE_ERROR_CODES.WALLET_INSUFFICIENT_FUNDS, {
+          shortfallMinor: '1000',
+          currency: 'IRT',
+        }),
+      );
+      // One unit short is refused; the whole amount pays, down to exactly zero.
+      await adjust(resellerCustomer, 'CREDIT', 999n);
+      await expect(settle(resellerCustomer, onTier.id)).rejects.toMatchObject(
         refusal(COMMERCE_ERROR_CODES.WALLET_INSUFFICIENT_FUNDS, { shortfallMinor: '1' }),
       );
+      await adjust(resellerCustomer, 'CREDIT', 1n);
+      expect((await settle(resellerCustomer, onTier.id)).order.state).toBe('PAID');
       expect(await balance(resellerCustomer)).toBe(0n);
 
-      const exact = await confirmed(resellerCustomer, await product(L));
-      const { order } = await settle(resellerCustomer, exact.id);
-      expect(order.state).toBe('PAID');
-      expect(await balance(resellerCustomer)).toBe(-L);
-
-      // Nothing more fits, not even one unit.
-      const one = await confirmed(resellerCustomer, await product(1n));
-      await expect(settle(resellerCustomer, one.id)).rejects.toMatchObject(
-        refusal(COMMERCE_ERROR_CODES.WALLET_INSUFFICIENT_FUNDS, { shortfallMinor: '1' }),
-      );
-      expect(await balance(resellerCustomer)).toBe(-L);
-    });
-
-    it('prefers the reseller’s own limit to the tier’s, in both directions', async () => {
-      const tierId = await tier({ credit: L });
-      await register(resellerCustomer, tierId, { credit: 30_000n });
-      const over = await confirmed(resellerCustomer, await product(30_001n));
-      await expect(settle(resellerCustomer, over.id)).rejects.toMatchObject(
-        refusal(COMMERCE_ERROR_CODES.WALLET_INSUFFICIENT_FUNDS),
-      );
-      const within = await confirmed(resellerCustomer, await product(30_000n));
-      await settle(resellerCustomer, within.id);
-      expect(await balance(resellerCustomer)).toBe(-30_000n);
-
-      // An own limit of ZERO overrides a generous tier: no debt at all.
+      // A legacy OWN limit over a zero tier grants nothing either.
       const other = await customer('940004');
-      await register(other, tierId, { credit: 0n });
-      const nothing = await confirmed(other, await product(1_000n));
-      await expect(settle(other, nothing.id)).rejects.toMatchObject(
-        refusal(COMMERCE_ERROR_CODES.WALLET_INSUFFICIENT_FUNDS),
-      );
-    });
-
-    it('grants nothing for a purchase in a currency other than the limit’s', async () => {
-      const tierId = await tier({ credit: L, creditCurrency: 'USD' });
-      await register(resellerCustomer, tierId);
-      const order = await confirmed(resellerCustomer, await product(1_000n));
-      await expect(settle(resellerCustomer, order.id)).rejects.toMatchObject(
+      await register(other, await tier(), { credit: L });
+      expect(
+        (await ctx.container.resellersAdmin.get(tenantA, owner, other)).creditLimit,
+        'the stored value still reads',
+      ).toEqual(money(L, 'IRT'));
+      const own = await confirmed(other, await product(1_000n));
+      await expect(settle(other, own.id)).rejects.toMatchObject(
         refusal(COMMERCE_ERROR_CODES.WALLET_INSUFFICIENT_FUNDS, { shortfallMinor: '1000' }),
       );
-
-      // The reseller's own limit, in the wrong currency, over a right-currency tier: none.
-      const other = await customer('940005');
-      await register(other, await tier({ credit: L }), { credit: L, creditCurrency: 'USD' });
-      const second = await confirmed(other, await product(1_000n));
-      await expect(settle(other, second.id)).rejects.toMatchObject(
-        refusal(COMMERCE_ERROR_CODES.WALLET_INSUFFICIENT_FUNDS),
-      );
+      expect(await balance(other)).toBe(0n);
+      expect(
+        await count(sql`SELECT count(*)::int AS n FROM wallet_entries WHERE reason = 'PURCHASE'`),
+      ).toBe(1);
     });
 
-    it('never lets an operator’s manual debit overdraw, whatever the credit limit', async () => {
+    it('refuses a non-zero limit on every write, and stores nothing', async () => {
+      const invalid = refusal(COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID);
+      await expect(
+        ctx.container.resellersAdmin.createTier(tenantA, owner, {
+          idempotencyKey: key(),
+          write: {
+            name: 'On credit',
+            pricingMode: 'LIST_PRICE',
+            discountPercentage: null,
+            creditLimit: money(1n, 'IRT'),
+          },
+        }),
+      ).rejects.toMatchObject(invalid);
+      expect(await count(sql`SELECT count(*)::int AS n FROM reseller_tiers`)).toBe(0);
+
+      const tierId = await tier();
+      const current = await ctx.container.resellersAdmin.getTier(tenantA, owner, tierId);
+      await expect(
+        ctx.container.resellersAdmin.updateTier(tenantA, owner, {
+          idempotencyKey: key(),
+          tierId,
+          write: {
+            name: current.name,
+            pricingMode: current.pricingMode,
+            discountPercentage: current.discountPercentage,
+            creditLimit: money(L, 'IRT'),
+          },
+        }),
+      ).rejects.toMatchObject(invalid);
+      const terms = { tierId, pricingMode: 'TIER' as const, discountPercentage: null };
+      await expect(
+        ctx.container.resellersAdmin.register(tenantA, owner, {
+          idempotencyKey: key(),
+          customerId: resellerCustomer,
+          write: { ...terms, creditLimit: money(L, 'IRT') },
+        }),
+      ).rejects.toMatchObject(invalid);
+      expect(await count(sql`SELECT count(*)::int AS n FROM resellers`)).toBe(0);
+      await register(resellerCustomer, tierId);
+      await expect(
+        ctx.container.resellersAdmin.update(tenantA, owner, {
+          idempotencyKey: key(),
+          customerId: resellerCustomer,
+          write: { ...terms, status: 'ACTIVE', creditLimit: money(1n, 'IRT') },
+        }),
+      ).rejects.toMatchObject(invalid);
+
+      const stored = await rows<{ amount: string | null }>(sql`
+        SELECT credit_limit_amount::text AS amount FROM reseller_tiers
+        UNION ALL SELECT credit_limit_amount::text FROM resellers`);
+      expect(stored.every((r) => r.amount === null || r.amount === '0')).toBe(true);
+    });
+
+    it('replays a positive-limit command that committed before the decision, and refuses a new one', async () => {
+      /*
+       * PR #132 review, finding 2. A command sent by the previous release with a positive
+       * limit can commit and lose its response; its retry carries the same key and body
+       * across the upgrade. It must get its ORIGINAL result, so the schema parses the old
+       * shape and the service looks up the replay BEFORE it refuses a non-zero limit.
+       *
+       * The previous release's commit is reproduced as it left the database: the row (its
+       * limit since zeroed by migration 0155) and the idempotency record of the positive
+       * body, hashed by the same `serialisableTier` / `serialisableReseller` shape.
+       */
+      const legacy = money(L, 'IRT');
+      const tierWrite = {
+        name: 'Legacy Gold',
+        pricingMode: 'LIST_PRICE' as const,
+        discountPercentage: null,
+        creditLimit: legacy,
+      };
+      const tierKey = key();
+      const committed = await ctx.container.resellersAdmin.createTier(tenantA, owner, {
+        idempotencyKey: tierKey,
+        write: { ...tierWrite, creditLimit: money(0n, 'IRT') },
+      });
+      const asSent = (payload: unknown, idempotencyKey: string) =>
+        ctx.container.database.db.execute(sql`
+          UPDATE request_idempotency SET request_hash = ${hashRequest(payload)}
+           WHERE key = ${idempotencyKey}`);
+      await asSent(
+        {
+          tier: {
+            name: tierWrite.name,
+            pricingMode: tierWrite.pricingMode,
+            discountPercentage: null,
+            creditLimit: { amount: L.toString(), currency: 'IRT' },
+          },
+        },
+        tierKey,
+      );
+      const replayed = await ctx.container.resellersAdmin.createTier(tenantA, owner, {
+        idempotencyKey: tierKey,
+        write: tierWrite,
+      });
+      expect(replayed.id, 'the original result').toBe(committed.id);
+      expect(await count(sql`SELECT count(*)::int AS n FROM reseller_tiers`)).toBe(1);
+
+      // The same for a registration.
+      await grant(committed.id, EVERYTHING);
+      const registerKey = key();
+      const terms = {
+        tierId: committed.id,
+        pricingMode: 'TIER' as const,
+        discountPercentage: null,
+      };
+      await ctx.container.resellersAdmin.register(tenantA, owner, {
+        idempotencyKey: registerKey,
+        customerId: resellerCustomer,
+        write: { ...terms, creditLimit: null },
+      });
+      await asSent(
+        {
+          customerId: resellerCustomer,
+          reseller: {
+            ...terms,
+            status: 'ACTIVE',
+            creditLimit: { amount: L.toString(), currency: 'IRT' },
+          },
+        },
+        registerKey,
+      );
+      const again = await ctx.container.resellersAdmin.register(tenantA, owner, {
+        idempotencyKey: registerKey,
+        customerId: resellerCustomer,
+        write: { ...terms, creditLimit: legacy },
+      });
+      expect(again.customerId).toBe(resellerCustomer);
+      expect(await count(sql`SELECT count(*)::int AS n FROM resellers`)).toBe(1);
+
+      // A NEW key with a positive limit is not a replay: refused, and nothing stored.
+      await expect(
+        ctx.container.resellersAdmin.createTier(tenantA, owner, {
+          idempotencyKey: key(),
+          write: { ...tierWrite, name: 'Fresh' },
+        }),
+      ).rejects.toMatchObject(refusal(COMMERCE_ERROR_CODES.COMMERCE_REQUEST_INVALID));
+      // And neither replay granted any credit: the stored limits are zero and null.
+      expect(
+        (await ctx.container.resellersAdmin.getTier(tenantA, owner, committed.id)).creditLimit,
+      ).toEqual(money(0n, 'IRT'));
+      expect(
+        (await ctx.container.resellersAdmin.get(tenantA, owner, resellerCustomer)).creditLimit,
+      ).toBeNull();
+      expect(await count(sql`SELECT count(*)::int AS n FROM reseller_tiers`)).toBe(1);
+    });
+
+    it('migration 0155 zeroes every stored limit, so the PREVIOUS release computes no credit either', async () => {
+      /*
+       * PR #132 review, finding 1. During a rolling update a replica of the previous release
+       * keeps serving after the migrations ran. Its allowance rule — copied here verbatim
+       * from `reseller-credit.ts` on main before the decision — must read zero from what the
+       * migration leaves. The migration's own SQL is applied to rows holding the limits the
+       * previous release could store, and the ledger is checked untouched.
+       */
+      const previousAllowance = (
+        status: string,
+        own: { amount: bigint; currency: string } | null,
+        tierLimit: { amount: bigint; currency: string },
+        currency: string,
+      ): bigint => {
+        if (status !== 'ACTIVE') return 0n;
+        const limit = own ?? tierLimit;
+        if (limit.amount <= 0n) return 0n;
+        if (limit.currency !== currency) return 0n;
+        return limit.amount;
+      };
+
+      const generous = await tier({ credit: L });
+      const zero = await tier();
+      await register(resellerCustomer, generous);
+      const own = await customer('940006');
+      await register(own, zero, { credit: 30_000n });
+      const explicitZero = await customer('940007');
+      await register(explicitZero, generous, { credit: 0n });
+      await adjust(resellerCustomer, 'CREDIT', 5n);
+      const ledgerBefore = await rows<Record<string, unknown>>(
+        sql`SELECT * FROM wallet_entries ORDER BY created_at, id`,
+      );
+
+      const stateOf = async () =>
+        rows<{
+          customer_id: string;
+          status: string;
+          own_amount: string | null;
+          own_currency: string | null;
+          tier_amount: string;
+          tier_currency: string;
+        }>(sql`
+          SELECT r.customer_id, r.status,
+                 r.credit_limit_amount::text AS own_amount, r.credit_limit_currency AS own_currency,
+                 t.credit_limit_amount::text AS tier_amount, t.credit_limit_currency AS tier_currency
+            FROM resellers r JOIN reseller_tiers t ON t.id = r.tier_id ORDER BY r.customer_id`);
+      const allowances = async () =>
+        (await stateOf()).map((r) =>
+          previousAllowance(
+            r.status,
+            r.own_amount === null
+              ? null
+              : { amount: BigInt(r.own_amount), currency: r.own_currency ?? '' },
+            { amount: BigInt(r.tier_amount), currency: r.tier_currency },
+            'IRT',
+          ),
+        );
+      expect(
+        (await allowances()).some((a) => a > 0n),
+        'the previous release would extend credit before the migration',
+      ).toBe(true);
+
+      const migration = readFileSync(
+        join(__dirname, '../../apps/api/drizzle/0155_reseller_credit_removed.sql'),
+        'utf8',
+      );
+      for (const statement of migration.split('--> statement-breakpoint')) {
+        await ctx.container.database.db.execute(sql.raw(statement));
+      }
+
+      expect(await allowances(), 'the previous release computes no credit after it').toEqual([
+        0n,
+        0n,
+        0n,
+      ]);
+      const after = await stateOf();
+      expect(after.every((r) => r.own_amount === null && r.tier_amount === '0')).toBe(true);
+      expect(await rows(sql`SELECT * FROM wallet_entries ORDER BY created_at, id`)).toEqual(
+        ledgerBefore,
+      );
+
+      // Each non-zero value is on record, on the entity it belonged to.
+      const recorded = await rows<{ action: string; entity_id: string; before: unknown }>(sql`
+        SELECT action, entity_id, before FROM audit_logs
+         WHERE correlation_id = 'migration-0155-reseller-credit-removed'
+         ORDER BY action, entity_id`);
+      expect(recorded).toEqual(
+        expect.arrayContaining([
+          {
+            action: 'reseller_tier.update',
+            entity_id: generous,
+            before: { creditLimit: { amount: L.toString(), currency: 'IRT' } },
+          },
+          {
+            action: 'reseller.update',
+            entity_id: own,
+            before: { creditLimit: { amount: '30000', currency: 'IRT' } },
+          },
+        ]),
+      );
+      expect(recorded, 'zero values are not recorded as changes').toHaveLength(2);
+    });
+
+    it('leaves a legacy debt exactly as it is: no purchase deepens it, nothing collects it', async () => {
+      await register(resellerCustomer, await tier({ credit: L }));
+      // A debt run up under the old credit line, before the decision: a plain ledger row.
+      await ctx.container.database.db.execute(sql`
+        INSERT INTO wallet_entries (id, tenant_id, customer_id, direction, reason, amount, currency, reference)
+        VALUES (${ctx.container.ids.uuid()}, ${tenantA.tenantId}, ${resellerCustomer}, 'DEBIT',
+                'PURCHASE', 40000, 'IRT', ${`legacy-credit-${key()}`})`);
+      const ledger = () =>
+        rows<Record<string, unknown>>(
+          sql`SELECT * FROM wallet_entries WHERE customer_id = ${resellerCustomer} ORDER BY created_at, id`,
+        );
+      const before = await ledger();
+      expect(await balance(resellerCustomer)).toBe(-40_000n);
+
+      const order = await confirmed(resellerCustomer, await product(1_000n));
+      await expect(settle(resellerCustomer, order.id)).rejects.toMatchObject(
+        refusal(COMMERCE_ERROR_CODES.WALLET_INSUFFICIENT_FUNDS, { shortfallMinor: '41000' }),
+      );
+      await expect(adjust(resellerCustomer, 'DEBIT', 1n)).rejects.toMatchObject(
+        refusal(COMMERCE_ERROR_CODES.WALLET_INSUFFICIENT_FUNDS),
+      );
+      // A suspension, and a tier change, leave it where it is.
+      await setStatus(resellerCustomer, 'SUSPENDED');
+      expect(await ledger(), 'no entry written, none changed').toEqual(before);
+
+      // A top-up repays it like any balance; only then does the wallet pay again.
+      await adjust(resellerCustomer, 'CREDIT', 41_000n);
+      await setStatus(resellerCustomer, 'ACTIVE');
+      expect((await settle(resellerCustomer, order.id)).order.state).toBe('PAID');
+      expect(await balance(resellerCustomer)).toBe(0n);
+    });
+
+    it('never lets an operator’s manual debit overdraw, whatever limit is stored', async () => {
       await register(resellerCustomer, await tier({ credit: L }));
       await expect(adjust(resellerCustomer, 'DEBIT', 1n)).rejects.toMatchObject(
         refusal(COMMERCE_ERROR_CODES.WALLET_INSUFFICIENT_FUNDS),
@@ -1211,19 +1546,12 @@ describe('resellers (WP9-B)', () => {
       );
       await adjust(resellerCustomer, 'DEBIT', 10n);
       expect(await balance(resellerCustomer)).toBe(0n);
-
-      // And a balance already in credit-debt cannot be pushed further by hand.
-      const order = await confirmed(resellerCustomer, await product(40_000n));
-      await settle(resellerCustomer, order.id);
-      expect(await balance(resellerCustomer)).toBe(-40_000n);
-      await expect(adjust(resellerCustomer, 'DEBIT', 1n)).rejects.toMatchObject(
-        refusal(COMMERCE_ERROR_CODES.WALLET_INSUFFICIENT_FUNDS),
-      );
-      expect(await balance(resellerCustomer)).toBe(-40_000n);
     });
 
     it('serialises two concurrent 0.6·L purchases on the wallet lock: exactly one fits', async () => {
+      // A funded wallet of L and a legacy limit of L: only the money pays.
       await register(resellerCustomer, await tier({ credit: L }));
+      await adjust(resellerCustomer, 'CREDIT', L);
       const first = await confirmed(resellerCustomer, await product(60_000n));
       const second = await confirmed(resellerCustomer, await product(60_000n));
 
@@ -1281,8 +1609,7 @@ describe('resellers (WP9-B)', () => {
           shortfallMinor: '20000',
         }),
       });
-      expect(await balance(resellerCustomer)).toBe(-60_000n);
-      expect(await balance(resellerCustomer)).toBeGreaterThanOrEqual(-L);
+      expect(await balance(resellerCustomer)).toBe(40_000n);
       expect(
         await count(
           sql`SELECT count(*)::int AS n FROM wallet_entries WHERE reason = 'PURCHASE' AND customer_id = ${resellerCustomer}`,
@@ -1296,12 +1623,13 @@ describe('resellers (WP9-B)', () => {
   // -------------------------------------------------------------------------
 
   describe('refunds and the record (R10)', () => {
-    it('refunds a credit purchase with a compensating ledger entry and edits no row', async () => {
-      await register(resellerCustomer, await tier({ percent: 20, credit: 100_000n }));
+    it('refunds a wallet purchase with a compensating ledger entry and edits no row', async () => {
+      await register(resellerCustomer, await tier({ percent: 20 }));
+      await adjust(resellerCustomer, 'CREDIT', 60_000n);
       const order = await confirmed(resellerCustomer, await product(75_000n));
       expect(order.totals.total.amountMinor).toBe(60_000n);
       const { payment } = await settle(resellerCustomer, order.id);
-      expect(await balance(resellerCustomer)).toBe(-60_000n);
+      expect(await balance(resellerCustomer)).toBe(0n);
 
       const ledgerBefore = await rows<Record<string, unknown>>(
         sql`SELECT * FROM wallet_entries WHERE customer_id = ${resellerCustomer} ORDER BY created_at, id`,
@@ -1334,7 +1662,7 @@ describe('resellers (WP9-B)', () => {
           .slice(ledgerBefore.length)
           .map((e) => [e.direction, e.reason, String(e.amount)]),
       ).toEqual([['CREDIT', 'REFUND', '60000']]);
-      expect(await balance(resellerCustomer)).toBe(0n);
+      expect(await balance(resellerCustomer)).toBe(60_000n);
       expect(await termsRow(order.id), 'the snapshot keeps the margin it was sold at').toEqual(
         termsBefore,
       );
@@ -1367,7 +1695,7 @@ describe('resellers (WP9-B)', () => {
       name,
       pricingMode: 'PERCENTAGE_DISCOUNT' as const,
       discountPercentage: 10,
-      creditLimit: money(50_000n, 'IRT'),
+      creditLimit: money(0n, 'IRT'),
     });
 
     it('refuses a second tier whose name differs only in case', async () => {
@@ -1545,7 +1873,7 @@ describe('resellers (WP9-B)', () => {
         ctx.container.resellersAdmin.register(tenantA, owner, {
           idempotencyKey: r,
           customerId: resellerCustomer,
-          write: { ...write, creditLimit: money(1n, 'IRT') },
+          write: { ...write, pricingMode: 'LIST_PRICE', creditLimit: null },
         }),
       ).rejects.toMatchObject(refusal(PLATFORM_ERROR_CODES.IDEMPOTENCY_PAYLOAD_MISMATCH));
 
@@ -1901,67 +2229,12 @@ describe('resellers (WP9-B)', () => {
       });
       expect(await statusOf(resellerCustomer)).toBe('SUSPENDED');
     });
-
-    it('a suspension waits for a wallet settlement that is spending credit', async () => {
-      await register(resellerCustomer, await tier({ credit: 100_000n }));
-      const order = await confirmed(resellerCustomer, await product(60_000n));
-      const later = await confirmed(resellerCustomer, await product(1_000n));
-
-      // Held right after the settlement read the allowance, under the wallet lock.
-      const service = ctx.container.resellers;
-      const original = service.creditAllowance.bind(service);
-      let entered!: () => void;
-      const read = new Promise<void>((resolve) => (entered = resolve));
-      let release!: () => void;
-      const gate = new Promise<void>((resolve) => (release = resolve));
-      let allowance: bigint | undefined;
-      vi.spyOn(service, 'creditAllowance').mockImplementation(async (...args) => {
-        const answer = await original(...args);
-        if (allowance === undefined) {
-          allowance = answer;
-          entered();
-          await gate;
-        }
-        return answer;
-      });
-
-      const finished: string[] = [];
-      const settlement = settle(resellerCustomer, order.id).then((result) => {
-        finished.push('settlement');
-        return result;
-      });
-      settlement.catch(() => undefined);
-      let suspension: Promise<void>;
-      let waitingIn: string | null;
-      try {
-        await read;
-        expect(allowance, 'the settlement read the credit line').toBe(100_000n);
-        suspension = setStatus(resellerCustomer, 'SUSPENDED').then(() => {
-          finished.push('suspension');
-        });
-        suspension.catch(() => undefined);
-        waitingIn = await lockWaitOn(RESELLER_ROW_WRITE, () => finished.includes('suspension'));
-      } finally {
-        release();
-      }
-      const [settled, suspended] = await Promise.allSettled([settlement, suspension]);
-
-      expect(
-        { waitingIn: waitingIn !== null, finished: [...finished] },
-        'the suspension must wait on the reseller row until the settlement spending its ' +
-          'credit has committed',
-      ).toEqual({ waitingIn: true, finished: ['settlement', 'suspension'] });
-      // The settlement completed on the credit it read.
-      expect(settled).toMatchObject({ status: 'fulfilled', value: { order: { state: 'PAID' } } });
-      expect(await balance(resellerCustomer)).toBe(-60_000n);
-      expect(suspended.status).toBe('fulfilled');
-      expect(await statusOf(resellerCustomer)).toBe('SUSPENDED');
-      // And the credit line is gone for whatever comes after the suspension.
-      await expect(settle(resellerCustomer, later.id)).rejects.toMatchObject(
-        refusal(COMMERCE_ERROR_CODES.WALLET_INSUFFICIENT_FUNDS),
-      );
-      expect(await balance(resellerCustomer)).toBe(-60_000n);
-    });
+    /*
+     * The case "a suspension waits for a wallet settlement that is spending credit" was
+     * removed with reseller credit (owner decision, 2026-10-01): a settlement no longer
+     * reads the reseller row at all — its allowance is zero for everyone — so there is no
+     * credit for a suspension to race.
+     */
   });
 
   describe('two operator updates of one reseller serialise, and the second audits the first’s after-image', () => {

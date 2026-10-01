@@ -7915,7 +7915,10 @@ export const resellerTiers = pgTable(
     pricingMode: text('pricing_mode').notNull(),
     /** Whole percent off list. Null unless the mode is PERCENTAGE_DISCOUNT. */
     discountPercentage: integer('discount_percentage'),
-    /** The credit allowance below zero, stored positive. Zero means no debt (R8). */
+    /**
+     * Kept, not dropped: reseller credit was removed (owner decision, 2026-10-01). Writes can
+     * store only zero; a positive value stored before the decision grants nothing.
+     */
     creditLimitAmount: bigint('credit_limit_amount', { mode: 'bigint' })
       .notNull()
       .default(sql`0`),
@@ -8025,7 +8028,9 @@ export const resellers = pgTable(
     /** Whole percent off list. Null unless the mode is PERCENTAGE_DISCOUNT. */
     discountPercentage: integer('discount_percentage'),
     /**
-     * The reseller's own limit, or null for the tier's. Positive when set.
+     * The reseller's own limit, or null for the tier's. Reseller credit was removed (owner
+     * decision, 2026-10-01): writes store only zero or null, and a positive value stored
+     * before the decision grants nothing. Kept, not dropped.
      *
      * The `DEFAULT 0` is the column's pre-WP9-B default, KEPT: dropping it is a
      * narrowing the rollback window forbids (`migration-compatibility.test.ts`). It

@@ -66,10 +66,10 @@ export function canCover(
   balanceMinor: bigint,
   requiredMinor: bigint,
   /**
-   * The customer's allowance below zero: a reseller's credit limit, stored positive, for a
-   * purchase in its own currency (`docs/wp9-reseller-audit.md` R8). Zero for everyone and
-   * everything else — an operator's manual debit included — which is the plain
-   * no-overdraft rule. A negative argument is treated as zero, never as extra credit.
+   * The customer's allowance below zero. Zero for everyone and everything — a wallet
+   * purchase by a reseller included, since the owner removed reseller credit (2026-10-01,
+   * `creditAllowanceOf`), and an operator's manual debit — which is the plain no-overdraft
+   * rule. A negative argument is treated as zero, never as extra credit.
    */
   allowanceMinor: bigint = 0n,
 ): boolean {

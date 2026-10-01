@@ -134,8 +134,12 @@ const RECORDS = [
  * It is the TOTAL over `RECORDS`, not a per-file figure. A per-file count would
  * have to be a map, and a map is a place for a record to be added with no entry
  * and checked against nothing — which is this script's own failure mode.
+ *
+ * 2459 → 2449: nine rows (ten citations) of the reseller credit line retired with it,
+ * by the owner's decision of 2026-10-01 — WP9B-02, -03, -15, -21 and R14-02, -09, -10,
+ * -12, -16. Each record says so above its table.
  */
-const EXPECTED = 2459;
+const EXPECTED = 2449;
 /**
  * A table whose last column is one of these is making citations.
  *

@@ -1469,6 +1469,41 @@ release before package D runs:
 Nothing needs doing before rolling back past package D unless a narrowing override must
 keep holding (above).
 
+### What an update and a rollback change: reseller credit removed (owner decision, 2026-10-01)
+
+The owner removed reseller credit: no reseller debt, no negative balance from a purchase
+and no credit purchase (`docs/reseller-phase3-closure.md` §5, §6). Migration
+`0155_reseller_credit_removed` changes data once and adds nothing:
+
+- **It sets limits to zero.** Every `reseller_tiers.credit_limit_amount` becomes 0, and
+  every `resellers` own limit becomes NULL, which inherits the tier's 0.
+- **It records the old values first.** Each non-zero value is written as an audit row on
+  its tier or customer (correlation `migration-0155-reseller-credit-removed`), so the Web
+  Admin's change history shows what it was. The pre-update backup holds it too.
+- **Nothing restores a limit; that is deliberate.**
+
+Why the migration and not only the code:
+
+- An update migrates **before** the new release starts.
+- While a replica of the previous release is still serving, it computes the allowance
+  from the stored limits. After the migration it reads zero, so no purchase it settles can
+  go below zero.
+- One residual case remains. An operator typing a positive limit into the OLD form during
+  that window would store one, which the new release ignores. The next tier save writes
+  zero over it, and the next reseller save writes null.
+
+While the previous release runs after a rollback:
+
+- **Still no credit.** The rolled-back code reads the zeroed limits, so it extends no
+  credit.
+- **Its forms show a limit field again.** Leave it at zero. A positive value typed there
+  would be credit again for as long as the rollback lasts, and the roll-forward refuses to
+  keep it (the next tier save writes zero, the next reseller save writes null).
+- **Balances are untouched.** A balance already below zero (a debt from before the
+  decision) stays exactly as it is. Neither release collects it.
+
+Nothing needs doing before rolling back past this change, except not re-entering a limit.
+
 ### What a rollback changes: the trial switch, the catalogue and the wallet (F5)
 
 F5 retires the tenant-wide `trials` feature flag: a trial is offered exactly when a panel

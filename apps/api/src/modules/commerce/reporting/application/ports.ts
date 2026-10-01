@@ -482,7 +482,6 @@ export const REPORT_EXPORT_COLUMN_KEYS = [
   'status',
   'sales',
   'services',
-  'creditLimit',
   'creditInUse',
 ] as const;
 export type ExportColumnKey = (typeof REPORT_EXPORT_COLUMN_KEYS)[number];

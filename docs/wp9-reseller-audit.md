@@ -105,6 +105,13 @@ entitlement's record (R9) in the same transaction as `DRAFT → AWAITING_PAYMENT
 confirmed reseller order with no such record cannot exist, and a test pins that.
 
 **R8 — Credit is an allowance below zero, enforced once, under the customer's lock.**
+
+> **Superseded by owner decision, 2026-10-01: reseller credit is removed.** No reseller
+> debt, no negative balances, no credit purchases (`docs/reseller-phase3-closure.md` §5).
+> `creditAllowanceOf` is zero for everyone, every write refuses a non-zero limit, and a limit
+> stored before the decision grants nothing. A balance already negative is a legacy debt,
+> left as it is. The text below records R8 as it was built, not current behaviour.
+
 The effective limit is the reseller's own `credit_limit`, or the tier's when the reseller's
 is null. Zero means no debt. It applies only to an ACTIVE reseller, and only in the limit's
 own currency; a different currency gets no credit. It is read **inside** the wallet

@@ -24,6 +24,7 @@ import {
   type UserId,
 } from '@nexa/contracts';
 import { createApiApp, type ApiApp } from '../../apps/api/src/bootstrap';
+import { hashRequest } from '../../apps/api/src/modules/platform/idempotency/infrastructure/drizzle-idempotency-store';
 import { DrizzleProductRepository } from '../../apps/api/src/modules/commerce/catalog/infrastructure/drizzle-product.repository';
 import { seed, SEED_IDS } from '../../apps/api/src/infrastructure/persistence/seed';
 import {
@@ -186,7 +187,7 @@ describe('reseller phase 2 HTTP surface (WP14)', () => {
     name: 'Gold',
     pricingMode: 'PERCENTAGE_DISCOUNT',
     discountPercentage: 20,
-    creditLimit: { amount: '100000', currency: 'IRT' },
+    creditLimit: { amount: '0', currency: 'IRT' },
     ...overrides,
   });
 
@@ -213,7 +214,8 @@ describe('reseller phase 2 HTTP surface (WP14)', () => {
     return resellerTierResponseSchema.parse(response.json()).tier.id;
   }
 
-  async function purchasedOnCredit(): Promise<{ tierId: string; orderId: string }> {
+  /** A paid reseller purchase, from a wallet funded with exactly its price. */
+  async function purchased(): Promise<{ tierId: string; orderId: string }> {
     const tierId = await createdTier({ name: 'Gold', discountPercentage: 20 });
     await post(RESELLER_TIER_ROUTES.grants(tierId), { idempotencyKey: key(), grants: EVERYTHING });
     expect((await post(RESELLER_ROUTES.register, registerBody(customerA, tierId))).statusCode).toBe(
@@ -229,7 +231,8 @@ describe('reseller phase 2 HTTP surface (WP14)', () => {
       customerId: customerA,
       orderId: drafted.id,
     });
-    // An empty wallet: the whole 80 000 is drawn on the 100 000 credit line.
+    // No reseller credit (owner decision, 2026-10-01): the wallet holds the 80 000 it pays.
+    await fund(customerA, 80_000n);
     const { order } = await api.container.payments.settleFromWallet(
       viaBot,
       customerActor(key()),
@@ -262,45 +265,77 @@ describe('reseller phase 2 HTTP surface (WP14)', () => {
   // D1 — credit standing
   // -------------------------------------------------------------------------
 
-  it('shows the credit a purchase on credit drew, as settlement would allow the next one', async () => {
-    const before = await createdTier({ name: 'Silver' });
-    await post(RESELLER_ROUTES.register, registerBody(customerA2, before));
-    expect(await creditOf(customerA2), 'nothing drawn yet').toMatchObject({
-      credit: 'CREDIT_APPLIES',
+  /*
+   * Reseller credit was removed (owner decision, 2026-10-01: no reseller debt, no credit
+   * purchases). The view keeps its shape and reports the balance and any legacy debt, with
+   * an allowance of zero, whatever limit a row stored before the decision still holds.
+   */
+
+  const fund = async (customerId: string, amountMinor: bigint) =>
+    api.container.wallet.adjust(tenantA, await ownerActor(), customerId as UserId, {
+      idempotencyKey: key(),
+      direction: 'CREDIT',
+      amountMinor,
+      currency: 'IRT',
+      note: 'شارژ آزمون',
+    });
+
+  /** A limit stored BEFORE the decision: no write can set one now, so the row is edited. */
+  const legacyLimit = (table: 'reseller_tiers' | 'resellers', id: string, amount: bigint) =>
+    table === 'reseller_tiers'
+      ? api.container.database.db.execute(
+          sql`UPDATE reseller_tiers SET credit_limit_amount = ${amount} WHERE id = ${id}`,
+        )
+      : api.container.database.db.execute(
+          sql`UPDATE resellers SET credit_limit_amount = ${amount}, credit_limit_currency = 'IRT'
+               WHERE customer_id = ${id}`,
+        );
+
+  /** A debt run up under the old credit line: a plain ledger row, as it was written then. */
+  const legacyDebt = (customerId: string, amount: bigint) =>
+    api.container.database.db.execute(sql`
+      INSERT INTO wallet_entries (id, tenant_id, customer_id, direction, reason, amount, currency, reference)
+      VALUES (${api.container.ids.uuid()}, ${tenantA.tenantId}, ${customerId}, 'DEBIT', 'PURCHASE',
+              ${amount}, 'IRT', ${`legacy-credit-${key()}`})`);
+
+  it('shows the balance with an allowance of zero: there is no credit to draw', async () => {
+    const tierId = await createdTier({ name: 'Silver' });
+    await post(RESELLER_ROUTES.register, registerBody(customerA2, tierId));
+    expect(await creditOf(customerA2), 'nothing drawn, nothing available on credit').toEqual({
+      customerId: customerA2,
+      status: 'ACTIVE',
+      effectiveLimit: IRT('0'),
       limitSource: 'TIER',
+      sellingCurrency: 'IRT',
+      credit: 'NO_LIMIT',
       balance: IRT('0'),
-      allowance: IRT('100000'),
+      allowance: IRT('0'),
       creditInUse: IRT('0'),
-      availableToSpend: IRT('100000'),
+      availableToSpend: IRT('0'),
       overLimitBy: IRT('0'),
     });
 
-    await purchasedOnCredit();
-    expect(await creditOf(customerA)).toEqual({
-      customerId: customerA,
-      status: 'ACTIVE',
-      effectiveLimit: IRT('100000'),
-      limitSource: 'TIER',
-      sellingCurrency: 'IRT',
-      credit: 'CREDIT_APPLIES',
-      balance: IRT('-80000'),
-      allowance: IRT('100000'),
-      creditInUse: IRT('80000'),
-      availableToSpend: IRT('20000'),
-      overLimitBy: IRT('0'),
+    await purchased();
+    expect(await creditOf(customerA)).toMatchObject({
+      credit: 'NO_LIMIT',
+      balance: IRT('0'),
+      allowance: IRT('0'),
+      creditInUse: IRT('0'),
+      availableToSpend: IRT('0'),
     });
   });
 
-  it('agrees with settlement at the frontier: available-to-spend passes and one unit more is refused', async () => {
-    await purchasedOnCredit();
+  it('agrees with settlement at the frontier: available-to-spend is the balance, one unit more is refused', async () => {
+    const { tierId } = await purchased();
+    await legacyLimit('reseller_tiers', tierId, 100_000n);
+    await fund(customerA, 20_000n);
     const available = BigInt((await creditOf(customerA)).availableToSpend.amount);
-    expect(available).toBe(20_000n);
+    expect(available, 'a stored limit of 100 000 adds nothing').toBe(20_000n);
 
     /*
      * A LIST_PRICE override so the product's price is the order's total, and the view's
      * number is tested against the settlement path itself rather than restated.
      */
-    const tierId = await tierOf(customerA);
     await post(
       RESELLER_ROUTES.update(customerA),
       updateBody(tierId, { pricingMode: 'LIST_PRICE' }),
@@ -313,64 +348,123 @@ describe('reseller phase 2 HTTP surface (WP14)', () => {
     const exact = await confirmedOrder(await product(available));
     expect((await settle(exact)).order.state).toBe('PAID');
     expect(await creditOf(customerA)).toMatchObject({
-      balance: IRT('-100000'),
-      creditInUse: IRT('100000'),
+      balance: IRT('0'),
+      creditInUse: IRT('0'),
       availableToSpend: IRT('0'),
       overLimitBy: IRT('0'),
     });
   });
 
-  it('reports the debt a lowered limit no longer covers, and leaves it where it is', async () => {
-    const { tierId } = await purchasedOnCredit();
-    const lowered = await post(
-      RESELLER_ROUTES.update(customerA),
-      updateBody(tierId, { creditLimit: IRT('50000') }),
-    );
-    expect(lowered.statusCode, lowered.body).toBe(201);
-    expect(await creditOf(customerA)).toMatchObject({
-      effectiveLimit: IRT('50000'),
-      limitSource: 'RESELLER',
-      credit: 'CREDIT_APPLIES',
-      balance: IRT('-80000'),
-      allowance: IRT('50000'),
-      creditInUse: IRT('80000'),
-      availableToSpend: IRT('-30000'),
-      overLimitBy: IRT('30000'),
-    });
-  });
-
-  it('keeps a suspended reseller’s debt and applies no credit to it', async () => {
-    const { tierId } = await purchasedOnCredit();
-    await post(RESELLER_ROUTES.update(customerA), updateBody(tierId, { status: 'SUSPENDED' }));
-    expect(await creditOf(customerA)).toMatchObject({
-      status: 'SUSPENDED',
-      // The limit is still on record; it simply does not apply (R1, R8).
+  it('shows a legacy debt as it is, under a stored limit that grants nothing, active or suspended', async () => {
+    const { tierId } = await purchased();
+    await legacyLimit('resellers', customerA, 100_000n);
+    await legacyDebt(customerA, 80_000n);
+    const legacy = {
       effectiveLimit: IRT('100000'),
-      credit: 'RESELLER_SUSPENDED',
+      limitSource: 'RESELLER',
+      credit: 'NO_LIMIT',
       balance: IRT('-80000'),
       allowance: IRT('0'),
       creditInUse: IRT('80000'),
       availableToSpend: IRT('-80000'),
       overLimitBy: IRT('80000'),
+    };
+    expect(await creditOf(customerA)).toMatchObject({ status: 'ACTIVE', ...legacy });
+    const order = await confirmedOrder(await product(1_000n));
+    await expect(settle(order)).rejects.toMatchObject({
+      code: COMMERCE_ERROR_CODES.WALLET_INSUFFICIENT_FUNDS,
+    });
+
+    // A suspension that echoes nothing about credit leaves the debt, and the stored limit
+    // is cleared by the write (null: no limit of its own).
+    await post(RESELLER_ROUTES.update(customerA), updateBody(tierId, { status: 'SUSPENDED' }));
+    expect(await creditOf(customerA)).toMatchObject({
+      status: 'SUSPENDED',
+      ...legacy,
+      effectiveLimit: IRT('0'),
+      limitSource: 'TIER',
     });
   });
 
-  it('says NO_LIMIT for a zero limit and CURRENCY_MISMATCH for a limit in another currency', async () => {
-    const zero = await createdTier({ name: 'Zero', creditLimit: IRT('0') });
-    await post(RESELLER_ROUTES.register, registerBody(customerA, zero));
-    expect(await creditOf(customerA)).toMatchObject({ credit: 'NO_LIMIT', allowance: IRT('0') });
-
-    await post(
-      RESELLER_ROUTES.update(customerA),
-      updateBody(zero, { creditLimit: { amount: '5000', currency: 'USD' } }),
+  it('refuses a non-zero credit limit with 400 on every write, and stores none', async () => {
+    const refused = [
+      await post(RESELLER_TIER_ROUTES.create, tierBody({ creditLimit: IRT('100000') })),
+      await post(RESELLER_TIER_ROUTES.create, tierBody({ creditLimit: IRT('1') })),
+    ];
+    const tierId = await createdTier({ name: 'Zero' });
+    refused.push(
+      await post(RESELLER_TIER_ROUTES.update(tierId), tierBody({ creditLimit: IRT('5000') })),
+      await post(
+        RESELLER_ROUTES.register,
+        registerBody(customerA, tierId, { creditLimit: IRT('5000') }),
+      ),
     );
+    expect((await post(RESELLER_ROUTES.register, registerBody(customerA, tierId))).statusCode).toBe(
+      201,
+    );
+    refused.push(
+      await post(
+        RESELLER_ROUTES.update(customerA),
+        updateBody(tierId, { creditLimit: { amount: '5000', currency: 'USD' } }),
+      ),
+    );
+    for (const response of refused) {
+      expect(response.statusCode, response.body).toBe(400);
+    }
+    const stored = await api.container.database.db.execute(sql`
+      SELECT credit_limit_amount::text AS amount FROM reseller_tiers
+      UNION ALL SELECT credit_limit_amount::text FROM resellers`);
+    expect(
+      (stored.rows as { amount: string | null }[]).every(
+        (r) => r.amount === null || r.amount === '0',
+      ),
+    ).toBe(true);
     expect(await creditOf(customerA)).toMatchObject({
-      credit: 'CURRENCY_MISMATCH',
-      effectiveLimit: { amount: '5000', currency: 'USD' },
-      sellingCurrency: 'IRT',
+      credit: 'NO_LIMIT',
       allowance: IRT('0'),
-      availableToSpend: IRT('0'),
     });
+  });
+
+  it('replays over HTTP a positive-limit tier command that committed before the decision', async () => {
+    /*
+     * PR #132 review, finding 2: the schema must let the pre-decision body through to the
+     * service's replay lookup, so a retry across the upgrade gets its original 201.
+     */
+    const idempotencyKey = key();
+    const body = tierBody({ idempotencyKey, name: 'Legacy', creditLimit: IRT('0') });
+    const first = await post(RESELLER_TIER_ROUTES.create, body);
+    expect(first.statusCode, first.body).toBe(201);
+    const original = resellerTierResponseSchema.parse(first.json()).tier.id;
+    // The previous release hashed the body it was sent, positive limit included.
+    await api.container.database.db.execute(sql`
+      UPDATE request_idempotency
+         SET request_hash = ${hashRequest({
+           tier: {
+             name: 'Legacy',
+             pricingMode: 'PERCENTAGE_DISCOUNT',
+             discountPercentage: 20,
+             creditLimit: { amount: '100000', currency: 'IRT' },
+           },
+         })}
+       WHERE key = ${idempotencyKey}`);
+    const retried = await post(RESELLER_TIER_ROUTES.create, {
+      ...body,
+      creditLimit: IRT('100000'),
+    });
+    expect(retried.statusCode, retried.body).toBe(201);
+    expect(resellerTierResponseSchema.parse(retried.json()).tier).toMatchObject({
+      id: original,
+      creditLimit: IRT('0'),
+    });
+    // A new key with the same positive limit is refused.
+    expect(
+      (
+        await post(
+          RESELLER_TIER_ROUTES.create,
+          tierBody({ name: 'New', creditLimit: IRT('100000') }),
+        )
+      ).statusCode,
+    ).toBe(400);
   });
 
   // -------------------------------------------------------------------------
@@ -378,7 +472,7 @@ describe('reseller phase 2 HTTP surface (WP14)', () => {
   // -------------------------------------------------------------------------
 
   it('lists the purchase as confirmation recorded it, survives a tier re-price and rename, and omits the margin', async () => {
-    const { tierId, orderId } = await purchasedOnCredit();
+    const { tierId, orderId } = await purchased();
     const renamed = await post(
       RESELLER_TIER_ROUTES.update(tierId),
       tierBody({ name: 'Platinum', discountPercentage: 50 }),
@@ -409,7 +503,7 @@ describe('reseller phase 2 HTTP surface (WP14)', () => {
   });
 
   it('pages purchases newest first with a keyset cursor, and refuses a cursor it did not write', async () => {
-    const { tierId } = await purchasedOnCredit();
+    const { tierId } = await purchased();
     await post(
       RESELLER_ROUTES.update(customerA),
       updateBody(tierId, { pricingMode: 'LIST_PRICE' }),
@@ -515,7 +609,7 @@ describe('reseller phase 2 HTTP surface (WP14)', () => {
   // -------------------------------------------------------------------------
 
   it('charges resellers.view and the extra key each view needs, on every new route', async () => {
-    const { tierId } = await purchasedOnCredit();
+    const { tierId } = await purchased();
     const routes = [
       RESELLER_ROUTES.credit(customerA),
       RESELLER_ROUTES.purchases(customerA),
@@ -550,7 +644,7 @@ describe('reseller phase 2 HTTP surface (WP14)', () => {
   });
 
   it('shows tenant B nothing of tenant A’s credit, purchases or history, and 404s an unknown id', async () => {
-    const { tierId } = await purchasedOnCredit();
+    const { tierId } = await purchased();
     for (const path of [
       RESELLER_ROUTES.credit(customerA),
       RESELLER_ROUTES.purchases(customerA),
@@ -574,13 +668,6 @@ describe('reseller phase 2 HTTP surface (WP14)', () => {
   // -------------------------------------------------------------------------
   // Helpers that need the scenario above
   // -------------------------------------------------------------------------
-
-  async function tierOf(customerId: string): Promise<string> {
-    const rows = await api.container.database.db.execute(
-      sql`SELECT tier_id FROM resellers WHERE customer_id = ${customerId}`,
-    );
-    return (rows.rows[0] as { tier_id: string }).tier_id;
-  }
 
   async function confirmedOrder(productId: ProductId): Promise<string> {
     const drafted = await api.container.orders.createDraft(viaBot, customerActor(key()), {

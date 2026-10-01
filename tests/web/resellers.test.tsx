@@ -1,6 +1,7 @@
 import type { ReactElement } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { RESELLER_DEFAULT_CREDIT_LIMIT_MINOR } from '@nexa/contracts';
 import { ResellersPage, percentOf } from '../../apps/web/src/pages/resellers';
 import {
   ResellerTiersPage,
@@ -14,7 +15,8 @@ import { PLANNED_SURFACES } from '../../apps/web/src/pages/planned';
 import { NAV, navPermitted, resolve } from '../../apps/web/src/app';
 import { LeaveGuardHost } from '../../apps/web/src/ui/kit';
 import { navigate } from '../../apps/web/src/router';
-import { t } from '../../apps/web/src/i18n/web.fa';
+import { WEB_FA, t } from '../../apps/web/src/i18n/web.fa';
+import { CATALOGUE_FA } from '@nexa/i18n';
 import {
   categoryListing,
   customer,
@@ -177,7 +179,7 @@ describe('permission gating', () => {
 // ---------------------------------------------------------------------------
 
 describe('the reseller list', () => {
-  it('renders the name, Telegram id, tier, status, pricing and the limit that applies', async () => {
+  it('renders the name, Telegram id, tier, status and pricing, and no credit limit — not even a stored one', async () => {
     stubApi(
       listRoutes([
         reseller(),
@@ -203,16 +205,18 @@ describe('the reseller list', () => {
     expect(first.textContent).toContain('Gold');
     expect(first.textContent).toContain('فعال');
     expect(first.textContent).toContain('مطابق سطح');
-    expect(first.textContent).toContain('500,000');
-    expect(first.textContent).toContain('از سطح');
+    // Reseller credit was removed (owner decision, 2026-10-01): a limit stored before the
+    // decision grants nothing, and the list does not draw it.
+    expect(first.textContent).not.toContain('500,000');
+    expect(first.textContent).not.toContain('از سطح');
 
     // No display name: the Telegram id IS the link.
     const second = within(table).getByText('5559876543').closest('tr') as HTMLElement;
     expect(second.textContent).toContain('معلق');
     expect(second.textContent).toContain('درصد اختصاصی کمتر از قیمت فهرست');
     expect(second.textContent).toContain('15');
-    expect(second.textContent).toContain('1,000,000');
-    expect(second.textContent).toContain('اختصاصی این نماینده');
+    expect(second.textContent).not.toContain('1,000,000');
+    expect(second.textContent).not.toContain('اختصاصی این نماینده');
   });
 
   it('filters on the server: the applied search, the status and the tier', async () => {
@@ -266,7 +270,7 @@ describe('registering and editing a reseller', () => {
     expect(String(body['idempotencyKey']).length).toBeGreaterThanOrEqual(8);
   });
 
-  it('sends its own limit and a percentage override when chosen', async () => {
+  it('sends a percentage override when chosen, and no credit limit: the form has no field for one', async () => {
     const api = stubApi(listRoutes());
     renderList();
     await screen.findByText('Reza Reseller');
@@ -280,17 +284,15 @@ describe('registering and editing a reseller', () => {
     // A percentage mode with no percentage is refused here, before any request.
     expect(screen.getByRole('button', { name: 'ثبت نماینده' })).toBeDisabled();
     fireEvent.change(screen.getByLabelText('درصد'), { target: { value: '12' } });
-    fireEvent.click(screen.getByLabelText('سقف اعتبار اختصاصی'));
-    fireEvent.change(screen.getByLabelText('سقف اعتبار (واحد خرد)'), {
-      target: { value: '0750000' },
-    });
+    expect(screen.queryByLabelText('سقف اعتبار اختصاصی')).toBeNull();
+    expect(screen.queryByLabelText('سقف اعتبار (واحد خرد)')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'ثبت نماینده' }));
 
     await waitFor(() => expect(posts(api, '/resellers')).toHaveLength(1));
     expect(posts(api, '/resellers')[0]?.body).toMatchObject({
       pricingMode: 'PERCENTAGE_DISCOUNT',
       discountPercentage: 12,
-      creditLimit: { amount: '750000', currency: 'IRT' },
+      creditLimit: null,
     });
   });
 
@@ -574,7 +576,8 @@ describe('the tiers page', () => {
     // Five kinds, each drawn as the refusal it is, and the consequence in words.
     expect(within(row).getAllByText('هیچ')).toHaveLength(5);
     expect(row.textContent).toContain('این سطح فعلاً اجازهٔ هیچ خریدی نمی‌دهد.');
-    expect(row.textContent).toContain('500,000');
+    // A stored (legacy) limit is not drawn: reseller credit was removed.
+    expect(row.textContent).not.toContain('500,000');
     expect(row.textContent).toContain('10');
   });
 
@@ -677,7 +680,7 @@ describe('the tiers page', () => {
     expect(api.calls.every((call) => call.method === 'GET')).toBe(true);
   });
 
-  it('creates a tier with its limit in minor units and no percentage for the list price', async () => {
+  it('creates a tier with no percentage for the list price, and a zero credit limit', async () => {
     const api = stubApi([{ url: '/reseller-tiers', body: { tiers: [] } }]);
     renderPage(
       <ResellerTiersPage
@@ -690,7 +693,6 @@ describe('the tiers page', () => {
     );
     await screen.findByText('هنوز سطحی ساخته نشده است.');
     fireEvent.change(screen.getByLabelText('نام سطح'), { target: { value: ' Bronze ' } });
-    fireEvent.change(screen.getByLabelText('سقف اعتبار (واحد خرد)'), { target: { value: '0' } });
     fireEvent.click(screen.getByRole('button', { name: 'ساخت سطح' }));
     await waitFor(() => expect(posts(api, '/reseller-tiers')).toHaveLength(1));
     expect(posts(api, '/reseller-tiers')[0]?.body).toMatchObject({
@@ -699,6 +701,41 @@ describe('the tiers page', () => {
       discountPercentage: null,
       creditLimit: { amount: '0', currency: 'IRT' },
     });
+  });
+
+  it('offers no credit limit, and an edit writes zero over a stored one', async () => {
+    /*
+     * Reseller credit was removed (owner decision, 2026-10-01; `docs/reseller-phase3-closure.md`
+     * §3). The tier form has no limit field; every save sends
+     * `RESELLER_DEFAULT_CREDIT_LIMIT_MINOR` — zero — in the tier's own currency, including
+     * over a positive limit stored before the decision.
+     */
+    const api = stubApi([
+      { url: '/reseller-tiers', body: { tiers: [tier()] } },
+      { url: `/reseller-tiers/${TIER_ID}`, body: { tier: tier({ name: 'Gold+' }) } },
+    ]);
+    renderPage(
+      <ResellerTiersPage
+        denied={false}
+        mayEdit
+        mayViewCatalog
+        mayViewPanels
+        mayViewAudit={false}
+      />,
+    );
+    const table = await screen.findByRole('table', { name: 'سطوح' });
+    expect(screen.queryByLabelText('سقف اعتبار (واحد خرد)')).toBeNull();
+    fireEvent.click(within(table).getByRole('button', { name: 'ویرایش' }));
+    const name = await screen.findByDisplayValue('Gold');
+    fireEvent.change(name, { target: { value: 'Gold+' } });
+    expect(screen.queryByLabelText('سقف اعتبار (واحد خرد)')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'ذخیره' }));
+    await waitFor(() => expect(posts(api, `/reseller-tiers/${TIER_ID}`)).toHaveLength(1));
+    expect(posts(api, `/reseller-tiers/${TIER_ID}`)[0]?.body).toMatchObject({
+      name: 'Gold+',
+      creditLimit: { amount: RESELLER_DEFAULT_CREDIT_LIMIT_MINOR.toString(), currency: 'IRT' },
+    });
+    expect(RESELLER_DEFAULT_CREDIT_LIMIT_MINOR).toBe(0n);
   });
 });
 
@@ -785,7 +822,7 @@ describe("the customer's reseller card", () => {
     expect(within(card).queryByText('این مشتری نماینده نیست.')).toBeNull();
   });
 
-  it('shows the tier, status, pricing and the effective limit of a reseller', async () => {
+  it('shows the tier, status and pricing of a reseller, and no credit limit', async () => {
     stubApi([
       customerRoute,
       {
@@ -811,9 +848,10 @@ describe("the customer's reseller card", () => {
     expect(card.textContent).toContain('معلق');
     expect(card.textContent).toContain('درصد اختصاصی کمتر از قیمت فهرست');
     expect(card.textContent).toContain('20');
-    expect(card.textContent).toContain('900,000');
-    expect(card.textContent).toContain('اختصاصی این نماینده');
-    expect(card.textContent).toContain('با قیمت فهرست و بدون اعتبار خرید می‌کند');
+    // A limit stored before the owner removed reseller credit is not drawn.
+    expect(card.textContent).not.toContain('900,000');
+    expect(card.textContent).not.toContain('سقف اعتبار');
+    expect(card.textContent).toContain('با قیمت فهرست خرید می‌کند');
   });
 
   it('names the key and asks nothing without resellers.view', async () => {
@@ -862,7 +900,9 @@ describe("the customer's reseller card", () => {
     ) as HTMLElement;
     await within(card).findByText('بدهکار');
     expect(card.textContent).toContain('−150,000');
-    expect(card.textContent).toContain('سقف اعتبار');
+    // A legacy debt: reseller credit was removed, so no limit is named (PR #132 finding 5).
+    expect(card.textContent).toContain('پیش از حذف خرید اعتباری');
+    expect(card.textContent).not.toContain('سقف اعتبار');
   });
 
   it('draws no debt badge for a balance of zero or more', async () => {
@@ -1025,5 +1065,43 @@ describe('unsaved edits on the tier form', () => {
     // The same tier again, untouched: nothing to ask.
     fireEvent.click(edit());
     expect(screen.queryByRole('alertdialog')).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// No user-facing text claims an active credit line (PR #132 review, finding 5)
+// ---------------------------------------------------------------------------
+
+describe('no catalogue string promises reseller credit', () => {
+  /*
+   * Reseller credit was removed (owner decision, 2026-10-01). A sentence that still
+   * describes a purchase limit, spending on credit or a debt "within the limit" tells an
+   * operator — or a reseller — something the system no longer does. `web.reseller_credit_limit`
+   * is the one exception: it labels the field in change-history rows written before the
+   * decision (and by migration 0155), which still name it.
+   */
+  const ACTIVE_CREDIT = [
+    'سقف اعتبار',
+    'بدون اعتبار خرید',
+    'قابل خرید با اعتبار',
+    'اعتبار مصرف‌شده',
+    'اعتبار در حال استفاده',
+    'از اعتبار او برداشته شده است. این عدد',
+  ];
+
+  it('holds for every Web Admin string', () => {
+    const offending = Object.entries(WEB_FA)
+      .filter(([key]) => key !== 'web.reseller_credit_limit')
+      .filter(([, text]) => ACTIVE_CREDIT.some((phrase) => text.includes(phrase)))
+      .map(([key]) => key);
+    expect(offending).toEqual([]);
+    expect(WEB_FA['web.wallet_balance_negative_hint']).toContain('پیش از حذف خرید اعتباری');
+  });
+
+  it('holds for every Telegram template', () => {
+    const offending = Object.entries(CATALOGUE_FA)
+      .filter(([, text]) => ACTIVE_CREDIT.some((phrase) => text.includes(phrase)))
+      .map(([key]) => key);
+    expect(offending).toEqual([]);
   });
 });

@@ -433,6 +433,10 @@ Notation: **Q** query (key → endpoint), **M** mutation, **P** permission prop 
 - **Filters**: status pills (all/active/suspended) and tier select — local state; trail
   keyed on search|status|tier.
 - **Q**: `['reseller-tiers']`, `['resellers', sig, cursor]`.
+- _Since 2026-10-01 (owner decision, `docs/reseller-phase3-closure.md` §5) there is no
+  reseller credit: the credit-limit column and fields, `debtWarningOf` and the
+  acknowledgement are gone, and `ResellerCreditCard` became `ResellerBalanceCard` (balance,
+  and a legacy-debt line only when negative). The notes below record the redesign as built._
 - **Columns**: reseller (link to `/users/:id`, name or Telegram id, Telegram id subline),
   tier, status badge, pricing (override label + %), credit limit (effective Money + own/
   from-tier), actions: "standing" (opens the standing section below for that customer),

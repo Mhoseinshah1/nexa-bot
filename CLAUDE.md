@@ -102,8 +102,8 @@ Three referral rules, each a way to pay a commission that was never owed:
 Four reseller rules, each a way to sell below cost or on credit nobody granted:
 
 - A reseller is a customer with an **ACTIVE** reseller row; SUSPENDED is an
-  ordinary customer, with no discount, no reseller-only product and no credit.
-  Margin, discount, commission, cashback and credit are five things: the
+  ordinary customer, with no discount and no reseller-only product.
+  Margin, discount, commission and cashback are four things: the
   reseller layer is a `TIER_PRICE` or `USER_OVERRIDE` step that REPLACES the
   subtotal, so a margin is never recorded as a discount.
 - Entitlement is **one evaluator**, `decideEntitlement`, deny-by-default per
@@ -117,9 +117,16 @@ Four reseller rules, each a way to sell below cost or on credit nobody granted:
   registered onto a list-priced tier) confirms under the standing in force at
   confirmation, audience and entitlement included. `order_reseller_terms` is
   written once; history reads that row, never live settings.
-- Credit is read **under the customer's wallet lock**, in the limit's own
-  currency, by `settleFromWallet` only. Zero means no debt; an operator's
-  manual debit never overdraws; a clawback never goes below zero.
+- **There is no reseller credit** — removed by owner decision (2026-10-01): no
+  reseller debt, no negative balances, no credit purchases. `creditAllowanceOf`
+  is zero for everyone, so `settleFromWallet` never takes a wallet below zero;
+  every reseller write refuses a non-zero limit (after its idempotent replay),
+  and migration `0155_reseller_credit_removed` zeroed every stored limit so an
+  old replica grants none either. A balance already negative is a legacy debt, left
+  exactly as it is and never collected. An operator's manual debit never
+  overdraws; a clawback never goes below zero. Never reintroduce a credit
+  line, a debt, or a monthly-minimum consequence without an explicit owner
+  instruction (`docs/reseller-phase3-closure.md`).
 
 **The deployment checkpoint after Phase 2 is done too**: an immutable image,
 a production Compose topology behind Caddy, an Ubuntu installer, and `botctl`
