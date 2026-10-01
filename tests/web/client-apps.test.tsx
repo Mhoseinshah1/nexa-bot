@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { NAV, navPermitted } from '../../apps/web/src/app';
 import { ClientAppsPage, formProblems } from '../../apps/web/src/pages/client-apps';
 import { t } from '../../apps/web/src/i18n/web.fa';
@@ -225,16 +225,25 @@ describe('the apps page', () => {
     expect(edit?.url.endsWith(`/client-apps/${APP_ID}`)).toBe(true);
     expect(edit?.body).toMatchObject({ description: 'توضیح تازه', expectedVersion: 2 });
 
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(false);
+    // The kit's dialog asks, with labelled buttons. Declined: nothing is sent.
     fireEvent.click(await screen.findByRole('button', { name: t('web.client_apps_delete') }));
-    expect(confirm).toHaveBeenCalledTimes(1);
+    const dialog = await screen.findByRole('alertdialog');
+    expect(dialog.textContent).toContain(t('web.client_apps_delete_confirm'));
+    fireEvent.click(within(dialog).getByRole('button', { name: t('web.client_apps_cancel') }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
     expect(api.calls.some((call) => call.url.endsWith('/delete'))).toBe(false);
 
-    confirm.mockReturnValueOnce(true);
+    // Confirmed: one delete, carrying the version the row was read at.
     fireEvent.click(screen.getByRole('button', { name: t('web.client_apps_delete') }));
+    fireEvent.click(
+      within(await screen.findByRole('alertdialog')).getByRole('button', {
+        name: t('web.client_apps_delete_yes'),
+      }),
+    );
     await waitFor(() => {
       expect(api.calls.some((call) => call.url.endsWith('/delete'))).toBe(true);
     });
+    expect(api.calls.filter((call) => call.url.endsWith('/delete'))).toHaveLength(1);
     expect(api.calls.find((call) => call.url.endsWith('/delete'))?.body).toMatchObject({
       expectedVersion: 2,
     });

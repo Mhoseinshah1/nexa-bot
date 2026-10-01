@@ -11,10 +11,12 @@ import {
   DataTable,
   KV,
   Ltr,
+  Stat,
   StateSwitch,
   useToast,
   type Column,
 } from '../ui/kit';
+import { Icon } from '../ui/icons';
 
 /**
  * The FX section of the payment routes page (package FX, brief "Web Admin").
@@ -128,138 +130,144 @@ export function FxSection({ denied, mayEdit }: { denied: boolean; mayEdit: boole
                 disabled={refresh.isPending}
                 onClick={() => refresh.mutate()}
               >
+                <Icon name="refresh" />
                 {t('web.fx_refresh')}
               </button>
             ) : undefined
           }
         >
-          <KV
-            items={[
-              [
-                t('web.fx_enabled'),
-                <Badge key="en" tone={status.data.enabled ? 'ok' : 'neutral'}>
-                  {t(status.data.enabled ? 'web.fx_enabled_on' : 'web.fx_enabled_off')}
-                </Badge>,
-              ],
-              [t('web.fx_primary_source'), sourceLabel(status.data.primarySource)],
-              [t('web.fx_fallback_source'), sourceLabel(status.data.fallbackSource)],
-              [
-                t('web.fx_state'),
-                <Badge key="st" tone={stateTone(status.data.state)}>
+          {refresh.error != null && <Banner tone="danger">{messageFor(refresh.error)}</Banner>}
+
+          {/* The four facts an operator looks for first — every one a field of the answer. */}
+          <div className="fx-strip" data-testid="fx-strip">
+            <Stat
+              label={t('web.fx_state')}
+              value={
+                <Badge tone={stateTone(status.data.state)} dot>
                   {t(STATE_LABELS[status.data.state])}
-                </Badge>,
-              ],
-              [
-                t('web.fx_current_rate'),
+                </Badge>
+              }
+            />
+            <Stat
+              label={t('web.fx_current_rate')}
+              value={
                 status.data.quote === null ? (
-                  <span key="rt" className="muted">
-                    {t('web.fx_no_quote')}
-                  </span>
+                  <span className="muted small">{t('web.fx_no_quote')}</span>
                 ) : (
-                  <span key="rt">
-                    <Ltr>{status.data.quote.rate}</Ltr> {currencyLabel(status.data.quoteCurrency)}
-                  </span>
-                ),
-              ],
-              [
-                t('web.fx_current_source'),
-                status.data.quote === null ? '—' : sourceLabel(status.data.quote.source),
-              ],
-              [
-                t('web.fx_last_refresh'),
-                status.data.quote === null ? '—' : formatTimestamp(status.data.quote.fetchedAt),
-              ],
-              [
-                t('web.fx_source_time'),
-                status.data.quote?.sourceAt === null || status.data.quote === null
-                  ? '—'
-                  : formatTimestamp(status.data.quote.sourceAt),
-              ],
-              [
-                t('web.fx_age'),
-                status.data.quote === null
-                  ? '—'
-                  : `${formatNumber(status.data.quote.ageSeconds)} ${t('web.unit_seconds')}`,
-              ],
-              [
-                t('web.fx_ttl'),
-                `${formatNumber(status.data.freshTtlSeconds)} ${t('web.unit_seconds')}`,
-              ],
-              [
-                t('web.fx_max_stale'),
-                `${formatNumber(status.data.maxStaleSeconds)} ${t('web.unit_seconds')}`,
-              ],
-              [
-                t('web.fx_last_attempt'),
-                status.data.lastAttemptAt === null
-                  ? '—'
-                  : formatTimestamp(status.data.lastAttemptAt),
-              ],
-              [
-                t('web.fx_last_error'),
-                status.data.lastErrorCode === null ? (
-                  '—'
-                ) : (
-                  <Ltr key="le">{status.data.lastErrorCode}</Ltr>
-                ),
-              ],
-              [
-                t('web.fx_quote_id'),
-                status.data.quote === null ? '—' : <Ltr key="qi">{status.data.quote.quoteId}</Ltr>,
-              ],
-              [t('web.fx_policy_version'), <Ltr key="pv">{String(status.data.policyVersion)}</Ltr>],
-            ]}
-          />
+                  <Ltr>{status.data.quote.rate}</Ltr>
+                )
+              }
+              {...(status.data.quote === null
+                ? {}
+                : { unit: currencyLabel(status.data.quoteCurrency) })}
+            />
+            <Stat
+              label={t('web.fx_age')}
+              value={status.data.quote === null ? '—' : formatNumber(status.data.quote.ageSeconds)}
+              {...(status.data.quote === null ? {} : { unit: t('web.unit_seconds') })}
+            />
+            <Stat
+              label={t('web.fx_last_refresh')}
+              value={
+                <span className="small">
+                  {status.data.quote === null ? '—' : formatTimestamp(status.data.quote.fetchedAt)}
+                </span>
+              }
+            />
+          </div>
 
-          <h3>{t('web.fx_stars_title')}</h3>
-          <KV
-            items={[
-              [
-                t('web.fx_stars_mode'),
-                t(
-                  status.data.stars.pricingMode === 'CENTRAL_FX_RATIO'
-                    ? 'web.fx_stars_mode_central'
-                    : 'web.fx_stars_mode_fixed',
-                ),
-              ],
-              [
-                t('web.fx_stars_ratio'),
-                status.data.stars.starsPerUsdt === '' ? (
-                  <span key="ra" className="muted">
-                    {t('web.fx_stars_ratio_unset')}
-                  </span>
-                ) : (
-                  <Ltr key="ra">{status.data.stars.starsPerUsdt}</Ltr>
-                ),
-              ],
-              [
-                t('web.fx_stars_fixed_rate'),
-                status.data.stars.fixedRateMinor === null ? (
-                  '—'
-                ) : (
-                  <span key="fr">
-                    <Ltr>{status.data.stars.fixedRateMinor}</Ltr>{' '}
-                    {currencyLabel(status.data.quoteCurrency)}
-                  </span>
-                ),
-              ],
-              [
-                t('web.fx_stars_central_rate'),
-                status.data.stars.centralRatePerStar === null ? (
-                  <span key="cr" className="muted">
-                    {t('web.fx_stars_central_rate_none')}
-                  </span>
-                ) : (
-                  <span key="cr">
-                    <Ltr>{status.data.stars.centralRatePerStar}</Ltr>{' '}
-                    {currencyLabel(status.data.quoteCurrency)}
-                  </span>
-                ),
-              ],
-            ]}
-          />
+          <div className="grid-2">
+            <div>
+              <h3 className="fx-subhead">{t('web.fx_sources_policy_title')}</h3>
+              <KV
+                items={[
+                  [
+                    t('web.fx_enabled'),
+                    <Badge key="en" tone={status.data.enabled ? 'ok' : 'neutral'}>
+                      {t(status.data.enabled ? 'web.fx_enabled_on' : 'web.fx_enabled_off')}
+                    </Badge>,
+                  ],
+                  [t('web.fx_primary_source'), sourceLabel(status.data.primarySource)],
+                  [t('web.fx_fallback_source'), sourceLabel(status.data.fallbackSource)],
+                  [
+                    t('web.fx_current_source'),
+                    status.data.quote === null ? '—' : sourceLabel(status.data.quote.source),
+                  ],
+                  [
+                    t('web.fx_source_time'),
+                    status.data.quote?.sourceAt === null || status.data.quote === null
+                      ? '—'
+                      : formatTimestamp(status.data.quote.sourceAt),
+                  ],
+                  [
+                    t('web.fx_ttl'),
+                    `${formatNumber(status.data.freshTtlSeconds)} ${t('web.unit_seconds')}`,
+                  ],
+                  [
+                    t('web.fx_max_stale'),
+                    `${formatNumber(status.data.maxStaleSeconds)} ${t('web.unit_seconds')}`,
+                  ],
+                  [
+                    t('web.fx_last_attempt'),
+                    status.data.lastAttemptAt === null
+                      ? '—'
+                      : formatTimestamp(status.data.lastAttemptAt),
+                  ],
+                ]}
+              />
+            </div>
+            <div>
+              <h3 className="fx-subhead">{t('web.fx_stars_title')}</h3>
+              <KV
+                items={[
+                  [
+                    t('web.fx_stars_mode'),
+                    t(
+                      status.data.stars.pricingMode === 'CENTRAL_FX_RATIO'
+                        ? 'web.fx_stars_mode_central'
+                        : 'web.fx_stars_mode_fixed',
+                    ),
+                  ],
+                  [
+                    t('web.fx_stars_ratio'),
+                    status.data.stars.starsPerUsdt === '' ? (
+                      <span key="ra" className="muted">
+                        {t('web.fx_stars_ratio_unset')}
+                      </span>
+                    ) : (
+                      <Ltr key="ra">{status.data.stars.starsPerUsdt}</Ltr>
+                    ),
+                  ],
+                  [
+                    t('web.fx_stars_fixed_rate'),
+                    status.data.stars.fixedRateMinor === null ? (
+                      '—'
+                    ) : (
+                      <span key="fr">
+                        <Ltr>{status.data.stars.fixedRateMinor}</Ltr>{' '}
+                        {currencyLabel(status.data.quoteCurrency)}
+                      </span>
+                    ),
+                  ],
+                  [
+                    t('web.fx_stars_central_rate'),
+                    status.data.stars.centralRatePerStar === null ? (
+                      <span key="cr" className="muted">
+                        {t('web.fx_stars_central_rate_none')}
+                      </span>
+                    ) : (
+                      <span key="cr">
+                        <Ltr>{status.data.stars.centralRatePerStar}</Ltr>{' '}
+                        {currencyLabel(status.data.quoteCurrency)}
+                      </span>
+                    ),
+                  ],
+                ]}
+              />
+            </div>
+          </div>
 
-          <h3>{t('web.fx_sources_title')}</h3>
+          <h3 className="fx-subhead">{t('web.fx_sources_title')}</h3>
           {status.data.sources.length === 0 ? (
             <p className="muted small">{t('web.fx_sources_none')}</p>
           ) : (
@@ -268,11 +276,43 @@ export function FxSection({ denied, mayEdit }: { denied: boolean; mayEdit: boole
               rows={status.data.sources}
               rowKey={(row) => row.source}
               caption={t('web.fx_sources_title')}
+              dense
             />
           )}
 
+          {/*
+            The identifiers somebody debugging a price needs, and nobody else: behind a
+            disclosure so the normal view carries no raw key.
+          */}
+          <details className="fx-technical">
+            <summary>{t('web.fx_technical')}</summary>
+            <KV
+              items={[
+                [
+                  t('web.fx_last_error'),
+                  status.data.lastErrorCode === null ? (
+                    '—'
+                  ) : (
+                    <Ltr key="le">{status.data.lastErrorCode}</Ltr>
+                  ),
+                ],
+                [
+                  t('web.fx_quote_id'),
+                  status.data.quote === null ? (
+                    '—'
+                  ) : (
+                    <Ltr key="qi">{status.data.quote.quoteId}</Ltr>
+                  ),
+                ],
+                [
+                  t('web.fx_policy_version'),
+                  <Ltr key="pv">{String(status.data.policyVersion)}</Ltr>,
+                ],
+              ]}
+            />
+          </details>
+
           <p className="muted small">{t('web.fx_settings_link')}</p>
-          {refresh.error != null && <Banner tone="danger">{messageFor(refresh.error)}</Banner>}
         </Card>
       )}
     </StateSwitch>

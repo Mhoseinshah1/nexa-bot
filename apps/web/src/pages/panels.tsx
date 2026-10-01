@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useState, type FormEvent, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   PANEL_HEALTH_FRESH_FOR_MS,
@@ -44,13 +44,14 @@ import {
   sameActivationDraft,
   type ActivationDraft,
 } from './panel-activation';
-import { navigate, setQuery, useLinkHandler, type Route } from '../router';
+import { navigate, setQuery, useLinkHandler, useRoute, type Route } from '../router';
 // WP-A8: the capability registry, the panel policy, provider rules and diagnostics.
 import {
   ACTIVATION_FIELD_LABELS,
   CREDENTIAL_SHAPE_LABELS,
   CapabilitiesTab,
   DiagnosticsCard,
+  FAILURE_LABELS,
   REGISTRY_ROW_LABELS,
 } from './panel-advanced';
 import { messageFor } from './settings';
@@ -75,24 +76,33 @@ import {
   Badge,
   Banner,
   Card,
+  CellMain,
   Copyable,
   CursorPager,
   DataTable,
+  DetailHead,
   Empty,
   Field,
+  FilterBar,
+  FilterChip,
   KV,
   Ltr,
+  Meter,
   Num,
   PageHead,
-  Pills,
+  Progress,
   Secret,
   StateSwitch,
+  StatusDot,
   Tabs,
   TabPanel,
+  TwoColumn,
   useToast,
+  useUnsavedChanges,
   type Column,
   type Tone,
 } from '../ui/kit';
+import { Icon } from '../ui/icons';
 import { pollUnlessFinal } from '../polling';
 
 /**
@@ -156,8 +166,8 @@ const STATUS_TONES: Readonly<Record<PanelStatus, Tone>> = {
 function HealthBadge({ panel }: { panel: PanelSummaryResponse }) {
   const state = panel.health.state;
   return (
-    <span className="nowrap">
-      <Badge tone={HEALTH_TONES[state] ?? 'neutral'}>
+    <span className="nowrap panels-health">
+      <Badge tone={HEALTH_TONES[state] ?? 'neutral'} dot>
         {t(HEALTH_LABELS[state] ?? 'web.health_unchecked')}
       </Badge>
       {/* Staleness is computed by the SERVER against one constant, and shown
@@ -167,13 +177,47 @@ function HealthBadge({ panel }: { panel: PanelSummaryResponse }) {
       {panel.health.stale && (
         <>
           {' '}
-          <Badge tone="warn" title={t('web.health_stale_hint')}>
+          <Badge tone="warn" outline title={t('web.health_stale_hint')}>
             {t('web.health_stale')}
           </Badge>
         </>
       )}
     </span>
   );
+}
+
+/**
+ * The provider as the reference draws it: an outlined type badge, and the
+ * version the last probe read beside it — both technical values, so LTR.
+ */
+function ProviderBadge({ panel }: { panel: PanelSummaryResponse }) {
+  return (
+    <span className="nowrap panels-provider">
+      <Badge tone="info" outline>
+        <Ltr mono={false}>{panel.providerName}</Ltr>
+      </Badge>
+      {panel.health.providerVersion !== null && (
+        <span className="faint small">
+          {' '}
+          <Ltr>{panel.health.providerVersion}</Ltr>
+        </span>
+      )}
+    </span>
+  );
+}
+
+/**
+ * The host an operator recognises a panel by, cut from `baseUrl`.
+ *
+ * Display only. The full address is on the detail page, and a value that does
+ * not parse is shown whole rather than guessed at.
+ */
+export function hostOf(baseUrl: string): string {
+  try {
+    return new URL(baseUrl).host;
+  } catch {
+    return baseUrl;
+  }
 }
 
 function FailureBadge({ failure }: { failure: string | null }) {
@@ -203,22 +247,32 @@ function FailureBadge({ failure }: { failure: string | null }) {
  */
 function CapacityCell({ capacity }: { capacity: PanelSummaryResponse['capacity'] }) {
   return (
-    <Ltr mono={false}>
-      <Num value={capacity.used} />
-      {' / '}
-      {capacity.maxServices === null ? (
-        <span title={t('web.panel_capacity_unlimited')}>∞</span>
-      ) : (
-        <Num value={capacity.maxServices} />
+    <span className="panels-capacity">
+      <Ltr mono={false}>
+        <Num value={capacity.used} />
+        {' / '}
+        {capacity.maxServices === null ? (
+          <span title={t('web.panel_capacity_unlimited')}>∞</span>
+        ) : (
+          <Num value={capacity.maxServices} />
+        )}
+        {capacity.reservations > 0 && (
+          <span className="faint" title={t('web.panel_capacity_reservations')}>
+            {' ('}
+            <Num value={capacity.reservations} />
+            {')'}
+          </span>
+        )}
+      </Ltr>
+      {/* A share only where there is a whole: an uncapped panel has no bar. */}
+      {capacity.maxServices !== null && (
+        <Progress
+          value={capacity.used}
+          max={capacity.maxServices}
+          label={t('web.panel_capacity')}
+        />
       )}
-      {capacity.reservations > 0 && (
-        <span className="faint" title={t('web.panel_capacity_reservations')}>
-          {' ('}
-          <Num value={capacity.reservations} />
-          {')'}
-        </span>
-      )}
-    </Ltr>
+    </span>
   );
 }
 
@@ -312,15 +366,20 @@ export function PanelsPage({
       key: 'name',
       header: t('web.panel_name'),
       render: (row) => (
-        <a href={`/panels/${encodeURIComponent(row.id)}`} onClick={onLink} className="strong">
-          {row.name}
-        </a>
+        <CellMain
+          primary={
+            <a href={`/panels/${encodeURIComponent(row.id)}`} onClick={onLink} className="strong">
+              {row.name}
+            </a>
+          }
+          secondary={<Ltr>{hostOf(row.baseUrl)}</Ltr>}
+        />
       ),
     },
     {
       key: 'provider',
       header: t('web.panel_provider'),
-      render: (row) => <span className="nowrap">{row.providerName}</span>,
+      render: (row) => <ProviderBadge panel={row} />,
     },
     {
       key: 'health',
@@ -339,7 +398,7 @@ export function PanelsPage({
         row.health.checkedAt === null ? (
           <span className="faint">—</span>
         ) : (
-          <span className="nowrap">{formatTimestamp(row.health.checkedAt)}</span>
+          <span className="nowrap small">{formatTimestamp(row.health.checkedAt)}</span>
         ),
     },
     {
@@ -364,8 +423,33 @@ export function PanelsPage({
     {
       key: 'status',
       header: t('web.status'),
+      /*
+       * The lifecycle status, and under it the server's own sellability verdict —
+       * real data from `panelSummarySchema`, read-only, with the reason as its
+       * title. It is a verdict, never a switch: nothing here can make a panel sell.
+       */
       render: (row) => (
-        <Badge tone={STATUS_TONES[row.status]}>{t(STATUS_LABELS[row.status])}</Badge>
+        <CellMain
+          primary={
+            <Badge tone={STATUS_TONES[row.status]} dot>
+              {t(STATUS_LABELS[row.status])}
+            </Badge>
+          }
+          {...(row.status === 'ARCHIVED' || row.sellability.sellable
+            ? {}
+            : {
+                secondary: (
+                  <span
+                    className="small warn"
+                    {...(row.sellability.reason === null
+                      ? {}
+                      : { title: t(SELLABILITY_REASON_LABELS[row.sellability.reason]) })}
+                  >
+                    {t('web.panels_not_sellable')}
+                  </span>
+                ),
+              })}
+        />
       ),
     },
   ];
@@ -378,7 +462,8 @@ export function PanelsPage({
         maturity="now"
         actions={
           mayEdit ? (
-            <a className="btn primary sm" href="/panels/new" onClick={onLink}>
+            <a className="btn primary" href="/panels/new" onClick={onLink}>
+              <Icon name="plus" />
               {t('web.panel_new')}
             </a>
           ) : undefined
@@ -387,20 +472,20 @@ export function PanelsPage({
 
       <Card>
         {/*
-          The live/archived pills mint a new query key — a fresh request against
+          The live/archived chips mint a new query key — a fresh request against
           a question the card below has just said cannot be answered. Same rule
           as the alerts toolbar, the refresh button and the pager.
         */}
-        <div className="toolbar" hidden={!mayRequest(panels, denied)}>
-          <Pills
-            value={archived ? 'archived' : 'live'}
-            onChange={(next) => setArchived(next === 'archived')}
-            items={[
-              { id: 'live', label: t('web.panels_live') },
-              { id: 'archived', label: t('web.panels_archived') },
-            ]}
-          />
-        </div>
+        <FilterBar hidden={!mayRequest(panels, denied)}>
+          <div className="panels-filter" role="group" aria-label={t('web.panels_filter')}>
+            <FilterChip pressed={!archived} onClick={() => setArchived(false)}>
+              {t('web.panels_live')}
+            </FilterChip>
+            <FilterChip pressed={archived} onClick={() => setArchived(true)}>
+              {t('web.panels_archived')}
+            </FilterChip>
+          </div>
+        </FilterBar>
 
         <StateSwitch
           query={panels}
@@ -408,7 +493,7 @@ export function PanelsPage({
           isEmpty={rows.length === 0}
           empty={
             archived ? (
-              <Empty title={t('web.panels_archived_empty')} icon="inbox" />
+              <Empty title={t('web.panels_archived_empty')} icon="archive" />
             ) : (
               <Empty
                 title={t('web.panels_empty')}
@@ -423,6 +508,7 @@ export function PanelsPage({
             columns={columns}
             rows={rows}
             rowKey={(row) => row.id}
+            dense
           />
         </StateSwitch>
 
@@ -458,7 +544,15 @@ export function PanelsPage({
 // Detail
 // ---------------------------------------------------------------------------
 
-type DetailTab = 'overview' | 'workload' | 'health' | 'credentials' | 'capabilities' | 'trial';
+const DETAIL_TABS = [
+  'overview',
+  'workload',
+  'health',
+  'credentials',
+  'capabilities',
+  'trial',
+] as const;
+type DetailTab = (typeof DETAIL_TABS)[number];
 
 /** The three credential kinds, once, so no list of them can drift from another. */
 type CredentialField = 'username' | 'password' | 'apiToken';
@@ -535,7 +629,6 @@ export function PanelDetailPage({
 }) {
   const client = useQueryClient();
   const toast = useToast();
-  const [tab, setTab] = useState<DetailTab>('overview');
 
   const panel = useQuery({
     queryKey: ['panel', id],
@@ -616,44 +709,69 @@ export function PanelDetailPage({
   const view = denied ? 'denied' : queryState(panel);
   const data = shownData(panel, view, panel.data?.panel);
 
+  /*
+   * The open tab lives in the URL (`?tab=`, lead decision D1), so a tab is
+   * linkable and Back/Forward move between tabs.
+   *
+   * NOT through `useQueryTab`/`RoutedTabs`, deliberately. Those mount only the
+   * open panel and put a tab switch behind the leave guard, and both are wrong
+   * for THIS page: Overview must stay mounted (see the comment on its panel
+   * below), so switching away from it loses nothing and asking "leave without
+   * saving?" there would be a false alarm. Leaving the PAGE is still guarded,
+   * by the Overview form itself.
+   */
+  const route = useRoute();
+  const rawTab = route.query.get('tab');
+  const tab: DetailTab =
+    rawTab !== null && (DETAIL_TABS as readonly string[]).includes(rawTab)
+      ? (rawTab as DetailTab)
+      : 'overview';
+  const setTab = (next: DetailTab) => {
+    const query = new URLSearchParams(route.query);
+    if (next === 'overview') query.delete('tab');
+    else query.set('tab', next);
+    const suffix = query.toString();
+    navigate(suffix === '' ? route.path : `${route.path}?${suffix}`);
+  };
+
+  // `mayEdit`, because `testConnection` is guarded by `panels.edit` on the
+  // server (`PanelService.testConnection`). Drawing it for a viewer is not a
+  // cosmetic slip: pressing it records an `access.permission_denied`
+  // operational event AND a `DENIED` audit row, so a control that can never
+  // work would manufacture the very noise the alerts page exists to keep
+  // clear. Every other write control on this surface is gated the same way;
+  // this was the one that was not.
+  //
+  // `probeable` is the third condition, and it is the same rule for the same
+  // reason. `attemptProbe` calls `toProviderCredentials`, which returns null —
+  // 412 `panel.credentials_missing` — when the stored credentials do not
+  // satisfy the provider's shape. An actor holding `panels.edit` but not
+  // `panels.credentials.rotate` creates a panel with NO credentials (that
+  // boundary is enforced now) and lands straight on this page, where this
+  // button was the only thing to press and could only ever fail.
+  const testButton =
+    !mayEdit || data === undefined || data.status === 'ARCHIVED' || !probeable(data) ? undefined : (
+      <button
+        type="button"
+        className="btn primary"
+        disabled={test.isPending}
+        onClick={() => test.mutate(testSubmission.current({ command: 'panels.test', id }))}
+      >
+        <Icon name="zap" />
+        {test.isPending ? t('web.working') : t('web.panel_test')}
+      </button>
+    );
+
   return (
     <>
-      <PageHead
-        title={data?.name ?? t('web.panel_detail')}
-        {...(data === undefined ? {} : { subtitle: data.providerName })}
-        maturity="now"
-        actions={
-          // `mayEdit`, because `testConnection` is guarded by `panels.edit` on
-          // the server (`PanelService.testConnection`). Drawing it for a viewer
-          // is not a cosmetic slip: pressing it records an `access.permission_denied`
-          // operational event AND a `DENIED` audit row, so a control that can
-          // never work would manufacture the very noise the alerts page exists
-          // to keep clear. Every other write control on this surface is gated
-          // the same way; this was the one that was not.
-          //
-          // `probeable` is the third condition, and it is the same rule for the
-          // same reason. `attemptProbe` calls `toProviderCredentials`, which
-          // returns null — 412 `panel.credentials_missing` — when the stored
-          // credentials do not satisfy the provider's shape. An actor holding
-          // `panels.edit` but not `panels.credentials.rotate` creates a panel
-          // with NO credentials (that boundary is enforced now) and lands
-          // straight on this page, where this button was the only thing to
-          // press and could only ever fail.
-          !mayEdit ||
-          data === undefined ||
-          data.status === 'ARCHIVED' ||
-          !probeable(data) ? undefined : (
-            <button
-              type="button"
-              className="btn sm"
-              disabled={test.isPending}
-              onClick={() => test.mutate(testSubmission.current({ command: 'panels.test', id }))}
-            >
-              {test.isPending ? t('web.working') : t('web.panel_test')}
-            </button>
-          )
-        }
-      />
+      {data === undefined ? (
+        // The page's name while nothing may be shown: no badge, no button.
+        <PageHead title={t('web.panel_detail')} />
+      ) : (
+        <PanelHead panel={data} actions={testButton} />
+      )}
+
+      {data !== undefined && <PanelHeadBanners panel={data} onHealth={() => setTab('health')} />}
 
       <StateSwitch query={panel} denied={denied}>
         {data !== undefined && (
@@ -728,6 +846,149 @@ export function PanelDetailPage({
           </>
         )}
       </StateSwitch>
+    </>
+  );
+}
+
+/**
+ * The detail page's head: the panel's name with its lifecycle status and its
+ * health beside it, the provider, version and address beneath, the primary
+ * action, and a strip of summary figures.
+ *
+ * Every figure is a field of the panel response. The reference's "next check",
+ * backoff step, executable-capability count and users-on-panel have no field in
+ * the contract, so they are not here — a strip of invented telemetry is the
+ * defect the list page's owner revision 19 removed.
+ */
+function PanelHead({ panel, actions }: { panel: PanelSummaryResponse; actions?: ReactNode }) {
+  const health = panel.health;
+  const capacity = panel.capacity;
+  return (
+    <DetailHead
+      title={panel.name}
+      badge={
+        <span className="panel-head-badges">
+          <Badge tone={STATUS_TONES[panel.status]} dot>
+            {t(STATUS_LABELS[panel.status])}
+          </Badge>
+          <HealthBadge panel={panel} />
+        </span>
+      }
+      meta={
+        <span className="panel-head-meta">
+          <ProviderBadge panel={panel} />
+          <span className="faint">·</span>
+          <Ltr>{panel.baseUrl}</Ltr>
+        </span>
+      }
+      {...(actions === undefined ? {} : { actions })}
+      stats={[
+        {
+          label: t('web.panel_health'),
+          value: (
+            <span className="panel-stat">
+              <StatusDot tone={HEALTH_TONES[health.state] ?? 'neutral'}>
+                {t(HEALTH_LABELS[health.state] ?? 'web.health_unchecked')}
+              </StatusDot>
+              <span className="faint small">
+                {health.checkedAt === null
+                  ? t('web.panel_never_checked')
+                  : formatTimestamp(health.checkedAt)}
+              </span>
+            </span>
+          ),
+        },
+        {
+          label: t('web.panel_latency'),
+          value:
+            health.latencyMs === null ? (
+              <span className="faint">—</span>
+            ) : (
+              <Ltr mono={false}>
+                <Num value={health.latencyMs} /> ms
+              </Ltr>
+            ),
+        },
+        {
+          label: t('web.panel_last_healthy'),
+          value:
+            health.lastHealthyAt === null ? (
+              <span className="faint">—</span>
+            ) : (
+              <span className="small">{formatTimestamp(health.lastHealthyAt)}</span>
+            ),
+        },
+        {
+          label: t('web.panel_sellable'),
+          value: (
+            <span className="panel-stat">
+              <span className={panel.sellability.sellable ? 'ok' : 'warn'}>
+                {t(
+                  panel.sellability.sellable
+                    ? 'web.panel_stat_sellable'
+                    : 'web.panels_not_sellable',
+                )}
+              </span>
+              {!panel.sellability.sellable && panel.sellability.reason !== null && (
+                <span className="faint small">
+                  {t(SELLABILITY_REASON_LABELS[panel.sellability.reason])}
+                </span>
+              )}
+            </span>
+          ),
+        },
+        { label: t('web.panel_capacity'), value: <CapacityCell capacity={capacity} /> },
+        {
+          label: t('web.panel_capacity_services'),
+          value: <Num value={capacity.services} />,
+        },
+      ]}
+    />
+  );
+}
+
+/**
+ * Two facts that belong above every tab, from the panel response alone: the
+ * server's own staleness verdict, and the last probe's failure with the one
+ * remedy it maps to. No "monitor deferred" banner — the contract has no such
+ * state to report.
+ */
+function PanelHeadBanners({
+  panel,
+  onHealth,
+}: {
+  panel: PanelSummaryResponse;
+  onHealth: () => void;
+}) {
+  const failure = panel.health.failure;
+  return (
+    <>
+      {failure !== null && (
+        <Banner
+          tone={
+            PROVIDER_FAILURE_RETRYABLE[failure as keyof typeof PROVIDER_FAILURE_RETRYABLE] === true
+              ? 'warn'
+              : 'danger'
+          }
+          title={t('web.panel_failure_title')}
+          role="status"
+          action={
+            <button type="button" className="btn sm" onClick={onHealth}>
+              {t('web.panel_open_health')}
+            </button>
+          }
+        >
+          {FAILURE_LABELS[failure as keyof typeof FAILURE_LABELS] === undefined
+            ? null
+            : t(FAILURE_LABELS[failure as keyof typeof FAILURE_LABELS])}{' '}
+          <Ltr>{failure}</Ltr>
+        </Banner>
+      )}
+      {panel.health.stale && (
+        <Banner tone="warn" title={t('web.panel_stale_title')} role="status">
+          {t('web.health_stale_hint')}
+        </Banner>
+      )}
     </>
   );
 }
@@ -1214,6 +1475,20 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
    * NEWER than this operator's write — is never suppressed by it.
    */
   const behind = written !== null && Date.parse(panel.updatedAt) < Date.parse(written);
+  /*
+   * Whether a Save would send anything: the same "changed from the basis" the
+   * request is assembled from, so the leave guard and the request cannot
+   * disagree about what is unsaved. Only while the form can be saved at all.
+   */
+  const dirty =
+    mayWrite &&
+    (name !== basis.name ||
+      baseUrl !== basis.baseUrl ||
+      maxServices !==
+        (basis.capacity.maxServices === null ? '' : String(basis.capacity.maxServices)) ||
+      policyChanged ||
+      activationChanged);
+  useUnsavedChanges(dirty);
   const changedElsewhere =
     !behind && (remote.name || remote.baseUrl || remote.maxServices || remote.usernamePolicy);
 
@@ -1312,405 +1587,433 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
 
   return (
     <>
-      <Card title={t('web.panel_identity')}>
-        <KV
-          items={[
-            [t('web.panel_id'), <Copyable key="id" value={panel.id} />],
-            [
-              t('web.panel_provider'),
-              <span key="p" className="nowrap">
-                {panel.providerName} <Ltr>({panel.providerType})</Ltr>
-              </span>,
-            ],
-            [
-              t('web.status'),
-              <Badge key="s" tone={STATUS_TONES[panel.status]}>
-                {t(STATUS_LABELS[panel.status])}
-              </Badge>,
-            ],
-            [t('web.panel_created'), formatTimestamp(panel.createdAt)],
-            [t('web.updated_at'), formatTimestamp(panel.updatedAt)],
-          ]}
-        />
-      </Card>
+      <div className="two-col">
+        <div className="stack">
+          <Card title={t('web.panel_configuration')} hint={t('web.panel_configuration_hint')} tight>
+            <form onSubmit={onSubmit}>
+              <div className="form-section">
+                <h3>{t('web.panel_section_connection')}</h3>
+                <div className="form-grid">
+                  <Field label={t('web.panel_name')} htmlFor={`name-${panel.id}`}>
+                    <input
+                      id={`name-${panel.id}`}
+                      className="input"
+                      value={name}
+                      onChange={(event) => setName(event.target.value)}
+                      disabled={!mayWrite}
+                    />
+                  </Field>
+                  <Field
+                    label={t('web.panel_base_url')}
+                    hint={t('web.panel_base_url_hint')}
+                    htmlFor={`url-${panel.id}`}
+                  >
+                    <input
+                      id={`url-${panel.id}`}
+                      className="input ltr mono"
+                      value={baseUrl}
+                      onChange={(event) => setBaseUrl(event.target.value)}
+                      disabled={!mayWrite}
+                    />
+                  </Field>
+                  <Field
+                    label={t('web.panel_max_services')}
+                    hint={t('web.panel_max_services_hint')}
+                    htmlFor={`cap-${panel.id}`}
+                  >
+                    <input
+                      id={`cap-${panel.id}`}
+                      className="input ltr"
+                      inputMode="numeric"
+                      value={maxServices}
+                      onChange={(event) => setMaxServices(event.target.value)}
+                      disabled={!mayWrite}
+                    />
+                  </Field>
+                </div>
+              </div>
+              {/*
+                THE PROVIDER CONFIGURATION, EDITABLE.
 
-      {/*
-        The three numbers, kept apart.
-        
-        An operator looking at a full panel needs to know whether it is full of
-        SERVICES, which they resolve by raising the cap or terminating something,
-        or full of HOLDS, which resolve themselves when the orders behind them
-        settle or lapse. One `used` figure cannot answer that, and the operator
-        who cannot tell the two apart terminates a customer's service to make
-        room that was about to free itself.
-      */}
-      {/*
-        THE THREE STATES, SAID SEPARATELY.
+                It was not, and that is the proximate cause of order `01a0c54b`: this
+                page rendered the NAMES of the required fields in a warning banner and
+                offered no input for any of them, so a Marzban panel could not be
+                completed from the admin an operator was given. It stayed enabled and
+                unconfigured, and the catalogue sold onto it.
 
-        This page used to show health and capacity, and an operator reading two
-        greens took it to mean the panel was ready to sell. Order `01a0c54b` was
-        taken by a panel that was ACTIVE, HEALTHY and had room, and that had no
-        Marzban activation at all.
-
-        `sellable` is the server's own verdict from the ONE evaluator the
-        catalogue, confirmation and settlement all use — not a rule recomputed
-        here, which would be the second place it lives and the one that disagrees.
-        The two lines under it exist so that a `false` is actionable: a single
-        `reason` can only name one thing, and an operator fixing a disabled panel
-        needs to know whether enabling it will be enough.
-      */}
-      <Card title={t('web.panel_sellability_title')} hint={t('web.panel_sellability_hint')}>
-        <KV
-          items={[
-            [
-              t('web.panel_sellable'),
-              panel.sellability.sellable ? (
-                <Badge key="s" tone="ok">
-                  {t('web.panel_sellable_yes')}
-                </Badge>
-              ) : (
-                <Badge key="s" tone="warn">
-                  {t('web.panel_sellable_no')}
-                </Badge>
-              ),
-            ],
-            [
-              t('web.panel_activation_state'),
-              panel.sellability.activationComplete ? (
-                <Badge key="a" tone="ok">
-                  {t('web.panel_activation_complete')}
-                </Badge>
-              ) : (
-                <Badge key="a" tone="warn">
-                  {t('web.panel_activation_incomplete')}
-                </Badge>
-              ),
-            ],
-            [
-              t('web.panel_connection_validated'),
-              panel.sellability.connectionValidated ? (
-                <Badge key="v" tone="ok">
-                  {t('web.panel_connection_validated_yes')}
-                </Badge>
-              ) : (
-                <Badge key="v" tone="warn">
-                  {t('web.panel_connection_validated_no')}
-                </Badge>
-              ),
-            ],
-          ]}
-        />
-        {!panel.sellability.sellable && panel.sellability.reason !== null && (
-          /*
-            The REASON in Persian, from a frozen map rather than the enum name.
-            `SELLABILITY_REASON_LABELS` is exhaustive over the contract, so a
-            reason added later fails to typecheck here instead of rendering as an
-            English constant on an operator's screen.
-          */
-          <Banner tone="warn" title={t(SELLABILITY_REASON_LABELS[panel.sellability.reason])}>
-            {t(SELLABILITY_REASON_HELP[panel.sellability.reason])}
-          </Banner>
-        )}
-        {panel.sellability.missingActivationFields.length > 0 && (
-          <Banner tone="warn" title={t('web.panel_activation_missing')}>
-            <Ltr>{panel.sellability.missingActivationFields.join(', ')}</Ltr>
-          </Banner>
-        )}
-      </Card>
-
-      <Card title={t('web.panel_capacity_title')} hint={t('web.panel_capacity_hint')}>
-        <KV
-          items={[
-            [t('web.panel_capacity_services'), <Num key="s" value={panel.capacity.services} />],
-            [
-              t('web.panel_capacity_reservations'),
-              <Num key="r" value={panel.capacity.reservations} />,
-            ],
-            [t('web.panel_capacity_used'), <Num key="u" value={panel.capacity.used} />],
-            [
-              t('web.panel_max_services'),
-              panel.capacity.maxServices === null ? (
-                <span key="m" className="faint">
-                  {t('web.panel_capacity_unlimited')}
-                </span>
-              ) : (
-                <Num key="m" value={panel.capacity.maxServices} />
-              ),
-            ],
-            [
-              t('web.panel_capacity_available'),
-              panel.capacity.available === null ? (
-                <span key="a" className="faint">
-                  {t('web.panel_capacity_unlimited')}
-                </span>
-              ) : (
-                <Num key="a" value={panel.capacity.available} />
-              ),
-            ],
-          ]}
-        />
-      </Card>
-
-      <Card title={t('web.panel_configuration')} hint={t('web.panel_configuration_hint')}>
-        <form onSubmit={onSubmit} className="form-grid">
-          <Field label={t('web.panel_name')} htmlFor={`name-${panel.id}`}>
-            <input
-              id={`name-${panel.id}`}
-              className="input"
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              disabled={!mayWrite}
-            />
-          </Field>
-          <Field
-            label={t('web.panel_base_url')}
-            hint={t('web.panel_base_url_hint')}
-            htmlFor={`url-${panel.id}`}
-          >
-            <input
-              id={`url-${panel.id}`}
-              className="input ltr mono"
-              value={baseUrl}
-              onChange={(event) => setBaseUrl(event.target.value)}
-              disabled={!mayWrite}
-            />
-          </Field>
-          <Field
-            label={t('web.panel_max_services')}
-            hint={t('web.panel_max_services_hint')}
-            htmlFor={`cap-${panel.id}`}
-          >
-            <input
-              id={`cap-${panel.id}`}
-              className="input ltr"
-              inputMode="numeric"
-              value={maxServices}
-              onChange={(event) => setMaxServices(event.target.value)}
-              disabled={!mayWrite}
-            />
-          </Field>
-          {/*
-            THE PROVIDER CONFIGURATION, EDITABLE.
-
-            It was not, and that is the proximate cause of order `01a0c54b`: this
-            page rendered the NAMES of the required fields in a warning banner and
-            offered no input for any of them, so a Marzban panel could not be
-            completed from the admin an operator was given. It stayed enabled and
-            unconfigured, and the catalogue sold onto it.
-
-            Read back in full for the reason `activation` on the response states:
-            a setting an operator can write and cannot read is the legacy screen
-            where "the only way to read a price is to overwrite it". None of it is
-            a secret — an inbound tag is configuration copied off a panel they
-            already administer.
-          */}
-          <p className="field-group-head">{t('web.panel_activation')}</p>
-          <ActivationFields
-            providerType={panel.providerType}
-            draft={activationDraft}
-            onChange={setActivationDraft}
-            disabled={!mayWrite}
-          />
-          {activationChanged && activationParse.kind === 'INVALID' && (
-            <Banner tone="danger" title={t('web.panel_activation_invalid')}>
-              <Ltr>{activationParse.fields.join(', ')}</Ltr>
-            </Banner>
-          )}
-          {/*
-            The username policy: two switches and a template, read back in full.
-
-            Returned by every panel read and rendered here, for the reason `activation`
-            above is: a policy an operator can write and cannot read is the legacy
-            settings screen where "the only way to read a price is to overwrite it".
-            None of it is a secret — the customer is shown the rule before they type.
-          */}
-          <p className="field-group-head">{t('web.panel_username_policy')}</p>
-          <Field
-            label={t('web.panel_username_custom')}
-            hint={t('web.panel_username_custom_hint')}
-            htmlFor={`uc-${panel.id}`}
-          >
-            <input
-              id={`uc-${panel.id}`}
-              type="checkbox"
-              checked={allowCustom}
-              onChange={(event) => setAllowCustom(event.target.checked)}
-              disabled={!mayWrite}
-            />
-          </Field>
-          <Field
-            label={t('web.panel_username_automatic')}
-            hint={t('web.panel_username_automatic_hint')}
-            htmlFor={`ur-${panel.id}`}
-          >
-            <input
-              id={`ur-${panel.id}`}
-              type="checkbox"
-              checked={allowAutomatic}
-              onChange={(event) => setAllowAutomatic(event.target.checked)}
-              disabled={!mayWrite}
-            />
-          </Field>
-          {/*
-            The preset, shown whatever the automatic switch says.
-
-            Deliberately, and for the reason the template field below gives: a preset
-            stored beside a disabled mode goes live the moment somebody re-enables it,
-            which is a one-checkbox edit nobody would think to validate. Hiding it
-            would leave an operator unable to see what is about to become live.
-          */}
-          <Field
-            label={t('web.panel_username_strategy')}
-            hint={t('web.panel_username_strategy_hint')}
-            htmlFor={`us-${panel.id}`}
-          >
-            <select
-              id={`us-${panel.id}`}
-              className="input"
-              value={strategy}
-              onChange={(event) => setStrategy(event.target.value as UsernameStrategy)}
-              disabled={!mayWrite}
-            >
-              {USERNAME_STRATEGIES.map((option) => (
-                <option key={option} value={option}>
-                  {t(`web.panel_username_strategy_${option}` as WebKey)}
-                </option>
-              ))}
-            </select>
-          </Field>
-          {strategy === 'PREFIX_RANDOM' && (
-            <Field
-              label={t('web.panel_username_prefix')}
-              hint={t('web.panel_username_prefix_hint')}
-              htmlFor={`up-${panel.id}`}
-            >
-              <input
-                id={`up-${panel.id}`}
-                className="input ltr mono"
-                value={usernamePrefix}
-                onChange={(event) => setUsernamePrefix(event.target.value)}
-                disabled={!mayWrite}
-              />
-            </Field>
-          )}
-          {strategy === 'CUSTOM_TEMPLATE' && (
-            <>
-              <Field
-                label={t('web.panel_username_template')}
-                hint={t('web.panel_username_template_hint')}
-                htmlFor={`ut-${panel.id}`}
-              >
-                <input
-                  id={`ut-${panel.id}`}
-                  className="input ltr mono"
-                  value={usernameTemplate}
-                  onChange={(event) => setUsernameTemplate(event.target.value)}
+                Read back in full for the reason `activation` on the response states:
+                a setting an operator can write and cannot read is the legacy screen
+                where "the only way to read a price is to overwrite it". None of it is
+                a secret — an inbound tag is configuration copied off a panel they
+                already administer.
+              */}
+              <div className="form-section">
+                <h3>{t('web.panel_activation')}</h3>
+                <ActivationFields
+                  providerType={panel.providerType}
+                  draft={activationDraft}
+                  onChange={setActivationDraft}
                   disabled={!mayWrite}
                 />
-              </Field>
-              <p className="hint ltr mono">
-                {t('web.panel_username_tokens')}:{' '}
-                {USERNAME_TEMPLATE_TOKEN_NAMES.map((token) => `{${token}}`).join(' ')}
-              </p>
+                {activationChanged && activationParse.kind === 'INVALID' && (
+                  <Banner tone="danger" title={t('web.panel_activation_invalid')}>
+                    <Ltr>{activationParse.fields.join(', ')}</Ltr>
+                  </Banner>
+                )}
+              </div>
               {/*
-                BOTH bounds, not a sample render.
+                The username policy: two switches and a template, read back in full.
 
-                A template measured on a typical value passes here and then produces a
-                name the panel refuses for the one customer whose Telegram id is longer
-                than the operator's — after their money moved. The two numbers shown are
-                what `validateUsernameTemplate` actually decides on.
+                Returned by every panel read and rendered here, for the reason `activation`
+                above is: a policy an operator can write and cannot read is the legacy
+                settings screen where "the only way to read a price is to overwrite it".
+                None of it is a secret — the customer is shown the rule before they type.
               */}
-              {templateVerdict !== null && (
-                <p className={templateVerdict.ok ? 'hint' : 'notice'}>
-                  {t('web.panel_username_bounds')
-                    .replace('{best}', String(templateVerdict.bestCaseLength))
-                    .replace('{worst}', String(templateVerdict.worstCaseLength))
-                    .replace('{min}', String(PROVIDER_USERNAME_MIN_LENGTH))
-                    .replace('{max}', String(PROVIDER_USERNAME_MAX_LENGTH))}
-                  {templateIssues.length > 0 && ` — ${templateIssues.join(' ')}`}
+              <div className="form-section">
+                <h3>{t('web.panel_username_policy')}</h3>
+                <div className="form-grid">
+                  <Field
+                    label={t('web.panel_username_custom')}
+                    hint={t('web.panel_username_custom_hint')}
+                    htmlFor={`uc-${panel.id}`}
+                  >
+                    <input
+                      id={`uc-${panel.id}`}
+                      type="checkbox"
+                      checked={allowCustom}
+                      onChange={(event) => setAllowCustom(event.target.checked)}
+                      disabled={!mayWrite}
+                    />
+                  </Field>
+                  <Field
+                    label={t('web.panel_username_automatic')}
+                    hint={t('web.panel_username_automatic_hint')}
+                    htmlFor={`ur-${panel.id}`}
+                  >
+                    <input
+                      id={`ur-${panel.id}`}
+                      type="checkbox"
+                      checked={allowAutomatic}
+                      onChange={(event) => setAllowAutomatic(event.target.checked)}
+                      disabled={!mayWrite}
+                    />
+                  </Field>
+                  {/*
+                The preset, shown whatever the automatic switch says.
+
+                Deliberately, and for the reason the template field below gives: a preset
+                stored beside a disabled mode goes live the moment somebody re-enables it,
+                which is a one-checkbox edit nobody would think to validate. Hiding it
+                would leave an operator unable to see what is about to become live.
+              */}
+                  <Field
+                    label={t('web.panel_username_strategy')}
+                    hint={t('web.panel_username_strategy_hint')}
+                    htmlFor={`us-${panel.id}`}
+                  >
+                    <select
+                      id={`us-${panel.id}`}
+                      className="input"
+                      value={strategy}
+                      onChange={(event) => setStrategy(event.target.value as UsernameStrategy)}
+                      disabled={!mayWrite}
+                    >
+                      {USERNAME_STRATEGIES.map((option) => (
+                        <option key={option} value={option}>
+                          {t(`web.panel_username_strategy_${option}` as WebKey)}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                  {strategy === 'PREFIX_RANDOM' && (
+                    <Field
+                      label={t('web.panel_username_prefix')}
+                      hint={t('web.panel_username_prefix_hint')}
+                      htmlFor={`up-${panel.id}`}
+                    >
+                      <input
+                        id={`up-${panel.id}`}
+                        className="input ltr mono"
+                        value={usernamePrefix}
+                        onChange={(event) => setUsernamePrefix(event.target.value)}
+                        disabled={!mayWrite}
+                      />
+                    </Field>
+                  )}
+                </div>
+                {strategy === 'CUSTOM_TEMPLATE' && (
+                  <>
+                    <Field
+                      label={t('web.panel_username_template')}
+                      hint={t('web.panel_username_template_hint')}
+                      htmlFor={`ut-${panel.id}`}
+                    >
+                      <input
+                        id={`ut-${panel.id}`}
+                        className="input ltr mono"
+                        value={usernameTemplate}
+                        onChange={(event) => setUsernameTemplate(event.target.value)}
+                        disabled={!mayWrite}
+                      />
+                    </Field>
+                    <p className="hint ltr mono">
+                      {t('web.panel_username_tokens')}:{' '}
+                      {USERNAME_TEMPLATE_TOKEN_NAMES.map((token) => `{${token}}`).join(' ')}
+                    </p>
+                    {/*
+                    BOTH bounds, not a sample render.
+
+                    A template measured on a typical value passes here and then produces a
+                    name the panel refuses for the one customer whose Telegram id is longer
+                    than the operator's — after their money moved. The two numbers shown are
+                    what `validateUsernameTemplate` actually decides on.
+                  */}
+                    {templateVerdict !== null && (
+                      <p className={templateVerdict.ok ? 'hint' : 'notice'}>
+                        {t('web.panel_username_bounds')
+                          .replace('{best}', String(templateVerdict.bestCaseLength))
+                          .replace('{worst}', String(templateVerdict.worstCaseLength))
+                          .replace('{min}', String(PROVIDER_USERNAME_MIN_LENGTH))
+                          .replace('{max}', String(PROVIDER_USERNAME_MAX_LENGTH))}
+                        {templateIssues.length > 0 && ` — ${templateIssues.join(' ')}`}
+                      </p>
+                    )}
+                  </>
+                )}
+                {/*
+                The preview, from synthetic values, beside the controls that produce it.
+
+                This is the whole answer to a write-only settings screen: an operator can
+                see the shape a customer will get BEFORE saving, without reserving a name
+                or consuming any randomness.
+              */}
+                <p className="hint">
+                  {t('web.panel_username_preview')}:{' '}
+                  <span className="ltr mono">{preview ?? '\u2014'}</span>
                 </p>
-              )}
-            </>
-          )}
-          {/*
-            The preview, from synthetic values, beside the controls that produce it.
+                {!policyVerdict.ok && policyVerdict.refusal === 'NO_MODE' && (
+                  <Banner tone="danger">{t('web.panel_username_policy_empty')}</Banner>
+                )}
+                {!policyVerdict.ok && policyVerdict.refusal !== 'NO_MODE' && (
+                  <Banner tone="danger">{policyVerdict.reason ?? ''}</Banner>
+                )}
+              </div>
 
-            This is the whole answer to a write-only settings screen: an operator can
-            see the shape a customer will get BEFORE saving, without reserving a name
-            or consuming any randomness.
-          */}
-          <p className="hint">
-            {t('web.panel_username_preview')}:{' '}
-            <span className="ltr mono">{preview ?? '\u2014'}</span>
-          </p>
-          {!policyVerdict.ok && policyVerdict.refusal === 'NO_MODE' && (
-            <Banner tone="danger">{t('web.panel_username_policy_empty')}</Banner>
-          )}
-          {!policyVerdict.ok && policyVerdict.refusal !== 'NO_MODE' && (
-            <Banner tone="danger">{policyVerdict.reason ?? ''}</Banner>
-          )}
+              {/* The provider type is deliberately not editable. Changing it would
+                  reinterpret the stored credentials against a different protocol;
+                  the API does not accept it either. */}
 
-          {/* The provider type is deliberately not editable. Changing it would
-              reinterpret the stored credentials against a different protocol;
-              the API does not accept it either. */}
+              <div className="form-section panel-form-foot">
+                {/*
+                Somebody else changed this row while the draft was open. Said
+                rather than resolved: `POST /panels/:id` carries no expected
+                version, so nothing on the server can refuse the overwrite, and the
+                operator is the only party that can decide whose edit stands.
 
-          {/*
-            Somebody else changed this row while the draft was open. Said
-            rather than resolved: `POST /panels/:id` carries no expected
-            version, so nothing on the server can refuse the overwrite, and the
-            operator is the only party that can decide whose edit stands.
-
-            Which is why this is NOT `web.changed_elsewhere`, the string the
-            settings and content forms use: that one promises a conflict error,
-            and those two send an `expectedVersion` that can produce one. Here
-            it described a refusal the contract cannot make, so an operator who
-            pressed Save expecting to be stopped silently overwrote the other
-            administrator's rename instead.
-          */}
-          {/*
-            Always rendered when the row moved; only the CLAIM depends on
-            `mayWrite`.
+                Which is why this is NOT `web.changed_elsewhere`, the string the
+                settings and content forms use: that one promises a conflict error,
+                and those two send an `expectedVersion` that can produce one. Here
+                it described a refusal the contract cannot make, so an operator who
+                pressed Save expecting to be stopped silently overwrote the other
+                administrator's rename instead.
+              */}
+                {/*
+                Always rendered when the row moved; only the CLAIM depends on
+                `mayWrite`.
             
-            Gating the whole notice on write access was itself a defect: on an
-            ARCHIVED panel the inputs are disabled but still on screen holding
-            the operator's draft, the query keeps refreshing underneath, and
-            removing the notice took away both the only signal that the row had
-            moved and the "load the fresh value" link that re-syncs it. A viewer
-            without `panels.edit` lost the same thing.
+                Gating the whole notice on write access was itself a defect: on an
+                ARCHIVED panel the inputs are disabled but still on screen holding
+                the operator's draft, the query keeps refreshing underneath, and
+                removing the notice took away both the only signal that the row had
+                moved and the "load the fresh value" link that re-syncs it. A viewer
+                without `panels.edit` lost the same thing.
             
-            What must not be said to them is anything about saving: there is no
-            Save button, and `PanelService.update` refuses an archived panel
-            with a 412.
-          */}
-          {changedElsewhere && (
-            <p className="notice">
-              {t(
-                !mayWrite
-                  ? 'web.changed_elsewhere_readonly'
-                  : willOverwrite
-                    ? 'web.changed_elsewhere_overwrite'
-                    : 'web.changed_elsewhere_untouched',
-              )}{' '}
-              <button type="button" className="link" onClick={() => adopt(panel)}>
-                {t('web.reload_value')}
-              </button>
-            </p>
-          )}
+                What must not be said to them is anything about saving: there is no
+                Save button, and `PanelService.update` refuses an archived panel
+                with a 412.
+              */}
+                {changedElsewhere && (
+                  <p className="notice">
+                    {t(
+                      !mayWrite
+                        ? 'web.changed_elsewhere_readonly'
+                        : willOverwrite
+                          ? 'web.changed_elsewhere_overwrite'
+                          : 'web.changed_elsewhere_untouched',
+                    )}{' '}
+                    <button type="button" className="link" onClick={() => adopt(panel)}>
+                      {t('web.reload_value')}
+                    </button>
+                  </p>
+                )}
+                {/*
+                Archiving is one press away on the card below, which lands the
+                operator on exactly this form; `mayWrite` is why neither this
+                button nor the two fields above survive it. Restore first — the
+                lifecycle card says so.
+              */}
+                {mayWrite ? (
+                  <div className="form-actions">
+                    <button type="submit" className="btn primary" disabled={save.isPending}>
+                      {save.isPending ? t('web.saving') : t('web.save')}
+                    </button>
+                    {dirty && <span className="muted small">{t('web.form_unsaved')}</span>}
+                  </div>
+                ) : (
+                  <p className="faint small">{t('web.panel_read_only')}</p>
+                )}
+              </div>
+            </form>
+          </Card>
+        </div>
+        <div className="stack">
+          <Card title={t('web.panel_identity')}>
+            <KV
+              items={[
+                [t('web.panel_id'), <Copyable key="id" value={panel.id} />],
+                [
+                  t('web.panel_provider'),
+                  <span key="p" className="nowrap">
+                    {panel.providerName} <Ltr>({panel.providerType})</Ltr>
+                  </span>,
+                ],
+                [
+                  t('web.status'),
+                  <Badge key="s" tone={STATUS_TONES[panel.status]}>
+                    {t(STATUS_LABELS[panel.status])}
+                  </Badge>,
+                ],
+                [t('web.panel_created'), formatTimestamp(panel.createdAt)],
+                [t('web.updated_at'), formatTimestamp(panel.updatedAt)],
+              ]}
+            />
+          </Card>
           {/*
-            Archiving is one press away on the card below, which lands the
-            operator on exactly this form; `mayWrite` is why neither this
-            button nor the two fields above survive it. Restore first — the
-            lifecycle card says so.
+            The three numbers, kept apart.
+        
+            An operator looking at a full panel needs to know whether it is full of
+            SERVICES, which they resolve by raising the cap or terminating something,
+            or full of HOLDS, which resolve themselves when the orders behind them
+            settle or lapse. One `used` figure cannot answer that, and the operator
+            who cannot tell the two apart terminates a customer's service to make
+            room that was about to free itself.
           */}
-          {mayWrite && (
-            <div>
-              <button type="submit" className="btn primary" disabled={save.isPending}>
-                {save.isPending ? t('web.saving') : t('web.save')}
-              </button>
-            </div>
-          )}
-        </form>
-      </Card>
+          {/*
+            THE THREE STATES, SAID SEPARATELY.
+
+            This page used to show health and capacity, and an operator reading two
+            greens took it to mean the panel was ready to sell. Order `01a0c54b` was
+            taken by a panel that was ACTIVE, HEALTHY and had room, and that had no
+            Marzban activation at all.
+
+            `sellable` is the server's own verdict from the ONE evaluator the
+            catalogue, confirmation and settlement all use — not a rule recomputed
+            here, which would be the second place it lives and the one that disagrees.
+            The two lines under it exist so that a `false` is actionable: a single
+            `reason` can only name one thing, and an operator fixing a disabled panel
+            needs to know whether enabling it will be enough.
+          */}
+          <Card title={t('web.panel_sellability_title')} hint={t('web.panel_sellability_hint')}>
+            <KV
+              items={[
+                [
+                  t('web.panel_sellable'),
+                  panel.sellability.sellable ? (
+                    <Badge key="s" tone="ok">
+                      {t('web.panel_sellable_yes')}
+                    </Badge>
+                  ) : (
+                    <Badge key="s" tone="warn">
+                      {t('web.panel_sellable_no')}
+                    </Badge>
+                  ),
+                ],
+                [
+                  t('web.panel_activation_state'),
+                  panel.sellability.activationComplete ? (
+                    <Badge key="a" tone="ok">
+                      {t('web.panel_activation_complete')}
+                    </Badge>
+                  ) : (
+                    <Badge key="a" tone="warn">
+                      {t('web.panel_activation_incomplete')}
+                    </Badge>
+                  ),
+                ],
+                [
+                  t('web.panel_connection_validated'),
+                  panel.sellability.connectionValidated ? (
+                    <Badge key="v" tone="ok">
+                      {t('web.panel_connection_validated_yes')}
+                    </Badge>
+                  ) : (
+                    <Badge key="v" tone="warn">
+                      {t('web.panel_connection_validated_no')}
+                    </Badge>
+                  ),
+                ],
+              ]}
+            />
+            {!panel.sellability.sellable && panel.sellability.reason !== null && (
+              /*
+                The REASON in Persian, from a frozen map rather than the enum name.
+                `SELLABILITY_REASON_LABELS` is exhaustive over the contract, so a
+                reason added later fails to typecheck here instead of rendering as an
+                English constant on an operator's screen.
+              */
+              <Banner tone="warn" title={t(SELLABILITY_REASON_LABELS[panel.sellability.reason])}>
+                {t(SELLABILITY_REASON_HELP[panel.sellability.reason])}
+              </Banner>
+            )}
+            {panel.sellability.missingActivationFields.length > 0 && (
+              <Banner tone="warn" title={t('web.panel_activation_missing')}>
+                <Ltr>{panel.sellability.missingActivationFields.join(', ')}</Ltr>
+              </Banner>
+            )}
+          </Card>
+          <Card title={t('web.panel_capacity_title')} hint={t('web.panel_capacity_hint')}>
+            {panel.capacity.maxServices !== null && (
+              <Meter
+                label={t('web.panel_capacity_used')}
+                used={<Num value={panel.capacity.used} />}
+                total={<Num value={panel.capacity.maxServices} />}
+                value={panel.capacity.used}
+                max={panel.capacity.maxServices}
+              />
+            )}
+            <KV
+              items={[
+                [t('web.panel_capacity_services'), <Num key="s" value={panel.capacity.services} />],
+                [
+                  t('web.panel_capacity_reservations'),
+                  <Num key="r" value={panel.capacity.reservations} />,
+                ],
+                [t('web.panel_capacity_used'), <Num key="u" value={panel.capacity.used} />],
+                [
+                  t('web.panel_max_services'),
+                  panel.capacity.maxServices === null ? (
+                    <span key="m" className="faint">
+                      {t('web.panel_capacity_unlimited')}
+                    </span>
+                  ) : (
+                    <Num key="m" value={panel.capacity.maxServices} />
+                  ),
+                ],
+                [
+                  t('web.panel_capacity_available'),
+                  panel.capacity.available === null ? (
+                    <span key="a" className="faint">
+                      {t('web.panel_capacity_unlimited')}
+                    </span>
+                  ) : (
+                    <Num key="a" value={panel.capacity.available} />
+                  ),
+                ],
+              ]}
+            />
+          </Card>
+        </div>
+      </div>
 
       {/*
         Archiving and restoring are part of the lifecycle the status API
@@ -1721,7 +2024,7 @@ function OverviewTab({ panel, mayEdit }: { panel: PanelSummaryResponse; mayEdit:
         one archived through another client.
       */}
       {mayEdit && (
-        <Card title={t('web.panel_lifecycle')} hint={t('web.panel_lifecycle_hint')}>
+        <Card title={t('web.panel_lifecycle')} hint={t('web.panel_lifecycle_hint')} tone="danger">
           <div className="btn-group">
             {panel.status === 'ACTIVE' && (
               <button
@@ -1887,55 +2190,71 @@ function HealthTab({ panel }: { panel: PanelSummaryResponse }) {
       */}
       {!probeable(panel) && <Banner tone="warn">{t('web.panel_not_probeable')}</Banner>}
 
-      {/* WP-A8: the same stored facts, as operator checks with a remedy each. */}
-      <DiagnosticsCard panelId={panel.id} refreshMs={PANEL_DETAIL_REFRESH_MS} />
-
-      <Card title={t('web.panel_tab_health')}>
-        <KV
-          items={[
-            [t('web.panel_health'), <HealthBadge key="h" panel={panel} />],
-            [t('web.panel_failure'), <FailureBadge key="f" failure={panel.health.failure} />],
-            [
-              t('web.panel_last_check'),
-              panel.health.checkedAt === null ? '—' : formatTimestamp(panel.health.checkedAt),
-            ],
-            [
-              t('web.panel_latency'),
-              panel.health.latencyMs === null ? (
-                '—'
-              ) : (
-                <Ltr key="l" mono={false}>
-                  <Num value={panel.health.latencyMs} /> ms
-                </Ltr>
-              ),
-            ],
-            [
-              t('web.panel_upstream_status'),
-              panel.health.status === null ? '—' : <Ltr key="u">{String(panel.health.status)}</Ltr>,
-            ],
-            [
-              t('web.panel_provider_version'),
-              panel.health.providerVersion === null ? (
-                '—'
-              ) : (
-                <Ltr key="v">{panel.health.providerVersion}</Ltr>
-              ),
-            ],
-            [
-              t('web.panel_last_healthy'),
-              panel.health.lastHealthyAt === null
-                ? '—'
-                : formatTimestamp(panel.health.lastHealthyAt),
-            ],
-            [
-              t('web.panel_freshness'),
-              <span key="fr">
-                <Num value={fresh.value} /> {t(unitKey(fresh.unit))}
-              </span>,
-            ],
-          ]}
-        />
-      </Card>
+      <TwoColumn
+        main={
+          /* WP-A8: the same stored facts, as operator checks with a remedy each. */
+          <DiagnosticsCard panelId={panel.id} refreshMs={PANEL_DETAIL_REFRESH_MS} />
+        }
+        side={
+          <Card
+            title={t('web.panel_health_latest_card')}
+            actions={
+              <Badge tone="neutral" outline>
+                {t('web.panel_health_latest_chip')}
+              </Badge>
+            }
+          >
+            <KV
+              items={[
+                [t('web.panel_health'), <HealthBadge key="h" panel={panel} />],
+                [t('web.panel_failure'), <FailureBadge key="f" failure={panel.health.failure} />],
+                [
+                  t('web.panel_last_check'),
+                  panel.health.checkedAt === null ? '—' : formatTimestamp(panel.health.checkedAt),
+                ],
+                [
+                  t('web.panel_latency'),
+                  panel.health.latencyMs === null ? (
+                    '—'
+                  ) : (
+                    <Ltr key="l" mono={false}>
+                      <Num value={panel.health.latencyMs} /> ms
+                    </Ltr>
+                  ),
+                ],
+                [
+                  t('web.panel_upstream_status'),
+                  panel.health.status === null ? (
+                    '—'
+                  ) : (
+                    <Ltr key="u">{String(panel.health.status)}</Ltr>
+                  ),
+                ],
+                [
+                  t('web.panel_provider_version'),
+                  panel.health.providerVersion === null ? (
+                    '—'
+                  ) : (
+                    <Ltr key="v">{panel.health.providerVersion}</Ltr>
+                  ),
+                ],
+                [
+                  t('web.panel_last_healthy'),
+                  panel.health.lastHealthyAt === null
+                    ? '—'
+                    : formatTimestamp(panel.health.lastHealthyAt),
+                ],
+                [
+                  t('web.panel_freshness'),
+                  <span key="fr">
+                    <Num value={fresh.value} /> {t(unitKey(fresh.unit))}
+                  </span>,
+                ],
+              ]}
+            />
+          </Card>
+        }
+      />
     </>
   );
 }
@@ -2105,91 +2424,93 @@ function CredentialsTab({
         <p className="faint small">{t('web.credential_stored_unusable')}</p>
       )}
 
-      <Card title={t('web.panel_tab_credentials')}>
-        <div className="list-editor">
-          {shows('username') && (
-            <Secret
-              label={t('web.credential_username')}
-              configured={panel.credentials.username.configured}
-              {...(metaFor('username') === undefined
-                ? {}
-                : { meta: metaFor('username') as string })}
-              {...(mayWrite ? { onRemove: () => remove('username') } : {})}
-            />
-          )}
-          {shows('password') && (
-            <Secret
-              label={t('web.credential_password')}
-              configured={panel.credentials.password.configured}
-              {...(metaFor('password') === undefined
-                ? {}
-                : { meta: metaFor('password') as string })}
-              {...(mayWrite ? { onRemove: () => remove('password') } : {})}
-            />
-          )}
-          {shows('apiToken') && (
-            <Secret
-              label={t('web.credential_api_token')}
-              configured={panel.credentials.apiToken.configured}
-              {...(metaFor('apiToken') === undefined
-                ? {}
-                : { meta: metaFor('apiToken') as string })}
-              {...(mayWrite ? { onRemove: () => remove('apiToken') } : {})}
-            />
-          )}
-        </div>
-      </Card>
-
-      {mayWrite && (
-        <Card title={t('web.credentials_replace')} hint={t('web.credentials_replace_hint')}>
-          <form onSubmit={onSubmit} className="form-grid">
-            {accepts('username') && (
-              <Field label={t('web.username')} htmlFor={`cu-${panel.id}`}>
-                <input
-                  id={`cu-${panel.id}`}
-                  className="input ltr mono"
-                  autoComplete="off"
-                  value={username}
-                  onChange={(event) => setUsername(event.target.value)}
-                />
-              </Field>
+      <div className="grid-2">
+        <Card title={t('web.panel_tab_credentials')} hint={t('web.credentials_presence_hint')}>
+          <div className="list-editor">
+            {shows('username') && (
+              <Secret
+                label={t('web.credential_username')}
+                configured={panel.credentials.username.configured}
+                {...(metaFor('username') === undefined
+                  ? {}
+                  : { meta: metaFor('username') as string })}
+                {...(mayWrite ? { onRemove: () => remove('username') } : {})}
+              />
             )}
-            {accepts('password') && (
-              <Field label={t('web.password')} htmlFor={`cp-${panel.id}`}>
-                <input
-                  id={`cp-${panel.id}`}
-                  className="input ltr mono"
-                  type="password"
-                  autoComplete="new-password"
-                  value={password}
-                  onChange={(event) => setPassword(event.target.value)}
-                />
-              </Field>
+            {shows('password') && (
+              <Secret
+                label={t('web.credential_password')}
+                configured={panel.credentials.password.configured}
+                {...(metaFor('password') === undefined
+                  ? {}
+                  : { meta: metaFor('password') as string })}
+                {...(mayWrite ? { onRemove: () => remove('password') } : {})}
+              />
             )}
-            {accepts('apiToken') && (
-              <Field
-                label={t('web.api_token')}
-                hint={t('web.api_token_hint')}
-                htmlFor={`ct-${panel.id}`}
-              >
-                <input
-                  id={`ct-${panel.id}`}
-                  className="input ltr mono"
-                  type="password"
-                  autoComplete="off"
-                  value={apiToken}
-                  onChange={(event) => setApiToken(event.target.value)}
-                />
-              </Field>
+            {shows('apiToken') && (
+              <Secret
+                label={t('web.credential_api_token')}
+                configured={panel.credentials.apiToken.configured}
+                {...(metaFor('apiToken') === undefined
+                  ? {}
+                  : { meta: metaFor('apiToken') as string })}
+                {...(mayWrite ? { onRemove: () => remove('apiToken') } : {})}
+              />
             )}
-            <div>
-              <button type="submit" className="btn primary" disabled={save.isPending}>
-                {save.isPending ? t('web.saving') : t('web.save')}
-              </button>
-            </div>
-          </form>
+          </div>
         </Card>
-      )}
+
+        {mayWrite && (
+          <Card title={t('web.credentials_replace')} hint={t('web.credentials_replace_hint')}>
+            <form onSubmit={onSubmit} className="stack">
+              {accepts('username') && (
+                <Field label={t('web.username')} htmlFor={`cu-${panel.id}`}>
+                  <input
+                    id={`cu-${panel.id}`}
+                    className="input ltr mono"
+                    autoComplete="off"
+                    value={username}
+                    onChange={(event) => setUsername(event.target.value)}
+                  />
+                </Field>
+              )}
+              {accepts('password') && (
+                <Field label={t('web.password')} htmlFor={`cp-${panel.id}`}>
+                  <input
+                    id={`cp-${panel.id}`}
+                    className="input ltr mono"
+                    type="password"
+                    autoComplete="new-password"
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
+                  />
+                </Field>
+              )}
+              {accepts('apiToken') && (
+                <Field
+                  label={t('web.api_token')}
+                  hint={t('web.api_token_hint')}
+                  htmlFor={`ct-${panel.id}`}
+                >
+                  <input
+                    id={`ct-${panel.id}`}
+                    className="input ltr mono"
+                    type="password"
+                    autoComplete="off"
+                    value={apiToken}
+                    onChange={(event) => setApiToken(event.target.value)}
+                  />
+                </Field>
+              )}
+              <div className="form-actions full">
+                <button type="submit" className="btn primary" disabled={save.isPending}>
+                  {save.isPending ? t('web.saving') : t('web.save')}
+                </button>
+              </div>
+            </form>
+          </Card>
+        )}
+      </div>
     </>
   );
 }
@@ -2232,7 +2553,7 @@ function WorkloadTab({ panel }: { panel: PanelSummaryResponse }) {
   });
 
   return (
-    <div className="stack">
+    <div className="grid-2">
       <Card title={t('web.panel_workload_products')} hint={t('web.panel_workload_products_hint')}>
         <StateSwitch query={products} denied={false}>
           {products.data !== undefined &&
@@ -2464,124 +2785,162 @@ export function NewPanelPage({
         </Banner>
       )}
 
-      <Card>
-        {/*
-          The provider catalogue decides whether this form can do anything at
-          all. Reading `providers.data` directly meant a 503 from `/providers`
-          rendered a complete, enabled form with an empty picker: submitting
-          returned silently because `providerType` was '', so an outage looked
-          exactly like an installation with no supported providers, and offered
-          no retry.
-        */}
-        <StateSwitch
-          query={providers}
-          isEmpty={(providers.data?.providers.length ?? 0) === 0}
-          empty={<Empty title={t('web.providers_none')} icon="panels" />}
-        >
-          <form onSubmit={onSubmit} className="form-grid">
-            <Field label={t('web.panel_name')} htmlFor="new-name">
-              <input
-                id="new-name"
-                className="input"
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-                required
-              />
-            </Field>
+      {/*
+        The provider catalogue decides whether this form can do anything at
+        all. Reading `providers.data` directly meant a 503 from `/providers`
+        rendered a complete, enabled form with an empty picker: submitting
+        returned silently because `providerType` was '', so an outage looked
+        exactly like an installation with no supported providers, and offered
+        no retry.
+      */}
+      <StateSwitch
+        query={providers}
+        isEmpty={(providers.data?.providers.length ?? 0) === 0}
+        empty={<Empty title={t('web.providers_none')} icon="panels" />}
+      >
+        <form onSubmit={onSubmit}>
+          <TwoColumn
+            main={
+              <Card tight>
+                <div className="form-section">
+                  <h3>{t('web.panel_new_section_identity')}</h3>
+                  <div className="form-grid">
+                    <Field label={t('web.panel_name')} htmlFor="new-name">
+                      <input
+                        id="new-name"
+                        className="input"
+                        value={name}
+                        onChange={(event) => setName(event.target.value)}
+                        required
+                      />
+                    </Field>
 
-            <Field label={t('web.panel_provider')} htmlFor="new-provider">
-              <select
-                id="new-provider"
-                className="input"
-                value={providerType}
-                onChange={(event) => setProviderType(event.target.value as ProviderType | '')}
-                required
-              >
-                <option value="">—</option>
-                {(providers.data?.providers ?? []).map((provider) => (
-                  <option key={provider.key} value={provider.key}>
-                    {provider.canonicalName}
-                  </option>
-                ))}
-              </select>
-            </Field>
+                    <Field label={t('web.panel_provider')} htmlFor="new-provider">
+                      <select
+                        id="new-provider"
+                        className="input"
+                        value={providerType}
+                        onChange={(event) =>
+                          setProviderType(event.target.value as ProviderType | '')
+                        }
+                        required
+                      >
+                        <option value="">—</option>
+                        {(providers.data?.providers ?? []).map((provider) => (
+                          <option key={provider.key} value={provider.key}>
+                            {provider.canonicalName}
+                          </option>
+                        ))}
+                      </select>
+                    </Field>
 
-            <Field
-              label={t('web.panel_base_url')}
-              hint={t('web.panel_base_url_hint')}
-              htmlFor="new-url"
-            >
-              <input
-                id="new-url"
-                className="input ltr mono"
-                value={baseUrl}
-                onChange={(event) => setBaseUrl(event.target.value)}
-                required
-              />
-            </Field>
+                    <div className="full">
+                      <Field
+                        label={t('web.panel_base_url')}
+                        hint={t('web.panel_base_url_hint')}
+                        htmlFor="new-url"
+                      >
+                        <input
+                          id="new-url"
+                          className="input ltr mono"
+                          value={baseUrl}
+                          onChange={(event) => setBaseUrl(event.target.value)}
+                          required
+                        />
+                      </Field>
+                    </div>
+                  </div>
+                </div>
 
-            {chosen !== undefined && (
-              <>
-                <Banner tone="info" title={t('web.panel_credential_shape')}>
-                  {t(CREDENTIAL_SHAPE_LABELS[chosen.credentialShape])}
-                </Banner>
-                {chosen.requiredActivationFields.length > 0 && (
-                  <Banner tone="warn" title={t('web.panel_activation_fields')}>
-                    {chosen.requiredActivationFields
-                      .map((field) => {
-                        const label = ACTIVATION_FIELD_LABELS[field];
-                        return label === undefined ? field : t(label);
-                      })
-                      .join(t('web.list_separator'))}
-                  </Banner>
+                {(accepts('username') || accepts('password') || accepts('apiToken')) && (
+                  <div className="form-section">
+                    <h3>{t('web.panel_new_section_credentials')}</h3>
+                    <p className="desc">{t('web.credentials_one_way_body')}</p>
+                    <div className="form-grid">
+                      {accepts('username') && (
+                        <Field label={t('web.username')} htmlFor="new-username">
+                          <input
+                            id="new-username"
+                            className="input ltr mono"
+                            autoComplete="off"
+                            value={username}
+                            onChange={(event) => setUsername(event.target.value)}
+                          />
+                        </Field>
+                      )}
+                      {accepts('password') && (
+                        <Field label={t('web.password')} htmlFor="new-password">
+                          <input
+                            id="new-password"
+                            className="input ltr mono"
+                            type="password"
+                            autoComplete="new-password"
+                            value={password}
+                            onChange={(event) => setPassword(event.target.value)}
+                          />
+                        </Field>
+                      )}
+                      {accepts('apiToken') && (
+                        <Field
+                          label={t('web.api_token')}
+                          hint={t('web.api_token_hint')}
+                          htmlFor="new-token"
+                        >
+                          <input
+                            id="new-token"
+                            className="input ltr mono"
+                            type="password"
+                            autoComplete="off"
+                            value={apiToken}
+                            onChange={(event) => setApiToken(event.target.value)}
+                          />
+                        </Field>
+                      )}
+                    </div>
+                  </div>
                 )}
-              </>
-            )}
 
-            {accepts('username') && (
-              <Field label={t('web.username')} htmlFor="new-username">
-                <input
-                  id="new-username"
-                  className="input ltr mono"
-                  autoComplete="off"
-                  value={username}
-                  onChange={(event) => setUsername(event.target.value)}
-                />
-              </Field>
-            )}
-            {accepts('password') && (
-              <Field label={t('web.password')} htmlFor="new-password">
-                <input
-                  id="new-password"
-                  className="input ltr mono"
-                  type="password"
-                  autoComplete="new-password"
-                  value={password}
-                  onChange={(event) => setPassword(event.target.value)}
-                />
-              </Field>
-            )}
-            {accepts('apiToken') && (
-              <Field label={t('web.api_token')} hint={t('web.api_token_hint')} htmlFor="new-token">
-                <input
-                  id="new-token"
-                  className="input ltr mono"
-                  type="password"
-                  autoComplete="off"
-                  value={apiToken}
-                  onChange={(event) => setApiToken(event.target.value)}
-                />
-              </Field>
-            )}
-
-            <div>
-              <button type="submit" className="btn primary" disabled={create.isPending}>
-                {create.isPending ? t('web.saving') : t('web.save')}
-              </button>
-            </div>
-          </form>
-        </StateSwitch>
-      </Card>
+                <div className="form-section panel-form-foot">
+                  <div className="form-actions">
+                    <button type="submit" className="btn primary" disabled={create.isPending}>
+                      {create.isPending ? t('web.saving') : t('web.save')}
+                    </button>
+                  </div>
+                </div>
+              </Card>
+            }
+            side={
+              <Card title={t('web.panel_new_provider_card')}>
+                {chosen === undefined ? (
+                  <p className="muted small">{t('web.panel_new_choose_provider')}</p>
+                ) : (
+                  <div className="stack-sm">
+                    <p>
+                      <Badge tone="info" outline>
+                        <Ltr mono={false}>{chosen.canonicalName}</Ltr>
+                      </Badge>
+                    </p>
+                    <Banner tone="info" title={t('web.panel_credential_shape')}>
+                      {t(CREDENTIAL_SHAPE_LABELS[chosen.credentialShape])}
+                    </Banner>
+                    {chosen.requiredActivationFields.length > 0 && (
+                      <Banner tone="warn" title={t('web.panel_activation_fields')}>
+                        {chosen.requiredActivationFields
+                          .map((field) => {
+                            const label = ACTIVATION_FIELD_LABELS[field];
+                            return label === undefined ? field : t(label);
+                          })
+                          .join(t('web.list_separator'))}
+                      </Banner>
+                    )}
+                    {!mayRotate && <p className="muted small">{t('web.panel_new_no_rotate')}</p>}
+                  </div>
+                )}
+              </Card>
+            }
+          />
+        </form>
+      </StateSwitch>
     </>
   );
 }
@@ -2619,6 +2978,7 @@ export function ProvidersPage() {
       <Card>
         <StateSwitch query={providers} isEmpty={rows.length === 0}>
           <DataTable
+            dense
             caption={t('web.providers_title')}
             rows={rows}
             rowKey={(row) => row.key}
@@ -2628,7 +2988,15 @@ export function ProvidersPage() {
              * reads what the adapter can DO, row by row, from the server's registry.
              */
             columns={[
-              { key: 'name', header: t('web.panel_provider'), render: (row) => row.canonicalName },
+              {
+                key: 'name',
+                header: t('web.panel_provider'),
+                render: (row) => (
+                  <Badge tone="info" outline>
+                    <Ltr mono={false}>{row.canonicalName}</Ltr>
+                  </Badge>
+                ),
+              },
               {
                 key: 'shape',
                 header: t('web.panel_credential_shape'),
@@ -2637,12 +3005,13 @@ export function ProvidersPage() {
               {
                 key: 'caps',
                 header: t('web.providers_capabilities'),
+                wrap: true,
                 render: (row) => (
-                  <span className="nowrap">
+                  <span className="providers-caps">
                     {row.capabilityRegistry
                       .filter((entry) => entry.supported)
                       .map((entry) => (
-                        <Badge key={entry.row} tone="ok">
+                        <Badge key={entry.row} tone="ok" dot>
                           {t(REGISTRY_ROW_LABELS[entry.row])}
                         </Badge>
                       ))}

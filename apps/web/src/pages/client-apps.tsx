@@ -47,15 +47,20 @@ import { queryState } from '../view-state';
 import { t, type WebKey } from '../i18n/web.fa';
 import { messageFor } from './settings';
 import { sortOrderOf } from './support';
+import { TelegramPhone } from './telegram-phone';
+import { Icon } from '../ui/icons';
 import {
   Badge,
   Banner,
   Card,
+  ConfirmDialog,
   DataTable,
   Empty,
   Field,
   PageHead,
+  RowActions,
   StateSwitch,
+  useUnsavedChanges,
   useToast,
   type Column,
 } from '../ui/kit';
@@ -518,7 +523,7 @@ function ImageCard({
             data-testid="client-app-image-picked"
           />
         )}
-        <div className="toolbar">
+        <div className="form-actions">
           <button
             type="submit"
             className="btn primary sm"
@@ -558,6 +563,8 @@ export function ClientAppsPage({ denied, mayEdit }: { denied: boolean; mayEdit: 
   const rows = apps.data?.items ?? [];
 
   const [editor, setEditor] = useState<Editor>({ kind: 'closed' });
+  /** The entry the operator asked to delete, awaiting the dialog's answer. */
+  const [deleting, setDeleting] = useState<ClientAppResponse | null>(null);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [touched, setTouched] = useState(false);
 
@@ -646,6 +653,16 @@ export function ClientAppsPage({ denied, mayEdit }: { denied: boolean; mayEdit: 
 
   const current =
     editor.kind === 'edit' ? rows.find((row) => row.id === editor.basis.id) : undefined;
+  /*
+   * Dirty-state protection: an open editor whose fields differ from what it was
+   * opened with. Leaving the page asks first; closing the editor is the operator's
+   * own Cancel and needs no second question.
+   */
+  const editorDirty =
+    editor.kind !== 'closed' &&
+    JSON.stringify(form) !==
+      JSON.stringify(editor.kind === 'edit' ? formOf(editor.basis) : EMPTY_FORM);
+  useUnsavedChanges(mayEdit && editorDirty);
   const changedElsewhere =
     editor.kind === 'edit' &&
     !save.isPending &&
@@ -666,6 +683,7 @@ export function ClientAppsPage({ denied, mayEdit }: { denied: boolean; mayEdit: 
 
   const newButton = (
     <button type="button" className="btn primary sm" disabled={busy} onClick={openCreate}>
+      <Icon name="plus" />
       {t('web.client_apps_new')}
     </button>
   );
@@ -679,7 +697,9 @@ export function ClientAppsPage({ denied, mayEdit }: { denied: boolean; mayEdit: 
     {
       key: 'name',
       header: t('web.client_apps_name'),
-      render: (row) => (row.icon === null ? row.name : `${row.icon} ${row.name}`),
+      render: (row) => (
+        <span className="strong">{row.icon === null ? row.name : `${row.icon} ${row.name}`}</span>
+      ),
     },
     { key: 'order', header: t('web.client_apps_order'), render: (row) => String(row.sortOrder) },
     {
@@ -691,7 +711,7 @@ export function ClientAppsPage({ denied, mayEdit }: { denied: boolean; mayEdit: 
       key: 'status',
       header: t('web.client_apps_status'),
       render: (row) => (
-        <Badge tone={row.status === 'ENABLED' ? 'ok' : 'neutral'}>
+        <Badge tone={row.status === 'ENABLED' ? 'ok' : 'neutral'} dot>
           {t(row.status === 'ENABLED' ? 'web.client_apps_enabled' : 'web.client_apps_disabled')}
         </Badge>
       ),
@@ -707,7 +727,7 @@ export function ClientAppsPage({ denied, mayEdit }: { denied: boolean; mayEdit: 
       align: 'end',
       render: (row) =>
         !mayEdit ? null : (
-          <div className="toolbar">
+          <RowActions>
             <button type="button" className="btn sm" disabled={busy} onClick={() => openEdit(row)}>
               {t('web.client_apps_edit')}
             </button>
@@ -727,16 +747,15 @@ export function ClientAppsPage({ denied, mayEdit }: { denied: boolean; mayEdit: 
             </button>
             <button
               type="button"
-              className="btn danger sm"
+              className="btn ghost danger sm"
               disabled={busy}
-              onClick={() => {
-                if (!window.confirm(t('web.client_apps_delete_confirm'))) return;
-                remove.mutate({ id: row.id, expectedVersion: row.version });
-              }}
+              // Asked through the kit's dialog, which names its buttons; the answer
+              // deletes the version the operator was looking at when they pressed.
+              onClick={() => setDeleting(row)}
             >
               {t('web.client_apps_delete')}
             </button>
-          </div>
+          </RowActions>
         ),
     },
   ];
@@ -790,285 +809,346 @@ export function ClientAppsPage({ denied, mayEdit }: { denied: boolean; mayEdit: 
             rows={rows}
             rowKey={(row) => row.id}
             caption={t('web.client_apps_title')}
+            dense
           />
         </Card>
       </StateSwitch>
 
       {mayEdit && editor.kind !== 'closed' && (
-        <Card
-          title={t(
-            editor.kind === 'create' ? 'web.client_apps_creating' : 'web.client_apps_editing',
-          )}
-          hint={t('web.client_apps_form_hint')}
-        >
-          <form onSubmit={submit} noValidate>
-            <Field label={t('web.client_apps_platform')} htmlFor="app-platform">
-              <select
-                id="app-platform"
-                value={form.platform}
-                onChange={(event) =>
-                  setForm({ ...form, platform: event.target.value as ClientAppPlatform })
-                }
-              >
-                {CLIENT_APP_PLATFORMS.map((platform) => (
-                  <option key={platform} value={platform}>
-                    {t(PLATFORM_LABELS[platform])}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            <Field
-              label={t('web.client_apps_name')}
-              htmlFor="app-name"
-              {...(shown('name') === undefined ? {} : { error: shown('name') as string })}
-            >
-              <input
-                id="app-name"
-                value={form.name}
-                maxLength={CLIENT_APP_NAME_MAX_LENGTH}
-                onChange={(event) => setForm({ ...form, name: event.target.value })}
-              />
-            </Field>
-            <Field
-              label={t('web.client_apps_icon')}
-              htmlFor="app-icon"
-              hint={t('web.client_apps_icon_hint')}
-              {...(shown('icon') === undefined ? {} : { error: shown('icon') as string })}
-            >
-              <input
-                id="app-icon"
-                value={form.icon}
-                maxLength={CLIENT_APP_ICON_MAX_LENGTH}
-                onChange={(event) => setForm({ ...form, icon: event.target.value })}
-              />
-            </Field>
-            <Field
-              label={t('web.client_apps_description')}
-              htmlFor="app-description"
-              {...(shown('description') === undefined
-                ? {}
-                : { error: shown('description') as string })}
-            >
-              <input
-                id="app-description"
-                value={form.description}
-                maxLength={CLIENT_APP_DESCRIPTION_MAX_LENGTH}
-                onChange={(event) => setForm({ ...form, description: event.target.value })}
-              />
-            </Field>
-            <Field
-              label={t('web.client_apps_official_url')}
-              htmlFor="app-official"
-              hint={t('web.client_apps_url_hint')}
-              {...(shown('officialUrl') === undefined
-                ? {}
-                : { error: shown('officialUrl') as string })}
-            >
-              <input
-                id="app-official"
-                dir="ltr"
-                inputMode="url"
-                value={form.officialUrl}
-                maxLength={CLIENT_APP_URL_MAX_LENGTH}
-                onChange={(event) => setForm({ ...form, officialUrl: event.target.value })}
-              />
-            </Field>
-            <Field
-              label={t('web.client_apps_alternative_url')}
-              htmlFor="app-alternative"
-              hint={t('web.client_apps_optional')}
-              {...(shown('alternativeUrl') === undefined
-                ? {}
-                : { error: shown('alternativeUrl') as string })}
-            >
-              <input
-                id="app-alternative"
-                dir="ltr"
-                inputMode="url"
-                value={form.alternativeUrl}
-                maxLength={CLIENT_APP_URL_MAX_LENGTH}
-                onChange={(event) => setForm({ ...form, alternativeUrl: event.target.value })}
-              />
-            </Field>
-            <Field
-              label={t('web.client_apps_help_url')}
-              htmlFor="app-help"
-              hint={t('web.client_apps_optional')}
-              {...(shown('helpUrl') === undefined ? {} : { error: shown('helpUrl') as string })}
-            >
-              <input
-                id="app-help"
-                dir="ltr"
-                inputMode="url"
-                value={form.helpUrl}
-                maxLength={CLIENT_APP_URL_MAX_LENGTH}
-                onChange={(event) => setForm({ ...form, helpUrl: event.target.value })}
-              />
-            </Field>
-            <Field
-              label={t('web.client_apps_guide')}
-              htmlFor="app-guide"
-              hint={t('web.client_apps_guide_hint')}
-              {...(shown('guide') === undefined ? {} : { error: shown('guide') as string })}
-            >
-              <textarea
-                id="app-guide"
-                rows={8}
-                value={form.guide}
-                maxLength={CLIENT_APP_GUIDE_MAX_LENGTH}
-                onChange={(event) => setForm({ ...form, guide: event.target.value })}
-              />
-            </Field>
-
-            <fieldset className="field">
-              <legend>{t('web.client_apps_delivery')}</legend>
-              <span className="muted small">{t('web.client_apps_compat_hint')}</span>
-              {CLIENT_APP_DELIVERY_KINDS.map((kind) => (
-                <label key={kind} className="nowrap">
-                  <input
-                    type="checkbox"
-                    checked={form.deliveryKinds.includes(kind)}
-                    onChange={(event) =>
-                      setForm({
-                        ...form,
-                        deliveryKinds: toggled(form.deliveryKinds, kind, event.target.checked),
-                      })
-                    }
-                  />{' '}
-                  {t(DELIVERY_LABELS[kind])}
-                </label>
-              ))}
-            </fieldset>
-            <fieldset className="field">
-              <legend>{t('web.client_apps_protocols')}</legend>
-              {CLIENT_APP_PROTOCOLS.map((protocol) => (
-                <label key={protocol} className="nowrap" dir="ltr">
-                  <input
-                    type="checkbox"
-                    checked={form.protocols.includes(protocol)}
-                    onChange={(event) =>
-                      setForm({
-                        ...form,
-                        protocols: toggled(form.protocols, protocol, event.target.checked),
-                      })
-                    }
-                  />{' '}
-                  {protocol}
-                </label>
-              ))}
-            </fieldset>
-            <fieldset className="field">
-              <legend>{t('web.client_apps_providers')}</legend>
-              {PROVIDER_DESCRIPTORS.map((descriptor) => (
-                <label key={descriptor.key} className="nowrap" dir="ltr">
-                  <input
-                    type="checkbox"
-                    checked={form.providerTypes.includes(descriptor.key)}
-                    onChange={(event) =>
-                      setForm({
-                        ...form,
-                        providerTypes: toggled(
-                          form.providerTypes,
-                          descriptor.key,
-                          event.target.checked,
-                        ),
-                      })
-                    }
-                  />{' '}
-                  {descriptor.canonicalName}
-                </label>
-              ))}
-            </fieldset>
-
-            <Field
-              label={t('web.client_apps_order')}
-              htmlFor="app-sort"
-              hint={t('web.client_apps_sort_hint')}
-              {...(shown('sortOrder') === undefined ? {} : { error: shown('sortOrder') as string })}
-            >
-              <input
-                id="app-sort"
-                value={form.sortOrder}
-                inputMode="numeric"
-                onChange={(event) => setForm({ ...form, sortOrder: event.target.value })}
-              />
-            </Field>
-
-            <Card title={t('web.client_apps_preview')} hint={t('web.client_apps_preview_hint')}>
-              {/* HF-A10: the picture goes out first, as its own message, when there is one. */}
-              {editor.kind === 'edit' && editor.basis.image !== null && (
-                <img
-                  className="client-app-image"
-                  src={clientAppImageUrl(editor.basis.id, editor.basis.image.sha256)}
-                  alt={t('web.client_apps_image_alt')}
-                />
-              )}
-              <div className="bot-preview" data-testid="client-app-preview" dir="auto">
-                {preview}
-              </div>
-              <div className="toolbar">
-                <span className="btn sm">{CATALOGUE_FA['bot.apps.download_button']}</span>
-                {form.alternativeUrl.trim() !== '' && (
-                  <span className="btn sm">{CATALOGUE_FA['bot.apps.alternative_button']}</span>
-                )}
-                {form.helpUrl.trim() !== '' && (
-                  <span className="btn sm">{CATALOGUE_FA['bot.apps.help_button']}</span>
-                )}
-              </div>
-            </Card>
-
-            {changedElsewhere && (
-              <Banner tone="warn">
-                {t('web.changed_elsewhere')}{' '}
-                <button
-                  type="button"
-                  className="btn ghost sm"
-                  onClick={() => {
-                    save.reset();
-                    if (current !== undefined) openEdit(current);
-                  }}
-                >
-                  {t('web.reload_value')}
-                </button>
-              </Banner>
+        <div className="two-col">
+          <Card
+            title={t(
+              editor.kind === 'create' ? 'web.client_apps_creating' : 'web.client_apps_editing',
             )}
+            hint={t('web.client_apps_form_hint')}
+            tight
+          >
+            <form onSubmit={submit} noValidate>
+              <div className="form-section">
+                <h3>{t('web.client_apps_section_identity')}</h3>
+                <div className="form-grid">
+                  <Field label={t('web.client_apps_platform')} htmlFor="app-platform">
+                    <select
+                      id="app-platform"
+                      className="input"
+                      value={form.platform}
+                      onChange={(event) =>
+                        setForm({ ...form, platform: event.target.value as ClientAppPlatform })
+                      }
+                    >
+                      {CLIENT_APP_PLATFORMS.map((platform) => (
+                        <option key={platform} value={platform}>
+                          {t(PLATFORM_LABELS[platform])}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                  <Field
+                    label={t('web.client_apps_name')}
+                    htmlFor="app-name"
+                    {...(shown('name') === undefined ? {} : { error: shown('name') as string })}
+                  >
+                    <input
+                      id="app-name"
+                      className="input"
+                      value={form.name}
+                      maxLength={CLIENT_APP_NAME_MAX_LENGTH}
+                      onChange={(event) => setForm({ ...form, name: event.target.value })}
+                    />
+                  </Field>
+                  <Field
+                    label={t('web.client_apps_icon')}
+                    htmlFor="app-icon"
+                    hint={t('web.client_apps_icon_hint')}
+                    {...(shown('icon') === undefined ? {} : { error: shown('icon') as string })}
+                  >
+                    <input
+                      id="app-icon"
+                      className="input"
+                      value={form.icon}
+                      maxLength={CLIENT_APP_ICON_MAX_LENGTH}
+                      onChange={(event) => setForm({ ...form, icon: event.target.value })}
+                    />
+                  </Field>
+                  <Field
+                    label={t('web.client_apps_description')}
+                    htmlFor="app-description"
+                    {...(shown('description') === undefined
+                      ? {}
+                      : { error: shown('description') as string })}
+                  >
+                    <input
+                      id="app-description"
+                      className="input"
+                      value={form.description}
+                      maxLength={CLIENT_APP_DESCRIPTION_MAX_LENGTH}
+                      onChange={(event) => setForm({ ...form, description: event.target.value })}
+                    />
+                  </Field>
+                </div>
+              </div>
+              <div className="form-section">
+                <h3>{t('web.client_apps_section_links')}</h3>
+                <div className="form-grid">
+                  <div className="full">
+                    <Field
+                      label={t('web.client_apps_official_url')}
+                      htmlFor="app-official"
+                      hint={t('web.client_apps_url_hint')}
+                      {...(shown('officialUrl') === undefined
+                        ? {}
+                        : { error: shown('officialUrl') as string })}
+                    >
+                      <input
+                        id="app-official"
+                        className="input ltr"
+                        dir="ltr"
+                        inputMode="url"
+                        value={form.officialUrl}
+                        maxLength={CLIENT_APP_URL_MAX_LENGTH}
+                        onChange={(event) => setForm({ ...form, officialUrl: event.target.value })}
+                      />
+                    </Field>
+                  </div>
+                  <Field
+                    label={t('web.client_apps_alternative_url')}
+                    htmlFor="app-alternative"
+                    hint={t('web.client_apps_optional')}
+                    {...(shown('alternativeUrl') === undefined
+                      ? {}
+                      : { error: shown('alternativeUrl') as string })}
+                  >
+                    <input
+                      id="app-alternative"
+                      className="input ltr"
+                      dir="ltr"
+                      inputMode="url"
+                      value={form.alternativeUrl}
+                      maxLength={CLIENT_APP_URL_MAX_LENGTH}
+                      onChange={(event) => setForm({ ...form, alternativeUrl: event.target.value })}
+                    />
+                  </Field>
+                  <Field
+                    label={t('web.client_apps_help_url')}
+                    htmlFor="app-help"
+                    hint={t('web.client_apps_optional')}
+                    {...(shown('helpUrl') === undefined
+                      ? {}
+                      : { error: shown('helpUrl') as string })}
+                  >
+                    <input
+                      id="app-help"
+                      className="input ltr"
+                      dir="ltr"
+                      inputMode="url"
+                      value={form.helpUrl}
+                      maxLength={CLIENT_APP_URL_MAX_LENGTH}
+                      onChange={(event) => setForm({ ...form, helpUrl: event.target.value })}
+                    />
+                  </Field>
+                </div>
+              </div>
+              <div className="form-section">
+                <Field
+                  label={t('web.client_apps_guide')}
+                  htmlFor="app-guide"
+                  hint={t('web.client_apps_guide_hint')}
+                  {...(shown('guide') === undefined ? {} : { error: shown('guide') as string })}
+                >
+                  <textarea
+                    id="app-guide"
+                    className="input"
+                    rows={8}
+                    value={form.guide}
+                    maxLength={CLIENT_APP_GUIDE_MAX_LENGTH}
+                    onChange={(event) => setForm({ ...form, guide: event.target.value })}
+                  />
+                </Field>
+              </div>
+              <div className="form-section">
+                <h3>{t('web.client_apps_section_compat')}</h3>
+                <div className="client-apps-sets">
+                  <fieldset className="field client-apps-set">
+                    <legend>{t('web.client_apps_delivery')}</legend>
+                    <span className="muted small">{t('web.client_apps_compat_hint')}</span>
+                    {CLIENT_APP_DELIVERY_KINDS.map((kind) => (
+                      <label key={kind} className="nowrap">
+                        <input
+                          type="checkbox"
+                          checked={form.deliveryKinds.includes(kind)}
+                          onChange={(event) =>
+                            setForm({
+                              ...form,
+                              deliveryKinds: toggled(
+                                form.deliveryKinds,
+                                kind,
+                                event.target.checked,
+                              ),
+                            })
+                          }
+                        />{' '}
+                        {t(DELIVERY_LABELS[kind])}
+                      </label>
+                    ))}
+                  </fieldset>
+                  <fieldset className="field client-apps-set">
+                    <legend>{t('web.client_apps_protocols')}</legend>
+                    {CLIENT_APP_PROTOCOLS.map((protocol) => (
+                      <label key={protocol} className="nowrap" dir="ltr">
+                        <input
+                          type="checkbox"
+                          checked={form.protocols.includes(protocol)}
+                          onChange={(event) =>
+                            setForm({
+                              ...form,
+                              protocols: toggled(form.protocols, protocol, event.target.checked),
+                            })
+                          }
+                        />{' '}
+                        {protocol}
+                      </label>
+                    ))}
+                  </fieldset>
+                  <fieldset className="field client-apps-set">
+                    <legend>{t('web.client_apps_providers')}</legend>
+                    {PROVIDER_DESCRIPTORS.map((descriptor) => (
+                      <label key={descriptor.key} className="nowrap" dir="ltr">
+                        <input
+                          type="checkbox"
+                          checked={form.providerTypes.includes(descriptor.key)}
+                          onChange={(event) =>
+                            setForm({
+                              ...form,
+                              providerTypes: toggled(
+                                form.providerTypes,
+                                descriptor.key,
+                                event.target.checked,
+                              ),
+                            })
+                          }
+                        />{' '}
+                        {descriptor.canonicalName}
+                      </label>
+                    ))}
+                  </fieldset>
+                </div>
+              </div>
+              <details className="form-section client-apps-advanced">
+                <summary>{t('web.payment_gateway_section_advanced')}</summary>
+                <Field
+                  label={t('web.client_apps_order')}
+                  htmlFor="app-sort"
+                  hint={t('web.client_apps_sort_hint')}
+                  {...(shown('sortOrder') === undefined
+                    ? {}
+                    : { error: shown('sortOrder') as string })}
+                >
+                  <input
+                    id="app-sort"
+                    className="input ltr"
+                    value={form.sortOrder}
+                    inputMode="numeric"
+                    onChange={(event) => setForm({ ...form, sortOrder: event.target.value })}
+                  />
+                </Field>
+              </details>
+              <div className="form-section client-apps-form-foot">
+                {changedElsewhere && (
+                  <Banner tone="warn">
+                    {t('web.changed_elsewhere')}{' '}
+                    <button
+                      type="button"
+                      className="btn ghost sm"
+                      onClick={() => {
+                        save.reset();
+                        if (current !== undefined) openEdit(current);
+                      }}
+                    >
+                      {t('web.reload_value')}
+                    </button>
+                  </Banner>
+                )}
 
-            <div className="toolbar">
-              <button
-                type="submit"
-                className="btn primary sm"
-                disabled={busy || (touched && (formInvalid || sortOrder === null))}
-              >
-                {t('web.client_apps_save')}
-              </button>
-              <button type="button" className="btn sm" disabled={busy} onClick={close}>
-                {t('web.client_apps_cancel')}
-              </button>
-            </div>
+                <div className="form-actions">
+                  <button
+                    type="submit"
+                    className="btn primary"
+                    disabled={busy || (touched && (formInvalid || sortOrder === null))}
+                  >
+                    {t('web.client_apps_save')}
+                  </button>
+                  <button type="button" className="btn" disabled={busy} onClick={close}>
+                    {t('web.client_apps_cancel')}
+                  </button>
+                </div>
 
-            {save.error != null && <Banner tone="danger">{faultOf(save.error)}</Banner>}
-          </form>
-        </Card>
+                {save.error != null && <Banner tone="danger">{faultOf(save.error)}</Banner>}
+              </div>
+            </form>
+          </Card>
+          <div className="stack">
+            <Card title={t('web.client_apps_preview')} hint={t('web.client_apps_preview_hint')}>
+              <TelegramPhone title={t('web.client_apps_preview_chat')}>
+                {/* HF-A10: the picture goes out first, as its own message, when there is one. */}
+                {editor.kind === 'edit' && editor.basis.image !== null && (
+                  <img
+                    className="client-app-image tg-phone-photo"
+                    src={clientAppImageUrl(editor.basis.id, editor.basis.image.sha256)}
+                    alt={t('web.client_apps_image_alt')}
+                  />
+                )}
+                <div className="bot-preview" data-testid="client-app-preview" dir="auto">
+                  {preview}
+                </div>
+                {/* The message's buttons, as the bot attaches them: captions only. */}
+                <div className="tg-phone-inline">
+                  <span className="tg-phone-key">{CATALOGUE_FA['bot.apps.download_button']}</span>
+                  {form.alternativeUrl.trim() !== '' && (
+                    <span className="tg-phone-key">
+                      {CATALOGUE_FA['bot.apps.alternative_button']}
+                    </span>
+                  )}
+                  {form.helpUrl.trim() !== '' && (
+                    <span className="tg-phone-key">{CATALOGUE_FA['bot.apps.help_button']}</span>
+                  )}
+                </div>
+              </TelegramPhone>
+            </Card>
+            <ImageCard
+              key={editor.kind === 'edit' ? editor.basis.id : 'new'}
+              entry={editor.kind === 'edit' ? editor.basis : null}
+              onChanged={(row) => {
+                /*
+                 * The picture's writes bump the entry's version. The list is patched with the
+                 * returned row BEFORE the editor's basis moves to it, so the two never
+                 * disagree and «changed elsewhere» is not raised for the operator's own write.
+                 */
+                queries.setQueryData<{ items: ClientAppResponse[] }>(['client-apps'], (old) =>
+                  old === undefined
+                    ? old
+                    : { ...old, items: old.items.map((one) => (one.id === row.id ? row : one)) },
+                );
+                setEditor({ kind: 'edit', basis: row });
+                refresh();
+              }}
+            />
+          </div>
+        </div>
       )}
 
-      {mayEdit && editor.kind !== 'closed' && (
-        <ImageCard
-          key={editor.kind === 'edit' ? editor.basis.id : 'new'}
-          entry={editor.kind === 'edit' ? editor.basis : null}
-          onChanged={(row) => {
-            /*
-             * The picture's writes bump the entry's version. The list is patched with the
-             * returned row BEFORE the editor's basis moves to it, so the two never
-             * disagree and «changed elsewhere» is not raised for the operator's own write.
-             */
-            queries.setQueryData<{ items: ClientAppResponse[] }>(['client-apps'], (old) =>
-              old === undefined
-                ? old
-                : { ...old, items: old.items.map((one) => (one.id === row.id ? row : one)) },
-            );
-            setEditor({ kind: 'edit', basis: row });
-            refresh();
+      {deleting !== null && (
+        <ConfirmDialog
+          title={t('web.client_apps_delete_title')}
+          question={t('web.client_apps_delete_confirm')}
+          detail={deleting.name}
+          confirmLabel={t('web.client_apps_delete_yes')}
+          cancelLabel={t('web.client_apps_cancel')}
+          onConfirm={() => {
+            const row = deleting;
+            setDeleting(null);
+            remove.mutate({ id: row.id, expectedVersion: row.version });
           }}
+          onCancel={() => setDeleting(null)}
         />
       )}
 

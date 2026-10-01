@@ -201,7 +201,7 @@ export function ActivationFields({
     return (
       <>
         <Field label={t('web.panel_proxy_protocols')} hint={t('web.panel_proxy_protocols_hint')}>
-          <div className="stack-sm">
+          <div className="panel-protocols">
             {MARZBAN_PROXY_PROTOCOLS.map((protocol) => (
               <label key={protocol} className="check">
                 <input
