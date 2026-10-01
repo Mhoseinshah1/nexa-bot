@@ -1065,6 +1065,57 @@ describe('resellers (WP9-B)', () => {
     });
   });
 
+  describe('an ordinary customer beside a configured reseller (docs/reseller-phase3-closure.md)', () => {
+    it('keeps the public catalogue, the list price, no terms and no credit, whatever a tier and an override say', async () => {
+      const L = 100_000n;
+      const narrowed = await product(100_000n);
+      const other = await product(50_000n);
+      const resellersOnly = await product(80_000n, { audience: 'RESELLERS_ONLY' });
+      // Everything a reseller can be given at once: a discount, a credit line, and a
+      // per-reseller catalogue override narrowing them to one existing Product.
+      await register(resellerCustomer, await tier({ percent: 30, credit: L }));
+      await ctx.container.resellersAdmin.replaceOverrides(tenantA, owner, {
+        idempotencyKey: key(),
+        customerId: resellerCustomer,
+        overrides: [{ dimension: 'CATALOGUE', grants: [{ kind: 'PRODUCT', subject: narrowed }] }],
+      });
+      const browse = async (customerId: UserId) =>
+        (await ctx.container.products.browse(viaBot, customerActor(key()), 50, customerId)).items
+          .map((p) => p.id)
+          .sort();
+
+      // The reseller is narrowed and discounted — so the configuration is live.
+      expect(await browse(resellerCustomer)).toEqual([narrowed]);
+      await expect(draft(resellerCustomer, other)).rejects.toMatchObject(
+        refusal(COMMERCE_ERROR_CODES.RESELLER_NOT_ENTITLED, { dimension: 'CATALOGUE' }),
+      );
+      const resold = await confirmed(resellerCustomer, narrowed);
+      expect(resold.totals.total.amountMinor).toBe(70_000n);
+      expect(stepsOf(resold).map((s) => s.step)).toContain('TIER_PRICE');
+
+      // The ordinary customer: the whole public catalogue, none of the reseller-only one.
+      expect(await browse(ordinary)).toEqual([narrowed, other].sort());
+      await expect(draft(ordinary, resellersOnly)).rejects.toMatchObject(
+        refusal(COMMERCE_ERROR_CODES.PRODUCT_NOT_FOR_AUDIENCE),
+      );
+      // List price through the one engine: a BASE_PRICE step and nothing else, no terms.
+      const plain = await confirmed(ordinary, narrowed);
+      expect(plain.totals.total.amountMinor).toBe(100_000n);
+      expect(stepsOf(plain).map((s) => s.step)).toEqual(['BASE_PRICE']);
+      expect(await termsRow(plain.id)).toBeUndefined();
+
+      // And no overdraft: the reseller's credit line is the reseller's, never the tenant's.
+      await expect(settle(ordinary, plain.id)).rejects.toMatchObject(
+        refusal(COMMERCE_ERROR_CODES.WALLET_INSUFFICIENT_FUNDS, {
+          shortfallMinor: '100000',
+          currency: 'IRT',
+        }),
+      );
+      expect(await balance(ordinary)).toBe(0n);
+      expect((await orderRow(plain.id))?.state).toBe('AWAITING_PAYMENT');
+    });
+  });
+
   // -------------------------------------------------------------------------
   // 8, 9. The credit line
   // -------------------------------------------------------------------------

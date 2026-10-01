@@ -1,6 +1,7 @@
 import type { ReactElement } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { RESELLER_DEFAULT_CREDIT_LIMIT_MINOR } from '@nexa/contracts';
 import { ResellersPage, percentOf } from '../../apps/web/src/pages/resellers';
 import {
   ResellerTiersPage,
@@ -699,6 +700,32 @@ describe('the tiers page', () => {
       discountPercentage: null,
       creditLimit: { amount: '0', currency: 'IRT' },
     });
+  });
+
+  it('extends no credit by default: a tier saved without touching the limit sends zero', async () => {
+    /*
+     * `docs/reseller-phase3-closure.md` §3. Credit below zero exists only where an owner
+     * TYPES a positive limit; the form's untouched value is no credit
+     * (`RESELLER_DEFAULT_CREDIT_LIMIT_MINOR`).
+     */
+    const api = stubApi([{ url: '/reseller-tiers', body: { tiers: [] } }]);
+    renderPage(
+      <ResellerTiersPage
+        denied={false}
+        mayEdit
+        mayViewCatalog
+        mayViewPanels
+        mayViewAudit={false}
+      />,
+    );
+    await screen.findByText('هنوز سطحی ساخته نشده است.');
+    fireEvent.change(screen.getByLabelText('نام سطح'), { target: { value: 'Silver' } });
+    fireEvent.click(screen.getByRole('button', { name: 'ساخت سطح' }));
+    await waitFor(() => expect(posts(api, '/reseller-tiers')).toHaveLength(1));
+    expect(posts(api, '/reseller-tiers')[0]?.body).toMatchObject({
+      creditLimit: { amount: RESELLER_DEFAULT_CREDIT_LIMIT_MINOR.toString(), currency: 'IRT' },
+    });
+    expect(RESELLER_DEFAULT_CREDIT_LIMIT_MINOR).toBe(0n);
   });
 });
 

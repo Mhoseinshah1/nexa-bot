@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   PANEL_PAGE_MAX,
   PRODUCT_PAGE_MAX,
+  RESELLER_DEFAULT_CREDIT_LIMIT_MINOR,
   RESELLER_ENTITLEMENT_DIMENSIONS,
   RESELLER_GRANTABLE_OPERATIONS,
   RESELLER_GRANT_KINDS,
@@ -835,7 +836,8 @@ const BLANK_TIER: TierFormState = {
   name: '',
   pricingMode: 'LIST_PRICE',
   percent: '',
-  limitAmount: '0',
+  // No credit until an owner types a positive limit (`docs/reseller-phase3-closure.md` §3).
+  limitAmount: RESELLER_DEFAULT_CREDIT_LIMIT_MINOR.toString(),
   limitCurrency: SALES_CURRENCY_CODES[0],
 };
 
