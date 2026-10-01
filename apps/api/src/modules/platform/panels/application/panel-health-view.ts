@@ -1,6 +1,8 @@
 import {
   PANEL_HEALTH_FRESH_FOR_MS,
+  type PanelHealthState,
   type PanelHealthView as PanelHealthViewState,
+  type PanelStatus,
   type ProviderFailureKind,
 } from '@nexa/contracts';
 import type { PanelHealthSnapshot, PanelRecord } from './ports.js';
@@ -42,6 +44,19 @@ export interface PanelHealthReading {
   readonly stale: boolean;
 }
 
+/**
+ * The STATE half of `readHealth`, for a reader that has only the two stored facts — the
+ * panel's status and its latest probe's state — such as the dashboard counting its fleet by
+ * group. The same projection, not a copy: `readHealth` calls it.
+ */
+export function healthViewOf(
+  status: PanelStatus,
+  stored: PanelHealthState | null,
+): PanelHealthViewState {
+  if (status !== 'ACTIVE') return 'DISABLED';
+  return stored ?? 'UNCHECKED';
+}
+
 export function readHealth(
   panel: Pick<PanelRecord, 'status'>,
   health: PanelHealthSnapshot | null,
@@ -49,7 +64,7 @@ export function readHealth(
 ): PanelHealthReading {
   if (health === null) {
     return {
-      state: panel.status === 'ACTIVE' ? 'UNCHECKED' : 'DISABLED',
+      state: healthViewOf(panel.status, null),
       checkedAt: null,
       failure: null,
       /*
@@ -61,7 +76,7 @@ export function readHealth(
     };
   }
   return {
-    state: panel.status === 'ACTIVE' ? health.state : 'DISABLED',
+    state: healthViewOf(panel.status, health.state),
     checkedAt: health.checkedAt,
     failure: health.failure,
     stale: now.getTime() - health.checkedAt.getTime() > PANEL_HEALTH_FRESH_FOR_MS,
