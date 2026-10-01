@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, afterEach } from 'vitest';
 import type { ReactElement } from 'react';
-import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import {
   OWNER_ROLE_KEY,
   reportFailuresResponseSchema,
@@ -26,8 +26,6 @@ import {
 import { reportExportUrl } from '../../apps/web/src/api/client';
 import { t } from '../../apps/web/src/i18n/web.fa';
 import { renderPage, stubApi } from './harness';
-
-const INACTIVE_LABEL = t('web.product_status_inactive');
 
 /**
  * WP12 in the Web Admin (`docs/wp12-business-analytics-audit.md`).
@@ -140,8 +138,6 @@ const BUSINESS_ROUTES = [
   { url: '/system/readiness', body: { status: 'ok', dependencies: [] } },
 ];
 
-const OWNER_PERMISSIONS = ['reports.view', 'reports.export'];
-
 afterEach(() => {
   vi.useRealTimers();
 });
@@ -183,43 +179,13 @@ describe('who sees business reports', () => {
   });
 });
 
-describe('the business dashboard', () => {
-  it('renders the eight KPI cards with exact money and the comparison', async () => {
-    stubApi(BUSINESS_ROUTES);
-    renderPage(<DashboardPage permissions={OWNER_PERMISSIONS} route={route()} superAdmin />);
-    const kpis = await screen.findByText('شاخص‌های اصلی');
-    const card = kpis.closest('section') as HTMLElement;
-    await waitFor(() => expect(card.textContent).toContain('177,000'));
-    for (const label of [
-      'فروش',
-      'درآمد',
-      'سفارش موفق',
-      'کاربر جدید',
-      'سرویس جدید',
-      'تمدید',
-      'شارژ کیف پول',
-      'سرویس فعال (اکنون)',
-    ]) {
-      expect(within(card).getAllByText(label).length, label).toBeGreaterThan(0);
-    }
-    // Full value, never abbreviated.
-    expect(card.textContent).toContain('177,000');
-    // 6 against 3 is +100%; nothing before and something now is "new", never infinity.
-    expect(card.textContent).toContain('+100%');
-    expect(within(card).getAllByText('جدید').length).toBeGreaterThan(0);
-    expect(card.textContent).not.toContain('∞');
-  });
+/*
+ * The owner's dashboard itself — its KPIs, period control, charts and the three report
+ * cards it keeps (top products, failures, the remaining summary figures) — is covered in
+ * `dashboard.test.tsx`, beside the page it tests.
+ */
 
-  it('asks for the range the operator picks', async () => {
-    const api = stubApi(BUSINESS_ROUTES);
-    window.history.replaceState(null, '', '/');
-    renderPage(<DashboardPage permissions={OWNER_PERMISSIONS} route={route()} superAdmin />);
-    await screen.findByText('شاخص‌های اصلی');
-    expect(api.calls.some((c) => c.url.includes('/reports/summary?range=TODAY'))).toBe(true);
-    fireEvent.click(screen.getAllByRole('button', { name: 'دیروز' })[0] as HTMLElement);
-    expect(window.location.search).toContain('range=YESTERDAY');
-  });
-
+describe('the report range and cadence', () => {
   it('reads a range from the URL, and falls back on anything unknown', () => {
     expect(rangeFromRoute(route('range=LAST_7_DAYS'), 'TODAY')).toEqual({ range: 'LAST_7_DAYS' });
     expect(rangeFromRoute(route('range=nonsense'), 'TODAY')).toEqual({ range: 'TODAY' });
@@ -229,53 +195,8 @@ describe('the business dashboard', () => {
     });
   });
 
-  it('re-reads every five minutes, not faster, and on the refresh button', async () => {
+  it('re-reads report figures every five minutes, not faster', () => {
     expect(BUSINESS_REFRESH_MS).toBe(300_000);
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    const api = stubApi(BUSINESS_ROUTES);
-    renderPage(<DashboardPage permissions={OWNER_PERMISSIONS} route={route()} superAdmin />);
-    await screen.findByText('شاخص‌های اصلی');
-    const summaries = () => api.calls.filter((c) => c.url.includes('/reports/summary')).length;
-    const first = summaries();
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(60_000);
-    });
-    expect(summaries()).toBe(first);
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(BUSINESS_REFRESH_MS);
-    });
-    await waitFor(() => expect(summaries()).toBeGreaterThan(first));
-    const afterTimer = summaries();
-    fireEvent.click(screen.getAllByRole('button', { name: 'تازه‌سازی' })[0] as HTMLElement);
-    await waitFor(() => expect(summaries()).toBeGreaterThan(afterTimer));
-  });
-
-  it('shows the top products by their sold title, with a link to all of them', async () => {
-    stubApi(BUSINESS_ROUTES);
-    renderPage(<DashboardPage permissions={OWNER_PERMISSIONS} route={route()} superAdmin />);
-    expect(await screen.findByText('Plan A')).toBeInTheDocument();
-    const viewAll = screen.getByRole('link', { name: 'مشاهدهٔ همه' });
-    expect(viewAll.getAttribute('href')).toBe('/reports?tab=products');
-    // A product no longer on sale stays in the ranking, with its lifecycle named.
-    expect(screen.getByText(INACTIVE_LABEL)).toBeInTheDocument();
-  });
-
-  it('says so when a report fails rather than showing zeros', async () => {
-    stubApi([
-      ...BUSINESS_ROUTES.filter((r) => r.url !== '/reports/summary'),
-      {
-        url: '/reports/summary',
-        status: 500,
-        body: {
-          error: { kind: 'internal', code: 'internal.unhandled', message: 'x', correlationId: 't' },
-        },
-      },
-    ]);
-    renderPage(<DashboardPage permissions={OWNER_PERMISSIONS} route={route()} superAdmin />);
-    const card = (await screen.findByText('شاخص‌های اصلی')).closest('section') as HTMLElement;
-    await waitFor(() => expect(within(card).queryByText('177,000')).toBeNull());
-    await waitFor(() => expect(within(card).getAllByRole('button').length).toBeGreaterThan(0));
-    expect(card.textContent).not.toContain('177,000');
   });
 });
 

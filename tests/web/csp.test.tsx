@@ -227,7 +227,20 @@ describe('the production content-security policy', () => {
   it('renders a dashboard with no style attribute the policy would drop', async () => {
     stubApi([
       { url: '/system/readiness', body: { status: 'ok', dependencies: [] } },
-      { url: '/panels', body: { panels: [panel()], nextCursor: null } },
+      {
+        url: '/dashboard/operations',
+        body: {
+          generatedAt: '2026-09-06T08:00:00.000Z',
+          panels: {
+            total: 1,
+            active: 1,
+            health: [{ state: 'HEALTHY', count: 1 }],
+            providers: [{ providerType: 'marzban', providerName: 'Marzban', count: 1 }],
+          },
+          provisioning: null,
+          expiring: null,
+        },
+      },
       // `nextCursor` is REQUIRED by `operationalEventListResponseSchema`.
       // Without it the client rejects at parse, the needs-attention card
       // renders its error state, and the assertions below photograph a page

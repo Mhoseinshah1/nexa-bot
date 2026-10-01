@@ -101,6 +101,8 @@ export * from './secrets.js';
 export * from './ports.js';
 export * from './http.js';
 export * from './reporting.js';
+/** Round W: the Web Admin dashboard and sidebar counters, over the reports above. */
+export * from './dashboard.js';
 /** Round N: the shared audience, broadcast, and safe mass actions. */
 export * from './audience.js';
 export * from './broadcasts.js';
