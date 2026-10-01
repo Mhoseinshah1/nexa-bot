@@ -1,7 +1,9 @@
 # Provider capability audit: LOCATION_CHANGE and DEVICE_LIMIT_ADJUSTMENT (HF-A6A8)
 
-**Status.** Audit complete. **Verdict: neither capability is declared for any provider in
-this release.** No adapter method was written for either. This document says, per provider,
+**Status.** Audit complete, and re-audited in round R (packages A and B; see
+[Round R re-audit](#round-r-re-audit-packages-a-and-b) at the end). **Verdict, unchanged by
+round R: neither capability is declared for any provider in this release.** No adapter
+method was written for either. This document says, per provider,
 what the repository's evidence shows and what would have to happen before either could be
 declared.
 
@@ -143,3 +145,83 @@ sets out.
 6. **The declaration.** Add the capability to the descriptor. In the same commit, edit the
    registry tests that pin "no provider declares it". The Web Admin switch then becomes
    usable for that provider with no further change.
+
+## Round R re-audit (packages A and B)
+
+Round R asked the same two questions again, per provider, against Nexa's existing
+contracts: `DEVICE_LIMIT_ADJUSTMENT` (the `ADD_DEVICES` commercial action, an ABSOLUTE
+`deviceLimit` target that never lowers, settled by `readDeviceLimit`) and `LOCATION_CHANGE`
+(the `CHANGE_LOCATION` operation: the SAME account on the SAME panel, an absolute
+`locationKey`, settled by `readLocation`, link read back from the panel). It did not lower
+the bar set out above.
+
+**Nothing new was found, so nothing was declared and no adapter method was written.** The
+evidence in the repository has not moved since HF-A6A8 (`f91d9ab2`):
+
+- No commit since then touches a provider route a device limit or a location could use.
+  The log of the provider paths since then lists only the R3 service-card, R4 bot-token and
+  command-menu commits, and none of them touches an adapter's wire calls:
+
+  ```bash
+  git log f91d9ab2..325b765 -- apps/api/src/modules/platform/providers docs/providers \
+    docs/real-panel-acceptance.md tests/acceptance 'tests/support/fake-*.ts' \
+    packages/contracts/src/provider.ts
+  ```
+
+- No real-panel acceptance has been run in this environment, and none can be: there is no
+  disposable panel and no credentials here.
+- The owner's 3X-UI freeze (`docs/phase4e-audit.md`, "Scope correction, mid-phase: Marzban
+  only", line 156) has not been lifted. CLAUDE.md still says 3X-UI "gains no new mutable
+  scope".
+- `docs/research/` adds nothing about a provider API. The 3X-UI and Marzban crossmaps
+  record a "Device / IP limit numeric field" as `not exposed` in the legacy bot's UI on
+  both panels (`docs/research/mirzabot3xuipanelinvestigationcomplete1/3xui-vs-marzban-panel-crossmap.md`
+  line 37). `NOT_EXPOSED` is not evidence either way. PBR-006 says the legacy «تغییر
+  لوکیشن» was a panel-to-panel migration, which Nexa's contract excludes.
+
+### The matrix
+
+| Provider                           | `DEVICE_LIMIT_ADJUSTMENT`                    | `LOCATION_CHANGE`                          | Evidence and reason                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | Remaining real-provider acceptance items                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| ---------------------------------- | -------------------------------------------- | ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Marzban v0.8.4** (`marzban`)     | **Not supported.** The API has no such field | **Not supported.** Unmeasured; no READ     | Device limit: the pinned `User` model and `UserCreate`/`UserModify` carry no per-user device, IP or connection limit (descriptor comment, `packages/contracts/src/provider.ts` lines 1671-1676; `PROVIDER_RULES` `deviceLimitOnCreate: NOT_SENT`). There is no field to set, so there is no absolute target, no read and no replay to reason about. Location: the closest thing is the account's inbound set, writable through `UserModify.inbounds` (`provider.ts` lines 1678-1686, `OQ-WPA6-01`). But `MarzbanAdapter` never reads an account's inbounds (`lookupUser`, `marzban.adapter.ts` line 401, reads usage and status), so an ambiguous move could not be settled by a READ. `inbounds` is also the one field whose source-read meaning a real v0.8.4 has already contradicted (`docs/providers/marzban.md` lines 99-116: omitted means NONE, not every inbound). Moving inbounds on the same account may also change the configs the customer's link serves, and nobody has measured whether the subscription link survives. | Device limit: none possible on v0.8.4. A newer Marzban with such a field is a new pinned contract with its own acceptance. Location: (1) owner decision on which inbound set is an operator's "location"; (2) a verified READ of one account's inbound set (`GET /api/user/{username}` `inbounds`); (3) acceptance of `PUT /api/user/{username}` with `inbounds`: the target lands, the same body twice changes nothing, `used_traffic`/`data_limit`/`expire`/`status` survive, a sibling is untouched, and what the subscription link serves afterwards; (4) the fake corrected in the same commit. |
+| **RickPanel** (`rickpanel`)        | **Not supported.** The API has no such field | **Not supported.** No per-account location | Device limit: the owner's OpenAPI document gives `PUT /api/user/{username}` exactly twelve properties, and none bounds devices, IPs or connections (`provider.ts` lines 1762-1769; table above). Location: the same document says `inbounds` and partial `proxies` are "accepted but ignored: every user gets every protocol and every inbound" (`docs/providers/rickpanel.md` line 50; `provider.ts` lines 1771-1775). No RickPanel acceptance has been run at all (`docs/providers/rickpanel.md` line 157, "What has NOT been verified").                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | Either capability first needs a documented per-account route (a device-limit field, or a placement route). Then it needs real-panel acceptance, and the RickPanel acceptance suite has not been run even for the capabilities already declared.                                                                                                                                                                                                                                                                                                                                                      |
+| **Sanaei 3X-UI v3.7.0** (`sanaei`) | **Not supported.** Frozen by the owner       | **Not supported.** Frozen by the owner     | Device limit: `limitIp` is the per-client limit. `createUser` writes it (`sanaei.adapter.ts` line 392), and acceptance A5 read it back, which is why `LIMIT_DEVICES` (at CREATE) is declared. `POST panel/api/clients/update/:email` is registered (`docs/providers/sanaei-3xui.md` line 309). But raising a LIVE client's limit is new mutable scope, which `docs/phase4e-audit.md` line 156 forbids. The adapter's wire calls are `clients/add` and `clients/traffic` only (`sanaei.adapter.ts` lines 117-118). Unread as well: whether `update` takes a partial client or the whole object, the CSRF requirement in session mode, and what a replay does. Location: `clients/get/:email` answers `inboundIds` (`docs/providers/sanaei-3xui.md` line 369). What `update` does with them is unread, and the freeze applies whatever the answer.                                                                                                                                                                                        | (1) The owner lifts the freeze for the specific operation. (2) The v3.7.0 `update` handler's body semantics are read from the pinned source into `docs/providers/sanaei-3xui.md`. (3) Acceptance: `limitIp` lands on that client only; traffic, expiry and `enable` are kept; a higher limit is never lowered; a replay is a no-op; `clients/get` reads the result back. For location: the move keeps the client UUID and the subscription identity, siblings are untouched, and the link is read back. (4) The fake is corrected in the same commit.                                                |
+
+### What round R added: the gates, pinned from the outside
+
+The flows themselves were built in WP-A5, WP-A6 and HF-A6A8, and their scripted-provider
+suites already pin, for a DECLARING panel:
+
+- the target semantics (an absolute `deviceLimit`, an absolute `locationKey`);
+- that a replay buys and writes once;
+- that an ambiguous write is settled by a READ and never resent;
+- that a READ proving the write did not land refunds once;
+- that a definitive refusal refunds through `RefundService`;
+- that the current location is never offered;
+- the location cooldown, rolling limit and policy switch;
+- that a move and a link rotation fence each other;
+- tenant isolation.
+
+Round R added the cases those suites did not have. Each was mutation-checked: the rule it
+names was reverted, the test was watched fail, and the rule was restored.
+
+| Test                                                                                                                                                        | What it pins                                                                                                                                                                                                                                                                                                                          | Mutation (reverted, then restored)                                                                                                                                                                                                                                                                                                                                               |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `extra-devices.test.ts` / `location-change.test.ts`: "cannot settle once the capability is withdrawn: a wallet purchase is refused, uncharged"              | A quote confirmed while the capability existed, paid after it is gone (a `botctl rollback` is the ordinary way), is refused `PANEL_NOT_OPERABLE`. The balance is unchanged, no operation is planned and nothing is written to the panel (money rule three: a wallet purchase is refused, never refunded).                             | The settlement gate's three-question check in `container.ts` (`canAdjustDeviceLimit` / `canChangeLocation`) AND `OPERATION_REQUIRED_CAPABILITIES` emptied together: both tests **fail**. Either one alone: both **pass**, because each layer refuses on its own. That is defence in depth, and it is recorded here so the passing single mutation is not misread as a dead test. |
+| `extra-devices.test.ts` / `location-change.test.ts`: "cannot settle once the capability is withdrawn: a paid purchase/move is refunded, never written/sent" | A purchase PAID while the capability existed, executed after it is gone, ends `FAILED`. Its order is `REFUNDED` once, for the exact amount, through the one credit path. The panel gets no write. The service keeps its device limit, or its location, expiry, allowance and link.                                                    | The executor's guard (`provisioner.service.ts`, the `ADD_DEVICES` / `CHANGE_LOCATION` cases) AND `OPERATION_REQUIRED_CAPABILITIES` removed together: both tests **fail**. Either alone: both **pass**, for the same defence-in-depth reason.                                                                                                                                     |
+| `extra-devices.test.ts`: "is switched off by the panel policy, at every step, and nothing else is"                                                          | On a panel that DOES support extra users, the `EXTRA_DEVICES` policy switch off removes the button. It refuses the crafted offer and quantity callbacks, a direct quote, and the confirmation of a quote drawn before the switch, with `PANEL_NOT_OPERABLE` / `CUSTOMER_POLICY`. `availableFor` loses `ADD_DEVICES` and nothing else. | `COMMERCIAL_POLICY_ROW.ADD_DEVICES` pointed at `RENEW`: **fails**.                                                                                                                                                                                                                                                                                                               |
+| `panel-advanced-settings.test.ts` (unit): "finds no device-limit or location method on any shipped adapter"                                                 | No shipped adapter carries even one of `readDeviceLimit`, `applyDeviceLimit`, `readLocation` or `applyLocation`. The registry row needs both methods, so a lone unproven method would otherwise read `NOT_SUPPORTED` and go unnoticed until its twin and the declaration turned it on.                                                | A stub `readLocation`, and separately a stub `applyDeviceLimit`, added to `SanaeiAdapter`: **fails** each time. The pre-existing `EXTRA_DEVICES` row check alone stayed green under a lone `readDeviceLimit` on `MarzbanAdapter`. That is why this test asks the methods directly.                                                                                               |
+
+The location policy switch has the same coverage already ("refuses every customer move on
+a panel whose policy switched it off"). That includes a move paid before the switch, which
+is delivered and not held.
+
+### Open concerns
+
+- The integration suites prove the flows only against a scripted provider installed on
+  `MarzbanAdapter.prototype` for one block. They prove that Nexa's rows, locks, refunds and
+  notifications behave. They do not prove that any panel assigns a limit or a location
+  absolutely. The first provider to declare either capability brings that acceptance with
+  it, in the order under "What declaring one would take".
+- OQ-WPA6-01's second point is still open: no provider can yet guarantee that a
+  subscription link survives a move.
