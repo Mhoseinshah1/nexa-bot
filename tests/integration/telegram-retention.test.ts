@@ -2,6 +2,8 @@ import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   systemJobActor,
+  TELEGRAM_MESSAGE_RETENTION_FAILING_CODE,
+  TELEGRAM_MESSAGE_RETENTION_RECOVERED_CODE,
   TELEGRAM_MESSAGE_STATE_RETENTION_DAYS,
   type BotInstanceId,
   type CorrelationId,
@@ -385,6 +387,41 @@ describe('Telegram message-state retention', () => {
     } finally {
       await db().execute(sql`UPDATE tenants SET status = 'ACTIVE' WHERE id = ${TENANT_A.tenantId}`);
     }
+  });
+
+  // Codex review of #131: the lane's condition must reach the notification queue, which only
+  // the recorder facade (wrapped by NotifyingOperationalEventRecorder) projects into.
+  it("the worker's lane announces its failing and recovered conditions through the notifying recorder", async () => {
+    const loop = c().telegramMessageRetentionLoop;
+    await c().featureFlags.set(TENANT_A, f.owner, {
+      key: 'ops_notifications',
+      enabled: true,
+      expectedVersion: null,
+      idempotencyKey: 'retention-ops-flag',
+      confirmKey: 'ops_notifications',
+      reason: 'Retention announcement test.',
+    });
+    const announced = async (code: string) =>
+      Number(
+        (
+          await rows<{ n: number }>(
+            f,
+            sql`SELECT count(*)::int AS n FROM notifications
+                WHERE tenant_id = ${TENANT_A.tenantId} AND kind = 'OPERATIONAL_EVENT'
+                  AND payload::text LIKE ${`%${code}%`}`,
+          )
+        )[0]?.n ?? 0,
+      );
+    // The sweep's own statement fails: the review table is briefly not there.
+    await db().execute(sql`ALTER TABLE telegram_review_messages RENAME TO trm_retention_hold`);
+    try {
+      for (let tick = 0; tick < 3; tick += 1) expect(await loop.tick()).toBeNull();
+    } finally {
+      await db().execute(sql`ALTER TABLE trm_retention_hold RENAME TO telegram_review_messages`);
+    }
+    expect(await announced(TELEGRAM_MESSAGE_RETENTION_FAILING_CODE)).toBe(1);
+    expect(await loop.tick()).toEqual({ wizards: 0, reviews: 0 });
+    expect(await announced(TELEGRAM_MESSAGE_RETENTION_RECOVERED_CODE)).toBe(1);
   });
 
   it('each pass is bounded, and a loop tick stops at its ceiling and leaves the rest for the next', async () => {

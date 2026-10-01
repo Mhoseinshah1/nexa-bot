@@ -2576,7 +2576,9 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     maxBatchesPerTick: TELEGRAM_MESSAGE_RETENTION_MAX_BATCHES,
     now: () => clock.now().getTime(),
     ids,
-    opsLog: opsLogWriter,
+    // The façade, never the bare writer: only it is wrapped by the notifying recorder, so a
+    // failure streak and its recovery reach the operations log group, not just the table.
+    opsLog,
     conditions: new DrizzleOperationalConditionReader(database.db),
     logger,
   });
