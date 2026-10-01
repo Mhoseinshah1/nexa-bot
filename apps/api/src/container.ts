@@ -415,6 +415,13 @@ import { DrizzleCustomerReminderFactsReader } from './modules/commerce/messaging
 // R2: the Telegram messages edited in place, and the renewal result's facts.
 import { TelegramMessageStateService } from './modules/commerce/messaging/application/telegram-message-state.js';
 import { DrizzleTelegramMessageStateRepository } from './modules/commerce/messaging/infrastructure/drizzle-telegram-message-state.repository.js';
+import {
+  TelegramMessageRetentionLoop,
+  TELEGRAM_MESSAGE_RETENTION_BATCH,
+  TELEGRAM_MESSAGE_RETENTION_INITIAL_DELAY_MS,
+  TELEGRAM_MESSAGE_RETENTION_INTERVAL_MS,
+  TELEGRAM_MESSAGE_RETENTION_MAX_BATCHES,
+} from './modules/commerce/messaging/application/telegram-message-retention-loop.js';
 import { DrizzleRenewalFactsReader } from './modules/commerce/messaging/infrastructure/drizzle-renewal-facts.reader.js';
 import { WizardInvoiceScreens } from './surfaces/telegram/wizard-invoice-screens.js';
 import { SettingsQuietHoursReader } from './modules/commerce/messaging/infrastructure/settings-quiet-hours.reader.js';
@@ -645,6 +652,8 @@ export interface Container {
    */
   readonly telegramMessageState: TelegramMessageStateService;
   readonly wizardScreens: WizardInvoiceScreens;
+  /** Retention for the two tables above (`docs/telegram-retention.md`); the worker starts it. */
+  readonly telegramMessageRetentionLoop: TelegramMessageRetentionLoop;
   /** The lane's repository, shared so producers enqueue through the same object. */
   readonly customerNotifications: DrizzleCustomerNotificationRepository;
   /** HF-A9: the quiet window the lane defers reminders by — the instance it is given. */
@@ -2550,6 +2559,26 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     scopeActivity: tenants,
     clock,
     ids,
+  });
+  /*
+   * Retention for those two tables (docs/telegram-retention.md). Every rule that makes a
+   * deletion safe is in the repository's query and the gates' purge horizon; the loop only
+   * paces it — hourly, bounded batches, one condition for a failure streak.
+   */
+  const telegramMessageRetentionLoop = new TelegramMessageRetentionLoop(telegramMessageState, {
+    scope: () =>
+      installationTenantId === null
+        ? null
+        : { tenantId: installationTenantId, botInstanceId: null },
+    intervalMs: TELEGRAM_MESSAGE_RETENTION_INTERVAL_MS,
+    initialDelayMs: TELEGRAM_MESSAGE_RETENTION_INITIAL_DELAY_MS,
+    batchSize: TELEGRAM_MESSAGE_RETENTION_BATCH,
+    maxBatchesPerTick: TELEGRAM_MESSAGE_RETENTION_MAX_BATCHES,
+    now: () => clock.now().getTime(),
+    ids,
+    opsLog: opsLogWriter,
+    conditions: new DrizzleOperationalConditionReader(database.db),
+    logger,
   });
   const gatewayPayments = new GatewayPaymentService({
     invoices: gatewayInvoiceRepository,
@@ -4991,6 +5020,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     customerNotificationLoop,
     telegramMessageState,
     wizardScreens,
+    telegramMessageRetentionLoop,
     customerNotifications: customerNotificationRepository,
     reminderQuietHours,
     audit,
@@ -5373,6 +5403,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       await serviceReminderLoop.stop();
       await customerReminderLoop.stop();
       await campaignScheduleLoop.stop();
+      await telegramMessageRetentionLoop.stop();
       // Round P: a claimed command sync finishes its record or lapses with its lease.
       await botCommandSyncLoop.stop();
       await customerNotificationLoop.stop();

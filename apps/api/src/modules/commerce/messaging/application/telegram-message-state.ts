@@ -12,6 +12,7 @@ import type {
   TenantContext,
   UnitOfWork,
 } from '@nexa/contracts';
+import { TELEGRAM_MESSAGE_STATE_RETENTION_DAYS } from '@nexa/contracts';
 import type { PermissionGuard } from '../../../platform/access/application/permission-guard.js';
 import { runAuthorizedMutation } from '../../../platform/access/application/authorized-mutation.js';
 import type { SessionRepository } from '../../../platform/identity/application/ports.js';
@@ -229,6 +230,55 @@ export interface TelegramMessageStateRepository {
 
   /** Clears a stamp whose edit Telegram definitely did not apply, so a later tap can retry. */
   unfinaliseReviewMessage(scope: TenantContext, id: string, tx: TransactionScope): Promise<void>;
+
+  // --- Retention (docs/telegram-retention.md) ---------------------------------------------
+
+  /**
+   * Whether `ref` is at or below its chat's PURGE HORIZON: the greatest message id whose row
+   * the retention sweep has removed in that chat. A tap on an untracked message there is a
+   * tap on a message whose row may have been deleted, and is stale.
+   */
+  isWithinPurgedHorizon(
+    scope: TenantContext,
+    ref: TelegramMessageRef,
+    tx?: TransactionScope,
+  ): Promise<boolean>;
+
+  /**
+   * Deletes at most `limit` wizard rows nothing live names any more — untouched since
+   * `cutoff`, not held by a turn's lease at `now`, showing no payment that is still open
+   * (`PENDING`, `UNKNOWN`) and, for an `ORDER` wizard, no order that is not yet done — and
+   * returns the messages they tracked. Candidates are taken `FOR UPDATE SKIP LOCKED`, so a
+   * row a turn is writing is skipped, never waited on, and the DELETE re-checks the age and
+   * the lease against the row it actually removes.
+   */
+  purgeWizards(
+    scope: TenantContext,
+    where: { readonly cutoff: Date; readonly now: Date; readonly limit: number },
+    tx: TransactionScope,
+  ): Promise<readonly TelegramMessageRef[]>;
+
+  /**
+   * Deletes at most `limit` review-message rows whose payment has reached a terminal state
+   * and whose last write — the finalisation, or the recording when it was never finalised —
+   * is older than `cutoff`, and returns the messages they tracked. Same locking as wizards.
+   */
+  purgeReviewMessages(
+    scope: TenantContext,
+    where: { readonly cutoff: Date; readonly limit: number },
+    tx: TransactionScope,
+  ): Promise<readonly TelegramMessageRef[]>;
+
+  /**
+   * Raises each chat's purge horizon to the greatest message id among `refs` (never lowers
+   * it). Called in the transaction that deleted those rows.
+   */
+  raisePurgedHorizons(
+    scope: TenantContext,
+    refs: readonly TelegramMessageRef[],
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<void>;
 }
 
 /**
@@ -338,6 +388,18 @@ export class TelegramMessageStateService {
       async (tx, now) => {
         const existing = await this.deps.repository.findWizard(scope, input.ref, tx);
         if (existing === null) {
+          /*
+           * Retention (docs/telegram-retention.md): an untracked message at or below its
+           * chat's purge horizon may be one whose row the sweep DELETED — a closed wizard, a
+           * message a refused edit left behind with its keyboard still on it. Adopting it
+           * would honour that old keyboard as if it were a fresh screen: a pay or confirm
+           * button of a flow that ended long ago. So it is stale, and nothing is written.
+           * Read in this transaction, after `findWizard`: the sweep deletes a row and raises
+           * the horizon in ONE commit, so a read that no longer sees the row sees the horizon.
+           */
+          if (await this.deps.repository.isWithinPurgedHorizon(scope, input.ref, tx)) {
+            return { outcome: 'STALE' };
+          }
           await this.deps.repository.adoptWizard(
             scope,
             {
@@ -559,6 +621,46 @@ export class TelegramMessageStateService {
     return this.write(scope, actor, where.paymentId ?? null, [], (tx, now) =>
       this.deps.repository.finaliseReviewMessages(scope, where, now, tx),
     );
+  }
+
+  /**
+   * Retention: whether a receipt-review tap on a message with NO row is a tap on one whose
+   * row the sweep removed — at or below the chat's purge horizon. Such a tap is answered and
+   * nothing else, exactly like a tap on a finalised message: the decision it would ask for
+   * was taken (the sweep removes a review row only once its payment is terminal), and asking
+   * again would only produce a second answer to a settled question.
+   */
+  reviewTapIsRetired(scope: TenantContext, ref: TelegramMessageRef): Promise<boolean> {
+    return this.deps.repository.isWithinPurgedHorizon(scope, ref);
+  }
+
+  /**
+   * One bounded retention pass (docs/telegram-retention.md): at most `limit` wizard rows and
+   * at most `limit` review rows that nothing live names any more, deleted with their chats'
+   * purge horizons raised in the SAME transaction. Charged and scope-checked like every
+   * other write here: a stopped scope removes nothing.
+   */
+  purgeExpired(
+    scope: TenantContext,
+    actor: ActorContext,
+    limit: number,
+  ): Promise<{ readonly wizards: number; readonly reviews: number }> {
+    return this.write(scope, actor, null, { wizards: 0, reviews: 0 }, async (tx, now) => {
+      const cutoff = new Date(now.getTime() - TELEGRAM_MESSAGE_STATE_RETENTION_DAYS * 86_400_000);
+      const bounded = Math.max(1, Math.floor(limit));
+      const wizards = await this.deps.repository.purgeWizards(
+        scope,
+        { cutoff, now, limit: bounded },
+        tx,
+      );
+      const reviews = await this.deps.repository.purgeReviewMessages(
+        scope,
+        { cutoff, limit: bounded },
+        tx,
+      );
+      await this.deps.repository.raisePurgedHorizons(scope, [...wizards, ...reviews], now, tx);
+      return { wizards: wizards.length, reviews: reviews.length };
+    });
   }
 
   unfinaliseReview(scope: TenantContext, actor: ActorContext, id: string): Promise<void> {

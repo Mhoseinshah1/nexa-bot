@@ -1,4 +1,9 @@
-import { and, desc, eq, inArray, isNull, lte, or, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, isNull, lte, or, sql, type SQL } from 'drizzle-orm';
+import {
+  ORDER_SETTLED_STATES,
+  ORDER_TERMINAL_STATES,
+  PAYMENT_TERMINAL_STATES,
+} from '@nexa/contracts';
 import type {
   BotInstanceId,
   TelegramReviewMessageRole,
@@ -12,6 +17,7 @@ import {
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
 import {
+  telegramMessageHorizons,
   telegramReviewMessages,
   telegramWizards,
 } from '../../../../infrastructure/persistence/schema.js';
@@ -54,6 +60,36 @@ function reviewOf(row: ReviewRow): TelegramReviewMessageRecord {
     role: row.role as TelegramReviewMessageRole,
     hasMedia: row.hasMedia,
     finalisedAt: row.finalisedAt,
+  };
+}
+
+/** A literal list for `IN (...)`, from a contract's closed set. */
+function literals(values: readonly string[]): SQL {
+  return sql.join(
+    values.map((value) => sql`${value}`),
+    sql`, `,
+  );
+}
+
+/** A payment no longer open: nothing will move a wizard or decide a review of it again. */
+const PAYMENT_DONE = literals(PAYMENT_TERMINAL_STATES);
+/**
+ * An order nothing will settle or close through its wizard again: paid (a refund edits no
+ * wizard) or ended. Named as the DONE states, so a state added later is retained by default.
+ */
+const ORDER_DONE = literals([...ORDER_SETTLED_STATES, ...ORDER_TERMINAL_STATES]);
+
+interface PurgedRow {
+  readonly bot_instance_id: string;
+  readonly chat_id: string;
+  readonly message_id: string | number;
+}
+
+function refOf(row: PurgedRow): TelegramMessageRef {
+  return {
+    botInstanceId: row.bot_instance_id as BotInstanceId,
+    chatId: row.chat_id,
+    messageId: Number(row.message_id),
   };
 }
 
@@ -449,6 +485,149 @@ export class DrizzleTelegramMessageStateRepository implements TelegramMessageSta
       .where(and(target, isNull(telegramReviewMessages.finalisedAt)))
       .returning();
     return rows.map(reviewOf);
+  }
+
+  async isWithinPurgedHorizon(
+    scope: TenantContext,
+    ref: TelegramMessageRef,
+    tx?: TransactionScope,
+  ): Promise<boolean> {
+    const rows = await this.exec(tx)
+      .select({ through: telegramMessageHorizons.purgedThroughMessageId })
+      .from(telegramMessageHorizons)
+      .where(
+        and(
+          eq(telegramMessageHorizons.tenantId, requireTenantId(scope)),
+          eq(telegramMessageHorizons.botInstanceId, ref.botInstanceId),
+          eq(telegramMessageHorizons.chatId, ref.chatId),
+          gte(telegramMessageHorizons.purgedThroughMessageId, ref.messageId),
+        ),
+      )
+      .limit(1);
+    return rows.length > 0;
+  }
+
+  async purgeWizards(
+    scope: TenantContext,
+    where: { readonly cutoff: Date; readonly now: Date; readonly limit: number },
+    tx: TransactionScope,
+  ): Promise<readonly TelegramMessageRef[]> {
+    const tenantId = requireTenantId(scope);
+    /*
+     * The candidates are a MATERIALIZED CTE, evaluated exactly once. Written as
+     * `id IN (SELECT ... LIMIT n FOR UPDATE SKIP LOCKED)` the subquery can be re-run per
+     * outer row, and a re-run skips the rows this very statement has just deleted and
+     * returns the NEXT n — the bound silently becomes "everything" (the batching test caught
+     * exactly that: a limit of 3 deleted 7).
+     *
+     * Oldest first, bounded, and SKIP LOCKED: a row a turn's claim or a worker's move is
+     * writing right now is skipped rather than waited on — and once that write commits its
+     * `updated_at` is fresh, so it is not a candidate any more. The outer predicate repeats
+     * the age and the lease, so the DELETE judges the row it removes, not the one the
+     * subquery read. The tenant is named in both, so another tenant's rows are never read.
+     */
+    const result = await this.exec(tx).execute(sql`
+      WITH victims AS MATERIALIZED (
+           SELECT c.id FROM telegram_wizards AS c
+            WHERE c.tenant_id = ${tenantId}
+              AND c.updated_at < ${where.cutoff}
+              AND (c.busy_until IS NULL OR c.busy_until <= ${where.now})
+              AND NOT EXISTS (
+                SELECT 1 FROM payments AS p
+                 WHERE p.tenant_id = c.tenant_id AND p.id = c.payment_id
+                   AND p.state NOT IN (${PAYMENT_DONE}))
+              AND NOT (c.kind = 'ORDER' AND EXISTS (
+                SELECT 1 FROM orders AS o
+                 WHERE o.tenant_id = c.tenant_id AND o.id = c.subject_id
+                   AND o.state NOT IN (${ORDER_DONE})))
+            ORDER BY c.updated_at ASC, c.id ASC
+            LIMIT ${Math.max(1, where.limit)}
+            FOR UPDATE OF c SKIP LOCKED)
+      DELETE FROM telegram_wizards AS w
+       USING victims
+       WHERE w.id = victims.id
+         AND w.tenant_id = ${tenantId}
+         AND w.updated_at < ${where.cutoff}
+         AND (w.busy_until IS NULL OR w.busy_until <= ${where.now})
+      RETURNING w.bot_instance_id, w.chat_id, w.message_id`);
+    return (result.rows as unknown as PurgedRow[]).map(refOf);
+  }
+
+  async purgeReviewMessages(
+    scope: TenantContext,
+    where: { readonly cutoff: Date; readonly limit: number },
+    tx: TransactionScope,
+  ): Promise<readonly TelegramMessageRef[]> {
+    const tenantId = requireTenantId(scope);
+    /*
+     * Only a TERMINAL payment's rows: nothing decides it again, so nothing will edit its
+     * messages again. `PENDING` (a block leaves the receipt in the queue) and `UNKNOWN`
+     * (reconciliation is still to come) keep theirs. The payment is read, never locked: a
+     * terminal state is final, and the only way out of `UNKNOWN` is into one.
+     */
+    const result = await this.exec(tx).execute(sql`
+      WITH victims AS MATERIALIZED (
+           SELECT c.id FROM telegram_review_messages AS c
+             JOIN payments AS p ON p.tenant_id = c.tenant_id AND p.id = c.payment_id
+            WHERE c.tenant_id = ${tenantId}
+              AND c.created_at < ${where.cutoff}
+              AND COALESCE(c.finalised_at, c.created_at) < ${where.cutoff}
+              AND p.state IN (${PAYMENT_DONE})
+            ORDER BY c.created_at ASC, c.id ASC
+            LIMIT ${Math.max(1, where.limit)}
+            FOR UPDATE OF c SKIP LOCKED)
+      DELETE FROM telegram_review_messages AS r
+       USING victims
+       WHERE r.id = victims.id
+         AND r.tenant_id = ${tenantId}
+         AND COALESCE(r.finalised_at, r.created_at) < ${where.cutoff}
+      RETURNING r.bot_instance_id, r.chat_id, r.message_id`);
+    return (result.rows as unknown as PurgedRow[]).map(refOf);
+  }
+
+  async raisePurgedHorizons(
+    scope: TenantContext,
+    refs: readonly TelegramMessageRef[],
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<void> {
+    const highest = new Map<string, TelegramMessageRef>();
+    for (const ref of refs) {
+      const key = `${ref.botInstanceId}\u0000${ref.chatId}`;
+      const known = highest.get(key);
+      if (known === undefined || ref.messageId > known.messageId) highest.set(key, ref);
+    }
+    if (highest.size === 0) return;
+    /*
+     * One row per chat (an upsert may not touch a row twice), in key order, so two sweeps
+     * raising overlapping chats take the row locks in the same order and cannot deadlock.
+     */
+    const ordered = [...highest.entries()]
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+      .map(([, ref]) => ref);
+    const tenantId = requireTenantId(scope);
+    await this.exec(tx)
+      .insert(telegramMessageHorizons)
+      .values(
+        ordered.map((ref) => ({
+          tenantId,
+          botInstanceId: ref.botInstanceId,
+          chatId: ref.chatId,
+          purgedThroughMessageId: ref.messageId,
+          updatedAt: now,
+        })),
+      )
+      .onConflictDoUpdate({
+        target: [
+          telegramMessageHorizons.tenantId,
+          telegramMessageHorizons.botInstanceId,
+          telegramMessageHorizons.chatId,
+        ],
+        set: {
+          purgedThroughMessageId: sql`GREATEST(${telegramMessageHorizons.purgedThroughMessageId}, excluded.purged_through_message_id)`,
+          updatedAt: now,
+        },
+      });
   }
 
   async unfinaliseReviewMessage(
