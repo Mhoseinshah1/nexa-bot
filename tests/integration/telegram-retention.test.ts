@@ -161,6 +161,28 @@ describe('Telegram message-state retention', () => {
     return payment;
   }
 
+  /**
+   * Time passes for a confirmed payment: its order's operations finish and are announced,
+   * and the payment and the order were last changed long ago. Returns the order.
+   */
+  async function settleAndAge(payment: string): Promise<string> {
+    const order =
+      (
+        await rows<{ order_id: string }>(
+          f,
+          sql`SELECT order_id FROM payments WHERE id = ${payment}`,
+        )
+      )[0]?.order_id ?? 'MISSING';
+    await db().execute(sql`
+      UPDATE provisioning_operations
+         SET state = 'SUCCEEDED', completed_at = ${ago(OLD)}, announced_at = ${ago(OLD)},
+             claimed_by = NULL, lease_until = NULL
+       WHERE tenant_id = ${TENANT_A.tenantId} AND order_id = ${order}`);
+    await db().execute(sql`UPDATE payments SET updated_at = ${ago(OLD)} WHERE id = ${payment}`);
+    await db().execute(sql`UPDATE orders SET updated_at = ${ago(OLD)} WHERE id = ${order}`);
+    return order;
+  }
+
   // ---------------------------------------------------------------------------------------
   // Wizards
   // ---------------------------------------------------------------------------------------
@@ -186,6 +208,7 @@ describe('Telegram message-state retention', () => {
 
   it('an old wizard nothing names is removed, and its chat horizon is raised in the same commit', async () => {
     const done = await confirmed('w-done', 501);
+    await settleAndAge(done);
     await wizard(201, { step: 'CLOSED' });
     await wizard(202, { step: 'NOTICE', kind: 'TOPUP' });
     await wizard(203, { step: 'INVOICE', paymentId: done });
@@ -205,6 +228,71 @@ describe('Telegram message-state retention', () => {
     expect(await horizon()).toBe(206);
     // Business truth is untouched.
     expect(await paymentState(f, done)).toBe('CONFIRMED');
+  });
+
+  // Codex review of #131: delayed writers — the worker's refresh after a payment's outcome,
+  // and the renewal result's closeOrder after the order's operation finishes — must still
+  // find the wizard, however long ago the wizard itself was touched.
+  it('an order wizard is kept while a delayed writer can still close it: recent payment or order change, running or unannounced operation, pending notification', async () => {
+    const done = await confirmed('w-delayed', 511);
+    const order =
+      (
+        await rows<{ order_id: string }>(f, sql`SELECT order_id FROM payments WHERE id = ${done}`)
+      )[0]?.order_id ?? 'MISSING';
+    const ops = await rows<{ id: string }>(
+      f,
+      sql`SELECT id FROM provisioning_operations WHERE order_id = ${order}`,
+    );
+    expect(ops.length).toBeGreaterThan(0);
+    const op = ops[0]?.id ?? 'MISSING';
+    await wizard(3001, { step: 'AWAITING_PAYMENT', subjectId: order });
+    await wizard(3002, { step: 'INVOICE', paymentId: done, kind: 'TOPUP' });
+
+    // Just paid: the payment and the order changed now; the operation is still planned.
+    expect((await purge()).wizards).toBe(0);
+
+    // Long ago paid, but the operation is still running (it went UNKNOWN, say).
+    await db().execute(sql`UPDATE payments SET updated_at = ${ago(OLD)} WHERE id = ${done}`);
+    await db().execute(sql`UPDATE orders SET updated_at = ${ago(OLD)} WHERE id = ${order}`);
+    expect(await wizardIds()).toEqual([3001, 3002]);
+    expect((await purge()).wizards).toBe(1);
+    // The payment-only wizard had nothing left to wait for; the order's still has.
+    expect(await wizardIds()).toEqual([3001]);
+
+    // Finished but not yet announced: the result has not been queued.
+    await db().execute(sql`
+      UPDATE provisioning_operations
+         SET state = 'SUCCEEDED', completed_at = ${ago(1)}, claimed_by = NULL, lease_until = NULL
+       WHERE order_id = ${order}`);
+    expect((await purge()).wizards).toBe(0);
+
+    // Announced, its result still waiting in the notification lane.
+    await db().execute(sql`
+      UPDATE provisioning_operations SET announced_at = ${ago(1)} WHERE order_id = ${order}`);
+    const notification = c().ids.uuid();
+    await db().execute(sql`
+      INSERT INTO customer_notifications
+        (id, tenant_id, customer_id, bot_instance_id, kind, subject_id, state)
+      VALUES (${notification}, ${TENANT_A.tenantId}, ${f.customer}, ${BOT_A},
+              'SERVICE_RENEWED', ${op}, 'PENDING')`);
+    expect((await purge()).wizards).toBe(0);
+
+    // Delivered: closeOrder has run; nothing will write the wizard again.
+    await db().execute(sql`
+      UPDATE customer_notifications SET state = 'DELIVERED', resolved_at = ${ago(1)}
+       WHERE id = ${notification}`);
+    expect((await purge()).wizards).toBe(1);
+    expect(await wizardIds()).toEqual([]);
+  });
+
+  it('an order wizard is kept while its order changed within the retention period, whatever its operations', async () => {
+    const done = await confirmed('w-order-recent', 512);
+    const order = await settleAndAge(done);
+    await db().execute(sql`UPDATE orders SET updated_at = now() WHERE id = ${order}`);
+    await wizard(3101, { step: 'CLOSED', subjectId: order });
+    expect((await purge()).wizards).toBe(0);
+    await db().execute(sql`UPDATE orders SET updated_at = ${ago(OLD)} WHERE id = ${order}`);
+    expect((await purge()).wizards).toBe(1);
   });
 
   it('the horizon only rises: a later purge of lower message ids does not lower it', async () => {

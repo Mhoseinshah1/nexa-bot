@@ -100,13 +100,27 @@ a setting).
 1. `updated_at` is more than 30 days ago (every claim, landing, move and release bumps it);
 2. it is not leased: `busy_until IS NULL OR busy_until <= now`;
 3. its `payment_id` names no payment that is still open — `state NOT IN
-PAYMENT_TERMINAL_STATES`, i.e. `PENDING` or `UNKNOWN` (a payment id with no row names
-   nothing);
+PAYMENT_TERMINAL_STATES`, i.e. `PENDING` or `UNKNOWN` — nor one whose `updated_at` is
+   within the retention period (a payment id with no row names nothing);
 4. for an `ORDER` wizard, its `subject_id` names no order that is not done — `state NOT IN
-(ORDER_SETTLED_STATES ∪ ORDER_TERMINAL_STATES)`, i.e. `DRAFT` or `AWAITING_PAYMENT`.
-   Written as the DONE list, so a state added later is retained by default.
+(ORDER_SETTLED_STATES ∪ ORDER_TERMINAL_STATES)`, i.e. `DRAFT` or `AWAITING_PAYMENT` —
+   nor one whose `updated_at` is within the retention period. Written as the DONE list, so
+   a state added later is retained by default;
+5. for an `ORDER` wizard, its order is not BUSY: it has no provisioning operation still
+   running (any state outside `OPERATION_TERMINAL_STATES`), no `SUCCEEDED`/`ABANDONED`
+   operation with `announced_at IS NULL`, and no `PENDING` customer notification whose
+   subject is one of its operations.
 
-Every step qualifies, `CLOSED` and `NOTICE` included, once those four hold.
+Rules 3–5 exist for the DELAYED writers (Codex review of #131): the gateway worker's
+`refresh(paymentId)` runs right after a payment's outcome commits, a reviewer can decide a
+receipt that has been pending for weeks, and the renewal result's `closeOrder` runs only
+when the notification lane delivers `SERVICE_RENEWED` — after the order's RENEW operation
+has succeeded and been announced, which can be days after the order was paid if the
+operation went `UNKNOWN`. Each of them must still find the wizard, or the result arrives
+beside a keyboard that looks live and whose taps are silently stale. `updated_at` is bumped
+by every state transition of a payment and of an order.
+
+Every step qualifies, `CLOSED` and `NOTICE` included, once those five hold.
 
 **A review row is removed only when ALL hold** (`purgeReviewMessages`):
 
@@ -195,13 +209,14 @@ a replaced replica left open (looked up once per process). Both codes are declar
 
 ## 8. What is retained, and why
 
-| Row class                                                                           | Fate                   | Reason                                                                                                                                                                    |
-| ----------------------------------------------------------------------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Wizard, untouched > 30 d, not leased, no open payment / unfinished order (any step) | removed                | nothing writes it again; §5 keeps its keyboard stale                                                                                                                      |
-| Wizard touched within 30 d                                                          | retained               | may still be claimed, landed, moved or redelivered                                                                                                                        |
-| Wizard with a live lease                                                            | retained               | a turn is using it                                                                                                                                                        |
-| Wizard showing a `PENDING` / `UNKNOWN` payment                                      | retained               | the worker may still edit the invoice into its outcome; `UNKNOWN` may be reconciled                                                                                       |
-| `ORDER` wizard of a `DRAFT` / `AWAITING_PAYMENT` order                              | retained               | the order can still be paid and its screens closed                                                                                                                        |
-| Review row of a terminal payment, last write > 30 d                                 | removed                | no decision is taken on it again                                                                                                                                          |
-| Review row of a `PENDING` / `UNKNOWN` payment                                       | retained (**blocker**) | a pending receipt has no timer and stays reviewable for as long as nobody decides; its rows are what the decision edits. Bounded by the review queue itself, not by time. |
-| `telegram_message_horizons`                                                         | retained               | one row per chat the sweep touched; it is the stale-tap proof                                                                                                             |
+| Row class                                                                                                                                             | Fate                   | Reason                                                                                                                                                                    |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Wizard, untouched > 30 d, not leased, no open payment / unfinished order (any step)                                                                   | removed                | nothing writes it again; §5 keeps its keyboard stale                                                                                                                      |
+| Wizard touched within 30 d                                                                                                                            | retained               | may still be claimed, landed, moved or redelivered                                                                                                                        |
+| Wizard with a live lease                                                                                                                              | retained               | a turn is using it                                                                                                                                                        |
+| Wizard showing a `PENDING` / `UNKNOWN` payment                                                                                                        | retained               | the worker may still edit the invoice into its outcome; `UNKNOWN` may be reconciled                                                                                       |
+| `ORDER` wizard of a `DRAFT` / `AWAITING_PAYMENT` order                                                                                                | retained               | the order can still be paid and its screens closed                                                                                                                        |
+| Wizard whose payment or order changed within 30 d; `ORDER` wizard whose order has a running or unannounced operation or a pending result notification | retained               | a delayed writer (worker refresh, renewal `closeOrder`) still edits it                                                                                                    |
+| Review row of a terminal payment, last write > 30 d                                                                                                   | removed                | no decision is taken on it again                                                                                                                                          |
+| Review row of a `PENDING` / `UNKNOWN` payment                                                                                                         | retained (**blocker**) | a pending receipt has no timer and stays reviewable for as long as nobody decides; its rows are what the decision edits. Bounded by the review queue itself, not by time. |
+| `telegram_message_horizons`                                                                                                                           | retained               | one row per chat the sweep touched; it is the stale-tap proof                                                                                                             |

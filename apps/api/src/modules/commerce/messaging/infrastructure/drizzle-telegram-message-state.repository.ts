@@ -1,5 +1,7 @@
 import { and, desc, eq, gte, inArray, isNull, lte, or, sql, type SQL } from 'drizzle-orm';
 import {
+  OPERATION_STATES,
+  OPERATION_TERMINAL_STATES,
   ORDER_SETTLED_STATES,
   ORDER_TERMINAL_STATES,
   PAYMENT_TERMINAL_STATES,
@@ -78,6 +80,16 @@ const PAYMENT_DONE = literals(PAYMENT_TERMINAL_STATES);
  * wizard) or ended. Named as the DONE states, so a state added later is retained by default.
  */
 const ORDER_DONE = literals([...ORDER_SETTLED_STATES, ...ORDER_TERMINAL_STATES]);
+/**
+ * A provisioning operation still running — derived from the contract, so a state added later
+ * is "still running" by default. Spelled as the open list rather than `NOT IN terminal` so
+ * the planner can use the operations table's partial indexes on those states.
+ */
+const OPERATION_OPEN = literals(
+  OPERATION_STATES.filter(
+    (state) => !(OPERATION_TERMINAL_STATES as readonly string[]).includes(state),
+  ),
+);
 
 interface PurgedRow {
   readonly bot_instance_id: string;
@@ -526,8 +538,37 @@ export class DrizzleTelegramMessageStateRepository implements TelegramMessageSta
      * the age and the lease, so the DELETE judges the row it removes, not the one the
      * subquery read. The tenant is named in both, so another tenant's rows are never read.
      */
+    /*
+     * A DELAYED writer must still find its row (Codex review of #131). Two reach a wizard
+     * after the business fact that would otherwise make it eligible has committed:
+     *
+     *   - the gateway worker's `refresh(paymentId)`, right after a payment's outcome commits,
+     *     and a reviewer's decision on a long-pending receipt — so a payment or an order that
+     *     CHANGED within the retention period keeps its wizards (`updated_at` is bumped by
+     *     every state transition of both);
+     *   - the renewal result's `closeOrder`, sent by the notification lane only once the
+     *     order's RENEW operation has succeeded AND been announced AND its notification
+     *     delivered — which can be days after the order was paid, if the operation went
+     *     UNKNOWN. So an order with an operation still running, a terminal one not yet
+     *     announced, or a pending customer notification about one of its operations keeps
+     *     its wizards too (`busy_orders`, each branch on an existing partial index).
+     */
     const result = await this.exec(tx).execute(sql`
-      WITH victims AS MATERIALIZED (
+      WITH busy_orders AS MATERIALIZED (
+           SELECT op.order_id FROM provisioning_operations AS op
+            WHERE op.tenant_id = ${tenantId} AND op.order_id IS NOT NULL
+              AND op.state IN (${OPERATION_OPEN})
+           UNION
+           SELECT op.order_id FROM provisioning_operations AS op
+            WHERE op.tenant_id = ${tenantId} AND op.order_id IS NOT NULL
+              AND op.announced_at IS NULL AND op.state IN ('SUCCEEDED', 'ABANDONED')
+           UNION
+           SELECT op.order_id FROM customer_notifications AS n
+             JOIN provisioning_operations AS op
+               ON op.tenant_id = n.tenant_id AND op.id = n.subject_id
+            WHERE n.tenant_id = ${tenantId} AND n.state = 'PENDING'
+              AND op.order_id IS NOT NULL),
+      victims AS MATERIALIZED (
            SELECT c.id FROM telegram_wizards AS c
             WHERE c.tenant_id = ${tenantId}
               AND c.updated_at < ${where.cutoff}
@@ -535,11 +576,12 @@ export class DrizzleTelegramMessageStateRepository implements TelegramMessageSta
               AND NOT EXISTS (
                 SELECT 1 FROM payments AS p
                  WHERE p.tenant_id = c.tenant_id AND p.id = c.payment_id
-                   AND p.state NOT IN (${PAYMENT_DONE}))
+                   AND (p.state NOT IN (${PAYMENT_DONE}) OR p.updated_at >= ${where.cutoff}))
               AND NOT (c.kind = 'ORDER' AND EXISTS (
                 SELECT 1 FROM orders AS o
                  WHERE o.tenant_id = c.tenant_id AND o.id = c.subject_id
-                   AND o.state NOT IN (${ORDER_DONE})))
+                   AND (o.state NOT IN (${ORDER_DONE}) OR o.updated_at >= ${where.cutoff})))
+              AND NOT (c.kind = 'ORDER' AND c.subject_id IN (SELECT order_id FROM busy_orders))
             ORDER BY c.updated_at ASC, c.id ASC
             LIMIT ${Math.max(1, where.limit)}
             FOR UPDATE OF c SKIP LOCKED)
