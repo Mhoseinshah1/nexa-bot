@@ -450,6 +450,7 @@ export class DrizzleTelegramMessageStateRepository implements TelegramMessageSta
         role: row.role,
         hasMedia: row.hasMedia,
         createdAt: now,
+        updatedAt: now,
       })
       .onConflictDoNothing();
   }
@@ -493,7 +494,7 @@ export class DrizzleTelegramMessageStateRepository implements TelegramMessageSta
     if (target === undefined) return [];
     const rows = await this.exec(tx)
       .update(telegramReviewMessages)
-      .set({ finalisedAt: now })
+      .set({ finalisedAt: now, updatedAt: now })
       .where(and(target, isNull(telegramReviewMessages.finalisedAt)))
       .returning();
     return rows.map(reviewOf);
@@ -604,25 +605,31 @@ export class DrizzleTelegramMessageStateRepository implements TelegramMessageSta
     /*
      * Only a TERMINAL payment's rows: nothing decides it again, so nothing will edit its
      * messages again. `PENDING` (a block leaves the receipt in the queue) and `UNKNOWN`
-     * (reconciliation is still to come) keep theirs. The payment is read, never locked: a
-     * terminal state is final, and the only way out of `UNKNOWN` is into one.
+     * (reconciliation is still to come) keep theirs. The payment is read, never locked.
+     *
+     * And only once BOTH have been quiet for the retention period (Codex review of #131):
+     * the payment's `updated_at`, because a decision commits the payment's terminal state
+     * BEFORE `finaliseReview` stamps and edits its messages, and a row deleted in between
+     * leaves the receipt card looking actionable; and the row's own `updated_at`, because
+     * a stamp cleared after a failed edit (`unfinaliseReviewMessage`) is a retry still owed,
+     * not an old row.
      */
     const result = await this.exec(tx).execute(sql`
       WITH victims AS MATERIALIZED (
            SELECT c.id FROM telegram_review_messages AS c
              JOIN payments AS p ON p.tenant_id = c.tenant_id AND p.id = c.payment_id
             WHERE c.tenant_id = ${tenantId}
-              AND c.created_at < ${where.cutoff}
-              AND COALESCE(c.finalised_at, c.created_at) < ${where.cutoff}
+              AND c.updated_at < ${where.cutoff}
               AND p.state IN (${PAYMENT_DONE})
-            ORDER BY c.created_at ASC, c.id ASC
+              AND p.updated_at < ${where.cutoff}
+            ORDER BY c.updated_at ASC, c.id ASC
             LIMIT ${Math.max(1, where.limit)}
             FOR UPDATE OF c SKIP LOCKED)
       DELETE FROM telegram_review_messages AS r
        USING victims
        WHERE r.id = victims.id
          AND r.tenant_id = ${tenantId}
-         AND COALESCE(r.finalised_at, r.created_at) < ${where.cutoff}
+         AND r.updated_at < ${where.cutoff}
       RETURNING r.bot_instance_id, r.chat_id, r.message_id`);
     return (result.rows as unknown as PurgedRow[]).map(refOf);
   }
@@ -675,11 +682,14 @@ export class DrizzleTelegramMessageStateRepository implements TelegramMessageSta
   async unfinaliseReviewMessage(
     scope: TenantContext,
     id: string,
+    now: Date,
     tx: TransactionScope,
   ): Promise<void> {
     await this.exec(tx)
       .update(telegramReviewMessages)
-      .set({ finalisedAt: null })
+      // `updated_at` too: a stamp cleared for a retry is the row's newest write, and the
+      // retention sweep ages the row by it — never by the creation the clear exposes.
+      .set({ finalisedAt: null, updatedAt: now })
       .where(
         and(
           eq(telegramReviewMessages.tenantId, requireTenantId(scope)),

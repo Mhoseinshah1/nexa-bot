@@ -108,13 +108,20 @@ describe('Telegram message-state retention', () => {
         : options.finalisedDays === null
           ? null
           : ago(options.finalisedDays);
+    const created = ago(options.createdDays ?? OLD);
+    // The row's last write: its finalisation when there is one, its recording otherwise.
+    const updated = finalised !== null && finalised > created ? finalised : created;
     await db().execute(sql`
       INSERT INTO telegram_review_messages
         (id, tenant_id, bot_instance_id, chat_id, message_id, payment_id, role, has_media,
-         finalised_at, created_at)
+         finalised_at, created_at, updated_at)
       VALUES (${c().ids.uuid()}, ${TENANT_A.tenantId}, ${BOT_A}, ${CHAT}, ${messageId},
-              ${paymentId}, 'REVIEW', true, ${finalised}, ${ago(options.createdDays ?? OLD)})`);
+              ${paymentId}, 'REVIEW', true, ${finalised}, ${created}, ${updated})`);
   }
+
+  /** The payment was last changed long ago. */
+  const agePayment = (payment: string) =>
+    db().execute(sql`UPDATE payments SET updated_at = ${ago(OLD)} WHERE id = ${payment}`);
 
   const wizardIds = async (scope: TenantContext = TENANT_A) =>
     (
@@ -395,6 +402,7 @@ describe('Telegram message-state retention', () => {
 
   it('an old review row of a terminal payment is removed, finalised or not', async () => {
     const done = await confirmed('r-old', 503);
+    await agePayment(done);
     await review(701, done, { finalisedDays: OLD });
     // Decided elsewhere (the Web Admin, an expiry) and never finalised here.
     await review(702, done, { finalisedDays: null });
@@ -405,14 +413,62 @@ describe('Telegram message-state retention', () => {
     expect(await horizon()).toBe(702);
   });
 
+  // Codex review of #131: a decision commits the payment's terminal state BEFORE the review
+  // messages are stamped and edited; a sweep in that gap must not take them.
+  it('an old unfinalised review row is kept while its payment changed recently: the decision just committed, its finalisation still to come', async () => {
+    const done = await confirmed('r-gap', 504);
+    await review(711, done, { createdDays: OLD, finalisedDays: null });
+    await purge();
+    expect(await reviewIds()).toEqual(expect.arrayContaining([711]));
+    await agePayment(done);
+    await purge();
+    expect(await reviewIds()).not.toEqual(expect.arrayContaining([711]));
+  });
+
+  // Codex review of #131: a stamp cleared after a failed edit is a retry still owed.
+  it("a review stamp cleared after a failed edit is not eligible: the clear is the row's newest write", async () => {
+    const done = await confirmed('r-retry', 505);
+    await agePayment(done);
+    await review(721, done, { createdDays: OLD, finalisedDays: OLD });
+    const id =
+      (
+        await rows<{ id: string }>(
+          f,
+          sql`SELECT id FROM telegram_review_messages WHERE message_id = 721`,
+        )
+      )[0]?.id ?? 'MISSING';
+    await c().telegramMessageState.unfinaliseReview(TENANT_A, systemActor('retry'), id);
+    await purge();
+    expect(await reviewIds()).toEqual(expect.arrayContaining([721]));
+    await db().execute(
+      sql`UPDATE telegram_review_messages SET updated_at = ${ago(OLD)} WHERE id = ${id}`,
+    );
+    await purge();
+    expect(await reviewIds()).not.toEqual(expect.arrayContaining([721]));
+  });
+
+  it('finalising an old review row makes it young again: it is aged from its finalisation', async () => {
+    const done = await confirmed('r-final', 506);
+    await agePayment(done);
+    await review(731, done, { createdDays: OLD, finalisedDays: null });
+    const stamped = await c().telegramMessageState.finaliseReviews(TENANT_A, systemActor('fin'), {
+      ref: { botInstanceId: BOT_A, chatId: CHAT, messageId: 731 },
+    });
+    expect(stamped).toHaveLength(1);
+    await purge();
+    expect(await reviewIds()).toEqual(expect.arrayContaining([731]));
+  });
+
   it('a stale review tap after cleanup only answers: no second decision, no money, no message', async () => {
     const payment = await pendingWithReceipt(f, 'r-stale');
     await tapOn(f, `D:${payment}`, TG.owner, { id: 801, photo: true }).result;
     expect(await paymentState(f, payment)).toBe('CONFIRMED');
     const ledger = await ledgerCount(f);
     await db().execute(sql`
-      UPDATE telegram_review_messages SET created_at = ${ago(OLD)}, finalised_at = ${ago(OLD)}
+      UPDATE telegram_review_messages
+         SET created_at = ${ago(OLD)}, finalised_at = ${ago(OLD)}, updated_at = ${ago(OLD)}
        WHERE tenant_id = ${TENANT_A.tenantId} AND payment_id = ${payment}`);
+    await agePayment(payment);
     expect((await purge()).reviews).toBeGreaterThanOrEqual(1);
     const left = await rows<{ n: number }>(
       f,

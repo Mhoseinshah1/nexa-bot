@@ -229,7 +229,12 @@ export interface TelegramMessageStateRepository {
   ): Promise<readonly TelegramReviewMessageRecord[]>;
 
   /** Clears a stamp whose edit Telegram definitely did not apply, so a later tap can retry. */
-  unfinaliseReviewMessage(scope: TenantContext, id: string, tx: TransactionScope): Promise<void>;
+  unfinaliseReviewMessage(
+    scope: TenantContext,
+    id: string,
+    now: Date,
+    tx: TransactionScope,
+  ): Promise<void>;
 
   // --- Retention (docs/telegram-retention.md) ---------------------------------------------
 
@@ -259,9 +264,10 @@ export interface TelegramMessageStateRepository {
   ): Promise<readonly TelegramMessageRef[]>;
 
   /**
-   * Deletes at most `limit` review-message rows whose payment has reached a terminal state
-   * and whose last write — the finalisation, or the recording when it was never finalised —
-   * is older than `cutoff`, and returns the messages they tracked. Same locking as wizards.
+   * Deletes at most `limit` review-message rows whose payment has reached a terminal state,
+   * whose payment last changed before `cutoff`, and whose own last write (`updated_at`: the
+   * recording, the finalisation or a cleared stamp) is before `cutoff`, and returns the
+   * messages they tracked. Same locking as wizards.
    */
   purgeReviewMessages(
     scope: TenantContext,
@@ -664,8 +670,8 @@ export class TelegramMessageStateService {
   }
 
   unfinaliseReview(scope: TenantContext, actor: ActorContext, id: string): Promise<void> {
-    return this.write(scope, actor, id, undefined, (tx) =>
-      this.deps.repository.unfinaliseReviewMessage(scope, id, tx),
+    return this.write(scope, actor, id, undefined, (tx, now) =>
+      this.deps.repository.unfinaliseReviewMessage(scope, id, now, tx),
     );
   }
 }

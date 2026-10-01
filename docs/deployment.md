@@ -1718,8 +1718,13 @@ used on its invoice row.
 
 Migration `0153_telegram_message_retention` adds one table, `telegram_message_horizons` (a
 per-chat purge horizon), and two ONLINE indexes on the R2 tables are built after the
-migrator (`telegram_wizards_retention_idx`, `telegram_review_messages_retention_idx`). It
-only adds. While a release without the retention lane runs:
+migrator (`telegram_wizards_retention_idx`, `telegram_review_messages_updated_idx`);
+`0154_telegram_review_message_updated_at` adds a defaulted `updated_at` to
+`telegram_review_messages`. Both only add. A release without the lane inserts review rows
+with the column's default and does not bump it when it finalises or clears a stamp, so
+after a roll-forward such a row ages from its recording — at worst a cleared stamp the old
+release wrote is retired 30 days after it was recorded rather than after it was cleared.
+While a release without the retention lane runs:
 
 - **Nothing is swept**, and the two tables grow again as they did in R2. The horizon table
   is never read or written by the old release.

@@ -127,8 +127,15 @@ Every step qualifies, `CLOSED` and `NOTICE` included, once those five hold.
 1. its payment is terminal (`PAYMENT_TERMINAL_STATES`: `CONFIRMED`, `FAILED`, `CANCELLED`,
    `EXPIRED`) — so `PENDING` (including a block, which finalises only the blocker's copy and
    leaves the receipt in the queue) and `UNKNOWN` keep every row;
-2. its last write — `finalised_at`, or `created_at` when it was never finalised (a payment
-   decided in the Web Admin or expired) — is more than 30 days ago.
+2. its payment last changed (`payments.updated_at`) more than 30 days ago — a decision
+   commits the payment's terminal state BEFORE `finaliseReview` stamps and edits the
+   messages, and a row deleted in that gap would leave the receipt card looking
+   actionable (Codex review of #131);
+3. its own last write (`telegram_review_messages.updated_at`, migration `0154`: set by the
+   recording, the finalisation, and the clearing of a stamp whose edit failed) is more than
+   30 days ago — so a stamp cleared for a retry is a retry still owed, not an old row, and
+   a row never finalised here (decided in the Web Admin, or expired) ages from its
+   recording.
 
 **Never touched**: orders, payments, receipts, wallet entries, services, provisioning
 operations, audit and operational records, the outbox, `processed_messages`. The sweep
@@ -192,9 +199,12 @@ LOCKED`; the DELETE re-checks age and lease on the row it removes. A tap whose c
   after start, so a restart loop still sweeps. Restart-safe: each batch commits on its own
   and nothing is held in memory but the failure streak.
 - **Indexes.** `telegram_wizards_retention_idx (tenant_id, updated_at)` and
-  `telegram_review_messages_retention_idx (tenant_id, created_at)` are ONLINE indexes
+  `telegram_review_messages_updated_idx (tenant_id, updated_at)` are ONLINE indexes
   (`online-indexes.ts`), built concurrently after the migrator: both tables take a write
-  per tap. Migration `0153_telegram_message_retention` only creates the empty horizon table.
+  per tap. Migration `0153_telegram_message_retention` only creates the empty horizon table;
+  `0154_telegram_review_message_updated_at` adds the review row's `updated_at` (a
+  non-volatile default, so no table rewrite; existing rows start their 30 days at the
+  migration).
 
 ## 7. Operational visibility
 
@@ -202,10 +212,14 @@ The loop is in the worker's readiness list (`telegram-message-retention`): a loo
 every tick fails turns readiness stale. A failure streak is ONE operational condition,
 `telegram.message_retention_failing` (dedupe key = code, so per tenant), written when 3
 consecutive ticks have failed and then at most once an hour while it lasts — its occurrence
-counter climbs, no row per tick. The first completed tick records
-`telegram.message_retention_recovered`, which resolves exactly that condition, including one
-a replaced replica left open (looked up once per process). Both codes are declared in
-`packages/contracts/src/telegram-wizards.ts`.
+counter climbs, no row per tick. The failure is remembered only once its write succeeded, so
+a write that failed is retried by the next failed tick and never answered by an orphan
+recovery. The first completed tick records `telegram.message_retention_recovered`, which
+resolves exactly that condition; a completed tick with no failure of its own on record asks
+the log every time whether the condition is open, so one another replica opened — before
+this one started or later — is resolved too, and a lookup that threw is simply asked again.
+Both go through the `opsLog` facade, so the notifying recorder projects them into the
+operations log group. Both codes are declared in `packages/contracts/src/telegram-wizards.ts`.
 
 ## 8. What is retained, and why
 
@@ -217,6 +231,6 @@ a replaced replica left open (looked up once per process). Both codes are declar
 | Wizard showing a `PENDING` / `UNKNOWN` payment                                                                                                        | retained               | the worker may still edit the invoice into its outcome; `UNKNOWN` may be reconciled                                                                                       |
 | `ORDER` wizard of a `DRAFT` / `AWAITING_PAYMENT` order                                                                                                | retained               | the order can still be paid and its screens closed                                                                                                                        |
 | Wizard whose payment or order changed within 30 d; `ORDER` wizard whose order has a running or unannounced operation or a pending result notification | retained               | a delayed writer (worker refresh, renewal `closeOrder`) still edits it                                                                                                    |
-| Review row of a terminal payment, last write > 30 d                                                                                                   | removed                | no decision is taken on it again                                                                                                                                          |
+| Review row of a terminal payment, payment and row both unchanged > 30 d                                                                               | removed                | no decision is taken on it again, and its finalisation (or retry) is long done                                                                                            |
 | Review row of a `PENDING` / `UNKNOWN` payment                                                                                                         | retained (**blocker**) | a pending receipt has no timer and stays reviewable for as long as nobody decides; its rows are what the decision edits. Bounded by the review queue itself, not by time. |
 | `telegram_message_horizons`                                                                                                                           | retained               | one row per chat the sweep touched; it is the stale-tap proof                                                                                                             |
