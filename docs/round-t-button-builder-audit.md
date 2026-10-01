@@ -15,20 +15,20 @@ where each addition goes.
 
 ## 1. Source of truth today
 
-| Thing | Where | Evidence |
-|---|---|---|
-| Arrangement (order, on/off, appearance slot) | registry setting `bot.main_menu` in `setting_values` | `packages/contracts/src/settings.ts:876-892` |
-| Setting schema | `mainMenuLayoutSchema` | `packages/contracts/src/bot-commands.ts:396-420` |
-| Entry schema | `mainMenuLayoutEntrySchema` — **`.strict()`** | `bot-commands.ts:359-378` (`.strict()` at `:372`) |
-| Default | `DEFAULT_MAIN_MENU_LAYOUT` (every declared button, ON, explicit target, `appearanceSlot: null`) | `bot-commands.ts:423-425`; registry default `settings.ts:886` |
-| Button registry (closed) | `MAIN_MENU_BUTTONS` (8 entries), `MAIN_MENU_BUTTON_IDS` | `bot-commands.ts:125-134`, `:221-300` |
-| Targets (closed) | `MAIN_MENU_TARGETS` = catalog, services, wallet, help, trial, referral, apps, tickets | `bot-commands.ts:102-112` |
-| Gates | `feature: 'referrals' | null`, `needsTrialOffer` | `bot-commands.ts:156`, `:163`; `mainMenuButtonIsGated` `:178-180` |
-| Row packing | `packMainMenuRows`: two per row, a `wide` button alone (apps, tickets are wide) | `bot-commands.ts:315-335`, `wide` at `:285`, `:295` |
-| Completion of a stored value | `resolveMainMenuLayout`: stored order, then every undeclared-in-value button appended **ON** | `bot-commands.ts:431-448` |
-| Resolved → stored | `mainMenuEntryOf` | `bot-commands.ts:451-458` |
-| Labels | templates `bot.menu.*` (PLAIN_TEXT, no placeholders) | `packages/contracts/src/templates.ts:229-276`; defaults `packages/i18n/src/catalogue.fa.ts:194-200,1036,1240` |
-| Evaluator | `MainMenuLayout` (`describeFor` / `buttonsFor` / `rowsFor` / `routesFor`) | `apps/api/src/modules/commerce/messaging/application/main-menu.ts:69-169` |
+| Thing                                        | Where                                                                                           | Evidence                                                                                                      |
+| -------------------------------------------- | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| Arrangement (order, on/off, appearance slot) | registry setting `bot.main_menu` in `setting_values`                                            | `packages/contracts/src/settings.ts:876-892`                                                                  |
+| Setting schema                               | `mainMenuLayoutSchema`                                                                          | `packages/contracts/src/bot-commands.ts:396-420`                                                              |
+| Entry schema                                 | `mainMenuLayoutEntrySchema` — **`.strict()`**                                                   | `bot-commands.ts:359-378` (`.strict()` at `:372`)                                                             |
+| Default                                      | `DEFAULT_MAIN_MENU_LAYOUT` (every declared button, ON, explicit target, `appearanceSlot: null`) | `bot-commands.ts:423-425`; registry default `settings.ts:886`                                                 |
+| Button registry (closed)                     | `MAIN_MENU_BUTTONS` (8 entries), `MAIN_MENU_BUTTON_IDS`                                         | `bot-commands.ts:125-134`, `:221-300`                                                                         |
+| Targets (closed)                             | `MAIN_MENU_TARGETS` = catalog, services, wallet, help, trial, referral, apps, tickets           | `bot-commands.ts:102-112`                                                                                     |
+| Gates                                        | `feature: 'referrals' \| null`, `needsTrialOffer`                                               | `bot-commands.ts:156`, `:163`; `mainMenuButtonIsGated` `:178-180`                                             |
+| Row packing                                  | `packMainMenuRows`: two per row, a `wide` button alone (apps, tickets are wide)                 | `bot-commands.ts:315-335`, `wide` at `:285`, `:295`                                                           |
+| Completion of a stored value                 | `resolveMainMenuLayout`: stored order, then every undeclared-in-value button appended **ON**    | `bot-commands.ts:431-448`                                                                                     |
+| Resolved → stored                            | `mainMenuEntryOf`                                                                               | `bot-commands.ts:451-458`                                                                                     |
+| Labels                                       | templates `bot.menu.*` (PLAIN_TEXT, no placeholders)                                            | `packages/contracts/src/templates.ts:229-276`; defaults `packages/i18n/src/catalogue.fa.ts:194-200,1036,1240` |
+| Evaluator                                    | `MainMenuLayout` (`describeFor` / `buttonsFor` / `rowsFor` / `routesFor`)                       | `apps/api/src/modules/commerce/messaging/application/main-menu.ts:69-169`                                     |
 
 Schema rules in force (all in `mainMenuLayoutSchema`): at most 8 entries (`:398`), each
 button once (`:399-401`), each target once (`:408-413`), target must equal the declared one
@@ -37,7 +37,7 @@ button once (`:399-401`), each target once (`:408-413`), target must equal the d
 (`settings.ts:888-889`).
 
 Note: rows are **not** stored anywhere today. They are recomputed on every render by packing
-the *shown* subset (`main-menu.ts:138-147`), so hiding a button reflows the rows below it.
+the _shown_ subset (`main-menu.ts:138-147`), so hiding a button reflows the rows below it.
 
 ## 2. Readers and writers (every call site at `25e717a`)
 
@@ -51,17 +51,17 @@ the *shown* subset (`main-menu.ts:138-147`), so hiding a button reflows the rows
 
 **Readers:**
 
-| Reader | Purpose | Evidence |
-|---|---|---|
-| `MainMenuLayout.describeFor` | the one decision per item (enabled ∧ gate) | `main-menu.ts:79-128` (reads the setting at `:92-95`) |
-| `MainMenuLayout.rowsFor` | keyboard rows as rendered labels | `main-menu.ts:138-147` |
-| `MainMenuLayout.routesFor` | label → `/command` for EVERY declared button | `main-menu.ts:150-168` |
-| `TelegramCustomerMessenger.send` | draws the keyboard on the last part of a reply | `telegram-customer-messenger.ts:326-347`, `:410` |
-| `BotRuntime.menuFor` | route table for a text update | `apps/api/src/surfaces/telegram/bot-runtime.ts:5063-5067` |
-| `BotMenuService.config` | Web Admin read model (`GET /bot-menu`) | `apps/api/src/modules/platform/tenancy/application/bot-menu.service.ts:93-132` |
-| `BotCommandSyncConsumer` | `SettingChanged` on `bot.main_menu` queues a command-menu re-derive | `.../tenancy/application/bot-command-sync.consumer.ts:51-54` |
-| Web settings page | hides the key (`SETTINGS_MANAGED_ELSEWHERE`) | `apps/web/src/settings-presentation.ts:104,315-322` |
-| Web `/bot-buttons` | draft/preview using `resolveMainMenuLayout`, `packMainMenuRows`, `mainMenuLayoutSchema` | `bot-buttons.tsx:240,260,295-304,365` |
+| Reader                           | Purpose                                                                                 | Evidence                                                                       |
+| -------------------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `MainMenuLayout.describeFor`     | the one decision per item (enabled ∧ gate)                                              | `main-menu.ts:79-128` (reads the setting at `:92-95`)                          |
+| `MainMenuLayout.rowsFor`         | keyboard rows as rendered labels                                                        | `main-menu.ts:138-147`                                                         |
+| `MainMenuLayout.routesFor`       | label → `/command` for EVERY declared button                                            | `main-menu.ts:150-168`                                                         |
+| `TelegramCustomerMessenger.send` | draws the keyboard on the last part of a reply                                          | `telegram-customer-messenger.ts:326-347`, `:410`                               |
+| `BotRuntime.menuFor`             | route table for a text update                                                           | `apps/api/src/surfaces/telegram/bot-runtime.ts:5063-5067`                      |
+| `BotMenuService.config`          | Web Admin read model (`GET /bot-menu`)                                                  | `apps/api/src/modules/platform/tenancy/application/bot-menu.service.ts:93-132` |
+| `BotCommandSyncConsumer`         | `SettingChanged` on `bot.main_menu` queues a command-menu re-derive                     | `.../tenancy/application/bot-command-sync.consumer.ts:51-54`                   |
+| Web settings page                | hides the key (`SETTINGS_MANAGED_ELSEWHERE`)                                            | `apps/web/src/settings-presentation.ts:104,315-322`                            |
+| Web `/bot-buttons`               | draft/preview using `resolveMainMenuLayout`, `packMainMenuRows`, `mainMenuLayoutSchema` | `bot-buttons.tsx:240,260,295-304,365`                                          |
 
 Wiring: one `MainMenuLayout` instance (`container.ts:3659-3684`) is given to the messenger
 (`:3732`), to `BotMenuService` (`:3705`) and to the runtime as `menuRoutes` (`:5162`). The
@@ -177,8 +177,7 @@ contains no mention of `KeyboardButton.style` or `icon_custom_emoji_id` (grep: n
   a decorated request refused with FAILED_PERMANENT (not "not modified") is re-sent ONCE plain;
   if that succeeds, ops event `APPEARANCE_DECORATION_FAILED_CODE` and
   `recordRuntimeRefusal` marks the bot `REJECTED / appearance.custom_emoji_refused`
-  (`drizzle-appearance.repository.ts:322-329`); FAILED_RETRYABLE (timeout, 5xx, unreadable 2xx,
-  429) is never retried. Cache: 30 s per tenant+bot, dropped on refusal and on save/test
+  (`drizzle-appearance.repository.ts:322-329`); FAILED_RETRYABLE (timeout, 5xx, unreadable 2xx, 429) is never retried. Cache: 30 s per tenant+bot, dropped on refusal and on save/test
   (`:262,272-337`; `container.ts:3755`).
 - `decorationFor(scope, botInstanceId)` already returns `{ customEmoji: Map<slot, id> }` for an
   eligible bot and `NO_DECORATION` otherwise — exactly the lookup an icon needs.
@@ -188,7 +187,7 @@ contains no mention of `KeyboardButton.style` or `icon_custom_emoji_id` (grep: n
 - Documented as the slot for "the screen the item OPENS", explicitly NOT what the keyboard
   shows (`menu-appearance.ts:12-14`; `bot-commands.ts:164-170`; `docs/command-menu-audit.md:115-129`).
 - **Every button has a non-null default** (`purchase, service, wallet, support, trial,
-  referral, link, support` — `bot-commands.ts:229-298`).
+referral, link, support` — `bot-commands.ts:229-298`).
 - **No runtime consumer**: the only reader of `item.appearanceSlot` in `apps/api/src` is the
   read model (`bot-menu.service.ts:112-113`). It is stored, shown and inert.
 
@@ -404,20 +403,20 @@ two-per-row packing, no styles/icons. That is a graceful degradation, not a rese
 `runAuthorizedMutation` transaction (`settings.edit`):
 
 1. `scopeActivity.scopeIsActive(scope, tx)`; 2. `SELECT … FOR UPDATE` the tenant's
-`main_menu_layouts` row; 3. compare `draft_version` and `published_revision` with the
-expectations → `control.version_conflict`; 4. re-parse the draft with
-`explicitMainMenuSchema` server-side; 5. no-op if draft ≡ published (consume key,
-`changed: false`, no revision); 6. resolve `bot.main_menu` in-tx and
-`SettingRepository.upsert(projection, expectedVersion = its version)` — null result →
-conflict; 7. insert `main_menu_revisions` (revision = n+1, `restored_from_revision_id` =
-draft's); 8. conditional UPDATE of the layout row (`published`, `published_revision`,
-`published_at/by`, `projection_setting_version = written.version`,
-`draft_restored_from_revision_id = NULL`) naming the version read in step 2; 9. audit
-`bot_menu.published` (before/after = published snapshots and revision numbers);
-10. outbox `SettingChanged {key:'bot.main_menu', from, to}` (existing event → the command-sync
-consumer keeps working, `bot-command-sync.consumer.ts:51-54`); 11. `rememberOnce`.
-Any failure rolls back all of it: there is never a published row without its projection or
-vice versa.
+   `main_menu_layouts` row; 3. compare `draft_version` and `published_revision` with the
+   expectations → `control.version_conflict`; 4. re-parse the draft with
+   `explicitMainMenuSchema` server-side; 5. no-op if draft ≡ published (consume key,
+   `changed: false`, no revision); 6. resolve `bot.main_menu` in-tx and
+   `SettingRepository.upsert(projection, expectedVersion = its version)` — null result →
+   conflict; 7. insert `main_menu_revisions` (revision = n+1, `restored_from_revision_id` =
+   draft's); 8. conditional UPDATE of the layout row (`published`, `published_revision`,
+   `published_at/by`, `projection_setting_version = written.version`,
+   `draft_restored_from_revision_id = NULL`) naming the version read in step 2; 9. audit
+   `bot_menu.published` (before/after = published snapshots and revision numbers);
+2. outbox `SettingChanged {key:'bot.main_menu', from, to}` (existing event → the command-sync
+   consumer keeps working, `bot-command-sync.consumer.ts:51-54`); 11. `rememberOnce`.
+   Any failure rolls back all of it: there is never a published row without its projection or
+   vice versa.
 
 ### 11.7 Single writer of `bot.main_menu`
 
@@ -457,14 +456,14 @@ otherwise make the projection and the published table disagree.
 
 ### 11.10 API (contracts `BOT_MENU_BUILDER_ROUTES`, controller beside `bot-menu.controller.ts`)
 
-| Method | Path | Body | Permission |
-|---|---|---|---|
-| GET | `/bot-menu/builder` | — | settings.view |
-| PUT | `/bot-menu/builder/draft` | `{idempotencyKey, expectedDraftVersion, layout}` | settings.edit |
-| POST | `/bot-menu/builder/publish` | `{idempotencyKey, expectedDraftVersion, expectedPublishedRevision}` | settings.edit |
-| POST | `/bot-menu/builder/reset` | `{idempotencyKey, expectedDraftVersion}` | settings.edit |
-| GET | `/bot-menu/builder/revisions` | `?before&limit` | settings.view |
-| POST | `/bot-menu/builder/revisions/:id/restore` | `{idempotencyKey, expectedDraftVersion}` | settings.edit |
+| Method | Path                                      | Body                                                                | Permission    |
+| ------ | ----------------------------------------- | ------------------------------------------------------------------- | ------------- |
+| GET    | `/bot-menu/builder`                       | —                                                                   | settings.view |
+| PUT    | `/bot-menu/builder/draft`                 | `{idempotencyKey, expectedDraftVersion, layout}`                    | settings.edit |
+| POST   | `/bot-menu/builder/publish`               | `{idempotencyKey, expectedDraftVersion, expectedPublishedRevision}` | settings.edit |
+| POST   | `/bot-menu/builder/reset`                 | `{idempotencyKey, expectedDraftVersion}`                            | settings.edit |
+| GET    | `/bot-menu/builder/revisions`             | `?before&limit`                                                     | settings.view |
+| POST   | `/bot-menu/builder/revisions/:id/restore` | `{idempotencyKey, expectedDraftVersion}`                            | settings.edit |
 
 `GET` response: `{ source: 'LEGACY'|'EXPLICIT', superseded, draft: {layout, version|null,
 updatedAt, restoredFromRevision|null, differsFromPublished}, published: {layout, revision,
@@ -481,6 +480,7 @@ Sequencing: **T1 merges first**; T2 and T3 then run in parallel on disjoint file
 ### T1 — contracts, persistence, publish, revisions, migration (owns migration numbering)
 
 May modify / create:
+
 - `packages/contracts/src/bot-menu-builder.ts` (new), `packages/contracts/src/index.ts`
   (export), `packages/contracts/src/menu-appearance.ts` (comment correction only),
   `packages/contracts/src/bot-menu.ts` (routes constant only, if co-located),
@@ -511,6 +511,7 @@ types `ExplicitMainMenu`, `MainMenuButtonConfig`, `customerRowsOf(layout, gateOp
 ### T2 — Telegram runtime and wire
 
 May modify:
+
 - `apps/api/src/infrastructure/telegram/send-message.ts`: central descriptor
   `TelegramReplyKeyboardButton = { text; style?: 'primary'|'success'|'danger'; iconCustomEmojiId?: string }`;
   `textMessageBody.keyboard` accepts descriptors (string accepted for the admin row);
@@ -546,6 +547,7 @@ package needs it — routing is unchanged, which is the point); `CLAUDE.md`, `do
 ## 13. Required tests and falsification targets
 
 **T1 (contracts / persistence / publish / revisions)**
+
 - C-1 legacy: `explicitFromLegacy` × every legacy value fixture (R1 shape, round P shape,
   empty, reordered, disabled) with all gates open → rows equal legacy `rowsFor`.
 - C-2 projection compat: `legacyProjectionOf(x)` parses under a **frozen verbatim copy** of
@@ -572,6 +574,7 @@ package needs it — routing is unchanged, which is the point); `CLAUDE.md`, `do
   make the source switch read `draft`; drop the `projection_setting_version` comparison.
 
 **T2 (runtime / wire)**
+
 - R-1 styles: `default` omits `style`; primary/success/danger emitted verbatim.
 - R-2 icons per bot: bot A `SENT` + slot configured → `icon_custom_emoji_id`; bot B untested
   → omitted, same tenant, same message (BotInstance isolation).
@@ -588,6 +591,7 @@ package needs it — routing is unchanged, which is the point); `CLAUDE.md`, `do
   `decorationFor(sendingBot)`; prepending the fallback emoji to `text`.
 
 **T3 (web)**
+
 - Every control and state: Saved / Unsaved / Draft differs / Publishing / Published /
   Conflict (409 → reload offer, no silent overwrite) / Invalid (server issues shown).
 - Remove vs disable produce different drafts; pool lists unplaced; target read-only.
@@ -599,6 +603,7 @@ package needs it — routing is unchanged, which is the point); `CLAUDE.md`, `do
 - Visual QA at 1440/900/390, light/dark, RTL (`scripts/visual`).
 
 **Real Telegram acceptance (not CI; checklist for the Lead)**
+
 - R-ACC-1 style values render and the request is accepted on the production Bot API.
 - R-ACC-2 `icon_custom_emoji_id` accepted by an eligible bot; refused (what code?) by an
   ineligible one, and the one-shot fallback lands.
@@ -610,15 +615,15 @@ package needs it — routing is unchanged, which is the point); `CLAUDE.md`, `do
 
 - **OQ-T-1 Labels are live, not drafted.** Editing a label in the Inspector saves the
   `bot.menu.*` template immediately (existing mechanism), outside Draft/Publish.
-  *Default: yes, with an explicit "applies immediately" note in the Inspector.*
+  _Default: yes, with an explicit "applies immediately" note in the Inspector._
 - **OQ-T-2 A button a future release adds**, on a tenant with an explicit published layout:
-  *Default: lands unplaced in the pool with a "new" badge; never auto-drawn.*
-- **OQ-T-3 Revision retention.** *Default: keep all, append-only, as `template_revisions`;
-  history read is paginated.*
+  _Default: lands unplaced in the pool with a "new" badge; never auto-drawn._
+- **OQ-T-3 Revision retention.** _Default: keep all, append-only, as `template_revisions`;
+  history read is paginated._
 - **OQ-T-4 Icon eligibility is shared with message decoration** (one per-bot state; a refused
-  icon also turns text decoration off for that bot until re-tested). *Default: shared — one
+  icon also turns text decoration off for that bot until re-tested). _Default: shared — one
   eligibility truth per bot; revisit only if real acceptance shows Telegram grants the two
-  differently.*
+  differently._
 
 UNKNOWNs to log in `docs/open-questions.md` by T1: Bot API `KeyboardButton.style` /
 `icon_custom_emoji_id` exact semantics and eligibility (not verifiable from this session —
