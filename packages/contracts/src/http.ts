@@ -54,7 +54,7 @@ import {
   REFERRAL_TRIGGERS,
   RESELLER_GRANTABLE_OPERATIONS,
   RESELLER_GRANT_KINDS,
-  RESELLER_DEFAULT_CREDIT_LIMIT_MINOR,
+  RESELLER_MAX_CREDIT_LIMIT_MINOR,
   RESELLER_OVERRIDE_MODES,
   RESELLER_PRICE_LAYERS,
   RESELLER_PRICING_MODES,
@@ -3040,13 +3040,19 @@ export const RESELLER_PAGE_DEFAULT = 25;
 export const RESELLER_PAGE_MAX = 100;
 
 /**
- * A credit limit on a write: zero, and nothing else (owner decision, 2026-10-01 — no
- * reseller debt, no credit purchases; `RESELLER_DEFAULT_CREDIT_LIMIT_MINOR`). The field keeps
- * its shape so stored rows and existing clients still read and round-trip.
+ * A credit limit on a write. Reseller credit was removed (owner decision, 2026-10-01 — no
+ * reseller debt, no credit purchases), and the ONLY limit the service accepts is zero
+ * (`RESELLER_DEFAULT_CREDIT_LIMIT_MINOR`).
+ *
+ * The schema still parses the shape a client from before the decision sent, a
+ * non-negative amount up to `RESELLER_MAX_CREDIT_LIMIT_MINOR`, for one reason: the request
+ * must reach the service's idempotent replay. A command that committed before the upgrade
+ * and lost its response replays its original result. Anything else carrying a non-zero
+ * limit is refused there, after the replay lookup, with `COMMERCE_REQUEST_INVALID`.
  */
 const creditLimitSchema = z.object({
-  amount: minorAmountSchema.refine((v) => BigInt(v) === RESELLER_DEFAULT_CREDIT_LIMIT_MINOR, {
-    message: 'Reseller credit was removed: a credit limit is always zero.',
+  amount: minorAmountSchema.refine((v) => BigInt(v) <= RESELLER_MAX_CREDIT_LIMIT_MINOR, {
+    message: 'That credit limit is past the largest this system allows.',
   }),
   currency: z.enum(CURRENCY_CODES),
 });
@@ -3146,8 +3152,8 @@ export const resellerSummarySchema = z.object({
   discountPercentage: z.number().int().nullable(),
   /**
    * The reseller's STORED own limit, or null when the tier's is inherited. Reseller credit
-   * was removed (owner decision, 2026-10-01): a stored value grants nothing, and a write
-   * can only set zero or null.
+   * was removed (owner decision, 2026-10-01): migration `0153_reseller_credit_removed` set
+   * every one to null, and the service stores only zero or null.
    */
   creditLimit: z.object({ amount: z.string(), currency: z.enum(CURRENCY_CODES) }).nullable(),
   /** The stored own limit, else the tier's. Grants nothing; kept so stored rows read. */
@@ -3222,12 +3228,22 @@ export type ResellerResponse = z.infer<typeof resellerResponseSchema>;
  */
 
 /**
- * Why credit does not apply to a reseller: it was removed (owner decision, 2026-10-01 — no
- * reseller debt, no credit purchases). The one value there is. The field stays so the
- * standing view keeps its shape; what it now reports is the balance and any legacy debt —
- * a negative balance from before the decision, left exactly as it is (`OQ-WP9-04`).
+ * Why credit does or does not apply to a reseller. Reseller credit was removed (owner
+ * decision, 2026-10-01 — no reseller debt, no credit purchases): the server now answers
+ * `NO_LIMIT` for every reseller, and every stored limit is zero (migration
+ * `0153_reseller_credit_removed`).
+ *
+ * The vocabulary is kept whole, deliberately. During a rolling update an old replica still
+ * answers with the other values, and an old browser bundle still parses this field with
+ * the old enum; a new value would break one of the two. The Web Admin draws the balance
+ * only and reads nothing from this field.
  */
-export const RESELLER_CREDIT_STATES = ['CREDIT_REMOVED'] as const;
+export const RESELLER_CREDIT_STATES = [
+  'CREDIT_APPLIES',
+  'RESELLER_SUSPENDED',
+  'NO_LIMIT',
+  'CURRENCY_MISMATCH',
+] as const;
 export type ResellerCreditState = (typeof RESELLER_CREDIT_STATES)[number];
 
 /** Where the STORED limit comes from: the reseller's own, else the tier's. It grants nothing. */

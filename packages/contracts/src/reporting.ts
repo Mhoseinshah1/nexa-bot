@@ -599,7 +599,12 @@ export const reportResellersResponseSchema = z.object({
       orders: count,
       sales: moneyTotals,
       services: count,
-      /** Always null: reseller credit was removed (owner decision, 2026-10-01). */
+      /**
+       * Reseller credit was removed (owner decision, 2026-10-01): a ZERO amount in the
+       * selling currency, never a limit. Zero rather than null so a browser bundle from
+       * before the decision, which requires a money object, still parses the report; null
+       * stays accepted so this schema reads both.
+       */
       creditLimit: moneySchema.nullable(),
       /**
        * How far below zero the reseller's wallet is now, in the selling currency: a legacy
