@@ -54,7 +54,7 @@ import {
   REFERRAL_TRIGGERS,
   RESELLER_GRANTABLE_OPERATIONS,
   RESELLER_GRANT_KINDS,
-  RESELLER_MAX_CREDIT_LIMIT_MINOR,
+  RESELLER_DEFAULT_CREDIT_LIMIT_MINOR,
   RESELLER_OVERRIDE_MODES,
   RESELLER_PRICE_LAYERS,
   RESELLER_PRICING_MODES,
@@ -3039,9 +3039,14 @@ export const REFERRAL_ROUTES = {
 export const RESELLER_PAGE_DEFAULT = 25;
 export const RESELLER_PAGE_MAX = 100;
 
+/**
+ * A credit limit on a write: zero, and nothing else (owner decision, 2026-10-01 — no
+ * reseller debt, no credit purchases; `RESELLER_DEFAULT_CREDIT_LIMIT_MINOR`). The field keeps
+ * its shape so stored rows and existing clients still read and round-trip.
+ */
 const creditLimitSchema = z.object({
-  amount: minorAmountSchema.refine((v) => BigInt(v) <= RESELLER_MAX_CREDIT_LIMIT_MINOR, {
-    message: 'That credit limit is past the largest this system allows.',
+  amount: minorAmountSchema.refine((v) => BigInt(v) === RESELLER_DEFAULT_CREDIT_LIMIT_MINOR, {
+    message: 'Reseller credit was removed: a credit limit is always zero.',
   }),
   currency: z.enum(CURRENCY_CODES),
 });
@@ -3084,6 +3089,7 @@ export const resellerTierSummarySchema = z.object({
   name: z.string(),
   pricingMode: z.enum(RESELLER_PRICING_MODES),
   discountPercentage: z.number().int().nullable(),
+  /** The STORED limit. Grants nothing since reseller credit was removed (2026-10-01). */
   creditLimit: z.object({ amount: z.string(), currency: z.enum(CURRENCY_CODES) }),
   grants: z.array(resellerTierGrantSchema),
   resellerCount: z.number().int().nonnegative(),
@@ -3138,9 +3144,13 @@ export const resellerSummarySchema = z.object({
   status: z.enum(RESELLER_STATUSES),
   pricingMode: z.enum(RESELLER_OVERRIDE_MODES),
   discountPercentage: z.number().int().nullable(),
-  /** The reseller's own limit, or null when the tier's applies. */
+  /**
+   * The reseller's STORED own limit, or null when the tier's is inherited. Reseller credit
+   * was removed (owner decision, 2026-10-01): a stored value grants nothing, and a write
+   * can only set zero or null.
+   */
   creditLimit: z.object({ amount: z.string(), currency: z.enum(CURRENCY_CODES) }).nullable(),
-  /** What actually applies: the reseller's own limit, else the tier's. */
+  /** The stored own limit, else the tier's. Grants nothing; kept so stored rows read. */
   effectiveCreditLimit: z.object({ amount: z.string(), currency: z.enum(CURRENCY_CODES) }),
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),
@@ -3206,26 +3216,21 @@ export type ResellerResponse = z.infer<typeof resellerResponseSchema>;
 
 /**
  * Read-only views of what WP9-B already defines (`docs/wp14-reseller-phase2-audit.md`).
- * Nothing here moves money, settles a debt or introduces a financial rule: each field is a
- * derivation of R8's allowance, `canCover`'s frontier or R9's snapshot.
+ * Nothing here moves money, settles a debt or introduces a financial rule. Since the owner
+ * removed reseller credit (2026-10-01) the credit view reports the balance and any legacy
+ * debt, with an allowance that is always zero.
  */
 
 /**
- * Why credit does or does not apply to a reseller right now (R8).
- *
- * `CURRENCY_MISMATCH`: the effective limit is in a currency the installation does not sell
- * in, so no purchase can draw on it. A debt a reseller already owes stays owed in every
- * state — suspension and a lower limit stop further credit, nothing more (`OQ-WP9-04`).
+ * Why credit does not apply to a reseller: it was removed (owner decision, 2026-10-01 — no
+ * reseller debt, no credit purchases). The one value there is. The field stays so the
+ * standing view keeps its shape; what it now reports is the balance and any legacy debt —
+ * a negative balance from before the decision, left exactly as it is (`OQ-WP9-04`).
  */
-export const RESELLER_CREDIT_STATES = [
-  'CREDIT_APPLIES',
-  'RESELLER_SUSPENDED',
-  'NO_LIMIT',
-  'CURRENCY_MISMATCH',
-] as const;
+export const RESELLER_CREDIT_STATES = ['CREDIT_REMOVED'] as const;
 export type ResellerCreditState = (typeof RESELLER_CREDIT_STATES)[number];
 
-/** Where the effective limit comes from: the reseller's own, else the tier's (R8). */
+/** Where the STORED limit comes from: the reseller's own, else the tier's. It grants nothing. */
 export const RESELLER_LIMIT_SOURCES = ['RESELLER', 'TIER'] as const;
 export type ResellerLimitSource = (typeof RESELLER_LIMIT_SOURCES)[number];
 
@@ -3244,17 +3249,17 @@ export const resellerCreditStandingSchema = z.object({
   credit: z.enum(RESELLER_CREDIT_STATES),
   /**
    * The wallet balance in the SELLING currency, from the ledger — the balance a purchase
-   * debits and `canCover` compares with the allowance. Negative is debt. Every amount
-   * below is in this currency; only `effectiveLimit` keeps its own.
+   * debits. Negative only for a legacy debt run up before reseller credit was removed. Every
+   * amount below is in this currency; only `effectiveLimit` keeps its own.
    */
   balance: signedMoneySchema,
-  /** What settlement would allow below zero now; zero unless credit applies. */
+  /** What settlement allows below zero: always zero (reseller credit was removed). */
   allowance: signedMoneySchema,
-  /** `max(0, −balance)`: the debt. */
+  /** `max(0, −balance)`: a legacy debt, left as it is and never collected. */
   creditInUse: signedMoneySchema,
-  /** `balance + allowance`: the largest purchase the credit check would pass. May be negative. */
+  /** `balance + allowance`, so the balance: the largest purchase a wallet can pay. */
   availableToSpend: signedMoneySchema,
-  /** `max(0, creditInUse − allowance)`: owed beyond what the limit now allows. */
+  /** `max(0, creditInUse − allowance)`, so the whole legacy debt. */
   overLimitBy: signedMoneySchema,
 });
 export type ResellerCreditStanding = z.infer<typeof resellerCreditStandingSchema>;

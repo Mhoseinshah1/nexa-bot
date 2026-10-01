@@ -526,21 +526,21 @@ export type ResellerPricingMode = (typeof RESELLER_PRICING_MODES)[number];
 export const resellerPricingModeSchema = z.enum(RESELLER_PRICING_MODES);
 
 /**
- * The credit line, in minor units, and its default.
+ * The ONLY reseller credit limit there is: zero.
  *
- * **Zero.** A reseller with no configured limit may not go below zero, which is
- * `WALLET_ALLOWS_NEGATIVE_BALANCE` expressed per customer. The owner's instruction says
- * a credit feature must default to no credit, and the reason is that the failure mode of
- * the other default is a tenant discovering it has extended unsecured credit to everyone
- * it ever marked a reseller.
+ * **Owner decision (2026-10-01): no reseller debt and no credit purchases.** WP9-B R8 let an
+ * ACTIVE reseller's wallet purchase take the balance down to a configured limit below zero.
+ * The owner removed it (`docs/reseller-phase3-closure.md` §3). A wallet purchase now needs
+ * the whole amount, for a reseller exactly as for any customer
+ * (`WALLET_ALLOWS_NEGATIVE_BALANCE` is `false`), and every reseller write schema refuses a
+ * credit limit other than this one.
  *
- * A limit is an ALLOWANCE below zero, stored positive: a limit of 5,000,000 means the
- * balance may reach -5,000,000. Storing it as a negative number would make every
- * comparison a double negative, and the first person to get that backwards grants
- * unlimited credit.
+ * The `credit_limit_*` columns stay, and a read still returns what is stored: a row written
+ * before the decision may hold a positive limit, and it grants nothing. A balance that is
+ * already negative is a legacy debt, left exactly as it is — never collected, never
+ * touched — and repaid only by the same top-ups and credits as any balance.
  */
 export const RESELLER_DEFAULT_CREDIT_LIMIT_MINOR = 0n;
-export const RESELLER_MAX_CREDIT_LIMIT_MINOR = 1_000_000_000_000n;
 
 /**
  * Whether a debit is within a customer's means.

@@ -599,8 +599,12 @@ export const reportResellersResponseSchema = z.object({
       orders: count,
       sales: moneyTotals,
       services: count,
+      /** Always null: reseller credit was removed (owner decision, 2026-10-01). */
       creditLimit: moneySchema.nullable(),
-      /** How far below zero the reseller's wallet is now, in the limit's currency. */
+      /**
+       * How far below zero the reseller's wallet is now, in the selling currency: a legacy
+       * debt from before credit was removed, shown as it is. Zero for everyone else.
+       */
       creditInUse: moneySchema.nullable(),
     }),
   ),
