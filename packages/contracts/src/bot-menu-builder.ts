@@ -46,28 +46,35 @@ import { BOT_INSTANCE_STATUSES } from './tenant.js';
  *   layout (OQ-T-2).
  */
 
-/** The closed set of reply-keyboard styles. `default` is OMITTED on the wire. */
+/**
+ * The closed set of reply-keyboard styles. `KeyboardButton.style` accepts exactly
+ * `primary`, `success` and `danger` (Bot API 9.4, confirmed by the owner); `default` is
+ * Nexa's name for "no style" and is OMITTED on the wire. No custom colours.
+ */
 export const MAIN_MENU_BUTTON_STYLES = ['default', 'primary', 'success', 'danger'] as const;
 export type MainMenuButtonStyle = (typeof MAIN_MENU_BUTTON_STYLES)[number];
 
 /** The snapshot shape version. A stored layout of another `v` is unreadable, not guessed at. */
 export const EXPLICIT_MAIN_MENU_VERSION = 1;
 
-/** At most one row per declared button: a row holds at least one. */
+/**
+ * At most one row per declared button, so one button per row is always legal.
+ *
+ * A Nexa DOMAIN bound derived from the closed registry — NOT a Telegram maximum. Each id is
+ * placed at most once, so no layout can need more rows than there are buttons.
+ */
 export const MAIN_MENU_ROWS_MAX = MAIN_MENU_BUTTON_IDS.length;
 
 /**
- * At most four buttons on one row.
+ * At most every declared button on one row.
  *
- * Telegram's own per-row limit for a REPLY keyboard could not be verified from this
- * repository (`OQ-T-ROWLEN` in `docs/open-questions.md`), and a keyboard Telegram refuses
- * takes down every reply that carries it. So the bound is deliberately conservative: twice
- * what the legacy packing ever drew (`packMainMenuRows`: two to a row), half the inline
- * keyboard's documented eight, and the most a phone shows with the labels still readable —
- * every default label is an emoji and a Persian phrase. Raising it later is a widening a
- * previous release still parses; lowering it would strand stored layouts, so it starts low.
+ * Like `MAIN_MENU_ROWS_MAX`, a Nexa DOMAIN bound derived from the registry (each id is placed
+ * at most once, so a row can hold no more than all of them) — NOT a Telegram maximum. How
+ * many buttons read well side by side is the operator's call in the builder, not a protocol
+ * limit this schema invents. It grows with the registry, which is a widening an older
+ * release's parser of its own snapshots never sees.
  */
-export const MAIN_MENU_ROW_LENGTH_MAX = 4;
+export const MAIN_MENU_ROW_LENGTH_MAX = MAIN_MENU_BUTTON_IDS.length;
 
 /** One button's configuration. Its label is the `bot.menu.*` template, never stored here. */
 export const mainMenuButtonConfigSchema = z
@@ -78,6 +85,10 @@ export const mainMenuButtonConfigSchema = z
     style: z.enum(MAIN_MENU_BUTTON_STYLES),
     /**
      * The appearance slot whose custom emoji is the button's ICON, or null for none.
+     *
+     * `KeyboardButton.icon_custom_emoji_id` is official Bot API, for bots able to use custom
+     * emoji (confirmed by the owner); whether a given bot is able is decided per BOT INSTANCE
+     * by Nexa's own appearance test, never by the tenant.
      *
      * Distinct from `appearanceSlot` on purpose (audit §7): that field names the slot of the
      * screen the button OPENS, every button has a non-null default for it, and reusing it
@@ -353,6 +364,20 @@ export const mainMenuDraftViewSchema = z.object({
   /** Whether publishing this draft would change what is published (always true before a first publish). */
   differsFromPublished: z.boolean(),
   storedValueInvalid: z.boolean(),
+  /**
+   * The `bot.main_menu` version this draft was derived from — its LEGACY BASELINE, stored
+   * with the draft (null: derived while the setting had no row). Set when the draft is first
+   * saved (from the version the page was seeded from), by a reset or reseed, and by every
+   * publish (to the projection's version).
+   */
+  legacyBaselineVersion: z.number().int().positive().nullable(),
+  /**
+   * The legacy arrangement moved since this draft's baseline, and it MATTERS: nothing is
+   * published yet, or the published layout is superseded. A publish is then refused
+   * (`control.version_conflict`) until the operator resets or reseeds the draft from the
+   * live keyboard — the builder never rebases a draft onto a change nobody looked at.
+   */
+  legacyChangedSinceDraft: z.boolean(),
 });
 export type MainMenuDraftView = z.infer<typeof mainMenuDraftViewSchema>;
 
@@ -365,10 +390,14 @@ export const mainMenuPublishedViewSchema = z.object({
 });
 export type MainMenuPublishedView = z.infer<typeof mainMenuPublishedViewSchema>;
 
+/** The `bot.main_menu` setting's version this answer was built from (null: no row). */
+const settingVersion = z.number().int().positive().nullable();
+
 /** The two heads every builder write answers with. JSON-native, so a replay returns it verbatim. */
 export const mainMenuBuilderHeadSchema = z.object({
   draft: mainMenuDraftViewSchema,
   published: mainMenuPublishedViewSchema.nullable(),
+  settingVersion,
 });
 export type MainMenuBuilderHead = z.infer<typeof mainMenuBuilderHeadSchema>;
 
@@ -415,6 +444,12 @@ export const botMenuBuilderResponseSchema = z.object({
   superseded: z.boolean(),
   /** A layout is published and cannot be read by this release; the keyboard follows the setting. */
   publishedUnreadable: z.boolean(),
+  /**
+   * The `bot.main_menu` version read in the SAME statement as the draft and published head;
+   * `source`, `superseded`, `live` and the draft's `legacyChangedSinceDraft` are all decided
+   * from that one read.
+   */
+  settingVersion,
   draft: mainMenuDraftViewSchema,
   published: mainMenuPublishedViewSchema.nullable(),
   items: z.array(mainMenuBuilderItemSchema),
@@ -433,6 +468,13 @@ export const saveMainMenuDraftRequestSchema = z.object({
   idempotencyKey,
   expectedDraftVersion: z.number().int().positive().nullable(),
   layout: z.unknown(),
+  /**
+   * The `bot.main_menu` version the page's draft was seeded from (`draft.legacyBaselineVersion`
+   * of the read). Stored as the draft's baseline by the FIRST save only — the save that
+   * creates the row; a later save keeps the stored baseline. Carried by the request because
+   * the server cannot know which version a page seeded its draft from.
+   */
+  legacyBaselineVersion: z.number().int().positive().nullable(),
 });
 export type SaveMainMenuDraftRequest = Omit<
   z.infer<typeof saveMainMenuDraftRequestSchema>,
@@ -447,13 +489,23 @@ export const publishMainMenuRequestSchema = z.object({
 });
 export type PublishMainMenuRequest = z.infer<typeof publishMainMenuRequestSchema>;
 
-/** Reset the DRAFT to the registry's default. `confirm` must be `true`: the page asked first. */
+/** Where a reset takes the draft from. */
+export const MAIN_MENU_RESET_SEEDS = ['DEFAULT', 'LIVE'] as const;
+export type MainMenuResetSeed = (typeof MAIN_MENU_RESET_SEEDS)[number];
+
+/**
+ * Reset the DRAFT — to the registry's default (`DEFAULT`), or reseeded from the live
+ * `bot.main_menu` arrangement (`LIVE`, what "the legacy menu changed since this draft" asks
+ * for). Either way the draft's legacy baseline becomes the setting's CURRENT version: the
+ * operator chose this, knowingly. `confirm` must be `true`: the page asked first.
+ */
 export const resetMainMenuDraftRequestSchema = z.object({
   idempotencyKey,
   expectedDraftVersion: z.number().int().positive().nullable(),
   confirm: z.literal(true),
+  seed: z.enum(MAIN_MENU_RESET_SEEDS).default('DEFAULT'),
 });
-export type ResetMainMenuDraftRequest = z.infer<typeof resetMainMenuDraftRequestSchema>;
+export type ResetMainMenuDraftRequest = z.input<typeof resetMainMenuDraftRequestSchema>;
 
 /** Restore one revision INTO THE DRAFT. Never live: publishing it is a separate act. */
 export const restoreMainMenuRevisionRequestSchema = z.object({

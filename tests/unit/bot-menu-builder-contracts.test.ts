@@ -342,7 +342,7 @@ describe('C-3 placement safety', () => {
     expect(refused({ ...base, v: 2 })).toBe(false);
   });
 
-  it('refuses an empty row, too many rows, and a row past the bound', () => {
+  it('refuses an empty row and too many rows, and accepts every row length up to the registry', () => {
     expect(refused({ ...base, rows: [['catalog'], []] })).toBe(false);
     expect(MAIN_MENU_ROWS_MAX).toBe(MAIN_MENU_BUTTON_IDS.length);
     expect(
@@ -352,11 +352,18 @@ describe('C-3 placement safety', () => {
       }),
     ).toBe(false);
     expect(refused({ ...base, rows: MAIN_MENU_BUTTON_IDS.map((id) => [id]) })).toBe(true);
-    expect(MAIN_MENU_ROW_LENGTH_MAX).toBe(4);
-    expect(refused({ ...base, rows: [['catalog', 'services', 'wallet', 'help']] })).toBe(true);
-    expect(refused({ ...base, rows: [['catalog', 'services', 'wallet', 'help', 'apps']] })).toBe(
-      false,
-    );
+    // The bounds are Nexa's own, derived from the registry — not a Telegram maximum: one
+    // button per row is always legal, and so is every button on one row.
+    expect(MAIN_MENU_ROW_LENGTH_MAX).toBe(MAIN_MENU_BUTTON_IDS.length);
+    for (const length of [1, 2, 3, 4, 5, MAIN_MENU_BUTTON_IDS.length]) {
+      const ids = ['catalog', ...MAIN_MENU_BUTTON_IDS.filter((id) => id !== 'catalog')].slice(
+        0,
+        length,
+      );
+      expect(refused({ ...base, rows: [ids] }), `a row of ${String(length)}`).toBe(true);
+    }
+    // Past the registry, a row can only be made by repeating a button — refused.
+    expect(refused({ ...base, rows: [[...MAIN_MENU_BUTTON_IDS, 'catalog']] })).toBe(false);
   });
 
   it('refuses a layout with no placed, enabled, ungated button', () => {
