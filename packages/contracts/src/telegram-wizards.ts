@@ -100,7 +100,7 @@ export type TelegramReviewOutcome = (typeof TELEGRAM_REVIEW_OUTCOMES)[number];
 export const TELEGRAM_MESSAGE_STATE_RETENTION_DAYS = 30;
 
 /**
- * The Telegram-message retention sweep has failed this many ticks in a row (the database
+ * The Telegram-message retention sweep has failed three ticks in a row — `TELEGRAM_MESSAGE_RETENTION_FAILURE_THRESHOLD` in the loop (the database
  * refused its delete, its transaction timed out). One condition per tenant — the dedupe key
  * is the code — written when the streak reaches its threshold and then at most once an
  * hour while it lasts, so a sweep that fails every tick is ONE row whose counter climbs,
