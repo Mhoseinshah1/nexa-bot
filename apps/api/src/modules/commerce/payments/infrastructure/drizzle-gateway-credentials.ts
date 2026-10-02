@@ -23,8 +23,8 @@ import type {
  * tenant, row id)` is rebuilt from the caller's scope on every read, never stored; this
  * file is the only place the key exists in plaintext, for the length of one expression;
  * and nothing here logs. The webhook secret and the verify key (CentralPay) follow the same
- * rules on the same row, each under its own purpose. `setAt` is the only read a response builder can reach, and it
- * selects a timestamp — never the ciphertext.
+ * rules on the same row, each under its own purpose. `setAt` is the only read a response
+ * builder can reach, and it selects a timestamp — never the ciphertext.
  */
 export class DrizzleGatewayCredentialStore implements GatewayCredentialStore {
   constructor(

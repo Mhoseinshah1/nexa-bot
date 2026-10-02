@@ -15760,10 +15760,10 @@ const PROVIDER_REVIEW_SCREEN_KEYS: Partial<
 };
 
 /**
- * The label of the URL button that opens a provider's invoice page. CentralPay's
- * «💳 پرداخت با CentralPay» is isolated the same way (`payment.centralpay.open`). NOWPayments carries the
+ * The label of the URL button that opens a provider's invoice page. NOWPayments carries the
  * owner's «💳 پرداخت با ارز دیجیتال» under its OWN key, isolated so the central inline-button
- * registry can take it over as `payment.nowpayments.open` without touching any other route.
+ * registry can take it over as `payment.nowpayments.open` without touching any other route;
+ * CentralPay's «💳 پرداخت با CentralPay» is isolated the same way (`payment.centralpay.open`).
  */
 const PROVIDER_PAY_BUTTON_KEYS: Partial<Record<PaymentGatewayProvider, TemplateKey>> = {
   NOWPAYMENTS: 'bot.payment.nowpayments_pay_button',
