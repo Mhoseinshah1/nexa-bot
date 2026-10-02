@@ -4,7 +4,6 @@ import {
   BOT_COMMANDS,
   MAIN_MENU_BUTTONS,
   mainMenuButton,
-  mainMenuButtonIsGated,
   templateDefinition,
   templateViewSchema,
   type BotCommandSyncView,
@@ -16,16 +15,17 @@ import { BotButtonsPage, syncErrorHint } from '../../apps/web/src/pages/bot-butt
 import { PanelTrialTab } from '../../apps/web/src/pages/panel-trial';
 import { NAV, resolve } from '../../apps/web/src/app';
 import { t } from '../../apps/web/src/i18n/web.fa';
-import { renderPage, setting, stubApi } from './harness';
+import { renderPage, stubApi } from './harness';
+import { builderView } from './bot-buttons-builder-fixture';
 
 /**
  * R1 + round P on the Web Admin: «دکمه‌های ربات» and the panel's «سرویس تست» tab.
  *
- * The bot-buttons page reads ONE endpoint (`/bot-menu`): each item with the keyboard's
- * own decision about it, the command list, and every bot's sync state. It writes through
- * the endpoints that already exist — the arrangement (order, on/off, appearance slot) as
- * `bot.main_menu` with its version, the labels as `bot.menu.*` templates. The trial tab
- * sends the whole configuration with its revision, the traffic as a figure and a unit.
+ * The main menu itself is the round T builder, read from `/bot-menu/builder` and tested in
+ * `bot-buttons-builder.test.tsx`. This file keeps what the page shows beside it: the
+ * command list and every bot's sync state (`/bot-menu`), the labels as `bot.menu.*`
+ * templates, and the gate each button is shown under. The trial tab sends the whole
+ * configuration with its revision, the traffic as a figure and a unit.
  */
 
 const view = (key: TemplateKey, body: string) => {
@@ -155,7 +155,22 @@ function api(
         bots: options.bots ?? [syncView()],
       },
     },
-    { url: '/settings/bot.main_menu', body: { setting: setting(), changed: true } },
+    {
+      url: '/bot-menu/builder',
+      body: builderView({
+        itemOverrides: Object.fromEntries(
+          items.map((one) => [
+            one.id,
+            {
+              label: one.label,
+              labelOverridden: one.labelOverridden,
+              gateOpen: one.gateOpen,
+            },
+          ]),
+        ),
+      }),
+    },
+    { url: '/appearance', body: { slots: [], bots: [], operatorTelegramBound: false } },
     {
       url: '/templates/bot.menu.wallet',
       body: {
@@ -178,13 +193,6 @@ function api(
   ]);
 }
 
-/** The arrangement's card — the label cards below it have save buttons of their own. */
-const layoutCard = () =>
-  within(
-    screen
-      .getByRole('heading', { name: t('web.bot_buttons_order_title') })
-      .closest('section') as HTMLElement,
-  );
 const syncCard = () =>
   within(
     screen
@@ -192,92 +200,20 @@ const syncCard = () =>
       .closest('section') as HTMLElement,
   );
 
-const rowOf = (id: string) =>
-  document.querySelector(`tr[data-button="${id}"]`) as HTMLTableRowElement;
+const chip = (id: string) => document.querySelector(`[data-chip="${id}"]`) as HTMLElement | null;
 
 const page = () => <BotButtonsPage mayEdit denied={false} mayViewTemplates mayEditTemplates />;
 
 describe('«دکمه‌های ربات»', () => {
-  it('lists every main-menu button, the trial and the referral included, with its label and its gate', async () => {
-    api();
-    renderPage(page());
-    await waitFor(() => expect(rowOf('trial')).not.toBeNull());
-    const rows = [...document.querySelectorAll('tr[data-button]')].map((row) =>
-      row.getAttribute('data-button'),
-    );
-    expect(rows).toEqual(MAIN_MENU_BUTTONS.map((button) => button.id));
-    expect(within(rowOf('trial')).getByText(CATALOGUE_FA['bot.menu.trial'])).toBeInTheDocument();
-    // The target is shown, read-only, as the command the button opens.
-    expect(within(rowOf('wallet')).getByText('/wallet')).toBeInTheDocument();
-    expect(within(rowOf('wallet')).queryByRole('textbox')).toBeNull();
-    // The slot select offers the closed list with the button's default marked.
-    const slot = within(rowOf('wallet')).getByRole('combobox') as HTMLSelectElement;
-    expect(slot.value).toBe('wallet');
-    expect([...slot.options].map((option) => option.value)).toContain('payment');
-    /*
-     * F5: the trial has no flag. The server says no panel offers one, so the page says the
-     * button will not be seen, and why — a panel's own trial, not a switch on Features.
-     */
-    expect(
-      within(rowOf('trial')).getByText(t('web.bot_buttons_needs_trial_offer')),
-    ).toBeInTheDocument();
-    expect(
-      within(rowOf('trial')).getByText(t('web.bot_buttons_trial_not_offered')),
-    ).toBeInTheDocument();
-    expect(
-      within(rowOf('referral')).getByText(t('web.bot_buttons_feature_off')),
-    ).toBeInTheDocument();
-    expect(within(rowOf('catalog')).queryByText(t('web.bot_buttons_feature_off'))).toBeNull();
-    // The preview is the keyboard the bot would draw: no gated button while its gate is shut.
-    const preview = document.querySelector('.menu-preview') as HTMLElement;
-    expect(within(preview).queryByText(CATALOGUE_FA['bot.menu.trial'])).toBeNull();
-    expect(within(preview).queryByText(CATALOGUE_FA['bot.menu.referral'])).toBeNull();
-    expect(within(preview).getByText(CATALOGUE_FA['bot.menu.catalog'])).toBeInTheDocument();
-  });
-
-  it('draws a gated button in the preview once the server says its gate is open', async () => {
-    api({
-      items: MAIN_MENU_BUTTONS.map((button, order) =>
-        item(button.id, order, button.id === 'trial' ? { gateOpen: true, shownNow: true } : {}),
-      ),
-    });
-    renderPage(page());
-    const preview = () => document.querySelector('.menu-preview') as HTMLElement;
-    await waitFor(() =>
-      expect(within(preview()).getByText(CATALOGUE_FA['bot.menu.trial'])).toBeInTheDocument(),
-    );
-    expect(within(rowOf('trial')).queryByText(t('web.bot_buttons_trial_not_offered'))).toBeNull();
-  });
-
-  it('keeps a gated item out of the preview until its gate is known open (Codex #6)', async () => {
-    // The trial is switched OFF in the stored layout and the server answered nothing
-    // about its gate. Switching it on in the draft must not preview a button the keyboard
-    // will hide: unknown is not open.
-    api({
-      items: MAIN_MENU_BUTTONS.map((button, order) =>
-        item(
-          button.id,
-          order,
-          button.id === 'trial' ? { enabled: false, gateOpen: null, shownNow: false } : {},
-        ),
-      ),
-    });
-    renderPage(page());
-    await waitFor(() => expect(rowOf('trial')).not.toBeNull());
-    fireEvent.click(within(rowOf('trial')).getByRole('switch'));
-    const preview = document.querySelector('.menu-preview') as HTMLElement;
-    expect(within(preview).queryByText(CATALOGUE_FA['bot.menu.trial'])).toBeNull();
-    // An ungated item switched on in the draft IS previewed: the draft's switches count.
-    expect(within(preview).getByText(CATALOGUE_FA['bot.menu.catalog'])).toBeInTheDocument();
-  });
-
   it('re-reads the menu after a label is saved through the texts card (Codex #7)', async () => {
     const calls = api();
     renderPage(page());
-    await waitFor(() => expect(rowOf('wallet')).not.toBeNull());
-    const menuReads = () =>
-      calls.calls.filter((call) => call.method === 'GET' && call.url.endsWith('/bot-menu')).length;
+    await waitFor(() => expect(chip('wallet')).not.toBeNull());
+    const reads = (suffix: string) =>
+      calls.calls.filter((call) => call.method === 'GET' && call.url.endsWith(suffix)).length;
+    const menuReads = () => reads('/bot-menu');
     await waitFor(() => expect(menuReads()).toBe(1));
+    const builderReads = reads('/bot-menu/builder');
 
     const summary = screen.getByText(CATALOGUE_FA['bot.menu.wallet'], { selector: 'summary' });
     const details = summary.closest('details') as HTMLDetailsElement;
@@ -289,87 +225,53 @@ describe('«دکمه‌های ربات»', () => {
         true,
       ),
     );
-    // The table, the command list, the digest and the sync states come from `/bot-menu`,
-    // so the save re-reads it.
+    // The command list, the digest and the sync states come from `/bot-menu`, and the
+    // builder's labels and warnings from `/bot-menu/builder`: the save re-reads both.
     await waitFor(() => expect(menuReads()).toBeGreaterThan(1));
+    await waitFor(() => expect(reads('/bot-menu/builder')).toBeGreaterThan(builderReads));
   });
 
-  it('reorders, switches and re-slots buttons, and saves the whole arrangement with its version', async () => {
-    const calls = api();
+  it('lists every main-menu button, the trial and the referral included, with its label and its gate', async () => {
+    api();
     renderPage(page());
-    await waitFor(() => expect(rowOf('trial')).not.toBeNull());
-
-    fireEvent.click(
-      within(rowOf('trial')).getByRole('button', {
-        name: `${t('web.bot_buttons_move_up')}: ${CATALOGUE_FA['bot.menu.trial']}`,
-      }),
+    await waitFor(() => expect(chip('trial')).not.toBeNull());
+    const placed = [...document.querySelectorAll('.bb-row [data-chip]')].map((one) =>
+      one.getAttribute('data-chip'),
     );
-    fireEvent.click(within(rowOf('help')).getByRole('switch'));
-    fireEvent.change(within(rowOf('wallet')).getByRole('combobox'), {
-      target: { value: 'payment' },
-    });
-    fireEvent.click(layoutCard().getByRole('button', { name: t('web.save') }));
-
-    await waitFor(() =>
-      expect(calls.calls.some((call) => call.url.includes('/settings/bot.main_menu'))).toBe(true),
-    );
-    const post = calls.calls.find((call) => call.url.includes('/settings/bot.main_menu'));
-    const body = post?.body as {
-      value: { button: string; enabled: boolean; target: string; appearanceSlot: string | null }[];
-      expectedVersion: number;
-    };
-    expect(body.expectedVersion).toBe(7);
-    expect(body.value.map((entry) => entry.button)).toEqual([
-      'catalog',
-      'services',
-      'wallet',
-      'trial',
-      'help',
-      'referral',
-      'apps',
-      'tickets',
-    ]);
-    // Every entry names its declared target; the slot is stored only when chosen.
-    for (const entry of body.value) {
-      expect(entry.target).toBe(mainMenuButton(entry.button as never).command);
-    }
-    expect(body.value.find((entry) => entry.button === 'help')?.enabled).toBe(false);
-    expect(body.value.find((entry) => entry.button === 'wallet')?.appearanceSlot).toBe('payment');
-    expect(body.value.find((entry) => entry.button === 'catalog')?.appearanceSlot).toBeNull();
-    // Saved: the menu is re-read, so the server's next answer is what the page shows.
-    await waitFor(() =>
-      expect(calls.calls.filter((call) => call.url.endsWith('/bot-menu')).length).toBeGreaterThan(
-        1,
-      ),
-    );
-  });
-
-  it('refuses to save an arrangement that leaves no ungated button on', async () => {
-    const calls = api();
-    renderPage(page());
-    await waitFor(() => expect(rowOf('catalog')).not.toBeNull());
-    for (const button of MAIN_MENU_BUTTONS.filter((one) => !mainMenuButtonIsGated(one))) {
-      fireEvent.click(within(rowOf(button.id)).getByRole('switch'));
-    }
-    expect(screen.getByText(t('web.bot_buttons_one_required'))).toBeInTheDocument();
+    expect(placed).toEqual(MAIN_MENU_BUTTONS.map((button) => button.id));
     expect(
-      (layoutCard().getByRole('button', { name: t('web.save') }) as HTMLButtonElement).disabled,
-    ).toBe(true);
-    expect(calls.calls.some((call) => call.method === 'POST')).toBe(false);
-  });
-
-  it('shows the default beside an overridden label, edits it through the texts card, and warns on a duplicate', async () => {
-    api({ labels: { 'bot.menu.trial': CATALOGUE_FA['bot.menu.catalog'] } });
-    renderPage(page());
-    await waitFor(() =>
-      expect(screen.getAllByText(t('web.bot_buttons_label_duplicate')).length).toBe(2),
-    );
-    expect(
-      within(rowOf('trial')).getByText(t('web.bot_buttons_label_default'), { exact: false }),
+      within(chip('trial') as HTMLElement).getByText(CATALOGUE_FA['bot.menu.trial']),
     ).toBeInTheDocument();
+    /*
+     * F5: the trial has no flag. The server says no panel offers one, so the page says the
+     * button will not be seen, and why — a panel's own trial, not a switch on Features.
+     */
     expect(
-      within(rowOf('catalog')).queryByText(t('web.bot_buttons_label_default'), { exact: false }),
-    ).toBeNull();
+      within(chip('trial') as HTMLElement).getByText(t('web.bb_hidden_now')),
+    ).toBeInTheDocument();
+    fireEvent.click(document.querySelector('[data-chip-button="trial"]') as HTMLElement);
+    const gate = within(screen.getByTestId('bb-gate'));
+    expect(gate.getByText(t('web.bot_buttons_needs_trial_offer'))).toBeInTheDocument();
+    expect(
+      gate.getByText(t('web.bot_buttons_trial_not_offered'), { exact: false }),
+    ).toBeInTheDocument();
+    // The target is shown, read-only, as the command the button opens.
+    expect(within(screen.getByTestId('bb-inspector')).getByText('/trial')).toBeInTheDocument();
+    fireEvent.click(document.querySelector('[data-chip-button="referral"]') as HTMLElement);
+    expect(
+      within(screen.getByTestId('bb-gate')).getByText(t('web.bot_buttons_feature_off'), {
+        exact: false,
+      }),
+    ).toBeInTheDocument();
+    fireEvent.click(document.querySelector('[data-chip-button="catalog"]') as HTMLElement);
+    expect(screen.queryByTestId('bb-gate')).toBeNull();
+    // The customer preview is the keyboard the bot would draw: no gated button while its
+    // gate is shut.
+    fireEvent.click(screen.getByRole('button', { name: t('web.bb_mode_customer') }));
+    const preview = screen.getByTestId('bb-customer-preview');
+    expect(within(preview).queryByText(CATALOGUE_FA['bot.menu.trial'])).toBeNull();
+    expect(within(preview).queryByText(CATALOGUE_FA['bot.menu.referral'])).toBeNull();
+    expect(within(preview).getByText(CATALOGUE_FA['bot.menu.catalog'])).toBeInTheDocument();
   });
 
   it('lists the command menu Telegram is given — the customer scope, never an admin command', async () => {
@@ -442,7 +344,9 @@ describe('«دکمه‌های ربات»', () => {
     );
     await screen.findByTestId('bot-menu-sync');
     expect(syncCard().queryByRole('button', { name: t('web.bot_buttons_sync_now') })).toBeNull();
-    expect(layoutCard().queryByRole('button', { name: t('web.save') })).toBeNull();
+    await waitFor(() => expect(chip('wallet')).not.toBeNull());
+    expect(screen.queryByRole('button', { name: t('web.bb_save_draft') })).toBeNull();
+    expect(screen.queryByRole('button', { name: t('web.bb_publish') })).toBeNull();
   });
 
   it('names a transport code in Persian by its kind', () => {

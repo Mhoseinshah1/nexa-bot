@@ -2,63 +2,29 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   BOT_COMMANDS,
-  MENU_APPEARANCE_SLOTS,
   mainMenuButton,
-  mainMenuLayoutSchema,
-  packMainMenuRows,
-  resolveMainMenuLayout,
-  mainMenuEntryOf,
   type BotCommandCheck,
   type BotCommandSyncResult,
   type BotCommandSyncState,
   type BotCommandSyncView,
   type BotMenuConfigResponse,
-  type MainMenuGate,
-  type MainMenuItemView,
-  type MainMenuLayoutEntry,
-  type MenuAppearanceSlot,
+  type MainMenuButtonId,
 } from '@nexa/contracts';
 import {
   checkBotMenu,
   fetchBotMenu,
+  fetchBotMenuBuilder,
   fetchTemplates,
-  saveSetting,
   syncBotMenu,
 } from '../api/client';
 import { formatTimestamp } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
-import { APPEARANCE_SLOT_LABEL } from '../appearance-labels';
 import { useSubmissionKey } from '../submission-key';
-import { templateCopy } from '../template-copy';
-import {
-  Disclosure,
-  Badge,
-  Banner,
-  Card,
-  Ltr,
-  PageHead,
-  RowActions,
-  StateSwitch,
-  Switch,
-  useUnsavedChanges,
-  type Tone,
-} from '../ui/kit';
-import { Icon } from '../ui/icons';
-import { TelegramPhone } from './telegram-phone';
+import { Disclosure, Badge, Banner, Card, Ltr, PageHead, StateSwitch, type Tone } from '../ui/kit';
 import { TemplateCard } from './content';
 import { ErrorReport } from './settings';
-
-const SETTING_KEY = 'bot.main_menu';
-
-/** The sentence under a gated button, by the gate the server names. */
-const GATE_NOTES: Readonly<Record<MainMenuGate, WebKey>> = {
-  FEATURE: 'web.bot_buttons_needs_referrals',
-  TRIAL_OFFER: 'web.bot_buttons_needs_trial_offer',
-};
-const GATE_CLOSED: Readonly<Record<MainMenuGate, WebKey>> = {
-  FEATURE: 'web.bot_buttons_feature_off',
-  TRIAL_OFFER: 'web.bot_buttons_trial_not_offered',
-};
+import { BUILDER_QUERY_KEY, MenuBuilder } from './bot-buttons/builder';
+import { labelOf } from './bot-buttons/canvas';
 
 const SYNC_STATE_LABEL: Readonly<Record<BotCommandSyncState, WebKey>> = {
   CURRENT: 'web.bot_menu_state_current',
@@ -94,16 +60,18 @@ export function syncErrorHint(code: string): WebKey {
 }
 
 /**
- * R1 + round P: «دکمه‌های ربات» — the customer main menu and the Telegram command menu, as
- * an operator manages both.
+ * R1 + round P + round T: «دکمه‌های ربات» — the customer main menu and the Telegram command
+ * menu, as an operator manages both.
  *
- * Everything shown is read from ONE endpoint (`/bot-menu`), which answers each item with
- * the keyboard's own decision about it — enabled, its gate and whether that gate is open
- * now — so the table and the preview say what the bot says. What is WRITTEN goes where
- * it already lives: the arrangement (order, on/off, appearance slot) is the registry
- * setting `bot.main_menu`, saved whole with the version it was read at; the labels and
- * the command descriptions are the `bot.menu.*` and `bot.command.*` texts, edited with
- * the texts screen's own card. This page holds no second copy of anything.
+ * The main menu is edited in the BUILDER (round T, `bot-buttons/builder.tsx`): explicit
+ * rows, a style and an icon slot per button, around a draft that changes nothing a
+ * customer sees until it is published. It reads `GET /bot-menu/builder`, which answers each
+ * registry button with the server's own gate answer; the page decides no gate.
+ *
+ * The command menu and each bot's sync state still come from `GET /bot-menu`. The labels
+ * and the command descriptions are the `bot.menu.*` and `bot.command.*` texts, edited with
+ * the texts screen's own card — live, outside the draft. This page holds no second copy of
+ * anything.
  *
  * A button's TARGET is shown and never edited: each button opens exactly the command it
  * is declared for, and the schema refuses anything else, so two buttons cannot do one
@@ -121,10 +89,19 @@ export function BotButtonsPage({
   mayEditTemplates: boolean;
 }) {
   const client = useQueryClient();
+  const builder = useQuery({
+    queryKey: BUILDER_QUERY_KEY,
+    queryFn: fetchBotMenuBuilder,
+    enabled: !denied,
+  });
   const menu = useQuery({ queryKey: ['bot-menu'], queryFn: fetchBotMenu, enabled: !denied });
-  // A label or description saved through a card changes the table, the command list, the
-  // digest and every bot's state: the read model is re-read (Codex #7).
-  const refreshMenu = () => client.invalidateQueries({ queryKey: ['bot-menu'] });
+  // A label saved through a card changes the builder's labels and warnings, the command
+  // list, the digest and every bot's state: both read models are re-read (Codex #7).
+  const refreshMenu = () =>
+    Promise.all([
+      client.invalidateQueries({ queryKey: ['bot-menu'] }),
+      client.invalidateQueries({ queryKey: BUILDER_QUERY_KEY }),
+    ]);
   const templates = useQuery({
     queryKey: ['templates'],
     queryFn: fetchTemplates,
@@ -136,24 +113,38 @@ export function BotButtonsPage({
   const commandTemplates = (templates.data?.templates ?? []).filter((one) =>
     one.key.startsWith('bot.command.'),
   );
+  const items = builder.data?.items ?? [];
+
+  /** The Inspector's «edit the label»: open that button's text card below and go to it. */
+  const editLabel = (id: MainMenuButtonId) => {
+    const host = document.getElementById(`bot-buttons-label-${id}`);
+    const details = host?.querySelector('details');
+    if (details === null || details === undefined) return;
+    details.open = true;
+    details.scrollIntoView?.({ block: 'start' });
+    details.querySelector('summary')?.focus();
+  };
 
   return (
     <>
       <PageHead title={t('web.bot_buttons_title')} subtitle={t('web.bot_buttons_intro')} />
+      <StateSwitch query={builder} denied={denied} isEmpty={false}>
+        {builder.data !== undefined && (
+          <MenuBuilder
+            view={builder.data}
+            mayEdit={mayEdit}
+            mayViewTemplates={mayViewTemplates}
+            onEditLabel={editLabel}
+            refetch={() => builder.refetch()}
+          />
+        )}
+      </StateSwitch>
       <StateSwitch query={menu} denied={denied} isEmpty={false}>
         {menu.data !== undefined && (
-          <>
-            <LayoutCard
-              // Re-seeded from the server whenever the stored value moves on.
-              key={String(menu.data.layout.version ?? 0)}
-              config={menu.data}
-              mayEdit={mayEdit}
-            />
-            <div className="grid-2">
-              <CommandsCard config={menu.data} />
-              <SyncCard bots={menu.data.bots} mayEdit={mayEdit} />
-            </div>
-          </>
+          <div className="grid-2">
+            <CommandsCard config={menu.data} />
+            <SyncCard bots={menu.data.bots} mayEdit={mayEdit} />
+          </div>
         )}
       </StateSwitch>
       <Card title={t('web.bot_buttons_labels_title')} hint={t('web.bot_buttons_labels_hint')}>
@@ -161,21 +152,24 @@ export function BotButtonsPage({
           <Banner tone="info">{t('web.bot_buttons_labels_denied')}</Banner>
         ) : (
           <StateSwitch query={templates}>
-            {(menu.data?.layout.items ?? []).map((item) => {
+            {items.map((item) => {
               const button = mainMenuButton(item.id);
               const template = menuTemplates.find((one) => one.key === button.label);
               if (template === undefined) return null;
               return (
-                <Disclosure key={button.id} summary={labelOf(item)}>
-                  {duplicated(item, menu.data?.layout.items ?? []) && (
-                    <Banner tone="warn">{t('web.bot_buttons_label_duplicate')}</Banner>
-                  )}
-                  <TemplateCard
-                    template={template}
-                    mayEdit={mayEditTemplates}
-                    onChanged={refreshMenu}
-                  />
-                </Disclosure>
+                <div key={button.id} id={`bot-buttons-label-${button.id}`}>
+                  <Disclosure summary={labelOf(item.id, item)}>
+                    {item.duplicateLabel && (
+                      <Banner tone="warn">{t('web.bot_buttons_label_duplicate')}</Banner>
+                    )}
+                    {item.slashLabel && <Banner tone="warn">{t('web.bb_label_slash')}</Banner>}
+                    <TemplateCard
+                      template={template}
+                      mayEdit={mayEditTemplates}
+                      onChanged={refreshMenu}
+                    />
+                  </Disclosure>
+                </div>
               );
             })}
             <h3 className="small">{t('web.bot_buttons_command_texts_title')}</h3>
@@ -204,310 +198,6 @@ export function BotButtonsPage({
         )}
       </Card>
     </>
-  );
-}
-
-/** The label a button shows now: the tenant's text, else the template's Persian name. */
-function labelOf(item: MainMenuItemView): string {
-  const button = mainMenuButton(item.id);
-  return item.label !== '' ? item.label : templateCopy(button.label, '').name;
-}
-
-/** Whether another button shows the same text — the bot could then reach only one of them. */
-function duplicated(item: MainMenuItemView, items: readonly MainMenuItemView[]): boolean {
-  if (item.label === '') return false;
-  return items.some((other) => other.id !== item.id && other.label === item.label);
-}
-
-/** The stored entries as the server resolved them, so the draft starts from the truth. */
-function entriesOf(items: readonly MainMenuItemView[]): readonly MainMenuLayoutEntry[] {
-  return items.map((item) =>
-    mainMenuEntryOf({
-      button: item.id,
-      enabled: item.enabled,
-      target: item.target,
-      appearanceSlot: item.appearanceSlot,
-      appearanceSlotOverridden: item.appearanceSlot !== item.defaultAppearanceSlot,
-    }),
-  );
-}
-
-function LayoutCard({ config, mayEdit }: { config: BotMenuConfigResponse; mayEdit: boolean }) {
-  const client = useQueryClient();
-  const submission = useSubmissionKey();
-  const items = config.layout.items;
-  const byId = new Map(items.map((item) => [item.id, item]));
-  const [draft, setDraft] = useState<readonly MainMenuLayoutEntry[]>(() => entriesOf(items));
-
-  const save = useMutation({
-    mutationFn: (command: {
-      idempotencyKey: string;
-      value: readonly MainMenuLayoutEntry[];
-      expectedVersion: number | null;
-    }) => saveSetting({ key: SETTING_KEY, ...command }),
-    onSuccess: async () => {
-      submission.settle();
-      await Promise.all([
-        client.invalidateQueries({ queryKey: ['bot-menu'] }),
-        client.invalidateQueries({ queryKey: ['settings'] }),
-      ]);
-    },
-    onError: (error: unknown) => {
-      submission.settleOn(error);
-    },
-  });
-
-  const valid = mainMenuLayoutSchema.safeParse(draft).success;
-  const dirty = JSON.stringify(draft) !== JSON.stringify(entriesOf(items));
-  const editable = mayEdit && !save.isPending;
-  // An arrangement the operator moved and has not saved: leaving asks first.
-  useUnsavedChanges(mayEdit && dirty);
-
-  const move = (index: number, by: -1 | 1) => {
-    const target = index + by;
-    if (target < 0 || target >= draft.length) return;
-    const next = [...draft];
-    const [moved] = next.splice(index, 1);
-    if (moved === undefined) return;
-    next.splice(target, 0, moved);
-    setDraft(next);
-  };
-  const toggle = (index: number, enabled: boolean) =>
-    setDraft(draft.map((entry, at) => (at === index ? { ...entry, enabled } : entry)));
-  const chooseSlot = (index: number, slot: MenuAppearanceSlot) =>
-    setDraft(
-      draft.map((entry, at) => {
-        if (at !== index) return entry;
-        const defaultSlot = mainMenuButton(entry.button).appearanceSlot;
-        return { ...entry, appearanceSlot: slot === defaultSlot ? null : slot };
-      }),
-    );
-
-  const onSave = () => {
-    if (!valid) return;
-    const command = { value: draft, expectedVersion: config.layout.version };
-    save.mutate({ ...command, idempotencyKey: submission.current(command) });
-  };
-
-  // The preview is the keyboard the bot draws from THIS draft: the server's answer about
-  // each gate (read for switched-off items too), applied to the draft's switches. A gated
-  // item is drawn only when its gate is KNOWN open; unknown is not open (Codex #6).
-  const preview = packMainMenuRows(
-    resolveMainMenuLayout(draft)
-      .filter((entry) => entry.enabled)
-      .map((entry) => byId.get(entry.button))
-      .filter(
-        (item): item is MainMenuItemView =>
-          item !== undefined && (item.gate === null || item.gateOpen === true),
-      )
-      .map((item) => ({ id: item.id, wide: item.wide, label: labelOf(item) })),
-  );
-
-  const title = config.bots.find((bot) => bot.botStatus === 'ACTIVE') ?? config.bots[0];
-
-  return (
-    <div className="two-col">
-      <Card
-        title={t('web.bot_buttons_order_title')}
-        hint={t('web.bot_buttons_order_hint')}
-        {...(mayEdit
-          ? {
-              actions: (
-                <>
-                  <button
-                    type="button"
-                    className="btn"
-                    disabled={!editable}
-                    onClick={() =>
-                      setDraft(
-                        items.map((item) => ({
-                          button: item.id,
-                          enabled: true,
-                          target: item.target,
-                          appearanceSlot: null,
-                        })),
-                      )
-                    }
-                  >
-                    {t('web.bot_buttons_restore_default')}
-                  </button>
-                  <button
-                    type="button"
-                    className="btn primary"
-                    disabled={!editable || !valid || !dirty}
-                    onClick={onSave}
-                  >
-                    <Icon name="check" />
-                    {save.isPending ? t('web.saving') : t('web.save')}
-                  </button>
-                </>
-              ),
-            }
-          : {})}
-      >
-        {config.layout.storedValueInvalid && (
-          <Banner tone="danger">{t('web.bot_buttons_stored_invalid')}</Banner>
-        )}
-        <div className="tbl-wrap">
-          <table className="tbl dense">
-            <caption className="visually-hidden">{t('web.bot_buttons_order_title')}</caption>
-            <thead>
-              <tr>
-                <th>{t('web.bot_buttons_position')}</th>
-                <th className="wrap">{t('web.bot_buttons_button')}</th>
-                <th>{t('web.bot_buttons_target')}</th>
-                <th>{t('web.bot_buttons_slot')}</th>
-                <th>{t('web.bot_buttons_shown')}</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {resolveMainMenuLayout(draft).map((entry, index) => {
-                const item = byId.get(entry.button);
-                if (item === undefined) return null;
-                const label = labelOf(item);
-                const slotSelect = `bot-buttons-slot-${item.id}`;
-                return (
-                  <tr key={item.id} data-button={item.id}>
-                    <td className="faint">{String(index + 1)}</td>
-                    <td className="wrap">
-                      <span className="strong">{label}</span>
-                      {item.labelOverridden && (
-                        <p className="muted small">
-                          {t('web.bot_buttons_label_default')} {item.defaultLabel}
-                        </p>
-                      )}
-                      {item.gate !== null && (
-                        <p className="muted small">
-                          {t(GATE_NOTES[item.gate])}{' '}
-                          {item.gateOpen === false && (
-                            <Badge tone="warn">{t(GATE_CLOSED[item.gate])}</Badge>
-                          )}
-                        </p>
-                      )}
-                    </td>
-                    <td>
-                      <Badge tone="neutral" title={t('web.bot_buttons_target_hint')}>
-                        <Ltr>/{item.target}</Ltr>
-                      </Badge>
-                    </td>
-                    <td>
-                      <label className="visually-hidden" htmlFor={slotSelect}>
-                        {`${t('web.bot_buttons_slot')}: ${label}`}
-                      </label>
-                      <select
-                        id={slotSelect}
-                        className="input sm"
-                        value={entry.appearanceSlot}
-                        disabled={!editable}
-                        onChange={(event) =>
-                          chooseSlot(index, event.target.value as MenuAppearanceSlot)
-                        }
-                      >
-                        {MENU_APPEARANCE_SLOTS.map((slot) => (
-                          <option key={slot} value={slot}>
-                            {t(APPEARANCE_SLOT_LABEL[slot])}
-                            {slot === item.defaultAppearanceSlot
-                              ? ` (${t('web.bot_buttons_slot_default')})`
-                              : ''}
-                          </option>
-                        ))}
-                      </select>
-                    </td>
-                    <td>
-                      <Switch
-                        checked={entry.enabled}
-                        label={`${t('web.bot_buttons_shown')}: ${label}`}
-                        disabled={!editable}
-                        onChange={(next) => toggle(index, next)}
-                      />
-                    </td>
-                    <td>
-                      {mayEdit && (
-                        <RowActions>
-                          <button
-                            type="button"
-                            className="btn sm ghost icon"
-                            aria-label={`${t('web.bot_buttons_move_up')}: ${label}`}
-                            title={t('web.bot_buttons_move_up')}
-                            disabled={!editable || index === 0}
-                            onClick={() => move(index, -1)}
-                          >
-                            <Icon name="arrowUp" />
-                          </button>
-                          <button
-                            type="button"
-                            className="btn sm ghost icon"
-                            aria-label={`${t('web.bot_buttons_move_down')}: ${label}`}
-                            title={t('web.bot_buttons_move_down')}
-                            disabled={!editable || index === draft.length - 1}
-                            onClick={() => move(index, 1)}
-                          >
-                            <Icon name="arrowDown" />
-                          </button>
-                        </RowActions>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-        {!valid && <Banner tone="danger">{t('web.bot_buttons_one_required')}</Banner>}
-        {dirty && valid && <Banner tone="warn">{t('web.bot_buttons_unsaved')}</Banner>}
-        {save.isError && <ErrorReport error={save.error} />}
-        {save.isSuccess && (
-          <Banner tone={save.data.changed ? 'ok' : 'info'}>
-            {save.data.changed ? t('web.saved') : t('web.unchanged')}
-          </Banner>
-        )}
-      </Card>
-      <div className="stack">
-        <Card title={t('web.bot_buttons_preview_title')} hint={t('web.bot_buttons_preview_hint')}>
-          <TelegramPhone
-            title={
-              title === undefined ? (
-                t('web.bot_buttons_preview_title')
-              ) : (
-                <Ltr mono={false}>@{title.username}</Ltr>
-              )
-            }
-            {...(preview.length === 0
-              ? {}
-              : {
-                  keyboard: (
-                    <div className="menu-preview" aria-label={t('web.bot_buttons_preview_title')}>
-                      {preview.map((row) => (
-                        <div
-                          key={row.map((button) => button.id).join(':')}
-                          className="menu-preview-row"
-                        >
-                          {row.map((button) => (
-                            <span key={button.id} className="menu-preview-key">
-                              {button.label}
-                            </span>
-                          ))}
-                        </div>
-                      ))}
-                    </div>
-                  ),
-                })}
-          >
-            {preview.length === 0 && (
-              <p className="tg-phone-note">{t('web.bot_buttons_preview_empty')}</p>
-            )}
-          </TelegramPhone>
-        </Card>
-        <Card title={t('web.bot_buttons_rules_title')} tone="muted">
-          <ul className="bot-buttons-rules small muted">
-            <li>{t('web.bot_buttons_slot_hint')}</li>
-            <li>{t('web.bot_buttons_target_hint')}</li>
-            <li>{t('web.bot_buttons_rule_gate')}</li>
-          </ul>
-        </Card>
-      </div>
-    </div>
   );
 }
 

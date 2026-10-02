@@ -3,8 +3,11 @@ import {
   APPEARANCE_SLOT_FALLBACKS,
   BOT_COMMANDS,
   CAPABILITY_REGISTRY_ROWS,
+  DEFAULT_EXPLICIT_MAIN_MENU,
   MAIN_MENU_BUTTONS,
   appearanceResponseSchema,
+  botMenuBuilderResponseSchema,
+  mainMenuRevisionListResponseSchema,
   botListResponseSchema,
   botMenuConfigResponseSchema,
   clientAppListSchema,
@@ -225,6 +228,36 @@ const MENU_ITEMS: readonly Json[] = MAIN_MENU_BUTTONS.map((button, order) => ({
   shownNow: !button.needsTrialOffer && button.feature === null,
 }));
 
+/**
+ * Round T: a SAVED builder draft that differs from what is published — three buttons on
+ * the first row, styles, an icon slot, a switched-off button — so a shot shows every
+ * state the editor draws. Revision 1 is the default keyboard.
+ */
+const BUILDER_DRAFT: Json = {
+  v: 1,
+  rows: [['catalog', 'services', 'wallet'], ['help'], ['trial', 'referral'], ['apps'], ['tickets']],
+  buttons: DEFAULT_EXPLICIT_MAIN_MENU.buttons.map((config) => ({
+    ...config,
+    ...(config.button === 'catalog' ? { style: 'primary', iconSlot: 'purchase' } : {}),
+    ...(config.button === 'wallet' ? { style: 'success' } : {}),
+    ...(config.button === 'tickets' ? { enabled: false } : {}),
+  })),
+};
+
+const BUILDER_ITEMS: readonly Json[] = MAIN_MENU_BUTTONS.map((button) => ({
+  id: button.id,
+  target: button.command,
+  wide: button.wide,
+  label: CATALOGUE_FA[button.label],
+  defaultLabel: CATALOGUE_FA[button.label],
+  labelOverridden: false,
+  defaultAppearanceSlot: button.appearanceSlot,
+  gate: button.needsTrialOffer ? 'TRIAL_OFFER' : button.feature !== null ? 'FEATURE' : null,
+  gateOpen: button.needsTrialOffer ? false : button.feature !== null ? true : null,
+  duplicateLabel: false,
+  slashLabel: false,
+}));
+
 /** A template at its catalogue default, as `/templates` returns one. */
 function template(key: Parameters<typeof templateDefinition>[0]): Json {
   const definition = templateDefinition(key);
@@ -436,6 +469,55 @@ export const OPS_A: readonly ShotFixture[] = [
         nextAttemptAt: null,
       },
     ],
+  }),
+  fixture('/bot-menu/builder', botMenuBuilderResponseSchema, {
+    source: 'EXPLICIT',
+    superseded: false,
+    publishedUnreadable: false,
+    settingVersion: 9,
+    draft: {
+      layout: BUILDER_DRAFT,
+      version: 2,
+      updatedAt: ago(60 * 20),
+      updatedByAdminId: null,
+      restoredFrom: null,
+      differsFromPublished: true,
+      storedValueInvalid: false,
+      legacyBaselineVersion: 9,
+      legacyChangedSinceDraft: false,
+    },
+    published: {
+      layout: DEFAULT_EXPLICIT_MAIN_MENU,
+      revision: 1,
+      publishedAt: ago(60 * 60 * 24),
+      publishedByAdminId: null,
+    },
+    items: BUILDER_ITEMS,
+    live: {
+      rows: [
+        [CATALOGUE_FA['bot.menu.catalog'], CATALOGUE_FA['bot.menu.services']],
+        [CATALOGUE_FA['bot.menu.wallet'], CATALOGUE_FA['bot.menu.help']],
+        [CATALOGUE_FA['bot.menu.referral']],
+        [CATALOGUE_FA['bot.menu.apps']],
+        [CATALOGUE_FA['bot.menu.tickets']],
+      ],
+    },
+    iconEligibility: [
+      { botInstanceId: BOT_ID, username: 'nexa_store_bot', status: 'ACTIVE', eligible: true },
+    ],
+  }),
+  fixture('/bot-menu/builder/revisions', mainMenuRevisionListResponseSchema, {
+    revisions: [
+      {
+        id: '01900000-0000-7000-8000-0000000be001',
+        revision: 1,
+        layout: DEFAULT_EXPLICIT_MAIN_MENU,
+        createdAt: ago(60 * 60 * 24),
+        createdByAdminId: null,
+        restoredFrom: null,
+      },
+    ],
+    nextBefore: null,
   }),
   fixture('/templates', templateListResponseSchema, {
     templates: [

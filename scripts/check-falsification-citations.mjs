@@ -110,6 +110,8 @@ const RECORDS = [
   'docs/r1-falsification.md',
   'docs/f5-falsification.md',
   'docs/round-t-t1-falsification.md',
+  'docs/round-t-t2-falsification.md',
+  'docs/round-t-t3-falsification.md',
   'docs/tonpays-telegram-falsification.md',
 ];
 /**
@@ -140,8 +142,14 @@ const RECORDS = [
  * 2459 → 2449: nine rows (ten citations) of the reseller credit line retired with it,
  * by the owner's decision of 2026-10-01 — WP9B-02, -03, -15, -21 and R14-02, -09, -10,
  * -12, -16. Each record says so above its table.
+ *
+ * 2468 → 2493: round T (T2), `docs/round-t-t2-falsification.md` — fourteen rows, 25
+ * citations. 2493 → 2494: T2-15, from the PR #135 review. Combined with round T (T3),
+ * `docs/round-t-t3-falsification.md` (29 citations, merged first in #134): 2523.
+ *
+ * 2523 → 2611: TonPays Telegram, `docs/tonpays-telegram-falsification.md` — 88 citations.
  */
-const EXPECTED = 2556;
+const EXPECTED = 2611;
 /**
  * A table whose last column is one of these is making citations.
  *
