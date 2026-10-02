@@ -1,5 +1,8 @@
 import {
   PAYMENT_GATEWAY_DESCRIPTORS,
+  TONPAYS_TELEGRAM_RECEIPT_MAX_ATTEMPTS,
+  TONPAYS_TELEGRAM_REVIEW_CHECK_SPACING_MS,
+  TONPAYS_TELEGRAM_REVIEW_WINDOW_MS,
   systemJobActor,
   type ActorContext,
   type AuditWriter,
@@ -25,9 +28,20 @@ import {
   TONPAYS_CREATE_RETRY_MS,
   inquiryBackoffMs,
 } from '../domain/tonpays.js';
+import { gatewaySettlementDeadline } from '../domain/settlement.js';
+import {
+  receiptAcknowledged,
+  reviewInquiryNextAt,
+  sniffReceiptImage,
+} from '../domain/tonpays-telegram.js';
 import type {
+  CardTransferGatewayAdapter,
+  ClaimedCardTransferRow,
   ClaimedGatewayInvoice,
   ExternalGatewayAdapter,
+  GatewayCardChangeRecord,
+  GatewayCardTransferRepository,
+  GatewayReceiptSubmissionRecord,
   GatewayCallBudget,
   GatewayCredentialStore,
   GatewayInvoicePresentation,
@@ -57,6 +71,30 @@ export const GATEWAY_CONFIGURED_CODE = 'payments.gateway_configured';
 export const GATEWAY_CREATE_UNKNOWN_CODE = 'payments.gateway_create_unknown';
 export const GATEWAY_LATE_COMPLETION_CODE = 'payments.gateway_late_completion';
 export const GATEWAY_IDENTITY_MISMATCH_CODE = 'payments.gateway_identity_mismatch';
+/**
+ * TonPays Telegram (`docs/tonpays-telegram-gateway-audit.md` §9.4), declared beside their
+ * producer and part of the schema once shipped:
+ *
+ * - `payments.gateway_receipt_unknown` — a receipt upload's answer was lost. Per payment.
+ *   Never re-uploaded; the next inquiry is brought forward.
+ * - `payments.gateway_card_change_unknown` — a card change's answer was lost. Per payment.
+ *   The current card is hidden and the request is never re-sent.
+ * - `payments.gateway_review_unresolved` (WARN) — a provider review ended with no
+ *   trustworthy answer and the payment is UNKNOWN. Per payment. Recovered by
+ *   `payments.gateway_review_reconciled` (INFO) when an operator reconciles it
+ *   (`PaymentService.reconcileGatewayPayment`).
+ */
+export const GATEWAY_RECEIPT_UNKNOWN_CODE = 'payments.gateway_receipt_unknown';
+export const GATEWAY_CARD_CHANGE_UNKNOWN_CODE = 'payments.gateway_card_change_unknown';
+export const GATEWAY_REVIEW_UNRESOLVED_CODE = 'payments.gateway_review_unresolved';
+export const GATEWAY_REVIEW_RECONCILED_CODE = 'payments.gateway_review_reconciled';
+
+/**
+ * The note a CREATED card-transfer attempt carries in `creation_error_code` when the
+ * provider's answer named no card: it exists, is still asked about, and cannot be paid
+ * from Telegram — so it is never handed back as the open attempt.
+ */
+export const NO_PAYMENT_CARD_CODE = 'nexa.no_payment_card';
 
 /**
  * F3 (round N): the note a CREATED attempt carries in `creation_error_code` when the
@@ -69,7 +107,13 @@ export const NO_PAYMENT_LINK_CODE = 'nexa.no_payment_link';
 export const GATEWAY_CLAIM_LEASE_MS = 60_000;
 /** Rows per pass, per queue. Small: every one of them is a call to a third party. */
 export const GATEWAY_CREATE_BATCH = 5;
-export const GATEWAY_INQUIRY_BATCH = 10;
+export const GATEWAY_INQUIRY_BATCH = 10; /** TonPays Telegram: card changes and receipt uploads per pass; review and window sweeps. */
+export const GATEWAY_CARD_CHANGE_BATCH = 5;
+export const GATEWAY_RECEIPT_BATCH = 3;
+export const GATEWAY_REVIEW_SWEEP_BATCH = 50;
+export const GATEWAY_CAPTURE_SWEEP_BATCH = 100;
+/** A rate-limited receipt is re-queued this far out (the provider's own word, a 4xx). */
+export const RECEIPT_RATE_LIMIT_RETRY_MS = 60_000;
 /**
  * How soon a recorded charge whose outcome did not commit is tried again, when no inquiry
  * backoff applies (it is past its deadline, or on the last retry before it).
@@ -99,8 +143,35 @@ export function gatewayCallbackUrl(
 
 export interface GatewayPaymentServiceDeps {
   readonly invoices: GatewayInvoiceRepository;
-  readonly payments: Pick<PaymentService, 'confirmGatewayPayment' | 'failGatewayPayment'>;
-  readonly paymentRecords: Pick<PaymentRepository, 'findById' | 'setExternalReference'>;
+  readonly payments: Pick<
+    PaymentService,
+    'confirmGatewayPayment' | 'failGatewayPayment' | 'recordProviderReview'
+  >;
+  readonly paymentRecords: Pick<
+    PaymentRepository,
+    'findById' | 'setExternalReference' | 'loseTrackOfReviewed'
+  >;
+  /**
+   * TonPays Telegram (§7.3–§7.5): card-change requests, receipt windows and submissions.
+   * Absent in a lane that serves no card-transfer route; their passes then do nothing.
+   */
+  readonly cardTransfer?: GatewayCardTransferRepository;
+  /** The card-transfer capability, resolved by descriptor (`invoiceForm`), or null. */
+  readonly cardAdapters?: (provider: PaymentGatewayProvider) => CardTransferGatewayAdapter | null;
+  /**
+   * A receipt's bytes, fetched with the token of the bot the photo was sent to (the
+   * submission's, which is the invoice's), bounded while streaming. Held only for one upload.
+   */
+  readonly receiptFiles?: {
+    download(
+      scope: TenantContext,
+      binding: { readonly botInstanceId: string; readonly fileId: string },
+      options: { readonly maxBytes: number },
+    ): Promise<
+      | { readonly outcome: 'SUCCEEDED'; readonly bytes: Uint8Array }
+      | { readonly outcome: 'UNAVAILABLE'; readonly reason: string }
+    >;
+  };
   readonly adapters: (provider: PaymentGatewayProvider) => ExternalGatewayAdapter | null;
   readonly credentials: GatewayCredentialStore;
   /**
@@ -161,6 +232,10 @@ export interface GatewayPassReport {
   readonly unsuccessful: number;
   readonly lateCompletions: number;
   readonly budgetExhausted: boolean;
+  /** TonPays Telegram: payments whose review lapsed (UNKNOWN), card changes, receipts. */
+  readonly reviewsLapsed: number;
+  readonly cardChanges: number;
+  readonly receipts: number;
 }
 
 /** What a webhook did. Never anything the caller could turn into money. */
@@ -221,6 +296,9 @@ export class GatewayPaymentService {
       unsuccessful: 0,
       lateCompletions: 0,
       budgetExhausted: false,
+      reviewsLapsed: 0,
+      cardChanges: 0,
+      receipts: 0,
     };
     // A stopped tenant's rows simply wait, and nothing about them is sent anywhere.
     if (!(await this.deps.scopeActivity.scopeIsActive(scope))) return report;
@@ -283,6 +361,20 @@ export class GatewayPaymentService {
           await this.refreshScreens(scope, claimed.invoice.paymentId);
         }
       }
+    }
+
+    // TonPays Telegram: no provider call — always run, whatever the budget said.
+    report.reviewsLapsed = await this.loseTrackOfLapsedReviews(scope, actor);
+    await this.sweepReceiptCaptures(scope);
+    if (!report.budgetExhausted) {
+      const cards = await this.runCardChanges(scope, actor);
+      report.cardChanges = cards.done;
+      report.budgetExhausted = cards.budgetExhausted;
+    }
+    if (!report.budgetExhausted) {
+      const receipts = await this.runReceipts(scope, actor);
+      report.receipts = receipts.done;
+      report.budgetExhausted = receipts.budgetExhausted;
     }
     return report;
   }
@@ -420,16 +512,27 @@ export class GatewayPaymentService {
      * about, but it cannot be paid from Telegram. Recorded against the attempt, so the
      * operator reads it on the payment, and the customer is told exactly that.
      */
-    const unpayable =
-      outcome.kind === 'CREATED' &&
-      descriptor.invoiceCredential !== 'BOT_TOKEN' &&
-      outcome.webInvoiceUrl === null &&
-      outcome.invoiceUrl === null;
+    /*
+     * By the route's invoice FORM (§5.3), never by its credential: a LINK invoice with no
+     * link, or a CARD invoice with no card, was created and cannot be paid from Telegram.
+     */
+    const card = outcome.kind === 'CREATED' ? (outcome.instructions ?? null) : null;
+    const unpayableNote =
+      outcome.kind !== 'CREATED'
+        ? null
+        : descriptor.invoiceForm === 'LINK' &&
+            outcome.webInvoiceUrl === null &&
+            outcome.invoiceUrl === null
+          ? NO_PAYMENT_LINK_CODE
+          : descriptor.invoiceForm === 'CARD_TRANSFER' && card === null
+            ? NO_PAYMENT_CARD_CODE
+            : null;
+    const unpayable = unpayableNote !== null;
     const logContext = {
       paymentId: invoice.paymentId,
       provider: invoice.provider,
       outcome: outcome.kind,
-      reason: outcome.kind === 'CREATED' ? (unpayable ? NO_PAYMENT_LINK_CODE : null) : outcome.code,
+      reason: outcome.kind === 'CREATED' ? unpayableNote : outcome.code,
       elapsedMs,
     };
     if (outcome.kind === 'CREATED' && !unpayable) {
@@ -453,7 +556,10 @@ export class GatewayPaymentService {
               finalAmount: outcome.finalAmount,
               buyerChatIdSent: buyerChatId !== null,
               callbackUrlSent: callbackUrl !== null,
-              note: unpayable ? NO_PAYMENT_LINK_CODE : null,
+              note: unpayableNote,
+              // A card-transfer route's first card: current, and seq 1 of its history.
+              card:
+                card === null ? null : { instructions: card, policy: outcome.cardChange ?? null },
               // A provider that pushes its payments is never asked (Stars).
               firstInquiryAt:
                 descriptor.approval === 'INQUIRY'
@@ -487,6 +593,8 @@ export class GatewayPaymentService {
                 buyerChatIdSent: buyerChatId !== null,
                 callbackUrlSent: callbackUrl !== null,
                 paymentLinkReturned: !unpayable,
+                // Whether a card came back — never the card itself (§7.1).
+                cardReturned: card !== null,
                 elapsedMs,
               },
               result: 'SUCCESS',
@@ -559,12 +667,22 @@ export class GatewayPaymentService {
     const { invoice } = claimed;
     const now = this.deps.clock.now();
     const invoiceId = invoice.providerInvoiceId ?? invoice.hintedInvoiceId;
-    const expiresAt = claimed.paymentExpiresAt;
+    /*
+     * The EFFECTIVE deadline (§9.6.3 d): the review deadline once acknowledged, `expires_at`
+     * otherwise. Advisory here — `confirmGatewayPayment` decides under the payment's lock.
+     */
+    const reviewUntil = claimed.paymentReviewUntil;
+    const expiresAt = gatewaySettlementDeadline({
+      expiresAt: claimed.paymentExpiresAt,
+      providerReviewUntil: reviewUntil,
+    });
     const eligible =
       claimed.paymentState === 'PENDING' &&
       expiresAt !== null &&
       now.getTime() < expiresAt.getTime();
     const postDeadline = !eligible;
+    // An operator's "ask again" on an UNKNOWN payment lets ONE inquiry past the bound.
+    const operatorAsked = invoice.reconcileInquiryRequestedAt !== null;
 
     /*
      * A provider that PUSHES its payments (Stars) is never asked. Its row is due only
@@ -583,7 +701,7 @@ export class GatewayPaymentService {
       invoiceId === null ||
       adapter === null ||
       apiKey === null ||
-      (postDeadline && invoice.postDeadlineInquiries >= POST_DEADLINE_INQUIRY_MAX)
+      (postDeadline && invoice.postDeadlineInquiries >= POST_DEADLINE_INQUIRY_MAX && !operatorAsked)
     ) {
       // Nothing that could be asked, or nothing more to ask. Stop scheduling.
       await this.deps.uow.run(scope, (tx) =>
@@ -623,7 +741,16 @@ export class GatewayPaymentService {
 
     const outcome = await adapter.inquire(apiKey, invoiceId);
     const at = this.deps.clock.now();
-    const next = postDeadline ? null : this.nextInquiryAt(invoice, at, expiresAt);
+    const next = postDeadline
+      ? null
+      : reviewUntil !== null
+        ? // In review (§9.6.5): the review cadence, ending fifteen seconds before its deadline.
+          reviewInquiryNextAt(
+            new Date(reviewUntil.getTime() - TONPAYS_TELEGRAM_REVIEW_WINDOW_MS),
+            reviewUntil,
+            at,
+          )
+        : this.nextInquiryAt(invoice, at, expiresAt);
 
     if (outcome.kind !== 'OBSERVED') {
       const retry =
@@ -682,8 +809,16 @@ export class GatewayPaymentService {
       return 'ERROR';
     }
 
-    await this.deps.uow.run(scope, (tx) =>
-      this.deps.invoices.recordInquiry(
+    await this.deps.uow.run(scope, async (tx) => {
+      /*
+       * TonPays Telegram (§9.1): an answer about THIS attempt resolves a lost receipt upload
+       * FOR DISPLAY — a later `pending` lets the customer send a different photo — and never
+       * opens a review: only the upload answer's own acknowledgement does.
+       */
+      if (this.deps.cardTransfer !== undefined) {
+        await this.deps.cardTransfer.resolveUnknownSubmissions(scope, invoice.paymentId, at, tx);
+      }
+      await this.deps.invoices.recordInquiry(
         scope,
         invoice.paymentId,
         {
@@ -709,8 +844,8 @@ export class GatewayPaymentService {
         },
         at,
         tx,
-      ),
-    );
+      );
+    });
 
     if (outcome.verdict === 'OPEN') return 'OPEN';
 
@@ -865,10 +1000,9 @@ export class GatewayPaymentService {
     // and a redelivered update must not write a second late-completion notice.
     if (invoice.outcome !== null) return invoice.outcome === 'LATE_COMPLETION' ? 'LATE' : 'SETTLED';
     const now = this.deps.clock.now();
+    const deadline = gatewaySettlementDeadline(payment);
     const eligible =
-      payment.state === 'PENDING' &&
-      payment.expiresAt !== null &&
-      now.getTime() < payment.expiresAt.getTime();
+      payment.state === 'PENDING' && deadline !== null && now.getTime() < deadline.getTime();
     return this.settleApproved(
       scope,
       this.actor(),
@@ -910,6 +1044,578 @@ export class GatewayPaymentService {
      */
     const last = new Date(expiresAt.getTime() - 15_000);
     return last.getTime() > at.getTime() ? last : null;
+  }
+
+  // ---------------------------------------------------------------------------------------
+  // TonPays Telegram — the review sweep, the card-change lane and the receipt lane
+  // (`docs/tonpays-telegram-gateway-audit.md` §8.2, §8.3, §9.1, §9.6). Each provider call is
+  // claimed in one short transaction, stamped and COMMITTED before the call, made outside
+  // every transaction under the tenant's budget, and recorded in another. A row reclaimed
+  // with its stamp set is UNKNOWN and is never sent again. Nothing here settles anything.
+  // ---------------------------------------------------------------------------------------
+
+  /**
+   * The review sweep (§9.6.3 e), the first producer of `LOSE_TRACK`: a PENDING payment whose
+   * provider review window has ended with no trustworthy answer becomes UNKNOWN — never
+   * EXPIRED and never FAILED, because the customer has very probably paid. In the same
+   * transaction: the audit row, `PaymentOutcomeUnknown` and the operator's condition. Two
+   * replicas take different rows (`SKIP LOCKED`); a replay moves nothing. Returns how many.
+   */
+  private async loseTrackOfLapsedReviews(
+    scope: TenantContext,
+    actor: ActorContext,
+  ): Promise<number> {
+    const now = this.deps.clock.now();
+    const lapsed = await this.deps.uow.run(scope, async (tx) => {
+      // A stopped scope accepts no new state change; its rows wait (checked IN the tx).
+      if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) return [];
+      const moved = await this.deps.paymentRecords.loseTrackOfReviewed(
+        scope,
+        now,
+        GATEWAY_REVIEW_SWEEP_BATCH,
+        tx,
+      );
+      for (const payment of moved) {
+        await this.deps.audit.record(
+          scope,
+          actor,
+          {
+            action: 'payment.lose_track',
+            entityType: 'Payment',
+            entityId: payment.id,
+            before: { state: 'PENDING' },
+            after: {
+              state: 'UNKNOWN',
+              gatewayProvider: payment.gatewayProvider,
+              providerReviewStartedAt: payment.providerReviewStartedAt?.toISOString() ?? null,
+              providerReviewUntil: payment.providerReviewUntil?.toISOString() ?? null,
+            },
+            result: 'SUCCESS',
+          },
+          tx,
+        );
+        await this.deps.outbox.write(tx, actor, {
+          eventType: 'PaymentOutcomeUnknown',
+          aggregateType: 'Payment',
+          aggregateId: payment.id,
+          payload: {
+            customerId: payment.customerId,
+            orderId: payment.orderId,
+            method: payment.method,
+            amountMinor: payment.amount.amountMinor.toString(),
+            currency: payment.amount.currency,
+          },
+        });
+        await this.deps.opsLog.record(
+          scope,
+          {
+            code: GATEWAY_REVIEW_UNRESOLVED_CODE,
+            severity: 'WARN',
+            message:
+              'A payment gateway’s review of a customer’s receipt ended with no confirmed answer. ' +
+              'Nothing was settled or failed; reconcile it against the gateway’s records.',
+            dedupeKey: `${GATEWAY_REVIEW_UNRESOLVED_CODE}:${payment.id}`,
+            context: { paymentId: payment.id, provider: payment.gatewayProvider },
+          },
+          tx,
+        );
+      }
+      return moved;
+    });
+    for (const payment of lapsed) await this.refreshScreens(scope, payment.id);
+    return lapsed.length;
+  }
+
+  /** Receipt windows past their deadline, or whose payment closed or entered review. */
+  private async sweepReceiptCaptures(scope: TenantContext): Promise<void> {
+    const cards = this.deps.cardTransfer;
+    if (cards === undefined) return;
+    const now = this.deps.clock.now();
+    await this.deps.uow.run(scope, (tx) =>
+      cards.sweepCaptures(scope, now, GATEWAY_CAPTURE_SWEEP_BATCH, tx),
+    );
+  }
+
+  /** The card-change lane (§8.2). */
+  private async runCardChanges(
+    scope: TenantContext,
+    actor: ActorContext,
+  ): Promise<{ readonly done: number; readonly budgetExhausted: boolean }> {
+    const cards = this.deps.cardTransfer;
+    if (cards === undefined) return { done: 0, budgetExhausted: false };
+    const now = this.deps.clock.now();
+    const lease = new Date(now.getTime() + GATEWAY_CLAIM_LEASE_MS);
+    const claimed = await this.deps.uow.run(scope, (tx) =>
+      cards.claimCardChanges(scope, now, GATEWAY_CLAIM_LEASE_MS, GATEWAY_CARD_CHANGE_BATCH, tx),
+    );
+    let done = 0;
+    for (const [index, row] of claimed.entries()) {
+      const result = await this.processCardChange(scope, actor, cards, row);
+      if (result === 'BUDGET') {
+        // The row that met the empty budget and every one after it give their leases back.
+        await this.deps.uow.run(scope, (tx) =>
+          cards.releaseCardChangeClaims(
+            scope,
+            claimed.slice(index).map((one) => one.row.id),
+            lease,
+            tx,
+          ),
+        );
+        return { done, budgetExhausted: true };
+      }
+      done += 1;
+      await this.refreshScreens(scope, row.row.paymentId);
+    }
+    return { done, budgetExhausted: false };
+  }
+
+  private async processCardChange(
+    scope: TenantContext,
+    actor: ActorContext,
+    cards: GatewayCardTransferRepository,
+    claimed: ClaimedCardTransferRow<GatewayCardChangeRecord>,
+  ): Promise<'DONE' | 'BUDGET'> {
+    const change = claimed.row;
+    const now = this.deps.clock.now();
+    const decide = async (
+      to: 'APPLIED' | 'REFUSED' | 'RATE_LIMITED' | 'UNKNOWN',
+      code: string | null,
+      extra?: (tx: TransactionScope) => Promise<void>,
+    ): Promise<void> => {
+      await this.deps.uow.run(scope, async (tx) => {
+        const moved = await cards.decideCardChange(
+          scope,
+          change.id,
+          to,
+          code,
+          this.deps.clock.now(),
+          tx,
+        );
+        if (!moved) return;
+        if (extra !== undefined) await extra(tx);
+        await this.deps.audit.record(
+          scope,
+          actor,
+          {
+            action:
+              to === 'APPLIED'
+                ? 'gateway_invoice.card_change_applied'
+                : to === 'UNKNOWN'
+                  ? 'gateway_invoice.card_change_unknown'
+                  : 'gateway_invoice.card_change_refused',
+            entityType: 'Payment',
+            entityId: change.paymentId,
+            before: { cardChangeId: change.id, state: change.state },
+            // Ids, states and codes only: never a card number or a card name.
+            after: { cardChangeId: change.id, state: to, reason: code },
+            result: 'SUCCESS',
+          },
+          tx,
+        );
+      });
+    };
+
+    /*
+     * TPTG-04: a request whose send was stamped and never answered — a worker died mid-call,
+     * or its lease ran out. The provider may have changed the card: UNKNOWN, never re-sent,
+     * and the current card is HIDDEN (it may have been retired).
+     */
+    if (change.sentAt !== null) {
+      await decide('UNKNOWN', 'nexa.send_interrupted', (tx) =>
+        this.cardUnknown(scope, change.paymentId, 'nexa.send_interrupted', tx),
+      );
+      return 'DONE';
+    }
+    const invoice = await this.deps.invoices.findByPayment(scope, change.paymentId);
+    const customerWindowOpen =
+      claimed.paymentState === 'PENDING' &&
+      claimed.paymentReviewUntil === null &&
+      claimed.paymentExpiresAt !== null &&
+      now.getTime() < claimed.paymentExpiresAt.getTime();
+    if (
+      !customerWindowOpen ||
+      invoice === null ||
+      invoice.creationState !== 'CREATED' ||
+      invoice.providerInvoiceId === null
+    ) {
+      await decide('REFUSED', 'nexa.attempt_closed');
+      return 'DONE';
+    }
+    const adapter = this.deps.cardAdapters?.(invoice.provider) ?? null;
+    const apiKey =
+      adapter === null ? null : await this.deps.credentials.read(scope, invoice.provider);
+    if (adapter === null || apiKey === null) {
+      await decide('REFUSED', 'nexa.credential_missing');
+      await this.misconfigured(scope, invoice, 'nexa.credential_missing');
+      return 'DONE';
+    }
+    if (!(await this.deps.budget.take(scope, invoice.provider, adapter.callBudgetPerMinute, now))) {
+      return 'BUDGET';
+    }
+    const stamped = await this.deps.uow.run(scope, (tx) =>
+      cards.markCardChangeSent(scope, change.id, now, tx),
+    );
+    if (!stamped) return 'DONE';
+    const outcome = await adapter.changeCard(apiKey, invoice.providerInvoiceId);
+    const at = this.deps.clock.now();
+    this.deps.logger.info(
+      {
+        paymentId: change.paymentId,
+        provider: invoice.provider,
+        outcome: outcome.kind,
+        reason: outcome.kind === 'CHANGED' ? null : outcome.code,
+      },
+      'gateway card change answered',
+    );
+    switch (outcome.kind) {
+      case 'CHANGED':
+        await decide('APPLIED', null, async (tx) => {
+          await this.deps.invoices.applyCard(
+            scope,
+            change.paymentId,
+            outcome.instructions,
+            'CHANGE_CARD',
+            outcome.policy,
+            at,
+            tx,
+          );
+        });
+        await this.configured(scope, invoice.provider);
+        return 'DONE';
+      case 'RATE_LIMITED':
+        // Not processed: the current card stays, and the customer may tap again.
+        await decide('RATE_LIMITED', outcome.code);
+        return 'DONE';
+      case 'REFUSED':
+        await decide('REFUSED', outcome.code);
+        if (outcome.configuration) await this.misconfigured(scope, invoice, outcome.code);
+        return 'DONE';
+      case 'NOT_FOUND':
+        await decide('REFUSED', outcome.code);
+        await this.identityMismatch(scope, invoice, 'INQUIRY');
+        return 'DONE';
+      case 'UNKNOWN':
+        await decide('UNKNOWN', outcome.code, (tx) =>
+          this.cardUnknown(scope, change.paymentId, outcome.code, tx),
+        );
+        return 'DONE';
+    }
+  }
+
+  /** A card change whose answer was lost: the card is hidden and the operator told. */
+  private async cardUnknown(
+    scope: TenantContext,
+    paymentId: PaymentId,
+    reason: string,
+    tx: TransactionScope,
+  ): Promise<void> {
+    await this.deps.invoices.hideCard(scope, paymentId, this.deps.clock.now(), tx);
+    await this.deps.opsLog.record(
+      scope,
+      {
+        code: GATEWAY_CARD_CHANGE_UNKNOWN_CODE,
+        severity: 'WARN',
+        message:
+          'A payment gateway’s answer to a card change was lost. The previous card is no ' +
+          'longer shown to the customer, and the request is never sent again.',
+        dedupeKey: `${GATEWAY_CARD_CHANGE_UNKNOWN_CODE}:${paymentId}`,
+        context: { paymentId, reason },
+      },
+      tx,
+    );
+  }
+
+  /** The receipt lane (§8.3). */
+  private async runReceipts(
+    scope: TenantContext,
+    actor: ActorContext,
+  ): Promise<{ readonly done: number; readonly budgetExhausted: boolean }> {
+    const cards = this.deps.cardTransfer;
+    if (cards === undefined) return { done: 0, budgetExhausted: false };
+    const now = this.deps.clock.now();
+    const lease = new Date(now.getTime() + GATEWAY_CLAIM_LEASE_MS);
+    const claimed = await this.deps.uow.run(scope, (tx) =>
+      cards.claimSubmissions(scope, now, GATEWAY_CLAIM_LEASE_MS, GATEWAY_RECEIPT_BATCH, tx),
+    );
+    let done = 0;
+    for (const [index, row] of claimed.entries()) {
+      const result = await this.processReceipt(scope, actor, cards, row);
+      if (result === 'BUDGET') {
+        await this.deps.uow.run(scope, (tx) =>
+          cards.releaseSubmissionClaims(
+            scope,
+            claimed.slice(index).map((one) => one.row.id),
+            lease,
+            tx,
+          ),
+        );
+        return { done, budgetExhausted: true };
+      }
+      done += 1;
+      await this.refreshScreens(scope, row.row.paymentId);
+    }
+    return { done, budgetExhausted: false };
+  }
+
+  private async processReceipt(
+    scope: TenantContext,
+    actor: ActorContext,
+    cards: GatewayCardTransferRepository,
+    claimed: ClaimedCardTransferRow<GatewayReceiptSubmissionRecord>,
+  ): Promise<'DONE' | 'BUDGET'> {
+    const submission = claimed.row;
+    const decide = async (
+      to: 'ACCEPTED' | 'REFUSED' | 'UNKNOWN' | 'ABANDONED',
+      facts: {
+        readonly errorCode: string | null;
+        readonly providerStatus?: string | null;
+        readonly receiptReceived?: boolean | null;
+      },
+      extra?: (tx: TransactionScope) => Promise<void>,
+    ): Promise<boolean> =>
+      this.deps.uow.run(scope, async (tx) => {
+        const moved = await cards.decideSubmission(
+          scope,
+          submission.id,
+          to,
+          {
+            errorCode: facts.errorCode,
+            providerStatus: facts.providerStatus ?? null,
+            receiptReceived: facts.receiptReceived ?? null,
+          },
+          this.deps.clock.now(),
+          tx,
+        );
+        if (!moved) return false;
+        if (extra !== undefined) await extra(tx);
+        await this.deps.audit.record(
+          scope,
+          actor,
+          {
+            action: `gateway_receipt.${to.toLowerCase()}`,
+            entityType: 'Payment',
+            entityId: submission.paymentId,
+            before: { submissionId: submission.id, state: submission.state },
+            // Ids, states and codes only: no file id, caption, bytes or card (TPTG-21).
+            after: {
+              submissionId: submission.id,
+              state: to,
+              reason: facts.errorCode,
+              providerStatus: facts.providerStatus ?? null,
+              receiptReceived: facts.receiptReceived ?? null,
+            },
+            result: 'SUCCESS',
+          },
+          tx,
+        );
+        return true;
+      });
+    const lost = async (code: string): Promise<void> => {
+      await decide('UNKNOWN', { errorCode: code }, async (tx) => {
+        await this.deps.opsLog.record(
+          scope,
+          {
+            code: GATEWAY_RECEIPT_UNKNOWN_CODE,
+            severity: 'WARN',
+            message:
+              'A payment gateway’s answer to a receipt upload was lost. It is never uploaded ' +
+              'again; the next inquiry is brought forward, and the deadline still stands.',
+            dedupeKey: `${GATEWAY_RECEIPT_UNKNOWN_CODE}:${submission.paymentId}`,
+            context: { paymentId: submission.paymentId, reason: code },
+          },
+          tx,
+        );
+        // Bring the inquiry forward: only it may say what became of the upload.
+        await this.deps.invoices.requestInquiry(
+          scope,
+          submission.paymentId,
+          this.deps.clock.now(),
+          tx,
+        );
+      });
+    };
+
+    /*
+     * TPTG-05: an upload whose send was stamped and never answered. TonPays documents no
+     * receipt idempotency, so it is UNKNOWN and NEVER uploaded again (`OQ-TPTG-08`).
+     */
+    if (submission.sentAt !== null) {
+      await lost('nexa.send_interrupted');
+      return 'DONE';
+    }
+    const windowOpen = (payment: {
+      readonly state: string;
+      readonly expiresAt: Date | null;
+      readonly reviewUntil: Date | null;
+    }): boolean =>
+      payment.state === 'PENDING' &&
+      payment.reviewUntil === null &&
+      payment.expiresAt !== null &&
+      this.deps.clock.now().getTime() < payment.expiresAt.getTime();
+    /*
+     * TPTG-33: once the customer window has closed nothing is uploaded — a receipt sent
+     * after the deadline could not open a review, and must never reopen an expired payment.
+     */
+    if (
+      !windowOpen({
+        state: claimed.paymentState,
+        expiresAt: claimed.paymentExpiresAt,
+        reviewUntil: claimed.paymentReviewUntil,
+      })
+    ) {
+      await decide('ABANDONED', { errorCode: 'nexa.deadline_passed' });
+      return 'DONE';
+    }
+    const invoice = await this.deps.invoices.findByPayment(scope, submission.paymentId);
+    if (
+      invoice === null ||
+      invoice.creationState !== 'CREATED' ||
+      invoice.providerInvoiceId !== submission.providerInvoiceId ||
+      invoice.botInstanceId !== submission.botInstanceId
+    ) {
+      await decide('ABANDONED', { errorCode: 'nexa.identity_mismatch' });
+      return 'DONE';
+    }
+    const adapter = this.deps.cardAdapters?.(invoice.provider) ?? null;
+    const apiKey =
+      adapter === null ? null : await this.deps.credentials.read(scope, invoice.provider);
+    if (adapter === null || apiKey === null || this.deps.receiptFiles === undefined) {
+      await decide('ABANDONED', { errorCode: 'nexa.credential_missing' });
+      if (adapter === null || apiKey === null) {
+        await this.misconfigured(scope, invoice, 'nexa.credential_missing');
+      }
+      return 'DONE';
+    }
+    // The bytes, with the token of the bot the photo was sent to, bounded while streaming.
+    const file = await this.deps.receiptFiles.download(
+      scope,
+      { botInstanceId: submission.botInstanceId, fileId: submission.telegramFileId },
+      { maxBytes: adapter.receiptMaxBytes },
+    );
+    if (file.outcome !== 'SUCCEEDED') {
+      await decide('ABANDONED', { errorCode: 'nexa.file_unavailable' });
+      return 'DONE';
+    }
+    const mimeType = sniffReceiptImage(file.bytes);
+    if (mimeType === null) {
+      await decide('ABANDONED', { errorCode: 'nexa.not_an_image' });
+      return 'DONE';
+    }
+    if (file.bytes.byteLength > adapter.receiptMaxBytes) {
+      await decide('ABANDONED', { errorCode: 'nexa.receipt_too_large' });
+      return 'DONE';
+    }
+    const now = this.deps.clock.now();
+    if (!(await this.deps.budget.take(scope, invoice.provider, adapter.callBudgetPerMinute, now))) {
+      return 'BUDGET';
+    }
+    // Re-read the payment: the window may have closed while the file was fetched.
+    const payment = await this.deps.paymentRecords.findById(scope, submission.paymentId);
+    if (
+      payment === null ||
+      !windowOpen({
+        state: payment.state,
+        expiresAt: payment.expiresAt,
+        reviewUntil: payment.providerReviewUntil,
+      })
+    ) {
+      await decide('ABANDONED', { errorCode: 'nexa.deadline_passed' });
+      return 'DONE';
+    }
+    const stamped = await this.deps.uow.run(scope, (tx) =>
+      cards.markSubmissionSending(scope, submission.id, file.bytes.byteLength, now, tx),
+    );
+    if (!stamped) return 'DONE';
+    const outcome = await adapter.uploadReceipt(apiKey, invoice.providerInvoiceId, {
+      bytes: file.bytes,
+      mimeType,
+      fileName: mimeType === 'image/png' ? 'receipt.png' : 'receipt.jpg',
+    });
+    // The clock AFTER the answer: the earliest moment Nexa knows (§9.6.3 c).
+    const at = this.deps.clock.now();
+    this.deps.logger.info(
+      {
+        paymentId: submission.paymentId,
+        provider: invoice.provider,
+        outcome: outcome.kind,
+        reason: outcome.kind === 'ACCEPTED' ? null : outcome.code,
+      },
+      'gateway receipt upload answered',
+    );
+    switch (outcome.kind) {
+      case 'ACCEPTED': {
+        const facts = {
+          errorCode: null,
+          providerStatus: outcome.status,
+          receiptReceived:
+            typeof outcome.receiptReceived === 'boolean' ? outcome.receiptReceived : null,
+        };
+        if (receiptAcknowledged(outcome)) {
+          /*
+           * The ONE thing that may open the 24-hour review: decided under the payment's lock,
+           * strictly before its deadline, written once. The submission is decided in that
+           * same transaction. Should it not run (the scope stopped), nothing is written and
+           * the submission is reclaimed with its stamp set — UNKNOWN, and the 70-minute rule
+           * stands. That is the conservative failure.
+           */
+          try {
+            await this.deps.payments.recordProviderReview(scope, actor, submission.paymentId, {
+              submissionId: submission.id,
+              acknowledgedAt: at,
+              providerStatus: outcome.status,
+              receiptReceived: facts.receiptReceived,
+            });
+          } catch (error: unknown) {
+            this.deps.logger.error(
+              {
+                paymentId: submission.paymentId,
+                error: error instanceof Error ? error.name : 'unknown',
+              },
+              'a provider acknowledgement could not be recorded',
+            );
+            return 'DONE';
+          }
+        }
+        // Not acknowledged, or acknowledged too late: recorded, and nothing extends. An
+        // acknowledged one was decided in the review's own transaction above.
+        await decide('ACCEPTED', facts);
+        // Either way the next inquiry is brought forward: only it can approve.
+        await this.deps.uow.run(scope, (tx) =>
+          this.deps.invoices.requestInquiry(scope, submission.paymentId, at, tx),
+        );
+        await this.configured(scope, invoice.provider);
+        return 'DONE';
+      }
+      case 'RATE_LIMITED': {
+        // Definitely not processed (a 4xx): the same photo is queued again, bounded.
+        if (submission.attempts + 1 < TONPAYS_TELEGRAM_RECEIPT_MAX_ATTEMPTS) {
+          await this.deps.uow.run(scope, (tx) =>
+            cards.requeueSubmission(
+              scope,
+              submission.id,
+              outcome.code,
+              new Date(at.getTime() + RECEIPT_RATE_LIMIT_RETRY_MS),
+              at,
+              tx,
+            ),
+          );
+        } else {
+          await decide('ABANDONED', { errorCode: outcome.code });
+        }
+        return 'DONE';
+      }
+      case 'REFUSED':
+        await decide('REFUSED', { errorCode: outcome.code });
+        if (outcome.configuration) await this.misconfigured(scope, invoice, outcome.code);
+        return 'DONE';
+      case 'NOT_FOUND':
+        await decide('REFUSED', { errorCode: outcome.code });
+        await this.identityMismatch(scope, invoice, 'INQUIRY');
+        return 'DONE';
+      case 'UNKNOWN':
+        await lost(outcome.code);
+        return 'DONE';
+    }
   }
 
   // ---------------------------------------------------------------------------------------
@@ -959,10 +1665,10 @@ export class GatewayPaymentService {
     if (payment === null) return 'IGNORED_UNKNOWN';
 
     const now = this.deps.clock.now();
+    // The effective deadline (§9.6.3 d, §9.6.5): a webhook never opens, extends or ends a review.
+    const deadline = gatewaySettlementDeadline(payment);
     const eligible =
-      payment.state === 'PENDING' &&
-      payment.expiresAt !== null &&
-      now.getTime() < payment.expiresAt.getTime();
+      payment.state === 'PENDING' && deadline !== null && now.getTime() < deadline.getTime();
     const earliest =
       invoice.lastInquiryAt === null
         ? now
@@ -1047,23 +1753,27 @@ export class GatewayPaymentService {
    */
   async requestCheck(scope: TenantContext, view: GatewayAttemptView): Promise<void> {
     const now = this.deps.clock.now();
+    const deadline = gatewaySettlementDeadline(view.payment);
     if (
       // A provider that pushes its payments (Stars) has nothing to ask: the tap only
       // re-reads the attempt's state, which the caller renders.
       PAYMENT_GATEWAY_DESCRIPTORS[view.invoice.provider].approval !== 'INQUIRY' ||
       view.payment.state !== 'PENDING' ||
-      view.payment.expiresAt === null ||
-      now.getTime() >= view.payment.expiresAt.getTime() ||
+      deadline === null ||
+      now.getTime() >= deadline.getTime() ||
       view.invoice.creationState !== 'CREATED'
     ) {
       return;
     }
+    // In review a customer cannot spend the budget: a minute apart (§9.6.5).
+    const spacing =
+      view.payment.providerReviewUntil === null
+        ? INQUIRY_MIN_SPACING_MS
+        : TONPAYS_TELEGRAM_REVIEW_CHECK_SPACING_MS;
     const at =
       view.invoice.lastInquiryAt === null
         ? now
-        : new Date(
-            Math.max(now.getTime(), view.invoice.lastInquiryAt.getTime() + INQUIRY_MIN_SPACING_MS),
-          );
+        : new Date(Math.max(now.getTime(), view.invoice.lastInquiryAt.getTime() + spacing));
     await this.deps.uow.run(scope, (tx) =>
       this.deps.invoices.requestInquiry(scope, view.payment.id, at, tx),
     );

@@ -1280,6 +1280,7 @@ describe('TonPays, through the one settlement path', () => {
       const flaky = laneWith(tonpays, {
         payments: {
           confirmGatewayPayment: (...args) => ctx.container.payments.confirmGatewayPayment(...args),
+          recordProviderReview: (...args) => ctx.container.payments.recordProviderReview(...args),
           failGatewayPayment: (...args) => {
             if (refusals > 0) {
               refusals -= 1;

@@ -3,6 +3,7 @@ import {
   COMMERCE_ERROR_CODES,
   MAX_MONEY_AMOUNT_MINOR,
   PAYMENT_GATEWAY_DESCRIPTORS,
+  TONPAYS_TELEGRAM_REVIEW_WINDOW_MS,
   PAYMENT_RECEIPT_MAX_PER_PAYMENT,
   PAYMENT_WINDOW_MINUTES_MIN,
   orderPurposeCreatesNewService,
@@ -73,6 +74,7 @@ import type { OfferedGateway, PaymentGatewayService } from './payment-gateway.se
 import type { PaymentReceiptRepository, ReceiptCaptureRepository } from './receipt-ports.js';
 import type {
   ExternalGatewayAdapter,
+  GatewayCardTransferRepository,
   GatewayCredentialStore,
   GatewayInvoiceFxSnapshot,
   GatewayInvoiceRecord,
@@ -89,7 +91,11 @@ import type { UndeliverableOrderRefunder } from '../../orders/application/undeli
 import type { CustomerRepository } from '../../customers/application/ports.js';
 import type { WalletRepository } from '../../wallet/application/ports.js';
 import { canCover, shortfallMinor } from '../../wallet/domain/balance.js';
-import { settlementRefusal } from '../domain/settlement.js';
+import { gatewaySettlementDeadline, settlementRefusal } from '../domain/settlement.js';
+import {
+  GATEWAY_REVIEW_RECONCILED_CODE,
+  GATEWAY_REVIEW_UNRESOLVED_CODE,
+} from './gateway-payment.service.js';
 import type {
   PaymentCursor,
   PaymentCustomerFee,
@@ -263,7 +269,15 @@ export interface PaymentServiceDeps {
    */
   readonly gatewayInvoices: Pick<
     GatewayInvoiceRepository,
-    'open' | 'findOpenAttempt' | 'findByPayment'
+    'open' | 'findOpenAttempt' | 'findByPayment' | 'requestReconcileInquiry'
+  >;
+  /**
+   * TonPays Telegram (§9.6.3 c): the two rows the acknowledgement's own transaction also
+   * writes — the submission that opened the review, and the capture windows it closes.
+   */
+  readonly cardTransfer: Pick<
+    GatewayCardTransferRepository,
+    'decideSubmission' | 'markOpenedReview' | 'closeCapturesForPayment'
   >;
   /**
    * The adapter for a provider, or null for a route that is not an external gateway.
@@ -331,6 +345,20 @@ export type GatewayConfirmation =
 const GATEWAY_REQUEST_ACTION = 'payment.gateway_request';
 const GATEWAY_CONFIRM_ACTION = 'payment.gateway_confirm';
 const GATEWAY_FAIL_ACTION = 'payment.gateway_fail';
+/** TonPays Telegram (§9.4): the review window and the reconciliation of an UNKNOWN payment. */
+const PROVIDER_REVIEW_ACTION = 'payment.provider_review_started';
+const RECONCILE_CONFIRM_ACTION = 'payment.reconcile_confirmed';
+const RECONCILE_FAIL_ACTION = 'payment.reconcile_failed';
+const RECONCILE_INQUIRY_ACTION = 'gateway_invoice.reconcile_inquiry_requested';
+
+/** What reconciling an UNKNOWN gateway payment acts under (OQ-TPTG-19). */
+export const PAYMENT_RECONCILE_PERMISSION: PermissionKey = 'payments.reconcile';
+
+/** An operator's "ask the provider again" is spaced at least this far apart. */
+const RECONCILE_INQUIRY_SPACING_MS = 60_000;
+
+/** The provider statuses a recorded inquiry must show for each reconciliation (§9.6.4). */
+const RECONCILE_FAILED_STATUSES: readonly string[] = ['rejected', 'expired', 'canceled'];
 
 /**
  * What a customer's payment command carries. An ORDER ID AND NOTHING ELSE.
@@ -763,6 +791,18 @@ export class PaymentService {
           throw errors.conflict(
             COMMERCE_ERROR_CODES.PAYMENT_CHECKOUT_IN_PROGRESS,
             'A Telegram Stars payment for this order is being completed.',
+          );
+        }
+        /*
+         * And a payment in a provider review, or one whose review lapsed UNKNOWN (TonPays
+         * Telegram, §9.6.3 f): the customer has very probably sent that money. Debiting the
+         * wallet as well would be two payments for one order. `cancelPendingForOrder` above
+         * left such a row behind; refused, and the withdrawals roll back with it.
+         */
+        if (await this.deps.repository.hasProviderReviewOrUnknownForOrder(scope, orderId, tx)) {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.ORDER_TRANSFER_UNDER_REVIEW,
+            'A payment for this order is being reviewed by the gateway.',
           );
         }
 
@@ -2249,13 +2289,23 @@ export class PaymentService {
     payment: PaymentRecord,
     confirmation: {
       readonly evidenceKind:
-        'WALLET_DEBIT' | 'OPERATOR_REVIEW' | 'GATEWAY_INQUIRY' | 'GATEWAY_CALLBACK';
+        | 'WALLET_DEBIT'
+        | 'OPERATOR_REVIEW'
+        | 'GATEWAY_INQUIRY'
+        | 'GATEWAY_CALLBACK'
+        | 'RECONCILIATION';
       readonly evidenceNote: string | null;
       readonly confirmedByAdminId: string | null;
       readonly confirmedAt: Date;
     },
     now: Date,
     action: string,
+    /**
+     * The state the confirmation leaves (§9.6.4): `PENDING` for every rail, `UNKNOWN` only
+     * for an operator's reconciliation of a gateway payment whose review lapsed. The SAME
+     * body either way — one settlement path, one credit, one set of ledger indexes.
+     */
+    from: 'PENDING' | 'UNKNOWN' = 'PENDING',
   ): Promise<PaymentRecord> {
     const selling = await this.sellingCurrency(scope, tx);
     if (payment.amount.currency !== selling) {
@@ -2265,7 +2315,10 @@ export class PaymentService {
       );
     }
 
-    const moved = await this.deps.repository.confirm(scope, payment.id, confirmation, now, tx);
+    const moved =
+      from === 'UNKNOWN'
+        ? await this.deps.repository.reconcileConfirm(scope, payment.id, confirmation, now, tx)
+        : await this.deps.repository.confirm(scope, payment.id, confirmation, now, tx);
     if (!moved) {
       /*
        * Somebody else moved the row out of PENDING first — and WHICH way decides whether
@@ -2867,6 +2920,17 @@ export class PaymentService {
         }
 
         /*
+         * Nor a payment whose receipt a provider is reviewing (TonPays Telegram, §9.6.3 f):
+         * read from the row held FOR UPDATE, the lock the acknowledgement is recorded under.
+         */
+        if (payment.providerReviewUntil !== null) {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.ORDER_TRANSFER_UNDER_REVIEW,
+            'The gateway is reviewing a receipt for this payment.',
+          );
+        }
+
+        /*
          * A transfer the customer sent a RECEIPT for is not theirs to withdraw (Payment
          * File 02 §9, D1). The receipt has no timer and leaves review only through a
          * reviewer's approve, reject or credit — a withdrawal would be a fourth way out
@@ -3421,10 +3485,15 @@ export class PaymentService {
           return { outcome: 'NOT_ELIGIBLE', reason: 'PAYMENT_NOT_PENDING', payment };
         }
         /*
-         * The attempt's own deadline, hard, with no grace (brief §3). `expires_at` is
-         * always set on a gateway payment; a null is treated as past, never as "none".
+         * The attempt's own deadline, hard, with no grace (brief §3) — its EFFECTIVE one
+         * (§9.6.3 d): the provider review deadline once a provider acknowledged the
+         * receipt under this same lock, `expires_at` otherwise. Read from the row held FOR
+         * UPDATE, so the deadline and the state are judged together whatever the caller
+         * believed. A null is treated as past, never as "none". An approval at or after it
+         * is DEADLINE_PASSED, which the lane records as LATE_COMPLETION.
          */
-        if (payment.expiresAt === null || now.getTime() >= payment.expiresAt.getTime()) {
+        const deadline = gatewaySettlementDeadline(payment);
+        if (deadline === null || now.getTime() >= deadline.getTime()) {
           return { outcome: 'NOT_ELIGIBLE', reason: 'DEADLINE_PASSED', payment };
         }
         /*
@@ -3576,6 +3645,416 @@ export class PaymentService {
     );
   }
 
+  // ---------------------------------------------------------------------------------------
+  // TonPays Telegram — the provider review window (owner decision of 2026-10-01) and the
+  // reconciliation of a payment whose review lapsed (`docs/tonpays-telegram-gateway-audit.md`
+  // §9.6). None of these settles on a provider's word: the review moves no money, and a
+  // reconciliation is decided from the provider's RECORDED inquiry, never an operator's
+  // recollection, through the one settlement path.
+  // ---------------------------------------------------------------------------------------
+
+  /**
+   * Records a provider's ACKNOWLEDGEMENT of the customer's receipt (§9.6.3 c), opening the
+   * 24-hour review window from `acknowledgedAt`. Called by the gateway lane as `SYSTEM_JOB`
+   * after the upload answer, only when `receiptAcknowledged` said so.
+   *
+   * Under the payment's lock, FIRST, and refused with no write unless the payment is a
+   * PENDING GATEWAY payment of a route that reviews, with `acknowledgedAt` strictly before
+   * its own deadline — the interval is half-open, so an acknowledgement at exactly minute 70
+   * opens nothing, and one after it never reopens an expired payment. The UPDATE is
+   * conditional and there is no setter: a repeated acknowledgement moves nothing. The CHECK
+   * and the guard trigger refuse the same things for any writer that forgets. In the same
+   * transaction: the submission is marked as the one that opened the review, the capture
+   * windows close, and the audit row records ids and the two times — never a file, a
+   * caption or a card. Returns whether a review opened.
+   */
+  async recordProviderReview(
+    scope: TenantContext,
+    actor: ActorContext,
+    id: string,
+    input: {
+      readonly submissionId: string;
+      readonly acknowledgedAt: Date;
+      /** What the upload answer said — metadata recorded on the submission, never approval. */
+      readonly providerStatus: string | null;
+      readonly receiptReceived: boolean | null;
+    },
+  ): Promise<boolean> {
+    const paymentId = this.paymentId(id);
+    const denial = { action: PROVIDER_REVIEW_ACTION, entityType: 'Payment', entityId: paymentId };
+    await this.authorize(scope, actor, PAYMENT_PLACE_PERMISSION, denial);
+    const now = this.deps.clock.now();
+    return runAuthorizedMutation(
+      this.mutationDeps(),
+      scope,
+      actor,
+      PAYMENT_PLACE_PERMISSION,
+      denial,
+      async (tx) => {
+        await this.assertScopeActive(scope, tx);
+        const payment = await this.deps.repository.findByIdForUpdate(scope, paymentId, tx);
+        // The upload is answered either way; the submission records it in this transaction.
+        await this.deps.cardTransfer.decideSubmission(
+          scope,
+          input.submissionId,
+          'ACCEPTED',
+          {
+            errorCode: null,
+            providerStatus: input.providerStatus,
+            receiptReceived: input.receiptReceived,
+          },
+          now,
+          tx,
+        );
+        if (
+          payment === null ||
+          payment.method !== 'GATEWAY' ||
+          payment.gatewayProvider === null ||
+          !PAYMENT_GATEWAY_DESCRIPTORS[payment.gatewayProvider].providerReview ||
+          payment.state !== 'PENDING' ||
+          payment.expiresAt === null ||
+          input.acknowledgedAt.getTime() >= payment.expiresAt.getTime()
+        ) {
+          return false;
+        }
+        const reviewUntil = new Date(
+          input.acknowledgedAt.getTime() + TONPAYS_TELEGRAM_REVIEW_WINDOW_MS,
+        );
+        const opened = await this.deps.repository.recordProviderReview(
+          scope,
+          paymentId,
+          { acknowledgedAt: input.acknowledgedAt, reviewUntil },
+          now,
+          tx,
+        );
+        if (!opened) return false;
+        await this.deps.cardTransfer.markOpenedReview(scope, input.submissionId, tx);
+        await this.deps.cardTransfer.closeCapturesForPayment(
+          scope,
+          paymentId,
+          'PAYMENT_CLOSED',
+          now,
+          tx,
+        );
+        await this.deps.audit.record(
+          scope,
+          actor,
+          {
+            action: PROVIDER_REVIEW_ACTION,
+            entityType: 'Payment',
+            entityId: paymentId,
+            before: { state: 'PENDING', providerReviewUntil: null },
+            after: {
+              state: 'PENDING',
+              gatewayProvider: payment.gatewayProvider,
+              submissionId: input.submissionId,
+              providerReviewStartedAt: input.acknowledgedAt.toISOString(),
+              providerReviewUntil: reviewUntil.toISOString(),
+              expiresAt: payment.expiresAt.toISOString(),
+            },
+            result: 'SUCCESS',
+          },
+          tx,
+        );
+        return true;
+      },
+    );
+  }
+
+  /**
+   * An operator resolving an UNKNOWN gateway payment (§9.6.4), under `payments.reconcile`.
+   *
+   * Under the payment's lock it requires `UNKNOWN` — the only state `RECONCILE_*` leave —
+   * and the `reconciliationEvidenceRecorded` guard from the RECORDED inquiry on the invoice:
+   * `CONFIRMED` only when the provider's last identity-verified inquiry said `completed`
+   * with `paid === true`; `FAILED` only when it said `rejected`, `expired` or `canceled`.
+   * Anything else is refused and the payment stays UNKNOWN.
+   *
+   * `CONFIRMED` goes through the SAME settlement body every rail uses, from `UNKNOWN`,
+   * with evidence `RECONCILIATION` and the operator as the confirming administrator; an
+   * order no longer awaiting payment is refused (it stays UNKNOWN). `FAILED` is the
+   * conditional `UNKNOWN -> FAILED` with the operator as the resolver, the customer told
+   * `GATEWAY_PAYMENT_FAILED`, and `PaymentFailed` in the outbox. Both conditional, so a
+   * double click moves once, and both close the payment's open operational condition.
+   */
+  async reconcileGatewayPayment(
+    scope: TenantContext,
+    actor: ActorContext,
+    id: string,
+    input: {
+      readonly to: 'CONFIRMED' | 'FAILED';
+      readonly note: string | null;
+      readonly idempotencyKey: string;
+    },
+  ): Promise<PaymentRecord> {
+    const paymentId = this.paymentId(id);
+    const action = input.to === 'CONFIRMED' ? RECONCILE_CONFIRM_ACTION : RECONCILE_FAIL_ACTION;
+    const denial = { action, entityType: 'Payment', entityId: paymentId };
+    await this.authorize(scope, actor, PAYMENT_RECONCILE_PERMISSION, denial);
+    const note = input.note === null ? null : input.note.trim().slice(0, 500) || null;
+    const requestHash = hashRequest({ paymentId, decision: `RECONCILE_${input.to}`, note });
+    const replayed = await this.deps.idempotency.find<{ paymentId: string }>(
+      scope,
+      OPERATOR_NAMESPACE,
+      input.idempotencyKey,
+      requestHash,
+    );
+    if (replayed !== null) {
+      const existing = await this.deps.repository.findById(scope, paymentId);
+      if (existing !== null) return existing;
+    }
+    const now = this.deps.clock.now();
+
+    return runAuthorizedMutation(
+      this.mutationDeps(),
+      scope,
+      actor,
+      PAYMENT_RECONCILE_PERMISSION,
+      denial,
+      async (tx) => {
+        await this.assertScopeActive(scope, tx);
+        const payment = await this.deps.repository.findByIdForUpdate(scope, paymentId, tx);
+        if (payment === null || payment.method !== 'GATEWAY') {
+          throw errors.notFound(COMMERCE_ERROR_CODES.PAYMENT_NOT_FOUND, 'Unknown payment.');
+        }
+        if (payment.state !== 'UNKNOWN') {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.PAYMENT_STATE_INVALID,
+            'Only a payment whose outcome is unknown can be reconciled.',
+            { state: payment.state },
+          );
+        }
+        const invoice = await this.deps.gatewayInvoices.findByPayment(scope, paymentId, tx);
+        const status = invoice?.providerStatus ?? null;
+        const evidenceAllows =
+          input.to === 'CONFIRMED'
+            ? status === 'completed' && invoice?.providerPaid === true
+            : status !== null && RECONCILE_FAILED_STATUSES.includes(status);
+        if (invoice === null || !evidenceAllows) {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.PAYMENT_STATE_INVALID,
+            'The gateway’s recorded answer does not support that resolution.',
+            { reason: 'RECONCILIATION_EVIDENCE_MISSING', providerStatus: status },
+          );
+        }
+        const provider = (payment.gatewayProvider ?? invoice.provider).toLowerCase();
+        let result: PaymentRecord;
+        if (input.to === 'CONFIRMED') {
+          const confirmation = {
+            evidenceKind: 'RECONCILIATION' as const,
+            evidenceNote: `${provider}:${status}:paid`,
+            confirmedByAdminId: adminIdOf(actor),
+            confirmedAt: now,
+          };
+          if (payment.orderId === null) {
+            result = await this.confirmAndCredit(
+              scope,
+              actor,
+              tx,
+              payment,
+              confirmation,
+              now,
+              action,
+              'UNKNOWN',
+            );
+          } else {
+            const order = await this.deps.orders.findById(scope, payment.orderId, tx);
+            if (
+              order === null ||
+              order.customerId !== payment.customerId ||
+              order.state !== 'AWAITING_PAYMENT'
+            ) {
+              // Money for an order already paid or closed: never a second settlement.
+              throw errors.conflict(
+                COMMERCE_ERROR_CODES.PAYMENT_STATE_INVALID,
+                'This payment’s order is no longer awaiting payment.',
+                { reason: 'ORDER_NOT_AWAITING_PAYMENT' },
+              );
+            }
+            result = (
+              await this.confirmAndSettle(
+                scope,
+                actor,
+                tx,
+                payment,
+                order,
+                confirmation,
+                now,
+                action,
+                undefined,
+                'UNKNOWN',
+              )
+            ).payment;
+          }
+        } else {
+          const moved = await this.deps.repository.reconcileFail(
+            scope,
+            paymentId,
+            {
+              resolvedByAdminId: adminIdOf(actor),
+              resolutionNote: `${provider}:${status ?? 'unknown'}`.slice(0, 120),
+              resolvedAt: now,
+            },
+            now,
+            tx,
+          );
+          if (!moved) {
+            throw errors.conflict(
+              COMMERCE_ERROR_CODES.PAYMENT_STATE_INVALID,
+              'This payment was already resolved.',
+            );
+          }
+          await this.deps.notifier.notify(
+            scope,
+            payment.customerId,
+            'GATEWAY_PAYMENT_FAILED',
+            paymentId,
+            now,
+            tx,
+          );
+          await this.deps.outbox.write(tx, actor, {
+            eventType: 'PaymentFailed',
+            aggregateType: 'Payment',
+            aggregateId: paymentId,
+            payload: {
+              customerId: payment.customerId,
+              orderId: payment.orderId,
+              method: payment.method,
+              cause: 'GATEWAY_FAILED',
+            },
+          });
+          const failed = await this.deps.repository.findById(scope, paymentId, tx);
+          if (failed === null) {
+            throw errors.notFound(COMMERCE_ERROR_CODES.PAYMENT_NOT_FOUND, 'Unknown payment.');
+          }
+          result = failed;
+        }
+        await this.deps.audit.record(
+          scope,
+          actor,
+          {
+            action,
+            entityType: 'Payment',
+            entityId: paymentId,
+            before: { state: 'UNKNOWN' },
+            after: {
+              state: result.state,
+              gatewayProvider: payment.gatewayProvider,
+              orderId: payment.orderId,
+              providerStatus: status,
+              providerPaid: invoice.providerPaid,
+              lastInquiryAt: invoice.lastInquiryAt?.toISOString() ?? null,
+              note,
+            },
+            result: 'SUCCESS',
+          },
+          tx,
+        );
+        const dedupeKey = `${GATEWAY_REVIEW_UNRESOLVED_CODE}:${paymentId}`;
+        await this.deps.opsLog.record(
+          scope,
+          {
+            code: GATEWAY_REVIEW_RECONCILED_CODE,
+            severity: 'INFO',
+            message: 'An operator reconciled a gateway payment whose outcome was unknown.',
+            context: { paymentId, provider: payment.gatewayProvider, to: result.state },
+            recoversCode: GATEWAY_REVIEW_UNRESOLVED_CODE,
+            recoversDedupeKey: dedupeKey,
+          },
+          tx,
+        );
+        await rememberOnce(
+          this.deps.idempotency,
+          scope,
+          OPERATOR_NAMESPACE,
+          input.idempotencyKey,
+          requestHash,
+          { paymentId },
+          tx,
+        );
+        return result;
+      },
+    );
+  }
+
+  /**
+   * "Ask the provider again" on an UNKNOWN gateway payment (§9.6.4): a DATABASE write only —
+   * the row is flagged and its next inquiry brought forward, spaced a minute apart; the
+   * worker asks under the ordinary budget, past `POST_DEADLINE_INQUIRY_MAX`. Whatever the
+   * answer, nothing settles or fails automatically: it is evidence for `reconcile`.
+   * Returns whether a request was recorded (false: one was made in the last minute).
+   */
+  async reinquireGatewayPayment(
+    scope: TenantContext,
+    actor: ActorContext,
+    id: string,
+    input: { readonly idempotencyKey: string },
+  ): Promise<boolean> {
+    const paymentId = this.paymentId(id);
+    const denial = { action: RECONCILE_INQUIRY_ACTION, entityType: 'Payment', entityId: paymentId };
+    await this.authorize(scope, actor, PAYMENT_RECONCILE_PERMISSION, denial);
+    const requestHash = hashRequest({ paymentId, decision: 'REINQUIRE' });
+    const replayed = await this.deps.idempotency.find<{ requested: boolean }>(
+      scope,
+      OPERATOR_NAMESPACE,
+      input.idempotencyKey,
+      requestHash,
+    );
+    if (replayed !== null) return replayed.result.requested;
+    const now = this.deps.clock.now();
+    return runAuthorizedMutation(
+      this.mutationDeps(),
+      scope,
+      actor,
+      PAYMENT_RECONCILE_PERMISSION,
+      denial,
+      async (tx) => {
+        await this.assertScopeActive(scope, tx);
+        const payment = await this.deps.repository.findByIdForUpdate(scope, paymentId, tx);
+        if (payment === null || payment.method !== 'GATEWAY') {
+          throw errors.notFound(COMMERCE_ERROR_CODES.PAYMENT_NOT_FOUND, 'Unknown payment.');
+        }
+        if (payment.state !== 'UNKNOWN') {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.PAYMENT_STATE_INVALID,
+            'Only a payment whose outcome is unknown can be asked about again.',
+            { state: payment.state },
+          );
+        }
+        const requested = await this.deps.gatewayInvoices.requestReconcileInquiry(
+          scope,
+          paymentId,
+          now,
+          RECONCILE_INQUIRY_SPACING_MS,
+          tx,
+        );
+        await this.deps.audit.record(
+          scope,
+          actor,
+          {
+            action: RECONCILE_INQUIRY_ACTION,
+            entityType: 'Payment',
+            entityId: paymentId,
+            before: null,
+            after: { gatewayProvider: payment.gatewayProvider, requested },
+            result: 'SUCCESS',
+          },
+          tx,
+        );
+        await rememberOnce(
+          this.deps.idempotency,
+          scope,
+          OPERATOR_NAMESPACE,
+          input.idempotencyKey,
+          requestHash,
+          { requested },
+          tx,
+        );
+        return requested;
+      },
+    );
+  }
+
   /**
    * The route a gateway attempt is issued against, re-decided inside the transaction:
    * offered for this purpose, customer and amount, and settling through `GATEWAY` with an
@@ -3620,11 +4099,31 @@ export class PaymentService {
         { reason: 'CREDENTIAL_MISSING' },
       );
     }
-    if (descriptor.invoiceCredential === 'BOT_TOKEN' && scope.botInstanceId === null) {
+    if (descriptor.boundToBot && scope.botInstanceId === null) {
       throw errors.conflict(
         COMMERCE_ERROR_CODES.PAYMENT_METHOD_UNAVAILABLE,
         'That payment route is only offered inside the bot.',
       );
+    }
+    /*
+     * A provider that REQUIRES the buyer's chat id (TonPays Telegram, §5.3): refused here,
+     * before any row is written, when the customer's Telegram id is not a safe JSON integer.
+     * Sending the create with the field dropped would be a guaranteed refusal after the
+     * payment exists, and the adapter refuses it locally as a second line.
+     */
+    if (descriptor.requiresBuyerChatId) {
+      const customer = await this.deps.customers.findById(scope, customerId, tx);
+      const telegramUserId = customer?.telegramUserId ?? null;
+      if (
+        telegramUserId === null ||
+        !/^-?\d{1,16}$/u.test(telegramUserId) ||
+        !Number.isSafeInteger(Number(telegramUserId))
+      ) {
+        throw errors.conflict(
+          COMMERCE_ERROR_CODES.PAYMENT_METHOD_UNAVAILABLE,
+          'That payment route needs a Telegram account this installation can name.',
+        );
+      }
     }
     /*
      * Resolved LAZILY: an open attempt for the same order or amount is handed back with
@@ -3747,8 +4246,8 @@ export class PaymentService {
       );
     }
     const descriptor = PAYMENT_GATEWAY_DESCRIPTORS[input.provider];
-    // The bot the invoice is sent through, for a route that sends it with the bot's token.
-    const botInstanceId = descriptor.invoiceCredential === 'BOT_TOKEN' ? scope.botInstanceId : null;
+    // The bot the attempt is bound to, for a route offered only inside a bot (§5.3).
+    const botInstanceId = descriptor.boundToBot ? scope.botInstanceId : null;
     const open = await this.deps.gatewayInvoices.findOpenAttempt(
       scope,
       {
@@ -3966,7 +4465,11 @@ export class PaymentService {
     order: OrderRecord,
     confirmation: {
       readonly evidenceKind:
-        'WALLET_DEBIT' | 'OPERATOR_REVIEW' | 'GATEWAY_INQUIRY' | 'GATEWAY_CALLBACK';
+        | 'WALLET_DEBIT'
+        | 'OPERATOR_REVIEW'
+        | 'GATEWAY_INQUIRY'
+        | 'GATEWAY_CALLBACK'
+        | 'RECONCILIATION';
       readonly evidenceNote: string | null;
       readonly confirmedByAdminId: string | null;
       readonly confirmedAt: Date;
@@ -3988,8 +4491,13 @@ export class PaymentService {
       readonly requestHash: string;
       readonly namespace: 'WEB' | 'TELEGRAM';
     },
+    /** As `confirmAndCredit`'s: `UNKNOWN` only for a reconciliation (§9.6.4). */
+    from: 'PENDING' | 'UNKNOWN' = 'PENDING',
   ): Promise<{ readonly payment: PaymentRecord; readonly order: OrderRecord }> {
-    const moved = await this.deps.repository.confirm(scope, payment.id, confirmation, now, tx);
+    const moved =
+      from === 'UNKNOWN'
+        ? await this.deps.repository.reconcileConfirm(scope, payment.id, confirmation, now, tx)
+        : await this.deps.repository.confirm(scope, payment.id, confirmation, now, tx);
     if (!moved) {
       /*
        * Somebody else moved the row out of PENDING first, and `confirmAndCredit` states
