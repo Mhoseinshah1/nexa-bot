@@ -415,6 +415,24 @@ describe('the one-shot fallback (owner rule B5)', () => {
     expect(refused).toEqual([]);
   });
 
+  it('counts no icon when inline buttons take the reply_markup: a refusal is one call, nothing marked', async () => {
+    const { appearance, refused } = reader([eligibleBot], { wallet: ICON });
+    const { messenger, calls, respondWith } = harness(EXPLICIT, { appearance });
+    respondWith([GENERIC, OK]);
+    const sent = await messenger.send(scope, {
+      chatId: '42',
+      botInstanceId: eligibleBot,
+      templateKey: TEXT_KEY,
+      values: {},
+      keyboard: 'MAIN_MENU',
+      buttons: [{ label: { kind: 'TEXT', text: 'go' }, data: 'g' }],
+    });
+    expect(sent).toEqual({ outcome: 'REFUSED' });
+    expect(calls).toHaveLength(1);
+    expect(keyboardOf(calls[0])).toBeUndefined();
+    expect(refused).toEqual([]);
+  });
+
   it('reads a denial with the probe’s classifier, not loosened', () => {
     expect(isCustomEmojiDenial('Bad Request: CUSTOM_EMOJI_INVALID')).toBe(true);
     expect(isCustomEmojiDenial('Bad Request: custom emoji are not available')).toBe(true);

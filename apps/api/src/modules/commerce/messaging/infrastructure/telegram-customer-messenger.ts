@@ -421,9 +421,16 @@ export class TelegramCustomerMessenger implements CustomerMessenger {
     const keyboard = iconKeyboard === undefined ? undefined : withAdminRow(iconKeyboard);
     const plainKeyboard =
       iconKeyboard === undefined ? undefined : withAdminRow(withoutKeyboardIcons(iconKeyboard));
+    /*
+     * Only a keyboard that REACHES the wire counts: `textMessageBody` gives inline buttons
+     * precedence and drops the reply keyboard, so with inline buttons no icon is sent, and
+     * counting one would retry an undecorated refusal and misread a decorated-text one as an
+     * icon failure (PR #135 review).
+     */
     const keyboardHasIcon =
-      keyboard?.some((row) => row.some((button) => button.iconCustomEmojiId !== undefined)) ??
-      false;
+      buttons.length === 0 &&
+      (keyboard?.some((row) => row.some((button) => button.iconCustomEmojiId !== undefined)) ??
+        false);
     /*
      * A body over Telegram's bound goes as SEVERAL messages, in order, cut by
      * `splitMessageBody` — between paragraphs, then lines, then characters. Telegram

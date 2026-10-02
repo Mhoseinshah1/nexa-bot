@@ -142,9 +142,9 @@ const RECORDS = [
  * -12, -16. Each record says so above its table.
  *
  * 2468 → 2493: round T (T2), `docs/round-t-t2-falsification.md` — fourteen rows, 25
- * citations.
+ * citations. 2493 → 2494: T2-15, from the PR #135 review.
  */
-const EXPECTED = 2493;
+const EXPECTED = 2494;
 /**
  * A table whose last column is one of these is making citations.
  *
