@@ -20,6 +20,7 @@ import type {
   RestoreEngine,
 } from './ports.js';
 import type { RecoveryService } from './recovery.service.js';
+import type { RecoveryKeyCoverage } from './installation-key.ports.js';
 
 /**
  * The destructive half of a recovery, in its own process.
@@ -55,6 +56,8 @@ export interface RecoveryExecutorDeps {
   readonly recovery: RecoveryService;
   readonly engine: RestoreEngine;
   readonly workspaces: RecoveryWorkspaceFactory;
+  /** Carries the imported keys into the candidate and checks its secrets are covered. */
+  readonly keys: RecoveryKeyCoverage;
   readonly journal: CutoverJournal;
   /** The unmodified Backup V1 pipeline. The emergency backup is a trigger value. */
   readonly backup: BackupService;
@@ -835,6 +838,40 @@ export class RecoveryExecutor {
         `The candidate's schema is ${compatibility.verdict} and cannot be cut over to.`,
       );
     }
+    /*
+     * THE KEYS, before the renames. ADR-0032.
+     *
+     * `installation_keys` lives in the database being replaced, and the
+     * candidate is the OLD installation's database: without this, the Recovery
+     * Kit the operator imported to open this very archive would vanish at the
+     * cutover, and with it the only key that reads the restored credentials. So
+     * the current rows are written INTO THE CANDIDATE — atomically with the
+     * rename, in the sense that matters: they are there before it has the live
+     * name, and if anything fails here, nothing has been renamed.
+     *
+     * Then the restore-test's check again, authoritatively: every key the
+     * candidate's secrets name must be held. The restore-test asked the same
+     * question minutes or days ago; a key removed since must not be discovered
+     * by the bot failing to start.
+     */
+    await this.deps.keys.refresh();
+    try {
+      await this.deps.keys.carryInto(candidate);
+    } catch (error) {
+      throw new RecoveryAbort(
+        'recovery.candidate_validation_failed',
+        "This installation's decrypt-only keys could not be written into the candidate.",
+        error,
+      );
+    }
+    const missing = await this.deps.keys.missingFrom(candidate);
+    if (missing.length > 0) {
+      throw new RecoveryAbort(
+        'recovery.candidate_keys_missing',
+        `The candidate's secrets need keys this installation does not hold: ${missing.join(', ')}.`,
+      );
+    }
+
     await this.deps.requests.progress({
       id,
       stage: 'VALIDATE_CANDIDATE',

@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { isNexaError } from '@nexa/contracts';
@@ -7,6 +7,8 @@ import { loadConfig } from './infrastructure/config/load-config.js';
 import { resolveKeyring } from './infrastructure/crypto/resolve-keyring.js';
 import { KeyringBackupArchiver } from './modules/platform/backup/infrastructure/archiver.js';
 import { readArchiveHeader } from './modules/platform/backup/infrastructure/archive.js';
+import { InstallationKeyring } from './infrastructure/crypto/installation-keyring.js';
+import { openRecoveryKit } from './infrastructure/crypto/recovery-kit.js';
 
 /**
  * `backup run|list|verify|restore` — the operator's side of the pipeline.
@@ -40,6 +42,12 @@ const USAGE = [
   '  backup verify --archive PATH            decrypt and checksum; touches no database',
   '  backup restore --archive PATH --target DB',
   '                                          restore into an explicit, empty, non-live database',
+  '',
+  '  verify and restore also take --kit PATH: a Recovery Kit (ADR-0032) whose keys',
+  '  open an archive another installation sealed. They are used for this command',
+  "  only and never become this installation's encryption key. The passphrase is",
+  '  read from standard input, never from an argument:',
+  '      read -rs P; printf %s "$P" | pnpm backup verify --archive A --kit K',
 ].join('\n');
 
 interface Args {
@@ -47,6 +55,7 @@ interface Args {
   readonly archive: string | null;
   readonly target: string | null;
   readonly limit: number;
+  readonly kit: string | null;
 }
 
 function parseArgs(argv: readonly string[]): Args {
@@ -69,6 +78,16 @@ function parseArgs(argv: readonly string[]): Args {
 
   const archive = value('--archive');
   const target = value('--target');
+  const kit = value('--kit');
+  if (kit !== null && command !== 'verify' && command !== 'restore') {
+    throw new UsageError('--kit applies to verify and restore only.');
+  }
+  // Refused as an argument outright. argv is world-readable in /proc and lands
+  // in shell history; the passphrase is the only thing between a kit and every
+  // key in it.
+  if (argv.includes('--passphrase')) {
+    throw new UsageError('The kit passphrase is read from standard input, never from an argument.');
+  }
 
   // The requirements are checked HERE, not in `main`, for two reasons.
   //
@@ -91,7 +110,43 @@ function parseArgs(argv: readonly string[]): Args {
     );
   }
 
-  return { command, archive, target, limit };
+  return { command, archive, target, limit, kit };
+}
+
+/** Reads the kit passphrase from standard input: everything up to EOF, one trailing newline dropped. */
+async function passphraseFromStdin(): Promise<string> {
+  if (process.stdin.isTTY) {
+    throw new UsageError(
+      'Pipe the kit passphrase on standard input (see `backup` with no arguments); it is not ' +
+        'read from a terminal prompt or an argument.',
+    );
+  }
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
+  return Buffer.concat(chunks)
+    .toString('utf8')
+    .replace(/\r?\n$/, '');
+}
+
+/**
+ * Adds a Recovery Kit's keys to `keyring`, for this command's lifetime only.
+ *
+ * Nothing is written anywhere: the CLI's job is to open one archive. Importing
+ * the keys so the restored installation can read its own credentials is the Web
+ * Admin's import, which wraps them under the active key and audits it.
+ */
+async function withKit(keyring: InstallationKeyring, kitPath: string): Promise<number> {
+  const opened = await openRecoveryKit(await readFile(kitPath), await passphraseFromStdin());
+  try {
+    const next = new Map(keyring.importedKeys);
+    for (const key of opened.keys) {
+      if (!keyring.isConfigured(key.keyId)) next.set(key.keyId, key.material);
+    }
+    keyring.replaceImported(next);
+    return opened.keys.length;
+  } finally {
+    for (const key of opened.keys) key.material.fill(0);
+  }
 }
 
 /**
@@ -194,7 +249,7 @@ async function cmdList(container: Container, limit: number): Promise<number> {
  * file it holds is a plaintext database, and leaving one behind because a
  * verification failed would be the worst possible time to leave one behind.
  */
-async function cmdVerify(archivePath: string): Promise<number> {
+async function cmdVerify(archivePath: string, kitPath: string | null = null): Promise<number> {
   // The KEYRING ONLY, straight from the environment — not `loadConfig()`.
   //
   // This command's whole purpose is the case where the database is what is
@@ -207,7 +262,7 @@ async function cmdVerify(archivePath: string): Promise<number> {
   // `resolveKeyring` takes exactly the four keyring variables, so reading them
   // here is not a second configuration path — it is the same parser, given the
   // subset this command actually depends on.
-  const archiver = new KeyringBackupArchiver(
+  const keyring = new InstallationKeyring(
     resolveKeyring({
       SECRETS_KEYS: process.env.SECRETS_KEYS,
       SECRETS_ACTIVE_KEY_ID: process.env.SECRETS_ACTIVE_KEY_ID,
@@ -215,6 +270,12 @@ async function cmdVerify(archivePath: string): Promise<number> {
       SECRETS_KEK_ID: process.env.SECRETS_KEK_ID,
     }),
   );
+  if (kitPath !== null) {
+    process.stdout.write(
+      `kit      ${String(await withKit(keyring, kitPath))} key(s), decrypt-only\n`,
+    );
+  }
+  const archiver = new KeyringBackupArchiver(keyring);
 
   const header = await readArchiveHeader(archivePath);
   process.stdout.write(
@@ -261,7 +322,16 @@ async function cmdRestore(
   container: Container,
   archivePath: string,
   target: string,
+  kitPath: string | null = null,
 ): Promise<number> {
+  // The installation's imported keys, then the kit's, if one was given. Both
+  // only ever DECRYPT: the container's keyring encrypts with the configured key.
+  await container.installationKeyLoader.refreshQuietly();
+  if (kitPath !== null) {
+    process.stdout.write(
+      `Kit       ${String(await withKit(container.keyring, kitPath))} key(s), decrypt-only\n`,
+    );
+  }
   const directory = await mkdtemp(join(tmpdir(), 'nexa-restore-'));
   try {
     const dumpPath = join(directory, 'dump.pgcustom');
@@ -297,7 +367,7 @@ async function main(): Promise<void> {
   // an archive in.
   if (args.command === 'verify') {
     // `parseArgs` has already refused a missing `--archive`.
-    process.exit(await cmdVerify(args.archive ?? ''));
+    process.exit(await cmdVerify(args.archive ?? '', args.kit));
   }
 
   const config = loadConfig();
@@ -306,7 +376,7 @@ async function main(): Promise<void> {
     if (args.command === 'run') process.exit(await cmdRun(container));
     if (args.command === 'list') process.exit(await cmdList(container, args.limit));
     // Both refused by `parseArgs`, before this container was built.
-    process.exit(await cmdRestore(container, args.archive ?? '', args.target ?? ''));
+    process.exit(await cmdRestore(container, args.archive ?? '', args.target ?? '', args.kit));
   } finally {
     await container.shutdown();
   }
