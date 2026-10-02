@@ -59,6 +59,10 @@ export const PERMISSIONS = [
    * that is `users.block`. The key stays declared and seeded because removing a
    * permission strands the role rows that grant it; what it must not acquire is
    * a surface that pretends to work. See `docs/wp2-customer-audit.md`.
+   *
+   * Customer 360 added controls an operator CAN change — an exemption, a verified phone, a
+   * location override, a notification preference — and each took its own key below rather
+   * than this one, because nothing on Telegram overwrites them and their risks differ.
    */
   p('users.edit', 'Edit customer attributes'),
   p('users.block', 'Block or unblock a customer', 'HIGH'),
@@ -74,6 +78,30 @@ export const PERMISSIONS = [
    * per customer, and moves no money. The TENANT-WIDE reset is `settings.destructive`.
    */
   p('users.trial.edit', "Set or remove a customer's trial limit override", 'HIGH'),
+  /*
+   * Customer 360 (`docs/customer-account-transfer-audit.md`, spec §11.4–11.5). Each control
+   * is a decision the INSTALLATION makes about a customer, which nothing on Telegram
+   * overwrites — so none of them is `users.edit`, whose docblock above explains why that key
+   * stays uncharged. One key per control, because the blast radii differ:
+   *
+   * - the channel-membership exemption lets one customer past a gate the tenant made
+   *   mandatory for everybody (HIGH);
+   * - a phone verification is an operator vouching for a number they checked out of band;
+   * - a location-change override replaces the configured cooldown and rolling limit for one
+   *   customer's services (HIGH, like the trial override it mirrors);
+   * - the notification switch is the promotional opt-out, set on the customer's behalf;
+   * - the account transfer moves every movable service and the whole wallet balance from
+   *   one Telegram identity to another (CRITICAL: it moves money and ownership at once).
+   */
+  p(
+    'users.channel_membership.exempt',
+    'Exempt a customer from mandatory channel membership',
+    'HIGH',
+  ),
+  p('users.phone.verify', "Record or revoke a customer's manually verified phone number"),
+  p('users.location.edit', "Set or remove a customer's location-change limit override", 'HIGH'),
+  p('users.notifications.edit', "Change a customer's promotional notification preference"),
+  p('users.transfer', "Transfer a customer's account to another Telegram identity", 'CRITICAL'),
   /*
    * Phase 7, both of them, and neither is charged by anything here. There is no
    * tier column, no tier type and no tier surface; there is no mass tool at all.
@@ -384,6 +412,14 @@ export const ROLE_SEEDS: readonly RoleSeed[] = [
       'users.block',
       // A customer's trial allowance is a support question an operator answers daily.
       'users.trial.edit',
+      /*
+       * Customer 360 (§11.4): the per-customer controls an operator answers support
+       * questions with. The account TRANSFER stays with the owner.
+       */
+      'users.channel_membership.exempt',
+      'users.phone.verify',
+      'users.location.edit',
+      'users.notifications.edit',
       'orders.view',
       'services.view',
       'services.edit',
@@ -637,6 +673,15 @@ export const PERMISSION_REQUIRES: Readonly<Record<string, PermissionKey>> = {
    * Holding the write without the read would be a second way to read it.
    */
   'users.trial.edit': 'users.view' as PermissionKey,
+  /*
+   * Customer 360. Every one of these is set FROM a customer's page and answers with that
+   * customer's controls, which `users.view` reads.
+   */
+  'users.channel_membership.exempt': 'users.view' as PermissionKey,
+  'users.phone.verify': 'users.view' as PermissionKey,
+  'users.location.edit': 'users.view' as PermissionKey,
+  'users.notifications.edit': 'users.view' as PermissionKey,
+  'users.transfer': 'users.view' as PermissionKey,
   /*
    * WP-A7. Every ticket action is taken FROM a ticket (or, for categories, from the
    * inbox that lists them), which `tickets.view` reads. Holding the action alone would be

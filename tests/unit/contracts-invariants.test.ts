@@ -101,7 +101,9 @@ describe('ledger reason catalog', () => {
     // label; see docs/open-questions.md (C-LEDGER-COUNT). WP8 added two:
     // CASHBACK_PURCHASE and CASHBACK_REVERSAL (docs/wp8-pricing-audit.md P9). The
     // payment package added RECEIPT_CREDIT (docs/payments-file02-design.md D2).
-    expect(LEDGER_REASONS.length).toBe(28);
+    // Customer 360 added the ACCOUNT_TRANSFER_OUT/IN pair
+    // (docs/customer-account-transfer-audit.md).
+    expect(LEDGER_REASONS.length).toBe(30);
     expect(new Set(LEDGER_REASONS).size).toBe(LEDGER_REASONS.length);
   });
 
