@@ -20,6 +20,7 @@ import {
   legacyProjectionOf,
   mainMenuBuilderMutationResponseSchema,
   type ActorContext,
+  type BotInstanceId,
   type ExplicitMainMenu,
   type MainMenuBuilderMutationResponse,
   type MainMenuButtonId,
@@ -34,7 +35,10 @@ import { BotMenuBuilderService } from '../../apps/api/src/modules/control/bot-me
 import { PublishedMainMenuSource } from '../../apps/api/src/modules/control/bot-menu-builder/application/main-menu-source';
 import type { MainMenuBuilderRepository } from '../../apps/api/src/modules/control/bot-menu-builder/application/ports';
 import { DrizzleMainMenuBuilderRepository } from '../../apps/api/src/modules/control/bot-menu-builder/infrastructure/drizzle-main-menu-builder.repository';
-import { DrizzleAppearanceRepository } from '../../apps/api/src/modules/control/appearance/infrastructure/drizzle-appearance.repository';
+import {
+  CachedAppearanceReader,
+  DrizzleAppearanceRepository,
+} from '../../apps/api/src/modules/control/appearance/infrastructure/drizzle-appearance.repository';
 import { DrizzleSettingRepository } from '../../apps/api/src/modules/control/settings/infrastructure/drizzle-settings.repository';
 import { seed } from '../../apps/api/src/infrastructure/persistence/seed';
 import type { Container } from '../../apps/api/src/container';
@@ -885,6 +889,45 @@ describe('the button builder (round T, T1)', () => {
              WHERE id = ${SEED_IDS.botA1}`,
       );
       const view = await builder().view(tenantA, owner);
+      expect(
+        Object.fromEntries(view.iconEligibility.map((bot) => [bot.botInstanceId, bot.eligible])),
+      ).toEqual({ [SEED_IDS.botA1]: true, [SEED_IDS.botA2]: false });
+    });
+
+    it('F-4 calls a bot eligible exactly when the runtime decorates it: a tested, refused bot is not', async () => {
+      // botA1 proved custom emoji; botA2 was TESTED and refused — a recorded outcome that is
+      // not SENT, which a builder answering "has a test" would call eligible.
+      for (const [botId, outcome, errorCode] of [
+        [SEED_IDS.botA1, 'SENT', null],
+        [SEED_IDS.botA2, 'REJECTED', 'appearance.custom_emoji_refused'],
+      ] as const) {
+        await db().execute(
+          sql`UPDATE bot_instances SET custom_emoji_tested_at = now(),
+                     custom_emoji_test_outcome = ${outcome},
+                     custom_emoji_test_error_code = ${errorCode}
+               WHERE id = ${botId}`,
+        );
+      }
+      await db().execute(
+        sql`INSERT INTO bot_appearance_slots (id, tenant_id, slot, custom_emoji_id)
+            VALUES (gen_random_uuid(), ${tenantA.tenantId}, 'wallet', '5368324170671202286')
+            ON CONFLICT (tenant_id, slot) DO UPDATE SET custom_emoji_id = EXCLUDED.custom_emoji_id,
+                                                        enabled = true`,
+      );
+      const view = await builder().view(tenantA, owner);
+      const reader = new CachedAppearanceReader(
+        new DrizzleAppearanceRepository(db()),
+        container.clock,
+      );
+      for (const bot of view.iconEligibility) {
+        const decorated =
+          (await reader.decorationFor(tenantA, bot.botInstanceId as BotInstanceId)).customEmoji
+            .size > 0;
+        expect({ bot: bot.botInstanceId, eligible: bot.eligible }).toEqual({
+          bot: bot.botInstanceId,
+          eligible: decorated,
+        });
+      }
       expect(
         Object.fromEntries(view.iconEligibility.map((bot) => [bot.botInstanceId, bot.eligible])),
       ).toEqual({ [SEED_IDS.botA1]: true, [SEED_IDS.botA2]: false });

@@ -53,6 +53,7 @@ import { hashRequest } from '../../../platform/idempotency/infrastructure/drizzl
 import type { SessionRepository } from '../../../platform/identity/application/ports.js';
 import type { ScopeActivityReader } from '../../../platform/system/application/record-ping.service.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
+import { isCustomEmojiEligible } from '../../appearance/application/eligibility.js';
 import type { AppearanceBotRecord } from '../../appearance/application/ports.js';
 import type { SettingRepository } from '../../settings/application/ports.js';
 import {
@@ -175,7 +176,8 @@ export class BotMenuBuilderService {
         botInstanceId: bot.id,
         username: bot.username,
         status: bot.status,
-        eligible: bot.test?.outcome === 'SENT',
+        // The runtime's own rule (`decorationFor`), not a copy of it.
+        eligible: isCustomEmojiEligible(bot),
       })),
     };
   }
