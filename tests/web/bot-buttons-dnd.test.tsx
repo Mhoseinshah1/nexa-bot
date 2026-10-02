@@ -3,6 +3,7 @@ import { DEFAULT_EXPLICIT_MAIN_MENU, type ExplicitMainMenu } from '@nexa/contrac
 import {
   DRAG_THRESHOLD_PX,
   autoScrollStep,
+  scrollContainerOf,
   passedThreshold,
   targetAtPoint,
 } from '../../apps/web/src/pages/bot-buttons/dnd';
@@ -164,6 +165,27 @@ describe('the press-to-drag threshold and the edge auto-scroll', () => {
     expect(autoScrollStep(770, 800)).toBeGreaterThan(0);
     expect(autoScrollStep(800, 800)).toBeGreaterThan(autoScrollStep(770, 800));
     expect(autoScrollStep(10, 0)).toBe(0);
+  });
+});
+
+describe('scrollContainerOf — the element a drag near an edge scrolls', () => {
+  afterEach(() => {
+    document.body.innerHTML = '';
+  });
+
+  it("is the nearest scrolling ancestor (the shell's .content), not the window", () => {
+    document.body.innerHTML =
+      '<main class="content" style="overflow: auto"><div><button id="grip"></button></div></main>';
+    expect(scrollContainerOf(document.getElementById('grip'))).toBe(
+      document.querySelector('main.content'),
+    );
+  });
+
+  it('falls back to the document when nothing between scrolls', () => {
+    document.body.innerHTML = '<div><button id="grip"></button></div>';
+    expect(scrollContainerOf(document.getElementById('grip'))).toBe(
+      document.scrollingElement ?? document.documentElement,
+    );
   });
 });
 

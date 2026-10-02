@@ -65,6 +65,20 @@ export function autoScrollStep(y: number, viewportHeight: number, edge = 56, max
   return 0;
 }
 
+/**
+ * The element that actually scrolls the builder: the nearest ancestor whose overflow scrolls
+ * (the shell's `.content`), else the document. The shell keeps the document at 100% height,
+ * so scrolling `window` would do nothing.
+ */
+export function scrollContainerOf(element: Element | null): Element {
+  for (let node = element?.parentElement ?? null; node !== null; node = node.parentElement) {
+    const style = getComputedStyle(node);
+    const overflowY = style.overflowY || style.overflow;
+    if (overflowY === 'auto' || overflowY === 'scroll') return node;
+  }
+  return document.scrollingElement ?? document.documentElement;
+}
+
 function isButtonId(value: string | undefined): value is MainMenuButtonId {
   return value !== undefined && (MAIN_MENU_BUTTON_IDS as readonly string[]).includes(value);
 }
@@ -170,6 +184,7 @@ export function usePointerDrag(
   const side = useRef<'before' | 'after' | null>(null);
   const overKey = useRef<string | null>(null);
   const frame = useRef<number | null>(null);
+  const scroller = useRef<Element | null>(null);
   const onDropRef = useRef(onDrop);
   useEffect(() => {
     onDropRef.current = onDrop;
@@ -216,11 +231,18 @@ export function usePointerDrag(
     if (live.current === null) return;
     placeGhost();
     publishOver(resolve());
-    const step = autoScrollStep(point.current.y, window.innerHeight);
-    if (step !== 0 && typeof window.scrollBy === 'function') {
-      window.scrollBy(0, step);
-      schedule();
-    }
+    const box = scroller.current;
+    if (box === null) return;
+    const viewport =
+      box === (document.scrollingElement ?? document.documentElement)
+        ? { top: 0, height: window.innerHeight }
+        : box.getBoundingClientRect();
+    const step = autoScrollStep(point.current.y - viewport.top, viewport.height);
+    if (step === 0) return;
+    const before = box.scrollTop;
+    box.scrollTop = before + step;
+    // Keep scrolling under a still pointer only while the container actually moves.
+    if (box.scrollTop !== before) schedule();
   };
   const schedule = () => {
     if (frame.current !== null) return;
@@ -263,6 +285,7 @@ export function usePointerDrag(
       } catch {
         // Capture is an optimisation for the moves that follow; without it they still arrive.
       }
+      scroller.current = scrollContainerOf(event.currentTarget);
       pressed.current = {
         from,
         startX: event.clientX,
