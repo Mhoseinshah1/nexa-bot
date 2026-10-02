@@ -367,6 +367,56 @@ export const PLATFORM_ERROR_CODES = {
    * their own recovery row, and to nobody else.
    */
   RECOVERY_CONFIRMATION_INVALID: 'recovery.confirmation_invalid',
+
+  /**
+   * A Recovery Kit is not readable AS A KIT: wrong magic, an implausible length,
+   * a header that is not JSON or not the shape format 1 declares, KDF parameters
+   * outside the accepted bounds. Nothing has been derived or decrypted yet.
+   *
+   * Also raised AFTER authentication for a payload that is internally
+   * inconsistent — a duplicated key id, a fingerprint that is not its key's —
+   * because those are bytes the passphrase-holder sealed, and the answer is
+   * "this kit is broken", not "your passphrase is wrong".
+   */
+  RECOVERY_KIT_MALFORMED: 'recovery_kit.malformed',
+  /** The kit names a format version this release does not read. Never guessed at. */
+  RECOVERY_KIT_UNSUPPORTED_VERSION: 'recovery_kit.unsupported_version',
+  /**
+   * The kit did not authenticate. ONE code for a wrong passphrase and a damaged
+   * file, for the reason `BACKUP_ARCHIVE_AUTH_FAILED` gives: AES-GCM cannot tell
+   * them apart, and an error that tried would be a passphrase oracle.
+   */
+  RECOVERY_KIT_AUTH_FAILED: 'recovery_kit.auth_failed',
+  /**
+   * The kit carries a key under an id this installation already holds with
+   * DIFFERENT bytes. The whole import is refused: last-wins would silently
+   * replace a key existing ciphertext needs, and first-wins would silently drop
+   * the one the operator brought.
+   */
+  RECOVERY_KIT_KEY_COLLISION: 'recovery_kit.key_collision',
+  /** The passphrase is shorter than the floor, or the two entries differ. */
+  RECOVERY_KIT_PASSPHRASE_REJECTED: 'recovery_kit.passphrase_rejected',
+  /** The administrator's own password did not verify, so no kit was produced. */
+  RECOVERY_KIT_REAUTHENTICATION_FAILED: 'recovery_kit.reauthentication_failed',
+  /**
+   * A destructive recovery holds the installation, so its keys may not change.
+   * The executor carries the CURRENT keys into the restored database; a key
+   * imported or removed during that window would be lost or resurrected.
+   */
+  RECOVERY_KIT_BUSY: 'recovery_kit.busy',
+  /** No imported key by that id. Configured keys are not addressable here. */
+  INSTALLATION_KEY_NOT_FOUND: 'installation_key.not_found',
+  /**
+   * The key is part of the server's configuration (active or rotation overlap),
+   * so it is removed by editing that configuration, never from a web page.
+   */
+  INSTALLATION_KEY_NOT_REMOVABLE: 'installation_key.not_removable',
+  /**
+   * Something retained still needs the key: a stored secret, another imported
+   * key wrapped under it, an archive on disk, or an unfinished recovery. The
+   * counts are in `details`; nothing was removed.
+   */
+  INSTALLATION_KEY_IN_USE: 'installation_key.in_use',
 } as const;
 
 /**

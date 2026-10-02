@@ -5763,7 +5763,12 @@ export type RecoveryDetailResponse = z.infer<typeof recoveryDetailResponseSchema
 export const recoveryCapabilitiesResponseSchema = z.object({
   uploadEnabled: z.boolean(),
   maxUploadBytes: z.number().int().positive(),
-  foreignInstallationSupported: z.literal(false),
+  /**
+   * True since the Recovery Kit (ADR-0032): an archive from another installation
+   * restores once that installation's kit has been imported. Still a field, so a
+   * client built against the refusal keeps parsing.
+   */
+  foreignInstallationSupported: z.boolean(),
   /** The phrase the server will compare against. The surface shows it; it never decides it. */
   confirmationPhrase: z.literal(RECOVERY_CONFIRMATION_PHRASE),
   confirmationTtlMs: z.number().int().positive(),
