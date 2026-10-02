@@ -88,6 +88,22 @@ export const GATEWAY_RECEIPT_UNKNOWN_CODE = 'payments.gateway_receipt_unknown';
 export const GATEWAY_CARD_CHANGE_UNKNOWN_CODE = 'payments.gateway_card_change_unknown';
 export const GATEWAY_REVIEW_UNRESOLVED_CODE = 'payments.gateway_review_unresolved';
 export const GATEWAY_REVIEW_RECONCILED_CODE = 'payments.gateway_review_reconciled';
+/**
+ * NOWPayments (`docs/nowpayments-gateway-audit.md` §5.6), declared beside their producer and
+ * part of the schema once shipped:
+ *
+ * - `payments.gateway_webhook_unverified` (WARN) — a webhook for a route whose provider
+ *   signs them arrived with a signature that did not verify against the stored secret (or
+ *   with no secret stored). Dropped unread. One open condition per provider; closed by
+ *   `payments.gateway_webhook_verified` (INFO) when a signed webhook next verifies. A
+ *   stranger can raise it only by posting junk, and only once: it is deduplicated.
+ *
+ * A NOWPayments MISMATCH (a partial payment, or `finished` for another price) is raised as
+ * `payments.gateway_review_unresolved` with `reason: PROVIDER_AMOUNT_MISMATCH` — the same
+ * operator condition an unresolved review raises, closed by the same reconciliation.
+ */
+export const GATEWAY_WEBHOOK_UNVERIFIED_CODE = 'payments.gateway_webhook_unverified';
+export const GATEWAY_WEBHOOK_VERIFIED_CODE = 'payments.gateway_webhook_verified';
 
 /**
  * The note a CREATED card-transfer attempt carries in `creation_error_code` when the
@@ -145,11 +161,14 @@ export interface GatewayPaymentServiceDeps {
   readonly invoices: GatewayInvoiceRepository;
   readonly payments: Pick<
     PaymentService,
-    'confirmGatewayPayment' | 'failGatewayPayment' | 'recordProviderReview'
+    | 'confirmGatewayPayment'
+    | 'failGatewayPayment'
+    | 'recordProviderReview'
+    | 'recordProviderFundsDetected'
   >;
   readonly paymentRecords: Pick<
     PaymentRepository,
-    'findById' | 'findByIdForUpdate' | 'setExternalReference' | 'loseTrackOfReviewed'
+    'findById' | 'findByIdForUpdate' | 'setExternalReference' | 'loseTrackOfReviewed' | 'loseTrack'
   >;
   /**
    * TonPays Telegram (§7.3–§7.5): card-change requests, receipt windows and submissions.
@@ -236,6 +255,9 @@ export interface GatewayPassReport {
   readonly reviewsLapsed: number;
   readonly cardChanges: number;
   readonly receipts: number;
+  /** NOWPayments: attempts whose coins were seen (review opened) or held for a MISMATCH. */
+  readonly reviewsOpened: number;
+  readonly held: number;
 }
 
 /** What a webhook did. Never anything the caller could turn into money. */
@@ -245,7 +267,9 @@ export type GatewayWebhookResult =
   | 'DUPLICATE'
   | 'IGNORED_UNKNOWN'
   | 'IGNORED_MISMATCH'
-  | 'IGNORED_INACTIVE';
+  | 'IGNORED_INACTIVE'
+  /** A signed route's webhook whose signature did not verify: dropped before it was read. */
+  | 'IGNORED_UNVERIFIED';
 
 /** An attempt as a customer's own surface may see it. */
 export interface GatewayAttemptView {
@@ -309,6 +333,8 @@ export class GatewayPaymentService {
       reviewsLapsed: 0,
       cardChanges: 0,
       receipts: 0,
+      reviewsOpened: 0,
+      held: 0,
     };
     // A stopped tenant's rows simply wait, and nothing about them is sent anywhere.
     if (!(await this.deps.scopeActivity.scopeIsActive(scope))) return report;
@@ -366,8 +392,16 @@ export class GatewayPaymentService {
         if (result === 'SETTLED') report.settled += 1;
         if (result === 'UNSUCCESSFUL') report.unsuccessful += 1;
         if (result === 'LATE') report.lateCompletions += 1;
+        if (result === 'REVIEW') report.reviewsOpened += 1;
+        if (result === 'HELD') report.held += 1;
         // R2: an attempt that settled or ended is shown so on the message that shows it.
-        if (result === 'SETTLED' || result === 'UNSUCCESSFUL' || result === 'LATE') {
+        if (
+          result === 'SETTLED' ||
+          result === 'UNSUCCESSFUL' ||
+          result === 'LATE' ||
+          result === 'REVIEW' ||
+          result === 'HELD'
+        ) {
           await this.refreshScreens(scope, claimed.invoice.paymentId);
         }
       }
@@ -673,7 +707,9 @@ export class GatewayPaymentService {
     scope: TenantContext,
     actor: ActorContext,
     claimed: ClaimedGatewayInvoice,
-  ): Promise<'OPEN' | 'SETTLED' | 'UNSUCCESSFUL' | 'LATE' | 'ERROR' | 'BUDGET'> {
+  ): Promise<
+    'OPEN' | 'SETTLED' | 'UNSUCCESSFUL' | 'LATE' | 'ERROR' | 'BUDGET' | 'REVIEW' | 'HELD'
+  > {
     const { invoice } = claimed;
     const now = this.deps.clock.now();
     const invoiceId = invoice.providerInvoiceId ?? invoice.hintedInvoiceId;
@@ -751,7 +787,16 @@ export class GatewayPaymentService {
 
     // The clock BEFORE the call: what an answer can say anything about (F11).
     const sentAt = this.deps.clock.now();
-    const outcome = await adapter.inquire(apiKey, invoiceId);
+    /*
+     * What the adapter's pure mapping needs beside the invoice id: OUR order id, the amount
+     * Nexa sent (an approval for another figure is a MISMATCH, never a settlement), and the
+     * payment a verified webhook last named (NOWPayments).
+     */
+    const outcome = await adapter.inquire(apiKey, invoiceId, {
+      providerOrderId: invoice.providerOrderId,
+      sentAmount: invoice.sentAmount,
+      hintedPaymentId: invoice.hintedPaymentId,
+    });
     const at = this.deps.clock.now();
     const next = postDeadline
       ? null
@@ -860,13 +905,65 @@ export class GatewayPaymentService {
            */
           nextInquiryAt: next,
           postDeadline,
+          // The payment this identity-checked answer described (NOWPayments): followed next.
+          hintedPaymentId: outcome.providerPaymentId ?? null,
         },
         at,
         tx,
       );
     });
 
-    if (outcome.verdict === 'OPEN') return 'OPEN';
+    if (outcome.verdict === 'OPEN') {
+      /*
+       * NOWPayments (§5.4): the provider's own read says the customer's coins are on their
+       * way. On a route that reviews, inside the customer window and with no review yet, that
+       * opens the bounded review window — decided again under the payment's lock, strictly
+       * before its deadline. It approves nothing.
+       */
+      if (
+        outcome.fundsDetected === true &&
+        eligible &&
+        reviewUntil === null &&
+        PAYMENT_GATEWAY_DESCRIPTORS[invoice.provider].providerReview
+      ) {
+        try {
+          const opened = await this.deps.payments.recordProviderFundsDetected(
+            scope,
+            actor,
+            invoice.paymentId,
+            { detectedAt: at, providerStatus: outcome.status },
+          );
+          if (opened) return 'REVIEW';
+        } catch (error: unknown) {
+          // Nothing was written; the next inquiry asks again inside the deadline.
+          this.deps.logger.error(
+            {
+              paymentId: invoice.paymentId,
+              error: error instanceof Error ? error.name : 'unknown',
+            },
+            'a provider funds-detected report could not be recorded',
+          );
+        }
+      }
+      return 'OPEN';
+    }
+
+    if (outcome.verdict === 'MISMATCH') {
+      /*
+       * Money the provider holds that is not what this attempt invoiced (§5.5): never
+       * settled and never failed. Inside the deadline the payment goes to UNKNOWN for an
+       * operator; a payment already UNKNOWN stays as it is; one already closed records the
+       * money as a late completion — nothing moves either way.
+       */
+      if (eligible) {
+        return (await this.holdMismatch(scope, actor, invoice, outcome.status)) ? 'HELD' : 'ERROR';
+      }
+      if (claimed.paymentState !== 'UNKNOWN') {
+        await this.lateCompletion(scope, actor, invoice, 'PROVIDER_AMOUNT_MISMATCH');
+        return 'LATE';
+      }
+      return 'OPEN';
+    }
 
     if (outcome.verdict === 'UNSUCCESSFUL') {
       if (eligible) {
@@ -1072,6 +1169,77 @@ export class GatewayPaymentService {
   // every transaction under the tenant's budget, and recorded in another. A row reclaimed
   // with its stamp set is UNKNOWN and is never sent again. Nothing here settles anything.
   // ---------------------------------------------------------------------------------------
+
+  /**
+   * NOWPayments' MISMATCH (§5.5): `PENDING -> UNKNOWN` for ONE payment, in one transaction
+   * with its audit row, `PaymentOutcomeUnknown` and the operator's condition — the shape the
+   * review sweep below writes. Conditional on the payment still being PENDING inside its
+   * effective deadline; a replay moves nothing. True when it moved.
+   */
+  private async holdMismatch(
+    scope: TenantContext,
+    actor: ActorContext,
+    invoice: GatewayInvoiceRecord,
+    providerStatus: string,
+  ): Promise<boolean> {
+    const now = this.deps.clock.now();
+    const held = await this.deps.uow.run(scope, async (tx) => {
+      if (!(await this.deps.scopeActivity.scopeIsActive(scope, tx))) return null;
+      const payment = await this.deps.paymentRecords.loseTrack(scope, invoice.paymentId, now, tx);
+      if (payment === null) return null;
+      await this.deps.audit.record(
+        scope,
+        actor,
+        {
+          action: 'payment.lose_track',
+          entityType: 'Payment',
+          entityId: payment.id,
+          before: { state: 'PENDING' },
+          after: {
+            state: 'UNKNOWN',
+            gatewayProvider: payment.gatewayProvider,
+            reason: 'PROVIDER_AMOUNT_MISMATCH',
+            providerStatus,
+          },
+          result: 'SUCCESS',
+        },
+        tx,
+      );
+      await this.deps.outbox.write(tx, actor, {
+        eventType: 'PaymentOutcomeUnknown',
+        aggregateType: 'Payment',
+        aggregateId: payment.id,
+        payload: {
+          customerId: payment.customerId,
+          orderId: payment.orderId,
+          method: payment.method,
+          amountMinor: payment.amount.amountMinor.toString(),
+          currency: payment.amount.currency,
+        },
+      });
+      await this.deps.opsLog.record(
+        scope,
+        {
+          code: GATEWAY_REVIEW_UNRESOLVED_CODE,
+          severity: 'WARN',
+          message:
+            'A payment gateway reported money for an attempt that does not match what was invoiced ' +
+            '(a partial payment, or another price). Nothing was settled or failed; reconcile it ' +
+            'against the gateway’s records.',
+          dedupeKey: `${GATEWAY_REVIEW_UNRESOLVED_CODE}:${payment.id}`,
+          context: {
+            paymentId: payment.id,
+            provider: payment.gatewayProvider,
+            reason: 'PROVIDER_AMOUNT_MISMATCH',
+            providerStatus,
+          },
+        },
+        tx,
+      );
+      return payment;
+    });
+    return held !== null;
+  }
 
   /**
    * The review sweep (§9.6.3 e), the first producer of `LOSE_TRACK`: a PENDING payment whose
@@ -1693,13 +1861,83 @@ export class GatewayPaymentService {
     provider: PaymentGatewayProvider,
     body: unknown,
     deliveryIdHeader: string | undefined,
+    /** The provider's signature header, read only for a route whose provider signs (§5.6). */
+    signatureHeader?: string,
   ): Promise<GatewayWebhookResult | 'MALFORMED' | 'NO_ADAPTER'> {
     const adapter = this.deps.adapters(provider);
     if (adapter === null) return 'NO_ADAPTER';
-    // Shape only. The signature and API-key headers are never read (brief §6).
+    /*
+     * A route whose provider SIGNS its webhooks (NOWPayments): verified against the stored
+     * secret, in constant time, BEFORE a single field of the body is read. Unverified is
+     * dropped. Verified is still only a hint — it never reaches the settlement path.
+     */
+    if (PAYMENT_GATEWAY_DESCRIPTORS[provider].webhookSecret) {
+      const verified = await this.verifyWebhook(tenantId, provider, adapter, body, signatureHeader);
+      if (verified !== 'VERIFIED') return verified;
+    }
+    // Shape only. TonPays' signature and API-key headers are never read (brief §6).
     const hint = adapter.parseWebhook(body, deliveryIdHeader);
     if (hint === null) return 'MALFORMED';
     return this.applyWebhookHint(tenantId, provider, hint);
+  }
+
+  private async verifyWebhook(
+    tenantId: string,
+    provider: PaymentGatewayProvider,
+    adapter: ExternalGatewayAdapter,
+    body: unknown,
+    signature: string | undefined,
+  ): Promise<'VERIFIED' | 'IGNORED_INACTIVE' | 'IGNORED_UNVERIFIED'> {
+    const scope: TenantContext = {
+      tenantId: tenantId as TenantContext['tenantId'],
+      botInstanceId: null,
+    };
+    // An unknown or stopped tenant is answered like every other ignored webhook.
+    if (!(await this.deps.scopeActivity.scopeIsActive(scope))) return 'IGNORED_INACTIVE';
+    let secret: string | null;
+    try {
+      secret = await this.deps.credentials.readWebhookSecret(scope, provider);
+    } catch (error: unknown) {
+      // A secret that will not decrypt verifies nothing. Never logged beyond its class.
+      this.deps.logger.error(
+        { provider, error: error instanceof Error ? error.name : 'unknown' },
+        'a gateway webhook secret could not be read',
+      );
+      secret = null;
+    }
+    const verified =
+      secret !== null &&
+      adapter.verifyWebhook !== undefined &&
+      adapter.verifyWebhook(secret, body, signature);
+    const dedupeKey = `${GATEWAY_WEBHOOK_UNVERIFIED_CODE}:${provider}`;
+    if (!verified) {
+      this.deps.logger.warn(
+        { provider, secretStored: secret !== null, signaturePresent: signature !== undefined },
+        'gateway webhook dropped: signature not verified',
+      );
+      await this.deps.opsLog.record(scope, {
+        code: GATEWAY_WEBHOOK_UNVERIFIED_CODE,
+        severity: 'WARN',
+        message:
+          'A payment gateway notification arrived whose signature did not verify against the ' +
+          'stored webhook secret. It was ignored; check the IPN secret if this repeats. Payments ' +
+          'are still confirmed by the gateway’s own status read.',
+        dedupeKey,
+        context: { provider, secretStored: secret !== null },
+      });
+      return 'IGNORED_UNVERIFIED';
+    }
+    if (await this.deps.conditions.conditionIsOpen(scope, dedupeKey)) {
+      await this.deps.opsLog.record(scope, {
+        code: GATEWAY_WEBHOOK_VERIFIED_CODE,
+        severity: 'INFO',
+        message: 'A payment gateway notification verified against the stored webhook secret.',
+        context: { provider },
+        recoversCode: GATEWAY_WEBHOOK_UNVERIFIED_CODE,
+        recoversDedupeKey: dedupeKey,
+      });
+    }
+    return 'VERIFIED';
   }
 
   private async applyWebhookHint(
@@ -1760,6 +1998,8 @@ export class GatewayPaymentService {
             invoice.creationState === 'CREATE_UNKNOWN' && invoice.providerInvoiceId === null
               ? hint.invoiceId
               : null,
+          // Only for a VERIFIED webhook whose ids matched above: what the next inquiry reads.
+          hintedPaymentId: hint.paymentId ?? null,
           inquireAt,
         },
         now,

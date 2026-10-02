@@ -201,6 +201,18 @@ export type GatewayInquiryOutcome =
       readonly verdict: GatewayApprovalVerdict;
       readonly requestAmount: bigint | null;
       readonly finalAmount: bigint | null;
+      /**
+       * The provider's own id for the payment this answer describes, when an invoice can
+       * carry several (NOWPayments' `payment_id`). Recorded as the hint the next inquiry
+       * reads. Absent for a provider whose invoice IS the payment.
+       */
+      readonly providerPaymentId?: string | null;
+      /**
+       * Whether the provider reports the customer's money as already on its way (coins seen
+       * on chain) — the trigger, on a route whose descriptor says `providerReview`, that opens
+       * the bounded review window. Never an approval.
+       */
+      readonly fundsDetected?: boolean;
     }
   | { readonly kind: 'NOT_FOUND'; readonly code: string }
   | { readonly kind: 'RATE_LIMITED'; readonly code: string }
@@ -216,7 +228,31 @@ export interface GatewayWebhookHint {
   readonly status: string | null;
   readonly deliveryId: string | null;
   readonly creditAmount: bigint | null;
+  /** The provider's payment id under the invoice, when it names one (NOWPayments). */
+  readonly paymentId?: string | null;
 }
+
+/**
+ * What the orchestrator tells an adapter about the attempt it asks after, beside the
+ * invoice id: OUR order id, the amount Nexa sent in the provider's unit (so a pure mapping
+ * can refuse an approval for another figure), and the payment id a verified webhook last
+ * named, for a provider whose invoice may carry several payments.
+ */
+export interface GatewayInquiryContext {
+  readonly providerOrderId: string;
+  readonly sentAmount: bigint;
+  readonly hintedPaymentId: string | null;
+}
+
+/**
+ * The operator's credential check (`docs/nowpayments-gateway-audit.md` §5.7): one read-only
+ * call with the stored key. `OK` — the provider answered it; `REFUSED` — it refused the key
+ * (a configuration code); `UNAVAILABLE` — no readable answer. A machine code only.
+ */
+export type GatewayCredentialCheck =
+  | { readonly kind: 'OK' }
+  | { readonly kind: 'REFUSED'; readonly code: string }
+  | { readonly kind: 'UNAVAILABLE'; readonly code: string };
 
 export interface ExternalGatewayAdapter {
   readonly provider: PaymentGatewayProvider;
@@ -252,9 +288,21 @@ export interface ExternalGatewayAdapter {
    * gateway key (`GATEWAY_KEY`), or the token of the attempt's bot (`BOT_TOKEN`).
    */
   createInvoice(credential: string, request: GatewayCreateRequest): Promise<GatewayCreateOutcome>;
-  inquire(apiKey: string, invoiceId: string): Promise<GatewayInquiryOutcome>;
+  inquire(
+    apiKey: string,
+    invoiceId: string,
+    context?: GatewayInquiryContext,
+  ): Promise<GatewayInquiryOutcome>;
   /** Shape-checks a webhook body. Null for anything that is not one. Reads no secret header. */
   parseWebhook(body: unknown, deliveryIdHeader: string | undefined): GatewayWebhookHint | null;
+  /**
+   * For a route whose descriptor says `webhookSecret`: whether `signature` is the stored
+   * secret's signature of `body`, compared in constant time. Called BEFORE `parseWebhook`,
+   * so nothing in an unverified body is ever read. Absent for every other adapter.
+   */
+  verifyWebhook?(secret: string, body: unknown, signature: string | undefined): boolean;
+  /** The operator's read-only credential check, for a provider that offers a safe read. */
+  checkCredential?(apiKey: string): Promise<GatewayCredentialCheck>;
 }
 
 // ---------------------------------------------------------------------------------------
@@ -325,6 +373,8 @@ export interface GatewayInvoiceRecord {
   readonly cardChangeExhausted: boolean | null;
   /** An operator asked the provider again on an UNKNOWN payment; cleared by that inquiry. */
   readonly reconcileInquiryRequestedAt: Date | null;
+  /** The provider payment id a verified webhook (or a listing inquiry) last named. A hint. */
+  readonly hintedPaymentId: string | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }
@@ -517,6 +567,8 @@ export interface GatewayInvoiceRepository {
       readonly adoptInvoiceId: string | null;
       readonly nextInquiryAt: Date | null;
       readonly postDeadline: boolean;
+      /** A provider payment id the answer named under this invoice; kept as the hint. */
+      readonly hintedPaymentId?: string | null;
     },
     now: Date,
     tx?: unknown,
@@ -588,6 +640,8 @@ export interface GatewayInvoiceRepository {
       readonly deliveryId: string | null;
       readonly creditAmount: bigint | null;
       readonly hintedInvoiceId: string | null;
+      /** A VERIFIED webhook's provider payment id under this invoice (NOWPayments). */
+      readonly hintedPaymentId?: string | null;
       /** Null: bring nothing forward. */
       readonly inquireAt: Date | null;
     },
@@ -653,6 +707,39 @@ export interface GatewayCredentialStore {
     now: Date,
     tx: unknown,
   ): Promise<Date>;
+  /** When the webhook signing secret was last replaced, or null. Never the secret. */
+  webhookSecretSetAt(
+    scope: TenantContext,
+    provider: PaymentGatewayProvider,
+    tx?: unknown,
+  ): Promise<Date | null>;
+  /** The webhook signing secret, decrypted, or null. For the verification only. */
+  readWebhookSecret(scope: TenantContext, provider: PaymentGatewayProvider): Promise<string | null>;
+  /**
+   * Replaces the webhook signing secret on the route's EXISTING credential row (the key is
+   * set first). Returns the new set-at time, or null when no row exists yet.
+   */
+  replaceWebhookSecret(
+    scope: TenantContext,
+    provider: PaymentGatewayProvider,
+    secret: string,
+    now: Date,
+    tx: unknown,
+  ): Promise<Date | null>;
+  /** The last credential check, latest state only. Null when never checked. */
+  lastCheck(
+    scope: TenantContext,
+    provider: PaymentGatewayProvider,
+    tx?: unknown,
+  ): Promise<{ readonly at: Date; readonly result: string } | null>;
+  /** Records a credential check's machine result on the existing row. False with no row. */
+  recordCheck(
+    scope: TenantContext,
+    provider: PaymentGatewayProvider,
+    result: string,
+    now: Date,
+    tx: unknown,
+  ): Promise<boolean>;
 }
 
 /**

@@ -862,6 +862,13 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.payment.manual_button',
       'bot.payment.manual_instructions',
       'bot.payment.not_pending',
+      /*
+       * NOWPayments: the «💳 پرداخت با ارز دیجیتال» URL button, coins confirming on chain, and
+       * the needs-review sentence. None names a coin, a crypto figure or says paid.
+       */
+      'bot.payment.nowpayments_in_review',
+      'bot.payment.nowpayments_pay_button',
+      'bot.payment.nowpayments_review_unresolved',
       'bot.payment.receipt_expired',
       'bot.payment.receipt_limit',
       'bot.payment.receipt_not_expected',

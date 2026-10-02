@@ -751,6 +751,30 @@ export class DrizzlePaymentRepository implements PaymentRepository {
     return rows.map((row) => toRecord(row as Row));
   }
 
+  async loseTrack(
+    scope: TenantContext,
+    id: PaymentId,
+    now: Date,
+    tx: unknown,
+  ): Promise<PaymentRecord | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await this.exec(tx)
+      .update(payments)
+      // UNKNOWN is not a resolved state: no `resolved_at` (`payments_resolved_check`).
+      .set({ state: 'UNKNOWN', updatedAt: now })
+      .where(
+        and(
+          eq(payments.tenantId, tenantId),
+          eq(payments.id, id),
+          eq(payments.state, 'PENDING'),
+          eq(payments.method, 'GATEWAY'),
+          sql`COALESCE(${payments.providerReviewUntil}, ${payments.expiresAt}) > ${now}::timestamptz`,
+        ),
+      )
+      .returning();
+    return row === undefined ? null : toRecord(row as Row);
+  }
+
   async reconcileConfirm(
     scope: TenantContext,
     id: PaymentId,

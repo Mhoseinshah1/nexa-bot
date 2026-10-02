@@ -268,6 +268,7 @@ function GatewayName({ provider }: { provider: string | null }) {
   if (provider === 'TELEGRAM_STARS') {
     return <>{t('web.payment_gateway_provider_telegram_stars')}</>;
   }
+  if (provider === 'NOWPAYMENTS') return <>{t('web.payment_gateway_provider_nowpayments')}</>;
   return <Ltr>{provider}</Ltr>;
 }
 
@@ -1631,6 +1632,22 @@ export function PaymentDetailPage({
                                     <Copyable
                                       key="pc"
                                       value={row.gatewayInvoice.providerChargeId}
+                                    />,
+                                  ] as [ReactNode, ReactNode],
+                                ]),
+                            /*
+                             * NOWPayments: the provider payment a verified IPN (or the invoice's
+                             * payment list) last named — what the next status read follows, and
+                             * what an operator looks up in the NOWPayments dashboard.
+                             */
+                            ...(row.gatewayInvoice.hintedPaymentId === null
+                              ? []
+                              : [
+                                  [
+                                    t('web.payment_gateway_provider_payment_id'),
+                                    <Copyable
+                                      key="pp"
+                                      value={row.gatewayInvoice.hintedPaymentId}
                                     />,
                                   ] as [ReactNode, ReactNode],
                                 ]),

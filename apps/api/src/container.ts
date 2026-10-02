@@ -326,6 +326,7 @@ import type {
 import { GatewayReceiptCaptureService } from './modules/commerce/payments/application/gateway-receipt-capture.service.js';
 import { DrizzleGatewayCardTransferRepository } from './modules/commerce/payments/infrastructure/drizzle-gateway-card-transfer.repository.js';
 import { TonPaysTelegramAdapter } from './modules/commerce/payments/infrastructure/tonpays-telegram-adapter.js';
+import { NowPaymentsAdapter } from './modules/commerce/payments/infrastructure/nowpayments-adapter.js';
 import { TelegramStarsAdapter } from './modules/commerce/payments/infrastructure/telegram-stars-adapter.js';
 import { FxService } from './modules/commerce/fx/application/fx.service.js';
 import type { FxSourceAdapter } from './modules/commerce/fx/application/ports.js';
@@ -2244,6 +2245,13 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    */
   const tonpaysTelegramAdapter = new TonPaysTelegramAdapter();
   /*
+   * NOWPayments (`docs/nowpayments-gateway-audit.md`): the hosted crypto invoice. Its own
+   * adapter, the only code that speaks its HTTP; priced from the central USDT quote; its IPN
+   * verified against the tenant's stored secret and still only a hint. Not accepted against
+   * the real provider yet (`OQ-NP-01`).
+   */
+  const nowpaymentsAdapter = new NowPaymentsAdapter();
+  /*
    * Package A — Telegram Stars. The invoice is sent with the ATTEMPT's bot token through
    * the one Telegram call module, bounded by the same send timeout every customer message
    * uses.
@@ -2260,6 +2268,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
         return starsAdapter;
       case 'TONPAYS_TELEGRAM':
         return tonpaysTelegramAdapter;
+      case 'NOWPAYMENTS':
+        return nowpaymentsAdapter;
       case 'MANUAL_TRANSFER':
         return null;
     }

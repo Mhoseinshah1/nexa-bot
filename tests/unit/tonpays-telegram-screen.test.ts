@@ -57,6 +57,7 @@ function invoice(overrides: Partial<GatewayInvoiceRecord> = {}): GatewayInvoiceR
     providerOrderId: 'NTAAAAAAAAAAAAAAAAAA',
     providerInvoiceId: 'TPT-1',
     hintedInvoiceId: null,
+    hintedPaymentId: null,
     creationState: 'CREATED',
     creationAttempts: 1,
     creationSentAt: CREATED_AT,

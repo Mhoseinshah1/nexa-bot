@@ -361,6 +361,22 @@ function provider(invoice: GatewayInvoiceRecord | null): TemplateValues {
       providerFinalAmount: `${invoice.sentAmount.toString()} ${invoice.providerUnit}`,
     };
   }
+  /*
+   * A dollar-priced attempt (NOWPayments, central FX): the price it asked for, in dollars
+   * from its exact cents, and the provider payment a verified IPN or the list named. The
+   * crypto the customer chose is the provider's business and is never read.
+   */
+  if (invoice.providerUnit === 'USD') {
+    const cents = invoice.sentAmount;
+    const dollars = `${(cents / 100n).toString()}.${(cents % 100n).toString().padStart(2, '0')}`;
+    return {
+      providerInvoiceId:
+        invoice.hintedPaymentId === null
+          ? (invoice.providerInvoiceId ?? NONE)
+          : `${invoice.providerInvoiceId ?? NONE}/${invoice.hintedPaymentId}`,
+      providerFinalAmount: `${dollars} USD`,
+    };
+  }
   return {
     providerInvoiceId: invoice.providerInvoiceId ?? invoice.hintedInvoiceId ?? NONE,
     providerFinalAmount:

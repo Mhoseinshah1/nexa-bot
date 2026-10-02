@@ -139,6 +139,139 @@ export class DrizzleGatewayCredentialStore implements GatewayCredentialStore {
     }
     return now;
   }
+
+  async webhookSecretSetAt(
+    scope: TenantContext,
+    provider: PaymentGatewayProvider,
+    tx?: unknown,
+  ): Promise<Date | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await this.exec(tx)
+      .select({ setAt: paymentGatewayCredentials.webhookSecretSetAt })
+      .from(paymentGatewayCredentials)
+      .where(
+        and(
+          eq(paymentGatewayCredentials.tenantId, tenantId),
+          eq(paymentGatewayCredentials.provider, provider),
+        ),
+      )
+      .limit(1);
+    return row?.setAt ?? null;
+  }
+
+  async readWebhookSecret(
+    scope: TenantContext,
+    provider: PaymentGatewayProvider,
+  ): Promise<string | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await this.db
+      .select({
+        id: paymentGatewayCredentials.id,
+        ciphertext: paymentGatewayCredentials.webhookSecretCiphertext,
+        keyId: paymentGatewayCredentials.webhookSecretKeyId,
+      })
+      .from(paymentGatewayCredentials)
+      .where(
+        and(
+          eq(paymentGatewayCredentials.tenantId, tenantId),
+          eq(paymentGatewayCredentials.provider, provider),
+        ),
+      )
+      .limit(1);
+    if (row === undefined || row.ciphertext === null || row.keyId === null) return null;
+    return this.cipher.decrypt(
+      { keyId: row.keyId, ciphertext: row.ciphertext },
+      { purpose: 'payment_gateway.webhook_secret', tenantId, entityId: row.id },
+    );
+  }
+
+  async replaceWebhookSecret(
+    scope: TenantContext,
+    provider: PaymentGatewayProvider,
+    secret: string,
+    now: Date,
+    tx: unknown,
+  ): Promise<Date | null> {
+    const tenantId = requireTenantId(scope);
+    const executor = this.exec(tx);
+    const [existing] = await executor
+      .select({ id: paymentGatewayCredentials.id })
+      .from(paymentGatewayCredentials)
+      .where(
+        and(
+          eq(paymentGatewayCredentials.tenantId, tenantId),
+          eq(paymentGatewayCredentials.provider, provider),
+        ),
+      )
+      .for('update')
+      .limit(1);
+    // The secret lives on the key's row and is bound to its id: no row, no secret.
+    if (existing === undefined) return null;
+    const sealed = this.cipher.encrypt(secret, {
+      purpose: 'payment_gateway.webhook_secret',
+      tenantId,
+      entityId: existing.id,
+    });
+    await executor
+      .update(paymentGatewayCredentials)
+      .set({
+        webhookSecretCiphertext: sealed.ciphertext,
+        webhookSecretKeyId: sealed.keyId,
+        webhookSecretSetAt: now,
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(paymentGatewayCredentials.tenantId, tenantId),
+          eq(paymentGatewayCredentials.id, existing.id),
+        ),
+      );
+    return now;
+  }
+
+  async lastCheck(
+    scope: TenantContext,
+    provider: PaymentGatewayProvider,
+    tx?: unknown,
+  ): Promise<{ readonly at: Date; readonly result: string } | null> {
+    const tenantId = requireTenantId(scope);
+    const [row] = await this.exec(tx)
+      .select({
+        at: paymentGatewayCredentials.lastCheckAt,
+        result: paymentGatewayCredentials.lastCheckResult,
+      })
+      .from(paymentGatewayCredentials)
+      .where(
+        and(
+          eq(paymentGatewayCredentials.tenantId, tenantId),
+          eq(paymentGatewayCredentials.provider, provider),
+        ),
+      )
+      .limit(1);
+    if (row === undefined || row.at === null || row.result === null) return null;
+    return { at: row.at, result: row.result };
+  }
+
+  async recordCheck(
+    scope: TenantContext,
+    provider: PaymentGatewayProvider,
+    result: string,
+    now: Date,
+    tx: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .update(paymentGatewayCredentials)
+      .set({ lastCheckAt: now, lastCheckResult: result.slice(0, 64), updatedAt: now })
+      .where(
+        and(
+          eq(paymentGatewayCredentials.tenantId, tenantId),
+          eq(paymentGatewayCredentials.provider, provider),
+        ),
+      )
+      .returning({ id: paymentGatewayCredentials.id });
+    return rows.length > 0;
+  }
 }
 
 /**

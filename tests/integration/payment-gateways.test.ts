@@ -140,10 +140,15 @@ describe('payment routes', () => {
     // In render order `(sort_order, provider)`: every seeded route has sort order 0.
     expect(gateways.map((gateway) => gateway.provider)).toEqual([
       'MANUAL_TRANSFER',
+      'NOWPAYMENTS',
       'TELEGRAM_STARS',
       'TONPAYS',
       'TONPAYS_TELEGRAM',
     ]);
+    // NOWPayments needs a key and an IPN secret: seeded DISABLED like TonPays.
+    expect(gateways.find((gateway) => gateway.provider === 'NOWPAYMENTS')?.status).toBe(
+      'DISABLED',
+    );
     const route = gateways.find((gateway) => gateway.provider === 'MANUAL_TRANSFER');
     expect(route?.status).toBe('ACTIVE');
     // WP11A: a route that needs a credential is seeded DISABLED, with no key.
@@ -177,8 +182,9 @@ describe('payment routes', () => {
 
   it('lets a view-only role read and refuses its writes at the guard', async () => {
     const { gateways } = await ctx.container.paymentGateways.list(tenantA, viewerA);
-    // The whole roster: TonPays (WP11A), Telegram Stars (Package A) and TonPays Telegram.
-    expect(gateways).toHaveLength(4);
+    // The whole roster: TonPays (WP11A), Telegram Stars (Package A), TonPays Telegram and
+    // NOWPayments.
+    expect(gateways).toHaveLength(5);
 
     const refused = await ctx.container.paymentGateways
       .setStatus(tenantA, viewerA, {
