@@ -192,6 +192,10 @@ export const CUSTOMER_TRANSFER_WARNINGS = [
   'TRIAL_SERVICES_STAY',
   'SOURCE_OVERRIDES_STAY',
   'OPEN_TICKETS_STAY',
+  /** Commissions earned from customers the source referred keep landing on the source. */
+  'REFERRAL_CREDITS_STAY',
+  /** A later refund of one of the source's payments credits the SOURCE's wallet. */
+  'REFUNDS_CREDIT_SOURCE',
 ] as const;
 export type CustomerTransferWarning = (typeof CUSTOMER_TRANSFER_WARNINGS)[number];
 
