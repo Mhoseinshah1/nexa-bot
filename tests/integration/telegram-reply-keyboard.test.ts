@@ -281,8 +281,13 @@ describe('the customer reply keyboard on the wire (round T, T2)', () => {
   it('R-3 routes a tap on an iconed, styled button by its label, exactly as the slash command', async () => {
     await publishLayout();
     await say(BOT_A1);
+    // The text the ICONED button actually carries on the wire — what a tap sends back.
+    const iconed = (keyboardOf(sends()[0]?.body) as Record<string, unknown>[][])
+      .flat()
+      .find((button) => button['icon_custom_emoji_id'] === WALLET_ICON);
+    expect(iconed?.['text']).toBe(label('bot.menu.wallet'));
     telegram.calls.length = 0;
-    await say(BOT_A1, label('bot.menu.wallet'));
+    await say(BOT_A1, String(iconed?.['text']));
     await say(BOT_A1, '/wallet');
     expect(sends()).toHaveLength(2);
     expect(sends()[0]?.body['text']).toBe(sends()[1]?.body['text']);

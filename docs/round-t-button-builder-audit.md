@@ -655,3 +655,64 @@ package needs it — routing is unchanged, which is the point); `CLAUDE.md`, `do
 UNKNOWNs to log in `docs/open-questions.md` by T1: Bot API `KeyboardButton.style` /
 `icon_custom_emoji_id` exact semantics and eligibility (not verifiable from this session —
 egress blocked), reply-keyboard per-row limits, and what a tap on an iconed button sends.
+
+## 15. T2 — as built (runtime and wire)
+
+Branch `round-t/t2-telegram-wire`; falsification record `docs/round-t-t2-falsification.md`.
+
+**Wire.** `send-message.ts` holds the one descriptor, `TelegramReplyKeyboardButton
+{ text; style?; iconCustomEmojiId? }`, and `replyKeyboardButtonMarkup` turns each into a
+`KeyboardButton`. `textMessageBody.keyboard` accepts a string (`{ text }`, the admin row) or a
+descriptor. `style` is written only when it is one of `primary | success | danger`; an empty
+icon id is never written. Nothing else in the markup changed (`resize_keyboard`,
+`is_persistent`, `one_time_keyboard`, `selective`; inline buttons still win).
+
+```jsonc
+// published layout, eligible bot (wallet: success + icon; catalog: primary; help: default)
+{ "keyboard": [[{ "text": "<bot.menu.wallet>", "style": "success", "icon_custom_emoji_id": "5368…286" },
+                { "text": "<bot.menu.catalog>", "style": "primary" }],
+               [{ "text": "<bot.menu.help>" }]], "resize_keyboard": true, … }
+// same message from a second bot of the tenant whose appearance test is not SENT: no icon
+// never-published tenant, any bot: exactly the pre-round-T bytes — [{ "text": … }] only
+```
+
+**Per-bot icons.** `TelegramCustomerMessenger.send` reads `menu.keyboardFor(scope)` and the
+SENDING bot's `decorationFor(scope, botInstanceId)` once, for the text and the keyboard alike
+(`replyKeyboardFor`). An icon is set only when the button has an `iconSlot`, the bot's last
+appearance test is `SENT`, and the tenant has a switched-on custom emoji for that slot.
+
+**Fallback (owner rule B5).** An iconed keyboard makes the last part decorated, so the
+existing one-shot retry (`deliverDecorated`) covers it; its plain request strips entities,
+`<tg-emoji>` tags AND icons, keeps every label and style. Outcome table:
+
+| first answer to an iconed request                          | second send?                                              | bot's shared custom-emoji state              | operator                                                            |
+| ---------------------------------------------------------- | --------------------------------------------------------- | -------------------------------------------- | ------------------------------------------------------------------- |
+| 2xx `ok`                                                   | no                                                        | unchanged                                    | —                                                                   |
+| 4xx naming custom emoji (`isCustomEmojiDenial`) + retry ok | one, without icons                                        | `REJECTED / appearance.custom_emoji_refused` | `telegram.appearance_decoration_failed`, `eligibilityChanged: true` |
+| any other 4xx + retry ok                                   | one, without icons                                        | unchanged                                    | same condition, `eligibilityChanged: false`                         |
+| any 4xx + retry refused                                    | one (already made); its answer is the message's (REFUSED) | unchanged                                    | the customer-send condition, as before                              |
+| timeout / dropped connection / unreadable 2xx / 5xx        | NO (UNKNOWN)                                              | unchanged                                    | the customer-send condition, `UNCERTAIN`                            |
+| 429                                                        | NO (RATE_LIMITED)                                         | unchanged                                    | —                                                                   |
+
+A refused decoration on an earlier part of a split message strips the last part's icons, so
+one send makes at most one retry. Text-only decoration keeps its pre-T2 reading (a landed
+retry switches the bot off). The decoration condition's context carries the bot id, template
+key, Telegram error CODE and (for an iconed request) `keyboardIcons` / `eligibilityChanged`
+only — never a token, a description or an emoji id.
+
+**Not changed:** routing (`bot-runtime.ts`), contracts, migrations, the container, the web.
+`main-menu.ts`'s comment on `rowsFor` ("until the transport carries styles", T1's file) is
+now historical; `rowsFor` still serves the builder's read and the bot-menu page.
+
+**Real-Telegram acceptance (not CI; the fakes prove only agreement with themselves):**
+
+- R-ACC-1 publish a layout using `primary`, `success`, `danger` and `default`; `/start` on a
+  real bot: the request is accepted and each style renders; `default` renders unstyled.
+- R-ACC-2 configure the icon slot; send from a bot whose appearance test is `SENT`: the icon
+  renders and the label text is unchanged. From a bot known to be ineligible (forced to carry
+  the icon), record the HTTP status and the exact `description` (`OQ-T-API-05`); confirm one
+  icon-less retry lands, styles intact, and whether the bot was switched off.
+- R-ACC-3 tap every styled and iconed button: Telegram sends exactly the label `text`, and
+  the command reached is the button's.
+- Confirm on the real client that an icon from an eligible bot is not ALSO drawn as the
+  label's leading emoji twice (operator-facing warning in the builder, audit §5).

@@ -110,6 +110,7 @@ const RECORDS = [
   'docs/r1-falsification.md',
   'docs/f5-falsification.md',
   'docs/round-t-t1-falsification.md',
+  'docs/round-t-t2-falsification.md',
 ];
 /**
  * The fewest citations this record may contain.
@@ -139,8 +140,11 @@ const RECORDS = [
  * 2459 → 2449: nine rows (ten citations) of the reseller credit line retired with it,
  * by the owner's decision of 2026-10-01 — WP9B-02, -03, -15, -21 and R14-02, -09, -10,
  * -12, -16. Each record says so above its table.
+ *
+ * 2468 → 2493: round T (T2), `docs/round-t-t2-falsification.md` — fourteen rows, 25
+ * citations.
  */
-const EXPECTED = 2468;
+const EXPECTED = 2493;
 /**
  * A table whose last column is one of these is making citations.
  *
