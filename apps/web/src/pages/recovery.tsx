@@ -34,7 +34,6 @@ import {
   Empty,
   KV,
   Ltr,
-  MaturityBadge,
   Num,
   PageHead,
   StatCard,
@@ -43,6 +42,7 @@ import {
   type Column,
 } from '../ui/kit';
 import { Icon } from '../ui/icons';
+import { RecoveryKitSection, recoveryFailureAdvice } from './recovery-kit';
 
 /**
  * Backup and disaster recovery.
@@ -51,12 +51,12 @@ import { Icon } from '../ui/icons';
  * what has it produced, what is the newest thing that could actually be
  * restored, and — last, because it is the dangerous one — restore from it.
  *
- * NOTHING HERE IS FAKE. Every control calls a real endpoint, and the two
- * capabilities this release does not have say so in the place an operator would
- * look for them rather than being hidden: uploading is reported off when it is
- * off, and foreign-installation archives are reported «پشتیبانی نمی‌شود»
- * because a missing button reads as an oversight and a refusal reads as a
- * decision.
+ * NOTHING HERE IS FAKE. Every control calls a real endpoint, and a capability
+ * this installation does not have says so in the place an operator would look
+ * for it rather than being hidden: uploading is reported off when it is off.
+ * An archive from ANOTHER installation is restorable once that installation's
+ * Recovery Kit is imported (ADR-0032), and the section that does it sits above
+ * the upload, in the order an operator on a fresh server needs it.
  *
  * `permission` decides what is DRAWN and never what is allowed. The server
  * re-checks every call, and this page would be exactly as safe if it drew all of
@@ -179,6 +179,13 @@ export function RecoveryPage({
         </StateSwitch>
       </Card>
 
+      {/*
+        The Recovery Kit (ADR-0032), ABOVE the upload: on a fresh server the kit
+        is imported first and the old server's backup uploaded second, and the
+        page reads in the order the operator acts.
+      */}
+      <RecoveryKitSection permissions={permissions} />
+
       <Card
         title={t('web.recovery_operations_title')}
         hint={t('web.recovery_upload_hint')}
@@ -211,20 +218,6 @@ export function RecoveryPage({
         </StateSwitch>
       </Card>
 
-      <Card title={t('web.recovery_foreign_unsupported')} tone="muted">
-        {/*
-          Reported rather than omitted. ADR-0028: supporting a foreign archive
-          means holding another installation's key, and the only ways to do that
-          are a form that accepts one — forbidden — or a key-import feature that
-          does not exist. A missing section would read as an oversight.
-        */}
-        <Banner tone="neutral" title={t('web.recovery_foreign_unsupported')}>
-          {t('web.recovery_foreign_hint')}
-        </Banner>
-        <p className="muted small">
-          <MaturityBadge value="unsupported" /> {t('web.recovery_foreign_unsupported')}
-        </p>
-      </Card>
       <span hidden onClick={onLink} />
     </>
   );
@@ -557,6 +550,10 @@ function RecoveryOperations({
                   ][])),
             ]}
           />
+
+          {recoveryFailureAdvice(current.failureCode) !== null && (
+            <Banner tone="danger">{recoveryFailureAdvice(current.failureCode)}</Banner>
+          )}
 
           {current.state === 'UPLOADED' && (
             <>
