@@ -334,6 +334,16 @@ M = [
     ('REV-F12', [(PS, "        if (decided) {\n          await this.deps.audit.record(", "        if (false) {\n          await this.deps.audit.record(")],
      T_GW, 'TPTG-33', 'KILL'),
 
+    # --- the Codex review of #136 -----------------------------------------------------------
+    ('CDX-1', [(PS, "    await this.deps.gatewayInvoices.requestInquiry(scope, payment.id, now, tx);\n", "")],
+     T_GW, 'Codex #136-1', 'KILL'),
+    ('CDX-2', [(GPS, "        return 'CLOSED' as const;\n      }\n      return (await cards.markSubmissionSending(",
+                "      }\n      return (await cards.markSubmissionSending(")],
+     T_GW, 'Codex #136-2', 'KILL'),
+    ('CDX-3', [(RC, "      await this.deps.cardTransfer.lockCaptureNamespace(\n        scope,\n        input.botInstanceId,\n        input.customerId,\n        tx,\n      );\n", "")],
+     T_GW, 'Codex #136-3', 'KILL'),
+    ('CDX-4', [(RC, "      if (\n        submissions.some(", "      if (\n        false &&\n        submissions.some(")],
+     T_GW, 'Codex #136-4', 'KILL'),
     # --- the website route's rules, re-run over the refactored code (docs/tonpays-falsification.md)
     ('TP-01', [(DTP, "      return paid === true ? 'APPROVED' : 'OPEN';", "      return paid ? 'APPROVED' : 'OPEN';")],
      T_WA, 'approves ONLY completed with paid === true', 'KILL'),

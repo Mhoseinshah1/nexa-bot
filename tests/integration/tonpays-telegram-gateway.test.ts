@@ -746,7 +746,9 @@ describe('TonPays Telegram, through the one settlement path', () => {
       clock.shift(6 * 60_000);
       await pass();
       expect(await openWindow(paymentId)).not.toBeNull();
-      expect(await sendPhoto(file)).toBe('DUPLICATE');
+      // The same photo again is never queued: its submission has ended, so the customer is
+      // asked for another (Codex review of #136) rather than told it is on its way.
+      expect(await sendPhoto(file)).toBe('ALREADY_SENT');
       expect(await sendPhoto(photo('receipt-5b'))).toBe('QUEUED');
     });
 
@@ -953,6 +955,130 @@ describe('TonPays Telegram, through the one settlement path', () => {
       });
     });
 
+    it('Codex #136-1: the review and its first inquiry commit together — a lane that dies after the review still polls it', async () => {
+      const { paymentId } = await createdAttempt();
+      await openWindow(paymentId);
+      await sendPhoto(photo('receipt-c1'));
+      // The last pre-deadline inquiry has already been made: nothing is scheduled.
+      fake.duringReceipt = async () => {
+        await ctx.container.database.db.execute(
+          sql`UPDATE gateway_invoices SET next_inquiry_at = NULL WHERE payment_id = ${paymentId}`,
+        );
+      };
+      const real = ctx.container.payments;
+      const dying = telegramLaneWith(ctx, fake, {
+        payments: {
+          confirmGatewayPayment: (...args) => real.confirmGatewayPayment(...args),
+          failGatewayPayment: (...args) => real.failGatewayPayment(...args),
+          // Commits the review, then the worker dies before its own next step.
+          recordProviderReview: async (...args) => {
+            await real.recordProviderReview(...args);
+            throw new Error('worker died');
+          },
+        },
+      });
+      await dying.runOnce(tenantA);
+      const payment = await paymentOf(paymentId);
+      expect(payment.provider_review_until).not.toBeNull();
+      expect((await invoiceOf(paymentId)).next_inquiry_at).not.toBeNull();
+    });
+
+    it('Codex #136-2: a payment closed between the lane’s read and the stamp is never uploaded to', async () => {
+      const { paymentId } = await createdAttempt();
+      await openWindow(paymentId);
+      await sendPhoto(photo('receipt-c2'));
+      await ctx.container.database.db.execute(
+        sql`UPDATE gateway_invoices SET next_inquiry_at = NULL WHERE tenant_id = ${tenantA.tenantId}`,
+      );
+      let armed = true;
+      const racing = telegramLaneWith(ctx, fake, {
+        paymentRecords: (repo) => ({
+          findById: async (scope, id, tx) => {
+            const read = await repo.findById(scope, id, tx);
+            if (armed && id === paymentId) {
+              armed = false;
+              // The inquiry lane fails it in another transaction, right after this read.
+              await ctx.container.payments.failGatewayPayment(tenantA, systemActor(key()), id, {
+                reasonCode: 'tonpays_telegram:rejected',
+                notifyCustomer: false,
+              });
+            }
+            return read;
+          },
+          findByIdForUpdate: (scope, id, tx) => repo.findByIdForUpdate(scope, id, tx),
+          setExternalReference: (...args) => repo.setExternalReference(...args),
+          loseTrackOfReviewed: (...args) => repo.loseTrackOfReviewed(...args),
+        }),
+      });
+      await racing.runOnce(tenantA);
+      expect(armed).toBe(false);
+      expect((await paymentOf(paymentId)).state).toBe('FAILED');
+      expect(fake.receipts).toHaveLength(0);
+      expect((await submissions(paymentId))[0]).toMatchObject({ state: 'ABANDONED' });
+    });
+
+    it('Codex #136-3: a manual window opened while a photo is being taken wins it — the photo is never queued for TonPays', async () => {
+      // The manual window is for ANOTHER payment of this customer, as it is in life: no row
+      // lock is shared between the two transactions, only the capture namespace.
+      const other = await createdAttempt();
+      const { paymentId } = await createdAttempt();
+      await openWindow(paymentId);
+      const manual = new DrizzleReceiptCaptureRepository(ctx.container.database.db);
+      let release: () => void = () => undefined;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let opened: () => void = () => undefined;
+      const opening = new Promise<void>((resolve) => {
+        opened = resolve;
+      });
+      const now = ctx.container.clock.now();
+      // The manual window's own opening path: the namespace lock, then close-and-open.
+      const superseding = ctx.container.uow.run(tenantA, async (tx) => {
+        await manual.lockForCustomer(tenantA, BOT_A, maryam, tx);
+        await manual.open(
+          tenantA,
+          {
+            id: ctx.container.ids.uuid() as never,
+            botInstanceId: BOT_A,
+            customerId: maryam,
+            paymentId: other.paymentId,
+            openedAt: now,
+            expiresAt: new Date(now.getTime() + 600_000),
+          },
+          tx,
+        );
+        opened();
+        await held;
+      });
+      await opening;
+      const taking = sendPhoto(photo('receipt-c3'));
+      await awaitBlocked();
+      release();
+      await superseding;
+      expect(await taking).toBe('NO_WINDOW');
+      expect(await submissions(paymentId)).toEqual([]);
+    });
+
+    it('Codex #136-4: the very photo of a submission that has ended is not "queued" — it asks for another, and the window stays open', async () => {
+      const { paymentId } = await createdAttempt();
+      await openWindow(paymentId);
+      fake.receiptMode = { status: 400, code: 'INVALID_RECEIPT_TYPE' };
+      expect(await sendPhoto(photo('receipt-c4'))).toBe('QUEUED');
+      await pass();
+      expect((await submissions(paymentId))[0]).toMatchObject({ state: 'REFUSED' });
+      await openWindow(paymentId);
+      expect(await sendPhoto(photo('receipt-c4'))).toBe('ALREADY_SENT');
+      expect(await submissions(paymentId)).toHaveLength(1);
+      const [open] = await rows<{ n: number }>(
+        sql`SELECT count(*)::int AS n FROM gateway_receipt_captures
+             WHERE payment_id = ${paymentId} AND closed_at IS NULL`,
+      );
+      expect(open?.n).toBe(1);
+      // A different photo is taken.
+      expect(await sendPhoto(photo('receipt-c4b'))).toBe('QUEUED');
+    });
+
     it('review F10: a receipt window past its own ten minutes takes no photo, though the payment is open', async () => {
       const { paymentId } = await createdAttempt();
       expect(await openWindow(paymentId)).not.toBeNull();
@@ -1067,4 +1193,18 @@ describe('TonPays Telegram, through the one settlement path', () => {
       expect(lines.length).toBeGreaterThan(0);
     });
   });
+
+  /** Waits until PostgreSQL reports a backend of this database blocked on a lock. */
+  async function awaitBlocked(): Promise<void> {
+    for (let attempt = 0; attempt < 2_500; attempt += 1) {
+      const found = await rows<{ n: number }>(
+        sql`SELECT count(*)::int AS n FROM pg_stat_activity
+             WHERE datname = current_database() AND wait_event_type = 'Lock'
+               AND query NOT ILIKE '%pg_stat_activity%'`,
+      );
+      if ((found[0]?.n ?? 0) >= 1) return;
+      await new Promise((resolve) => setTimeout(resolve, 2));
+    }
+    throw new Error('nothing ever blocked on a lock; the interleaving never happened');
+  }
 });

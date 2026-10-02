@@ -276,7 +276,7 @@ export interface PaymentServiceDeps {
    */
   readonly gatewayInvoices: Pick<
     GatewayInvoiceRepository,
-    'open' | 'findOpenAttempt' | 'findByPayment' | 'requestReconcileInquiry'
+    'open' | 'findOpenAttempt' | 'findByPayment' | 'requestReconcileInquiry' | 'requestInquiry'
   >;
   /**
    * TonPays Telegram (§9.6.3 c): the two rows the acknowledgement's own transaction also
@@ -3811,6 +3811,13 @@ export class PaymentService {
     );
     if (!opened) return false;
     await this.deps.cardTransfer.markOpenedReview(scope, input.submissionId, tx);
+    /*
+     * The review's first inquiry, in the review's own transaction (Codex review of #136):
+     * the last inquiry before the 70-minute deadline may already have cleared the schedule,
+     * and a worker that died after this commit would leave a review nothing ever asks about
+     * — UNKNOWN in 24 hours, whatever TonPays had decided.
+     */
+    await this.deps.gatewayInvoices.requestInquiry(scope, payment.id, now, tx);
     await this.deps.cardTransfer.closeCapturesForPayment(
       scope,
       payment.id,

@@ -295,6 +295,10 @@ export function telegramLaneWith(
     readonly invoiceScreens?: GatewayPaymentServiceDeps['invoiceScreens'];
     readonly logger?: GatewayPaymentServiceDeps['logger'];
     readonly websiteFetch?: FetchLike;
+    /** Wraps the lane's payment reads, so a case can act between a read and the next step. */
+    readonly paymentRecords?: (
+      real: DrizzlePaymentRepository,
+    ) => GatewayPaymentServiceDeps['paymentRecords'];
   } = {},
 ): GatewayPaymentService {
   const db = ctx.container.database.db;
@@ -308,7 +312,10 @@ export function telegramLaneWith(
   return new GatewayPaymentService({
     invoices: new DrizzleGatewayInvoiceRepository(db),
     payments: overrides.payments ?? ctx.container.payments,
-    paymentRecords: new DrizzlePaymentRepository(db),
+    paymentRecords:
+      overrides.paymentRecords === undefined
+        ? new DrizzlePaymentRepository(db)
+        : overrides.paymentRecords(new DrizzlePaymentRepository(db)),
     adapters: (provider) =>
       provider === 'TONPAYS_TELEGRAM' ? telegram : provider === 'TONPAYS' ? website : null,
     cardTransfer: new DrizzleGatewayCardTransferRepository(db),

@@ -149,7 +149,7 @@ export interface GatewayPaymentServiceDeps {
   >;
   readonly paymentRecords: Pick<
     PaymentRepository,
-    'findById' | 'setExternalReference' | 'loseTrackOfReviewed'
+    'findById' | 'findByIdForUpdate' | 'setExternalReference' | 'loseTrackOfReviewed'
   >;
   /**
    * TonPays Telegram (§7.3–§7.5): card-change requests, receipt windows and submissions.
@@ -1541,10 +1541,48 @@ export class GatewayPaymentService {
       await decide('ABANDONED', { errorCode: 'nexa.deadline_passed' });
       return 'DONE';
     }
-    const stamped = await this.deps.uow.run(scope, (tx) =>
-      cards.markSubmissionSending(scope, submission.id, file.bytes.byteLength, now, tx),
-    );
-    if (!stamped) return 'DONE';
+    /*
+     * Decided again under the payment's lock, in the transaction that stamps the send (Codex
+     * review of #136): the read above is unlocked, and an inquiry's confirmation or failure,
+     * a review opening or the expiry sweep can close the payment before this commits. The
+     * stamp is the point of no return; it is taken only for a payment still open, on the
+     * same invoice.
+     */
+    const stamped = await this.deps.uow.run(scope, async (tx) => {
+      const locked = await this.deps.paymentRecords.findByIdForUpdate(
+        scope,
+        submission.paymentId,
+        tx,
+      );
+      const current = await this.deps.invoices.findByPayment(scope, submission.paymentId, tx);
+      if (
+        locked === null ||
+        !windowOpen({
+          state: locked.state,
+          expiresAt: locked.expiresAt,
+          reviewUntil: locked.providerReviewUntil,
+        }) ||
+        current === null ||
+        current.creationState !== 'CREATED' ||
+        current.providerInvoiceId !== submission.providerInvoiceId
+      ) {
+        return 'CLOSED' as const;
+      }
+      return (await cards.markSubmissionSending(
+        scope,
+        submission.id,
+        file.bytes.byteLength,
+        now,
+        tx,
+      ))
+        ? ('STAMPED' as const)
+        : ('LOST' as const);
+    });
+    if (stamped === 'CLOSED') {
+      await decide('ABANDONED', { errorCode: 'nexa.deadline_passed' });
+      return 'DONE';
+    }
+    if (stamped === 'LOST') return 'DONE';
     const outcome = await adapter.uploadReceipt(apiKey, invoice.providerInvoiceId, {
       bytes: file.bytes,
       mimeType,

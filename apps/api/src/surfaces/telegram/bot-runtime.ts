@@ -14530,6 +14530,8 @@ export class BotRuntime {
       case 'QUEUED':
       case 'DUPLICATE':
         return reply('bot.payment.gateway_receipt_queued');
+      case 'ALREADY_SENT':
+        return reply('bot.payment.gateway_receipt_already_sent');
       case 'PHOTO_ONLY':
         return reply('bot.payment.gateway_receipt_photo_only');
       case 'TOO_LARGE':

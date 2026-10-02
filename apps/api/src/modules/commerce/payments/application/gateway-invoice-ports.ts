@@ -810,6 +810,16 @@ export interface GatewayCardTransferRepository {
     },
     tx: unknown,
   ): Promise<GatewayReceiptCaptureRecord>;
+  /**
+   * Take the (tenant, bot, customer) capture lock every window opening takes — manual and
+   * provider alike — so a photo's routing and a window's supersession are serialised.
+   */
+  lockCaptureNamespace(
+    scope: TenantContext,
+    botInstanceId: string,
+    customerId: string,
+    tx: unknown,
+  ): Promise<void>;
   /** The open window for (tenant, bot, customer), whatever its deadline, or null. */
   findOpenCapture(
     scope: TenantContext,

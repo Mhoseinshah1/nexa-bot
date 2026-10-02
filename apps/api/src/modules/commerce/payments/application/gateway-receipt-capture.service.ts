@@ -38,6 +38,8 @@ export type GatewayReceiptPhotoResult =
   | 'QUEUED'
   /** This photo is already a submission, or one is already in flight: nothing new. */
   | 'DUPLICATE'
+  /** This photo was sent for this payment before and that submission has ended. */
+  | 'ALREADY_SENT'
   /** A document, video or anything but a photo: nothing stored, the window stays open. */
   | 'PHOTO_ONLY'
   /** Declared over the provider's 5 MB: nothing stored, the window stays open. */
@@ -252,7 +254,17 @@ export class GatewayReceiptCaptureService {
        * The window read again, in this transaction and after the payment's lock (review
        * F10): the read above was outside any transaction, and a manual window opened since
        * has closed this one. The photo is then the manual flow's, never this provider's.
+       *
+       * UNDER the capture namespace's lock (Codex review of #136), the one every window
+       * opening takes: an unlocked re-read could see this window open while a manual one,
+       * opening concurrently, closed it — and the photo would still go to TonPays.
        */
+      await this.deps.cardTransfer.lockCaptureNamespace(
+        scope,
+        input.botInstanceId,
+        input.customerId,
+        tx,
+      );
       const current = await this.deps.cardTransfer.findOpenCapture(
         scope,
         input.botInstanceId,
@@ -302,6 +314,22 @@ export class GatewayReceiptCaptureService {
       }
       const submissions = await this.deps.cardTransfer.submissionsFor(scope, capture.paymentId, tx);
       if (!receiptUploadAvailable(invoice, submissions)) return 'DUPLICATE';
+      /*
+       * The very photo of a submission that has ENDED (Codex review of #136): the (payment,
+       * file) key refuses a second row, so nothing would be queued — the customer is asked
+       * for another photo instead of being told this one is on its way, and the window stays
+       * open for it.
+       */
+      if (
+        submissions.some(
+          (one) =>
+            one.telegramFileUniqueId === input.file.fileUniqueId &&
+            one.state !== 'QUEUED' &&
+            one.state !== 'SENDING',
+        )
+      ) {
+        return 'ALREADY_SENT';
+      }
       const queued = await this.deps.cardTransfer.queueSubmission(
         scope,
         {

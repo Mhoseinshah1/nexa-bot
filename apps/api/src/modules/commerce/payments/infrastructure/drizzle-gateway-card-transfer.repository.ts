@@ -331,6 +331,20 @@ export class DrizzleGatewayCardTransferRepository implements GatewayCardTransfer
     return captureOf(row);
   }
 
+  async lockCaptureNamespace(
+    scope: TenantContext,
+    botInstanceId: string,
+    customerId: string,
+    tx: unknown,
+  ): Promise<void> {
+    const tenantId = requireTenantId(scope);
+    // The very key `openCapture` and the manual window's `open` take.
+    await this.exec(tx).execute(
+      sql`SELECT pg_advisory_xact_lock(${RECEIPT_CAPTURE_LOCK_CLASS},
+            hashtext(${`${tenantId}:${botInstanceId}:${customerId}`}))`,
+    );
+  }
+
   async findOpenCapture(
     scope: TenantContext,
     botInstanceId: string,
