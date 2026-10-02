@@ -34,3 +34,20 @@ holds — the trial is left out while the server says no panel offers one — is
 | T3-18b | the same, on the OPS-A guard suite                                     | as T3-18                                                           | `ops-a-redesign.test.tsx` › guards a moved main-menu arrangement until it is saved or restored                            | KILLED |
 | T3-19  | the style picker offers exactly the contract's four                    | the picker drops `danger`                                          | `bot-buttons-builder.test.tsx` › offers exactly the four styles and saves the one chosen                                  | KILLED |
 | T3-20  | a row emptied by a move is dropped, never saved empty                  | `withRows` keeps empty rows                                        | `bot-buttons-builder.test.tsx` › drag and drop and the non-drag controls produce the identical draft                      | KILLED |
+
+## The review of PR #134
+
+Rows T3-21 to T3-27 answer the one Codex review of PR #134 (findings 1–6 and 8; finding 7
+was rejected because the read cannot express it — every stored layout is returned
+normalised, so a button a later release added is indistinguishable from one the operator
+configured). Same procedure as above; each cited test was written to fail before its fix.
+
+| #     | rule                                                                     | mutation                                                           | tests that die                                                                                                 | result |
+| ----- | ------------------------------------------------------------------------ | ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------- | ------ |
+| T3-21 | nothing is editable while a builder write is in flight                   | `editable` ignores the pending write                               | `bot-buttons-builder.test.tsx` › #1 allows no edit while a write is in flight, so its answer drops nothing     | KILLED |
+| T3-22 | a write's answer outranks the snapshot that was on screen when it landed | the sync ignores which snapshot the answer superseded              | `bot-buttons-builder.test.tsx` › #2 keeps a publish’s answer over the snapshot that was on screen before it    | KILLED |
+| T3-23 | only the latest write's refusal is shown                                 | the error shown is the first errored mutation's                    | `bot-buttons-builder.test.tsx` › #3 forgets an earlier write’s refusal once a later write succeeds             | KILLED |
+| T3-24 | a failed re-read never replaces the edit with cached data                | the reload adopts the result's data whether or not the read failed | `bot-buttons-builder.test.tsx` › #4 keeps the edit and the conflict when the re-read after a 409 fails         | KILLED |
+| T3-25 | the live keyboard shows the published layout's styles                    | every live key is drawn `default`                                  | `bot-buttons-builder.test.tsx` › #5 draws the live keyboard with the published layout’s styles and icons       | KILLED |
+| T3-26 | a publish over an unreadable layout is not the first publication         | the unreadable case falls through to the first-publication message | `bot-buttons-builder.test.tsx` › #6 never calls a publish over an unreadable layout the first publication      | KILLED |
+| T3-27 | an icon beside a label's own emoji is warned about                       | the warning is never drawn                                         | `bot-buttons-builder.test.tsx` › #8 warns, without refusing, when an icon would sit beside a label’s own emoji | KILLED |
