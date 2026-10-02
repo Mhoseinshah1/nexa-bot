@@ -257,10 +257,7 @@ describe('Central FX and the Stars route (packages FX, FX-STARS)', () => {
   }
 
   const configureStars = (
-    config: Partial<PaymentGatewayConfig> & {
-      customerFeeBasisPoints?: number;
-      providerUnitRateMinor?: bigint | null;
-    } = {},
+    config: Partial<PaymentGatewayConfig> & { customerFeeBasisPoints?: number } = {},
   ) =>
     api.container.paymentGateways.configure(tenantA, owner, {
       idempotencyKey: key(),
