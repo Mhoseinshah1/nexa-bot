@@ -231,6 +231,18 @@ describe('«دکمه‌های ربات»', () => {
     await waitFor(() => expect(reads('/bot-menu/builder')).toBeGreaterThan(builderReads));
   });
 
+  it('places «دکمه‌های شیشه‌ای ربات» below the command menu and sync, above the texts (owner spec §6)', async () => {
+    api();
+    renderPage(page());
+    const glass = await screen.findByRole('heading', { name: t('web.ib_title') });
+    const sync = await screen.findByRole('heading', { name: t('web.bot_buttons_sync_title') });
+    const texts = screen.getByRole('heading', { name: t('web.bot_buttons_labels_title') });
+    const follows = (a: Element, b: Element) =>
+      (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+    expect(follows(sync, glass)).toBe(true);
+    expect(follows(glass, texts)).toBe(true);
+  });
+
   it('lists every main-menu button, the trial and the referral included, with its label and its gate', async () => {
     api();
     renderPage(page());

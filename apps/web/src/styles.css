@@ -25,6 +25,7 @@
 @import './styles/pages/commerce-b.css';
 @import './styles/pages/ops-a.css';
 @import './styles/pages/ops-b.css';
+@import './styles/pages/inline-buttons.css';
 
 /*
  * `hidden` means hidden, whatever else a rule says about display.
