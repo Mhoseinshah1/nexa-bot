@@ -2219,6 +2219,7 @@ export async function exportRecoveryKit(input: {
 export async function importRecoveryKit(input: {
   file: File;
   passphrase: string;
+  accountPassword: string;
   idempotencyKey: string;
 }): Promise<ImportRecoveryKitResponse> {
   // FileReader's data URL, the way the other file pickers here read a file: one
@@ -2234,7 +2235,12 @@ export async function importRecoveryKit(input: {
   });
   return post(
     RECOVERY_KIT_ROUTES.import,
-    { kit, passphrase: input.passphrase, idempotencyKey: input.idempotencyKey },
+    {
+      kit,
+      passphrase: input.passphrase,
+      accountPassword: input.accountPassword,
+      idempotencyKey: input.idempotencyKey,
+    },
     importRecoveryKitResponseSchema,
   );
 }

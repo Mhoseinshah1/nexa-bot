@@ -122,7 +122,10 @@ function ExportForm() {
       link.href = url;
       link.download = filename;
       link.click();
-      URL.revokeObjectURL(url);
+      // After a tick, not at once: some browsers start the download only once
+      // the click has been handled, and a URL revoked before that downloads
+      // nothing.
+      setTimeout(() => URL.revokeObjectURL(url), 0);
       setDone(true);
     },
     onSettled: () => {
@@ -196,23 +199,28 @@ function ExportForm() {
 function ImportForm({ onImported }: { onImported: () => void }) {
   const [file, setFile] = useState<File | null>(null);
   const [passphrase, setPassphrase] = useState('');
+  const [accountPassword, setAccountPassword] = useState('');
   const [result, setResult] = useState<ImportRecoveryKitResponse | null>(null);
 
   const importer = useMutation({
-    mutationFn: (input: { file: File; passphrase: string }) =>
+    mutationFn: (input: { file: File; passphrase: string; accountPassword: string }) =>
       importRecoveryKit({ ...input, idempotencyKey: newIdempotencyKey() }),
     onSuccess: (response) => {
       setResult(response);
       onImported();
     },
-    onSettled: () => setPassphrase(''),
+    onSettled: () => {
+      setPassphrase('');
+      setAccountPassword('');
+    },
   });
 
+  const ready = file !== null && passphrase !== '' && accountPassword !== '';
   const onSubmit = (event: FormEvent): void => {
     event.preventDefault();
-    if (file === null || passphrase === '') return;
+    if (file === null || !ready) return;
     setResult(null);
-    importer.mutate({ file, passphrase });
+    importer.mutate({ file, passphrase, accountPassword });
   };
 
   return (
@@ -235,12 +243,18 @@ function ImportForm({ onImported }: { onImported: () => void }) {
           onChange={(event) => setPassphrase(event.currentTarget.value)}
         />
       </label>
+      <label className="field">
+        <span className="field-label">{t('web.kit_account_password')}</span>
+        <input
+          type="password"
+          className="input"
+          autoComplete="current-password"
+          value={accountPassword}
+          onChange={(event) => setAccountPassword(event.currentTarget.value)}
+        />
+      </label>
       <div className="btn-group">
-        <button
-          type="submit"
-          className="btn primary"
-          disabled={file === null || passphrase === '' || importer.isPending}
-        >
+        <button type="submit" className="btn primary" disabled={!ready || importer.isPending}>
           <Icon name="upload" />
           {importer.isPending ? t('web.kit_importing') : t('web.kit_import_button')}
         </button>
@@ -288,6 +302,7 @@ function KeyTable({
             {t(ROLE_LABEL[row.origin])}
           </Badge>
           {!row.available && <Badge tone="danger">{t('web.kit_key_unavailable')}</Badge>}
+          {row.arrivedByRestore && <Badge tone="warn">{t('web.kit_key_arrived_by_restore')}</Badge>}
         </>
       ),
     },
@@ -304,7 +319,7 @@ function KeyTable({
     {
       key: 'fingerprint',
       header: t('web.kit_key_fingerprint'),
-      render: (row) => <Ltr>{row.fingerprint.slice(0, 16)}</Ltr>,
+      render: (row) => (row.fingerprint === null ? '—' : <Ltr>{row.fingerprint.slice(0, 16)}</Ltr>),
     },
     {
       key: 'actions',
@@ -441,6 +456,7 @@ const KIT_ERRORS: Record<string, WebKey> = {
   [PLATFORM_ERROR_CODES.RECOVERY_KIT_REAUTHENTICATION_FAILED]: 'web.kit_error_reauth',
   [PLATFORM_ERROR_CODES.RECOVERY_KIT_PASSPHRASE_REJECTED]: 'web.kit_error_passphrase',
   [PLATFORM_ERROR_CODES.RECOVERY_KIT_BUSY]: 'web.kit_error_busy',
+  [PLATFORM_ERROR_CODES.RECOVERY_KIT_TOO_MANY_KEYS]: 'web.kit_error_too_many',
   [PLATFORM_ERROR_CODES.INSTALLATION_KEY_IN_USE]: 'web.kit_error_in_use',
 };
 
