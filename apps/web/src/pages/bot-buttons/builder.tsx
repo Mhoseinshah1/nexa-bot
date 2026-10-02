@@ -911,6 +911,13 @@ function PublishDialog({
       <p>{t('web.bb_publish_question')}</p>
       {unreadable ? (
         <Banner tone="warn">{t('web.bb_publish_over_unreadable')}</Banner>
+      ) : view.superseded ? (
+        /*
+         * Superseded (T4 F-2): customers see what an older release wrote, not `before`, so a
+         * diff against `before` — and above all "no layout change" — would describe a change
+         * that is not the one customers get. The two keyboards below are the comparison.
+         */
+        <Banner tone="warn">{t('web.bb_publish_over_superseded')}</Banner>
       ) : before === null ? (
         <Banner tone="info">{t('web.bb_publish_first')}</Banner>
       ) : changes !== null && changes.length === 0 ? (

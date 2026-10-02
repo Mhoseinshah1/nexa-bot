@@ -929,6 +929,31 @@ describe('the button builder — review of PR #134', () => {
     expect(dialog.queryByText(t('web.bb_publish_first'))).toBeNull();
   });
 
+  it('F-2 never says "no layout change" over a superseded layout: customers’ keyboard changes', async () => {
+    // P-5's path: reseeded from live, revision 2 restored into the draft — the draft equals
+    // what is published, yet customers see what an older release wrote, and publishing
+    // replaces it.
+    const view = explicitView({ source: 'LEGACY', superseded: true });
+    builderApi(
+      builderView({
+        ...view,
+        draft: draftView({
+          version: 4,
+          differsFromPublished: false,
+          layout: view.published?.layout ?? DEFAULT_EXPLICIT_MAIN_MENU,
+        }),
+      }),
+    );
+    renderPage(page());
+    await ready();
+    expect(toolbarButton(t('web.bb_publish')).disabled).toBe(false);
+    fireEvent.click(toolbarButton(t('web.bb_publish')));
+    const dialog = within(screen.getByRole('dialog', { name: t('web.bb_publish_title') }));
+    expect(dialog.getByText(t('web.bb_publish_over_superseded'))).toBeTruthy();
+    expect(dialog.queryByText(t('web.bb_publish_no_layout_change'))).toBeNull();
+    expect(dialog.queryByTestId('bb-diff')).toBeNull();
+  });
+
   it('#8 warns, without refusing, when an icon would sit beside a label’s own emoji', async () => {
     builderApi(builderView({ itemOverrides: { services: { label: 'سرویس‌ها' } } }));
     renderPage(page());

@@ -396,6 +396,9 @@ two-per-row packing, no styles/icons. That is a graceful degradation, not a rese
   setting (the operator's latest act wins), and the builder read reports
   `superseded: true` so the page says "the live keyboard was changed by an older release;
   review the draft and publish again". No silent overwrite in either direction.
+  (Corrected by the T4 review, F-3: the draft cannot publish until it is reseeded from the
+  live keyboard — and a revision restored, to bring the published layout back; the page,
+  the contracts comment and `docs/deployment.md` now say so.)
 - Draft is never read by the runtime. `describeFor`, `rowsFor`, `routesFor` keep their
   contracts; `routesFor` still routes EVERY declared button (placed or not, §3).
 

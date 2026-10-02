@@ -438,8 +438,10 @@ export const botMenuBuilderResponseSchema = z.object({
   source: z.enum(['LEGACY', 'EXPLICIT']),
   /**
    * A layout is published, but `bot.main_menu` was written after it — by an older release
-   * during a rollback. The keyboard follows the setting (the operator's latest act); review
-   * the draft and publish again.
+   * during a rollback. The keyboard follows the setting (the operator's latest act). The
+   * existing draft does NOT publish over it (its legacy baseline is behind the setting):
+   * reseed the draft from the live keyboard, restore a revision into it if the published
+   * layout is wanted back, then publish.
    */
   superseded: z.boolean(),
   /** A layout is published and cannot be read by this release; the keyboard follows the setting. */

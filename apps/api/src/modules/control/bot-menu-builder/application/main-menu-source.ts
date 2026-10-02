@@ -1,9 +1,7 @@
 import {
   BOT_MENU_PUBLISHED_UNREADABLE_CODE,
   explicitMainMenuSchema,
-  isSystemContext,
   normalizeExplicitMainMenu,
-  settingDefinition,
   type ExplicitMainMenu,
   type MainMenuLayoutEntry,
   type OperationalEventRecorder,
@@ -74,14 +72,12 @@ export class PublishedMainMenuSource implements MainMenuSource {
     private readonly opsLog: OperationalEventRecorder,
   ) {}
 
+  /**
+   * A system scope is refused with `TENANT_CONTEXT_MISSING` by the state read
+   * (`requireTenantId`), exactly as the pre-round-T settings read refused it: a keyboard
+   * belongs to a tenant, and answering the registry default for no tenant would fail open.
+   */
   async snapshotFor(scope: ScopeContext): Promise<MainMenuSnapshot> {
-    // A system scope draws no customer's keyboard and has no builder row.
-    if (isSystemContext(scope)) {
-      return {
-        source: legacy(false, false),
-        legacy: settingDefinition('bot.main_menu').defaultValue as readonly MainMenuLayoutEntry[],
-      };
-    }
     return (await this.fromState(scope, await this.repository.readMenuState(scope))).snapshot;
   }
 

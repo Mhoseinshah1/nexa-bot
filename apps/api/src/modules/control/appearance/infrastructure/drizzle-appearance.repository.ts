@@ -22,6 +22,7 @@ import {
   type AppearanceDecoration,
 } from '../../../commerce/messaging/application/appearance-render.js';
 import type { AppearanceReader } from '../../../commerce/messaging/application/ports.js';
+import { isCustomEmojiEligible } from '../application/eligibility.js';
 import type {
   AppearanceBotRecord,
   AppearanceRepository,
@@ -292,11 +293,11 @@ export class CachedAppearanceReader implements AppearanceReader {
     const bots = await this.repository.listBots(scope);
     const bot = bots.find((one) => one.id === botInstanceId);
     // Untested is not eligible. Never assumed: the Bot API grants custom emoji per bot and
-    // answers nothing in advance, so only a recorded `SENT` decorates.
-    const decoration =
-      bot === undefined || bot.test === null || bot.test.outcome !== 'SENT'
-        ? NO_DECORATION
-        : await this.configuredDecoration(scope);
+    // answers nothing in advance, so only a recorded `SENT` decorates. The builder's
+    // Inspector asks the same predicate.
+    const decoration = isCustomEmojiEligible(bot)
+      ? await this.configuredDecoration(scope)
+      : NO_DECORATION;
     this.cache.set(key, { decoration, staleAt: now + APPEARANCE_CACHE_TTL_MS });
     return decoration;
   }
