@@ -1114,6 +1114,13 @@
       "when": 1790974128201,
       "tag": "0158_nowpayments_gateway",
       "breakpoints": true
+    },
+    {
+      "idx": 159,
+      "version": "7",
+      "when": 1790981565601,
+      "tag": "0159_centralpay_gateway",
+      "breakpoints": true
     }
   ]
 }
