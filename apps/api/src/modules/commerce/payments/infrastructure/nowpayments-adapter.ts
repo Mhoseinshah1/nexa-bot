@@ -32,6 +32,7 @@ import {
   NOWPAYMENTS_ORDER_ID_RANDOM_BYTES,
   centsOfPriceAmount,
   nowpaymentsOrderId,
+  nowpaymentsStatusRank,
   nowpaymentsVerdict,
   priceAmountOfCents,
   strongestJudgement,
@@ -102,6 +103,8 @@ const paymentSchema = z.object({
   price_amount: z.unknown().optional(),
   price_currency: z.unknown().optional(),
 });
+
+type NowPaymentsRecord = z.infer<typeof paymentSchema>;
 
 const paymentListSchema = z.object({ data: z.array(z.unknown()) });
 
@@ -265,35 +268,111 @@ export class NowPaymentsAdapter implements ExternalGatewayAdapter {
     context?: GatewayInquiryContext,
   ): Promise<GatewayInquiryOutcome> {
     if (context === undefined) return { kind: 'FAILED', code: 'nexa.no_inquiry_context' };
+    /*
+     * Codex review of #141 (P1): the hinted payment is ONE payment under an invoice that can
+     * carry several. Its read is decisive only when it is decisive — `finished` for exactly
+     * the invoiced price (APPROVED) or a MISMATCH. Otherwise the invoice-wide list is read
+     * too and the strongest of everything seen is reported, so an expired hinted payment can
+     * never hide a second, successful one whose IPN was lost. A hinted record about another
+     * invoice is not this attempt's and is ignored rather than reported.
+     */
     const hinted = context.hintedPaymentId;
+    let hintedRecord: NowPaymentsRecord | null = null;
+    let hintedFailure: GatewayInquiryOutcome | null = null;
     if (hinted !== null && PAYMENT_ID_TEXT.test(hinted)) {
-      return this.readPayment(apiKey, invoiceId, hinted, context);
+      const read = await this.readPayment(apiKey, hinted);
+      if (read.kind === 'RECORD') {
+        if (read.payment.invoice_id === invoiceId && this.isOurs(read.payment, context)) {
+          hintedRecord = read.payment;
+          const judged = this.judge(read.payment, context);
+          if (judged.verdict === 'APPROVED' || judged.verdict === 'MISMATCH') {
+            return this.observed(read.payment, invoiceId, context);
+          }
+        }
+      } else {
+        hintedFailure = read.outcome;
+      }
     }
-    return this.listInvoicePayments(apiKey, invoiceId, context);
+    const listed = await this.listInvoicePayments(apiKey, invoiceId, context);
+    if (listed.kind === 'RECORDS' && (listed.payments.length > 0 || hintedRecord === null)) {
+      const candidates = [
+        ...listed.payments,
+        ...(hintedRecord !== null &&
+        !listed.payments.some((one) => one.payment_id === hintedRecord?.payment_id)
+          ? [hintedRecord]
+          : []),
+      ];
+      const best = strongestJudgement(
+        candidates.map((payment) => ({ payment, ...this.judge(payment, context) })),
+      );
+      if (best === null) return { kind: 'NOT_FOUND', code: 'nowpayments.no_payment_yet' };
+      return this.observed(best.payment, invoiceId, context);
+    }
+    // The list said nothing usable: what the hinted read saw is still an answer.
+    if (hintedRecord !== null) return this.observed(hintedRecord, invoiceId, context);
+    if (hintedFailure !== null && listed.kind === 'FAILURE') {
+      // A refused LIST (OQ-NP-02) says less than the payment read's own answer.
+      return listed.outcome.kind === 'FAILED' && hintedFailure.kind !== 'FAILED'
+        ? hintedFailure
+        : listed.outcome;
+    }
+    return listed.kind === 'FAILURE'
+      ? listed.outcome
+      : { kind: 'NOT_FOUND', code: 'nowpayments.no_payment_yet' };
+  }
+
+  private judge(payment: NowPaymentsRecord, context: GatewayInquiryContext) {
+    return nowpaymentsVerdict(
+      {
+        status: payment.payment_status,
+        priceAmount: payment.price_amount,
+        priceCurrency: payment.price_currency,
+      },
+      context.sentAmount,
+    );
+  }
+
+  /** A record that omits its order id is bound by the invoice id; one naming another is not ours. */
+  private isOurs(payment: NowPaymentsRecord, context: GatewayInquiryContext): boolean {
+    const orderId = payment.order_id ?? null;
+    return orderId === null || orderId === context.providerOrderId;
+  }
+
+  /**
+   * How strongly a status says the customer's money is with the provider, for keeping the
+   * hint on the strongest payment (Codex review of #141): a later `waiting` IPN for another
+   * payment must never displace a `finished` one before the worker reads it.
+   */
+  hintRank(status: string | null): number {
+    return nowpaymentsStatusRank(status);
   }
 
   /** `GET /v1/payment/{id}`: the one payment a verified webhook named. */
   private async readPayment(
     apiKey: string,
-    invoiceId: string,
     paymentId: string,
-    context: GatewayInquiryContext,
-  ): Promise<GatewayInquiryOutcome> {
+  ): Promise<
+    | { readonly kind: 'RECORD'; readonly payment: NowPaymentsRecord }
+    | { readonly kind: 'FAILURE'; readonly outcome: GatewayInquiryOutcome }
+  > {
     // Digits only (checked above), so the provider-supplied id cannot shape the path.
     const raw = await this.call('GET', `${NOWPAYMENTS_PAYMENT_PATH}/${paymentId}`, apiKey, null);
     const failure = this.readFailure(raw, false);
-    if (failure !== null) return failure;
+    if (failure !== null) return { kind: 'FAILURE', outcome: failure };
     const body = (raw as Extract<Raw, { kind: 'BODY' }>).body;
     const parsed = paymentSchema.safeParse(body);
     if (!parsed.success) {
       return {
-        kind: 'FAILED',
-        code: boundedCode(
-          `http.200.unexpected_body:${firstIssuePath(parsed.error, RESPONSE_FIELDS)}`,
-        ),
+        kind: 'FAILURE',
+        outcome: {
+          kind: 'FAILED',
+          code: boundedCode(
+            `http.200.unexpected_body:${firstIssuePath(parsed.error, RESPONSE_FIELDS)}`,
+          ),
+        },
       };
     }
-    return this.observed(parsed.data, invoiceId, context);
+    return { kind: 'RECORD', payment: parsed.data };
   }
 
   /** `GET /v1/payment/?invoiceId=…`: every payment under the invoice, correlated locally. */
@@ -301,7 +380,10 @@ export class NowPaymentsAdapter implements ExternalGatewayAdapter {
     apiKey: string,
     invoiceId: string,
     context: GatewayInquiryContext,
-  ): Promise<GatewayInquiryOutcome> {
+  ): Promise<
+    | { readonly kind: 'RECORDS'; readonly payments: readonly NowPaymentsRecord[] }
+    | { readonly kind: 'FAILURE'; readonly outcome: GatewayInquiryOutcome }
+  > {
     const query = new URLSearchParams({
       invoiceId,
       limit: String(PAYMENT_LIST_LIMIT),
@@ -316,14 +398,17 @@ export class NowPaymentsAdapter implements ExternalGatewayAdapter {
       null,
     );
     const failure = this.readFailure(raw, true);
-    if (failure !== null) return failure;
+    if (failure !== null) return { kind: 'FAILURE', outcome: failure };
     const listed = paymentListSchema.safeParse((raw as Extract<Raw, { kind: 'BODY' }>).body);
     if (!listed.success) {
       return {
-        kind: 'FAILED',
-        code: boundedCode(
-          `http.200.unexpected_body:${firstIssuePath(listed.error, RESPONSE_FIELDS)}`,
-        ),
+        kind: 'FAILURE',
+        outcome: {
+          kind: 'FAILED',
+          code: boundedCode(
+            `http.200.unexpected_body:${firstIssuePath(listed.error, RESPONSE_FIELDS)}`,
+          ),
+        },
       };
     }
     /*
@@ -334,40 +419,18 @@ export class NowPaymentsAdapter implements ExternalGatewayAdapter {
       const one = paymentSchema.safeParse(item);
       if (!one.success) return [];
       if (one.data.invoice_id !== invoiceId) return [];
-      // A record that omits its order id is bound by the invoice id; one naming another is not ours.
-      const orderId = one.data.order_id ?? null;
-      if (orderId !== null && orderId !== context.providerOrderId) return [];
+      if (!this.isOurs(one.data, context)) return [];
       return [one.data];
     });
-    const judged = ours.map((payment) => ({
-      payment,
-      ...nowpaymentsVerdict(
-        {
-          status: payment.payment_status,
-          priceAmount: payment.price_amount,
-          priceCurrency: payment.price_currency,
-        },
-        context.sentAmount,
-      ),
-    }));
-    const best = strongestJudgement(judged);
-    if (best === null) return { kind: 'NOT_FOUND', code: 'nowpayments.no_payment_yet' };
-    return this.observed(best.payment, invoiceId, context);
+    return { kind: 'RECORDS', payments: ours };
   }
 
   private observed(
-    payment: z.infer<typeof paymentSchema>,
+    payment: NowPaymentsRecord,
     invoiceId: string,
     context: GatewayInquiryContext,
   ): GatewayInquiryOutcome {
-    const judgement = nowpaymentsVerdict(
-      {
-        status: payment.payment_status,
-        priceAmount: payment.price_amount,
-        priceCurrency: payment.price_currency,
-      },
-      context.sentAmount,
-    );
+    const judgement = this.judge(payment, context);
     return {
       kind: 'OBSERVED',
       // The ids the PROVIDER returned; the orchestrator compares them with the attempt's.

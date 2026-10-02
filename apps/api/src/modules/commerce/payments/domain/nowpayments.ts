@@ -118,6 +118,28 @@ export function nowpaymentsVerdict(
 }
 
 /**
+ * A status's strength as evidence that the customer's money is with the provider:
+ * `finished` 4, `partially_paid` 3, coins on their way 2, `waiting` 1, anything else 0. What
+ * keeps the webhook hint on the strongest payment under an invoice (Codex review of #141).
+ */
+export function nowpaymentsStatusRank(status: string | null): number {
+  switch (status) {
+    case 'finished':
+      return 4;
+    case 'partially_paid':
+      return 3;
+    case 'confirming':
+    case 'confirmed':
+    case 'sending':
+      return 2;
+    case 'waiting':
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+/**
  * The strongest of several payment records under one invoice — what an inquiry by invoice
  * reports. An approval outranks a mismatch, a mismatch outranks coins on their way, and
  * those outrank a payment that is merely waiting or ended. Ties keep the first.

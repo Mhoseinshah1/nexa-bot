@@ -13,6 +13,7 @@ import type {
   SalesCurrencyCode,
   TenantContext,
 } from '@nexa/contracts';
+import { PAYMENT_GATEWAY_PROVIDERS } from '@nexa/contracts';
 import type { Database, Executor } from '../../../../infrastructure/persistence/database.js';
 import {
   requireTenantId,
@@ -423,6 +424,9 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
     const leaseUntil = new Date(now.getTime() + leaseMs);
     const claimable = and(
       eq(gatewayInvoices.tenantId, tenantId),
+      // Only providers this binary has a descriptor for (Codex review of #141): after a
+      // rollback, a newer provider's row must not stall the whole lane on every pass.
+      inArray(gatewayInvoices.provider, [...PAYMENT_GATEWAY_PROVIDERS]),
       eq(gatewayInvoices.creationState, 'CREATING'),
       or(
         isNull(gatewayInvoices.creationClaimedUntil),
@@ -765,6 +769,7 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
     const leaseUntil = new Date(now.getTime() + leaseMs);
     const claimable = and(
       eq(gatewayInvoices.tenantId, tenantId),
+      inArray(gatewayInvoices.provider, [...PAYMENT_GATEWAY_PROVIDERS]),
       isNotNull(gatewayInvoices.nextInquiryAt),
       lte(gatewayInvoices.nextInquiryAt, now),
       or(

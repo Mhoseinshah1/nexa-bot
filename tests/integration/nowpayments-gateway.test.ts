@@ -657,6 +657,33 @@ describe('NOWPayments, through the one settlement path', () => {
     });
   });
 
+  describe('Codex review of #141: the hint never narrows what is found', () => {
+    it('an expired hinted payment never hides a second payment whose IPN was lost', async () => {
+      await enableNowPayments();
+      const { paymentId, invoiceId } = await createdAttempt();
+      await ipn(fake.pay(invoiceId, 90, 'expired'));
+      await pass();
+      expect((await invoiceOf(paymentId)).hinted_payment_id).toBe('90');
+      // The customer chose another coin and paid; NOWPayments' IPN for it never arrived.
+      fake.pay(invoiceId, 91, 'finished');
+      await inquireNow();
+      expect((await paymentOf(paymentId)).state).toBe('CONFIRMED');
+      expect(await ledger()).toHaveLength(1);
+      expect((await invoiceOf(paymentId)).hinted_payment_id).toBe('91');
+    });
+
+    it('a later, weaker IPN never displaces a finished hint before the worker reads it', async () => {
+      await enableNowPayments();
+      fake.listStatus = 401; // only the hinted read can find the payment
+      const { paymentId, invoiceId } = await createdAttempt();
+      expect(await ipn(fake.pay(invoiceId, 92, 'finished'))).toBe('SCHEDULED');
+      expect(await ipn(fake.pay(invoiceId, 93, 'waiting'))).not.toBe('DUPLICATE');
+      expect((await invoiceOf(paymentId)).hinted_payment_id).toBe('92');
+      await inquireNow();
+      expect((await paymentOf(paymentId)).state).toBe('CONFIRMED');
+    });
+  });
+
   describe('reconciliation without a webhook', () => {
     it('finds a lost IPN’s payment through the invoice’s payment list', async () => {
       await enableNowPayments();

@@ -478,7 +478,12 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
     mutationFn: (provider: string) =>
       checkPaymentGatewayCredential({
         provider,
-        idempotencyKey: checkKeyed.current({ provider, at: Date.now() }),
+        /*
+         * Stable intent only (Codex review of #141): an automatic retry of the same tap reuses
+         * the key, so it is the same command — never a second provider call. The key is
+         * retired once an answer is seen, so the operator's next check is a new command.
+         */
+        idempotencyKey: checkKeyed.current({ provider }),
       }),
     onSuccess: () => {
       checkKeyed.settle();
@@ -958,6 +963,9 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
           )}
         </Card>
       )}
+
+      {/* The credential check's own failure (Codex review of #141), like every other command's. */}
+      {check.error != null && <Banner tone="danger">{messageFor(check.error)}</Banner>}
 
       {/*
         A refusal to switch a route on — TonPays without its key — lands here, since the

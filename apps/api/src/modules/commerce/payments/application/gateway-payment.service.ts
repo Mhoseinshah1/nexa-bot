@@ -1980,7 +1980,7 @@ export class GatewayPaymentService {
     // Shape only. TonPays' signature and API-key headers are never read (brief §6).
     const hint = adapter.parseWebhook(body, deliveryIdHeader);
     if (hint === null) return 'MALFORMED';
-    return this.applyWebhookHint(tenantId, provider, hint);
+    return this.applyWebhookHint(tenantId, provider, hint, adapter);
   }
 
   private async verifyWebhook(
@@ -2046,6 +2046,7 @@ export class GatewayPaymentService {
     tenantId: string,
     provider: PaymentGatewayProvider,
     hint: GatewayWebhookHint,
+    adapter: Pick<ExternalGatewayAdapter, 'hintRank'>,
   ): Promise<GatewayWebhookResult> {
     const scope: TenantContext = {
       tenantId: tenantId as TenantContext['tenantId'],
@@ -2088,12 +2089,29 @@ export class GatewayPaymentService {
       // Diagnostics only: whether the provider now says a closed attempt was paid.
       inquireAt = earliest;
     }
+    /*
+     * Codex review of #141 (P1): an invoice that can carry several payments keeps its hint on
+     * the STRONGEST one. A webhook about another payment moves the hint only when its status
+     * is at least as strong as what the hinted payment last showed — its last inquiry and its
+     * last webhook — so a later `waiting` never displaces a `finished` before the worker reads
+     * it. A webhook that does not move the hint leaves the hint's status as it was too, so the
+     * stored status keeps describing the hinted payment. The next inquiry is brought forward
+     * either way, and the invoice-wide list is read whenever the hinted payment is not decisive.
+     */
+    const rank = adapter.hintRank?.bind(adapter);
+    const movesHint =
+      hint.paymentId === undefined ||
+      hint.paymentId === null ||
+      invoice.hintedPaymentId === null ||
+      hint.paymentId === invoice.hintedPaymentId ||
+      rank === undefined ||
+      rank(hint.status) >= Math.max(rank(invoice.providerStatus), rank(invoice.webhookStatusHint));
     const recorded = await this.deps.uow.run(scope, (tx) =>
       this.deps.invoices.recordWebhook(
         scope,
         invoice.paymentId,
         {
-          status: hint.status,
+          status: movesHint ? hint.status : invoice.webhookStatusHint,
           deliveryId: hint.deliveryId,
           creditAmount: hint.creditAmount,
           hintedInvoiceId:
@@ -2101,7 +2119,7 @@ export class GatewayPaymentService {
               ? hint.invoiceId
               : null,
           // Only for a VERIFIED webhook whose ids matched above: what the next inquiry reads.
-          hintedPaymentId: hint.paymentId ?? null,
+          hintedPaymentId: movesHint ? (hint.paymentId ?? null) : null,
           inquireAt,
         },
         now,

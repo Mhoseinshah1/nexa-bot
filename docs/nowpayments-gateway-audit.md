@@ -159,14 +159,27 @@ exactly as for TonPays. A CHECK pins every NOWPayments row to USD, central FX an
 
 ### 5.3 The authoritative read
 
-`inquire(key, invoiceId, { providerOrderId, sentAmount, hintedPaymentId })`:
+`inquire(key, invoiceId, { providerOrderId, sentAmount, hintedPaymentId })` (revised after the
+Codex review of #141 — a hint never narrows what can be found):
 
-- a payment id a VERIFIED IPN named (digits only — it goes in a URL path) →
-  `GET /v1/payment/{id}`;
-- otherwise `GET /v1/payment/?invoiceId=<id>&limit=100&page=0&sortBy=created_at&orderBy=desc`,
-  keeping only records whose `invoice_id` is this invoice and whose `order_id` (when present)
-  is this attempt's, and reporting the strongest (approval > mismatch > coins on their way >
-  waiting/ended).
+1. When a VERIFIED IPN (or an earlier read) named a payment (digits only — it goes in a URL
+   path), `GET /v1/payment/{id}`. If that payment is decisive — APPROVED (`finished` for the
+   exact price) or MISMATCH — it is the answer, in one call.
+2. Otherwise — no hint, or a hinted payment that is waiting, confirming, expired, failed or
+   refunded, or that names another invoice — the invoice-wide list is read too:
+   `GET /v1/payment/?invoiceId=<id>&limit=100&page=0&sortBy=created_at&orderBy=desc`, keeping
+   only records whose `invoice_id` is this invoice and whose `order_id` (when present) is this
+   attempt's, and reporting the strongest of the list and the hinted record (approval >
+   mismatch > coins on their way > waiting/ended). An expired hinted payment therefore never
+   hides a second coin's `finished` whose IPN was lost.
+3. When the list is refused (`OQ-NP-02`) or empty, the hinted read's own answer stands.
+
+The hint itself stays on the strongest payment: a verified IPN about ANOTHER payment moves the
+hint only when its status ranks at least as high as what the hinted payment last showed (its
+last read and its last IPN: `finished` 4, `partially_paid` 3, coins on their way 2, `waiting`
+1, ended 0), and an IPN that does not move it leaves the hint's status untouched — so a later
+`waiting` can never displace a `finished` before the worker reads it. Worst case, an inquiry
+makes two calls; both run under the same per-tenant budget the inquiry took.
 
 The orchestrator compares the answer's invoice and order ids with the attempt's (an answer
 about another attempt is recorded as `nexa.identity_mismatch` and never acted on) and records
@@ -263,7 +276,18 @@ skipped; `partially_paid` approving; the price not compared; `expired` failing t
 no review on coins seen; a refused list read as configuration; `pay_currency` sent; enabling
 without the secret.
 
-## 7. Live acceptance still owed (`OQ-NP-01`)
+## 7. Rollback (Codex review of #141)
+
+The release seeds a `DISABLED` NOWPAYMENTS route row per tenant at boot, as every earlier
+provider did. The previous binary indexes `PAYMENT_GATEWAY_DESCRIPTORS` by every row's provider
+(admin list, active-route evaluator, gateway worker claim), so a rollback needs the procedure
+in `docs/deployment.md`, "Before rolling back past NOWPayments (0158)": disable, drain, delete
+the NOWPAYMENTS budget, credential and route rows. This release, in turn, lists and claims
+only providers it knows (`DrizzlePaymentGatewayRepository.list`, `claimCreating`,
+`claimInquiries`, and an adapter resolver that answers `null`, never `undefined`), so a later
+release's provider cannot break it the same way (`tests/integration/payment-gateways.test.ts`).
+
+## 8. Live acceptance still owed (`OQ-NP-01`)
 
 With real NOWPayments credentials on staging: set the key and IPN secret, run the credential
 check (expect `ok`), enable the route, pay a small top-up in one coin and an order in another;

@@ -3,6 +3,7 @@ import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   COMMERCE_ERROR_CODES,
+  PAYMENT_GATEWAY_PROVIDERS,
   isNexaError,
   type ActorContext,
   type BotInstanceId,
@@ -134,6 +135,42 @@ describe('payment routes', () => {
   // -------------------------------------------------------------------------
   // The roster, and who may touch it
   // -------------------------------------------------------------------------
+
+  it('Codex #141 (rollback safety): a route row for a provider this binary does not know is not listed or offered', async () => {
+    /*
+     * The state a rollback leaves: a LATER release seeded a provider this code has no
+     * descriptor for. The CHECK constraint (this release's roster) is lifted for the length
+     * of the case to put such a row in, exactly as the older binary would find it.
+     */
+    const db = ctx.container.database.db;
+    const roster = PAYMENT_GATEWAY_PROVIDERS.map((provider) => `'${provider}'`).join(', ');
+    await db.execute(
+      sql`ALTER TABLE payment_gateways DROP CONSTRAINT payment_gateways_provider_check`,
+    );
+    try {
+      await db.execute(
+        sql`INSERT INTO payment_gateways (tenant_id, provider, status)
+            SELECT tenant_id, 'FUTURE_GATEWAY', 'ACTIVE' FROM payment_gateways
+            WHERE tenant_id = ${tenantA.tenantId} AND provider = 'MANUAL_TRANSFER'`,
+      );
+      const { gateways } = await ctx.container.paymentGateways.list(tenantA, ownerA);
+      expect(gateways.map((gateway) => gateway.provider)).not.toContain('FUTURE_GATEWAY');
+      const routes = await ctx.container.paymentGateways.routesFor(
+        tenantA,
+        customerA,
+        'WALLET_TOPUP',
+        money(100_000n, 'IRT'),
+      );
+      expect(routes.map((route) => route.provider)).not.toContain('FUTURE_GATEWAY');
+    } finally {
+      await db.execute(sql`DELETE FROM payment_gateways WHERE provider = 'FUTURE_GATEWAY'`);
+      await db.execute(
+        sql.raw(
+          `ALTER TABLE payment_gateways ADD CONSTRAINT payment_gateways_provider_check CHECK (provider IN (${roster}))`,
+        ),
+      );
+    }
+  });
 
   it('seeds each tenant exactly the routes this release can operate', async () => {
     const { gateways, currency } = await ctx.container.paymentGateways.list(tenantA, ownerA);

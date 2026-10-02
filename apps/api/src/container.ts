@@ -2282,6 +2282,9 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
         return centralpayAdapter;
       case 'MANUAL_TRANSFER':
         return null;
+      default:
+        // A provider a LATER release added (seen after a rollback): no adapter, never undefined.
+        return null;
     }
   };
   /**

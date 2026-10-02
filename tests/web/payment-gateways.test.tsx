@@ -392,6 +392,39 @@ describe('the NOWPayments key, IPN secret and credential check', () => {
     expect((posted[0]!.body as Record<string, unknown>)['secret']).toBe('ipn_secret_123');
   });
 
+  it('Codex #141: shows a failed check, and a retry of the same check reuses its idempotency key', async () => {
+    const api = stubApi([
+      { url: '/payment-gateways', body: { gateways: [NOWPAYMENTS] } },
+      {
+        url: '/payment-gateways/NOWPAYMENTS/check',
+        status: 502,
+        body: {
+          error: {
+            kind: 'unavailable',
+            code: 'test.upstream',
+            message: 'the check could not be completed',
+            correlationId: 'test',
+          },
+        },
+      },
+    ]);
+    renderPage(<PaymentGatewaysPage denied={false} mayEdit />);
+    fireEvent.click(await screen.findByRole('button', { name: 'بررسی اتصال' }));
+    expect(await screen.findByText('the check could not be completed')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'بررسی اتصال' })).not.toBeDisabled();
+    });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    fireEvent.click(screen.getByRole('button', { name: 'بررسی اتصال' }));
+    await waitFor(() => {
+      expect(api.calls.filter((call) => call.method === 'POST').length).toBeGreaterThanOrEqual(2);
+    });
+    const keys = api.calls
+      .filter((call) => call.method === 'POST')
+      .map((call) => (call.body as Record<string, unknown>)['idempotencyKey']);
+    expect(new Set(keys).size).toBe(1);
+  });
+
   it('runs the credential check through its own route, and offers it to no other route', async () => {
     const tonpays = { ...NOWPAYMENTS, provider: 'TONPAYS' };
     const api = stubApi([
