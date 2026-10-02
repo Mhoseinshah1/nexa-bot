@@ -279,11 +279,18 @@ export class DrizzleOrderRepository implements OrderRepository {
      * PENDING payments left on a due order are the ones the bound skipped. This is the
      * one predicate here that is NOT redundant.
      */
+    /*
+     * `UNKNOWN` is live too (TonPays Telegram, §9.6.3 f): a payment whose provider review
+     * ended unresolved is money very probably sent, waiting for an operator to reconcile it,
+     * and a reconciled confirmation needs its order still AWAITING_PAYMENT. Expiring the
+     * order would release its username hold and leave that confirmation nothing to settle.
+     * Nothing else produces `UNKNOWN`, so every other route is unchanged.
+     */
     const noLivePayment = sql`NOT EXISTS (
       SELECT 1 FROM payments live
        WHERE live.tenant_id = ${orders.tenantId}
          AND live.order_id = ${orders.id}
-         AND live.state = 'PENDING'
+         AND live.state IN ('PENDING', 'UNKNOWN')
     )`;
 
     const due = this.exec(tx)

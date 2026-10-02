@@ -54,6 +54,8 @@ export class TelegramReceiptFiles {
     scope: ScopeContext,
     // The binding and nothing else — a ticket attachment (WP-A7) is fetched the same way.
     receipt: Pick<PaymentReceiptRecord, 'botInstanceId' | 'fileId'>,
+    /** A tighter bound than the receipt default (a TonPays Telegram receipt: 5 MB). */
+    options: { readonly maxBytes?: number } = {},
   ): Promise<TelegramFileOutcome> {
     const token = await this.deps.bots.tokenForBotInstance(scope, receipt.botInstanceId);
     if (token === null) {
@@ -77,6 +79,7 @@ export class TelegramReceiptFiles {
       fileBaseUrl: this.deps.fileBaseUrl,
       timeoutMs: this.deps.timeoutMs,
       fileId: receipt.fileId,
+      ...(options.maxBytes === undefined ? {} : { maxBytes: options.maxBytes }),
     });
   }
 }

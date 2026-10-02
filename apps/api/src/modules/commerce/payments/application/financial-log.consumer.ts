@@ -74,6 +74,8 @@ export class FinancialLogConsumer implements EventConsumer {
     'PaymentConfirmed',
     'PaymentFailed',
     'PaymentLateCompletionObserved',
+    // TonPays Telegram (§9.6.4): a provider review that lapsed with no trustworthy answer.
+    'PaymentOutcomeUnknown',
     'RefundCompleted',
     'RefundFailed',
     'ServiceRefundRequestResolved',
@@ -184,6 +186,23 @@ export class FinancialLogConsumer implements EventConsumer {
           templateKey: 'ops.financial.late_completion' as TemplateKey,
           values: {
             route: payload.provider,
+            ...who(facts.customer),
+            reference: facts.payment.reference,
+            paymentId: facts.payment.id,
+            orderId: facts.payment.orderId ?? NONE,
+            ...amounts(facts.payment),
+            ...provider(facts.invoice),
+            at: new Date(event.occurredAt),
+          },
+        };
+      }
+      case 'PaymentOutcomeUnknown': {
+        const facts = await this.facts(scope, event.aggregateId as PaymentId, tx);
+        if (facts === null) return null;
+        return {
+          templateKey: 'ops.financial.outcome_unknown' as TemplateKey,
+          values: {
+            route: facts.payment.gatewayProvider ?? NONE,
             ...who(facts.customer),
             reference: facts.payment.reference,
             paymentId: facts.payment.id,

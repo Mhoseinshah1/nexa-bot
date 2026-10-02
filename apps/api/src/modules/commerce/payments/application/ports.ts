@@ -84,6 +84,13 @@ export interface PaymentRecord {
    * `amount` above stays the PRINCIPAL; this is beside it, never inside it.
    */
   readonly customerFee: PaymentCustomerFee | null;
+  /**
+   * The provider review window (TonPays Telegram, owner decision of 2026-10-01): when an
+   * external gateway's acknowledgement of the customer's receipt was recorded, and the
+   * settlement deadline it opened. Both null until then; frozen once set (0157).
+   */
+  readonly providerReviewStartedAt: Date | null;
+  readonly providerReviewUntil: Date | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }
@@ -491,6 +498,87 @@ export interface PaymentRepository {
    * anything else, and for a rejection recorded before the reason was mandatory.
    */
   rejectionReasonFor(scope: TenantContext, paymentId: string, tx?: unknown): Promise<string | null>;
+
+  /**
+   * Opens the provider review window (`docs/tonpays-telegram-gateway-audit.md` §9.6.3 c), as
+   * ONE conditional UPDATE naming its `from`: PENDING, no window yet, and the payment's own
+   * deadline strictly after the acknowledgement. There is no setter. False on a repeated or
+   * late acknowledgement — the deadline never moves. The caller holds the payment's lock.
+   */
+  recordProviderReview(
+    scope: TenantContext,
+    id: PaymentId,
+    window: { readonly acknowledgedAt: Date; readonly reviewUntil: Date },
+    now: Date,
+    tx: unknown,
+  ): Promise<boolean>;
+
+  /**
+   * The review sweep (§9.6.3 e), the first producer of `LOSE_TRACK`: PENDING payments whose
+   * review window has ended move to `UNKNOWN`, a bounded set, `FOR UPDATE SKIP LOCKED`, every
+   * predicate restated in the UPDATE. Row-local: reads `provider_review_until` only.
+   */
+  loseTrackOfReviewed(
+    scope: TenantContext,
+    now: Date,
+    limit: number,
+    tx: unknown,
+  ): Promise<readonly PaymentRecord[]>;
+
+  /**
+   * `RECONCILE_CONFIRMED` (§9.6.4): the confirm edge from `UNKNOWN`, conditional on it, every
+   * confirmation column in the same statement. Reached only through
+   * `PaymentService.reconcileGatewayPayment`, after the recorded evidence was checked.
+   */
+  reconcileConfirm(
+    scope: TenantContext,
+    id: PaymentId,
+    confirmation: PaymentConfirmation,
+    now: Date,
+    tx: unknown,
+  ): Promise<boolean>;
+
+  /** `RECONCILE_FAILED` (§9.6.4): `UNKNOWN -> FAILED`, conditional on `UNKNOWN`. */
+  reconcileFail(
+    scope: TenantContext,
+    id: PaymentId,
+    resolution: PaymentResolution,
+    now: Date,
+    tx: unknown,
+  ): Promise<boolean>;
+
+  /**
+   * Whether this order has money in flight through a provider: a PENDING payment in review,
+   * an UNKNOWN one (§9.6.3 f), or a PENDING one with a receipt sent to the provider and not
+   * yet answered (independent review F3). Every NEW way to pay the order, the wallet
+   * purchase and the customer's own cancellation refuse on it (OQ-TPTG-17, decided).
+   */
+  hasProviderReviewOrUnknownForOrder(
+    scope: TenantContext,
+    orderId: OrderId,
+    tx: unknown,
+  ): Promise<boolean>;
+
+  /**
+   * Lock the order's PENDING payments, in id order. Taken by every path that issues a NEW way
+   * to pay an order BEFORE the customer's row — the order the wallet purchase takes them in —
+   * so the money-in-flight read after it sees a receipt queued under one of those locks.
+   */
+  lockPendingForOrder(scope: TenantContext, orderId: OrderId, tx: unknown): Promise<void>;
+
+  /**
+   * Whether the order has another payment that is PENDING, UNKNOWN or CONFIRMED beside
+   * `except`. A provider receipt is refused while one exists (OQ-TPTG-17, decided).
+   */
+  hasOtherLivePaymentForOrder(
+    scope: TenantContext,
+    orderId: OrderId,
+    except: PaymentId,
+    tx: unknown,
+  ): Promise<boolean>;
+
+  /** Whether a receipt sent to the provider for this payment is still unanswered (F3). */
+  hasGatewayReceiptInFlight(scope: TenantContext, id: PaymentId, tx: unknown): Promise<boolean>;
 
   /**
    * Records the external gateway's own id for a GATEWAY payment (WP11A): the provider's

@@ -1810,6 +1810,55 @@ release before round T runs:
 
 Nothing needs doing before rolling back or forward.
 
+### Before rolling back past TonPays Telegram (`0157`)
+
+Migration `0157_tonpays_telegram` adds the `TONPAYS_TELEGRAM` route (`docs/tonpays-telegram-gateway-audit.md`):
+
+- the card and receipt tables;
+- `provider_review_started_at` and `provider_review_until` on `payments`, with their CHECK;
+- the guard that freezes them;
+- the `payments.reconcile` permission.
+
+It is additive. The release before it reads a `TONPAYS_TELEGRAM` row as a provider it has no
+adapter for and offers nothing new. What it does NOT know is the provider review, or that an
+`UNKNOWN` payment is money in flight. While it runs:
+
+- **It expires a payment in review at its 70-minute deadline.** Its `expireDue` does not read
+  `provider_review_until`. The customer is told `PAYMENT_EXPIRED` about a receipt TonPays is
+  reviewing. A later approval is `LATE_COMPLETION`: recorded, with nothing moved.
+- **It ignores an in-flight payment on the order.** Its customer cancellation and wallet
+  purchase cancel or bypass an in-review payment, so the order can be paid twice. Its order
+  sweep counts only `PENDING` as live, so an order whose payment is `UNKNOWN` expires and
+  releases its capacity slot.
+- **It renders those payments as closed.** In-review and `UNKNOWN` payments show as
+  `gateway_closed`. Its Web Admin cannot reconcile an `UNKNOWN` payment.
+
+**Before rolling back past 0157**, count what would be affected:
+
+```bash
+docker compose --env-file /etc/nexa/deploy.env -f /opt/nexa/deploy/compose.yml \
+  exec -T postgres psql -U nexa -d nexa -c \
+  "SELECT state, count(*) FROM payments
+    WHERE gateway_provider = 'TONPAYS_TELEGRAM'
+      AND ((state = 'PENDING' AND provider_review_until IS NOT NULL) OR state = 'UNKNOWN')
+    GROUP BY state"
+```
+
+If both counts are zero, nothing needs doing. Otherwise:
+
+1. Switch the `TONPAYS_TELEGRAM` route to DISABLED on the Payment Gateways page. No new
+   attempt can then start.
+2. Wait for the counts to drain. A review ends within 24 hours, and each `UNKNOWN` payment
+   is then reconciled from the payment's page. Only after that, roll back.
+
+If you cannot wait, roll back anyway and accept the consequences listed above for the rows
+counted. After the roll-forward:
+
+- a review that had not lapsed is honoured again, from the stored deadline;
+- `UNKNOWN` rows wait for reconciliation as before.
+
+`botctl rollback` never restores the database.
+
 ### How far back you can roll
 
 **One release**, safely. Migrations are expand-only within a release

@@ -100,6 +100,14 @@ export const PERMISSIONS = [
   p('payments.view', 'View payments', 'LOW'),
   p('payments.retry', 'Retry a payment settlement'),
   /*
+   * Resolving a gateway payment whose outcome is UNKNOWN (`docs/tonpays-telegram-gateway-audit.md`
+   * §9.6.4, OQ-TPTG-19): confirm it, fail it, or ask the provider again, each re-decided on
+   * the server from the provider's RECORDED inquiry, never from the operator's recollection.
+   * Its own key rather than `payments.retry`, which names a different act and has no reader.
+   * HIGH: a confirmation settles an order or credits a wallet through the one settlement path.
+   */
+  p('payments.reconcile', 'Resolve a gateway payment whose outcome is unknown', 'HIGH'),
+  /*
    * The destination money arrives at, as its own pair rather than `settings.*`.
    *
    * Reuse was the first idea and it is wrong in both directions. `settings.edit` is
@@ -425,6 +433,8 @@ export const ROLE_SEEDS: readonly RoleSeed[] = [
       'orders.view',
       'payments.view',
       'payments.retry',
+      // A payment whose outcome is unknown is Finance's to reconcile against the provider.
+      'payments.reconcile',
       'receipts.view',
       'receipts.review',
       'refunds.view',
@@ -616,6 +626,11 @@ export const PERMISSION_REQUIRES: Readonly<Record<string, PermissionKey>> = {
    * concept is the failure this codebase measures.
    */
   'receipts.review': 'payments.view' as PermissionKey,
+  /*
+   * A reconciliation is decided ON a payment's detail and its recorded gateway evidence,
+   * which `payments.view` reads.
+   */
+  'payments.reconcile': 'payments.view' as PermissionKey,
   /*
    * An override is set FROM a customer's page and answers with that customer's
    * allowance — limit, used, remaining — which is customer data `users.view` reads.

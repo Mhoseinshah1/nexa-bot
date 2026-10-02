@@ -1,13 +1,15 @@
-import type {
-  ActorContext,
-  Clock,
-  PaymentId,
-  TelegramWizardStep,
-  TenantContext,
+import {
+  PAYMENT_GATEWAY_DESCRIPTORS,
+  type ActorContext,
+  type Clock,
+  type PaymentId,
+  type TelegramWizardStep,
+  type TenantContext,
 } from '@nexa/contracts';
 import type { CustomerMessenger } from '../../modules/commerce/messaging/application/ports.js';
 import type { TelegramMessageStateService } from '../../modules/commerce/messaging/application/telegram-message-state.js';
 import type { GatewayInvoiceRecord } from '../../modules/commerce/payments/application/gateway-invoice-ports.js';
+import type { GatewayCardFacts } from '../../modules/commerce/payments/application/gateway-payment.service.js';
 import type { PaymentRecord } from '../../modules/commerce/payments/application/ports.js';
 import { editSent, gatewayAttemptScreen } from './bot-runtime.js';
 import type { InvoiceScreensPort } from './wizard-state.js';
@@ -60,6 +62,11 @@ export class WizardInvoiceScreens implements InvoiceScreensPort {
           scope: TenantContext,
           paymentId: PaymentId,
         ): Promise<GatewayInvoiceRecord | null>;
+        /** TonPays Telegram: the card-change and receipt facts the card screen draws from. */
+        cardFactsFor?(
+          scope: TenantContext,
+          invoice: Pick<GatewayInvoiceRecord, 'paymentId' | 'provider'>,
+        ): Promise<GatewayCardFacts | null>;
       };
       readonly messenger: CustomerMessenger;
       readonly clock: Clock;
@@ -73,16 +80,25 @@ export class WizardInvoiceScreens implements InvoiceScreensPort {
     if (payment === null || payment.method !== 'GATEWAY') return;
     const invoice = await this.deps.invoices.invoiceForPayment(scope, payment.id);
     if (invoice === null) return;
+    const facts = (await this.deps.invoices.cardFactsFor?.(scope, invoice)) ?? null;
     const screen = gatewayAttemptScreen(
       { payment, invoice },
       payment.orderId,
       this.deps.clock.now(),
+      facts,
     );
     // Still being created: the loading screen stays, and this is called again when it is not.
     if (screen.wizard?.invoicePending === true || screen.key === null) return;
     const step = screen.wizard?.step ?? 'NOTICE';
+    /*
+     * A card-transfer attempt (TonPays Telegram, §8.1) changes while it is an INVOICE — a new
+     * card, a receipt sent, a review opened — so its INVOICE replaces a showing INVOICE too:
+     * the payment message is edited in place rather than left stale.
+     */
+    const cardTransfer =
+      PAYMENT_GATEWAY_DESCRIPTORS[invoice.provider].invoiceForm === 'CARD_TRANSFER';
     const origins: readonly TelegramWizardStep[] =
-      step === 'INVOICE' ? ['INVOICE_PENDING'] : ['INVOICE_PENDING', 'INVOICE'];
+      step === 'INVOICE' && !cardTransfer ? ['INVOICE_PENDING'] : ['INVOICE_PENDING', 'INVOICE'];
     // One move per origin, so a 429 knows which step to put its one wizard back on.
     for (const origin of origins) {
       const moved = await this.deps.state.moveAll(

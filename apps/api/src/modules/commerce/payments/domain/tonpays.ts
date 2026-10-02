@@ -81,15 +81,19 @@ export const TONPAYS_ORDER_ID_RANDOM_BYTES = Math.ceil((ORDER_ID_RANDOM_CHARS * 
  * the customer or anything the customer typed — so it discloses nothing and cannot be
  * steered — and generated ONCE per attempt, persisted with the attempt before any call,
  * and never regenerated for it (brief §9: a `DUPLICATE_ORDER_ID` is not a reason to
- * re-key an attempt).
+ * re-key an attempt). `prefix` is `NX` for the website route and `NT` for the Telegram
+ * route (`OQ-TPTG-01`): two characters either way, so the id is always exactly twenty.
  */
-export function tonpaysOrderId(random: Uint8Array): string {
+export function tonpaysOrderId(random: Uint8Array, prefix: string = ORDER_ID_PREFIX): string {
   if (random.length < TONPAYS_ORDER_ID_RANDOM_BYTES) {
     throw new Error(`tonpaysOrderId needs ${TONPAYS_ORDER_ID_RANDOM_BYTES} random bytes`);
   }
+  if (prefix.length !== ORDER_ID_PREFIX.length) {
+    throw new Error('a TonPays order id prefix is two characters, so the id stays twenty');
+  }
   let bits = 0;
   let value = 0;
-  let out = ORDER_ID_PREFIX;
+  let out = prefix;
   for (const byte of random) {
     value = (value << 8) | byte;
     bits += 8;

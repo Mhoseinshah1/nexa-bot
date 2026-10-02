@@ -84,3 +84,20 @@ export function settlementRefusal(
 export function settlementIsFunded(order: OrderRecord, payment: PaymentRecord): boolean {
   return settlementRefusal(order, payment) === null;
 }
+
+/**
+ * The moment a GATEWAY attempt stops being settleable automatically
+ * (`docs/tonpays-telegram-gateway-audit.md` §9.6.3 d): the provider review deadline once a
+ * provider has acknowledged the customer's receipt (owner decision of 2026-10-01), and the
+ * attempt's own `expires_at` otherwise. Null is "past" to every caller, never "none".
+ *
+ * ONE function, so `confirmGatewayPayment` — which compares it under the payment's lock and
+ * decides — and every advisory read (the lane, the webhook, the check tap, the open-attempt
+ * lookup, the Telegram screen) agree. Only the review CHECK makes `providerReviewUntil`
+ * non-null, and only on a route whose descriptor says `providerReview`.
+ */
+export function gatewaySettlementDeadline(
+  payment: Pick<PaymentRecord, 'expiresAt' | 'providerReviewUntil'>,
+): Date | null {
+  return payment.providerReviewUntil ?? payment.expiresAt;
+}

@@ -4,7 +4,11 @@ import type {
   FxSource,
   FxUnitRatio,
   GatewayApprovalVerdict,
+  GatewayCardChangeState,
+  GatewayCardSource,
   GatewayConversionPolicy,
+  GatewayReceiptCaptureCloseReason,
+  GatewayReceiptSubmissionState,
   GatewayInvoiceCreationState,
   GatewayInvoiceOutcome,
   GatewayProviderUnit,
@@ -14,6 +18,7 @@ import type {
   ResolvedConversion,
   SalesCurrencyCode,
   TenantContext,
+  TonPaysTelegramReceiptMimeType,
 } from '@nexa/contracts';
 
 /**
@@ -92,11 +97,95 @@ export type GatewayCreateOutcome =
       readonly status: string | null;
       readonly requestAmount: bigint | null;
       readonly finalAmount: bigint | null;
+      /**
+       * A card-transfer provider's payee card (`TONPAYS_TELEGRAM`, audit §5.2): what the
+       * customer transfers to. Absent or null for every other adapter, and for a card answer
+       * that carried no card — a created invoice that cannot be paid from Telegram.
+       */
+      readonly instructions?: GatewayCardInstructions | null;
+      /** What the provider said about changing that card, when it said anything. */
+      readonly cardChange?: GatewayCardChangePolicy | null;
     }
   | { readonly kind: 'REFUSED'; readonly code: string; readonly configuration: boolean }
   | { readonly kind: 'RATE_LIMITED'; readonly code: string }
   | { readonly kind: 'AMBIGUOUS'; readonly code: string }
   | { readonly kind: 'UNKNOWN'; readonly code: string };
+
+/** A payee card, exactly as the provider sent it (format undocumented, `OQ-TPTG-06`). */
+export interface GatewayCardInstructions {
+  readonly cardNumber: string;
+  readonly cardName: string | null;
+}
+
+/** The provider's own word on changing the card. Null fields: it did not say. */
+export interface GatewayCardChangePolicy {
+  readonly showChangeCard: boolean | null;
+  readonly cooldownSeconds: number | null;
+  readonly exhausted: boolean | null;
+}
+
+/**
+ * A card change (audit §5.2). The five-way vocabulary the create uses: a new card, a
+ * readable refusal, the provider's own rate limit, an invoice it does not know, or no
+ * readable answer — after which the current card is no longer shown.
+ */
+export type GatewayCardChangeOutcome =
+  | {
+      readonly kind: 'CHANGED';
+      readonly instructions: GatewayCardInstructions;
+      readonly policy: GatewayCardChangePolicy;
+    }
+  | { readonly kind: 'REFUSED'; readonly code: string; readonly configuration: boolean }
+  | { readonly kind: 'RATE_LIMITED'; readonly code: string }
+  | { readonly kind: 'NOT_FOUND'; readonly code: string }
+  | { readonly kind: 'UNKNOWN'; readonly code: string };
+
+/**
+ * A receipt upload (audit §5.2). `ACCEPTED` carries what the answer said as METADATA:
+ * `status` bounded, `paid` and `receiptReceived` as the raw JSON values, judged only by
+ * `receiptAcknowledged` (which accepts the boolean `true` and the exact string
+ * `processing`). Nothing here ever reaches settlement.
+ */
+export type GatewayReceiptOutcome =
+  | {
+      readonly kind: 'ACCEPTED';
+      readonly status: string | null;
+      readonly paid: unknown;
+      readonly receiptReceived: unknown;
+    }
+  | {
+      readonly kind: 'REFUSED';
+      readonly code: string;
+      readonly configuration: boolean;
+      /** The provider refused the IMAGE (type, size): the customer may send another. */
+      readonly receiptRefused: boolean;
+    }
+  | { readonly kind: 'RATE_LIMITED'; readonly code: string }
+  | { readonly kind: 'NOT_FOUND'; readonly code: string }
+  | { readonly kind: 'UNKNOWN'; readonly code: string };
+
+/** The receipt image, held only for the length of one upload and never logged. */
+export interface GatewayReceiptFile {
+  readonly bytes: Uint8Array;
+  readonly mimeType: TonPaysTelegramReceiptMimeType;
+  readonly fileName: string;
+}
+
+/**
+ * The capability a card-transfer provider adds (audit §5.2), resolved by DESCRIPTOR
+ * (`invoiceForm === 'CARD_TRANSFER'`), never by `instanceof`. Both calls are invoice-scoped
+ * and made by the gateway worker only — never while Telegram waits.
+ */
+export interface CardTransferGatewayAdapter extends ExternalGatewayAdapter {
+  /** The largest receipt the provider documents, in bytes. */
+  readonly receiptMaxBytes: number;
+  changeCard(apiKey: string, invoiceId: string): Promise<GatewayCardChangeOutcome>;
+  uploadReceipt(
+    apiKey: string,
+    invoiceId: string,
+    file: GatewayReceiptFile,
+  ): Promise<GatewayReceiptOutcome>;
+}
 
 /**
  * What an inquiry produced. Only `OBSERVED` carries anything the provider asserted, and
@@ -222,6 +311,20 @@ export interface GatewayInvoiceRecord {
   readonly outcome: GatewayInvoiceOutcome | null;
   readonly outcomeAt: Date | null;
   readonly lateCompletionObservedAt: Date | null;
+  /**
+   * A card-transfer route's CURRENT card (`TONPAYS_TELEGRAM`): null before the create, and
+   * after a card change whose answer was lost. Never logged and never in an audit `after`.
+   */
+  readonly cardNumber: string | null;
+  readonly cardName: string | null;
+  readonly cardSeq: number | null;
+  readonly cardReceivedAt: Date | null;
+  /** What the provider last said about changing the card. Null: it did not say. */
+  readonly cardChangeShown: boolean | null;
+  readonly cardChangeCooldownUntil: Date | null;
+  readonly cardChangeExhausted: boolean | null;
+  /** An operator asked the provider again on an UNKNOWN payment; cleared by that inquiry. */
+  readonly reconcileInquiryRequestedAt: Date | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }
@@ -232,6 +335,8 @@ export interface ClaimedGatewayInvoice {
   readonly customerId: string;
   readonly paymentState: string;
   readonly paymentExpiresAt: Date | null;
+  /** The provider review deadline, read beside `expires_at` (§9.6.3 d). */
+  readonly paymentReviewUntil: Date | null;
 }
 
 export interface GatewayInvoiceRepository {
@@ -341,6 +446,14 @@ export interface GatewayInvoiceRepository {
        * whatever schedule it has, so a charge recorded before this commits stays due.
        */
       readonly firstInquiryAt: Date | null;
+      /**
+       * A card-transfer provider's first card (`TONPAYS_TELEGRAM`): made current AND appended
+       * to `gateway_invoice_cards` as seq 1, in this same statement's transaction.
+       */
+      readonly card?: {
+        readonly instructions: GatewayCardInstructions;
+        readonly policy: GatewayCardChangePolicy | null;
+      } | null;
     },
     now: Date,
     tx: unknown,
@@ -409,6 +522,43 @@ export interface GatewayInvoiceRepository {
     tx?: unknown,
   ): Promise<void>;
 
+  /**
+   * An operator's "ask the provider again" on an UNKNOWN payment (§9.6.4): flags the row and
+   * brings its next inquiry to `at`, conditional on no request in the last `spacingMs`.
+   * A database write only; the worker makes the call under the ordinary budget.
+   */
+  requestReconcileInquiry(
+    scope: TenantContext,
+    paymentId: PaymentId,
+    at: Date,
+    spacingMs: number,
+    tx: unknown,
+  ): Promise<boolean>;
+
+  /**
+   * A new current card (a change-card answer): appended to `gateway_invoice_cards` with the
+   * next sequence and made current, with what the provider said about changing it.
+   */
+  applyCard(
+    scope: TenantContext,
+    paymentId: PaymentId,
+    card: GatewayCardInstructions,
+    source: GatewayCardSource,
+    policy: GatewayCardChangePolicy | null,
+    now: Date,
+    tx: unknown,
+  ): Promise<number>;
+
+  /** The current card is no longer shown (a card change whose answer was lost). History stays. */
+  hideCard(scope: TenantContext, paymentId: PaymentId, now: Date, tx: unknown): Promise<boolean>;
+
+  /** Every card the attempt was ever shown, oldest first. */
+  cardsFor(
+    scope: TenantContext,
+    paymentId: PaymentId,
+    tx?: unknown,
+  ): Promise<readonly GatewayCardRecord[]>;
+
   /** Records how the attempt ended, once. Conditional on no outcome yet. */
   recordOutcome(
     scope: TenantContext,
@@ -475,11 +625,12 @@ export interface GatewayInvoiceRepository {
       readonly botInstanceId: string | null;
       readonly now: Date;
       /**
-       * F3: the provider's invoice is a LINK, so a created invoice without one is not open —
-       * the customer never had a way to pay it, and handing it back would hold them on it
-       * until its deadline. False for a provider whose invoice is a message (Stars).
+       * What makes a CREATED invoice payable, by the route's `invoiceForm` (audit §5.3):
+       * `LINK` — a link the customer can open (F3); `CARD` — a card the provider named (a
+       * created card invoice without one is not open); `ANY` — a message this bot sends
+       * (Stars). A CREATING invoice is open in every form.
        */
-      readonly requireLink: boolean;
+      readonly payableForm: 'LINK' | 'CARD' | 'ANY';
     },
     tx: unknown,
   ): Promise<GatewayInvoiceRecord | null>;
@@ -523,4 +674,258 @@ export interface GatewayCallBudget {
  */
 export interface PublicOriginReader {
   originFor(scope: TenantContext): Promise<string | null>;
+}
+
+/** One card in an attempt's history. */
+export interface GatewayCardRecord {
+  readonly seq: number;
+  readonly cardNumber: string;
+  readonly cardName: string | null;
+  readonly source: GatewayCardSource;
+  readonly receivedAt: Date;
+}
+
+// ---------------------------------------------------------------------------------------
+// TonPays Telegram: card-change requests, receipt capture windows and receipt submissions
+// (`docs/tonpays-telegram-gateway-audit.md` §7.3–§7.5). Every transition is a conditional
+// UPDATE naming its `from` states; every row is tenant-scoped.
+// ---------------------------------------------------------------------------------------
+
+export interface GatewayCardChangeRecord {
+  readonly id: string;
+  readonly paymentId: PaymentId;
+  readonly botInstanceId: string;
+  readonly customerId: string;
+  readonly state: GatewayCardChangeState;
+  readonly requestedAt: Date;
+  readonly sentAt: Date | null;
+  readonly decidedAt: Date | null;
+  readonly errorCode: string | null;
+}
+
+export interface GatewayReceiptCaptureRecord {
+  readonly id: string;
+  readonly botInstanceId: string;
+  readonly customerId: string;
+  readonly paymentId: PaymentId;
+  readonly providerInvoiceId: string;
+  readonly openedAt: Date;
+  readonly expiresAt: Date;
+}
+
+export interface GatewayReceiptSubmissionRecord {
+  readonly id: string;
+  readonly paymentId: PaymentId;
+  readonly providerInvoiceId: string;
+  readonly botInstanceId: string;
+  readonly customerId: string;
+  readonly captureId: string;
+  readonly telegramFileId: string;
+  readonly telegramFileUniqueId: string;
+  readonly declaredSize: bigint | null;
+  readonly state: GatewayReceiptSubmissionState;
+  readonly attempts: number;
+  readonly sentAt: Date | null;
+  readonly retryAt: Date | null;
+  readonly decidedAt: Date | null;
+  readonly errorCode: string | null;
+  readonly providerStatus: string | null;
+  readonly receiptReceived: boolean | null;
+  readonly openedReview: boolean;
+  readonly inquiryResolvedAt: Date | null;
+  readonly byteLength: number | null;
+  readonly createdAt: Date;
+}
+
+/** A claimed row with the payment facts the worker re-reads beside it. */
+export interface ClaimedCardTransferRow<T> {
+  readonly row: T;
+  readonly paymentState: string;
+  readonly paymentExpiresAt: Date | null;
+  readonly paymentReviewUntil: Date | null;
+}
+
+export interface GatewayCardTransferRepository {
+  // --- card changes ------------------------------------------------------------------
+  /** `REQUESTED`, refused by the partial unique index while one is in flight (null). */
+  requestCardChange(
+    scope: TenantContext,
+    input: {
+      readonly id: string;
+      readonly paymentId: PaymentId;
+      readonly botInstanceId: string;
+      readonly customerId: string;
+      readonly idempotencyKey: string;
+      readonly now: Date;
+    },
+    tx: unknown,
+  ): Promise<GatewayCardChangeRecord | null>;
+  latestCardChange(
+    scope: TenantContext,
+    paymentId: PaymentId,
+    tx?: unknown,
+  ): Promise<GatewayCardChangeRecord | null>;
+  claimCardChanges(
+    scope: TenantContext,
+    now: Date,
+    leaseMs: number,
+    limit: number,
+    tx: unknown,
+  ): Promise<readonly ClaimedCardTransferRow<GatewayCardChangeRecord>[]>;
+  /** `REQUESTED -> SENT`, stamped BEFORE the call. */
+  markCardChangeSent(scope: TenantContext, id: string, now: Date, tx: unknown): Promise<boolean>;
+  /** `REQUESTED | SENT -> APPLIED | REFUSED | RATE_LIMITED | UNKNOWN`. */
+  decideCardChange(
+    scope: TenantContext,
+    id: string,
+    to: Exclude<GatewayCardChangeState, 'REQUESTED' | 'SENT'>,
+    errorCode: string | null,
+    now: Date,
+    tx: unknown,
+  ): Promise<boolean>;
+  /** Gives back unreached leases (only those still carrying `leaseUntil`). */
+  releaseCardChangeClaims(
+    scope: TenantContext,
+    ids: readonly string[],
+    leaseUntil: Date,
+    tx: unknown,
+  ): Promise<number>;
+
+  // --- receipt capture windows ---------------------------------------------------------
+  /**
+   * Opens the payment-scoped window, under the (tenant, bot, customer) advisory lock the
+   * manual window takes: closes this customer's open gateway window AND open manual
+   * `receipt_captures` window in this bot as SUPERSEDED (or EXPIRED), then inserts.
+   */
+  openCapture(
+    scope: TenantContext,
+    input: {
+      readonly id: string;
+      readonly botInstanceId: string;
+      readonly customerId: string;
+      readonly paymentId: PaymentId;
+      readonly providerInvoiceId: string;
+      readonly openedAt: Date;
+      readonly expiresAt: Date;
+    },
+    tx: unknown,
+  ): Promise<GatewayReceiptCaptureRecord>;
+  /**
+   * Take the (tenant, bot, customer) capture lock every window opening takes — manual and
+   * provider alike — so a photo's routing and a window's supersession are serialised.
+   */
+  lockCaptureNamespace(
+    scope: TenantContext,
+    botInstanceId: string,
+    customerId: string,
+    tx: unknown,
+  ): Promise<void>;
+  /** The open window for (tenant, bot, customer), whatever its deadline, or null. */
+  findOpenCapture(
+    scope: TenantContext,
+    botInstanceId: string,
+    customerId: string,
+    tx?: unknown,
+  ): Promise<GatewayReceiptCaptureRecord | null>;
+  closeCapture(
+    scope: TenantContext,
+    id: string,
+    reason: GatewayReceiptCaptureCloseReason,
+    at: Date,
+    tx: unknown,
+  ): Promise<boolean>;
+  /** Every open window of one payment, closed with `reason`. */
+  closeCapturesForPayment(
+    scope: TenantContext,
+    paymentId: PaymentId,
+    reason: GatewayReceiptCaptureCloseReason,
+    at: Date,
+    tx: unknown,
+  ): Promise<number>;
+  /**
+   * The sweep: windows past their deadline become EXPIRED; windows whose payment left
+   * PENDING (or entered review) become PAYMENT_CLOSED. Bounded.
+   */
+  sweepCaptures(scope: TenantContext, now: Date, limit: number, tx: unknown): Promise<number>;
+
+  // --- receipt submissions --------------------------------------------------------------
+  /** `QUEUED`; null when this photo is already a submission for this payment. */
+  queueSubmission(
+    scope: TenantContext,
+    input: {
+      readonly id: string;
+      readonly paymentId: PaymentId;
+      readonly providerInvoiceId: string;
+      readonly botInstanceId: string;
+      readonly customerId: string;
+      readonly captureId: string;
+      readonly telegramFileId: string;
+      readonly telegramFileUniqueId: string;
+      readonly declaredSize: bigint | null;
+      readonly now: Date;
+    },
+    tx: unknown,
+  ): Promise<GatewayReceiptSubmissionRecord | null>;
+  submissionsFor(
+    scope: TenantContext,
+    paymentId: PaymentId,
+    tx?: unknown,
+  ): Promise<readonly GatewayReceiptSubmissionRecord[]>;
+  claimSubmissions(
+    scope: TenantContext,
+    now: Date,
+    leaseMs: number,
+    limit: number,
+    tx: unknown,
+  ): Promise<readonly ClaimedCardTransferRow<GatewayReceiptSubmissionRecord>[]>;
+  /** `QUEUED -> SENDING`, stamped and committed BEFORE the upload. */
+  markSubmissionSending(
+    scope: TenantContext,
+    id: string,
+    byteLength: number,
+    now: Date,
+    tx: unknown,
+  ): Promise<boolean>;
+  /** `QUEUED | SENDING -> ACCEPTED | REFUSED | UNKNOWN | ABANDONED`. */
+  decideSubmission(
+    scope: TenantContext,
+    id: string,
+    to: 'ACCEPTED' | 'REFUSED' | 'UNKNOWN' | 'ABANDONED',
+    facts: {
+      readonly errorCode: string | null;
+      readonly providerStatus: string | null;
+      readonly receiptReceived: boolean | null;
+    },
+    now: Date,
+    tx: unknown,
+  ): Promise<boolean>;
+  /** A provider rate limit: `SENDING -> QUEUED`, send stamp cleared, retried at `retryAt`. */
+  requeueSubmission(
+    scope: TenantContext,
+    id: string,
+    errorCode: string,
+    retryAt: Date,
+    now: Date,
+    tx: unknown,
+  ): Promise<boolean>;
+  /** The ACCEPTED submission whose acknowledgement opened the review. Once per payment. */
+  markOpenedReview(scope: TenantContext, id: string, tx: unknown): Promise<boolean>;
+  /**
+   * An inquiry SENT after these UNKNOWN uploads were given up on: resolved FOR DISPLAY, never
+   * a review. Compared with the inquiry's send time, not its answer time — an inquiry already
+   * on the wire when the upload was lost says nothing about the upload (review F11).
+   */
+  resolveUnknownSubmissions(
+    scope: TenantContext,
+    paymentId: PaymentId,
+    inquirySentAt: Date,
+    now: Date,
+    tx?: unknown,
+  ): Promise<number>;
+  releaseSubmissionClaims(
+    scope: TenantContext,
+    ids: readonly string[],
+    leaseUntil: Date,
+    tx: unknown,
+  ): Promise<number>;
 }

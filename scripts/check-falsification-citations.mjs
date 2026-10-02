@@ -112,6 +112,7 @@ const RECORDS = [
   'docs/round-t-t1-falsification.md',
   'docs/round-t-t2-falsification.md',
   'docs/round-t-t3-falsification.md',
+  'docs/tonpays-telegram-falsification.md',
 ];
 /**
  * The fewest citations this record may contain.
@@ -147,8 +148,13 @@ const RECORDS = [
  * `docs/round-t-t3-falsification.md` (29 citations, merged first in #134): 2523.
  *
  * 2523 → 2530: the round T T4 review's fixes — T1-20..T1-24 (six citations) and T3-28 (one).
+ * 2530 → 2618: TonPays Telegram, `docs/tonpays-telegram-falsification.md` — 88 citations.
+ * 2618 → 2635: its independent review — nineteen REV rows added, and TPTG-36p and -36d moved
+ * to the record's layer table (a review fix now holds their rows a second way).
+ * 2635 → 2638: the Codex review of #136 — four CDX rows added, and REV-F6 moved to the layer
+ * table (the stamp's own transaction now re-decides the window).
  */
-const EXPECTED = 2530;
+const EXPECTED = 2638;
 /**
  * A table whose last column is one of these is making citations.
  *

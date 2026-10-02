@@ -4131,6 +4131,15 @@ export const paymentSummarySchema = z.object({
    * keeps it from reading as a rejection. Defaulted on parse, like the D7 fields.
    */
   receiptDisposition: z.enum(RECEIPT_DISPOSITIONS).nullable().default(null),
+  /**
+   * The provider review window (`docs/tonpays-telegram-gateway-audit.md` §9.6): when Nexa
+   * recorded the provider's acknowledgement of the customer's receipt, and the settlement
+   * deadline it opened (24 hours later, frozen). Null on every payment no provider has
+   * acknowledged. A PENDING payment before `providerReviewUntil` is "in provider review".
+   * Defaulted on parse, like the D7 fields.
+   */
+  providerReviewStartedAt: z.iso.datetime().nullable().default(null),
+  providerReviewUntil: z.iso.datetime().nullable().default(null),
 });
 export type PaymentSummaryResponse = z.infer<typeof paymentSummarySchema>;
 
@@ -4239,6 +4248,29 @@ export type PaymentListResponse = z.infer<typeof paymentListResponseSchema>;
 
 export const paymentResponseSchema = z.object({ payment: paymentDetailSchema });
 export type PaymentResponse = z.infer<typeof paymentResponseSchema>;
+
+/**
+ * An operator resolving an `UNKNOWN` gateway payment (`docs/tonpays-telegram-gateway-audit.md`
+ * §9.6.4) under `payments.reconcile`. `to` is what the RECORDED inquiry evidence must
+ * support — the server re-decides it under the payment's lock and refuses anything the
+ * evidence does not show. The note is the operator's own, bounded.
+ */
+export const paymentReconcileRequestSchema = z.object({
+  idempotencyKey: z.string().min(8).max(255),
+  to: z.enum(['CONFIRMED', 'FAILED']),
+  note: z.string().trim().max(500).optional(),
+});
+export type PaymentReconcileRequest = z.infer<typeof paymentReconcileRequestSchema>;
+
+/** "Ask the provider again" on an `UNKNOWN` gateway payment: a database write only. */
+export const paymentReinquireRequestSchema = z.object({
+  idempotencyKey: z.string().min(8).max(255),
+});
+export type PaymentReinquireRequest = z.infer<typeof paymentReinquireRequestSchema>;
+
+/** `requested` is false when a request was already recorded within the last minute. */
+export const paymentReinquireResponseSchema = z.object({ requested: z.boolean() });
+export type PaymentReinquireResponse = z.infer<typeof paymentReinquireResponseSchema>;
 
 // --- Payment timeline (WP17) --------------------------------------------------
 
@@ -4410,6 +4442,15 @@ export const PAYMENT_ROUTES = {
    * behind their own permission — `paymentTimelineResponseSchema`.
    */
   timeline: (id: string) => `/payments/${encodeURIComponent(id)}/timeline`,
+  /**
+   * Resolving an `UNKNOWN` gateway payment from the provider's RECORDED answer
+   * (`docs/tonpays-telegram-gateway-audit.md` §9.6.4), under `payments.reconcile`. This is
+   * not the card-to-card confirm the comment above excludes: the operator chooses nothing
+   * the inquiry evidence does not already show, and the server re-decides it under the lock.
+   */
+  reconcile: (id: string) => `/payments/${encodeURIComponent(id)}/reconcile`,
+  /** Bring the next provider inquiry of an `UNKNOWN` gateway payment forward: a row write only. */
+  reinquire: (id: string) => `/payments/${encodeURIComponent(id)}/reinquire`,
 } as const;
 
 /**

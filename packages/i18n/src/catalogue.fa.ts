@@ -55,6 +55,8 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     '❌ پرداخت ناموفق/رد شد\n\n⚠️ علت: {cause}\n💠 روش: {method} ({route})\n👤 کاربر: {displayName} | {username} | {telegramId}\n🔖 مرجع پرداخت: {reference}\n🆔 شناسه پرداخت: {paymentId}\n📦 سفارش: {orderId}\n💰 مبلغ اصل: {principal}\n💳 کارمزد درگاه: {fee}\n💵 مبلغ قابل پرداخت: {payable}\n🕒 زمان: {at}',
   'ops.financial.late_completion':
     '⚠️ تأیید دیرهنگام درگاه پس از بسته‌شدن پرداخت\n\nاین پرداخت در Nexa بسته شده بود و هیچ مبلغی ثبت نشد؛ نیاز به بررسی دستی دارد.\n\n💠 درگاه: {route}\n👤 کاربر: {displayName} | {username} | {telegramId}\n🔖 مرجع پرداخت: {reference}\n🆔 شناسه پرداخت: {paymentId}\n📦 سفارش: {orderId}\n💰 مبلغ اصل: {principal}\n💳 کارمزد درگاه: {fee}\n💵 مبلغ قابل پرداخت: {payable}\n🧾 شناسه فاکتور درگاه: {providerInvoiceId}\n📊 مبلغ نهایی گزارش‌شدهٔ درگاه (فقط برای بررسی): {providerFinalAmount}\n🕒 زمان: {at}',
+  'ops.financial.outcome_unknown':
+    '❓ نتیجهٔ پرداخت درگاه نامعلوم ماند\n\nمهلت بررسی درگاه بدون پاسخ قطعی تمام شد. هیچ مبلغی ثبت یا رد نشده است؛ نیاز به تطبیق دستی دارد.\n\n💠 درگاه: {route}\n👤 کاربر: {displayName} | {username} | {telegramId}\n🔖 مرجع پرداخت: {reference}\n🆔 شناسه پرداخت: {paymentId}\n📦 سفارش: {orderId}\n💰 مبلغ اصل: {principal}\n💳 کارمزد درگاه: {fee}\n💵 مبلغ قابل پرداخت: {payable}\n🧾 شناسه فاکتور درگاه: {providerInvoiceId}\n📊 مبلغ نهایی گزارش‌شدهٔ درگاه (فقط برای بررسی): {providerFinalAmount}\n🕒 زمان: {at}',
   'ops.financial.refund_completed':
     '↩️ بازگشت وجه انجام شد\n\n🆔 شناسه بازگشت وجه: {refundId}\n📤 مقصد: {channel}\n👤 کاربر: {displayName} | {username} | {telegramId}\n🔖 مرجع پرداخت: {reference}\n🆔 شناسه پرداخت: {paymentId}\n📦 سفارش: {orderId}\n💰 مبلغ بازگشتی: {amount}\n🕒 زمان: {at}',
   'ops.financial.refund_failed':
@@ -1096,7 +1098,8 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
   'bot.payment.gateway_button': '💳 پرداخت با درگاه',
   'bot.payment.gateway_choose': '💳 درگاه پرداخت خود را انتخاب کنید:',
   'bot.payment.route_name_manual_transfer': 'کارت به کارت',
-  'bot.payment.route_name_tonpays': 'تون‌پیز (TonPays)',
+  'bot.payment.route_name_tonpays': 'درگاه پرداخت تون پی وبسایت',
+  'bot.payment.route_name_tonpays_telegram': 'درگاه پرداخت تون پی تلگرام',
   'bot.payment.route_name_telegram_stars': '⭐ تلگرام استارز',
   'bot.payment.stars_invoice_order':
     '🧾 فاکتور پرداخت با تلگرام استارز\n\n💰 مبلغ سفارش: {payable}\n⭐ مبلغ به استارز: {stars} استارز\n⏳ مهلت پرداخت: {expiresAt}\n\nفاکتور استارز در پیام بعدی برای شما ارسال می‌شود. پرداخت شما فقط پس از تأیید تلگرام ثبت می‌شود.',
@@ -1137,6 +1140,35 @@ export const CATALOGUE_FA: Readonly<Record<TemplateKey, string>> = {
     'درگاه ساخت این فاکتور را اعلام کرد اما لینک پرداختی برای آن نفرستاد، بنابراین از اینجا قابل پرداخت نیست. از این فاکتور مبلغی ثبت نشده است؛ می‌توانید دوباره پرداخت را آغاز کنید یا روش دیگری انتخاب کنید.',
   'bot.payment.gateway_closed':
     'این فاکتور دیگر قابل پرداخت نیست (مهلت آن تمام شده یا بسته شده است). برای پرداخت می‌توانید دوباره اقدام کنید.',
+  'bot.payment.gateway_card_invoice':
+    '🧾 فاکتور پرداخت کارت‌به‌کارت تون پی\n\n💰 مبلغ اصلی: {principal}\n💳 کارمزد درگاه: {fee}\n💵 مبلغ قابل پرداخت: {payable}\n🔢 مبلغ اعلام‌شده توسط تون پی برای واریز: {transferAmount}\n\n💳 شماره کارت مقصد: {cardNumber}\n👤 به نام: {cardName}\n⏳ مهلت واریز و ارسال فیش: {expiresAt}\n\nمبلغ را به این کارت واریز کنید و سپس با دکمهٔ «📤 ارسال فیش واریزی» عکس فیش را بفرستید. پرداخت شما فقط پس از تأیید تون پی ثبت می‌شود.',
+  'bot.payment.gateway_card_receipt_sent':
+    '📤 فیش واریزی شما برای تون پی ارسال شده و در انتظار پاسخ است.\n\n💵 مبلغ قابل پرداخت: {payable}\n⏳ مهلت: {expiresAt}\n\nپرداخت شما فقط پس از تأیید تون پی ثبت می‌شود. برای دیدن آخرین وضعیت، دکمهٔ «🔎 بررسی وضعیت» را بزنید.',
+  'bot.payment.gateway_card_receipt_refused':
+    '⚠️ تون پی آخرین تصویر را به‌عنوان فیش نپذیرفت یا ارسال آن ممکن نشد. لطفاً عکس واضح فیش واریزی را دوباره بفرستید.\n\n💵 مبلغ قابل پرداخت: {payable}\n💳 شماره کارت مقصد: {cardNumber}\n👤 به نام: {cardName}\n⏳ مهلت واریز و ارسال فیش: {expiresAt}',
+  'bot.payment.gateway_card_changing':
+    '🔄 درخواست کارت جدید برای تون پی ارسال شد. کارت جدید به‌محض آماده شدن در همین پیام نمایش داده می‌شود.\n\n💵 مبلغ قابل پرداخت: {payable}\n⏳ مهلت: {expiresAt}',
+  'bot.payment.gateway_card_unconfirmed':
+    'پاسخ تون پی برای تعویض کارت دریافت نشد، بنابراین شمارهٔ کارتی نمایش داده نمی‌شود.\n\n💵 مبلغ قابل پرداخت: {payable}\n⏳ مهلت: {expiresAt}\n\nاگر پیش‌تر واریز کرده‌اید، فیش آن را بفرستید؛ در غیر این صورت وضعیت را بررسی کنید یا پس از یک دقیقه دوباره کارت جدید بخواهید. از این پرداخت مبلغی ثبت نشده است.',
+  'bot.payment.gateway_card_missing':
+    'تون پی ساخت این فاکتور را اعلام کرد اما شماره کارتی برای واریز نفرستاد، بنابراین از اینجا قابل پرداخت نیست. از این فاکتور مبلغی ثبت نشده است؛ می‌توانید دوباره پرداخت را آغاز کنید یا روش دیگری انتخاب کنید.',
+  'bot.payment.gateway_in_review':
+    '🕓 تون پی فیش واریزی شما را دریافت کرده و در حال بررسی آن است.\n\n💵 مبلغ قابل پرداخت: {payable}\n⏳ پایان مهلت بررسی: {reviewUntil}\n\nلطفاً دوباره پرداخت نکنید. نتیجه پس از تأیید تون پی در همین پیام نمایش داده می‌شود.',
+  'bot.payment.gateway_review_unresolved':
+    'نتیجهٔ بررسی تون پی هنوز قطعی نشده است. پرداخت شما ناموفق اعلام نشده و در حال پیگیری است.\n\nلطفاً دوباره پرداخت نکنید؛ پس از روشن شدن نتیجه به شما اطلاع داده می‌شود.',
+  'bot.payment.gateway_receipt_button': '📤 ارسال فیش واریزی',
+  'bot.payment.gateway_change_card_button': '🔄 تعویض کارت',
+  'bot.payment.gateway_card_check_button': '🔎 بررسی وضعیت',
+  'bot.payment.gateway_receipt_prompt':
+    '📤 لطفاً عکس فیش واریزی را همین‌جا بفرستید.\n\nفقط عکس پذیرفته می‌شود (نه فایل، PDF یا ویدیو) و حجم آن حداکثر ۵ مگابایت است. این درخواست تا {closesAt} باز است.',
+  'bot.payment.gateway_receipt_queued':
+    '⏳ فیش شما دریافت شد و در حال ارسال برای تون پی است. نتیجه در پیام پرداخت نمایش داده می‌شود.',
+  'bot.payment.gateway_receipt_photo_only':
+    'فقط عکس فیش پذیرفته می‌شود. لطفاً فیش را به‌صورت عکس (نه فایل، PDF یا ویدیو) بفرستید.',
+  'bot.payment.gateway_receipt_already_sent':
+    'این عکس پیش‌تر برای همین پرداخت فرستاده شده است و دوباره ارسال نمی‌شود. اگر فیش دیگری دارید، عکس آن را بفرستید.',
+  'bot.payment.gateway_receipt_too_large':
+    'حجم این عکس بیش از ۵ مگابایت است. لطفاً عکس کوچک‌تری از فیش واریزی بفرستید.',
   'bot.wallet.summary':
     '🎡 اطلاعات حساب کاربری شما:\n\n🪪 آی دی عددی: {telegramId}\n👤 نام: {displayName}\n⚫ شماره تماس: {phoneState}\n⏳ زمان ثبت نام: {registeredAt}\n⭐ موجودی: {balance}\n🛒 تعداد سرویس های خریداری شده: {serviceCount} عدد\n🧾 تعداد فاکتورهای پرداخت شده: {paidInvoiceCount} عدد\n👥 تعداد زیرمجموعه های شما: {referralCount} نفر\n🔖 گروه کاربری: {customerGroup}',
   'bot.wallet.phone_missing': '🔴 ارسال نشده است',

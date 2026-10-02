@@ -127,8 +127,15 @@ import {
 } from '../../modules/commerce/payments/application/payment.service.js';
 import type {
   GatewayAttemptView,
+  GatewayCardFacts,
   GatewayPaymentService,
 } from '../../modules/commerce/payments/application/gateway-payment.service.js';
+import type { GatewayInvoiceRecord } from '../../modules/commerce/payments/application/gateway-invoice-ports.js';
+import type { GatewayReceiptCaptureService } from '../../modules/commerce/payments/application/gateway-receipt-capture.service.js';
+import {
+  cardChangeAvailable,
+  receiptUploadAvailable,
+} from '../../modules/commerce/payments/domain/tonpays-telegram.js';
 import type { WalletService } from '../../modules/commerce/wallet/application/wallet.service.js';
 import {
   ProvisioningService,
@@ -252,6 +259,12 @@ export const BOT_INTENTS = [
   'PAY_METHODS_CLOSE',
   /* WP11A: the customer asks what became of an external-gateway attempt. Names the payment. */
   'GATEWAY_CHECK',
+  /*
+   * TonPays Telegram (§8.1): «📤 ارسال فیش واریزی» opens the payment-scoped receipt window,
+   * «🔄 تعویض کارت» asks for another card. Each names the PAYMENT and nothing else.
+   */
+  'GATEWAY_RECEIPT',
+  'GATEWAY_CARD_CHANGE',
   'PAY_CANCEL_ASK',
   'PAY_CANCEL',
   'PAY_SENT',
@@ -791,6 +804,17 @@ export const GATEWAY_PAY_CALLBACK_PREFIX = 'g:';
  * `g` then a letter, so it cannot shadow `g:` nor be shadowed by it.
  */
 export const GATEWAY_CHECK_CALLBACK_PREFIX = 'gc:';
+
+/**
+ * TonPays Telegram (`docs/tonpays-telegram-gateway-audit.md` §8.1): «📤 ارسال فیش واریزی»
+ * (`gr:`) and «🔄 تعویض کارت» (`gk:`). Each names the PAYMENT — an identifier, never an
+ * amount or a card — and is re-decided against the row: the owner, a card-transfer route,
+ * PENDING inside the CUSTOMER window (the review deadline never reopens either), no review
+ * started, a created invoice, and the bot the invoice is bound to. 3 + 36 bytes, under 64.
+ * `g` then a letter, so neither shadows `g:`/`gc:`/`gp:` nor is shadowed by them.
+ */
+export const GATEWAY_RECEIPT_CALLBACK_PREFIX = 'gr:';
+export const GATEWAY_CARD_CHANGE_CALLBACK_PREFIX = 'gk:';
 
 /**
  * Paying an order through ONE named external route (Package A): `gp:<order uuid>.<provider>`,
@@ -2640,6 +2664,20 @@ export function intentOf(update: unknown, menu: MainMenuRoutes = NO_MENU): BotCo
     if (data.startsWith(GATEWAY_PAY_CALLBACK_PREFIX)) {
       return callbackCommand('PAY_GATEWAY', data.slice(GATEWAY_PAY_CALLBACK_PREFIX.length), id);
     }
+    if (data.startsWith(GATEWAY_RECEIPT_CALLBACK_PREFIX)) {
+      return callbackCommand(
+        'GATEWAY_RECEIPT',
+        data.slice(GATEWAY_RECEIPT_CALLBACK_PREFIX.length),
+        id,
+      );
+    }
+    if (data.startsWith(GATEWAY_CARD_CHANGE_CALLBACK_PREFIX)) {
+      return callbackCommand(
+        'GATEWAY_CARD_CHANGE',
+        data.slice(GATEWAY_CARD_CHANGE_CALLBACK_PREFIX.length),
+        id,
+      );
+    }
     if (data.startsWith(GATEWAY_CHECK_CALLBACK_PREFIX)) {
       return callbackCommand('GATEWAY_CHECK', data.slice(GATEWAY_CHECK_CALLBACK_PREFIX.length), id);
     }
@@ -3993,7 +4031,15 @@ export interface BotRuntimeDeps {
    * customer's own, and the check tap that brings its next inquiry forward. No provider
    * call happens through either.
    */
-  readonly gateway: Pick<GatewayPaymentService, 'attemptFor' | 'requestCheck'>;
+  readonly gateway: Pick<GatewayPaymentService, 'attemptFor' | 'requestCheck' | 'cardFactsFor'>;
+  /**
+   * TonPays Telegram (§8.2, §8.3): the customer's card-change and receipt commands. Absent,
+   * the card screen draws neither button and a photo goes to the manual flow as before.
+   */
+  readonly gatewayReceipts?: Pick<
+    GatewayReceiptCaptureService,
+    'openReceiptCapture' | 'requestCardChange' | 'receivePhoto'
+  >;
   readonly screens: CustomerScreenComposer;
   readonly counters: CustomerCountersReader;
   /** The payment routes per purpose; the external chooser is drawn only from a real route. */
@@ -9900,6 +9946,19 @@ export class BotRuntime {
     if (command.intent === 'GATEWAY_CHECK' && command.targetId !== null) {
       return this.gatewayCheck(scope, command.targetId, customer);
     }
+    if (command.intent === 'GATEWAY_RECEIPT' && command.targetId !== null) {
+      return this.gatewayReceipt(scope, actor, command.targetId, customer, input.botInstanceId);
+    }
+    if (command.intent === 'GATEWAY_CARD_CHANGE' && command.targetId !== null) {
+      return this.gatewayCardChange(
+        scope,
+        actor,
+        command.targetId,
+        customer,
+        input.botInstanceId,
+        input.idempotencyKey,
+      );
+    }
     if (command.intent === 'PAY_CANCEL_ASK' && command.targetId !== null) {
       return this.cancelPaymentAsk(scope, command.targetId, customer);
     }
@@ -9913,6 +9972,19 @@ export class BotRuntime {
        */
       const ticketFile = await this.ticketFile(scope, actor, customer, command.file, input);
       if (ticketFile !== null) return ticketFile;
+      /*
+       * TonPays Telegram (§8.3): a provider receipt window open for this customer IN THIS
+       * BOT takes the file; its payment, provider and invoice come from the window's row.
+       * Never the manual review queue. No window: the manual flow, exactly as before.
+       */
+      const providerReceipt = await this.gatewayReceiptPhoto(
+        scope,
+        actor,
+        customer,
+        input.botInstanceId,
+        command.file,
+      );
+      if (providerReceipt !== null) return providerReceipt;
       return this.submitReceipt(
         scope,
         actor,
@@ -11549,7 +11621,7 @@ export class BotRuntime {
         return this.topupChooser(scope, captureId, chosen.routes);
       }
       if (chosen.outcome === 'GATEWAY_REQUESTED') {
-        return this.gatewayAttemptReply(chosen.attempt, null);
+        return await this.gatewayAttemptReply(chosen.attempt, null, scope);
       }
       return this.transferInstruction(scope, chosen.instruction, null);
     } catch (error) {
@@ -14274,7 +14346,7 @@ export class BotRuntime {
         orderId,
         provider: route.provider,
       });
-      return this.gatewayAttemptReply(attempt, orderId);
+      return await this.gatewayAttemptReply(attempt, orderId, scope);
     } catch (error) {
       const refused = gatewayRefusal(error);
       return refused.key === 'bot.payment.gateway_unavailable'
@@ -14303,15 +14375,170 @@ export class BotRuntime {
       };
     }
     await this.deps.gateway.requestCheck(scope, view);
-    return this.gatewayAttemptReply({ ...view, reissued: true }, view.payment.orderId);
+    return this.gatewayAttemptReply({ ...view, reissued: true }, view.payment.orderId, scope);
   }
 
   /** An external-gateway attempt, as the customer sees it: `gatewayAttemptScreen`, now. */
-  private gatewayAttemptReply(
+  private async gatewayAttemptReply(
     attempt: GatewayAttempt | GatewayAttemptView,
     orderId: string | null,
-  ): PendingReply {
-    return gatewayAttemptScreen(attempt, orderId, this.deps.clock.now());
+    scope: TenantContext,
+  ): Promise<PendingReply> {
+    const facts = await this.deps.gateway.cardFactsFor(scope, attempt.invoice);
+    return gatewayAttemptScreen(attempt, orderId, this.deps.clock.now(), facts);
+  }
+
+  /**
+   * «📤 ارسال فیش واریزی» (TonPays Telegram, §8.3): opens the payment-scoped receipt window
+   * and asks for ONE photo, as its own message — the payment message stays as it is. Refused
+   * (re-decided against the rows) with the attempt's current screen: closed, in review, a
+   * receipt already on its way. The tap extends nothing.
+   */
+  private async gatewayReceipt(
+    scope: TenantContext,
+    actor: ActorContext,
+    paymentId: string,
+    customer: CustomerRecord,
+    botInstanceId: BotInstanceId,
+  ): Promise<PendingReply> {
+    const view = await this.deps.gateway.attemptFor(scope, customer.id, paymentId);
+    /*
+     * TPTG-19: another customer's payment, another bot's attempt, or no such lane is
+     * answered as closed — never with anything about the attempt.
+     */
+    if (
+      view === null ||
+      view.invoice.botInstanceId !== botInstanceId ||
+      this.deps.gatewayReceipts === undefined
+    ) {
+      return {
+        key: 'bot.payment.gateway_closed',
+        values: {},
+        buttons: [mainMenuButton()],
+        orderId: null,
+      };
+    }
+    const window = await this.deps.gatewayReceipts.openReceiptCapture(scope, actor, {
+      customerId: customer.id,
+      paymentId: view.payment.id,
+      botInstanceId,
+    });
+    if (window === null) return this.refusedCardTap(scope, view);
+    return {
+      key: 'bot.payment.gateway_receipt_prompt',
+      values: { closesAt: window.expiresAt },
+      buttons: [mainMenuButton()],
+      orderId: view.payment.orderId,
+      wizard: {
+        kind: view.payment.orderId === null ? 'TOPUP' : 'ORDER',
+        step: 'INVOICE',
+        paymentId: view.payment.id,
+        placement: 'NEW',
+      },
+    };
+  }
+
+  /**
+   * «🔄 تعویض کارت» (TonPays Telegram, §8.2): a request row the worker sends; the payment
+   * message is redrawn in place ("changing card…") and the worker edits the new card in.
+   * Refused locally while one is in flight, during the cooldown or once exhausted — the
+   * current screen is redrawn, which no longer carries the button.
+   */
+  private async gatewayCardChange(
+    scope: TenantContext,
+    actor: ActorContext,
+    paymentId: string,
+    customer: CustomerRecord,
+    botInstanceId: BotInstanceId,
+    idempotencyKey: string,
+  ): Promise<PendingReply> {
+    const view = await this.deps.gateway.attemptFor(scope, customer.id, paymentId);
+    /*
+     * TPTG-19: another customer's payment, another bot's attempt, or no such lane is
+     * answered as closed — never with anything about the attempt.
+     */
+    if (
+      view === null ||
+      view.invoice.botInstanceId !== botInstanceId ||
+      this.deps.gatewayReceipts === undefined
+    ) {
+      return {
+        key: 'bot.payment.gateway_closed',
+        values: {},
+        buttons: [mainMenuButton()],
+        orderId: null,
+      };
+    }
+    const requested = await this.deps.gatewayReceipts.requestCardChange(scope, actor, {
+      customerId: customer.id,
+      paymentId: view.payment.id,
+      botInstanceId,
+      idempotencyKey: `${idempotencyKey}:card-change`,
+    });
+    const fresh = (await this.deps.gateway.attemptFor(scope, customer.id, paymentId)) ?? view;
+    return requested
+      ? this.gatewayAttemptReply({ ...fresh, reissued: true }, fresh.payment.orderId, scope)
+      : this.refusedCardTap(scope, fresh);
+  }
+
+  /**
+   * A refused `gr:`/`gk:` (TPTG-19): a payment still PENDING (a receipt already on its way, a
+   * cooldown) or in review / UNKNOWN is redrawn as it stands — the review screens included;
+   * anything else that is no longer payable answers `gateway_closed` and nothing more.
+   */
+  private refusedCardTap(
+    scope: TenantContext,
+    view: GatewayAttemptView,
+  ): Promise<PendingReply> | PendingReply {
+    if (view.payment.state === 'PENDING' || view.payment.state === 'UNKNOWN') {
+      return this.gatewayAttemptReply({ ...view, reissued: true }, view.payment.orderId, scope);
+    }
+    return {
+      key: 'bot.payment.gateway_closed',
+      values: {},
+      buttons: [mainMenuButton()],
+      orderId: null,
+    };
+  }
+
+  /**
+   * A photo for an open provider receipt window in THIS bot (§8.3), or null when none is
+   * open — the caller then runs the manual flow exactly as before.
+   */
+  private async gatewayReceiptPhoto(
+    scope: TenantContext,
+    actor: ActorContext,
+    customer: CustomerRecord,
+    botInstanceId: BotInstanceId,
+    file: InboundReceiptFile,
+  ): Promise<PendingReply | null> {
+    if (this.deps.gatewayReceipts === undefined) return null;
+    const result = await this.deps.gatewayReceipts.receivePhoto(scope, actor, {
+      customerId: customer.id,
+      botInstanceId,
+      file,
+    });
+    const reply = (key: TemplateKey): PendingReply => ({
+      key,
+      values: {},
+      buttons: [mainMenuButton()],
+      orderId: null,
+    });
+    switch (result) {
+      case 'NO_WINDOW':
+        return null;
+      case 'QUEUED':
+      case 'DUPLICATE':
+        return reply('bot.payment.gateway_receipt_queued');
+      case 'ALREADY_SENT':
+        return reply('bot.payment.gateway_receipt_already_sent');
+      case 'PHOTO_ONLY':
+        return reply('bot.payment.gateway_receipt_photo_only');
+      case 'TOO_LARGE':
+        return reply('bot.payment.gateway_receipt_too_large');
+      case 'CLOSED':
+        return reply('bot.payment.gateway_closed');
+    }
   }
 
   /**
@@ -15346,6 +15573,153 @@ function ticketAlreadyClosed(): PendingReply {
 }
 
 /**
+ * «🔎 بررسی وضعیت» on a TonPays Telegram screen: the same `gc:` tap, its own label.
+ */
+function cardCheck(paymentId: string): CustomerButton {
+  return {
+    label: { kind: 'TEMPLATE', key: 'bot.payment.gateway_card_check_button' },
+    data: `${GATEWAY_CHECK_CALLBACK_PREFIX}${paymentId}`,
+  };
+}
+
+/**
+ * A created TonPays Telegram attempt in its customer window (`docs/tonpays-telegram-gateway-
+ * audit.md` §8.1): the payable from the payment's own snapshot, TonPays' transfer figure when
+ * it differs (labelled as TonPays', never what Nexa settles), the CURRENT card, the deadline,
+ * and the three actions — each drawn only while the rule behind it allows it, and each
+ * re-decided against the rows when tapped. Never says paid.
+ */
+function cardTransferScreen(
+  payment: PaymentRecord,
+  invoice: GatewayInvoiceRecord,
+  orderId: string | null,
+  at: Date,
+  facts: GatewayCardFacts | null,
+): PendingReply {
+  const kind = payment.orderId === null ? ('TOPUP' as const) : ('ORDER' as const);
+  const retry: CustomerButton =
+    payment.orderId === null ? topupButton() : payMethodsButton(payment.orderId);
+  const wizard = { kind, step: 'INVOICE' as const, paymentId: payment.id };
+  if (invoice.creationErrorCode !== null) {
+    // Created without a card: it cannot be paid from here, and a new attempt is the way on.
+    return {
+      key: 'bot.payment.gateway_card_missing',
+      values: {},
+      buttons: [retry, mainMenuButton()],
+      orderId,
+      wizard: { kind, step: 'NOTICE', paymentId: payment.id },
+    };
+  }
+  const expiresAt = payment.expiresAt ?? new Date(0);
+  const fee = payment.customerFee;
+  const payable = fee?.payable ?? payment.amount;
+  const submissions = facts?.submissions ?? [];
+  const latest = facts?.latestChange ?? null;
+  const windowOpen =
+    payment.state === 'PENDING' &&
+    (payment.providerReviewUntil ?? null) === null &&
+    payment.expiresAt !== null &&
+    at.getTime() < payment.expiresAt.getTime();
+  const receipt: CustomerButton = {
+    label: { kind: 'TEMPLATE', key: 'bot.payment.gateway_receipt_button' },
+    data: `${GATEWAY_RECEIPT_CALLBACK_PREFIX}${payment.id}`,
+  };
+  const change: CustomerButton = {
+    label: { kind: 'TEMPLATE', key: 'bot.payment.gateway_change_card_button' },
+    data: `${GATEWAY_CARD_CHANGE_CALLBACK_PREFIX}${payment.id}`,
+  };
+  const actions = [
+    ...(facts !== null && windowOpen && receiptUploadAvailable(invoice, submissions)
+      ? [receipt]
+      : []),
+    ...(facts !== null && windowOpen && cardChangeAvailable(invoice, latest, at) ? [change] : []),
+    cardCheck(payment.id),
+    mainMenuButton(),
+  ];
+  const brief = { payable, expiresAt };
+  const newest = submissions.at(-1) ?? null;
+  // A receipt on its way, accepted without a review, or whose answer was lost: shown as sent.
+  if (
+    newest !== null &&
+    (newest.state === 'QUEUED' ||
+      newest.state === 'SENDING' ||
+      newest.state === 'ACCEPTED' ||
+      (newest.state === 'UNKNOWN' && newest.inquiryResolvedAt === null))
+  ) {
+    return {
+      key: 'bot.payment.gateway_card_receipt_sent',
+      values: brief,
+      buttons: actions,
+      orderId,
+      wizard,
+    };
+  }
+  // TonPays itself says the receipt is being checked (an inquiry, not an acknowledgement).
+  if (invoice.providerStatus === 'processing') {
+    return {
+      key: 'bot.payment.gateway_card_receipt_sent',
+      values: brief,
+      buttons: actions,
+      orderId,
+      wizard,
+    };
+  }
+  if (latest !== null && (latest.state === 'REQUESTED' || latest.state === 'SENT')) {
+    return {
+      key: 'bot.payment.gateway_card_changing',
+      values: brief,
+      buttons: actions,
+      orderId,
+      wizard,
+    };
+  }
+  if (invoice.cardNumber === null) {
+    // The last card change's answer was lost: no card is shown, never a stale one.
+    return {
+      key: 'bot.payment.gateway_card_unconfirmed',
+      values: brief,
+      buttons: actions,
+      orderId,
+      wizard,
+    };
+  }
+  const card = {
+    cardNumber: invoice.cardNumber,
+    ...(invoice.cardName === null ? {} : { cardName: invoice.cardName }),
+  };
+  if (newest !== null && (newest.state === 'REFUSED' || newest.state === 'ABANDONED')) {
+    return {
+      key: 'bot.payment.gateway_card_receipt_refused',
+      values: { ...brief, ...card },
+      buttons: actions,
+      orderId,
+      wizard,
+    };
+  }
+  return {
+    key: 'bot.payment.gateway_card_invoice',
+    values: {
+      ...brief,
+      ...card,
+      ...(fee !== null && fee.fee.amountMinor > 0n
+        ? { principal: payment.amount, fee: fee.fee }
+        : {}),
+      /*
+       * TonPays' own `final_amount` (OQ-TPTG-03), shown only when present and different from
+       * what Nexa asked for: the provider's transfer instruction, never what Nexa settles,
+       * credits or refunds (§12).
+       */
+      ...(invoice.finalAmount !== null && invoice.finalAmount !== invoice.sentAmount
+        ? { transferAmount: money(invoice.finalAmount, 'IRT') }
+        : {}),
+    },
+    buttons: actions,
+    orderId,
+    wizard,
+  };
+}
+
+/**
  * An external-gateway attempt, as the customer sees it (brief §11, §23) — and, since R2
  * (item 4), the SAME screen whether the turn draws it or the gateway worker edits the wizard
  * message into it once the invoice is ready (`WizardInvoiceScreens`). A pure function of the
@@ -15364,6 +15738,12 @@ export function gatewayAttemptScreen(
   attempt: GatewayAttempt | GatewayAttemptView,
   orderId: string | null,
   at: Date,
+  /**
+   * A card-transfer attempt's card-change and receipt facts (TonPays Telegram, §8.1); null
+   * for every other route — and absent, the card screen offers neither the receipt nor the
+   * card-change button, never a stale one.
+   */
+  cardFacts: GatewayCardFacts | null = null,
 ): PendingReply {
   const { payment, invoice } = attempt;
   const kind = payment.orderId === null ? ('TOPUP' as const) : ('ORDER' as const);
@@ -15391,6 +15771,33 @@ export function gatewayAttemptScreen(
     },
   });
   if (payment.state === 'CONFIRMED') return screen('bot.payment.gateway_confirmed', [], 'CLOSED');
+  /*
+   * TonPays Telegram, the owner's review window (§8.1, §9.6.6), decided BEFORE the "closed"
+   * test below: a payment whose receipt the provider is reviewing is not closed, and one
+   * whose review ended unresolved has neither failed nor closed. Neither invites a new
+   * payment, a new receipt or a card change. Both stay `INVOICE` so the worker's edit of the
+   * outcome (confirmed, failed) replaces them in place.
+   */
+  if (payment.state === 'UNKNOWN') {
+    return screen('bot.payment.gateway_review_unresolved', [], 'INVOICE');
+  }
+  const reviewUntil = payment.providerReviewUntil ?? null;
+  if (payment.state === 'PENDING' && reviewUntil !== null) {
+    if (reviewUntil.getTime() > at.getTime()) {
+      return {
+        key: 'bot.payment.gateway_in_review',
+        values: {
+          payable: payment.customerFee?.payable ?? payment.amount,
+          reviewUntil,
+        },
+        buttons: [cardCheck(payment.id), mainMenuButton()],
+        orderId,
+        wizard: { kind, step: 'INVOICE', paymentId: payment.id },
+      };
+    }
+    // Lapsed and not yet swept: the same truth the sweep is about to record.
+    return screen('bot.payment.gateway_review_unresolved', [], 'INVOICE');
+  }
   if (payment.state === 'FAILED') {
     // A create the gateway refused is "unavailable"; an invoice it did not approve failed.
     return screen(
@@ -15448,6 +15855,12 @@ export function gatewayAttemptScreen(
    */
   if (invoice.creationState === 'CREATE_FAILED') {
     return screen('bot.payment.gateway_unavailable', [retry], 'NOTICE');
+  }
+  if (
+    PAYMENT_GATEWAY_DESCRIPTORS[invoice.provider].invoiceForm === 'CARD_TRANSFER' &&
+    invoice.creationState === 'CREATED'
+  ) {
+    return cardTransferScreen(payment, invoice, orderId, at, cardFacts);
   }
   const link = invoice.webInvoiceUrl ?? invoice.invoiceUrl;
   if (invoice.creationState === 'CREATED' && link === null) {

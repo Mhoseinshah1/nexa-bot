@@ -62,7 +62,7 @@ const MAX_RESPONSE_BYTES = 64 * 1024;
 
 export type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
 
-const bounded = (max: number) => z.string().min(1).max(max);
+export const bounded = (max: number) => z.string().min(1).max(max);
 
 /**
  * A provider identifier: a non-empty bounded string, or a JSON integer, which is normalised
@@ -70,7 +70,7 @@ const bounded = (max: number) => z.string().min(1).max(max);
  * the provider chose to send as a number is still the same id — refusing it would turn a
  * created invoice into an UNKNOWN one (F3, round N). Anything else is not an id.
  */
-const providerId = z
+export const providerId = z
   .union([bounded(GATEWAY_PROVIDER_ID_MAX_LENGTH), z.number().int().nonnegative()])
   .transform((value) => String(value));
 
@@ -81,13 +81,13 @@ const providerId = z
  * came in. Before round N a `null` or a decimal `final_amount` made the whole create
  * `unexpected_body`, and a created, payable invoice was shown to the customer as a lost one.
  */
-function metadataAmount(value: unknown): bigint | null {
+export function metadataAmount(value: unknown): bigint | null {
   if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) return BigInt(value);
   if (typeof value === 'string' && /^\d{1,18}$/u.test(value)) return BigInt(value);
   return null;
 }
 
-function metadataStatus(value: unknown): string | null {
+export function metadataStatus(value: unknown): string | null {
   return typeof value === 'string' &&
     value.length > 0 &&
     value.length <= GATEWAY_PROVIDER_STATUS_MAX_LENGTH
@@ -125,7 +125,7 @@ const inquiryResponseSchema = z.object({
   paid: z.unknown().optional(),
 });
 
-const errorBodySchema = z.object({
+export const errorBodySchema = z.object({
   detail: z.object({ code: z.string().min(1) }),
 });
 
@@ -153,7 +153,7 @@ function safeLink(value: unknown): string | null {
   }
 }
 
-function boundedCode(code: string): string {
+export function boundedCode(code: string): string {
   return code.replace(/[^A-Za-z0-9_.:-]/gu, '_').slice(0, GATEWAY_ERROR_CODE_MAX_LENGTH);
 }
 
@@ -174,15 +174,15 @@ function boundedCode(code: string): string {
  *   operating system's own error code (`ENOTFOUND`, `ECONNREFUSED`, a TLS code) when there
  *   is one.
  */
-type UnreadableShape = 'html' | 'text' | 'empty' | 'too_large' | 'stream';
+export type UnreadableShape = 'html' | 'text' | 'empty' | 'too_large' | 'stream';
 
-type Raw =
+export type Raw =
   | { readonly kind: 'BODY'; readonly status: number; readonly body: unknown }
   | { readonly kind: 'UNREADABLE'; readonly status: number; readonly shape: UnreadableShape }
   | { readonly kind: 'NO_RESPONSE'; readonly reason: string };
 
 /** Why a request got no answer, from the error alone and never from its message text. */
-function transportReason(error: unknown, aborted: boolean): string {
+export function transportReason(error: unknown, aborted: boolean): string {
   if (aborted) return 'timeout';
   const cause = (error as { cause?: unknown } | null)?.cause;
   // `redirect: 'error'` refuses a 30x this way; compared, never stored.
@@ -231,12 +231,15 @@ const RESPONSE_FIELDS: ReadonlySet<string> = new Set([
   'credit_amount',
 ]);
 
-/** The first field a zod parse refused, from `RESPONSE_FIELDS` or `unknown`. */
-function firstIssuePath(error: z.ZodError): string {
+/** The first field a zod parse refused, from `fields` (default `RESPONSE_FIELDS`) or `unknown`. */
+export function firstIssuePath(
+  error: z.ZodError,
+  fields: ReadonlySet<string> = RESPONSE_FIELDS,
+): string {
   const path = error.issues[0]?.path ?? [];
   if (path.length === 0) return 'root';
   const field = path[0];
-  return typeof field === 'string' && RESPONSE_FIELDS.has(field) ? field : 'unknown';
+  return typeof field === 'string' && fields.has(field) ? field : 'unknown';
 }
 
 /**
@@ -244,16 +247,56 @@ function firstIssuePath(error: z.ZodError): string {
  * names — one of `REQUEST_FIELDS`, else `unknown` — or null when the body is not one. The
  * provider's `loc`, `msg` and `type` are never copied into anything.
  */
-function validationFieldOf(body: unknown): string | null {
+export function validationFieldOf(
+  body: unknown,
+  fields: ReadonlySet<string> = REQUEST_FIELDS,
+): string | null {
   const detail = (body as { detail?: unknown } | null)?.detail;
   if (!Array.isArray(detail) || detail.length === 0) return null;
   const loc = (detail[0] as { loc?: unknown } | null)?.loc;
   if (!Array.isArray(loc) || loc.length === 0) return 'unknown';
   const last: unknown = loc[loc.length - 1];
-  return typeof last === 'string' && REQUEST_FIELDS.has(last) ? last : 'unknown';
+  return typeof last === 'string' && fields.has(last) ? last : 'unknown';
 }
 
-function unreadableCode(raw: { readonly status: number; readonly shape: UnreadableShape }): string {
+/**
+ * What a NON-2xx answer to a request that may have done work (a create, a card change, a
+ * receipt upload) said — shared by both TonPays adapters, so the rule is written once.
+ *
+ * A 5xx is UNKNOWN whatever its body says, and is decided BEFORE any code is read: the
+ * provider may have failed after doing the work. A readable RATE_LIMIT_EXCEEDED or
+ * configuration code in a 500 would otherwise clear the send stamp and send the request
+ * again — a second payable invoice, card change or receipt. Only a 4xx is taken at its
+ * word. A 4xx/429 with no readable code says nothing documented, so it is UNKNOWN too — but
+ * the request field a framework validation answer names is kept, because it is the one
+ * thing that tells an operator which part of the request the provider would not take.
+ */
+export function tonpaysWriteAnswer(
+  raw: Extract<Raw, { kind: 'BODY' }>,
+  requestFields: ReadonlySet<string>,
+):
+  | { readonly kind: 'UNKNOWN'; readonly code: string }
+  | { readonly kind: 'CODE'; readonly code: string } {
+  if (raw.status >= 500) return { kind: 'UNKNOWN', code: `http.${String(raw.status)}` };
+  const parsed = errorBodySchema.safeParse(raw.body);
+  if (!parsed.success) {
+    const field = validationFieldOf(raw.body, requestFields);
+    return {
+      kind: 'UNKNOWN',
+      code: boundedCode(
+        field === null
+          ? `http.${String(raw.status)}`
+          : `http.${String(raw.status)}.validation:${field}`,
+      ),
+    };
+  }
+  return { kind: 'CODE', code: parsed.data.detail.code };
+}
+
+export function unreadableCode(raw: {
+  readonly status: number;
+  readonly shape: UnreadableShape;
+}): string {
   return `http.${String(raw.status)}.unreadable.${raw.shape}`;
 }
 
@@ -341,31 +384,9 @@ export class TonPaysAdapter implements ExternalGatewayAdapter {
         finalAmount: metadataAmount(parsed.data.final_amount),
       };
     }
-    /*
-     * A 5xx is UNKNOWN whatever its body says, and is decided BEFORE any code is read:
-     * the provider may have failed after doing the work. A readable RATE_LIMIT_EXCEEDED
-     * or configuration code in a 500 would otherwise clear the send stamp and send the
-     * create again — a second payable invoice for an order that may already have one.
-     * Only a 4xx is taken at its word.
-     */
-    if (raw.status >= 500) return { kind: 'UNKNOWN', code: `http.${String(raw.status)}` };
-    const code = this.errorCodeOf(raw.body);
-    if (code === null) {
-      /*
-       * A 4xx/429 with no readable code: nothing documented was said, so UNKNOWN — but the
-       * field a framework validation answer names is kept, because it is the one thing that
-       * tells an operator which part of the request the provider would not take.
-       */
-      const field = validationFieldOf(raw.body);
-      return {
-        kind: 'UNKNOWN',
-        code: boundedCode(
-          field === null
-            ? `http.${String(raw.status)}`
-            : `http.${String(raw.status)}.validation:${field}`,
-        ),
-      };
-    }
+    const answered = tonpaysWriteAnswer(raw, REQUEST_FIELDS);
+    if (answered.kind === 'UNKNOWN') return answered;
+    const code = answered.code;
     switch (classifyTonPaysError(code)) {
       case 'CONFIGURATION':
         return { kind: 'REFUSED', code: boundedCode(code), configuration: true };
@@ -459,62 +480,93 @@ export class TonPaysAdapter implements ExternalGatewayAdapter {
     apiKey: string,
     body: Record<string, unknown>,
   ): Promise<Raw> {
-    // The provider is dialled only after the caller has committed. A call inside a
-    // transaction could not be rolled back, and would hold a connection for its length.
-    assertOutsideTransaction('A TonPays call');
-    const doFetch: FetchLike = this.options.fetch ?? ((url, init) => fetch(url, init));
-    const controller = new AbortController();
-    const timer = setTimeout(
-      () => controller.abort(),
-      this.options.timeoutMs ?? TONPAYS_TIMEOUT_MS,
-    );
+    return tonpaysRequest(this.options, {
+      method,
+      url: `${TONPAYS_BASE_URL}${path}`,
+      apiKey,
+      body: { kind: 'JSON', value: body },
+    });
+  }
+}
+
+/**
+ * ONE TonPays HTTP request, for both adapters: the key in its header and nowhere else,
+ * `redirect: 'error'`, the timeout, the bounded streaming read and the transport classifier.
+ * Refuses to run inside a database transaction.
+ */
+export async function tonpaysRequest(
+  options: { readonly fetch?: FetchLike; readonly timeoutMs?: number },
+  request: {
+    readonly method: 'GET' | 'POST';
+    readonly url: string;
+    readonly apiKey: string;
+    readonly body:
+      | { readonly kind: 'JSON'; readonly value: Record<string, unknown> }
+      | { readonly kind: 'MULTIPART'; readonly contentType: string; readonly bytes: Uint8Array }
+      | { readonly kind: 'NONE' };
+  },
+): Promise<Raw> {
+  // The provider is dialled only after the caller has committed. A call inside a
+  // transaction could not be rolled back, and would hold a connection for its length.
+  assertOutsideTransaction('A TonPays call');
+  const doFetch: FetchLike = options.fetch ?? ((url, init) => fetch(url, init));
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? TONPAYS_TIMEOUT_MS);
+  try {
+    let response: Response;
     try {
-      let response: Response;
-      try {
-        response = await doFetch(`${TONPAYS_BASE_URL}${path}`, {
-          method,
-          headers: {
-            'content-type': 'application/json',
-            accept: 'application/json',
-            [TONPAYS_API_KEY_HEADER]: apiKey,
-          },
-          body: JSON.stringify(body),
-          signal: controller.signal,
-          redirect: 'error',
-        });
-      } catch (error: unknown) {
-        /*
-         * Nothing about the error is kept but its system code: an undici error's MESSAGE can
-         * quote the request, while `ENOTFOUND` or a TLS code cannot, and is exactly what an
-         * operator needs to tell a DNS, firewall or certificate problem from a slow provider.
-         */
-        return { kind: 'NO_RESPONSE', reason: transportReason(error, controller.signal.aborted) };
-      }
-      let text: string | null;
-      try {
-        text = await readBounded(response, MAX_RESPONSE_BYTES);
-      } catch {
-        return controller.signal.aborted
-          ? { kind: 'NO_RESPONSE', reason: 'timeout' }
-          : { kind: 'UNREADABLE', status: response.status, shape: 'stream' };
-      }
-      if (text === null) return { kind: 'UNREADABLE', status: response.status, shape: 'too_large' };
-      try {
-        return { kind: 'BODY', status: response.status, body: JSON.parse(text) as unknown };
-      } catch {
-        const trimmed = text.trimStart();
-        const contentType = response.headers.get('content-type') ?? '';
-        const shape: UnreadableShape =
-          trimmed === ''
-            ? 'empty'
-            : trimmed.startsWith('<') || /html/iu.test(contentType)
-              ? 'html'
-              : 'text';
-        return { kind: 'UNREADABLE', status: response.status, shape };
-      }
-    } finally {
-      clearTimeout(timer);
+      const body = request.body;
+      response = await doFetch(request.url, {
+        method: request.method,
+        headers: {
+          ...(body.kind === 'JSON'
+            ? { 'content-type': 'application/json' }
+            : body.kind === 'MULTIPART'
+              ? { 'content-type': body.contentType }
+              : {}),
+          accept: 'application/json',
+          [TONPAYS_API_KEY_HEADER]: request.apiKey,
+        },
+        ...(body.kind === 'JSON'
+          ? { body: JSON.stringify(body.value) }
+          : body.kind === 'MULTIPART'
+            ? { body: body.bytes }
+            : {}),
+        signal: controller.signal,
+        redirect: 'error',
+      });
+    } catch (error: unknown) {
+      /*
+       * Nothing about the error is kept but its system code: an undici error's MESSAGE can
+       * quote the request, while `ENOTFOUND` or a TLS code cannot, and is exactly what an
+       * operator needs to tell a DNS, firewall or certificate problem from a slow provider.
+       */
+      return { kind: 'NO_RESPONSE', reason: transportReason(error, controller.signal.aborted) };
     }
+    let text: string | null;
+    try {
+      text = await readBounded(response, MAX_RESPONSE_BYTES);
+    } catch {
+      return controller.signal.aborted
+        ? { kind: 'NO_RESPONSE', reason: 'timeout' }
+        : { kind: 'UNREADABLE', status: response.status, shape: 'stream' };
+    }
+    if (text === null) return { kind: 'UNREADABLE', status: response.status, shape: 'too_large' };
+    try {
+      return { kind: 'BODY', status: response.status, body: JSON.parse(text) as unknown };
+    } catch {
+      const trimmed = text.trimStart();
+      const contentType = response.headers.get('content-type') ?? '';
+      const shape: UnreadableShape =
+        trimmed === ''
+          ? 'empty'
+          : trimmed.startsWith('<') || /html/iu.test(contentType)
+            ? 'html'
+            : 'text';
+      return { kind: 'UNREADABLE', status: response.status, shape };
+    }
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -524,7 +576,7 @@ export class TonPaysAdapter implements ExternalGatewayAdapter {
  * first, so an oversized or endless answer would cost the worker its heap before the
  * limit was ever consulted. A declared length over the limit is refused unread.
  */
-async function readBounded(response: Response, limit: number): Promise<string | null> {
+export async function readBounded(response: Response, limit: number): Promise<string | null> {
   const declared = Number(response.headers.get('content-length'));
   if (Number.isFinite(declared) && declared > limit) {
     await response.body?.cancel().catch(() => undefined);

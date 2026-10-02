@@ -49,6 +49,8 @@ import {
   refusalValuesFor,
   followUpForSettlement,
   GATEWAY_CHECK_CALLBACK_PREFIX,
+  GATEWAY_RECEIPT_CALLBACK_PREFIX,
+  GATEWAY_CARD_CHANGE_CALLBACK_PREFIX,
   GATEWAY_PAY_CALLBACK_PREFIX,
   intentOf,
   startPayloadOf,
@@ -813,10 +815,25 @@ describe('profile metadata, normalised before it is ever stored', () => {
        * way — both of which this head answers — and names no source and no figure.
        */
       'bot.payment.fx_unavailable',
+      /*
+       * TonPays Telegram (`docs/tonpays-telegram-gateway-audit.md` §8): the card invoice,
+       * the receipt and card-change states, the review screens and their buttons. Reviewed:
+       * each promises only what this head does — the worker sends the receipt and the card
+       * change, the review is TonPays', and none of them ever says paid.
+       */
+      'bot.payment.gateway_card_changing',
+      'bot.payment.gateway_card_check_button',
+      'bot.payment.gateway_card_invoice',
+      'bot.payment.gateway_card_missing',
+      'bot.payment.gateway_card_receipt_refused',
+      'bot.payment.gateway_card_receipt_sent',
+      'bot.payment.gateway_card_unconfirmed',
+      'bot.payment.gateway_change_card_button',
       'bot.payment.gateway_check_button',
       'bot.payment.gateway_closed',
       'bot.payment.gateway_confirmed',
       'bot.payment.gateway_failed',
+      'bot.payment.gateway_in_review',
       'bot.payment.gateway_invoice',
       /*
        * WP18. The invoice screens when the route charges the customer a fee: the same
@@ -833,6 +850,13 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.payment.gateway_no_link',
       'bot.payment.gateway_pay_button',
       'bot.payment.gateway_preparing',
+      'bot.payment.gateway_receipt_already_sent',
+      'bot.payment.gateway_receipt_button',
+      'bot.payment.gateway_receipt_photo_only',
+      'bot.payment.gateway_receipt_prompt',
+      'bot.payment.gateway_receipt_queued',
+      'bot.payment.gateway_receipt_too_large',
+      'bot.payment.gateway_review_unresolved',
       'bot.payment.gateway_unavailable',
       'bot.payment.gateway_unknown',
       'bot.payment.manual_button',
@@ -1638,6 +1662,9 @@ describe('a callback prefix decides what happens, so no prefix may shadow anothe
     PAY_GATEWAY: GATEWAY_PAY_CALLBACK_PREFIX,
     // WP11A: `gc:` begins with `g` like `g:`, and the shadowing case below is what proves it safe.
     GATEWAY_CHECK: GATEWAY_CHECK_CALLBACK_PREFIX,
+    // TonPays Telegram: `gr:` and `gk:`, `g` then a letter like `gc:`; proven safe below.
+    GATEWAY_RECEIPT: GATEWAY_RECEIPT_CALLBACK_PREFIX,
+    GATEWAY_CARD_CHANGE: GATEWAY_CARD_CHANGE_CALLBACK_PREFIX,
     SERVICE: SERVICE_CALLBACK_PREFIX,
     SERVICE_RESEND: SERVICE_RESEND_CALLBACK_PREFIX,
     SERVICE_SUSPEND: SERVICE_SUSPEND_CALLBACK_PREFIX,

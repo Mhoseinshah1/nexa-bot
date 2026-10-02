@@ -142,6 +142,8 @@ function nameOf(gateway: PaymentGatewayView): string {
       return t('web.payment_gateway_provider_tonpays');
     case 'TELEGRAM_STARS':
       return t('web.payment_gateway_provider_telegram_stars');
+    case 'TONPAYS_TELEGRAM':
+      return t('web.payment_gateway_provider_tonpays_telegram');
   }
 }
 
@@ -684,6 +686,14 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
           hint={t('web.payment_gateway_credential_hint')}
           className="gateways-form"
         >
+          {/*
+            The Telegram route's key is a Custom Telegram key, issued separately from the
+            website's (TonPays Telegram audit §6): the two are never interchangeable, and a
+            website key here is refused by TonPays as the wrong kind.
+          */}
+          {keying === 'TONPAYS_TELEGRAM' && (
+            <Banner tone="info">{t('web.payment_gateway_credential_telegram_hint')}</Banner>
+          )}
           <Field label={t('web.payment_gateway_credential_input')} htmlFor="pg-api-key">
             <input
               id="pg-api-key"

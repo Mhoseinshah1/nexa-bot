@@ -2,6 +2,7 @@ import { fileURLToPath } from 'node:url';
 import {
   ADMIN_MENU_BUTTON,
   ADMIN_MENU_COMMAND,
+  PAYMENT_GATEWAY_DESCRIPTORS,
   CAMPAIGN_SCHEDULE_INTERVAL_MS,
   CHANNEL_MEMBERSHIP_TIMEOUT_MS,
   COUNTER_CAP,
@@ -318,6 +319,13 @@ import {
   TonPaysAdapter,
 } from './modules/commerce/payments/infrastructure/tonpays-adapter.js';
 import { DrizzleGatewayInvoiceRepository } from './modules/commerce/payments/infrastructure/drizzle-gateway-invoice.repository.js';
+import type {
+  CardTransferGatewayAdapter,
+  ExternalGatewayAdapter,
+} from './modules/commerce/payments/application/gateway-invoice-ports.js';
+import { GatewayReceiptCaptureService } from './modules/commerce/payments/application/gateway-receipt-capture.service.js';
+import { DrizzleGatewayCardTransferRepository } from './modules/commerce/payments/infrastructure/drizzle-gateway-card-transfer.repository.js';
+import { TonPaysTelegramAdapter } from './modules/commerce/payments/infrastructure/tonpays-telegram-adapter.js';
 import { TelegramStarsAdapter } from './modules/commerce/payments/infrastructure/telegram-stars-adapter.js';
 import { FxService } from './modules/commerce/fx/application/fx.service.js';
 import type { FxSourceAdapter } from './modules/commerce/fx/application/ports.js';
@@ -347,6 +355,8 @@ import {
 import {
   GATEWAY_CREATE_BATCH,
   GATEWAY_INQUIRY_BATCH,
+  GATEWAY_CARD_CHANGE_BATCH,
+  GATEWAY_RECEIPT_BATCH,
   GatewayPaymentService,
   gatewayCallbackUrl,
 } from './modules/commerce/payments/application/gateway-payment.service.js';
@@ -616,6 +626,8 @@ export interface Container {
    * Telegram surface; its loop is started by the worker only.
    */
   readonly gatewayPayments: GatewayPaymentService;
+  /** TonPays Telegram: the customer's card-change and receipt commands (database writes). */
+  readonly gatewayReceiptCaptures: GatewayReceiptCaptureService;
   readonly gatewayPaymentLoop: GatewayPaymentLoop;
   /** Package FX: the central exchange rate, and the worker's lane that keeps it fresh. */
   readonly fx: FxService;
@@ -1987,6 +1999,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
         paymentRepository.hasClaimedPendingForOrder(scope, orderId, tx),
       checkoutHeldFor: (scope, orderId, now, tx) =>
         paymentRepository.hasCheckoutHeldPendingForOrder(scope, orderId, now, tx),
+      providerReviewFor: (scope, orderId, tx) =>
+        paymentRepository.hasProviderReviewOrUnknownForOrder(scope, orderId, tx),
       withdrawPendingFor: (scope, orderId, now, tx) =>
         paymentRepository.cancelPendingForOrder(scope, orderId, now, tx),
     },
@@ -2223,6 +2237,13 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
    */
   const tonpaysAdapter = new TonPaysAdapter();
   /*
+   * TonPays Telegram (`docs/tonpays-telegram-gateway-audit.md`): a SEPARATE adapter for the
+   * custom API — its own paths, its own key, a payee card instead of a link, a card change
+   * and a receipt upload. It shares the website adapter's request and classifier, never a
+   * key. Not accepted against the real provider yet (`OQ-WP10-01`).
+   */
+  const tonpaysTelegramAdapter = new TonPaysTelegramAdapter();
+  /*
    * Package A — Telegram Stars. The invoice is sent with the ATTEMPT's bot token through
    * the one Telegram call module, bounded by the same send timeout every customer message
    * uses.
@@ -2231,8 +2252,30 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     apiBaseUrl: config.TELEGRAM_API_BASE_URL,
     timeoutMs: config.NOTIFICATION_SEND_TIMEOUT_MS,
   });
-  const gatewayAdapters = (provider: PaymentGatewayProvider) =>
-    provider === 'TONPAYS' ? tonpaysAdapter : provider === 'TELEGRAM_STARS' ? starsAdapter : null;
+  const gatewayAdapters = (provider: PaymentGatewayProvider): ExternalGatewayAdapter | null => {
+    switch (provider) {
+      case 'TONPAYS':
+        return tonpaysAdapter;
+      case 'TELEGRAM_STARS':
+        return starsAdapter;
+      case 'TONPAYS_TELEGRAM':
+        return tonpaysTelegramAdapter;
+      case 'MANUAL_TRANSFER':
+        return null;
+    }
+  };
+  /**
+   * The card-transfer capability (audit §5.2), resolved by DESCRIPTOR, never by `instanceof`:
+   * only a route whose `invoiceForm` is `CARD_TRANSFER` has one.
+   */
+  const cardTransferAdapters = (
+    provider: PaymentGatewayProvider,
+  ): CardTransferGatewayAdapter | null =>
+    PAYMENT_GATEWAY_DESCRIPTORS[provider].invoiceForm === 'CARD_TRANSFER' &&
+    provider === 'TONPAYS_TELEGRAM'
+      ? tonpaysTelegramAdapter
+      : null;
+  const gatewayCardTransferRepository = new DrizzleGatewayCardTransferRepository(database.db);
   const gatewayInvoiceRepository = new DrizzleGatewayInvoiceRepository(database.db);
   const gatewayCredentialStore = new DrizzleGatewayCredentialStore(database.db, cipher, () =>
     ids.uuid(),
@@ -2487,6 +2530,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   const paymentService = new PaymentService({
     resellers: resellerService,
     undeliverable: undeliverableOrders,
+    // The one credit path, for a reconciliation whose order another payment settled.
+    refunds: refundService,
     repository: paymentRepository,
     /*
      * The two READ methods only. This module consults a route and cannot configure one
@@ -2548,6 +2593,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     gatewayInvoices: gatewayInvoiceRepository,
     gatewayAdapters,
     gatewayCredentials: gatewayCredentialStore,
+    // TonPays Telegram (§9.6.3 c): what the acknowledgement's own transaction also writes.
+    cardTransfer: gatewayCardTransferRepository,
     /*
      * Package FX: the central rate, LATE-BOUND. The FX service is built further down,
      * beside the HTTP client its sources dial through; nothing calls these before the
@@ -2608,6 +2655,22 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     paymentRecords: paymentRepository,
     adapters: gatewayAdapters,
     credentials: gatewayCredentialStore,
+    // TonPays Telegram: the card-change and receipt lanes, and the window sweep.
+    cardTransfer: gatewayCardTransferRepository,
+    cardAdapters: cardTransferAdapters,
+    /*
+     * A receipt's bytes, with the token of the bot the photo was sent to, bounded at the
+     * provider's 5 MB while streaming. Late-bound: `receiptFiles` is built further down;
+     * only the worker's pass calls this, after the container has finished.
+     */
+    receiptFiles: {
+      download: (scope, binding, options) =>
+        receiptFiles.download(
+          scope,
+          { botInstanceId: binding.botInstanceId as BotInstanceId, fileId: binding.fileId },
+          options,
+        ),
+    },
     // The bot the customer is talking to sends a Stars invoice (`BOT_TOKEN` routes).
     botTokens: {
       tokenForBotInstance: (scope, botInstanceId) =>
@@ -2644,6 +2707,23 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       refresh: (scope, paymentId): Promise<void> => wizardScreens.refresh(scope, paymentId),
     },
   });
+  /*
+   * TonPays Telegram (§8.2, §8.3): the customer's three commands — another card, the receipt
+   * window, a photo for it. Database writes under the guard; the worker makes every call.
+   */
+  const gatewayReceiptCaptures = new GatewayReceiptCaptureService({
+    guard,
+    uow,
+    audit,
+    opsLog,
+    sessions,
+    scopeActivity: tenants,
+    clock,
+    ids,
+    payments: paymentRepository,
+    invoices: gatewayInvoiceRepository,
+    cardTransfer: gatewayCardTransferRepository,
+  });
   const starsPayments = new StarsPaymentService({
     invoices: gatewayInvoiceRepository,
     payments: paymentRepository,
@@ -2676,8 +2756,13 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     // Every call a pass may make, one after another, each allowed its whole timeout — and,
     // since R2, the Telegram edit of the invoice message each of them may be followed by.
     passBoundMs:
-      (GATEWAY_CREATE_BATCH + GATEWAY_INQUIRY_BATCH) *
-      (TONPAYS_TIMEOUT_MS + config.NOTIFICATION_SEND_TIMEOUT_MS),
+      (GATEWAY_CREATE_BATCH +
+        GATEWAY_INQUIRY_BATCH +
+        GATEWAY_CARD_CHANGE_BATCH +
+        GATEWAY_RECEIPT_BATCH) *
+        (TONPAYS_TIMEOUT_MS + config.NOTIFICATION_SEND_TIMEOUT_MS) +
+      // TonPays Telegram: each receipt is first fetched from Telegram (getFile, then the file).
+      GATEWAY_RECEIPT_BATCH * 2 * config.NOTIFICATION_SEND_TIMEOUT_MS,
     now: () => clock.now().getTime(),
     logger,
   });
@@ -5067,6 +5152,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     ticketReplyFileSweeper,
     paymentExpiryLoop,
     gatewayPayments,
+    gatewayReceiptCaptures,
     gatewayPaymentLoop,
     fx: fxService,
     fxRefreshLoop,
@@ -5194,6 +5280,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       membership: channelMembership,
       // WP11A: the external-gateway attempt's customer reads and the check tap.
       gateway: gatewayPayments,
+      // TonPays Telegram: «📤 ارسال فیش واریزی» and «🔄 تعویض کارت» (database writes only).
+      gatewayReceipts: gatewayReceiptCaptures,
       /*
        * The main menu's routing table, built HERE because this is the only layer
        * that may read the catalogue on this path: the boundary check refuses

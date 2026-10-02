@@ -13,7 +13,7 @@ import {
   sql,
   type SQL,
 } from 'drizzle-orm';
-import { money } from '@nexa/contracts';
+import { money, PROVIDER_REVIEW_GATEWAY_PROVIDERS } from '@nexa/contracts';
 import type {
   CurrencyCode,
   OrderId,
@@ -449,6 +449,25 @@ export class DrizzlePaymentRepository implements PaymentRepository {
     tx: unknown,
   ): Promise<readonly PaymentId[]> {
     const tenantId = requireTenantId(scope);
+    /*
+     * The order's PENDING rows are LOCKED first, in a statement of their own, so the UPDATE
+     * below runs on a snapshot taken AFTER every lock is held (READ COMMITTED takes one per
+     * statement). The receipt-in-flight predicate reads ANOTHER table, and PostgreSQL's
+     * re-check of a row it waited for does not re-read other tables: a receipt queued under
+     * the payment's lock while this statement waited would be invisible to it, and the
+     * payment the customer had just sent a receipt for would be cancelled (review F3).
+     */
+    await this.exec(tx)
+      .select({ id: payments.id })
+      .from(payments)
+      .where(
+        and(
+          eq(payments.tenantId, tenantId),
+          eq(payments.orderId, orderId),
+          eq(payments.state, 'PENDING'),
+        ),
+      )
+      .for('update');
     const rows = await this.exec(tx)
       .update(payments)
       .set({ state: 'CANCELLED', resolvedAt: now, updatedAt: now })
@@ -457,6 +476,12 @@ export class DrizzlePaymentRepository implements PaymentRepository {
           eq(payments.tenantId, tenantId),
           eq(payments.orderId, orderId),
           eq(payments.state, 'PENDING'),
+          /*
+           * Nor one whose receipt has been sent to a provider and not yet answered (review
+           * F3): the customer's transfer is very probably made. Read on the snapshot taken
+           * after the lock above.
+           */
+          sql`NOT ${receiptInFlight()}`,
           /*
            * A SIGNALLED transfer is never withdrawn here, and the predicate belongs in
            * this statement rather than in the caller's guard.
@@ -479,6 +504,13 @@ export class DrizzlePaymentRepository implements PaymentRepository {
            * waited on the approval's row lock re-checks it against the committed row.
            */
           notHeldAt(now),
+          /*
+           * Nor a payment in a provider review (TonPays Telegram, §9.6.3 f): the customer has
+           * very probably sent the money and the provider is reviewing the receipt. Row-local,
+           * for the reason the hold above is: a cancellation that waited on the
+           * acknowledgement's row lock re-reads this column on the committed row.
+           */
+          isNull(payments.providerReviewUntil),
         ),
       )
       .returning({ id: payments.id });
@@ -523,6 +555,8 @@ export class DrizzlePaymentRepository implements PaymentRepository {
           isNotNull(payments.expiresAt),
           lte(payments.expiresAt, now),
           noReceiptFiled(),
+          // Never a payment in a provider review: row-local (§9.6.3 a, b).
+          isNull(payments.providerReviewUntil),
         ),
       )
       .orderBy(asc(payments.expiresAt), asc(payments.id))
@@ -563,6 +597,14 @@ export class DrizzlePaymentRepository implements PaymentRepository {
            * the day the candidate query stops taking the lock.
            */
           noReceiptFiled(),
+          /*
+           * TonPays Telegram (§9.6.3): a payment whose provider acknowledged the receipt
+           * before its deadline is in review, and only the review sweep moves it. ROW-LOCAL
+           * and restated here: an acknowledgement that commits between this statement's
+           * snapshot and its lock is seen by the re-check of the locked row's own columns,
+           * which a cross-table predicate would not be.
+           */
+          isNull(payments.providerReviewUntil),
           sql`${payments.id} IN ${due}`,
         ),
       )
@@ -643,6 +685,211 @@ export class DrizzlePaymentRepository implements PaymentRepository {
       }
     }
     return found;
+  }
+
+  async recordProviderReview(
+    scope: TenantContext,
+    id: PaymentId,
+    window: { readonly acknowledgedAt: Date; readonly reviewUntil: Date },
+    now: Date,
+    tx: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .update(payments)
+      .set({
+        providerReviewStartedAt: window.acknowledgedAt,
+        providerReviewUntil: window.reviewUntil,
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(payments.tenantId, tenantId),
+          eq(payments.id, id),
+          eq(payments.state, 'PENDING'),
+          eq(payments.method, 'GATEWAY'),
+          // Only a route whose descriptor reviews (the CHECK says so too).
+          inArray(payments.gatewayProvider, [...PROVIDER_REVIEW_GATEWAY_PROVIDERS]),
+          // Written once: a repeated acknowledgement moves nothing.
+          isNull(payments.providerReviewUntil),
+          // Half-open: an acknowledgement AT the deadline opens nothing.
+          gt(payments.expiresAt, window.acknowledgedAt),
+        ),
+      )
+      .returning({ id: payments.id });
+    return rows.length > 0;
+  }
+
+  async loseTrackOfReviewed(
+    scope: TenantContext,
+    now: Date,
+    limit: number,
+    tx: unknown,
+  ): Promise<readonly PaymentRecord[]> {
+    const tenantId = requireTenantId(scope);
+    if (limit <= 0) return [];
+    const reviewEnded = and(
+      eq(payments.tenantId, tenantId),
+      eq(payments.state, 'PENDING'),
+      eq(payments.method, 'GATEWAY'),
+      isNotNull(payments.providerReviewUntil),
+      lte(payments.providerReviewUntil, now),
+    );
+    const due = this.exec(tx)
+      .select({ id: payments.id })
+      .from(payments)
+      .where(reviewEnded)
+      .orderBy(asc(payments.providerReviewUntil), asc(payments.id))
+      .limit(limit)
+      .for('update', { skipLocked: true });
+    const rows = await this.exec(tx)
+      .update(payments)
+      // UNKNOWN is not a resolved state: no `resolved_at` (`payments_resolved_check`).
+      .set({ state: 'UNKNOWN', updatedAt: now })
+      .where(and(reviewEnded, sql`${payments.id} IN ${due}`))
+      .returning();
+    return rows.map((row) => toRecord(row as Row));
+  }
+
+  async reconcileConfirm(
+    scope: TenantContext,
+    id: PaymentId,
+    confirmation: PaymentConfirmation,
+    now: Date,
+    tx: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .update(payments)
+      .set({
+        state: 'CONFIRMED',
+        evidenceKind: confirmation.evidenceKind,
+        evidenceNote: confirmation.evidenceNote,
+        confirmedByAdminId: confirmation.confirmedByAdminId,
+        confirmedAt: confirmation.confirmedAt,
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(payments.tenantId, tenantId),
+          eq(payments.id, id),
+          eq(payments.state, 'UNKNOWN'),
+          eq(payments.method, 'GATEWAY'),
+        ),
+      )
+      .returning({ id: payments.id });
+    return rows.length > 0;
+  }
+
+  async reconcileFail(
+    scope: TenantContext,
+    id: PaymentId,
+    resolution: PaymentResolution,
+    now: Date,
+    tx: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .update(payments)
+      .set({
+        state: 'FAILED',
+        resolvedAt: resolution.resolvedAt,
+        resolvedByAdminId: resolution.resolvedByAdminId,
+        resolutionNote: resolution.resolutionNote,
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(payments.tenantId, tenantId),
+          eq(payments.id, id),
+          eq(payments.state, 'UNKNOWN'),
+          eq(payments.method, 'GATEWAY'),
+        ),
+      )
+      .returning({ id: payments.id });
+    return rows.length > 0;
+  }
+
+  async hasProviderReviewOrUnknownForOrder(
+    scope: TenantContext,
+    orderId: OrderId,
+    tx: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select({ id: payments.id })
+      .from(payments)
+      .where(
+        and(
+          eq(payments.tenantId, tenantId),
+          eq(payments.orderId, orderId),
+          or(
+            and(eq(payments.state, 'PENDING'), isNotNull(payments.providerReviewUntil)),
+            eq(payments.state, 'UNKNOWN'),
+            // A receipt already sent to the provider and not yet answered (review F3).
+            and(eq(payments.state, 'PENDING'), receiptInFlight()),
+          ),
+        ),
+      )
+      .limit(1);
+    return rows.length > 0;
+  }
+
+  async lockPendingForOrder(scope: TenantContext, orderId: OrderId, tx: unknown): Promise<void> {
+    const tenantId = requireTenantId(scope);
+    await this.exec(tx)
+      .select({ id: payments.id })
+      .from(payments)
+      .where(
+        and(
+          eq(payments.tenantId, tenantId),
+          eq(payments.orderId, orderId),
+          eq(payments.state, 'PENDING'),
+        ),
+      )
+      .orderBy(asc(payments.id))
+      .for('update');
+  }
+
+  async hasOtherLivePaymentForOrder(
+    scope: TenantContext,
+    orderId: OrderId,
+    except: PaymentId,
+    tx: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select({ id: payments.id })
+      .from(payments)
+      .where(
+        and(
+          eq(payments.tenantId, tenantId),
+          eq(payments.orderId, orderId),
+          sql`${payments.id} <> ${except}`,
+          /*
+           * Any PENDING one, whatever its clock says — a manual transfer with a receipt never
+           * expires and can still be confirmed — an UNKNOWN one, and a CONFIRMED one: the
+           * order is then paid, and a receipt for it would be a second payment.
+           */
+          inArray(payments.state, ['PENDING', 'UNKNOWN', 'CONFIRMED']),
+        ),
+      )
+      .limit(1);
+    return rows.length > 0;
+  }
+
+  async hasGatewayReceiptInFlight(
+    scope: TenantContext,
+    id: PaymentId,
+    tx: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select({ id: payments.id })
+      .from(payments)
+      .where(and(eq(payments.tenantId, tenantId), eq(payments.id, id), receiptInFlight()))
+      .limit(1);
+    return rows.length > 0;
   }
 
   async setExternalReference(
@@ -774,6 +1021,8 @@ type Row = {
   customerFeeBasisPoints: number | null;
   customerFeeAmount: bigint | null;
   payableAmount: bigint | null;
+  providerReviewStartedAt: Date | null;
+  providerReviewUntil: Date | null;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -812,6 +1061,8 @@ function toRecord(row: Row): PaymentRecord {
             fee: money(row.customerFeeAmount, row.currency as CurrencyCode),
             payable: money(row.payableAmount, row.currency as CurrencyCode),
           },
+    providerReviewStartedAt: row.providerReviewStartedAt,
+    providerReviewUntil: row.providerReviewUntil,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -820,4 +1071,21 @@ function toRecord(row: Row): PaymentRecord {
 /** No approved Stars checkout holds the row at `now` (Codex review of #85, C2). */
 function notHeldAt(now: Date) {
   return or(isNull(payments.checkoutHeldUntil), lte(payments.checkoutHeldUntil, now));
+}
+
+/**
+ * A provider receipt the customer has SENT for this payment that the provider has not yet
+ * answered, or whose answer is still being decided (`docs/tonpays-telegram-gateway-audit.md`
+ * §9.6.3 f; independent review F3): queued, on the wire, accepted, or lost and not yet
+ * resolved by an inquiry. Money the customer has very probably moved — the manual-transfer
+ * precedent is `customer_signalled_at`. Raw SQL over the submissions table, correlated on
+ * the payment row, so the predicate composes into any payments query.
+ */
+function receiptInFlight(): SQL {
+  return sql`EXISTS (
+    SELECT 1 FROM gateway_receipt_submissions s
+     WHERE s.tenant_id = ${payments.tenantId}
+       AND s.payment_id = ${payments.id}
+       AND (s.state IN ('QUEUED', 'SENDING', 'ACCEPTED')
+            OR (s.state = 'UNKNOWN' AND s.inquiry_resolved_at IS NULL)))`;
 }

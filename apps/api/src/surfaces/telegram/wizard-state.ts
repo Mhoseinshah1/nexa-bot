@@ -227,6 +227,12 @@ export const WIZARD_GATES: ReadonlyMap<string, WizardGate> = new Map<string, Wiz
       from: ['INVOICE_PENDING', 'INVOICE', 'INVOICE_LOADING'],
     },
   ],
+  /*
+   * TonPays Telegram (§8.1): the receipt and card-change buttons are drawn only on the card
+   * invoice, which is an `INVOICE` screen. A tap from any other screen is stale.
+   */
+  ['GATEWAY_RECEIPT', { kind: null, adoptAs: 'ORDER', from: ['INVOICE'] }],
+  ['GATEWAY_CARD_CHANGE', { kind: null, adoptAs: 'ORDER', from: ['INVOICE'] }],
 ]);
 
 /**

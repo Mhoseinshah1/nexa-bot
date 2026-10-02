@@ -140,6 +140,13 @@ export interface OrderPaymentLane {
   ): Promise<boolean>;
 
   /**
+   * Whether this order has a payment in a provider review, or one whose review lapsed
+   * UNKNOWN (TonPays Telegram, `docs/tonpays-telegram-gateway-audit.md` §9.6.3 f): money the
+   * customer has very probably sent, which a cancellation must not orphan.
+   */
+  providerReviewFor(scope: TenantContext, orderId: OrderId, tx: TransactionScope): Promise<boolean>;
+
+  /**
    * Withdraws every PENDING payment against this order. Returns the ids it moved.
    *
    * A set rather than one row, because `requestManualTransfer` allows at most one
@@ -2060,6 +2067,17 @@ export class OrderService {
           throw errors.conflict(
             COMMERCE_ERROR_CODES.PAYMENT_CHECKOUT_IN_PROGRESS,
             'A Telegram Stars payment for this order is being completed.',
+          );
+        }
+        /*
+         * And a payment a provider is reviewing, or whose review lapsed UNKNOWN (§9.6.3 f).
+         * The withdrawal left it behind (its own row-local predicate); refused with the
+         * existing answer, and the withdrawal rolls back.
+         */
+        if (await this.deps.payments.providerReviewFor(scope, orderId, tx)) {
+          throw errors.conflict(
+            COMMERCE_ERROR_CODES.ORDER_TRANSFER_UNDER_REVIEW,
+            'A payment for this order is being reviewed by the gateway.',
           );
         }
 

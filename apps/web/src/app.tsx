@@ -788,6 +788,8 @@ export function resolve(
            * than drawing a disabled button.
            */
           mayViewRefunds={may('refunds.view')}
+          // TonPays Telegram §9.6.4: resolving an UNKNOWN gateway payment from recorded evidence.
+          mayReconcile={may('payments.reconcile')}
           mayIssueRefunds={may('refunds.issue')}
           mayViewWallet={may('users.view')}
           /*

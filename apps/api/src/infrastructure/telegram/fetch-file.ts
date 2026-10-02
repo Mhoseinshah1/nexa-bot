@@ -49,6 +49,12 @@ export interface TelegramFileRequest {
   readonly fileBaseUrl: string;
   readonly timeoutMs: number;
   readonly fileId: string;
+  /**
+   * The largest file this caller will hold, enforced on the declared size, the declared
+   * length and while streaming. Absent: `PAYMENT_RECEIPT_MAX_BYTES`, as before. A TonPays
+   * Telegram receipt passes its provider's five-megabyte bound (TPTG-09).
+   */
+  readonly maxBytes?: number;
 }
 
 export async function telegramFetchFile(
@@ -65,6 +71,10 @@ export async function telegramFetchFile(
   const described = await describe(request);
   if (described.outcome !== 'SUCCEEDED') return described;
   return download(request, described.filePath, described.declaredSize);
+}
+
+function limitOf(request: TelegramFileRequest): number {
+  return request.maxBytes ?? PAYMENT_RECEIPT_MAX_BYTES;
 }
 
 type DescribeOutcome =
@@ -113,7 +123,7 @@ async function describe(request: TelegramFileRequest): Promise<DescribeOutcome> 
       typeof declared === 'number' && Number.isSafeInteger(declared) && declared >= 0
         ? declared
         : null;
-    if (declaredSize !== null && declaredSize > PAYMENT_RECEIPT_MAX_BYTES) {
+    if (declaredSize !== null && declaredSize > limitOf(request)) {
       return { outcome: 'UNAVAILABLE', reason: 'the file is larger than this API will fetch' };
     }
     return { outcome: 'SUCCEEDED', filePath, declaredSize };
@@ -152,10 +162,10 @@ async function download(
      * trusted alone.
      */
     const promised = Number(response.headers.get('content-length') ?? Number.NaN);
-    if (Number.isSafeInteger(promised) && promised > PAYMENT_RECEIPT_MAX_BYTES) {
+    if (Number.isSafeInteger(promised) && promised > limitOf(request)) {
       return { outcome: 'UNAVAILABLE', reason: 'the file is larger than this API will fetch' };
     }
-    const read = await readBounded(response, controller);
+    const read = await readBounded(response, controller, limitOf(request));
     if (read === null) {
       return { outcome: 'UNAVAILABLE', reason: 'the file is larger than this API will fetch' };
     }
@@ -197,6 +207,7 @@ async function download(
 async function readBounded(
   response: Response,
   controller: AbortController,
+  limit: number,
 ): Promise<Uint8Array | null> {
   const body = response.body;
   if (body === null) return new Uint8Array(0);
@@ -209,7 +220,7 @@ async function readBounded(
     if (done) break;
     if (value === undefined) continue;
     total += value.byteLength;
-    if (total > PAYMENT_RECEIPT_MAX_BYTES) {
+    if (total > limit) {
       controller.abort();
       return null;
     }
