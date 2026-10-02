@@ -17,7 +17,17 @@ import {
 } from '../api/client';
 import { formatTimestamp } from '../format';
 import { t, type WebKey } from '../i18n/web.fa';
-import { Badge, Banner, Card, DataTable, Ltr, Num, StateSwitch, type Column } from '../ui/kit';
+import {
+  Badge,
+  Banner,
+  Card,
+  DataTable,
+  Disclosure,
+  Ltr,
+  Num,
+  StateSwitch,
+  type Column,
+} from '../ui/kit';
 import { Icon } from '../ui/icons';
 
 /**
@@ -83,10 +93,9 @@ export function RecoveryKitSection({ permissions }: { permissions: readonly stri
         </StateSwitch>
       </div>
 
-      <details className="muted small">
-        <summary>{t('web.kit_advanced')}</summary>
-        <p>{t('web.kit_advanced_body')}</p>
-      </details>
+      <Disclosure summary={t('web.kit_advanced')} size="sm">
+        <p className="muted small">{t('web.kit_advanced_body')}</p>
+      </Disclosure>
     </Card>
   );
 }
