@@ -85,7 +85,7 @@ function parseArgs(argv: readonly string[]): Args {
   // Refused as an argument outright. argv is world-readable in /proc and lands
   // in shell history; the passphrase is the only thing between a kit and every
   // key in it.
-  if (argv.includes('--passphrase')) {
+  if (argv.some((arg) => arg === '--passphrase' || arg.startsWith('--passphrase='))) {
     throw new UsageError('The kit passphrase is read from standard input, never from an argument.');
   }
 

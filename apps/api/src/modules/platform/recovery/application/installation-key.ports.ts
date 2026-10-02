@@ -13,13 +13,18 @@ export interface InstallationKeyRow {
   readonly id: string;
   readonly keyId: string;
   readonly fingerprint: string;
-  readonly wrappedMaterial: string;
-  readonly wrappedUnderKeyId: string;
+  /** Null on a TOMBSTONE — a removed key, kept so a restore cannot revive it. */
+  readonly wrappedMaterial: string | null;
+  readonly wrappedUnderKeyId: string | null;
   readonly source: InstallationKeySource;
   readonly kitId: string | null;
   readonly importedAt: Date;
   readonly importedByAdminId: string | null;
   readonly importedByLabel: string | null;
+  readonly removedAt: Date | null;
+  readonly removedByLabel: string | null;
+  /** Set when the row came back inside a restored backup rather than an import here. */
+  readonly restoredAt: Date | null;
 }
 
 export interface InstallationKeyRepository {
@@ -33,9 +38,24 @@ export interface InstallationKeyRepository {
    * rows that do not exist yet.
    */
   lock(tx: unknown): Promise<void>;
-  insert(tx: unknown, row: InstallationKeyRow): Promise<void>;
-  /** Deletes the row only if it still holds the bytes that were checked. */
-  deleteIfUnchanged(tx: unknown, keyId: string, fingerprint: string): Promise<boolean>;
+  /**
+   * Writes an imported key, or revives a tombstone of the same id. Never
+   * overwrites a LIVE row; returns false if one is there.
+   */
+  upsertImported(tx: unknown, row: InstallationKeyRow): Promise<boolean>;
+  /**
+   * Removes a key by turning its row into a TOMBSTONE: the wrapped bytes are
+   * erased, the id and fingerprint kept. Only if the row still holds the key
+   * that was checked. A deleted row would let a restore of an older backup
+   * bring the key straight back.
+   */
+  tombstone(
+    tx: unknown,
+    keyId: string,
+    fingerprint: string,
+    at: Date,
+    byLabel: string,
+  ): Promise<boolean>;
   /** Replaces a row's wrap, only if it is still the one that was read. For `secrets rewrap`. */
   rewrap(
     tx: unknown,
@@ -52,15 +72,38 @@ export interface InstallationKeyRepository {
   openRecoveryWorkspaces(tx?: unknown): Promise<readonly string[]>;
 }
 
+/** One encrypted archive still on this server's disk, as its cleartext header and name describe it. */
+export interface RetainedArchive {
+  /** The key that sealed it. */
+  readonly keyId: string;
+  /** When it was taken: the UUIDv7 backup id's own timestamp, else the file's mtime. */
+  readonly takenAt: Date;
+}
+
 /**
- * Which key sealed each encrypted archive that is still on this server's disk.
+ * The encrypted archives still on this server's disk.
  *
  * Read from each archive's CLEARTEXT header, which names its key without
- * anything being decrypted. A count by key id; never a path.
+ * anything being decrypted. Never a path.
  */
 export interface RetainedArchiveScanner {
-  retainedArchiveKeyIds(): Promise<ReadonlyMap<string, number>>;
-  /** The key a single archive (a recovery's upload) names, or null when unreadable. */
+  /**
+   * Every archive on disk, and how many could NOT be read.
+   *
+   * FAIL CLOSED. Only a CONFIRMED-absent archive is no dependency: a directory
+   * holding an archive whose header cannot be read (an I/O error, a permission,
+   * an upload still arriving) is counted as `unreadable`, and the caller treats
+   * each one as a dependency of every key. Throws when the root itself cannot be
+   * listed for any reason other than not existing.
+   */
+  retainedArchives(): Promise<{
+    readonly archives: readonly RetainedArchive[];
+    readonly unreadable: number;
+  }>;
+  /**
+   * The key a single archive (a recovery's upload) names; null only when the file
+   * is confirmed ABSENT. Throws when it exists and cannot be read.
+   */
   archiveKeyId(archivePath: string): Promise<string | null>;
 }
 
@@ -87,8 +130,16 @@ export interface CandidateKeyStore {
    * can open). Under the same id with a DIFFERENT fingerprint, it throws: two
    * different keys answering to one name in one database is exactly the
    * ambiguity a cutover must not carry into production.
+   *
+   * TOMBSTONES are carried too: a key removed here and present in the
+   * candidate (because the backup predates the removal) is erased there, so a
+   * restore cannot revive it.
+   *
+   * Returns the ids of keys the CANDIDATE holds that this installation never
+   * had — keys that will come back with the restore. They are stamped
+   * `restored_at` in the candidate, for the list and the audit.
    */
-  carryInto(database: string, rows: readonly InstallationKeyRow[]): Promise<void>;
+  carryInto(database: string, rows: readonly InstallationKeyRow[]): Promise<readonly string[]>;
 }
 
 /**
@@ -104,6 +155,9 @@ export interface RecoveryKeyCoverage {
   refresh(): Promise<void>;
   /** Key ids the database's stored secrets name that this installation does not hold. */
   missingFrom(database: string): Promise<readonly string[]>;
-  /** Writes this installation's imported keys into a candidate. Returns how many. */
-  carryInto(database: string): Promise<number>;
+  /**
+   * Writes this installation's imported keys (and tombstones) into a candidate.
+   * Returns the ids of keys that arrive with the restore and were never imported here.
+   */
+  carryInto(database: string): Promise<readonly string[]>;
 }

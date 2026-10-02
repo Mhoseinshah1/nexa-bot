@@ -73,7 +73,9 @@ export class RecoveryKitController {
     @Body() body: unknown,
   ): Promise<ImportRecoveryKitResponse> {
     const { scope, actor } = await this.authenticate(request, { write: true });
-    return this.container.installationKeys.importKit(scope, actor, body);
+    return this.container.installationKeys.importKit(scope, actor, body, {
+      ip: ipThrottleSubject(request.ip, this.container.config.TRUSTED_PROXY_IPS),
+    });
   }
 
   @Post(RECOVERY_KIT_ROUTES.remove)

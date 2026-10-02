@@ -105,6 +105,7 @@ function installationKey(overrides: Record<string, unknown> = {}): Record<string
     importedBy: null,
     available: true,
     dependencies: { secrets: 3, wrappedKeys: 0, retainedArchives: 2, openRecoveries: 0 },
+    arrivedByRestore: false,
     removable: false,
     ...overrides,
   };
@@ -368,7 +369,7 @@ describe('the recovery page', () => {
 
       const button = await screen.findByRole('button', { name: 'ساخت و دریافت کیت' });
       expect(button).toBeDisabled();
-      fireEvent.change(screen.getByLabelText('رمز ورود حساب شما'), {
+      fireEvent.change(screen.getAllByLabelText('رمز ورود حساب شما')[0]!, {
         target: { value: 'my-account-password' },
       });
       fireEvent.change(screen.getByLabelText('رمز کیت (دست‌کم ۱۲ نویسه)'), {
@@ -428,7 +429,13 @@ describe('the recovery page', () => {
         target: { files: [new File([new Uint8Array([1, 2, 3])], 'old.nxkit')] },
       });
       fireEvent.change(screen.getByLabelText('رمز کیت'), { target: { value: 'wrong one' } });
-      fireEvent.click(screen.getByRole('button', { name: 'وارد کردن کیت' }));
+      const importButton = screen.getByRole('button', { name: 'وارد کردن کیت' });
+      // The step-up (PR #144 review): no import without the account password.
+      expect(importButton).toBeDisabled();
+      const passwords = screen.getAllByLabelText('رمز ورود حساب شما');
+      fireEvent.change(passwords[passwords.length - 1]!, { target: { value: 'my-password' } });
+      expect(importButton).toBeEnabled();
+      fireEvent.click(importButton);
       expect(
         await screen.findByText('کیت باز نشد: یا رمز درست نیست یا فایل آسیب دیده است.'),
       ).toBeInTheDocument();

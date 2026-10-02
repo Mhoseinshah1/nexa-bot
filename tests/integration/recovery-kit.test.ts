@@ -144,6 +144,7 @@ describe('the Recovery Kit key lifecycle', () => {
     post(RECOVERY_KIT_ROUTES.import, ownerCookie, {
       kit: kit.toString('base64'),
       passphrase,
+      accountPassword: OWNER_PASSWORD,
       idempotencyKey: key,
     });
 
@@ -346,12 +347,12 @@ describe('the Recovery Kit key lifecycle', () => {
       const failing: InstallationKeyRepository = {
         all: (tx) => real.all(tx),
         lock: (tx) => real.lock(tx),
-        insert: async (tx, row) => {
+        upsertImported: async (tx, row) => {
           inserts += 1;
           if (inserts === 2) throw new Error('the disk went away');
-          await real.insert(tx, row);
+          return real.upsertImported(tx, row);
         },
-        deleteIfUnchanged: (tx, keyId, fp) => real.deleteIfUnchanged(tx, keyId, fp),
+        tombstone: (tx, keyId, fp, at, by) => real.tombstone(tx, keyId, fp, at, by),
         rewrap: (tx, keyId, expected, next) => real.rewrap(tx, keyId, expected, next),
         secretCountsByKeyId: () => real.secretCountsByKeyId(),
         openRecoveryWorkspaces: () => real.openRecoveryWorkspaces(),
@@ -376,6 +377,7 @@ describe('the Recovery Kit key lifecycle', () => {
             ])
           ).toString('base64'),
           passphrase: PASSPHRASE,
+          accountPassword: OWNER_PASSWORD,
           idempotencyKey: idempotencyKey(),
         }),
       ).rejects.toThrow('the disk went away');
@@ -384,10 +386,88 @@ describe('the Recovery Kit key lifecycle', () => {
       expect(api.container.keyring.importedKeys.size).toBe(0);
     });
 
+    // --- PR #144 review fixes ------------------------------------------------
+
+    it('needs the account password as well as the session (step-up), and writes nothing without it', async () => {
+      const kit = await kitOf([{ keyId: 'attacker-1', material: randomBytes(32) }]);
+      const wrong = await post(RECOVERY_KIT_ROUTES.import, ownerCookie, {
+        kit: kit.toString('base64'),
+        passphrase: PASSPHRASE,
+        accountPassword: 'a-stolen-session-does-not-know-this',
+        idempotencyKey: idempotencyKey(),
+      });
+      // 400, not 401: the session stays signed in.
+      expect(wrong.statusCode).toBe(400);
+      expect(wrong.json().error.code).toBe(
+        PLATFORM_ERROR_CODES.RECOVERY_KIT_REAUTHENTICATION_FAILED,
+      );
+      const missing = await post(RECOVERY_KIT_ROUTES.import, ownerCookie, {
+        kit: kit.toString('base64'),
+        passphrase: PASSPHRASE,
+        idempotencyKey: idempotencyKey(),
+      });
+      expect(missing.statusCode).toBe(400);
+      expect(await api.container.installationKeyRepository.all()).toHaveLength(0);
+      expect(api.container.keyring.keys.has('attacker-1')).toBe(false);
+      expect(await auditText()).toContain('REAUTHENTICATION_FAILED');
+    });
+
+    it('imports bytes already held under ANOTHER name as that name, so the name resolves', async () => {
+      // The kit calls the active key `alias-1`. Reporting it "already held" left
+      // `alias-1` unresolvable, and an archive naming it foreign.
+      const response = await importKit(await kitOf([{ keyId: 'alias-1', material: activeKey }]));
+      expect(response.statusCode, response.body).toBe(201);
+      expect(
+        importRecoveryKitResponseSchema.parse(response.json()).imported.map((k) => k.keyId),
+      ).toEqual(['alias-1']);
+      expect(api.container.keyring.keys.get('alias-1')?.equals(activeKey)).toBe(true);
+      // Still decrypt-only: the configured key encrypts.
+      expect(api.container.keyring.activeKeyId).toBe('test-1');
+    });
+
+    it('does not replay an earlier success for a wrong passphrase', async () => {
+      const key = idempotencyKey();
+      const kit = await kitOf([{ keyId: 'old-1', material: randomBytes(32) }]);
+      expect((await importKit(kit, PASSPHRASE, key)).statusCode).toBe(201);
+      const replayed = await importKit(kit, 'not the passphrase at all', key);
+      expect(replayed.statusCode).toBe(400);
+      expect(replayed.json().error.code).toBe(PLATFORM_ERROR_CODES.RECOVERY_KIT_AUTH_FAILED);
+    });
+
+    it('refuses an import that would leave more keys than one kit can carry', async () => {
+      // 64 new keys plus the configured one is 65; the next export would fail.
+      const keys = Array.from({ length: 64 }, (_, index) => ({
+        keyId: `bulk-${String(index)}`,
+        material: randomBytes(32),
+      }));
+      const response = await importKit(await kitOf(keys));
+      expect(response.statusCode).toBe(400);
+      expect(response.json().error.code).toBe(PLATFORM_ERROR_CODES.RECOVERY_KIT_TOO_MANY_KEYS);
+      expect(await api.container.installationKeyRepository.all()).toHaveLength(0);
+      expect(await auditText()).toContain('TOO_MANY_KEYS');
+    });
+
+    it('revives a removed key only by importing it again, explicitly', async () => {
+      const material = randomBytes(32);
+      expect((await importKit(await kitOf([{ keyId: 'old-1', material }]))).statusCode).toBe(201);
+      const removed = await post(RECOVERY_KIT_ROUTES.remove, ownerCookie, {
+        keyId: 'old-1',
+        confirmation: 'old-1',
+        idempotencyKey: idempotencyKey(),
+      });
+      expect(removed.statusCode, removed.body).toBe(201);
+      expect(api.container.keyring.keys.has('old-1')).toBe(false);
+      expect((await importKit(await kitOf([{ keyId: 'old-1', material }]))).statusCode).toBe(201);
+      const [row] = await api.container.installationKeyRepository.all();
+      expect(row?.removedAt).toBeNull();
+      expect(api.container.keyring.keys.get('old-1')?.equals(material)).toBe(true);
+    });
+
     it('is refused without the permission', async () => {
       const response = await post(RECOVERY_KIT_ROUTES.import, observerCookie, {
         kit: (await kitOf([{ keyId: 'old-1', material: randomBytes(32) }])).toString('base64'),
         passphrase: PASSPHRASE,
+        accountPassword: 'the-observers-password',
         idempotencyKey: idempotencyKey(),
       });
       expect(response.statusCode).toBe(403);
@@ -416,7 +496,11 @@ describe('the Recovery Kit key lifecycle', () => {
       await importOld();
       const response = await remove('old-1');
       expect(response.statusCode, response.body).toBe(201);
-      expect(await api.container.installationKeyRepository.all()).toHaveLength(0);
+      // A TOMBSTONE: the bytes erased, the row kept so a restore cannot revive it.
+      const [tombstone] = await api.container.installationKeyRepository.all();
+      expect(tombstone?.wrappedMaterial).toBeNull();
+      expect(tombstone?.wrappedUnderKeyId).toBeNull();
+      expect(tombstone?.removedAt).not.toBeNull();
       expect(api.container.keyring.keys.has('old-1')).toBe(false);
       expect(await auditText()).toContain('installation_key.removed');
     });
@@ -499,7 +583,7 @@ describe('the Recovery Kit key lifecycle', () => {
     it('refuses while another imported key is stored WRAPPED under it', async () => {
       const old = await importOld();
       const older = randomBytes(32);
-      await api.container.installationKeyRepository.insert(undefined, {
+      await api.container.installationKeyRepository.upsertImported(undefined, {
         id: randomUUID(),
         keyId: 'old-0',
         fingerprint: kekFingerprint(older),
@@ -515,6 +599,9 @@ describe('the Recovery Kit key lifecycle', () => {
         importedAt: new Date(),
         importedByAdminId: null,
         importedByLabel: 'a restored installation',
+        removedAt: null,
+        removedByLabel: null,
+        restoredAt: null,
       });
       // The second generation resolves through the first.
       await api.container.installationKeyLoader.refresh();
@@ -523,6 +610,59 @@ describe('the Recovery Kit key lifecycle', () => {
       const response = await remove('old-1');
       expect(response.statusCode).toBe(409);
       expect(response.json().error.details.dependencies.wrappedKeys).toBe(1);
+    });
+
+    it('refuses while a backup taken AFTER the import is on disk, whatever key sealed it', async () => {
+      // The archive is sealed under the ACTIVE key, so its header names test-1.
+      // It was taken while old-1 was held, so the secrets inside it may be sealed
+      // under old-1 — which the header cannot show.
+      await importOld();
+      const backupId = '01ffffff-ffff-7fff-bfff-ffffffffffff';
+      const directory = join(workRoot, backupId);
+      await mkdir(directory, { recursive: true });
+      const payload = Buffer.from('PGDMP not really a dump');
+      await writeFile(join(directory, 'dump'), payload);
+      await sealArchive({
+        dumpPath: join(directory, 'dump'),
+        archivePath: join(directory, 'archive.nxb'),
+        keyring: {
+          activeKeyId: 'test-1',
+          keys: new Map([['test-1', activeKey]]),
+          format: 'canonical',
+        },
+        manifest: {
+          manifestVersion: 1,
+          backupId,
+          installationId: 'this',
+          createdAt: new Date().toISOString(),
+          databaseName: 'nexa',
+          postgresVersion: '16',
+          pgDumpVersion: 'pg_dump 16',
+          dumpFormat: 'custom',
+          dumpBytes: payload.length,
+          checksumAlgorithm: 'sha256',
+          checksum: createHash('sha256').update(payload).digest('hex'),
+          exclusions: [],
+        } as never,
+      });
+      const response = await remove('old-1');
+      expect(response.statusCode).toBe(409);
+      expect(response.json().error.details.dependencies.retainedArchives).toBe(1);
+    });
+
+    it('FAILS CLOSED on an archive it cannot read: counted against every key', async () => {
+      await importOld();
+      const directory = join(workRoot, randomUUID());
+      await mkdir(directory, { recursive: true });
+      // Present and unreadable as an archive: a truncated upload, a damaged file.
+      await writeFile(join(directory, 'archive.nxb'), Buffer.from('NEXABAK1'));
+      const response = await remove('old-1');
+      expect(response.statusCode).toBe(409);
+      expect(response.json().error.details.dependencies.retainedArchives).toBe(1);
+      // While a directory with NO archive in it is confirmed absent, not a dependency.
+      await rm(directory, { recursive: true, force: true });
+      await mkdir(join(workRoot, randomUUID()), { recursive: true });
+      expect((await remove('old-1')).statusCode).toBe(201);
     });
 
     it('is refused without the permission', async () => {
@@ -535,6 +675,27 @@ describe('the Recovery Kit key lifecycle', () => {
       expect(response.statusCode).toBe(403);
       expect(await api.container.installationKeyRepository.all()).toHaveLength(1);
     });
+  });
+
+  it("shows a configured key's fingerprint only to someone who may export the kit", async () => {
+    const asObserver = installationKeysResponseSchema.parse(
+      (await get(RECOVERY_KIT_ROUTES.keys, observerCookie)).json(),
+    ).keys;
+    expect(asObserver.find((k) => k.keyId === 'test-1')?.fingerprint).toBeNull();
+    const asOwner = await keys();
+    expect(asOwner.find((k) => k.keyId === 'test-1')?.fingerprint).toBe(kekFingerprint(activeKey));
+  });
+
+  it('audits an export refused for its passphrase', async () => {
+    const response = await post(RECOVERY_KIT_ROUTES.export, ownerCookie, {
+      accountPassword: OWNER_PASSWORD,
+      passphrase: PASSPHRASE,
+      passphraseConfirmation: `${PASSPHRASE}!`,
+    });
+    expect(response.statusCode).toBe(400);
+    const audit = await auditText();
+    expect(audit).toContain('PASSPHRASE_MISMATCH');
+    expect(audit).not.toContain(PASSPHRASE);
   });
 
   it('lists keys to backup.view, without key bytes', async () => {

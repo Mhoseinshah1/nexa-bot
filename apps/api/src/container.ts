@@ -5036,6 +5036,7 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
     engine: backupTools,
     workspaces: recoveryWorkspaces,
     keys: recoveryKeyCoverage,
+    audit,
     journal: recoveryJournal,
     // The unmodified pipeline. `PRE_RESTORE` is a trigger VALUE, not a second
     // code path: same lock, same six stages, same mandatory verification.

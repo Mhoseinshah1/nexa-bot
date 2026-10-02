@@ -2962,9 +2962,15 @@ export const installationKeys = pgTable(
     keyId: text('key_id').notNull(),
     /** `kekFingerprint` of the key. Safe to show; compared on every unwrap. */
     fingerprint: text('fingerprint').notNull(),
-    wrappedMaterial: text('wrapped_material').notNull(),
-    /** Which CONFIGURED key wraps it — what `secrets retire-check` counts. */
-    wrappedUnderKeyId: text('wrapped_under_key_id').notNull(),
+    /**
+     * The wrapped key. NULL exactly when the row is a TOMBSTONE: removal erases
+     * the bytes and keeps the row, so a restore of an older backup — which still
+     * holds this key — cannot quietly bring it back (the executor carries the
+     * tombstone into the candidate).
+     */
+    wrappedMaterial: text('wrapped_material'),
+    /** Which CONFIGURED key wraps it — what `secrets retire-check` counts. NULL on a tombstone. */
+    wrappedUnderKeyId: text('wrapped_under_key_id'),
     source: text('source').notNull(),
     /** The kit it arrived in. An identifier, never the kit. */
     kitId: uuid('kit_id'),
@@ -2972,6 +2978,15 @@ export const installationKeys = pgTable(
     /** Captured as a label too, so the row still names somebody after a restore. */
     importedByAdminId: uuid('imported_by_admin_id'),
     importedByLabel: text('imported_by_label'),
+    /** Set by removal; the row is then a tombstone. Cleared only by a later import. */
+    removedAt: timestamptz('removed_at'),
+    removedByLabel: text('removed_by_label'),
+    /**
+     * Set by the recovery executor on a row the CANDIDATE held and this
+     * installation did not: a key that came back inside a restored backup rather
+     * than through an import here. Shown in the list, and audited at the cutover.
+     */
+    restoredAt: timestamptz('restored_at'),
   },
   (table) => [
     uniqueIndex('installation_keys_key_id_idx').on(table.keyId),
@@ -2980,7 +2995,12 @@ export const installationKeys = pgTable(
     check('installation_keys_fingerprint_check', sql`fingerprint ~ '^[0-9a-f]{32}$'`),
     check(
       'installation_keys_wrapped_under_check',
-      sql`wrapped_under_key_id ~ '^[A-Za-z0-9._-]{1,64}$' AND wrapped_under_key_id <> key_id`,
+      sql`wrapped_under_key_id IS NULL OR (wrapped_under_key_id ~ '^[A-Za-z0-9._-]{1,64}$' AND wrapped_under_key_id <> key_id)`,
+    ),
+    /** A live row has its wrap; a tombstone has neither half of it. Both directions. */
+    check(
+      'installation_keys_tombstone_check',
+      sql`(removed_at IS NULL) = (wrapped_material IS NOT NULL) AND (wrapped_material IS NULL) = (wrapped_under_key_id IS NULL)`,
     ),
     index('installation_keys_wrapped_under_idx').on(table.wrappedUnderKeyId),
   ],

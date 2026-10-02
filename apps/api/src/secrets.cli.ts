@@ -391,13 +391,16 @@ async function rewrapInstallationKeys(
   const tenantId =
     container.installationTenantId ?? (await container.tenants.findPrimary())?.id ?? null;
   for (const row of await container.installationKeyRepository.all()) {
+    // A tombstone holds no key: nothing to re-wrap.
+    if (row.wrappedMaterial === null) continue;
+    const wrapped = row.wrappedMaterial;
     if (row.wrappedUnderKeyId === activeKeyId) {
       skipped += 1;
       continue;
     }
     const material = unwrapInstallationKey({
       keyId: row.keyId,
-      wrapped: row.wrappedMaterial,
+      wrapped,
       fingerprint: row.fingerprint,
       keys: container.keyring.keys,
     });
@@ -416,7 +419,7 @@ async function rewrapInstallationKeys(
         const won = await container.installationKeyRepository.rewrap(
           { tx } as never,
           row.keyId,
-          row.wrappedMaterial,
+          wrapped,
           { wrappedMaterial: next, wrappedUnderKeyId: activeKeyId },
         );
         if (!won) return false;
@@ -457,7 +460,9 @@ async function main(): Promise<void> {
     // The imported decrypt-only keys (ADR-0032), so a rewrap can read a secret a
     // restore brought in under the old installation's key — and so the counts
     // below include what those keys wrap.
-    await container.installationKeyLoader.refreshQuietly();
+    // Not quietly: a rewrap or a retirement check on a keyring that failed to load
+    // would answer from the configured keys alone.
+    await container.installationKeyLoader.refresh();
     const wrappedKeys = await container.installationKeyRepository.countsByWrappingKey();
     const keyring = resolveKeyring(config);
     const activeKeyId = keyring.activeKeyId;

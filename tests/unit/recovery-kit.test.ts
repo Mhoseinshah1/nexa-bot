@@ -441,3 +441,208 @@ describe('an imported key at rest', () => {
     expect(unavailable).toEqual(['orphan']);
   });
 });
+
+// --- PR #144 review fixes ----------------------------------------------------
+
+describe('a reload never disturbs a key already in use', () => {
+  it('opens an archive sealed under an imported key while the keyring reloads mid-open', async () => {
+    // The defect: `openArchive` fetches the KEK, awaits three file operations,
+    // then unwraps. A reload in between used to ZERO the buffer it held, so the
+    // unwrap ran under 32 zero bytes and a recovery failed for good.
+    const { mkdtemp, rm, writeFile } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { createHash } = await import('node:crypto');
+    const { openArchive, sealArchive } =
+      await import('../../apps/api/src/modules/platform/backup/infrastructure/archive');
+
+    const imported = key();
+    const keyring = new InstallationKeyring({
+      activeKeyId: 'kek-2',
+      keys: new Map([['kek-2', key()]]),
+      format: 'canonical',
+    });
+    keyring.replaceImported(new Map([['kek-1', imported]]));
+
+    const directory = await mkdtemp(join(tmpdir(), 'nexa-kit-reload-'));
+    try {
+      const payload = Buffer.from('PGDMP a dump');
+      await writeFile(join(directory, 'dump'), payload);
+      await sealArchive({
+        dumpPath: join(directory, 'dump'),
+        archivePath: join(directory, 'archive.nxb'),
+        keyring: {
+          activeKeyId: 'kek-1',
+          keys: new Map([['kek-1', imported]]),
+          format: 'canonical',
+        },
+        manifest: {
+          manifestVersion: 1,
+          backupId: '01a05e35-c9ad-7e93-bef3-1ed9b55292ff',
+          installationId: 'old',
+          createdAt: '2026-09-09T02:00:00.000Z',
+          databaseName: 'nexa',
+          postgresVersion: '16',
+          pgDumpVersion: 'pg_dump 16',
+          dumpFormat: 'custom',
+          dumpBytes: payload.length,
+          checksumAlgorithm: 'sha256',
+          checksum: createHash('sha256').update(payload).digest('hex'),
+          exclusions: [],
+        } as never,
+      });
+
+      const opening = openArchive({
+        archivePath: join(directory, 'archive.nxb'),
+        dumpPath: join(directory, 'out'),
+        keyring,
+      });
+      // A reload of the SAME keys, landing while the open is awaiting the file.
+      setImmediate(() => keyring.replaceImported(new Map(keyring.importedKeys)));
+      const opened = await opening;
+      expect(opened.dumpChecksum).toBe(opened.manifest.checksum);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps the same buffer for an unchanged key across a reload', () => {
+    const keyring = new InstallationKeyring({
+      activeKeyId: 'kek-2',
+      keys: new Map([['kek-2', key()]]),
+      format: 'canonical',
+    });
+    keyring.replaceImported(new Map([['kek-1', key()]]));
+    const held = keyring.keys.get('kek-1')!;
+    const copy = Buffer.from(held);
+    keyring.replaceImported(new Map(keyring.importedKeys));
+    expect(keyring.keys.get('kek-1')).toBe(held);
+    expect(held.equals(copy)).toBe(true);
+  });
+});
+
+describe('a kit derivation is bounded', () => {
+  it('runs at most one at a time in a process, refusing the second as BUSY', async () => {
+    const kit = await kitOf([{ keyId: 'k', material: key() }]);
+    const [first, second] = await Promise.allSettled([
+      openRecoveryKit(kit, PASSPHRASE),
+      openRecoveryKit(kit, PASSPHRASE),
+    ]);
+    expect(first.status).toBe('fulfilled');
+    expect(second.status).toBe('rejected');
+    expect((second as PromiseRejectedResult).reason.code).toBe(
+      PLATFORM_ERROR_CODES.RECOVERY_KIT_BUSY,
+    );
+    // And it is free again afterwards.
+    await expect(openRecoveryKit(kit, PASSPHRASE)).resolves.toBeDefined();
+  });
+
+  it('refuses p above 4 from the header alone', async () => {
+    const kit = await kitOf([{ keyId: 'k', material: key() }]);
+    const hostile = withHeader(kit, (h) => {
+      (h.kdf as Record<string, unknown>).p = 5;
+    });
+    expect(syncCodeOf(() => readRecoveryKitHeader(hostile))).toBe(
+      PLATFORM_ERROR_CODES.RECOVERY_KIT_MALFORMED,
+    );
+  });
+});
+
+describe('an imported key at rest, against a truncated tag', () => {
+  it('refuses a wrap whose authentication tag was shortened', () => {
+    const wrapping = key();
+    const material = key();
+    const wrapped = wrapInstallationKey({
+      keyId: 'kek-1',
+      material,
+      wrappingKeyId: 'kek-2',
+      wrappingKey: wrapping,
+    });
+    const parts = wrapped.split('.');
+    // The first 12 of the 16 tag bytes: a shorter tag is a weaker check, and a
+    // decipher that inferred the length from the tag would accept it.
+    parts[4] = Buffer.from(parts[4]!, 'base64url').subarray(0, 12).toString('base64url');
+    expect(
+      unwrapInstallationKey({
+        keyId: 'kek-1',
+        wrapped: parts.join('.'),
+        fingerprint: kekFingerprint(material),
+        keys: new Map([['kek-2', wrapping]]),
+      }),
+    ).toBeNull();
+  });
+});
+
+describe('the key loader', () => {
+  it('applies reloads in the order they were asked for, never an older read last', async () => {
+    const { InstallationKeyLoader } =
+      await import('../../apps/api/src/modules/platform/recovery/infrastructure/installation-key-adapters');
+    const wrapping = key();
+    const material = key();
+    const row = {
+      id: randomUUID(),
+      keyId: 'kek-1',
+      fingerprint: kekFingerprint(material),
+      wrappedMaterial: wrapInstallationKey({
+        keyId: 'kek-1',
+        material,
+        wrappingKeyId: 'kek-2',
+        wrappingKey: wrapping,
+      }),
+      wrappedUnderKeyId: 'kek-2',
+      source: 'RECOVERY_KIT' as const,
+      kitId: null,
+      importedAt: new Date(),
+      importedByAdminId: null,
+      importedByLabel: null,
+      removedAt: null,
+      removedByLabel: null,
+      restoredAt: null,
+    };
+    // The first read is SLOW and sees the key; the second is fast and sees it
+    // removed. Unserialised, the slow, older read finishes last and re-adds it.
+    let calls = 0;
+    const repository = {
+      all: async () => {
+        calls += 1;
+        if (calls === 1) {
+          await new Promise((resolve) => setTimeout(resolve, 30));
+          return [row];
+        }
+        return [];
+      },
+    };
+    const keyring = new InstallationKeyring({
+      activeKeyId: 'kek-2',
+      keys: new Map([['kek-2', wrapping]]),
+      format: 'canonical',
+    });
+    const loader = new InstallationKeyLoader(keyring, repository as never, {
+      warn: () => undefined,
+      error: () => undefined,
+    });
+    await Promise.all([loader.refresh(), loader.refresh()]);
+    expect(keyring.keys.has('kek-1')).toBe(false);
+  });
+
+  it('makes a recovery FAIL when the keys cannot be reloaded, rather than run on stale keys', async () => {
+    const { InstallationKeyLoader, KeyringRecoveryKeyCoverage } =
+      await import('../../apps/api/src/modules/platform/recovery/infrastructure/installation-key-adapters');
+    const keyring = new InstallationKeyring({
+      activeKeyId: 'kek-2',
+      keys: new Map([['kek-2', key()]]),
+      format: 'canonical',
+    });
+    const broken = {
+      all: async () => {
+        throw new Error('the database went away');
+      },
+    };
+    const loader = new InstallationKeyLoader(keyring, broken as never, {
+      warn: () => undefined,
+      error: () => undefined,
+    });
+    const coverage = new KeyringRecoveryKeyCoverage(keyring, loader, broken as never, {} as never);
+    await expect(coverage.refresh()).rejects.toThrow('the database went away');
+  });
+});

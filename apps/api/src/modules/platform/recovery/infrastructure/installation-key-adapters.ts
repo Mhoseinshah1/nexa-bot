@@ -1,4 +1,4 @@
-import { readdir } from 'node:fs/promises';
+import { readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Client } from 'pg';
 import { readArchiveHeader } from '../../backup/infrastructure/archive.js';
@@ -13,6 +13,7 @@ import type {
   InstallationKeyRepository,
   InstallationKeyRow,
   RecoveryKeyCoverage,
+  RetainedArchive,
   RetainedArchiveScanner,
 } from '../application/installation-key.ports.js';
 
@@ -30,30 +31,67 @@ import type {
 export class FilesystemRetainedArchiveScanner implements RetainedArchiveScanner {
   constructor(private readonly backupRoot: string) {}
 
-  async retainedArchiveKeyIds(): Promise<ReadonlyMap<string, number>> {
-    const counts = new Map<string, number>();
+  async retainedArchives(): Promise<{
+    readonly archives: readonly RetainedArchive[];
+    readonly unreadable: number;
+  }> {
+    const archives: RetainedArchive[] = [];
+    let unreadable = 0;
     let entries: string[];
     try {
       entries = await readdir(this.backupRoot);
-    } catch {
-      // No directory is no archives. A root that cannot be READ is the same
-      // answer from here; the backup pipeline reports its own disk.
-      return counts;
+    } catch (error) {
+      // No directory is no archives. ANY other failure — a permission, an I/O
+      // error — is not an answer, and is thrown so the caller fails closed.
+      if (isAbsent(error)) return { archives, unreadable };
+      throw error;
     }
     for (const entry of entries) {
-      const keyId = await this.archiveKeyId(join(this.backupRoot, entry, 'archive.nxb'));
-      if (keyId !== null) counts.set(keyId, (counts.get(keyId) ?? 0) + 1);
+      const path = join(this.backupRoot, entry, 'archive.nxb');
+      try {
+        const keyId = await this.archiveKeyId(path);
+        if (keyId === null) continue;
+        archives.push({ keyId, takenAt: await takenAt(entry, path) });
+      } catch {
+        // Present and unreadable: counted, never skipped. A key is removable only
+        // when every archive here is known not to need it.
+        unreadable += 1;
+      }
     }
-    return counts;
+    return { archives, unreadable };
   }
 
   async archiveKeyId(archivePath: string): Promise<string | null> {
     try {
       return (await readArchiveHeader(archivePath)).header.keyId;
-    } catch {
-      return null;
+    } catch (error) {
+      // Absent is the ONE failure that means "no archive". A malformed header, a
+      // truncated upload and an I/O error all mean "cannot tell" — thrown.
+      if (isAbsent(error)) return null;
+      throw error;
     }
   }
+}
+
+/** Whether a filesystem error says the thing is not there (rather than unreadable). */
+function isAbsent(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  return code === 'ENOENT' || code === 'ENOTDIR';
+}
+
+/**
+ * When an archive was taken: the UUIDv7 backup id names it to the millisecond,
+ * because the workspace directory IS the backup id. A directory not named that
+ * way falls back to the file's modification time.
+ */
+async function takenAt(directoryName: string, archivePath: string): Promise<Date> {
+  if (
+    /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(directoryName)
+  ) {
+    const hex = directoryName.replace(/-/g, '').slice(0, 12);
+    return new Date(Number.parseInt(hex, 16));
+  }
+  return (await stat(archivePath)).mtime;
 }
 
 /** The connection string for a sibling database on the same cluster. */
@@ -121,15 +159,48 @@ export class PgCandidateKeyStore implements CandidateKeyStore {
     });
   }
 
-  async carryInto(database: string, rows: readonly InstallationKeyRow[]): Promise<void> {
-    if (rows.length === 0) return;
-    await this.withClient(database, async (client) => {
+  async carryInto(
+    database: string,
+    rows: readonly InstallationKeyRow[],
+  ): Promise<readonly string[]> {
+    return this.withClient(database, async (client) => {
       await client.query('BEGIN');
       try {
         for (const row of rows) {
+          if (row.wrappedMaterial === null) {
+            // A TOMBSTONE. The candidate predates the removal and may hold the key:
+            // erase it there too, or the restore revives a key an operator
+            // removed, unaudited. Only the SAME key (fingerprint) — a different key
+            // under that name is not the one that was removed.
+            await client.query(
+              `INSERT INTO installation_keys
+                 (id, key_id, fingerprint, wrapped_material, wrapped_under_key_id, source, kit_id,
+                  imported_at, imported_by_admin_id, imported_by_label, removed_at, removed_by_label)
+               VALUES ($1, $2, $3, NULL, NULL, $4, $5, $6, $7, $8, $9, $10)
+               ON CONFLICT (key_id) DO UPDATE
+                 SET wrapped_material = NULL, wrapped_under_key_id = NULL,
+                     removed_at = EXCLUDED.removed_at, removed_by_label = EXCLUDED.removed_by_label
+               WHERE installation_keys.fingerprint = EXCLUDED.fingerprint`,
+              [
+                row.id,
+                row.keyId,
+                row.fingerprint,
+                row.source,
+                row.kitId,
+                row.importedAt,
+                row.importedByAdminId,
+                row.importedByLabel,
+                row.removedAt,
+                row.removedByLabel,
+              ],
+            );
+            continue;
+          }
           // Same id and same key: this installation's wrap replaces the
-          // candidate's, because this installation can open it. Same id and a
-          // different key: nothing is written, and the check below refuses.
+          // candidate's, because this installation can open it (and a tombstone
+          // of it in the candidate is lifted: this installation holds it now).
+          // Same id and a different key: nothing is written, and the check below
+          // refuses.
           await client.query(
             `INSERT INTO installation_keys
                (id, key_id, fingerprint, wrapped_material, wrapped_under_key_id, source, kit_id,
@@ -137,7 +208,8 @@ export class PgCandidateKeyStore implements CandidateKeyStore {
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
              ON CONFLICT (key_id) DO UPDATE
                SET wrapped_material = EXCLUDED.wrapped_material,
-                   wrapped_under_key_id = EXCLUDED.wrapped_under_key_id
+                   wrapped_under_key_id = EXCLUDED.wrapped_under_key_id,
+                   removed_at = NULL, removed_by_label = NULL
              WHERE installation_keys.fingerprint = EXCLUDED.fingerprint`,
             [
               row.id,
@@ -162,7 +234,26 @@ export class PgCandidateKeyStore implements CandidateKeyStore {
             );
           }
         }
+
+        // What the restore brings that this installation never had: live rows in
+        // the candidate matching nothing (id AND key) carried above. Stamped, so
+        // the list says so and the executor audits it.
+        const known = new Set(rows.map((row) => `${row.keyId}|${row.fingerprint}`));
+        const candidateRows = await client.query<{ key_id: string; fingerprint: string }>(
+          'SELECT key_id, fingerprint FROM installation_keys WHERE removed_at IS NULL',
+        );
+        const arrived = candidateRows.rows
+          .filter((row) => !known.has(`${row.key_id}|${row.fingerprint}`))
+          .map((row) => row.key_id)
+          .sort();
+        if (arrived.length > 0) {
+          await client.query(
+            'UPDATE installation_keys SET restored_at = now() WHERE key_id = ANY($1) AND restored_at IS NULL',
+            [arrived],
+          );
+        }
         await client.query('COMMIT');
+        return arrived;
       } catch (error) {
         await client.query('ROLLBACK').catch(() => undefined);
         throw error;
@@ -187,6 +278,13 @@ export class PgCandidateKeyStore implements CandidateKeyStore {
 export class InstallationKeyLoader {
   private timer: NodeJS.Timeout | null = null;
   private lastUnavailable = '';
+  /**
+   * Every reload runs after the one before it finishes. Two overlapping reloads
+   * (the timer and an import, say) could otherwise finish out of order, and the
+   * OLDER read would be applied last — re-adding a key just removed, or dropping
+   * one just imported, until the next tick.
+   */
+  private chain: Promise<unknown> = Promise.resolve();
 
   constructor(
     private readonly keyring: InstallationKeyring,
@@ -197,7 +295,19 @@ export class InstallationKeyLoader {
     },
   ) {}
 
-  async refresh(): Promise<{ readonly loaded: number; readonly unavailable: readonly string[] }> {
+  refresh(): Promise<{ readonly loaded: number; readonly unavailable: readonly string[] }> {
+    const next = this.chain.then(
+      () => this.load(),
+      () => this.load(),
+    );
+    this.chain = next.catch(() => undefined);
+    return next;
+  }
+
+  private async load(): Promise<{
+    readonly loaded: number;
+    readonly unavailable: readonly string[];
+  }> {
     const rows = await this.repository.all();
     const { resolved, unavailable } = resolveStoredKeys(
       rows.map((row) => ({
@@ -211,7 +321,7 @@ export class InstallationKeyLoader {
     // configuration is the authority. `resolveStoredKeys` skips them; they are
     // named here so the log says why a row in the list is not in use.
     const shadowed = rows
-      .filter((row) => this.keyring.isConfigured(row.keyId))
+      .filter((row) => row.wrappedMaterial !== null && this.keyring.isConfigured(row.keyId))
       .map((row) => row.keyId);
     const refused = [...shadowed, ...this.keyring.replaceImported(resolved)];
     for (const material of resolved.values()) material.fill(0);
@@ -264,8 +374,15 @@ export class KeyringRecoveryKeyCoverage implements RecoveryKeyCoverage {
     private readonly candidates: CandidateKeyStore,
   ) {}
 
+  /**
+   * NOT quiet. A recovery that could not reload the keys must stop, not continue
+   * on a stale keyring: the executor would otherwise ask `missingFrom` of keys
+   * this process still remembers while `carryInto` writes the table as it is —
+   * and cut over to a database that needs a key the table no longer holds
+   * (Codex review of #144).
+   */
   async refresh(): Promise<void> {
-    await this.loader.refreshQuietly();
+    await this.loader.refresh();
   }
 
   async missingFrom(database: string): Promise<readonly string[]> {
@@ -273,9 +390,7 @@ export class KeyringRecoveryKeyCoverage implements RecoveryKeyCoverage {
     return referenced.filter((keyId) => !this.keyring.keys.has(keyId));
   }
 
-  async carryInto(database: string): Promise<number> {
-    const rows = await this.repository.all();
-    await this.candidates.carryInto(database, rows);
-    return rows.length;
+  async carryInto(database: string): Promise<readonly string[]> {
+    return this.candidates.carryInto(database, await this.repository.all());
   }
 }

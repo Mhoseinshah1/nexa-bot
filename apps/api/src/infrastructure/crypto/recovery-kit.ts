@@ -143,19 +143,53 @@ export function passphraseProblem(passphrase: string): string | null {
   return null;
 }
 
-function deriveKey(passphrase: string, salt: Buffer, profile: KitKdfProfile): Promise<Buffer> {
-  const N = 2 ** profile.log2N;
-  return new Promise((resolve, reject) => {
-    scrypt(
-      passphraseBytes(passphrase),
-      salt,
-      KEY_BYTES,
-      // Headroom over the 128 * N * r the algorithm needs; Node's 32 MiB default
-      // would reject the production profile outright.
-      { N, r: profile.r, p: profile.p, maxmem: 256 * N * profile.r + 1024 * 1024 },
-      (error, key) => (error ? reject(error) : resolve(key)),
-    );
+/**
+ * Whether a kit derivation is running in this process.
+ *
+ * At most ONE at a time, and a second is REFUSED rather than queued. The
+ * derivation's cost is chosen by the file (within the reader's bounds, up to
+ * 256 MiB of scrypt), it runs on libuv's shared thread pool — the same four
+ * threads that serve file I/O and DNS for everything else in the process — and
+ * a queue would only turn several crafted kits into a longer stall. Refusing is
+ * cheap and honest: the caller is told to try again (RECOVERY_KIT_BUSY).
+ */
+let derivationInFlight = false;
+
+function busy(): NexaError {
+  return new NexaError({
+    kind: 'CONFLICT',
+    code: PLATFORM_ERROR_CODES.RECOVERY_KIT_BUSY,
+    message: 'Another Recovery Kit is being opened or sealed right now. Try again in a moment.',
   });
+}
+
+async function deriveKey(
+  passphrase: string,
+  salt: Buffer,
+  profile: KitKdfProfile,
+): Promise<Buffer> {
+  if (derivationInFlight) throw busy();
+  derivationInFlight = true;
+  const N = 2 ** profile.log2N;
+  const secret = passphraseBytes(passphrase);
+  try {
+    return await new Promise<Buffer>((resolve, reject) => {
+      scrypt(
+        secret,
+        salt,
+        KEY_BYTES,
+        // Headroom over the 128 * N * r the algorithm needs; Node's 32 MiB default
+        // would reject the production profile outright.
+        { N, r: profile.r, p: profile.p, maxmem: 256 * N * profile.r + 1024 * 1024 },
+        (error, key) => (error ? reject(error) : resolve(key)),
+      );
+    });
+  } finally {
+    // The passphrase's bytes outlive nothing they were made for. (The JS string
+    // it came from cannot be zeroed; this copy can.)
+    secret.fill(0);
+    derivationInFlight = false;
+  }
 }
 
 function u32(value: number): Buffer {
@@ -341,7 +375,9 @@ export async function openRecoveryKit(kit: Buffer, passphrase: string): Promise<
   const key = await deriveKey(passphrase, salt, header.kdf);
   let plaintext: Buffer;
   try {
-    const decipher = createDecipheriv('aes-256-gcm', key, iv);
+    // The tag length stated, not inferred from the tag supplied: a truncated tag
+    // must be a failure, never a weaker check.
+    const decipher = createDecipheriv('aes-256-gcm', key, iv, { authTagLength: GCM_TAG_BYTES });
     decipher.setAAD(preamble);
     decipher.setAuthTag(tag);
     plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]);

@@ -59,6 +59,12 @@ describe('the backup CLI arguments', () => {
     ).toThrowError(/standard input/);
   });
 
+  it('refuses a kit passphrase given as --passphrase=VALUE too', () => {
+    expect(() =>
+      parseArgs(['verify', '--archive', '/tmp/a.nxb', '--kit', 'k', '--passphrase=hunter2-long']),
+    ).toThrowError(/standard input/);
+  });
+
   it('refuses an unknown command with the usage text', () => {
     expect(() => parseArgs(['delete-everything'])).toThrowError(UsageError);
     expect(() => parseArgs([])).toThrowError(USAGE);

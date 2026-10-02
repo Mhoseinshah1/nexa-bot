@@ -2,17 +2,21 @@ CREATE TABLE "installation_keys" (
 	"id" uuid PRIMARY KEY NOT NULL,
 	"key_id" text NOT NULL,
 	"fingerprint" text NOT NULL,
-	"wrapped_material" text NOT NULL,
-	"wrapped_under_key_id" text NOT NULL,
+	"wrapped_material" text,
+	"wrapped_under_key_id" text,
 	"source" text NOT NULL,
 	"kit_id" uuid,
 	"imported_at" timestamp with time zone NOT NULL,
 	"imported_by_admin_id" uuid,
 	"imported_by_label" text,
+	"removed_at" timestamp with time zone,
+	"removed_by_label" text,
+	"restored_at" timestamp with time zone,
 	CONSTRAINT "installation_keys_source_check" CHECK (source IN ('RECOVERY_KIT')),
 	CONSTRAINT "installation_keys_key_id_check" CHECK (key_id ~ '^[A-Za-z0-9._-]{1,64}$'),
 	CONSTRAINT "installation_keys_fingerprint_check" CHECK (fingerprint ~ '^[0-9a-f]{32}$'),
-	CONSTRAINT "installation_keys_wrapped_under_check" CHECK (wrapped_under_key_id ~ '^[A-Za-z0-9._-]{1,64}$' AND wrapped_under_key_id <> key_id)
+	CONSTRAINT "installation_keys_wrapped_under_check" CHECK (wrapped_under_key_id IS NULL OR (wrapped_under_key_id ~ '^[A-Za-z0-9._-]{1,64}$' AND wrapped_under_key_id <> key_id)),
+	CONSTRAINT "installation_keys_tombstone_check" CHECK ((removed_at IS NULL) = (wrapped_material IS NOT NULL) AND (wrapped_material IS NULL) = (wrapped_under_key_id IS NULL))
 );
 --> statement-breakpoint
 ALTER TABLE "recovery_requests" DROP CONSTRAINT "recovery_requests_failure_code_check";--> statement-breakpoint

@@ -74,16 +74,29 @@ export class InstallationKeyring implements SecretKeyring {
         refused.push(keyId);
         continue;
       }
-      imported.set(keyId, Buffer.from(material));
+      // An unchanged key keeps the SAME buffer it had, so a reload is invisible to
+      // anything already holding it.
+      const previous = this.imported.get(keyId);
+      imported.set(
+        keyId,
+        previous !== undefined && previous.equals(material) ? previous : Buffer.from(material),
+      );
     }
     const merged = new Map(this.configured.keys);
     for (const [keyId, material] of imported) merged.set(keyId, material);
-    const previous = this.imported;
     this.imported = imported;
     this.merged = merged;
-    // The previous copies are not referenced any more. Zeroed, because a key
-    // that was removed should stop existing in this process too.
-    for (const material of previous.values()) material.fill(0);
+    /*
+     * The previous buffers are NOT zeroed, and that is the fix for a real defect
+     * (PR #144 security review). A reader takes a key with `keys.get(id)` and may
+     * use it after an await — `openArchive` reads the tag and opens the file
+     * between fetching the KEK and unwrapping with it. Zeroing here, on a reload
+     * the 60-second timer or any key list triggers, handed that reader 32 zero
+     * bytes: an authentication failure and a recovery failed for good. A removed
+     * key therefore lingers in this process's heap until it is collected; it is
+     * gone from every map, from the database (its row is a tombstone) and from
+     * every later lookup.
+     */
     return refused;
   }
 }
@@ -156,7 +169,9 @@ export function unwrapInstallationKey(input: {
   const wrappingKey = input.keys.get(wrappingKeyId);
   if (wrappingKey === undefined) return null;
   try {
-    const decipher = createDecipheriv('aes-256-gcm', wrappingKey, Buffer.from(iv, 'base64url'));
+    const decipher = createDecipheriv('aes-256-gcm', wrappingKey, Buffer.from(iv, 'base64url'), {
+      authTagLength: 16,
+    });
     decipher.setAAD(wrapAad(input.keyId, wrappingKeyId));
     decipher.setAuthTag(Buffer.from(tag, 'base64url'));
     const material = Buffer.concat([
@@ -177,7 +192,8 @@ export function unwrapInstallationKey(input: {
 export interface StoredInstallationKey {
   readonly keyId: string;
   readonly fingerprint: string;
-  readonly wrappedMaterial: string;
+  /** Null on a tombstone: a removed key, kept so a restore cannot revive it. */
+  readonly wrappedMaterial: string | null;
 }
 
 /**
@@ -194,7 +210,7 @@ export function resolveStoredKeys(
   configured: ReadonlyMap<string, Buffer>,
 ): { readonly resolved: Map<string, Buffer>; readonly unavailable: readonly string[] } {
   const resolved = new Map<string, Buffer>();
-  const pending = rows.filter((row) => !configured.has(row.keyId));
+  const pending = rows.filter((row) => !configured.has(row.keyId) && row.wrappedMaterial !== null);
   let progressed = true;
   while (progressed && pending.length > 0) {
     progressed = false;
@@ -203,7 +219,7 @@ export function resolveStoredKeys(
       const row = pending[index]!;
       const material = unwrapInstallationKey({
         keyId: row.keyId,
-        wrapped: row.wrappedMaterial,
+        wrapped: row.wrappedMaterial ?? '',
         fingerprint: row.fingerprint,
         keys: available,
       });

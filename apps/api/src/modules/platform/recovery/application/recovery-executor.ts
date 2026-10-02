@@ -4,7 +4,10 @@ import {
   RECOVERY_DISPLACED_PREFIX,
   RECOVERY_LEASE_HEARTBEAT_MS,
   RECOVERY_LEASE_STALE_AFTER_MS,
+  systemJobActor,
+  type AuditWriter,
   type Clock,
+  type CorrelationId,
   type OperationalEventRecorder,
   type RecoveryFailureCode,
   type ScopeContext,
@@ -58,6 +61,12 @@ export interface RecoveryExecutorDeps {
   readonly workspaces: RecoveryWorkspaceFactory;
   /** Carries the imported keys into the candidate and checks its secrets are covered. */
   readonly keys: RecoveryKeyCoverage;
+  /**
+   * For the one audit row the executor writes itself: the keys a restore brought
+   * back that were never imported here (ADR-0032). Written into the RESTORED
+   * database after the cutover, where the key now lives.
+   */
+  readonly audit: AuditWriter;
   readonly journal: CutoverJournal;
   /** The unmodified Backup V1 pipeline. The emergency backup is a trigger value. */
   readonly backup: BackupService;
@@ -855,8 +864,9 @@ export class RecoveryExecutor {
      * by the bot failing to start.
      */
     await this.deps.keys.refresh();
+    let arrivedByRestore: readonly string[] = [];
     try {
-      await this.deps.keys.carryInto(candidate);
+      arrivedByRestore = await this.deps.keys.carryInto(candidate);
     } catch (error) {
       throw new RecoveryAbort(
         'recovery.candidate_validation_failed',
@@ -984,6 +994,36 @@ export class RecoveryExecutor {
       failureCode: null,
     };
     await this.deps.requests.reassert(reasserted);
+
+    // Keys that came back INSIDE the restored backup rather than through an
+    // import here: stamped `restored_at` by the carry, and audited now, in the
+    // database they live in. A key nobody imported on this server must not
+    // appear in its keyring without a trace (PR #144 security review).
+    if (arrivedByRestore.length > 0) {
+      const scope = this.deps.scope();
+      if (scope !== null && !isSystemContext(scope)) {
+        await this.deps.audit
+          .record(scope, systemJobActor('recovery-executor', id as CorrelationId), {
+            action: 'installation_key.arrived_by_restore',
+            entityType: 'InstallationKey',
+            entityId: null,
+            before: null,
+            after: { recoveryId: id, keyIds: arrivedByRestore },
+            reason: 'A restored backup carried decrypt-only keys this installation never imported.',
+            result: 'SUCCESS',
+          })
+          .catch((error: unknown) =>
+            this.deps.logger.error(
+              { recoveryId: id, keyIds: arrivedByRestore, err: rootMessage(error) },
+              'could not audit the keys a restore brought back',
+            ),
+          );
+      }
+      this.deps.logger.warn(
+        { recoveryId: id, keyIds: arrivedByRestore },
+        'a restored backup carried decrypt-only keys this installation never imported',
+      );
+    }
 
     // Readiness is the SAME computation the load balancer gets. A recovery is not
     // successful because `pg_restore` exited zero; it is successful when the

@@ -1,5 +1,5 @@
 {
-  "id": "982739fb-0a87-463c-9600-8621db3025f5",
+  "id": "07ed33d6-8d3e-434a-b1b9-200c97ed3b0c",
   "prevId": "7523dd21-3308-40c6-be83-0348c094b8bc",
   "version": "7",
   "dialect": "postgresql",
@@ -9179,13 +9179,13 @@
           "name": "wrapped_material",
           "type": "text",
           "primaryKey": false,
-          "notNull": true
+          "notNull": false
         },
         "wrapped_under_key_id": {
           "name": "wrapped_under_key_id",
           "type": "text",
           "primaryKey": false,
-          "notNull": true
+          "notNull": false
         },
         "source": {
           "name": "source",
@@ -9214,6 +9214,24 @@
         "imported_by_label": {
           "name": "imported_by_label",
           "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "removed_at": {
+          "name": "removed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "removed_by_label": {
+          "name": "removed_by_label",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "restored_at": {
+          "name": "restored_at",
+          "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
         }
@@ -9269,7 +9287,11 @@
         },
         "installation_keys_wrapped_under_check": {
           "name": "installation_keys_wrapped_under_check",
-          "value": "wrapped_under_key_id ~ '^[A-Za-z0-9._-]{1,64}$' AND wrapped_under_key_id <> key_id"
+          "value": "wrapped_under_key_id IS NULL OR (wrapped_under_key_id ~ '^[A-Za-z0-9._-]{1,64}$' AND wrapped_under_key_id <> key_id)"
+        },
+        "installation_keys_tombstone_check": {
+          "name": "installation_keys_tombstone_check",
+          "value": "(removed_at IS NULL) = (wrapped_material IS NOT NULL) AND (wrapped_material IS NULL) = (wrapped_under_key_id IS NULL)"
         }
       },
       "isRLSEnabled": false
