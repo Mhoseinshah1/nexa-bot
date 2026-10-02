@@ -254,6 +254,16 @@ export interface GatewayAttemptView {
 }
 
 /**
+ * A card-transfer attempt's own facts beside it (TonPays Telegram, §8.1): the latest card
+ * change and the receipts sent to the provider — what the screen needs to say "changing
+ * card", "receipt sent" or "send it again". Ids and states only; never a file.
+ */
+export interface GatewayCardFacts {
+  readonly latestChange: GatewayCardChangeRecord | null;
+  readonly submissions: readonly GatewayReceiptSubmissionRecord[];
+}
+
+/**
  * The external-gateway lane (WP11A, `docs/tonpays-gateway-audit.md` §5).
  *
  * It creates invoices, asks the provider what happened, and hands the provider's
@@ -1731,6 +1741,28 @@ export class GatewayPaymentService {
     paymentId: PaymentId,
   ): Promise<GatewayInvoiceRecord | null> {
     return this.deps.invoices.findByPayment(scope, paymentId);
+  }
+
+  /**
+   * A card-transfer attempt's card-change and receipt facts, for the customer's screen and
+   * the operator's detail (§8.1, §10). Null for any other route, or with no such lane.
+   */
+  async cardFactsFor(
+    scope: TenantContext,
+    invoice: Pick<GatewayInvoiceRecord, 'paymentId' | 'provider'>,
+  ): Promise<GatewayCardFacts | null> {
+    const cards = this.deps.cardTransfer;
+    if (
+      cards === undefined ||
+      PAYMENT_GATEWAY_DESCRIPTORS[invoice.provider].invoiceForm !== 'CARD_TRANSFER'
+    ) {
+      return null;
+    }
+    const [latestChange, submissions] = await Promise.all([
+      cards.latestCardChange(scope, invoice.paymentId),
+      cards.submissionsFor(scope, invoice.paymentId),
+    ]);
+    return { latestChange, submissions };
   }
 
   /** The attempt, if it is this customer's GATEWAY payment. Null otherwise — never another's. */

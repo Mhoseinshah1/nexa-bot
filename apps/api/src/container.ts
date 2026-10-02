@@ -5278,6 +5278,8 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
       membership: channelMembership,
       // WP11A: the external-gateway attempt's customer reads and the check tap.
       gateway: gatewayPayments,
+      // TonPays Telegram: «📤 ارسال فیش واریزی» and «🔄 تعویض کارت» (database writes only).
+      gatewayReceipts: gatewayReceiptCaptures,
       /*
        * The main menu's routing table, built HERE because this is the only layer
        * that may read the catalogue on this path: the boundary check refuses
