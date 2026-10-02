@@ -334,10 +334,10 @@ export const FEATURE_FLAGS = [
     key: 'central_fx',
     description:
       'Read the USDT rate from a public exchange (Nobitex, with Wallex as the fallback) and ' +
-      'keep it fresh for the routes priced by it (package FX). Off by default: an ' +
-      'installation that upgrades keeps every existing route exactly as it was, and the ' +
-      'Telegram Stars route stays on its operator-set fixed rate until stars.pricing_mode ' +
-      'is switched explicitly. Turning it off stops the refresh and makes the central rate ' +
+      'keep it fresh for the routes priced by it (package FX). The Telegram Stars route is ' +
+      'priced by this rate and stars.per_usdt only (spec §8): while it is off no new Stars ' +
+      'invoice can be priced, and there is no manual Stars rate to fall back to. Turning ' +
+      'it off stops the refresh and makes the central rate ' +
       'UNAVAILABLE, so a new central-rate invoice is refused with a customer message; an ' +
       'invoice already issued keeps its own snapshot whatever happens to the feed.',
     defaultEnabled: false,
@@ -348,7 +348,6 @@ export const FEATURE_FLAGS = [
       'fx.fallback_source',
       'fx.fresh_ttl_seconds',
       'fx.max_stale_seconds',
-      'stars.pricing_mode',
       'stars.per_usdt',
     ],
   },
