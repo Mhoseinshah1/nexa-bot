@@ -50,7 +50,8 @@ every send. The receipt's shape is the right one: **store Telegram's reference**
   only from the bot the video was set through. A refusal drops the video and the screen
   still goes out.
 - **Callbacks** — `va:` (the section) and `vb:<code>:<app uuid>` with `v` view, `s` set,
-  `x` ask to delete, `X` delete, `c` cancel. Parsed in `surfaces/telegram/admin-tutorial-video.ts`;
+  `x` ask to delete, `X` delete — each naming the app — and `c` cancel, naming the PROMPT
+  (its capture id), so a stale cancel never closes a newer prompt. Parsed in `surfaces/telegram/admin-tutorial-video.ts`;
   the runtime only routes.
 
 ### 7.3 Tests
@@ -97,6 +98,9 @@ many Stars one USDT buys), which Telegram publishes no feed for (`OQ-FX-01`). It
 - Enabling the Stars route requires `central_fx` on and `stars.per_usdt` set
   (`PAYMENT_GATEWAY_UNAVAILABLE {reason: FX_UNAVAILABLE, detail: DISABLED | UNIT_RATIO_MISSING}`).
   New rows start DISABLED. A central-only route with no ratio is not offered (a courtesy).
+  The enable and a ratio clear both take the route row FOR UPDATE first, so they serialise.
+- A tutorial video write takes an advisory lock on its (tenant, app, bot) identity before
+  it reads the `before` it audits (§7).
 - The FX status no longer reports a fixed rate; the Web Admin drops the mode selector and the
   fixed-rate line.
 - Found on the way: the financial log keyed "converted attempt" on a fixed rate being present,
@@ -134,10 +138,14 @@ materialisation, and the dispatcher's stamp. ADR-0030's lane never reads it.
   answered `bot.marketing.unavailable` and change nothing. `setMarketingOptOut` re-decides
   inside its transaction and refuses (`MARKETING_OPT_OUT_DISABLED`), so no stale callback or
   other caller can bypass it.
-- OFF: MARKETING broadcasts ignore the stored opt-out at all three points — one function,
-  `excludesMarketingOptOuts`, read in each step's own transaction. The stored value is never
-  erased; ON again makes it effective at once (the stamp re-reads it). Transactional
-  messages and service announcements are unaffected either way.
+- MARKETING broadcasts decide the opt-out at ONE point, the dispatcher's stamp, under the
+  customer's lock and against the policy in force at that moment (Codex review of #143).
+  The preview and the launch count and materialise every member — an opted-out customer is
+  written PENDING, exactly as a frozen draft already counted one — so the confirmed count
+  is the audience, and a send launched while ON and switched OFF before it goes reaches
+  the opted-out customer (and the reverse resolves SKIPPED). The broadcast page's purpose
+  hint and the flag's off-effect tell the operator. The stored value is never erased.
+  Transactional messages and service announcements are unaffected either way.
 
 ### 9.3 Tests
 
@@ -154,19 +162,24 @@ per bot and synced separately); it answers `bot.marketing.unavailable`.
 `scripts/mutate-package-h.py` reverts each rule once, runs its named tests and restores the
 file. Recorded on the branch head before the §7 commit (counts from real output):
 
-| #   | Rule reverted                                            | Result                    |
-| --- | -------------------------------------------------------- | ------------------------- |
-| M1  | §7 a video older than the tap is offered to the prompt   | 1 failed / 7 integration  |
-| M2  | §7 an expired prompt still stores                        | 1 failed / 7 integration  |
-| M3  | §9 the service write does not re-check the policy        | 1 failed / 3 integration  |
-| M4  | §9 MARKETING always excludes stored opt-outs             | 2 failed / 20 integration |
-| M5  | §9 the support screen draws the button while OFF         | 1 failed / 3 integration  |
-| M6  | §8 a central-only route with no ratio is offered         | 1 failed / 20 integration |
-| M7  | §8 the Stars route enables with central_fx off           | 1 failed / 20 integration |
-| M8  | §8 the ratio can be cleared while the route is on        | 1 failed / 20 integration |
-| M9  | §8 a legacy stored rate blocks every route edit          | 1 failed / 20 integration |
-| M10 | §8 the Stars spec back to FIXED_RATE-first, two policies | 3 failed / 43 unit        |
-| M11 | §8 the retired mode guard accepts a change               | 1 failed / 20 integration |
+| #   | Rule reverted                                                          | Result                    |
+| --- | ---------------------------------------------------------------------- | ------------------------- |
+| M1  | §7 a video older than the tap is offered to the prompt                 | 1 failed / 7 integration  |
+| M2  | §7 an expired prompt still stores                                      | 1 failed / 7 integration  |
+| M3  | §9 the service write does not re-check the policy                      | 1 failed / 3 integration  |
+| M4  | §9 MARKETING always excludes stored opt-outs                           | 2 failed / 20 integration |
+| M5  | §9 the support screen draws the button while OFF                       | 1 failed / 3 integration  |
+| M6  | §8 a central-only route with no ratio is offered                       | 1 failed / 20 integration |
+| M7  | §8 the Stars route enables with central_fx off                         | 1 failed / 20 integration |
+| M8  | §8 the ratio can be cleared while the route is on                      | 1 failed / 20 integration |
+| M9  | §8 a legacy stored rate blocks every route edit                        | 1 failed / 20 integration |
+| M10 | §8 the Stars spec back to FIXED_RATE-first, two policies               | 3 failed / 43 unit        |
+| M12 | §9 the launch excludes opted-out members again (Codex #143 F1)         | 6 failed / 21 integration |
+| M13 | §7 a cancel closes whatever prompt is open (Codex #143 F2)             | 1 failed / 9 integration  |
+| M14 | §8 the enable reads the ratio without the route lock (Codex #143 F3)   | 1 failed / 22 integration |
+| M15 | §8 the ratio guard reads the route without the lock (Codex #143 F3)    | 1 failed / 22 integration |
+| M16 | §7 the upload reads `before` without the identity lock (Codex #143 F4) | 1 failed / 9 integration  |
+| M11 | §8 the retired mode guard accepts a change                             | 1 failed / 20 integration |
 
 ## Rollback
 
