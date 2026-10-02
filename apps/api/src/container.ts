@@ -4094,15 +4094,14 @@ export function createContainer(config: AppConfig, role: ProcessRole): Container
   );
   /*
    * Spec §9: a customer's stored promotional opt-out is honoured exactly while the
-   * `customer_marketing_opt_out` switch is on. One policy for the preview, the launch and
-   * the dispatcher's stamp; each reads it in its own transaction.
+   * `customer_marketing_opt_out` switch is on, decided by the dispatcher's stamp alone: the
+   * preview and the launch count and materialise every member (Codex review of #143).
    */
   const marketingOptOutPolicy = {
     honoured: (scope: TenantContext, tx?: unknown) =>
       featureFlagResolver.isEnabled(scope, 'customer_marketing_opt_out', tx),
   };
   const broadcastService = new BroadcastService({
-    marketingOptOut: marketingOptOutPolicy,
     repository: broadcastRepository,
     audience: audienceService,
     transport: broadcastTransport,

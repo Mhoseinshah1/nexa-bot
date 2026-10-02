@@ -460,6 +460,65 @@ describe('Central FX and the Stars route (packages FX, FX-STARS)', () => {
       expect((await setSetting('stars.per_usdt', '')).changed).toBe(true);
     });
 
+    /** Holds the Stars route's row lock in its own transaction while `during` runs. */
+    async function holdingRoute(
+      during: (tx: { execute: (q: ReturnType<typeof sql>) => Promise<unknown> }) => Promise<void>,
+    ) {
+      await api.container.database.db.transaction(async (tx) => {
+        await tx.execute(
+          sql`SELECT 1 FROM payment_gateways
+               WHERE tenant_id = ${tenantA.tenantId} AND provider = 'TELEGRAM_STARS' FOR UPDATE`,
+        );
+        await during(tx);
+      });
+    }
+    const pause = () => new Promise((resolve) => setTimeout(resolve, 400));
+
+    it('an enable and a ratio clear serialise on the route row: an enable that waited sees the clear and refuses (Codex review of #143)', async () => {
+      await configureStars();
+      await setFlag(true);
+      await setSetting('stars.per_usdt', '100');
+      let enabling: Promise<unknown> | null = null;
+      await holdingRoute(async (tx) => {
+        enabling = switchStars('ACTIVE').catch((error: unknown) => error);
+        await pause();
+        // The clear commits while the enable waits (written as the guard would let it be).
+        await tx.execute(
+          sql`UPDATE setting_values SET value = '""'::jsonb
+               WHERE tenant_id = ${tenantA.tenantId} AND setting_key = 'stars.per_usdt'`,
+        );
+      });
+      const refused = await enabling!;
+      expect(isNexaError(refused) && refused.details).toMatchObject({
+        reason: FX_UNAVAILABLE_REASON,
+        detail: 'UNIT_RATIO_MISSING',
+      });
+      const [route] = await rows<{ status: string }>(
+        sql`SELECT status FROM payment_gateways
+             WHERE tenant_id = ${tenantA.tenantId} AND provider = 'TELEGRAM_STARS'`,
+      );
+      expect(route?.status).toBe('DISABLED');
+    });
+
+    it('a ratio clear that waited for an enable sees the route ACTIVE and is refused (Codex review of #143)', async () => {
+      await configureStars();
+      await setFlag(true);
+      await setSetting('stars.per_usdt', '100');
+      let clearing: Promise<unknown> | null = null;
+      await holdingRoute(async (tx) => {
+        clearing = setSetting('stars.per_usdt', '').catch((error: unknown) => error);
+        await pause();
+        // The enable commits while the clear waits.
+        await tx.execute(
+          sql`UPDATE payment_gateways SET status = 'ACTIVE'
+               WHERE tenant_id = ${tenantA.tenantId} AND provider = 'TELEGRAM_STARS'`,
+        );
+      });
+      const refused = await clearing!;
+      expect(isNexaError(refused) && refused.code).toBe(CONTROL_ERROR_CODES.INVALID_VALUE);
+      expect(await api.container.settingsResolver.valueOf(tenantA, 'stars.per_usdt')).toBe('100');
+    });
+
     it('a route whose ratio is unset is not offered to a customer (a courtesy; the attempt decides again)', async () => {
       await centralStars();
       const offered = async () =>

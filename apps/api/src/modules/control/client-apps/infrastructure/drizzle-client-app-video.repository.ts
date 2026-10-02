@@ -12,6 +12,9 @@ import type {
   InboundTutorialVideo,
 } from '../application/client-app-video.service.js';
 
+/** The advisory-lock CLASS for one video identity; distinct from every other class. */
+export const CLIENT_APP_VIDEO_LOCK_CLASS = 0x5654;
+
 /**
  * Spec §7: the tutorial video references, one per (tenant, app, bot). Every query carries the
  * tenant, and the bot: a `file_id` is valid only for the bot that received it.
@@ -21,6 +24,19 @@ export class DrizzleClientAppVideoRepository implements ClientAppVideoRepository
 
   private exec(tx?: unknown): Executor {
     return (tx as TransactionScope | undefined)?.tx ?? this.db;
+  }
+
+  async lockIdentity(
+    scope: TenantContext,
+    clientAppId: string,
+    botInstanceId: BotInstanceId,
+    tx: unknown,
+  ): Promise<void> {
+    const tenantId = requireTenantId(scope);
+    await this.exec(tx).execute(
+      sql`SELECT pg_advisory_xact_lock(${CLIENT_APP_VIDEO_LOCK_CLASS},
+            hashtext(${`${tenantId}:${clientAppId}:${botInstanceId}`}))`,
+    );
   }
 
   async find(

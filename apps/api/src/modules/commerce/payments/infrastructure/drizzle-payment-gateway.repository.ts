@@ -151,6 +151,22 @@ export class DrizzlePaymentGatewayRepository implements PaymentGatewayRepository
     return row === undefined ? null : toRecord(row);
   }
 
+  async lockForUpdate(
+    scope: TenantContext,
+    provider: PaymentGatewayProvider,
+    tx: unknown,
+  ): Promise<PaymentGatewayRecord | null> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select(COLUMNS)
+      .from(paymentGateways)
+      .where(and(eq(paymentGateways.tenantId, tenantId), eq(paymentGateways.provider, provider)))
+      .limit(1)
+      .for('update');
+    const row = rows[0];
+    return row === undefined ? null : toRecord(row);
+  }
+
   /**
    * The zero row for every route this release can operate, for a tenant missing one.
    *

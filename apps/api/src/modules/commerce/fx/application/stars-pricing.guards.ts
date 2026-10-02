@@ -52,7 +52,7 @@ const RATIO_ROUTES: readonly PaymentGatewayProvider[] = PAYMENT_GATEWAY_PROVIDER
 export class StarsPerUsdtGuard implements SettingChangeGuard {
   readonly key = STARS_PER_USDT_KEY;
 
-  constructor(private readonly gateways: Pick<PaymentGatewayRepository, 'find'>) {}
+  constructor(private readonly gateways: Pick<PaymentGatewayRepository, 'lockForUpdate'>) {}
 
   async refuseChange(
     scope: ScopeContext,
@@ -62,7 +62,9 @@ export class StarsPerUsdtGuard implements SettingChangeGuard {
     if (typeof change.to === 'string' && parseUnitRatio(change.to) !== null) return null;
     if (isSystemContext(scope)) return null;
     for (const provider of RATIO_ROUTES) {
-      const route = await this.gateways.find(scope, provider, tx);
+      // FOR UPDATE (Codex review of #143): the enable takes the same row lock before it reads
+      // the ratio, so the two serialise and neither decides on what the other overwrites.
+      const route = await this.gateways.lockForUpdate(scope, provider, tx);
       if (route?.status === 'ACTIVE') {
         return (
           'The Telegram Stars route is switched on and is priced by this ratio and the central ' +

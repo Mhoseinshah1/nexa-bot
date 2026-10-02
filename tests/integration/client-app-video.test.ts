@@ -6,6 +6,7 @@ import {
   ADMIN_APPS_CALLBACK_DATA,
   ADMIN_APP_CALLBACK_PREFIX,
 } from '../../apps/api/src/surfaces/telegram/admin-tutorial-video';
+import { DrizzleClientAppVideoRepository } from '../../apps/api/src/modules/control/client-apps/infrastructure/drizzle-client-app-video.repository';
 import {
   BOT_A,
   TG,
@@ -128,7 +129,10 @@ describe('the tutorial video wizard (spec §7)', () => {
     expect(callbacks()).not.toContain(app('x'));
 
     expect((await tap(f, app('s'), TG.owner)).replyKey).toBe('bot.admin.app_video_prompt');
-    expect(callbacks()).toEqual([app('c')]);
+    // The cancel names the PROMPT (Codex review of #143), never the app.
+    const [cancel] = callbacks();
+    expect(cancel).toMatch(new RegExp(`^${ADMIN_APP_CALLBACK_PREFIX}c:`, 'u'));
+    expect(cancel).not.toBe(app('c'));
     expect(await prompts()).toEqual([{ close_reason: null }]);
 
     expect((await sendVideo(TG.owner, 'uniq-1')).replyKey).toBe('bot.admin.app_video_saved');
@@ -183,13 +187,53 @@ describe('the tutorial video wizard (spec §7)', () => {
     expect(f.sent.some((call) => call.method === 'sendVideo')).toBe(false);
   });
 
+  /** The cancel button the last prompt was drawn with. */
+  const cancelButton = () => {
+    const data = callbacks().find((one) => one?.startsWith(`${ADMIN_APP_CALLBACK_PREFIX}c:`));
+    if (data === undefined) throw new Error('no cancel button');
+    return data;
+  };
+
   it('cancel: the prompt closes CANCELLED and a later video stores nothing; a stale cancel answers and does nothing', async () => {
     await tap(f, app('s'), TG.owner);
-    expect((await tap(f, app('c'), TG.owner)).replyKey).toBe('bot.admin.app_video_cancelled');
+    const cancel = cancelButton();
+    expect((await tap(f, cancel, TG.owner)).replyKey).toBe('bot.admin.app_video_cancelled');
+    expect(callbacks()).toEqual([app('v')]);
     expect(await prompts()).toEqual([{ close_reason: 'CANCELLED' }]);
     expect((await sendVideo(TG.owner, 'uniq-1')).replyKey).toBe('bot.admin.app_video_stale');
     expect(await stored()).toEqual([]);
-    expect((await tap(f, app('c'), TG.owner)).replyKey).toBe('bot.admin.app_video_stale');
+    expect((await tap(f, cancel, TG.owner)).replyKey).toBe('bot.admin.app_video_stale');
+  });
+
+  it('a stale cancel cannot close a NEWER prompt — for another app or the same one (Codex review of #143)', async () => {
+    const other = (
+      await f.ctx.container.clientApps.create(tenantA, f.owner, {
+        ...entry(),
+        name: 'برنامهٔ دوم',
+        idempotencyKey: `app-other-${String((seq += 1))}`,
+      })
+    ).id;
+    // A's prompt, then B's supersedes it; A's old cancel button is tapped.
+    await tap(f, app('s'), TG.owner);
+    const cancelA = cancelButton();
+    await tap(f, `${ADMIN_APP_CALLBACK_PREFIX}s:${other}`, TG.owner);
+    expect((await tap(f, cancelA, TG.owner)).replyKey).toBe('bot.admin.app_video_stale');
+    expect(await prompts()).toEqual([{ close_reason: 'SUPERSEDED' }, { close_reason: null }]);
+    // B's prompt is still open: the video goes to B.
+    expect((await sendVideo(TG.owner, 'uniq-b')).replyKey).toBe('bot.admin.app_video_saved');
+    const [toB] = await rows<{ client_app_id: string }>(
+      f,
+      sql`SELECT client_app_id FROM client_app_videos`,
+    );
+    expect(toB?.client_app_id).toBe(other);
+
+    // The same app twice: the first prompt's cancel cannot close the second.
+    await tap(f, app('s'), TG.owner);
+    const first = cancelButton();
+    await tap(f, app('s'), TG.owner);
+    expect((await tap(f, first, TG.owner)).replyKey).toBe('bot.admin.app_video_stale');
+    expect((await sendVideo(TG.owner, 'uniq-a')).replyKey).toBe('bot.admin.app_video_saved');
+    expect(await stored()).toHaveLength(1);
   });
 
   it('stale wizard state is safe: an expired prompt closes EXPIRED; a video older than the tap, or from anybody else, is never stored', async () => {
@@ -219,6 +263,46 @@ describe('the tutorial video wizard (spec §7)', () => {
     await sendVideo(TG.owner, 'uniq-1');
     expect((await tap(f, app('X'), TG.customer)).replyKey).toBe('bot.unknown_command');
     expect(await stored()).toHaveLength(1);
+  });
+
+  it('two administrators writing one app+bot video are serialised: the audit’s before is the row actually replaced (Codex review of #143)', async () => {
+    await tap(f, app('s'), TG.owner);
+    const repository = new DrizzleClientAppVideoRepository(f.ctx.container.database.db);
+    let upload: ReturnType<typeof sendVideo> | null = null;
+    let settled = false;
+    await f.ctx.container.database.db.transaction(async (tx) => {
+      // Another administrator's write of the SAME identity, holding its lock, not yet committed.
+      await repository.lockIdentity(tenantA, appId, BOT_A, { tx, scope: tenantA });
+      await repository.upsert(
+        tenantA,
+        {
+          id: f.ctx.container.ids.uuid(),
+          clientAppId: appId,
+          botInstanceId: BOT_A,
+          setByAdminId: f.ownerId,
+          fileId: 'file-other',
+          fileUniqueId: 'other',
+          mimeType: null,
+          durationSeconds: null,
+          fileSize: null,
+          now: new Date(),
+        },
+        { tx, scope: tenantA },
+      );
+      upload = sendVideo(TG.owner, 'mine');
+      void upload.then(() => {
+        settled = true;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      // The upload waits for the identity rather than reading a `before` that is about to change.
+      expect(settled).toBe(false);
+    });
+    expect((await upload!).replyKey).toBe('bot.admin.app_video_saved');
+    expect(await stored()).toEqual([
+      { file_id: 'file-mine', file_unique_id: 'mine', bot_instance_id: BOT_A, version: 2 },
+    ]);
+    const [audit] = await audits();
+    expect(JSON.stringify(audit?.before)).toContain('other');
   });
 
   it('deleting the app deletes its video and any open prompt for it', async () => {

@@ -44,6 +44,21 @@ M=[
  ('M11 §8 the retired mode guard accepts a change','apps/api/src/modules/commerce/fx/application/stars-pricing.guards.ts',
   "if (change.from === change.to) return Promise.resolve(null);","return Promise.resolve(null);",
   ['tests/integration/fx-stars.test.ts']),
+  ('M12 §9 the launch excludes opted-out members again (Codex #143 F1)','apps/api/src/modules/commerce/broadcasts/application/broadcast.service.ts',
+   "const MATERIALISE_OPTED_OUT = { excludeMarketingOptOuts: false } as const;","const MATERIALISE_OPTED_OUT = { excludeMarketingOptOuts: true } as const;",
+   ['tests/integration/round-n-close.test.ts']),
+  ('M13 §7 a cancel closes whatever prompt is open (Codex #143 F2)','apps/api/src/modules/control/client-apps/application/client-app-video.service.ts',
+   "? await this.deps.captures.findById(scope, input.captureId, tx)","? await this.deps.captures.findOpenVideo(scope, input.botInstanceId, input.adminId, tx)",
+   ['tests/integration/client-app-video.test.ts']),
+  ('M14 §8 the enable reads the ratio without the route lock (Codex #143 F3)','apps/api/src/modules/commerce/payments/application/payment-gateway.service.ts',
+   "await this.deps.repository.lockForUpdate(scope, provider, tx);","",
+   ['tests/integration/fx-stars.test.ts']),
+  ('M15 §8 the ratio guard reads the route without the lock (Codex #143 F3)','apps/api/src/modules/commerce/fx/application/stars-pricing.guards.ts',
+   "await this.gateways.lockForUpdate(scope, provider, tx);","await this.gateways['find' as 'lockForUpdate'](scope, provider, tx);",
+   ['tests/integration/fx-stars.test.ts']),
+  ('M16 §7 the upload reads before without the identity lock (Codex #143 F4)','apps/api/src/modules/control/client-apps/application/client-app-video.service.ts',
+   "        await this.deps.videos.lockIdentity(scope, app.id, input.botInstanceId, tx);\n        const before","        const before",
+   ['tests/integration/client-app-video.test.ts']),
 ]
 only=sys.argv[1:]
 for name,path,old,new,tests in M:

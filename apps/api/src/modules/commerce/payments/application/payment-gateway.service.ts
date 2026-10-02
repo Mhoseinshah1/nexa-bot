@@ -566,6 +566,13 @@ export class PaymentGatewayService {
          */
         const spec = PAYMENT_GATEWAY_DESCRIPTORS[provider].conversion;
         if (input.status === 'ACTIVE' && pricedOnlyByCentralFx(spec)) {
+          /*
+           * The route's row lock FIRST (Codex review of #143): `StarsPerUsdtGuard` takes the
+           * same lock before it lets the ratio be cleared, so an enable and a clear cannot
+           * both pass on what each read before the other committed. The ratio read below
+           * is a new statement after the lock, so it sees a clear that committed first.
+           */
+          await this.deps.repository.lockForUpdate(scope, provider, tx);
           const flagOn =
             this.deps.features !== undefined &&
             (await this.deps.features.isEnabled(scope, 'central_fx', tx));

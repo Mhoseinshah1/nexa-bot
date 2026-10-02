@@ -26,8 +26,9 @@ import type { ClientAppRecord } from '../../modules/control/client-apps/applicat
  * Callbacks — two letters, like `ka:`/`kb:`, and distinct from `v:` at the second byte:
  *
  * - `va:` the section (the list of apps).
- * - `vb:<code>:<app uuid>` one app: `v` view, `s` «تنظیم ویدیو» (opens the prompt), `x` ask
- *   to delete, `X` delete, `c` cancel the open prompt. 41 bytes at the longest.
+ * - `vb:<code>:<uuid>` one app: `v` view, `s` «تنظیم ویدیو» (opens the prompt), `x` ask
+ *   to delete, `X` delete — each naming the APP; and `c` cancel, naming the PROMPT (its
+ *   `admin_amount_captures` id), so a stale cancel cannot close a newer prompt. 41 bytes.
  *
  * The video itself arrives as an ordinary VIDEO MESSAGE (`ADMIN_APP_VIDEO_UPLOAD`) and is
  * offered to the service, which stores it only when THIS administrator's prompt on THIS bot is
@@ -242,20 +243,26 @@ export async function adminTutorialTurn(
       return replyOf(
         'bot.admin.app_video_prompt',
         { app: appTitle(opened.app) },
-        [appButton('c', opened.app.id, 'bot.admin.app_video_cancel_button')],
+        // The cancel names the PROMPT, never the app: a stale cancel cannot close a newer one.
+        [appButton('c', opened.captureId, 'bot.admin.app_video_cancel_button')],
         true,
       );
     }
     case 'ADMIN_APP_VIDEO_CANCEL': {
       if (command.targetId === null) return null;
-      const cancelled = await service.cancelCapture(scope, actor, {
+      const result = await service.cancelCapture(scope, actor, {
+        captureId: command.targetId,
         botInstanceId: input.botInstanceId,
         adminId: input.adminId,
       });
       return replyOf(
-        cancelled ? 'bot.admin.app_video_cancelled' : 'bot.admin.app_video_stale',
+        result.cancelled ? 'bot.admin.app_video_cancelled' : 'bot.admin.app_video_stale',
         {},
-        [appButton('v', command.targetId, 'bot.admin.app_back_button')],
+        [
+          result.appId === null
+            ? backToApps()
+            : appButton('v', result.appId, 'bot.admin.app_back_button'),
+        ],
         true,
       );
     }

@@ -55,6 +55,17 @@ export interface InboundTutorialVideo {
 }
 
 export interface ClientAppVideoRepository {
+  /**
+   * Serialises every write of ONE video identity (tenant, app, bot) for the transaction.
+   * Two administrators' uploads take different per-admin prompt locks, so this is what makes
+   * the `before` a write reads and audits the row it actually replaces (Codex review of #143).
+   */
+  lockIdentity(
+    scope: TenantContext,
+    clientAppId: string,
+    botInstanceId: BotInstanceId,
+    tx: unknown,
+  ): Promise<void>;
   find(
     scope: TenantContext,
     clientAppId: string,
@@ -264,14 +275,21 @@ export class ClientAppVideoService {
   }
 
   /**
-   * Cancels THIS administrator's open video prompt on this bot. False when none was open —
-   * already cancelled, expired, superseded or used: the stale button answers, nothing else.
+   * Cancels ONE prompt: the one the tapped button was drawn for (`captureId`), and only while
+   * it is still this administrator's open prompt on this bot. A stale cancel — its prompt
+   * already cancelled, expired, used, or superseded by a prompt for this or another app —
+   * closes nothing, so it can never cancel a NEWER prompt (Codex review of #143). Answers
+   * the app the prompt was for, so the screen can go back to it.
    */
   async cancelCapture(
     scope: TenantContext,
     actor: ActorContext,
-    input: { readonly botInstanceId: BotInstanceId; readonly adminId: string },
-  ): Promise<boolean> {
+    input: {
+      readonly captureId: string;
+      readonly botInstanceId: BotInstanceId;
+      readonly adminId: string;
+    },
+  ): Promise<{ readonly cancelled: boolean; readonly appId: string | null }> {
     await this.deps.guard.check(scope, actor, CLIENT_APP_EDIT_PERMISSION);
     const now = this.deps.clock.now();
     return runAuthorizedMutation(
@@ -282,14 +300,22 @@ export class ClientAppVideoService {
       { action: 'client_app.video_prompt_cancel', entityType: 'ClientApp', entityId: null },
       async (tx) => {
         await this.deps.captures.lockForAdmin(scope, input.botInstanceId, input.adminId, tx);
-        const open = await this.deps.captures.findOpenVideo(
-          scope,
-          input.botInstanceId,
-          input.adminId,
-          tx,
-        );
-        if (open === null) return false;
-        return this.deps.captures.close(scope, open.id, 'CANCELLED', now, tx);
+        const named = UUID_SHAPE.test(input.captureId)
+          ? await this.deps.captures.findById(scope, input.captureId, tx)
+          : null;
+        // Only a CLIENT_APP_VIDEO prompt of THIS administrator on THIS bot is ever named.
+        const mine =
+          named !== null &&
+          named.purpose === 'CLIENT_APP_VIDEO' &&
+          named.adminId === input.adminId &&
+          named.botInstanceId === input.botInstanceId
+            ? named
+            : null;
+        if (mine === null) return { cancelled: false, appId: null };
+        const cancelled =
+          mine.closedAt === null &&
+          (await this.deps.captures.close(scope, mine.id, 'CANCELLED', now, tx));
+        return { cancelled, appId: mine.clientAppId };
       },
     );
   }
@@ -380,6 +406,8 @@ export class ClientAppVideoService {
           await this.deps.captures.close(scope, prompt.id, 'SUPERSEDED', now, tx);
           return answer({ outcome: 'NO_PROMPT' });
         }
+        // The identity's lock BEFORE the read: the `before` audited is the row replaced.
+        await this.deps.videos.lockIdentity(scope, app.id, input.botInstanceId, tx);
         const before = await this.deps.videos.find(scope, app.id, input.botInstanceId, tx);
         const after = await this.deps.videos.upsert(
           scope,
@@ -455,6 +483,7 @@ export class ClientAppVideoService {
       async (tx) => {
         await this.assertScopeActive(scope, tx);
         const app = await this.requireApp(scope, input.appId, tx);
+        await this.deps.videos.lockIdentity(scope, app.id, input.botInstanceId, tx);
         const removed = await this.deps.videos.remove(scope, app.id, input.botInstanceId, tx);
         if (removed !== null) {
           await this.deps.audit.record(

@@ -44,10 +44,6 @@ import type { ScopeActivityReader } from '../../../platform/system/application/r
 import type { OutboxWriter } from '../../../platform/eventing/infrastructure/outbox-writer.js';
 import type { TransactionScope } from '../../../../infrastructure/persistence/unit-of-work.js';
 import {
-  excludesMarketingOptOuts,
-  type MarketingOptOutPolicy,
-} from './marketing-opt-out-policy.js';
-import {
   freezeAudience,
   toPreview,
   type AudienceService,
@@ -85,13 +81,20 @@ export interface BroadcastServiceDeps {
   readonly outbox: OutboxWriter;
   readonly clock: Clock;
   readonly ids: IdGenerator;
-  /**
-   * Spec §9: whether a customer's stored promotional opt-out is HONOURED right now
-   * (`customer_marketing_opt_out`). Off, a MARKETING send ignores `marketing_opt_out_at`
-   * without erasing it. Absent reads as honoured — the behaviour before the switch.
-   */
-  readonly marketingOptOut?: MarketingOptOutPolicy;
 }
+
+/**
+ * Spec §9 (Codex review of #143): the promotional opt-out is decided at ONE point — the
+ * dispatcher's stamp, in its own transaction, under the customer's lock, against the
+ * `customer_marketing_opt_out` policy in force THEN. The preview and the launch therefore
+ * count and materialise every member of the audience, opted out or not, so the confirmed
+ * count is the audience the frozen-audience design already confirms (a frozen draft has
+ * always counted an opted-out member and resolved it apart). A customer who has opted out
+ * is written PENDING and resolved SKIPPED at the send while the policy honours the opt-out,
+ * and SENT while it does not — so switching the policy between the launch and the send
+ * changes the outcome both ways, and the stored preference is never touched.
+ */
+const MATERIALISE_OPTED_OUT = { excludeMarketingOptOuts: false } as const;
 
 /** The composer's fields. */
 export interface BroadcastContentInput {
@@ -513,16 +516,9 @@ export class BroadcastService {
         sample: [],
       };
     }
-    // Round N close (§D): a MARKETING send counts without the customers who opted out, and
-    // the launch materialises with the same flag, so the count confirmed is the count frozen.
-    // Spec §9: only while the installation honours the opt-out.
-    const options = {
-      excludeMarketingOptOuts: await excludesMarketingOptOuts(
-        record.purpose,
-        this.deps.marketingOptOut,
-        scope,
-      ),
-    };
+    // Spec §9: every member is counted; the opt-out is decided at the send (see above), and
+    // the launch materialises the same set, so the count confirmed is the count frozen.
+    const options = MATERIALISE_OPTED_OUT;
     const result = await this.deps.audience.evaluate(
       scope,
       record.audienceDefinition,
@@ -770,13 +766,8 @@ export class BroadcastService {
             );
           }
         }
-        // Spec §9: read in the launch's own transaction.
-        const excludeMarketingOptOuts = await excludesMarketingOptOuts(
-          current.purpose,
-          this.deps.marketingOptOut,
-          scope,
-          tx,
-        );
+        // Spec §9: the opt-out is the send's decision, never the launch's (see above).
+        const { excludeMarketingOptOuts } = MATERIALISE_OPTED_OUT;
         /*
          * Round N close (§A): a draft bound to a frozen audience COPIES its members, and the
          * rows written must be the rows frozen (the header's count and fingerprint) as well as
