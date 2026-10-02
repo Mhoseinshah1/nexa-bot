@@ -16,6 +16,7 @@ import {
   fetchPaymentGateways,
   setPaymentGatewayCredential,
   setPaymentGatewayWebhookSecret,
+  setPaymentGatewayVerifyKey,
   setPaymentGatewayStatus,
   updatePaymentGateway,
 } from '../api/client';
@@ -148,6 +149,8 @@ function nameOf(gateway: PaymentGatewayView): string {
       return t('web.payment_gateway_provider_tonpays_telegram');
     case 'NOWPAYMENTS':
       return t('web.payment_gateway_provider_nowpayments');
+    case 'CENTRALPAY':
+      return t('web.payment_gateway_provider_centralpay');
   }
 }
 
@@ -307,6 +310,9 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
   /** A signed route's webhook secret, typed and sent once, exactly like the key. */
   const [webhookSecret, setWebhookSecret] = useState('');
   const secretKeyed = useSubmissionKey();
+  /** A route's separate verify key (CentralPay), typed and sent once, exactly like the key. */
+  const [verifyKey, setVerifyKey] = useState('');
+  const verifyKeyed = useSubmissionKey();
   const checkKeyed = useSubmissionKey();
 
   const reset = () => {
@@ -450,6 +456,24 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
     onError: (error) => secretKeyed.settleOn(error),
   });
 
+  const verify = useMutation({
+    mutationFn: () => {
+      if (keying === null) throw new Error('no route is being keyed');
+      return setPaymentGatewayVerifyKey({
+        provider: keying,
+        verifyKey,
+        idempotencyKey: verifyKeyed.current({ provider: keying, verifyKey }),
+      });
+    },
+    onSuccess: () => {
+      verifyKeyed.settle();
+      setVerifyKey('');
+      notify({ tone: 'ok', message: t('web.payment_gateway_verify_key_saved') });
+      refresh();
+    },
+    onError: (error) => verifyKeyed.settleOn(error),
+  });
+
   const check = useMutation({
     mutationFn: (provider: string) =>
       checkPaymentGatewayCredential({
@@ -469,6 +493,7 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
     toggle.isPending ||
     credential.isPending ||
     secret.isPending ||
+    verify.isPending ||
     check.isPending;
   const failure = save.error ?? toggle.error;
 
@@ -481,7 +506,9 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
   const formDirty =
     editedRow !== undefined && JSON.stringify(form) !== JSON.stringify(formOf(editedRow));
   useUnsavedChanges(
-    mayEdit && (formDirty || (keying !== null && (apiKey !== '' || webhookSecret !== ''))),
+    mayEdit &&
+      (formDirty ||
+        (keying !== null && (apiKey !== '' || webhookSecret !== '' || verifyKey !== ''))),
   );
 
   const columns: readonly Column<PaymentGatewayView>[] = [
@@ -656,6 +683,21 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
                 )}
               </span>
             )}
+            {/* A route's separate verify key (CentralPay): its state alone, never a value. */}
+            {row.credential.verifyKeyRequired && (
+              <span>
+                {row.credential.verifyKeySetAt === null ? (
+                  <Badge tone="warn">{t('web.payment_gateway_verify_key_missing')}</Badge>
+                ) : (
+                  <>
+                    <Badge tone="ok">{t('web.payment_gateway_verify_key_configured')}</Badge>{' '}
+                    <span className="muted small">
+                      {formatTimestamp(row.credential.verifyKeySetAt)}
+                    </span>
+                  </>
+                )}
+              </span>
+            )}
             {/* The last credential check: when, and its machine result for diagnosis. */}
             {row.credential.lastCheckAt !== null && row.credential.lastCheckResult !== null && (
               <span>
@@ -709,6 +751,8 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
                   setKeying(row.provider);
                   setApiKey('');
                   setWebhookSecret('');
+                  setVerifyKey('');
+                  setVerifyKey('');
                 }}
               >
                 {t('web.payment_gateway_credential_edit')}
@@ -799,6 +843,9 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
           {keying === 'NOWPAYMENTS' && (
             <Banner tone="info">{t('web.payment_gateway_nowpayments_hint')}</Banner>
           )}
+          {keying === 'CENTRALPAY' && (
+            <Banner tone="info">{t('web.payment_gateway_centralpay_hint')}</Banner>
+          )}
           <Field label={t('web.payment_gateway_credential_input')} htmlFor="pg-api-key">
             <input
               id="pg-api-key"
@@ -828,6 +875,7 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
                 setKeying(null);
                 setApiKey('');
                 setWebhookSecret('');
+                setVerifyKey('');
               }}
             >
               {t('web.payment_gateway_cancel_edit')}
@@ -870,6 +918,42 @@ export function PaymentGatewaysPage({ denied, mayEdit }: { denied: boolean; mayE
                 </button>
               </div>
               {secret.error != null && <Banner tone="danger">{messageFor(secret.error)}</Banner>}
+            </>
+          )}
+          {/*
+            A route's separate verify key (CentralPay): its own write-only field and its own
+            command, starting EMPTY every time — the stored key is never sent here.
+          */}
+          {PAYMENT_GATEWAY_DESCRIPTORS[keying as keyof typeof PAYMENT_GATEWAY_DESCRIPTORS]
+            ?.verifyKey === true && (
+            <>
+              <Field
+                label={t('web.payment_gateway_verify_key_input')}
+                htmlFor="pg-verify-key"
+                hint={t('web.payment_gateway_verify_key_hint')}
+              >
+                <input
+                  id="pg-verify-key"
+                  className="input ltr mono"
+                  type="password"
+                  autoComplete="new-password"
+                  spellCheck={false}
+                  value={verifyKey}
+                  maxLength={256}
+                  onChange={(event) => setVerifyKey(event.target.value)}
+                />
+              </Field>
+              <div className="form-actions">
+                <button
+                  type="button"
+                  className="btn primary"
+                  disabled={busy || verifyKey.trim() === ''}
+                  onClick={() => verify.mutate()}
+                >
+                  {t('web.payment_gateway_verify_key_save')}
+                </button>
+              </div>
+              {verify.error != null && <Banner tone="danger">{messageFor(verify.error)}</Banner>}
             </>
           )}
         </Card>

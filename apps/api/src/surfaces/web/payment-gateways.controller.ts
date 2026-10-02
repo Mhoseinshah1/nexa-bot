@@ -4,6 +4,7 @@ import {
   API_PREFIX,
   PAYMENT_GATEWAY_DESCRIPTORS,
   checkPaymentGatewayCredentialRequestSchema,
+  setPaymentGatewayVerifyKeyRequestSchema,
   setPaymentGatewayWebhookSecretRequestSchema,
   providerUnitRateMinorSchema,
   PAYMENT_GATEWAY_ROUTES,
@@ -182,6 +183,26 @@ export class PaymentGatewaysController {
   }
 
   /**
+   * Replaces a route's separate verify key (CentralPay). Write-only, the key's rules: the
+   * answer is the route view with the verify key's set-at time, never the key.
+   */
+  @Post(routePattern(PAYMENT_GATEWAY_ROUTES.verifyKey, 'provider'))
+  async setVerifyKey(
+    @Req() request: FastifyRequest,
+    @Param('provider') provider: string,
+    @Body() body: unknown,
+  ): Promise<PaymentGatewayResponse> {
+    const { scope, actor } = await this.authenticate(request);
+    const input = setPaymentGatewayVerifyKeyRequestSchema.parse(body);
+    const gateway = await this.container.paymentGateways.setVerifyKey(scope, actor, {
+      idempotencyKey: input.idempotencyKey,
+      provider,
+      verifyKey: input.verifyKey,
+    });
+    return this.respond(scope, gateway);
+  }
+
+  /**
    * The operator's credential check: one read-only provider call with the stored key,
    * recorded as the route's last check. The answer is the route view.
    */
@@ -246,6 +267,7 @@ const NO_FACTS: GatewayOperatorFacts = {
   callbackUrl: null,
   webhookSecretSetAt: null,
   lastCheck: null,
+  verifyKeySetAt: null,
 };
 
 function toView(
@@ -281,6 +303,8 @@ function toView(
       webhookSecretSetAt: facts.webhookSecretSetAt?.toISOString() ?? null,
       lastCheckAt: facts.lastCheck?.at.toISOString() ?? null,
       lastCheckResult: facts.lastCheck?.result ?? null,
+      verifyKeyRequired: PAYMENT_GATEWAY_DESCRIPTORS[gateway.provider].verifyKey,
+      verifyKeySetAt: facts.verifyKeySetAt?.toISOString() ?? null,
     },
     callbackUrl: facts.callbackUrl,
     conversion: {

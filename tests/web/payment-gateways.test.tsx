@@ -412,6 +412,75 @@ describe('the NOWPayments key, IPN secret and credential check', () => {
 });
 
 /**
+ * CentralPay (`docs/centralpay-gateway-audit.md` §5.7): the verify key is a second write-only
+ * field beside the API key, shown as a state and never a value; no credential check is
+ * offered (the guide documents no safe read).
+ */
+describe('the CentralPay API key and verify key', () => {
+  const CENTRALPAY = {
+    provider: 'CENTRALPAY',
+    status: 'DISABLED',
+    displayName: null,
+    instructions: null,
+    minAmountMinor: '0',
+    maxAmountMinor: '0',
+    currency: 'IRT',
+    eligibility: {
+      activateAfterPayments: 0,
+      deactivateAfterPayments: 0,
+      activateAfterAccountDays: 0,
+    },
+    sortOrder: 0,
+    topupCashbackPercent: 0,
+    allowServicePurchase: true,
+    allowWalletTopup: true,
+    credential: {
+      required: true,
+      setAt: '2026-09-20T08:00:00.000Z',
+      webhookSecretRequired: false,
+      webhookSecretSetAt: null,
+      lastCheckAt: null,
+      lastCheckResult: null,
+      verifyKeyRequired: true,
+      verifyKeySetAt: null,
+    },
+    callbackUrl: 'https://bot.example.com/payments/return/centralpay/t-1',
+    createdAt: '2026-09-10T12:30:00.000Z',
+    updatedAt: '2026-09-10T12:30:00.000Z',
+  };
+
+  it('shows the missing verify key as a state, offers no check and no IPN secret', async () => {
+    stubApi([{ url: '/payment-gateways', body: { gateways: [CENTRALPAY] } }]);
+    const view = renderPage(<PaymentGatewaysPage denied={false} mayEdit />);
+    expect(await screen.findByText('کلید تأیید (verify) تنظیم نشده')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'بررسی اتصال' })).toBeNull();
+    expect(view.container.querySelectorAll('input[type="password"]')).toHaveLength(0);
+  });
+
+  it('replaces the verify key through its own empty write-only field and route', async () => {
+    const api = stubApi([
+      { url: '/payment-gateways', body: { gateways: [CENTRALPAY] } },
+      { url: '/payment-gateways/CENTRALPAY/verify-key', body: { gateway: CENTRALPAY } },
+    ]);
+    renderPage(<PaymentGatewaysPage denied={false} mayEdit />);
+    fireEvent.click(await screen.findByRole('button', { name: 'تنظیم کلید API' }));
+    expect(screen.queryByLabelText('کلید IPN جدید (IPN Secret)')).toBeNull();
+    const input = (await screen.findByLabelText('کلید تأیید جدید (verify)')) as HTMLInputElement;
+    expect(input.value).toBe('');
+    expect(input.type).toBe('password');
+    fireEvent.change(input, { target: { value: 'md5_verify_123' } });
+    fireEvent.click(screen.getByRole('button', { name: 'ذخیرهٔ کلید تأیید' }));
+    await waitFor(() => {
+      expect(api.calls.some((call) => call.method === 'POST')).toBe(true);
+    });
+    const posted = api.calls.filter((call) => call.method === 'POST');
+    expect(posted).toHaveLength(1);
+    expect(posted[0]!.url).toContain('/payment-gateways/CENTRALPAY/verify-key');
+    expect((posted[0]!.body as Record<string, unknown>)['verifyKey']).toBe('md5_verify_123');
+  });
+});
+
+/**
  * WP18 — the customer gateway fee field. Only a route that settles through `GATEWAY` draws
  * it; a typed `5.25` travels as 525 basis points, and 525 reopens as `5.25`.
  */

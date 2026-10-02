@@ -1813,6 +1813,16 @@ export function setPaymentGatewayWebhookSecret(input: {
   return post(PAYMENT_GATEWAY_ROUTES.webhookSecret(provider), body, paymentGatewayResponseSchema);
 }
 
+/** Replaces a route's separate verify key (CentralPay). Write-only. */
+export function setPaymentGatewayVerifyKey(input: {
+  provider: string;
+  idempotencyKey: string;
+  verifyKey: string;
+}): Promise<PaymentGatewayResponse> {
+  const { provider, ...body } = input;
+  return post(PAYMENT_GATEWAY_ROUTES.verifyKey(provider), body, paymentGatewayResponseSchema);
+}
+
 /** The operator's read-only credential check; the answer carries the route's last check. */
 export function checkPaymentGatewayCredential(input: {
   provider: string;

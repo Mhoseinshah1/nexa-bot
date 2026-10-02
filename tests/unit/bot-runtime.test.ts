@@ -801,6 +801,12 @@ describe('profile metadata, normalised before it is ever stored', () => {
       'bot.payment.cancel_confirm',
       'bot.payment.cancel_confirm_button',
       'bot.payment.cancelled',
+      /*
+       * CentralPay: the «💳 پرداخت با CentralPay» URL button and the needs-review sentence
+       * for a verify that did not match. Neither names a card or says paid.
+       */
+      'bot.payment.centralpay_pay_button',
+      'bot.payment.centralpay_review_unresolved',
       'bot.payment.checkout_in_progress',
       'bot.payment.copy_amount_button',
       'bot.payment.copy_card_button',

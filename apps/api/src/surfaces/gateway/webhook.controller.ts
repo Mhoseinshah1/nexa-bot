@@ -101,5 +101,7 @@ export class GatewayWebhookController {
 function externalProviderOf(segment: string): PaymentGatewayProvider | null {
   const found = PAYMENT_GATEWAY_PROVIDERS.find((provider) => provider.toLowerCase() === segment);
   if (found === undefined) return null;
-  return PAYMENT_GATEWAY_DESCRIPTORS[found].settlesVia === 'GATEWAY' ? found : null;
+  // A browser-return route (CentralPay) documents no webhook: there is nothing to receive.
+  const descriptor = PAYMENT_GATEWAY_DESCRIPTORS[found];
+  return descriptor.settlesVia === 'GATEWAY' && !descriptor.browserReturn ? found : null;
 }

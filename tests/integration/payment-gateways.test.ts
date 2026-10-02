@@ -139,6 +139,7 @@ describe('payment routes', () => {
     const { gateways, currency } = await ctx.container.paymentGateways.list(tenantA, ownerA);
     // In render order `(sort_order, provider)`: every seeded route has sort order 0.
     expect(gateways.map((gateway) => gateway.provider)).toEqual([
+      'CENTRALPAY',
       'MANUAL_TRANSFER',
       'NOWPAYMENTS',
       'TELEGRAM_STARS',
@@ -147,6 +148,8 @@ describe('payment routes', () => {
     ]);
     // NOWPayments needs a key and an IPN secret: seeded DISABLED like TonPays.
     expect(gateways.find((gateway) => gateway.provider === 'NOWPAYMENTS')?.status).toBe('DISABLED');
+    // CentralPay needs a key and a verify key: seeded DISABLED like TonPays.
+    expect(gateways.find((gateway) => gateway.provider === 'CENTRALPAY')?.status).toBe('DISABLED');
     const route = gateways.find((gateway) => gateway.provider === 'MANUAL_TRANSFER');
     expect(route?.status).toBe('ACTIVE');
     // WP11A: a route that needs a credential is seeded DISABLED, with no key.
@@ -180,9 +183,9 @@ describe('payment routes', () => {
 
   it('lets a view-only role read and refuses its writes at the guard', async () => {
     const { gateways } = await ctx.container.paymentGateways.list(tenantA, viewerA);
-    // The whole roster: TonPays (WP11A), Telegram Stars (Package A), TonPays Telegram and
-    // NOWPayments.
-    expect(gateways).toHaveLength(5);
+    // The whole roster: TonPays (WP11A), Telegram Stars (Package A), TonPays Telegram,
+    // NOWPayments and CentralPay.
+    expect(gateways).toHaveLength(6);
 
     const refused = await ctx.container.paymentGateways
       .setStatus(tenantA, viewerA, {
@@ -195,7 +198,9 @@ describe('payment routes', () => {
 
     // And nothing moved: the refusal is the guard's, not a missing button's.
     const after = await ctx.container.paymentGateways.list(tenantA, ownerA);
-    expect(after.gateways[0]?.status).toBe('ACTIVE');
+    expect(after.gateways.find((gateway) => gateway.provider === 'MANUAL_TRANSFER')?.status).toBe(
+      'ACTIVE',
+    );
   });
 
   it('cannot configure or read across tenants', async () => {
@@ -208,8 +213,9 @@ describe('payment routes', () => {
     // Tenant B's own route is untouched — the key is `(tenant, provider)`, so the two
     // rows cannot be confused however identical their provider is.
     const { gateways } = await ctx.container.paymentGateways.list(tenantB, ownerB);
-    expect(gateways[0]?.displayName).toBeNull();
-    expect(gateways[0]?.sortOrder).toBe(0);
+    const manualB = gateways.find((gateway) => gateway.provider === 'MANUAL_TRANSFER');
+    expect(manualB?.displayName).toBeNull();
+    expect(manualB?.sortOrder).toBe(0);
 
     // And tenant A's actor reaches nothing in tenant B.
     await expect(ctx.container.paymentGateways.list(tenantB, ownerA)).rejects.toSatisfy(

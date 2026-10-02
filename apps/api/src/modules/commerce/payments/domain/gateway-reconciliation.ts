@@ -48,7 +48,29 @@ const RECONCILIATION_EVIDENCE: Readonly<
     failed: ['failed', 'expired', 'refunded', 'partially_paid'],
     failsUnpaidApproval: true,
   },
+  /*
+   * CentralPay (`docs/centralpay-gateway-audit.md` §5.5): `verified` with `paid` is the
+   * only confirmation — recorded only when the amount, the customer and a reference bound to
+   * this attempt all matched. A `verified` recorded UNPAID (a MISMATCH) or an `unverified`
+   * may be failed: neither is a payment of this order.
+   */
+  CENTRALPAY: {
+    confirmed: ['verified'],
+    failed: ['unverified'],
+    failsUnpaidApproval: true,
+  },
 };
+
+/**
+ * The routes whose settlement REQUIRES the provider's reference for the money to be bound to
+ * the attempt first (CentralPay's `referenceId`): `confirmGatewayPayment` refuses one without
+ * it, under the payment's lock, whatever its caller passed.
+ */
+const REFERENCE_BOUND_PROVIDERS: ReadonlySet<PaymentGatewayProvider> = new Set(['CENTRALPAY']);
+
+export function requiresProviderReference(provider: PaymentGatewayProvider): boolean {
+  return REFERENCE_BOUND_PROVIDERS.has(provider);
+}
 
 /** Whether the recorded inquiry supports resolving the payment to `to`. */
 export function reconciliationEvidenceAllows(
