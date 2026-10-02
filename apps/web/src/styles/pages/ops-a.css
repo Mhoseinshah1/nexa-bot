@@ -292,18 +292,30 @@
   min-height: 300px;
 }
 
-/* The editable keyboard: rows of chips, gaps that appear while dragging. */
+/*
+ * The editable keyboard: rows of chips with a drop gap between every two rows.
+ *
+ * Nothing here changes SIZE while a drag starts or moves (no jumpiness): the gaps are always
+ * laid out, and every placeholder — the caret before a key, the caret at a row's end, the
+ * line where a new row would go — is a pseudo-element drawn over the layout. A size change
+ * under a still pointer would move the target out from under it and the placeholder would
+ * flicker between two places.
+ */
 .bb-keyboard {
+  position: relative;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+}
+.bb-keyboard.is-dragging {
+  user-select: none;
+  -webkit-user-select: none;
 }
 .bb-row-wrap {
   display: flex;
   flex-direction: column;
-  gap: 6px;
 }
 .bb-row {
+  position: relative;
   display: flex;
   gap: 6px;
   align-items: stretch;
@@ -311,25 +323,64 @@
   padding: 2px;
   border: 1px dashed transparent;
   border-radius: var(--radius-ctl);
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease;
 }
-.bb-row.is-over {
+/* The obvious target row: the row a drop on a key or at a row's end lands in. */
+.bb-row.is-target {
   border-color: var(--accent);
   background: var(--accent-soft);
 }
 .bb-row.is-dragging {
-  opacity: 0.55;
+  opacity: 0.45;
 }
+/* The caret after the row's last key. */
+.bb-row.is-insert-end::after {
+  content: '';
+  position: absolute;
+  inset-block: 4px;
+  inset-inline-end: 3px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--accent);
+  pointer-events: none;
+}
+/* A grip is a real button: a 34 × 44 px hit area a finger lands on (QA-2), a small mark. */
 .bb-row-grip,
 .bb-grip {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex: none;
-  width: 18px;
+  width: 22px;
+  min-height: 32px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
   color: var(--fg-3);
+  font: inherit;
   cursor: grab;
   touch-action: none;
   user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+.bb-row-grip::before,
+.bb-grip::before {
+  content: '';
+  position: absolute;
+  inset: -6px;
+}
+.bb-row-grip:hover,
+.bb-grip:hover {
+  color: var(--fg);
+}
+.bb-keyboard.is-dragging .bb-row-grip,
+.bb-keyboard.is-dragging .bb-grip {
+  cursor: grabbing;
 }
 .bb-row-warn {
   display: inline-flex;
@@ -337,20 +388,45 @@
   flex: none;
   color: var(--warn);
 }
+/* A gap: always 10px tall, armed (visible) while dragging, a line where the new row goes. */
 .bb-gap {
-  padding: 6px;
-  border: 1px dashed var(--line-2);
+  position: relative;
+  height: 10px;
+  flex: none;
   border-radius: var(--radius-ctl);
-  color: var(--fg-3);
-  font-size: var(--fs-xs);
-  text-align: center;
+}
+.bb-gap.is-armed {
+  background: color-mix(in srgb, var(--line-2) 35%, transparent);
 }
 .bb-gap.is-over {
-  border-color: var(--accent);
-  background: var(--accent-soft);
-  color: var(--fg);
+  background: transparent;
+}
+.bb-gap.is-over::before {
+  content: '';
+  position: absolute;
+  inset-inline: 2px;
+  top: 3px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--accent);
+  pointer-events: none;
+}
+.bb-gap-note {
+  position: absolute;
+  inset-inline-start: 8px;
+  top: -9px;
+  z-index: 1;
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--bg-1);
+  font-size: var(--fs-xs);
+  line-height: 18px;
+  white-space: nowrap;
+  pointer-events: none;
 }
 .bb-chip {
+  position: relative;
   flex: 1 1 0;
   min-width: 0;
   display: flex;
@@ -387,12 +463,21 @@
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
-.bb-chip.is-over {
-  border-inline-start-width: 3px;
-  border-inline-start-color: var(--accent);
+/* The insertion caret on the START edge of the key the drop goes before — drawn, not a border. */
+.bb-chip.is-insert-before::before {
+  content: '';
+  position: absolute;
+  inset-block: -2px;
+  inset-inline-start: -5px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--accent);
+  pointer-events: none;
 }
+/* The key being dragged stays in place, faded: its ghost follows the pointer. */
 .bb-chip.is-dragging {
-  opacity: 0.5;
+  opacity: 0.4;
+  border-style: dashed;
 }
 .bb-chip.is-off .bb-chip-label {
   opacity: 0.55;
@@ -447,17 +532,55 @@
   gap: 6px;
 }
 
-/* The icon marker: the slot's ordinary emoji in a dashed frame, never a custom emoji. */
-.bb-icon-mark {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 20px;
-  padding: 0 2px;
-  border: 1px dashed var(--fg-3);
-  border-radius: var(--radius-sm);
-  font-size: var(--fs-xs);
-  line-height: 1.4;
+/*
+ * The drag ghost: an SVG layer over the page. Its group is moved by its `transform`
+ * ATTRIBUTE, once per frame (no inline style survives the production CSP); it never takes
+ * the pointer, so hit-testing sees the page beneath it.
+ */
+.bb-drag-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+.bb-ghost-box {
+  fill: var(--bg-3);
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  filter: drop-shadow(0 6px 14px rgb(0 0 0 / 0.25));
+}
+.bb-ghost.bb-style-primary .bb-ghost-box {
+  fill: var(--info-soft);
+}
+.bb-ghost.bb-style-success .bb-ghost-box {
+  fill: var(--ok-soft);
+}
+.bb-ghost.bb-style-danger .bb-ghost-box {
+  fill: var(--danger-soft);
+}
+.bb-ghost-text {
+  fill: var(--fg);
+  font-family: inherit;
+  font-size: var(--fs-ui);
+}
+
+/*
+ * A builder banner with an action (reseed, reload): at phone width the action goes UNDER the
+ * text instead of squeezing it into a column a few words wide (round-T QA-5).
+ */
+@media (max-width: 560px) {
+  .bb-card .banner {
+    flex-wrap: wrap;
+  }
+  .bb-card .banner > div {
+    flex: 1 1 calc(100% - 26px);
+  }
+  .bb-card .banner > .btn {
+    margin-inline-start: 26px;
+  }
 }
 
 /* The Inspector. */
@@ -495,13 +618,6 @@
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-}
-.bb-eligibility ul {
-  margin: 0;
-  padding-inline-start: 1.1rem;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
 }
 
 /* Publish: the change list and the two keyboards. History: one revision per item. */
