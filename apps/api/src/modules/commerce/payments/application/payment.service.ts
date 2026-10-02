@@ -3758,7 +3758,13 @@ export class PaymentService {
         amount: input.amount,
         botInstanceId,
         now: input.now,
-        requireLink: descriptor.invoiceCredential !== 'BOT_TOKEN',
+        // What makes a created invoice payable, by the route's own invoice form (§5.3).
+        payableForm:
+          descriptor.invoiceForm === 'LINK'
+            ? 'LINK'
+            : descriptor.invoiceForm === 'CARD_TRANSFER'
+              ? 'CARD'
+              : 'ANY',
       },
       tx,
     );

@@ -1,7 +1,8 @@
-import { and, asc, eq, gt, inArray, isNotNull, isNull, lte, or, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNotNull, isNull, lte, or, sql } from 'drizzle-orm';
 import type {
   FxBaseAsset,
   FxSource,
+  GatewayCardSource,
   GatewayConversionPolicy,
   GatewayProviderUnit,
   Money,
@@ -17,9 +18,16 @@ import {
   requireTenantId,
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
-import { gatewayInvoices, payments } from '../../../../infrastructure/persistence/schema.js';
+import {
+  gatewayInvoiceCards,
+  gatewayInvoices,
+  payments,
+} from '../../../../infrastructure/persistence/schema.js';
 import type {
   ClaimedGatewayInvoice,
+  GatewayCardChangePolicy,
+  GatewayCardInstructions,
+  GatewayCardRecord,
   GatewayInvoiceFxSnapshot,
   GatewayInvoiceRecord,
   GatewayInvoiceRepository,
@@ -109,9 +117,23 @@ function toRecord(row: Row): GatewayInvoiceRecord {
     outcome: row.outcome as GatewayInvoiceOutcome | null,
     outcomeAt: row.outcomeAt,
     lateCompletionObservedAt: row.lateCompletionObservedAt,
+    cardNumber: row.cardNumber,
+    cardName: row.cardName,
+    cardSeq: row.cardSeq,
+    cardReceivedAt: row.cardReceivedAt,
+    cardChangeShown: row.cardChangeShown,
+    cardChangeCooldownUntil: row.cardChangeCooldownUntil,
+    cardChangeExhausted: row.cardChangeExhausted,
+    reconcileInquiryRequestedAt: row.reconcileInquiryRequestedAt,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
+}
+
+/** The provider's cooldown as a moment, or null when it said none. */
+function cooldownUntil(policy: GatewayCardChangePolicy | null, now: Date): Date | null {
+  if (policy === null || policy.cooldownSeconds === null) return null;
+  return new Date(now.getTime() + policy.cooldownSeconds * 1000);
 }
 
 /**
@@ -362,14 +384,30 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
       readonly callbackUrlSent: boolean;
       readonly note?: string | null;
       readonly firstInquiryAt: Date | null;
+      readonly card?: {
+        readonly instructions: GatewayCardInstructions;
+        readonly policy: GatewayCardChangePolicy | null;
+      } | null;
     },
     now: Date,
     tx: unknown,
   ): Promise<boolean> {
     const tenantId = requireTenantId(scope);
+    const card = created.card ?? null;
     const rows = await this.exec(tx)
       .update(gatewayInvoices)
       .set({
+        ...(card === null
+          ? {}
+          : {
+              cardNumber: card.instructions.cardNumber,
+              cardName: card.instructions.cardName,
+              cardSeq: 1,
+              cardReceivedAt: now,
+              cardChangeShown: card.policy?.showChangeCard ?? null,
+              cardChangeCooldownUntil: cooldownUntil(card.policy, now),
+              cardChangeExhausted: card.policy?.exhausted ?? null,
+            }),
         creationState: 'CREATED',
         providerInvoiceId: created.invoiceId,
         createdInvoiceAt: now,
@@ -391,6 +429,159 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
           eq(gatewayInvoices.tenantId, tenantId),
           eq(gatewayInvoices.paymentId, paymentId),
           eq(gatewayInvoices.creationState, 'CREATING'),
+        ),
+      )
+      .returning({ paymentId: gatewayInvoices.paymentId });
+    if (rows.length > 0 && card !== null) {
+      // The first card a customer is shown is kept for ever beside every later one.
+      await this.exec(tx).insert(gatewayInvoiceCards).values({
+        tenantId,
+        paymentId,
+        seq: 1,
+        cardNumber: card.instructions.cardNumber,
+        cardName: card.instructions.cardName,
+        source: 'CREATE',
+        receivedAt: now,
+      });
+    }
+    return rows.length > 0;
+  }
+
+  async applyCard(
+    scope: TenantContext,
+    paymentId: PaymentId,
+    card: GatewayCardInstructions,
+    source: GatewayCardSource,
+    policy: GatewayCardChangePolicy | null,
+    now: Date,
+    tx: unknown,
+  ): Promise<number> {
+    const tenantId = requireTenantId(scope);
+    // The invoice row's lock first: two writers of one attempt's cards are serialised here.
+    const [locked] = await this.exec(tx)
+      .select({ paymentId: gatewayInvoices.paymentId })
+      .from(gatewayInvoices)
+      .where(and(eq(gatewayInvoices.tenantId, tenantId), eq(gatewayInvoices.paymentId, paymentId)))
+      .for('update');
+    if (locked === undefined) throw new Error('applyCard: no gateway invoice for this payment');
+    const [last] = await this.exec(tx)
+      .select({ seq: sql<number>`COALESCE(MAX(${gatewayInvoiceCards.seq}), 0)::int` })
+      .from(gatewayInvoiceCards)
+      .where(
+        and(
+          eq(gatewayInvoiceCards.tenantId, tenantId),
+          eq(gatewayInvoiceCards.paymentId, paymentId),
+        ),
+      );
+    const seq = (last?.seq ?? 0) + 1;
+    await this.exec(tx).insert(gatewayInvoiceCards).values({
+      tenantId,
+      paymentId,
+      seq,
+      cardNumber: card.cardNumber,
+      cardName: card.cardName,
+      source,
+      receivedAt: now,
+    });
+    await this.exec(tx)
+      .update(gatewayInvoices)
+      .set({
+        cardNumber: card.cardNumber,
+        cardName: card.cardName,
+        cardSeq: seq,
+        cardReceivedAt: now,
+        // The provider is authoritative: what it said now replaces what it said before.
+        cardChangeShown: policy?.showChangeCard ?? null,
+        cardChangeCooldownUntil: cooldownUntil(policy, now),
+        cardChangeExhausted: policy?.exhausted ?? null,
+        updatedAt: now,
+      })
+      .where(and(eq(gatewayInvoices.tenantId, tenantId), eq(gatewayInvoices.paymentId, paymentId)));
+    return seq;
+  }
+
+  async hideCard(
+    scope: TenantContext,
+    paymentId: PaymentId,
+    now: Date,
+    tx: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .update(gatewayInvoices)
+      .set({
+        cardNumber: null,
+        cardName: null,
+        cardSeq: null,
+        cardReceivedAt: null,
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(gatewayInvoices.tenantId, tenantId),
+          eq(gatewayInvoices.paymentId, paymentId),
+          isNotNull(gatewayInvoices.cardSeq),
+        ),
+      )
+      .returning({ paymentId: gatewayInvoices.paymentId });
+    return rows.length > 0;
+  }
+
+  async cardsFor(
+    scope: TenantContext,
+    paymentId: PaymentId,
+    tx?: unknown,
+  ): Promise<readonly GatewayCardRecord[]> {
+    const tenantId = requireTenantId(scope);
+    const rows = await this.exec(tx)
+      .select()
+      .from(gatewayInvoiceCards)
+      .where(
+        and(
+          eq(gatewayInvoiceCards.tenantId, tenantId),
+          eq(gatewayInvoiceCards.paymentId, paymentId),
+        ),
+      )
+      .orderBy(asc(gatewayInvoiceCards.seq));
+    return rows.map((row) => ({
+      seq: row.seq,
+      cardNumber: row.cardNumber,
+      cardName: row.cardName,
+      source: row.source as GatewayCardSource,
+      receivedAt: row.receivedAt,
+    }));
+  }
+
+  async requestReconcileInquiry(
+    scope: TenantContext,
+    paymentId: PaymentId,
+    at: Date,
+    spacingMs: number,
+    tx: unknown,
+  ): Promise<boolean> {
+    const tenantId = requireTenantId(scope);
+    const spaced = new Date(at.getTime() - spacingMs);
+    const rows = await this.exec(tx)
+      .update(gatewayInvoices)
+      .set({
+        reconcileInquiryRequestedAt: at,
+        nextInquiryAt: sql`LEAST(COALESCE(${gatewayInvoices.nextInquiryAt}, ${at}::timestamptz), ${at}::timestamptz)`,
+        updatedAt: at,
+      })
+      .where(
+        and(
+          eq(gatewayInvoices.tenantId, tenantId),
+          eq(gatewayInvoices.paymentId, paymentId),
+          or(
+            isNotNull(gatewayInvoices.providerInvoiceId),
+            isNotNull(gatewayInvoices.hintedInvoiceId),
+          ),
+          // Spaced: one operator request a minute, whatever the button does.
+          or(isNull(gatewayInvoices.lastInquiryAt), lte(gatewayInvoices.lastInquiryAt, spaced)),
+          or(
+            isNull(gatewayInvoices.reconcileInquiryRequestedAt),
+            lte(gatewayInvoices.reconcileInquiryRequestedAt, spaced),
+          ),
         ),
       )
       .returning({ paymentId: gatewayInvoices.paymentId });
@@ -572,6 +763,8 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
           : {}),
         nextInquiryAt: result.nextInquiryAt,
         inquiryClaimedUntil: null,
+        // An operator's request is answered by the inquiry it let through.
+        reconcileInquiryRequestedAt: null,
         updatedAt: now,
       })
       .where(and(eq(gatewayInvoices.tenantId, tenantId), eq(gatewayInvoices.paymentId, paymentId)));
@@ -707,7 +900,7 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
       readonly amount: Money;
       readonly botInstanceId: string | null;
       readonly now: Date;
-      readonly requireLink: boolean;
+      readonly payableForm: 'LINK' | 'CARD' | 'ANY';
     },
     tx: unknown,
   ): Promise<GatewayInvoiceRecord | null> {
@@ -728,11 +921,22 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
           eq(gatewayInvoices.provider, input.provider),
           inArray(gatewayInvoices.creationState, ['CREATING', 'CREATED']),
           // F3: a created invoice with no link a customer can open is not an open attempt.
-          input.requireLink
+          input.payableForm === 'LINK'
             ? or(
                 eq(gatewayInvoices.creationState, 'CREATING'),
                 isNotNull(gatewayInvoices.webInvoiceUrl),
                 isNotNull(gatewayInvoices.invoiceUrl),
+              )
+            : undefined,
+          /*
+           * A created CARD invoice is open unless its create answer carried no card (it is
+           * then noted `nexa.no_payment_card` and could never be paid); a card hidden after a
+           * lost card change keeps it open — the customer may already have transferred.
+           */
+          input.payableForm === 'CARD'
+            ? or(
+                eq(gatewayInvoices.creationState, 'CREATING'),
+                isNull(gatewayInvoices.creationErrorCode),
               )
             : undefined,
           input.botInstanceId === null
@@ -743,7 +947,12 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
           input.orderId === null ? isNull(payments.orderId) : eq(payments.orderId, input.orderId),
           eq(payments.amount, input.amount.amountMinor),
           eq(payments.currency, input.amount.currency),
-          gt(payments.expiresAt, input.now),
+          /*
+           * The EFFECTIVE deadline (§9.6.3 d, f): the review deadline once a provider has
+           * acknowledged the receipt, `expires_at` otherwise — so an attempt in review is
+           * handed back, showing the review, instead of a second invoice being opened.
+           */
+          sql`COALESCE(${payments.providerReviewUntil}, ${payments.expiresAt}) > ${input.now}::timestamptz`,
         ),
       )
       .orderBy(sql`${gatewayInvoices.createdAt} DESC`)
@@ -765,6 +974,7 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
         customerId: payments.customerId,
         state: payments.state,
         expiresAt: payments.expiresAt,
+        providerReviewUntil: payments.providerReviewUntil,
       })
       .from(payments)
       .where(
@@ -788,6 +998,7 @@ export class DrizzleGatewayInvoiceRepository implements GatewayInvoiceRepository
                 customerId: fact.customerId,
                 paymentState: fact.state,
                 paymentExpiresAt: fact.expiresAt,
+                paymentReviewUntil: fact.providerReviewUntil,
               },
             ];
       })

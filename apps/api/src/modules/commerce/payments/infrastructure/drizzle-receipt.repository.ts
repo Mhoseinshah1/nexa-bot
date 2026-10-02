@@ -15,6 +15,7 @@ import {
   type TransactionScope,
 } from '../../../../infrastructure/persistence/unit-of-work.js';
 import {
+  gatewayReceiptCaptures,
   paymentReceipts,
   payments,
   receiptCaptures,
@@ -110,6 +111,27 @@ export class DrizzleReceiptCaptureRepository implements ReceiptCaptureRepository
           eq(receiptCaptures.botInstanceId, input.botInstanceId),
           eq(receiptCaptures.customerId, input.customerId),
           isNull(receiptCaptures.closedAt),
+        ),
+      );
+
+    /*
+     * TonPays Telegram (`docs/tonpays-telegram-gateway-audit.md` §7.4): one photo, one
+     * meaning. An open PROVIDER receipt window for this customer in this bot is superseded
+     * by this one in the same transaction, under the same advisory lock — the next photo is
+     * a receipt for the payment this window names, and never for the provider's.
+     */
+    await this.exec(tx)
+      .update(gatewayReceiptCaptures)
+      .set({
+        closedAt: input.openedAt,
+        closeReason: sql`CASE WHEN ${gatewayReceiptCaptures.expiresAt} <= ${input.openedAt} THEN 'EXPIRED' ELSE 'SUPERSEDED' END`,
+      })
+      .where(
+        and(
+          eq(gatewayReceiptCaptures.tenantId, tenantId),
+          eq(gatewayReceiptCaptures.botInstanceId, input.botInstanceId),
+          eq(gatewayReceiptCaptures.customerId, input.customerId),
+          isNull(gatewayReceiptCaptures.closedAt),
         ),
       );
 

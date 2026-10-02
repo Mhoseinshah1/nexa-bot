@@ -340,9 +340,11 @@ function toSummary(
     customerTelegramUserId: identity?.telegramUserId ?? null,
     customerUsername: identity?.username ?? null,
     receiptDisposition,
-    // The provider review window arrives with its columns (TonPays Telegram, P1).
-    providerReviewStartedAt: null,
-    providerReviewUntil: null,
+    // TonPays Telegram (§9.6.7): the provider review window, when one was opened.
+    providerReviewStartedAt:
+      record.providerReviewStartedAt === null ? null : record.providerReviewStartedAt.toISOString(),
+    providerReviewUntil:
+      record.providerReviewUntil === null ? null : record.providerReviewUntil.toISOString(),
   };
 }
 
@@ -406,12 +408,12 @@ function toGatewayInvoiceView(invoice: GatewayInvoiceRecord): GatewayInvoiceView
     outcome: invoice.outcome,
     lateCompletionObservedAt: iso(invoice.lateCompletionObservedAt),
     createdAt: invoice.createdAt.toISOString(),
-    // The card-transfer facts arrive with their columns (TonPays Telegram, P1).
-    cardSeq: null,
-    cardReceivedAt: null,
-    cardChangeShown: null,
-    cardChangeCooldownUntil: null,
-    cardChangeExhausted: null,
+    // TonPays Telegram (§10): which card is current and since when — never its number.
+    cardSeq: invoice.cardSeq,
+    cardReceivedAt: iso(invoice.cardReceivedAt),
+    cardChangeShown: invoice.cardChangeShown,
+    cardChangeCooldownUntil: iso(invoice.cardChangeCooldownUntil),
+    cardChangeExhausted: invoice.cardChangeExhausted,
     latestCardChange: null,
     receiptSubmissions: [],
   };

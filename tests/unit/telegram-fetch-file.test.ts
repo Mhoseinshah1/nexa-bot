@@ -76,6 +76,26 @@ describe('fetching a receipt file', () => {
         pump();
         return;
       }
+      if (url.includes('six-megabytes')) {
+        // Under the receipt default (20 MiB), over a TonPays Telegram receipt's 5 MB: no
+        // declared length, chunked, so only the RUNNING bound can refuse it (TPTG-09).
+        response.writeHead(200, { 'content-type': 'image/jpeg' });
+        let sent = 0;
+        const chunk = Buffer.alloc(256 * 1_024);
+        const pump = (): void => {
+          while (sent < 6_000_000) {
+            if (response.writableEnded || response.destroyed) return;
+            sent += chunk.byteLength;
+            if (!response.write(chunk)) {
+              response.once('drain', pump);
+              return;
+            }
+          }
+          if (!response.writableEnded) response.end();
+        };
+        pump();
+        return;
+      }
       response.writeHead(200, { 'content-type': 'image/jpeg' });
       response.end(Buffer.from([1, 2, 3, 4, 5]));
     });
@@ -138,6 +158,21 @@ describe('fetching a receipt file', () => {
     expect(most, 'the transfer should have been abandoned early').toBeLessThan(
       PAYMENT_RECEIPT_MAX_BYTES + 4 * 1_024 * 1_024,
     );
+  });
+
+  it('TPTG-09: a caller-supplied bound (a TonPays Telegram receipt, 5 MB) refuses while streaming, and the default is unchanged', async () => {
+    const bounded = await telegramFetchFile({
+      token: 'test-token',
+      apiBaseUrl: base,
+      fileBaseUrl: base,
+      timeoutMs: 20_000,
+      fileId: 'six-megabytes',
+      maxBytes: 5_000_000,
+    });
+    expect(bounded.outcome).toBe('UNAVAILABLE');
+    // Without the caller's bound, the receipt default applies and the same file is fetched.
+    const unbounded = await fetchFile('six-megabytes');
+    expect(unbounded.outcome).toBe('SUCCEEDED');
   });
 
   it('refuses a file path that could leave the file host', () => {

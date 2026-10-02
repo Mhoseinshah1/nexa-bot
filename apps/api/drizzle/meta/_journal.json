@@ -1100,6 +1100,13 @@
       "when": 1790872500125,
       "tag": "0156_round_t_button_builder",
       "breakpoints": true
+    },
+    {
+      "idx": 157,
+      "version": "7",
+      "when": 1790902945640,
+      "tag": "0157_tonpays_telegram",
+      "breakpoints": true
     }
   ]
 }

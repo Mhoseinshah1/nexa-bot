@@ -72,6 +72,14 @@ import {
   ORDER_SETTLED_STATES,
   ORDER_STATES,
   PAYMENT_GATEWAY_PROVIDERS,
+  PROVIDER_REVIEW_GATEWAY_PROVIDERS,
+  TONPAYS_TELEGRAM_REVIEW_WINDOW_HOURS,
+  GATEWAY_CARD_NAME_MAX_LENGTH,
+  GATEWAY_CARD_NUMBER_MAX_LENGTH,
+  GATEWAY_CARD_SOURCES,
+  GATEWAY_CARD_CHANGE_STATES,
+  GATEWAY_RECEIPT_CAPTURE_CLOSE_REASONS,
+  GATEWAY_RECEIPT_SUBMISSION_STATES,
   GATEWAY_INVOICE_CREATION_STATES,
   GATEWAY_INVOICE_OUTCOMES,
   REFUND_CHANNELS,
@@ -3884,6 +3892,27 @@ export const payments = pgTable(
     customerFeeBasisPoints: integer('customer_fee_basis_points'),
     customerFeeAmount: bigint('customer_fee_amount', { mode: 'bigint' }),
     payableAmount: bigint('payable_amount', { mode: 'bigint' }),
+    /**
+     * The provider review window (`docs/tonpays-telegram-gateway-audit.md` §7.0, §9.6; the
+     * owner's decision of 2026-10-01): when Nexa observed an external gateway's
+     * ACKNOWLEDGEMENT of the customer's receipt, and the settlement deadline that opened —
+     * 24 hours later, written in the SAME statement.
+     *
+     * Provider-neutral in name and meaning, and on the payment row for the reason
+     * `checkout_held_until` is: the expiry sweep's exclusion must be ROW-LOCAL. A sweep
+     * that waited on this row's lock re-reads this row's own columns (EvalPlanQual) and
+     * nothing else, so an acknowledgement kept on another table would be invisible to a
+     * sweep whose snapshot predates it, and a payment TonPays is reviewing would expire.
+     *
+     * `payments_provider_review_check` binds both columns to each other, to a GATEWAY
+     * payment of a route whose descriptor says `providerReview`, to an acknowledgement
+     * strictly before `expires_at`, and to exactly the window's length.
+     * `nexa_payments_confirmation_guard` freezes them once set, and allows setting them
+     * only on a PENDING payment: a repeated or later acknowledgement never moves the
+     * deadline, whoever writes it.
+     */
+    providerReviewStartedAt: timestamptz('provider_review_started_at'),
+    providerReviewUntil: timestamptz('provider_review_until'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
@@ -3959,6 +3988,13 @@ export const payments = pgTable(
     index('payments_pending_expiry_idx')
       .on(table.tenantId, table.expiresAt)
       .where(sql`state = 'PENDING'`),
+    /**
+     * The review sweep's own index (§9.6.3 e), shipped WITH its reader: PENDING payments in
+     * a provider review, by the moment their review ends.
+     */
+    index('payments_provider_review_idx')
+      .on(table.tenantId, table.providerReviewUntil)
+      .where(sql`state = 'PENDING' AND provider_review_until IS NOT NULL`),
     check('payments_state_check', enumCheck('state', PAYMENT_STATES)),
     check('payments_method_check', enumCheck('method', PAYMENT_METHODS)),
     check('payments_currency_check', enumCheck('currency', CURRENCY_CODES)),
@@ -4046,6 +4082,19 @@ export const payments = pgTable(
     check(
       'payments_customer_fee_check',
       sql`(customer_fee_basis_points IS NULL AND customer_fee_amount IS NULL AND payable_amount IS NULL) OR (method = 'GATEWAY' AND customer_fee_basis_points BETWEEN ${sql.raw(String(CUSTOMER_FEE_BASIS_POINTS_MIN))} AND ${sql.raw(String(CUSTOMER_FEE_BASIS_POINTS_MAX))} AND customer_fee_amount >= 0 AND payable_amount = amount + customer_fee_amount)`,
+    ),
+    /*
+     * The provider review window (§7.0), row-local and generated from the contract: both
+     * columns or neither; only on a GATEWAY payment of a route that reviews; acknowledged
+     * strictly BEFORE the payment's own deadline (half-open — an acknowledgement at exactly
+     * minute 70 opens nothing); and exactly the window's length.
+     */
+    check(
+      'payments_provider_review_check',
+      sql`(provider_review_started_at IS NULL) = (provider_review_until IS NULL) AND (provider_review_until IS NULL OR (method = 'GATEWAY' AND gateway_provider IN (${sql.join(
+        PROVIDER_REVIEW_GATEWAY_PROVIDERS.map((provider) => sql.raw(`'${provider}'`)),
+        sql`, `,
+      )}) AND expires_at IS NOT NULL AND provider_review_started_at < expires_at AND provider_review_until = provider_review_started_at + interval '${sql.raw(String(TONPAYS_TELEGRAM_REVIEW_WINDOW_HOURS))} hours'))`,
     ),
     unique('payments_tenant_id_key').on(table.tenantId, table.id),
   ],
@@ -4183,6 +4232,28 @@ export const gatewayInvoices = pgTable(
     fxUnitRatioScale: integer('fx_unit_ratio_scale'),
     fxEffectiveRateNumerator: bigint('fx_effective_rate_numerator', { mode: 'bigint' }),
     fxEffectiveRateDenominator: bigint('fx_effective_rate_denominator', { mode: 'bigint' }),
+    /*
+     * A card-transfer route's CURRENT payee card (`TONPAYS_TELEGRAM`, audit §7.1): the
+     * latest state, the "the row holds what the customer pays through" precedent of
+     * `invoice_url`. Every card ever shown is kept in `gateway_invoice_cards`; these say
+     * which one is current. Never projected into a log line or an audit `after`.
+     * `card_seq` is null exactly when no card is current — before the create, and after a
+     * card change whose answer was lost (the provider may have retired the card).
+     */
+    cardNumber: text('card_number'),
+    cardName: text('card_name'),
+    cardSeq: integer('card_seq'),
+    cardReceivedAt: timestamptz('card_received_at'),
+    /** What the provider last said about changing the card. Authoritative; null = not said. */
+    cardChangeShown: boolean('card_change_shown'),
+    cardChangeCooldownUntil: timestamptz('card_change_cooldown_until'),
+    cardChangeExhausted: boolean('card_change_exhausted'),
+    /**
+     * An operator asked the provider again on an UNKNOWN payment (audit §9.6.4): lets one
+     * inquiry through past `POST_DEADLINE_INQUIRY_MAX`, and is cleared by the inquiry it
+     * let through. A flag on the row rather than a raised constant.
+     */
+    reconcileInquiryRequestedAt: timestamptz('reconcile_inquiry_requested_at'),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
   },
@@ -4294,6 +4365,278 @@ export const gatewayInvoices = pgTable(
           AND (provider_invoice_id IS NULL OR creation_state IN ('CREATED', 'CREATE_UNKNOWN'))`,
     ),
     check('gateway_invoices_outcome_at_check', sql`(outcome IS NULL) = (outcome_at IS NULL)`),
+    /**
+     * A TonPays Telegram attempt names its bot and is billed in Toman with no conversion
+     * (audit §7.1) — the Stars CHECK's shape. The bot is frozen by the snapshot guard.
+     */
+    check(
+      'gateway_invoices_tonpays_telegram_check',
+      sql`provider <> 'TONPAYS_TELEGRAM' OR (bot_instance_id IS NOT NULL AND provider_unit = 'IRT' AND conversion_policy = 'SAME_UNIT')`,
+    ),
+    /** A current card is a whole card, only on a card-transfer route, bounded by length only. */
+    check(
+      'gateway_invoices_card_check',
+      sql`(card_seq IS NULL) = (card_number IS NULL)
+          AND (card_seq IS NULL) = (card_received_at IS NULL)
+          AND (card_name IS NULL OR card_number IS NOT NULL)
+          AND (card_number IS NULL OR provider = 'TONPAYS_TELEGRAM')
+          AND (card_seq IS NULL OR card_seq >= 1)
+          AND (card_number IS NULL OR length(card_number) BETWEEN 1 AND ${sql.raw(String(GATEWAY_CARD_NUMBER_MAX_LENGTH))})
+          AND (card_name IS NULL OR length(card_name) BETWEEN 1 AND ${sql.raw(String(GATEWAY_CARD_NAME_MAX_LENGTH))})`,
+    ),
+  ],
+);
+
+/**
+ * Every payee card a card-transfer attempt was ever shown (audit §7.2). APPEND-ONLY, by
+ * trigger: a dispute — "I paid the card you showed me" — is answerable only if no card a
+ * customer saw can be overwritten. `gateway_invoices.card_*` says which one is current.
+ */
+export const gatewayInvoiceCards = pgTable(
+  'gateway_invoice_cards',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    paymentId: uuid('payment_id').notNull(),
+    seq: integer('seq').notNull(),
+    cardNumber: text('card_number').notNull(),
+    cardName: text('card_name'),
+    source: text('source').notNull(),
+    receivedAt: timestamptz('received_at').notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.tenantId, table.paymentId, table.seq] }),
+    foreignKey({
+      columns: [table.tenantId, table.paymentId],
+      foreignColumns: [payments.tenantId, payments.id],
+      name: 'gateway_invoice_cards_payment_fk',
+    }),
+    check('gateway_invoice_cards_source_check', enumCheck('source', GATEWAY_CARD_SOURCES)),
+    check(
+      'gateway_invoice_cards_bounds_check',
+      sql`seq >= 1 AND length(card_number) BETWEEN 1 AND ${sql.raw(String(GATEWAY_CARD_NUMBER_MAX_LENGTH))} AND (card_name IS NULL OR length(card_name) BETWEEN 1 AND ${sql.raw(String(GATEWAY_CARD_NAME_MAX_LENGTH))})`,
+    ),
+  ],
+);
+
+/**
+ * A customer's request for another payee card (audit §7.3, §8.2): written by the tap, sent
+ * by the gateway worker, never while Telegram waits. Every transition is a conditional
+ * UPDATE naming its `from` states; `sent_at` is stamped and committed BEFORE the call, and a
+ * row reclaimed with it set is UNKNOWN and never re-sent.
+ */
+export const gatewayCardChanges = pgTable(
+  'gateway_card_changes',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    paymentId: uuid('payment_id').notNull(),
+    botInstanceId: uuid('bot_instance_id')
+      .notNull()
+      .references(() => botInstances.id),
+    customerId: uuid('customer_id').notNull(),
+    state: text('state').notNull(),
+    requestedAt: timestamptz('requested_at').notNull(),
+    claimedUntil: timestamptz('claimed_until'),
+    sentAt: timestamptz('sent_at'),
+    decidedAt: timestamptz('decided_at'),
+    errorCode: text('error_code'),
+    idempotencyKey: text('idempotency_key').notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.tenantId, table.paymentId],
+      foreignColumns: [payments.tenantId, payments.id],
+      name: 'gateway_card_changes_payment_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+      name: 'gateway_card_changes_customer_fk',
+    }),
+    /** At most ONE request in flight per payment, decided by the database. */
+    uniqueIndex('gateway_card_changes_in_flight_key')
+      .on(table.tenantId, table.paymentId)
+      .where(sql`state IN ('REQUESTED', 'SENT')`),
+    uniqueIndex('gateway_card_changes_idempotency_key').on(table.tenantId, table.idempotencyKey),
+    index('gateway_card_changes_due_idx')
+      .on(table.tenantId, table.requestedAt)
+      .where(sql`state IN ('REQUESTED', 'SENT')`),
+    index('gateway_card_changes_payment_idx').on(
+      table.tenantId,
+      table.paymentId,
+      table.requestedAt,
+    ),
+    check('gateway_card_changes_state_check', enumCheck('state', GATEWAY_CARD_CHANGE_STATES)),
+    check(
+      'gateway_card_changes_decided_check',
+      sql`(state IN ('REQUESTED', 'SENT')) = (decided_at IS NULL) AND (state <> 'SENT' OR sent_at IS NOT NULL) AND (state <> 'REQUESTED' OR sent_at IS NULL)`,
+    ),
+    check(
+      'gateway_card_changes_error_code_check',
+      sql`error_code IS NULL OR length(error_code) BETWEEN 1 AND 64`,
+    ),
+  ],
+);
+
+/**
+ * The window in which ONE customer's next photo, in ONE bot, is a receipt for ONE
+ * TonPays Telegram payment (audit §7.4, §8.3). Bound to exactly the six things the brief
+ * names: tenant, bot, customer, payment, provider and invoice — every one from the ROW,
+ * never from the update. NOT `receipt_captures`: that window files a `payment_receipts` row
+ * for Nexa's manual review queue and exempts the payment from expiry, and a provider
+ * receipt there would be a second approver and an unbounded deadline.
+ */
+export const gatewayReceiptCaptures = pgTable(
+  'gateway_receipt_captures',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    botInstanceId: uuid('bot_instance_id')
+      .notNull()
+      .references(() => botInstances.id),
+    customerId: uuid('customer_id').notNull(),
+    paymentId: uuid('payment_id').notNull(),
+    provider: text('provider').notNull(),
+    providerInvoiceId: text('provider_invoice_id').notNull(),
+    openedAt: timestamptz('opened_at').notNull(),
+    expiresAt: timestamptz('expires_at').notNull(),
+    closedAt: timestamptz('closed_at'),
+    closeReason: text('close_reason'),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+      name: 'gateway_receipt_captures_customer_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.paymentId],
+      foreignColumns: [payments.tenantId, payments.id],
+      name: 'gateway_receipt_captures_payment_fk',
+    }),
+    /** ONE open window per customer per bot — `receipt_captures_open_key`'s rule. */
+    uniqueIndex('gateway_receipt_captures_open_key')
+      .on(table.tenantId, table.botInstanceId, table.customerId)
+      .where(sql`closed_at IS NULL`),
+    index('gateway_receipt_captures_due_idx')
+      .on(table.tenantId, table.expiresAt)
+      .where(sql`closed_at IS NULL`),
+    check('gateway_receipt_captures_provider_check', sql`provider = 'TONPAYS_TELEGRAM'`),
+    check(
+      'gateway_receipt_captures_close_reason_check',
+      nullableEnumCheck('close_reason', GATEWAY_RECEIPT_CAPTURE_CLOSE_REASONS),
+    ),
+    check(
+      'gateway_receipt_captures_closed_check',
+      sql`(closed_at IS NULL) = (close_reason IS NULL)`,
+    ),
+    check('gateway_receipt_captures_expiry_check', sql`expires_at > opened_at`),
+    unique('gateway_receipt_captures_tenant_id_key').on(table.tenantId, table.id),
+  ],
+);
+
+/**
+ * One receipt image the customer sent for the PROVIDER (audit §7.5). Never a
+ * `payment_receipts` row, never in the manual review queue. No bytes, no hash and no
+ * caption are stored: `byte_length` is a count. Claimed and uploaded by the gateway worker;
+ * `sent_at` is stamped and committed before the upload, and a row reclaimed with it set is
+ * UNKNOWN and is never re-uploaded (`OQ-TPTG-08`).
+ */
+export const gatewayReceiptSubmissions = pgTable(
+  'gateway_receipt_submissions',
+  {
+    id: uuid('id').primaryKey(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    paymentId: uuid('payment_id').notNull(),
+    providerInvoiceId: text('provider_invoice_id').notNull(),
+    botInstanceId: uuid('bot_instance_id')
+      .notNull()
+      .references(() => botInstances.id),
+    customerId: uuid('customer_id').notNull(),
+    captureId: uuid('capture_id').notNull(),
+    /** Telegram's handle for the file, scoped to the bot above. Never logged. */
+    telegramFileId: text('telegram_file_id').notNull(),
+    telegramFileUniqueId: text('telegram_file_unique_id').notNull(),
+    declaredSize: bigint('declared_size', { mode: 'bigint' }),
+    state: text('state').notNull(),
+    attempts: integer('attempts').notNull().default(0),
+    claimedUntil: timestamptz('claimed_until'),
+    sentAt: timestamptz('sent_at'),
+    retryAt: timestamptz('retry_at'),
+    decidedAt: timestamptz('decided_at'),
+    errorCode: text('error_code'),
+    /** What the upload answer said — metadata, never approval. */
+    providerStatus: text('provider_status'),
+    receiptReceived: boolean('receipt_received'),
+    /** True on the ONE submission whose acknowledgement opened the review window. */
+    openedReview: boolean('opened_review').notNull().default(false),
+    /**
+     * When an inquiry answered after this submission's answer was lost: the UNKNOWN is then
+     * resolved FOR DISPLAY (a later `pending` lets the customer send a different photo), and
+     * never opens a review (§9.1, §9.6.3 c).
+     */
+    inquiryResolvedAt: timestamptz('inquiry_resolved_at'),
+    byteLength: integer('byte_length'),
+    createdAt: timestamptz('created_at').notNull(),
+    updatedAt: timestamptz('updated_at').notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.tenantId, table.paymentId],
+      foreignColumns: [payments.tenantId, payments.id],
+      name: 'gateway_receipt_submissions_payment_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.customerId],
+      foreignColumns: [customers.tenantId, customers.id],
+      name: 'gateway_receipt_submissions_customer_fk',
+    }),
+    foreignKey({
+      columns: [table.tenantId, table.captureId],
+      foreignColumns: [gatewayReceiptCaptures.tenantId, gatewayReceiptCaptures.id],
+      name: 'gateway_receipt_submissions_capture_fk',
+    }),
+    /** The same photo is one submission: never queued, so never sent, twice. */
+    uniqueIndex('gateway_receipt_submissions_file_key').on(
+      table.tenantId,
+      table.paymentId,
+      table.telegramFileUniqueId,
+    ),
+    /** At most ONE in flight per payment. */
+    uniqueIndex('gateway_receipt_submissions_in_flight_key')
+      .on(table.tenantId, table.paymentId)
+      .where(sql`state IN ('QUEUED', 'SENDING')`),
+    /** At most ONE unresolved UNKNOWN per payment: it blocks a new upload until answered. */
+    uniqueIndex('gateway_receipt_submissions_unknown_key')
+      .on(table.tenantId, table.paymentId)
+      .where(sql`state = 'UNKNOWN' AND inquiry_resolved_at IS NULL`),
+    /** The submission whose acknowledgement opened the review — one per payment. */
+    uniqueIndex('gateway_receipt_submissions_review_key')
+      .on(table.tenantId, table.paymentId)
+      .where(sql`opened_review`),
+    index('gateway_receipt_submissions_due_idx')
+      .on(table.tenantId, table.createdAt)
+      .where(sql`state IN ('QUEUED', 'SENDING')`),
+    check(
+      'gateway_receipt_submissions_state_check',
+      enumCheck('state', GATEWAY_RECEIPT_SUBMISSION_STATES),
+    ),
+    check(
+      'gateway_receipt_submissions_decided_check',
+      sql`(state IN ('QUEUED', 'SENDING')) = (decided_at IS NULL) AND (state <> 'SENDING' OR sent_at IS NOT NULL) AND (NOT opened_review OR state = 'ACCEPTED')`,
+    ),
+    check(
+      'gateway_receipt_submissions_bounds_check',
+      sql`attempts >= 0 AND (byte_length IS NULL OR byte_length >= 0) AND (declared_size IS NULL OR declared_size > 0) AND (error_code IS NULL OR length(error_code) BETWEEN 1 AND 64) AND (provider_status IS NULL OR length(provider_status) BETWEEN 1 AND 32) AND length(telegram_file_unique_id) BETWEEN 1 AND 255 AND length(telegram_file_id) BETWEEN 1 AND 1024`,
+    ),
   ],
 );
 
